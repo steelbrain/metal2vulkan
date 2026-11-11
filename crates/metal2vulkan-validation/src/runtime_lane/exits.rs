@@ -382,10 +382,11 @@ static CALLS_AT_EXIT: Mutex<Option<(Device, Vec<u8>)>> = Mutex::new(None);
 
 /// An exit handler the calls cases register once the program's own thread made its common calls
 /// ([`common_calls`]), as a program registers its own: the same calls again, on the exiting
-/// thread, whose thread-locals the exit destroyed before it ran the handlers (macOS, the GNU C library), those the
-/// runtime made for that thread's earlier calls among them. Its line says whether the device's
-/// hook ran before it (`hook_ran`) and what each call answered. Its pipeline's region (two threads
-/// a threadgroup) is not the earlier one's (one), so its creation makes it on this thread.
+/// thread, whose thread-locals the exit destroyed before it ran the handlers (macOS, the GNU C
+/// library), those the runtime made for that thread's earlier calls among them. Its line says
+/// whether the device's hook ran before it (`hook_ran`) and what each call answered. Its
+/// pipeline's region (two threads a threadgroup) is not the earlier one's (one), so it needs a
+/// making of its own.
 extern "C" fn calls_at_exit() {
     let kept = CALLS_AT_EXIT
         .lock()
@@ -404,27 +405,55 @@ extern "C" fn calls_at_exit() {
     unsafe { libc::write(1, line.as_ptr().cast(), line.len()) };
 }
 
+/// `what`'s debug form as one field value: its whitespace joined with `_`.
+fn token(what: impl std::fmt::Debug) -> String {
+    format!("{what:?}")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("_")
+}
+
+/// A command buffer of `queue` that `encode` encodes, committed and waited for: `completed`, else
+/// what its encoding, commit or wait answered, or its status, error, failed pipeline and refusal,
+/// as one field value ([`token`]).
+fn run_on(
+    queue: &CommandQueue,
+    encode: impl FnOnce(&CommandBuffer) -> Result<(), metal2vulkan_runtime::Error>,
+) -> String {
+    let ended = (|| {
+        let command_buffer = queue.command_buffer()?;
+        encode(&command_buffer)?;
+        command_buffer.commit()?;
+        command_buffer.wait_until_completed()?;
+        Ok::<_, metal2vulkan_runtime::Error>(command_buffer)
+    })();
+    match ended {
+        Ok(done) if done.status() == CommandBufferStatus::Completed => "completed".to_owned(),
+        Ok(done) => token((
+            done.status(),
+            done.error(),
+            done.failed_pipeline(),
+            done.refusal(),
+        )),
+        Err(error) => token(error),
+    }
+}
+
 /// The program's common calls on this thread, and what each answered, as a line's fields: three
-/// shared buffers (`buffers`), a 4x4 `RGBA8Unorm` texture (`texture`) and `store_const`'s compute
-/// pipeline of `threads` threads a threadgroup, so that its creation makes its pipeline on this
-/// thread (`pipeline`: `made`, else the error); then a command buffer that copies 64 bytes from a
-/// buffer into the texture and back out into another, and runs the kernel, which stores 42, where
-/// its pipeline was made (`committed`, `waited`, `completed`); and what it wrote, read back
-/// (`texels`: the bytes came back; `stored`: the kernel's word, `-` where no kernel ran). A call
-/// that fails ends the line with its error.
+/// shared buffers (`buffers`) and a 4x4 `RGBA8Unorm` texture (`texture`); a command buffer that
+/// copies 64 bytes from a buffer into the texture and back out into another (`blit`, as
+/// [`run_on`] answers), and whether the bytes came back (`texels`); `store_const`'s compute
+/// pipeline of `threads` threads a threadgroup, so that its creation makes its pipeline
+/// (`pipeline`: `made`, else the error); and a command buffer that runs it where it was made
+/// (`dispatch`, `-` where none), and the word it stores, 42, read back (`stored`, `-` where it did
+/// not complete). A call that fails before them ends the line with its error.
 fn common_calls(device: &Device, air: &[u8], threads: u64) -> String {
-    let token = |what: &dyn std::fmt::Debug| {
-        format!("{what:?}")
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join("_")
-    };
     let bytes: Vec<u8> = (0u8..64).map(|at| at.wrapping_mul(37) ^ FILLED).collect();
     let shared = |length| device.new_buffer(length, ResourceOptions::shared());
     let (upload, back, out) = match (shared(64), shared(64), shared(4)) {
         (Ok(upload), Ok(back), Ok(out)) => (upload, back, out),
         (upload, back, out) => {
-            return format!("buffers={}", token(&(upload.err(), back.err(), out.err())))
+            return format!("buffers={}", token((upload.err(), back.err(), out.err())))
         }
     };
     let (Some(at), Some(word)) = (upload.contents(), out.contents()) else {
@@ -439,8 +468,28 @@ fn common_calls(device: &Device, air: &[u8], threads: u64) -> String {
     let descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
     let texture = match device.new_texture(&descriptor) {
         Ok(texture) => texture,
-        Err(error) => return format!("buffers=1 texture={}", token(&error)),
+        Err(error) => return format!("buffers=1 texture={}", token(error)),
     };
+    let queue = match device.new_command_queue() {
+        Ok(queue) => queue,
+        Err(error) => return format!("buffers=1 texture=1 queue={}", token(error)),
+    };
+    let blit = run_on(&queue, |command_buffer| {
+        let mut blit = command_buffer.blit_command_encoder()?;
+        let size = Size::new(4, 4, 1);
+        let origin = Origin::new(0, 0, 0);
+        let none = BlitOption::None;
+        blit.copy_from_buffer_to_texture(&upload, 0, 16, 64, size, &texture, 0, 0, origin, none)?;
+        blit.copy_from_texture_to_buffer(&texture, 0, 0, origin, size, &back, 0, 16, 64, none)?;
+        blit.end_encoding()
+    });
+    let texels = blit == "completed"
+        && back.contents().is_some_and(|at| {
+            // SAFETY: the buffer's 64 shared bytes, alive with it; the command buffer that wrote
+            // them completed.
+            let came_back = unsafe { std::slice::from_raw_parts(at.as_ptr(), 64) };
+            came_back == &bytes[..]
+        });
     let pipeline = device
         .new_library_with_air(air)
         .and_then(|library| library.new_function_with_name("store_const"))
@@ -451,64 +500,28 @@ fn common_calls(device: &Device, air: &[u8], threads: u64) -> String {
             descriptor.required_threads_per_threadgroup = Some([threads as u32, 1, 1]);
             device.new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
         });
-    let made = match &pipeline {
-        Ok(_) => "made".to_owned(),
-        Err(error) => token(error),
-    };
-    let encoded = || -> Result<CommandBuffer, metal2vulkan_runtime::Error> {
-        let queue = device.new_command_queue()?;
-        let command_buffer = queue.command_buffer()?;
-        let mut blit = command_buffer.blit_command_encoder()?;
-        let size = Size::new(4, 4, 1);
-        let origin = Origin::new(0, 0, 0);
-        let none = BlitOption::None;
-        blit.copy_from_buffer_to_texture(&upload, 0, 16, 64, size, &texture, 0, 0, origin, none)?;
-        blit.copy_from_texture_to_buffer(&texture, 0, 0, origin, size, &back, 0, 16, 64, none)?;
-        blit.end_encoding()?;
-        if let Ok(pipeline) = &pipeline {
-            let mut encoder = command_buffer.compute_command_encoder()?;
-            encoder.set_compute_pipeline_state(pipeline)?;
-            encoder.set_buffer(Some(&out), 0, 0)?;
-            encoder.dispatch_threadgroups(Size::new(1, 1, 1), Size::new(threads, 1, 1))?;
-            encoder.end_encoding()?;
+    let (made, dispatch) = match &pipeline {
+        Ok(pipeline) => {
+            let dispatch = run_on(&queue, |command_buffer| {
+                let mut encoder = command_buffer.compute_command_encoder()?;
+                encoder.set_compute_pipeline_state(pipeline)?;
+                encoder.set_buffer(Some(&out), 0, 0)?;
+                encoder.dispatch_threadgroups(Size::new(1, 1, 1), Size::new(threads, 1, 1))?;
+                encoder.end_encoding()
+            });
+            ("made".to_owned(), dispatch)
         }
-        Ok(command_buffer)
+        Err(error) => (token(error), "-".to_owned()),
     };
-    let command_buffer = match encoded() {
-        Ok(command_buffer) => command_buffer,
-        Err(error) => {
-            return format!(
-                "buffers=1 texture=1 pipeline={made} encoded={}",
-                token(&error)
-            )
-        }
-    };
-    let committed = match command_buffer.commit() {
-        Ok(()) => "1".to_owned(),
-        Err(error) => token(&error),
-    };
-    let waited = token(&command_buffer.wait_until_completed());
-    let completed = command_buffer.status() == CommandBufferStatus::Completed;
-    let texels = completed
-        && back.contents().is_some_and(|at| {
-            // SAFETY: the buffer's 64 shared bytes, alive with it; the command buffer that wrote
-            // them completed.
-            let came_back = unsafe { std::slice::from_raw_parts(at.as_ptr(), 64) };
-            came_back == &bytes[..]
-        });
-    let stored = match (&pipeline, completed) {
-        (Ok(_), true) => {
-            // SAFETY: the output's 4 shared bytes, alive with it, which the completed command
-            // buffer wrote.
-            let word = unsafe { word.as_ptr().cast::<u32>().read_unaligned() };
-            word.to_string()
-        }
-        _ => "-".to_owned(),
+    let stored = match dispatch == "completed" {
+        // SAFETY: the output's 4 shared bytes, alive with it, which the completed command buffer
+        // wrote.
+        true => unsafe { word.as_ptr().cast::<u32>().read_unaligned() }.to_string(),
+        false => "-".to_owned(),
     };
     format!(
-        "buffers=1 texture=1 pipeline={made} committed={committed} waited={waited} completed={} \
-         texels={} stored={stored}",
-        u8::from(completed),
+        "buffers=1 texture=1 blit={blit} texels={} pipeline={made} dispatch={dispatch} \
+         stored={stored}",
         u8::from(texels)
     )
 }
@@ -885,7 +898,9 @@ fn child() {
             let answered = common_calls(&device, &air, 1);
             println!("{REPORT}-OWN {answered}");
             assert!(
-                answered.ends_with("completed=1 texels=1 stored=42"),
+                answered.ends_with(
+                    "blit=completed texels=1 pipeline=made dispatch=completed stored=42"
+                ),
                 "{case}: the program's own calls: {answered}"
             );
             *CALLS_AT_EXIT.lock().unwrap_or_else(PoisonError::into_inner) =
@@ -1776,13 +1791,13 @@ fn an_exit_handler_registered_after_the_device_runs_its_work_to_completion() {
 /// thread ([`common_calls`]: a buffer, a texture and a compute pipeline made, a copy through the
 /// texture and a dispatch encoded, committed and waited for, what they wrote read back), after the
 /// program's own thread made them before the exit, so the runtime's thread-locals for them were
-/// made there and the exit destroyed them before it ran the handlers (macOS, the GNU C library). Each call answers
-/// as on any other thread, and the process exits cleanly. Where the program registered no handler
-/// after a later pipeline making, every call runs and its work completes, on every device. Where
-/// it made a pipeline after the handler, the handler's making answers that the process is exiting
-/// (docs/API.md, accepted differences, "Process exit"); on a GPU the rest of its work completes,
-/// and on a CPU device that making's run of the hook closed the runtime, so the handler's work
-/// answers that the process is exiting too.
+/// made there and the exit destroyed them before it ran the handlers (macOS, the GNU C library).
+/// Each call answers as on any other thread, and the process exits cleanly. Where the program
+/// made no pipeline after it registered the handler, every call runs and its work completes, on
+/// every device. Where it made one, the handler's making answers that the process is exiting
+/// (docs/API.md, accepted differences, "Process exit"), at the creation or at the dispatch that
+/// needs it; on a GPU its copy completes, and on a CPU device that making's run of the hook
+/// closed the runtime, so the handler's work answers that the process is exiting too.
 #[test]
 fn an_exit_handler_s_common_calls_answer_as_on_any_thread() {
     let cases = ["handler_calls_exit", "handler_calls_after_making_exit"];
@@ -1805,10 +1820,10 @@ fn an_exit_handler_s_common_calls_answer_as_on_any_thread() {
             .is_some_and(|made| made.contains("cpu=1"));
         let all = (
             field("hook_ran"),
-            field("pipeline"),
-            field("committed"),
-            field("completed"),
+            field("blit"),
             field("texels"),
+            field("pipeline"),
+            field("dispatch"),
             field("stored"),
         );
         match (case, cpu) {
@@ -1816,31 +1831,34 @@ fn an_exit_handler_s_common_calls_answer_as_on_any_thread() {
                 all,
                 (
                     Some("0"),
+                    Some("completed"),
+                    Some("1"),
                     Some("made"),
-                    Some("1"),
-                    Some("1"),
-                    Some("1"),
+                    Some("completed"),
                     Some("42")
                 ),
                 "the handler's calls did not all run: {}",
                 what()
             ),
             (_, false) => {
+                // At the pipeline's creation, or at the dispatch that needs its making where the
+                // creation left the making for later.
+                let exiting = |name| field(name).is_some_and(|value| value.contains("Exiting"));
                 assert!(
-                    field("pipeline").is_some_and(|made| made.contains("Exiting")),
+                    exiting("pipeline") || exiting("dispatch"),
                     "the handler's making did not answer that the process is exiting: {}",
                     what()
                 );
                 assert_eq!(
-                    (all.0, all.2, all.3, all.4, all.5),
-                    (Some("0"), Some("1"), Some("1"), Some("1"), Some("-")),
+                    (all.0, all.1, all.2, all.5),
+                    (Some("0"), Some("completed"), Some("1"), Some("-")),
                     "the handler's other work did not complete: {}",
                     what()
                 );
             }
             (_, true) => {
                 assert!(
-                    field("hook_ran") == Some("1") && field("completed") != Some("1"),
+                    field("hook_ran") == Some("1") && field("blit") != Some("completed"),
                     "on a CPU device the making's run of the hook did not close the runtime: {}",
                     what()
                 );
