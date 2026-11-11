@@ -450,6 +450,9 @@ struct Round {
     /// The thread's sleeps that ended at their time limit between the `VkQueue`'s release and
     /// the thread's taking of the later one.
     slept: u64,
+    /// The device's submission checks' calls between the `VkQueue`'s release and the thread's
+    /// taking of the later one (`WorkCounts::submit_check_calls`): none, as they answered first.
+    checks: u64,
 }
 
 /// One round of [`checked_commits_during_submissions_are_taken_up_promptly`].
@@ -493,7 +496,8 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
         command_buffer.commit().unwrap();
     }
     let slices = || device.work_counts().scheduler_sleep_slices;
-    let before = slices();
+    let calls = || device.work_counts().submit_check_calls;
+    let (before, checked) = (slices(), calls());
     // No `vkQueueSubmit` is in the driver while the round holds the `VkQueue`.
     let driven = in_driver(device);
     let free = host_time();
@@ -509,7 +513,7 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
         );
         std::hint::spin_loop();
     }
-    let slept = slices() - before;
+    let (slept, checks) = (slices() - before, calls() - checked);
     completed(&[&first, &submitting, &left[0], &left[1]]);
     // In commit order: each copied the number the one before it filled.
     let ran = read_buffer(&seen, 0, 16).unwrap();
@@ -528,6 +532,7 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
             .each_ref()
             .map(|c| c.kernel_end_time() - c.kernel_start_time()),
         slept,
+        checks,
     }
 }
 
@@ -539,8 +544,12 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
 /// run, [`Taken`]) in [`PROMPTLY`] of its own time ([`Round::ours`]) after the `VkQueue` is free,
 /// the time the batches' `vkQueueSubmit` calls spent in the driver meanwhile apart. And none of
 /// its sleeps between the release and its taking of the later one ended at its time limit: it was
-/// woken for them, or found them as its pass ended, never by itself. The GPU's and the driver's
-/// times are printed, not bounded: on an RTX 5080 Laptop GPU beside the full suite, the earlier
+/// woken for them, or found them as its pass ended, never by itself. The rounds begin once the
+/// device's submission checks answered (`Device::settle_submit_checks`): those run on the
+/// device's first `VkQueue`, which the rounds' command queue shares on a lane device, holding its
+/// lock for their own calls, and the driver may hold every other thread's submission back while
+/// they make and release their imports (`submit_check.rs`). The GPU's and the driver's times are
+/// printed, not bounded: on an RTX 5080 Laptop GPU beside the full suite, the earlier
 /// one's submission took 168 ms and 243 ms in two runs; in another, the batches'
 /// `vkQueueSubmit` calls spent 71.5 ms in the driver from the earlier one's check until the
 /// round completed, and the later one's kernel started 63.4 ms after the earlier one's ended.
@@ -548,17 +557,27 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
 fn checked_commits_during_submissions_are_taken_up_promptly() {
     on_device(|device, _| {
         let queue = device.new_command_queue().unwrap();
+        assert!(
+            device.settle_submit_checks(WAIT),
+            "the submission checks answered"
+        );
         let rounds: Vec<_> = (0..ROUNDS).map(|_| taken_up(device, &queue)).collect();
         let most =
             |of: fn(&Round) -> [f64; 2]| (rounds.iter().flat_map(of)).fold(f64::MIN, f64::max);
         let ms = |of: fn(&Round) -> [f64; 2]| 1e3 * most(of);
         let slept: u64 = rounds.iter().map(|round| round.slept).sum();
+        let checks: u64 = rounds.iter().map(|round| round.checks).sum();
+        let own = |round: &Round| round.ours[0].max(round.ours[1]);
+        let (slowest, round) = (rounds.iter().enumerate())
+            .max_by(|a, b| own(a.1).total_cmp(&own(b.1)))
+            .expect("rounds ran");
         eprintln!(
             "TAKEN-UP {}: {ROUNDS} rounds, taken at most {:.3} ms after the VkQueue was free, the \
              thread's own time at most {:.3} ms, the driver's vkQueueSubmit at most {:.3} ms of \
              it; a kernel started at most {:.3} ms after the VkQueue was free, the later one at \
              most {:.3} ms after the earlier one's end; a submission at most {:.3} ms; sleeps \
-             ended at their limit {slept}",
+             ended at their limit {slept}; the submission checks' calls {checks}; the most own \
+             time round {slowest}: {round:?}",
             device.name(),
             ms(|round| round.taken),
             ms(|round| round.ours),
