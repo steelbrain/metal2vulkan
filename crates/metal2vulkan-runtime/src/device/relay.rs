@@ -36,7 +36,14 @@
 //! (`CommandBuffer::error_description`); a failure of the program's own submission is the program's
 //! to read (its own messenger hears it); and one of the runtime's own, or one no submission in
 //! flight explains (a Metal command buffer MoltenVK made for itself), loses the device: every
-//! command buffer in flight then finishes `DeviceLost`, and no later one is submitted.
+//! batch in flight then takes the loss's code (`DeviceRemoved`, 11), and no later one is
+//! submitted. So does every batch where no fence can be read, the device lost before the report
+//! (MoltenVK under the program's own `MVK_CONFIG_RESUME_LOST_DEVICE` off). Where the device's
+//! line recovers (`device/line.rs`), its command buffers answer as the recovery does: where the
+//! loss failed a wait for their fences, the command buffer of the oldest incomplete batch as the
+//! hang (`GpuHang`) and the rest as its victims (`command_buffer/completion.rs`), the loss's code
+//! leaving that answer as it is; where their fences signaled, each as a victim
+//! (`GpuRecoveryVictim`).
 //!
 //! **The loader word.** MoltenVK writes `ICD_LOADER_MAGIC` over the first word of an object it
 //! names in a message (`loader_word.rs`), the queue's here, where a layer between the loader and
@@ -79,7 +86,7 @@ pub(super) fn setting() -> super::create::LayerSetting {
 
 /// `MTLCommandBufferErrorDeviceRemoved`: the code a device lost by the relay gives its command
 /// buffers in flight.
-const DEVICE_REMOVED: u64 = 11;
+pub(crate) const DEVICE_REMOVED: u64 = 11;
 
 /// The relay's messenger on an instance the runtime created, and the relay it reports to.
 pub(super) struct Messenger {
@@ -173,7 +180,7 @@ impl Relay {
                     .iter()
                     .filter(|f| Arc::ptr_eq(&f.lost, &flights.lost))
                 {
-                    each.fail_all(DEVICE_REMOVED);
+                    each.lose_all();
                 }
             }
         }
@@ -203,6 +210,12 @@ impl Relayed {
         if failure.is_none() {
             *failure = Some((code, description.map(str::to_owned)));
         }
+    }
+
+    /// The device was lost: its loss's code (`DeviceRemoved`), unless a failure was kept already
+    /// (the module docs).
+    pub(crate) fn lost(&self) {
+        self.fail(DEVICE_REMOVED, None);
     }
 
     /// The code and the description kept, if a failure was relayed.
@@ -416,11 +429,12 @@ impl Flights {
         status.is_ok()
     }
 
-    /// Every batch in flight fails with `code`, unless it failed already.
-    fn fail_all(&self, code: u64) {
+    /// Every batch in flight takes the device's loss ([`Relayed::lost`]), unless it failed
+    /// already.
+    fn lose_all(&self) {
         for flight in lock(&self.log).iter() {
             if let By::Batch(failed) = &flight.by {
-                failed.fail(code, None);
+                failed.lost();
             }
         }
     }

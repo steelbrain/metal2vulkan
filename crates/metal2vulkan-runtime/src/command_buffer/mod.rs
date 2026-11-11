@@ -65,7 +65,7 @@ use super::copied::CopiesReached;
 use super::deferred::{Deferred, Prepared, StepInputs};
 use super::degradation::{Degradation, NoticesFor};
 use super::descriptor_arena::DescriptorArena;
-use super::device::relay::Relayed;
+use super::device::relay::{self, Relayed};
 use super::device::{lock, DeviceShared};
 use super::dirty_pages::DirtyCommit;
 use super::encoder::{Recorded, Segment};
@@ -2386,6 +2386,14 @@ impl CommandBuffer {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn fail_draw_making(&self, error: Error) {
         self.state().making_failure_injected = Some(error);
+    }
+
+    /// Relay the device's loss to it, as the relay does to every batch in flight where it cannot
+    /// read which one failed (`device/relay.rs`): a device test's injection
+    /// (`tests::device_recovery`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn relay_loss(&self) {
+        self.0.relayed.lost();
     }
 
     /// Its state, locked, as a host step's draw or a commit's work holds it: a device test's
@@ -5328,9 +5336,16 @@ impl CommandBufferShared {
             // (`revocation.rs`).
             let lost_hang = result == Err(CommandBufferError::GpuHang);
             // A failure the driver relayed for one of its batches is Metal's answer for its work
-            // (`device/relay.rs`).
+            // (`device/relay.rs`). The device's loss is not: where a recovery from it answered
+            // already (`completion.rs`, the oldest incomplete command buffer as the hang and the
+            // rest as its victims, as its notice names them), that answer stands.
+            let recovered = matches!(
+                result,
+                Err(CommandBufferError::GpuHang | CommandBufferError::GpuRecoveryVictim)
+            );
             let result = match (state.failure, self.relayed.failure()) {
                 (Some(error), _) => Err(error),
+                (None, Some((relay::DEVICE_REMOVED, _))) if recovered => result,
                 (None, Some((code, description))) => {
                     state.relayed_description = description;
                     Err(CommandBufferError::of_metal_code(code))

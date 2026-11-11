@@ -200,6 +200,52 @@ fn a_loss_holds_the_hang_s_queue_until_the_recovery() {
     panic!("no loss of {ATTEMPTS} caught the busy command buffer in flight");
 }
 
+/// A loss the driver reported before any fence could be read, as MoltenVK does under the
+/// program's own `MVK_CONFIG_RESUME_LOST_DEVICE` off (it marks the device lost first): the relay
+/// gives every batch in flight the loss's code (`device/relay.rs`), and the recovery's answers
+/// stand, the command buffer in flight failing as the hang its notice names, not as a victim.
+/// The M3 Max's GPU fault under that setting read `GpuRecoveryVictim` there in 25 of 25 runs
+/// (`runtime_lane::host_memory`'s `a_gpu_fault_fails_its_command_buffer_and_the_queue_runs_on`).
+#[test]
+fn a_relayed_loss_leaves_the_recovery_s_hang() {
+    let scratch = Scratch::new();
+    let heard = Heard::default();
+    let device = heard_device(&scratch.0, &heard);
+    let queue = device.new_command_queue().unwrap();
+    for _ in 0..ATTEMPTS {
+        let from = heard.lock().unwrap().len();
+        let in_flight = busy(&device, &queue);
+        let lost = in_flight.device().clone();
+        lost.mark_lost();
+        in_flight.relay_loss();
+        lost.shared().completion.fail_in_flight();
+        let answer = outcome(&in_flight);
+        drop((in_flight, lost));
+        // The next call recovers the device; its notice says whether the loss caught the copies
+        // in flight, which else completed first.
+        drop(queue.command_buffer().unwrap());
+        let made = recovery_notices(&heard, from, "the device");
+        assert_eq!(made.len(), 1, "one recovery announced {made:?}");
+        if made[0].contains("no command buffer was in flight") {
+            continue;
+        }
+        assert!(
+            made[0].contains("failed as the hang (`GpuHang`)"),
+            "{made:?}"
+        );
+        assert_eq!(
+            answer,
+            (
+                CommandBufferStatus::Error,
+                Some(CommandBufferError::GpuHang)
+            ),
+            "the recovery named the command buffer in flight the hang: {made:?}"
+        );
+        return;
+    }
+    panic!("no loss of {ATTEMPTS} caught the busy command buffer in flight");
+}
+
 /// A loss marked while `queue`'s busy command buffer is in flight, as a failed wait finds it:
 /// whether it caught that command buffer as the hang, which else completed first. Either way the
 /// next call recovers the device.
