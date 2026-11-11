@@ -1772,7 +1772,7 @@ pub(crate) enum UnorderedBind {
 
 /// Whether a render pipeline state of `pipeline` made on `device` binds a set 0 whose storage
 /// buffers its fragment stage writes inside its interlock where its driver orders those only in
-/// a pushed set: its making announces `interlocked-buffer-order` ([`unordered_bind`]). The lanes
+/// a pushed set: its making announces `interlocked-buffer-order` (`unordered_bind`). The lanes
 /// predict their notices by it.
 #[doc(hidden)]
 pub fn binds_unordered_interlocked_buffers(device: &Device, pipeline: &RenderPipeline) -> bool {
