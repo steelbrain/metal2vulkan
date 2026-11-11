@@ -17,8 +17,10 @@
 //!   the stage's discards wait until after its stores against its driver's store-dropping defect
 //!   (its census's `fragment.discard.deferred`), `helper-guard <stage>` with the number of the
 //!   stage's selections whose helper invocations take another arm against the same defect (its
-//!   census's `fragment.helper-guard`), and the graphics key's other parts (topology, pass,
-//!   strides, fixed state, sample positions). A state's first pipeline prints every field; a later
+//!   census's `fragment.helper-guard`), `helper-fence <stage>` with the number of the stage's
+//!   calls an identity shuffle follows against it (its census's `fragment.helper-fence`), and the
+//!   graphics key's other parts (topology, pass, strides, fixed state, sample positions). A
+//!   state's first pipeline prints every field; a later
 //!   one prints the fields that differ from the state's closest earlier pipeline (the one with the
 //!   fewest differing fields), each as `old -> new` with the parts both share elided.
 //! - **MoltenVK's split.** Where the device's driver is MoltenVK and its performance tracking is
@@ -68,6 +70,9 @@ const DEFERRED_DISCARD_STRATEGY: &str = "fragment.discard.deferred";
 /// The census name of a fragment function's selections whose helper invocations take another
 /// arm.
 const HELPER_GUARD_STRATEGY: &str = "fragment.helper-guard";
+
+/// The census name of a fragment function's calls an identity shuffle follows.
+const HELPER_FENCE_STRATEGY: &str = "fragment.helper-fence";
 
 /// Whether the log is on: read once, at the first state made.
 pub(crate) fn enabled() -> bool {
@@ -387,6 +392,14 @@ fn fields(
             fields.insert(
                 format!("helper-guard {:?}", module.stage),
                 guard.uses.to_string(),
+            );
+        }
+        // The stage's calls an identity shuffle follows, against the same defect where no arm
+        // keeps the helpers out exactly.
+        if let Some(fence) = module.strategies.entries.get(HELPER_FENCE_STRATEGY) {
+            fields.insert(
+                format!("helper-fence {:?}", module.stage),
+                fence.uses.to_string(),
             );
         }
     }

@@ -3998,7 +3998,10 @@ bound.
   edges, or demoted invocations) may run it before a storage write, and keeping them out would not
   be exact (`spirv::helper_branches`): a derivative or subgroup operation reads what they compute
   there or after, an arm leaves its selection otherwise than at its merge, or the call is in a loop
-  whose helper invocations may iterate alone.
+  whose helper invocations may iterate alone; and no identity shuffle of the call's result can
+  follow it, which keeps the writes where the module places one: the device has no fragment-stage
+  subgroup shuffle, or the result is a 64-bit or `bool` lane, or an 8- or 16-bit one without
+  `shaderSubgroupExtendedTypes`.
 - `metal2vulkan-degrade-extended-range-float-blend-source` (precision).
   `PrecisionNote::ExtendedRangeFloatBlendSource`: `PrecisionNote::ExtendedRangeBlendSource` for a
   `float` color output (a scalar or vector of AIR's `float`): blended into an extended-range or

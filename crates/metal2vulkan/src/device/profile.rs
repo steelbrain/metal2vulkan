@@ -1428,7 +1428,8 @@ pub enum DriverWorkaround {
     /// threads only of their own branch too. Without any discard, the same fragment lost 1,040 to
     /// 1,063 of its 2,584 texels a run in 98 or 99 blocks where only those helpers took the branch
     /// with the `optnone` call (the probe). There the selections whose arms hold such a
-    /// call before a storage write send their helper invocations to another arm where that is exact
+    /// call before a storage write send their helper invocations to another arm where that is exact,
+    /// and an identity simdgroup shuffle of its result follows each such call left
     /// (`spirv::helper_branches`).
     DiscardDropsSimdgroupStores,
     /// The driver's compiler keeps a call to a function declared `DontInline` a call and

@@ -2738,8 +2738,9 @@ fn compile_kept<K>(
     // repeated regions are written once, as a loop.
     crate::spirv::roll::roll_entry(&mut module, m)?;
     // On a driver whose compiler loses a simdgroup's storage writes after an `optnone` call only
-    // its helper invocations make, those invocations take another arm where that is exact.
-    let helper_guard = crate::spirv::helper_branches::guard_for(&mut module, p, m)?;
+    // its helper invocations make, those invocations take another arm where that is exact, and
+    // each such call left is fenced once every analysis below has read the module.
+    let (helper_guard, fences) = crate::spirv::helper_branches::guard_for(&mut module, p, m)?;
     let function_tables = spec.function_tables.clone();
     let reaches_command_buffers = spec.may_encode_indirect_commands();
     let command_writes = spec.command_writes();
@@ -2898,6 +2899,8 @@ fn compile_kept<K>(
         precision.push(PrecisionNote::DeviceSampling);
         precision.sort_unstable();
     }
+    // The fences are identities, which the analyses above would read as moves between lanes.
+    fences.apply(&mut module)?;
     let stats = crate::spirv::verify::verify(&module, p, m)?;
     let kept = keep(&module);
     let mut symbols =
@@ -3168,9 +3171,11 @@ fn census(plan: &Plan) -> StrategyCensus {
     c
 }
 
-/// [`census`] of the emitted module: the plan's, and the selections whose helper invocations
-/// take another arm (`spirv::helper_branches`), each with its helper query and one or two
-/// logical operations (about 12 words).
+/// [`census`] of the emitted module: the plan's, the selections whose helper invocations take
+/// another arm (`spirv::helper_branches`), each with its helper query and one or two logical
+/// operations (about 12 words), and the `optnone` calls an identity shuffle follows, each with
+/// its lane's load and its shuffle (about 10 words; a structure's two members and their
+/// construction about 30).
 fn emitted_census(
     plan: &Plan,
     helper_guard: crate::spirv::helper_branches::Guarded,
@@ -3182,6 +3187,15 @@ fn emitted_census(
             StrategyUse {
                 uses: helper_guard.selections,
                 words: u64::from(helper_guard.selections) * 12,
+            },
+        );
+    }
+    if helper_guard.fences > 0 {
+        c.entries.insert(
+            crate::spirv::helper_branches::FENCE_STRATEGY.to_owned(),
+            StrategyUse {
+                uses: helper_guard.fences,
+                words: u64::from(helper_guard.fences) * 30,
             },
         );
     }

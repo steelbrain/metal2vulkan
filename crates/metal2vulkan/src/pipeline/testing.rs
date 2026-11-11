@@ -387,7 +387,8 @@ fn typed_module_of(
     let crate::lower::emit::Emitted { mut module, .. } =
         crate::lower::emit::emit_module(&spec, &plan, m)?;
     crate::spirv::roll::roll_entry(&mut module, m)?;
-    crate::spirv::helper_branches::guard_for(&mut module, p, m)?;
+    let (_, fences) = crate::spirv::helper_branches::guard_for(&mut module, p, m)?;
+    fences.apply(&mut module)?;
     crate::spirv::verify::verify(&module, p, m)?;
     Ok((plan, module))
 }

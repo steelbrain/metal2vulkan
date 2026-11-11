@@ -1523,10 +1523,13 @@ pub enum PrecisionNote {
     /// compute there or after, an arm leaves its selection otherwise than at its merge, or the call
     /// is in a loop whose helper invocations may iterate alone. Only where a path from the call
     /// ends without a tangled instruction (an implicit-LOD sample, an LOD query, a derivative, a
-    /// subgroup operation) that reads what it computes: one after it keeps the writes. The live
-    /// fragments of a simdgroup (8 by 4 pixels) whose helpers make the call alone may lose their
-    /// texture writes (and, not measured, their buffer stores and atomics); color outputs are not
-    /// affected.
+    /// subgroup operation) that reads what it computes: one after it keeps the writes. And only
+    /// where no identity shuffle of the call's result can follow it, which the module places
+    /// elsewhere to keep the writes: the device has no fragment-stage subgroup shuffle, or the
+    /// result is a 64-bit or `bool` lane, or an 8- or 16-bit one without
+    /// `shaderSubgroupExtendedTypes`. The live fragments of a simdgroup (8 by 4 pixels) whose
+    /// helpers make the call alone may lose their texture writes (and, not measured, their buffer
+    /// stores and atomics); color outputs are not affected.
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review, deferred in C3 until an exact path exists.

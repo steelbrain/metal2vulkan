@@ -47,13 +47,11 @@
 //!   instruction, leaves the selection as it is.
 //!
 //! A helper invocation's own writes and outputs have no effect, so its new route changes nothing
-//! else. Where a call stays where only helper invocations may run before a storage write (an
-//! arm of a selection that cannot be guarded exactly and that no enclosing guard covers, or a
-//! loop, whose helpers may iterate alone), [`Guarded::exposed`] says so, and the caller records
-//! `PrecisionNote::HelperBranchDropsSimdgroupStores`: the writes may be lost as the defect loses
-//! them.
+//! else. A call can stay where only helper invocations may run it before a storage write: an arm
+//! of a selection that cannot be guarded exactly and that no enclosing guard covers, or a loop,
+//! whose helpers may iterate alone.
 //!
-//! Unless a tangled instruction follows the call: the defect loses nothing where the helpers make
+//! There the call is harmless where a tangled instruction follows it: the defect loses nothing where the helpers make
 //! an implicit-LOD sample, a derivative, an LOD query or a simdgroup operation after the call. In
 //! plain Metal on an M4, 0 of 2,584 texels were lost with any of them after the call in its arm (a
 //! sample at a coordinate the call computes or of its own, `dfdx`, `fwidth`, either LOD query,
@@ -69,16 +67,32 @@
 //! `Private` variables too, but not back from a later block's phi or store. A call outside every
 //! selection and loop of a callee counts at its call sites. An arm a guard sends helpers past holds
 //! no tangled instruction, so the guards are as before.
+//!
+//! **Fences.** Each call that counts is fenced ([`Fences`]): an identity shuffle follows it, its
+//! result read in every invocation from the invocation's own lane (`OpGroupNonUniformShuffle` at
+//! `SubgroupLocalInvocationId`; a `MulExtended`'s structure member by member, put together again),
+//! and every use of the result reads the shuffled value. Every invocation, a helper too, reads its
+//! own value, so no answer changes and no lane reads another's (a guard's exactness holds); the
+//! shuffle is the simdgroup operation after the call that reads what it computes, which keeps the
+//! simdgroup's writes. The caller places the fences once every analysis of the module has run
+//! ([`Fences::apply`]): they would read the shuffle as a move between lanes. A call stays bare where
+//! the profile has no fragment shuffle (`subgroupSupportedStages` without the fragment stage, or
+//! `subgroupSupportedOperations` without `SHUFFLE`) or its result is a lane no shuffle moves (a
+//! 64-bit or `bool` one, or an 8- or 16-bit one without `shaderSubgroupExtendedTypes`); then
+//! [`Guarded::exposed`] says so, and the caller records
+//! `PrecisionNote::HelperBranchDropsSimdgroupStores`: the writes may be lost as the defect loses
+//! them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::budget::Meter;
 use crate::device::{DeviceProfile, DriverWorkaround};
 use crate::error::{Error, InternalError, InternalKind};
-use crate::spirv::ids::{BlockId, FuncId, GlobalId, Value, VarId};
+use crate::spirv::ids::{BlockId, ConstId, FuncId, GlobalId, TypeId, Value, VarId};
 use crate::spirv::ir::{
-    BinOp, ConstBits, Constant, Contraction, Decl, ExecModel, GlslOp, Inst, InstNode, Merge,
-    StorageClass, Terminator, Type, TypedModule, UnOp, ValueDef, ValueOrigin,
+    BinOp, ConstBits, Constant, Contraction, Decl, ExecModel, GlobalKind, GlobalVar, GlslOp,
+    GroupInst, Inst, InstNode, IoDir, MemAccess, Merge, Scope, ScopeId, ShuffleOp, StorageClass,
+    Terminator, Type, TypedModule, UnOp, ValueDef, ValueOrigin,
 };
 
 /// The census name of the selections [`guard`] guards ([`Guarded::selections`]), which the
@@ -91,41 +105,85 @@ const NONE: u32 = u32::MAX;
 /// The most whole-module passes a taint analysis takes before it calls its guard inexact.
 const MAX_PASSES: u32 = 64;
 
+/// The census name of the `optnone` calls [`guard`] fences ([`Guarded::fences`]), which the
+/// runtime's pipeline creation log prints as `helper-fence <stage>`.
+pub const FENCE_STRATEGY: &str = "fragment.helper-fence";
+
 /// What [`guard`] did to a module.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Guarded {
     /// The selections whose helper invocations now take an arm without an `optnone` call.
     pub selections: u32,
+    /// The `optnone` calls an identity shuffle of what they compute follows ([`Fences`]).
+    pub fences: u32,
     /// An `optnone` call stays where only helper invocations may run it before a storage write.
     pub exposed: bool,
 }
 
+/// The `optnone` calls a guard left where only helper invocations may make them before a storage
+/// write, with no tangled instruction reading what they compute after them, each to be followed
+/// by an identity shuffle of its result ([`Fences::apply`]). [`guard`] decides them; the caller
+/// applies them once every analysis of the module has run, since a shuffle is an identity that
+/// those analyses would read as a move between lanes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Fences {
+    /// Each call's block and result.
+    sites: Vec<(BlockId, Value)>,
+}
+
+/// The fences a profile can place: a fragment entry's `OpGroupNonUniformShuffle`
+/// (`subgroupSupportedStages` with the fragment stage, `subgroupSupportedOperations` with
+/// `SHUFFLE`), and of 8- and 16-bit values (`shaderSubgroupExtendedTypes`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct FenceForms {
+    shuffle: bool,
+    extended: bool,
+}
+
 /// [`guard`] where `p`'s driver has the defect (`DriverWorkaround::DiscardDropsSimdgroupStores`);
 /// nothing elsewhere. A helper query needs `shaderDemoteToHelperInvocation`: without it nothing
-/// is guarded, and a call where only helpers may run it is reported.
+/// is guarded. A call that stays where only helpers may run it is fenced where the profile can
+/// place the fence ([`Fences`]), else reported.
 pub fn guard_for(
     m: &mut TypedModule,
     p: &DeviceProfile,
     meter: &mut Meter,
-) -> Result<Guarded, Error> {
+) -> Result<(Guarded, Fences), Error> {
     let fields = p.fields();
     if !fields
         .workarounds
         .contains(&DriverWorkaround::DiscardDropsSimdgroupStores)
     {
-        return Ok(Guarded::default());
+        return Ok((Guarded::default(), Fences::default()));
     }
-    guard(m, fields.fragment.demote_to_helper, meter)
+    let fragment = &fields.subgroup.fragment;
+    let forms = FenceForms {
+        shuffle: fragment.supported
+            && fragment
+                .ops
+                .contains(crate::device::subgroup::OpBits::SHUFFLE),
+        extended: fields
+            .enabled
+            .features
+            .contains(&crate::device::requirements::VkFeature::ShaderSubgroupExtendedTypes),
+    };
+    guard(m, fields.fragment.demote_to_helper, forms, meter)
 }
 
 /// Keep `m`'s helper invocations out of the arms that hold an `optnone` call before a storage
-/// write (the module docs), where `m` is a fragment entry that samples and writes storage.
+/// write (the module docs), where `m` is a fragment entry that samples and writes storage, and
+/// fence each call that stays where only they may make it (`forms`, [`Fences`]).
 /// `query`: the module may ask whether its invocation is a helper (`OpIsHelperInvocationEXT`).
-fn guard(m: &mut TypedModule, query: bool, meter: &mut Meter) -> Result<Guarded, Error> {
+fn guard(
+    m: &mut TypedModule,
+    query: bool,
+    forms: FenceForms,
+    meter: &mut Meter,
+) -> Result<(Guarded, Fences), Error> {
     if m.entry.model != ExecModel::Fragment {
-        return Ok(Guarded::default());
+        return Ok((Guarded::default(), Fences::default()));
     }
-    let (guards, exposed) = {
+    let (guards, fences, exposed) = {
         let facts = Facts::new(m, meter)?;
         if !facts.samples
             || !facts
@@ -134,9 +192,26 @@ fn guard(m: &mut TypedModule, query: bool, meter: &mut Meter) -> Result<Guarded,
                 .copied()
                 .unwrap_or(false)
         {
-            return Ok(Guarded::default());
+            return Ok((Guarded::default(), Fences::default()));
         }
-        facts.plan(query, meter)?
+        let Plan {
+            guards,
+            bare,
+            problem,
+        } = facts.plan(query, meter)?;
+        // Every bare call is fenced where its result can be shuffled; the note stays where one
+        // cannot.
+        let mut fences = Fences::default();
+        let mut exposed = false;
+        if problem {
+            for (b, v) in bare {
+                match forms.shuffle && facts.fenceable(v, forms.extended)? {
+                    true => fences.sites.push((b, v)),
+                    false => exposed = true,
+                }
+            }
+        }
+        (guards, fences, exposed)
     };
     let selections = u32::try_from(guards.len()).map_err(|_| invariant("guard count"))?;
     if !guards.is_empty() {
@@ -145,10 +220,15 @@ fn guard(m: &mut TypedModule, query: bool, meter: &mut Meter) -> Result<Guarded,
         }
         m.rederive()?;
     }
-    Ok(Guarded {
-        selections,
-        exposed,
-    })
+    let count = u32::try_from(fences.sites.len()).map_err(|_| invariant("fence count"))?;
+    Ok((
+        Guarded {
+            selections,
+            fences: count,
+            exposed,
+        },
+        fences,
+    ))
 }
 
 fn invariant(detail: &str) -> Error {
@@ -229,6 +309,19 @@ enum Route {
 struct Guard {
     header: BlockId,
     route: Route,
+}
+
+/// What [`Facts::plan`] decides.
+struct Plan {
+    /// The selections to guard.
+    guards: Vec<Guard>,
+    /// Every bare `optnone` call (its block and result: one a path from which ends without
+    /// passing a tangled instruction that reads what it computes) where only helper invocations
+    /// may make it, or in a callee, outside its selections and loops, that its callers may call
+    /// so.
+    bare: Vec<(BlockId, Value)>,
+    /// A bare call where only helper invocations may make it.
+    problem: bool,
 }
 
 /// A structured construct of one function: the layout interval `[start, end)` from its header to
@@ -524,6 +617,31 @@ impl<'a> Facts<'a> {
         Ok(decided.get(&v).copied().unwrap_or(false))
     }
 
+    /// Whether the result `v` of an `optnone` call can be shuffled between lanes
+    /// ([`Fences::apply`]): a scalar or vector of 32-bit integers or floats, or of 8- or 16-bit
+    /// ones where `extended` (`shaderSubgroupExtendedTypes`), or a structure of such members (a
+    /// `MulExtended`'s). A 64-bit or `bool` lane is not: Metal's simdgroup shuffles move no
+    /// 64-bit value.
+    fn fenceable(&self, v: Value, extended: bool) -> Result<bool, Error> {
+        let ty = self
+            .m
+            .values
+            .get(v.index())
+            .map(|d| d.ty)
+            .ok_or_else(|| invariant("an optnone call's result"))?;
+        match self.m.types.get(ty)? {
+            Type::Struct { members, .. } => {
+                for member in members.iter() {
+                    if !lane_type(self.m, *member, extended)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            _ => lane_type(self.m, ty, extended),
+        }
+    }
+
     fn blocks_of(&self, f: FuncId) -> Vec<BlockId> {
         self.m
             .functions
@@ -692,7 +810,7 @@ impl<'a> Facts<'a> {
     }
 
     /// Decide the guards, callees first, and whether a call stays exposed.
-    fn plan(&self, query: bool, meter: &mut Meter) -> Result<(Vec<Guard>, bool), Error> {
+    fn plan(&self, query: bool, meter: &mut Meter) -> Result<Plan, Error> {
         let m = self.m;
         let nf = m.functions.len();
         // By function: an `optnone` call no guard covers, before a write.
@@ -702,6 +820,7 @@ impl<'a> Facts<'a> {
         let mut bare_fn = vec![false; nf];
         let mut problem = false;
         let mut guards = Vec::new();
+        let mut bare = Vec::new();
         // Every guard exact at once, where the union of all candidates' taint reaches nothing.
         let mut all_exact: Option<bool> = None;
         let mut uniformity = Uniformity::default();
@@ -798,10 +917,7 @@ impl<'a> Facts<'a> {
             // computes. A call inside a selection or loop whose condition is not draw-uniform
             // records the note; one outside every such construct of a callee is its callers' to
             // count, through the call. Guards are as before: an arm they guard holds no tangled
-            // instruction at all.
-            if problem {
-                continue;
-            }
+            // instruction at all. Every function's bare calls are listed, whatever the note.
             let mut inner = Vec::new();
             let mut outer = Vec::new();
             for &p in &open {
@@ -832,31 +948,50 @@ impl<'a> Facts<'a> {
                     }
                 }
             }
-            if self.any_bare(&blocks, &inner, meter)? {
+            let inner = self.bare(&blocks, &inner, meter)?;
+            let outer = self.bare(&blocks, &outer, meter)?;
+            if !inner.is_empty() {
                 problem = true;
-            } else if self.any_bare(&blocks, &outer, meter)? {
+            } else if !outer.is_empty() {
                 if let Some(x) = bare_fn.get_mut(f.index()) {
                     *x = true;
                 }
             }
+            for (p, i) in inner.into_iter().chain(outer) {
+                let Some(b) = blocks.get(p) else {
+                    continue;
+                };
+                // A call of a function is cured inside the function.
+                if let Some(node) = self.block(*b)?.insts.get(i).filter(|n| optnone(&n.inst)) {
+                    let v = node
+                        .result
+                        .ok_or_else(|| invariant("an optnone call's result"))?;
+                    bare.push((*b, v));
+                }
+            }
         }
-        Ok((guards, problem))
+        Ok(Plan {
+            guards,
+            bare,
+            problem,
+        })
     }
 
-    /// Whether a path from one of `calls` (block position and instruction index in `blocks`, one
-    /// function's layout) ends without passing a tangled instruction that reads what the call
-    /// computes. The calls are taken 64 at a time: one pass over the function's layout from the
-    /// first of them marks, by block, the calls each tangled instruction there reads (a bit a
+    /// The calls of `calls` (block position and instruction index in `blocks`, one function's
+    /// layout) a path from which ends without passing a tangled instruction that reads what the
+    /// call computes. The calls are taken 64 at a time: one pass over the function's layout from
+    /// the first of them marks, by block, the calls each tangled instruction there reads (a bit a
     /// call, through every operand, phi, and `Function` or `Private` variable stored to, from the
     /// call on, in layout order, where a block's dominators come first; what a block reaches only
     /// through a later block's phi or store is not followed), then each call's paths are walked to
     /// their end or to such a block.
-    fn any_bare(
+    fn bare(
         &self,
         blocks: &[BlockId],
         calls: &[(usize, usize)],
         meter: &mut Meter,
-    ) -> Result<bool, Error> {
+    ) -> Result<Vec<(usize, usize)>, Error> {
+        let mut out = Vec::new();
         for batch in calls.chunks(64) {
             let bit: BTreeMap<(usize, usize), u64> = batch
                 .iter()
@@ -908,13 +1043,13 @@ impl<'a> Facts<'a> {
                     }
                 }
             }
-            for (k, &(p, _)) in batch.iter().enumerate() {
+            for (k, &(p, i)) in batch.iter().enumerate() {
                 if self.bare_path(blocks, &meets, p, 1u64 << k)? {
-                    return Ok(true);
+                    out.push((p, i));
                 }
             }
         }
-        Ok(false)
+        Ok(out)
     }
 
     /// Whether a path from the block at position `p` of `blocks` ends (a return, kill or
@@ -1216,6 +1351,207 @@ impl<'a> Facts<'a> {
     }
 }
 
+/// Whether a value of type `ty` is a lane a simdgroup shuffle moves ([`Facts::fenceable`]).
+fn lane_type(m: &TypedModule, ty: TypeId, extended: bool) -> Result<bool, Error> {
+    let scalar = match m.types.get(ty)? {
+        Type::Vector { elem, .. } => *elem,
+        _ => ty,
+    };
+    Ok(match m.types.get(scalar)? {
+        Type::Int { width, .. } => *width == 32 || (extended && matches!(*width, 8 | 16)),
+        Type::Float { width } => *width == 32 || (extended && *width == 16),
+        _ => false,
+    })
+}
+
+impl Fences {
+    /// Follow each fenced call with an identity shuffle of what it computes: its result read in
+    /// every invocation from the invocation's own lane (`OpGroupNonUniformShuffle` at
+    /// `SubgroupLocalInvocationId`, a structure's members each), which every later use reads in
+    /// its place. Every invocation, a helper too, reads its own value, so no answer changes; the
+    /// shuffle is the tangled instruction after the call that keeps the simdgroup's writes on
+    /// Apple's compiler (the module docs). The entry reads the lane through the module's
+    /// `SubgroupLocalInvocationId` input, declared where the module has none.
+    pub fn apply(&self, m: &mut TypedModule) -> Result<(), Error> {
+        if self.sites.is_empty() {
+            return Ok(());
+        }
+        let u32_ty = ty(
+            m,
+            Type::Int {
+                width: 32,
+                signed: false,
+            },
+        )?;
+        let lane = lane_input(m, u32_ty)?;
+        let scope = ScopeId {
+            scope: Scope::Subgroup,
+            id: constant_id(
+                m,
+                Constant::Scalar {
+                    ty: u32_ty,
+                    bits: ConstBits(Scope::Subgroup.to_spirv() as u64),
+                },
+            )?,
+        };
+        for &(b, v) in &self.sites {
+            fence(m, (b, v), lane, u32_ty, scope)?;
+        }
+        m.rederive()?;
+        Ok(())
+    }
+}
+
+/// The pointer of the module's `SubgroupLocalInvocationId` input, declared where it has none.
+fn lane_input(m: &mut TypedModule, u32_ty: TypeId) -> Result<Value, Error> {
+    let builtin = crate::spv::BuiltIn::SubgroupLocalInvocationId;
+    let found = m.globals.iter().find(|g| {
+        g.kind
+            == GlobalKind::BuiltIn {
+                builtin,
+                dir: IoDir::Input,
+            }
+            && g.pointee == u32_ty
+    });
+    if let Some(g) = found {
+        return Ok(g.value);
+    }
+    let class = StorageClass::Input;
+    let ptr_ty = ty(
+        m,
+        Type::Pointer {
+            class,
+            pointee: u32_ty,
+        },
+    )?;
+    let id = GlobalId::new(u32::try_from(m.globals.len()).map_err(|_| invariant("global ids"))?);
+    let value = new_value(m, ptr_ty, ValueOrigin::Global(id))?;
+    m.globals.push(GlobalVar {
+        class,
+        pointee: u32_ty,
+        ptr_ty,
+        value,
+        init: None,
+        kind: GlobalKind::BuiltIn {
+            builtin,
+            dir: IoDir::Input,
+        },
+    });
+    m.decls.push(Decl::Global(id));
+    Ok(value)
+}
+
+/// Follow the call of block `b` whose result is `v` with an identity shuffle of `v` (a
+/// structure's members each, put together again), renaming every use of `v` in its function to
+/// the shuffled value.
+fn fence(
+    m: &mut TypedModule,
+    (b, v): (BlockId, Value),
+    lane: Value,
+    u32_ty: TypeId,
+    scope: ScopeId,
+) -> Result<(), Error> {
+    let blk = m
+        .blocks
+        .get(b.index())
+        .ok_or_else(|| invariant("a fenced call's block"))?;
+    let func = blk.func;
+    let at = blk
+        .insts
+        .iter()
+        .position(|n| n.result == Some(v))
+        .ok_or_else(|| invariant("a fenced call"))?;
+    let ty_of = |m: &TypedModule, x: Value| {
+        m.values
+            .get(x.index())
+            .map(|d| d.ty)
+            .ok_or_else(|| invariant("a fenced value"))
+    };
+    let result_ty = ty_of(m, v)?;
+    let fenced = new_value(m, result_ty, ValueOrigin::Inst(b))?;
+    // Every use reads the shuffled value; the shuffle, placed after this, reads the call's.
+    let rename = |x: &mut Value| {
+        if *x == v {
+            *x = fenced;
+        }
+    };
+    for blk in m.blocks.iter_mut().filter(|blk| blk.func == func) {
+        for phi in &mut blk.phis {
+            for (x, _) in &mut phi.incoming {
+                rename(x);
+            }
+        }
+        for node in &mut blk.insts {
+            node.inst.for_each_value_mut(rename);
+        }
+        blk.term.for_each_value_mut(rename);
+    }
+    if m.stored_texels.contains(&v) {
+        m.stored_texels.insert(fenced);
+    }
+    let mut nodes = Vec::new();
+    let id = new_value(m, u32_ty, ValueOrigin::Inst(b))?;
+    nodes.push(InstNode {
+        result: Some(id),
+        inst: Inst::Load {
+            ptr: lane,
+            access: MemAccess::default(),
+        },
+    });
+    let shuffle = |value| Inst::Group {
+        scope,
+        op: GroupInst::Shuffle {
+            op: ShuffleOp::Shuffle,
+            value,
+            x: id,
+        },
+    };
+    let members = match m.types.get(result_ty)? {
+        Type::Struct { members, .. } => Some(members.to_vec()),
+        _ => None,
+    };
+    match members {
+        Some(members) => {
+            let mut parts = Vec::with_capacity(members.len());
+            for (k, member) in members.into_iter().enumerate() {
+                let index = u32::try_from(k).map_err(|_| invariant("a member index"))?;
+                let part = new_value(m, member, ValueOrigin::Inst(b))?;
+                nodes.push(InstNode {
+                    result: Some(part),
+                    inst: Inst::CompositeExtract {
+                        composite: v,
+                        indices: Box::new([index]),
+                    },
+                });
+                let moved = new_value(m, member, ValueOrigin::Inst(b))?;
+                nodes.push(InstNode {
+                    result: Some(moved),
+                    inst: shuffle(part),
+                });
+                parts.push(moved);
+            }
+            nodes.push(InstNode {
+                result: Some(fenced),
+                inst: Inst::CompositeConstruct {
+                    parts: parts.into_boxed_slice(),
+                },
+            });
+        }
+        None => nodes.push(InstNode {
+            result: Some(fenced),
+            inst: shuffle(v),
+        }),
+    }
+    let blk = m
+        .blocks
+        .get_mut(b.index())
+        .ok_or_else(|| invariant("a fenced call's block"))?;
+    let tail = blk.insts.split_off(at + 1);
+    blk.insts.extend(nodes);
+    blk.insts.extend(tail);
+    Ok(())
+}
+
 /// Make the header of `g` send its helper invocations by its route.
 fn apply(m: &mut TypedModule, g: &Guard) -> Result<(), Error> {
     let bool_ty = ty(m, Type::Bool)?;
@@ -1341,6 +1677,12 @@ fn value(
 
 /// The value of plain constant `c`, declaring it when new.
 fn constant(m: &mut TypedModule, c: Constant) -> Result<Value, Error> {
+    let id = constant_id(m, c)?;
+    Ok(m.const_value(id)?)
+}
+
+/// Plain constant `c`, declared when new.
+fn constant_id(m: &mut TypedModule, c: Constant) -> Result<ConstId, Error> {
     let ty = c.ty();
     let (id, fresh) = m.consts.intern(c, &m.types)?;
     if fresh {
@@ -1351,5 +1693,5 @@ fn constant(m: &mut TypedModule, c: Constant) -> Result<Value, Error> {
         m.const_values.push(v);
         m.decls.push(Decl::Const(id));
     }
-    Ok(m.const_value(id)?)
+    Ok(id)
 }

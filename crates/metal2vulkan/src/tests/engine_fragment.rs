@@ -5642,6 +5642,58 @@ fn helper_guards(m: &TypedModule) -> usize {
         .count()
 }
 
+/// The identity shuffles of `m` that fence an `optnone` call (`spirv::helper_branches`'s
+/// `Fences`): each `OpGroupNonUniformShuffle` at the `SubgroupLocalInvocationId` the module loads
+/// of an `OpUMulExtended`'s member.
+fn helper_fences(m: &TypedModule) -> usize {
+    use crate::spirv::ir::{BinOp, GlobalKind, GroupInst, ShuffleOp, ValueOrigin};
+    let defs: std::collections::HashMap<_, _> = m
+        .blocks()
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter_map(|n| n.result.map(|r| (r, &n.inst)))
+        .collect();
+    let lane = |v| match defs.get(&v) {
+        Some(Inst::Load { ptr, .. }) => match m.values().get(ptr.index()).map(|d| d.origin) {
+            Some(ValueOrigin::Global(g)) => m.globals().get(g.index()).is_some_and(|g| {
+                matches!(
+                    g.kind,
+                    GlobalKind::BuiltIn {
+                        builtin: crate::spv::BuiltIn::SubgroupLocalInvocationId,
+                        ..
+                    }
+                )
+            }),
+            _ => false,
+        },
+        _ => false,
+    };
+    let product = |v| match defs.get(&v) {
+        Some(Inst::CompositeExtract { composite, .. }) => matches!(
+            defs.get(composite),
+            Some(Inst::Binary {
+                op: BinOp::UMulExtended,
+                ..
+            })
+        ),
+        _ => false,
+    };
+    defs.values()
+        .filter(|inst| match inst {
+            Inst::Group {
+                op:
+                    GroupInst::Shuffle {
+                        op: ShuffleOp::Shuffle,
+                        value,
+                        x,
+                    },
+                ..
+            } => product(*value) && lane(*x),
+            _ => false,
+        })
+        .count()
+}
+
 /// On MoltenVK on an Apple GPU (`DriverWorkaround::DiscardDropsSimdgroupStores`), Apple's compiler
 /// loses a simdgroup's storage writes after an `optnone` call only its helper invocations make,
 /// with no discard: the quad helpers past a primitive's edges take a branch alone. The owned
@@ -5651,12 +5703,13 @@ fn helper_guards(m: &TypedModule) -> usize {
 /// it. There the branch's helper invocations take its empty arm where nothing they compute
 /// differently reaches a derivative: `rch_helper_branch` (no implicit LOD) and
 /// `rch_helper_branch_late` (an implicit-LOD sample after the branch at the pixel) are guarded,
-/// census `fragment.helper-guard`, and record no note. `rch_helper_branch_gradient`, whose
-/// implicit-LOD sample reads a coordinate the branch computes, is not guarded and records no note
-/// either: the sample reads the product after it. `rch_helper_branch_loop`, whose product is in a
-/// loop as long as the coverage, records `PrecisionNote::HelperBranchDropsSimdgroupStores`. One
+/// census `fragment.helper-guard`. `rch_helper_branch_gradient`, whose implicit-LOD sample reads
+/// a coordinate the branch computes, is neither guarded nor fenced: the sample reads the product
+/// after it. `rch_helper_branch_loop`, whose product is in a loop as long as the coverage, is
+/// fenced: an identity shuffle of each of its products' two members follows it, census
+/// `fragment.helper-fence`. None records `PrecisionNote::HelperBranchDropsSimdgroupStores`. One
 /// that samples nothing (`rch_helper_branch_unsampled`) is left as it is. A device without the
-/// defect (`intel-arl-anv`) guards nothing. Every module passes L3.
+/// defect (`intel-arl-anv`) guards and fences nothing. Every module passes L3.
 #[test]
 fn helper_invocations_skip_an_optnone_branch_on_a_driver_that_drops_a_simdgroups_stores() {
     let Some(bc) = fixture("rch_helper_branch") else {
@@ -5666,7 +5719,8 @@ fn helper_invocations_skip_an_optnone_branch_on_a_driver_that_drops_a_simdgroups
     let anv = profile("intel-arl-anv", DevicePolicy::default()).expect("profile");
     let noted = PrecisionNote::HelperBranchDropsSimdgroupStores;
     let census = "fragment.helper-guard";
-    // (entry, guarded on `moltenvk-m3`, noted there)
+    let fence_census = "fragment.helper-fence";
+    // (entry, guarded on `moltenvk-m3`, fenced there)
     let cases = [
         ("rch_helper_branch", true, false),
         ("rch_helper_branch_late", true, false),
@@ -5675,22 +5729,34 @@ fn helper_invocations_skip_an_optnone_branch_on_a_driver_that_drops_a_simdgroups
         ("rch_helper_branch_loop", false, true),
     ];
     let inputs = LoweringInputs::new();
-    for (entry, guarded, note) in cases {
-        for (stem, p, guarded, note) in [
-            ("moltenvk-m3", &mvk, guarded, note),
+    for (entry, guarded, fenced) in cases {
+        for (stem, p, guarded, fenced) in [
+            ("moltenvk-m3", &mvk, guarded, fenced),
             ("intel-arl-anv", &anv, false, false),
         ] {
             let what = format!("{entry} on {stem}");
             let (_, m) =
                 typed_module_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
             let guards = helper_guards(&m);
+            let fences = helper_fences(&m);
             let a = compile_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
             let counted = a.strategies.entries.get(census).map(|u| u.uses as usize);
+            let fences_counted = a.strategies.entries.get(fence_census).map(|u| u.uses);
             let noted_here = a.precision.contains(&noted);
-            eprintln!("observed: {what}: guards {guards}, census {counted:?}, note {noted_here}");
+            eprintln!(
+                "observed: {what}: guards {guards}, census {counted:?}, fences {fences} \
+                 ({fences_counted:?}), note {noted_here}"
+            );
             assert_eq!(guards > 0, guarded, "{what}: {guards} guards");
             assert_eq!(counted, guarded.then_some(guards), "{what}: the census");
-            assert_eq!(noted_here, note, "{what}: the note");
+            // Each fenced product's two members are shuffled.
+            assert_eq!(fences > 0, fenced, "{what}: {fences} fences");
+            assert_eq!(
+                fences_counted.map(|c| 2 * c as usize),
+                fenced.then_some(fences),
+                "{what}: the fence census"
+            );
+            assert!(!noted_here, "{what}: the note");
             link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
         }
     }
@@ -5747,16 +5813,17 @@ fn a_branch_every_invocation_takes_alike_leaves_no_helper_alone() {
 
 /// Apple's compiler loses nothing after an `optnone` call only helper invocations make where they
 /// make a tangled instruction (an implicit-LOD sample, a derivative, an LOD query, a simdgroup
-/// operation) after it, so such a call records no note where every path from it passes a tangled
-/// instruction reading what it computes. The owned fixture `rch_helper_tangle` takes the high
-/// words of products (`mulhi`, an `OpUMulExtended`, which SPIRV-Cross writes through its `optnone`
+/// operation) after it that reads what it computes, so a call is fenced only where some path from
+/// it passes none. The owned fixture `rch_helper_tangle` takes the high words of products
+/// (`mulhi`, an `OpUMulExtended`, which SPIRV-Cross writes through its `optnone`
 /// `spvMulExtended`) where only the quad helpers past a primitive's edges run more than once or at
 /// all, beside a tangled instruction, and writes a texture after it. On `moltenvk-m3` no arm is
 /// guarded; the `after` functions, whose tangled instruction reads the products (in the arm an
 /// implicit-LOD sample at them, `dfdx`, `quad_sum`, the LOD query; a sample after the branch's
-/// merge; a sample after a loop only helpers repeat), record no
-/// `HelperBranchDropsSimdgroupStores`; the `before` functions and `rch_tangle_unread`, whose
-/// tangled instruction reads none of them, record it. Every module passes L3.
+/// merge; a sample after a loop only helpers repeat), are not fenced; the `before` functions and
+/// `rch_tangle_unread`, whose tangled instruction reads none of them, are: an identity shuffle of
+/// each of the products' two members follows the call, census `fragment.helper-fence`. None
+/// records `HelperBranchDropsSimdgroupStores`. Every module passes L3.
 #[test]
 fn a_tangled_instruction_reading_a_helper_call_keeps_the_note_away() {
     let Some(bc) = fixture("rch_helper_tangle") else {
@@ -5764,7 +5831,7 @@ fn a_tangled_instruction_reading_a_helper_call_keeps_the_note_away() {
     };
     let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
     let noted = PrecisionNote::HelperBranchDropsSimdgroupStores;
-    // (entry, noted on `moltenvk-m3`)
+    // (entry, fenced on `moltenvk-m3`)
     let cases = [
         ("rch_tangle_sample_after", false),
         ("rch_tangle_dfdx_after", false),
@@ -5777,19 +5844,74 @@ fn a_tangled_instruction_reading_a_helper_call_keeps_the_note_away() {
         ("rch_tangle_unread", true),
     ];
     let inputs = LoweringInputs::new();
-    for (entry, note) in cases {
+    for (entry, fenced) in cases {
         let what = format!("{entry} on moltenvk-m3");
         let (_, m) =
             typed_module_with(&bc, entry, &p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
         let a = compile_with(&bc, entry, &p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
         let noted_here = a.precision.contains(&noted);
+        let fences = helper_fences(&m);
+        let counted = a
+            .strategies
+            .entries
+            .get("fragment.helper-fence")
+            .map(|u| u.uses);
         eprintln!(
-            "observed: {what}: guards {}, note {noted_here}",
+            "observed: {what}: guards {}, fences {fences} ({counted:?}), note {noted_here}",
             helper_guards(&m)
         );
         assert_eq!(helper_guards(&m), 0, "{what}: guards");
-        assert_eq!(noted_here, note, "{what}: the note");
+        // Each fenced product's two members are shuffled.
+        assert_eq!(fences > 0, fenced, "{what}: {fences} fences");
+        assert_eq!(
+            counted.map(|c| 2 * c as usize),
+            fenced.then_some(fences),
+            "{what}: the fence census"
+        );
+        assert!(!noted_here, "{what}: the note");
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+    }
+}
+
+/// A call no identity shuffle can follow stays bare and records the note: on `moltenvk-m3` with
+/// the fragment stage's shuffle taken out of its subgroup model (the `SHUFFLE` operation, or the
+/// fragment stage), `rch_helper_tangle`'s `before` functions and `rch_tangle_unread` are not
+/// fenced and record `PrecisionNote::HelperBranchDropsSimdgroupStores`, as every profile with the
+/// defect and no fragment shuffle does. Every module passes L3.
+#[test]
+fn a_helper_call_no_shuffle_can_follow_keeps_the_note() {
+    let Some(bc) = fixture("rch_helper_tangle") else {
+        return;
+    };
+    let base = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let mut no_op = base.clone();
+    no_op
+        .edit(|f| f.subgroup.fragment.ops = OpBits(f.subgroup.fragment.ops.0 & !OpBits::SHUFFLE.0));
+    let mut no_stage = base.clone();
+    no_stage.edit(|f| f.subgroup.fragment.supported = false);
+    let noted = PrecisionNote::HelperBranchDropsSimdgroupStores;
+    let inputs = LoweringInputs::new();
+    for (form, p) in [
+        ("no fragment SHUFFLE", &no_op),
+        ("no fragment stage", &no_stage),
+    ] {
+        for entry in [
+            "rch_tangle_quad_before",
+            "rch_tangle_sample_before",
+            "rch_tangle_unread",
+        ] {
+            let what = format!("{entry} on moltenvk-m3 with {form}");
+            let (_, m) =
+                typed_module_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
+            let a = compile_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(helper_fences(&m), 0, "{what}: the fences");
+            assert!(
+                !a.strategies.entries.contains_key("fragment.helper-fence"),
+                "{what}: the fence census"
+            );
+            assert!(a.precision.contains(&noted), "{what}: the note");
+            link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        }
     }
 }
 
