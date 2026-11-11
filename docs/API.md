@@ -4196,6 +4196,17 @@ bound.
   `OpQuantizeToF16` alone, on every device without `shaderFloat16`, its quantize measured or not: a
   value below the smallest normal `half` may round to a zero where Metal answers the half denormal
   (or `2^-14`, from just below it). An integer's `half` rounds exactly instead.
+- `metal2vulkan-degrade-native-conversion-rounding` (precision).
+  `PrecisionNote::NativeConversionRounding`: Native device maths (a conversion): an `air.convert`
+  whose name rounds to nearest even (`.rte`: OpenCL's `convert_float` of an `int`, as Apple's
+  OpenCL compiler spells it) and that can round (a 32- or 64-bit integer to `float`, a 64-bit
+  integer to `double`, a `double` to `float`) is the device's correctly rounded conversion where
+  the entry cannot declare `RoundingModeRTE` for the result's width with the widths the device's
+  rounding-mode independence ties to it (MoltenVK, whose 64-bit rounding mode it does not state):
+  either value around the exact one, the device's choice, where Metal answers the nearer one, ties
+  to even. Where the entry declares the mode the conversion is Metal's and records nothing. The
+  conversions that round toward zero or an infinity (`.rtz`, `.rtp`, `.rtn`) are exact on every
+  device and record nothing.
 - `metal2vulkan-degrade-native-nan-encoding` (precision). `PrecisionNote::NativeNanEncoding`: Native
   device maths: a `float` or `half` operation's NaN result is the device's, its sign and payload
   unselected, where Metal answers a NaN the device is not measured to answer (every NaN but

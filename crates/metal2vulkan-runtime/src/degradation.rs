@@ -2583,6 +2583,15 @@ degradations! {
         /// flushes 16-bit denormals; a NaN's encoding (`0x7FFF` on the RTX 5080, where Metal
         /// answers `0x7E00`) and the sign of a zero result the device's.
         NativeHalfConversion = "native-half-conversion";
+        /// Class: native device maths (a conversion). The device's correctly rounded conversion
+        /// answers an `air.convert` whose name rounds to nearest even (`.rte`, OpenCL's
+        /// `convert_float` of an `int`) and that can round (a 32- or 64-bit integer to `float`, a
+        /// 64-bit integer to `double`, a `double` to `float`), on a device whose float controls
+        /// cannot declare `RoundingModeRTE` for the result's width with the widths its
+        /// independence ties to it (MoltenVK). Recorded bound: the exact value's neighbour on
+        /// either side, one unit in the last place, the device's choice, where Metal answers the
+        /// nearer one, ties to even.
+        NativeConversionRounding = "native-conversion-rounding";
         /// Class: native half rounding. The device's `OpQuantizeToF16` alone rounds the
         /// pipeline's `half` results computed in `float` on every device without `shaderFloat16`,
         /// its quantize measured or not; an integer's `half` rounds exactly. Recorded bound: a

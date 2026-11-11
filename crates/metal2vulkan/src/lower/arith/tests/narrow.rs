@@ -1588,7 +1588,10 @@ fn narrow_conversions_round_once() {
                 &|fb, x| {
                     math::convert(
                         fb,
-                        ConvertKind::ToInt { signed },
+                        ConvertKind::ToInt {
+                            signed,
+                            integral: crate::lower::arith::rounding::Integral::Truncate,
+                        },
                         half(),
                         fi,
                         x[0],

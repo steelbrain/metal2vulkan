@@ -1960,6 +1960,18 @@ pub enum PrecisionNote {
     /// `fquantize2f16` flushes every one, SwiftShader's too); a NaN's encoding is the device's.
     /// Validation derives no tolerance from it.
     NativeHalfQuantize,
+    /// Native conversion rounding: an `air.convert` whose name rounds to nearest even (`.rte`,
+    /// Apple's OpenCL compiler's `convert_<type>` and `convert_<type>_rte`) and that can round (a
+    /// 32- or 64-bit integer to `float`, a 64-bit integer to `double`, a `double` to `float`) is
+    /// the device's correctly rounded conversion, in an entry that cannot declare
+    /// `RoundingModeRTE` for the result's width: the device's float controls lack it, or its
+    /// rounding-mode independence ties it to a width that lacks it (MoltenVK, whose 64-bit
+    /// rounding mode it does not state). The Vulkan spec rounds such a conversion to either of
+    /// the two values around the exact one, the device's choice, where Metal rounds to nearest
+    /// even. Where the entry declares the mode, the conversion is Metal's and records nothing. The
+    /// recorded bound: one unit in the last place of the result, a value exactly between two the
+    /// other of them. Validation derives no tolerance from it.
+    NativeConversionRounding,
     /// Native device maths: a `float` or `half` operation's NaN result is the device's, its sign
     /// and payload unselected, where Metal answers a NaN the device is not measured to answer:
     /// every NaN Metal answers on a device whose arithmetic is not measured to answer Metal's

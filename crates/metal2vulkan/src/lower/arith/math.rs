@@ -29,6 +29,7 @@ use crate::lower::arith::libm::{self, Lib};
 use crate::lower::arith::nan::{self, NanTest};
 use crate::lower::arith::narrow;
 use crate::lower::arith::ops::{fsplat, mask, ones, sext, splat, ty, CastKind};
+use crate::lower::arith::rounding;
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, TypeRule};
 use crate::spirv::ids::Value;
@@ -2366,10 +2367,26 @@ pub enum ConvertKind {
     Float,
     /// Integer (`signed` source) to float.
     ToFloat { signed: bool },
-    /// Float to integer, saturating: NaN to 0, out-of-range to the destination's bound.
-    ToInt { signed: bool },
+    /// Float to integer, saturating: NaN to 0, out-of-range to the destination's bound, the float
+    /// first rounded to an integral value by `integral` (`air.convert`'s rounding).
+    ToInt {
+        signed: bool,
+        integral: rounding::Integral,
+    },
     /// Integer (`signed` source) to integer.
     Int { signed: bool },
+    /// Integer (`src_signed` source) to integer (`dst_signed`), saturating (`air.convert`'s
+    /// `.sat`): clamped to the range both share ([`rounding::saturate`]), then [`ConvertKind::Int`].
+    SatInt { src_signed: bool, dst_signed: bool },
+    /// Integer (`signed` source) to a float that cannot hold every value of it, rounded `dir`
+    /// (`air.convert`'s `.rtz`, `.rtp` and `.rtn`): exact by integer arithmetic
+    /// ([`rounding::int_to_float`]).
+    ToFloatDirected {
+        signed: bool,
+        dir: rounding::Directed,
+    },
+    /// A float to a narrower float, rounded `dir` ([`rounding::narrow_float`]): exact.
+    FloatDirected(rounding::Directed),
     /// An 8-bit float (carried in an `i8`) to a float: exact.
     FromFp8(narrow::Fp8Layout),
     /// An 8-bit float (carried in an `i8`) to an integer: its value as an `f32` (exact, as
@@ -2416,8 +2433,24 @@ pub fn convert(
         ConvertKind::Fp8ToInt { fp8, signed } => {
             let f = from.with(Held::Float(FloatFmt::F32));
             let v = narrow::fp8_to_f32(fb, fp8, narrow::u32_form(from), f, x)?;
-            convert(fb, ConvertKind::ToInt { signed }, f, to, v, test)
+            let k = ConvertKind::ToInt {
+                signed,
+                integral: rounding::Integral::Truncate,
+            };
+            convert(fb, k, f, to, v, test)
         }
+        ConvertKind::SatInt {
+            src_signed,
+            dst_signed,
+        } => {
+            let c = rounding::saturate(fb, (src_signed, dst_signed), from, to, x)?;
+            let k = ConvertKind::Int { signed: src_signed };
+            convert(fb, k, from, to, c, test)
+        }
+        ConvertKind::ToFloatDirected { signed, dir } => {
+            rounding::int_to_float(fb, (signed, dir), from, to, x)
+        }
+        ConvertKind::FloatDirected(dir) => rounding::narrow_float(fb, from, to, x, dir),
         ConvertKind::Float => cast(fb, CastKind::FpResize, from, to, x),
         // A held integer is zero-extended in its container, so the container is zero exactly
         // when the value is.
@@ -2460,7 +2493,9 @@ pub fn convert(
             }
             cast(fb, c, from, to, x)
         }
-        ConvertKind::ToInt { signed } => {
+        ConvertKind::ToInt { signed, integral } => {
+            // Rounded to an integral value first; the NaN test reads the operand itself.
+            let v = rounding::integral(fb, integral, x)?;
             let n = u32::from(to.bits());
             // A narrow float is exactly its container's value: clamp in the container.
             let fw = from.container();
@@ -2475,7 +2510,7 @@ pub fn convert(
             };
             let hi_bits = below_pow2_bits(fw, k);
             let hi = splat(fb, from, hi_bits)?;
-            let c = glsl(fb, GlslOp::NClamp, &[x, lo, hi])?;
+            let c = glsl(fb, GlslOp::NClamp, &[v, lo, hi])?;
             let t = ty(fb, to)?;
             let op = if signed {
                 ConvOp::ConvertFToS
@@ -2488,7 +2523,7 @@ pub fn convert(
             // to it); otherwise it is selected.
             if float_value(fw, hi_bits).trunc() < (2f64.powi(k as i32) - 1.0) {
                 let limit = splat(fb, from, pow2_bits(fw, k))?;
-                let over = bin(fb, BinOp::FOrdGreaterThanEqual, x, limit)?;
+                let over = bin(fb, BinOp::FOrdGreaterThanEqual, v, limit)?;
                 let max = splat(fb, to, ones(if signed { to.bits() - 1 } else { to.bits() }))?;
                 r = fb.select(over, max, r)?;
             }

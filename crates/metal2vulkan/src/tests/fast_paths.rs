@@ -157,6 +157,7 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             HalfOutputPrecision,
             NativeHalfConversion,
             NativeHalfQuantize,
+            NativeConversionRounding,
             F16FmaDoubleRounding,
             F16IntConvDoubleRounding,
             GradFromBias,

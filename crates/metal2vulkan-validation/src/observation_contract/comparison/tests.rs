@@ -68,6 +68,7 @@ fn every_precision_note_has_its_table_row() {
         (N::DeviceColorConversion, Allowance::Recorded),
         (N::DeviceInterpolation, Allowance::Unbounded),
         (N::ExtrapolatedInterpolation, Allowance::Unbounded),
+        (N::NativeConversionRounding, Allowance::Unbounded),
         (N::QuadsSplitByClipping, Allowance::Unbounded),
         (N::VertexSimdgroupGrouping, Allowance::Unbounded),
         (N::FragmentSimdgroupGrouping, Allowance::Unbounded),

@@ -279,19 +279,81 @@ fn math_conversion_and_atomic_families_decode() {
         "air.convert.f8e5m2.f32.f.f32", // 8-bit float is not a destination type
         "air.convert.u.i1.f.f8e5m2",    // an 8-bit float converts to no `bool`
         "air.convert.s.i32.s.f8e5m2",   // an 8-bit float is read as a float
-        "air.convert.s.i32.u.v2i32",    // lane counts differ
-        "air.convert.f.i32.s.i32",      // kind disagrees with type
-        "air.convert.s.i1.f.f32",       // booleans are `u.i1`
-        "air.pack.unorm4x8.v3f32",      // lane count
-        "air.atomic.global.min.i32",    // integer min spells its sign
-        "air.atomic.global.and.f32",    // no float and
-        "air.atomic.global.add.v2i32",  // no vector atomics
-        "air.atomic.global.xchg.u.i32", // exchange takes no sign
-        "air.atomic.region.add.u.i32",  // unknown space
+        "air.convert.f.f32.s.i32.sat",  // `.sat` follows a rounding
+        "air.convert.f.f32.s.i32.rte.sat", // a float saturates nothing
+        "air.convert.s.i32.f.f32.rtz.sat.sat",
+        "air.convert.s.i32.f.f32.rtu",    // no such rounding
+        "air.convert.f.f32.u.i1.rte",     // a `bool` rounds nothing
+        "air.convert.s.i32.f.f8e5m2.rtz", // nor an 8-bit float
+        "air.convert.s.i32.u.v2i32",      // lane counts differ
+        "air.convert.f.i32.s.i32",        // kind disagrees with type
+        "air.convert.s.i1.f.f32",         // booleans are `u.i1`
+        "air.pack.unorm4x8.v3f32",        // lane count
+        "air.atomic.global.min.i32",      // integer min spells its sign
+        "air.atomic.global.and.f32",      // no float and
+        "air.atomic.global.add.v2i32",    // no vector atomics
+        "air.atomic.global.xchg.u.i32",   // exchange takes no sign
+        "air.atomic.region.add.u.i32",    // unknown space
         "air.load.somewhat_coherent.i32.p1i32",
     ] {
         assert_eq!(classify_self(name), DeclClass::Unknown, "{name}");
     }
+}
+
+/// The rounding Apple's OpenCL compiler spells after a conversion's types, and `.sat` after it to
+/// an integer: every `convert_*` it emits (`convert_float4_rte(uchar4)` is
+/// `air.convert.f.v4f32.u.v4i8.rte`, `convert_int_sat(float)` is
+/// `air.convert.s.i32.f.f32.rtz.sat`).
+#[test]
+fn convert_parses_its_rounding_and_saturation() {
+    let parse = |name: &str| match air(name) {
+        AirIntrinsic::Convert(c) => c,
+        other => panic!("{name}: {other:?}"),
+    };
+    for (name, rounding, saturate) in [
+        (
+            "air.convert.f.v4f32.u.v4i8.rte",
+            ConvertRounding::Rte,
+            false,
+        ),
+        (
+            "air.convert.f.v4f32.s.v4i32.rte",
+            ConvertRounding::Rte,
+            false,
+        ),
+        ("air.convert.f.f16.s.i32.rtz", ConvertRounding::Rtz, false),
+        ("air.convert.f.f32.f.f64.rtp", ConvertRounding::Rtp, false),
+        ("air.convert.s.i32.f.f32.rtn", ConvertRounding::Rtn, false),
+        (
+            "air.convert.s.i32.f.f32.rtz.sat",
+            ConvertRounding::Rtz,
+            true,
+        ),
+        (
+            "air.convert.u.v2i16.s.v2i64.rte.sat",
+            ConvertRounding::Rte,
+            true,
+        ),
+        ("air.convert.u.i8.u.i32.rtz", ConvertRounding::Rtz, false),
+    ] {
+        let c: Convert = parse(name);
+        assert_eq!(
+            (c.rounding, c.saturate),
+            (Some(rounding), saturate),
+            "{name}"
+        );
+    }
+    let plain = parse("air.convert.f.f32.s.i32");
+    assert_eq!((plain.rounding, plain.saturate), (None, false));
+    // The suffix changes nothing else: the types and kinds are the plain conversion's.
+    let rte = parse("air.convert.f.f32.s.i32.rte");
+    assert_eq!(
+        Convert {
+            rounding: None,
+            ..rte
+        },
+        plain
+    );
 }
 
 #[test]

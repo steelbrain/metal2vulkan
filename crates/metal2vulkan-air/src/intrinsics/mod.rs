@@ -58,7 +58,7 @@ mod intersect_tests;
 mod tests;
 
 pub use atomic::{AccessKind, Atomic, AtomicOp, AtomicSpace, Coherent, MemoryOrder, ThreadScope};
-pub use convert::{Convert, Fp8, NumKind, Pack, PackDir, PackFormat};
+pub use convert::{Convert, ConvertRounding, Fp8, NumKind, Pack, PackDir, PackFormat};
 pub use intersect::{Instancing, Intersect, IntersectTags, ResultField, Role as IntersectRole};
 pub use layout::Layout;
 pub use llvm::{dropped_family, AgxSpace};

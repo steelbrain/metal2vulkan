@@ -1,4 +1,5 @@
-//! Conversions: `air.convert.<kind>.<type>.<kind>.<type>` and `air.{pack,unpack}.<format>.<type>`.
+//! Conversions: `air.convert.<kind>.<type>.<kind>.<type>[.<rounding>[.sat]]` and
+//! `air.{pack,unpack}.<format>.<type>`.
 
 use super::sig::{Operand, Signature};
 use super::ty::{Elem, NumTy};
@@ -71,6 +72,32 @@ impl Fp8 {
     }
 }
 
+/// The rounding a conversion names after its types (OpenCL's `convert_<type>_<mode>`), which
+/// Apple's OpenCL compiler spells on every `convert_*` it emits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ConvertRounding {
+    /// `rte`: to nearest, ties to even.
+    Rte,
+    /// `rtz`: toward zero.
+    Rtz,
+    /// `rtp`: toward positive infinity.
+    Rtp,
+    /// `rtn`: toward negative infinity.
+    Rtn,
+}
+
+impl ConvertRounding {
+    fn parse(token: &str) -> Option<ConvertRounding> {
+        Some(match token {
+            "rte" => ConvertRounding::Rte,
+            "rtz" => ConvertRounding::Rtz,
+            "rtp" => ConvertRounding::Rtp,
+            "rtn" => ConvertRounding::Rtn,
+            _ => return None,
+        })
+    }
+}
+
 /// A numeric conversion between equal lane counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Convert {
@@ -86,6 +113,13 @@ pub struct Convert {
     /// or to an integer other than `i1`. An 8-bit float destination does not decode
     /// ([`super::UNDECODED`]).
     pub src_fp8: Option<Fp8>,
+    /// The rounding the name spells after the types (`.<rte|rtz|rtp|rtn>`), or `None` for the
+    /// plain conversion. Neither side is a `bool` or an 8-bit float when it is spelled.
+    pub rounding: Option<ConvertRounding>,
+    /// Whether the name ends in `.sat` after its rounding: a saturating conversion to an integer
+    /// (OpenCL's `convert_<type>_sat_<mode>`), out-of-range values clamped to the destination's
+    /// range and a NaN to zero.
+    pub saturate: bool,
 }
 
 impl Convert {
@@ -93,6 +127,15 @@ impl Convert {
     pub(super) fn parse(rest: &str) -> Option<Convert> {
         let mut t = rest.split('.');
         let (dk, dt, sk, st) = (t.next()?, t.next()?, t.next()?, t.next()?);
+        let rounding = match t.next() {
+            Some(token) => Some(ConvertRounding::parse(token)?),
+            None => None,
+        };
+        let saturate = match t.next() {
+            Some("sat") => true,
+            Some(_) => return None,
+            None => false,
+        };
         if t.next().is_some() {
             return None;
         }
@@ -114,12 +157,22 @@ impl Convert {
             src_kind: NumKind::parse(sk)?,
             src,
             src_fp8,
+            rounding,
+            saturate,
         };
         let src_ok = match src_fp8 {
             Some(_) => c.dst.elem != Elem::I1,
             None => c.src_kind.admits(c.src.elem),
         };
-        let ok = c.dst_kind.admits(c.dst.elem) && src_ok && c.dst.lanes == c.src.lanes;
+        // A rounding is spelled between numbers (no `bool`, no 8-bit float), and `.sat` only after
+        // one, to an integer.
+        let plain = c.dst.elem != Elem::I1 && c.src.elem != Elem::I1 && src_fp8.is_none();
+        let suffix_ok = match (rounding, saturate) {
+            (None, _) => true,
+            (Some(_), false) => plain,
+            (Some(_), true) => plain && c.dst_kind != NumKind::Float,
+        };
+        let ok = c.dst_kind.admits(c.dst.elem) && src_ok && suffix_ok && c.dst.lanes == c.src.lanes;
         ok.then_some(c)
     }
 

@@ -1165,6 +1165,7 @@ enum	metal2vulkan-air::intrinsics::BarrierName	#[derive(Clone, Copy, Debug, Part
 enum	metal2vulkan-air::intrinsics::Bound	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum Bound
 enum	metal2vulkan-air::intrinsics::CommandStage	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum CommandStage
 enum	metal2vulkan-air::intrinsics::Component	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Component
+enum	metal2vulkan-air::intrinsics::ConvertRounding	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum ConvertRounding
 enum	metal2vulkan-air::intrinsics::DeclClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum DeclClass
 enum	metal2vulkan-air::intrinsics::DerivativeOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum DerivativeOp
 enum	metal2vulkan-air::intrinsics::Dropped	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Dropped
@@ -1852,6 +1853,8 @@ field	metal2vulkan-air::intrinsics::Coherent.ty	pub ty: NumTy
 field	metal2vulkan-air::intrinsics::Coherent.volatile	pub volatile: bool
 field	metal2vulkan-air::intrinsics::Convert.dst	pub dst: NumTy
 field	metal2vulkan-air::intrinsics::Convert.dst_kind	pub dst_kind: NumKind
+field	metal2vulkan-air::intrinsics::Convert.rounding	pub rounding: Option<ConvertRounding>
+field	metal2vulkan-air::intrinsics::Convert.saturate	pub saturate: bool
 field	metal2vulkan-air::intrinsics::Convert.src	pub src: NumTy
 field	metal2vulkan-air::intrinsics::Convert.src_fp8	pub src_fp8: Option<Fp8>
 field	metal2vulkan-air::intrinsics::Convert.src_kind	pub src_kind: NumKind
@@ -5499,6 +5502,7 @@ macro-member	metal2vulkan-runtime::Degradation::MoltenVkArgumentBuffersUnread	Mo
 macro-member	metal2vulkan-runtime::Degradation::MultisamplePosition	MultisamplePosition = "multisample-position";
 macro-member	metal2vulkan-runtime::Degradation::NanDepth	NanDepth = "nan-depth", Precision,
 macro-member	metal2vulkan-runtime::Degradation::NarrowSurfaceRows	NarrowSurfaceRows = "narrow-surface-rows", Precision,
+macro-member	metal2vulkan-runtime::Degradation::NativeConversionRounding	NativeConversionRounding = "native-conversion-rounding";
 macro-member	metal2vulkan-runtime::Degradation::NativeDivision	NativeDivision = "native-division";
 macro-member	metal2vulkan-runtime::Degradation::NativeDot	NativeDot = "native-dot";
 macro-member	metal2vulkan-runtime::Degradation::NativeFma	NativeFma = "native-fma";
@@ -11006,6 +11010,10 @@ variant	metal2vulkan-air::intrinsics::Component::W	W
 variant	metal2vulkan-air::intrinsics::Component::X	X
 variant	metal2vulkan-air::intrinsics::Component::Y	Y
 variant	metal2vulkan-air::intrinsics::Component::Z	Z
+variant	metal2vulkan-air::intrinsics::ConvertRounding::Rte	Rte
+variant	metal2vulkan-air::intrinsics::ConvertRounding::Rtn	Rtn
+variant	metal2vulkan-air::intrinsics::ConvertRounding::Rtp	Rtp
+variant	metal2vulkan-air::intrinsics::ConvertRounding::Rtz	Rtz
 variant	metal2vulkan-air::intrinsics::DeclClass::Air	Air(AirIntrinsic)
 variant	metal2vulkan-air::intrinsics::DeclClass::Drop	Drop(Dropped)
 variant	metal2vulkan-air::intrinsics::DeclClass::Llvm	Llvm(LlvmIntrinsic)
@@ -14279,6 +14287,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::HelperBranchDropsSimdgroupStores	
 variant	metal2vulkan::pipeline::PrecisionNote::LinkedSamplerNumbering	LinkedSamplerNumbering
 variant	metal2vulkan::pipeline::PrecisionNote::LoopedSampleOutputs	LoopedSampleOutputs
 variant	metal2vulkan::pipeline::PrecisionNote::MultisamplePosition	MultisamplePosition
+variant	metal2vulkan::pipeline::PrecisionNote::NativeConversionRounding	NativeConversionRounding
 variant	metal2vulkan::pipeline::PrecisionNote::NativeDivision	NativeDivision
 variant	metal2vulkan::pipeline::PrecisionNote::NativeDot	NativeDot
 variant	metal2vulkan::pipeline::PrecisionNote::NativeFma	NativeFma
