@@ -10,17 +10,18 @@
 //! for color and alpha (a composite's state), cleared to 0.4 in every channel (code 102) and
 //! stored; the source is (0.2, 0.2, 0.2, 0) in `half` at every pixel. Specialized with the read
 //! dead (constant 0 false, constant 1 zero), each function reads nothing of the attachment, so on
-//! every device, one with no fetch form too, its pipeline is a plain one: as the translator makes
-//! it for the device, color 0 is a color attachment the device blends, with no storage and no
-//! input attachment. A pass of two draws stores (204, 204, 204, 102) in every texel, Metal's (the
-//! source added to the destination twice, alpha kept: 0.4 + 2 · 0.2 is 0.8, code 204), each
+//! every device, one without an ordered fetch form too, its pipeline is a plain one: as the
+//! translator makes it for the device, color 0 is a color attachment the device blends, with no
+//! storage and no input attachment. A pass of two draws stores (204, 204, 204, 102) in every
+//! texel, Metal's (the source added to the destination twice, alpha kept: 0.4 + 2 · 0.2 is 0.8,
+//! code 204), each
 //! channel within one code of it asserted and the exact ones counted; it takes no storage form for
 //! the target (`WorkCounts::storage_forms_taken`), splits no render pass instance for interlocked
 //! writes (`instance_splits_interlocked_writes`), and announces none of the fetch's notices
 //! (`render-pass-split`, `memoryless-backed`, `fetch-through-scratch`, `fetched-target-storage`).
 //!
-//! Specialized live, on a device with a fetch form, each pipeline reads color 0 in that form (a
-//! written storage attachment in the pixel interlock, an input attachment through
+//! Specialized live, on a device with an ordered fetch form, each pipeline reads color 0 in that
+//! form (a written storage attachment in the pixel interlock, an input attachment through
 //! rasterization-order access), which is asserted of the translator's pipeline; the live pass's
 //! notices, counts and first texel are printed as the contrast. Each function prints a
 //! `DEAD-FETCH` line.

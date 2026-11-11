@@ -428,12 +428,12 @@ fn scenes(width: Width) {
     depth_scene(&lane, &five);
     load_scene(&lane, &five);
     dead_scene(&lane, &five);
-    // A device without a fetch form refuses the fetching pipelines, typed ([`fetches`]).
-    let fetching = fetches(&lane.device);
-    if fetching {
+    // A device without an ordered fetch form fetches between draws alone ([`fetches`]), which
+    // `framebuffer_fetch::between_draws` tests: the fetch scene's answers are an ordered form's.
+    if fetches(&lane.device) {
         fetch_scene(&lane);
     }
-    refusals(&lane, &five, fetching);
+    refusals(&lane, &five);
     let announced: BTreeSet<Degradation> = (messages.take_notices().iter())
         .filter_map(|message| message.degradation.as_ref())
         .map(|notice| notice.degradation)
@@ -803,9 +803,8 @@ fn dead_scene(lane: &Lane, five: &[usize]) {
     eprintln!("COLOR-GROUPS dfr_lacks on {name}: refused dead and live, as Metal");
 }
 
-/// What the restricted device refuses, and the device as it is draws (the module docs); on a
-/// device without a fetch form (not `fetching`), `cg_fetch` is refused there as `FramebufferFetch`.
-fn refusals(lane: &Lane, five: &[usize], fetching: bool) {
+/// What the restricted device refuses, and the device as it is draws (the module docs).
+fn refusals(lane: &Lane, five: &[usize]) {
     let name = lane.device.name().to_owned();
     // The pipeline's limit refusal: its attachments reach index 4 on a device of four.
     let limit = Error::Unsupported(Unsupported::needs(
@@ -847,17 +846,7 @@ fn refusals(lane: &Lane, five: &[usize], fetching: bool) {
         }
         Width::Device => {
             counts.unwrap();
-            match fetching {
-                true => {
-                    fetch.unwrap();
-                }
-                false => match fetch {
-                    Err(Error::Unsupported(refusal))
-                        if refusal.feature == Feature::FramebufferFetch => {}
-                    Err(error) => panic!("cg_fetch on {name} without a fetch form: {error}"),
-                    Ok(_) => panic!("cg_fetch on {name}: made without a fetch form"),
-                },
-            }
+            fetch.unwrap();
         }
     }
 }

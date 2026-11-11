@@ -2259,6 +2259,23 @@ pub enum PrecisionNote {
     ///
     /// [`DriverWorkaround::PerspectiveReadsExtrapolated`]: crate::device::DriverWorkaround::PerspectiveReadsExtrapolated
     ExtrapolatedInterpolation,
+    /// A fragment function reads a color attachment (framebuffer fetch) on a device with neither
+    /// rasterization-order color attachment access nor `fragmentShaderPixelInterlock`. It reads
+    /// the attachment as an input attachment, and the consumer records a barrier of the subpass's
+    /// dependency on itself, by region, from the color writes of the draws before to the input
+    /// attachment reads of a draw that fetches (and from those reads to the color writes of the
+    /// draws after): a fetch reads what every earlier draw stored at its pixel, Metal's answer.
+    /// Vulkan orders nothing between the overlapping fragments of one draw
+    /// (`GraphicsState::rasterization_order_attachment_access` false), where Metal orders them in
+    /// primitive order: a fragment that covers a pixel an earlier fragment of its own draw
+    /// covered may read the texel from before that fragment's write, and its own write may land
+    /// before that one. Exact for a draw whose primitives do not overlap at a pixel (one
+    /// fullscreen triangle, a rectangle of two triangles, disjoint quads); otherwise each such
+    /// pixel holds the result of some order of the draw's fragments there, not necessarily
+    /// Metal's.
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch for review.
+    UnorderedFetchWithinDraw,
 }
 
 /// The math mode of an entry's module, which decides, on a device whose `float` functions are

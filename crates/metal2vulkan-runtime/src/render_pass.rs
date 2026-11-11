@@ -984,7 +984,8 @@ pub(super) struct PassLayout {
     pub(super) visibility: Option<Buffer>,
     /// The descriptor's `visibilityResultType`.
     pub(super) visibility_type: VisibilityResultType,
-    /// The draws read the color attachments as input attachments in rasterization order: the
+    /// The draws read the color attachments as input attachments, in rasterization order where
+    /// the device has it and ordered between draws by barriers where it has no ordered form: the
     /// device's framebuffer fetch does (`framebuffer_fetch::through_inputs`), and the pass has a
     /// color attachment.
     pub(super) fetch_inputs: bool,

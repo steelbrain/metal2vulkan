@@ -11,7 +11,8 @@
 //! its own ([`keyed_assembly`]), the compatible render pass's formats and samples, the encoder's
 //! fixed-function state the pipeline does not make dynamic, and the pass's sample positions
 //! (`sample_positions.rs`). In a pass whose draws fetch through input attachments, every pipeline
-//! orders its color attachment accesses by rasterization (`framebuffer_fetch.rs`). A mesh pipeline
+//! orders its color attachment accesses by rasterization where the device has that access
+//! (`framebuffer_fetch.rs`). A mesh pipeline
 //! has no vertex input and no input assembly; its key's topology only enables the depth bias
 //! (`render/mesh.rs`). An emulated mesh function's pipeline leaves its compute stage out, which a
 //! pipeline of its own runs (`objects.rs`), and draws its synthesized vertex stage's list of the
@@ -1055,14 +1056,18 @@ impl VariantObjects {
                 })
                 .collect();
         // In a pass whose draws fetch through input attachments every pipeline orders its color
-        // attachment accesses by rasterization (`framebuffer_fetch.rs`), so a fetch reads what an
-        // earlier fragment of any pipeline wrote.
+        // attachment accesses by rasterization where the device has that access
+        // (`framebuffer_fetch.rs`), so a fetch reads what an earlier fragment of any pipeline
+        // wrote; without it the pass orders its draws by barriers alone.
         if graphics.rasterization_order_attachment_access && !key.pass.fetch_inputs {
             return Err(internal(
                 "a pipeline fetching in rasterization order outside a pass that does",
             ));
         }
-        let blend_flags = match key.pass.fetch_inputs {
+        let raster_order = crate::framebuffer_fetch::inputs_in_raster_order(
+            self.device.compile_device().profile(),
+        );
+        let blend_flags = match key.pass.fetch_inputs && raster_order {
             true => {
                 vk::PipelineColorBlendStateCreateFlags::RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXT
             }

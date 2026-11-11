@@ -58,8 +58,10 @@
 //!   each fetch after the earlier fragments of the draw that cover the pixel; Vulkan does only
 //!   under rasterization-order attachment access, so a pipeline with input attachments on a profile
 //!   with `rasterizationOrderColorAttachmentAccess` states `rasterization_order_attachment_access`
-//!   (and the compiled pipeline requires the feature). Without the feature no fragment stage reads
-//!   an input attachment (`lower::fragment::color` refuses it). In a multisampled pipeline
+//!   (and the compiled pipeline requires the feature). Without the feature a fragment stage reads
+//!   an input attachment only on a device without the pixel interlock either
+//!   (`lower::fragment::color`), whose consumer orders the draws by barriers alone. In a
+//!   multisampled pipeline
 //!   (`rasterSampleCount` above 1) Metal runs a function that reads a color attachment once per
 //!   covered sample, each invocation reading its own sample (measured), so the stage, compiled for
 //!   the pipeline (`LoweringInputs::multisampled`), reads a multisampled `SubpassData` image (or,

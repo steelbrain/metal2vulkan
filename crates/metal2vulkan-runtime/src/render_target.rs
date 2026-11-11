@@ -204,7 +204,7 @@ pub(super) struct PassShape {
     /// and its depth and stencil resolve mode (`resolve.rs`).
     pub(super) depth_stencil_resolve: Option<(metal2vulkan::vk::Format, ResolveMode, ResolveMode)>,
     /// The draws' subpass reads each color attachment as the input attachment of its index, with
-    /// rasterization-order color access (`PassLayout::fetch_inputs`).
+    /// rasterization-order color access where the device has it (`PassLayout::fetch_inputs`).
     pub(super) fetch_inputs: bool,
     /// The color indices, ascending, whose images take no input attachment usage (a caller's
     /// image, `texture/wrapped.rs`) where the subpass reads the others as input attachments: their
@@ -902,6 +902,37 @@ pub(super) unsafe fn between_storage_draws(
             &[],
             &[],
         );
+    }
+}
+
+/// Which barrier a draw records after the earlier draws of its instance whose accesses it meets
+/// (`render.rs`'s `InterlockedStorage`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DrawsBarrier {
+    /// From the fragment shader's storage writes to its reads and writes
+    /// ([`between_storage_draws`]): storage the pixel interlock orders.
+    Storage,
+    /// The draws' subpass's whole dependency on itself ([`between_draws`]): colors read through
+    /// input attachments ordered between draws alone, whose barrier orders the earlier draws' color
+    /// writes before a later draw's input attachment reads, and those reads before a later draw's
+    /// color writes (and the storage's scopes too, which it holds).
+    Whole,
+}
+
+impl DrawsBarrier {
+    /// Record the barrier into `draws`, as [`between_storage_draws`] or [`between_draws`].
+    ///
+    /// # Safety
+    ///
+    /// As [`between_storage_draws`]'s and [`between_draws`]'s.
+    pub(super) unsafe fn record(self, raw: &ash::Device, draws: vk::CommandBuffer, view_mask: u32) {
+        // SAFETY: the caller's contract.
+        unsafe {
+            match self {
+                DrawsBarrier::Storage => between_storage_draws(raw, draws, view_mask),
+                DrawsBarrier::Whole => between_draws(raw, draws, view_mask),
+            }
+        }
     }
 }
 
@@ -1804,8 +1835,9 @@ fn make_pass(
             .view_mask(shape.view_mask)
     };
     // Framebuffer fetch's input attachments: color attachment `i` is input attachment `i`, read in
-    // rasterization order (`framebuffer_fetch.rs`). The same attachment in `GENERAL` both ways;
-    // an input reference names its aspect.
+    // rasterization order where the device has it, else ordered between draws by barriers of the
+    // dependency below (`framebuffer_fetch.rs`). The same attachment in `GENERAL` both ways; an
+    // input reference names its aspect.
     let inputs: Vec<_> = references
         .iter()
         .enumerate()
@@ -1843,9 +1875,12 @@ fn make_pass(
     }
     let mut draws = graphics().color_attachments(&references);
     if shape.fetch_inputs {
-        draws = draws
-            .input_attachments(&inputs)
-            .flags(vk::SubpassDescriptionFlags::RASTERIZATION_ORDER_ATTACHMENT_COLOR_ACCESS_EXT);
+        draws = draws.input_attachments(&inputs);
+        if super::framebuffer_fetch::inputs_in_raster_order(device.compile_device().profile()) {
+            draws = draws.flags(
+                vk::SubpassDescriptionFlags::RASTERIZATION_ORDER_ATTACHMENT_COLOR_ACCESS_EXT,
+            );
+        }
     }
     if resolve_references
         .iter()

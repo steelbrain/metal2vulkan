@@ -199,6 +199,7 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             DeviceSampleLevel,
             NativeNanEncoding,
             NativeMinMax,
+            UnorderedFetchWithinDraw,
         ],
     }
 }

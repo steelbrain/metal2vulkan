@@ -336,7 +336,8 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::NativeMix
         | N::DevicePackConversion
         | N::DiscardDropsSimdgroupStores
-        | N::HelperBranchDropsSimdgroupStores => Allowance::Unbounded,
+        | N::HelperBranchDropsSimdgroupStores
+        | N::UnorderedFetchWithinDraw => Allowance::Unbounded,
     }
 }
 

@@ -32,7 +32,7 @@ use super::formats::{FormatRow, Missing};
 use super::{Column, Facts, FormatCapability, Framework, Refusal, RowState};
 use crate::capabilities::Query;
 use crate::error::RuntimeGap;
-use crate::framebuffer_fetch::{renders_through_words, through_inputs, through_storage};
+use crate::framebuffer_fetch::{renders_through_words, through_storage};
 use crate::rate_mapped_pass::RegionRefusal;
 use metal2vulkan::device::{
     DriverWorkaround, OpBits, StageSimd, SubgroupOp, VkExtension, VkFeature, VkProperty,
@@ -1017,18 +1017,13 @@ impl FeatureRow {
             // and two-channel 8-bit sRGB formats on NVIDIA and ANV, and on NVIDIA the packed
             // 16-bit ones and `RGB9E5Float`) does not fetch an attachment
             // of it (`NotImplemented(Format)` per pipeline): the row's gap there. A device with
-            // neither form has no ordered fetch.
+            // neither form fetches through input attachments ordered between draws, the
+            // overlapping fragments of one draw unordered, logged
+            // (`PrecisionNote::UnorderedFetchWithinDraw`).
             F::ProgrammableBlending => first([
-                match (through_inputs(f.profile), through_storage(f.profile)) {
-                    (true, _) => None,
-                    (false, true) if renders_through_words(f.profile) => {
-                        not_implemented(Feature::FramebufferFetch)
-                    }
-                    (false, true) => None,
-                    (false, false) => Some(refused(Unsupported::needs(
-                        Feature::FramebufferFetch,
-                        Capability::Feature(VkFeature::RasterizationOrderColorAttachmentAccess),
-                    ))),
+                match through_storage(f.profile) && renders_through_words(f.profile) {
+                    true => not_implemented(Feature::FramebufferFetch),
+                    false => None,
                 },
             ]),
             // Separate depth and stencil textures of one pass: their resolve of a stencil drawn

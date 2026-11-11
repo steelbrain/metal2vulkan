@@ -100,9 +100,9 @@ pub(super) struct PendingDraw {
     pub(super) draw: usize,
     pub(super) variant: VariantKey,
     pub(super) specialization: Vec<(SpecKey, u64)>,
-    /// The view mask of the storage barrier it records first
-    /// (`render_target::between_storage_draws`), where it has one.
-    pub(super) storage_barrier: Option<u32>,
+    /// The view mask and kind of the barrier after its instance's earlier draws it records first
+    /// (`render_target::DrawsBarrier`), where it has one.
+    pub(super) storage_barrier: Option<(u32, render_target::DrawsBarrier)>,
     /// The view mask and destination stages of the barrier from its instance's earlier
     /// indirect argument reads it records first (`render_target::after_indirect_reads`), where it
     /// has one.
@@ -197,8 +197,8 @@ impl PendingDraw {
         // the encoder's draws count in, with none active in this secondary before it. Without its
         // pipeline it records them around no draw.
         unsafe {
-            if let Some(view_mask) = self.storage_barrier {
-                render_target::between_storage_draws(raw, cb, view_mask);
+            if let Some((view_mask, barrier)) = self.storage_barrier {
+                barrier.record(raw, cb, view_mask);
             }
             if let Some((view_mask, stages)) = self.indirect_barrier {
                 render_target::after_indirect_reads(raw, cb, view_mask, stages);

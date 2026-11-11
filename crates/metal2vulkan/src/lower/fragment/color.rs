@@ -10,17 +10,20 @@
 //! image; like the `uint` color outputs, link must check the attachment format's class against the
 //! declared one.
 //!
-//! **Ordering**: Metal orders a fetch after earlier overlapping fragments of the draw.
-//! Vulkan orders an input-attachment read so only with rasterization-order color attachment
-//! access. Without it, a device with `fragmentShaderPixelInterlock` reads (and writes) the
-//! attachment as a storage image inside the ordered interlock where the pipeline's state lets
-//! that be exact (`fetch`). Everywhere else the function is refused, naming what either ordered
-//! form needs (`Unsupported{FramebufferFetch, ...}`; the storage form's own reason where it alone
-//! was blocked): an unordered read could see the attachment before an earlier overlapping
-//! fragment's write, which Metal never shows. The function states
+//! **Ordering**: Metal orders a fetch after every earlier fragment of the pixel, of the draw and
+//! of earlier draws. Vulkan orders an input-attachment read so only with rasterization-order color
+//! attachment access. Without it, a device with `fragmentShaderPixelInterlock` reads (and writes)
+//! the attachment as a storage image inside the ordered interlock where the pipeline's state lets
+//! that be exact (`fetch`), and refuses the function where that state blocks it. A device with
+//! neither ([`fetch::fetch_unordered`](super::fetch::fetch_unordered)) reads the input attachment
+//! all the same: Vulkan orders an earlier draw's color write before a later draw's input
+//! attachment read of the subpass by a barrier of the subpass's dependency on itself, by region,
+//! which the consumer records between them (`GraphicsState::rasterization_order_attachment_access`
+//! false), but nothing orders the overlapping fragments of one draw. The function records
+//! `PrecisionNote::UnorderedFetchWithinDraw` there. The function states
 //! `RuntimeFact::FramebufferFetch{color}` for every index it reads as an input attachment, so
-//! link can set the pipeline's rasterization-order flags and the render pass can provide the
-//! self-dependency.
+//! link can set the pipeline's rasterization-order flags where the device has them and the render
+//! pass can provide the self-dependency.
 //!
 //! **Per sample**. Metal runs a function that reads a color attachment of a multisampled pass once
 //! per covered sample, reading its own sample (measured). Compiled for such a pipeline
@@ -79,6 +82,7 @@ use crate::lower::arith::{extended_range, narrow, ops, Form, Held};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::metal::format::ExtendedRange;
+use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
@@ -178,10 +182,14 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
         super::fetch::select_read(cx, input)?;
         return Ok(input);
     }
-    // On a device with the pixel interlock `fetch::plan` refused a blocked attachment already;
-    // here neither ordered form exists.
+    // On a device with the pixel interlock `fetch::plan` refused a blocked attachment already. On
+    // one with neither ordered form the input attachment is ordered between draws alone, by the
+    // consumer's barriers: overlapping fragments of one draw are not.
     if !frag.rasterization_order_color_access {
-        return Err(unordered(cx, color));
+        if !super::fetch::fetch_unordered(cx.profile) {
+            return Err(unordered(cx, color));
+        }
+        cx.precision.insert(PrecisionNote::UnorderedFetchWithinDraw);
     }
     // The input attachment of an image holding Metal's channels rotated (`ARGB8Unorm` in
     // `R8G8B8A8_UNORM`) reads them in the image's order: a color input of one is not modelled.

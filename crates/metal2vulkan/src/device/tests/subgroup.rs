@@ -622,6 +622,11 @@ fn metal_properties_report_d3_d4_values() {
     for f in [Feature::ArgumentBufferPointers, Feature::RasterOrderGroups] {
         assert!(has(&f), "vk12-floor should report {f:?}");
     }
+    // Neither rasterization-order access nor the pixel interlock: framebuffer fetch reads input
+    // attachments ordered between draws, a note, not a refusal.
+    let fragment = floor.profile().fields().fragment;
+    assert!(!fragment.rasterization_order_color_access && !fragment.pixel_interlock);
+    assert!(!has(&Feature::FramebufferFetch));
     let nv = device("nvidia-rtx50-linux");
     let m = nv.metal_properties();
     assert_eq!(m.read_write_texture_tier, ReadWriteTextureTier::Tier2);

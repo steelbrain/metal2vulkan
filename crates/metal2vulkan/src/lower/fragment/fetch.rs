@@ -2,7 +2,8 @@
 //!
 //! **Where.** Metal orders a fetch after every earlier fragment of the pixel, across draws.
 //! Vulkan orders an input-attachment read so only under rasterization-order attachment access
-//! (`color`). A device without that access but with `fragmentShaderPixelInterlock`
+//! (`color`; a device with neither form reads the input attachment ordered between draws alone,
+//! [`fetch_unordered`]). A device without that access but with `fragmentShaderPixelInterlock`
 //! ([`interlock_orders`]: RADV, ANV, and MoltenVK where measured) orders a fetch instead through
 //! the ordered pixel interlock, the mechanism of raster order groups and imageblocks: each color
 //! attachment the function reads becomes a storage image of the attachment
@@ -366,7 +367,11 @@ pub(crate) fn inputs_order(p: &DeviceProfile) -> bool {
 }
 
 /// Whether `p` orders framebuffer fetch in neither form: no rasterization-order color attachment
-/// access and no `fragmentShaderPixelInterlock`.
+/// access and no `fragmentShaderPixelInterlock`. A fetch there reads the input attachment, which
+/// the consumer's barrier of the subpass's dependency on itself orders after the earlier draws'
+/// writes but not after an overlapping earlier fragment of the same draw
+/// (`PrecisionNote::UnorderedFetchWithinDraw`, `color`); a blend or a merge the function computes
+/// over its own read ([`unordered_extended_fetch`]) is refused.
 pub(crate) fn fetch_unordered(p: &DeviceProfile) -> bool {
     !interlock_orders(p) && !inputs_order(p)
 }

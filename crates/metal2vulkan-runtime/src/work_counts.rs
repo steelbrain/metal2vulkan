@@ -504,6 +504,7 @@ pub(crate) struct Counters {
     view_shadows: AtomicU64,
     attachment_read_splits: AtomicU64,
     attachment_read_clears: AtomicU64,
+    fetch_draw_barriers: AtomicU64,
     reading_draws_snapshotted: AtomicU64,
     snapshot_inline_splits: AtomicU64,
     reading_draws_split: [AtomicU64; 15],
@@ -4033,6 +4034,13 @@ impl Counters {
     /// (`texture/attached_reads.rs`).
     pub(crate) fn attachment_read_cleared(&self) {
         self.attachment_read_clears.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A draw recorded after a barrier from the earlier draws of its instance because it reads
+    /// input attachments ordered between draws alone after one wrote a color, or writes a color
+    /// after one read them (`render.rs`'s `InterlockedStorage`, `framebuffer_fetch.rs`).
+    pub(crate) fn fetch_draw_barrier(&self) {
+        self.fetch_draw_barriers.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A draw that samples a color attachment's texture after a memory barrier of its render
@@ -7711,6 +7719,13 @@ pub struct WorkCounts {
     /// clears in place (`texture/attached_reads.rs`). Not in `attachment_read_splits`, and the
     /// clears are not in `shadow_copies`.
     pub attachment_read_clears: u64,
+    /// Barriers recorded before a draw on a device with neither rasterization-order color
+    /// attachment access nor `fragmentShaderPixelInterlock`, whose framebuffer fetch reads input
+    /// attachments ordered between draws alone: before a draw that reads them after an earlier
+    /// draw of its render pass instance wrote a color, or that writes a color after an earlier
+    /// one read them, each the draws' subpass's whole dependency on itself
+    /// (`framebuffer_fetch.rs`). 0 on every other device.
+    pub fetch_draw_barriers: u64,
     /// Draws that sample a color attachment's texture after a memory barrier of their render
     /// pass, each reading it through a snapshot inside its instance in place of a split: drawn
     /// twice, first copying each fragment's texel into the snapshot, then reading the snapshot
@@ -8974,6 +8989,7 @@ impl Device {
             view_shadows: counters.view_shadows.load(Ordering::Relaxed),
             attachment_read_splits: counters.attachment_read_splits.load(Ordering::Relaxed),
             attachment_read_clears: counters.attachment_read_clears.load(Ordering::Relaxed),
+            fetch_draw_barriers: counters.fetch_draw_barriers.load(Ordering::Relaxed),
             reading_draws_snapshotted: counters.reading_draws_snapshotted.load(Ordering::Relaxed),
             snapshot_inline_splits: counters.snapshot_inline_splits.load(Ordering::Relaxed),
             reading_draws_split_unreadable_own_pixel: split_by(SplitReason::UnreadableOwnPixel),

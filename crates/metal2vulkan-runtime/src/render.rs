@@ -1032,6 +1032,18 @@ impl DrawStates {
 /// after the barrier (`Split::InterlockedWrites`), whose boundary orders it after the draws before.
 /// Another kind of storage a draw reads and writes inside the interlock joins as a field here and
 /// in [`InterlockedStorage::of`].
+///
+/// On a device whose input attachments are ordered between draws alone
+/// (`framebuffer_fetch::inputs_between_draws`: neither rasterization-order color attachment access
+/// nor the pixel interlock), the colors a pass's draws fetch take two more kinds, which the
+/// barrier of the subpass's whole dependency on itself orders (`render_target::between_draws`):
+/// a draw that reads input attachments after an earlier draw of its instance wrote a color, and
+/// a draw that writes a color after an earlier one read input attachments, records after it. No
+/// interlock orders anything there; the barrier orders the draws, as Vulkan's subpass
+/// self-dependency does ("A vkCmdPipelineBarrier inside a subpass can synchronize prior attachment
+/// writes in the subpass with subsequent input attachment reads", the Render Pass chapter's
+/// Common Render Pass Data Races), and the fetching stage records what it leaves unordered
+/// (`PrecisionNote::UnorderedFetchWithinDraw`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InterlockedStorage {
     /// The pass's fragment imageblock storage (`fragment_imageblock.rs`).
@@ -1043,6 +1055,12 @@ struct InterlockedStorage {
     /// The depth's stand-in, which a draw that tests the depth in the shader reads and may write
     /// (`depth_stand_in.rs`).
     depth: bool,
+    /// Colors an input attachment read ordered between draws alone takes after earlier color
+    /// writes: a draw that reads input attachments reaches it, one that writes a color writes it.
+    fetch_after_writes: bool,
+    /// Colors a write takes after earlier input attachment reads ordered between draws alone: a
+    /// draw that writes a color reaches it, one that reads input attachments "writes" it.
+    writes_after_fetch: bool,
 }
 
 impl InterlockedStorage {
@@ -1050,6 +1068,8 @@ impl InterlockedStorage {
         imageblock: false,
         colors: false,
         depth: false,
+        fetch_after_writes: false,
+        writes_after_fetch: false,
     };
 
     /// Every kind: what an execution of render commands, or the encoder's draws before it, may
@@ -1058,30 +1078,41 @@ impl InterlockedStorage {
         imageblock: true,
         colors: true,
         depth: true,
+        fetch_after_writes: true,
+        writes_after_fetch: true,
     };
 
     /// What a draw of `graphics` whose colors in the interlocked storage form are `storage`, and
     /// which reads and writes extended-range shadows beside input attachments where `shadows`,
     /// reaches, and what it writes, on a device whose driver orders interlocked draws' colors by
-    /// the interlock alone where `colors_ordered` (then no color is a kind of it). A draw that
+    /// the interlock alone where `colors_ordered` (then no color is a kind of it), in a pass whose
+    /// input attachments are ordered between draws alone where `between_draws`. A draw that
     /// reaches the imageblock may write it, one that tests the depth in the shader may write the
     /// depth's stand-in, and one that binds shadows may write them.
     fn of(
         graphics: &GraphicsState,
         (storage, shadows): (&[StorageAttachmentUse], bool),
-        colors_ordered: bool,
+        (colors_ordered, between_draws): (bool, bool),
     ) -> (Self, Self) {
         let imageblock = graphics.fragment_imageblock.is_some();
         let depth = graphics.shader_tests.is_some();
+        let fetches = between_draws && !graphics.input_attachments.is_empty();
+        let writes_colors = between_draws
+            && !graphics.rasterizer_discard
+            && (graphics.color_attachments.iter().flatten()).any(|a| !a.write_mask.is_empty());
         let reaches = Self {
             imageblock,
             colors: !colors_ordered && (!storage.is_empty() || shadows),
             depth,
+            fetch_after_writes: fetches,
+            writes_after_fetch: writes_colors,
         };
         let writes = Self {
             imageblock,
             colors: !colors_ordered && (storage.iter().any(|s| s.writes) || shadows),
             depth,
+            fetch_after_writes: writes_colors,
+            writes_after_fetch: fetches,
         };
         (reaches, writes)
     }
@@ -1091,6 +1122,23 @@ impl InterlockedStorage {
         (self.imageblock && other.imageblock)
             || (self.colors && other.colors)
             || (self.depth && other.depth)
+            || self.meets_fetch(other)
+    }
+
+    /// Whether a kind of input attachments ordered between draws is in both: the barrier that
+    /// orders them is the subpass's whole dependency on itself, not the storage's.
+    fn meets_fetch(self, other: Self) -> bool {
+        (self.fetch_after_writes && other.fetch_after_writes)
+            || (self.writes_after_fetch && other.writes_after_fetch)
+    }
+
+    /// The barrier a draw that reaches `self` records after an instance's draws that wrote
+    /// `other`, where they meet.
+    fn barrier(self, other: Self) -> render_target::DrawsBarrier {
+        match self.meets_fetch(other) {
+            true => render_target::DrawsBarrier::Whole,
+            false => render_target::DrawsBarrier::Storage,
+        }
     }
 
     /// The kinds of either.
@@ -1099,6 +1147,8 @@ impl InterlockedStorage {
             imageblock: self.imageblock || other.imageblock,
             colors: self.colors || other.colors,
             depth: self.depth || other.depth,
+            fetch_after_writes: self.fetch_after_writes || other.fetch_after_writes,
+            writes_after_fetch: self.writes_after_fetch || other.writes_after_fetch,
         }
     }
 }
@@ -8791,8 +8841,13 @@ impl RenderLowering {
         // The shadows a draw of a pass that fetches through input attachments reads and writes
         // in the interlock (`render/extended_shadow.rs`), where the storage form holds none.
         let shadows = self.layout.fetch_inputs && !live.state.extended_shadows.is_empty();
-        let (interlocked, interlocked_writes) =
-            InterlockedStorage::of(graphics, (&storage, shadows), colors_ordered);
+        let between_draws = self.layout.fetch_inputs
+            && framebuffer_fetch::inputs_between_draws(device.compile_device().profile());
+        let (interlocked, interlocked_writes) = InterlockedStorage::of(
+            graphics,
+            (&storage, shadows),
+            (colors_ordered, between_draws),
+        );
         // On a driver whose draws of one instance race on the interlocked storage under load
         // (`DriverFact::InterlockedDrawsRaceUnderLoad`), a draw that reaches storage an earlier
         // draw of the instance wrote records into a new instance, after the one that wrote it, in
@@ -10425,22 +10480,22 @@ impl RenderLowering {
             let mut storage_barrier = None;
             if after_writes {
                 let view_mask = self.current.shape.view_mask;
+                let barrier = interlocked.barrier(self.current.interlocked_writes);
+                if barrier == render_target::DrawsBarrier::Whole {
+                    device.shared().counts.fetch_draw_barrier();
+                }
                 match (pending.is_some(), &mut self.current.kept) {
-                    (true, _) => storage_barrier = Some(view_mask),
+                    (true, _) => storage_barrier = Some((view_mask, barrier)),
                     // An instance recorded inline after a split keeps it with its draws
                     // (`render/inline_splits.rs`).
                     (false, Some(kept)) => {
-                        kept.storage_barrier(view_mask);
+                        kept.storage_barrier(view_mask, barrier);
                     }
                     // SAFETY: the secondary command buffer (or the pass's, inline) is recording
                     // inside the compatible pass, which `render_target` made, and only this
                     // encoder records it.
                     (false, None) => unsafe {
-                        render_target::between_storage_draws(
-                            device.shared().vk(),
-                            self.current.draws,
-                            view_mask,
-                        )
+                        barrier.record(device.shared().vk(), self.current.draws, view_mask)
                     },
                 }
             }

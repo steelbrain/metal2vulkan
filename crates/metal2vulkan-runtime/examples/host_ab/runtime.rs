@@ -2051,6 +2051,7 @@ impl Gpu for Runtime {
             ),
             ("attachment_read_splits", c.attachment_read_splits),
             ("attachment_read_clears", c.attachment_read_clears),
+            ("fetch_draw_barriers", c.fetch_draw_barriers),
             ("reading_draws_snapshotted", c.reading_draws_snapshotted),
             ("snapshot_inline_splits", c.snapshot_inline_splits),
             ("reading_draws_by_coverage", c.reading_draws_by_coverage),

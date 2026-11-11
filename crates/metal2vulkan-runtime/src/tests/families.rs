@@ -279,9 +279,9 @@ fn states_follow_their_sources() {
         // Through input attachments in rasterization order exact; through the pixel interlock's
         // storage form exact but where the device renders a color format only through a word
         // whose fetch is not built, an 8-bit sRGB word (the one- and two-channel sRGB formats on
-        // NVIDIA and ANV) or an `RGB9E5Float` one; with neither form, refused. A packed 16-bit
-        // word's fetch decodes the word (`lower::fragment::fetch`), so `BGRA4Unorm`, which
-        // MoltenVK renders only that way, is no gap.
+        // NVIDIA and ANV) or an `RGB9E5Float` one; with neither form, offered and logged. A
+        // packed 16-bit word's fetch decodes the word (`lower::fragment::fetch`), so `BGRA4Unorm`,
+        // which MoltenVK renders only that way, is no gap.
         if enabled.has(VkFeature::RasterizationOrderColorAttachmentAccess) {
             assert_eq!(blending, RowState::Exact, "{stem}");
         } else if enabled.has(VkFeature::FragmentShaderPixelInterlock) {
@@ -310,14 +310,9 @@ fn states_follow_their_sources() {
                 storage_fetch.insert(c);
             }
         } else {
-            assert_eq!(
-                blending,
-                refused(
-                    Feature::FramebufferFetch,
-                    Capability::Feature(VkFeature::RasterizationOrderColorAttachmentAccess)
-                ),
-                "{stem}"
-            );
+            // Neither form: input attachments ordered between draws, the overlapping fragments
+            // of one draw unordered, logged (`PrecisionNote::UnorderedFetchWithinDraw`).
+            assert_eq!(blending, RowState::Exact, "{stem}");
         }
         let cube = state(apple9, feature(F::CubeMapTextureArrays)).unwrap();
         assert_eq!(

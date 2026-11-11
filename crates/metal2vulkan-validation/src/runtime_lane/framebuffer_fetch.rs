@@ -142,6 +142,7 @@
 //!   planes' split before it and merge after it.
 
 mod beside_depth;
+mod between_draws;
 mod bgra;
 mod blend16;
 mod blend8;
@@ -174,7 +175,9 @@ use metal2vulkan::metal::{
     BlendFactor, IndexType, IndirectCommandType, PixelFormat, PrimitiveType, TextureType,
     TextureUsage,
 };
-use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use metal2vulkan::pipeline::{
+    ColorAttachmentDescriptor, PrecisionNote, RenderPipelineDescriptor, StageSource,
+};
 use metal2vulkan::vk;
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
@@ -206,14 +209,16 @@ fn fixture(device: &Device, stem: &str) -> Library {
     device.new_library_with_air(&bitcode).unwrap()
 }
 
-/// Whether `device` takes a framebuffer fetch: the gate every lane test that fetches opens with,
-/// skipping where it answers false. A device whose profile has a form a fetch takes,
-/// rasterization-order color attachment access (input attachments) or the fragment shader pixel
-/// interlock (the storage form), answers true and makes nothing, so a test's count of makings is
-/// its own (`degrade_notices::assert_made_once`). One with neither (RADV on the RX 550, GCN4) must
-/// refuse a fetching pipeline (`fragment_fetch`'s `fetch_scalar`), typed: `Unsupported` of
-/// `Feature::FramebufferFetch`, the device's honest answer, printed as a `FETCH-SKIP` line before
-/// it answers false. Any other answer there fails the test.
+/// Whether `device` takes a framebuffer fetch in an ordered form: the gate every lane test of an
+/// ordered fetch opens with, skipping where it answers false. A device whose profile has a form
+/// that orders a fetch within a draw, rasterization-order color attachment access (input
+/// attachments) or the fragment shader pixel interlock (the storage form), answers true and makes
+/// nothing, so a test's count of makings is its own (`degrade_notices::assert_made_once`). One with
+/// neither (RADV on the RX 550, GCN4) fetches through input attachments ordered between draws
+/// alone, whose answers `between_draws.rs` tests: it must make a fetching pipeline
+/// (`fragment_fetch`'s `fetch_scalar`) whose fragment stage records
+/// `PrecisionNote::UnorderedFetchWithinDraw`, printed as a `FETCH-BETWEEN-DRAWS` line before it
+/// answers false. Any other answer there fails the test.
 pub(super) fn fetches(device: &Device) -> bool {
     let fragment = device.compile_device().profile().fragment();
     if fragment.rasterization_order_color_access || fragment.pixel_interlock {
@@ -228,13 +233,18 @@ pub(super) fn fetches(device: &Device) -> bool {
         1,
     );
     let name = device.name();
+    let note = Degradation::from_precision_note(PrecisionNote::UnorderedFetchWithinDraw);
+    assert!(
+        made_render_kinds(device, &descriptor).contains(&note),
+        "{name}: a fetch without an ordered form records no {}",
+        note.code()
+    );
     match device.new_render_pipeline_state(&descriptor, &PipelineOptions::default()) {
-        Err(Error::Unsupported(refusal)) if refusal.feature == Feature::FramebufferFetch => {
-            println!("FETCH-SKIP on {name}: no framebuffer fetch form, refused: {refusal}");
+        Ok(_) => {
+            println!("FETCH-BETWEEN-DRAWS on {name}: input attachments ordered between draws");
             false
         }
-        Ok(_) => panic!("{name}: a fetching pipeline was made with no fetch form in the profile"),
-        Err(error) => panic!("{name}: a fetching pipeline was refused otherwise: {error}"),
+        Err(error) => panic!("{name}: a fetching pipeline was refused: {error}"),
     }
 }
 
@@ -363,13 +373,11 @@ fn blended_descriptor(vertices: &Library, colors: &[PixelFormat]) -> RenderPipel
 }
 
 /// Whether the device's framebuffer fetch reads input attachments: it has rasterization-order
-/// color attachment access, which the compile layer orders such reads with.
+/// color attachment access, which the compile layer orders such reads with, or neither that nor
+/// the pixel interlock, where barriers order them between draws alone.
 pub(super) fn through_inputs(lane: &Lane) -> bool {
-    lane.device
-        .compile_device()
-        .profile()
-        .fragment()
-        .rasterization_order_color_access
+    let fragment = lane.device.compile_device().profile().fragment();
+    fragment.rasterization_order_color_access || !fragment.pixel_interlock
 }
 
 /// Whether a single-sampled pass on the lane's device holds an extended-range color's `half`

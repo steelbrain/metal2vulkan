@@ -196,11 +196,14 @@ impl Kept {
         self.room.commands.push(KeptCommand::Barrier(view_mask));
     }
 
-    /// Keep a barrier before a draw that reaches interlocked storage.
-    pub(super) fn storage_barrier(&mut self, view_mask: u32) {
-        self.room
-            .commands
-            .push(KeptCommand::StorageBarrier(view_mask));
+    /// Keep a barrier before a draw that reaches interlocked storage, or input attachments
+    /// ordered between draws alone (`render_target::DrawsBarrier`).
+    pub(super) fn storage_barrier(&mut self, view_mask: u32, barrier: render_target::DrawsBarrier) {
+        let command = match barrier {
+            render_target::DrawsBarrier::Storage => KeptCommand::StorageBarrier(view_mask),
+            render_target::DrawsBarrier::Whole => KeptCommand::Barrier(view_mask),
+        };
+        self.room.commands.push(command);
     }
 
     /// Keep a barrier before a draw that writes, in `stages`, what a draw before it read as its

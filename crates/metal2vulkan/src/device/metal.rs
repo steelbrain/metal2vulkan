@@ -247,16 +247,9 @@ fn unsupported_features(profile: &DeviceProfile) -> Vec<Unsupported> {
             ],
         ));
     }
-    // Ordered by rasterization-order access, or by the pixel interlock's storage form.
-    if !f.fragment.rasterization_order_color_access && !f.fragment.pixel_interlock {
-        out.push(Unsupported::needs_any_of(
-            Feature::FramebufferFetch,
-            vec![
-                vec![feature(VkFeature::RasterizationOrderColorAttachmentAccess)],
-                vec![feature(VkFeature::FragmentShaderPixelInterlock)],
-            ],
-        ));
-    }
+    // Framebuffer fetch refuses on no device: ordered by rasterization-order access, by the pixel
+    // interlock's storage form, or, with neither, through input attachments ordered between draws
+    // (`PrecisionNote::UnorderedFetchWithinDraw`).
     // `[[barycentric_coord]]`: the device's builtins, or varyings a generated geometry stage
     // writes (`pipeline::link::geometry`).
     if !f.fragment.barycentric && !f.fragment.geometry_shader {
