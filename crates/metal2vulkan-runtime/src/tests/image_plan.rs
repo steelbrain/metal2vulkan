@@ -210,11 +210,12 @@ fn check_plan(
         );
     }
     // A color attachment is an input attachment exactly where the device's framebuffer fetch
-    // reads input attachments.
+    // reads input attachments: in rasterization order, or, with neither ordered form, between
+    // draws.
     assert_eq!(
         plan.usage.contains(ImageUsageFlags::INPUT_ATTACHMENT),
         plan.usage.contains(ImageUsageFlags::COLOR_ATTACHMENT)
-            && profile.fragment().rasterization_order_color_access,
+            && crate::framebuffer_fetch::through_inputs(profile),
         "{what}"
     );
     if plan

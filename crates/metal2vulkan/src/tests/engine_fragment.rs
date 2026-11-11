@@ -474,8 +474,10 @@ fn fetch_state(read: &[u32], formats: &[PixelFormat], blending: bool) -> Lowerin
 /// fact. With only the ordered pixel interlock it is one storage image read (and written) inside
 /// the interlock, under its pipeline's state (standalone, the function needs that state); a
 /// blended attachment's blend the shader computes, Metal's of a 16-bit float or 8-bit unorm one,
-/// the generic one, noted `UnmeasuredFetchBlend`, of another. With neither, it is refused naming
-/// both. Every compiled module passes L3.
+/// the generic one, noted `UnmeasuredFetchBlend`, of another. With neither, it is one input
+/// attachment with a `FramebufferFetch` fact, ordered between draws alone and noted
+/// `UnorderedFetchWithinDraw`, a raster order group on it (`fetch_ordered`) taking no interlock.
+/// Every compiled module passes L3.
 #[test]
 fn framebuffer_fetch_reads_in_an_ordered_form_where_the_device_has_one() {
     let Some(bc) = fixture("fragment_fetch") else {
@@ -500,9 +502,9 @@ fn framebuffer_fetch_reads_in_an_ordered_form_where_the_device_has_one() {
     for (stem, strict) in committed_profiles().expect("profiles") {
         let frag = strict.fields().fragment;
         for (entry, colors, formats) in entries {
-            // A color input in a raster order group needs the interlock, where rasterization-order
-            // access orders the read; with neither ordered form the read is refused first, naming
-            // both (below).
+            // A color input in a raster order group needs the interlock where rasterization-order
+            // access orders the read; with neither ordered form the group orders the read alone
+            // (below).
             if entry == "fetch_ordered"
                 && !frag.pixel_interlock
                 && frag.rasterization_order_color_access
@@ -530,6 +532,11 @@ fn framebuffer_fetch_reads_in_an_ordered_form_where_the_device_has_one() {
                             a.facts
                         );
                     }
+                    assert!(
+                        !a.precision
+                            .contains(&PrecisionNote::UnorderedFetchWithinDraw),
+                        "{entry} on {stem}"
+                    );
                 }
             } else if frag.pixel_interlock {
                 forms[1] += 1;
@@ -578,25 +585,23 @@ fn framebuffer_fetch_reads_in_an_ordered_form_where_the_device_has_one() {
                 );
             } else {
                 forms[2] += 1;
-                // Each entry writes the color it reads first: the interlock's alternative names
-                // what the device lacks of the interlock and the fragment-stage store.
-                let mut interlock =
-                    vec![Capability::Feature(VkFeature::FragmentShaderPixelInterlock)];
-                if !strict.fields().leaf.fragment_stores_and_atomics {
-                    interlock.push(Capability::Feature(VkFeature::FragmentStoresAndAtomics));
+                let a = compile_with(&bc, entry, &strict, &LoweringInputs::new())
+                    .unwrap_or_else(|e| panic!("{entry} on {stem}: {e}"));
+                link_and_validate(&a, &strict)
+                    .unwrap_or_else(|e| panic!("{entry} on {stem}: L3: {e}"));
+                assert_eq!(attachments(&a), colors, "{entry} on {stem}");
+                for &color in colors {
+                    assert!(
+                        a.facts.contains(&RuntimeFact::FramebufferFetch { color }),
+                        "{entry} on {stem}: {:?}",
+                        a.facts
+                    );
                 }
-                assert_eq!(
-                    refusal(&bc, entry, &strict),
-                    (
-                        Feature::FramebufferFetch,
-                        Needs::AnyOf(vec![
-                            vec![Capability::Feature(
-                                VkFeature::RasterizationOrderColorAttachmentAccess
-                            )],
-                            interlock,
-                        ])
-                    ),
-                    "{entry} on {stem}"
+                assert!(
+                    a.precision
+                        .contains(&PrecisionNote::UnorderedFetchWithinDraw),
+                    "{entry} on {stem}: {:?}",
+                    a.precision
                 );
             }
         }

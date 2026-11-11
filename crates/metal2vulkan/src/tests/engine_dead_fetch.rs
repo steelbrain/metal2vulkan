@@ -14,8 +14,9 @@
 //! shader) and no input attachment, its stages passing L3. Specialized with the read live, each
 //! reads color 0 in the form the device orders a fetch by: a written storage attachment and no
 //! color attachment where it orders fetch through the pixel interlock alone, an input attachment
-//! where it orders it through rasterization-order input attachments, and refused where it has
-//! neither. Before the fetch state was decided from the specialized function's uses, a dead read
+//! where it orders it through rasterization-order input attachments, and an input attachment
+//! ordered between draws alone where it has neither, its fragment stage noting
+//! `UnorderedFetchWithinDraw`. Before the fetch state was decided from the specialized function's uses, a dead read
 //! took the storage form on every interlock profile, with the blend computed in the shader.
 //! No GPU is used.
 
@@ -27,7 +28,7 @@ use crate::error::Error;
 use crate::library::{FunctionConstantValue, FunctionConstantValues, Library};
 use crate::lower::fragment::{inputs_order, interlock_orders};
 use crate::metal::{BlendFactor, BlendOperation, DataType, PixelFormat};
-use crate::pipeline::artifact::RenderPipeline;
+use crate::pipeline::artifact::{PrecisionNote, RenderPipeline};
 use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
 };
@@ -163,19 +164,19 @@ fn a_framebuffer_read_dead_after_specialization_takes_no_fetch_form() {
                         pipe.graphics.color_attachments[0]
                     );
                     interlocked += 1;
-                } else if inputs_order(&p) {
+                } else {
+                    // Rasterization-order input attachments, or with neither ordered form input
+                    // attachments ordered between draws alone, noted.
                     let pipe = live.unwrap_or_else(|e| panic!("{what}, live: {e}"));
                     let read: Vec<u32> = (pipe.graphics.input_attachments.iter())
                         .map(|u| u.color_index)
                         .collect();
                     assert_eq!(read, [0], "{what}, live");
                     assert_eq!(storage(&pipe), [], "{what}, live");
-                } else {
-                    assert!(
-                        matches!(live, Err(Error::Unsupported(_))),
-                        "{what}, live: {:?}",
-                        live.map(|_| ())
-                    );
+                    let noted = (pipe.stages.iter()).any(|s| {
+                        (s.precision_notes).contains(&PrecisionNote::UnorderedFetchWithinDraw)
+                    });
+                    assert_eq!(noted, !inputs_order(&p), "{what}, live");
                 }
             }
         }

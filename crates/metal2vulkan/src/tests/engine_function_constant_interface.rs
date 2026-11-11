@@ -37,9 +37,10 @@ use std::sync::Arc;
 
 use crate::budget::SPIRV_WORDS;
 use crate::device::{DevicePolicy, DeviceProfile};
-use crate::error::{DescriptorError, Error, Feature, RuntimeInput};
+use crate::error::{DescriptorError, Error, RuntimeInput};
 use crate::library::{FunctionArtifact, FunctionConstantValue, FunctionConstantValues};
 use crate::metal::DataType;
+use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::link::link;
@@ -206,9 +207,9 @@ fn an_unobserved_gated_off_input_compiles() {
         validate(&off, &p);
     }
     // Defined (and so declared), the color input is read: a framebuffer fetch. `vk12-floor` has
-    // neither ordered form, so the default policy refuses it; `moltenvk-m3` orders a fetch only
-    // through the pixel interlock, in a storage form that needs its pipeline's state, which a
-    // standalone compile does not have.
+    // neither ordered form, so it reads color 0's input attachment, ordered between draws alone
+    // and noted; `moltenvk-m3` orders a fetch only through the pixel interlock, in a storage form
+    // that needs its pipeline's state, which a standalone compile does not have.
     for stem in ["vk12-floor", "moltenvk-m3"] {
         let r = compile_bitcode(
             &bc,
@@ -221,8 +222,19 @@ fn an_unobserved_gated_off_input_compiles() {
             SPIRV_WORDS,
         );
         match (stem, r) {
-            ("vk12-floor", Err(Error::Unsupported(u))) => {
-                assert_eq!(u.feature, Feature::FramebufferFetch)
+            ("vk12-floor", Ok(a)) => {
+                assert!(
+                    a.facts
+                        .contains(&RuntimeFact::FramebufferFetch { color: 0 }),
+                    "{stem}: {:?}",
+                    a.facts
+                );
+                assert!(
+                    a.precision
+                        .contains(&PrecisionNote::UnorderedFetchWithinDraw),
+                    "{stem}: {:?}",
+                    a.precision
+                );
             }
             ("moltenvk-m3", Err(Error::NeedsInput(RuntimeInput::FramebufferFetch))) => {}
             (_, other) => panic!("{stem}: declared color input: {:?}", other.map(|_| ())),
