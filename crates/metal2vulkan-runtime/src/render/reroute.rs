@@ -43,7 +43,7 @@ use crate::draw_source::{DrawSource, KeptSource};
 use crate::error::Error;
 use crate::live_bind::LiveBind;
 use crate::pipeline::{GraphicsState as DrawingState, RenderPipelineState};
-use crate::render_state::EncoderState;
+use crate::render_state::{EncoderState, ScissorRects};
 use crate::render_target::PassShape;
 use crate::residency::Residency;
 use metal2vulkan::bind::{DrawCall, ViewSetup};
@@ -68,6 +68,9 @@ pub(super) struct Rerecord {
 struct Held {
     pipeline: Option<RenderPipelineState>,
     state: EncoderState,
+    /// The scissor rectangles, which live apart from `state` (`ScissorRects`): a draw recorded
+    /// again draws through the rectangles it was drawn through, not the encoder's latest.
+    scissors: ScissorRects,
     vertex: ArgumentTable,
     fragment: ArgumentTable,
     residency: Residency,
@@ -251,6 +254,7 @@ impl RenderLowering {
         Held {
             pipeline: self.pipeline.clone(),
             state: self.state.clone(),
+            scissors: self.scissors.clone(),
             vertex: self.vertex.clone(),
             fragment: self.fragment.clone(),
             residency: self.residency.clone(),
@@ -262,6 +266,7 @@ impl RenderLowering {
     fn swap_held(&mut self, held: &mut Held) {
         std::mem::swap(&mut self.pipeline, &mut held.pipeline);
         std::mem::swap(&mut *self.state, &mut held.state);
+        std::mem::swap(&mut self.scissors, &mut held.scissors);
         std::mem::swap(&mut self.vertex, &mut held.vertex);
         std::mem::swap(&mut self.fragment, &mut held.fragment);
         std::mem::swap(&mut self.residency, &mut held.residency);
