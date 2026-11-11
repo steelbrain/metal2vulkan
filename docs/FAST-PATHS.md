@@ -966,7 +966,7 @@ driver's. Each is open work.
   for each command buffer. Metal's command buffers wait for no such making. Not announced.
 - **On NVIDIA, a command buffer submitted while the runtime makes or frees a memory block completes
   as that call ends; emptied blocks are kept so that a returning working set makes none again.**
-  The runtime's memory blocks (`memory.rs`: pooled blocks of 64 MiB, 68 MiB for images (the row on
+  The runtime's memory blocks (`memory.rs`: pooled blocks of 64 MiB, images' included (the row on
   plain blocks below), blocks of their own for placements past half of 64 MiB, and the blocks
   exportable buffers share) are made with
   `vkAllocateMemory` and freed with `vkFreeMemory`, which hold every submission on NVIDIA's driver
@@ -1000,8 +1000,8 @@ driver's. Each is open work.
   its making at once rather than at the next creation call. A creation call that needs one while
   its making still waits for that end makes it at once and waits for it, as for a block made in
   place, and one that finds none made waits for the ready thread to make it first. A pool near its
-  next block keeps that block at rest for as long as it stays so, 64 MiB a pool at most (68 MiB
-  for images), counted against the kept empty blocks' budget. Metal's command buffers wait for no
+  next block keeps that block at rest for as long as it stays so, 64 MiB a pool at most, counted
+  against the kept empty blocks' budget. Metal's command buffers wait for no
   allocation. Not announced.
 - **With unified memory, `Private` memory lies in the system heap's types before the device-local
   ones, its buffers' blocks there allocated exportable but for buffers that declare their padding
@@ -1079,13 +1079,15 @@ driver's. Each is open work.
   buffer where the device's buffers lie in plain blocks; not the runtime's own pages, which it
   imports) shares the reservation of the process's buffer objects on RADV, and its
   `vkAllocateMemory` holds every submission of the process while the kernel fills its pages (the
-  row above). Pooled blocks are 64 MiB on every device, and a block of images 68 MiB: a
-  sixteenth besides (`IMAGE_BLOCK_SLACK`), since a
-  driver's image takes more than its texels (RADV on a Radeon 780M and ANV on an Iris Xe place a
-  `Private` `RGBA8Unorm` texture of 1024x1024 in 4 MiB and 16 KiB, and one of 2048x2048 in 16 MiB
-  and 64 KiB, at an alignment of 64 KiB), so that four images of a quarter of a block fit in one:
-  a block of 64 MiB held three such 2048x2048 textures on both, one of 68 MiB holds four
-  (`tests::blocks_ahead`). On a Radeon 780M (RADV PHOENIX, Mesa
+  row above). Pooled blocks are 64 MiB on every device, images' included. A driver's image takes
+  more than its texels (RADV on a Radeon 780M and ANV on an Iris Xe place a `Private`
+  `RGBA8Unorm` texture of 1024x1024 in 4 MiB and 16 KiB, and one of 2048x2048 in 16 MiB and
+  64 KiB, at an alignment of 64 KiB), so a block of images holds three such 2048x2048 textures
+  there, not four (`tests::blocks_ahead`). Blocks of images a sixteenth larger (68 MiB), which
+  hold four, dropped more frames in a macOS guest's page scroll on a Hawk Point 780M; with
+  64 MiB blocks the same build matched the build before the larger blocks, over 4 + 4 boots in
+  ABBA BAAB order: 8 rAF gaps of 100 ms or more against 8, 22 of 50 ms or more against 24, and
+  29.0 presents a second against 29.3. On a Radeon 780M (RADV PHOENIX, Mesa
   26.2.6), the kernel's page pools emptied before each run (through debugfs, the measurement's
   method alone: with freed pages in them a block of 16 to 64 MiB took 0.1 to 0.3 ms), a `Private`
   texture made every 16.7 ms beside a command buffer committed about every millisecond

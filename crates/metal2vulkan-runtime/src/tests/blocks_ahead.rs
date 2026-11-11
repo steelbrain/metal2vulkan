@@ -20,7 +20,7 @@
 
 use super::freed_memory::device;
 use crate::device::queue_quiet::QueueQuiet;
-use crate::memory::Holds;
+use crate::memory::{Holds, BLOCK_BYTES};
 use crate::{Buffer, Device, Error, ResourceOptions, Texture, TextureDescriptor, WorkCounts};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::time::{Duration, Instant};
@@ -259,15 +259,14 @@ fn a_pool_s_first_block_is_made_alone() {
     drop(buffer.unwrap());
 }
 
-/// The textures of a pool of images pack as many to a block as their texels' bytes fill: four
-/// `RGBA8Unorm` textures of 2048 x 2048 (16 MiB of texels each, a quarter of `memory::BLOCK_BYTES`)
-/// to a block, whatever metadata the driver's image carries past its texels within the block's
-/// sixteenth besides (`memory::IMAGE_BLOCK_SLACK`): RADV on a Radeon 780M and Iris Xe's driver
-/// take 16 MiB and 64 KiB for each at an alignment of 64 KiB, three to a block of 64 MiB. The run
-/// makes [`PACKED`] of them, one at a time, and counts the pool's blocks of images, printing each
-/// image's bytes and alignment as the driver asked them.
+/// A pool of images' blocks are [`BLOCK_BYTES`], as every pool's, and its textures pack as many to
+/// a block as the driver's placed bytes fit: `RGBA8Unorm` textures of 2048 x 2048 (16 MiB of
+/// texels each, a quarter of a block), which RADV on a Radeon 780M and Iris Xe's driver place in
+/// 16 MiB and 64 KiB at an alignment of 64 KiB, three to a block, and lavapipe in 16 MiB, four.
+/// The run makes [`PACKED`] of them, one at a time, and counts the pool's blocks of images,
+/// printing each image's bytes and alignment as the driver asked them.
 #[test]
-fn a_block_of_images_holds_four_textures_of_a_quarter_block_each() {
+fn a_block_of_images_holds_as_many_textures_as_their_placed_bytes_fit() {
     let scratch = Scratch::new("pack");
     let device = device(&scratch.0);
     let start = device.work_counts();
@@ -290,14 +289,28 @@ fn a_block_of_images_holds_four_textures_of_a_quarter_block_each() {
         device.name(),
     );
     assert!(
-        used <= PACKED / 4,
-        "{PACKED} textures of a quarter of a block lie in {used} blocks, not {}",
-        PACKED / 4
+        sizes.iter().all(|&size| size == BLOCK_BYTES),
+        "pooled blocks of images of {sizes:?} bytes, not {BLOCK_BYTES} as every pool's"
+    );
+    // The textures' placement: the largest the run asked for, as many times as it made them.
+    let Some((&(bytes, align), _)) = (placements.iter())
+        .filter(|&(_, &count)| count >= PACKED as u64)
+        .max_by_key(|&(&(bytes, _), _)| bytes)
+    else {
+        panic!("no placement asked for {PACKED} times among {placements:?}");
+    };
+    let stride = bytes.div_ceil(align) * align;
+    let per_block = ((BLOCK_BYTES - bytes) / stride + 1) as usize;
+    let fit = PACKED.div_ceil(per_block);
+    assert!(
+        used <= fit,
+        "{PACKED} textures placed in {bytes} bytes at {align} lie in {used} blocks, not the {fit} \
+         that {per_block} to a block of {BLOCK_BYTES} bytes fill"
     );
 }
 
-/// The textures `a_block_of_images_holds_four_textures_of_a_quarter_block_each` makes, and their
-/// side.
+/// The textures `a_block_of_images_holds_as_many_textures_as_their_placed_bytes_fit` makes, and
+/// their side.
 const PACKED: usize = 8;
 const PACKED_SIDE: u64 = 2048;
 
