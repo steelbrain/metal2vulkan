@@ -1,0 +1,200 @@
+/*
+ * Which kernel layer holds the dma-bufs a process freed but the kernel keeps.
+ *
+ * Follows every dma-buf whose name starts with "m2vleak" (the leak probe and repro.c name
+ * theirs with DMA_BUF_SET_NAME before importing them) through the generic DRM PRIME and
+ * dma-buf paths, and records which steps each one went through as bits:
+ *
+ *     1  dma_buf_dynamic_attach        (a device attached it)
+ *     2  dma_buf_map_attachment*       (the attachment mapped)
+ *     4  drm_gem_prime_import(_dev)    (a DRM driver imported it as a GEM object)
+ *     8  drm_prime_add_buf_handle      (the DRM file's PRIME cache took it, with a handle)
+ *    16  drm_prime_remove_buf_handle   (that cache entry removed)
+ *    32  drm_gem_object_release_handle (a GEM handle of its object closed)
+ *    64  dma_buf_unmap_attachment*     (the attachment unmapped)
+ *   128  dma_buf_detach                (the device detached)
+ *   256  drm_gem_object_release        (its GEM object released, freed)
+ *   512  drm_prime_gem_destroy         (the GEM object's PRIME teardown)
+ *  1024  release_udmabuf               (the dma-buf itself freed: the exporter's release)
+ *
+ * On exit (SIGINT) it prints, for the dma-bufs freed, how many went through each set of steps,
+ * and for those still alive (kept), the same, with how many attachments each still has, the
+ * GEM object's reference count when its handle closed, and the GEM handles still open on it.
+ * A kept dma-buf whose handle closed with more than one reference left, and whose GEM object
+ * was never released, is held by a reference inside the driver (a VM mapping, a job); one
+ * whose handle never closed is held by userspace or the PRIME cache; one released as a GEM
+ * object but still attached was never detached.
+ *
+ * Run it as root across the whole run and stop it with SIGINT a few seconds after the process
+ * exits: sudo bpftrace kernel-holds.bt
+ */
+
+config = {
+    missing_probes = "warn"
+}
+
+BEGIN
+{
+    printf("kernel-holds: following dma-bufs named m2vleak*\n");
+}
+
+kprobe:drm_gem_prime_import,
+kprobe:drm_gem_prime_import_dev
+{
+    $d = (struct dma_buf *)arg1;
+    if ($d->name != 0 && strncmp(str($d->name), "m2vleak", 7) == 0) {
+        @ours[(uint64)$d] = 1;
+        @st[(uint64)$d] = @st[(uint64)$d] | 4;
+        @n[func] = count();
+    }
+}
+
+kprobe:dma_buf_dynamic_attach
+{
+    $d = (struct dma_buf *)arg0;
+    if ($d->name != 0 && strncmp(str($d->name), "m2vleak", 7) == 0) {
+        @ours[(uint64)$d] = 1;
+        @st[(uint64)$d] = @st[(uint64)$d] | 1;
+        @att[(uint64)$d] = @att[(uint64)$d] + 1;
+        @n[func] = count();
+    }
+}
+
+kprobe:dma_buf_map_attachment,
+kprobe:dma_buf_map_attachment_unlocked
+{
+    $a = (struct dma_buf_attachment *)arg0;
+    $d = (uint64)$a->dmabuf;
+    if (@ours[$d]) {
+        @st[$d] = @st[$d] | 2;
+        @n[func] = count();
+    }
+}
+
+kprobe:dma_buf_unmap_attachment,
+kprobe:dma_buf_unmap_attachment_unlocked
+{
+    $a = (struct dma_buf_attachment *)arg0;
+    $d = (uint64)$a->dmabuf;
+    if (@ours[$d]) {
+        @st[$d] = @st[$d] | 64;
+        @n[func] = count();
+    }
+}
+
+kprobe:dma_buf_detach
+{
+    $d = (uint64)arg0;
+    if (@ours[$d]) {
+        @st[$d] = @st[$d] | 128;
+        @att[$d] = @att[$d] - 1;
+        @n[func] = count();
+    }
+}
+
+kprobe:drm_prime_add_buf_handle
+{
+    $d = (uint64)arg1;
+    if (@ours[$d]) {
+        @st[$d] = @st[$d] | 8;
+        @handle[arg0, (uint32)arg2] = $d;
+        @handles[$d] = @handles[$d] + 1;
+        @n[func] = count();
+    }
+}
+
+kprobe:drm_prime_remove_buf_handle
+{
+    $d = @handle[arg0, (uint32)arg1];
+    if ($d != 0) {
+        @st[$d] = @st[$d] | 16;
+        @handles[$d] = @handles[$d] - 1;
+        delete(@handle[arg0, (uint32)arg1]);
+        @n[func] = count();
+    }
+}
+
+kprobe:drm_gem_object_release_handle
+{
+    $o = (struct drm_gem_object *)arg1;
+    if ($o->import_attach != 0) {
+        $d = (uint64)$o->import_attach->dmabuf;
+        if (@ours[$d]) {
+            @st[$d] = @st[$d] | 32;
+            @refs_at_close[$d] = $o->refcount.refcount.refs.counter;
+            @n[func] = count();
+        }
+    }
+}
+
+kprobe:drm_gem_object_release
+{
+    $o = (struct drm_gem_object *)arg0;
+    if ($o->import_attach != 0) {
+        $d = (uint64)$o->import_attach->dmabuf;
+        if (@ours[$d]) {
+            @st[$d] = @st[$d] | 256;
+            @n[func] = count();
+        }
+    }
+}
+
+kprobe:drm_prime_gem_destroy
+{
+    $o = (struct drm_gem_object *)arg0;
+    if ($o->import_attach != 0) {
+        $d = (uint64)$o->import_attach->dmabuf;
+        if (@ours[$d]) {
+            @st[$d] = @st[$d] | 512;
+            @n[func] = count();
+        }
+    }
+}
+
+kprobe:release_udmabuf
+{
+    $d = (uint64)arg0;
+    if (@ours[$d]) {
+        @freed_by_steps[@st[$d] | 1024] = count();
+        @n[func] = count();
+        delete(@st[$d]);
+        delete(@ours[$d]);
+        delete(@att[$d]);
+        delete(@handles[$d]);
+        delete(@refs_at_close[$d]);
+    }
+}
+
+END
+{
+    for ($kv : @st) {
+        @kept_by_steps[$kv.1] = count();
+        @kept_by_attachments_left[@att[$kv.0]] = count();
+        @kept_by_refs_at_handle_close[@refs_at_close[$kv.0]] = count();
+        @kept_by_handles_left[@handles[$kv.0]] = count();
+    }
+    printf("\nfreed dma-bufs, by the steps they went through (bits above):\n");
+    print(@freed_by_steps);
+    printf("\nkept dma-bufs (alive at exit), by the steps they went through:\n");
+    print(@kept_by_steps);
+    printf("\nkept, by attachments left:\n");
+    print(@kept_by_attachments_left);
+    printf("\nkept, by the GEM object's references when its handle closed (0: never closed):\n");
+    print(@kept_by_refs_at_handle_close);
+    printf("\nkept, by PRIME cache handles left:\n");
+    print(@kept_by_handles_left);
+    printf("\ncalls seen, of the followed dma-bufs:\n");
+    print(@n);
+    clear(@st);
+    clear(@ours);
+    clear(@att);
+    clear(@handle);
+    clear(@handles);
+    clear(@refs_at_close);
+    clear(@freed_by_steps);
+    clear(@kept_by_steps);
+    clear(@kept_by_attachments_left);
+    clear(@kept_by_refs_at_handle_close);
+    clear(@kept_by_handles_left);
+    clear(@n);
+}
