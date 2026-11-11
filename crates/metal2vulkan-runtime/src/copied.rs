@@ -581,21 +581,22 @@ impl BaseBytes {
     }
 
     /// Read `into.len()` of the bytes from `offset` into `into`. Of the device's memory, a read
-    /// across the bus that the host does not cache: slow (`memory::host_cached`), and made only
-    /// for a block both sides changed.
+    /// across the bus that the host does not cache (`memory::host_cached`), made only for a block
+    /// both sides changed: on an x86-64 host with SSE4.1, with streaming loads ([`stream_read`]).
     ///
     /// # Safety
     ///
     /// `offset..offset + into.len()` lies in the bytes.
     unsafe fn read(&self, offset: usize, into: &mut [u8]) {
+        // SAFETY: the caller's.
+        let from = unsafe { self.at.as_ptr().add(offset) };
+        #[cfg(target_arch = "x86_64")]
+        if self.on_device && std::is_x86_feature_detected!("sse4.1") {
+            // SAFETY: the caller's; the host has SSE4.1.
+            return unsafe { stream_read(from, into) };
+        }
         // SAFETY: the caller's; `into` is the caller's own, apart.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                self.at.as_ptr().add(offset),
-                into.as_mut_ptr(),
-                into.len(),
-            )
-        };
+        unsafe { std::ptr::copy_nonoverlapping(from, into.as_mut_ptr(), into.len()) };
     }
 
     /// Write `from` into the bytes from `offset`.
@@ -609,6 +610,37 @@ impl BaseBytes {
             std::ptr::copy_nonoverlapping(from.as_ptr(), self.at.as_ptr().add(offset), from.len())
         };
     }
+}
+
+/// Read `into.len()` bytes at `from`, the device's memory the host maps uncached, with streaming
+/// loads (`MOVNTDQA`) of each 16 bytes where `from` lies on 16 bytes: of write-combining memory,
+/// the host may fetch a streaming load's whole 64-byte line once into a buffer that the line's
+/// next streaming loads read (Intel's SDM), where each plain load crosses the bus. A full fence
+/// first orders them after the host's earlier writes of the bytes. The bytes past the last 16, and every byte where `from` lies off 16, are
+/// copied with plain loads.
+///
+/// # Safety
+///
+/// `from` is `into.len()` bytes of mapped memory, apart from `into`; the host has SSE4.1.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse4.1")]
+unsafe fn stream_read(from: *const u8, into: &mut [u8]) {
+    use std::arch::x86_64::{__m128i, _mm_mfence, _mm_storeu_si128, _mm_stream_load_si128};
+    let whole = match from.addr() % 16 {
+        0 => into.len() / 16 * 16,
+        _ => 0,
+    };
+    _mm_mfence();
+    for at in (0..whole).step_by(16) {
+        // SAFETY: 16 bytes at `at` of the caller's memory, on 16 bytes, into `into`'s own.
+        unsafe {
+            let bytes = _mm_stream_load_si128(from.add(at).cast::<__m128i>());
+            _mm_storeu_si128(into.as_mut_ptr().add(at).cast(), bytes);
+        }
+    }
+    let rest = into.len() - whole;
+    // SAFETY: the caller's, past the bytes streamed.
+    unsafe { std::ptr::copy_nonoverlapping(from.add(whole), into.as_mut_ptr().add(whole), rest) };
 }
 
 /// Host memory of a base's bytes, freed as it goes: reached through [`BaseBytes`]' pointer alone.
