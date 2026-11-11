@@ -1,7 +1,7 @@
 //! Not a consumer's example: the GPU's bandwidth through two 256 MiB buffers, made as a program
 //! makes them (`new_buffer`, `new_buffer_with_descriptor` at an address it picks or at a pinned
-//! one, or `new_buffer_with_bytes_no_copy` over pages of the example's own, or over the bytes of a
-//! `Shared` no-copy buffer that is a copy of them), each pair after the
+//! one, or `new_buffer_with_bytes_no_copy` over pages of the example's own, over the bytes of a
+//! `Shared` no-copy buffer that is a copy of them, or over read-only ones), each pair after the
 //! pairs before it in the same device went, so that a pair may take the memory an earlier one
 //! left. A kernel reads one buffer and writes the other, one dispatch a command buffer, committed
 //! and waited for, with no CPU access.
@@ -80,6 +80,10 @@ enum Made {
     /// the pair's buffer's import too): as a host that refuses a second import of pages makes a
     /// guest's buffers.
     OverCopy,
+    /// `newBufferWithBytesNoCopy:length:options:deallocator:` over pages of the example's own that
+    /// it maps read-only, whose import a gate refuses: the GPU's writes are dropped, so the
+    /// kernel's output reads the pages' zeros.
+    ReadOnly,
 }
 
 /// The storage mode's bits of a resource's options.
@@ -125,6 +129,17 @@ impl Pages {
             return Err("mmap failed".into());
         }
         Ok(Pages(NonNull::new(pointer.cast()).ok_or("mmap gave null")?))
+    }
+
+    /// Let the process only read them from now on.
+    fn read_only(&self) -> common::Result<()> {
+        // SAFETY: the mapping `new` made, whole.
+        let done =
+            unsafe { libc::mprotect(self.0.as_ptr().cast(), BYTES as usize, libc::PROT_READ) };
+        match done {
+            0 => Ok(()),
+            _ => Err("mprotect failed".into()),
+        }
     }
 }
 
@@ -199,6 +214,7 @@ const SEQUENCES: [(&str, &[Pair]); 7] = [
             Pair(StorageMode::Managed, Made::OverCopy, 0),
             Pair(StorageMode::Managed, Made::NoCopy, 0),
             Pair(StorageMode::Shared, Made::OverCopy, 0),
+            Pair(StorageMode::Managed, Made::ReadOnly, 0),
         ],
     ),
 ];
@@ -263,6 +279,14 @@ fn make(
             // SAFETY: as above.
             let buffer = unsafe { refused(device, options, &host) }?;
             beside.push(copy);
+            pages.push(host);
+            buffer
+        }
+        Made::ReadOnly => {
+            let host = Pages::new()?;
+            host.read_only()?;
+            // SAFETY: the pages outlive the buffer (`run_pair` drops them after it).
+            let buffer = unsafe { refused(device, options, &host) }?;
             pages.push(host);
             buffer
         }
@@ -344,7 +368,8 @@ fn pass(
 const CHECKED: u64 = 1024;
 
 /// Check that `output` holds the kernel's answer for an input of zeros, `output[i] = i`, in its
-/// first [`CHECKED`] floats, copied by a blit into a `Shared` buffer the host reads.
+/// first [`CHECKED`] floats, copied by a blit into a `Shared` buffer the host reads; for a pair
+/// over read-only pages, whose GPU writes are dropped, the pages' zeros.
 fn check(
     device: &Device,
     queue: &CommandQueue,
@@ -358,10 +383,13 @@ fn check(
     blit.end_encoding()?;
     common::run(&command_buffer)?;
     let bytes = common::bytes(&read)?;
+    let dropped = matches!(pair.1, Made::ReadOnly);
     for (i, value) in bytes.as_chunks::<4>().0.iter().enumerate() {
         let value = f32::from_le_bytes(*value);
-        if value != i as f32 {
-            return Err(format!("{}: output[{i}] is {value}, not {i}", pair.name()).into());
+        let expected = if dropped { 0.0 } else { i as f32 };
+        if value != expected {
+            let name = pair.name();
+            return Err(format!("{name}: output[{i}] is {value}, not {expected}").into());
         }
     }
     Ok(())
