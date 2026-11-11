@@ -2664,6 +2664,7 @@ field	metal2vulkan-runtime::WorkCounts.copied_base_device_bytes	pub copied_base_
 field	metal2vulkan-runtime::WorkCounts.copied_base_host_bytes	pub copied_base_host_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.copied_bases_made	pub copied_bases_made: u64
 field	metal2vulkan-runtime::WorkCounts.copied_bases_refused	pub copied_bases_refused: u64
+field	metal2vulkan-runtime::WorkCounts.copied_compare_threads	pub copied_compare_threads: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes	pub copied_copy_in_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes_skipped	pub copied_copy_in_bytes_skipped: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_ins_unused	pub copied_copy_ins_unused: u64

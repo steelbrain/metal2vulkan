@@ -135,19 +135,23 @@
 //!   wait for them is held on the host until that turn (`event_timeline.rs`), so the GPU's writes
 //!   before a signal are in the pages once its value is seen, as Metal's are. No submission is
 //!   added; a reader sees the value a completion turn later than the semaphore's counter shows it.
-//! - **Cost.** A copy is compared whole at each batch's completion that may have written it, and
-//!   at each commit where its pages carry no log: O(bytes) per such batch, and per commit without
-//!   a log, a fallback's cost (`docs/FAST-PATHS.md`, known gaps). A command buffer whose
-//!   functions read addresses may write every copy. Without a base, a page that agrees costs one
-//!   read of each side and a slice comparison; with one, a block that agrees costs one read of
-//!   one side and its tag (SSE2 on x86-64, about 55 GB/s over a block in the first-level cache
-//!   on a Ryzen 7 7840HS). On that host a 256 MiB copy with a base that agrees took 9.1-9.4 ms
-//!   each way, and where every byte changed on both sides 172 ms in and 218 ms back; 680 MiB of
-//!   copies that agree 27-28 ms each way; their logged copy in 0.2-0.3 ms where no page changed,
-//!   and 4.8-6.0 ms where 1% of the pages changed on each side; a merge back of no copy written,
-//!   none (`tests/copied_bench.rs`; `docs/FAST-PATHS.md` has the snapshot's figures they
-//!   replaced). Counted:
-//!   `WorkCounts::copied_copy_in_bytes`, `WorkCounts::copied_merge_back_bytes`,
+//! - **Cost.** A copy is compared whole at each batch's completion that may have written it, and at
+//!   each commit where its pages carry no log: O(bytes) per such batch, and per commit without a
+//!   log, a fallback's cost (`docs/FAST-PATHS.md`, known gaps). A command buffer whose functions
+//!   read addresses may write every copy. Without a base, a page that agrees costs one read of each
+//!   side and a slice comparison; with one, a block that agrees costs one read of one side and its
+//!   tag (SSE2 on x86-64, about 55 GB/s over a block in the first-level cache on a Ryzen 7 7840HS).
+//!   A comparison of a copy with a base of at least twice `SPLIT_BYTES` (8 MiB) splits its blocks
+//!   into runs of at least that many, one for each of up to four threads, the calling one among
+//!   them: it starts at most three, each with a 256 KiB stack, and they end before it returns, so a
+//!   device's comparisons, which its copies' lock keeps one at a time, hold at most three more
+//!   threads at once (`WorkCounts::copied_compare_threads`; a copy without a base is compared on
+//!   the calling thread). On that host a 256 MiB copy with a base that agrees took 9.1-9.4 ms each
+//!   way, and where every byte changed on both sides 172 ms in and 218 ms back; 680 MiB of copies
+//!   that agree 27-28 ms each way; their logged copy in 0.2-0.3 ms where no page changed, and
+//!   4.8-6.0 ms where 1% of the pages changed on each side; a merge back of no copy written, none
+//!   (`tests/copied_bench.rs`; `docs/FAST-PATHS.md` has the snapshot's figures they replaced).
+//!   Counted: `WorkCounts::copied_copy_in_bytes`, `WorkCounts::copied_merge_back_bytes`,
 //!   `WorkCounts::copied_dropped_bytes`.
 //! - **Heaps and rebinds.** A no-copy heap's own buffer is copied as a buffer is, where the heap's
 //!   textures could lie, with a heap's hazard identity; its buffers lie in the copy at their
@@ -186,7 +190,7 @@ use std::num::NonZeroU64;
 use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 /// A device's live copied host buffers, compared at each commit and each batch's completion.
 #[derive(Default)]
@@ -698,7 +702,8 @@ pub(crate) struct BaseBytes {
 }
 
 // SAFETY: `at` names the memory `_held` keeps mapped and nothing else uses, reached only under
-// the copies' lock ([`CopiedBuffers`]).
+// the copies' lock ([`CopiedBuffers`]): by the thread that holds it, or by the threads of its
+// comparison, each its own blocks ([`split`]).
 unsafe impl Send for BaseBytes {}
 
 impl BaseBytes {
@@ -1077,7 +1082,7 @@ impl CopiedBuffers {
             .collect();
         let plans = planned(asked, tally, &in_flight);
         let (mut moved, mut skipped, mut unused, mut read) = (0u64, 0u64, 0u64, 0u64);
-        let (mut made, mut refused) = (0u64, 0u64);
+        let (mut made, mut refused, mut started) = (0u64, 0u64, 0u64);
         for entry in lock(&self.entries).iter_mut() {
             if !reaches(entry) {
                 unused += 1;
@@ -1097,13 +1102,23 @@ impl CopiedBuffers {
             let mut compared = 0u64;
             for range in ranges {
                 let bytes = range.start as usize..range.end as usize;
-                // SAFETY: the entry's pointers are live while it is registered (`Entry`), and
-                // `bytes` lies in its bytes (`blocks`), from a multiple of `SYNC_BLOCK`.
-                moved += unsafe {
-                    match &mut entry.base {
-                        Some(base) => copy_in_tagged(pages, copy, base, length, bytes, &mut read),
-                        None => copy_in_untagged(pages, copy, bytes),
+                // The entry's pointers are live while it is registered (`Entry`), and `bytes`
+                // lies in its bytes (`blocks`), from a multiple of `SYNC_BLOCK`.
+                moved += match &mut entry.base {
+                    Some(Base { tags, bytes: kept }) => {
+                        let sides = Sides {
+                            pages,
+                            copy,
+                            length,
+                            bytes: kept,
+                        };
+                        // SAFETY: as above; `sides` and `tags` are the entry's base's.
+                        let tally = unsafe { copy_in_tagged(sides, tags, bytes) };
+                        (read, started) = (read + tally.read, started + tally.started);
+                        tally.written
                     }
+                    // SAFETY: as above.
+                    None => unsafe { copy_in_untagged(pages, copy, bytes) },
                 };
                 compared += range.end - range.start;
             }
@@ -1133,6 +1148,7 @@ impl CopiedBuffers {
         counts.copied_copy_in_skipped(skipped);
         counts.copied_copy_ins_unused(unused);
         counts.copied_bases(made, refused, read);
+        counts.copied_compare_threads(started);
         match refused {
             0 => Ok(()),
             _ => Err(NotCopied::OutOfHostMemory),
@@ -1174,7 +1190,7 @@ impl CopiedBuffers {
         }
         let owed = self.owed.swap(false, Ordering::AcqRel);
         let (mut moved, mut dropped, mut read) = (0u64, 0u64, 0u64);
-        let (mut compared, mut skipped) = (0u64, 0u64);
+        let (mut compared, mut skipped, mut started) = (0u64, 0u64, 0u64);
         let mut reports = Vec::new();
         for entry in lock(&self.entries).iter_mut() {
             let Some(base) = entry.base.as_mut() else {
@@ -1186,28 +1202,32 @@ impl CopiedBuffers {
                 continue;
             }
             compared += 1;
+            let Base { tags, bytes } = base;
             let (copy, pages, length) = (entry.copy, entry.pages, entry.length);
+            let sides = Sides {
+                pages,
+                copy,
+                length,
+                bytes,
+            };
             if entry.drops_writes {
-                // SAFETY: the entry's pointers are live while it is registered (`Entry`).
-                dropped += unsafe { restore_tagged(copy, pages, base, length, &mut read) };
+                // SAFETY: the entry's pointers are live while it is registered (`Entry`), and
+                // `sides` and `tags` are its base's.
+                let tally = unsafe { restore_tagged(sides, tags) };
+                (dropped, read) = (dropped + tally.written, read + tally.read);
+                started += tally.started;
                 continue;
             }
-            let mut blocks: Vec<Range<u64>> = Vec::new();
-            let mut note = |wrote: Range<usize>| {
-                // The block of `SYNC_BLOCK` bytes the write lies in, cut to the copy.
-                let start = (wrote.start / SYNC_BLOCK * SYNC_BLOCK) as u64;
-                let end = (start + SYNC_BLOCK as u64).min(length as u64);
-                match blocks.last_mut() {
-                    Some(last) if last.end >= start => last.end = last.end.max(end),
-                    _ => blocks.push(start..end),
-                }
-            };
             // SAFETY: as above.
-            moved += unsafe { merge_tagged(copy, pages, base, length, &mut read, &mut note) };
-            if let (Some(log), false) = (&mut entry.log, blocks.is_empty()) {
-                let wrote: u64 = blocks.iter().map(|bytes| bytes.end - bytes.start).sum();
+            let tally = unsafe { merge_tagged(sides, tags) };
+            (moved, read) = (moved + tally.written, read + tally.read);
+            started += tally.started;
+            if let (Some(log), false) = (&mut entry.log, tally.wrote.is_empty()) {
+                let wrote: u64 = (tally.wrote.iter())
+                    .map(|bytes| bytes.end - bytes.start)
+                    .sum();
                 log.merged = log.merged.saturating_add(wrote);
-                reports.push((Arc::clone(&log.pages), log.writer, blocks));
+                reports.push((Arc::clone(&log.pages), log.writer, tally.wrote));
             }
         }
         // Reported with no lock of the copies' held.
@@ -1218,6 +1238,7 @@ impl CopiedBuffers {
         counts.copied_dropped(dropped);
         counts.copied_merges(compared, skipped);
         counts.copied_bases(0, 0, read);
+        counts.copied_compare_threads(started);
     }
 
     /// Find no memory for a base from now on where `refused`: a test's stand-in for a host out of
@@ -1413,32 +1434,167 @@ pub(crate) unsafe fn copy_in_untagged(
     written
 }
 
-/// A copy in of a copy with `base`, over `bytes` (from a multiple of [`TAG_BLOCK`]), of a copy
-/// of `length` bytes: each block of the pages whose tag differs from the base's is compared with
-/// the base's bytes, and each byte that differs written into `copy`. The base's bytes are the
-/// copy's block where its tag still agrees (the GPU did not change it since), else read from the
-/// base (counted in `read`). The base then holds the block as written, the pages' bytes over the
-/// base's. The bytes written.
+/// The most threads one comparison of a copy with a base runs on ([`split`]), the calling thread
+/// among them.
+const SPLIT_THREADS: usize = 4;
+
+/// The fewest bytes of a copy each thread of a split comparison takes ([`split`]): a copy of
+/// less than twice as many is compared on the calling thread alone.
+pub(crate) const SPLIT_BYTES: usize = 8 << 20;
+
+/// The stack of each thread a split comparison starts ([`split`]): a run's two blocks and its
+/// calls' frames.
+const SPLIT_STACK: usize = 256 << 10;
+
+/// The memory one comparison of a copy with a base reaches, which [`split`] shares among its
+/// threads: the pages and the copy, both `length` bytes of mapped memory, and the base's bytes.
+#[derive(Clone, Copy)]
+struct Sides<'a> {
+    pages: NonNull<u8>,
+    copy: NonNull<u8>,
+    length: usize,
+    bytes: &'a BaseBytes,
+}
+
+// SAFETY: the pointers are an entry's, live while it is registered (`Entry`), and a comparison
+// holds the copies' lock until each thread it started has ended ([`split`]); each thread reads
+// and writes only its own blocks of the pages, the copy and the base's bytes.
+unsafe impl Send for Sides<'_> {}
+// SAFETY: as above.
+unsafe impl Sync for Sides<'_> {}
+
+/// What a run of a copy's blocks did: the bytes it wrote, the base's blocks it read
+/// (`WorkCounts::copied_base_blocks_read`), and, of a merge back, the blocks of [`SYNC_BLOCK`]
+/// bytes of the pages it wrote a byte of, in order, adjacent ones joined; and of a comparison
+/// split across threads, those it started (`WorkCounts::copied_compare_threads`).
+#[derive(Default)]
+struct Tally {
+    written: u64,
+    read: u64,
+    wrote: Vec<Range<u64>>,
+    started: u64,
+}
+
+impl Tally {
+    /// Note the write of a byte of the [`SYNC_BLOCK`] at `start` of a copy of `length` bytes,
+    /// after those noted before it.
+    fn wrote(&mut self, start: u64, length: usize) {
+        let end = (start + SYNC_BLOCK as u64).min(length as u64);
+        self.joined(start..end);
+    }
+
+    /// `run` after the runs this one holds, joined with the last where they meet.
+    fn joined(&mut self, run: Range<u64>) {
+        match self.wrote.last_mut() {
+            Some(last) if last.end >= run.start => last.end = last.end.max(run.end),
+            _ => self.wrote.push(run),
+        }
+    }
+
+    /// This run's tally and then `later`'s, of the blocks after its own.
+    fn and(mut self, later: Tally) -> Tally {
+        self.written += later.written;
+        self.read += later.read;
+        self.started += later.started;
+        for run in later.wrote {
+            self.joined(run);
+        }
+        self
+    }
+}
+
+/// The threads a comparison may run on: [`SPLIT_THREADS`], or as many as the host runs at once
+/// where fewer.
+fn split_threads() -> usize {
+    static THREADS: OnceLock<usize> = OnceLock::new();
+    *THREADS.get_or_init(|| {
+        let host = std::thread::available_parallelism().map_or(1, |threads| threads.get());
+        host.min(SPLIT_THREADS)
+    })
+}
+
+/// Run `work` over the blocks of a copy whose tags are `tags`, from its block `first`, split into
+/// at most one run for each of [`split_threads`], each a whole number of [`SYNC_BLOCK`]s of at
+/// least [`SPLIT_BYTES`] but the last, which may be shorter. The calling thread takes runs, and
+/// so does each thread started for the others (`exit_guard::spawn_scoped`, raised to at least
+/// the user-initiated class), all ended before this returns; a thread the system does not start
+/// leaves its runs to the rest. `work` takes a run's first block and its tags. The runs' tallies,
+/// joined in order.
+fn split(
+    tags: &mut [Tag],
+    first: usize,
+    work: impl Fn(usize, &mut [Tag]) -> Tally + Sync,
+) -> Tally {
+    let threads = (tags.len() * TAG_BLOCK / SPLIT_BYTES).clamp(1, split_threads());
+    if threads == 1 {
+        return work(first, tags);
+    }
+    let each = (tags.len().div_ceil(threads)).next_multiple_of(SYNC_BLOCK / TAG_BLOCK);
+    let runs = Mutex::new(tags.chunks_mut(each).enumerate());
+    let tallies = Mutex::new(Vec::with_capacity(threads));
+    let pull = || {
+        while let Some((index, run)) = lock(&runs).next() {
+            let tally = work(first + index * each, run);
+            lock(&tallies).push((index, tally));
+        }
+    };
+    let started = std::thread::scope(|scope| {
+        let pull = &pull;
+        let started = (1..threads).filter(|_| {
+            let builder = std::thread::Builder::new()
+                .name("m2v-copied-compare".to_owned())
+                .stack_size(SPLIT_STACK);
+            // One the system does not start leaves its runs to the others.
+            let thread = crate::exit_guard::spawn_scoped(scope, builder, move || {
+                crate::exit_guard::raise_to_user_initiated();
+                pull()
+            });
+            thread.is_ok()
+        });
+        let started = started.count() as u64;
+        pull();
+        started
+    });
+    let mut tallies = tallies.into_inner().unwrap_or_else(PoisonError::into_inner);
+    tallies.sort_by_key(|(index, _)| *index);
+    let started = Tally {
+        started,
+        ..Tally::default()
+    };
+    (tallies.into_iter()).fold(started, |tally, (_, run)| tally.and(run))
+}
+
+/// A copy in of a copy with a base whose tags are `tags`, over `bytes` (from a multiple of
+/// [`SYNC_BLOCK`]) of `sides`, split across threads ([`split`]): each block of the pages whose
+/// tag differs from the base's is compared with the base's bytes, and each byte that differs
+/// written into the copy. The base's bytes are the copy's block where its tag still agrees (the
+/// GPU did not change it since), else read from the base. The base then holds the block as
+/// written, the pages' bytes over the base's.
 ///
 /// # Safety
 ///
-/// `pages` and `copy` are `length` bytes of mapped memory, and `bytes` lies in them.
-unsafe fn copy_in_tagged(
-    pages: NonNull<u8>,
-    copy: NonNull<u8>,
-    base: &mut Base,
-    length: usize,
-    bytes: Range<usize>,
-    read: &mut u64,
-) -> u64 {
-    let (pages, copy) = (pages.as_ptr(), copy.as_ptr());
-    let mut written = 0u64;
-    let (mut now, mut was) = ([0u8; TAG_BLOCK], [0u8; TAG_BLOCK]);
+/// `sides` holds an entry's live pointers and its base's bytes, `tags` the base's tags, and
+/// `bytes` lies in the copy.
+unsafe fn copy_in_tagged(sides: Sides<'_>, tags: &mut [Tag], bytes: Range<usize>) -> Tally {
     let (first, end) = (bytes.start / TAG_BLOCK, bytes.end.div_ceil(TAG_BLOCK));
-    let blocks = base.tags.iter_mut().enumerate().take(end).skip(first);
-    for (index, agreed) in blocks {
+    // SAFETY: the caller's, for the run's own blocks.
+    split(&mut tags[first..end], first, |first, tags| unsafe {
+        copy_in_blocks(sides, first, tags)
+    })
+}
+
+/// [`copy_in_tagged`] of the blocks whose tags are `tags`, from the copy's block `first`.
+///
+/// # Safety
+///
+/// As [`copy_in_tagged`]'s, and no other thread reaches these blocks.
+unsafe fn copy_in_blocks(sides: Sides<'_>, first: usize, tags: &mut [Tag]) -> Tally {
+    let (pages, copy) = (sides.pages.as_ptr(), sides.copy.as_ptr());
+    let mut tally = Tally::default();
+    let (mut now, mut was) = ([0u8; TAG_BLOCK], [0u8; TAG_BLOCK]);
+    for (index, agreed) in (first..).zip(tags) {
         let at = index * TAG_BLOCK;
-        let span = (length - at).min(TAG_BLOCK);
+        let span = (sides.length - at).min(TAG_BLOCK);
         // SAFETY: `span` bytes at `at` lie in the pages (the caller's).
         if unsafe { tag_in_place(pages.add(at), span, &mut now) } == *agreed {
             continue;
@@ -1456,48 +1612,54 @@ unsafe fn copy_in_tagged(
         let copy_agrees = tag(&was) == *agreed;
         if !copy_agrees {
             // SAFETY: as above, in the base's bytes, which are as many.
-            unsafe { base.bytes.read(at, &mut was[..span]) };
-            *read += 1;
+            unsafe { sides.bytes.read(at, &mut was[..span]) };
+            tally.read += 1;
         }
         // SAFETY: as above, in the copy.
-        written += unsafe { merge_block(&now[..span], copy.add(at), &mut was[..span], false) };
+        tally.written +=
+            unsafe { merge_block(&now[..span], copy.add(at), &mut was[..span], false) };
         // The pages' block over the base's: the pages' own where the copy's agreed.
         *agreed = match copy_agrees {
             true => changed,
             false => tag(&was),
         };
         // SAFETY: as above, in the base's bytes.
-        unsafe { base.bytes.write(at, &was[..span]) };
+        unsafe { sides.bytes.write(at, &was[..span]) };
     }
-    written
+    tally
 }
 
-/// A merge back of a copy with `base` (that keeps the GPU's writes) of `length` bytes: each block
-/// of the copy whose tag differs from the base's is merged into `pages`, each block it wrote a
-/// byte of told to `note`. Where the pages' block still has the base's tag (the CPU did not change
-/// it since), the copy's block is the merge, stored over it whole ([`store_block`]); else the
-/// copy's block is compared with the base's bytes (read from the base, counted in `read`), and
-/// each byte that differs written into `pages`, unless the pages' byte differs from the base's
-/// already (the CPU wrote it since: [`merge_block`]). The base then holds the copy's block. The
-/// bytes that the pages took.
+/// A merge back of a copy with a base whose tags are `tags` (that keeps the GPU's writes), of
+/// `sides`, split across threads ([`split`]): each block of the copy whose tag differs from the
+/// base's is merged into the pages, and the blocks of [`SYNC_BLOCK`] bytes it wrote a byte of
+/// noted. Where the pages' block still has the base's tag (the CPU did not change it since), the
+/// copy's block is the merge, stored over it whole ([`store_block`]); else the copy's block is
+/// compared with the base's bytes (read from the base), and each byte that differs written into
+/// the pages, unless the pages' byte differs from the base's already (the CPU wrote it since:
+/// [`merge_block`]). The base then holds the copy's block.
 ///
 /// # Safety
 ///
-/// `copy` and `pages` are `length` bytes of mapped memory.
-unsafe fn merge_tagged(
-    copy: NonNull<u8>,
-    pages: NonNull<u8>,
-    base: &mut Base,
-    length: usize,
-    read: &mut u64,
-    note: &mut impl FnMut(Range<usize>),
-) -> u64 {
-    let (copy, pages) = (copy.as_ptr(), pages.as_ptr());
-    let mut written = 0u64;
+/// `sides` holds an entry's live pointers and its base's bytes, and `tags` the base's tags.
+unsafe fn merge_tagged(sides: Sides<'_>, tags: &mut [Tag]) -> Tally {
+    // SAFETY: the caller's, for the run's own blocks.
+    split(tags, 0, |first, tags| unsafe {
+        merge_blocks(sides, first, tags)
+    })
+}
+
+/// [`merge_tagged`] of the blocks whose tags are `tags`, from the copy's block `first`.
+///
+/// # Safety
+///
+/// As [`merge_tagged`]'s, and no other thread reaches these blocks.
+unsafe fn merge_blocks(sides: Sides<'_>, first: usize, tags: &mut [Tag]) -> Tally {
+    let (copy, pages) = (sides.copy.as_ptr(), sides.pages.as_ptr());
+    let mut tally = Tally::default();
     let (mut now, mut was) = ([0u8; TAG_BLOCK], [0u8; TAG_BLOCK]);
-    for (index, agreed) in base.tags.iter_mut().enumerate() {
+    for (index, agreed) in (first..).zip(tags) {
         let at = index * TAG_BLOCK;
-        let span = (length - at).min(TAG_BLOCK);
+        let span = (sides.length - at).min(TAG_BLOCK);
         // SAFETY: `span` bytes at `at` lie in the copy (the caller's).
         if unsafe { tag_in_place(copy.add(at), span, &mut now) } == *agreed {
             continue;
@@ -1518,44 +1680,50 @@ unsafe fn merge_tagged(
         } else {
             // Both sides changed it: the base's bytes, merged byte by byte.
             // SAFETY: as above, in the base's bytes, which are as many.
-            unsafe { base.bytes.read(at, &mut was[..span]) };
-            *read += 1;
+            unsafe { sides.bytes.read(at, &mut was[..span]) };
+            tally.read += 1;
             // SAFETY: as above, in the pages.
             unsafe { merge_block(&now[..span], pages.add(at), &mut was[..span], true) }
         };
         if merged > 0 {
-            note(at..at + span);
+            tally.wrote((at / SYNC_BLOCK * SYNC_BLOCK) as u64, sides.length);
         }
-        written += merged;
+        tally.written += merged;
         *agreed = changed;
         // SAFETY: as above, in the base's bytes.
-        unsafe { base.bytes.write(at, &now[..span]) };
+        unsafe { sides.bytes.write(at, &now[..span]) };
     }
-    written
+    tally
 }
 
-/// A merge back of a copy with `base` whose GPU writes are dropped, of `length` bytes: each block
-/// of the copy whose tag differs from the base's takes back the base's bytes wherever it differs
-/// from them, and nothing is written to `pages` or the base. The base's bytes are the pages'
-/// block where its tag still agrees, else read from the base (counted in `read`). The bytes
-/// written into the copy.
+/// A merge back of a copy with a base whose tags are `tags` and whose GPU writes are dropped, of
+/// `sides`, split across threads ([`split`]): each block of the copy whose tag differs from the
+/// base's takes back the base's bytes wherever it differs from them, and nothing is written to
+/// the pages or the base. The base's bytes are the pages' block where its tag still agrees, else
+/// read from the base.
 ///
 /// # Safety
 ///
-/// `copy` and `pages` are `length` bytes of mapped memory.
-unsafe fn restore_tagged(
-    copy: NonNull<u8>,
-    pages: NonNull<u8>,
-    base: &Base,
-    length: usize,
-    read: &mut u64,
-) -> u64 {
-    let (copy, pages) = (copy.as_ptr(), pages.as_ptr());
-    let mut written = 0u64;
+/// `sides` holds an entry's live pointers and its base's bytes, and `tags` the base's tags.
+unsafe fn restore_tagged(sides: Sides<'_>, tags: &mut [Tag]) -> Tally {
+    // SAFETY: the caller's, for the run's own blocks.
+    split(tags, 0, |first, tags| unsafe {
+        restore_blocks(sides, first, tags)
+    })
+}
+
+/// [`restore_tagged`] of the blocks whose tags are `tags`, from the copy's block `first`.
+///
+/// # Safety
+///
+/// As [`restore_tagged`]'s, and no other thread reaches these blocks.
+unsafe fn restore_blocks(sides: Sides<'_>, first: usize, tags: &[Tag]) -> Tally {
+    let (copy, pages) = (sides.copy.as_ptr(), sides.pages.as_ptr());
+    let mut tally = Tally::default();
     let (mut now, mut agreed) = ([0u8; TAG_BLOCK], [0u8; TAG_BLOCK]);
-    for (index, tagged) in base.tags.iter().enumerate() {
+    for (index, tagged) in (first..).zip(tags) {
         let at = index * TAG_BLOCK;
-        let span = (length - at).min(TAG_BLOCK);
+        let span = (sides.length - at).min(TAG_BLOCK);
         // SAFETY: `span` bytes at `at` lie in the copy (the caller's).
         if unsafe { tag_in_place(copy.add(at), span, &mut now) } == *tagged {
             continue;
@@ -1566,13 +1734,14 @@ unsafe fn restore_tagged(
         unsafe { read_block(pages.add(at), span, &mut agreed) };
         if tag(&agreed) != *tagged {
             // SAFETY: as above, in the base's bytes, which are as many.
-            unsafe { base.bytes.read(at, &mut agreed[..span]) };
-            *read += 1;
+            unsafe { sides.bytes.read(at, &mut agreed[..span]) };
+            tally.read += 1;
         }
         // SAFETY: as above, in the copy.
-        written += unsafe { merge_block(&agreed[..span], copy.add(at), &mut now[..span], false) };
+        tally.written +=
+            unsafe { merge_block(&agreed[..span], copy.add(at), &mut now[..span], false) };
     }
-    written
+    tally
 }
 
 /// One block whose bytes `now` (read of one side) differ from the agreed bytes `was`: each byte of

@@ -15,7 +15,7 @@
 //! leaving out one it is not told, so a block it leaves out shows whether a copy in took it.
 
 use super::copied::add_reading;
-use crate::copied::{Copied, CopiedBuffers, CopiesReached, SYNC_BLOCK};
+use crate::copied::{Copied, CopiedBuffers, CopiesReached, SPLIT_BYTES, SYNC_BLOCK};
 use crate::dirty_pages::{hook, DirtySource, DirtyTally, PagesLog};
 use crate::work_counts::Counters;
 use crate::{DirtyPages, DirtyStamp};
@@ -554,6 +554,97 @@ fn a_cpu_write_the_gpu_did_not_make_survives_both_ways_logged_or_not() {
             pair.pages[cpu_byte + 1],
             pair.copy[cpu_byte + 1],
             "logged {logged}"
+        );
+        drop(copied);
+    }
+}
+
+/// A comparison of a copy of more than four times `SPLIT_BYTES` splits its blocks across threads,
+/// where the host runs two or more at once (`WorkCounts::copied_compare_threads`), and answers as
+/// one thread does: the GPU writes one byte of every other block of the pages (of `SYNC_BLOCK`
+/// bytes) and the CPU one byte of each block between, and of every fifth block the GPU wrote, the
+/// same byte. The merge back writes the GPU's bytes but those, keeps the CPU's, reads the base for
+/// those blocks alone, and reports the blocks it wrote a byte of in order, one run each; the next
+/// copy in takes the CPU's bytes. A copy whose writes are dropped takes the GPU's out of itself.
+#[test]
+fn a_comparison_split_across_threads_answers_as_one_thread_does() {
+    let length = 4 * SPLIT_BYTES + 3 * 1024 + 5;
+    let blocks = length.div_ceil(SYNC_BLOCK);
+    for drops in [false, true] {
+        let mut pages: Vec<u8> = (0..length).map(|i| (i * 7 + 3) as u8).collect();
+        let mut copy = vec![0_u8; length];
+        let pointer = pages.as_ptr() as u64;
+        let own = Arc::new(TestLog::default());
+        let log = own_log(&own, pointer, length);
+        let buffers = Arc::new(CopiedBuffers::default());
+        let (counts, tally) = (Counters::default(), DirtyTally::default());
+        // SAFETY: the copy and the pages are the test's, of `length` bytes, live past the answer.
+        let copied =
+            unsafe { add_reading(&buffers, at(&mut pages), at(&mut copy), length, read, drops) };
+        let copied = copied.unwrap();
+        copied.set_log(&log);
+        copy_in_all(&buffers, &counts, &tally);
+        let agreed = pages.clone();
+        let (mut want, mut wrote, mut both) = (pages.clone(), vec![], 0);
+        for block in (0..blocks).step_by(2) {
+            let gpu = block * SYNC_BLOCK + block % SYNC_BLOCK;
+            if gpu >= length {
+                continue;
+            }
+            copy[gpu] ^= 0xFF;
+            if block % 5 == 0 {
+                pages[gpu] ^= 0x0F;
+                want[gpu] = pages[gpu];
+                both += 1;
+            } else {
+                want[gpu] = copy[gpu];
+                let start = (block * SYNC_BLOCK) as u64;
+                wrote.push(start..(start + BLOCK).min(length as u64));
+            }
+            let cpu = (block + 1) * SYNC_BLOCK + 7;
+            if cpu < length {
+                pages[cpu] ^= 0xF0;
+                want[cpu] = pages[cpu];
+            }
+        }
+        let before = counts.copied_tallies();
+        buffers.merge_back(&counts, &CopiesReached::all());
+        let after = counts.copied_tallies();
+        let parallel = std::thread::available_parallelism().map_or(1, |n| n.get()) > 1;
+        assert_eq!(
+            after.compare_threads > before.compare_threads,
+            parallel,
+            "drops {drops}: split where the host runs threads at once"
+        );
+        match drops {
+            false => {
+                assert!(pages == want, "the GPU's bytes merged, the CPU's kept");
+                assert_eq!(
+                    after.merge_back_bytes - before.merge_back_bytes,
+                    wrote.len() as u64
+                );
+                assert_eq!(after.base_blocks_read - before.base_blocks_read, both);
+                let writer = own.named().first().map(|w| w.1).expect("reported");
+                let want_named: Vec<_> = wrote.into_iter().map(|run| (run, writer)).collect();
+                assert!(own.named() == want_named, "each block written, in order");
+            }
+            true => {
+                assert!(copy == agreed, "the copy holds the agreed bytes again");
+                let gpu = (0..blocks).step_by(2).filter(|b| b * SYNC_BLOCK < length);
+                assert_eq!(
+                    after.dropped_bytes - before.dropped_bytes,
+                    gpu.count() as u64
+                );
+                assert!(own.named().is_empty(), "nothing written, nothing reported");
+            }
+        }
+        let started = counts.copied_tallies().compare_threads;
+        copy_in_all(&buffers, &counts, &tally);
+        assert!(copy == pages, "drops {drops}: the CPU's bytes copied in");
+        assert_eq!(
+            counts.copied_tallies().compare_threads > started,
+            parallel,
+            "drops {drops}: the copy in split too"
         );
         drop(copied);
     }

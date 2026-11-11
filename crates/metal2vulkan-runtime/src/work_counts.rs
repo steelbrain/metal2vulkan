@@ -47,6 +47,7 @@ pub(crate) struct CopiedTallies {
     pub(crate) bases_made: u64,
     pub(crate) bases_refused: u64,
     pub(crate) base_blocks_read: u64,
+    pub(crate) compare_threads: u64,
 }
 
 /// A device's counters (`DeviceShared::counts`), each only ever added to.
@@ -387,6 +388,7 @@ pub(crate) struct Counters {
     copied_bases_made: AtomicU64,
     copied_bases_refused: AtomicU64,
     copied_base_blocks_read: AtomicU64,
+    copied_compare_threads: AtomicU64,
     host_ram_copies: AtomicU64,
     host_ram_copy_bytes: AtomicU64,
     host_ram_copy_dispatches: AtomicU64,
@@ -3558,7 +3560,8 @@ impl Counters {
     }
 
     /// The copied host buffers' counts so far, as [`Device::work_counts`] reads them: the bytes
-    /// copied in, merged back and dropped, and the bases made, refused and their blocks read.
+    /// copied in, merged back and dropped, the bases made, refused and their blocks read, and the
+    /// threads comparisons started.
     #[cfg(test)]
     pub(crate) fn copied_tallies(&self) -> CopiedTallies {
         let load = |count: &AtomicU64| count.load(Ordering::Relaxed);
@@ -3569,6 +3572,7 @@ impl Counters {
             bases_made: load(&self.copied_bases_made),
             bases_refused: load(&self.copied_bases_refused),
             base_blocks_read: load(&self.copied_base_blocks_read),
+            compare_threads: load(&self.copied_compare_threads),
         }
     }
 
@@ -3579,6 +3583,12 @@ impl Counters {
         (self.copied_bases_made).fetch_add(made, Ordering::Relaxed);
         (self.copied_bases_refused).fetch_add(refused, Ordering::Relaxed);
         (self.copied_base_blocks_read).fetch_add(read, Ordering::Relaxed);
+    }
+
+    /// Comparisons of copied host buffers started `threads` threads beside their calling ones,
+    /// each splitting a copy's blocks across them (`copied.rs`).
+    pub(crate) fn copied_compare_threads(&self, threads: u64) {
+        (self.copied_compare_threads).fetch_add(threads, Ordering::Relaxed);
     }
 
     /// A batch's completion dropped `bytes` the GPU changed in copies of pages the process
@@ -7248,6 +7258,11 @@ pub struct WorkCounts {
     /// the GPU both changed since the pages and the copy last agreed. A base in the device's
     /// memory is read across the bus, uncached.
     pub copied_base_blocks_read: u64,
+    /// The threads comparisons of copied host buffers started beside the calling thread: a
+    /// commit's copy in or a completion's merge back of a copy with a base of 16 MiB or more
+    /// splits its blocks across up to four threads, the calling one among them, each run at
+    /// least 8 MiB, and the threads it started end before it returns.
+    pub copied_compare_threads: u64,
     /// The host bytes the live copied host buffers' bases hold (a gauge): their tags, a 64th of
     /// each copy's length, and the bytes of those kept in host memory.
     pub copied_base_host_bytes: u64,
@@ -9228,6 +9243,7 @@ impl Device {
             copied_bases_made: counters.copied_bases_made.load(Ordering::Relaxed),
             copied_bases_refused: counters.copied_bases_refused.load(Ordering::Relaxed),
             copied_base_blocks_read: counters.copied_base_blocks_read.load(Ordering::Relaxed),
+            copied_compare_threads: counters.copied_compare_threads.load(Ordering::Relaxed),
             copied_base_host_bytes,
             copied_base_device_bytes,
             host_ram_copies: counters.host_ram_copies.load(Ordering::Relaxed),
