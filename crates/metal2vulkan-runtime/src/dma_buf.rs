@@ -43,8 +43,14 @@
 //!   Apple's M2 Pro, answers offset 0 for a plane 8192 bytes into a 16 KiB page), the image's
 //!   plane starts at offset 0 and the image is bound at the texels' offset of an import of the
 //!   pages that is no dedicated allocation, where the driver takes such a binding (it requires no
-//!   dedicated allocation of the image, and its memory's alignment divides the offset); counted
-//!   (`WorkCounts::dma_buf_images_at_offset`). Elsewhere such a texture is a shadow. Its features
+//!   dedicated allocation of the image, and its memory's alignment divides the offset: lavapipe of
+//!   Mesa 26.2.6 takes one, aligned to 64 bytes; RADV of Mesa 26.2.6 requires a dedicated
+//!   allocation of every such image); counted (`WorkCounts::dma_buf_images_at_offset`). Its
+//!   subresource holds the same texels and bytes
+//!   between rows as the explicit plane's would, and the pages' bytes before its binding lie
+//!   outside it, so the device's check of the dma-buf class (`in_place_check.rs`, whose images'
+//!   planes start at their pages' first byte, bound to dedicated imports) judges its accesses as
+//!   it judges those. Elsewhere such a texture is a shadow. Its features
 //!   are the modifier's (64-bit where the device has `format_feature_flags2`: `modifier_features`),
 //!   checked as a linear image's are against the optimal tiling's for the texture's usage, and its
 //!   limits the format query's for that modifier and dma-bufs. RADV (Mesa 26.2.4 and 26.0.8) lays
