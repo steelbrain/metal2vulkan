@@ -697,6 +697,7 @@ fn execute(
             primitive_restart,
             encoder,
             rasterizer_discard: pipeline.graphics.rasterizer_discard,
+            graphics: &pipeline.graphics,
             draw: &commands,
             shadow: shadow.as_ref(),
             replayed: None,
@@ -1172,6 +1173,7 @@ fn draw_child(
             primitive_restart,
             encoder,
             rasterizer_discard: pipeline.graphics.rasterizer_discard,
+            graphics: &pipeline.graphics,
             draw: commands,
             shadow: None,
             replayed,
@@ -2286,6 +2288,8 @@ struct Recording<'r> {
     /// The pipeline has rasterization disabled, so it has no fragment shader or fragment output
     /// state for dynamic state to set.
     rasterizer_discard: bool,
+    /// The pipeline's graphics state, whose render pass the draws record in.
+    graphics: &'r GraphicsState,
     draw: &'r DrawCommands,
     /// The shader-side stencil's shadow, copied in before the render pass and out after it.
     shadow: Option<&'r shadow::ShadowStencil<'r>>,
@@ -2777,7 +2781,14 @@ fn record_and_submit(
             dynamic(vk::DynamicState::SCISSOR),
         );
         // One draw per recording of it: the whole target, or each region of a rate-mapped pass.
+        // A fetch ordered between draws alone records after the barrier of the subpass's
+        // dependency on itself before each: the pass is `create_render_pass`'s of the pipeline's
+        // graphics state, whose subpass then reads input attachments.
+        let between_draws = graphics_pipeline::fetches_between_draws(recording.graphics);
         for (viewport, scissor) in recording.draws {
+            if between_draws {
+                graphics_pipeline::fetch_between_draws(device, command);
+            }
             if set_viewport {
                 device.cmd_set_viewport(command, 0, std::slice::from_ref(viewport));
             }

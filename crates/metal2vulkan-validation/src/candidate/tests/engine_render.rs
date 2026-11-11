@@ -471,13 +471,15 @@ fn a_back_culled_patch_and_its_mirror_leave_exactly_one_drawn() {
 /// times in order, so under rasterization-order access each instance reads what the one before it
 /// wrote and the attachment ends at `2^-n` of its contents. A device without that access but with
 /// the pixel interlock (MoltenVK, RADV, ANV) reads and writes the attachment as a storage image
-/// inside the interlock, in the same order, to the same result. A device with neither refuses the
-/// fetch, typed, naming both.
+/// inside the interlock, in the same order, to the same result. A device with neither reads it as
+/// an input attachment with no rasterization-order access, after a barrier between draws
+/// (`platform::graphics_pipeline::fetch_between_draws`), and its fragment module notes
+/// `PrecisionNote::UnorderedFetchWithinDraw`: one instance halves the attachment exactly, and
+/// three, one draw, leave each texel some order's `2^-k` of its contents, `k` in 1 to 3.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn a_framebuffer_fetch_halves_its_attachment_once_per_overlapping_instance() {
-    use crate::check::admission::NotSupported;
-    use crate::engine::Outcome;
+    use metal2vulkan::pipeline::PrecisionNote;
     let fragment = llvm_assemble(&metal2vulkan_devtools::engine_dir().join("fragment_fetch.ll"))
         .expect("llvm-as on the device lane");
     let mut authored =
@@ -505,24 +507,27 @@ fn a_framebuffer_fetch_halves_its_attachment_once_per_overlapping_instance() {
             },
         ) {
             Ok(run) => {
-                let scale = 0.5f32.powi(instances as i32);
-                let expected: Vec<f32> = initial.iter().map(|value| value * scale).collect();
-                assert_eq!(run.output, floats(&expected), "{instances} instance(s)");
-                assert_eq!(run.status, metal2vulkan::bind::StatusReport::default());
-            }
-            Err(ExecutorError::NotSupported(NotSupported::Product {
-                outcome:
-                    Outcome::DeviceCapabilityMissing {
-                        feature,
-                        capability,
-                    },
-                ..
-            })) => {
-                assert!(feature.contains("FramebufferFetch"), "{feature}");
-                assert!(
-                    capability.contains("RasterizationOrderColorAttachmentAccess"),
-                    "{capability}"
+                let unordered = (run.census.modules.iter()).any(|m| {
+                    m.precision
+                        .contains(&PrecisionNote::UnorderedFetchWithinDraw)
+                });
+                let scale = |k: u32| 0.5f32.powi(k as i32);
+                let scaled = |k| floats(&initial.map(|value| value * scale(k)));
+                if unordered && instances > 1 {
+                    let orders: Vec<Vec<u8>> = (1..=instances).map(scaled).collect();
+                    for (texel, got) in run.output.as_chunks::<4>().0.iter().enumerate() {
+                        assert!(
+                            (orders.iter()).any(|order| order[texel * 4..][..4] == got[..]),
+                            "{instances} instances, texel {texel}: {got:?}"
+                        );
+                    }
+                } else {
+                    assert_eq!(run.output, scaled(instances), "{instances} instance(s)");
+                }
+                eprintln!(
+                    "ENGINE-FETCH {instances} instance(s): unordered within the draw: {unordered}"
                 );
+                assert_eq!(run.status, metal2vulkan::bind::StatusReport::default());
             }
             Err(other) => panic!("{instances} instance(s): {other}"),
         }

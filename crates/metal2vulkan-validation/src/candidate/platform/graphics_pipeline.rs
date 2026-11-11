@@ -137,11 +137,12 @@ pub(super) fn has_depth(format: vk::Format) -> bool {
 /// The render pass of `graphics`: one subpass writing every color attachment at its Metal index
 /// (`VK_ATTACHMENT_UNUSED` for an absent one), in `COLOR_ATTACHMENT_OPTIMAL` (`GENERAL` for an
 /// attachment a framebuffer-fetch input also reads, as the input attachment of the same index,
-/// with a by-region self-dependency from color writes to input-attachment reads), then the
-/// depth/stencil attachment ([`depth_stencil_format`]) in `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`.
+/// with the by-region self-dependency of [`FETCH_SELF_DEPENDENCY`]), then the depth/stencil
+/// attachment ([`depth_stencil_format`]) in `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`.
 /// The subpass has rasterization-order color access when the artifact states it
 /// (`GraphicsState::rasterization_order_attachment_access`), so each fetch sees the earlier
-/// fragments of the draw that cover its pixel, as in Metal. Every attachment is loaded before and
+/// fragments of the draw that cover its pixel, as in Metal; where it does not, each draw records
+/// after a barrier of that dependency ([`fetch_between_draws`]). Every attachment is loaded before and
 /// stored after the subpass. The framebuffer's views are the present color attachments in index
 /// order, then the depth/stencil one.
 pub(super) fn create_render_pass(
@@ -263,13 +264,14 @@ pub(super) fn create_render_pass(
     let subpasses = [subpass];
     // Framebuffer fetch reads the attachment the same subpass writes: the contract's by-region
     // self-dependency.
+    let scopes = FETCH_SELF_DEPENDENCY;
     let dependencies = [vk::SubpassDependency::default()
         .src_subpass(0)
         .dst_subpass(0)
-        .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .dst_stage_mask(vk::PipelineStageFlags::FRAGMENT_SHADER)
-        .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_access_mask(vk::AccessFlags::INPUT_ATTACHMENT_READ)
+        .src_stage_mask(scopes.0)
+        .dst_stage_mask(scopes.0)
+        .src_access_mask(scopes.1)
+        .dst_access_mask(scopes.2)
         .dependency_flags(vk::DependencyFlags::BY_REGION)];
     let mut info = vk::RenderPassCreateInfo::default()
         .attachments(&attachments)
@@ -280,6 +282,61 @@ pub(super) fn create_render_pass(
     // SAFETY: `info` and every array it points at are live for the call.
     unsafe { device.create_render_pass(&info, None) }
         .map_err(|error| GraphicsError::Refused(format!("create render pass: {error}")))
+}
+
+/// The stages and the source and destination accesses of the self-dependency of a subpass whose
+/// colors a framebuffer-fetch input reads ([`create_render_pass`]), by region: from the color
+/// writes to the input attachment reads (a fetch after an earlier draw's writes, or the load
+/// operations'), and from the fragment shader's reads to the color reads and writes (a write
+/// after an earlier draw's fetch).
+pub(super) const FETCH_SELF_DEPENDENCY: (vk::PipelineStageFlags, vk::AccessFlags, vk::AccessFlags) = (
+    vk::PipelineStageFlags::from_raw(
+        vk::PipelineStageFlags::FRAGMENT_SHADER.as_raw()
+            | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.as_raw(),
+    ),
+    vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+    vk::AccessFlags::from_raw(
+        vk::AccessFlags::INPUT_ATTACHMENT_READ.as_raw()
+            | vk::AccessFlags::COLOR_ATTACHMENT_READ.as_raw()
+            | vk::AccessFlags::COLOR_ATTACHMENT_WRITE.as_raw(),
+    ),
+);
+
+/// Whether `graphics` reads input attachments ordered between draws alone: on a device with
+/// neither rasterization-order color attachment access nor the pixel interlock, which states no
+/// rasterization-order access (`GraphicsState::rasterization_order_attachment_access`). The
+/// contract has the consumer order each draw of it after the color writes of the draws before,
+/// and each draw that writes a color after their reads, by a barrier of the subpass's dependency
+/// on itself; the executor records one before each of its draws ([`fetch_between_draws`]), after
+/// the load operations too, as the runtime does.
+pub(super) fn fetches_between_draws(graphics: &GraphicsState) -> bool {
+    !graphics.input_attachments.is_empty() && !graphics.rasterization_order_attachment_access
+}
+
+/// Record, into `command`, inside a render pass of [`create_render_pass`] whose subpass reads
+/// input attachments, the barrier of its [`FETCH_SELF_DEPENDENCY`]: the draws after it read and
+/// write the colors after the draws before it wrote and read them.
+///
+/// # Safety
+///
+/// `command` is recording inside such a render pass instance, on `device`.
+pub(super) unsafe fn fetch_between_draws(device: &ash::Device, command: vk::CommandBuffer) {
+    let (stages, src, dst) = FETCH_SELF_DEPENDENCY;
+    let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(src)
+        .dst_access_mask(dst);
+    // SAFETY: the caller's contract; the subpass depends on itself by region with these scopes.
+    unsafe {
+        device.cmd_pipeline_barrier(
+            command,
+            stages,
+            stages,
+            vk::DependencyFlags::BY_REGION,
+            &[barrier],
+            &[],
+            &[],
+        );
+    }
 }
 
 /// The subpass flags of `graphics`: rasterization-order color access where it states it.

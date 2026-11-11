@@ -1044,7 +1044,12 @@ impl DrawStates {
 /// self-dependency does ("A vkCmdPipelineBarrier inside a subpass can synchronize prior attachment
 /// writes in the subpass with subsequent input attachment reads", the Render Pass chapter's
 /// Common Render Pass Data Races), and the fetching stage records what it leaves unordered
-/// (`PrecisionNote::UnorderedFetchWithinDraw`).
+/// (`PrecisionNote::UnorderedFetchWithinDraw`). They take that barrier on a driver whose
+/// interlocked draws race under load too, not a new instance: the race is the interlock's
+/// (`InterlockedDrawsRaceUnderLoad`'s measure is of interlocked storage images), and MoltenVK, the
+/// driver with it, ends its Metal render pass and begins another at a by-region barrier whose
+/// destination reads input attachments (`MVKCmdPipelineBarrier::encode`, on a tile-based GPU),
+/// which this barrier is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InterlockedStorage {
     /// The pass's fragment imageblock storage (`fragment_imageblock.rs`).
@@ -1132,10 +1137,15 @@ impl InterlockedStorage {
 
     /// Whether a kind is in both.
     fn meets(self, other: Self) -> bool {
+        self.meets_interlocked(other) || self.meets_fetch(other)
+    }
+
+    /// Whether a kind of storage the pixel interlock orders is in both: the imageblock's, a
+    /// color's or the depth's stand-in.
+    fn meets_interlocked(self, other: Self) -> bool {
         (self.imageblock && other.imageblock)
             || (self.colors && other.colors)
             || (self.depth && other.depth)
-            || self.meets_fetch(other)
     }
 
     /// Whether a kind of input attachments ordered between draws is in both: the barrier that
@@ -8862,10 +8872,11 @@ impl RenderLowering {
             (colors_ordered, between_draws),
         );
         // On a driver whose draws of one instance race on the interlocked storage under load
-        // (`DriverFact::InterlockedDrawsRaceUnderLoad`), a draw that reaches storage an earlier
-        // draw of the instance wrote records into a new instance, after the one that wrote it, in
-        // place of the barrier between them (`InterlockedStorage`).
-        let storage_split = interlocked.meets(self.current.interlocked_writes)
+        // (`DriverFact::InterlockedDrawsRaceUnderLoad`), a draw that reaches interlocked storage
+        // an earlier draw of the instance wrote records into a new instance, after the one that
+        // wrote it, in place of the barrier between them (`InterlockedStorage`). Input
+        // attachments ordered between draws alone take their barrier there too.
+        let storage_split = interlocked.meets_interlocked(self.current.interlocked_writes)
             && driver_facts.contains(&DriverFact::InterlockedDrawsRaceUnderLoad);
         let failing = match &failing_state {
             None => None,

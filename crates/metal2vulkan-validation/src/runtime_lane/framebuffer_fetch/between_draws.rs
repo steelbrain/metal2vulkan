@@ -8,8 +8,11 @@
 //! of the draws' subpass's dependency on itself, by region, before a draw that reads input
 //! attachments after an earlier draw of its render pass instance, or its load operations, wrote a
 //! color, and before a draw that writes a color after an earlier one read them
-//! (`WorkCounts::fetch_draw_barriers`). Each pass draws the fullscreen triangle (`rt6_resolves`'s
-//! `rt6_resolve_full`) over a 4² target:
+//! (`WorkCounts::fetch_draw_barriers`). It records the barrier, not a new render pass instance, on
+//! a driver whose interlocked draws race under load too (MoltenVK on Apple's GPUs): nothing here is
+//! interlocked, so no pass splits for that race (`WorkCounts::instance_splits_interlocked_writes`
+//! stays). Each pass draws the fullscreen triangle (`rt6_resolves`'s `rt6_resolve_full`) over a 4²
+//! target:
 //!
 //! - **Draws in order**: an `R32Float` target cleared to 0.75, then `fetch_scalar`
 //!   (`fragment_fetch`, half what it reads), `rt6_resolve_white` (1), `fetch_scalar` twice: 0.25,
@@ -64,9 +67,19 @@ fn unordered_lane() -> (Messages, ScratchCache, Lane) {
     })
 }
 
-/// The device's `fetch_draw_barriers` so far.
-fn barriers(lane: &Lane) -> u64 {
-    lane.device.work_counts().fetch_draw_barriers
+/// The device's `fetch_draw_barriers` and `instance_splits_interlocked_writes` so far.
+fn ordering(lane: &Lane) -> (u64, u64) {
+    let counts = lane.device.work_counts();
+    (
+        counts.fetch_draw_barriers,
+        counts.instance_splits_interlocked_writes,
+    )
+}
+
+/// The barriers between draws and the interlocked splits since `before` ([`ordering`]).
+fn since(lane: &Lane, before: (u64, u64)) -> (u64, u64) {
+    let now = ordering(lane);
+    (now.0 - before.0, now.1 - before.1)
 }
 
 /// The kind the fetching fragment stage records.
@@ -118,8 +131,8 @@ fn fetches_between_draws_read_every_earlier_draw_and_note_the_draw_itself() {
     let announced = counts(&messages.take_notices());
     assert_eq!(announced.get(&note()), Some(&1), "{device}: {announced:?}");
 
-    // Draws in order: 0.25, four barriers.
-    let before = barriers(&lane);
+    // Draws in order: 0.25, four barriers, no split.
+    let before = ordering(&lane);
     let target = lane.texture(pf, ONE, TextureUsage::RENDER_TARGET);
     let clear = ClearColor::new(0.75, 0.0, 0.0, 0.0);
     let targets = [(&target, clear, StoreAction::Store)];
@@ -136,16 +149,16 @@ fn fetches_between_draws_read_every_earlier_draw_and_note_the_draw_itself() {
         "{device}: draws in order"
     );
     assert_eq!(
-        barriers(&lane) - before,
-        4,
-        "{device}: barriers between the draws"
+        since(&lane, before),
+        (4, 0),
+        "{device}: barriers between the draws, and interlocked splits"
     );
     eprintln!("FETCH-BETWEEN-DRAWS draws in order on {device}: 0.25 at every texel, 4 barriers");
 
-    // Integer read-modify-writes: exact, three barriers.
+    // Integer read-modify-writes: exact, three barriers, no split.
     let integers = [PixelFormat::RGBA32Uint];
     let step = pipeline(&lane, &vertices, (&count, "exf_fetch_count"), &integers, 1).unwrap();
-    let before = barriers(&lane);
+    let before = ordering(&lane);
     let target = lane.texture(PixelFormat::RGBA32Uint, ONE, TextureUsage::RENDER_TARGET);
     let clear = ClearColor::new(1.0, 2.0, 3.0, 4.0);
     let targets = [(&target, clear, StoreAction::Store)];
@@ -157,15 +170,15 @@ fn fetches_between_draws_read_every_earlier_draw_and_note_the_draw_itself() {
         "{device}: integer read-modify-writes"
     );
     assert_eq!(
-        barriers(&lane) - before,
-        3,
-        "{device}: barriers between the draws"
+        since(&lane, before),
+        (3, 0),
+        "{device}: barriers between the draws, and interlocked splits"
     );
     eprintln!("FETCH-BETWEEN-DRAWS integer read-modify-writes on {device}: exact, 3 barriers");
 
     // One draw over itself: each texel one of the two orders of its fragments, the one barrier
     // after the clear.
-    let before = barriers(&lane);
+    let before = ordering(&lane);
     let target = lane.texture(pf, ONE, TextureUsage::RENDER_TARGET);
     let clear = ClearColor::new(0.75, 0.0, 0.0, 0.0);
     let targets = [(&target, clear, StoreAction::Store)];
@@ -194,9 +207,9 @@ fn fetches_between_draws_read_every_earlier_draw_and_note_the_draw_itself() {
         }
     }
     assert_eq!(
-        barriers(&lane) - before,
-        1,
-        "{device}: a barrier inside one draw"
+        since(&lane, before),
+        (1, 0),
+        "{device}: a barrier inside one draw, and interlocked splits"
     );
     eprintln!(
         "FETCH-BETWEEN-DRAWS one draw over itself on {device}: {metals} of {TEXELS} texels \

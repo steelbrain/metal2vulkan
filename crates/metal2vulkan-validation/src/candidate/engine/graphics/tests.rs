@@ -340,13 +340,14 @@ fn a_multisampled_stencil_output_case_plans_a_shadow_of_its_samples() {
 /// attachment 0 through an input-attachment write, and the pipeline states rasterization-order
 /// access and requires the feature. On moltenvk-m3, which lacks the feature but has the pixel
 /// interlock, it plans the interlocked storage form: one storage write of the attachment, which is
-/// no color attachment of the subpass. Without the interlock too, the product refuses the fetch,
-/// naming both forms.
+/// no color attachment of the subpass. Without the interlock too, it plans the input attachment
+/// with no rasterization-order access, which the consumer orders between draws alone (its
+/// barriers, `platform::graphics_pipeline::fetch_between_draws`), the fragment stage noting
+/// `PrecisionNote::UnorderedFetchWithinDraw`, and requires neither ordered form.
 #[test]
 fn a_framebuffer_fetch_case_plans_its_ordered_input_attachment() {
     use metal2vulkan::bind::WriteSource;
     use metal2vulkan::device::VkFeature;
-    use metal2vulkan::error::{Capability, Feature, Needs};
     let Some(bitcode) = assembled(&metal2vulkan_devtools::engine_dir().join("fragment_fetch.ll"))
     else {
         return;
@@ -416,7 +417,7 @@ fn a_framebuffer_fetch_case_plans_its_ordered_input_attachment() {
             .count(),
         1
     );
-    // Without the interlock either, the product refuses the fetch, naming both ordered forms.
+    // Without the interlock either, the input attachment ordered between draws alone, noted.
     let path = crate::engine::profiles_dir().join("moltenvk-m3.json");
     let mut description =
         DeviceDescription::from_khronos_json(&std::fs::read_to_string(path).unwrap(), None)
@@ -425,21 +426,43 @@ fn a_framebuffer_fetch_case_plans_its_ordered_input_attachment() {
         .features
         .remove(&VkFeature::FragmentShaderPixelInterlock);
     let unordered = Device::new(description, DevicePolicy::default()).unwrap();
-    match plan_render(&unordered, &render, libraries) {
-        Err(Error::Unsupported(refusal)) => {
-            assert_eq!(refusal.feature, Feature::FramebufferFetch);
-            assert_eq!(
-                refusal.needs,
-                Needs::AnyOf(vec![
-                    vec![Capability::Feature(
-                        VkFeature::RasterizationOrderColorAttachmentAccess
-                    )],
-                    vec![Capability::Feature(VkFeature::FragmentShaderPixelInterlock)],
-                ])
-            );
-        }
-        other => panic!("an unordered fetch was ordered: {other:?}"),
+    let (pipeline, plan, _) = planned_draw(&unordered, &render, libraries).unwrap();
+    let read: Vec<u32> = (pipeline.graphics.input_attachments.iter())
+        .map(|input| input.color_index)
+        .collect();
+    assert_eq!(read, [0]);
+    assert!(!pipeline.graphics.rasterization_order_attachment_access);
+    assert!(pipeline.graphics.storage_attachments.is_empty());
+    assert!(pipeline.graphics.color_attachments[0].is_some());
+    for ordered in [
+        VkFeature::RasterizationOrderColorAttachmentAccess,
+        VkFeature::FragmentShaderPixelInterlock,
+    ] {
+        assert!(
+            !pipeline.requirements.features.contains(&ordered),
+            "{ordered:?}"
+        );
     }
+    assert_eq!(
+        plan.descriptors
+            .iter()
+            .filter(|write| matches!(write.source, WriteSource::Attachment { color_index: 0 }))
+            .count(),
+        1
+    );
+    assert!(unordered_within_draw(&pipeline));
+}
+
+/// Whether `pipeline`'s fragment stage records `PrecisionNote::UnorderedFetchWithinDraw`: its
+/// fetch is ordered between draws alone.
+fn unordered_within_draw(pipeline: &metal2vulkan::pipeline::RenderPipeline) -> bool {
+    (pipeline.stages.iter())
+        .filter(|stage| stage.stage == vk::ShaderStage::FRAGMENT)
+        .any(|stage| {
+            stage
+                .precision_notes
+                .contains(&PrecisionNote::UnorderedFetchWithinDraw)
+        })
 }
 
 /// A fragment case draws through its passthrough vertex companion with its own resources on the
@@ -2151,16 +2174,19 @@ fn public_framebuffer_fetch_cases_plan_their_ordered_input_attachments() {
 }
 
 /// On `lunarg-desktop-baseline-2023` and `vk12-floor`, which offer no ordered form of framebuffer
-/// fetch (no rasterization-order attachment access), every installed public framebuffer-fetch case
-/// is refused `FramebufferFetch`: an unordered read is never compiled.
+/// fetch (neither rasterization-order attachment access nor the pixel interlock), every installed
+/// public framebuffer-fetch case plans its color inputs as input attachments with no
+/// rasterization-order access, which the consumer orders between draws alone, and its fragment
+/// stage notes `PrecisionNote::UnorderedFetchWithinDraw`; or, a multisampled pass, is refused as on
+/// every device (the coverage read beside it, or a sample count the attachments lack).
 #[test]
-fn public_framebuffer_fetch_cases_are_refused_without_an_ordered_form() {
+fn public_framebuffer_fetch_cases_plan_input_attachments_without_an_ordered_form() {
     use crate::air::reflect::ResourceKind;
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
     let store = CorpusStore::new(&root);
     let sources = public_sources().unwrap();
     for stem in ["lunarg-desktop-baseline-2023", "vk12-floor"] {
-        let ordered = device(stem);
+        let unordered = device(stem);
         let mut fetches = 0;
         for shard in 0..64 {
             for case in store.read_case_shard(shard).unwrap() {
@@ -2187,7 +2213,7 @@ fn public_framebuffer_fetch_cases_are_refused_without_an_ordered_form() {
                     continue;
                 }
                 fetches += 1;
-                let scratch = crate::ScratchDir::new("public-fetch-refused").unwrap();
+                let scratch = crate::ScratchDir::new("public-fetch-unordered").unwrap();
                 let ll = scratch.path().join("case.ll");
                 std::fs::write(&ll, &row.air_ll).unwrap();
                 let Some(bitcode) = assembled(&ll) else {
@@ -2210,15 +2236,32 @@ fn public_framebuffer_fetch_cases_are_refused_without_an_ordered_form() {
                     vertex: &companion,
                     fragment: Some(&bitcode),
                 };
-                match plan_render(&ordered, &render, libraries) {
-                    Err(Error::Unsupported(refusal)) => assert_eq!(
-                        refusal.feature,
-                        metal2vulkan::error::Feature::FramebufferFetch,
-                        "{stem} {}",
-                        case.name
-                    ),
-                    other => panic!("{stem} {}: {other:?}", case.name),
-                }
+                let pipeline = match planned_draw(&unordered, &render, libraries) {
+                    Ok((pipeline, _, _)) => pipeline,
+                    // A multisampled pass's refusals of every device's form (the lavapipe test's).
+                    Err(Error::Unsupported(refusal)) if case.raster_sample_count.is_some() => {
+                        use metal2vulkan::error::{Feature, Needs};
+                        match (&refusal.feature, &refusal.needs) {
+                            (Feature::PixelCoverageAtSampleRate, Needs::NotRepresentable)
+                            | (Feature::RasterSampleCount, Needs::AnyOf(_)) => continue,
+                            _ => panic!("{stem} {}: {refusal:?}", case.name),
+                        }
+                    }
+                    Err(other) => panic!("{stem} {}: {other:?}", case.name),
+                };
+                let mut read: Vec<u32> = (pipeline.graphics.input_attachments.iter())
+                    .map(|input| input.color_index)
+                    .collect();
+                read.sort_unstable();
+                let mut colors = colors;
+                colors.sort_unstable();
+                assert_eq!(read, colors, "{stem} {}", case.name);
+                assert!(
+                    !pipeline.graphics.rasterization_order_attachment_access,
+                    "{stem} {}",
+                    case.name
+                );
+                assert!(unordered_within_draw(&pipeline), "{stem} {}", case.name);
             }
         }
         assert!(fetches > 0, "{stem}: no public framebuffer-fetch case");
