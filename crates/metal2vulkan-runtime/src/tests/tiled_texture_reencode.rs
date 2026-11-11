@@ -16,10 +16,11 @@
 //! - **A `did_modify_data` after the commit** is left to the next use: the encoding again does not
 //!   take that call's mark, so the next command buffer takes the copy again.
 //! - **A pass recorded on the GPU alone** (it executes indirect commands the GPU writes,
-//!   `render/executions/gpu.rs`), whose indexed draw reads the texture and takes its indices from
-//!   the buffer: the commit records the pass in a segment, and the encoding again records it again
-//!   in a segment of its own, which takes the copy where the commit's took it
-//!   (`EncoderCore::finish_replay`), so the draw reads the bytes.
+//!   `render/executions/gpu.rs`), whose indexed draw after the execution reads the texture and
+//!   takes its indices from the buffer: the commit records the execution's instance, the draw
+//!   among it, in a segment, and the encoding again records it again in a segment of its own,
+//!   which takes the copy where the commit's took it (`EncoderCore::finish_replay`), so the draw
+//!   reads the bytes.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`TILED-REENCODE`): each leg's
@@ -341,8 +342,11 @@ fn a_pass_on_the_gpu_alone_encoded_again_takes_the_copy_where_its_commit_took_it
         blit.reset_commands_in_buffer(&icb, 0..1).unwrap();
         blit.end_encoding().unwrap();
         let mut encoder = (command_buffer.render_command_encoder(&pass(&target))).unwrap();
+        encoder.set_render_pipeline_state(&inherited).unwrap();
+        encoder.execute_commands_in_buffer(&icb, 0..1).unwrap();
+        // The texture's first use, after the execution in its instance, which the segment
+        // records: by the draw whose indices the buffer the rebind moves holds.
         encoder.set_render_pipeline_state(&sampled).unwrap();
-        // The texture's first use, by the draw whose indices the buffer the rebind moves holds.
         (encoder.set_fragment_texture(Some(&texture), 0)).unwrap();
         (encoder.draw_indexed_primitives(
             PrimitiveType::Triangle,
@@ -355,8 +359,6 @@ fn a_pass_on_the_gpu_alone_encoded_again_takes_the_copy_where_its_commit_took_it
             0,
         ))
         .unwrap();
-        encoder.set_render_pipeline_state(&inherited).unwrap();
-        encoder.execute_commands_in_buffer(&icb, 0..1).unwrap();
         encoder.end_encoding().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         (blit.copy_from_texture_to_buffer(
