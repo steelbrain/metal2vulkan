@@ -4,19 +4,21 @@
  * Follows each GEM object the DRM core imports from a dma-buf named "m2vleak*" and counts, per
  * object: its import order among its dma-buf's imports (1st, 2nd, ...), its vm_bos created
  * (drm_gpuvm_bo_create), its VAs linked and unlinked (drm_gpuva_link, drm_gpuva_unlink,
- * drm_gpuva_unlink_defer), the driver's map and unmap steps (asahi's step_map/step_unmap
- * callbacks), its vm_bo puts (drm_gpuvm_bo_put, drm_gpuvm_bo_put_deferred), the vm_bos moved to
- * a VM's deferred list (drm_gpuvm_bo_into_zombie, drm_gpuvm_bo_defer_free) and destroyed
- * (drm_gpuvm_bo_destroy, drm_gpuvm_bo_destroy_not_in_lists), its GEM close callbacks, and the
- * object's reference count when its last handle closed. It counts the VMs' deferred cleanups
- * (drm_gpuvm_bo_deferred_cleanup) with the kernel stacks that ran them, and at each VM's
- * teardown (drm_gpuvm_fini), the probe's vm_bos still alive in it.
+ * drm_gpuva_unlink_defer), its vm_bo puts (drm_gpuvm_bo_put, drm_gpuvm_bo_put_deferred), the
+ * vm_bos moved to a VM's deferred list (drm_gpuvm_bo_into_zombie, drm_gpuvm_bo_defer_free) and
+ * destroyed (drm_gpuvm_bo_destroy, drm_gpuvm_bo_destroy_not_in_lists), and the object's reference
+ * count when its last handle closed. It counts the VMs' deferred cleanups
+ * (drm_gpuvm_bo_deferred_cleanup) with the kernel stacks that ran them, and at each VM's teardown
+ * (drm_gpuvm_fini), the probe's vm_bos still alive in it.
+ *
+ * Only the DRM core's C functions are probed. The asahi driver's Rust functions (its GEM close
+ * callback, its gpuvm step callbacks) are not in available_filter_functions, so they cannot be
+ * kprobed; they show up in the kernel stacks instead.
  *
  * On exit (SIGINT) it prints one table for the objects released (drm_gem_object_release) and
  * one for those still alive, keyed by:
- *   (import order, vm_bos created, VAs linked, unlinked, unlinked deferred, map steps,
- *    unmap steps, vm_bo puts, deferred puts, into the deferred list, vm_bos destroyed,
- *    GEM closes, references at the last handle close)
+ *   (import order, vm_bos created, VAs linked, unlinked, unlinked deferred, vm_bo puts,
+ *    deferred puts, into the deferred list, vm_bos destroyed, references at the last handle close)
  * and the kernel stacks of the deferred puts, of the deferred cleanups, and of the VA unlinks.
  *
  * Probes the kernel lacks are skipped with a warning. Run it as root across the run and stop it
@@ -71,15 +73,6 @@ kprobe:drm_gem_object_release_handle
     }
 }
 
-/* asahi: kernel::drm::gem::close_callback::<asahi::gem::AsahiObject>(obj, file) */
-kprobe:_RINvNtNtCsiDqpfKj7gHn_6kernel3drm3gem14close_callbackNtNtCseiLulpeIEi5_5asahi3gem11AsahiObjectEBT_
-{
-    if (@objd[arg0]) {
-        @gemclose[arg0] = @gemclose[arg0] + 1;
-        @n["asahi gem close"] = count();
-    }
-}
-
 kretprobe:drm_gpuvm_bo_create
 {
     if (retval != 0 && retval < 0xfffffffffffff000) {
@@ -126,28 +119,6 @@ kprobe:drm_gpuva_unlink_defer
     }
 }
 
-/* asahi: kernel::drm::gpuvm::step_map_callback::<asahi::mmu::VmInner>(op, priv) */
-kprobe:_RINvNtNtCsiDqpfKj7gHn_6kernel3drm5gpuvm17step_map_callbackNtNtCseiLulpeIEi5_5asahi3mmu7VmInnerEBY_
-{
-    $op = (struct drm_gpuva_op *)arg0;
-    $o = (uint64)$op->map.gem.obj;
-    if (@objd[$o]) {
-        @stepmap[$o] = @stepmap[$o] + 1;
-        @n["asahi map step"] = count();
-    }
-}
-
-/* asahi: kernel::drm::gpuvm::step_unmap_callback::<asahi::mmu::VmInner>(op, priv) */
-kprobe:_RINvNtNtCsiDqpfKj7gHn_6kernel3drm5gpuvm19step_unmap_callbackNtNtCseiLulpeIEi5_5asahi3mmu7VmInnerEB10_
-{
-    $op = (struct drm_gpuva_op *)arg0;
-    $o = (uint64)$op->unmap.va->gem.obj;
-    if (@objd[$o]) {
-        @stepunmap[$o] = @stepunmap[$o] + 1;
-        @n["asahi unmap step"] = count();
-    }
-}
-
 kprobe:drm_gpuvm_bo_put
 {
     $o = @vbobj[arg0];
@@ -177,7 +148,7 @@ kprobe:drm_gpuvm_bo_defer_free
     }
     if ($o) {
         @zombie[$o] = @zombie[$o] + 1;
-        @n[func] = count();
+        @n[probe] = count();
     }
 }
 
@@ -192,7 +163,7 @@ kprobe:drm_gpuvm_bo_destroy
         @vbdestroy[$o] = @vbdestroy[$o] + 1;
         delete(@vbobj[$vb]);
         delete(@vbvm[$vb]);
-        @n[func] = count();
+        @n[probe] = count();
     }
 }
 
@@ -203,21 +174,22 @@ kprobe:drm_gpuvm_bo_destroy_not_in_lists
         @vbdestroy[$o] = @vbdestroy[$o] + 1;
         delete(@vbobj[arg0]);
         delete(@vbvm[arg0]);
-        @n[func] = count();
+        @n[probe] = count();
     }
 }
 
 kprobe:drm_gpuvm_bo_deferred_cleanup
 {
-    @n[func] = count();
+    @n[probe] = count();
     @cleanup_stack[kstack(10)] = count();
 }
 
 kprobe:drm_gpuvm_fini
 {
-    @n[func] = count();
+    @n[probe] = count();
+    $vm = arg0;
     for ($kv : @vbvm) {
-        if ($kv.1 == arg0) {
+        if ($kv.1 == $vm) {
             @vm_bos_alive_at_vm_fini = count();
         }
     }
@@ -227,9 +199,8 @@ kprobe:drm_gem_object_release
 {
     if (@objd[arg0]) {
         $o = arg0;
-        @released[@ord[$o], @vbcreate[$o], @link[$o], @unlink[$o], @unlinkdef[$o], @stepmap[$o],
-                  @stepunmap[$o], @vbput[$o], @vbputdef[$o], @zombie[$o], @vbdestroy[$o],
-                  @gemclose[$o], @refs_close[$o]] = count();
+        @released[@ord[$o], @vbcreate[$o], @link[$o], @unlink[$o], @unlinkdef[$o], @vbput[$o],
+                  @vbputdef[$o], @zombie[$o], @vbdestroy[$o], @refs_close[$o]] = count();
         @n["gem release"] = count();
         delete(@objd[$o]);
         delete(@ord[$o]);
@@ -237,13 +208,10 @@ kprobe:drm_gem_object_release
         delete(@link[$o]);
         delete(@unlink[$o]);
         delete(@unlinkdef[$o]);
-        delete(@stepmap[$o]);
-        delete(@stepunmap[$o]);
         delete(@vbput[$o]);
         delete(@vbputdef[$o]);
         delete(@zombie[$o]);
         delete(@vbdestroy[$o]);
-        delete(@gemclose[$o]);
         delete(@refs_close[$o]);
     }
 }
@@ -258,11 +226,10 @@ END
 {
     for ($kv : @objd) {
         $o = $kv.0;
-        @alive[@ord[$o], @vbcreate[$o], @link[$o], @unlink[$o], @unlinkdef[$o], @stepmap[$o],
-               @stepunmap[$o], @vbput[$o], @vbputdef[$o], @zombie[$o], @vbdestroy[$o],
-               @gemclose[$o], @refs_close[$o]] = count();
+        @alive[@ord[$o], @vbcreate[$o], @link[$o], @unlink[$o], @unlinkdef[$o], @vbput[$o],
+               @vbputdef[$o], @zombie[$o], @vbdestroy[$o], @refs_close[$o]] = count();
     }
-    printf("\nkey: (import order, vm_bos created, VAs linked, unlinked, unlinked deferred, map steps, unmap steps, vm_bo puts, deferred puts, into the deferred list, vm_bos destroyed, GEM closes, refs at last handle close)\n");
+    printf("\nkey: (import order, vm_bos created, VAs linked, unlinked, unlinked deferred, vm_bo puts, deferred puts, into the deferred list, vm_bos destroyed, refs at last handle close)\n");
     printf("\nGEM objects released:\n");
     print(@released);
     printf("\nGEM objects still alive at exit:\n");
@@ -287,13 +254,10 @@ END
     clear(@link);
     clear(@unlink);
     clear(@unlinkdef);
-    clear(@stepmap);
-    clear(@stepunmap);
     clear(@vbput);
     clear(@vbputdef);
     clear(@zombie);
     clear(@vbdestroy);
-    clear(@gemclose);
     clear(@refs_close);
     clear(@released);
     clear(@alive);
