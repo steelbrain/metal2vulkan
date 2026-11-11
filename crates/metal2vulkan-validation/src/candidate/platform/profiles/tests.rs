@@ -692,7 +692,7 @@ fn a_venue_run_stops_on_identity_or_key_and_reports_unread_members() {
 /// memory and no translation reads (`DeviceDescription::allocation`): both derive the venue's
 /// translation key, so a run on either proceeds and only reports the size. A device the venue does
 /// not allow stops on its identity, each field named against the nearest allowed identity; a venue
-/// allowing the RPL-P alone stops the RPL-S on its name and device ID.
+/// allowing the RPL-P alone stops the RPL-S on its name, device ID and driver build.
 #[test]
 fn one_intel_venue_allows_both_devices_and_stops_any_other() {
     let venue = crate::c3::VenueProfile::committed("intel-irisxe-rplp-anv").unwrap();
@@ -747,6 +747,14 @@ fn one_intel_venue_allows_both_devices_and_stops_any_other() {
             format!(
                 "identity device_id: {} ({})",
                 venue.identity.device_id, rpls.identity.device_id
+            ),
+            format!(
+                "identity driver_version: {} ({})",
+                venue.identity.driver_version, rpls.identity.driver_version
+            ),
+            format!(
+                "identity driver_info: {} ({})",
+                venue.identity.driver_info, rpls.identity.driver_info
             ),
         ]
     );
