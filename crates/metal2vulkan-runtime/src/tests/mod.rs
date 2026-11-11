@@ -166,6 +166,8 @@ mod event_vk_signal;
 mod exactness;
 mod exit_guard;
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
+mod export_dedication;
+#[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
 mod exported_memory;
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
 mod exported_semaphore;
