@@ -417,10 +417,9 @@ pub(crate) fn tag_portable(block: &[u8; TAG_BLOCK]) -> Tag {
 pub(crate) mod x86 {
     use super::{Tag, KEY_WORDS, TAG_BLOCK};
     use std::arch::x86_64::{
-        __m128i, __m256i, _mm256_add_epi32, _mm256_add_epi64, _mm256_loadu2_m128i,
-        _mm256_mul_epu32, _mm256_setzero_si256, _mm256_srli_epi64, _mm256_storeu_si256,
-        _mm_add_epi32, _mm_add_epi64, _mm_loadu_si128, _mm_mul_epu32, _mm_setzero_si128,
-        _mm_srli_epi64, _mm_storeu_si128,
+        __m128i, _mm256_add_epi32, _mm256_add_epi64, _mm256_loadu2_m128i, _mm256_mul_epu32,
+        _mm256_setzero_si256, _mm256_srli_epi64, _mm256_storeu_si256, _mm_add_epi32, _mm_add_epi64,
+        _mm_loadu_si128, _mm_mul_epu32, _mm_setzero_si128, _mm_srli_epi64, _mm_storeu_si128,
     };
 
     /// SSE2, which every x86-64 host has: one 32-byte stretch to a step.
