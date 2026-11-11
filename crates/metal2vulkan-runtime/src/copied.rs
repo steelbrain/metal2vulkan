@@ -40,15 +40,30 @@
 //!   commands wrote, and every copy where one of those may have written memory no use names (the
 //!   loaded addresses of a function that may store or update memory atomically, an indirect
 //!   command buffer's executions; `CopiesReached`), or kept its writes not all apart. Counted:
-//!   `WorkCounts::copied_merges_compared`, `copied_merges_skipped`. Inside a block that differs,
-//!   bytes are compared 8 at a time and then one at a time, so a merge writes no byte the GPU did
-//!   not change and a copy in none the CPU did not (`merge_block`). Each batch ends with a barrier
-//!   that makes its writes visible to the host (`tracker::Barrier::to_host`). Where the pages'
-//!   memory came with a log of the writes to them (`HostMemory::with_dirty_pages`, or its guest
-//!   RAM's, `HostRam::with_dirty_pages`), each merge back reports the blocks of 4 KiB it wrote to
-//!   the log as the copy's own writes, in one call (`DirtyPages::wrote_runs_as`, a writer of the
-//!   copy's own) before it returns: the log sees no write the runtime makes, and every other copy
-//!   and shadow of the pages takes them.
+//!   `WorkCounts::copied_merges_compared`, `copied_merges_skipped`. Inside a block that differs, a
+//!   copy in compares bytes 16 at a time (8 off x86-64) and stores only those the CPU changed: all
+//!   16, or 8, in one store where every one of them changed, else one at a time (`merge_block`), so
+//!   a GPU write in flight to a byte the CPU did not change is never stored over. A merge back of a
+//!   block the CPU also changed since they agreed does the same with the GPU's bytes, and keeps
+//!   each byte the CPU changed. A merge back of a block whose pages still hold the agreed bytes
+//!   (their tag, read once the block's GPU writes are complete) stores the copy's block over the
+//!   pages' whole, each 16 bytes in which any changed in one store (`store_block`): no byte-precise
+//!   check, at memory speed. The race windows: a CPU write to the pages made before the completion
+//!   reads that block's tag is always kept (the block takes the byte-precise merge, and a byte both
+//!   changed keeps the CPU's); one landing while the block is merged can be lost: in a byte-precise
+//!   merge only a byte the GPU also changed, in the window between reading that byte and storing
+//!   it; in a whole-block store any byte of a 16 the GPU changed, in the window between the tag's
+//!   read and that store (the time the block's merge takes). Only a program that writes the buffer
+//!   from the CPU while a command buffer that writes it may still run, before it observes the
+//!   completion, meets them; Metal, whose GPU writes a Shared buffer's pages in place, keeps every
+//!   byte the GPU does not write there. A program that writes after it observes the completion (a
+//!   waiter's return, a handler, a status read), as an OpenCL enqueue loop does, meets none. Each
+//!   batch ends with a barrier that makes its writes visible to the host
+//!   (`tracker::Barrier::to_host`). Where the pages' memory came with a log of the writes to them
+//!   (`HostMemory::with_dirty_pages`, or its guest RAM's, `HostRam::with_dirty_pages`), each merge
+//!   back reports the blocks of 4 KiB it wrote to the log as the copy's own writes, in one call
+//!   (`DirtyPages::wrote_runs_as`, a writer of the copy's own) before it returns: the log sees no
+//!   write the runtime makes, and every other copy and shadow of the pages takes them.
 //! - **The copy is the base until the GPU may write it.** Only copies in write a copy until a
 //!   command buffer that may write it is committed, so until then it holds the bytes its pages
 //!   and it agree on, and a copy in compares the pages with the copy itself, a page (4 KiB) at a
@@ -59,24 +74,24 @@
 //!   commands wrote one of its keys, or may write memory no use names), after its copy in and
 //!   before any of its work is submitted, the copy takes a base of the bytes it then holds
 //!   ([`Base`]): a 128-bit tag of each 1 KiB block ([`tag`]: two NH sums keyed by a random key of
-//!   the process's, `TAG_BLOCK`), kept in host memory (a 64th of the copy's length), and the
-//!   bytes themselves, kept in the device's memory where it has room for them, else in the
-//!   host's (`Device::copied_base`): device-local memory the host maps, coherent, in a heap of
-//!   1 GiB or more (a resizable BAR makes it the device's memory; without one it is a window of
-//!   about 256 MiB, which no base takes; nor does a device with unified memory, where that memory
-//!   is the host's), while the runtime's blocks in that heap and the base stay within half of
-//!   it. From then on each comparison reads
-//!   one side and its tags: a commit's copy in reads the pages' blocks, and only a block whose
-//!   tag changed reads the copy's block; a completion's merge back reads the copy's blocks, and
-//!   only a block whose tag changed reads the pages' block. The base's bytes are the other
-//!   side's block where its tag still agrees, and are read from the base only for a block both
-//!   sides changed since they agreed (where they are in the device's memory, a read across the
-//!   bus the host does not cache, with streaming loads on an x86-64 host with SSE4.1). The base then takes each block that changed. A block whose tag
-//!   agrees is taken as unchanged: for a block that changed, that happens with a chance of at
-//!   most 2^-64 at each comparison ([`tag`]), the only place the runtime takes a tag for the
-//!   bytes; a copy without a base compares bytes. Where the host has no memory for a base, the
-//!   commit fails with `Error::OutOfMemory` and runs nothing, as Metal fails a command buffer
-//!   for memory, and the copy keeps none (it holds what its pages and it agree on). Counted:
+//!   the process's, `TAG_BLOCK`), kept in host memory (a 64th of the copy's length), and the bytes
+//!   themselves, kept in the device's memory where it has room for them, else in the host's
+//!   (`Device::copied_base`): device-local memory the host maps, coherent, in a heap of 1 GiB or
+//!   more (a resizable BAR makes it the device's memory; without one it is a window of about 256
+//!   MiB, which no base takes; nor does a device with unified memory, where that memory is the
+//!   host's), while the runtime's blocks in that heap and the base stay within half of it. From
+//!   then on each comparison reads one side and its tags: a commit's copy in reads the pages'
+//!   blocks, and only a block whose tag changed reads the copy's block; a completion's merge back
+//!   reads the copy's blocks, and only a block whose tag changed reads the pages' block. The base's
+//!   bytes are the other side's block where its tag still agrees, and are read from the base only
+//!   for a block both sides changed since they agreed (where they are in the device's memory, a
+//!   read across the bus the host does not cache, with streaming loads on an x86-64 host with
+//!   SSE4.1). The base then takes each block that changed. A block whose tag agrees is taken as
+//!   unchanged: for a block that changed, that happens with a chance of at most 2^-64 at each
+//!   comparison ([`tag`]), the only place the runtime takes a tag for the bytes; a copy without a
+//!   base compares bytes. Where the host has no memory for a base, the commit fails with
+//!   `Error::OutOfMemory` and runs nothing, as Metal fails a command buffer for memory, and the
+//!   copy keeps none (it holds what its pages and it agree on). Counted:
 //!   `WorkCounts::copied_bases_made`, `copied_bases_refused`, `copied_base_blocks_read`, and the
 //!   gauges `copied_base_host_bytes` and `copied_base_device_bytes`.
 //! - **Copies in the log gates.** Where the pages' memory came with such a log (a copy that drops
@@ -437,8 +452,8 @@ pub(crate) fn tag_portable(block: &[u8; TAG_BLOCK]) -> Tag {
 pub(crate) mod x86 {
     use super::{Tag, KEY_WORDS, TAG_BLOCK};
     use std::arch::x86_64::{
-        __m128i, _mm_add_epi32, _mm_add_epi64, _mm_loadu_si128, _mm_mul_epu32, _mm_setzero_si128,
-        _mm_srli_epi64, _mm_storeu_si128,
+        __m128i, _mm_add_epi32, _mm_add_epi64, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8,
+        _mm_mul_epu32, _mm_setzero_si128, _mm_srli_epi64, _mm_storeu_si128,
     };
 
     /// [`tag`] of the [`TAG_BLOCK`] bytes at `block` under `key`, read with plain loads.
@@ -453,8 +468,8 @@ pub(crate) mod x86 {
         let (mut first, mut second) = ([_mm_setzero_si128(); 2], [_mm_setzero_si128(); 2]);
         for stretch in 0..TAG_BLOCK / 32 {
             // SAFETY: unaligned loads of the block's 16-byte pieces `2 * stretch` and the next
-            // (at most its 63rd of 64: the caller's), and of the key's 4-word pieces `2 * stretch` to two
-            // after it (at most its 64th of 65: words 256 to 259).
+            // (at most its 63rd of 64: the caller's), and of the key's 4-word pieces
+            // `2 * stretch` to two after it (at most its 64th of 65: words 256 to 259).
             let (low, high, low_key, high_key, next_key) = unsafe {
                 (
                     _mm_loadu_si128(words.add(2 * stretch)),
@@ -494,6 +509,114 @@ pub(crate) mod x86 {
             words[0].wrapping_add(words[1])
         };
         [sum(first), sum(second)]
+    }
+
+    /// [`merge_block`](super::merge_block) 16 bytes at a time: the bytes that differ from `was`
+    /// as a mask (`_mm_cmpeq_epi8`, `_mm_movemask_epi8`), and where `keep_to` those of `to` that
+    /// still hold `was`'s; 16 in one store where every byte is to be written, 8 where every byte
+    /// of a half is, else one byte at a time; `was` takes all 16 of `now` (the bytes that did not
+    /// change are the same). The rest past the last 16, 8 at a time
+    /// ([`merge_words`](super::merge_words)). The bytes written.
+    ///
+    /// # Safety
+    ///
+    /// As [`merge_block`](super::merge_block)'s.
+    #[target_feature(enable = "sse2")]
+    pub(super) unsafe fn merge_sse2(now: &[u8], to: *mut u8, was: &mut [u8], keep_to: bool) -> u64 {
+        let whole = now.len() / 16 * 16;
+        let mut written = 0u64;
+        for at in (0..whole).step_by(16) {
+            // SAFETY: 16 bytes at `at` of `now` and of `was` (as long), and of `to` (the
+            // caller's).
+            let (fresh, agreed) = unsafe {
+                (
+                    _mm_loadu_si128(now.as_ptr().add(at).cast()),
+                    _mm_loadu_si128(was.as_ptr().add(at).cast()),
+                )
+            };
+            let changed = !(_mm_movemask_epi8(_mm_cmpeq_epi8(fresh, agreed)) as u32) & 0xFFFF;
+            if changed == 0 {
+                continue;
+            }
+            let mut stores = changed;
+            if keep_to {
+                // SAFETY: as above.
+                let there = unsafe { _mm_loadu_si128(to.add(at).cast()) };
+                stores &= _mm_movemask_epi8(_mm_cmpeq_epi8(there, agreed)) as u32;
+            }
+            written += u64::from(stores.count_ones());
+            // SAFETY: as above.
+            unsafe {
+                store_masked(&now[at..at + 16], to.add(at), stores);
+                _mm_storeu_si128(was.as_mut_ptr().add(at).cast(), fresh);
+            }
+        }
+        // SAFETY: the rest of the caller's bytes.
+        written
+            + unsafe {
+                super::merge_words(&now[whole..], to.add(whole), &mut was[whole..], keep_to)
+            }
+    }
+
+    /// Store the bytes of `now` (16) at `to` whose bits `stores` sets: all 16 in one store, a
+    /// half's 8 in one, else each alone, so no other byte of `to` is written.
+    ///
+    /// # Safety
+    ///
+    /// `to` is 16 bytes of mapped memory.
+    #[target_feature(enable = "sse2")]
+    unsafe fn store_masked(now: &[u8], to: *mut u8, stores: u32) {
+        if stores == 0xFFFF {
+            // SAFETY: 16 bytes of `to` (the caller's).
+            unsafe { _mm_storeu_si128(to.cast(), _mm_loadu_si128(now.as_ptr().cast())) };
+            return;
+        }
+        for half in 0..2 {
+            let bits = (stores >> (8 * half)) & 0xFF;
+            let at = 8 * half;
+            if bits == 0xFF {
+                let word = <[u8; 8]>::try_from(&now[at..at + 8]).unwrap_or_default();
+                // SAFETY: 8 bytes of `to`; `[u8; 8]` is aligned to 1.
+                unsafe { to.add(at).cast::<[u8; 8]>().write_volatile(word) };
+                continue;
+            }
+            let mut bits = bits;
+            while bits != 0 {
+                let byte = at + bits.trailing_zeros() as usize;
+                // SAFETY: a byte of `to`.
+                unsafe { to.add(byte).write_volatile(now[byte]) };
+                bits &= bits - 1;
+            }
+        }
+    }
+
+    /// [`store_block`](super::store_block) 16 bytes at a time (the rest past the last 16, 8 at a
+    /// time): each 16 in which any byte differs from `to`'s stored whole. The bytes that differed.
+    ///
+    /// # Safety
+    ///
+    /// As [`store_block`](super::store_block)'s.
+    #[target_feature(enable = "sse2")]
+    pub(super) unsafe fn store_sse2(now: &[u8], to: *mut u8) -> u64 {
+        let whole = now.len() / 16 * 16;
+        let mut differed = 0u64;
+        for at in (0..whole).step_by(16) {
+            // SAFETY: 16 bytes at `at` of `now`, and of `to` (the caller's).
+            let (fresh, there) = unsafe {
+                (
+                    _mm_loadu_si128(now.as_ptr().add(at).cast()),
+                    _mm_loadu_si128(to.add(at).cast()),
+                )
+            };
+            let different = !(_mm_movemask_epi8(_mm_cmpeq_epi8(fresh, there)) as u32) & 0xFFFF;
+            if different != 0 {
+                differed += u64::from(different.count_ones());
+                // SAFETY: as above.
+                unsafe { _mm_storeu_si128(to.add(at).cast(), fresh) };
+            }
+        }
+        // SAFETY: the rest of the caller's bytes.
+        differed + unsafe { super::store_words(&now[whole..], to.add(whole)) }
     }
 }
 
@@ -642,8 +765,8 @@ impl BaseBytes {
 /// loads (`MOVNTDQA`) of each 16 bytes where `from` lies on 16 bytes: of write-combining memory,
 /// the host may fetch a streaming load's whole 64-byte line once into a buffer that the line's
 /// next streaming loads read (Intel's SDM), where each plain load crosses the bus. A full fence
-/// first orders them after the host's earlier writes of the bytes. The bytes past the last 16, and every byte where `from` lies off 16, are
-/// copied with plain loads.
+/// first orders them after the host's earlier writes of the bytes. The bytes past the last 16,
+/// and every byte where `from` lies off 16, are copied with plain loads.
 ///
 /// # Safety
 ///
@@ -895,20 +1018,19 @@ impl CopiedBuffers {
     /// commands use, as Metal's GPU reaches only those (counted:
     /// `WorkCounts::copied_copy_ins_unused`).
     ///
-    /// A copy with no base yet (no command buffer that may write it was committed) holds the
-    /// bytes its pages and it agree on: its pages are compared with it, and the bytes that differ
-    /// written in. Each copy the command buffer's commands may write (`written`: the keys they
-    /// wrote, `DirtyCommit::copies_written`, or every copy where one may write memory no use
-    /// names), and that has none, then takes its base ([`Base`]), before any of its work is
-    /// submitted: its bytes in the device's memory where `device` gives them
-    /// (`Device::copied_base`), else in the host's. A copy with a base compares its pages'
-    /// blocks' tags with its base's, and only a block whose tag changed reads the copy's, and the
-    /// base's bytes only where the copy's changed too: the bytes the CPU changed are written in,
-    /// and the base takes the block. Counted: `WorkCounts::copied_bases_made`, `copied_base_blocks_read`. Where the
-    /// host has no memory for a base, the copy keeps none and the answer is
-    /// `Err(NotCopied::OutOfHostMemory)`: the command buffer runs nothing
-    /// (`WorkCounts::copied_bases_refused`), and the copy still holds what its pages and it agree
-    /// on, for the next commit.
+    /// A copy with no base yet (no command buffer that may write it was committed) holds the bytes
+    /// its pages and it agree on: its pages are compared with it, and the bytes that differ written
+    /// in. Each copy the command buffer's commands may write (`written`: the keys they wrote,
+    /// `DirtyCommit::copies_written`, or every copy where one may write memory no use names), and
+    /// that has none, then takes its base ([`Base`]), before any of its work is submitted: its
+    /// bytes in the device's memory where `device` gives them (`Device::copied_base`), else in the
+    /// host's. A copy with a base compares its pages' blocks' tags with its base's, and only a
+    /// block whose tag changed reads the copy's, and the base's bytes only where the copy's changed
+    /// too: the bytes the CPU changed are written in, and the base takes the block. Counted:
+    /// `WorkCounts::copied_bases_made`, `copied_base_blocks_read`. Where the host has no memory for
+    /// a base, the copy keeps none and the answer is `Err(NotCopied::OutOfHostMemory)`: the command
+    /// buffer runs nothing (`WorkCounts::copied_bases_refused`), and the copy still holds what its
+    /// pages and it agree on, for the next commit.
     ///
     /// A copy whose pages' memory came with a log of the writes to them ([`Copied::set_log`])
     /// compares only the pages the log reports written since the stamp its last copy in synced
@@ -1351,12 +1473,13 @@ unsafe fn copy_in_tagged(
 }
 
 /// A merge back of a copy with `base` (that keeps the GPU's writes) of `length` bytes: each block
-/// of the copy whose tag differs from the base's is compared with the base's bytes, and each byte
-/// that differs written into `pages`, unless the pages' byte differs from the base's already (the
-/// CPU wrote it since: [`merge_block`]), each block it wrote a byte of told to `note`. The base's
-/// bytes are the pages' block where its tag still agrees (the CPU did not change it since), else
-/// read from the base (counted in `read`). The base then holds the copy's block. The bytes
-/// written.
+/// of the copy whose tag differs from the base's is merged into `pages`, each block it wrote a
+/// byte of told to `note`. Where the pages' block still has the base's tag (the CPU did not change
+/// it since), the copy's block is the merge, stored over it whole ([`store_block`]); else the
+/// copy's block is compared with the base's bytes (read from the base, counted in `read`), and
+/// each byte that differs written into `pages`, unless the pages' byte differs from the base's
+/// already (the CPU wrote it since: [`merge_block`]). The base then holds the copy's block. The
+/// bytes that the pages took.
 ///
 /// # Safety
 ///
@@ -1387,14 +1510,19 @@ unsafe fn merge_tagged(
             continue;
         }
         // SAFETY: as above, in the pages.
-        unsafe { read_block(pages.add(at), span, &mut was) };
-        if tag(&was) != *agreed {
+        let merged = if unsafe { tag_in_place(pages.add(at), span, &mut was) } == *agreed {
+            // The CPU did not change the block since the pages and the copy agreed: the copy's
+            // block is the merge, stored over the pages' whole (the module docs' race window).
+            // SAFETY: as above.
+            unsafe { store_block(&now[..span], pages.add(at)) }
+        } else {
+            // Both sides changed it: the base's bytes, merged byte by byte.
             // SAFETY: as above, in the base's bytes, which are as many.
             unsafe { base.bytes.read(at, &mut was[..span]) };
             *read += 1;
-        }
-        // SAFETY: as above, in the pages.
-        let merged = unsafe { merge_block(&now[..span], pages.add(at), &mut was[..span], true) };
+            // SAFETY: as above, in the pages.
+            unsafe { merge_block(&now[..span], pages.add(at), &mut was[..span], true) }
+        };
         if merged > 0 {
             note(at..at + span);
         }
@@ -1447,17 +1575,35 @@ unsafe fn restore_tagged(
     written
 }
 
-/// One block whose bytes `now` (read of one side) differ from the agreed bytes `was`: 8 bytes at
-/// a time, and in each 8 that differ, byte by byte, each byte of `now` that differs from `was`
-/// written into `to` (where `keep_to`, unless `to`'s byte differs from `was` already: the other
-/// side wrote it since) and taken into `was`: eight in one store where all eight differ (and,
-/// where `keep_to`, none of `to`'s does), so no byte that did not change is written. The bytes
-/// written.
+/// One block whose bytes `now` (read of one side) differ from the agreed bytes `was`: each byte of
+/// `now` that differs from `was` written into `to` (where `keep_to`, unless `to`'s byte differs
+/// from `was` already: the other side wrote it since) and taken into `was`, so no byte that did
+/// not change is written. The bytes written. On an x86-64 host 16 bytes at a time
+/// ([`x86::merge_sse2`]), else 8 ([`merge_words`]).
 ///
 /// # Safety
 ///
 /// `to` is `now.len()` bytes of mapped memory, `was` as long.
 unsafe fn merge_block(now: &[u8], to: *mut u8, was: &mut [u8], keep_to: bool) -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: the caller's; every x86-64 host has SSE2.
+        unsafe { x86::merge_sse2(now, to, was, keep_to) }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        // SAFETY: the caller's.
+        unsafe { merge_words(now, to, was, keep_to) }
+    }
+}
+
+/// [`merge_block`] 8 bytes at a time, and in each 8 that differ, byte by byte: eight in one store
+/// where all eight differ (and, where `keep_to`, none of `to`'s does). The bytes written.
+///
+/// # Safety
+///
+/// As [`merge_block`]'s.
+unsafe fn merge_words(now: &[u8], to: *mut u8, was: &mut [u8], keep_to: bool) -> u64 {
     let mut written = 0u64;
     let mut at = 0;
     while at < now.len() {
@@ -1497,6 +1643,56 @@ unsafe fn merge_block(now: &[u8], to: *mut u8, was: &mut [u8], keep_to: bool) ->
         at += span;
     }
     written
+}
+
+/// Store `now` over the `now.len()` bytes at `to`, whole: each 16 bytes in which any byte differs
+/// from `to`'s in one store, the bytes equal to `to`'s among them stored too (past the last 16,
+/// each 8, and the few after them, likewise). The bytes that differed. For a block whose other side
+/// did not change, whose merge is the block itself (the module docs' race window).
+///
+/// # Safety
+///
+/// `to` is `now.len()` bytes of mapped memory.
+unsafe fn store_block(now: &[u8], to: *mut u8) -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: the caller's; every x86-64 host has SSE2.
+        unsafe { x86::store_sse2(now, to) }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        // SAFETY: the caller's.
+        unsafe { store_words(now, to) }
+    }
+}
+
+/// [`store_block`] 8 bytes at a time, the few past the last 8 together. The bytes that differed.
+///
+/// # Safety
+///
+/// As [`store_block`]'s.
+unsafe fn store_words(now: &[u8], to: *mut u8) -> u64 {
+    let mut differed = 0u64;
+    for (at, now) in now
+        .chunks(8)
+        .enumerate()
+        .map(|(index, now)| (8 * index, now))
+    {
+        let mut there = [0u8; 8];
+        // SAFETY: `now.len()` bytes at `at` lie in `to` (the caller's).
+        unsafe { std::ptr::copy_nonoverlapping(to.add(at), there.as_mut_ptr(), now.len()) };
+        let different = now
+            .iter()
+            .zip(&there)
+            .filter(|(now, there)| now != there)
+            .count();
+        if different > 0 {
+            differed += different as u64;
+            // SAFETY: as above.
+            unsafe { std::ptr::copy_nonoverlapping(now.as_ptr(), to.add(at), now.len()) };
+        }
+    }
+    differed
 }
 
 /// Read the caller's `into.len()` bytes at `pages` into `into`: through the kernel (`kernel`,
