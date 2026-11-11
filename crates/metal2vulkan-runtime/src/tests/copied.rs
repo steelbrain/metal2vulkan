@@ -531,6 +531,37 @@ fn a_tag_changes_with_any_bit_of_its_block() {
     assert_ne!(tag(&zero), zero_tag, "the last word counts");
 }
 
+/// The SIMD forms of a block's tag (on x86-64: SSE2, and AVX2 where the host has it) answer as
+/// the portable form does, over random blocks, a block of all ones (the most every sum can
+/// carry) and one of zeros.
+#[test]
+fn a_tag_is_the_same_on_every_path() {
+    use crate::copied::tag_portable;
+    let mut rng = Rng(0x2545_F491_4F6C_DD1D);
+    let mut blocks = vec![[0u8; TAG_BLOCK], [0xFF; TAG_BLOCK]];
+    for _ in 0..256 {
+        let mut block = [0u8; TAG_BLOCK];
+        for byte in &mut block {
+            *byte = rng.next() as u8;
+        }
+        blocks.push(block);
+    }
+    for block in &blocks {
+        let portable = tag_portable(block);
+        assert_eq!(tag(block), portable);
+        #[cfg(target_arch = "x86_64")]
+        {
+            let key = crate::copied::key();
+            assert_eq!(crate::copied::x86::tag_sse2(block, key), portable, "SSE2");
+            if std::is_x86_feature_detected!("avx2") {
+                // SAFETY: the host has AVX2.
+                let avx2 = unsafe { crate::copied::x86::tag_avx2(block, key) };
+                assert_eq!(avx2, portable, "AVX2");
+            }
+        }
+    }
+}
+
 /// A copied 256 MiB buffer holds nothing beyond its copy while the GPU only reads it; once a
 /// command buffer may write it, its base's bytes in memory standing in for the device's leave
 /// its tags alone in host memory: a 64th of its length, within `length / 16` and far under the

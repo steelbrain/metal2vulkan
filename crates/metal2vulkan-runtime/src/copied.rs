@@ -341,7 +341,7 @@ type Tag = [u64; 2];
 const KEY_WORDS: usize = TAG_BLOCK / 4 + 4;
 
 /// The key of every [`tag`] in the process: random words, made once, which no caller sees.
-fn key() -> &'static [u32; KEY_WORDS] {
+pub(crate) fn key() -> &'static [u32; KEY_WORDS] {
     static KEY: OnceLock<[u32; KEY_WORDS]> = OnceLock::new();
     KEY.get_or_init(|| {
         // The standard library's hasher keyed from the system's randomness, as a keyed function
