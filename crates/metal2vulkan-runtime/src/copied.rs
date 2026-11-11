@@ -80,14 +80,18 @@
 //!   bytes are the other side's block where its tag still agrees, and are read from the base only
 //!   for a block both sides changed since they agreed (where they are in the device's memory, a
 //!   read across the bus the host does not cache, with streaming loads on an x86-64 host with
-//!   SSE4.1). The base then takes each block that changed. A block whose tag agrees is taken as
-//!   unchanged: for a block that changed, that happens with a chance of at most 2^-64 at each
-//!   comparison ([`tag`]), the only place the runtime takes a tag for the bytes; a copy without a
-//!   base compares bytes. Where the host has no memory for a base, the commit fails with
-//!   `Error::OutOfMemory` and runs nothing, as Metal fails a command buffer for memory, and the
-//!   copy keeps none (it holds what its pages and it agree on). Counted:
-//!   `WorkCounts::copied_bases_made`, `copied_bases_refused`, `copied_base_blocks_read`, and the
-//!   gauges `copied_base_host_bytes` and `copied_base_device_bytes`.
+//!   SSE4.1). A block of the device's memory so read is kept in host memory from then on
+//!   (`HostBlock`), its later reads and writes the host's, so a block both sides write again and
+//!   again crosses the bus once, and the host bytes such a base holds are its tags and those blocks
+//!   (where the host has no memory for one, the block stays in the device's). The base then takes
+//!   each block that changed. A block whose tag agrees is taken as unchanged: for a block that
+//!   changed, that happens with a chance of at most 2^-64 at each comparison ([`tag`]), the only
+//!   place the runtime takes a tag for the bytes; a copy without a base compares bytes. Where the
+//!   host has no memory for a base, the commit fails with `Error::OutOfMemory` and runs nothing, as
+//!   Metal fails a command buffer for memory, and the copy keeps none (it holds what its pages and
+//!   it agree on). Counted: `WorkCounts::copied_bases_made`, `copied_bases_refused`,
+//!   `copied_base_blocks_read`, and the gauges `copied_base_host_bytes`, `copied_base_device_bytes`
+//!   and `copied_base_host_blocks`.
 //! - **Copies in the log gates.** Where the pages' memory came with such a log (a copy that drops
 //!   the GPU's writes included: its guest RAM's runs are asked as a writable copy's are), a
 //!   commit's copy in compares only the pages the log reports written since the copy's last copy
@@ -181,6 +185,7 @@ use crate::key_hash::KeyMap;
 use crate::resource::ResourceKey;
 use crate::work_counts::Counters;
 use crate::DirtyStamp;
+use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::num::NonZeroU64;
 use std::ops::Range;
@@ -205,6 +210,9 @@ pub(crate) struct CopiedBuffers {
     /// The device bytes the live copies' bases hold: the agreed bytes of those kept in the
     /// device's memory. A gauge (`WorkCounts::copied_base_device_bytes`).
     base_device_bytes: AtomicU64,
+    /// The blocks of the live copies' bases in the device's memory that are kept in host memory
+    /// ([`HostBlock`]). A gauge (`WorkCounts::copied_base_host_blocks`).
+    base_host_blocks: AtomicU64,
     /// The tests' stand-in for a host with no memory for a base ([`CopiedBuffers::refuse_bases`]).
     #[cfg(test)]
     bases_refused: AtomicBool,
@@ -668,6 +676,9 @@ pub(crate) mod x86 {
 struct Base {
     tags: Box<[Tag]>,
     bytes: BaseBytes,
+    /// The blocks of bytes in the device's memory that a comparison read (both sides changed
+    /// them), kept in host memory from then on, by their index ([`HostBlock`]).
+    on_host: HashMap<usize, HostBlock>,
 }
 
 impl Base {
@@ -706,14 +717,16 @@ impl Base {
         Some(Base {
             tags: tags.into_boxed_slice(),
             bytes,
+            on_host: HashMap::new(),
         })
     }
 
-    /// The host's bytes it holds: its tags, and its bytes where they are in the host's memory.
+    /// The host's bytes it holds: its tags, and its bytes where they are in the host's memory,
+    /// else the blocks of them kept there ([`HostBlock`]).
     fn host_bytes(&self) -> u64 {
         let tags = (self.tags.len() * size_of::<Tag>()) as u64;
         match self.bytes.on_device {
-            true => tags,
+            true => tags + (self.on_host.len() * TAG_BLOCK) as u64,
             false => tags + self.bytes.length as u64,
         }
     }
@@ -786,6 +799,12 @@ impl BaseBytes {
         }
         // SAFETY: the caller's; `into` is the caller's own, apart.
         unsafe { std::ptr::copy_nonoverlapping(from, into.as_mut_ptr(), into.len()) };
+    }
+
+    /// Its first byte, for a test that writes the device's bytes under the base.
+    #[cfg(test)]
+    pub(crate) fn first(&self) -> NonNull<u8> {
+        self.at
     }
 
     /// [`BaseBytes::read`] with plain loads, whatever the memory: a benchmark's measure of the
@@ -862,6 +881,41 @@ impl Drop for HostBaseBytes {
         drop(unsafe { Box::from_raw(self.0.as_ptr()) });
     }
 }
+
+/// A block of a base whose bytes lie in the device's memory, kept in host memory from the first
+/// comparison that read it there (a block both sides changed since they agreed, whose read
+/// crosses the bus uncached): its later reads and writes are the host's, so a block both sides
+/// write again and again pays one read across the bus. Kept for the base's life.
+struct HostBlock(NonNull<[u8; TAG_BLOCK]>);
+
+impl HostBlock {
+    /// A block of host memory; `None` where the host has none, and the block stays in the
+    /// device's memory.
+    fn new() -> Option<HostBlock> {
+        // SAFETY: the layout's size is not zero.
+        let at = unsafe { std::alloc::alloc(std::alloc::Layout::new::<[u8; TAG_BLOCK]>()) };
+        NonNull::new(at.cast()).map(HostBlock)
+    }
+
+    /// Its first byte.
+    fn at(&self) -> *mut u8 {
+        self.0.as_ptr().cast()
+    }
+}
+
+impl Drop for HostBlock {
+    fn drop(&mut self) {
+        let layout = std::alloc::Layout::new::<[u8; TAG_BLOCK]>();
+        // SAFETY: allocated by `HostBlock::new` with this layout, freed once, here.
+        unsafe { std::alloc::dealloc(self.0.as_ptr().cast(), layout) };
+    }
+}
+
+// SAFETY: the memory is this value's own, reached only under the copies' lock, by the thread
+// that holds it or by the one thread of its comparison whose run holds its block ([`split`]).
+unsafe impl Send for HostBlock {}
+// SAFETY: as above.
+unsafe impl Sync for HostBlock {}
 
 /// Read `span` bytes at `from` into `into`, the rest of it zero: a block the tags read whole.
 ///
@@ -978,6 +1032,8 @@ impl Drop for Copied {
         if let Some(base) = removed.as_ref().and_then(|entry| entry.base.as_ref()) {
             (self.buffers.base_host_bytes).fetch_sub(base.host_bytes(), Ordering::Relaxed);
             (self.buffers.base_device_bytes).fetch_sub(base.device_bytes(), Ordering::Relaxed);
+            let blocks = base.on_host.len() as u64;
+            (self.buffers.base_host_blocks).fetch_sub(blocks, Ordering::Relaxed);
         }
         // Its watches end, and its base's memory goes, with no lock of the copies' held: a
         // watch's end is the consumer's call, and the device's memory takes its own lock.
@@ -1158,16 +1214,23 @@ impl CopiedBuffers {
                 // The entry's pointers are live while it is registered (`Entry`), and `bytes`
                 // lies in its bytes (`blocks`), from a multiple of `SYNC_BLOCK`.
                 moved += match &mut entry.base {
-                    Some(Base { tags, bytes: kept }) => {
+                    Some(Base {
+                        tags,
+                        bytes: agreed,
+                        on_host,
+                    }) => {
                         let sides = Sides {
                             pages,
                             copy,
                             length,
-                            bytes: kept,
+                            bytes: agreed,
+                            on_host,
                         };
                         // SAFETY: as above; `sides` and `tags` are the entry's base's.
                         let tally = unsafe { copy_in_tagged(sides, tags, bytes) };
                         (read, started) = (read + tally.read, started + tally.started);
+                        // SAFETY: as above.
+                        unsafe { self.keep_on_host((agreed, on_host), length, tally.kept) };
                         tally.written
                     }
                     // SAFETY: as above.
@@ -1255,26 +1318,36 @@ impl CopiedBuffers {
                 continue;
             }
             compared += 1;
-            let Base { tags, bytes } = base;
+            let Base {
+                tags,
+                bytes,
+                on_host,
+            } = base;
             let (copy, pages, length) = (entry.copy, entry.pages, entry.length);
             let sides = Sides {
                 pages,
                 copy,
                 length,
                 bytes,
+                on_host,
             };
+            // SAFETY: the entry's pointers are live while it is registered (`Entry`), and
+            // `sides` and `tags` are its base's.
+            let tally = unsafe {
+                match entry.drops_writes {
+                    true => restore_tagged(sides, tags),
+                    false => merge_tagged(sides, tags),
+                }
+            };
+            read += tally.read;
+            started += tally.started;
+            // SAFETY: as above.
+            unsafe { self.keep_on_host((bytes, on_host), length, tally.kept) };
             if entry.drops_writes {
-                // SAFETY: the entry's pointers are live while it is registered (`Entry`), and
-                // `sides` and `tags` are its base's.
-                let tally = unsafe { restore_tagged(sides, tags) };
-                (dropped, read) = (dropped + tally.written, read + tally.read);
-                started += tally.started;
+                dropped += tally.written;
                 continue;
             }
-            // SAFETY: as above.
-            let tally = unsafe { merge_tagged(sides, tags) };
-            (moved, read) = (moved + tally.written, read + tally.read);
-            started += tally.started;
+            moved += tally.written;
             if let (Some(log), false) = (&mut entry.log, tally.wrote.is_empty()) {
                 let wrote: u64 = (tally.wrote.iter())
                     .map(|bytes| bytes.end - bytes.start)
@@ -1292,6 +1365,49 @@ impl CopiedBuffers {
         counts.copied_merges(compared, skipped);
         counts.copied_bases(0, 0, read);
         counts.copied_compare_threads(started);
+    }
+
+    /// Keep `kept`, the blocks of a base in the device's memory (`bytes`, of a copy of `length`
+    /// bytes) that a comparison read, now held in host memory, in the base's map `on_host`, and
+    /// count them (`WorkCounts::copied_base_host_blocks`, `copied_base_host_bytes`). Where the
+    /// host has no memory for the map's entries, their bytes go back into the device's memory.
+    ///
+    /// # Safety
+    ///
+    /// The copies' lock is held, and no comparison of the base runs.
+    unsafe fn keep_on_host(
+        &self,
+        (bytes, on_host): (&BaseBytes, &mut HashMap<usize, HostBlock>),
+        length: usize,
+        kept: Vec<(usize, HostBlock)>,
+    ) {
+        if kept.is_empty() {
+            return;
+        }
+        if on_host.try_reserve(kept.len()).is_err() {
+            for (index, block) in kept {
+                let span = (length - index * TAG_BLOCK).min(TAG_BLOCK);
+                // SAFETY: the block's `span` bytes, written by the comparison, back into the
+                // base's bytes, which hold as many from `index * TAG_BLOCK`.
+                unsafe {
+                    bytes.write(
+                        index * TAG_BLOCK,
+                        std::slice::from_raw_parts(block.at(), span),
+                    )
+                };
+            }
+            return;
+        }
+        let blocks = kept.len() as u64;
+        on_host.extend(kept);
+        self.base_host_blocks.fetch_add(blocks, Ordering::Relaxed);
+        (self.base_host_bytes).fetch_add(blocks * TAG_BLOCK as u64, Ordering::Relaxed);
+    }
+
+    /// The blocks of the live copies' bases in the device's memory that are kept in host memory
+    /// (`WorkCounts::copied_base_host_blocks`).
+    pub(crate) fn base_host_blocks(&self) -> u64 {
+        self.base_host_blocks.load(Ordering::Relaxed)
     }
 
     /// Find no memory for a base from now on where `refused`: a test's stand-in for a host out of
@@ -1507,6 +1623,7 @@ struct Sides<'a> {
     copy: NonNull<u8>,
     length: usize,
     bytes: &'a BaseBytes,
+    on_host: &'a HashMap<usize, HostBlock>,
 }
 
 // SAFETY: the pointers are an entry's, live while it is registered (`Entry`), and a comparison
@@ -1516,16 +1633,70 @@ unsafe impl Send for Sides<'_> {}
 // SAFETY: as above.
 unsafe impl Sync for Sides<'_> {}
 
+impl Sides<'_> {
+    /// The block at `index` of the base's bytes where it is kept in host memory ([`HostBlock`]).
+    fn kept(&self, index: usize) -> Option<*mut u8> {
+        match self.on_host.is_empty() {
+            true => None,
+            false => self.on_host.get(&index).map(HostBlock::at),
+        }
+    }
+
+    /// Read the base's bytes of the block at `index` into `into` (as many as it holds): from host
+    /// memory where the block is kept there (`kept`, [`Sides::kept`]), else from the base's bytes;
+    /// and where those are in the device's memory, keep the block in host memory from then on,
+    /// returned (`None` where the host has no memory for it).
+    ///
+    /// # Safety
+    ///
+    /// The block lies in the base's bytes, and no other thread reaches it.
+    unsafe fn read_base(
+        &self,
+        index: usize,
+        kept: Option<*mut u8>,
+        into: &mut [u8],
+    ) -> Option<HostBlock> {
+        if let Some(at) = kept {
+            // SAFETY: a block of host memory as long, the caller's alone.
+            unsafe { std::ptr::copy_nonoverlapping(at, into.as_mut_ptr(), into.len()) };
+            return None;
+        }
+        // SAFETY: the caller's.
+        unsafe { self.bytes.read(index * TAG_BLOCK, into) };
+        match self.bytes.on_device {
+            true => HostBlock::new(),
+            false => None,
+        }
+    }
+
+    /// Write `from` as the base's bytes of the block at `index`: into host memory where it is
+    /// kept there (`kept`), else into the base's bytes.
+    ///
+    /// # Safety
+    ///
+    /// As [`Sides::read_base`]'s.
+    unsafe fn write_base(&self, index: usize, kept: Option<*mut u8>, from: &[u8]) {
+        match kept {
+            // SAFETY: a block of host memory as long, the caller's alone.
+            Some(at) => unsafe { std::ptr::copy_nonoverlapping(from.as_ptr(), at, from.len()) },
+            // SAFETY: the caller's.
+            None => unsafe { self.bytes.write(index * TAG_BLOCK, from) },
+        }
+    }
+}
+
 /// What a run of a copy's blocks did: the bytes it wrote, the base's blocks it read
 /// (`WorkCounts::copied_base_blocks_read`), and, of a merge back, the blocks of [`SYNC_BLOCK`]
 /// bytes of the pages it wrote a byte of, in order, adjacent ones joined; and of a comparison
-/// split across threads, those it started (`WorkCounts::copied_compare_threads`).
+/// split across threads, those it started (`WorkCounts::copied_compare_threads`); and the blocks
+/// of a base in the device's memory it read, now kept in host memory ([`HostBlock`]).
 #[derive(Default)]
 struct Tally {
     written: u64,
     read: u64,
     wrote: Vec<Range<u64>>,
     started: u64,
+    kept: Vec<(usize, HostBlock)>,
 }
 
 impl Tally {
@@ -1549,6 +1720,7 @@ impl Tally {
         self.written += later.written;
         self.read += later.read;
         self.started += later.started;
+        self.kept.extend(later.kept);
         for run in later.wrote {
             self.joined(run);
         }
@@ -1668,9 +1840,11 @@ unsafe fn copy_in_blocks(sides: Sides<'_>, first: usize, tags: &mut [Tag]) -> Ta
         // SAFETY: as above, in the copy.
         unsafe { read_block(copy.add(at), span, &mut was) };
         let copy_agrees = tag(&was) == *agreed;
+        let (mut kept, mut moved) = (sides.kept(index), None);
         if !copy_agrees {
-            // SAFETY: as above, in the base's bytes, which are as many.
-            unsafe { sides.bytes.read(at, &mut was[..span]) };
+            // SAFETY: as above, the block of the base's bytes, this run's own.
+            moved = unsafe { sides.read_base(index, kept, &mut was[..span]) };
+            kept = kept.or(moved.as_ref().map(HostBlock::at));
             tally.read += 1;
         }
         // SAFETY: as above, in the copy.
@@ -1681,8 +1855,9 @@ unsafe fn copy_in_blocks(sides: Sides<'_>, first: usize, tags: &mut [Tag]) -> Ta
             true => changed,
             false => tag(&was),
         };
-        // SAFETY: as above, in the base's bytes.
-        unsafe { sides.bytes.write(at, &was[..span]) };
+        // SAFETY: as above.
+        unsafe { sides.write_base(index, kept, &was[..span]) };
+        tally.kept.extend(moved.map(|block| (index, block)));
     }
     tally
 }
@@ -1732,9 +1907,11 @@ unsafe fn merge_blocks(sides: Sides<'_>, first: usize, tags: &mut [Tag]) -> Tall
         // did not change it since), else the base's (both sides changed it).
         // SAFETY: as above, in the pages.
         unsafe { read_block(pages.add(at), span, &mut was) };
+        let (mut kept, mut moved) = (sides.kept(index), None);
         if tag(&was) != *agreed {
-            // SAFETY: as above, in the base's bytes, which are as many.
-            unsafe { sides.bytes.read(at, &mut was[..span]) };
+            // SAFETY: as above, the block of the base's bytes, this run's own.
+            moved = unsafe { sides.read_base(index, kept, &mut was[..span]) };
+            kept = kept.or(moved.as_ref().map(HostBlock::at));
             tally.read += 1;
         }
         // SAFETY: as above, in the pages.
@@ -1744,8 +1921,9 @@ unsafe fn merge_blocks(sides: Sides<'_>, first: usize, tags: &mut [Tag]) -> Tall
         }
         tally.written += merged;
         *agreed = changed;
-        // SAFETY: as above, in the base's bytes.
-        unsafe { sides.bytes.write(at, &now[..span]) };
+        // SAFETY: as above.
+        unsafe { sides.write_base(index, kept, &now[..span]) };
+        tally.kept.extend(moved.map(|block| (index, block)));
     }
     tally
 }
@@ -1787,9 +1965,14 @@ unsafe fn restore_blocks(sides: Sides<'_>, first: usize, tags: &[Tag]) -> Tally 
         // SAFETY: as above, in the pages.
         unsafe { read_block(pages.add(at), span, &mut agreed) };
         if tag(&agreed) != *tagged {
-            // SAFETY: as above, in the base's bytes, which are as many.
-            unsafe { sides.bytes.read(at, &mut agreed[..span]) };
+            // SAFETY: as above, the block of the base's bytes, this run's own.
+            let moved = unsafe { sides.read_base(index, sides.kept(index), &mut agreed[..span]) };
             tally.read += 1;
+            if let Some(block) = moved {
+                // SAFETY: as above; the block is this run's new one.
+                unsafe { sides.write_base(index, Some(block.at()), &agreed[..span]) };
+                tally.kept.push((index, block));
+            }
         }
         // SAFETY: as above, in the copy.
         tally.written +=

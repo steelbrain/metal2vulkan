@@ -292,6 +292,73 @@ fn a_merge_stores_each_byte_it_writes_and_no_other() {
     }
 }
 
+/// A block of a base in the device's memory that both sides changed is read there once, and kept
+/// in host memory from then on: the comparisons after it read and write the host's block, so they
+/// answer exactly though the device's bytes of the block are overwritten; it counts a host block
+/// and its bytes, which go with the copy.
+#[test]
+fn a_device_base_s_block_both_sides_changed_is_kept_on_the_host() {
+    let length = 3 * TAG_BLOCK + 5;
+    let mut pages: Vec<u8> = (0..length as u32).map(|i| (i * 7 + 3) as u8).collect();
+    let mut copy = vec![0_u8; length];
+    let buffers = Arc::new(CopiedBuffers::default());
+    let counts = Counters::default();
+    // SAFETY: the copy and the pages are the test's, of `length` bytes, live past the answer.
+    let copied = unsafe {
+        add_reading(
+            &buffers,
+            at(&mut pages),
+            at(&mut copy),
+            length,
+            plain,
+            false,
+        )
+    };
+    let copied = copied.unwrap();
+    let device = Cell::new(None);
+    let all = CopiesReached::all();
+    let tally = DirtyTally::default();
+    let made = buffers.copy_in(&counts, &tally, (&all, &all), Vec::new, &mut |length| {
+        let base = stand_in(length)?;
+        device.set(Some(base.first()));
+        Some(base)
+    });
+    assert_eq!(made, Ok(()));
+    let device = device.get().expect("a base in the stand-in's memory");
+    let tags = (length.div_ceil(TAG_BLOCK) * 16) as u64;
+    assert_eq!(buffers.base_bytes(), (tags, length as u64));
+    // Both sides change block 1.
+    copy[1030] ^= 0xFF;
+    pages[1031] ^= 0xFF;
+    buffers.merge_back(&counts, &all);
+    assert_eq!(pages[1030], copy[1030], "the GPU's byte merged");
+    assert_eq!(counts.copied_tallies().base_blocks_read, 1);
+    assert_eq!(buffers.base_host_blocks(), 1, "block 1 kept on the host");
+    assert_eq!(
+        buffers.base_bytes(),
+        (tags + TAG_BLOCK as u64, length as u64)
+    );
+    // The device's bytes of block 1 overwritten: nothing reads them now.
+    // SAFETY: block 1 of the stand-in's bytes, which the base holds.
+    unsafe { std::ptr::write_bytes(device.as_ptr().add(TAG_BLOCK), 0xEE, TAG_BLOCK) };
+    commit_reading(&buffers, &counts);
+    assert_eq!(copy, pages, "the CPU's byte copied in");
+    // Both sides change block 1 again: the merge reads the host's block.
+    copy[1040] ^= 0xFF;
+    pages[1041] ^= 0xFF;
+    let cpu = pages[1041];
+    buffers.merge_back(&counts, &all);
+    assert_eq!(pages[1040], copy[1040], "the GPU's byte merged again");
+    assert_eq!(pages[1041], cpu, "the CPU's byte kept");
+    assert_eq!(counts.copied_tallies().base_blocks_read, 2);
+    assert_eq!(buffers.base_host_blocks(), 1, "no block kept again");
+    commit_reading(&buffers, &counts);
+    assert_eq!(copy, pages);
+    drop(copied);
+    assert_eq!(buffers.base_bytes(), (0, 0));
+    assert_eq!(buffers.base_host_blocks(), 0);
+}
+
 /// A copy whose GPU writes are dropped takes the GPU's bytes out of the copy alone, where the CPU
 /// changed a byte of the same block (its base's bytes read), and the CPU's byte reaches the copy
 /// at the next commit.
@@ -586,6 +653,11 @@ fn copied_comparisons_answer_as_byte_by_byte() {
         read += counts.copied_tallies().base_blocks_read;
         drop(copied);
         assert_eq!(buffers.base_bytes(), (0, 0), "round {round}: the base went");
+        assert_eq!(
+            buffers.base_host_blocks(),
+            0,
+            "round {round}: its host blocks too"
+        );
     }
     assert!(read > 0, "some blocks both sides changed");
 }

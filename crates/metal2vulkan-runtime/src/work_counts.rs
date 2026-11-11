@@ -7269,6 +7269,11 @@ pub struct WorkCounts {
     /// The device bytes the live copied host buffers' bases hold (a gauge): the bytes of those
     /// kept in the device's memory.
     pub copied_base_device_bytes: u64,
+    /// The 1 KiB blocks of the live copied host buffers' bases in the device's memory that are
+    /// kept in host memory (a gauge, their bytes among `copied_base_host_bytes`): each block a
+    /// comparison read there (the CPU and the GPU both changed it), held in host memory for the
+    /// base's life, so a block both sides write again is read across the bus once.
+    pub copied_base_host_blocks: u64,
     /// The copies between a guest RAM and a buffer blit encoders recorded
     /// (`BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`), each from the device's
     /// imports of the RAM's chunks.
@@ -9246,6 +9251,7 @@ impl Device {
             copied_compare_threads: counters.copied_compare_threads.load(Ordering::Relaxed),
             copied_base_host_bytes,
             copied_base_device_bytes,
+            copied_base_host_blocks: self.shared().copied.base_host_blocks(),
             host_ram_copies: counters.host_ram_copies.load(Ordering::Relaxed),
             host_ram_copy_bytes: counters.host_ram_copy_bytes.load(Ordering::Relaxed),
             host_ram_copy_dispatches: counters.host_ram_copy_dispatches.load(Ordering::Relaxed),
