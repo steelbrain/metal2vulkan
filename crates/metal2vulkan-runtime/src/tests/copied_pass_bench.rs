@@ -92,7 +92,7 @@ fn passes(device: &Device, state: &crate::ComputePipelineState, buffer: &Buffer,
     eprintln!(
         "COPIED-PASS {label}, {} MiB: a pass {wall:.2} ms ({:.2} GB/s), its commit {:.2} ms, its \
          wait {:.2} ms, the GPU's time {gpu:.2} ms ({:.2} GB/s); a pass copied in {} KiB and \
-         merged back {} KiB",
+         merged back {} KiB, its comparisons starting {} threads",
         length >> 20,
         moved / (wall / 1e3),
         median(commits),
@@ -100,6 +100,7 @@ fn passes(device: &Device, state: &crate::ComputePipelineState, buffer: &Buffer,
         moved / (gpu / 1e3),
         (after.copied_copy_in_bytes - before.copied_copy_in_bytes) / PASSES as u64 >> 10,
         (after.copied_merge_back_bytes - before.copied_merge_back_bytes) / PASSES as u64 >> 10,
+        (after.copied_compare_threads - before.copied_compare_threads) / PASSES as u64,
     );
 }
 

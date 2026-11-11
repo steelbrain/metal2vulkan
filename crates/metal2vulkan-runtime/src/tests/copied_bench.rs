@@ -428,12 +428,13 @@ pub(super) fn bench_256(label: &str, base: &mut dyn FnMut(usize) -> Option<BaseB
         let (ins, backs) = (median(ins), median(backs));
         let rate = |bytes: u64, ms: f64| bytes as f64 / 1e6 / ms;
         eprintln!(
-            "COPIED-256 {label} {case}: copy in {ins:.2} ms ({} MB, {:.2} GB/s), merge back {backs:.2} ms ({} MB, {:.2} GB/s) (median of {RUNS}), {} base blocks read",
+            "COPIED-256 {label} {case}: copy in {ins:.2} ms ({} MB, {:.2} GB/s), merge back {backs:.2} ms ({} MB, {:.2} GB/s) (median of {RUNS}), {} base blocks read, {} threads started",
             copied_in / 1_000_000,
             rate(copied_in, ins),
             merged / 1_000_000,
             rate(merged, backs),
             read / RUNS as u64,
+            (after.compare_threads - before.compare_threads) / RUNS as u64,
         );
     };
     report("(a) nothing changed", &mut pair, &mut |_, _| {});
