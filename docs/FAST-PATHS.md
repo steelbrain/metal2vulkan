@@ -1111,13 +1111,31 @@ driver's. Each is open work.
   buffer where the device's buffers lie in plain blocks; not the runtime's own pages, which it
   imports) shares the reservation of the process's buffer objects on RADV, and its
   `vkAllocateMemory` holds every submission of the process while the kernel fills its pages (the
-  row above). The kernel fills them from its page allocator in runs of up to 4 MiB, and a run of
-  2 MiB (the size amdgpu names beneficial; Linux 7.3.3, `ttm_pool.c`) may reclaim and compact
-  memory until it succeeds or fails, under that reservation: beside a consumer's guest on a Radeon
-  780M whose host was short of free memory (RADV PHOENIX, Mesa 26.2.6), one making held the
-  submissions 228 ms, 222 ms of it one compaction for one 2 MiB run. Every block of 2 MiB or more
-  takes such runs, so no block size bounds the hold below one run's. Pooled blocks are 64 MiB on
-  every device, images' included. A driver's image takes
+  row above). `amdgpu_gem_create_ioctl` reserves the root page directory of the process's GPU
+  address space for such a buffer object (`AMDGPU_GEM_CREATE_VM_ALWAYS_VALID`) and makes the object
+  on that reservation, and `ttm_bo_init_reserved` fills its pages before the root is released
+  (`ttm_bo_validate`, `ttm_tt_populate`, `ttm_pool_alloc`; Linux 7.3.3, `amdgpu_gem.c`,
+  `ttm_pool.c`). The pages come from the page allocator in runs of up to 4 MiB, and a run of 2 MiB
+  (order 9, the order amdgpu names beneficial) is asked with `__GFP_RETRY_MAYFAIL`, so it may
+  reclaim and compact memory until it succeeds or fails. Every kernel submission of the process,
+  and every buffer object it makes, opens or imports, locks that reservation and waits meanwhile:
+  beside a consumer's guest on a Radeon 780M whose host was short of free memory (RADV PHOENIX,
+  Mesa 26.2.6), one making held the submissions 228 ms, 222 ms of it one compaction for one 2 MiB
+  run. Every block of 2 MiB or more takes such runs, so no block size bounds the hold below one
+  run's, and an image binds one memory object, so an image of 2 MiB or more takes them whatever
+  the blocks. A smaller allocation moves the hold into direct reclaim under the same reservation:
+  its runs of more than a page are asked with no reclaim, so on a host whose free memory lies in
+  single pages it takes them a page at a time, reclaiming as it goes. On a Radeon 780M
+  (`tests::reclaim_submit_bench`, 768 MiB of allocations a phase, two runs of each arm, the
+  host's free memory in single pages), allocations of 1 MiB scanned 40,438 and 66,941 pages in
+  direct reclaim a phase and the host's tasks all stalled on memory 3.5 and 1.7 s; allocations of
+  4 MiB scanned 252 and 2,147 pages, stalled 1.1 and 1.0 s; with nothing made, 4,132 pages and
+  0.8 s. The 4 MiB allocations held 33 and 0 turnarounds of 8 ms or more (the slowest 23.5 ms, the
+  slowest making 8.0 ms, far short of the guest's), the 1 MiB ones none (the slowest 6.0 ms), so
+  the measurement shows no long hold that smaller allocations remove. A 1 MiB allocation took a
+  median of 0.4 to 0.6 ms, and holding many costs a submission nothing: with 2,752 of 1 MiB held,
+  `vkQueueSubmit` took 0.096 to 0.110 ms, with 43 of 64 MiB 0.096 to 0.109 ms, with none 0.097 to
+  0.107 ms. Pooled blocks are 64 MiB on every device, images' included. A driver's image takes
   more than its texels (RADV on a Radeon 780M and ANV on an Iris Xe place a `Private`
   `RGBA8Unorm` texture of 1024x1024 in 4 MiB and 16 KiB, and one of 2048x2048 in 16 MiB and
   64 KiB, at an alignment of 64 KiB), so a block of images holds three such 2048x2048 textures
@@ -1140,17 +1158,25 @@ driver's. Each is open work.
   kernel handed the block other pages), so that the kernel compacted for both allocations: in a
   scroll of a consumer's guest, every frame gap of 100 ms or more lay within one block making's
   direct compaction (46 to 164 ms), and with no fill there were none. No other allocation avoids
-  the hold for these blocks: RADV makes every memory neither exported nor imported a buffer
-  object of the process's reservation (Mesa 26.2.6, `radv_device_memory.c`), and asks a dedicated
-  allocation of every image made for an external handle type in other than linear tiling
-  (`radv_device.c`), so a block that holds images of optimal tiling, or the
+  the hold for these blocks. RADV makes every memory neither exported nor imported a buffer
+  object of the process's reservation, a dedicated allocation (`VkMemoryDedicatedAllocateInfo`)
+  among them (Mesa 26.2.6, `radv_device_memory.c`). An image bound to exportable or imported memory
+  names its handle type (`VUID-vkBindImageMemory-memory-02728`,
+  `VUID-vkBindImageMemory-memory-02989`), RADV requires a
+  dedicated allocation of every image made for an external handle type in other than linear
+  tiling (`radv_device.c`), and such an image binds only the memory made for it
+  (`VUID-vkBindImageMemory-image-01445`), which a host pointer's import may not be
+  (`VUID-VkMemoryAllocateInfo-pNext-02806`). So a block that holds images of optimal tiling, or the
   `DRM_FORMAT_MOD_LINEAR` images over buffers that declare their padding unobserved, can be
-  neither exportable memory nor imported pages; a dedicated exportable allocation per image would
-  add each image to the buffer objects every submission names, about 1 µs a submission each on a
-  Radeon 780M (the row above). Its device-local types lie in the carve-out while it has room and
-  in system memory past it, and Vulkan reports neither the carve-out's size nor its room (the row
-  above), so no placement there is decided from the device's answers. No switch: no answer of
-  Metal's changes. Not announced.
+  neither exportable memory nor imported pages, and an image of optimal tiling lies in no host
+  pointer's import at all. A dedicated exportable allocation per image would add each image to
+  the buffer objects every submission names (RADV lists every one not of the reservation in each,
+  `radv_amdgpu_bo.c`, whatever the device enables), about 1 µs a submission each on a Radeon 780M
+  (the row above); buffers in a host pointer's import cost every submission 24.1 µs per 64 MiB
+  held there, the kernel getting their pages again in each (`submit_check.rs`). Its device-local
+  types lie in the carve-out while it has room and in system memory past it, and Vulkan reports
+  neither the carve-out's size nor its room (the row above), so no placement there is decided from
+  the device's answers. No switch: no answer of Metal's changes. Not announced.
 
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
   `new_event` and `new_shared_event` each make one timeline semaphore (`vkCreateSemaphore`,
