@@ -5293,8 +5293,8 @@ each item named states the rule in full.
   again after each making, and the exit runs it before the program's handler, after the
   destructors the driver's compiler registered at that making: that run ends the makings and
   waits for those in progress, and leaves the rest of the runtime running, so the handler's other
-  work is submitted and completes, as Metal's exit runs it. A pipeline its work needs that was
-  not made yet answers the same, failing that work.
+  work is submitted and completes, as Metal's exit runs it. A making its work needs that had not
+  begun answers the same.
 - **On a CPU device (lavapipe, SwiftShader), an exit handler the program registered before a
   later pipeline making finds the process exiting**: its waits answer `WaitWouldDeadlock` of
   `DeadlockCause::Exiting` and the work it commits stays pending, where Metal's exit runs it. A
