@@ -1051,6 +1051,7 @@ mod bind_serde_round_trips {
             primitive_id_indices: Some(metal::IndexType::UInt16),
             quad_primitive_ids: true,
             private_list: true,
+            far_vertex_buffers: BTreeSet::from([2]),
         });
         let mut shape = StageShape::default();
         shape.buffers.insert(
@@ -1113,6 +1114,7 @@ mod bind_serde_round_trips {
             primitive_id_indices: Some(metal::IndexType::UInt32),
             quad_primitive_ids: true,
             private_list: true,
+            far_vertex_buffers: BTreeSet::from([1, 30]),
         });
     }
 
