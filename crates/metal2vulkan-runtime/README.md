@@ -285,8 +285,9 @@ the record the pass is making.
   `Buffer::export_memory_fd` answers a new descriptor each call, the consumer's to close, with the
   allocation's size, the buffer's offset and length in it, whether it is a dedicated allocation
   and its memory type. An import of a shared block reaches the whole block, of which the buffer
-  is its offset and length. The buffer must outlive every import. On a device loss the memory's
-  contents are lost for the imports too, and a device made again exports new allocations. A
+  is its offset and length. The buffer must outlive every access through an import; an import
+  may outlive it unused, since each descriptor holds a reference to the allocation's payload. On
+  a device loss the memory's contents are lost for the imports too, and a device made again exports new allocations. A
   device without `VK_KHR_external_memory_fd`, or that exports no buffer's memory so, refuses it
   (`RuntimeGap::ExportableMemory`).
 - A buffer descriptor's `exported_as` (`MemoryExport::OpaqueFd` or `MemoryExport::DmaBuf`) makes

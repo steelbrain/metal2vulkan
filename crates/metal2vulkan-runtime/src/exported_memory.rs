@@ -73,10 +73,13 @@
 //!   buffer's end left standing keeps reading what the buffer held then. Nothing
 //!   is released to the other API: it writes the memory as its own, and what the runtime wrote
 //!   there before is not its to read (Vulkan's implicit acquire makes it undefined).
-//! - **Lifetime.** The buffer must outlive every import of its memory: its release frees its
-//!   dedicated allocation, or gives its bytes of a shared block to the next exportable buffer,
-//!   and what another API reads or writes through its import after that is undefined. An import
-//!   of a shared block reaches the whole block: the other API is to read and write the buffer's
+//! - **Lifetime.** The buffer must outlive every access through an import of its memory: its
+//!   release frees its dedicated allocation, or gives its bytes of a shared block to the next
+//!   exportable buffer, and what another API reads or writes through its import after that is
+//!   undefined. An import may outlive the buffer unused, and be let go of later: each descriptor
+//!   holds a reference to the allocation's payload (`vkGetMemoryFdKHR`), so the payload stays
+//!   until the import goes too, even after the runtime frees its own allocation. An import of a
+//!   shared block reaches the whole block: the other API is to read and write the buffer's
 //!   `offset` and `length` alone. The other API writes the memory only while no command of the
 //!   runtime's that uses the buffer is in flight.
 //! - **Device loss.** On a device loss the memory's contents are lost for every import of it too.
@@ -224,8 +227,9 @@ impl Device {
     /// ([`Device::new_buffer_with_descriptor`]) makes such a buffer too, of either handle type,
     /// with the descriptor's other fields.
     ///
-    /// The buffer must outlive every import of its memory. On a device loss the memory's contents
-    /// are lost, for every import too, and a device made again makes new allocations, each
+    /// The buffer must outlive every access through an import of its memory (an import may
+    /// outlive it unused: the module docs). On a device loss the memory's contents are lost, for
+    /// every import too, and a device made again makes new allocations, each
     /// exported anew.
     ///
     /// Refused as [`Device::new_buffer`] refuses it, and `NotImplemented`
@@ -434,9 +438,9 @@ impl Buffer {
     /// to close; the allocation, its size and the buffer's offset in it stay the buffer's for
     /// its life.
     ///
-    /// The buffer must outlive every import of its memory: its release frees its dedicated
-    /// allocation, or gives its bytes of a shared block to the next exportable buffer. On a device
-    /// loss the memory's contents are lost for every import too, and the call answers as the
+    /// The buffer must outlive every access through an import of its memory (an import may
+    /// outlive it unused: the module docs): its release frees its dedicated allocation, or gives
+    /// its bytes of a shared block to the next exportable buffer. On a device loss the memory's contents are lost for every import too, and the call answers as the
     /// module docs say. What the other API writes there is the device's to read once the caller
     /// says so ([`Buffer::external_write_done`]).
     ///
@@ -458,7 +462,8 @@ impl Buffer {
     /// `DRM_FORMAT_MOD_LINEAR`. Each call answers a new descriptor, the caller's to close; the
     /// allocation, its size and the buffer's offset in it stay the buffer's for its life.
     ///
-    /// The buffer must outlive every import of its memory, as for [`Buffer::export_memory_fd`].
+    /// The buffer must outlive every access through an import of its memory, as for
+    /// [`Buffer::export_memory_fd`].
     /// What the other API writes there is the device's to read once the caller says so
     /// ([`Buffer::external_write_done`]).
     ///
