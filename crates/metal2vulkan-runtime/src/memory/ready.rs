@@ -204,6 +204,10 @@ pub(super) struct Made {
     pub(super) waited: Option<Waited>,
     /// A call waited for a block as it was made.
     pub(super) waited_for: bool,
+    /// How long its making took once its wait for a burst's end was over (its allocation, and
+    /// the reads of its pages until a call waited), for the crate's tests.
+    #[cfg(test)]
+    pub(super) making: Duration,
 }
 
 /// A call's wait for a readying's block of `least` bytes or more ([`Readying::waiter`]), with no
@@ -461,6 +465,8 @@ fn spawn(
                 state.making = Some(bytes);
                 bytes
             };
+            #[cfg(test)]
+            let began = Instant::now();
             let block = ready(
                 &maker,
                 &functions,
@@ -478,6 +484,8 @@ fn spawn(
                 block,
                 waited: waited.take(),
                 waited_for,
+                #[cfg(test)]
+                making: began.elapsed(),
             });
             drop(state);
             shared.changed.notify_all();

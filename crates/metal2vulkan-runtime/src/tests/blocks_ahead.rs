@@ -417,6 +417,14 @@ impl Drop for InUse<'_> {
 /// quiet: a pool's thread makes the blocks queued while it runs one after another with no wait of
 /// their own, and on an RTX 5080 creation calls back to back beside the runtime suite's first half
 /// kept its one thread making through up to 235 calls, and through [`MOST`] beside both halves.
+///
+/// The times it holds the calls to: the call that cut a making's wait short, less that making's
+/// own time (its allocation, which the driver takes as long as it takes), within half of
+/// [`QUIET_MOST`], where a call that waited out the rest of the making's wait for quiet would take
+/// most of it; every other call within [`QUIET_MOST`], on a host that runs the test's thread
+/// within that. The making's own time is no bound: on an RTX 5080 Laptop GPU inside the runtime
+/// suite a call that waited for a hurried 64 MiB block's making took 53.4 ms in all, past
+/// [`QUIET_MOST`], where it was held to it.
 #[test]
 fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allocation_alone() {
     let scratch = Scratch::new("hurried");
@@ -427,15 +435,24 @@ fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allo
     let shared = device.shared();
     let in_use = InUse::new(&shared.queue_quiet);
     let mut held = Vec::new();
+    let waited_making = || {
+        crate::device::lock(&shared.memory)
+            .ahead_blocks()
+            .waited_making
+    };
+    // A creation call: its time, and the time of the makings it waited for (their own work, once
+    // their waits for quiet were over).
     let new_buffer = |held: &mut Vec<Buffer>| {
         assert!(
             held.len() < MOST,
             "the pool never needed its block made ahead"
         );
+        let making = waited_making();
         let made = Instant::now();
         let buffer = device.new_buffer(BUFFER_BYTES, ResourceOptions::private());
+        let took = made.elapsed();
         held.push(buffer.unwrap());
-        made.elapsed()
+        (took, waited_making().saturating_sub(making))
     };
     // The buffers' pool's first growth, made for the creation call that needs it; the next
     // creation starts its next block's making, which waits for a pause the held use never leaves.
@@ -454,7 +471,9 @@ fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allo
         counts.blocks_ahead_past_quiet_wait - before.blocks_ahead_past_quiet_wait
     };
     let hurries = |counts: &WorkCounts| counts.blocks_ahead_hurried - before.blocks_ahead_hurried;
+    // The longest call that cut no making's wait short; the one that did, and its making's time.
     let mut longest = Duration::ZERO;
+    let mut hurrying = None;
     let mut in_use = Some(in_use);
     let mut counts = before;
     while hurries(&counts) == 0 && past(&counts) < ATTEMPTS {
@@ -467,16 +486,23 @@ fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allo
             if hurries(&counts) > 0 || past(&counts) > attempt {
                 break;
             }
-            longest = longest.max(new_buffer(&mut held));
+            let (took, making) = new_buffer(&mut held);
+            match hurries(&device.work_counts()) > hurries(&counts) {
+                true => hurrying = Some((took, making)),
+                false => longest = longest.max(took),
+            }
         }
     }
     let after = device.work_counts();
     drop(in_use);
     let hurried = after.blocks_ahead_hurried - before.blocks_ahead_hurried;
+    let (hurrying, making) = hurrying.unwrap_or_default();
+    let beside = hurrying.saturating_sub(making);
     println!(
-        "BLOCKS-AHEAD {}: with a use of the queues held open, the creation calls after the pool's \
-         first growth took {longest:?} at the longest; {hurried} making hurried, {} past its wait \
-         for quiet, {} waited for, {} made ahead, {} in place",
+        "BLOCKS-AHEAD {}: with a use of the queues held open, the creation call that hurried a \
+         making took {hurrying:?}, {making:?} of it the making's own, {beside:?} beside; the \
+         others after the pool's first growth took {longest:?} at the longest; {hurried} making \
+         hurried, {} past its wait for quiet, {} waited for, {} made ahead, {} in place",
         device.name(),
         past(&after),
         after.blocks_ahead_waited_for - before.blocks_ahead_waited_for,
@@ -485,8 +511,13 @@ fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allo
     );
     assert_eq!(hurried, 1, "no making a call waited for was cut short");
     assert!(
+        beside < QUIET_MOST / 2,
+        "the creation call that hurried a making waited {beside:?} beside the making's own \
+         {making:?}, out to the making's wait for quiet"
+    );
+    assert!(
         longest < QUIET_MOST,
-        "a creation call waited {longest:?}, out to the making's wait for quiet"
+        "a creation call that hurried no making waited {longest:?}"
     );
 }
 

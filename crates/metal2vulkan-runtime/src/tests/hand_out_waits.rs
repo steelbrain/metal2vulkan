@@ -18,6 +18,15 @@
 //! GPU that runs them one after another) the times are printed (`HAND-OUT-WAITS`), and the
 //! hand-outs' paths: the staging submission or the internal one each made.
 //!
+//! Its timing assumption: the GPU runs the test's work alone, so that the busy work's fills take
+//! the time they took timed alone. Beside another process's GPU work the fills timed slow and the
+//! busy work then ended early: on an RTX 5080 Laptop GPU inside the runtime suite (beside the
+//! dma-buf leak probe) a fill timed 1.59 ms, the busy work of 378 of them was done within 270 ms
+//! of the 601 ms they predicted, and each hand-out's staging submission waited 133 ms for the GPU,
+//! so a hand-out returned after the busy work. Where a hand-out found the busy work done before
+//! half the time its fills predict, the test says that its assumption failed, not that the
+//! hand-out waited. The check rounds run it alone on the GPU.
+//!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
 use super::blit_holds::{Scratch, WAIT};
@@ -91,27 +100,35 @@ fn fills(queue: &CommandQueue, target: &Buffer, fills: u32) -> CommandBuffer {
     command_buffer
 }
 
-/// One hand-out's time, whether the busy work still ran as it returned, and the staging and
-/// internal submissions it made.
+/// One hand-out's time, whether the busy work still ran as it returned, when it returned after
+/// the busy work's submission, and the staging and internal submissions it made.
 struct HandOut {
     took: Duration,
     busy_ran: bool,
+    returned: Duration,
     staging: u64,
     internal: u64,
 }
 
 impl HandOut {
-    /// Hand out through `hand_out`, timed, reading `busy`'s status as it returns.
-    fn of(device: &Device, busy: &CommandBuffer, hand_out: impl FnOnce()) -> HandOut {
+    /// Hand out through `hand_out`, timed, reading `busy`'s status as it returns; `busy` was
+    /// submitted at `submitted`.
+    fn of(
+        device: &Device,
+        (busy, submitted): (&CommandBuffer, Instant),
+        hand_out: impl FnOnce(),
+    ) -> HandOut {
         let before = device.work_counts();
         let start = Instant::now();
         hand_out();
         let took = start.elapsed();
         let busy_ran = busy.status() != CommandBufferStatus::Completed;
+        let returned = submitted.elapsed();
         let after = device.work_counts();
         HandOut {
             took,
             busy_ran,
+            returned,
             staging: after.staging_submissions - before.staging_submissions,
             internal: after.internal_submissions - before.internal_submissions,
         }
@@ -196,7 +213,7 @@ fn a_hand_out_makes_its_own_first_work_without_waiting_for_another_queue_s_work(
         .new_buffer(PICTURE, ResourceOptions::private())
         .unwrap();
     assert!(firsts.fills_wait(buffer.at(0).0), "the buffer's zeros wait");
-    let handed = HandOut::of(&device, &busy, || {
+    let handed = HandOut::of(&device, (&busy, started), || {
         // SAFETY: the handle is not used.
         let _ = unsafe { buffer.vk_buffer() };
     });
@@ -213,7 +230,7 @@ fn a_hand_out_makes_its_own_first_work_without_waiting_for_another_queue_s_work(
                 firsts.fills_wait(exportable.at(0).0),
                 "the picture's zeros wait"
             );
-            let exported = HandOut::of(&device, &busy, || {
+            let exported = HandOut::of(&device, (&busy, started), || {
                 drop(exportable.export_memory_fd().unwrap());
             });
             lines.push(exported.line("export_memory_fd"));
@@ -229,7 +246,7 @@ fn a_hand_out_makes_its_own_first_work_without_waiting_for_another_queue_s_work(
     descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
     descriptor.resource_options = ResourceOptions::private();
     let texture = device.new_texture(&descriptor).unwrap();
-    let image = HandOut::of(&device, &busy, || {
+    let image = HandOut::of(&device, (&busy, started), || {
         // SAFETY: the handle is not used.
         let _ = unsafe { texture.vk_image() };
     });
@@ -265,6 +282,25 @@ fn a_hand_out_makes_its_own_first_work_without_waiting_for_another_queue_s_work(
         (0, 1),
         "{name}: vk_image's submission"
     );
+    // The timing assumption (the module docs): the busy work runs about as long as its fills
+    // timed alone predict, so a hand-out that found it done before half that time found it done
+    // early, not by waiting for it.
+    let predicted = each * count;
+    let early = (buffers.iter().map(|(handed, _)| handed))
+        .chain([&image])
+        .filter(|handed| !handed.busy_ran)
+        .map(|handed| handed.returned)
+        .min()
+        .filter(|&done_by| done_by < predicted / 2);
+    if let Some(done_by) = early {
+        panic!(
+            "{name}: the busy work was done within {:.0} ms of its submission, where its fills \
+             timed alone predict {:.0} ms: other GPU work ran beside the test's timing of the \
+             fills (the test's timing assumption: the GPU runs its work alone)",
+            done_by.as_secs_f64() * 1e3,
+            predicted.as_secs_f64() * 1e3
+        );
+    }
     if staging || beside_family {
         for (handed, what) in &buffers {
             assert!(handed.busy_ran, "{name}: {what} waited for the busy work");

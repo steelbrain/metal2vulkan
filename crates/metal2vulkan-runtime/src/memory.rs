@@ -2188,6 +2188,11 @@ pub(super) struct AheadBlocks {
     /// of every pool.
     #[cfg(test)]
     pub(super) images_waited_for: u64,
+    /// Of `waited_for`, the time their makings took once their waits for a burst's end were over
+    /// (`ready::Made::making`), for the crate's tests: what a call that waited for one waited for
+    /// beside the wait for a burst's end.
+    #[cfg(test)]
+    pub(super) waited_making: Duration,
 }
 
 impl AheadBlocks {
@@ -2921,6 +2926,10 @@ impl Memory {
         let bytes = made.block.size;
         self.add_block(pool, made.block, bytes, false, 0);
         self.ahead.made_ahead(pool.0, made.waited_for, made.waited);
+        #[cfg(test)]
+        if made.waited_for {
+            self.ahead.waited_making += made.making;
+        }
         if self.host_copy_pool == Some(Some(pool)) {
             self.host_copy_blocks.readied += 1;
         }
