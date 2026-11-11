@@ -491,37 +491,46 @@ impl Buffer {
     /// descriptors, and `RGBA8Unorm` and `BGRA8Unorm`):
     ///
     /// - **Taken at use.** The first command of an encoder that uses any of its levels after its
-    ///   making, or after [`Texture::did_modify_data`](crate::Texture::did_modify_data), takes the
-    ///   copy: before that command, the bytes are copied into its first level and every later
-    ///   level is made from the one above by the device's blit chain, as `generate_mipmaps` makes
-    ///   them (announced as `device-filtered-mipmaps`). The copy is taken as that command is
-    ///   encoded and runs on the GPU in its command buffer's order, so it reads the bytes as they
-    ///   are when the command buffer runs: a CPU write made after the making and before then is in
-    ///   every level (on the Macs, at once or 100 ms after the making). Between takes nothing
-    ///   moves: a CPU write of the bytes reaches no level, nor does a GPU write of them (not
-    ///   measured on a Mac), and what the GPU writes into any level (a blit, a pass, a function's
-    ///   write) stays in the texture and never reaches the bytes or, written into the first, the
-    ///   later levels.
-    /// - **CPU calls.** `get_bytes` and `replace_region` read and write every level in the image,
-    ///   the first too. Before the first use a read gives what the image holds, zeros in a
-    ///   `Shared` or `Managed` texture, as a new texture of the runtime's own; Metal's answer
-    ///   there is not measured. A `replace_region` before a take is overwritten by it.
-    /// - **Formats.** For a format the device's blits do not filter (one `generate_mipmaps` makes
-    ///   by the integer picks or the compute filter), the copy moves the first level alone and the
-    ///   later levels keep what they hold (docs/FAST-PATHS.md, known gaps).
+    ///   making, or after [`Texture::did_modify_data`](crate::Texture::did_modify_data) or a
+    ///   `replace_region` of its first level, takes the copy: before that command, the bytes are
+    ///   copied into its first level and every later level is made from the first as
+    ///   `generate_mipmaps` makes them for its format: the device's blit chain or the compute
+    ///   filter (both announced as `device-filtered-mipmaps`), or for an integer format plain
+    ///   Metal's texel picks. The copy is taken as that command is encoded and runs on the GPU in
+    ///   its command buffer's order, so it reads the bytes as they are when the command buffer
+    ///   runs: a CPU write made after the making and before then is in every level (on the Macs,
+    ///   at once or 100 ms after the making). Between takes nothing moves: a CPU write of the
+    ///   bytes reaches no level, nor does a GPU write of them (not measured on a Mac), and what
+    ///   the GPU writes into any level (a blit, a pass, a function's write) stays in the texture
+    ///   and never reaches the bytes or, written into the first, the later levels.
+    /// - **CPU calls.** `get_bytes` and `replace_region` of the first level read and write the
+    ///   buffer's bytes, as the Macs' do, whatever the GPU wrote into that level; a
+    ///   `replace_region` there makes the next use take the copy again, as `did_modify_data`
+    ///   does. Of a later level they read and write the image, whose texels the GPU reads until
+    ///   the next take makes that level again. What differs from a Mac: there a `replace_region`
+    ///   of a later level never reaches the GPU, and what `get_bytes` reads there is not
+    ///   measured.
+    /// - **Formats.** For a format `generate_mipmaps` leaves as it is (a depth or stencil one) or
+    ///   refuses on the device, and where the scratch of its compute filter or its picks passes
+    ///   the device's limits, the copy moves the first level alone and the later levels keep what
+    ///   they hold (docs/FAST-PATHS.md, known gaps).
     /// - **What else differs.** It takes the buffer's resource options, as `new_texture`'s
     ///   texture does, so a texture over a `Shared` buffer answers `Shared`, as the Macs do. A
     ///   view in a format the image takes no Vulkan view of, and a binding beyond the texture's
     ///   usage, are refused (`Unsupported`), where a texture of one level over a buffer takes them
     ///   through a shadow of the bytes. While the buffer's bytes are detached (`detach_backing`)
-    ///   it keeps its image, every level of which its commands and CPU calls read and write, as a
-    ///   Mac's texture's own memory; a take while they are detached is a copy out of them, a
-    ///   command that names the buffer (`detach.rs`).
+    ///   it keeps its image, every level of which its commands read and write, as a Mac's
+    ///   texture's own memory, and its CPU calls the levels past the first; theirs of the first
+    ///   level, the bytes, are refused meanwhile (`NotImplemented(DetachedTexelAccess)`), as a
+    ///   one-level texture's are. A take while they are detached is a copy out of them, a command
+    ///   that names the buffer (`detach.rs`).
     ///
     /// Announced once (`shadowed-texture`, naming the levels), counted in
     /// `WorkCounts::shadowed_textures`, each take's copy in `WorkCounts::shadow_texels_copied_in`
-    /// (its first level's texels alone); nothing is ever counted in
-    /// `WorkCounts::shadow_texels_copied_back`.
+    /// (its first level's texels alone) and a take by the compute filter in
+    /// `WorkCounts::mipmaps_filtered`; nothing is ever counted in
+    /// `WorkCounts::shadow_texels_copied_back`. A take whose compute filter or picks find no room
+    /// for their scratch in the device's memory fails its command buffer.
     ///
     /// Refused as [`new_texture`](Self::new_texture) is, but for the levels: more levels than the
     /// extent's full chain (`Invalid`, `TextureProblem`), and a texture buffer of more than one

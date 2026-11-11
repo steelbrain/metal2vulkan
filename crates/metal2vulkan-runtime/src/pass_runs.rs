@@ -201,6 +201,7 @@ impl RunMerge {
                     area: None,
                     cause: None,
                     moves: None,
+                    later: None,
                     clear: None,
                 }))
             }

@@ -448,17 +448,20 @@ buffer's rows at the offset and pitch, taken at its first use, as on an x86 Mac 
 5300M and an Intel UHD Graphics 630 under macOS 26.7.1). Over any buffer such a texture is one
 image of its own holding every level (`shadowed-texture`, naming the levels;
 `TextureShadowReason::Mipmapped`). The first command of an encoder that uses any of its levels
-after its making, or after `Texture::did_modify_data` (Metal's private `didModifyData`), takes the
-copy before that command: the bytes into its first level, then every later level made from the one
-above by the device's blit chain, as `generate_mipmaps` makes them (`device-filtered-mipmaps`). The
-copy is taken as that command is encoded and runs in its command buffer's order on the GPU, so it
-reads the bytes as they are when the command buffer runs. Between takes no write of the bytes
-reaches a level, and nothing the GPU writes into a level reaches the bytes or the other levels.
-`get_bytes` and `replace_region` reach every level in the image; before the first use they read
-what the image holds (zeros in a `Shared` or `Managed` texture; not measured on a Mac). While the
+after its making, or after `Texture::did_modify_data` (Metal's private `didModifyData`) or a
+`replace_region` of its first level, takes the copy before that command: the bytes into its first
+level, then every later level made from the first as `generate_mipmaps` makes them for the format:
+the device's blit chain or the compute filter (`device-filtered-mipmaps`), or an integer format's
+texel picks. The copy is taken as that command is encoded and runs in its command buffer's order on
+the GPU, so it reads the bytes as they are when the command buffer runs. Between takes no write of
+the bytes reaches a level, and nothing the GPU writes into a level reaches the bytes or the other
+levels. `get_bytes` and `replace_region` of the first level read and write the buffer's bytes, as
+the Macs' do, and of a later level the image (an accepted difference, section 10). While the
 buffer's bytes are detached (`detach_backing`) it keeps its own image, every level read and written
-as before. A format the device's blits do not filter has its first level copied and its later levels
-left as they are (docs/FAST-PATHS.md, known gaps).
+by its commands as before and the later levels by its CPU calls; their calls on the first level are
+refused meanwhile (`NotImplemented(DetachedTexelAccess)`), as a one-level texture's are. A format
+`generate_mipmaps` leaves as it is or refuses has its first level copied and its later levels left
+as they are (docs/FAST-PATHS.md, known gaps).
 A texture of one level is `new_texture`'s, in place where that is.
 On a discrete GPU, a `Managed` texture over a no-copy buffer's bytes (not an IOSurface plane's)
 that only samples or reads, whose policy takes the image in place, over memory that carries a log
@@ -4879,6 +4882,13 @@ each item named states the rule in full.
   does not reproduce the loss.
 - **A heap's buffer and texture over the same bytes alias them, in the device's layout**, not
   Apple's tiled or compressed one.
+- **A tiled texture's `replace_region` of a later level reaches the GPU**
+  (`Buffer::new_tiled_texture`, more than one level; `Texture::replace_region`): it writes the
+  texture's image, which its commands read until the next take of its copy makes that level again.
+  Two x86 Macs (an AMD Radeon Pro 5300M and an Intel UHD Graphics 630 under macOS 26.7.1) never
+  showed such a write to the GPU; what their `getBytes` reads of a later level is not measured. The
+  runtime's `get_bytes` there reads the image. The first level is Metal's on both calls: the
+  buffer's bytes.
 - **A heap's one-plane YCbCr texture whose rows share bytes keeps the earlier row's bytes
   there.** Metal's blits lay a one-plane YCbCr texture's rows of 16 bytes or more that are not a
   multiple of 16 the row rounded down to 16 bytes apart, so consecutive rows share the row's last

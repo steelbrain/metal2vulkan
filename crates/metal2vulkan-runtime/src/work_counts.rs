@@ -4749,7 +4749,8 @@ pub struct WorkCounts {
     pub addressable_buffers_made: u64,
     /// `generate_mipmaps` calls that ran the compute filter, of a format the device's blits
     /// cannot filter, rather than the blit chain (`mipmap_filter.rs`; the chain's blits count in
-    /// [`image_blits_recorded`](Self::image_blits_recorded)): the lanes that make mipmaps hold
+    /// [`image_blits_recorded`](Self::image_blits_recorded)), and takes of a tiled texture's copy
+    /// whose later levels it makes (`Buffer::new_tiled_texture`): the lanes that make mipmaps hold
     /// themselves to them.
     pub mipmaps_filtered: u64,
     /// `generate_mipmaps` calls that read the first level in place through a sampled view, not

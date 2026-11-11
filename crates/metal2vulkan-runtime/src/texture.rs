@@ -58,7 +58,6 @@ use super::address_map::AddressModeMap;
 use super::attachment_stand_in::KeptBacking;
 use super::attributes::PurgeableState;
 use super::binding_view::{binding_view, texture_facts, VkView};
-use super::blit_texture::announce_mipmaps;
 use super::buffer::{Buffer, CallerMemory, HostPages, MemoryHold, NotedTexture};
 use super::buffer_texture::{Texels, TexelsHome};
 use super::churn_counts::{Owned, Recycled};
@@ -90,7 +89,6 @@ use super::in_place::{self, PagesClass, Refusal, ShadowCause, Verdict};
 use super::key_hash::KeyMap;
 use super::linear_plan::{aliases, check_linear_limits, linear_lack, LinearImage, LinearLack};
 use super::memory::{BoundMemory, MemoryClass, Placement, FD_BLOCKS_HANDLE};
-use super::mipmap_plan::{plan_mipmaps, MipmapPlan};
 use super::nan_clear;
 use super::neutral::Neutrals;
 use super::pvrtc::{
@@ -100,7 +98,7 @@ use super::recycle::{self, ImageMaking, Recycler};
 use super::resource::{Identity, ObjectId, ResourceKey};
 use super::resource_ids::{Holder, IdHold, IdPlacement, IdSpace, ResourceId};
 use super::retained::HeldBy;
-use super::shadow::ShadowCopies;
+use super::shadow::{LaterLevels, ShadowCopies};
 use super::shadow_copy_back::{self, with_word_view, WordView};
 use super::shadow_merge::{with_unorm_view, UnormView};
 use super::sharing::Sharing;
@@ -2644,22 +2642,15 @@ impl Device {
         let views = (words, unorm);
         let copies = texels.shadow_copies(image.raw.get(), image.identity, aspects, views)?;
         // A tiled texture of more than one level is a copy of the bytes taken at use, its later
-        // levels made from its first by the device's blit chain, as `generate_mipmaps` makes them
-        // (`Buffer::new_tiled_texture`). A format the device's blits do not filter keeps its
-        // later levels as they are (docs/FAST-PATHS.md, known gaps).
+        // levels made from its first as `generate_mipmaps` makes them for its format: the
+        // device's blit chain, the compute filter or the integer picks
+        // (`Buffer::new_tiled_texture`, `shadow::LaterLevels`).
         let copies = match levels {
             1 => copies,
             levels => {
                 let record = ViewRecord::of_descriptor(layout, descriptor);
-                let defects = &self.properties().driver_defects;
-                let blits = match plan_mipmaps(&record, image.plan(), &facts, defects) {
-                    Ok(MipmapPlan::Blits(blits)) => {
-                        announce_mipmaps(self, &record, "the device's blit chain");
-                        blits
-                    }
-                    _ => Vec::new(),
-                };
-                copies.taken_at_use(levels, blits)
+                let later = LaterLevels::of(self, &record, image.plan(), &facts);
+                copies.taken_at_use(levels, later)
             }
         };
         // Its copies keep its own image, which it presents again once the bytes lie in pages. A
@@ -5271,6 +5262,14 @@ impl Texture {
         matches!(self.storage(), Storage::Shadow { image, .. } if image.plan().levels > 1)
     }
 
+    /// Whether the CPU's `get_bytes` and `replace_region` of the texture's `level` (a view's,
+    /// from its own first) reach its image alone: a tiled texture's level past its root's first
+    /// ([`tiled_levels`](Self::tiled_levels)), which lies apart from the buffer's bytes. Its first
+    /// level is the bytes to the CPU, as on a Mac.
+    fn level_in_image(&self, level: u64) -> bool {
+        self.tiled_levels() && u64::from(self.0.record.base_level) + level > 0
+    }
+
     /// `didModifyData` (Metal's private `MTLTexture` method): the bytes a tiled texture of more
     /// than one level is over changed (`Buffer::new_tiled_texture`), so it takes its copy of them
     /// again at its next use. The first command of an encoder that uses any of its levels after
@@ -5279,9 +5278,10 @@ impl Texture {
     /// before, and a CPU write of the bytes reaches no level. Metal takes it at the next use, not
     /// at the call: a CPU write made after the call and before that use is in every level (two x86
     /// Macs, an AMD Radeon Pro 5300M and an Intel UHD Graphics 630, under macOS 26.7.1). A view of
-    /// such a texture marks its texture's copy. On any other texture the call does nothing: one
-    /// over a buffer's bytes reads them as they lie, and one of its own holds no copy of any
-    /// (Metal's answer there is not measured).
+    /// such a texture marks its texture's copy, and so does a `replace_region` of its first level
+    /// (the bytes). On any other texture the call does nothing: one over a buffer's bytes reads
+    /// them as they lie, and one of its own holds no copy of any (Metal's answer there is not
+    /// measured).
     pub fn did_modify_data(&self) {
         if let Some(levels) = self.shadow().and_then(|copies| copies.levels.as_ref()) {
             levels.mark_stale();
@@ -6213,11 +6213,11 @@ impl Texture {
 
     /// Refused (`NotImplemented(DetachedTexelAccess)`) while the bytes the texture is over (its
     /// root's, for a view) are detached (`detach.rs`): Metal's CPU access reaches the pages the
-    /// texture took as it was made, which the runtime does not keep. But a tiled texture's
-    /// ([`tiled_levels`](Self::tiled_levels)), whose image is its own copy of the bytes, every
-    /// level of which its CPU calls read and write, as a Mac's texture's own memory.
-    fn refuse_detached_texels(&self) -> Result<(), Error> {
-        if self.tiled_levels() {
+    /// texture took as it was made, which the runtime does not keep. But a tiled texture's level
+    /// past its first ([`level_in_image`](Self::level_in_image)), which its image alone holds, as
+    /// a Mac's texture's own memory: the CPU reads and writes it there.
+    fn refuse_detached_texels(&self, level: u64) -> Result<(), Error> {
+        if self.level_in_image(level) {
             return Ok(());
         }
         let root = self.root();
@@ -6522,6 +6522,13 @@ impl Texture {
     /// texture buffer's is refused (`Invalid`, `StorageMode`): plain Metal's process faults in
     /// the call.
     ///
+    /// A tiled texture of more than one level ([`Buffer::new_tiled_texture`]): a write of its
+    /// first level writes the buffer's bytes and makes its next use take its copy of them again,
+    /// as [`did_modify_data`](Self::did_modify_data) does (two x86 Macs, an AMD Radeon Pro 5300M
+    /// and an Intel UHD Graphics 630, under macOS 26.7.1). A write of a later level writes its
+    /// image, which the GPU reads until the next take makes that level again, where the Macs'
+    /// GPU never sees it.
+    ///
     /// A PVRTC texture's whole level takes its blocks in plain Metal's CPU order, Z order with
     /// the y bit lowest, at a `bytes_per_row` of 0 or of the level's row of blocks and above,
     /// where plain Metal moves the level's bytes contiguously and ignores the pitch
@@ -6589,7 +6596,7 @@ impl Texture {
         else {
             return Ok(());
         };
-        self.refuse_detached_texels()?;
+        self.refuse_detached_texels(level)?;
         if copy
             .host
             .host_len()
@@ -6616,13 +6623,20 @@ impl Texture {
         };
         let image = match self.storage() {
             Storage::Image(image) => image,
-            // A tiled texture's every level lies in its image, a copy of the bytes
+            // A tiled texture's levels past the first lie in its image alone
             // (`Buffer::new_tiled_texture`).
-            Storage::Shadow { image, .. } if self.tiled_levels() => image,
-            Storage::Texels(texels)
-            | Storage::Alias { texels, .. }
-            | Storage::Shadow { texels, .. } => {
+            Storage::Shadow { image, .. } if self.level_in_image(level) => image,
+            Storage::Texels(texels) | Storage::Alias { texels, .. } => {
                 return texels.write(CALL, &image_region, &host, bytes.slice())
+            }
+            // A tiled texture's first level is the buffer's bytes: written, the texture takes its
+            // copy again at its next use, as after `did_modify_data` (two x86 Macs).
+            Storage::Shadow { texels, copies, .. } => {
+                texels.write(CALL, &image_region, &host, bytes.slice())?;
+                if let Some(levels) = &copies.levels {
+                    levels.mark_stale();
+                }
+                return Ok(());
             }
         };
         // A heap shadow's texels are the heap's bytes (but a two-plane texture's later levels').
@@ -6771,7 +6785,10 @@ impl Texture {
     /// them, and images closer than a region's rows are written in turn, the later image's bytes
     /// staying. A combined depth/stencil format reads its depth, and its stencil view
     /// (`X32Stencil8`) the stencil, a byte a texel. A PVRTC texture's whole level gives its blocks
-    /// in plain Metal's CPU order.
+    /// in plain Metal's CPU order. A tiled texture of more than one level
+    /// ([`Buffer::new_tiled_texture`]) reads its first level in the buffer's bytes, whatever the
+    /// GPU wrote into that level, as two x86 Macs do, and a later level in its image (Metal's
+    /// answer there is not measured).
     ///
     /// Refused as [`replace_region`](Self::replace_region) is.
     pub fn get_bytes(
@@ -6789,7 +6806,7 @@ impl Texture {
         else {
             return Ok(());
         };
-        self.refuse_detached_texels()?;
+        self.refuse_detached_texels(level)?;
         if copy
             .host
             .host_len()
@@ -6946,9 +6963,9 @@ impl Texture {
     ) -> Result<(), Error> {
         let image = match self.storage() {
             Storage::Image(image) => image,
-            // A tiled texture's every level lies in its image, a copy of the bytes
-            // (`Buffer::new_tiled_texture`).
-            Storage::Shadow { image, .. } if self.tiled_levels() => image,
+            // A tiled texture's levels past the first lie in its image alone; its first is the
+            // buffer's bytes (`Buffer::new_tiled_texture`).
+            Storage::Shadow { image, .. } if self.tiled_levels() && image_region.level > 0 => image,
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
             | Storage::Shadow { texels, .. } => {
@@ -7085,9 +7102,9 @@ impl Texture {
                 (unit, false)
             }
             Storage::Texels(texels) | Storage::Alias { texels, .. } => (texels.unit(), true),
-            // A tiled texture's every level lies in its image, copied as an image's
-            // (`Buffer::new_tiled_texture`).
-            Storage::Shadow { texels, .. } => (texels.unit(), !self.tiled_levels()),
+            // A tiled texture's levels past the first lie in its image, copied as an image's; its
+            // first is the buffer's bytes (`Buffer::new_tiled_texture`).
+            Storage::Shadow { texels, .. } => (texels.unit(), !self.level_in_image(level)),
         };
         let region = texture_region(region, level, slice)
             .ok_or_else(|| invalid(call, Problem::Copy(CopyProblem::Region)))?;

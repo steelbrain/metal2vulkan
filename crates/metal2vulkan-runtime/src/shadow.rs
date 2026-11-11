@@ -232,23 +232,30 @@
 //!   in every level that use reads; one made after it reaches none; and a blit into the first
 //!   level reaches neither the bytes nor the later levels. A GPU write of the bytes is not
 //!   measured: here it reaches no level either, as a CPU write). The
-//!   first command of an encoder that uses any of its levels after a making or a call takes the
-//!   copy ([`LevelsCopy`], at that command's encoding): before the command, a copy in of every
-//!   texel of the first level, and the device's blit chain, which makes each later level from the
-//!   one above as `generate_mipmaps` makes it (`mipmap_plan.rs`). It runs on the GPU in its command
-//!   buffer's order, so it reads the bytes as they are when the command buffer runs, after its
-//!   commit. Every other use copies nothing in, whatever wrote the bytes, and nothing written
-//!   through the image is copied back or merged: it stays in the image, as a Mac's texture's own
-//!   memory keeps it. A use whose encoding is left out of its command buffer's work
-//!   ([`ShadowSync::forget`]) leaves the copy to the next use. For a format the device's blits do
-//!   not filter, the copy in moves the first level alone and the later levels keep what they hold
-//!   (docs/FAST-PATHS.md, known gaps).
+//!   first command of an encoder that uses any of its levels after a making or a call (or a
+//!   `replace_region` of its first level, which writes the bytes) takes the copy ([`LevelsCopy`],
+//!   at that command's encoding): before the command, a copy in of every texel of the first
+//!   level, then each later level made from the first as `generate_mipmaps` makes it for the
+//!   format ([`LaterLevels`], `mipmap_plan.rs`): the device's blit chain, or the compute filter's
+//!   or the integer picks' run over a scratch of their own, made as the encoder takes the copy
+//!   ([`LaterRun`]), all of it transfers of the image and dispatches over the scratch alone,
+//!   between barriers. It runs on the GPU in its command buffer's order, so it reads the bytes as
+//!   they are when the command buffer runs, after its commit. Every other use copies nothing in,
+//!   whatever wrote the bytes, and nothing written through the image is copied back or merged: it
+//!   stays in the image, as a Mac's texture's own memory keeps it. A use whose encoding is left
+//!   out of its command buffer's work ([`ShadowSync::forget`]) leaves the copy to the next use.
+//!   For a format `generate_mipmaps` leaves as it is or refuses, the copy in moves the first level
+//!   alone and the later levels keep what they hold (docs/FAST-PATHS.md, known gaps).
 
+use super::blit_texture::announce_mipmaps;
 use super::buffer::{Buffer, CallerMemory, WeakBuffer};
 use super::dirty_pages::{CopyInGate, ShadowLog};
 use super::error::{Error, RuntimeGap};
+use super::image_plan::{ImageFacts, ImagePlan};
 use super::mipmap::record_blit;
-use super::mipmap_plan::MipBlit;
+use super::mipmap_filter::{filter_chain, FilterRun};
+use super::mipmap_pick::{picks_fit, PickRun};
+use super::mipmap_plan::{plan_mipmaps, MipBlit, MipmapPlan, PickPlan};
 use super::residency::Residency;
 use super::resource::ResourceKey;
 use super::rotated::{RotatedCopies, Turn};
@@ -262,7 +269,7 @@ use super::texture::heap_two_planes::{HeapPlaneCopies, TwoPlaneHeapLayout};
 use super::texture::Texture;
 use super::tracker::{Access, Barrier, Use, UseRange};
 use super::values::StorageMode;
-use super::view_plan::reinterpretation_refused;
+use super::view_plan::{reinterpretation_refused, ViewRecord};
 use super::ycbcr::{YCbCrConversion, YCbCrWriteBack};
 use super::Device;
 use crate::device::functions::Vk;
@@ -309,34 +316,109 @@ pub(super) struct ShadowCopies {
 /// A tiled texture's image of every level over a buffer's bytes (`Buffer::new_tiled_texture`), a
 /// copy of them taken at use, as an x86 Mac's GPU takes it (the module's **Copies taken at
 /// use**): the first command of an encoder that uses any of its levels after the texture was made,
-/// or after `Texture::did_modify_data`, copies the bytes into its first level and makes every
-/// later level from the first by the device's blit chain, before that command; no other command
-/// copies anything in, and nothing it writes is copied back.
+/// or after `Texture::did_modify_data` (or a `replace_region` of its first level), copies the
+/// bytes into its first level and makes every later level from the first as `generate_mipmaps`
+/// makes them ([`LaterLevels`]), before that command; no other command copies anything in, and
+/// nothing it writes is copied back.
 pub(super) struct LevelsCopy {
-    /// Whether the next use takes the copy: set as the texture is made and by
-    /// `Texture::did_modify_data`, taken by the encoder whose command uses the texture first
-    /// after.
+    /// Whether the next use takes the copy: set as the texture is made, by
+    /// `Texture::did_modify_data` and by a `replace_region` of the first level, taken by the
+    /// encoder whose command uses the texture first after.
     stale: AtomicBool,
-    /// The blit chain that makes each later level from the one above after the copy
-    /// (`mipmap_plan.rs`); empty for a format the device's blits do not filter, whose later
-    /// levels keep what they hold (docs/FAST-PATHS.md, known gaps).
-    blits: Vec<MipBlit>,
+    /// How each take makes the later levels from the first after the copy.
+    later: LaterLevels,
     /// The image's aspects.
     aspects: vk::ImageAspectFlags,
 }
 
+/// How a copy taken at use makes its later levels from its first, right after its copy into the
+/// first: as `generate_mipmaps` makes them for the texture's format (`mipmap_plan.rs`).
+pub(super) enum LaterLevels {
+    /// The device's blit chain, each level the linear blit of the one above (`mipmap.rs`).
+    Blits(Vec<MipBlit>),
+    /// The runtime's compute filter (`mipmap_filter.rs`) of the levels the record presents, its
+    /// first level copied into the scratch.
+    Filter(ViewRecord),
+    /// The texel picks of an integer format (`mipmap_pick.rs`) of the levels the record presents.
+    Picks(ViewRecord, PickPlan),
+    /// None: the later levels keep what they hold. A format `generate_mipmaps` leaves as it is (a
+    /// depth or stencil one) or refuses on the device, and a filter or picks whose scratch passes
+    /// the device's limits (docs/FAST-PATHS.md, known gaps).
+    Kept,
+}
+
+impl LaterLevels {
+    /// How a tiled texture presenting `record`, whose image is `image`, makes its later levels on
+    /// `device` with `facts`: `generate_mipmaps`' plan of it (`plan_mipmaps`), where its scratch
+    /// fits the device's limits, announced as that call announces it (`device-filtered-mipmaps`
+    /// for the blit chain and the compute filter; nothing for the picks, plain Metal's own
+    /// answer).
+    pub(super) fn of(
+        device: &Device,
+        record: &ViewRecord,
+        image: &ImagePlan,
+        facts: &ImageFacts<'_>,
+    ) -> LaterLevels {
+        let defects = &device.properties().driver_defects;
+        let later = match plan_mipmaps(record, image, facts, defects) {
+            Ok(MipmapPlan::Blits(blits)) if !blits.is_empty() => LaterLevels::Blits(blits),
+            Ok(MipmapPlan::Filter) if filter_chain(device, record, None).is_some() => {
+                LaterLevels::Filter(*record)
+            }
+            Ok(MipmapPlan::Picks(picks)) if picks_fit(device, &picks) => {
+                LaterLevels::Picks(*record, picks)
+            }
+            _ => LaterLevels::Kept,
+        };
+        match &later {
+            LaterLevels::Blits(_) => announce_mipmaps(device, record, "the device's blit chain"),
+            LaterLevels::Filter(_) => {
+                announce_mipmaps(device, record, "the runtime's compute filter");
+            }
+            LaterLevels::Picks(..) | LaterLevels::Kept => {}
+        }
+        later
+    }
+}
+
+/// What one take of a copy taken at use records past its copy in where the compute filter or the
+/// picks make its later levels ([`LaterLevels`]): their scratch and commands, made as the encoder
+/// takes the copy (`EncoderCore::later_runs`) and held by its command buffer until it completes.
+pub(super) enum LaterRun {
+    Filter(Box<FilterRun>),
+    Picks(PickRun),
+}
+
+impl LaterRun {
+    /// Record the run over `image`.
+    ///
+    /// # Safety
+    ///
+    /// As [`FilterRun::record`]'s and [`PickRun::record`]'s.
+    unsafe fn record(&self, device: &Vk, command_buffer: vk::CommandBuffer, image: vk::Image) {
+        // SAFETY: the caller's contract.
+        unsafe {
+            match self {
+                LaterRun::Filter(run) => run.record(device, command_buffer, image),
+                LaterRun::Picks(run) => run.record(device, command_buffer, image),
+            }
+        }
+    }
+}
+
 impl LevelsCopy {
-    /// A copy to take at the texture's first use, its later levels made by `blits` over
+    /// A copy to take at the texture's first use, its later levels made as `later` says over
     /// `aspects`.
-    pub(super) fn new(blits: Vec<MipBlit>, aspects: vk::ImageAspectFlags) -> LevelsCopy {
+    pub(super) fn new(later: LaterLevels, aspects: vk::ImageAspectFlags) -> LevelsCopy {
         LevelsCopy {
             stale: AtomicBool::new(true),
-            blits,
+            later,
             aspects,
         }
     }
 
-    /// Take the copy at the next use again (`Texture::did_modify_data`).
+    /// Take the copy at the next use again (`Texture::did_modify_data`, and a `replace_region` of
+    /// the first level, which writes the bytes).
     pub(super) fn mark_stale(&self) {
         self.stale.store(true, Ordering::Release);
     }
@@ -347,23 +429,64 @@ impl LevelsCopy {
         self.stale.swap(false, Ordering::AcqRel)
     }
 
-    /// Record the later levels' blit chain after the copy into the first, on `image`.
+    /// Whether a take records a run made for it ([`run`](Self::run)): the compute filter's or
+    /// the picks'.
+    pub(super) fn runs(&self) -> bool {
+        matches!(self.later, LaterLevels::Filter(_) | LaterLevels::Picks(..))
+    }
+
+    /// What a take records past its copy in where the compute filter or the picks make the later
+    /// levels, made now on `device`; `None` for the blit chain, or none. Refused where it cannot
+    /// be made: a compute filter whose scratch the device's memory has no room for
+    /// (`NotImplemented(MipmapGeneration)`, as `generate_mipmaps` refuses it), and the picks'
+    /// scratch as a buffer of the runtime's own is.
+    pub(super) fn run(&self, device: &Device) -> Result<Option<LaterRun>, Error> {
+        let gap = || Error::Unsupported(Unsupported::not_implemented(Feature::MipmapGeneration));
+        match &self.later {
+            LaterLevels::Filter(record) => {
+                let chain = filter_chain(device, record, None).ok_or_else(gap)?;
+                let run = FilterRun::new(device, &chain, record, self.aspects, None)?;
+                Ok(Some(LaterRun::Filter(Box::new(run.ok_or_else(gap)?))))
+            }
+            LaterLevels::Picks(record, plan) => {
+                let run = PickRun::new(device, plan, record, self.aspects)?;
+                Ok(Some(LaterRun::Picks(run)))
+            }
+            LaterLevels::Blits(_) | LaterLevels::Kept => Ok(None),
+        }
+    }
+
+    /// Record the later levels after the copy into the first, on `image`: the blit chain, or
+    /// `run` where the take made one ([`run`](Self::run); none where it could not be made, which
+    /// failed its command buffer).
     ///
     /// # Safety
     ///
     /// `command_buffer` is recording outside a render pass, right after the copy into the first
-    /// level; the image is live until it completes, in the `GENERAL` layout, with the transfer
-    /// usages and its format's blit and linear-filter features (`plan_mipmaps` planned the chain).
+    /// level; the image and `run` are live until it completes, the image in the `GENERAL`
+    /// layout, with the transfer usages and the features its format's plan needs (`plan_mipmaps`
+    /// planned it).
     unsafe fn record_levels(
         &self,
         device: &Vk,
         command_buffer: vk::CommandBuffer,
         image: vk::Image,
+        run: Option<&LaterRun>,
     ) {
-        for blit in &self.blits {
-            // SAFETY: the caller's contract; each blit reads the level the one before wrote.
-            unsafe { Barrier::everything().record(device, command_buffer) };
-            record_blit(device, command_buffer, image, self.aspects, blit);
+        if let LaterLevels::Blits(blits) = &self.later {
+            for blit in blits {
+                // SAFETY: the caller's contract; each blit reads the level the one before wrote.
+                unsafe { Barrier::everything().record(device, command_buffer) };
+                record_blit(device, command_buffer, image, self.aspects, blit);
+            }
+            return;
+        }
+        if let Some(run) = run {
+            // SAFETY: the caller's contract; the run reads the first level the copy just wrote.
+            unsafe {
+                Barrier::everything().record(device, command_buffer);
+                run.record(device, command_buffer, image);
+            }
         }
     }
 }
@@ -663,8 +786,8 @@ impl ShadowStaging {
 impl ShadowCopies {
     /// The shadow of an image of `levels` levels whose copies in copy its first, as a copy taken
     /// at use ([`LevelsCopy`]): its range every level, which the first use after a take writes,
-    /// its later levels made by `blits`.
-    pub(super) fn taken_at_use(self, levels: u32, blits: Vec<MipBlit>) -> ShadowCopies {
+    /// its later levels made as `later` says.
+    pub(super) fn taken_at_use(self, levels: u32, later: LaterLevels) -> ShadowCopies {
         let (shadow_range, aspects) = match self.shadow_range {
             UseRange::Image {
                 aspects, layers, ..
@@ -680,7 +803,7 @@ impl ShadowCopies {
         };
         ShadowCopies {
             shadow_range,
-            levels: Some(LevelsCopy::new(blits, aspects)),
+            levels: Some(LevelsCopy::new(later, aspects)),
             ..self
         }
     }
@@ -1420,6 +1543,11 @@ pub(super) struct ShadowCopy<M = Arc<ShadowMerge>> {
     /// takes, planned as the encoder takes the copy (`EncoderCore::sample_moves`); `None` for
     /// every other texture, and where none could be planned (failing the command buffer).
     pub(super) moves: Option<Arc<SampleMoves>>,
+    /// A copy taken at use's later levels' run that a copy in of it records after its copy into
+    /// the first level (the compute filter's or the picks', [`LevelsCopy::run`]), made as the
+    /// encoder takes the copy (`EncoderCore::later_runs`); `None` for every other copy, and where
+    /// none could be made (failing the command buffer).
+    pub(super) later: Option<Arc<LaterRun>>,
     /// A copy in made as a clear of the shadow's image ([`ShadowCopies::cleared_image`]) to this
     /// value, its one level and slice, reading nothing of the truth ([`ShadowUse::cleared`]);
     /// `None` for every other step.
@@ -2304,7 +2432,7 @@ impl ShadowCopy {
                 );
                 // A copy taken at use makes its later levels from the first it just copied.
                 if let Some(levels) = &c.levels {
-                    levels.record_levels(device, command_buffer, image);
+                    levels.record_levels(device, command_buffer, image, self.later.as_deref());
                 }
             } else {
                 device.cmd_copy_image_to_buffer(
@@ -3337,6 +3465,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
             area,
             cause: None,
             moves: None,
+            later: None,
             clear: None,
         });
         for (j, other) in self.entries.iter_mut().enumerate() {
@@ -3530,6 +3659,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                     area: None,
                     cause: None,
                     moves: None,
+                    later: None,
                     clear: Some(value),
                 });
                 let entry = &mut self.entries[i];
@@ -3620,6 +3750,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                         area: needs,
                         cause: Some(cause),
                         moves: None,
+                        later: None,
                         clear: None,
                     });
                 }
@@ -3650,6 +3781,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                         area: Some(area),
                         cause: Some(CopyCause::Bounded),
                         moves: None,
+                        later: None,
                         clear: None,
                     });
                 }
@@ -3668,6 +3800,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                     area: needs,
                     cause: Some(CopyCause::First),
                     moves: None,
+                    later: None,
                     clear: None,
                 };
                 copy.texels_copied_in()
@@ -3707,6 +3840,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                 area: None,
                 cause: None,
                 moves: None,
+                later: None,
                 clear: None,
             });
         }
@@ -3721,6 +3855,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                 area: None,
                 cause: None,
                 moves: None,
+                later: None,
                 clear: None,
             });
         }

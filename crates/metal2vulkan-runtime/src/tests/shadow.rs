@@ -453,6 +453,7 @@ fn a_copy_in_covers_only_where_the_command_reads_and_writes() {
         area: Some(a),
         cause: Some(CopyCause::First),
         moves: None,
+        later: None,
         clear: None,
     };
     assert_eq!((copy.texels_in(), copy.texels_back()), (32 * 16, 0));

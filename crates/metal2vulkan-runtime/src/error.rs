@@ -1999,8 +1999,8 @@ pub enum RuntimeGap {
     /// heap's) are detached (`detach_backing`). Metal's CPU access reaches the pages the texture
     /// took as it was made (a heap's texture, the pages the heap was made over), measured on an
     /// M4 under macOS 27.0.1; the runtime keeps no pages of detached bytes. A tiled texture of more
-    /// than one level (`Buffer::new_tiled_texture`), whose image of every level is its own copy of
-    /// the bytes, is read and written there, never refused.
+    /// than one level (`Buffer::new_tiled_texture`) is refused so at its first level alone, the
+    /// bytes: its later levels, which its image alone holds, are read and written there.
     DetachedTexelAccess,
     /// A use of a texture of a depth or stencil format (`Depth16Unorm`, `Depth32Float`,
     /// `Depth32Float_Stencil8`, `Stencil8`, `X32_Stencil8`) over a plane of a surface with planes

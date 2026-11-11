@@ -18,6 +18,16 @@
 //! - **`did_modify_data`** takes the copy again at the next use, not at the call: a write after
 //!   the call is in every level, and a later write without one is in none.
 //! - **A blit into the first level** reaches neither the bytes nor the later levels.
+//! - **Every format's later levels** are made as `generate_mipmaps` makes them: an integer
+//!   format's (`RGBA8Uint`) by plain Metal's texel picks, exactly, whether the first use is a blit
+//!   or a pass into level 1 (which clears that level after the picks); an extended-range format's
+//!   (`BGR10XR`, which no blit filters) by the compute filter, each level within the filter's
+//!   bound of the one above (`bind::MipmapFilterChain::outside_bound`), the take counted in
+//!   `WorkCounts::mipmaps_filtered`.
+//! - **The first level on the CPU is the bytes**, as on the Macs: `get_bytes` reads them before
+//!   the first use, after a GPU write into the level (which the GPU reads) and after a CPU write
+//!   of them (which no level sees); a `replace_region` there writes them, the rows' padding left,
+//!   and the next use takes the copy again, every level made from it.
 //! - **Mipmaps and the later levels.** `generate_mipmaps` makes level 1 from the first; blits into
 //!   and out of each level past the first, and the CPU's `replace_region` and `get_bytes` there,
 //!   round-trip, and leave the buffer's bytes as they were.
@@ -29,9 +39,10 @@
 //!   `WorkCounts::shadowed_textures` and `shadows_zeroed`, and its placement query answers
 //!   `Shadow(Mipmapped)`.
 //! - **Detached.** Over a no-copy buffer's pages, detached (`detach_backing`), the texture keeps
-//!   its own image (its `VkImage` the same): every level reads what the last take left, and takes
-//!   writes. A rebind to new pages changes no level until a `did_modify_data`, after which the
-//!   next use takes their bytes.
+//!   its own image (its `VkImage` the same): its blits read every level as the last take left it,
+//!   and the CPU's calls on a later level read it so and write it; on the first, the bytes, they
+//!   are refused (`NotImplemented(DetachedTexelAccess)`). A rebind to new pages changes no level
+//!   until a `did_modify_data`, after which the next use takes their bytes.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`TILED-TEXTURE`): each
@@ -42,10 +53,11 @@ use super::draw_again::{device as hearing_device, Heard};
 use super::encoder_holds::{library, pass};
 use crate::{
     BlitOption, Buffer, ClearColor, CommandQueue, ComputePipelineState, CpuCacheMode, Degradation,
-    Device, HazardTrackingMode, Origin, PipelineOptions, Region, ResourceOptions, SamplerState,
-    Size, StorageMode, Texture, TextureDescriptor, TexturePlacement, TextureShadowReason,
+    Device, Error, HazardTrackingMode, Origin, PipelineOptions, Region, ResourceOptions,
+    RuntimeGap, SamplerState, Size, StorageMode, Texture, TextureDescriptor, TexturePlacement,
+    TextureShadowReason,
 };
-use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::bind::{MipmapFilterChain, SamplerDescriptor};
 use metal2vulkan::metal::{PixelFormat, SamplerMipFilter, TextureUsage};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
@@ -203,6 +215,28 @@ fn off_the_box(above: &[u8], below: &[u8], (w, h): (u64, u64)) -> Option<String>
         }
     }
     None
+}
+
+/// `level` of a first level of `(width, height)` whose packed 4-byte texels are `first`, as plain
+/// Metal's picks make it: texel `i` of a level is texel `floor((2i + 1) W / 2w)` of the level above
+/// on each axis, `W` and `w` the two levels' sizes on it (`mipmap_plan::PickPlan`).
+fn picked(first: &[u8], (width, height): (u64, u64), level: u64) -> Vec<u8> {
+    let (w, h) = level_extent((width, height), level);
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let (mut sx, mut sy) = (x, y);
+            for n in (1..=level).rev() {
+                let (above_w, above_h) = level_extent((width, height), n - 1);
+                let (here_w, here_h) = level_extent((width, height), n);
+                sx = (2 * sx + 1) * above_w / (2 * here_w);
+                sy = (2 * sy + 1) * above_h / (2 * here_h);
+            }
+            let at = ((sy * width + sx) * 4) as usize;
+            out.extend_from_slice(&first[at..at + 4]);
+        }
+    }
+    out
 }
 
 /// The device's queue, the sampling kernels, and a sampler with a nearest mip filter.
@@ -535,6 +569,185 @@ fn a_blit_into_the_first_level_reaches_neither_the_bytes_nor_the_later_levels() 
     );
 }
 
+#[test]
+fn an_integer_format_s_later_levels_are_plain_metal_s_picks() {
+    let scratch = Scratch::new("tiled-texture-picks");
+    let rig = rig(&scratch);
+    for shape in SHAPES {
+        let ((width, height), levels) = shape;
+        let case = format!("RGBA8Uint {width}x{height} of {levels} levels");
+        let target = zeroed(&rig.device, LENGTH);
+        let d = descriptor_of(PixelFormat::RGBA8Uint, shape);
+        let texture = target.new_tiled_texture(&d, 0, PITCH).unwrap();
+        write_rows(&target, ((width, height), PITCH), |x, y| texel(5, x, y));
+        let (got, copies) = rig.levels(&texture, shape);
+        eprintln!("TILED-TEXTURE: {case}: the first use {copies:?}");
+        assert_eq!(copies, one_take(width * height), "{case}");
+        let first = packed((width, height), |x, y| texel(5, x, y));
+        assert_eq!(got[0], first, "{case}: level 0");
+        for level in 1..levels {
+            let expected = picked(&first, (width, height), level);
+            assert_eq!(got[level as usize], expected, "{case}: level {level}");
+        }
+    }
+}
+
+#[test]
+fn a_pass_into_level_one_of_an_integer_format_follows_the_picks() {
+    let scratch = Scratch::new("tiled-texture-picks-pass");
+    let rig = rig(&scratch);
+    let shape = SHAPES[1];
+    let ((width, height), levels) = shape;
+    let target = zeroed(&rig.device, LENGTH);
+    let mut d = descriptor_of(PixelFormat::RGBA8Uint, shape);
+    d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+    let texture = target.new_tiled_texture(&d, 0, PITCH).unwrap();
+    write_rows(&target, ((width, height), PITCH), |x, y| texel(9, x, y));
+    let mut into_one = pass(&texture);
+    into_one.color_attachments[0].level = 1;
+    into_one.color_attachments[0].clear_color = ClearColor::new(7.0, 9.0, 11.0, 13.0);
+    // The pass is the first use: the take, its picks among it, records before it.
+    let copies = copies_of(&rig.device, || {
+        rig.run(|command_buffer| {
+            let encoder = command_buffer.render_command_encoder(&into_one).unwrap();
+            encoder.end_encoding().unwrap();
+        });
+    });
+    assert_eq!(copies, one_take(width * height), "the pass");
+    let (got, again) = rig.levels(&texture, shape);
+    eprintln!("TILED-TEXTURE: a pass into level 1 of RGBA8Uint {copies:?}, then {again:?}");
+    assert_eq!(again, NONE, "the use after the pass");
+    let first = packed((width, height), |x, y| texel(9, x, y));
+    assert_eq!(got[0], first, "level 0");
+    assert!(
+        got[1].chunks(4).all(|t| t == [7, 9, 11, 13]),
+        "level 1 as the pass cleared it after the picks: {:?}",
+        &got[1][..8]
+    );
+    for level in 2..levels {
+        let expected = picked(&first, (width, height), level);
+        assert_eq!(got[level as usize], expected, "level {level}");
+    }
+}
+
+#[test]
+fn an_extended_range_format_s_later_levels_take_the_compute_filter() {
+    let scratch = Scratch::new("tiled-texture-filter");
+    let rig = rig(&scratch);
+    let shape = SHAPES[1];
+    let ((width, height), levels) = shape;
+    let target = zeroed(&rig.device, LENGTH);
+    let d = descriptor_of(PixelFormat::BGR10XR, shape);
+    let texture = target.new_tiled_texture(&d, 0, PITCH).unwrap();
+    write_rows(&target, ((width, height), PITCH), |x, y| texel(13, x, y));
+    let filtered = |device: &Device| device.work_counts().mipmaps_filtered;
+    let before = filtered(&rig.device);
+    let (got, copies) = rig.levels(&texture, shape);
+    let ran = filtered(&rig.device) - before;
+    eprintln!("TILED-TEXTURE: BGR10XR's first use {copies:?}, the compute filter run {ran} times");
+    assert_eq!(copies, one_take(width * height), "the first use");
+    assert_eq!(ran, 1, "the take's compute filter");
+    assert_eq!(got[0], packed((width, height), |x, y| texel(13, x, y)));
+    let extent = [width as u32, height as u32, 1];
+    let chain = MipmapFilterChain::plan(
+        PixelFormat::BGR10XR,
+        extent,
+        1,
+        levels as u32,
+        false,
+        64,
+        u32::MAX,
+        [65535, 65535],
+        None,
+    )
+    .unwrap();
+    for level in 1..levels as usize {
+        let outside = chain.outside_bound(level, &got[level - 1], &got[level]);
+        let outside = outside.unwrap();
+        assert!(outside.is_empty(), "level {level}: texels {outside:?}");
+    }
+}
+
+#[test]
+fn the_first_level_on_the_cpu_is_the_buffer_s_bytes() {
+    let scratch = Scratch::new("tiled-texture-first-level-cpu");
+    let rig = rig(&scratch);
+    let shape = SHAPES[0];
+    let ((width, height), _) = shape;
+    let rows = ((width, height), PITCH);
+    let target = zeroed(&rig.device, LENGTH);
+    let texture = target
+        .new_tiled_texture(&descriptor(shape), 0, PITCH)
+        .unwrap();
+    write_rows(&target, rows, |x, y| texel(20, x, y));
+    let bytes = packed((width, height), |x, y| texel(20, x, y));
+    let cpu = || level_bytes(&texture, (width, height), 0);
+    assert_eq!(cpu(), bytes, "before the first use");
+    let (taken, _) = rig.levels(&texture, shape);
+    assert_eq!(taken[0], bytes, "taken");
+    // A GPU write into the first level stays in the texture: the GPU reads it, the CPU the bytes.
+    let texels = (width * height * 4) as usize;
+    let grey = holding(&rig.device, texels as u64, &vec![0x33; texels]);
+    let at = (Origin::new(0, 0, 0), Size::new(width, height, 1));
+    rig.run(|command_buffer| blit_into(command_buffer, (&grey, &texture), 0, at));
+    let (written, _) = rig.levels(&texture, shape);
+    assert!(
+        written[0].iter().all(|&b| b == 0x33),
+        "the GPU reads its write"
+    );
+    assert_eq!(
+        cpu(),
+        bytes,
+        "the CPU reads the bytes after the GPU's write"
+    );
+    // A CPU write of the bytes is what the CPU reads there, and no level sees it.
+    write_rows(&target, rows, |x, y| texel(21, x, y));
+    assert_eq!(cpu(), packed((width, height), |x, y| texel(21, x, y)));
+    let (kept, copies) = rig.levels(&texture, shape);
+    assert_eq!(copies, NONE, "a use after the CPU's write");
+    assert_eq!(kept, written, "every level as the GPU left it");
+}
+
+#[test]
+fn a_replace_region_of_the_first_level_writes_the_bytes_and_the_next_use_takes_them() {
+    let scratch = Scratch::new("tiled-texture-first-level-replace");
+    let rig = rig(&scratch);
+    let shape = SHAPES[0];
+    let ((width, height), levels) = shape;
+    let target = zeroed(&rig.device, LENGTH);
+    let texture = target
+        .new_tiled_texture(&descriptor(shape), 0, PITCH)
+        .unwrap();
+    write(&target, |bytes| bytes.fill(0x40));
+    let (taken, _) = rig.levels(&texture, shape);
+    assert!(
+        taken.iter().all(|level| near_each(level, [0x40; 4])),
+        "taken"
+    );
+    let grey = [0x20, 0x60, 0xa0, 0xff];
+    let written = packed((width, height), |_, _| grey);
+    let region = Region::new_2d(0, 0, width, height);
+    (texture.replace_region(region, 0, 0, &written, width * 4, 0)).unwrap();
+    // The bytes hold the rows, each row's padding as it was.
+    let bytes = read(&target);
+    for y in 0..height {
+        let row = &bytes[(y * PITCH) as usize..((y + 1) * PITCH) as usize];
+        let (texels, padding) = row.split_at((width * 4) as usize);
+        assert!(texels.chunks(4).all(|t| t == grey), "row {y}");
+        assert!(padding.iter().all(|&b| b == 0x40), "row {y}'s padding");
+    }
+    let (again, copies) = rig.levels(&texture, shape);
+    eprintln!("TILED-TEXTURE: the use after a replace_region of level 0 {copies:?}");
+    assert_eq!(copies, one_take(width * height), "the use after the write");
+    assert_eq!(again.len(), levels as usize);
+    for (level, bytes) in again.iter().enumerate() {
+        assert!(near_each(bytes, grey), "level {level} after the write");
+    }
+    let (kept, copies) = rig.levels(&texture, shape);
+    assert_eq!(copies, NONE, "the use after that");
+    assert_eq!(kept, again);
+}
+
 /// Encode a blit of `source`'s packed rows into `size` of `texture`'s `level` at `origin`.
 fn blit_into(
     command_buffer: &crate::CommandBuffer,
@@ -824,13 +1037,22 @@ fn detached_bytes_leave_every_level_as_taken() {
     let image = texture.raw_image().unwrap();
     assert_eq!(no_copy.detach_backing(), Ok(true), "the detach");
     assert_eq!(texture.raw_image().unwrap(), image, "its own image");
-    for (level, bytes) in taken.iter().enumerate() {
-        let got = level_bytes(&texture, (width, height), level as u64);
-        assert_eq!(&got, bytes, "level {level} as taken, read while detached");
-    }
-    // Every level takes a CPU write while detached.
-    for level in 0..levels {
+    // The first level, the bytes, is refused to the CPU while they are detached.
+    let gap = Err(Error::NotImplemented(RuntimeGap::DetachedTexelAccess));
+    let region = Region::new_2d(0, 0, width, height);
+    let mut out = vec![0u8; first.len()];
+    let read_first = texture.get_bytes(&mut out, width * 4, 0, region, 0, 0);
+    assert_eq!(read_first, gap, "level 0 read while detached");
+    let write_first = texture.replace_region(region, 0, 0, &first, width * 4, 0);
+    assert_eq!(write_first, gap, "level 0 written while detached");
+    // Every later level reads as taken and takes a CPU write.
+    for level in 1..levels {
         let (w, h) = level_extent((width, height), level);
+        let got = level_bytes(&texture, (width, height), level);
+        assert_eq!(
+            got, taken[level as usize],
+            "level {level} as taken, read while detached"
+        );
         let written = packed((w, h), |x, y| texel(0x20 + level as u8, x, y));
         let region = Region::new_2d(0, 0, w, h);
         (texture.replace_region(region, level, 0, &written, w * 4, 0)).unwrap();
@@ -841,14 +1063,20 @@ fn detached_bytes_leave_every_level_as_taken() {
     // SAFETY: `other` outlives the buffer (dropped after the device), which alone uses it.
     unsafe { no_copy.rebind_bytes_no_copy(other.memory(), None, None) }.unwrap();
     write_rows(&no_copy, rows, |x, y| texel(12, x, y));
+    let moved = packed((width, height), |x, y| texel(12, x, y));
+    let cpu = level_bytes(&texture, (width, height), 0);
+    assert_eq!(cpu, moved, "level 0 on the CPU, the new pages' bytes");
     let (rebound, copies) = rig.levels(&texture, shape);
     assert_eq!(copies, NONE, "a use after the rebind");
-    let written = packed((width, height), |x, y| texel(0x20, x, y));
-    assert_eq!(rebound[0], written, "level 0 through the rebind");
+    assert_eq!(rebound[0], first, "level 0 through the rebind, as taken");
+    let written = packed(level_extent((width, height), 1), |x, y| texel(0x21, x, y));
+    assert_eq!(
+        rebound[1], written,
+        "level 1 through the rebind, as written"
+    );
     texture.did_modify_data();
     let (again, copies) = rig.levels(&texture, shape);
     assert_eq!(copies, one_take(width * height), "the use after the call");
-    let moved = packed((width, height), |x, y| texel(12, x, y));
     assert_eq!(again[0], moved, "level 0 over the new pages");
     eprintln!(
         "TILED-TEXTURE on {}: detached, every level of {levels} read as taken",

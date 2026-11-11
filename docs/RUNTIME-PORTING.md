@@ -483,7 +483,7 @@ narrow refusal that the call's rustdoc describes.
 | `length` | `length` | `Buffer::length` |
 | `new_linear_texture` | `newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:` (SPI) | `Buffer::new_linear_texture` (an aliasing image, or a shadow image where Vulkan cannot alias) *(partial)* |
 | `new_texture` | `newTextureWithDescriptor:offset:bytesPerRow:` | `Buffer::new_texture`, as `new_linear_texture` *(partial)* |
-| `new_tiled_texture` | `newTiledTextureWithDescriptor:offset:bytesPerRow:` (SPI) | `Buffer::new_tiled_texture`: one level as `new_texture`; more, one image of every level, a copy of the bytes taken at the first use and after each `Texture::did_modify_data`, its later levels made by the device's blit chain (`shadowed-texture`) *(partial)* |
+| `new_tiled_texture` | `newTiledTextureWithDescriptor:offset:bytesPerRow:` (SPI) | `Buffer::new_tiled_texture`: one level as `new_texture`; more, one image of every level, a copy of the bytes taken at the first use and after each `Texture::did_modify_data`, its later levels made as `generate_mipmaps` makes them; the CPU's first level is the bytes (`shadowed-texture`) *(partial)* |
 
 ### `Texture`: `MTLTexture`
 

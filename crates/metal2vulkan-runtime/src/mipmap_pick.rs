@@ -9,14 +9,22 @@
 //! buffer completes. Where the scratch would pass the device's `max_buffer_length`, the call is
 //! refused (`NotImplemented(MipmapGeneration)`): a blit's nearest filter puts its sample on the
 //! edge between two texels, which the device's precision decides.
+//!
+//! **A tiled texture's take** (`Buffer::new_tiled_texture`, `shadow.rs`'s **Copies taken at
+//! use**) records the same run ([`PickRun`]) of the texture's levels right after its copy into
+//! the first level, inside the copy.
 
 use super::blit::BlitCommandEncoder;
+use super::buffer::Buffer;
 use super::error::Error;
 use super::mipmap_plan::PickPlan;
 use super::sparse::emulated::Written;
 use super::texture::{texture_aspects, Texture};
 use super::tracker::{Access, Barrier};
 use super::values::ResourceOptions;
+use super::view_plan::ViewRecord;
+use super::Device;
+use crate::device::functions::Vk;
 use ash::vk;
 use metal2vulkan::error::{Feature, Unsupported};
 use metal2vulkan::metal::TextureType;
@@ -33,13 +41,8 @@ impl BlitCommandEncoder {
     ) -> Result<(), Error> {
         let record = texture.record();
         let device = self.core().device().clone();
-        if plan.bytes > device.properties().max_buffer_length {
-            return Err(Error::Unsupported(Unsupported::not_implemented(
-                Feature::MipmapGeneration,
-            )));
-        }
-        let scratch = device.own_buffer(plan.bytes, ResourceOptions::private())?;
-        let (raw, at) = scratch.at(0);
+        let aspects = texture_aspects(texture.image_plan()?);
+        let run = PickRun::new(&device, plan, record, aspects)?;
         let (base_level, base_layer, layers) =
             (record.base_level, record.base_layer, record.layer_count);
         let all_layers = base_layer..base_layer + layers;
@@ -52,7 +55,74 @@ impl BlitCommandEncoder {
                 true,
             )?,
         ];
-        let (image, aspects) = (texture.raw_image()?, texture_aspects(texture.image_plan()?));
+        let image = texture.raw_image()?;
+        self.command(&uses, |device, command_buffer| {
+            // SAFETY: the command buffer is recording, outside a render pass; the run and the
+            // texture are retained until it completes; the image is in the `GENERAL` layout with
+            // transfer usages and features (`plan_mipmaps` checked them).
+            unsafe { run.record(device, command_buffer, image) };
+        })?;
+        self.core().retain(run);
+        self.core().retain(texture.clone());
+        let first = first_extent(record);
+        let written = (1..record.level_count)
+            .map(|n| {
+                let written = Written {
+                    level: base_level + n,
+                    layers: all_layers.clone(),
+                    origin: [0; 3],
+                    size: first.map(|axis| (axis >> n).max(1)),
+                };
+                (aspects, written)
+            })
+            .collect();
+        self.scrub(texture, written)
+    }
+}
+
+/// The first level's extent of the levels `record` presents: its depth 1 but a 3D texture's.
+fn first_extent(record: &ViewRecord) -> [u32; 3] {
+    let mut first = record.extent();
+    if record.texture_type != TextureType::Type3D {
+        first[2] = 1;
+    }
+    first
+}
+
+/// Whether `plan`'s scratch fits `device`'s `max_buffer_length`, which [`PickRun::new`] refuses
+/// past.
+pub(super) fn picks_fit(device: &Device, plan: &PickPlan) -> bool {
+    plan.bytes <= device.properties().max_buffer_length
+}
+
+/// One recording of a [`PickPlan`] (the module's **The command**): its scratch buffer, the copy of
+/// the first level into it and the copies of the later levels' columns out of it. The command
+/// buffer that records it holds it until it completes.
+pub(super) struct PickRun {
+    scratch: Buffer,
+    copy_in: vk::BufferImageCopy,
+    picks: Vec<vk::BufferImageCopy>,
+}
+
+impl PickRun {
+    /// The run of `plan`'s picks over the levels and layers `record` presents of an image of
+    /// `aspects` on `device`. Refused where the scratch would pass the device's
+    /// `max_buffer_length` (`NotImplemented(MipmapGeneration)`, [`picks_fit`]), or as a buffer of
+    /// the runtime's own is.
+    pub(super) fn new(
+        device: &Device,
+        plan: &PickPlan,
+        record: &ViewRecord,
+        aspects: vk::ImageAspectFlags,
+    ) -> Result<PickRun, Error> {
+        if !picks_fit(device, plan) {
+            return Err(Error::Unsupported(Unsupported::not_implemented(
+                Feature::MipmapGeneration,
+            )));
+        }
+        let scratch = device.own_buffer(plan.bytes, ResourceOptions::private())?;
+        let at = scratch.at(0).1;
+        let (base_layer, layers) = (record.base_layer, record.layer_count);
         let subresource = |level: u32| vk::ImageSubresourceLayers {
             aspect_mask: aspects,
             mip_level: level,
@@ -64,19 +134,15 @@ impl BlitCommandEncoder {
             height,
             depth,
         };
-        let mut first = record.extent();
-        if record.texture_type != TextureType::Type3D {
-            first[2] = 1;
-        }
         let copy_in = vk::BufferImageCopy {
             buffer_offset: at,
             buffer_row_length: 0,
             buffer_image_height: plan.image_height,
-            image_subresource: subresource(base_level),
+            image_subresource: subresource(record.base_level),
             image_offset: vk::Offset3D::default(),
-            image_extent: extent(first),
+            image_extent: extent(first_extent(record)),
         };
-        let picks: Vec<vk::BufferImageCopy> = plan
+        let picks = plan
             .picks
             .iter()
             .map(|pick| vk::BufferImageCopy {
@@ -92,45 +158,48 @@ impl BlitCommandEncoder {
                 image_extent: extent(pick.extent),
             })
             .collect();
-        self.command(&uses, |device, command_buffer| {
-            // SAFETY: the command buffer is recording, outside a render pass; the scratch and the
-            // texture are retained until it completes; the image is in the `GENERAL` layout with
-            // transfer usages and features (`plan_mipmaps` checked them); every region lies
-            // inside the scratch and its level (`plan_picks`), and the picks read what the copy in
-            // wrote, past a barrier.
-            unsafe {
-                device.cmd_copy_image_to_buffer(
+        Ok(PickRun {
+            scratch,
+            copy_in,
+            picks,
+        })
+    }
+
+    /// Record the run over `image`.
+    ///
+    /// # Safety
+    ///
+    /// `command_buffer` is recording, outside a render pass, after a barrier that orders the run
+    /// after every earlier write of the first level; the run and the image are live until it
+    /// completes; the image is in the `GENERAL` layout with transfer usages and features. Every
+    /// region lies inside the scratch and its level (`plan_picks`), and the picks read what the
+    /// copy in wrote, past a barrier.
+    pub(super) unsafe fn record(
+        &self,
+        device: &Vk,
+        command_buffer: vk::CommandBuffer,
+        image: vk::Image,
+    ) {
+        let raw = self.scratch.at(0).0;
+        // SAFETY: the caller's contract.
+        unsafe {
+            device.cmd_copy_image_to_buffer(
+                command_buffer,
+                image,
+                vk::ImageLayout::GENERAL,
+                raw,
+                &[self.copy_in],
+            );
+            Barrier::everything().record(device, command_buffer);
+            if !self.picks.is_empty() {
+                device.cmd_copy_buffer_to_image(
                     command_buffer,
+                    raw,
                     image,
                     vk::ImageLayout::GENERAL,
-                    raw,
-                    &[copy_in],
+                    &self.picks,
                 );
-                Barrier::everything().record(device, command_buffer);
-                if !picks.is_empty() {
-                    device.cmd_copy_buffer_to_image(
-                        command_buffer,
-                        raw,
-                        image,
-                        vk::ImageLayout::GENERAL,
-                        &picks,
-                    );
-                }
             }
-        })?;
-        self.core().retain(scratch);
-        self.core().retain(texture.clone());
-        let written = (1..record.level_count)
-            .map(|n| {
-                let written = Written {
-                    level: base_level + n,
-                    layers: all_layers.clone(),
-                    origin: [0; 3],
-                    size: first.map(|axis| (axis >> n).max(1)),
-                };
-                (aspects, written)
-            })
-            .collect();
-        self.scrub(texture, written)
+        }
     }
 }
