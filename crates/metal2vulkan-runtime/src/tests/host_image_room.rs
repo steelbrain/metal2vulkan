@@ -23,6 +23,7 @@ use crate::{Region, ResourceOptions, Texture, TextureDescriptor};
 use ash::vk::MemoryPropertyFlags;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::vk::ImageUsageFlags;
+use std::collections::BTreeSet;
 
 /// The side of each texture: 16 MiB of `Depth32Float`, a quarter of a block of images.
 const SIDE: u64 = 2048;
@@ -63,12 +64,14 @@ fn shared_depth_textures_past_their_host_transfer_heap_lie_in_device_local_memor
         let index = texture.placed_type().unwrap();
         lock(&device.shared().memory).type_and_heap(index)
     };
+    let first_type = first.placed_type().unwrap();
     let (flags, heap) = kind(&first);
     if !hosted(&first) || !flags.contains(MemoryPropertyFlags::DEVICE_LOCAL) {
         println!(
             "HOST-IMAGE-ROOM {name}: the first texture takes no host-transfer usage in \
-             device-local memory (usage {}, type {flags:?}): nothing to fill",
-            hosted(&first)
+             device-local memory (usage {}, type flags {:#x}): nothing to fill",
+            hosted(&first),
+            flags.as_raw()
         );
         return;
     }
@@ -88,13 +91,19 @@ fn shared_depth_textures_past_their_host_transfer_heap_lie_in_device_local_memor
         textures.push(device.new_texture(&descriptor).unwrap());
     }
     let with = textures.iter().filter(|texture| hosted(texture)).count();
+    let apart: BTreeSet<u32> = (textures.iter())
+        .filter(|texture| !hosted(texture))
+        .filter_map(Texture::placed_type)
+        .collect();
     let overflowed = textures
         .iter()
         .filter(|texture| texture.overflowed())
         .count();
     println!(
-        "HOST-IMAGE-ROOM {name}: a heap of {heap} bytes; {} textures of {bytes} bytes: {with} \
-         with host-transfer usage, {} without, {overflowed} overflowed",
+        "HOST-IMAGE-ROOM {name}: host-transfer images in type {first_type} (flags {:#x}), a heap \
+         of {heap} bytes; {} textures of {bytes} bytes: {with} with host-transfer usage, {} \
+         without (in types {apart:?}), {overflowed} overflowed",
+        flags.as_raw(),
         textures.len(),
         textures.len() - with
     );
@@ -107,7 +116,8 @@ fn shared_depth_textures_past_their_host_transfer_heap_lie_in_device_local_memor
         let (flags, _) = kind(texture);
         assert!(
             flags.contains(MemoryPropertyFlags::DEVICE_LOCAL),
-            "{name}: a texture lies in memory of {flags:?}"
+            "{name}: a texture lies in memory of flags {:#x}",
+            flags.as_raw()
         );
     }
     let last = textures.last().unwrap();
