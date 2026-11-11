@@ -3389,15 +3389,20 @@ bound.
   first commit whose command buffer may write it a base of the bytes the pages and the copy agree
   on: a 128-bit tag of each 1 KiB block in host memory (a 64th of the length), and the bytes in
   device-local memory the host maps where its heap is 1 GiB or more (a resizable BAR's) and has
-  room, else in host memory (`copied_base_host_bytes`, `copied_base_device_bytes`); a block whose tag
-  agrees is taken as unchanged, a changed one missed with a chance of at most 2^-64 at each
-  comparison, and a commit that finds no host memory for a base fails with `OutOfMemory`
-  (`copied_bases_refused`). A comparison of a copy with a base of 16 MiB or more splits its blocks
-  across up to four threads, the calling one among them (`copied_compare_threads`). An event signal submitted while a copy is live is seen once its batch's
-  writes are back in the pages, as Metal's: its value at the completion turn, and a wait for it
-  held on the host until then (`event_signals_behind_merge`). A copy and another memory over
-  overlapping but not the same bytes agree GPU to GPU only through the pages, so a read committed
-  before the write's completion reads the bytes from before it (docs/FAST-PATHS.md, known gaps).
+  room, else in host memory (`copied_base_host_bytes`, `copied_base_device_bytes`); a block of a
+  base in device memory that both sides changed is read once across the bus, by the host, or,
+  where a comparison reads 32 or more, through one copy on the device's staging queue
+  (`copied_base_blocks_read_back`), then kept in 1 KiB of host memory for the base's life
+  (`copied_base_host_blocks`); a block whose tag agrees is taken as unchanged, a changed one
+  missed with a chance of at most 2^-64 at each comparison, and a commit that finds no host memory
+  for a base fails with `OutOfMemory` (`copied_bases_refused`). A comparison of a copy with a base
+  of 16 MiB or more splits its blocks across up to four threads, the calling one among them
+  (`copied_compare_threads`). An event signal submitted while a copy is live is seen once its
+  batch's writes are back in the pages, as Metal's: its value at the completion turn, and a wait
+  for it held on the host until then (`event_signals_behind_merge`). A
+  copy and another memory over overlapping but not the same bytes agree GPU to GPU only through the
+  pages, so a read committed before the write's completion reads the bytes from before it
+  (docs/FAST-PATHS.md, known gaps).
 - `metal2vulkan-degrade-grouped-completion` (precision). `GroupedCompletion`: Batches of command
   buffers committed on one queue that the scheduler found ready together, or held while two or more
   earlier submissions of their queue ran, went to the driver in one `vkQueueSubmit`, only the last
