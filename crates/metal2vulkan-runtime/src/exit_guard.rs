@@ -140,9 +140,10 @@
 //!   device's in-place check ended, and none with the device dropped first (docs/FAST-PATHS.md,
 //!   known gaps). A load is where the first call counts
 //!   from: the Vulkan loader unloads the layers with the last instance and loads them again with
-//!   the next, which make their statics again at each entry point's first call after the device
-//!   that registered at the load; so that device forgets the entry points called before
-//!   ([`forget_calls`]). Measured: before, a teardown lane whose six devices each reloaded the
+//!   the next, which make their statics again at each entry point's first call after the load;
+//!   so the device that registers at the load forgets the entry points called before as its
+//!   priming begins ([`before_priming`], [`forget_calls`]), and the priming's calls, before its
+//!   registration, are the first since. Measured: before, a teardown lane whose six devices each reloaded the
 //!   validation layer ended with `SIGSEGV` at exit, a pool thread's `vkDestroyRenderPass` (its
 //!   making's pass) calling through a static of the layer's destroyed first, while the hook waited
 //!   for that section (in the core, that pool thread, and the main thread asleep as the hook's wait
@@ -1608,6 +1609,14 @@ impl Devices {
         }
     }
 
+    /// Whether a device made now registers the hook as the first after a load
+    /// ([`Admitted::Load`]), the process having loaded `loads` shared objects, and the hook being
+    /// registered in this process (`registered`): the process's first device (a forked child's
+    /// included), the first since the count of loads moved, and any where the host keeps none.
+    pub(crate) fn at_load(&self, registered: bool, loads: Option<u64>) -> bool {
+        !(registered && loads.is_some() && self.loads == loads)
+    }
+
     /// Whether a device of `identity` registers the hook ([`register_device`]), the process
     /// having loaded `loads` shared objects, and the hook being registered in this process
     /// (`registered`), and why; noted when it does. The identities kept are those registered
@@ -1618,7 +1627,7 @@ impl Devices {
         loads: Option<u64>,
         identity: Vec<u64>,
     ) -> Option<Admitted> {
-        let current = registered && loads.is_some() && self.loads == loads;
+        let current = !self.at_load(registered, loads);
         if current && self.identities.contains(&identity) {
             return None;
         }
@@ -1645,8 +1654,8 @@ impl Devices {
 pub(crate) enum Admitted {
     /// The process's first device (a forked child's included), the first after a load of a
     /// shared object, or any where the host keeps no count of loads: what was loaded since makes
-    /// its statics at each entry point's first call again, so the entry points called before are
-    /// forgotten ([`CALLED`]).
+    /// its statics at each entry point's first call again, so the entry points called before its
+    /// priming are forgotten ([`before_priming`]).
     Load,
     /// A device of an identity new since the last load.
     Identity,
@@ -1674,17 +1683,28 @@ pub(crate) fn register_device(identity: Vec<u64>) {
     let loads = loaded::count();
     let mut devices = DEVICES.lock().unwrap_or_else(PoisonError::into_inner);
     let registered = REGISTERED.load(Ordering::SeqCst) == std::process::id();
-    let Some(admitted) = devices.admit(registered, loads, identity) else {
+    if devices.admit(registered, loads, identity).is_none() {
         return;
-    };
-    // A layer the loader unloaded with the last instance and loaded again with this one makes
-    // its statics again at the first call of each entry point, after this registration: each
-    // such call's section registers the hook again as it ends.
-    if admitted == Admitted::Load {
-        forget_calls();
     }
     AT_DEVICES.fetch_add(1, Ordering::Relaxed);
     register();
+}
+
+/// Before a device made or adopted is primed (`device/prime.rs`): where it registers the hook as
+/// the first after a load of a shared object ([`Admitted::Load`]), forget the entry points called
+/// so far ([`forget_calls`]). A layer the loader unloaded with the last instance and loaded again
+/// with this one makes its statics again at the first call of each entry point: the priming's,
+/// which come before the device's registration, and count as the first calls since, so a later
+/// section that calls one of them registers nothing again (after an exit handler the program
+/// registered once its device was made, such a registration would close the guard before it); one
+/// the priming did not call registers the hook again as its section ends.
+pub(crate) fn before_priming() {
+    let loads = loaded::count();
+    let devices = DEVICES.lock().unwrap_or_else(PoisonError::into_inner);
+    let registered = REGISTERED.load(Ordering::SeqCst) == std::process::id();
+    if devices.at_load(registered, loads) {
+        forget_calls();
+    }
 }
 
 /// A `vkCreateInstance` was called, whatever it answered: by this thread (the runtime's one door,

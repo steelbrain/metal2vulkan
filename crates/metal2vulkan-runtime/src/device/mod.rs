@@ -2198,7 +2198,9 @@ impl Device {
             sized_index_bind,
         };
         // Before the exit hook is registered for this device (below): the first call of each
-        // entry point of the exit guard's table (`prime.rs`).
+        // entry point of the exit guard's table (`prime.rs`), counted as the first since a load
+        // of a shared object where the device is the first after one.
+        exit_guard::before_priming();
         // SAFETY: the device is live, of `physical`, and enables timeline semaphores, and
         // `bufferDeviceAddress` where `device_address` says so; `queues` holds at least one of
         // its queues, which nothing uses yet.
