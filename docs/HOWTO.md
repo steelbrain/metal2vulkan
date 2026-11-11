@@ -445,7 +445,9 @@ first, the pages after. The runtime tells when, for each object:
 - With a deallocator alone, its run: after that free.
 - With neither, the drop of the last reference frees the import before it returns. A committed
   command buffer that used the object holds a reference until its completed handlers ran, after
-  its status reads `Completed` and before its `wait_until_completed` returns.
+  its status reads `Completed` and before its `wait_until_completed` returns; and a texture over
+  the bytes, released while a command buffer submitted before may still read it, holds the import
+  until that command buffer completed.
 - A buffer made over exactly the bytes of another live buffer lies in that one's import: its
   keep-alive or deallocator goes at its release, and the other buffer's comes after the free. Pages
   under several objects go once each of them has signalled.
@@ -459,8 +461,8 @@ keep-alive alone waits for the free; and, while the buffer lives, by the device'
 window on a driver whose pointer imports follow their address (above), the next blit importing
 them again on the thread that encodes it. On RADV and ANV every submission of the device, from any
 thread, lists every live import. So pages unmapped before their objects go meet those threads at
-any moment, also where the objects are dropped right after on another thread: a submission that
-lists an import of pages gone fails (on ANV the device is lost), and on a Radeon 780M (Linux 7.3.3)
+any moment, also where the objects are dropped right after on another thread: on ANV a submission
+that lists an import of pages gone fails and the device is lost, and on a Radeon 780M (Linux 7.3.3)
 an unmap of pages under a live pointer import oopsed the kernel in amdgpu's notifier
 (`amdgpu_hmm_invalidate_gfx`), the GPU's work hanging until the machine was rebooted.
 
