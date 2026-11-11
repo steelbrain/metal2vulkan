@@ -8,8 +8,8 @@
 //! kernel's read refuses, is copied (where `/dev/udmabuf` opens).
 
 use crate::copied::{
-    read_caller, tag, BaseBytes, Copied, CopiedBuffers, CopiesReached, FirstRead, NotCopied,
-    TAG_BLOCK,
+    merge_block, read_caller, tag, BaseBytes, Copied, CopiedBuffers, CopiesReached, FirstRead,
+    NotCopied, TAG_BLOCK,
 };
 use crate::dirty_pages::DirtyTally;
 use crate::resource::ResourceKey;
@@ -211,10 +211,10 @@ fn copied_merge_back_keeps_a_byte_the_cpu_changed_since() {
 }
 
 /// A GPU that rewrote every byte of a block: where the CPU did not change it since the commit,
-/// the merge back stores the copy's block whole and counts every byte; where the CPU wrote bytes
-/// of it before the completion (one alone, one inside a run of 16 and a run of 16 whole), the
-/// merge keeps each of them and writes every other, the count leaving them out; the next commit
-/// carries them into the copy.
+/// the merge back writes every byte, the pages' block its agreed bytes (no base read); where the
+/// CPU wrote bytes of it before the completion (one alone, one inside a run of 16 and a run of 16
+/// whole), the merge keeps each of them and writes every other, the count leaving them out, the
+/// base's bytes read; the next commit carries them into the copy.
 #[test]
 fn a_cpu_write_made_before_the_completion_survives_a_block_the_gpu_rewrote() {
     let length = 3 * TAG_BLOCK + 5;
@@ -261,6 +261,30 @@ fn a_cpu_write_made_before_the_completion_survives_a_block_the_gpu_rewrote() {
     commit_reading(&buffers, &counts);
     assert_eq!(copy, pages, "the CPU's bytes copied in");
     drop(copied);
+}
+
+/// A merge of 16 bytes writes each byte one side changed and the other did not, in one store or
+/// in runs of 8, 4 and 2 or alone, and no other byte: for each of the 65,536 sets of bytes
+/// changed, every byte outside the set holds a value of the other side's, which a wider store
+/// would have written over.
+#[test]
+fn a_merge_stores_each_byte_it_writes_and_no_other() {
+    for changed in 0..=0xFFFF_u32 {
+        let set = |byte: usize| (changed >> byte) & 1 == 1;
+        let now: Vec<u8> = (0..16).map(|byte| u8::from(set(byte))).collect();
+        let mut was = [0u8; 16];
+        let mut to: Vec<u8> = (0..16)
+            .map(|byte| if set(byte) { 0 } else { 0x77 })
+            .collect();
+        // SAFETY: `to` is the test's 16 bytes.
+        let written = unsafe { merge_block(&now, to.as_mut_ptr(), &mut was, true) };
+        assert_eq!(written, u64::from(changed.count_ones()), "{changed:016b}");
+        for byte in 0..16 {
+            let want = if set(byte) { 1 } else { 0x77 };
+            assert_eq!(to[byte], want, "{changed:016b}: byte {byte}");
+        }
+        assert_eq!(&was[..], &now[..], "{changed:016b}: `was` takes `now`");
+    }
 }
 
 /// A copy whose GPU writes are dropped takes the GPU's bytes out of the copy alone, where the CPU
