@@ -279,7 +279,8 @@ the record the pass is making.
   detached pages.
 - `Device::new_exportable_buffer` makes a buffer whose memory another API imports (CUDA's
   `cuImportExternalMemory`, another `VkDevice`), in memory allocated exportable as an opaque file
-  descriptor: its own dedicated allocation where the device needs or prefers one, else a block
+  descriptor: its own dedicated allocation where the device needs one (it exports such memory
+  only so, or requires one; a driver's preference alone does not make one), else a block
   that exportable buffers share; every other buffer stays in the device's other pooled blocks.
   `Buffer::export_memory_fd` answers a new descriptor each call, the consumer's to close, with the
   allocation's size, the buffer's offset and length in it, whether it is a dedicated allocation
@@ -301,7 +302,7 @@ the record the pass is making.
   as well (`WorkCounts::exported_dma_buf_images`). An opaque file descriptor's memory the driver
   exports only as the buffer's dedicated allocation takes no image: its textures are shadows,
   announced. Dma-buf-exportable buffers share blocks of their own kind, or
-  take a dedicated allocation where the device needs or prefers one. `Buffer::export_memory_dma_buf`
+  take a dedicated allocation where the device needs one. `Buffer::export_memory_dma_buf`
   answers a new dma-buf each call, with what `export_memory_fd` answers; its `offset` is the
   buffer's first byte, so a VA-API `DRM_PRIME_2` surface's plane lies at `offset` plus the plane's
   offset in the buffer. A device without `VK_KHR_external_memory_fd`,

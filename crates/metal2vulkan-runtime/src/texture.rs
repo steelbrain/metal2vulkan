@@ -2918,7 +2918,7 @@ impl Device {
     ///   allocation, and the device's buffers lie there only where it makes no such image of its
     ///   own memory either (`Device::fd_blocks_cover`).
     /// - In a buffer's dedicated allocation (an exportable buffer's where the driver exports
-    ///   such memory only so, or prefers or requires it), no image
+    ///   such memory only so, or requires it), no image
     ///   (`VUID-vkBindImageMemory-memory-10926`).
     ///
     /// Why not: why the linear image is not, and why the pitched image is not, its cause (a

@@ -24,9 +24,13 @@
 //!   (`VkExternalMemoryBufferCreateInfo`) and has the device-address usage of its own; its memory
 //!   is of the memory type its storage mode takes as any buffer's does. Where the device exports
 //!   such memory only from a dedicated allocation (`VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT`)
-//!   or the driver prefers or requires one (`VkMemoryDedicatedRequirements`), it is the buffer's
-//!   dedicated allocation (`VkMemoryDedicatedAllocateInfo`, `VkExportMemoryAllocateInfo`), freed
-//!   with it. Else it lies in a block that exportable buffers of its handle type share, allocated
+//!   or the driver requires one (`VkMemoryDedicatedRequirements::requiresDedicatedAllocation`), it
+//!   is the buffer's dedicated allocation (`VkMemoryDedicatedAllocateInfo`,
+//!   `VkExportMemoryAllocateInfo`), freed with it. A driver's preference for one
+//!   (`prefersDedicatedAllocation`) alone does not make one: no image may be bound to a dedicated
+//!   allocation (`VUID-vkBindImageMemory-memory-10926`), and a texture over the buffer is an image
+//!   in its memory (below), so a dedicated allocation would leave every such texture a shadow.
+//!   Else it lies in a block that exportable buffers of its handle type share, allocated
 //!   exportable (`memory.rs`'s `Holds::Exports`, `Holds::DmaBufs`), at a multiple of 256 bytes as
 //!   any buffer of the runtime's memory (`buffer.rs`'s `placed`), as other buffers lie in pooled
 //!   blocks: a block holds a 4K NV12 picture's 12.4 MB five times, and one that empties is kept
@@ -212,7 +216,7 @@ impl Device {
     /// No Metal counterpart (a runtime extension): [`Device::new_buffer`] of `length` bytes with
     /// `options`, all zero, whose memory another API imports ([`Buffer::export_memory_fd`]): a
     /// buffer in memory allocated exportable as an opaque file descriptor, its dedicated
-    /// allocation where the device needs or prefers one, else a block such buffers share, where
+    /// allocation where the device needs one, else a block such buffers share, where
     /// any other buffer lies in the device's other pooled blocks (`exported_memory.rs`). It is a
     /// buffer as any other in every call; a `Managed` one on a device without unified memory
     /// exports the GPU's copy, which the host's reaches as Metal's managed copies do
@@ -311,10 +315,12 @@ impl Device {
         // SAFETY: `raw` is a live buffer of this device, at Vulkan 1.1 or later.
         unsafe { raw_device.get_buffer_memory_requirements2(&query, &mut requirements) };
         let requirements = requirements.memory_requirements;
+        // Its own allocation only where the device needs one for the export: a preference alone
+        // keeps it in a shared block, where a texture over it may be an image in its memory (the
+        // module docs).
         let exported = Exported {
             handle,
             dedicated: exports.dedicated_only
-                || dedicated.prefers_dedicated_allocation == vk::TRUE
                 || dedicated.requires_dedicated_allocation == vk::TRUE,
         };
         // A dedicated allocation is as long as the buffer requires, at offset 0; a shared block

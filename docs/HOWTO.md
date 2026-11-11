@@ -862,7 +862,8 @@ handle type for no plain linear image, and requires a dedicated allocation of a
 answers the same dma-buf as before.
 
 Elsewhere the texture is a shadow, announced with its cause: the memory is an opaque file
-descriptor's dedicated allocation (Vulkan binds no image in memory dedicated to a buffer), the
+descriptor's dedicated allocation, which the buffer takes only where the device exports such
+memory only from one or requires one (Vulkan binds no image in memory dedicated to a buffer), the
 format query refuses the handle type, the layout differs, or the check did not pass. Measured for
 a 3840x2160 NV12 frame (an `R8Unorm` plane, then an `RG8Unorm` 1920x1080 plane, both rows 3840
 bytes) made with `aligned_byte(0x20)`, its planes at 256 and 8,294,656 bytes of the memory, each

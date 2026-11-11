@@ -62,7 +62,8 @@
 //!   memory another API imports lies in a block allocated exportable as its handle type, an
 //!   opaque file descriptor ([`Holds::Exports`]) or a dma-buf ([`Holds::DmaBufs`]), which such
 //!   buffers alone share, pooled and kept as any other; or in its dedicated allocation, freed with
-//!   it, where the device needs or prefers one for the export.
+//!   it, where the device needs one for the export (it exports such memory only so, or requires
+//!   one; a preference alone keeps the buffer in a block, `exported_memory.rs`).
 //!
 //! - **Buffers in exportable blocks** ([`Holds::FdBuffers`], [`fd_buffer_types`]). On a device
 //!   with unified memory whose policy takes textures over exported memory in place
@@ -1478,7 +1479,7 @@ pub(super) enum BoundMemory {
 pub(super) enum NoImage {
     /// It is a buffer's dedicated allocation (`VkMemoryDedicatedAllocateInfo::buffer`), to which
     /// no image may be bound (`VUID-vkBindImageMemory-memory-10926`): an exportable buffer's where
-    /// the driver exports such memory only so, or prefers or requires it (`exported_memory.rs`).
+    /// the driver exports such memory only so, or requires it (`exported_memory.rs`).
     Dedicated,
     /// It is memory the caller made and keeps (`Device::new_buffer_with_vk_buffer`), whose handle
     /// types the runtime does not know.
