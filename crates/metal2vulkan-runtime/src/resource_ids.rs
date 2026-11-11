@@ -1238,23 +1238,28 @@ pub(crate) fn inside_passing_hold() -> bool {
 }
 
 /// Whether `message`, for `sink`, waits for this thread's outermost passing hold to end, to be
-/// delivered then: where the thread is inside one (the module docs).
+/// delivered then: where the thread is inside one (the module docs), and its thread-locals are
+/// not gone (an exiting thread's on macOS, [`PassingHold`]'s drop), where it is delivered now.
 pub(crate) fn held_past_passing_hold(sink: &MessageSink, message: &DebugMessage) -> bool {
-    if !inside_passing_hold() {
-        return false;
-    }
-    LEFT.with(|left| (left.borrow_mut().messages).push((sink.clone(), message.clone())));
-    true
+    inside_passing_hold()
+        && LEFT
+            .try_with(|left| (left.borrow_mut().messages).push((sink.clone(), message.clone())))
+            .is_ok()
 }
 
 /// Whether `release`, a release of the program's (`exit_guard::program_release`), waits for this
 /// thread's outermost passing hold to end, to run then (the module docs): given back to run now
-/// where the thread is inside none.
+/// where the thread is inside none. Where the thread's thread-locals are gone (an exiting
+/// thread's on macOS, [`PassingHold`]'s drop) it is kept unrun, as the process's exit keeps the
+/// program's releases (`Releases`).
 pub(crate) fn released_past_passing_hold<F: FnOnce() + Send + 'static>(release: F) -> Option<F> {
     if !inside_passing_hold() {
         return Some(release);
     }
-    LEFT.with(|left| (left.borrow_mut().releases).push(Box::new(release)));
+    match LEFT.try_with(|_| ()) {
+        Ok(()) => LEFT.with(|left| (left.borrow_mut().releases).push(Box::new(release))),
+        Err(_) => std::mem::forget(release),
+    }
     None
 }
 
@@ -1277,14 +1282,18 @@ impl Drop for PassingHold<'_> {
         if inside > 0 {
             return;
         }
-        // The outermost ended: what the holds left runs, outside every one.
-        let (releases, messages) = LEFT.with(|left| {
-            let mut left = left.borrow_mut();
-            (
-                Releases(std::mem::take(&mut left.releases)),
-                std::mem::take(&mut left.messages),
-            )
-        });
+        // The outermost ended: what the holds left runs, outside every one. Where the thread's
+        // thread-locals are gone (on macOS `exit` destroys the exiting thread's before it runs
+        // the exit handlers, which may commit work), none was left.
+        let (releases, messages) = LEFT
+            .try_with(|left| {
+                let mut left = left.borrow_mut();
+                (
+                    Releases(std::mem::take(&mut left.releases)),
+                    std::mem::take(&mut left.messages),
+                )
+            })
+            .unwrap_or_else(|_| (Releases(Vec::new()), Vec::new()));
         if !releases.0.is_empty() {
             // A thread command buffers' completion depends on runs none of the program's
             // releases (`exit_guard::program_release`).
