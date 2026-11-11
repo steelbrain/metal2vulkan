@@ -593,6 +593,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &STILL_MAKING,
         &COPIED_PAGES,
         &OVERFLOWED,
+        &LEAST_PLANS,
         &DEPTH_DENORMALS,
         &SIGNED_DEPTH_TESTS,
         &FIRST_SPARSE,
@@ -830,6 +831,14 @@ const COPIED_PAGES: [Degradation; 1] = [Degradation::CopiedHostPages];
 /// `resources_past_device_local_memory_are_made_used_and_read_back` takes its site, under
 /// `m2v_gpu_hazards` on a GPU.
 const OVERFLOWED: [Degradation; 1] = [Degradation::DeviceMemoryOverflow];
+
+/// The kind a device takes that the driver refused to make for want of its resources with its
+/// queue plan's `VkQueue`s, and made with its least plan's. No lane meets it: the driver refuses a
+/// device only where other devices of the GPU hold what it needs, such as its channels, which no
+/// lane exhausts (a GPU hazard). The runtime's own test
+/// `a_device_refused_once_takes_its_least_plan_where_it_takes_fewer_queues` takes its site, the
+/// driver's refusal stood in for by the runtime's test hook.
+const LEAST_PLANS: [Degradation; 1] = [Degradation::LeastQueuePlan];
 
 /// The kind Metal's private option bit takes where the GPU's writes reach the memory here
 /// ([`the_private_option_bit_is_announced_on_a_heap_of_the_runtime_s_memory`]).
