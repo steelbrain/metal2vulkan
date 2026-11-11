@@ -1,32 +1,36 @@
-//! Device tests of device copies on the device the cfg selects: on a discrete GPU, a `Managed`
-//! texture that would read host pages in place, over a no-copy buffer whose memory carries a log
-//! of its writes (`HostMemory::with_dirty_pages`), is a shadow in the device's memory whose copies
-//! in take only the rows the log reports changed (the runtime's `dirty_pages.rs`): the GPU's copy
-//! of the two a `Managed` resource is on a Mac with a discrete GPU. A `Shared` texture there, any
-//! texture on any other device, and one without a log, is placed as before.
+//! Device tests of a `Managed` surface over host pages on the device the cfg selects. On a device
+//! without unified memory (a discrete GPU) its no-copy buffer is two copies, as Metal keeps a
+//! `Managed` resource on a Mac with a discrete GPU (the runtime's `managed_copy.rs`): the GPU's
+//! own in device-local memory, which a texture over the buffer reads, and the pages. The GPU's copy
+//! takes the pages' bytes as the buffer is made and at each `did_modify_range`, whether or not the
+//! memory carries a log of its writes (`HostMemory::with_dirty_pages`), and the pages take the
+//! GPU's writes at a `synchronize_resource`; no texture over host pages is made, so none is a
+//! device copy of them (`device_copy_textures`, which a buffer that lies in its pages there makes
+//! where its GPU copy found no room). With unified memory the surface lies in the pages, in place
+//! or a shadow, as before. A `Shared` texture there, any texture on any other device, is placed as
+//! before.
 //!
-//! - [`a_sampled_surface_over_logged_pages_follows_the_guest_s_writes`], under the validation
-//!   layer: a 1920x1080 `BGRA8Unorm` `Managed` surface over logged pages, read whole each frame by
-//!   a fragment function into a private target, which then holds the pages' texels after each
-//!   frame's CPU write of a run of a row. On a discrete GPU it is a device copy
-//!   (`device_copy_textures`, no `vk_image`): its first copy in moves every row, each later one
-//!   only the rows the log reported (`dirty_copies_in_gated`, `dirty_copy_in_bytes_copied`), one
-//!   with no change nothing (`dirty_copies_in_skipped`), and one whose wait the log answers
-//!   `false` every row (`dirty_copies_in_whole`). Elsewhere none is made.
-//! - [`a_gpu_write_of_the_pages_reaches_the_device_copy`], under the validation layer: a blit's
-//!   fill of rows of the surface's buffer in one command buffer is what the next one's read finds
-//!   (on a discrete GPU a whole copy in: the fill let go of the copy's hold).
-//! - [`without_a_log_the_surface_is_placed_as_before`], under the validation layer: the same
-//!   surface over pages without a log is no device copy.
+//! - [`a_managed_surface_reads_the_writes_did_modify_range_names`], under the validation layer: a
+//!   1920x1080 `BGRA8Unorm` `Managed` surface over logged pages, read whole each frame by a
+//!   fragment function into a private target, which then holds the pages' texels after each
+//!   frame's CPU write of a run of a row, told by `did_modify_range` (and the log). A write
+//!   nothing tells the buffer of reaches the next frame with unified memory, and not with two
+//!   copies.
+//! - [`a_gpu_write_of_the_buffer_reaches_the_surface`], under the validation layer: a blit's fill
+//!   of rows of the surface's buffer in one command buffer is what the next one's read finds, and
+//!   the pages hold it after a `synchronize_resource` of the buffer (with two copies, not before).
+//! - [`a_surface_without_a_log_is_placed_as_one_with`], under the validation layer: the same
+//!   surface over pages without a log is two copies without unified memory, else in place or a
+//!   shadow; no device copy either way.
 //! - [`a_shared_surface_over_logged_pages_is_no_device_copy`], under the validation layer: a
 //!   `Shared` surface over logged pages is no device copy on any device, in place where the
 //!   device's check passed for pointer pages (on a discrete GPU, read across the bus as a
 //!   discrete Mac's GPU reads a `Shared` texture), its reads the pages' texels.
 //! - [`device_copy_costs`], without the validation layer, report only (built in release for the
 //!   numbers): a 3840x2160 `BGRA8Unorm` `Managed` surface read whole each frame, with a few CPU-written
-//!   runs a frame, in one pass and in three, over pages without a log (in place where the check
-//!   passed) and with one (a device copy on a discrete GPU): the median and fastest GPU time of a
-//!   frame's command buffer (`DEVICE-COPY-COST`).
+//!   runs a frame told by `did_modify_range`, in one pass and in three, over pages without a log
+//!   and with one: the median and fastest GPU time of a frame's command buffer
+//!   (`DEVICE-COPY-COST`).
 
 use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{counting, Mapping, GUEST_PAGE};
@@ -37,7 +41,7 @@ use super::{layer_reported_nothing_at_all, validated_device_with, Messages, Scra
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, CommandQueue, CpuCacheMode, Device, DeviceKind, DirtyPages, DirtyStamp,
+    BlitOption, Buffer, CommandQueue, CpuCacheMode, Device, DirtyPages, DirtyStamp,
     HazardTrackingMode, HostMemory, LoadAction, Origin, RenderPassDescriptor, RenderPipelineState,
     ResourceOptions, ScissorRect, Size, StorageMode, StoreAction, Texture, TextureDescriptor,
     WorkCounts,
@@ -230,9 +234,9 @@ fn target_of(device: &Device, (w, h): (u64, u64)) -> Texture {
     device.new_texture(&d).unwrap()
 }
 
-/// Whether `device` makes device copies: a discrete GPU.
-fn copies_on(device: &Device) -> bool {
-    device.properties().kind == DeviceKind::Discrete
+/// Whether a `Managed` no-copy buffer on `device` is two copies: it has no unified memory.
+fn two_copies(device: &Device) -> bool {
+    !device.properties().has_unified_memory
 }
 
 /// The changes of the device copies' counters from `before` to `after`: textures made, copies in
@@ -252,7 +256,7 @@ fn copied(before: &WorkCounts, after: &WorkCounts) -> [u64; 5] {
 }
 
 #[test]
-fn a_sampled_surface_over_logged_pages_follows_the_guest_s_writes() {
+fn a_managed_surface_reads_the_writes_did_modify_range_names() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
@@ -267,24 +271,23 @@ fn a_sampled_surface_over_logged_pages_follows_the_guest_s_writes() {
     let before = device.work_counts();
     let buffer = over(&device, &mapping, len, Some(&log));
     let texture = sampled(&buffer, PixelFormat::BGRA8Unorm, (w, h, bpr));
-    let made = copied(&before, &device.work_counts());
-    let discrete = copies_on(&device);
-    // SAFETY: the handle is only compared.
-    let in_place = unsafe { texture.vk_image() }.is_some();
+    let after = device.work_counts();
+    let two = two_copies(&device);
     eprintln!(
-        "DEVICE-COPY on {} ({:?}): device copy {}, in place {in_place}",
+        "DEVICE-COPY on {} ({:?}): two copies {two}",
         device.name(),
         device.properties().kind,
-        made[0] == 1
     );
     assert_eq!(
-        made[0],
-        u64::from(discrete),
-        "a device copy exactly on a discrete GPU"
+        after.managed_device_copies_made - before.managed_device_copies_made,
+        u64::from(two),
+        "two copies exactly without unified memory"
     );
-    if discrete {
-        assert!(!in_place, "a device copy reads no image in place");
-    }
+    assert_eq!(
+        copied(&before, &after)[0],
+        0,
+        "no device copy of host pages"
+    );
     let target = target_of(&device, (w, h));
     let objects = (&reads, &corners);
     let check = |what: &str| {
@@ -292,50 +295,31 @@ fn a_sampled_surface_over_logged_pages_follows_the_guest_s_writes() {
         let guest = guest_texels(&mapping, (w, h, bpr));
         assert!(read == guest, "{what}: the target holds the guest's texels");
     };
-    // The first frame copies every row.
-    let start = device.work_counts();
     frame(&queue, objects, (&texture, &target), (w, h), 1);
     check("the first frame");
-    // Each later frame's CPU write of a run of one row, logged.
+    // Each later frame's CPU write of a run of one row, logged and told.
     for (at, row) in [(3u64, 17u64), (1, 500), (7, 1079)] {
         let offset = row * bpr + at * 64;
         mapping.write(offset as usize, &[0xa5 ^ row as u8; 64]);
         log.mark(offset..offset + 64);
+        buffer.did_modify_range(offset..offset + 64).unwrap();
         frame(&queue, objects, (&texture, &target), (w, h), 1);
         check(&format!("after a write of row {row}"));
     }
-    // A frame with no write copies nothing; one whose wait cannot say copies every row.
-    frame(&queue, objects, (&texture, &target), (w, h), 1);
-    check("after no write");
+    // A logged write nothing tells the buffer of: in the pages with unified memory, which the
+    // GPU reads; not in the GPU's copy with two copies.
+    let seen = texels(&queue, &target, (w, h));
     let offset = 900 * bpr;
     mapping.write(offset as usize, &[0x3c; 128]);
     log.mark(offset..offset + 128);
-    log.cannot_say();
     frame(&queue, objects, (&texture, &target), (w, h), 1);
-    check("after a wait that could not say");
-    let counted = copied(&start, &device.work_counts());
-    eprintln!(
-        "DEVICE-COPY on {}: gated {}, whole {}, skipped {}, bytes copied {}",
-        device.name(),
-        counted[1],
-        counted[2],
-        counted[3],
-        counted[4]
-    );
-    if discrete {
-        assert_eq!(counted[1], 6, "each frame's copy in, gated");
-        assert_eq!(
-            counted[2], 2,
-            "the first and the one that could not say: every row"
-        );
-        assert_eq!(counted[3], 1, "no write: nothing");
-        // Every row twice; a 4 KiB page of a 7680-byte row touches at most two rows, three times.
-        let row = w * 4;
-        assert!(
-            counted[4] <= 2 * h * row + 3 * 2 * row,
-            "bytes {}",
-            counted[4]
-        );
+    let read = texels(&queue, &target, (w, h));
+    match two {
+        true => assert!(read == seen, "a write nothing told is not seen"),
+        false => assert!(
+            read == guest_texels(&mapping, (w, h, bpr)),
+            "a write in the pages is seen"
+        ),
     }
     drop((texture, buffer, target));
     drop(mapping);
@@ -343,7 +327,7 @@ fn a_sampled_surface_over_logged_pages_follows_the_guest_s_writes() {
 }
 
 #[test]
-fn a_gpu_write_of_the_pages_reaches_the_device_copy() {
+fn a_gpu_write_of_the_buffer_reaches_the_surface() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
@@ -360,8 +344,10 @@ fn a_gpu_write_of_the_pages_reaches_the_device_copy() {
     let target = target_of(&device, (w, h));
     let objects = (&reads, &corners);
     frame(&queue, objects, (&texture, &target), (w, h), 1);
-    let start = device.work_counts();
-    // A blit fills rows 40 to 47 of the buffer: the GPU's write, no CPU write logged.
+    // A blit fills rows 40 to 47 of the buffer: the GPU's write, no CPU write.
+    let filled = (40 * bpr) as usize..(48 * bpr) as usize;
+    let mut expected = guest_texels(&mapping, (w, h, bpr));
+    expected[(40 * w * 4) as usize..(48 * w * 4) as usize].fill(0x5a);
     let command_buffer = queue.command_buffer().unwrap();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.fill_buffer(&buffer, 40 * bpr..48 * bpr, 0x5a).unwrap();
@@ -371,44 +357,35 @@ fn a_gpu_write_of_the_pages_reaches_the_device_copy() {
     assert_eq!(command_buffer.error(), None);
     frame(&queue, objects, (&texture, &target), (w, h), 1);
     let read = texels(&queue, &target, (w, h));
-    assert!(
-        read == guest_texels(&mapping, (w, h, bpr)),
-        "the fill reached the read"
-    );
-    assert!(read[(40 * w * 4) as usize..(48 * w * 4) as usize]
+    assert!(read == expected, "the fill reached the read");
+    let in_pages = mapping
+        .read(filled.clone())
         .iter()
-        .all(|&byte| byte == 0x5a));
-    let counted = copied(&start, &device.work_counts());
-    eprintln!(
-        "DEVICE-COPY on {}: after the fill gated {}, whole {}, bytes {}",
-        device.name(),
-        counted[1],
-        counted[2],
-        counted[4]
+        .all(|&byte| byte == 0x5a);
+    assert_eq!(
+        in_pages,
+        !two_copies(&device),
+        "the pages hold the fill before a synchronize exactly where the GPU writes them"
     );
-    if copies_on(&device) {
-        // The runtime reports its own write of the pages to their log (`dirty_pages.rs`), so the
-        // next copy in is gated to the pages the fill wrote: no whole copy, and at least the
-        // fill's rows but no more than the pages they lie in.
-        assert_eq!(
-            counted[1..3],
-            [1, 0],
-            "the fill's pages, gated: no whole copy"
-        );
-        let fill = 8 * bpr;
-        assert!(
-            (fill..=fill + 2 * GUEST_PAGE as u64).contains(&counted[4]),
-            "the fill's pages alone: bytes {}",
-            counted[4]
-        );
-    }
+    // A synchronize copies the GPU's copy out to the pages (with unified memory, nothing).
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.synchronize_resource((&buffer).into()).unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    assert!(
+        mapping.read(filled).iter().all(|&byte| byte == 0x5a),
+        "the pages hold the fill after a synchronize"
+    );
     drop((texture, buffer, target));
     drop(mapping);
     layer_reported_nothing_at_all(&messages);
 }
 
 #[test]
-fn without_a_log_the_surface_is_placed_as_before() {
+fn a_surface_without_a_log_is_placed_as_one_with() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
@@ -424,12 +401,20 @@ fn without_a_log_the_surface_is_placed_as_before() {
         0,
         "no device copy without a log"
     );
+    let two = two_copies(&device);
     assert_eq!(
-        after.host_textures_in_place - before.host_textures_in_place + after.shadowed_textures
-            - before.shadowed_textures,
-        1,
-        "in place or a shadow, as before"
+        after.managed_device_copies_made - before.managed_device_copies_made,
+        u64::from(two),
+        "two copies exactly without unified memory"
     );
+    if !two {
+        assert_eq!(
+            after.host_textures_in_place - before.host_textures_in_place + after.shadowed_textures
+                - before.shadowed_textures,
+            1,
+            "in place or a shadow, as before"
+        );
+    }
     drop((texture, buffer));
     drop(mapping);
     layer_reported_nothing_at_all(&messages);
@@ -551,10 +536,14 @@ fn device_copy_costs() {
             let buffer = over(&device, &mapping, len, logged.then_some(&log));
             let texture = sampled(&buffer, PixelFormat::BGRA8Unorm, (w, h, bpr));
             // SAFETY: the handle is only compared.
-            let form = match (unsafe { texture.vk_image() }, logged && copies_on(&device)) {
-                (_, true) => "device copy",
+            let form = match (unsafe { texture.vk_image() }, two_copies(&device)) {
+                (_, true) => "two copies",
                 (Some(_), false) => "in place",
                 (None, false) => "shadow",
+            };
+            let form = match logged {
+                true => format!("{form}, logged"),
+                false => form.to_string(),
             };
             let start = device.work_counts();
             let mut times = Vec::with_capacity(FRAMES);
@@ -564,11 +553,14 @@ fn device_copy_costs() {
                     let offset = ((f * 37 + run * 541) % h) * bpr + run * 1024;
                     mapping.write(offset as usize, &[f as u8; 256]);
                     log.mark(offset..offset + 256);
+                    buffer.did_modify_range(offset..offset + 256).unwrap();
                 }
                 let objects = (&reads, &corners);
                 times.push(frame(&queue, objects, (&texture, &target), (w, h), passes));
             }
-            let counted = copied(&start, &device.work_counts());
+            let end = device.work_counts();
+            let counted = copied(&start, &end);
+            let bytes = counted[4] + end.managed_bytes_copied_in - start.managed_bytes_copied_in;
             times.sort_by(f64::total_cmp);
             eprintln!(
                 "DEVICE-COPY-COST on {}: {form}: a frame's GPU time median {:.1} us, fastest \
@@ -577,8 +569,8 @@ fn device_copy_costs() {
                 device.name(),
                 times[FRAMES / 2] * 1e6,
                 times[0] * 1e6,
-                counted[4],
-                counted[4] / FRAMES as u64,
+                bytes,
+                bytes / FRAMES as u64,
             );
             drop((texture, buffer));
             drop(mapping);

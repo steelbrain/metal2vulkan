@@ -73,7 +73,9 @@
 //! (`EncoderCore::hold_pass`): the pass's draws read the bytes the CPU wrote, the first time and
 //! after a write told to the log, and the pass stays one inline instance. So does a `Managed`
 //! texture the pass only samples, which a discrete GPU makes a device copy
-//! (`WorkCounts::device_copy_textures`) and every other device reads in place (no copy, printed).
+//! (`WorkCounts::device_copy_textures`) where its no-copy buffer lies in its pages (its GPU copy
+//! found no room: a two-copy buffer's texture is over its GPU copy, `managed_copy.rs`, and the
+//! leg then has nothing to copy in) and every other device reads in place (no copy, printed).
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`). The kernels are the owned fixture

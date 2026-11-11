@@ -201,7 +201,10 @@ impl Buffer {
         if self.heap().is_some() {
             return Ok(PurgeableState::NonVolatile);
         }
-        if self.caller_memory().is_some() || self.length() < PURGEABLE_ALLOCATION {
+        // A two-copy buffer (`managed_copy.rs`) is a no-copy buffer: its device copy is the
+        // runtime's own memory, but its bytes are the caller's pages.
+        let no_copy = self.caller_memory().is_some() || self.caller_copy().is_some();
+        if no_copy || self.length() < PURGEABLE_ALLOCATION {
             return Ok(PurgeableState::NonVolatile);
         }
         let answer = self.attributes().set_purgeable_state(state);

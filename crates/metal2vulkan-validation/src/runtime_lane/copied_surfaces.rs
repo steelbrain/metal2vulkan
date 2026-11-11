@@ -32,8 +32,9 @@ use super::WAIT;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan_runtime::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBuffer, CommandQueue,
-    CpuCacheMode, Device, EventRef, HazardTrackingMode, HostMemory, ImportGate, IoSurfacePlane,
-    Origin, ResourceOptions, Size, StorageMode, Texture, TextureDescriptor, WorkCounts,
+    CpuCacheMode, Device, EventRef, HazardTrackingMode, HostBacking, HostMemory, ImportGate,
+    IoSurfacePlane, Origin, ResourceOptions, Size, StorageMode, Texture, TextureDescriptor,
+    WorkCounts,
 };
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -357,16 +358,20 @@ fn two_buffers_over_one_refused_surface_are_one_copy() {
     });
 }
 
-/// A `Shared` and a `Managed` buffer over one refused surface's pages share one copy: the copy's
-/// memory is the runtime's own of one class whatever the buffer's storage mode, so the managed
-/// buffer takes the copy a copy of its own would be. Its managed contract holds over it: the CPU's
-/// writes through its contents, told by `did_modify_range`, reach a read through the shared
-/// buffer, and a GPU write through the shared buffer reaches its contents after a
-/// `synchronize_resource` of it; in one command buffer a write through either reaches a read
-/// through the other.
+/// A `Shared` and a `Managed` buffer over one refused surface's pages share one copy where the
+/// device has unified memory: the copy's memory is the runtime's own of one class whatever the
+/// buffer's storage mode, so the managed buffer takes the copy a copy of its own would be. Without
+/// unified memory the managed buffer is two copies instead, as on a Mac with a discrete GPU (the
+/// runtime's `managed_copy.rs`): the GPU's own and the pages, its gate asked and refusing, no copy
+/// made. Its managed contract holds either way: the CPU's writes through its contents, told by
+/// `did_modify_range`, reach a read through the shared buffer, and a GPU write through the shared
+/// buffer reaches its contents after a `synchronize_resource` of it. With unified memory, in one
+/// command buffer a write through either reaches a read through the other; with two copies they
+/// meet only through the pages.
 #[test]
 fn a_shared_and_a_managed_buffer_over_one_refused_surface_share_its_copy() {
     on_device(|device| {
+        let two_copies = !device.properties().has_unified_memory;
         let memory = Mapping::anonymous(LEN as usize);
         let before = device.work_counts();
         // SAFETY: the mapping outlives both buffers, dropped first.
@@ -379,11 +384,17 @@ fn a_shared_and_a_managed_buffer_over_one_refused_surface_share_its_copy() {
         // SAFETY: as above.
         let managed = unsafe { refused(device, memory.pointer(), options) };
         let counts = copy_counts(&before, &device.work_counts());
+        let expected = match two_copies {
+            false => [1, 1, 1, 1],
+            true => [1, 1, 0, 2],
+        };
         assert_eq!(
-            counts,
-            [1, 1, 1, 1],
+            counts, expected,
             "copies made, refused, shared, gate refusals"
         );
+        if two_copies {
+            assert_eq!(managed.host_backing(), Some(HostBacking::DeviceCopy));
+        }
         let queue = device.new_command_queue().unwrap();
         let copies = Copies::new(device);
         // The CPU writes through the managed buffer's contents, and says so.
@@ -413,7 +424,12 @@ fn a_shared_and_a_managed_buffer_over_one_refused_surface_share_its_copy() {
             vec![0x5a; LEN as usize],
             "the managed buffer's contents hold the GPU's write"
         );
-        // In one command buffer, a write through either reaches a read through the other.
+        // In one command buffer, a write through either reaches a read through the other where
+        // they share the copy.
+        if two_copies {
+            drop((shared, managed));
+            return;
+        }
         for (written, value) in [(&managed, 0x33), (&shared, 0x44)] {
             let reader = if std::ptr::eq(written, &managed) {
                 &shared
