@@ -4752,21 +4752,24 @@ pub(super) fn allocate_in(
     )
 }
 
-/// Memory for the bytes of a copied host buffer's base of `bytes` (`copied.rs`), which the host
-/// writes for each block that changed and reads only for a block both sides changed: device-local
-/// memory the host maps and needs no flush for ([`Memory::copied_base_type`]), placed as a
-/// `WriteCombined` buffer's, in a pooled block or one of its own. `None` where the device has no
-/// such memory with room, or the placement failed: the base's bytes then lie in host memory.
+/// Memory for the bytes of a copied host buffer's base (`copied.rs`), the buffer over them asking
+/// `requirements`, which the host writes for each block that changed and reads only for a block
+/// both sides changed: device-local memory the host maps and needs no flush for
+/// ([`Memory::copied_base_type`]), placed as a `WriteCombined` buffer's, in a pooled block or one
+/// of its own. `None` where the device has no such memory with room, the buffer cannot lie in
+/// it, or the placement failed: the base's bytes then lie in host memory.
 pub(super) fn allocate_copied_base(
     memory: &Mutex<Memory>,
     device: &ash::Device,
-    bytes: u64,
+    requirements: &vk::MemoryRequirements,
 ) -> Option<Placement> {
-    let type_index = lock(memory).copied_base_type(bytes)?;
+    let type_index = lock(memory).copied_base_type(requirements.size)?;
+    if requirements.memory_type_bits & (1 << type_index) == 0 {
+        return None;
+    }
     let requirements = vk::MemoryRequirements {
-        size: bytes,
-        alignment: 64,
         memory_type_bits: 1 << type_index,
+        ..*requirements
     };
     let class = MemoryClass::WriteCombined;
     let placed = place(

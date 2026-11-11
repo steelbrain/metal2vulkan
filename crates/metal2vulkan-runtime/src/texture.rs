@@ -4820,8 +4820,9 @@ pub(super) fn zero_copies(
 }
 
 /// A host-visible, mapped buffer of `len` bytes for copies both ways, bound to its placement: a
-/// staging buffer's objects ([`Staging`], `staging_copy::StagedBytes`).
-fn staging_buffer(device: &Device, len: u64) -> Result<(vk::Buffer, Placement), Error> {
+/// staging buffer's objects ([`Staging`], `staging_copy::StagedBytes`, a copied host buffer's
+/// base's read back, `copied_base.rs`).
+pub(crate) fn staging_buffer(device: &Device, len: u64) -> Result<(vk::Buffer, Placement), Error> {
     let shared = device.shared();
     let raw_device = shared.vk();
     usize::try_from(len).map_err(|_| Error::OutOfMemory(MemoryKind::Host))?;

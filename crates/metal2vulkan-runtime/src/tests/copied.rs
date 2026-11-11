@@ -9,12 +9,13 @@
 
 use crate::copied::{
     merge_block, read_caller, tag, BaseBytes, Copied, CopiedBuffers, CopiesReached, FirstRead,
-    NotCopied, TAG_BLOCK,
+    Held, NotCopied, READ_BACK_FROM, TAG_BLOCK,
 };
 use crate::dirty_pages::DirtyTally;
 use crate::resource::ResourceKey;
 use crate::work_counts::Counters;
 use std::cell::Cell;
+use std::ops::{Deref, Range};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -89,6 +90,27 @@ struct StandIn(NonNull<[u8]>);
 
 // SAFETY: the memory is this value's own, reached only through the base's pointer.
 unsafe impl Send for StandIn {}
+
+/// Its reads back copy the runs on the host, as the device's copy on its staging queue would,
+/// where the test lets it ([`READS_BACK`]).
+impl Held for StandIn {
+    fn read_back(&self, runs: &[Range<usize>]) -> Option<Box<dyn Deref<Target = [u8]>>> {
+        if !READS_BACK.with(Cell::get) {
+            return None;
+        }
+        // SAFETY: the stand-in's memory, which the runs lie in.
+        let bytes = unsafe { self.0.as_ref() };
+        let read: Vec<u8> = (runs.iter())
+            .flat_map(|run| bytes[run.clone()].iter().copied())
+            .collect();
+        Some(Box::new(read))
+    }
+}
+
+thread_local! {
+    /// Whether the stand-ins' reads back are made on this thread ([`StandIn`]'s [`Held`]).
+    static READS_BACK: Cell<bool> = const { Cell::new(false) };
+}
 
 impl Drop for StandIn {
     fn drop(&mut self) {
@@ -357,6 +379,91 @@ fn a_device_base_s_block_both_sides_changed_is_kept_on_the_host() {
     drop(copied);
     assert_eq!(buffers.base_bytes(), (0, 0));
     assert_eq!(buffers.base_host_blocks(), 0);
+}
+
+/// A comparison that would read [`READ_BACK_FROM`] blocks or more of a base in the device's
+/// memory leaves them for a second pass, which takes them from one read back (the stand-in's,
+/// made on the host as the device's staging copy would be), and fewer each from the device's
+/// bytes, as it does where the read back is not made; either way a merge back (one that keeps
+/// the GPU's writes, and one that drops them) and the copy in after it answer exactly, each such
+/// block read once and kept on the host.
+#[test]
+fn a_comparison_of_many_device_blocks_reads_them_back_together() {
+    let blocks = [1, 2, 4, 8];
+    // (Its switch, whether reads back are made, the blocks read back.)
+    let cases = [(3, true, 4), (5, true, 0), (3, false, 0)];
+    for drops in [false, true] {
+        for (from, reads_back, read_back) in cases {
+            READ_BACK_FROM.store(from, std::sync::atomic::Ordering::Relaxed);
+            READS_BACK.with(|on| on.set(reads_back));
+            let named = format!("drops {drops}, from {from}, reads back {reads_back}");
+            let length = 8 * TAG_BLOCK + 5;
+            let mut pages: Vec<u8> = (0..length as u32).map(|i| (i * 13 + 1) as u8).collect();
+            let original = pages.clone();
+            let mut copy = vec![0_u8; length];
+            let buffers = Arc::new(CopiedBuffers::default());
+            let counts = Counters::default();
+            // SAFETY: the copy and the pages are the test's, of `length` bytes, live past the
+            // answer.
+            let copied = unsafe {
+                add_reading(
+                    &buffers,
+                    at(&mut pages),
+                    at(&mut copy),
+                    length,
+                    plain,
+                    drops,
+                )
+            };
+            let copied = copied.unwrap();
+            let all = CopiesReached::all();
+            let tally = DirtyTally::default();
+            let made = buffers.copy_in(&counts, &tally, (&all, &all), Vec::new, &mut stand_in);
+            assert_eq!(made, Ok(()), "{named}");
+            // Both sides change each of `blocks` (8 the last, 5 bytes long), and the GPU block 6.
+            for block in blocks {
+                copy[block * TAG_BLOCK + 3] ^= 0xFF;
+                pages[block * TAG_BLOCK + 4] ^= 0xFF;
+            }
+            copy[6 * TAG_BLOCK] ^= 0xFF;
+            let (gpu, cpu) = (copy.clone(), pages.clone());
+            buffers.merge_back(&counts, &all);
+            let counted = counts.copied_tallies();
+            assert_eq!(counted.base_blocks_read, 4, "{named}");
+            assert_eq!(counted.base_blocks_read_back, read_back, "{named}");
+            assert_eq!(
+                buffers.base_host_blocks(),
+                4,
+                "{named}: each kept on the host"
+            );
+            match drops {
+                false => {
+                    let mut merged = gpu.clone();
+                    for block in blocks {
+                        let at = block * TAG_BLOCK + 4;
+                        merged[at] = cpu[at];
+                    }
+                    assert_eq!(
+                        pages, merged,
+                        "{named}: the GPU's bytes merged, the CPU's kept"
+                    );
+                }
+                true => {
+                    assert_eq!(pages, cpu, "{named}: nothing written to the pages");
+                    assert_eq!(
+                        copy, original,
+                        "{named}: the GPU's bytes taken out of the copy"
+                    );
+                }
+            }
+            commit_reading(&buffers, &counts);
+            assert_eq!(copy, pages, "{named}: the CPU's bytes copied in");
+            drop(copied);
+            assert_eq!(buffers.base_host_blocks(), 0, "{named}");
+        }
+    }
+    READ_BACK_FROM.store(0, std::sync::atomic::Ordering::Relaxed);
+    READS_BACK.with(|on| on.set(false));
 }
 
 /// A copy whose GPU writes are dropped takes the GPU's bytes out of the copy alone, where the CPU

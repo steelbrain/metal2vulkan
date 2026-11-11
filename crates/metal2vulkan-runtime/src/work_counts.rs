@@ -47,6 +47,7 @@ pub(crate) struct CopiedTallies {
     pub(crate) bases_made: u64,
     pub(crate) bases_refused: u64,
     pub(crate) base_blocks_read: u64,
+    pub(crate) base_blocks_read_back: u64,
     pub(crate) compare_threads: u64,
 }
 
@@ -388,6 +389,7 @@ pub(crate) struct Counters {
     copied_bases_made: AtomicU64,
     copied_bases_refused: AtomicU64,
     copied_base_blocks_read: AtomicU64,
+    copied_base_blocks_read_back: AtomicU64,
     copied_compare_threads: AtomicU64,
     host_ram_copies: AtomicU64,
     host_ram_copy_bytes: AtomicU64,
@@ -3572,6 +3574,7 @@ impl Counters {
             bases_made: load(&self.copied_bases_made),
             bases_refused: load(&self.copied_bases_refused),
             base_blocks_read: load(&self.copied_base_blocks_read),
+            base_blocks_read_back: load(&self.copied_base_blocks_read_back),
             compare_threads: load(&self.copied_compare_threads),
         }
     }
@@ -3583,6 +3586,13 @@ impl Counters {
         (self.copied_bases_made).fetch_add(made, Ordering::Relaxed);
         (self.copied_bases_refused).fetch_add(refused, Ordering::Relaxed);
         (self.copied_base_blocks_read).fetch_add(read, Ordering::Relaxed);
+    }
+
+    /// Comparisons of copied host buffers read `blocks` blocks of bases in the device's memory
+    /// through a copy into host memory on the GPU, one per comparison that read that many
+    /// (`copied.rs`): among the blocks [`Counters::copied_bases`] counts read.
+    pub(crate) fn copied_base_blocks_read_back(&self, blocks: u64) {
+        (self.copied_base_blocks_read_back).fetch_add(blocks, Ordering::Relaxed);
     }
 
     /// Comparisons of copied host buffers started `threads` threads beside their calling ones,
@@ -7256,8 +7266,14 @@ pub struct WorkCounts {
     pub copied_bases_refused: u64,
     /// The 1 KiB blocks of copied host buffers' bases that comparisons read: blocks the CPU and
     /// the GPU both changed since the pages and the copy last agreed. A base in the device's
-    /// memory is read across the bus, uncached.
+    /// memory is read across the bus, uncached, by the host, or by the GPU's copy where one
+    /// comparison reads many (`copied_base_blocks_read_back`).
     pub copied_base_blocks_read: u64,
+    /// Of `copied_base_blocks_read`, the blocks of bases in the device's memory that comparisons
+    /// read through one copy into host memory on the device's staging queue each, where a
+    /// comparison read enough of them that the GPU's copy costs less than the host's uncached
+    /// reads (the device has a staging queue wherever a base lies in its memory).
+    pub copied_base_blocks_read_back: u64,
     /// The threads comparisons of copied host buffers started beside the calling thread: a
     /// commit's copy in or a completion's merge back of a copy with a base of 16 MiB or more
     /// splits its blocks across up to four threads, the calling one among them, each run at
@@ -9248,6 +9264,8 @@ impl Device {
             copied_bases_made: counters.copied_bases_made.load(Ordering::Relaxed),
             copied_bases_refused: counters.copied_bases_refused.load(Ordering::Relaxed),
             copied_base_blocks_read: counters.copied_base_blocks_read.load(Ordering::Relaxed),
+            copied_base_blocks_read_back: (counters.copied_base_blocks_read_back)
+                .load(Ordering::Relaxed),
             copied_compare_threads: counters.copied_compare_threads.load(Ordering::Relaxed),
             copied_base_host_bytes,
             copied_base_device_bytes,

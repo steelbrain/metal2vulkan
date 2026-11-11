@@ -9,12 +9,17 @@
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects. A device that imports no host memory says so and passes.
 
+use super::copied::add_reading;
+use crate::copied::{CopiedBuffers, CopiesReached, READ_BACK_FROM, TAG_BLOCK};
+use crate::dirty_pages::DirtyTally;
+use crate::work_counts::Counters;
 use crate::{
     Buffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, HostBacking, HostMemory,
     ImportGate, ResourceOptions,
 };
 use std::alloc::Layout;
 use std::ptr::NonNull;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -285,4 +290,171 @@ fn copied_base_read_scale_bench() {
     let started = Instant::now();
     read(0, LENGTH);
     report("256 MiB, one thread", LENGTH, started);
+}
+
+/// A plain read of a test's pages, a copy's first.
+fn plain(from: NonNull<u8>, into: &mut [u8]) -> bool {
+    // SAFETY: the tests' pages are `into.len()` bytes of plain memory.
+    unsafe { std::ptr::copy_nonoverlapping(from.as_ptr(), into.as_mut_ptr(), into.len()) };
+    true
+}
+
+/// The `n`th byte of the pages [`a_whole_written_device_base_is_read_back_by_the_gpu`] makes.
+fn page_byte(n: usize) -> u8 {
+    (n ^ (n >> 11)) as u8
+}
+
+/// A first merge back of a 256 MiB copy every block of which both sides changed, its base in the
+/// device's memory, after the device sat idle three seconds (where the host's reads of that
+/// memory are slowest, about 0.2 ms a 1 KiB block on an RTX 5080 Laptop GPU's host): the
+/// comparison reads every block back through one copy on the staging queue
+/// (`WorkCounts::copied_base_blocks_read_back`), in under a second, and merges exactly, the
+/// CPU's byte of each block kept and every other byte the GPU's.
+#[test]
+fn a_whole_written_device_base_is_read_back_by_the_gpu() {
+    let Some(device) = device() else {
+        return;
+    };
+    if device.copied_base(1 << 20).is_none() {
+        eprintln!("COPIED-BASE: no base in the device's memory here; nothing to test");
+        return;
+    }
+    let named = device.name().to_string();
+    let buffers = Arc::new(CopiedBuffers::default());
+    let (counts, tally) = (Counters::default(), DirtyTally::default());
+    let mut pages: Vec<u8> = (0..LENGTH).map(page_byte).collect();
+    let mut copy = vec![0_u8; LENGTH];
+    let at = |bytes: &mut Vec<u8>| NonNull::new(bytes.as_mut_ptr()).unwrap();
+    // SAFETY: the pages and the copy are the test's, of `LENGTH` bytes, live past the answer.
+    let copied = unsafe {
+        add_reading(
+            &buffers,
+            at(&mut pages),
+            at(&mut copy),
+            LENGTH,
+            plain,
+            false,
+        )
+    };
+    let copied = copied.unwrap();
+    let all = CopiesReached::all();
+    let made = buffers.copy_in(&counts, &tally, (&all, &all), Vec::new, &mut |length| {
+        device.copied_base(length)
+    });
+    assert_eq!(made, Ok(()));
+    assert_eq!(
+        buffers.base_bytes().1,
+        LENGTH as u64,
+        "the base in the device's memory"
+    );
+    // The GPU rewrites every float as `x + i`; the CPU a byte of every block.
+    for (index, float) in copy.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        *float = (f32::from_le_bytes(*float) + index as f32).to_le_bytes();
+    }
+    for block in pages.chunks_mut(TAG_BLOCK) {
+        block[1] = block[1].wrapping_add(1);
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    let started = Instant::now();
+    buffers.merge_back(&counts, &all);
+    let took = started.elapsed();
+    let counted = counts.copied_tallies();
+    eprintln!(
+        "COPIED-BASE {named}: a first merge back of 256 MiB both sides wrote whole, after 3 s \
+         idle: {:.1} ms, {} blocks read back",
+        took.as_secs_f64() * 1e3,
+        counted.base_blocks_read_back,
+    );
+    let blocks = (LENGTH / TAG_BLOCK) as u64;
+    assert_eq!(counted.base_blocks_read, blocks);
+    assert_eq!(
+        counted.base_blocks_read_back, blocks,
+        "every block read back"
+    );
+    assert!(took < Duration::from_secs(1), "{took:?}");
+    for (n, (&got, &gpu)) in pages.iter().zip(&copy).enumerate() {
+        let want = match n % TAG_BLOCK {
+            1 => page_byte(n).wrapping_add(1),
+            _ => gpu,
+        };
+        assert_eq!(got, want, "byte {n}");
+    }
+    drop(copied);
+}
+
+/// The cost of a comparison's reads of `n` blocks of a base in the device's memory that both
+/// sides changed, each read by the host against all read back through one copy on the staging
+/// queue, for `n` from 8 to 4096, each the median of three first merges back of fresh blocks of
+/// a 64 MiB copy, every other block (`COPIED-READ-BACK`); and 64 and 651 after three seconds of
+/// the device idle, once each: what sets `copied.rs`'s `READ_BACK_BLOCKS`. Ignored: run it in
+/// release with `--ignored --nocapture`.
+#[test]
+#[ignore = "a release-mode benchmark"]
+fn copied_read_back_bench() {
+    const BYTES: usize = 64 << 20;
+    let Some(device) = device() else {
+        return;
+    };
+    if device.copied_base(1 << 20).is_none() {
+        eprintln!("COPIED-READ-BACK: no base in the device's memory here");
+        return;
+    }
+    let named = device.name().to_string();
+    let buffers = Arc::new(CopiedBuffers::default());
+    let (counts, tally) = (Counters::default(), DirtyTally::default());
+    let mut pages: Vec<u8> = (0..BYTES).map(page_byte).collect();
+    let mut copy = vec![0_u8; BYTES];
+    let at = |bytes: &mut Vec<u8>| NonNull::new(bytes.as_mut_ptr()).unwrap();
+    // SAFETY: the pages and the copy are the bench's, of `BYTES` bytes, live past the answer.
+    let copied =
+        unsafe { add_reading(&buffers, at(&mut pages), at(&mut copy), BYTES, plain, false) };
+    let copied = copied.unwrap();
+    let all = CopiesReached::all();
+    let made = buffers.copy_in(&counts, &tally, (&all, &all), Vec::new, &mut |length| {
+        device.copied_base(length)
+    });
+    assert_eq!(made, Ok(()));
+    // Fresh blocks, every other one, so no two read back are adjacent.
+    let mut next = 0usize;
+    let mut merge = |n: usize, read_back: bool, pages: &mut Vec<u8>, copy: &mut Vec<u8>| {
+        READ_BACK_FROM.store(if read_back { 1 } else { usize::MAX }, Ordering::Relaxed);
+        for _ in 0..n {
+            let at = next * 2 * TAG_BLOCK;
+            next += 1;
+            copy[at] = copy[at].wrapping_add(1);
+            pages[at + 1] = pages[at + 1].wrapping_add(1);
+        }
+        let before = counts.copied_tallies().base_blocks_read_back;
+        let started = Instant::now();
+        buffers.merge_back(&counts, &all);
+        let took = started.elapsed().as_secs_f64() * 1e3;
+        let back = counts.copied_tallies().base_blocks_read_back - before;
+        assert_eq!(back, if read_back { n as u64 } else { 0 });
+        took
+    };
+    for n in [8, 16, 32, 64, 128, 256, 1024, 4096] {
+        let (mut host, mut back) = (Vec::new(), Vec::new());
+        for _ in 0..3 {
+            host.push(merge(n, false, &mut pages, &mut copy));
+            back.push(merge(n, true, &mut pages, &mut copy));
+        }
+        host.sort_by(f64::total_cmp);
+        back.sort_by(f64::total_cmp);
+        eprintln!(
+            "COPIED-READ-BACK {named}, {n} blocks: host reads {:.2} ms, read back {:.2} ms",
+            host[1], back[1],
+        );
+    }
+    for n in [64, 651] {
+        std::thread::sleep(Duration::from_secs(3));
+        let host = merge(n, false, &mut pages, &mut copy);
+        std::thread::sleep(Duration::from_secs(3));
+        let back = merge(n, true, &mut pages, &mut copy);
+        eprintln!(
+            "COPIED-READ-BACK {named}, {n} blocks after 3 s idle: host reads {host:.2} ms, read \
+             back {back:.2} ms",
+        );
+    }
+    READ_BACK_FROM.store(0, Ordering::Relaxed);
+    drop(copied);
 }
