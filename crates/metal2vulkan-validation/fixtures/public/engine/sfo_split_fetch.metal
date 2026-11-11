@@ -2,11 +2,12 @@
 // rasterization-order color access runs as several render pass instances, over a stencil the
 // draws before the fetch write and the draws from it test. Each fragment function writes color
 // attachment 0 (an 8-bit normalized format) as one code `c` in its red, green and blue channels
-// and 255 in alpha; `sfo_plane` writes a second color, `cover`, two floats, as well.
-// `sfo_image` writes `sfo_code(k)` for its primitive `k`; `sfo_filter` reads color attachment 0
-// and writes back `3c + 1` or `5c + 3` (wrapping at 256) by the parity of the bits set in `k`, so
-// overlapping fetching primitives leave a code that holds only where each read what the one before
-// it wrote; `sfo_plane` writes 7, `sfo_cover` 200.
+// and 255 in alpha; `sfo_plane` writes a second color, `cover`, two floats, as well: its
+// primitive's `k` and 1. `sfo_image` writes `sfo_code(k)` for its primitive `k`; `sfo_filter`
+// reads color attachments 0 and 1 and writes back `3c + 1` or `5c + 3` by the parity of the bits
+// set in `k`, plus the `k` the plane wrote into `cover` (wrapping at 256), so overlapping fetching
+// primitives leave a code that holds only where each read what the one before it wrote and what
+// the plane wrote; `sfo_plane` writes 7, `sfo_cover` 200.
 // `sfo_fan` draws one fullscreen triangle a primitive; `sfo_steps` draws rectangles from a corner
 // that steps with `k` (`sfo_corner`, in pixels from the target's top left) to the target's right
 // and bottom edges, the target's sides in pixels at buffer 0. `k` is the primitive in its instance
@@ -61,10 +62,11 @@ fragment SfoPlane sfo_plane(SfoVertex in [[stage_in]]) {
 
 fragment float4 sfo_image(SfoVertex in [[stage_in]]) { return sfo_color(sfo_code(in.k)); }
 
-fragment float4 sfo_filter(SfoVertex in [[stage_in]], float4 c [[color(0)]]) {
+fragment float4 sfo_filter(SfoVertex in [[stage_in]], float4 c [[color(0)]],
+                           float2 cover [[color(1)]]) {
     uint code = uint(rint(c.r * 255.0));
     uint next = (popcount(in.k) & 1u) != 0u ? code * 3u + 1u : code * 5u + 3u;
-    return sfo_color(next);
+    return sfo_color(next + uint(rint(cover.x)));
 }
 
 fragment float4 sfo_cover(SfoVertex in [[stage_in]]) { return sfo_color(200u); }

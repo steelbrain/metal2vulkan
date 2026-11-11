@@ -218,10 +218,21 @@ impl WeakCommandBuffer {
     pub(crate) fn upgrade(&self) -> Option<CommandBuffer> {
         self.0.upgrade().map(CommandBuffer)
     }
+}
 
-    /// Whether it is `buffer`.
-    pub(crate) fn is(&self, buffer: &CommandBuffer) -> bool {
-        std::sync::Weak::as_ptr(&self.0) == Arc::as_ptr(&buffer.0)
+/// Whether a command buffer completed, a handle that holds neither it nor what it holds
+/// ([`CommandBuffer::completion`]).
+pub(crate) struct Completion(Arc<Gate>);
+
+impl Completion {
+    /// Whether its command buffer completed: the gate `wait_until_completed` waits for opened.
+    pub(crate) fn completed(&self) -> bool {
+        self.0.is_open()
+    }
+
+    /// Whether it is `buffer`'s.
+    pub(crate) fn of(&self, buffer: &CommandBuffer) -> bool {
+        Arc::ptr_eq(&self.0, &buffer.0.gate)
     }
 }
 
@@ -2444,6 +2455,11 @@ impl CommandBuffer {
     /// flight hands the command buffer (`render/deferral.rs`), so that hold makes no cycle.
     pub(crate) fn downgrade(&self) -> WeakCommandBuffer {
         WeakCommandBuffer(Arc::downgrade(&self.0))
+    }
+
+    /// A handle that tells whether it completed, holding nothing else of it.
+    pub(crate) fn completion(&self) -> Completion {
+        Completion(Arc::clone(&self.0.gate))
     }
 
     /// Hold `ending`, the open render encoder's end, which its call left to the device's

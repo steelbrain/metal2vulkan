@@ -88,7 +88,7 @@
 
 use super::blit::TRANSFER;
 use super::color_resolve;
-use super::command_buffer::{CommandBuffer, WeakCommandBuffer};
+use super::command_buffer::{CommandBuffer, Completion};
 use super::device::lock;
 use super::encoder::EncoderCore;
 use super::error::{internal, Error, RuntimeGap};
@@ -101,7 +101,7 @@ use super::sample_positions;
 use super::texture::Texture;
 use super::texture_descriptor::TextureDescriptor;
 use super::tracker::{Access, Barrier, Use};
-use super::values::{CommandBufferStatus, ResourceOptions};
+use super::values::ResourceOptions;
 use super::Device;
 use crate::device::functions::Vk;
 use ash::vk;
@@ -277,8 +277,8 @@ struct PooledBacking {
     copies: bool,
     bytes: u64,
     taken: u64,
-    /// The command buffer that took it last.
-    taker: WeakCommandBuffer,
+    /// Whether the command buffer that took it last completed.
+    taker: Completion,
     backing: Target,
 }
 
@@ -358,19 +358,11 @@ pub(super) fn pooled_backing(
         if let Some(found) = pool.kept.iter_mut().find(|k| free(k)) {
             found.taken = takes;
             let backing = found.backing.clone();
-            let last = (!found.taker.is(maker))
-                .then(|| found.taker.upgrade())
-                .flatten();
-            found.taker = maker.downgrade();
-            drop(pool);
             // Taken while another command buffer that took it has not completed: the hazard
             // tracker orders their uses of it (counted).
-            let in_flight = last.is_some_and(|last| {
-                !matches!(
-                    last.status(),
-                    CommandBufferStatus::Completed | CommandBufferStatus::Error
-                )
-            });
+            let in_flight = !found.taker.of(maker) && !found.taker.completed();
+            found.taker = maker.completion();
+            drop(pool);
             maker
                 .device()
                 .shared()
@@ -397,7 +389,7 @@ pub(super) fn pooled_backing(
         copies,
         bytes: made.texture.placed_bytes().unwrap_or(0),
         taken: takes,
-        taker: maker.downgrade(),
+        taker: maker.completion(),
         backing: made.clone(),
     });
     pool.bound();

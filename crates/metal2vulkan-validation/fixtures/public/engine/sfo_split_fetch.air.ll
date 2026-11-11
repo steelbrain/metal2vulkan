@@ -47,7 +47,7 @@ define <{ <4 x float>, i32 }> @sfo_steps(i32 noundef %0, i32 noundef %1, <2 x fl
   %18 = tail call fast <2 x float> @air.convert.f.v2f32.u.v2i32(<2 x i32> %17) #5
   %19 = and i32 %9, 1
   %20 = icmp eq i32 %19, 0
-  %21 = load <2 x float>, <2 x float> addrspace(2)* %2, align 8, !alias.scope !41
+  %21 = load <2 x float>, <2 x float> addrspace(2)* %2, align 8, !alias.scope !42
   %22 = extractelement <2 x float> %21, i64 0
   %23 = extractelement <2 x float> %18, i64 0
   %24 = select fast i1 %20, float %23, float %22
@@ -94,26 +94,30 @@ define <4 x float> @sfo_image(<4 x float> %0, i32 %1) local_unnamed_addr #3 {
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
-define <4 x float> @sfo_filter(<4 x float> %0, i32 %1, <4 x float> noundef %2) local_unnamed_addr #3 {
-  %4 = extractelement <4 x float> %2, i64 0
-  %5 = fmul fast float %4, 2.550000e+02
-  %6 = tail call fast float @air.fast_rint.f32(float %5) #5
-  %7 = tail call i32 @air.convert.u.i32.f.f32(float %6) #5
-  %8 = tail call i32 @air.popcount.i32(i32 %1) #5
-  %9 = and i32 %8, 1
-  %10 = icmp eq i32 %9, 0
-  %11 = mul i32 %7, 3
-  %12 = add i32 %11, 1
-  %13 = mul i32 %7, 5
-  %14 = add i32 %13, 3
-  %15 = select i1 %10, i32 %14, i32 %12
-  %16 = and i32 %15, 255
-  %17 = tail call fast float @air.convert.f.f32.u.i32(i32 %16) #5
-  %18 = fmul fast float %17, 0x3F70101020000000
-  %19 = insertelement <3 x float> poison, float %18, i64 0
-  %20 = shufflevector <3 x float> %19, <3 x float> poison, <4 x i32> <i32 0, i32 0, i32 0, i32 undef>
-  %21 = insertelement <4 x float> %20, float 1.000000e+00, i64 3
-  ret <4 x float> %21
+define <4 x float> @sfo_filter(<4 x float> %0, i32 %1, <4 x float> noundef %2, <2 x float> noundef %3) local_unnamed_addr #3 {
+  %5 = extractelement <4 x float> %2, i64 0
+  %6 = fmul fast float %5, 2.550000e+02
+  %7 = tail call fast float @air.fast_rint.f32(float %6) #5
+  %8 = tail call i32 @air.convert.u.i32.f.f32(float %7) #5
+  %9 = tail call i32 @air.popcount.i32(i32 %1) #5
+  %10 = and i32 %9, 1
+  %11 = icmp eq i32 %10, 0
+  %12 = mul i32 %8, 3
+  %13 = add i32 %12, 1
+  %14 = mul i32 %8, 5
+  %15 = add i32 %14, 3
+  %16 = select i1 %11, i32 %15, i32 %13
+  %17 = extractelement <2 x float> %3, i64 0
+  %18 = tail call fast float @air.fast_rint.f32(float %17) #5
+  %19 = tail call i32 @air.convert.u.i32.f.f32(float %18) #5
+  %20 = add i32 %16, %19
+  %21 = and i32 %20, 255
+  %22 = tail call fast float @air.convert.f.f32.u.i32(i32 %21) #5
+  %23 = fmul fast float %22, 0x3F70101020000000
+  %24 = insertelement <3 x float> poison, float %23, i64 0
+  %25 = shufflevector <3 x float> %24, <3 x float> poison, <4 x i32> <i32 0, i32 0, i32 0, i32 undef>
+  %26 = insertelement <4 x float> %25, float 1.000000e+00, i64 3
+  ret <4 x float> %26
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind readnone willreturn
@@ -139,11 +143,11 @@ attributes #5 = { nounwind readnone willreturn }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
 !air.vertex = !{!9, !16}
-!air.fragment = !{!19, !26, !29, !32}
-!air.compile_options = !{!35, !36, !37}
-!llvm.ident = !{!38}
-!air.version = !{!39}
-!air.language_version = !{!40}
+!air.fragment = !{!19, !26, !29, !33}
+!air.compile_options = !{!36, !37, !38}
+!llvm.ident = !{!39}
+!air.version = !{!40}
+!air.language_version = !{!41}
 
 !0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
@@ -174,18 +178,19 @@ attributes #5 = { nounwind readnone willreturn }
 !26 = !{<4 x float> (<4 x float>, i32)* @sfo_image, !27, !23}
 !27 = !{!28}
 !28 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4"}
-!29 = !{<4 x float> (<4 x float>, i32, <4 x float>)* @sfo_filter, !27, !30}
-!30 = !{!24, !25, !31}
+!29 = !{<4 x float> (<4 x float>, i32, <4 x float>, <2 x float>)* @sfo_filter, !27, !30}
+!30 = !{!24, !25, !31, !32}
 !31 = !{i32 2, !"air.render_target", i32 0, !"air.arg_type_name", !"float4", !"air.arg_name", !"c"}
-!32 = !{<4 x float> (<4 x float>, i32)* @sfo_cover, !27, !33}
-!33 = !{!24, !34}
-!34 = !{i32 1, !"air.fragment_input", !"generated(1kj)", !"air.flat", !"air.arg_type_name", !"uint", !"air.arg_name", !"k", !"air.arg_unused"}
-!35 = !{!"air.compile.denorms_disable"}
-!36 = !{!"air.compile.fast_math_enable"}
-!37 = !{!"air.compile.framebuffer_fetch_enable"}
-!38 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
-!39 = !{i32 2, i32 8, i32 0}
-!40 = !{!"Metal", i32 4, i32 0, i32 0}
-!41 = !{!42}
-!42 = distinct !{!42, !43, !"air-alias-scope-arg(2)"}
-!43 = distinct !{!43, !"air-alias-scopes(sfo_steps)"}
+!32 = !{i32 3, !"air.render_target", i32 1, !"air.arg_type_name", !"float2", !"air.arg_name", !"cover"}
+!33 = !{<4 x float> (<4 x float>, i32)* @sfo_cover, !27, !34}
+!34 = !{!24, !35}
+!35 = !{i32 1, !"air.fragment_input", !"generated(1kj)", !"air.flat", !"air.arg_type_name", !"uint", !"air.arg_name", !"k", !"air.arg_unused"}
+!36 = !{!"air.compile.denorms_disable"}
+!37 = !{!"air.compile.fast_math_enable"}
+!38 = !{!"air.compile.framebuffer_fetch_enable"}
+!39 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!40 = !{i32 2, i32 8, i32 0}
+!41 = !{!"Metal", i32 4, i32 0, i32 0}
+!42 = !{!43}
+!43 = distinct !{!43, !44, !"air-alias-scope-arg(2)"}
+!44 = distinct !{!44, !"air-alias-scopes(sfo_steps)"}

@@ -9,12 +9,13 @@
 //! Each pass (`sfo_split_fetch`) clears an 8-bit color, then draws in one encoder, over that color
 //! (`Load`, `Store`), a two-float color and a stencil both loaded and stored `DontCare`, of private
 //! or memoryless storage ([`Storage`]): a fullscreen `sfo_plane` writing code 7, the stencil 1
-//! (`Replace`) and the second color; [`IMAGES`] draws of [`RECTS`] rectangles each (`sfo_image`,
-//! a code per rectangle, the stencil incremented, `IncrementClamp`); one fetching draw of
-//! [`FILTERS`] overlapping rectangles where the stencil is above 2 (`sfo_filter`, a map that does
-//! not commute); and a fullscreen `sfo_cover` writing 200 where the stencil is still 1. So a pixel
-//! holds [`expected`] only where every draw read the stencil and the color the draws before it
-//! left, through the instances. [`RUNS`] passes of each target and storage over 224x128 and 61x37,
+//! (`Replace`) and the second color, the pass's own number in its first float (the draw's base
+//! instance); [`IMAGES`] draws of [`RECTS`] rectangles each (`sfo_image`, a code per rectangle,
+//! the stencil incremented, `IncrementClamp`); one draw of [`FILTERS`] overlapping rectangles
+//! where the stencil is above 2 that fetches both colors (`sfo_filter`, a map that does not
+//! commute, plus the pass's number); and a fullscreen `sfo_cover` writing 200 where the stencil is
+//! still 1. So a pixel holds [`expected`] only where every draw read the stencil and the colors
+//! the draws before it left, through the instances. [`RUNS`] passes of each target and storage over 224x128 and 61x37,
 //! the target kept across passes (fetched in place once the device remade its image with
 //! `STORAGE`, `fetched-target-storage`) or new each pass (fetched through a scratch image,
 //! `fetch-through-scratch`). Every pixel of every pass must hold its code; the wrong ones are
@@ -78,8 +79,8 @@ fn code(k: u32) -> u32 {
     (k * 29 + 11) & 255
 }
 
-/// The code pixel `(x, y)` holds after a pass (the module docs).
-fn expected(pixel: (u64, u64)) -> u8 {
+/// The code pixel `(x, y)` holds after a pass whose plane wrote `plane` (the module docs).
+fn expected(pixel: (u64, u64), plane: u32) -> u8 {
     let (mut stencil, mut color) = (1u32, 7u32);
     for k in RECTS..FILTER_BASE {
         if covers(k, pixel) {
@@ -89,16 +90,30 @@ fn expected(pixel: (u64, u64)) -> u8 {
     }
     for k in FILTER_BASE..FILTER_BASE + FILTERS {
         if covers(k, pixel) && 2 < stencil {
-            color = match k.count_ones() % 2 {
+            color = (match k.count_ones() % 2 {
                 1 => color * 3 + 1,
                 _ => color * 5 + 3,
-            } & 255;
+            } + plane)
+                & 255;
         }
     }
     if stencil == 1 {
         color = 200;
     }
     color as u8
+}
+
+/// Every pixel's code of a target of `sides` after a pass whose plane wrote `plane`. Every corner
+/// lies within the first 61 columns and 23 rows, so a pixel past them holds what the last of them
+/// holds.
+fn want(sides: (u64, u64), plane: u32) -> Vec<u8> {
+    let reach: Vec<u8> = (0..23)
+        .flat_map(|y| (0..61).map(move |x| expected((x, y), plane)))
+        .collect();
+    (0..sides.1)
+        .flat_map(|y| (0..sides.0).map(move |x| (x.min(60), y.min(22))))
+        .map(|(x, y)| reach[(y * 61 + x) as usize])
+        .collect()
 }
 
 /// How the second color and the stencil are stored.
@@ -202,12 +217,13 @@ fn texture(
 }
 
 /// Encode one pass over `target` of `sides` into `command_buffer`, with the second color and
-/// stencil `attachments`: the target cleared to code 0 first, then the draws.
+/// stencil `attachments`, its plane writing `plane`: the target cleared to code 0 first, then the
+/// draws.
 fn encode_pass(
     command_buffer: &CommandBuffer,
     draws: &Draws,
     (target, attachments): (&Texture, &(Texture, Texture)),
-    sides: (u64, u64),
+    (sides, plane): ((u64, u64), u32),
 ) {
     let mut clear = RenderPassDescriptor::new();
     let color = &mut clear.color_attachments[0];
@@ -235,7 +251,7 @@ fn encode_pass(
     encoder
         .set_vertex_bytes(&size.map(f32::to_le_bytes).concat(), 0)
         .unwrap();
-    draws.draw(&mut encoder, 0, (1, 0, 1));
+    draws.draw(&mut encoder, 0, (1, plane, 1));
     for d in 0..IMAGES {
         draws.draw(&mut encoder, 1, (0, RECTS * (d + 1), RECTS));
     }
@@ -273,17 +289,22 @@ fn encode_readback(
     buffer
 }
 
-/// One pass over `target` of `sides` in a command buffer of a queue of its own, waited for; every
-/// pixel's code after it.
+/// One pass over `target` of `sides`, its plane writing `plane`, in a command buffer of a queue of
+/// its own, waited for; every pixel's code after it.
 fn pass(
     device: &Device,
     draws: &Draws,
     (target, attachments): (&Texture, &(Texture, Texture)),
-    sides: (u64, u64),
+    (sides, plane): ((u64, u64), u32),
 ) -> Vec<u8> {
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
-    encode_pass(&command_buffer, draws, (target, attachments), sides);
+    encode_pass(
+        &command_buffer,
+        draws,
+        (target, attachments),
+        (sides, plane),
+    );
     let buffer = encode_readback(&command_buffer, target, sides);
     command_buffer.commit().unwrap();
     completed(&command_buffer);
@@ -342,9 +363,6 @@ fn a_split_pass_s_draws_read_the_stencil_and_colors_the_draws_before_left() {
     let target_usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
     let mut wrong_passes = Vec::new();
     for sides in [(224u64, 128u64), (61, 37)] {
-        let want: Vec<u8> = (0..sides.1)
-            .flat_map(|y| (0..sides.0).map(move |x| expected((x, y))))
-            .collect();
         let mut kept = None;
         for storage in [Storage::Private, Storage::Memoryless] {
             let options = match storage {
@@ -380,7 +398,9 @@ fn a_split_pass_s_draws_read_the_stencil_and_colors_the_draws_before_left() {
                         kept = Some(target.clone());
                     }
                     let counted = device.work_counts();
-                    let codes = pass(&device, &draws, (&target, &attachments), sides);
+                    let plane = run as u32 + 1;
+                    let want = want(sides, plane);
+                    let codes = pass(&device, &draws, (&target, &attachments), (sides, plane));
                     let counts = device.work_counts();
                     let splits = [
                         counts.instance_splits_shape - counted.instance_splits_shape,
@@ -476,7 +496,9 @@ const ROUNDS: usize = 2;
 /// ([`Route::InPlace`]). Nothing orders one pass after another but the backing the passes of a
 /// queue share for their second color (its private form stored `DontCare`, `kept_bytes.rs`, or its
 /// memoryless form, `attachment_stand_in::pooled_backing`), which the hazard tracker orders as any
-/// texture. Each pass counts the backings it was handed (`WorkCounts::pooled_backings_made`,
+/// texture. Each pass's plane writes a number of its own into that color, which its fetching draw
+/// reads, so a pass that read what another left in a shared backing holds codes of the other's
+/// number. Each pass counts the backings it was handed (`WorkCounts::pooled_backings_made`,
 /// `pooled_backings_taken`) and those taken while another command buffer that took them had not
 /// completed (`pooled_backings_taken_in_flight`), its counts read once it was encoded (a read of
 /// the counts lowers what its encoders left); a round prints them beside each pass's wrong pixels
@@ -513,9 +535,6 @@ fn split_passes_in_flight_together_read_only_what_their_own_draws_left() {
     let mut wrong_passes = Vec::new();
     let mut taken = 0;
     for sides in [(224u64, 128u64), (61, 37)] {
-        let want: Vec<u8> = (0..sides.1)
-            .flat_map(|y| (0..sides.0).map(move |x| expected((x, y))))
-            .collect();
         for storage in [Storage::Private, Storage::Memoryless] {
             let options = match storage {
                 Storage::Private => ResourceOptions::private(),
@@ -533,7 +552,7 @@ fn split_passes_in_flight_together_read_only_what_their_own_draws_left() {
             // Each in-place target's storage form taken by a pass of its own, waited for.
             let in_place: Vec<Texture> = (0..IN_FLIGHT).map(|_| target(sides)).collect();
             for (kept, attachments) in in_place.iter().zip(&attachments) {
-                pass(&device, &draws, (kept, attachments), sides);
+                pass(&device, &draws, (kept, attachments), (sides, 0));
             }
             for route in [Route::Scratch, Route::InPlace] {
                 for (on, commit) in [Queues::One, Queues::Two]
@@ -555,7 +574,9 @@ fn split_passes_in_flight_together_read_only_what_their_own_draws_left() {
                             };
                             let command_buffer = queue.command_buffer().unwrap();
                             let counted = device.work_counts();
-                            encode_pass(&command_buffer, &draws, (target, attachments), sides);
+                            let plane = (round * IN_FLIGHT + k + 1) as u32;
+                            let textures = (target, attachments);
+                            encode_pass(&command_buffer, &draws, textures, (sides, plane));
                             let buffer = encode_readback(&command_buffer, target, sides);
                             let counts = device.work_counts();
                             let splits =
@@ -574,7 +595,7 @@ fn split_passes_in_flight_together_read_only_what_their_own_draws_left() {
                             if commit == Commit::Each {
                                 command_buffer.commit().unwrap();
                             }
-                            encoded.push((command_buffer, buffer, backings));
+                            encoded.push((command_buffer, buffer, backings, plane));
                         }
                         if commit == Commit::All {
                             for (command_buffer, ..) in &encoded {
@@ -583,9 +604,12 @@ fn split_passes_in_flight_together_read_only_what_their_own_draws_left() {
                         }
                         let mut wrong_counts = Vec::with_capacity(IN_FLIGHT);
                         let mut round_backings = [0u64; 3];
-                        for (k, (command_buffer, buffer, backings)) in encoded.iter().enumerate() {
+                        for (k, (command_buffer, buffer, backings, plane)) in
+                            encoded.iter().enumerate()
+                        {
                             completed(command_buffer);
                             let codes = codes(buffer, sides);
+                            let want = want(sides, *plane);
                             let wrong: Vec<bool> =
                                 codes.iter().zip(&want).map(|(c, w)| c != w).collect();
                             let count = wrong.iter().filter(|&&w| w).count();
