@@ -863,6 +863,8 @@ mod submission_handlers;
 mod submit_costs;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod submit_per_import;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod submit_per_surface;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod surface_aliases;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
