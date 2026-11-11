@@ -7,14 +7,18 @@
 //   clang -fobjc-arc -O1 -fmodules -o compute_pipeline_limits compute_pipeline_limits.m \
 //     -framework Foundation -framework Metal
 //
-// `compute_pipeline_limits CASE` makes one compute pipeline of the library below compiled from
-// source, through a descriptor (`newComputePipelineStateWithDescriptor:options:reflection:error:`)
-// or, for a `function-` case, from the function alone (`newComputePipelineStateWithFunction:
-// error:`), and prints `made` and the state's `maxTotalThreadsPerThreadgroup`, or `refused` and
-// the error's domain, code and description. A `dispatch-` case then encodes one dispatch of
-// `count` and prints what ran: how many threads added to word 0, and the
-// `threads_per_threadgroup` threadgroup 0's thread 0 stored in words 1 to 3. `--cases` lists the
-// cases. Run one case a process: a stop of Metal's ends only its own.
+// `compute_pipeline_limits CASE [SALT]` makes one compute pipeline of the library below compiled
+// from source, through a descriptor (`newComputePipelineStateWithDescriptor:options:reflection:
+// error:`) or, for a `function-` case, from the function alone
+// (`newComputePipelineStateWithFunction:error:`), and prints `made` and the state's
+// `maxTotalThreadsPerThreadgroup`, or `refused` and the error's domain, code and description. A
+// `dispatch-` case then encodes one dispatch of `count` and prints what ran: how many threads
+// added to word 0, and the `threads_per_threadgroup` threadgroup 0's thread 0 stored in words 1 to
+// 3. A SALT's 32-bit FNV-1a hash is the source's `SALT`, which each kernel compares a thread's
+// index with, so it is in each kernel's AIR: a salt never used before compiles kernels the
+// compiler has never seen (a first compile), and the same salt again compiles ones it has.
+// Without a salt `SALT` is 0. `--cases` lists the cases. Run one case a process: a stop of
+// Metal's ends only its own.
 //
 // Measured on an M3 Max under macOS 27.0.1, plain and with `MTL_DEBUG_LAYER=1`, which agree on
 // every creation:
@@ -41,15 +45,16 @@ static NSString *const SOURCE =
      "                  uint3 group [[threadgroup_position_in_grid]],\n"
      "                  uint tid [[thread_index_in_threadgroup]]) {\n"
      "  atomic_fetch_add_explicit(&out[0], 1, memory_order_relaxed);\n"
-     "  if (tid == 0 && group.x == 0 && group.y == 0 && group.z == 0) {\n"
+     "  if ((tid == 0 || tid == SALT) && group.x == 0 && group.y == 0 && group.z == 0) {\n"
      "    atomic_store_explicit(&out[1], tptg.x, memory_order_relaxed);\n"
      "    atomic_store_explicit(&out[2], tptg.y, memory_order_relaxed);\n"
      "    atomic_store_explicit(&out[3], tptg.z, memory_order_relaxed);\n"
      "  }\n"
      "}\n"
      "[[max_total_threads_per_threadgroup(64)]]\n"
-     "kernel void count64(device atomic_uint *out [[buffer(0)]]) {\n"
-     "  atomic_fetch_add_explicit(&out[0], 1, memory_order_relaxed);\n"
+     "kernel void count64(device atomic_uint *out [[buffer(0)]],\n"
+     "                    uint tid [[thread_index_in_threadgroup]]) {\n"
+     "  atomic_fetch_add_explicit(&out[tid == SALT && tid != 0 ? 1 : 0], 1, memory_order_relaxed);\n"
      "}\n";
 
 // How a case makes its pipeline and what it dispatches.
@@ -114,18 +119,27 @@ int main(int argc, const char **argv) {
             return 0;
         }
         const Case *c = NULL;
-        for (size_t i = 0; argc == 2 && i < n; i++) {
+        for (size_t i = 0; (argc == 2 || argc == 3) && i < n; i++) {
             if (strcmp(argv[1], CASES[i].name) == 0) {
                 c = &CASES[i];
             }
         }
         if (c == NULL) {
-            fprintf(stderr, "usage: compute_pipeline_limits CASE | --cases\n");
+            fprintf(stderr, "usage: compute_pipeline_limits CASE [SALT] | --cases\n");
             return 2;
         }
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
         NSError *error = nil;
-        id<MTLLibrary> library = [device newLibraryWithSource:SOURCE options:nil error:&error];
+        uint32_t salt = 0;
+        if (argc == 3) {
+            salt = 2166136261u;
+            for (const char *at = argv[2]; *at != '\0'; at++) {
+                salt = (salt ^ (uint8_t)*at) * 16777619u;
+            }
+        }
+        NSString *source = [[NSString stringWithFormat:@"#define SALT %uu\n", salt]
+            stringByAppendingString:SOURCE];
+        id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
         if (library == nil) {
             printf("library %s\n", error.localizedDescription.UTF8String);
             return 1;
