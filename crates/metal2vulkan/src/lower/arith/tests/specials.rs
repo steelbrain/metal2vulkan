@@ -558,6 +558,55 @@ fn median3_answers_as_metal_but_at_its_recorded_ties() {
     metal_answers(FloatFn::Median3, float(16), &half);
 }
 
+/// The lanes of the public case `nan-model-min-max-of-nan-operands-under-fast-math` (27f7c2fd)
+/// whose first two operands are NaNs, quiet and signalling of either sign with payloads, beside
+/// `+0`: `(a, b, c, precise::median3, fast::median3)`, Metal's answers on the M3 Max under macOS
+/// 27.0.1 (the precise answers from the case's twin 55bca0fd).
+const MEDIAN3_NAN_PAIRS: [(u32, u32, u32, u32, u32); 8] = [
+    (0x7FC00001, 0xFFEAAAAA, 0, 0, 0xFFEAAAAA),
+    (0xFFEAAAAA, 0x7FC00001, 0, 0, 0x7FC00001),
+    (0x7F800002, 0xFFB55555, 0, 0, 0xFFB55555),
+    (0xFFB55555, 0x7F800002, 0, 0, 0x7F800002),
+    (0x7FC00001, 0xFFB55555, 0, 0, 0xFFB55555),
+    (0xFFB55555, 0x7FC00001, 0, 0, 0x7FC00001),
+    (0x7F800002, 0xFFEAAAAA, 0, 0, 0xFFEAAAAA),
+    (0xFFEAAAAA, 0x7F800002, 0, 0, 0x7F800002),
+];
+
+/// `median3` and `fast::median3` of two NaNs beside a number answer the number, precise
+/// `median3`'s answer on Metal, at every such lane of [`MEDIAN3`] and [`MEDIAN3_NAN_PAIRS`]. Metal's
+/// fast form answers the second operand where the first two are the NaNs, and the number where a
+/// NaN is third: `PrecisionNote::NativeMinMax`'s stated bound, which leaves that fast answer to
+/// the device's picks (MSL section 8.1: a NaN operand under fast math is undefined).
+#[test]
+fn median3_of_two_nans_beside_a_number_answers_the_number() {
+    let nan = |b: u64| b & 0x7FFF_FFFF > 0x7F80_0000;
+    let table = MEDIAN3
+        .iter()
+        .map(|r| (r.0, r.1, r.2, r.3, r.4))
+        .chain(MEDIAN3_NAN_PAIRS);
+    let mut rows: Vec<Row> = Vec::new();
+    let mut fast_second = 0;
+    for (a, b, c, precise, fast) in table {
+        let ops = [u64::from(a), u64::from(b), u64::from(c)];
+        if ops.iter().filter(|o| nan(**o)).count() != 2 {
+            continue;
+        }
+        let number = ops.iter().copied().find(|o| !nan(*o)).expect("a number");
+        assert_eq!(u64::from(precise), number, "precise {ops:x?}");
+        if nan(ops[0]) && nan(ops[1]) {
+            assert_eq!(u64::from(fast), ops[1], "fast {ops:x?}");
+            fast_second += 1;
+        } else {
+            assert_eq!(u64::from(fast), number, "fast {ops:x?}");
+        }
+        rows.push((ops.to_vec(), number));
+    }
+    assert_eq!((rows.len(), fast_second), (12, 10));
+    metal_answers(FloatFn::Median3, float(32), &rows);
+    metal_answers(FloatFn::FastMedian3, float(32), &rows);
+}
+
 /// `pow`'s C99 special cases (`math::pow_special`) at the lanes of [`POW`] one of them decides,
 /// against Metal's answers: the magnitude operand (`GLSL.std.450 Pow(|x|, y)`, which the
 /// interpreter does not model) is a constant no answer equals, so a lane that read it would fail.

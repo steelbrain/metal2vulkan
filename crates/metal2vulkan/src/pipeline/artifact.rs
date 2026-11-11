@@ -2010,15 +2010,19 @@ pub enum PrecisionNote {
     /// `NClamp`, on a device not measured to answer Metal's operand; a `saturate` of a format
     /// whose operand Metal's other functions do not pick (`bfloat`, `double`) on every device; and
     /// `median3` on every device, `min(max(c, min(a, b)), max(a, b))` of the device's `NMin` and
-    /// `NMax`, whose pick of two NaNs and of an `f32` denormal is the device's (Metal's
-    /// `fast::median3` answers `b` for two NaN first operands).
+    /// `NMax`, whose pick of two NaNs and of an `f32` denormal is the device's.
     /// **Recorded bound:** the
-    /// result is one of the operands, the one Metal answers but at three ties: of two NaNs a NaN
-    /// (its bits the device's), where Metal answers the second operand's; of `+0` and `-0` either
-    /// zero, where Metal answers the second; and an `f32` denormal beside a zero or another
-    /// denormal compared by its value where the device's `NMin` and `NMax` keep denormals, whether
-    /// or not its arithmetic flushes them, where Metal compares it as a zero and answers the
-    /// second. Validation derives no tolerance from it.
+    /// result is one of the operands, the one Metal answers but at three ties and one undefined
+    /// answer: of two NaNs a NaN (its bits the device's), where Metal answers the second operand's;
+    /// of `+0` and `-0` either zero, where Metal answers the second; an `f32` denormal beside a
+    /// zero or another denormal compared by its value where the device's `NMin` and `NMax` keep
+    /// denormals, whether or not its arithmetic flushes them, where Metal compares it as a zero
+    /// and answers the second; and a `fast::median3` whose first two operands are NaNs and whose
+    /// third is not answers the third, where Metal's answers the second, a NaN. The third is
+    /// precise `median3`'s answer there on Metal and on the device, and MSL leaves a NaN operand
+    /// under fast math undefined (section 8.1), so the fast form's NaN is one reading of an
+    /// undefined answer (the M3 Max's under macOS 27.0.1: the eight lanes of `nan_minmax_fast`
+    /// whose first two operands are NaNs beside a `+0`). Validation derives no tolerance from it.
     NativeMinMax,
     /// Native device maths: Metal's `dot` on `float` and `half` is the device's `OpDot` (a `half`
     /// one summed in `float` and rounded once to `half`), not Metal's fused chain of its products,

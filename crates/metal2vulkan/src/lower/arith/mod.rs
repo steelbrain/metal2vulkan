@@ -1787,7 +1787,8 @@ fn llvm_math(op: &LlvmIntrinsic) -> Result<Fun, Error> {
 ///   ([`FloatFn::FastAcosh`]), the device's `Acosh`;
 /// - `air.fast_fract` is not bounded below one, and with every flag is the canonical NaN at an
 ///   infinity ([`FloatFn::FastFract`]);
-/// - `air.fast_fmedian3` answers `b` for two NaN first operands ([`FloatFn::FastMedian3`]);
+/// - `air.fast_fmedian3` answers `b` for two NaN first operands beside a number, where precise
+///   `median3` answers the number ([`FloatFn::FastMedian3`]);
 /// - `air.fast_pow`'s magnitude is `exp2(y · log2|x|)` ([`FloatFn::FastPow`]);
 /// - `air.fast_atan2` is `atan(y / x)` turned by `±π`, NaN at `0 / 0` and `inf / inf`
 ///   ([`FloatFn::FastAtan2`]);
@@ -2064,9 +2065,10 @@ fn min_max_family(op: FloatFn) -> bool {
 /// (`native_min_max`, [`FloatFacts::native_min_max`]), `saturate` on every other float format,
 /// which no device is measured to answer as Metal's `clamp(x, +0, 1)`, and `median3` and
 /// `fast::median3` on every device: `min(max(c, min(a, b)), max(a, b))` of the device's `NMin` and
-/// `NMax` (`math::median3`), Metal's answer but where two operands are NaN, whose pick is the
-/// device's (Metal's `fast::median3` answers `b` for two NaN first operands), and an `f32`
-/// denormal, which Metal compares as a zero.
+/// `NMax` (`math::median3`), Metal's answer but of two NaNs, whose NaN is the device's, of
+/// `fast::median3`'s two NaN first operands beside a number, which it answers as precise `median3`
+/// does where Metal's fast form answers `b` (undefined under fast math, MSL section 8.1), and of an
+/// `f32` denormal, which Metal compares as a zero.
 fn native_min_max(op: FloatFn, f: Form, native_min_max: bool) -> bool {
     let picks = math::metal_picks(f.float_fmt());
     (min_max_family(op) && ((picks && native_min_max) || (op == FloatFn::Saturate && !picks)))

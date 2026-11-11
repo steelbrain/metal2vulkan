@@ -4293,7 +4293,12 @@ bound.
   `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or `NClamp`, on a device not
   measured to answer Metal's operand; and `median3` on every device, `min(max(c, min(a, b)),
   max(a, b))` of the device's `NMin` and `NMax`, whose pick of two NaNs and of an `f32` denormal is
-  the device's (Metal's `fast::median3` answers `b` for two NaN first operands).
+  the device's. The result is one of the operands, Metal's but at three ties (of two NaNs a NaN of
+  the device's bits, where Metal answers the second operand's; of `+0` and `-0` either zero; an
+  `f32` denormal beside a zero or a denormal compared by its value, where Metal compares it as a
+  zero and answers the second) and one undefined answer: `fast::median3` of two NaN first operands
+  and a number answers the number, as precise `median3` does on Metal, where Metal's fast form
+  answers the second NaN. MSL leaves a NaN operand under fast math undefined (section 8.1).
 - `metal2vulkan-degrade-native-dot` (precision). `PrecisionNote::NativeDot`: Native device maths:
   Metal's `dot` on `float` and `half` is the device's `OpDot` (a `half` one summed in `float` and
   rounded once to `half`), not Metal's fused chain of its products, on every device but for a

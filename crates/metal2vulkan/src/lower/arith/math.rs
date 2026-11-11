@@ -767,8 +767,10 @@ pub enum FloatFn {
     /// Metal's `median3`: `min(max(c, min(a, b)), max(a, b))` of the device's `NMin` and `NMax`
     /// ([`median3`]).
     Median3,
-    /// `air.fast_fmedian3` on `float`: [`FloatFn::Median3`]'s form, where Metal's answers `b` for
-    /// two NaN first operands, which the device's picks leave to it.
+    /// `air.fast_fmedian3` on `float`: [`FloatFn::Median3`]'s form, which answers `c` for two NaN
+    /// first operands beside a number `c`, as precise `median3` does, where Metal's fast form
+    /// answers `b` (`PrecisionNote::NativeMinMax`'s bound; a NaN operand is undefined under fast
+    /// math).
     FastMedian3,
     /// `mix(x, y, t)`: the device's `FMix` on `float` and `half`, and on `bfloat` and `double`
     /// the blend `x * (1 - t) + y * t`.
