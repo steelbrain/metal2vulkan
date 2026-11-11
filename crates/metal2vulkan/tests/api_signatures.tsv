@@ -4653,6 +4653,7 @@ field	metal2vulkan::pipeline::LoweringInputs.folded_groups	pub folded_groups: bo
 field	metal2vulkan::pipeline::LoweringInputs.framebuffer_fetch	pub framebuffer_fetch: Option<FramebufferFetchInputs>
 field	metal2vulkan::pipeline::LoweringInputs.instanced_attributes	pub instanced_attributes: BTreeSet<u32>
 field	metal2vulkan::pipeline::LoweringInputs.kept_imageblock_bytes	pub kept_imageblock_bytes: Option<u32>
+field	metal2vulkan::pipeline::LoweringInputs.logic_operation	pub logic_operation: Option<vk::LogicOp>
 field	metal2vulkan::pipeline::LoweringInputs.max_call_stack_depth	pub max_call_stack_depth: Option<u32>
 field	metal2vulkan::pipeline::LoweringInputs.merged_draws	pub merged_draws: bool
 field	metal2vulkan::pipeline::LoweringInputs.multisampled	pub multisampled: bool
@@ -14144,6 +14145,7 @@ variant	metal2vulkan::error::RuntimeInput::DynamicLibrary	DynamicLibrary { insta
 variant	metal2vulkan::error::RuntimeInput::DynamicSymbol	DynamicSymbol { symbol: DiagName }
 variant	metal2vulkan::error::RuntimeInput::FramebufferFetch	FramebufferFetch
 variant	metal2vulkan::error::RuntimeInput::LinkedFunction	LinkedFunction { symbol: DiagName }
+variant	metal2vulkan::error::RuntimeInput::LogicOperation	LogicOperation
 variant	metal2vulkan::error::RuntimeInput::Multisampled	Multisampled
 variant	metal2vulkan::error::RuntimeInput::ObjectPayload	ObjectPayload
 variant	metal2vulkan::error::RuntimeInput::PrimitiveId	PrimitiveId

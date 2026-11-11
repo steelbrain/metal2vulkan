@@ -23,6 +23,22 @@
 //   xcrun clang -fobjc-arc -framework Metal -framework Foundation -o logic_operation \
 //     logic_operation.m
 //   /usr/bin/env -u MTL_DEBUG_LAYER ./logic_operation [all|formats|snorm|overlap|masks|msaa|tests|repro]
+//
+// What it measured (an Apple M3 Max, macOS 27.0.1, `all`): R8Unorm, A8Unorm, RGBA8Unorm,
+// BGRA8Unorm, R16Unorm, RGBA16Unorm, RG8Snorm, RGBA8Snorm, RG16Snorm, RGBA16Snorm, RGBA8Uint,
+// R16Uint, R32Uint, RGBA8Sint, RG16Sint and R32Sint hold the rule at every texel of every
+// operation, a NaN taking the channel's low end (0, or -1 for a signed one), a signed channel's
+// lowest code read and stored as the code above it, and an integer output saturated to the
+// channel's range before the operation. The device's native conversion (the `float` product
+// rounded to nearest even, the "native form" counts) takes another code only near a half-code
+// tie: 220 of 4,096 RGBA8Unorm texels, where the case's values hug the ties. RGB10A2Unorm (about a
+// quarter of its texels under every operation that reads the source), BGR10A2Unorm, the packed
+// 16-bit formats and RGB10A2Uint (which saturates the operation's 32-bit result) do not hold it.
+// Two triangles of one draw operate in primitive order; at 4 samples each sample operates on its
+// own stored code; a discarded fragment and one the depth test fails store nothing; a write mask
+// keeps its channels, but for a signed channel's lowest code, which a kept channel too stores as
+// the code above it (RGBA8Snorm: the 37 texels of 4,608 whose kept byte was 0x80). The repro
+// stores (191, 127, 191, 255).
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
