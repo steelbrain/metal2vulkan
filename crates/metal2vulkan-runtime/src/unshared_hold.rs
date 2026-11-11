@@ -67,7 +67,7 @@ impl Expected {
     /// where shorter.
     pub(crate) fn observed(&self, run: u64) {
         let run = run.max(1);
-        let _ = (self.0).fetch_update(Ordering::Relaxed, Ordering::Relaxed, |was| {
+        let _ = (self.0).try_update(Ordering::Relaxed, Ordering::Relaxed, |was| {
             Some(match was {
                 0 => run,
                 was if run >= was => run,
