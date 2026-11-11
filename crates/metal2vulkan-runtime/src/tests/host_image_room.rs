@@ -45,9 +45,8 @@ fn round_trip(texture: &Texture, depth: f32) -> Vec<f32> {
     texture.replace_region(region, 0, 0, &bytes, 16, 0).unwrap();
     let mut read = vec![0u8; bytes.len()];
     texture.get_bytes(&mut read, 16, 0, region, 0, 0).unwrap();
-    (read.chunks_exact(4))
-        .map(|word| f32::from_le_bytes(word.try_into().unwrap()))
-        .collect()
+    let (words, _) = read.as_chunks::<4>();
+    words.iter().map(|&word| f32::from_le_bytes(word)).collect()
 }
 
 #[test]
