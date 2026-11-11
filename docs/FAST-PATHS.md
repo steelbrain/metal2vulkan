@@ -440,12 +440,7 @@ recorded here.
   through a copy in its own memory. A kernel that reads one 256 MiB buffer and writes another
   (read plus write) ran at 5.3 GB/s over a `Shared` no-copy buffer and 328 GB/s over a `Private`
   one on the RTX 5080 Laptop GPU (NVIDIA 615.71.09), where a Radeon Pro 5300M under macOS 26.7.1
-  ran 6.1 and 96.1. Apple's OpenCL on Metal, which ships on Macs with unified memory only, lays a
-  `Shared` and a `Managed` buffer over each `cl_mem`'s pages, and synchronizes the `Managed` one
-  (`didModifyRange:`, `synchronizeResource:`) on its map path alone, not around
-  `clEnqueueWriteBuffer` and `clEnqueueReadBuffer`; so a consumer serving it on a discrete GPU
-  gives both buffers the one copy of `Shared` memory, and its kernels run at the bus's speed. A Mac
-  with a discrete GPU runs its vendor's OpenCL instead (the 5300M's: 98.5 GB/s in the same test).
+  ran 6.1 and 96.1.
 - **Emulated tessellation's scan.** On a device without `tessellationShader` a patch draw first
   runs a one-workgroup scan that places each patch's triangles in Metal's order, patch after
   patch: about 6-60 ms of GPU time per 10,000-patch draw at factors 4 to 64 on the Radeon 780M and
