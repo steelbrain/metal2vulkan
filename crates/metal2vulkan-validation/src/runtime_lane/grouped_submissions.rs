@@ -5,7 +5,8 @@
 //! value of its own, the first after a wait for an event the host has not raised, all wait behind
 //! that wait; once the host raises it the scheduler finds them ready together. Under the default
 //! `CompletionPolicy::Grouped`, on a device whose check found a submission that signals nothing
-//! merged into the next one (the runtime's `submit_check.rs`), they go in `vkQueueSubmit`
+//! merged into the next one (the runtime's `submit_check.rs`) and whose queues' failures are not
+//! relayed (MoltenVK's are: `device/relay.rs`), they go in `vkQueueSubmit`
 //! calls of up to four batches each, only the last of each signalling
 //! (`WorkCounts::grouped_submissions`,
 //! `WorkCounts::batches_grouped`), announced once ([`GROUPED`]); under `CompletionPolicy::Exact`,
@@ -110,6 +111,15 @@ fn merges(device: &metal2vulkan_runtime::Device) -> bool {
     device.submissions_merge()
 }
 
+/// Whether the device holds its batches in groups under the default completion (the runtime's
+/// `command_buffer/group.rs`): its submissions merge ([`merges`]), and its queues' failures are not
+/// relayed, as a relayed batch takes a fence of its own (`device/relay.rs`;
+/// [`relays`](super::commit_work::relays)). MoltenVK's are relayed, so it never groups, whatever
+/// its merge check answers (beside the lane's other tests it can answer `Holds` there).
+fn groups(device: &metal2vulkan_runtime::Device) -> bool {
+    merges(device) && !super::commit_work::relays(device)
+}
+
 /// Wait until a pass has taken in every command buffer committed before the call, and ended:
 /// `WorkCounts::commits_taken_in`, counted as each pass that took commits in ends (after its
 /// submissions and the groups it made), reaches `WorkCounts::commits_handed_off`, which counted
@@ -141,16 +151,16 @@ fn bytes_of(buffer: &Buffer) -> Vec<u8> {
 
 /// The module docs' run under `completion`, each command buffer `checked` or not: the
 /// `vkQueueSubmit` calls that held several batches, the batches they held, the kernel submissions
-/// in all, the grouped-completion notices, and whether the driver merges.
+/// in all, the grouped-completion notices, and whether the device groups its batches ([`groups`]).
 fn run(completion: CompletionPolicy, checked: bool) -> (u64, u64, u64, usize, bool, [u64; 7]) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let (grouped, batches, submissions, merging, ends) = {
+    let (grouped, batches, submissions, grouping, ends) = {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.completion = completion;
         })
         .unwrap();
-        let merging = merges(&device);
+        let grouping = groups(&device);
         let queue = device.new_command_queue().unwrap();
         let event = device.new_shared_event().unwrap();
         let buffers: Vec<Buffer> = (0..BATCHES)
@@ -207,7 +217,7 @@ fn run(completion: CompletionPolicy, checked: bool) -> (u64, u64, u64, usize, bo
             after.grouped_submissions - before.grouped_submissions,
             after.batches_grouped - before.batches_grouped,
             after.queue_submissions - before.queue_submissions,
-            merging,
+            grouping,
             group_ends(&before, &after),
         )
     };
@@ -217,9 +227,9 @@ fn run(completion: CompletionPolicy, checked: bool) -> (u64, u64, u64, usize, bo
     eprintln!(
         "GROUPED {completion:?}, checked {checked}: {grouped} vkQueueSubmit calls held {batches} batches together, \
          of {submissions} calls in all; groups by what sent them {ends:?}; {heard} \
-         grouped-completion notices; the driver merges: {merging}"
+         grouped-completion notices; the device groups: {grouping}"
     );
-    (grouped, batches, submissions, heard, merging, ends)
+    (grouped, batches, submissions, heard, grouping, ends)
 }
 
 /// Under the default, on a driver that merges, the command buffers the host's event let go
@@ -240,9 +250,9 @@ fn checked_ready_batches_go_in_one_kernel_submission_where_the_driver_merges() {
 /// The default's run, `checked` or not, as [`ready_batches_go_in_one_kernel_submission_where_the_driver_merges`]
 /// says.
 fn grouped_where_merging(checked: bool) {
-    let (grouped, batches, submissions, heard, merging, ends) =
+    let (grouped, batches, submissions, heard, grouping, ends) =
         run(CompletionPolicy::Grouped, checked);
-    if merging {
+    if grouping {
         assert!(grouped >= 2, "{grouped} grouped calls");
         assert!(batches >= 5, "{batches} batches grouped");
         assert!(submissions < BATCHES as u64, "{submissions} calls");
@@ -387,8 +397,8 @@ struct Scenario {
     grouped: u64,
     /// The batches they held.
     batches: u64,
-    /// Whether the driver merges.
-    merging: bool,
+    /// Whether the device groups its batches ([`groups`]).
+    grouping: bool,
     /// The groups by what sent them ([`group_ends`]).
     ends: [u64; 7],
     /// The event waits found met as the scheduler took their batches
@@ -411,7 +421,7 @@ fn event_scenario(completion: CompletionPolicy, steps: &[Step], last: u64) -> Sc
             at_plan(options)
         })
         .unwrap();
-        let merging = merges(&device);
+        let grouping = groups(&device);
         let queues = [
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
@@ -505,7 +515,7 @@ fn event_scenario(completion: CompletionPolicy, steps: &[Step], last: u64) -> Sc
         Scenario {
             grouped: after.grouped_submissions - before.grouped_submissions,
             batches: after.batches_grouped - before.batches_grouped,
-            merging,
+            grouping,
             ends: group_ends(&before, &after),
             met: after.event_waits_met - before.event_waits_met,
         }
@@ -513,8 +523,8 @@ fn event_scenario(completion: CompletionPolicy, steps: &[Step], last: u64) -> Sc
     layer_reported_nothing_at_all(&messages);
     eprintln!(
         "GROUPED-EVENTS {completion:?}: {} vkQueueSubmit calls held {} batches together; groups \
-         by what sent them {:?}; event waits met as taken {}; the driver merges: {}",
-        counted.grouped, counted.batches, counted.ends, counted.met, counted.merging
+         by what sent them {:?}; event waits met as taken {}; the device groups: {}",
+        counted.grouped, counted.batches, counted.ends, counted.met, counted.grouping
     );
     counted
 }
@@ -526,7 +536,7 @@ fn event_scenario(completion: CompletionPolicy, steps: &[Step], last: u64) -> Sc
 fn both_policies(steps: &[Step], last: u64, waits: bool) {
     let run = event_scenario(CompletionPolicy::Grouped, steps, last);
     let (grouped, ends) = (run.grouped, run.ends);
-    if run.merging {
+    if run.grouping {
         assert!(grouped >= 1, "{grouped} grouped calls");
         assert!(
             !waits || ends[1] >= 1,
@@ -646,7 +656,7 @@ fn a_command_buffer_that_waits_leads_its_group() {
     let run = event_scenario(CompletionPolicy::Grouped, &steps, 1);
     let (ends, met) = (run.ends, run.met);
     assert!(met >= 1, "{met} event waits met: the gate's was not");
-    match run.merging {
+    match run.grouping {
         // `B`'s wait, for the value `A`'s held group signals, is never met as it is taken.
         true => assert!(
             ends[1] >= 1 && ends[1] + (met - 1) >= 2,
@@ -861,8 +871,8 @@ struct Taken {
 /// What [`behind_running_work`] saw under one `CompletionPolicy`.
 #[derive(Debug)]
 struct Behind {
-    /// Whether the driver merges.
-    merging: bool,
+    /// Whether the device groups its batches ([`groups`]).
+    grouping: bool,
     /// Each command buffer behind `A`, in commit order.
     taken: Vec<Taken>,
     /// The groups kept for their queue's earlier work, and those a wait sent.
@@ -886,7 +896,7 @@ fn behind_running_work(completion: CompletionPolicy, stretch: usize, carried: Ca
             options.policy.completion = completion;
         })
         .unwrap();
-        let merging = merges(&device);
+        let grouping = groups(&device);
         let queue = device.new_command_queue().unwrap();
         let large = device
             .new_buffer(RUNNING_FILL, ResourceOptions::private())
@@ -1011,7 +1021,7 @@ fn behind_running_work(completion: CompletionPolicy, stretch: usize, carried: Ca
         }
         let after = device.work_counts();
         Behind {
-            merging,
+            grouping,
             taken,
             kept: after.groups_kept_pending - before.groups_kept_pending,
             sent: after.groups_sent_for_waits - before.groups_sent_for_waits,
@@ -1035,7 +1045,7 @@ fn behind_while_a_runs(carried: Carried) -> Behind {
     loop {
         let seen = behind_running_work(CompletionPolicy::Grouped, stretch, carried);
         let outlasted = seen.taken.iter().all(|taken| taken.a_ran) && seen.a_ran_at_send;
-        if !seen.merging || outlasted || stretch >= 1 << (BEHIND_RUNS - 1) {
+        if !seen.grouping || outlasted || stretch >= 1 << (BEHIND_RUNS - 1) {
             return seen;
         }
         stretch *= 2;
@@ -1086,7 +1096,7 @@ fn a_command_buffer_with_a_submission_handler_and_check_is_held_behind_running_w
 fn held_behind_running_work(carried: Carried) {
     let seen = behind_while_a_runs(carried);
     each_scheduled_as_taken_in(&seen, carried);
-    if seen.merging {
+    if seen.grouping {
         assert!(
             seen.taken.iter().all(|taken| taken.a_ran),
             "A ended before a command buffer behind it was taken in, at every run: {seen:?}"

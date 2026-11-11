@@ -106,9 +106,13 @@ fn finish(command_buffer: &CommandBuffer) {
 /// parking's mark (`freed_memory.rs`), which no use of the runtime's own takes, and so counts one
 /// too many here.
 pub(super) fn relay_marks(device: &Device) -> u64 {
-    let relays =
-        (device.properties().driver_facts).contains(&DriverFact::QueueFailuresReportedByMessenger);
-    u64::from(relays)
+    u64::from(relays(device))
+}
+
+/// Whether `device` relays its queues' failures (`device/relay.rs`): on a device the lane made,
+/// the runtime's branch on `DriverFact::QueueFailuresReportedByMessenger` ([`relay_marks`]).
+pub(super) fn relays(device: &Device) -> bool {
+    (device.properties().driver_facts).contains(&DriverFact::QueueFailuresReportedByMessenger)
 }
 
 /// A command buffer of a blit that fills `buffer`.
