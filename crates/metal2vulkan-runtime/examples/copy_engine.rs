@@ -299,8 +299,8 @@ impl Bench {
             .or(compute.map(|family| (family as u32, "compute")));
         for (index, family) in families.iter().enumerate() {
             println!(
-                "COPY-ENGINE family {index} flags {:?} queues {} timestamp bits {} granularity {}x{}x{}",
-                family.queue_flags,
+                "COPY-ENGINE family {index} flags {:#x} queues {} timestamp bits {} granularity {}x{}x{}",
+                family.queue_flags.as_raw(),
                 family.queue_count,
                 family.timestamp_valid_bits,
                 family.min_image_transfer_granularity.width,
@@ -418,9 +418,9 @@ impl Bench {
             }
             .expect("a memory type for the buffer");
             println!(
-                "COPY-ENGINE {} buffer memory type {index} flags {:?} heap {}",
+                "COPY-ENGINE {} buffer memory type {index} flags {:#x} heap {}",
                 if host { "host" } else { "device" },
-                memory_types[index as usize].property_flags,
+                memory_types[index as usize].property_flags.as_raw(),
                 memory_types[index as usize].heap_index,
             );
             let allocate = vk::MemoryAllocateInfo::default()
@@ -586,8 +586,8 @@ impl Bench {
             )
         };
         println!(
-            "COPY-ENGINE device {name} driver {:?} {driver_info} graphics family {graphics} ({} queues) other {}",
-            driver.driver_id,
+            "COPY-ENGINE device {name} driver {} {driver_info} graphics family {graphics} ({} queues) other {}",
+            driver.driver_id.as_raw(),
             graphics_queues,
             match other {
                 Some((family, label)) => format!("{label} family {family}"),
