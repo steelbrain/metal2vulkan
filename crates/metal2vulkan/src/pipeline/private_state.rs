@@ -58,7 +58,9 @@
 //!   by the attachments' blends and masks, and the rest through Vulkan's `logicOp`
 //!   ([`GraphicsState::logic_op`]), which applies the same operation to the same codes of a
 //!   normalized or integer attachment, but for a 10-bit format's, which Metal widens to 16 bits
-//!   first (a known gap, `docs/FAST-PATHS.md`). A device without it that orders framebuffer fetch (the
+//!   first: Vulkan's operation is the device's native form there, recorded
+//!   (`PrecisionNote::NativeLogicOperation`, [`note_vulkan_codes`]). A device without it that
+//!   orders framebuffer fetch (the
 //!   pixel interlock, or rasterization-order input attachments) has the fragment function compute
 //!   the operation itself, over the texel its first output's write reads (`lower::fragment`'s
 //!   `logic`; probe `logic_operation` on an Apple M3 Max, macOS 27.0.1: every operation into
@@ -134,6 +136,7 @@ use crate::error::{
 use crate::library::FunctionArtifact;
 use crate::metal::format::{write_conversion, WriteConversion};
 use crate::metal::{ColorWriteMask, CompareFunction, PixelFormat};
+use crate::pipeline::artifact::{PrecisionNote, StageModule};
 use crate::pipeline::descriptor::{PrivateRenderState, RenderPipelineDescriptor};
 use crate::pipeline::lower_inputs::ChannelWrite;
 use crate::pipeline::stage_io::{DepthCompares, StageBuiltin};
@@ -583,6 +586,46 @@ pub(crate) fn logic_operated(
             true => Ok(()),
             false => Err(Error::NeedsInput(RuntimeInput::LogicOperation)),
         },
+    }
+}
+
+/// Note Vulkan's operation (`PrecisionNote::NativeLogicOperation`) on the fragment stage among
+/// `modules` of the linked pipeline `g`, of descriptor `d` as it draws its logic operation
+/// ([`logic_operation`]), where Vulkan's `logicOp` ([`GraphicsState::logic_op`]) operates on an
+/// attachment whose codes Metal's operation widens (`RGB10A2Unorm` and `BGR10A2Unorm`, on 16-bit
+/// codes: `lower::fragment`'s `logic`): one a first output writes (`GraphicsState::color_outputs`)
+/// with a channel its write mask keeps. Vulkan's operation on the 10-bit codes themselves is the
+/// device's native form, and may store another code than Metal's.
+pub(crate) fn note_vulkan_codes(
+    d: &RenderPipelineDescriptor,
+    g: &GraphicsState,
+    modules: &mut [StageModule],
+) {
+    if g.logic_op.is_none() {
+        return;
+    }
+    let widened = d.color_attachments.iter().enumerate().any(|(i, a)| {
+        let written = g.color_outputs & 1u32.checked_shl(i as u32).unwrap_or(0) != 0
+            && g.color_attachments
+                .get(i)
+                .and_then(Option::as_ref)
+                .is_some_and(|s| !s.write_mask.is_empty());
+        written
+            && a.as_ref()
+                .is_some_and(|a| crate::lower::fragment::logic_widens(a.pixel_format))
+    });
+    if !widened {
+        return;
+    }
+    let note = PrecisionNote::NativeLogicOperation;
+    for m in modules
+        .iter_mut()
+        .filter(|m| m.stage == vk::ShaderStage::FRAGMENT)
+    {
+        if !m.precision_notes.contains(&note) {
+            m.precision_notes.push(note);
+            m.precision_notes.sort_unstable();
+        }
     }
 }
 

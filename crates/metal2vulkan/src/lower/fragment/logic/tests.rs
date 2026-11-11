@@ -53,6 +53,29 @@ fn the_operation_serves_the_per_channel_formats() {
     }
 }
 
+/// Metal's operation widens the codes of the 10-bit unorm formats alone, where Vulkan's `logicOp`
+/// operates on a channel's own codes; every other format's codes are its channels' own.
+#[test]
+fn only_the_10_bit_formats_widen_their_codes() {
+    for pf in [PixelFormat::RGB10A2Unorm, PixelFormat::BGR10A2Unorm] {
+        assert!(widens(pf), "{pf:?}");
+    }
+    for pf in [
+        PixelFormat::RGBA8Unorm,
+        PixelFormat::R8Unorm,
+        PixelFormat::RGBA16Unorm,
+        PixelFormat::RGBA8Snorm,
+        PixelFormat::RGBA8Uint,
+        PixelFormat::R32Sint,
+        PixelFormat::RGB10A2Uint,
+        PixelFormat::B5G6R5Unorm,
+        PixelFormat::RGBA8UnormSRGB,
+        PixelFormat::RGBA16Float,
+    ] {
+        assert!(!widens(pf), "{pf:?}");
+    }
+}
+
 /// A normalized format takes a `float` or `half` output, an integer one a 32-bit integer output.
 #[test]
 fn the_operation_takes_its_class_s_outputs() {

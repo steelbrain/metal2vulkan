@@ -4482,6 +4482,18 @@ bound.
   Metal's `mix(x, y, t)` on `float` and `half` is the device's `FMix` (a `half` one computed in
   `float` and rounded once to `half`), not Metal's `fma(t, y, fma(-t, x, x))`, on every device but
   for a `float` one where the device's functions are Metal's own (MoltenVK).
+- `metal2vulkan-degrade-native-logic-operation` (precision).
+  `PrecisionNote::NativeLogicOperation`: A render pipeline's private logic operation (other than
+  copy and no-op) is drawn by the device's `logicOp` into an `RGB10A2Unorm` or `BGR10A2Unorm`
+  attachment the fragment function writes, with a channel its write mask keeps. Vulkan's operation
+  takes the fragment's value converted to the channel's own 10-bit (or 2-bit) code and the stored
+  code as it is; Metal widens both to 16-bit codes, operates, and narrows the result to the
+  channel's code, rounded to nearest (probe `logic_operation` on an Apple M3 Max, macOS 27.0.1).
+  So a channel may store another code than Metal's (lavapipe's xor into `RGB10A2Unorm` stored
+  green 938 where Metal's rule gives 937), by a distance the note does not bound: the result
+  follows the codes' bits. The device's `logicOp` is its native form there, and no other form is
+  built for it; a device without `logicOp` computes Metal's rule in the fragment function and
+  records none.
 - `metal2vulkan-degrade-device-pack-conversion` (precision). `PrecisionNote::DevicePackConversion`:
   Native device maths (a conversion): `air.pack` or `air.unpack` of a normalized format is the
   device's: `GLSL.std.450`'s `Pack`/`Unpack` `Unorm4x8`, `Snorm4x8`, `Unorm2x16` and `Snorm2x16`,

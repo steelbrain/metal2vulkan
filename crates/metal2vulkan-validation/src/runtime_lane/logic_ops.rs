@@ -16,7 +16,9 @@
 //! orders fetch in neither form every other operation is refused naming the three features.
 //! Metal operates on `RGB10A2Unorm`'s codes widened to 16 bits and narrows the result back (the
 //! `logic_operation` probe), as the fragment function does; Vulkan's `logicOp` operates on the
-//! 10-bit codes themselves, a known gap (`docs/FAST-PATHS.md`) whose texels the lane counts apart.
+//! 10-bit codes themselves, the device's native form, which the pipeline records
+//! (`PrecisionNote::NativeLogicOperation`) and the device announces: the lane counts those texels
+//! apart, each through a pipeline that records the note.
 //!
 //! Where the device converts a color its own way, the operation takes the device's code: a drawn
 //! channel's where the pipeline's fragment stage records `PrecisionNote::DeviceColorConversion`
@@ -302,9 +304,11 @@ impl Lane {
         )
     }
 
-    /// Whether [`Lane::pipeline`]'s fragment stage records `PrecisionNote::DeviceColorConversion`,
-    /// as the device's compile layer compiles it: the device converts the drawn color its own way.
-    fn converts(&self, pf: PixelFormat, blended: bool, raw: u64) -> bool {
+    /// Whether [`Lane::pipeline`]'s fragment stage records `note`, as the device's compile layer
+    /// compiles it: `PrecisionNote::DeviceColorConversion` where the device converts the drawn
+    /// color its own way, `PrecisionNote::NativeLogicOperation` where Vulkan's `logicOp` operates
+    /// on a 10-bit format's own codes.
+    fn records(&self, pf: PixelFormat, blended: bool, raw: u64, note: PrecisionNote) -> bool {
         let compiled = self
             .device
             .compile_device()
@@ -314,10 +318,7 @@ impl Lane {
             )
             .unwrap();
         compiled.stages.iter().any(|stage| {
-            stage.stage == vk::ShaderStage::FRAGMENT
-                && stage
-                    .precision_notes
-                    .contains(&PrecisionNote::DeviceColorConversion)
+            stage.stage == vk::ShaderStage::FRAGMENT && stage.precision_notes.contains(&note)
         })
     }
 
@@ -450,7 +451,8 @@ fn unordered() -> metal2vulkan::error::Unsupported {
 /// every other operation is the fragment function's where the device orders fetch, and refused
 /// naming the three features elsewhere. Vulkan's `logicOp` operates on `RGB10A2Unorm`'s own
 /// codes, where Metal widens them to 16 bits: such a draw may store exactly the per-channel
-/// rule's texel instead (a known gap), counted apart.
+/// rule's texel instead, counted apart, its pipeline recording `PrecisionNote::NativeLogicOperation`,
+/// which the device announces where it has `logicOp` and not where the function operates.
 /// Where the device converts a drawn color (the pipeline's note) or the clears (their
 /// announcement, taken from a pass of each normalized format's clear alone, before any pipeline
 /// is made) its own way, that channel's code is either one nearest its value (the module docs).
@@ -538,16 +540,24 @@ fn run(lane: &Lane, messages: &Messages) -> String {
                     continue;
                 }
                 // Vulkan's operation on a 10-bit format's own codes, where Metal's widens them
-                // (a known gap, `docs/FAST-PATHS.md`): exactly the per-channel rule's texel.
+                // (the device's native form): exactly the per-channel rule's texel, through a
+                // pipeline that records it.
                 let rule = match has {
                     true => Rule::PerChannel,
                     false => Rule::Metal,
                 };
                 if !float && has && got == expected(pf, (raw, rule), drawn) {
+                    let native = PrecisionNote::NativeLogicOperation;
+                    assert!(
+                        lane.records(pf, blended, raw, native),
+                        "{name}: {pf:?} blended {blended} operation {raw} stores the per-channel \
+                         texel {got:02x?} through a pipeline that records no {native:?}"
+                    );
                     per_channel += 1;
                     continue;
                 }
-                let drawn_either = !float && lane.converts(pf, blended, raw);
+                let note = PrecisionNote::DeviceColorConversion;
+                let drawn_either = !float && lane.records(pf, blended, raw, note);
                 noted += usize::from(drawn_either);
                 let either = (drawn_either, cleared_either);
                 if !float && allowed(pf, (raw, rule), drawn, &got, either) {
@@ -573,11 +583,19 @@ fn run(lane: &Lane, messages: &Messages) -> String {
         wrong.len(),
         wrong.join("\n")
     );
+    // Vulkan's operation reached `RGB10A2Unorm` in every operation but copy and no-op: the device
+    // announced its note; the fragment function's operation records none.
+    messages.take_notices();
+    let announced = messages
+        .taken_kinds()
+        .contains(&Degradation::NativeLogicOperation);
+    assert_eq!(announced, has, "{name} ({form}): native-logic-operation");
     format!(
         "{name} ({form}): {checked} logic-operated draws store Metal's texels or the device's \
          conversion's ({theirs} the device's: {noted} of them through a pipeline noted \
          DeviceColorConversion, clears announced {cleared_either}; {per_channel} Vulkan's \
-         operation on a 10-bit format's own codes), {refused} refused"
+         operation on a 10-bit format's own codes, each through a pipeline noted \
+         NativeLogicOperation, announced {announced}), {refused} refused"
     )
 }
 

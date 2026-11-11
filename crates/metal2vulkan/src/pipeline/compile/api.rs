@@ -1067,6 +1067,7 @@ impl Device {
         )?;
         let logic_op = crate::pipeline::private_state::LogicDraw::vulkan(logic);
         graphics.logic_op = logic_op;
+        crate::pipeline::private_state::note_vulkan_codes(d, &graphics, &mut stages);
         let mut requirements = requirements;
         if logic_op.is_some() {
             requirements.features.insert(VkFeature::LogicOp);

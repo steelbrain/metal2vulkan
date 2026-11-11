@@ -5560,6 +5560,7 @@ macro-member	metal2vulkan-runtime::Degradation::NativeDot	NativeDot = "native-do
 macro-member	metal2vulkan-runtime::Degradation::NativeFma	NativeFma = "native-fma";
 macro-member	metal2vulkan-runtime::Degradation::NativeHalfConversion	NativeHalfConversion = "native-half-conversion";
 macro-member	metal2vulkan-runtime::Degradation::NativeHalfQuantize	NativeHalfQuantize = "native-half-quantize";
+macro-member	metal2vulkan-runtime::Degradation::NativeLogicOperation	NativeLogicOperation = "native-logic-operation";
 macro-member	metal2vulkan-runtime::Degradation::NativeMinMax	NativeMinMax = "native-min-max";
 macro-member	metal2vulkan-runtime::Degradation::NativeMix	NativeMix = "native-mix";
 macro-member	metal2vulkan-runtime::Degradation::NativeNanEncoding	NativeNanEncoding = "native-nan-encoding";
@@ -14381,6 +14382,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::NativeDot	NativeDot
 variant	metal2vulkan::pipeline::PrecisionNote::NativeFma	NativeFma
 variant	metal2vulkan::pipeline::PrecisionNote::NativeHalfConversion	NativeHalfConversion
 variant	metal2vulkan::pipeline::PrecisionNote::NativeHalfQuantize	NativeHalfQuantize
+variant	metal2vulkan::pipeline::PrecisionNote::NativeLogicOperation	NativeLogicOperation
 variant	metal2vulkan::pipeline::PrecisionNote::NativeMinMax	NativeMinMax
 variant	metal2vulkan::pipeline::PrecisionNote::NativeMix	NativeMix
 variant	metal2vulkan::pipeline::PrecisionNote::NativeNanEncoding	NativeNanEncoding

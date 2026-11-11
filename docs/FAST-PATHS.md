@@ -1359,8 +1359,10 @@ driver's. Each is open work.
   operation), as the fragment function's operation does; Vulkan's `logicOp`, which a device that
   has it draws with, operates on the 10-bit codes themselves, so such a draw can store another
   code (the logic-operation lane on lavapipe: its xor and equivalence draws into `RGB10A2Unorm`
-  store the per-channel texel, xor's green 938 where Metal's rule gives 937). No note records
-  it.
+  store the per-channel texel, xor's green 938 where Metal's rule gives 937). Vulkan's operation
+  is the device's native form there and stays: the pipeline's fragment stage records
+  `PrecisionNote::NativeLogicOperation` (`native-logic-operation`), which the runtime announces,
+  wherever Vulkan's `logicOp` operates on such an attachment the function writes.
 
 - **A reset compute pipeline descriptor keeps its thread shape on Metal and not here.**
   `MTLComputePipelineDescriptor.reset` restores the label, the buffer mutability,

@@ -2298,6 +2298,24 @@ pub enum PrecisionNote {
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch for review.
     UnorderedFetchWithinDraw,
+    /// A render pipeline draws its private logic operation through Vulkan's `logicOp`
+    /// ([`GraphicsState::logic_op`](crate::pipeline::GraphicsState::logic_op)), the device's
+    /// native form, into an attachment whose codes Metal's operation widens: an `RGB10A2Unorm` or
+    /// `BGR10A2Unorm` attachment a first output of the fragment function writes, with a channel
+    /// its write mask keeps. Metal widens each stored 10-bit code (and the 2-bit alpha) to 16
+    /// bits, converts the fragment's value to a 16-bit code, operates, and narrows the result
+    /// back to the channel's code, rounded to nearest (probe `logic_operation` on an Apple M3 Max,
+    /// macOS 27.0.1: every texel of every operation into both formats). Vulkan's operation takes
+    /// the fragment's value converted to the channel's own code and the stored code as it is, so
+    /// a channel may store another code than Metal's: lavapipe's xor into `RGB10A2Unorm` stored
+    /// green 938 where Metal's rule gives 937. The distance is not bounded, since the operation's
+    /// result follows the codes' bits, not their values. A device without `logicOp` computes
+    /// Metal's rule in the fragment function and records none. The fragment stage records it
+    /// whatever the specialization.
+    ///
+    /// Validation derives no tolerance and no explanation from it: a difference stays a
+    /// mismatch for review.
+    NativeLogicOperation,
 }
 
 /// The math mode of an entry's module, which decides, on a device whose `float` functions are

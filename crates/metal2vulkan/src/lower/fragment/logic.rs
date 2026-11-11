@@ -146,6 +146,23 @@ pub(crate) fn channels(pf: PixelFormat) -> Option<LogicChannels> {
     }
 }
 
+/// Whether Metal's operation into an attachment of `pf` takes codes wider than its channels' own
+/// (a 10-bit format's, widened to 16 bits: see the module docs), where Vulkan's `logicOp`
+/// operates on the channels' own codes and so may store another code.
+pub(crate) fn widens(pf: PixelFormat) -> bool {
+    let (Some(c), Some(WriteConversion::Rules(rules))) = (channels(pf), write_conversion(pf))
+    else {
+        return false;
+    };
+    c.bits
+        .iter()
+        .zip(rules)
+        .any(|(bits, rule)| match (bits, rule) {
+            (Some(bits), Some(ChannelWrite::Unorm { bits: own })) => *bits != u32::from(own),
+            _ => false,
+        })
+}
+
 /// The read class of an attachment of `channels`: `float` texels for a normalized format, `uint`
 /// ones for an integer format (a signed one's bits).
 pub(crate) fn reads_float(channels: LogicChannels) -> bool {

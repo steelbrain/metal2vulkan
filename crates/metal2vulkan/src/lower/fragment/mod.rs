@@ -122,7 +122,9 @@ pub use input_blend::{
 pub use input_shadow::InputShadow;
 pub(crate) use input_shadow::{shadows as input_shadow, store as input_shadow_store};
 pub use logic::LogicInput;
-pub(crate) use logic::{channels as logic_channels, input_operated as logic_input_operated};
+pub(crate) use logic::{
+    channels as logic_channels, input_operated as logic_input_operated, widens as logic_widens,
+};
 #[cfg(test)]
 pub(crate) use snapshot::{decode as snapshot_decode, encode as snapshot_encode};
 pub(crate) use snapshot::{prepare as snapshot_prepare, read as snapshot_read};
