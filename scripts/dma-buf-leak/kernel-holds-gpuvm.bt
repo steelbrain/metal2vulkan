@@ -48,6 +48,20 @@ kretprobe:drm_gem_prime_import_dev
     }
 }
 
+/* Whether a dma-buf's imports are in one DRM file (its PRIME cache) or in several. */
+kprobe:drm_prime_add_buf_handle
+{
+    if (@nimp[arg1]) {
+        if (@file[arg1] == 0) {
+            @file[arg1] = arg0;
+        } else if (@file[arg1] == arg0) {
+            @n["import again in the same DRM file"] = count();
+        } else {
+            @n["import again in another DRM file"] = count();
+        }
+    }
+}
+
 kprobe:drm_gem_object_release_handle
 {
     if (@objd[arg1]) {
@@ -237,6 +251,7 @@ kprobe:drm_gem_object_release
 kprobe:release_udmabuf
 {
     delete(@nimp[arg0]);
+    delete(@file[arg0]);
 }
 
 END
@@ -265,6 +280,7 @@ END
     clear(@objd);
     clear(@ord);
     clear(@nimp);
+    clear(@file);
     clear(@vbobj);
     clear(@vbvm);
     clear(@vbcreate);
