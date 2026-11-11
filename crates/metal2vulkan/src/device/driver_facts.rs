@@ -499,8 +499,9 @@ pub(crate) fn among<F: Copy + Ord>(
 /// `runtime_lane::half_storage_writes::every_nan_a_kernel_writes_to_a_small_float_texture_is_metal_s_where_measured`
 /// and
 /// `runtime_lane::half_write_nans::every_half_nan_written_to_a_small_float_texture_is_metal_s_where_measured`).
-/// One row, of the driver on every CPU. Measured to keep a NaN's payload bits, so not listed: RADV
-/// on the Radeon 780M and NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU.
+/// One row, of the driver on every CPU. Measured to store another NaN, so not listed: RADV on the
+/// Radeon 780M (a `half` NaN's payload bits kept) and NVIDIA's 615.71.09 on the RTX 5080 Laptop
+/// GPU (every bit of each NaN field set).
 ///
 /// `MetalUnaryDenormals`: MoltenVK 1.4.2's `OpFNegate`, `FAbs`, `Floor` and `Ceil` on 32-bit
 /// floats, which SPIRV-Cross writes as Metal's `-x`, `fabs`, `floor` and `ceil`. On the M3 Max
