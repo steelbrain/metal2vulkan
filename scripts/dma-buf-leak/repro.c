@@ -22,6 +22,10 @@
  *   -b 0|1      1: a thread keeps the queue busy with copies between two buffers of its own (0)
  *   -a 0|1      1: bufferDeviceAddress, imports with VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT (0)
  *   -x 0|1      1: one lock around every import and free (0)
+ *   -p 0|1|2    1: vkGetMemoryFdPropertiesKHR on each dma-buf, then the import (1); 0: no query,
+ *               the type from the buffer's requirements alone (a diagnostic: it breaks
+ *               VUID-VkMemoryAllocateInfo-memoryTypeIndex-00648); 2: the query alone, no buffer
+ *               and no import
  *   -d INDEX    physical device (0)           -f MIB  the memfd's size (512)
  *   -S          read bufinfo through `sudo -n cat`
  *
@@ -161,9 +165,9 @@ struct udmabuf_create_list { uint32_t flags, count; /* then the items */ };
 #define CHECK(call) do { VkResult r_ = (call); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s:%d: %s: VkResult %d\n", __FILE__, __LINE__, #call, r_); exit(1); } } while (0)
 
 static struct {
-    int threads, window, count, rounds, list, copy, busy, address, serial, sudo, device;
+    int threads, window, count, rounds, list, copy, busy, address, serial, sudo, device, props;
     uint64_t smallest, largest, file;
-} opt = { 8, 4, 50, 5, 1, 0, 0, 0, 0, 0, 0, 16 << 10, 64 << 20, 512 << 20 };
+} opt = { 8, 4, 50, 5, 1, 0, 0, 0, 0, 0, 0, 1, 16 << 10, 64 << 20, 512 << 20 };
 
 #define F(name) static PFN_##name name
 F(vkGetInstanceProcAddr); F(vkCreateInstance); F(vkEnumeratePhysicalDevices);
@@ -229,8 +233,15 @@ static struct import import(uint64_t *rng) {
     if (length > opt.largest) length = opt.largest;
     int fd = make_dmabuf(rng, length);
     if (opt.serial) pthread_mutex_lock(&serial_lock);
-    VkMemoryFdPropertiesKHR props = { VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR };
-    CHECK(vkGetMemoryFdPropertiesKHR(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &props));
+    VkMemoryFdPropertiesKHR props = { VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR, NULL, ~0u };
+    if (opt.props)
+        CHECK(vkGetMemoryFdPropertiesKHR(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &props));
+    if (opt.props == 2) {
+        if (opt.serial) pthread_mutex_unlock(&serial_lock);
+        close(fd);
+        __atomic_add_fetch(&made, 1, __ATOMIC_RELAXED);
+        return (struct import){ 0, 0, length };
+    }
     VkExternalMemoryBufferCreateInfo external = { VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO, NULL, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT };
     VkBufferCreateInfo info = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, &external, 0, length,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
@@ -419,7 +430,7 @@ static void load(void) {
 }
 
 int main(int argc, char **argv) {
-    for (int c; (c = getopt(argc, argv, "t:w:n:r:m:M:l:c:b:a:x:d:f:S")) != -1;) {
+    for (int c; (c = getopt(argc, argv, "t:w:n:r:m:M:l:c:b:a:x:p:d:f:S")) != -1;) {
         switch (c) {
         case 't': opt.threads = atoi(optarg); break;
         case 'w': opt.window = atoi(optarg); break;
@@ -434,10 +445,12 @@ int main(int argc, char **argv) {
         case 'x': opt.serial = atoi(optarg); break;
         case 'd': opt.device = atoi(optarg); break;
         case 'f': opt.file = strtoull(optarg, NULL, 0) << 20; break;
+        case 'p': opt.props = atoi(optarg); break;
         case 'S': opt.sudo = 1; break;
         default: fprintf(stderr, "see the comment at the top of repro.c\n"); return 2;
         }
     }
+    if (opt.props == 2) opt.copy = 0; /* no buffer to copy from */
     page = (uint64_t)sysconf(_SC_PAGESIZE);
     opt.smallest = (opt.smallest + page - 1) / page * page;
     if (opt.largest > (64ull << 20)) opt.largest = 64ull << 20;
@@ -477,12 +490,14 @@ int main(int argc, char **argv) {
 
     long count, attached;
     listed(&count, &attached);
-    printf("repro on %s: threads %d, window %d, %d imports a thread a round, %d rounds, %llu to %llu bytes, %s, copies %d, busy %d, device address %d, serial %d, %llu-byte pages; ",
+    printf("repro on %s: threads %d, window %d, %d imports a thread a round, %d rounds, %llu to %llu bytes, %s, copies %d, busy %d, device address %d, serial %d, properties %d, %llu-byte pages; ",
            name, opt.threads, opt.window, opt.count, opt.rounds, (unsigned long long)opt.smallest,
            (unsigned long long)opt.largest, opt.list ? "UDMABUF_CREATE_LIST" : "UDMABUF_CREATE",
-           opt.copy, opt.busy, opt.address, opt.serial, (unsigned long long)page);
+           opt.copy, opt.busy, opt.address, opt.serial, opt.props, (unsigned long long)page);
     if (count < 0) {
         printf("bufinfo unreadable (run as root, or with -S and sudo that asks no password)\n");
+    } else if (opt.props == 2) {
+        printf("no control (no import with -p 2)\n");
     } else {
         uint64_t rng = 1;
         struct import im = import(&rng);
