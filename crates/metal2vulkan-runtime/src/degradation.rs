@@ -2087,8 +2087,9 @@ degradations! {
         /// which is copied without asking the gate (`WorkCounts::copied_read_only_memory`). A copy
         /// of pages the process maps read-only, or of bit-24 memory, drops the GPU's writes, as
         /// Metal drops them: never written to the pages (`WorkCounts::copied_dropped_bytes`; the
-        /// detail says so). A copy whose own allocation
-        /// fails refuses the call (`OutOfMemory`).
+        /// detail says so). The reason names which of these it was; for a failed import, the
+        /// import's error, or the pages' unpinnable mapping and whether a dma-buf source was asked.
+        /// A copy whose own allocation fails refuses the call (`OutOfMemory`).
         /// Announced once per device, by the call that makes it, or at each such call where
         /// `DeviceOptions::announce_each` asks. Counted: `WorkCounts::copied_host_buffers_made`.
         /// Each such buffer, and each buffer placed in such a heap, answers

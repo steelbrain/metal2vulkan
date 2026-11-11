@@ -1,11 +1,12 @@
 //! Buffers over host memory (`host_memory.rs`): the pages an import covers, where the buffer
 //! binds in them, the memory types an import may use, and the host's page.
 
+use crate::buffer_descriptor::FailedImport;
 #[cfg(target_os = "linux")]
 use crate::host_memory::Access;
 use crate::host_memory::{
     based_size, binds_in, buffer_base, host_page, import_refused, import_window, refused,
-    ImportWindow, WindowRefusal,
+    unpinnable, ImportWindow, WindowRefusal,
 };
 use crate::memory::{candidates, MemoryClass};
 use crate::{Error, MemoryKind, VkResultCode};
@@ -207,6 +208,42 @@ fn imported_memory_is_host_visible_and_coherent_of_the_storage_mode_s_class() {
 }
 
 #[cfg(unix)]
+/// A no-copy object made a copy of its pages as their import failed names the failure in its
+/// announcement (`copied-host-pages`): pages the runtime kept from the driver as the kernel cannot
+/// pin them (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`), and whether a source of their
+/// dma-bufs was asked; or the import's error, of the pointer or of the caller's dma-bufs.
+#[test]
+fn a_copy_after_a_failed_import_names_the_failure() {
+    let cause = |error, sourced| FailedImport { error, sourced }.cause();
+    let kept = "the kernel cannot pin some of them";
+    let defect = "RuntimeDriverDefect::UnpinnablePagesBreakHostMemory";
+    let unasked = cause(unpinnable(), false);
+    for named in [kept, defect, "no source of dma-bufs of them was asked"] {
+        assert!(unasked.contains(named), "{named:?}: {unasked}");
+    }
+    let asked = cause(unpinnable(), true);
+    for named in [
+        kept,
+        defect,
+        "the caller's source (HostMemory::with_dma_buf) made none",
+    ] {
+        assert!(asked.contains(named), "{named:?}: {asked}");
+    }
+    let out = Error::OutOfMemory(MemoryKind::Device);
+    assert_eq!(
+        cause(out.clone(), false),
+        format!("their pointer's import failed: {out}")
+    );
+    let too_many = Error::Vulkan(VkResultCode(vk::Result::ERROR_TOO_MANY_OBJECTS.as_raw()));
+    let of_dma_bufs = cause(too_many.clone(), true);
+    assert!(
+        of_dma_bufs.contains("the import of the caller's dma-bufs of them")
+            && of_dma_bufs.ends_with(&format!("failed: {too_many}")),
+        "{of_dma_bufs}"
+    );
+    assert!(!of_dma_bufs.contains(defect), "{of_dma_bufs}");
+}
+
 #[test]
 fn the_host_page_is_known_on_unix() {
     let page = host_page().unwrap();

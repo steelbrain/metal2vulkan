@@ -956,28 +956,36 @@ impl Device {
                             // as where no source is given.
                             let by_device =
                                 pointer_refused && refused(&failed) && refusal == not_importable();
-                            (source_failure(failed, refusal), by_device)
+                            let error = source_failure(failed, refusal);
+                            (
+                                FailedImport {
+                                    error,
+                                    sourced: true,
+                                },
+                                by_device,
+                            )
                         }),
                         // The device's refusal of the pointer, with no source of dma-bufs of the
                         // pages to take instead.
                         Err(error) => {
                             let by_device = error == not_importable();
-                            Err((error, by_device))
+                            let sourced = false;
+                            Err((FailedImport { error, sourced }, by_device))
                         }
                     };
                 let (buffer, memory, again) = match imported {
                     Ok(imported) => imported,
                     // An import the device and the gate admitted that then failed, or pages the
                     // runtime refused for the driver that no dma-buf of them served: a copy,
-                    // announced.
-                    Err((error, _)) if copyable && copies_after(&error) => {
+                    // announced with the failure.
+                    Err((failed, _)) if copyable && copies_after(&failed.error) => {
                         // SAFETY: the caller's contract.
                         let copied = unsafe {
                             self.copied_buffer(
                                 copy,
                                 release,
                                 dirty,
-                                CopiedFor::Failed(error),
+                                CopiedFor::Failed(failed),
                                 naming,
                             )
                         };
@@ -995,7 +1003,7 @@ impl Device {
                             unsafe { self.copied_buffer(copy, release, dirty, why, naming) };
                         return copied.map(|buffer| noted(kept(buffer, log, kept_runs, made_of)));
                     }
-                    Err((error, _)) => return Err(error),
+                    Err((failed, _)) => return Err(failed.error),
                 };
                 (buffer, memory, again)
             }
@@ -1263,7 +1271,7 @@ impl Device {
                 // of the import's unit.
                 let images = (heap.is_some() || !in_place.is_empty()).then_some(unit);
                 let own_pages = !in_place.is_empty() && self.fresh_pages_take_images(&in_place);
-                let copy = |failed: Option<Error>| {
+                let copy = |failed: Option<&FailedImport>| {
                     let window = &copy_window;
                     // SAFETY: the caller's contract.
                     unsafe {
@@ -1272,7 +1280,7 @@ impl Device {
                             length,
                             window,
                             (images, own_pages),
-                            failed,
+                            failed.map(|failed| &failed.error),
                             read_only_copy,
                         )
                     }
@@ -1289,7 +1297,12 @@ impl Device {
                             self.import_by_pointer(importer, pointer, length, host, class)
                         } {
                             Ok(imported) => Ok(imported),
-                            Err(error) if copyable && copies_after(&error) => Err(Some(error)),
+                            Err(error) if copyable && copies_after(&error) => {
+                                Err(Some(FailedImport {
+                                    error,
+                                    sourced: false,
+                                }))
+                            }
                             Err(error) => return Err(error),
                         },
                     },
@@ -1362,7 +1375,12 @@ impl Device {
                             // An import of the caller's dma-bufs the gate admitted that then
                             // failed, or that served pages the runtime refused for the driver: a
                             // copy, as where the pointer's fails.
-                            Err(error) if copyable && copies_after(&error) => Err(Some(error)),
+                            Err(error) if copyable && copies_after(&error) => {
+                                Err(Some(FailedImport {
+                                    error,
+                                    sourced: true,
+                                }))
+                            }
                             Err(error) => return Err(error),
                         };
                         if was_settled {
@@ -1391,8 +1409,9 @@ impl Device {
                             (false, None) if unwritable => CopiedBecause::Unwritable,
                             (false, None) => CopiedBecause::Refused,
                         };
-                        let (host, placement, copied) = copy(failed)?;
-                        (host, placement, Remade::default(), Some((copied, cause)))
+                        let (host, placement, copied) = copy(failed.as_ref())?;
+                        let copied = (copied, cause, failed);
+                        (host, placement, Remade::default(), Some(copied))
                     }
                 };
                 // A copy lies at the offset it was laid out at: the old one where the bytes moved.
@@ -1408,12 +1427,13 @@ impl Device {
                     host.size - host.base,
                 );
                 match copied {
-                    Some((copied, cause)) => {
+                    Some((copied, cause, failed)) => {
                         let drops = copied.drops_writes();
                         pages.set_copied(copied);
                         shared.counts.copied_host_buffer_made(cause);
                         shared.counts.copied_rebind_pages_made();
-                        self.degrade_copied(call, pointer, length, (cause, drops));
+                        let why = (cause, drops, failed.as_ref());
+                        self.degrade_copied(call, pointer, length, why);
                     }
                     None if chunk_bound => {}
                     None => shared.counts.host_rebind_import_made(covered),
@@ -1758,7 +1778,7 @@ impl Device {
         length: u64,
         window: &ImportWindow,
         (images, own_pages): (Option<u64>, bool),
-        failed: Option<Error>,
+        failed: Option<&Error>,
         read_only: bool,
     ) -> Result<(HostBuffer, Placement, crate::copied::Copied), Error> {
         let shared = self.shared();
@@ -1777,6 +1797,7 @@ impl Device {
                 return Err(match why {
                     NotCopied::Unreadable => failed
                         .filter(|failed| !refused(failed))
+                        .cloned()
                         .unwrap_or_else(not_importable),
                     NotCopied::OutOfHostMemory => Error::OutOfMemory(MemoryKind::Host),
                 });
@@ -1885,15 +1906,17 @@ impl Device {
 
     /// Announce that `call` made the `length` bytes at `pointer` a copy of the caller's pages
     /// (`Degradation::CopiedHostPages`), for `cause`; one that `drops` the GPU's writes, as the
-    /// process cannot write the pages, says so.
+    /// process cannot write the pages, says so; one made as their import `failed` names the
+    /// failure ([`FailedImport::cause`]).
     fn degrade_copied(
         &self,
         call: &'static str,
         pointer: NonNull<u8>,
         length: u64,
-        (cause, drops): (CopiedBecause, bool),
+        (cause, drops, failed): (CopiedBecause, bool, Option<&FailedImport>),
     ) {
         self.degrade(Degradation::CopiedHostPages, || {
+            let failure;
             let why = match cause {
                 CopiedBecause::Refused => {
                     "the caller's import gate (HostMemory::with_import_gate) refused their \
@@ -1906,7 +1929,13 @@ impl Device {
                      them was given (HostMemory::with_dma_buf), or it failed, or the device \
                      refused its dma-bufs"
                 }
-                CopiedBecause::Failed => "their import failed",
+                CopiedBecause::Failed => match failed {
+                    Some(failed) => {
+                        failure = failed.cause();
+                        &failure
+                    }
+                    None => "their import failed",
+                },
                 CopiedBecause::Moved => {
                     "they lie at another offset in their page than the buffer's old bytes, \
                      where a texture over the buffer was planned, which no import lays them at"
@@ -2000,7 +2029,7 @@ impl Device {
         naming: Naming,
     ) -> Result<Buffer, Error> {
         let read_only = matches!(why, CopiedFor::ReadOnly);
-        let (cause, failed) = match why {
+        let (cause, failed): (_, Option<FailedImport>) = match why {
             CopiedFor::Refused => (CopiedBecause::Refused, None),
             CopiedFor::DeviceRefused => (CopiedBecause::DeviceRefused, None),
             CopiedFor::Failed(failed) => (CopiedBecause::Failed, Some(failed)),
@@ -2011,8 +2040,9 @@ impl Device {
         let raw_device = shared.vk();
         // The pages' refusal where they cannot be copied: the import's failure, or a refusal of
         // them.
-        let unreadable = |failed: Option<Error>| {
+        let unreadable = |failed: Option<FailedImport>| {
             failed
+                .map(|failed| failed.error)
                 .filter(|failed| !refused(failed))
                 .unwrap_or_else(not_importable)
         };
@@ -2108,7 +2138,7 @@ impl Device {
         if of_heap {
             shared.counts.copied_heap_made();
         }
-        self.degrade_copied(call, pointer, length, (cause, drops));
+        self.degrade_copied(call, pointer, length, (cause, drops, failed.as_ref()));
         Ok(buffer)
     }
 
@@ -2411,8 +2441,8 @@ enum CopiedFor {
     /// source of them (`HostMemory::with_dma_buf`), or its source failed, or the device refused
     /// its dma-bufs.
     DeviceRefused,
-    /// The import the device and the gate admitted failed, with this.
-    Failed(Error),
+    /// The import the device and the gate admitted failed, as this says.
+    Failed(FailedImport),
     /// Metal's private option bit 24 drops the GPU's writes to the memory, and the system maps
     /// no read-only view of the pages (`read_only_view.rs`): the copy drops them.
     ReadOnly,
@@ -2420,6 +2450,47 @@ enum CopiedFor {
     /// writes, as Metal drops them.
     Unwritable,
 }
+
+/// An import of a no-copy object's pages that the device and the gate admitted and that failed
+/// ([`copies_after`]), leaving the object a copy of them (`CopiedFor::Failed`).
+pub(super) struct FailedImport {
+    /// The failure: out of memory, another Vulkan error, or the runtime's refusal of pages the
+    /// kernel cannot pin ([`unpinnable`]).
+    pub(super) error: Error,
+    /// Whether the caller's dma-bufs of the pages were imported after their pointer was refused
+    /// (`HostMemory::with_dma_buf`, [`source_failure`]).
+    pub(super) sourced: bool,
+}
+
+impl FailedImport {
+    /// The cause the copy's announcement names (`copied-host-pages`): the pages the runtime kept
+    /// from the driver and why no dma-buf of them served, or the import that failed and its error.
+    pub(super) fn cause(&self) -> String {
+        let FailedImport { error, sourced } = self;
+        match (*error == unpinnable(), *sourced) {
+            (true, true) => format!(
+                "{UNPINNABLE}, and no dma-buf of them served: the caller's source \
+                 (HostMemory::with_dma_buf) made none of them, or the device refused its dma-bufs"
+            ),
+            (true, false) => format!(
+                "{UNPINNABLE}, and no source of dma-bufs of them was asked: the caller gave none \
+                 (HostMemory::with_dma_buf), or the device imports no dma-buf"
+            ),
+            (false, true) => format!(
+                "the device refused their pointer's import, or the runtime kept their pointer \
+                 from the driver, and the import of the caller's dma-bufs of them \
+                 (HostMemory::with_dma_buf) failed: {error}"
+            ),
+            (false, false) => format!("their pointer's import failed: {error}"),
+        }
+    }
+}
+
+/// Why the runtime keeps pages from the driver ([`unpinnable`]), in a copy's announcement.
+const UNPINNABLE: &str = "the kernel cannot pin some of them (a mapping over them is a dma-buf's, \
+     VM_PFNMAP, or could not be asked about), and the driver's later allocations fail once it \
+     fails to import such a pointer (RuntimeDriverDefect::UnpinnablePagesBreakHostMemory), so the \
+     runtime kept their pointer from it";
 
 /// Whether `error`, an import's failure that is not the device's refusal of the pages, leaves the
 /// no-copy buffer a copy of them (`copied.rs`): out of memory, another Vulkan error, or the

@@ -3253,7 +3253,9 @@ bound.
   called for them. The gate is asked before the pages' write permission, where the pointer would
   be imported. A copy of pages the process maps read-only drops the GPU's writes, as Metal drops
   them: each batch's completion takes them back out of the copy and writes nothing to the pages
-  (`copied_dropped_bytes`; the detail says so). The copy reads the pages through the kernel, and
+  (`copied_dropped_bytes`; the detail says so). The detail names which cause it was; for a failed
+  import, the import's error, or that the runtime kept the pages from the driver as the kernel
+  cannot pin them, and whether a dma-buf source of them was asked. The copy reads the pages through the kernel, and
   where the kernel cannot (on Linux it pins each page, which a dma-buf's mapping does not allow),
   with plain loads where the process maps every page readable. Pages not mapped, or mapped
   without read permission, are never copied: the buffer is refused, as their import is. A copy

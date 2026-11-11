@@ -75,6 +75,7 @@ use crate::{
     HeapDescriptor, HeapType, HostBacking, HostMemory, HostRam, ImportGate, ImportRequest,
     KeepAlive, MessageSink, Problem, ResourceOptions, RunResolver, Size,
 };
+use std::collections::BTreeSet;
 use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -159,11 +160,15 @@ fn device() -> Option<Device> {
 
 /// A device of the cfg's kind, as the product makes it; `None` where it imports no host memory.
 pub(super) fn ahead_device() -> Option<Device> {
-    ahead_device_with(None)
+    ahead_device_with(None, BTreeSet::new())
 }
 
-/// [`ahead_device`], its messages given to `messages`.
-fn ahead_device_with(messages: Option<MessageSink>) -> Option<Device> {
+/// [`ahead_device`], its messages given to `messages`, announcing the kinds of `announce_each`
+/// at each occurrence.
+fn ahead_device_with(
+    messages: Option<MessageSink>,
+    announce_each: BTreeSet<Degradation>,
+) -> Option<Device> {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
@@ -174,6 +179,7 @@ fn ahead_device_with(messages: Option<MessageSink>) -> Option<Device> {
             ],
         },
         messages,
+        announce_each,
         ..DeviceOptions::default()
     };
     let device = Device::system_default_with(&options).unwrap();
@@ -997,7 +1003,7 @@ fn the_window_ahead_moves_with_the_objects_and_imports_no_more() {
 #[test]
 fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_copies_its_objects() {
     let heard = Arc::new(AtomicUsize::new(0));
-    let Some(device) = ahead_device_with(Some(copies_heard(&heard))) else {
+    let Some(device) = ahead_device_with(Some(copies_heard(&heard)), BTreeSet::new()) else {
         return;
     };
     if device.imports_shared_host_pointers().unwrap() {
@@ -2491,15 +2497,27 @@ fn a_chunk_is_imported_after_a_refused_import_of_a_dma_buf_mapping() {
 /// with no gate and no source: on a driver whose failed import of such pages breaks its later ones,
 /// the runtime refuses the pages before the driver sees them (`WorkCounts::host_imports_unpinnable`)
 /// and each is a copy of them (`WorkCounts::copied_host_buffers_made`, for a failed import), whose
-/// bytes the GPU reads; the RAM's first chunk is imported after them, and buffers bound in it
-/// ([`a_chunk_binds`]). Elsewhere each is whatever the driver makes of the pages, and the chunk is
-/// imported all the same. Linux only, where `/dev/udmabuf` opens.
+/// bytes the GPU reads, and whose announcement (`copied-host-pages`, each heard) names the cause:
+/// the pages the runtime kept from the driver, and no source of their dma-bufs asked. The RAM's
+/// first chunk is imported after them, and buffers bound in it ([`a_chunk_binds`]). Elsewhere each
+/// is whatever the driver makes of the pages, and the chunk is imported all the same. Linux only,
+/// where `/dev/udmabuf` opens. Printed (`HOST-RAM-COPIED`): each reason heard.
 #[cfg(target_os = "linux")]
 #[test]
 fn pages_refused_before_the_driver_with_no_source_are_copied() {
-    let Some(device) = device() else {
+    let reasons: Arc<Mutex<Vec<String>>> = Arc::default();
+    let heard = Arc::clone(&reasons);
+    let sink = MessageSink::new(move |message| {
+        let notice = message.degradation.as_ref();
+        if let Some(notice) = notice.filter(|n| n.degradation == Degradation::CopiedHostPages) {
+            heard.lock().unwrap().push(notice.reason.clone());
+        }
+    });
+    let each = BTreeSet::from([Degradation::CopiedHostPages]);
+    let Some(device) = ahead_device_with(Some(sink), each) else {
         return;
     };
+    device.hold_host_ram_imports();
     let unit = device.shared().host_import.as_ref().unwrap().unit();
     let length = 4 * unit;
     // Three objects' pages, one after the other: the buffer's, the heap's, the rebind's.
@@ -2574,6 +2592,20 @@ fn pages_refused_before_the_driver_with_no_source_are_copied() {
             (3, 3, 1, 1),
             "three copies, each for a failed import"
         );
+        let reasons = reasons.lock().unwrap().clone();
+        for reason in &reasons {
+            eprintln!("HOST-RAM-COPIED on {}: {reason}", device.name());
+        }
+        assert_eq!(reasons.len(), 3, "each copy announced: {reasons:#?}");
+        for reason in &reasons {
+            for cause in [
+                "the kernel cannot pin some of them",
+                "UnpinnablePagesBreakHostMemory",
+                "no source of dma-bufs of them was asked",
+            ] {
+                assert!(reason.contains(cause), "{cause:?} named: {reason}");
+            }
+        }
         let placed = (heap.new_buffer_at_offset(length, ResourceOptions::default(), 0)).unwrap();
         assert!(
             gpu_bytes(&device, &made, length) == expected(0),
