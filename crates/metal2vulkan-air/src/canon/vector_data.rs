@@ -12,7 +12,12 @@
 //! 26.7.1), in OpenCL mode:
 //!
 //! - `vload3` of a `uint` pointer one element past a buffer's start reads the three elements that
-//!   follow it at each offset (no 16-byte alignment), and `vstore3` writes three;
+//!   follow it at each offset (no 16-byte alignment), and `vstore3` writes three; so do `vload3`
+//!   and `vstore3` of `uchar`s and `vload2` and `vstore2` of `short`s one element past the start;
+//! - `vload_half3` steps three halves and `vloada_half3` four; `vstore_half3` writes three halves
+//!   a step of three and `vstorea_half3` three a step of four, but on the Radeon Pro 5300M, whose
+//!   `vstorea_half3` also writes the fourth (the M3 Max and the UHD Graphics 630 leave it, and so
+//!   does the expansion);
 //! - a store narrows each lane to `half` as the device converts, whatever rounding the name spells:
 //!   the Radeon Pro 5300M and the UHD Graphics 630 store each of `vstore_half_rtz`, `_rtp` and
 //!   `_rtn` (and their `vstore_half4` forms) as `vstore_half_rte`, word for word over 32 values

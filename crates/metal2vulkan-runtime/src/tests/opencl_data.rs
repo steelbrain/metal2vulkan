@@ -13,7 +13,10 @@
 //!   are 101 to 112 and shorts 1 to 8 of `t` are 1001 to 1008, the rest untouched.
 //! - **vha3**: `vload_half3(i, g)` and `vloada_half3(i, g)` of halves `g[j] = 0x5000 + j` over 4
 //!   threads read halves `3i` to `3i + 2` and `4i` to `4i + 2`; `vstore_half3(_, i, h)` writes
-//!   halves 0 to 11 and `vstorea_half3_rte(_, i, h + 32)` three of each four from half 32.
+//!   halves 0 to 11 and `vstorea_half3_rte(_, i, h + 32)` three of each four from half 32, on the
+//!   M3 Max and the UHD Graphics 630. The Radeon Pro 5300M's `vstorea_half3` also writes the
+//!   fourth half of each four (the half after the three `vloada_half3` read); what no Mac
+//!   guarantees is no part of the store, and the crate leaves it.
 //! - **vsh_round**: `vstore_half` and its `_rte`, `_rtz`, `_rtp` and `_rtn` forms of 32 floats:
 //!   the Radeon Pro 5300M and the UHD Graphics 630 store every form as `vstore_half_rte`, word for
 //!   word, and the M3 Max rounds as each names; the crate stores every form as the device converts

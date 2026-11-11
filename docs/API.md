@@ -777,9 +777,11 @@ layout stride of `None` is `MTLBufferLayoutStrideDynamic`: the stride comes from
     at `p + offset * n` (`offset * 4` for `vloada_half3` and `vstorea_half3`), each at its own
     element's alignment, in every address space and of every element type the compiler spells.
     `vload3` of a `uint` pointer one element past a buffer's start reads the three words that
-    follow, as the M3 Max, the Radeon Pro 5300M and a UHD Graphics 630 (macOS 26.7.1) do. The
-    `half` forms widen each `half` read to `float` and narrow each lane stored to `half`; a
-    store's rounding is an accepted difference (section 10, Conversions).
+    follow, as the M3 Max, a Radeon Pro 5300M and a UHD Graphics 630 (macOS 26.7.1) do.
+    `vstorea_half3` writes three halves of each four, as the M3 Max and the UHD Graphics 630 do
+    (the Radeon Pro 5300M's writes the fourth too). The `half` forms widen each `half` read to
+    `float` and narrow each lane stored to `half`; a store's rounding is an accepted difference
+    (section 10, Conversions).
 
 ## 4. A render pipeline
 
