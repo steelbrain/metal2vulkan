@@ -37,9 +37,9 @@ use crate::budget::Meter;
 use crate::error::Error;
 use crate::intrinsics::{AirIntrinsic, Elem, TexOp, TexRole, Texture};
 use crate::ir::{
-    AddrSpace, ArgIdx, BinOp, Body, Call, CallConv, Callee, Const, FastMath, FnAttrs, FuncId,
-    Function, InstId, InstKind, IntPredicate, Linkage, ModuleParts, Param, ParamAttrs, TailKind,
-    Type, TypeId, UnnamedAddr, Value, Visibility,
+    AddrSpace, ArgIdx, BinOp, Body, Call, CallConv, Callee, Const, FnAttrs, FuncId, Function,
+    InstId, InstKind, IntPredicate, Linkage, ModuleParts, Param, ParamAttrs, Type, TypeId,
+    UnnamedAddr, Value, Visibility,
 };
 
 use super::inline;
