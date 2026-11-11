@@ -1,10 +1,19 @@
-//! The math family: `air.[fast_]<function>[.<s|u>].<type>`.
+//! The math family: `air.[fast_]<function>[.<s|u>].<type>`, and OpenCL C's
+//! `air.{native,half}_<function>.<type>`.
 //!
 //! One declarative table ([`TABLE`]) lists every function stem with its domain and operand
 //! shape. A float function takes an optional `fast_` prefix and no sign token; a sign-sensitive
 //! integer function requires `.s.` or `.u.`; a sign-agnostic integer function takes neither. The
 //! same stem may name a float and an integer function (`min`, `max`, `clamp`): the sign token
 //! decides, and the type token must agree with the domain.
+//!
+//! Apple's OpenCL compiler spells OpenCL C's `native_<function>` and `half_<function>` of a
+//! `float` scalar or vector `air.native_<stem>.<type>` and `air.half_<stem>.<type>`, for the stems
+//! [`OPENCL_STEMS`] lists (it spells `native_divide`, `native_recip`, `half_divide` and
+//! `half_recip` as plain arithmetic). OpenCL C leaves their precision to the implementation, and
+//! Metal's differ by device: `native_powr(100, 0.5)` answers `0x1.400002p+3` on an M3 Max (macOS
+//! 27.0.1) and `0x1.4p+3` on a Radeon Pro 5300M (macOS 26.7.1). Each reads as the function at
+//! [`Precision::Fast`], the device's fast form.
 //!
 //! Two functions reach AIR as calls to Metal runtime routines instead, declarations Apple's
 //! compiler emits and its backend defines at pipeline creation: `frexp` as
@@ -21,14 +30,23 @@ use super::ty::{Elem, NumTy, Sign};
 use crate::error::IntrinsicError;
 use crate::ir::AddrSpace;
 
-/// Whether a float function was spelled with the `fast_` prefix.
+/// Whether a float function was spelled with the `fast_` prefix (or OpenCL C's `native_` or
+/// `half_`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Precision {
-    /// Spelled without `fast_`; always so for integer functions and the runtime routines.
+    /// Spelled without a prefix; always so for integer functions and the runtime routines.
     Precise,
-    /// Spelled `air.fast_<stem>`: Metal's fast-math form.
+    /// Spelled `air.fast_<stem>`: Metal's fast-math form; or `air.native_<stem>` or
+    /// `air.half_<stem>`: OpenCL C's functions of the implementation's precision, read as that form
+    /// (module doc).
     Fast,
 }
+
+/// The stems Apple's OpenCL compiler spells with the `native_` and `half_` prefixes, on `float`
+/// types only: OpenCL C's `native_<stem>` and `half_<stem>` but `divide` and `recip`.
+pub(super) const OPENCL_STEMS: &[&str] = &[
+    "cos", "exp", "exp10", "exp2", "log", "log10", "log2", "powr", "rsqrt", "sin", "sqrt", "tan",
+];
 
 /// A math function. Integer functions whose result depends on signedness carry the [`Sign`] the
 /// name spells; `Clz`/`Ctz` carry their `is_zero_undef` immediate.
@@ -330,9 +348,21 @@ pub(super) const TABLE: &[(&str, Domain, Shape)] = {
 };
 
 impl Math {
-    /// Parse the part of a name after `air.`: `[fast_]stem.[s|u.]type`. `None` is not a math
-    /// name (another family's, or an unknown one).
+    /// Parse the part of a name after `air.`: `[fast_]stem.[s|u.]type`, or
+    /// `{native,half}_stem.type` of a stem [`OPENCL_STEMS`] lists and a `float` type. `None` is not
+    /// a math name (another family's, or an unknown one).
     pub(super) fn parse(rest: &str) -> Option<Math> {
+        let opencl = ["native_", "half_"]
+            .iter()
+            .find_map(|p| rest.strip_prefix(p));
+        if let Some(r) = opencl {
+            let (stem, ty) = r.split_once('.')?;
+            let float = NumTy::parse(ty).is_some_and(|t| t.elem == Elem::F32);
+            if !(OPENCL_STEMS.contains(&stem) && float) {
+                return None;
+            }
+            return Math::parse(&format!("fast_{r}"));
+        }
         let (fast, rest) = match rest.strip_prefix("fast_") {
             Some(r) => (true, r),
             None => (false, rest),

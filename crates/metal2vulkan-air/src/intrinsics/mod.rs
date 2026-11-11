@@ -27,7 +27,8 @@
 //! atomics and coherent accesses, derivatives, textures and samplers, barriers and fences,
 //! simdgroup and quad operations, simdgroup matrices, function constants, fragment operations,
 //! pull-model interpolation, imageblocks, async copies, function tables, acceleration-structure
-//! queries, ray intersection (`air.intersect`), tensor descriptors, indirect commands, and the
+//! queries, ray intersection (`air.intersect`), tensor descriptors, indirect commands, OpenCL C's
+//! vector data loads and stores, and the
 //! closed `llvm.*` set with the AGX family. Every other `air.*` name (names whose declarations have not been observed) stays
 //! unknown. [`UNDECODED`] lists the known families among them, and the intrinsic census of the
 //! `bitcode-reader` audit reports every unknown name with row counts. [`UNDECODED_FEATURES`] names
@@ -49,6 +50,7 @@ mod stage;
 mod sync;
 mod texture;
 mod ty;
+mod vector_data;
 
 #[cfg(test)]
 mod families_tests;
@@ -84,6 +86,7 @@ pub use texture::{Access, Form};
 pub use texture::{Component, LodMode, Query, SamplerOp, TexOp, TexRole, Texture};
 pub use ty::NumTy;
 pub use ty::{Elem, Sign};
+pub use vector_data::{HalfRounding, VectorData, VectorDataOp};
 
 use crate::error::Feature;
 use crate::error::IntrinsicError;
@@ -150,6 +153,9 @@ pub enum AirIntrinsic {
     IndirectCommand(IndirectCommand),
     /// An object or mesh function's operation.
     Mesh(Mesh),
+    /// OpenCL C's vector data loads and stores: `air.vload[a][_half].<space>.<type>` and
+    /// `air.vstore[a][_half].<space>[.<rounding>].<type>`.
+    VectorData(VectorData),
 }
 
 impl AirIntrinsic {
@@ -206,6 +212,7 @@ impl AirIntrinsic {
             .or_else(|| Tensor::parse(rest).map(A::Tensor))
             .or_else(|| IndirectCommand::parse(rest).map(A::IndirectCommand))
             .or_else(|| Mesh::parse(rest).map(A::Mesh))
+            .or_else(|| VectorData::parse(rest).map(A::VectorData))
             .or_else(|| Math::parse(rest).map(A::Math))
     }
 
@@ -255,6 +262,7 @@ impl AirIntrinsic {
             AirIntrinsic::Tensor(t) => t.signature(),
             AirIntrinsic::IndirectCommand(c) => c.signature(),
             AirIntrinsic::Mesh(m) => m.signature(),
+            AirIntrinsic::VectorData(v) => v.signature(),
         }
     }
 

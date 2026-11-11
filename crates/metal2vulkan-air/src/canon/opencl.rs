@@ -23,7 +23,6 @@
 //!   built-ins they read as program-scope variables. A grid of 8 by 4 threads in threadgroups of 4
 //!   by 2 at offset (3, 5), of two dimensions, answers each value of every thread, for constant
 //!   dimensions and for a dimension the kernel is given.
-//!
 //! - **Image formats.** `get_image_channel_order(image)` is `air.get_channel_order_texture_<kind>`
 //!   and `get_image_channel_data_type(image)` `air.get_channel_data_type_texture_<kind>`
 //!   ([`Query::ChannelOrder`], [`Query::ChannelDataType`]), each of the image argument. The third

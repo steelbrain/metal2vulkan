@@ -32,6 +32,7 @@ mod texture_writes;
 mod unbound_immediates;
 mod unobserved;
 mod unrolling;
+mod vector_data;
 
 fn meter() -> Meter {
     Meter::new(&Budget::default())

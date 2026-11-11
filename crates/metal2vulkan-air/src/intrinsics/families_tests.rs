@@ -768,6 +768,31 @@ const OBSERVED: &[(&str, &str)] = &[
     // 27.0.1).
     ("air.get_global_offset.i32", "i32 (i32)"),
     ("air.get_work_dim.i32", "i32 ()"),
+    // OpenCL C's `native_<function>` and `half_<function>` (Apple's OpenCL compiler, macOS 27.0.1
+    // and 26.7.1).
+    ("air.native_powr.v4f32", "v4f32 (v4f32, v4f32)"),
+    ("air.native_powr.f32", "f32 (f32, f32)"),
+    ("air.native_sqrt.v16f32", "v16f32 (v16f32)"),
+    ("air.native_exp10.v3f32", "v3f32 (v3f32)"),
+    ("air.half_cos.v4f32", "v4f32 (v4f32)"),
+    ("air.half_powr.v4f32", "v4f32 (v4f32, v4f32)"),
+    // OpenCL C's vector data functions (the same compilers).
+    ("air.vload.global.v3i32", "v3i32 (i64, p1)"),
+    ("air.vload.constant.v16i8", "v16i8 (i64, p2)"),
+    ("air.vload.local.v2i64", "v2i64 (i64, p3)"),
+    ("air.vload.private.v3f32", "v3f32 (i64, p0)"),
+    ("air.vstore.global.v3i32", "void (v3i32, i64, p1)"),
+    ("air.vstore.private.v16i8", "void (v16i8, i64, p0)"),
+    ("air.vload_half.constant.f32", "f32 (i64, p2)"),
+    ("air.vload_half.global.v16f32", "v16f32 (i64, p1)"),
+    ("air.vloada_half.global.v3f32", "v3f32 (i64, p1)"),
+    ("air.vstore_half.global.rtz.f32", "void (f32, i64, p1)"),
+    ("air.vstore_half.local.rte.v4f32", "void (v4f32, i64, p3)"),
+    (
+        "air.vstore_half.global.rtn.v16f32",
+        "void (v16f32, i64, p1)",
+    ),
+    ("air.vstorea_half.global.rtp.v3f32", "void (v3f32, i64, p1)"),
     // Simdgroup matrices.
     (
         "air.simdgroup_matrix_8x8_load.v64f32.p3f32",

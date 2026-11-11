@@ -646,6 +646,7 @@ impl<'a> Engine<'a> {
                     !matches!(a, AsyncCopy::NullEvent | AsyncCopy::IsNullEvent)
                 }
                 AirIntrinsic::Mesh(op) => self.mesh_write_kept(*op, call, roots),
+                AirIntrinsic::VectorData(v) => v.stores(),
                 AirIntrinsic::Atomic(_)
                 | AirIntrinsic::Sync(_)
                 | AirIntrinsic::SimdMatrix(_)

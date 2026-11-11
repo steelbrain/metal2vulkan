@@ -1176,6 +1176,7 @@ enum	metal2vulkan-air::intrinsics::FunctionTable	#[derive(Clone, Copy, Debug, Pa
 enum	metal2vulkan-air::intrinsics::GlobalVar	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum GlobalVar
 enum	metal2vulkan-air::intrinsics::GroupOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum GroupOp
 enum	metal2vulkan-air::intrinsics::GroupScope	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum GroupScope
+enum	metal2vulkan-air::intrinsics::HalfRounding	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum HalfRounding
 enum	metal2vulkan-air::intrinsics::HandleKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum HandleKind
 enum	metal2vulkan-air::intrinsics::ImageDim	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum ImageDim
 enum	metal2vulkan-air::intrinsics::Imageblock	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Imageblock
@@ -1208,6 +1209,7 @@ enum	metal2vulkan-air::intrinsics::Tensor	#[derive(Clone, Copy, Debug, PartialEq
 enum	metal2vulkan-air::intrinsics::TexOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum TexOp
 enum	metal2vulkan-air::intrinsics::TexRole	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum TexRole
 enum	metal2vulkan-air::intrinsics::ThreadScope	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum ThreadScope
+enum	metal2vulkan-air::intrinsics::VectorDataOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum VectorDataOp
 enum	metal2vulkan-air::intrinsics::WorkItem	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum WorkItem
 enum	metal2vulkan-air::ir::AddrSpace	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum AddrSpace
 enum	metal2vulkan-air::ir::AtomicRmwOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum AtomicRmwOp
@@ -1905,6 +1907,9 @@ field	metal2vulkan-air::intrinsics::Texture.op	pub op: TexOp
 field	metal2vulkan-air::intrinsics::Texture.states_access	pub states_access: bool
 field	metal2vulkan-air::intrinsics::Texture.status	pub status: bool
 field	metal2vulkan-air::intrinsics::Texture.texel	pub texel: Option<Texel>
+field	metal2vulkan-air::intrinsics::VectorData.op	pub op: VectorDataOp
+field	metal2vulkan-air::intrinsics::VectorData.space	pub space: AddrSpace
+field	metal2vulkan-air::intrinsics::VectorData.ty	pub ty: NumTy
 field	metal2vulkan-air::ir::Block.end	pub end: InstId
 field	metal2vulkan-air::ir::Block.name	pub name: Option<Sym>
 field	metal2vulkan-air::ir::Block.start	pub start: InstId
@@ -7787,6 +7792,10 @@ method	metal2vulkan-air::intrinsics::Texture::layout	pub fn layout(&self) -> Lay
 method	metal2vulkan-air::intrinsics::Texture::signature	pub fn signature(&self) -> Signature
 method	metal2vulkan-air::intrinsics::Texture::ulong	pub fn ulong(&self) -> bool
 method	metal2vulkan-air::intrinsics::ThreadScope::from_raw	pub fn from_raw(v: u64) -> Option<ThreadScope>
+method	metal2vulkan-air::intrinsics::VectorData::data	pub fn data(&self) -> Elem
+method	metal2vulkan-air::intrinsics::VectorData::signature	pub fn signature(&self) -> Signature
+method	metal2vulkan-air::intrinsics::VectorData::stores	pub fn stores(&self) -> bool
+method	metal2vulkan-air::intrinsics::VectorData::stride	pub fn stride(&self) -> u32
 method	metal2vulkan-air::intrinsics::WorkItem::signature	pub fn signature(&self) -> Signature
 method	metal2vulkan-air::ir::AddrSpace::from_raw	pub fn from_raw(n: u32) -> Result<AddrSpace, Unsupported>
 method	metal2vulkan-air::ir::AddrSpace::raw	pub const fn raw(self) -> u32
@@ -9826,6 +9835,7 @@ struct	metal2vulkan-air::intrinsics::Pack	#[derive(Clone, Copy, Debug, PartialEq
 struct	metal2vulkan-air::intrinsics::Signature	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct Signature
 struct	metal2vulkan-air::intrinsics::SimdgroupSize	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct SimdgroupSize
 struct	metal2vulkan-air::intrinsics::Texture	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct Texture
+struct	metal2vulkan-air::intrinsics::VectorData	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct VectorData
 struct	metal2vulkan-air::ir::Align	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct Align(u8)
 struct	metal2vulkan-air::ir::Arena	#[derive(Clone, PartialEq, Eq, Hash)] pub struct Arena<I, T>
 struct	metal2vulkan-air::ir::Block	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct Block
@@ -10986,6 +10996,7 @@ variant	metal2vulkan-air::intrinsics::AirIntrinsic::SimdgroupSize	SimdgroupSize(
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::Sync	Sync(Sync)
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::Tensor	Tensor(Tensor)
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::Texture	Texture(Texture)
+variant	metal2vulkan-air::intrinsics::AirIntrinsic::VectorData	VectorData(VectorData)
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::WorkItem	WorkItem(WorkItem)
 variant	metal2vulkan-air::intrinsics::AsyncCopy::Copy2d	Copy2d { dst: AddrSpace, src: AddrSpace }
 variant	metal2vulkan-air::intrinsics::AsyncCopy::IsNullEvent	IsNullEvent
@@ -11100,6 +11111,10 @@ variant	metal2vulkan-air::intrinsics::GroupOp::Sum	Sum
 variant	metal2vulkan-air::intrinsics::GroupOp::Xor	Xor
 variant	metal2vulkan-air::intrinsics::GroupScope::Quad	Quad
 variant	metal2vulkan-air::intrinsics::GroupScope::Simdgroup	Simdgroup
+variant	metal2vulkan-air::intrinsics::HalfRounding::Rte	Rte
+variant	metal2vulkan-air::intrinsics::HalfRounding::Rtn	Rtn
+variant	metal2vulkan-air::intrinsics::HalfRounding::Rtp	Rtp
+variant	metal2vulkan-air::intrinsics::HalfRounding::Rtz	Rtz
 variant	metal2vulkan-air::intrinsics::HandleKind::AccelerationStructure	AccelerationStructure
 variant	metal2vulkan-air::intrinsics::HandleKind::Command	Command
 variant	metal2vulkan-air::intrinsics::HandleKind::ComputePipelineState	ComputePipelineState
@@ -11338,6 +11353,8 @@ variant	metal2vulkan-air::intrinsics::PackFormat::UnormRgb9e5	UnormRgb9e5
 variant	metal2vulkan-air::intrinsics::Precision::Fast	Fast
 variant	metal2vulkan-air::intrinsics::Precision::Precise	Precise
 variant	metal2vulkan-air::intrinsics::Query::ArraySize	ArraySize
+variant	metal2vulkan-air::intrinsics::Query::ChannelDataType	ChannelDataType
+variant	metal2vulkan-air::intrinsics::Query::ChannelOrder	ChannelOrder
 variant	metal2vulkan-air::intrinsics::Query::Depth	Depth
 variant	metal2vulkan-air::intrinsics::Query::Height	Height
 variant	metal2vulkan-air::intrinsics::Query::NumMipLevels	NumMipLevels
@@ -11426,6 +11443,10 @@ variant	metal2vulkan-air::intrinsics::ThreadScope::Device	Device
 variant	metal2vulkan-air::intrinsics::ThreadScope::Simdgroup	Simdgroup
 variant	metal2vulkan-air::intrinsics::ThreadScope::Thread	Thread
 variant	metal2vulkan-air::intrinsics::ThreadScope::Threadgroup	Threadgroup
+variant	metal2vulkan-air::intrinsics::VectorDataOp::Load	Load
+variant	metal2vulkan-air::intrinsics::VectorDataOp::LoadHalf	LoadHalf { aligned: bool }
+variant	metal2vulkan-air::intrinsics::VectorDataOp::Store	Store
+variant	metal2vulkan-air::intrinsics::VectorDataOp::StoreHalf	StoreHalf { aligned: bool, rounding: HalfRounding }
 variant	metal2vulkan-air::intrinsics::WorkItem::GlobalOffset	GlobalOffset
 variant	metal2vulkan-air::intrinsics::WorkItem::WorkDim	WorkDim
 variant	metal2vulkan-air::ir::AddrSpace::Constant	Constant = 2

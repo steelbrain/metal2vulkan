@@ -1141,3 +1141,181 @@ fn dropped_family_names_only_the_markers_decode_drops() {
     assert_eq!(dropped_family("llvm.assumed"), None);
     assert_eq!(dropped_family("air.lifetime.start"), None);
 }
+
+#[test]
+fn opencl_native_and_half_functions_read_as_the_fast_form() {
+    let mut decoded = 0;
+    for prefix in ["native_", "half_"] {
+        for &stem in super::math::OPENCL_STEMS {
+            for lanes in [1, 2, 3, 4, 8, 16] {
+                let ty = token(NumTy {
+                    elem: Elem::F32,
+                    lanes,
+                });
+                let name = format!("air.{prefix}{stem}.{ty}");
+                let fast = air(&format!("air.fast_{stem}.{ty}"));
+                assert_eq!(air(&name), fast, "{name}");
+                let AirIntrinsic::Math(m) = fast else {
+                    panic!("{name}");
+                };
+                assert_eq!(m.precision, Precision::Fast, "{name}");
+                decoded += 1;
+            }
+        }
+    }
+    assert_eq!(decoded, 144);
+    for name in [
+        "air.native_divide.f32",    // spelled as arithmetic
+        "air.half_recip.v4f32",     // spelled as arithmetic
+        "air.native_fabs.f32",      // no OpenCL C native_fabs
+        "air.native_cos.f16",       // float types only
+        "air.half_powr.v2f16",      // float types only
+        "air.native_fast_cos.f32",  // one prefix
+        "air.native_cos.s.f32",     // no sign token
+        "air.native_cos.f32.extra", // trailing token
+    ] {
+        assert_eq!(classify_self(name), DeclClass::Unknown, "{name}");
+    }
+}
+
+#[test]
+fn opencl_vector_data_functions_decode_with_their_strides() {
+    use AddrSpace::{Constant as C, Device as G, Thread as P, Threadgroup as L};
+    let v = |name: &str| match air(name) {
+        AirIntrinsic::VectorData(v) => v,
+        other => panic!("{name}: {other:?}"),
+    };
+    let n = |elem, lanes| NumTy { elem, lanes };
+    for (name, op, space, ty, stride) in [
+        (
+            "air.vload.global.v3i32",
+            VectorDataOp::Load,
+            G,
+            n(Elem::I32, 3),
+            3,
+        ),
+        (
+            "air.vload.constant.v16i8",
+            VectorDataOp::Load,
+            C,
+            n(Elem::I8, 16),
+            16,
+        ),
+        (
+            "air.vload.local.v2i64",
+            VectorDataOp::Load,
+            L,
+            n(Elem::I64, 2),
+            2,
+        ),
+        (
+            "air.vload.private.v8i16",
+            VectorDataOp::Load,
+            P,
+            n(Elem::I16, 8),
+            8,
+        ),
+        (
+            "air.vstore.global.v4f32",
+            VectorDataOp::Store,
+            G,
+            n(Elem::F32, 4),
+            4,
+        ),
+        (
+            "air.vload_half.constant.f32",
+            VectorDataOp::LoadHalf { aligned: false },
+            C,
+            n(Elem::F32, 1),
+            1,
+        ),
+        (
+            "air.vload_half.global.v3f32",
+            VectorDataOp::LoadHalf { aligned: false },
+            G,
+            n(Elem::F32, 3),
+            3,
+        ),
+        (
+            "air.vloada_half.global.v3f32",
+            VectorDataOp::LoadHalf { aligned: true },
+            G,
+            n(Elem::F32, 3),
+            4,
+        ),
+        (
+            "air.vloada_half.local.v8f32",
+            VectorDataOp::LoadHalf { aligned: true },
+            L,
+            n(Elem::F32, 8),
+            8,
+        ),
+        (
+            "air.vstore_half.global.rtz.f32",
+            VectorDataOp::StoreHalf {
+                aligned: false,
+                rounding: HalfRounding::Rtz,
+            },
+            G,
+            n(Elem::F32, 1),
+            1,
+        ),
+        (
+            "air.vstore_half.private.rtp.v3f32",
+            VectorDataOp::StoreHalf {
+                aligned: false,
+                rounding: HalfRounding::Rtp,
+            },
+            P,
+            n(Elem::F32, 3),
+            3,
+        ),
+        (
+            "air.vstorea_half.global.rtn.v3f32",
+            VectorDataOp::StoreHalf {
+                aligned: true,
+                rounding: HalfRounding::Rtn,
+            },
+            G,
+            n(Elem::F32, 3),
+            4,
+        ),
+        (
+            "air.vstorea_half.local.rte.v16f32",
+            VectorDataOp::StoreHalf {
+                aligned: true,
+                rounding: HalfRounding::Rte,
+            },
+            L,
+            n(Elem::F32, 16),
+            16,
+        ),
+    ] {
+        let d = v(name);
+        assert_eq!(
+            (d.op, d.space, d.ty, d.stride()),
+            (op, space, ty, stride),
+            "{name}"
+        );
+        let half = matches!(
+            op,
+            VectorDataOp::LoadHalf { .. } | VectorDataOp::StoreHalf { .. }
+        );
+        assert_eq!(d.data(), if half { Elem::F16 } else { ty.elem }, "{name}");
+    }
+    for name in [
+        "air.vload.global.i32",           // one lane is no vload
+        "air.vload.global.v5i32",         // no such width
+        "air.vload.global.v4f16",         // no half vload observed
+        "air.vstore.constant.v4i32",      // no store to constant memory
+        "air.vload.device.v4i32",         // OpenCL's space names
+        "air.vloada_half.global.f32",     // vloada_half has vector forms only
+        "air.vload_half.global.v4i32",    // half forms are of floats
+        "air.vstore_half.global.v4f32",   // a rounding is spelled
+        "air.vstore_half.global.rtx.f32", // no such rounding
+        "air.vstore.global.v4i32.extra",  // trailing token
+        "air.vload.global.rte.v4i32",     // no rounding on a load
+    ] {
+        assert_eq!(classify_self(name), DeclClass::Unknown, "{name}");
+    }
+}

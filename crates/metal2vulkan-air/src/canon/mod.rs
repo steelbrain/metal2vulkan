@@ -40,8 +40,9 @@
 //!    constant that survives is `Error::NeedsInput(FunctionConstant)`. **Unrolling**: a loop whose
 //!    trip count SCCP made constant, and whose counter decides a branch of its body, is unrolled
 //!    within fixed ceilings, and SCCP runs again over the copies; the result is kept where it is
-//!    no larger than the loops it replaces (`unroll`). Before SCCP, in OpenCL mode, each operation
-//!    of a 1D image becomes the 2D texture's that Apple's OpenCL binds for it (`opencl_1d`).
+//!    no larger than the loops it replaces (`unroll`). Before SCCP, each OpenCL C vector data load
+//!    or store becomes its element accesses (`vector_data`), and in OpenCL mode each operation of
+//!    a 1D image becomes the 2D texture's that Apple's OpenCL binds for it (`opencl_1d`).
 //! 8. **Post-check**: no unknown or unbound intrinsic, indirect call, or call to an undefined
 //!    non-intrinsic function survives, and no reachable branch tests `undef`. A table call's refused candidate,
 //!    a table call no linked function answers, and a function pointer used as a value are refused
@@ -126,6 +127,7 @@ mod table_copy;
 #[cfg(test)]
 mod tests;
 mod unroll;
+mod vector_data;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -612,6 +614,8 @@ pub fn specialize_dynamic(
     let body = async_copy::expand(body, &mut parts, ep, m)?;
     // Metal 4.1's block reads are the reads of their texels.
     let body = block_read::expand(body, &mut parts, ep.func, m)?;
+    // OpenCL C's vector data loads and stores are their element accesses.
+    let body = vector_data::expand(body, &mut parts, ep.func, m)?;
     // OpenCL mode: a 1D image's operations are the 2D texture's that Apple's OpenCL binds for it.
     let body = if req.open_cl_mode && matches!(ep.stage, Stage::Kernel { .. }) {
         opencl_1d::expand(body, &mut parts, ep.func, m)?

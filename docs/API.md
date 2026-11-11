@@ -750,6 +750,36 @@ layout stride of `None` is `MTLBufferLayoutStrideDynamic`: the stride comes from
     the mode Metal refuses the pipeline ("Internal compiler error"); the crate compiles the AIR as
     Metal AIR, its buffers at their own indices, and refuses a read of `get_global_offset` or
     `get_work_dim` (`Unsupported` with `Lowering(Dispatch)`).
+  - Images in OpenCL mode. `get_image_channel_order(image)` and
+    `get_image_channel_data_type(image)` (`air.get_channel_order_texture_<kind>` and
+    `air.get_channel_data_type_texture_<kind>`, `Query::ChannelOrder` and
+    `Query::ChannelDataType`) read the third hidden buffer as it holds them: word `2t + 1` for the
+    order and word `2t` for the data type of the image at texture index `t`, as an M3 Max (macOS
+    27.0.1) and a Radeon Pro 5300M (macOS 26.7.1) answer. Metal refuses the queries of a buffer or
+    a depth image, and the crate decodes none (`UnknownIntrinsic`); without the mode it refuses
+    each query (`Unsupported` with `Lowering(Texture)`). Apple's OpenCL binds a 2D texture of
+    height 1 for an `image1d_t`, which the AIR declares `texture1d`, and a 2D array texture of
+    height 1 for an `image1d_array_t` (`texture1d_array`). In the mode the kernel's slot is that
+    texture's type (`TextureType::Type2D`, `Type2DArray`), and each read, sample and write of the
+    image, `get_image_width` and `get_image_array_size` is the 2D texture's at row 0 (a sampled
+    coordinate at the row's centre), as both Macs answer.
+  - OpenCL C's `native_<function>` and `half_<function>` of `float` types
+    (`air.native_<stem>.<type>` and `air.half_<stem>.<type>`, for `cos`, `exp`, `exp10`, `exp2`,
+    `log`, `log10`, `log2`, `powr`, `rsqrt`, `sin`, `sqrt` and `tan`, scalar and of every vector
+    width) are the function's fast form, as `fast::<function>` is (`Precision::Fast`). OpenCL C
+    leaves their precision to the implementation, and Metal's devices differ:
+    `native_powr(100, 0.5)` is `0x1.400002p+3` on the M3 Max and `0x1.4p+3` on the Radeon Pro
+    5300M.
+  - OpenCL C's vector data functions (`vload<n>`, `vstore<n>`, `vload_half[<n>]`,
+    `vloada_half<n>`, `vstore_half[<n>][_<rounding>]` and `vstorea_half<n>[_<rounding>]`, which
+    the compiler spells `air.vload[a][_half].<space>.<type>` and
+    `air.vstore[a][_half].<space>[.<rounding>].<type>`, `VectorData`) read and write `n` elements
+    at `p + offset * n` (`offset * 4` for `vloada_half3` and `vstorea_half3`), each at its own
+    element's alignment, in every address space and of every element type the compiler spells.
+    `vload3` of a `uint` pointer one element past a buffer's start reads the three words that
+    follow, as the M3 Max, the Radeon Pro 5300M and a UHD Graphics 630 (macOS 26.7.1) do. The
+    `half` forms widen each `half` read to `float` and narrow each lane stored to `half`; a
+    store's rounding is an accepted difference (section 10, Conversions).
 
 ## 4. A render pipeline
 
@@ -4970,6 +5000,15 @@ each item named states the rule in full.
   wraps (the M3 Max creates none), and a float to an integer by `.rtp` or `.rtn` truncates on the
   5300M (the others create none). The M3 Max's compiler service exits on the forms it does not
   compile, where the runtime compiles them all.
+- **`vstore_half` and `vstorea_half` with a rounding (`_rtz`, `_rtp`, `_rtn`) store each lane as
+  the device converts a `float` to `half`, to nearest even.** Measured over 32 values among them
+  ties, overflows past the largest `half`, subnormals and zeros, with the `vstore_half4` forms alike
+  (probe jobs m3-max-15563 on the M3 Max, macOS 27.0.1; m3-max-15564 on a Radeon Pro 5300M and
+  m3-max-15584 on a UHD Graphics 630, macOS 26.7.1):
+
+  | Form | M3 Max | Radeon Pro 5300M | UHD Graphics 630 | Runtime |
+  |---|---|---|---|---|
+  | `vstore_half_rtz`, `_rtp`, `_rtn` (`70000.0` by `_rtz`) | as named (`0x7bff`) | nearest even (`0x7c00`) | nearest even (`0x7c00`) | nearest even (`0x7c00`) |
 
 **Inline assembly**
 

@@ -878,6 +878,10 @@ fn route_air(cx: &SelectCx<'_>, op: &AirIntrinsic, decl: FuncId) -> Route {
         // An encoder operation writes its command's record through device addresses.
         A::IndirectCommand(_) => Route::Family(LowerFamily::Access),
         A::Mesh(_) => Route::Family(LowerFamily::Mesh),
+        // Canonicalization makes every vector data call its element accesses.
+        A::VectorData(_) => Route::Refuse(invariant(
+            "a vector data function survived canonicalization",
+        )),
         // Canonicalization made every read of a global built-in at a constant lane a read of a
         // built-in parameter, but a fragment's read of one Metal refuses there, which is
         // refused as its own feature; a read at another lane is not lowered.

@@ -454,7 +454,7 @@ pub(super) fn floats(buffer: &Buffer) -> Vec<f32> {
 
 /// One of a kernel's own arguments, as bound.
 #[derive(Clone, Copy)]
-enum Arg<'a> {
+pub(super) enum Arg<'a> {
     /// A buffer from a byte offset (`setBuffer:offset:atIndex:`).
     Buffer(&'a Buffer, u64),
     /// Bytes (`setBytes:length:atIndex:`).
@@ -462,14 +462,14 @@ enum Arg<'a> {
 }
 
 /// `buffer` from its start.
-fn whole(buffer: &Buffer) -> Arg<'_> {
+pub(super) fn whole(buffer: &Buffer) -> Arg<'_> {
     Arg::Buffer(buffer, 0)
 }
 
 /// `state` dispatched over `grid` threads in threadgroups of `group`, buffer 0 holding the global
 /// offset `offset` and the dimension count `dims`, buffers 1 and 2 bound as the dispatcher binds
 /// them, `args` at 3 and up, and `local` bytes of threadgroup memory at index 0 where `Some`.
-fn run(
+pub(super) fn run(
     device: &Device,
     state: &ComputePipelineState,
     (grid, group): (Size, Size),
@@ -506,7 +506,7 @@ fn run(
 }
 
 /// One dimension's grid.
-fn line(threads: u64, group: u64) -> (Size, Size) {
+pub(super) fn line(threads: u64, group: u64) -> (Size, Size) {
     (Size::new(threads, 1, 1), Size::new(group, 1, 1))
 }
 
