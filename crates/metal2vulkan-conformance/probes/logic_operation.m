@@ -165,31 +165,53 @@ static float value(int i, int l) {
 
 static uint32_t mask_of(int bits) { return bits >= 32 ? 0xFFFFFFFFu : (1u << bits) - 1; }
 
-// The rule's source code of output lane `x` (float bits, or integer bits) in a channel.
+// Which conversion of a float output the rule takes: the exact product rounded to nearest, or the
+// `float` product rounded to nearest even (the device's native arithmetic a shader would use).
+static int gNative;
+
+// The rule's source code of output lane `x` (float bits, or integer bits) in a channel: a
+// normalized value clamped (a NaN the low end: 0, or -1 for a signed channel) times the largest
+// code, rounded to nearest; a packed 16-bit channel's value rounded to `half` first; an integer
+// saturated to the channel's range.
 static uint32_t src_code(Kind kind, int bits, uint32_t x) {
   float f;
   memcpy(&f, &x, 4);
   double v = f;
   switch (kind) {
-    case UI:
-    case SI:
-      return x & mask_of(bits);
+    case UI: {
+      uint32_t m = mask_of(bits);
+      return x > m ? m : x;
+    }
+    case SI: {
+      int64_t lo = -((int64_t)1 << (bits - 1)), hi = ((int64_t)1 << (bits - 1)) - 1;
+      int64_t i = (int32_t)x;
+      return (uint32_t)(i < lo ? lo : i > hi ? hi : i) & mask_of(bits);
+    }
     case HU:
       v = (double)(_Float16)f;
       // fall through
     case UN: {
       if (isnan(v)) v = 0;
       v = v < 0 ? 0 : v > 1 ? 1 : v;
+      if (gNative) return (uint32_t)rintf((float)v * (float)mask_of(bits));
       return (uint32_t)rint(v * (double)mask_of(bits));
     }
     case SN: {
-      if (isnan(v)) v = 0;
+      if (isnan(v)) v = -1;
       v = v < -1 ? -1 : v > 1 ? 1 : v;
-      int32_t c = (int32_t)rint(v * (double)((1u << (bits - 1)) - 1));
+      float max = (float)((1u << (bits - 1)) - 1);
+      int32_t c = gNative ? (int32_t)rintf((float)v * max) : (int32_t)rint(v * (double)max);
       return (uint32_t)c & mask_of(bits);
     }
   }
   return 0;
+}
+
+// A signed normalized channel's lowest code, -2^(bits-1), taken as the next code up: Metal reads
+// it as -1, as it reads that code, and stores an operation's result there as -1.
+static uint32_t snorm_lowest(Kind kind, int bits, uint32_t c) {
+  uint32_t lowest = 1u << (bits - 1);
+  return kind == SN && c == lowest ? lowest + 1 : c;
 }
 
 static uint32_t operate(int raw, uint32_t s, uint32_t d, int bits) {
@@ -235,7 +257,11 @@ static uint64_t expected(const Fmt *f, int raw, const uint32_t *src[], int prims
     Field fd = f->f[c];
     if (!fd.bits || !(wmask & kMaskBit[c])) continue;
     uint32_t d = field(stored, fd);
-    for (int p = 0; p < prims; p++) d = operate(raw, src_code(f->kind, fd.bits, src[p][c]), d, fd.bits);
+    for (int p = 0; p < prims; p++) {
+      d = snorm_lowest(f->kind, fd.bits, d);
+      d = operate(raw, src_code(f->kind, fd.bits, src[p][c]), d, fd.bits);
+      d = snorm_lowest(f->kind, fd.bits, d);
+    }
     out &= ~((uint64_t)mask_of(fd.bits) << fd.shift);
     out |= (uint64_t)d << fd.shift;
   }
@@ -249,10 +275,13 @@ static int gCases, gCasesMatching;
 // line and the first mismatching channels.
 static void check(const char *label, const Fmt *f, int raw, const uint32_t *srcs, int prims,
                   const uint8_t *stored, const uint8_t *got, int wmask, const uint8_t *keep) {
-  int wrong = 0, shown = 0;
+  int wrong = 0, shown = 0, native = 0;
   for (int i = 0; i < N; i++) {
     const uint32_t *src[2] = {srcs + 4 * i, srcs + 4 * (N + i)};
     uint64_t s = word_at(stored, f->bpp, i), g = word_at(got, f->bpp, i);
+    gNative = 1;
+    native += g == (keep && !keep[i] ? s : expected(f, raw, src, prims, s, wmask));
+    gNative = 0;
     uint64_t want = keep && !keep[i] ? s : expected(f, raw, src, prims, s, wmask);
     if (g == want) continue;
     wrong++;
@@ -269,8 +298,8 @@ static void check(const char *label, const Fmt *f, int raw, const uint32_t *srcs
   }
   gCases++;
   gCasesMatching += !wrong;
-  printf("%s %s op %d mask %x: %d of %d texels hold the rule's answer\n", label, f->name, raw,
-         wmask, N - wrong, N);
+  printf("%s %s op %d mask %x: %d of %d texels hold the rule's answer (%d the native form's)\n",
+         label, f->name, raw, wmask, N - wrong, N, native);
 }
 
 static id<MTLRenderPipelineState> pipeline(const char *ffn, MTLPixelFormat pf, int samples, int raw,
