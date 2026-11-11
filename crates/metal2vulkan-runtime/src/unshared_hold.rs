@@ -26,9 +26,14 @@
 //! - **Expected runs** ([`Expected`]). Each command queue's: the host's view of how long its
 //!   recent batches ran as their `VkQueue`'s oldest in flight (`queue_wait.rs`'s runs), raised at
 //!   once by a longer one and halved toward a shorter one, so a queue whose batches got shorter
-//!   takes its new length within a few batches, while one long batch counts at once. A queue with
-//!   none seen yet is expected to run [`BUDGET`]. A run several batches complete in shares among
-//!   the other queues' batches among them; an unshared queue's takes no share.
+//!   takes its new length within a few batches, while one long batch counts at once. A run several
+//!   batches complete in shares among the other queues' batches among them; an unshared queue's
+//!   takes no share.
+//! - **Unknown length.** A batch of a queue with no run seen yet may be of any length: while one
+//!   is in flight, no other batch of the other queues goes there until it is seen complete, which
+//!   gives its queue a run. So an application that commits several command buffers at once does
+//!   not put them all ahead of a compositor's before the first is seen; it costs the GPU one
+//!   completion's turn, once per such queue.
 //! - **When it goes.** A pass that holds a batch so leaves the scheduler's thread waiting for its
 //!   `VkQueue`'s next completion (a gate, `scheduler/mod.rs`'s `Awaits`), and, where the oldest
 //!   batch's expected run still covers it, for the time the work left ahead falls under the
@@ -55,11 +60,11 @@ pub(crate) const BUDGET: u64 = 2_000_000;
 pub(crate) struct Expected(AtomicU64);
 
 impl Expected {
-    /// The run its next batch is expected to take: [`BUDGET`] where none was seen.
-    pub(crate) fn nanos(&self) -> u64 {
+    /// The run its next batch is expected to take: none where none was seen.
+    pub(crate) fn nanos(&self) -> Option<u64> {
         match self.0.load(Ordering::Relaxed) {
-            0 => BUDGET,
-            nanos => nanos,
+            0 => None,
+            nanos => Some(nanos),
         }
     }
 
@@ -92,8 +97,11 @@ pub(crate) enum Flies<'a> {
 struct InFlight {
     /// Its value of its `VkQueue`'s timeline.
     value: u64,
-    /// Its expected run, counted in [`Flight::expected`]; 0 for an unshared queue's.
+    /// Its expected run, counted in [`Flight::expected`]; 0 for an unshared queue's, and for one
+    /// whose queue had no run seen.
     expected: u64,
+    /// Its queue had no run seen at its submission: of unknown length.
+    unseen: bool,
     /// Its queue's expected run, which its run updates; none for an unshared queue's.
     of: Option<Arc<Expected>>,
 }
@@ -106,6 +114,8 @@ pub(crate) struct Flight {
     batches: VecDeque<InFlight>,
     /// The expected runs of the other queues' among them, summed.
     expected: u64,
+    /// How many among them are of unknown length.
+    unseen: usize,
 }
 
 /// Whether a batch may go to a `VkQueue` now ([`Flight::ahead`]).
@@ -113,9 +123,9 @@ pub(crate) struct Flight {
 pub(crate) enum Room {
     /// Less than [`BUDGET`] of other queues' expected work is left in flight.
     Go,
-    /// [`BUDGET`] or more: held until the `VkQueue`'s next completion, or until `after`
-    /// nanoseconds from now, where the oldest batch's expected run brings the work left under the
-    /// budget then.
+    /// [`BUDGET`] or more, or a batch of unknown length is in flight: held until the `VkQueue`'s
+    /// next completion, or, where only the budget holds it, until `after` nanoseconds from now,
+    /// where the oldest batch's expected run brings the work left under the budget then.
     Hold { after: Option<u64> },
 }
 
@@ -124,13 +134,17 @@ impl Flight {
     pub(crate) fn taken(&mut self, value: u64, flies: Flies<'_>) {
         let (expected, of) = match flies {
             Flies::Not => return,
-            Flies::Unshared => (0, None),
+            Flies::Unshared => (Some(0), None),
             Flies::Other(of) => (of.nanos(), Some(Arc::clone(of))),
         };
+        let unseen = expected.is_none();
+        let expected = expected.unwrap_or(0);
         self.expected += expected;
+        self.unseen += usize::from(unseen);
         self.batches.push_back(InFlight {
             value,
             expected,
+            unseen,
             of,
         });
     }
@@ -152,6 +166,7 @@ impl Flight {
         let share = run / others.max(1) as u64;
         for batch in self.batches.drain(..done) {
             self.expected -= batch.expected;
+            self.unseen -= usize::from(batch.unseen);
             if let Some(of) = batch.of {
                 of.observed(share);
             }
@@ -161,6 +176,9 @@ impl Flight {
     /// Whether another queue's batch may go now, the oldest batch in flight having run `ran`
     /// nanoseconds since it became so (the module docs).
     pub(crate) fn ahead(&self, ran: u64) -> Room {
+        if self.unseen > 0 {
+            return Room::Hold { after: None };
+        }
         let front = self.batches.front().map_or(0, |batch| batch.expected);
         let credit = ran.min(front);
         let left = self.expected - credit;

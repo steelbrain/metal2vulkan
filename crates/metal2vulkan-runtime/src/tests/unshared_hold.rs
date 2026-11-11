@@ -1,14 +1,15 @@
 //! Other queues' work held back from a `VkQueue` an unshared queue holds (`unshared_hold.rs`), the
 //! parts that need no device: a queue's expected run and a `VkQueue`'s flight.
 //!
-//! - **Expected runs.** None seen is the budget; a longer run is taken at once, a shorter one
+//! - **Expected runs.** None before one is seen; a longer run is taken at once, a shorter one
 //!   halves the way to it, so a queue whose batches drop from 30 ms to 1 ms is let have two in
 //!   flight again within five of them.
 //! - **The flight.** Other queues' batches count their expected runs, an unshared queue's none;
 //!   the oldest one's run so far counts against its own expected run alone; a batch may go while
-//!   less than the budget is left, else it waits for the next completion, or for the time the
-//!   oldest one's expected run brings the work left under the budget; a run several batches
-//!   complete in is shared among the other queues' batches, an unshared queue's taking none.
+//!   less than the budget is left and none of unknown length is in flight, else it waits for the
+//!   next completion, or for the time the oldest one's expected run brings the work left under
+//!   the budget; a run several batches complete in is shared among the other queues' batches, an
+//!   unshared queue's taking none.
 
 use crate::unshared_hold::{Expected, Flies, Flight, Room, BUDGET};
 use std::sync::Arc;
@@ -23,22 +24,49 @@ fn queue(nanos: u64) -> Arc<Expected> {
 }
 
 #[test]
-fn a_queue_with_no_run_seen_is_expected_to_run_the_budget() {
-    assert_eq!(Expected::default().nanos(), BUDGET);
+fn a_queue_with_no_run_seen_has_no_expected_run() {
+    assert_eq!(Expected::default().nanos(), None);
+}
+
+/// An application that commits three command buffers at once before any run of its queue is
+/// seen: the first goes, and the others wait for its completion, which gives its queue its run,
+/// however long it ran.
+#[test]
+fn a_batch_of_unknown_length_holds_the_next_back_until_it_completes() {
+    let app = Arc::new(Expected::default());
+    let mut flight = Flight::default();
+    assert_eq!(flight.ahead(0), Room::Go, "the first goes");
+    flight.taken(1, Flies::Other(&app));
+    assert_eq!(flight.ahead(0), Room::Hold { after: None });
+    assert_eq!(
+        flight.ahead(500 * MS),
+        Room::Hold { after: None },
+        "however long it has run"
+    );
+    flight.completed(1, 30 * MS);
+    assert_eq!(app.nanos(), Some(30 * MS));
+    assert_eq!(flight.ahead(0), Room::Go);
+    flight.taken(2, Flies::Other(&app));
+    assert_eq!(
+        flight.ahead(0),
+        Room::Hold {
+            after: Some(28 * MS + 1)
+        }
+    );
 }
 
 #[test]
 fn a_longer_run_is_taken_at_once_and_a_shorter_one_halves_the_way() {
     let expected = queue(4 * MS);
-    assert_eq!(expected.nanos(), 4 * MS);
+    assert_eq!(expected.nanos(), Some(4 * MS));
     expected.observed(30 * MS);
-    assert_eq!(expected.nanos(), 30 * MS, "a longer run at once");
+    assert_eq!(expected.nanos(), Some(30 * MS), "a longer run at once");
     expected.observed(10 * MS);
-    assert_eq!(expected.nanos(), 20 * MS, "halfway to a shorter one");
+    assert_eq!(expected.nanos(), Some(20 * MS), "halfway to a shorter one");
     expected.observed(0);
     assert_eq!(
         expected.nanos(),
-        10 * MS + 1,
+        Some(10 * MS + 1),
         "a run of nothing counts as 1 ns, the half rounded toward the longer"
     );
 }
@@ -67,7 +95,11 @@ fn a_queue_whose_batches_got_short_is_let_ahead_again_within_five_of_them() {
         );
     }
     assert!(short >= 1, "a 30 ms queue goes one at a time at first");
-    assert!(app.nanos() < BUDGET, "{}", app.nanos());
+    assert!(
+        app.nanos().is_some_and(|nanos| nanos < BUDGET),
+        "{:?}",
+        app.nanos()
+    );
 }
 
 #[test]
@@ -108,7 +140,7 @@ fn a_batch_goes_while_less_than_the_budget_is_left_ahead() {
     flight.completed(1, 31 * MS);
     assert_eq!(
         app.nanos(),
-        31 * MS,
+        Some(31 * MS),
         "its run raised the queue's expected one"
     );
     assert_eq!(flight.ahead(29 * MS + 1), Room::Go);
@@ -126,10 +158,10 @@ fn a_run_several_batches_complete_in_is_shared_among_the_other_queues_batches() 
     flight.completed(3, 9 * MS);
     assert_eq!(
         first.nanos(),
-        4 * MS + MS / 2,
+        Some(4 * MS + MS / 2),
         "the unshared batch took no share"
     );
-    assert_eq!(second.nanos(), 4 * MS + MS / 2);
+    assert_eq!(second.nanos(), Some(4 * MS + MS / 2));
     assert_eq!(flight.len(), 1, "the fourth is still in flight");
     // Its own expected run was taken at its submission: 1 ms, under the budget.
     assert_eq!(flight.ahead(0), Room::Go);
@@ -148,7 +180,7 @@ fn an_unshared_batch_seen_complete_with_another_queue_s_leaves_it_the_whole_run(
     flight.taken(1, Flies::Other(&app));
     flight.taken(2, Flies::Unshared);
     flight.completed(2, 30 * MS);
-    assert_eq!(app.nanos(), 30 * MS);
+    assert_eq!(app.nanos(), Some(30 * MS));
     flight.taken(3, Flies::Other(&app));
     assert_eq!(
         flight.ahead(14 * MS),
@@ -161,5 +193,5 @@ fn an_unshared_batch_seen_complete_with_another_queue_s_leaves_it_the_whole_run(
     flight.taken(4, Flies::Unshared);
     flight.completed(3, 30 * MS);
     flight.completed(4, MS / 10);
-    assert_eq!(app.nanos(), 30 * MS);
+    assert_eq!(app.nanos(), Some(30 * MS));
 }
