@@ -24,7 +24,10 @@
 //! (`NativeHalfQuantize`), the `fast` chain stores the held sum under `HalfChainPolicy::AtExits`
 //! (the default) and the rounded one under `HalfChainPolicy::EachOperation` (`exact_answers`); the
 //! chain without flags the rounded one under both. Elsewhere each chain stores one of the two (a
-//! driver that drops a conversion pair keeps the `float` sum), counted.
+//! driver that drops a conversion pair keeps the `float` sum), counted, or, where its stage records
+//! `PrecisionNote::FastMathRewrites`, a sum between them, each rounding taken or skipped: on
+//! MoltenVK the `fast` chain's 16-bit sums are left to Metal's fast compile, which may fold one's
+//! conversions away (`1 + 2^-11`, `0x3F801000`, measured on an Apple M3 Max).
 
 use super::{
     at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with,
@@ -366,27 +369,37 @@ fn half_chains_without_float16_round_at_their_exits() {
             })
             .unwrap();
             let name = device.name().to_owned();
-            // The module rounds by the device's quantize: the device has no 16-bit floats.
-            let quantizes = {
+            // Whether the compiled kernel records `note`.
+            let records = |kernel: &str, note: PrecisionNote| {
                 let library = Library::from_air(&bitcode).unwrap();
-                let function =
-                    FunctionDescriptor::new(library.function("fast_half_chain").unwrap());
+                let function = FunctionDescriptor::new(library.function(kernel).unwrap());
                 let inputs = VariantKey::new().lowering_inputs(Stage::Kernel);
                 device
                     .compile_device()
                     .compile_function(&function, &inputs, &Budget::standard())
                     .unwrap()
                     .precision_notes()
-                    .contains(&PrecisionNote::NativeHalfQuantize)
+                    .contains(&note)
             };
+            // The module rounds by the device's quantize: the device has no 16-bit floats.
+            let quantizes = records("fast_half_chain", PrecisionNote::NativeHalfQuantize);
             let library = device.new_library_with_air(&bitcode).unwrap();
             for kernel in ["fast_half_chain", "strict_half_chain"] {
+                // A chain the stage notes may skip any of its roundings: its sum lies between the
+                // rounded one and the held one (both positive, so their bits order as values).
+                let rewrites = records(kernel, PrecisionNote::FastMathRewrites);
+                let skips = |w: u32| rewrites && (rounded..=held).contains(&w);
                 let got = run(&device, &library, kernel, &input);
                 let held_words = got.iter().filter(|w| **w == held).count();
                 let rounded_words = got.iter().filter(|w| **w == rounded).count();
+                let between = got
+                    .iter()
+                    .filter(|w| **w != held && **w != rounded && skips(**w))
+                    .count();
                 eprintln!(
-                    "{kernel} under {policy} on {name} (quantize: {quantizes}): {held_words} held \
-                     at float, {rounded_words} rounded at each sum, of {THREADS}"
+                    "{kernel} under {policy} on {name} (quantize: {quantizes}, rewrites noted: \
+                     {rewrites}): {held_words} held at float, {rounded_words} rounded at each \
+                     sum, {between} between, of {THREADS}"
                 );
                 let want = match (quantizes, kernel == "fast_half_chain" && !exact) {
                     (true, true) => Some(held),
@@ -398,7 +411,7 @@ fn half_chains_without_float16_round_at_their_exits() {
                     .enumerate()
                     .filter(|(_, w)| match want {
                         Some(want) => **w != want,
-                        None => **w != held && **w != rounded,
+                        None => **w != held && **w != rounded && !skips(**w),
                     })
                     .map(|(g, w)| (g, *w))
                     .take(24)

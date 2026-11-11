@@ -1546,10 +1546,10 @@ fn holds_a_nan(w: u32) -> bool {
 
 /// Every word of [`HALF_ARITHMETIC_CASES`] is the Metal row's of the same chip where the profile
 /// takes `DriverDeviation::MetalHalfArithmetic`: the device's 16-bit `OpFAdd`, `OpFSub` and
-/// `Fma(a, b, -0.0)`, kept apart where the AIR forbids contraction (the kernels then require
-/// `VkProperty::MetalHalfArithmetic`), and `OpFAdd`, `OpFSub` and `OpFMul` the device may contract
-/// where fast math allows it (the stage then records `PrecisionNote::FastMathRewrites`).
-/// Elsewhere the module computes in `float` and rounds to `half` by its form
+/// `Fma(a, b, -0.0)`, kept apart where the AIR forbids contraction, and `OpFAdd`, `OpFSub` and
+/// `OpFMul` left to the device's compiler where fast math allows it (the stage then records
+/// `PrecisionNote::FastMathRewrites`), and every kernel requires `VkProperty::MetalHalfArithmetic` (for its kept arithmetic or its
+/// `half` reads' widening). Elsewhere the module computes in `float` and rounds to `half` by its form
 /// (`lower::arith::narrow::round`), and its words are Metal's where its stage records none of
 /// [`HALF_NATIVE`] (the float controls that make the device's conversion Metal's, or a quantize
 /// measured to be). A stage that records a native rounding (`NativeHalfConversion`,
@@ -1570,10 +1570,10 @@ fn half_arithmetic_answers_as_metal() {
             let case = public_case(case_name).unwrap();
             assert_eq!(
                 requires_property(&device, &case, VkProperty::MetalHalfArithmetic),
-                metals && !contracts,
-                "{case_name} on {name}: the kernel takes the device's 16-bit arithmetic kept \
-                 apart exactly where the profile takes the deviation and the AIR forbids \
-                 contraction"
+                metals,
+                "{case_name} on {name}: the kernel requires the measured fact (for its kept \
+                 16-bit arithmetic or its `half` reads' widening) exactly where the profile takes \
+                 the deviation"
             );
             let notes = case_notes(&device, &case);
             assert!(
