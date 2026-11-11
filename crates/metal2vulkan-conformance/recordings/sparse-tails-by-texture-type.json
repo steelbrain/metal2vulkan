@@ -1035,7 +1035,7 @@
       ],
       "bounds": {
         "addressable_buffers_made": 2,
-        "blocks_ahead_hurried": 1,
+        "blocks_ahead_hurried": 2,
         "blocks_ahead_waited_for": 5,
         "buffer_blocks_made_ahead": 2,
         "buffer_blocks_made_in_place": 2,
@@ -1070,7 +1070,7 @@
         "blocks_ahead_waited_for": 5,
         "buffer_blocks_made_ahead": 2,
         "buffer_blocks_made_in_place": 0,
-        "device_memory_allocated": 348127232,
+        "device_memory_allocated": 335544320,
         "image_blocks_made_ahead": 3,
         "image_blocks_made_in_place": 0,
         "memory_frees.pooled_emptied": 0,
