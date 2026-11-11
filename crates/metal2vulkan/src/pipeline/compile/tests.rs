@@ -1498,13 +1498,14 @@ fn a_vertex_pipeline_makes_its_input_assembly_dynamic_exactly_with_both_extended
 /// interlock: no input attachment, no color attachment state for it, the interlock, the
 /// fragment-stage store, and the format's storage access required; a blending attachment's blend
 /// the shader computes (`R32Float`'s the generic one, noted). Where the pipeline's state blocks
-/// that form (alpha to coverage), the pipeline is refused with the blocker; with neither form,
-/// refused naming both: an unordered read is never compiled.
+/// that form (alpha to coverage), the pipeline is refused with the blocker. With neither form it
+/// reads the input attachment without rasterization-order access, which the consumer's barriers
+/// order between draws alone, and its fragment stage records
+/// `PrecisionNote::UnorderedFetchWithinDraw`, which neither ordered form records.
 #[test]
 fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() {
     use crate::device::requirements::{FormatUsage, VkExtension, VkFeature};
-    use crate::error::Capability;
-    use crate::pipeline::RenderPipeline;
+    use crate::pipeline::{PrecisionNote, RenderPipeline};
     const ORDERED: VkFeature = VkFeature::RasterizationOrderColorAttachmentAccess;
     const INTERLOCK: VkFeature = VkFeature::FragmentShaderPixelInterlock;
     let (Some(io), Some(fetch)) = (fixture("stage_io"), fixture("fragment_fetch")) else {
@@ -1540,10 +1541,19 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
         Ok::<RenderPipeline, Error>(pipe)
     };
 
+    let unordered = |pipe: &RenderPipeline| {
+        (pipe.stages.iter())
+            .filter(|s| s.stage == vk::ShaderStage::FRAGMENT)
+            .any(|s| {
+                s.precision_notes
+                    .contains(&PrecisionNote::UnorderedFetchWithinDraw)
+            })
+    };
     let lavapipe = description("lavapipe");
     assert!(lavapipe.has(ORDERED));
     {
         let pipe = compile(&lavapipe, DevicePolicy::default(), &d).expect("lavapipe");
+        assert!(!unordered(&pipe));
         assert_eq!(pipe.graphics.input_attachments.len(), 1);
         assert!(pipe.graphics.storage_attachments.is_empty());
         assert!(pipe.graphics.rasterization_order_attachment_access);
@@ -1562,6 +1572,7 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
     assert!(interlocked.has(INTERLOCK));
     {
         let pipe = compile(&interlocked, DevicePolicy::default(), &d).expect("interlocked");
+        assert!(!unordered(&pipe));
         assert!(pipe.graphics.input_attachments.is_empty());
         assert!(pipe.graphics.color_attachments.iter().all(Option::is_none));
         let [s] = pipe.graphics.storage_attachments.as_slice() else {
@@ -1604,7 +1615,7 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
             .expect("a fragment stage");
         assert!(fragment
             .precision_notes
-            .contains(&crate::pipeline::PrecisionNote::UnmeasuredFetchBlend));
+            .contains(&PrecisionNote::UnmeasuredFetchBlend));
     }
     // Alpha to coverage, which can drop the fragment's samples, blocks the form.
     let mut covered = d.clone();
@@ -1619,18 +1630,13 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
 
     let mut without = interlocked.clone();
     without.features.remove(&INTERLOCK);
-    match compile(&without, DevicePolicy::default(), &d) {
-        Err(Error::Unsupported(u)) => assert_eq!(
-            (u.feature, u.needs),
-            (
-                Feature::FramebufferFetch,
-                Needs::AnyOf(vec![
-                    vec![Capability::Feature(ORDERED)],
-                    vec![Capability::Feature(INTERLOCK)],
-                ])
-            )
-        ),
-        other => panic!("{:?}", other.map(|_| ())),
+    let pipe = compile(&without, DevicePolicy::default(), &d).expect("neither");
+    assert!(unordered(&pipe));
+    assert_eq!(pipe.graphics.input_attachments.len(), 1);
+    assert!(pipe.graphics.storage_attachments.is_empty());
+    assert!(!pipe.graphics.rasterization_order_attachment_access);
+    for f in [ORDERED, INTERLOCK] {
+        assert!(!pipe.requirements.features.contains(&f), "{f:?}");
     }
 }
 
