@@ -24,7 +24,7 @@ use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
 use crate::error::{DescriptorError, Error, MetalAnswer, Needs};
 use crate::library::{FunctionArtifact, Library};
 use crate::metal::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat};
-use crate::pipeline::artifact::RenderPipeline;
+use crate::pipeline::artifact::{PrecisionNote, RenderPipeline};
 use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
 };
@@ -346,8 +346,9 @@ fn a_blend_into_a_bfloat_attachment_is_metals_pipeline_error() {
 /// an `RGBA32Float` color 1, make the whole pipeline on every committed profile that orders fetch:
 /// through the pixel interlock with color 0 a storage attachment of the raw format the function
 /// does not write, or through rasterization-order input attachments with color 0 an attachment of
-/// the raw format read as an unsigned input attachment. On one that orders it in neither form the
-/// pipeline is refused naming what the device lacks. Before the read was built each was refused
+/// the raw format read as an unsigned input attachment. On one that orders it in neither form it
+/// takes that input attachment too, ordered between draws alone, its fragment stage noting
+/// `UnorderedFetchWithinDraw`. Before the read was built each was refused
 /// `NotImplemented(FramebufferFetch)`. The negative control: a fetch of a bfloat attachment, whose
 /// read Metal answers unmeasured, stays `NotImplemented(Format)` on every profile.
 #[test]
@@ -401,7 +402,9 @@ fn a_fetch_of_a_padded_attachment_reads_the_tile_value_of_its_codes() {
                         .collect();
                     assert_eq!(uses, [(0, raw, false)], "{what}");
                     interlocked += 1;
-                } else if inputs_order(&p) {
+                } else {
+                    // Rasterization-order input attachments, or with neither ordered form input
+                    // attachments ordered between draws alone, noted.
                     let a = made.unwrap_or_else(|e| panic!("{what}: {e}"));
                     let state0 = a.graphics.color_attachments[0].expect("color 0");
                     assert_eq!(state0.format, raw, "{what}");
@@ -412,16 +415,14 @@ fn a_fetch_of_a_padded_attachment_reads_the_tile_value_of_its_codes() {
                         .map(|i| i.color_index)
                         .collect();
                     assert_eq!(read, [0], "{what}");
-                    inputs += 1;
-                } else {
-                    let e = made.map(drop).expect_err(&what);
-                    assert!(
-                        matches!(&e, Error::Unsupported(u)
-                            if u.feature == Feature::FramebufferFetch
-                                && u.needs != Needs::NotImplemented),
-                        "{what}: {e}"
-                    );
-                    unordered += 1;
+                    let noted = (a.stages.iter()).any(|s| {
+                        (s.precision_notes).contains(&PrecisionNote::UnorderedFetchWithinDraw)
+                    });
+                    assert_eq!(noted, !inputs_order(&p), "{what}");
+                    match inputs_order(&p) {
+                        true => inputs += 1,
+                        false => unordered += 1,
+                    }
                 }
             }
             for pf in BFLOAT {
