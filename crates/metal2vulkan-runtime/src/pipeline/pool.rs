@@ -16,7 +16,9 @@
 //! - **The exit guard.** Each piece runs inside a section (`exit_guard`), which registers the
 //!   hook again after the process's first pipeline made in one. Once the process is exiting, a
 //!   piece not started is dropped unrun: it fails its making (`making::Ticket`), as Metal's
-//!   pending work stays pending. While a piece's driver call makes a pipeline
+//!   pending work stays pending. Once the exit ended the makings alone (its run of the hook after
+//!   a making), a piece's making answers that the process is exiting
+//!   (`exit_guard::driver_making`), which fails it too. While a piece's driver call makes a pipeline
 //!   (`exit_guard::driver_making`), the exit waits for it up to `exit_guard::MAKING_BOUND`, not
 //!   the guard's two seconds: the program need not wait for the command buffer whose making it is
 //!   before it exits, and a making outlasts those. Past it, on Linux, the process ends at once

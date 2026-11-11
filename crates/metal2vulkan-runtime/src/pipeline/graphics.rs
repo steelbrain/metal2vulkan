@@ -23,7 +23,7 @@ use super::kept::Place;
 use super::libraries::{Linked, Part};
 use super::objects::{RawPipeline, VariantObjects};
 use crate::degradation::BoundFormats;
-use crate::error::{internal, vulkan, Error};
+use crate::error::{internal, vulkan, DeadlockCause, Error};
 use crate::render_target::{PassShape, RenderPassObject};
 use crate::shader_cache::driver::Making;
 use crate::shader_cache::{found_in_cache, REPORTED_STAGES};
@@ -1246,7 +1246,8 @@ impl VariantObjects {
                         let record = creation_log::record_text(creation_log::take_record());
                         creation_log::note(|| format!("pipeline (made{record})"), at.elapsed());
                     }
-                    made.map_err(|(_, error)| vulkan(error))
+                    made.ok_or(Error::from(DeadlockCause::Exiting))
+                        .and_then(|made| made.map_err(|(_, error)| vulkan(error)))
                         .and_then(|created| {
                             created
                                 .first()
@@ -1407,7 +1408,9 @@ impl VariantObjects {
         if let Some(at) = linking {
             creation_log::note(|| "link".to_owned(), at.elapsed());
         }
-        let created = created.map_err(|(_, error)| vulkan(error))?;
+        let created = created
+            .ok_or(DeadlockCause::Exiting)?
+            .map_err(|(_, error)| vulkan(error))?;
         shared.counts.pipeline_linked();
         created
             .first()

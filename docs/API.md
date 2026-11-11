@@ -5287,6 +5287,22 @@ each item named states the rule in full.
   thread left running, ended a consumer's process with `SIGSEGV` inside NVIDIA's SPIR-V compiler
   (`libnvidia-glvkspirv.so`, RTX 5080). A program that ends its making threads before it exits
   leaves only the 2 ms window.
+- **A pipeline's making that an exit handler begins answers that the process is exiting**
+  (`WaitWouldDeadlock` of `DeadlockCause::Exiting`) where the program made a pipeline after it
+  registered that handler, where Metal's exit makes it. The runtime registers its exit handler
+  again after each making, and the exit runs it before the program's handler, after the
+  destructors the driver's compiler registered at that making: that run ends the makings and
+  waits for those in progress, and leaves the rest of the runtime running, so the handler's other
+  work is submitted and completes, as Metal's exit runs it. A pipeline its work needs that was
+  not made yet answers the same, failing that work.
+- **On a CPU device (lavapipe, SwiftShader), an exit handler the program registered before a
+  later pipeline making finds the process exiting**: its waits answer `WaitWouldDeadlock` of
+  `DeadlockCause::Exiting` and the work it commits stays pending, where Metal's exit runs it. A
+  CPU device's queues compile as they run their work, on the process's own threads, and the
+  driver's compiler's destructors registered at that making run before the handler, so the
+  runtime's exit handler run there closes the runtime, as it does for a device's registration.
+  On lavapipe a queue's compile beside the exit's destructors ended the process in `free()`'s
+  heap checks in 5 of 300 exits while a host step waited.
 - **On NVIDIA's proprietary driver, an exit with a device live can fault in the driver's own exit
   handler** with no making in progress, where Metal's exit is clean: the handler tears the driver's
   SPIR-V compiler down while a worker thread of the driver's still runs in it (a null dereference

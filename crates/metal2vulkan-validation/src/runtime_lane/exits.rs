@@ -724,7 +724,8 @@ fn child() {
             // Then the program goes on: a pipeline made on its own thread, after its handler.
             let _made = configured(&device, Some(32), 5);
             println!(
-                "{REPORT}-MADE {:?}",
+                "{REPORT}-MADE cpu={} {:?}",
+                u8::from(device.properties().kind == DeviceKind::Cpu),
                 metal2vulkan_runtime::exit_registrations()
             );
             exit_now(case, &messages);
@@ -1539,21 +1540,39 @@ fn an_exit_runs_no_handler_beside_a_cpu_device_s_work() {
 /// An exit handler the program registers once its device is made commits work as the process
 /// exits and waits for it: Metal runs that work to completion, and so must the runtime, whatever
 /// the program did after registering the handler (here, a pipeline made on its own thread). The
-/// device's hook runs after the handler, so the handler finds the device's guard open.
+/// device's hook runs after the handler, so the handler finds the device's guard open; the hook's
+/// run for the making's registration, before the handler, ended the makings alone. On a CPU
+/// device, whose queues compile as they run, that run closes the guard (docs/API.md, accepted
+/// differences): the handler finds the process exiting, and its wait answers so.
 #[test]
 fn an_exit_handler_registered_after_the_device_runs_its_work_to_completion() {
     let case = "handler_work_exit";
     let exited = exits_cleanly(&[case]).remove(0);
     let handler = format!("{REPORT}-HANDLER ");
-    let field = |name: &str| -> Option<u8> {
-        stdout_line(&exited, &handler)?
+    let line_field = |line: &str, name: &str| -> Option<u8> {
+        stdout_line(&exited, line)?
             .split_whitespace()
             .find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='))?
             .parse()
             .ok()
     };
+    let field = |name: &str| line_field(&handler, name);
     let what = || format!("stdout:\n{}\nstderr:\n{}", exited.stdout, exited.stderr);
     eprintln!("{}", stdout_line(&exited, &handler).unwrap_or_default());
+    if line_field(&format!("{REPORT}-MADE "), "cpu") == Some(1) {
+        assert_eq!(
+            (field("hook_ran"), field("completed")),
+            (Some(1), Some(0)),
+            "on a CPU device the making's run of the hook did not close the guard: {}",
+            what()
+        );
+        assert!(
+            stdout_line(&exited, &handler).is_some_and(|line| line.contains("Exiting")),
+            "the handler's wait did not answer that the process is exiting: {}",
+            what()
+        );
+        return;
+    }
     assert_eq!(
         field("hook_ran"),
         Some(0),

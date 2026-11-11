@@ -6,7 +6,9 @@
 //! the hook learns it (Linux). Each test uses a guard of its own; only the fork tests use the
 //! process's, which nothing here closes.
 
-use crate::exit_guard::{self, hook, Busy, Call, Calls, Guard, InProcess, InProcessDevices};
+use crate::exit_guard::{
+    self, hook, hook_after_making, After, Busy, Call, Calls, Guard, InProcess, InProcessDevices,
+};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Barrier, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -204,9 +206,9 @@ fn the_hook_waits_past_its_bound_for_a_making_in_progress() {
 
     // `driver_making` takes such a section of the process's guard only on a thread in a section.
     let before = exit_guard::own();
-    assert_eq!(exit_guard::driver_making(exit_guard::own), before);
+    assert_eq!(exit_guard::driver_making(exit_guard::own), Some(before));
     let busy = exit_guard::enter().expect("open");
-    assert_eq!(exit_guard::driver_making(exit_guard::own), before + 2);
+    assert_eq!(exit_guard::driver_making(exit_guard::own), Some(before + 2));
     drop(busy);
 }
 
@@ -693,7 +695,7 @@ fn a_forked_child_s_exit_does_not_wait_for_its_parent_s_sections() {
     // `_exit`, which runs no handler.
     let child = unsafe { libc::fork() };
     if child == 0 {
-        exit_guard::run_on_exit(3);
+        exit_guard::run_on_exit(3, After::Calls);
         // SAFETY: as above.
         unsafe { libc::_exit(0) };
     }
@@ -729,8 +731,9 @@ fn every_entry_point_has_a_bit_of_its_own() {
 
 /// The exit status of a child that registers its hook (its first device), then a destructor (a
 /// driver's or a layer's static, made at its first use), then runs `sections`, and exits. The
-/// destructor ends the child with 42 when it sees the guard closed (the hook ran first), and 43
-/// when it ran first.
+/// destructor ends the child with 42 when it sees the guard closed (the hook ran first, after
+/// calls), 44 when it sees the makings ended and the guard open (the hook ran first, after a
+/// making), and 43 when it ran first.
 #[cfg(unix)]
 fn late_destructor_exit(sections: fn()) -> libc::c_int {
     late_destructor_exit_after(|| {}, sections)
@@ -741,7 +744,11 @@ fn late_destructor_exit(sections: fn()) -> libc::c_int {
 #[cfg(unix)]
 fn late_destructor_exit_after(before: fn(), sections: fn()) -> libc::c_int {
     extern "C" fn late_destructor() {
-        let code = if exit_guard::closed() { 42 } else { 43 };
+        let code = match (exit_guard::closed(), exit_guard::makings_ended()) {
+            (true, _) => 42,
+            (false, true) => 44,
+            (false, false) => 43,
+        };
         // SAFETY: ends the child at once, from its exit handlers.
         unsafe { libc::_exit(code) };
     }
@@ -829,15 +836,196 @@ fn an_instance_made_registers_the_hook_again() {
 /// A driver's `vkCreate*Pipelines` that returned registers the hook again, so a destructor its
 /// compiler registered in the call (a static made at its first use of a path, or the constructors
 /// of a compiler it loaded only then) runs after the hook: the child's destructor, registered
-/// before the call returned, stands for it, on the program's own thread (no section).
+/// before the call returned, stands for it, on the program's own thread (no section). That run
+/// ends the makings and leaves the guard open (44).
 #[cfg(unix)]
 #[test]
 fn a_pipeline_making_that_returned_registers_the_hook_again() {
     assert_eq!(
         late_destructor_exit(exit_guard::pipelines_made),
-        42,
-        "the compiler's destructor ran before the hook"
+        44,
+        "the compiler's destructor ran before the hook, or the hook closed the guard"
     );
+}
+
+/// The exit of a child that registers its hook (its device), then an exit handler of its own (as
+/// a program does once its device is made), then makes a pipeline (which registers the hook again
+/// after a making): the hook's run for that registration comes first, and the handler then finds
+/// the guard open, sections starting, and the makings ended (a making answers `None`). Exit
+/// statuses: 42 as expected, 43 the guard closed, 44 a section refused, 45 a making ran.
+#[cfg(unix)]
+#[test]
+fn a_making_s_run_of_the_hook_leaves_the_program_s_handler_the_guard_open() {
+    extern "C" fn program_handler() {
+        let code = if exit_guard::closed() {
+            43
+        } else if exit_guard::enter().is_none() {
+            44
+        } else if exit_guard::driver_making(|| ()).is_some() {
+            45
+        } else {
+            42
+        };
+        // SAFETY: ends the child at once, from its exit handlers.
+        unsafe { libc::_exit(code) };
+    }
+    // SAFETY: the child registers its hook and a handler (atomics and the C library's `atexit`),
+    // and exits.
+    let child = unsafe { libc::fork() };
+    if child == 0 {
+        exit_guard::register();
+        // SAFETY: `program_handler` is a function with no arguments that never unwinds.
+        unsafe { libc::atexit(program_handler) };
+        exit_guard::pipelines_made();
+        // SAFETY: as above.
+        unsafe { libc::exit(0) };
+    }
+    assert!(child > 0, "fork");
+    let mut status = 0;
+    // SAFETY: `child` is this process's child.
+    let reaped = unsafe { libc::waitpid(child, &mut status, 0) };
+    assert_eq!(reaped, child);
+    assert!(libc::WIFEXITED(status), "the child did not exit: {status}");
+    assert_eq!(libc::WEXITSTATUS(status), 42);
+}
+
+/// After a making's run of the hook and the program's handler, the hook's run for its device's
+/// registration still closes the guard before the destructors registered as the device was made:
+/// a handler registered before the device sees it closed (42; 43 not).
+#[cfg(unix)]
+#[test]
+fn the_device_s_run_of_the_hook_closes_the_guard_after_a_making_s_run() {
+    extern "C" fn before_the_device() {
+        let code = if exit_guard::closed() && exit_guard::makings_ended() {
+            42
+        } else {
+            43
+        };
+        // SAFETY: ends the child at once, from its exit handlers.
+        unsafe { libc::_exit(code) };
+    }
+    extern "C" fn program_handler() {}
+    // SAFETY: the child registers handlers and its hook (atomics and the C library's `atexit`),
+    // and exits.
+    let child = unsafe { libc::fork() };
+    if child == 0 {
+        // SAFETY: both are functions with no arguments that never unwind.
+        unsafe { libc::atexit(before_the_device) };
+        exit_guard::register();
+        // SAFETY: as above.
+        unsafe { libc::atexit(program_handler) };
+        exit_guard::pipelines_made();
+        // SAFETY: as above.
+        unsafe { libc::exit(0) };
+    }
+    assert!(child > 0, "fork");
+    let mut status = 0;
+    // SAFETY: `child` is this process's child.
+    let reaped = unsafe { libc::waitpid(child, &mut status, 0) };
+    assert_eq!(reaped, child);
+    assert!(libc::WIFEXITED(status), "the child did not exit: {status}");
+    assert_eq!(libc::WEXITSTATUS(status), 42);
+}
+
+/// With a device whose queues run in the process (a CPU device, whose queues compile as they run
+/// their work), a making's run of the hook closes the guard, as a device's does: the program's
+/// handler sees it closed (42; 43 open).
+#[cfg(unix)]
+#[test]
+fn a_making_s_run_of_the_hook_closes_the_guard_beside_a_cpu_device() {
+    extern "C" fn program_handler() {
+        let code = if exit_guard::closed() { 42 } else { 43 };
+        // SAFETY: ends the child at once, from its exit handlers.
+        unsafe { libc::_exit(code) };
+    }
+    /// A device with nothing in flight.
+    struct Idle;
+    impl InProcess for Idle {
+        fn drain(&self, _deadline: Option<Instant>) -> bool {
+            true
+        }
+    }
+    // SAFETY: the child registers a device, its hook and a handler (atomics, a lock and the C
+    // library's `atexit`), and exits.
+    let child = unsafe { libc::fork() };
+    if child == 0 {
+        let device: Arc<dyn InProcess> = Arc::new(Idle);
+        exit_guard::runs_in_process(Arc::downgrade(&device));
+        exit_guard::register();
+        // SAFETY: `program_handler` is a function with no arguments that never unwinds.
+        unsafe { libc::atexit(program_handler) };
+        exit_guard::pipelines_made();
+        // SAFETY: as above; `device` stays live, since `exit` drops nothing of this frame.
+        unsafe { libc::exit(0) };
+    }
+    assert!(child > 0, "fork");
+    let mut status = 0;
+    // SAFETY: `child` is this process's child.
+    let reaped = unsafe { libc::waitpid(child, &mut status, 0) };
+    assert_eq!(reaped, child);
+    assert!(libc::WIFEXITED(status), "the child did not exit: {status}");
+    assert_eq!(libc::WEXITSTATUS(status), 42);
+}
+
+/// Ending the makings waits for those in progress in sections, at most its bound, and none starts
+/// after it: a section's making answers `None` once they ended.
+#[test]
+fn the_makings_end_once_those_in_progress_ended_and_none_starts_after() {
+    let guard = guard();
+    let (entered, release) = (mpsc::channel(), mpsc::channel::<()>());
+    let worker = std::thread::spawn(move || {
+        let _section = guard.enter().expect("open");
+        let _making = guard.enter_making().expect("the makings go on");
+        entered.0.send(()).unwrap();
+        let _ = release.1.recv();
+        std::thread::sleep(Duration::from_millis(50));
+    });
+    entered.1.recv().unwrap();
+    let ender = std::thread::spawn(move || {
+        guard.end_makings(Duration::from_secs(5), Duration::from_secs(10))
+    });
+    let start = Instant::now();
+    while !guard.makings_ended() {
+        std::thread::yield_now();
+    }
+    let section = guard.enter().expect("sections still start");
+    assert!(
+        guard.enter_making().is_none(),
+        "a making started after the end"
+    );
+    drop(section);
+    release.0.send(()).unwrap();
+    assert!(ender.join().unwrap(), "the making in progress did not end");
+    assert!(
+        start.elapsed() >= Duration::from_millis(50),
+        "the end did not wait for the making in progress"
+    );
+    worker.join().unwrap();
+    assert!(!guard.is_closed(), "ending the makings closed the guard");
+}
+
+/// [`hook_after_making`] acts only in the process it was registered in, and beside no device whose
+/// queues run in it ends the makings alone.
+#[test]
+fn a_making_s_run_ends_the_makings_alone_in_its_own_process() {
+    let guard = guard();
+    let devices = none_in_process();
+    let bound = Duration::from_millis(100);
+    assert_eq!(
+        hook_after_making(guard, &devices, 1, 2, 0, bound, bound),
+        None
+    );
+    assert!(
+        !guard.makings_ended(),
+        "another process's run ended the makings"
+    );
+    assert_eq!(
+        hook_after_making(guard, &devices, 2, 2, 0, bound, bound),
+        Some(true)
+    );
+    assert!(guard.makings_ended() && !guard.is_closed());
+    assert!(hook(guard, &devices, 2, 2, 0, bound, bound).unwrap());
+    assert!(guard.is_closed());
 }
 
 /// The exit of a child whose earlier making (on its own thread) left a destructor of the driver's

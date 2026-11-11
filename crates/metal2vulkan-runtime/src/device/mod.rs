@@ -57,7 +57,7 @@ use super::depth_copy::DepthCopyObjects;
 use super::depth_stencil_resolve::DepthStencilResolveObjects;
 use super::draw_source::{sized_index_bind, SizedIndexBind};
 use super::dynamic_state::{ColorWriteMasks, ExtendedDynamicState};
-use super::error::{internal, vulkan, Error};
+use super::error::{internal, vulkan, DeadlockCause, Error};
 use super::exit_guard::{self, Call};
 use super::freed_memory::Parking;
 use super::function_table::TableShared;
@@ -745,12 +745,13 @@ impl DeviceShared {
     /// (`shader_cache::found_in_cache`, `None` where it reports nothing). A making from its record
     /// that the driver reports found reads no data back and writes nothing
     /// (`shader_cache/driver.rs`). On a pool's thread the exit waits for it longer
-    /// (`exit_guard::driver_making`).
+    /// (`exit_guard::driver_making`). `None`, `create` unrun, once the process's exit ended the
+    /// makings (`exit_guard::driver_making`).
     pub(crate) fn make_pipelines_reported<T, E>(
         &self,
         making: Making,
         create: impl FnOnce(vk::PipelineCache) -> (Result<T, E>, Option<bool>),
-    ) -> Result<T, E> {
+    ) -> Option<Result<T, E>> {
         // What every making is measured to report, withheld inside it (`driver_facts.rs`); a
         // render pipeline's making expects them with its own.
         let expected = crate::driver_facts::making_diagnostics(&self.invariant.properties);
@@ -790,6 +791,7 @@ impl DeviceShared {
             let found = reports.then(|| found_in_cache(&whole, &stage)).flatten();
             (made, found)
         });
+        let made = made.ok_or(DeadlockCause::Exiting)?;
         self.made_one(made, reports.then_some((&whole, &stage[..])))
     }
 
@@ -825,6 +827,7 @@ impl DeviceShared {
                 .flatten();
             (made, found)
         });
+        let made = made.ok_or(DeadlockCause::Exiting)?;
         self.made_one(made, reports.then_some((&whole, &stages[..reported])))
     }
 

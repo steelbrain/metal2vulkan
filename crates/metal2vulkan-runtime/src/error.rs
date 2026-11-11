@@ -308,7 +308,10 @@ pub enum DeadlockCause {
     /// From any thread, once the process is exiting ([`process_exiting`](crate::process_exiting)):
     /// the runtime's threads that schedule and finish command buffers have ended, and it makes no
     /// Vulkan call, so a command buffer not yet scheduled or finished never will be. A wait
-    /// already blocked answers within 50 ms.
+    /// already blocked answers within 50 ms. It also answers a pipeline's making begun once the
+    /// exit ended the makings, before the exit handlers the program registered before a later
+    /// making run (the driver's compiler's destructors may have run by then): a state's creation
+    /// in such a handler, or the work that needed that making.
     Exiting,
     /// From a submission handler ([`CommandBuffer::add_submission_handler`](crate::CommandBuffer::add_submission_handler),
     /// a runtime extension Metal has no counterpart of), a wait for what has not happened yet: a
