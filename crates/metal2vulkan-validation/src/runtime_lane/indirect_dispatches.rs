@@ -766,3 +766,110 @@ fn a_ragged_direct_dispatch_runs_each_thread_once_on_the_flat_variant() {
         let _ = messages.take_notices();
     });
 }
+
+/// A kernel that marks the grid's last column and last row: the thread at `x = gx - 1` adds 1
+/// into `out[y]`, the thread at `y = gy - 1` into `out[gy + x]`. Over a grid of more than 2^32
+/// threads only these edges are stored, and a position counted in 32 bits would wrap the rows past
+/// 2^32 threads onto the first ones (those counted twice, the last never).
+const FLAT_EDGES: &str = r#"define void @flat_edges(ptr addrspace(1) noundef "air-buffer-no-alias" %b0, <3 x i32> noundef %p, <3 x i32> noundef %g) {
+entry:
+  %px = extractelement <3 x i32> %p, i64 0
+  %py = extractelement <3 x i32> %p, i64 1
+  %gx = extractelement <3 x i32> %g, i64 0
+  %gy = extractelement <3 x i32> %g, i64 1
+  %lx = add i32 %gx, -1
+  %ly = add i32 %gy, -1
+  %ex = icmp eq i32 %px, %lx
+  br i1 %ex, label %col, label %next
+col:
+  %yi = zext i32 %py to i64
+  %o0 = getelementptr inbounds i32, ptr addrspace(1) %b0, i64 %yi
+  %a0 = atomicrmw add ptr addrspace(1) %o0, i32 1 monotonic, align 4
+  br label %next
+next:
+  %ey = icmp eq i32 %py, %ly
+  br i1 %ey, label %row, label %done
+row:
+  %xi = add i32 %gy, %px
+  %xw = zext i32 %xi to i64
+  %o1 = getelementptr inbounds i32, ptr addrspace(1) %b0, i64 %xw
+  %a1 = atomicrmw add ptr addrspace(1) %o1, i32 1 monotonic, align 4
+  br label %done
+done:
+  ret void
+}
+
+!air.kernel = !{!0}
+!air.version = !{!20}
+!air.language_version = !{!21}
+!0 = !{ptr @flat_edges, !1, !2}
+!1 = !{}
+!2 = !{!3, !5, !6}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b0"}
+!5 = !{i32 1, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint3", !"air.arg_name", !"p"}
+!6 = !{i32 2, !"air.threads_per_grid", !"air.arg_type_name", !"uint3", !"air.arg_name", !"g"}
+!20 = !{i32 2, i32 8, i32 0}
+!21 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
+/// A direct dispatch of more than 2^32 threads (65,536 x 65,601: ragged, so not the exact split, and 65 rows past 2^32) runs on the
+/// flat variant's 64-bit arm, and every thread of the last column and the last row runs once at
+/// its own position, the rows past 2^32 included: the 32-bit count is taken only when the whole
+/// dispatch fits it.
+#[test]
+fn a_direct_dispatch_past_2_32_threads_keeps_the_flat_variant_s_64_bit_count() {
+    on_device(|device, messages| {
+        let library = device
+            .new_library_with_air(&llvm_assemble_text(FLAT_EDGES).unwrap())
+            .unwrap();
+        let function = library.new_function_with_name("flat_edges").unwrap();
+        let kernel = device
+            .new_compute_pipeline_state(
+                &ComputePipelineDescriptor::new(StageSource::Function(
+                    function.function_descriptor(),
+                )),
+                &PipelineOptions::default(),
+            )
+            .unwrap();
+        let (grid, group) = ([65_536u32, 65_601, 1], [32u32, 32, 1]);
+        assert!(u64::from(grid[0]) * u64::from(grid[1]) > 1 << 32);
+        let [gx, gy, _] = grid;
+        let slots = u64::from(gy + gx);
+        let out = buffer_with(device, &vec![0; slots as usize * 4]).unwrap();
+        let queue = device.new_command_queue().unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder.set_compute_pipeline_state(&kernel).unwrap();
+        encoder.set_buffer(Some(&out), 0, 0).unwrap();
+        encoder.dispatch_threads(size(grid), size(group)).unwrap();
+        encoder.end_encoding().unwrap();
+        complete(&command_buffer, &format!("past 2^32 {grid:?} {group:?}"));
+        let flat = command_buffer
+            .executions()
+            .iter()
+            .any(|execution| match execution.pipeline() {
+                ExecutedPipeline::Compute(pipeline) => pipeline
+                    .dependencies
+                    .iter()
+                    .any(|dependency| dependency.fact == RuntimeFact::FlatGrid),
+                ExecutedPipeline::Render(_) => false,
+            });
+        assert!(flat, "{grid:?} {group:?}: not on the flat variant");
+        let words = read_buffer(&out, 0, slots * 4).unwrap();
+        let counts: Vec<u32> = words
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|w| u32::from_le_bytes(*w))
+            .collect();
+        let wrong: Vec<(usize, u32)> = counts
+            .iter()
+            .enumerate()
+            .filter(|(_, &c)| c != 1)
+            .map(|(i, &c)| (i, c))
+            .take(8)
+            .collect();
+        assert!(wrong.is_empty(), "slots not counted once (first 8, rows then columns at {gy}): {wrong:?}");
+        let _ = messages.take_notices();
+    });
+}
