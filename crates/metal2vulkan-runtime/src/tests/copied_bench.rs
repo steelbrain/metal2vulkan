@@ -427,16 +427,17 @@ pub(super) fn bench_256(label: &str, base: &mut dyn FnMut(usize) -> Option<BaseB
         let read = after.base_blocks_read - read;
         let copied_in = (after.copy_in_bytes - before.copy_in_bytes) / RUNS as u64;
         let merged = (after.merge_back_bytes - before.merge_back_bytes) / RUNS as u64;
-        let first = backs[0];
+        let (first_in, first_back) = (ins[0], backs[0]);
         let (ins, backs) = (median(ins), median(backs));
         let rate = |bytes: u64, ms: f64| bytes as f64 / 1e6 / ms;
         eprintln!(
-            "COPIED-256 {label} {case}: copy in {ins:.2} ms ({} MB, {:.2} GB/s), merge back {backs:.2} ms ({} MB, {:.2} GB/s) (median of {RUNS}; the first {first:.2} ms), {} base blocks read, {} threads started",
+            "COPIED-256 {label} {case}: copy in {ins:.2} ms ({} MB, {:.2} GB/s), merge back {backs:.2} ms ({} MB, {:.2} GB/s) (median of {RUNS}; the first {first_in:.2} ms in, {first_back:.2} ms back), {} base blocks read, {} kept on the host, {} threads started",
             copied_in / 1_000_000,
             rate(copied_in, ins),
             merged / 1_000_000,
             rate(merged, backs),
             read / RUNS as u64,
+            buffers.base_host_blocks(),
             (after.compare_threads - before.compare_threads) / RUNS as u64,
         );
     };
