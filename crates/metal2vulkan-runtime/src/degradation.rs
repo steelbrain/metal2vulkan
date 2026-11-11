@@ -828,19 +828,33 @@ degradations! {
         /// buffer's bytes, Metal's answer, nor, under `DontCareColorPolicy::Kept`, a texture's own
         /// image stored `DontCare` that the pass renders through a backing its queue keeps
         /// (`kept_bytes.rs`), which keeps its earlier texels, Metal's answer; only one whose image
-        /// the pass renders in place.
+        /// the pass renders in place. Where the pass also loads the attachment `DontCare` and the
+        /// runtime clears it (`UnstoredDontCarePolicy`, `clear_reach.rs`), a tile no draw touches
+        /// holds zero (a color) or the clear value (depth, stencil) after the pass, where Metal's
+        /// holds its earlier texels.
         DontCareStore = "dont-care-store", Precision,
             "the attachment's texels after the pass are each its earlier texel or the one the \
-             pass rendered, both Metal's answers, but not always the one Metal's tiler keeps";
+             pass rendered, both Metal's answers, but not always the one Metal's tiler keeps; \
+             where the pass loads it `DontCare` and clears it, a tile no draw touches holds zero \
+             or the clear value";
         /// An attachment loaded with `DontCare` and stored, in a pass that draws, is cleared
         /// before the draws to zero (a color) or its clear value (depth, stencil) over the render
         /// area and the tiles past it a clear reaches (`clear_reach.rs`), where Metal clears only
         /// the tiles a draw's primitives touch and keeps the texels of the others. Not one the
-        /// pass does not store, which its load operation clears over the render area: Metal's
-        /// answer wherever a fragment reads it.
+        /// pass does not store (`dont-care-unstored-load`).
         DontCareLoadTiles = "dont-care-load-tiles", Precision,
             "the tiles no draw touches hold zero or the clear value where Metal keeps their \
              texels";
+        /// An attachment loaded with `DontCare` and not stored (not memoryless, not one of
+        /// separate depth and stencil textures), in a pass whose draws reach a tile, is left to the
+        /// driver's `DONT_CARE` load under `UnstoredDontCarePolicy::Driver`, the default, on a
+        /// driver not measured to clear it no slower (`DriverFact::UnstoredClearNoSlower`), where
+        /// Metal's draws read zero (a color) or the clear value (depth, stencil) wherever they read
+        /// it (`clear_reach.rs`). Cleared, Metal's answer, and not announced on a driver with the
+        /// fact and under `UnstoredDontCarePolicy::Cleared`.
+        DontCareUnstoredLoad = "dont-care-unstored-load", Precision,
+            "the pass's draws read what the driver's `DONT_CARE` load leaves in the attachment \
+             (on lavapipe its earlier texels) where Metal's read zero or the clear value";
         /// On a device that presents an Apple silicon Mac's compression
         /// (`DeviceProperties::lossless_compression`, `MacClass::AppleSilicon`; never on one that
         /// presents a Mac with an Intel or AMD GPU, whose new `Private` texture holds what its

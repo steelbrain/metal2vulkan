@@ -254,6 +254,17 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   queue is known long only by its command buffers' timestamps.
   `queue_sharing = QueueSharingPolicy::PerQueue`, which `exact_answers()` selects, keeps each
   command queue on that `VkQueue` everywhere and runs no check.
+- **An attachment loaded `DontCare` and not stored, cleared where its driver clears it no slower**
+  (`UnstoredDontCarePolicy::Driver`, the default; the runtime's choice, no pipeline differs). Metal's
+  draws read zero (a colour) or the pass's clear value (depth, stencil) of such an attachment
+  wherever they read it (an M3 Max, macOS 27.0.1: a framebuffer fetch and a stencil test, in passes
+  split and whole). In a pass whose draws reach a tile the runtime clears it over the render area
+  on a driver measured to run that clear no slower than its `DONT_CARE` load
+  (`DriverFact::UnstoredClearNoSlower`: MoltenVK on the M3 Max, RADV on the Radeon 780M), and
+  leaves it to the driver's `DONT_CARE` elsewhere, announced `dont-care-unstored-load`: lavapipe's
+  draws then read its earlier texels. `unstored_dont_care_loads = UnstoredDontCarePolicy::Cleared`,
+  which `exact_answers()` selects, clears it on every device. A memoryless one, and one of separate
+  depth and stencil textures, are not covered.
 
 Loops run as written: no execution bound is translated in.
 
@@ -2334,20 +2345,29 @@ bound.
   announced (docs/FAST-PATHS.md). Only where the pass cannot (a draw took a view of the texture's
   own image before its store action was known, the pass executes render commands, the attachment
   is resolved, or the device copies or makes no image of the format) does the pass render in
-  place, announced so. Cost:
+  place, announced so. Where such a pass also loads the attachment `DontCare` and the runtime
+  clears it (`UnstoredDontCarePolicy`), a tile no draw touches holds zero or the clear value after
+  the pass, where Metal's holds its earlier texels. Cost:
   the attachment's texels after the pass are each its earlier texel or the one the pass rendered,
-  both Metal's answers, but not always the one Metal's tiler keeps. Within Metal's contract:
+  both Metal's answers, but not always the one Metal's tiler keeps; where the pass loads it
+  `DontCare` and clears it, a tile no draw touches holds zero or the clear value. Within Metal's contract:
   `MTLStoreAction.dontCare` lets the GPU leave arbitrary data ("You need to assume that GPU
   discarded the texture's contents").
 - `metal2vulkan-degrade-dont-care-load-tiles` (precision). `DontCareLoadTiles`: An attachment loaded
   with `DontCare` and stored, in a pass that draws, is cleared before the draws to zero (a color) or
   its clear value (depth, stencil) over the render area and the tiles past it a clear reaches, where
   Metal clears only the tiles a draw's primitives touch and keeps the texels of the others. Cost:
-  the tiles no draw touches hold zero or the clear value where Metal keeps their texels. An
-  attachment loaded with `DontCare` that the pass does not store is not announced: in a pass that
-  draws, the runtime clears it over the render area to zero or its clear value, which is what
-  Metal's draws read of it wherever they read it (an M3 Max, macOS 27.0.1: a framebuffer fetch of
-  a second color and a stencil test, in passes split and whole).
+  the tiles no draw touches hold zero or the clear value where Metal keeps their texels. Not an
+  attachment the pass does not store (`dont-care-unstored-load`).
+- `metal2vulkan-degrade-dont-care-unstored-load` (precision). `DontCareUnstoredLoad`: An attachment
+  loaded with `DontCare` and not stored (not memoryless, not one of separate depth and stencil
+  textures), in a pass whose draws reach a tile, is left to the driver's `DONT_CARE` load under
+  `UnstoredDontCarePolicy::Driver`, the default, on a driver not measured to clear it no slower
+  (`DriverFact::UnstoredClearNoSlower`), where Metal's draws read zero (a color) or the clear value
+  (depth, stencil) wherever they read it. Cleared, and not announced, on a driver with the fact and
+  under `UnstoredDontCarePolicy::Cleared` (`exact_answers()`). Cost: the pass's draws read what the
+  driver's `DONT_CARE` load leaves in the attachment (on lavapipe its earlier texels) where Metal's
+  read zero or the clear value.
 - `metal2vulkan-degrade-fresh-pattern-zeroed` (precision). `FreshPatternZeroed`: On a device that
   presents an Apple silicon Mac's compression (`DeviceProperties::lossless_compression`,
   `MacClass::AppleSilicon`; never on one that presents a Mac with an Intel or AMD GPU, whose new

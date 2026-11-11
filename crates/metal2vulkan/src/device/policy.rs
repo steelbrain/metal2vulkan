@@ -7,14 +7,15 @@ use std::time::Duration;
 /// Policy inputs of `Device::new`. Every field but `heap_compression`, `completion`,
 /// `batch_order`, `render_lowering`, `host_page_textures`, `pipeline_waits`,
 /// `pipeline_creation_wait`, `pipeline_commit_wait`, `wide_lines`, `extended_range_blits`,
-/// `queue_sharing` and `dont_care_colors` can change emitted code, so the profile carries it
-/// (containment as the encoding it selects) and its fingerprint covers it; those twelve are the
-/// runtime's alone (a heap's compressed texture's image, when the host sees a command buffer
+/// `queue_sharing`, `dont_care_colors` and `unstored_dont_care_loads` can change emitted code, so
+/// the profile carries it (containment as the encoding it selects) and its fingerprint covers it;
+/// those thirteen are the runtime's alone (a heap's compressed texture's image, when the host sees a command buffer
 /// complete, how a batch begins after the earlier ones of its queue, where a render encoder's calls
 /// are lowered, what holds a sampled texture over host pages, whether and how long a pipeline the
 /// driver is still making is waited for, which lines draw a wide line, what a blit through a
-/// compressed extended-range texture writes, which `VkQueue` a command queue submits to, and what
-/// a colour attachment stored `DontCare` keeps), and no profile carries them.
+/// compressed extended-range texture writes, which `VkQueue` a command queue submits to, what
+/// a colour attachment stored `DontCare` keeps, and what a pass reads of an attachment it loads
+/// `DontCare` and does not store), and no profile carries them.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -105,6 +106,12 @@ pub struct DevicePolicy {
     /// texture keeps the texels it held before the pass, as Apple's GPU leaves them. The runtime's
     /// choice alone: no emitted code changes.
     pub dont_care_colors: DontCareColorPolicy,
+    /// Whether an attachment a pass loads `DontCare` and does not store, in a pass whose draws
+    /// reach a tile, is cleared over the render area on a driver measured to run that clear no
+    /// slower than its `DONT_CARE` load and left `DONT_CARE` on every other (the default), or
+    /// cleared on every driver, so the pass's draws read Metal's answer wherever they read it.
+    /// The runtime's choice alone: no emitted code changes.
+    pub unstored_dont_care_loads: UnstoredDontCarePolicy,
 }
 
 impl DevicePolicy {
@@ -115,8 +122,9 @@ impl DevicePolicy {
     /// texture over host pages in place where the device's check passed, a pipeline still
     /// being made waited for a bound (4.5 s at a state's creation, and 4.5 s from a commit), a
     /// wide line the device's own wherever it draws the width, command queues sharing
-    /// `VkQueue`s where the device's GPU idles between work of different ones, and a colour stored
-    /// `DontCare` stored as the driver stores it.
+    /// `VkQueue`s where the device's GPU idles between work of different ones, a colour stored
+    /// `DontCare` stored as the driver stores it, and an attachment loaded `DontCare` and not
+    /// stored cleared where its driver clears it no slower.
     pub const UNTRUSTED: DevicePolicy = DevicePolicy {
         pointer_domain: PointerDomain::ResidentTable,
         handle_domain: HandleDomain::Table,
@@ -136,6 +144,7 @@ impl DevicePolicy {
         extended_range_blits: ExtendedRangeBlitPolicy::Kept,
         queue_sharing: QueueSharingPolicy::Adaptive,
         dont_care_colors: DontCareColorPolicy::Driver,
+        unstored_dont_care_loads: UnstoredDontCarePolicy::Driver,
     };
 
     /// This policy with Metal's answer wherever the choices offer it: a heap's texture whose bytes
@@ -157,7 +166,9 @@ impl DevicePolicy {
     /// texels ([`ExtendedRangeBlitPolicy::Canonical`]), every command queue on the `VkQueue`
     /// it took at its creation ([`QueueSharingPolicy::PerQueue`]), and every colour attachment of a
     /// texture's own image stored `DontCare` keeping its earlier texels
-    /// ([`DontCareColorPolicy::Kept`]). Every other field is kept.
+    /// ([`DontCareColorPolicy::Kept`]), and every attachment loaded `DontCare` and not stored
+    /// cleared in a pass whose draws reach a tile ([`UnstoredDontCarePolicy::Cleared`]). Every
+    /// other field is kept.
     pub const fn exact_answers(self) -> DevicePolicy {
         DevicePolicy {
             heap_compression: HeapCompressionPolicy::Uncompressed,
@@ -172,6 +183,7 @@ impl DevicePolicy {
             extended_range_blits: ExtendedRangeBlitPolicy::Canonical,
             queue_sharing: QueueSharingPolicy::PerQueue,
             dont_care_colors: DontCareColorPolicy::Kept,
+            unstored_dont_care_loads: UnstoredDontCarePolicy::Cleared,
             ..self
         }
     }
@@ -539,4 +551,29 @@ pub enum DontCareColorPolicy {
     /// 256x256); a `Clear` or `DontCare` load about none. Where a format makes no such image, the
     /// pass stores as under `Driver`, announced as there.
     Kept,
+}
+
+/// What a render pass's draws read of an attachment (not memoryless, not one of separate depth and
+/// stencil textures) the pass loads `MTLLoadActionDontCare` and does not store
+/// (`MTLStoreActionDontCare`), in a pass whose draws reach a tile. Metal's documentation leaves it
+/// open; what Apple's GPU reads is measured: zero for a colour and the pass's clear value for
+/// depth and stencil, wherever a draw reads it (an Apple M3 Max under macOS 27.0.1: a framebuffer
+/// fetch and a stencil test, in passes split and whole). Vulkan's `DONT_CARE` load leaves the
+/// contents undefined. The runtime's choice alone: no emitted code changes.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum UnstoredDontCarePolicy {
+    /// Cleared on a driver measured to run the clear no slower than its `DONT_CARE` load
+    /// (`DriverFact::UnstoredClearNoSlower`), Metal's answer there at no cost; `DONT_CARE`
+    /// elsewhere (the default), whose draws read what the driver leaves (on lavapipe, the
+    /// attachment's earlier texels), announced `dont-care-unstored-load` at the first such pass.
+    #[default]
+    Driver,
+    /// Cleared on every driver by the pass's load operation over the render area (or before the
+    /// pass, where its first render pass instance leaves the attachment out), to zero for a colour
+    /// and to the attachment's clear value for depth and stencil: Metal's answer wherever a draw
+    /// reads it. On lavapipe a 3648x2038 pass of an `RG16Float` colour and a
+    /// `Depth32Float_Stencil8` so loaded costs about 3.3 ms more of its CPU's time.
+    Cleared,
 }

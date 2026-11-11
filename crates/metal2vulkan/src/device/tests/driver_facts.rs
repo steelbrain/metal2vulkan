@@ -396,6 +396,7 @@ const OPTIMIZED: DriverFact = DriverFact::DepthStencilImagesStayGpuOptimized;
 const DEPTH16: DriverFact = DriverFact::FragmentDepthKeepsDepth16Codes;
 const FETCH: DriverFact = DriverFact::SampledFetchRecoversCodes;
 const SPLIT: DriverFact = DriverFact::InterlockedPassSplitNoSlower;
+const UNSTORED_CLEAR: DriverFact = DriverFact::UnstoredClearNoSlower;
 const RESTART: DriverFact = DriverFact::DynamicRestartWarns;
 const DONT_CARE: DriverFact = DriverFact::DontCareStoreIsMetals;
 const STAMPS: DriverFact = DriverFact::TimestampsWaitForEveryQueue;
@@ -455,6 +456,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 ZERO,
                 FETCH,
                 SPLIT,
+                UNSTORED_CLEAR,
                 COLOR_BLOCKS,
                 BC6H,
                 BC7,
@@ -468,6 +470,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 ZERO,
                 FETCH,
                 SPLIT,
+                UNSTORED_CLEAR,
                 COLOR_BLOCKS,
                 BC6H,
                 BC7,
@@ -538,6 +541,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 DEPTH16,
                 FETCH,
                 SPLIT,
+                UNSTORED_CLEAR,
                 RESTART,
                 BLENDLESS,
                 DONT_CARE,

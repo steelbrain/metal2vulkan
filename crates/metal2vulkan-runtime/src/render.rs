@@ -4748,8 +4748,13 @@ impl RenderLowering {
         // no tile, else cleared to zero or its clear value, Metal's answer in each tile a draw
         // reaches (`clear_reach.rs`), and only in those `tiles` bounds. One the pass does not
         // store is cleared over the render area where the draws reach a tile, Metal's answer
-        // wherever a fragment reads it.
-        let dont_care = clear_reach::dont_care_loads(&mut layout, reach);
+        // wherever a fragment reads it, under the policy or on a driver that clears it no slower;
+        // elsewhere it stays `DontCare`, announced.
+        let unstored = clear_reach::UnstoredLoads::of(
+            device.compile_device().policy().unstored_dont_care_loads,
+            &device.properties().driver_facts,
+        );
+        let dont_care = clear_reach::dont_care_loads(&mut layout, reach, unstored);
         // The tiles the draws reach, which only those loads' clears read: none made for a pass
         // without one.
         let tiles = match reach {
@@ -4762,6 +4767,17 @@ impl RenderLowering {
                     format!("{named} of a render pass, loaded with `DontCare` and stored"),
                     "Metal clears only the tiles a draw's primitives touch, which depend on where \
                      the GPU places the vertices"
+                        .to_owned(),
+                )
+            });
+        }
+        if let Some(named) = dont_care.unstored.clone() {
+            device.degrade(Degradation::DontCareUnstoredLoad, || {
+                (
+                    format!("{named} of a render pass, loaded with `DontCare` and not stored"),
+                    "Metal's draws read zero (a color) or the clear value (depth, stencil) of it, \
+                     and this driver is not measured to clear it no slower than its `DONT_CARE` \
+                     load"
                         .to_owned(),
                 )
             });

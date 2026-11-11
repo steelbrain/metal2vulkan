@@ -240,6 +240,7 @@ surface! {
         enum ExtendedRangeBlitPolicy N;
         enum QueueSharingPolicy N;
         enum DontCareColorPolicy N;
+        enum UnstoredDontCarePolicy N;
         struct DeviceProfile O;
         struct SpirvValidation N;
         struct EnabledCaps N;

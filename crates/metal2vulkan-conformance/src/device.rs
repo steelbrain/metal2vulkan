@@ -268,8 +268,8 @@ pub enum Policy {
     /// speed-for-accuracy switches, which are all it selects — `heap_compression`
     /// `Uncompressed`, `completion` `Exact`, `batch_order` `Exact`, `render_lowering` `AtCall`,
     /// `host_page_textures` `Shadow`, `half_chains` `EachOperation`, `pipeline_waits` `Exact`,
-    /// `wide_lines` `Exact`, `extended_range_blits` `Canonical`, `queue_sharing` `PerQueue` and
-    /// `dont_care_colors` `Kept`.
+    /// `wide_lines` `Exact`, `extended_range_blits` `Canonical`, `queue_sharing` `PerQueue`,
+    /// `dont_care_colors` `Kept` and `unstored_dont_care_loads` `Cleared`.
     Exact,
     /// The runtime's own defaults: the fast form of every choice, which is what a consumer runs.
     Default,

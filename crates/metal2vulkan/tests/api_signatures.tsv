@@ -1453,6 +1453,7 @@ enum	metal2vulkan::device::SpirvExtension	#[derive(Clone, Copy, Debug, PartialEq
 enum	metal2vulkan::device::StageCreateFlag	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum StageCreateFlag
 enum	metal2vulkan::device::SubgroupOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SubgroupOp
 enum	metal2vulkan::device::Tier	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Tier
+enum	metal2vulkan::device::UnstoredDontCarePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum UnstoredDontCarePolicy
 enum	metal2vulkan::device::VkExtension	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkExtension
 enum	metal2vulkan::device::VkFeature	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkFeature
 enum	metal2vulkan::device::VkLimit	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkLimit
@@ -4125,6 +4126,7 @@ field	metal2vulkan::device::DevicePolicy.pipeline_waits	pub pipeline_waits: Pipe
 field	metal2vulkan::device::DevicePolicy.pointer_domain	pub pointer_domain: PointerDomain
 field	metal2vulkan::device::DevicePolicy.queue_sharing	pub queue_sharing: QueueSharingPolicy
 field	metal2vulkan::device::DevicePolicy.render_lowering	pub render_lowering: RenderLoweringPolicy
+field	metal2vulkan::device::DevicePolicy.unstored_dont_care_loads	pub unstored_dont_care_loads: UnstoredDontCarePolicy
 field	metal2vulkan::device::DevicePolicy.wide_lines	pub wide_lines: WideLinePolicy
 field	metal2vulkan::device::DevicePolicy.ycbcr_in_place_reads	pub ycbcr_in_place_reads: YCbCrInPlacePolicy
 field	metal2vulkan::device::DriverDiagnostic.id	pub id: i32
@@ -5458,6 +5460,7 @@ macro-member	metal2vulkan-runtime::Degradation::DispatchDroppedStillMaking	Dispa
 macro-member	metal2vulkan-runtime::Degradation::DontCareLoadTiles	DontCareLoadTiles = "dont-care-load-tiles", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DontCareStandIn	DontCareStandIn = "dont-care-stand-in", Performance,
 macro-member	metal2vulkan-runtime::Degradation::DontCareStore	DontCareStore = "dont-care-store", Precision,
+macro-member	metal2vulkan-runtime::Degradation::DontCareUnstoredLoad	DontCareUnstoredLoad = "dont-care-unstored-load", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DrawDroppedStillMaking	DrawDroppedStillMaking = "draw-dropped-still-making", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DrawDroppedUnmade	DrawDroppedUnmade = "draw-dropped-unmade", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DrawnDepthCopy	DrawnDepthCopy = "drawn-depth-copy", Precision,
@@ -11864,6 +11867,7 @@ variant	metal2vulkan-runtime::DriverFact::SubpixelSnapIsMetals	SubpixelSnapIsMet
 variant	metal2vulkan-runtime::DriverFact::TileStoreIsMetals	TileStoreIsMetals
 variant	metal2vulkan-runtime::DriverFact::TimestampPoolsAreCounterSampleBuffers	TimestampPoolsAreCounterSampleBuffers
 variant	metal2vulkan-runtime::DriverFact::TimestampsWaitForEveryQueue	TimestampsWaitForEveryQueue
+variant	metal2vulkan-runtime::DriverFact::UnstoredClearNoSlower	UnstoredClearNoSlower
 variant	metal2vulkan-runtime::DriverSetting::MoltenVkArgumentBuffersOff	MoltenVkArgumentBuffersOff
 variant	metal2vulkan-runtime::DynamicLibraryError::InvalidFile	InvalidFile { path: PathBuf }
 variant	metal2vulkan-runtime::DynamicLibraryError::Read	Read { path: PathBuf, kind: std::io::ErrorKind, message: String }
@@ -13163,6 +13167,7 @@ variant	metal2vulkan::device::DriverFact::SubpixelSnapIsMetals	SubpixelSnapIsMet
 variant	metal2vulkan::device::DriverFact::TileStoreIsMetals	TileStoreIsMetals
 variant	metal2vulkan::device::DriverFact::TimestampPoolsAreCounterSampleBuffers	TimestampPoolsAreCounterSampleBuffers
 variant	metal2vulkan::device::DriverFact::TimestampsWaitForEveryQueue	TimestampsWaitForEveryQueue
+variant	metal2vulkan::device::DriverFact::UnstoredClearNoSlower	UnstoredClearNoSlower
 variant	metal2vulkan::device::DriverWorkaround::BothBarycentricFormsRejected	BothBarycentricFormsRejected
 variant	metal2vulkan::device::DriverWorkaround::BufferAtomicsUncontained	BufferAtomicsUncontained
 variant	metal2vulkan::device::DriverWorkaround::ClippedCoverageNotMetals	ClippedCoverageNotMetals
@@ -13289,6 +13294,8 @@ variant	metal2vulkan::device::Tier::Emulated	Emulated
 variant	metal2vulkan::device::Tier::Linear	Linear
 variant	metal2vulkan::device::Tier::NoSubgroup	NoSubgroup
 variant	metal2vulkan::device::Tier::PartialFragment	PartialFragment
+variant	metal2vulkan::device::UnstoredDontCarePolicy::Cleared	Cleared
+variant	metal2vulkan::device::UnstoredDontCarePolicy::Driver	Driver
 variant	metal2vulkan::device::VkExtension::Ext4444Formats	Ext4444Formats
 variant	metal2vulkan::device::VkExtension::ExtAttachmentFeedbackLoopLayout	ExtAttachmentFeedbackLoopLayout
 variant	metal2vulkan::device::VkExtension::ExtBorderColorSwizzle	ExtBorderColorSwizzle

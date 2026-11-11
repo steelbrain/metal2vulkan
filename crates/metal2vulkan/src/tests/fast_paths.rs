@@ -8,7 +8,8 @@
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DevicePolicy, DontCareColorPolicy, ExtendedRangeBlitPolicy,
     HalfChainPolicy, HeapCompressionPolicy, HostPageTexturePolicy, PipelineWaitPolicy,
-    QueueSharingPolicy, RenderLoweringPolicy, WideLinePolicy, YCbCrInPlacePolicy,
+    QueueSharingPolicy, RenderLoweringPolicy, UnstoredDontCarePolicy, WideLinePolicy,
+    YCbCrInPlacePolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -64,7 +65,8 @@ fn choices() -> Vec<Choice> {
         // how long a pipeline being made is waited for (the bounds' values:
         // `the_ledger_states_the_pipeline_wait_bounds`), which lines draw a wide line, what a
         // blit through a compressed extended-range texture writes, which `VkQueue` a command
-        // queue submits to, and what a colour attachment stored `DontCare` keeps.
+        // queue submits to, what a colour attachment stored `DontCare` keeps, and what a pass reads
+        // of an attachment it loads `DontCare` and does not store.
         heap_compression: _,
         completion: _,
         batch_order: _,
@@ -77,6 +79,7 @@ fn choices() -> Vec<Choice> {
         extended_range_blits: _,
         queue_sharing: _,
         dont_care_colors: _,
+        unstored_dont_care_loads: _,
         // The translator's: how a `half` chain rounds without `shaderFloat16`, and how planes of a
         // two-plane YCbCr texture read in place are sampled.
         half_chains: _,
@@ -95,6 +98,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.extended_range_blits: ExtendedRangeBlitPolicy { Kept, Canonical }),
         choice!(p.queue_sharing: QueueSharingPolicy { Adaptive, PerQueue }),
         choice!(p.dont_care_colors: DontCareColorPolicy { Driver, Kept }),
+        choice!(p.unstored_dont_care_loads: UnstoredDontCarePolicy { Driver, Cleared }),
     ]
 }
 
@@ -642,6 +646,41 @@ fn exact_answers_keep_a_dont_care_colour_s_earlier_texels() {
     assert_eq!(
         DevicePolicy::UNTRUSTED.exact_answers().dont_care_colors,
         DontCareColorPolicy::Kept
+    );
+}
+
+/// The runtime's choice of what a pass reads of an attachment it loads `DontCare` and does not
+/// store (`unstored_dont_care_loads`) moves no committed profile's fingerprint: no profile carries
+/// it, so no translation follows it.
+#[test]
+fn the_runtime_s_unstored_dont_care_loads_choice_keys_no_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let driver = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let cleared = committed_profiles_with(DevicePolicy {
+        unstored_dont_care_loads: UnstoredDontCarePolicy::Cleared,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(driver.len(), cleared.len());
+    for ((stem, d), (other, c)) in driver.iter().zip(&cleared) {
+        assert_eq!(stem, other);
+        assert_eq!(d.fingerprint(), c.fingerprint(), "{stem}");
+    }
+}
+
+/// `DevicePolicy::exact_answers()` clears every attachment loaded `DontCare` and not stored, and
+/// the default clears one where its driver clears it no slower.
+#[test]
+fn exact_answers_clear_every_unstored_dont_care_load() {
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.unstored_dont_care_loads,
+        UnstoredDontCarePolicy::Driver
+    );
+    assert_eq!(
+        DevicePolicy::UNTRUSTED
+            .exact_answers()
+            .unstored_dont_care_loads,
+        UnstoredDontCarePolicy::Cleared
     );
 }
 

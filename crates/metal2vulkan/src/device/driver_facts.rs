@@ -1065,6 +1065,15 @@ pub enum DriverFact {
     /// split, where the interlock's attachments alone split a pass: the device's faster form.
     /// Elsewhere such a split is announced.
     InterlockedPassSplitNoSlower,
+    /// A cost fact (the module docs): a render pass ran no slower with a `CLEAR` load of an
+    /// attachment it does not store (a colour and a depth/stencil, stored `DONT_CARE`) than with
+    /// a `DONT_CARE` load. Metal's draws read zero (a colour) or the clear value (depth, stencil)
+    /// of an attachment the pass loads `DontCare` and does not store, wherever they read it, where
+    /// Vulkan's `DONT_CARE` leaves the contents undefined. On a driver with it the runtime clears
+    /// such an attachment under `UnstoredDontCarePolicy::Driver`, the default, Metal's answer at
+    /// no cost; elsewhere it leaves it `DONT_CARE` and announces `dont-care-unstored-load`
+    /// (`clear_reach.rs`).
+    UnstoredClearNoSlower,
     /// A driver diagnostic (the module docs): the driver reports a warning as it creates a
     /// graphics pipeline that makes the primitive restart dynamic with its topology dynamic or a
     /// strip or fan, whatever restart the draws set later: a `VALIDATION` message named
@@ -1877,6 +1886,23 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// Not listed: lavapipe, which fetches through input attachments and so never splits for the
 /// interlock, and every GPU and release not measured, which split such a pass and announce it.
 ///
+/// `UnstoredClearNoSlower`, a cost fact: each driver ran the same frame in both forms, a probe
+/// built with the runtime still handing such a `DontCare` load to the driver as `DONT_CARE`
+/// (2026-11-11; debug builds, which change no GPU time, without the validation layer; the GPU's
+/// own span per pass, medians of 15 frames after an untimed one, two rounds, `DONT_CARE` against
+/// `CLEAR`): eight passes a frame over 3648x2038, each a `BGRA8Unorm` colour loaded and stored and
+/// an `RG16Float` colour and a `Depth32Float_Stencil8` depth and stencil loaded by the form and
+/// stored `DONT_CARE`, one draw over the whole target writing all three (depth `Always`, stencil
+/// replaced). One row per GPU, as measured:
+/// - RADV, Mesa 26.2.6, on the Radeon 780M: 1147 and 988 against 861 and 865 us.
+/// - MoltenVK 1.4.2 on the M3 Max under macOS 27.0.1 ([`APPLE9`]'s identity): 224 and 217 against
+///   218 and 218 us, the forms apart by less than one form's two rounds.
+///
+/// Measured not to have it, so not listed: lavapipe (Mesa 26.2.6, llvmpipe on LLVM 23.1.4, x86_64),
+/// 7280 and 7259 against 10480 and 10744 us, its clear a write of every texel; ANV, Mesa 26.2.6, on
+/// the Iris Xe (RPL-P), 1907 and 1151 against 1936 and 1936 us. Every GPU and release not
+/// measured leaves such a load `DONT_CARE`.
+///
 /// `DontCareStoreIsMetals`, read in MoltenVK 1.4.1's source
 /// (`MVKAttachmentDescription::getMTLStoreAction`; the restarts of `MVKCommandEncoder`,
 /// `MVKCmdPipelineBarrier` and the draws' compute stages) against Metal's answer on the GPU, and
@@ -2224,6 +2250,15 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
     ),
+    mesa_on(
+        DriverFact::UnstoredClearNoSlower,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RADEON_780M),
+    ),
+    Measured {
+        device: Some(APPLE9),
+        ..moltenvk_on_apple(DriverFact::UnstoredClearNoSlower)
+    },
     Measured {
         fact: DriverFact::DynamicRestartWarns,
         driver: DriverId::MOLTENVK,

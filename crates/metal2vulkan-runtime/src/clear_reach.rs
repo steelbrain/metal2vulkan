@@ -51,12 +51,17 @@
 //!   pass, and loads: every other tile keeps its texels, Metal's answer (a draw writes no pixel
 //!   outside them), and a pass whose draws reach no pixel loads, as one whose draws draw nothing.
 //! - A `DontCare`-loaded attachment the pass does not store (but separate depth and stencil
-//!   textures, and memoryless ones) clears to zero (a color) or its clear value (depth, stencil)
-//!   in a pass whose draws reach a tile, over the render area: by the load operation of the pass's
-//!   first instance, or before the pass where that instance leaves it out (as below). Metal's
-//!   answer wherever a fragment reads it, so no notice: no fragment reads a tile no draw touches.
-//!   What the pass leaves in it is a `DontCare` store's (`kept_bytes.rs`). In a pass whose draws
-//!   reach no tile it stays `DontCare`.
+//!   textures, and memoryless ones), in a pass whose draws reach a tile, clears to zero (a color)
+//!   or its clear value (depth, stencil) over the render area under
+//!   `UnstoredDontCarePolicy::Cleared`, and under the default `Driver` on a driver measured to run
+//!   that clear no slower than its `DONT_CARE` load (`DriverFact::UnstoredClearNoSlower`)
+//!   ([`UnstoredLoads`]): by the load operation of the pass's first instance, or before the pass
+//!   where that instance leaves it out (as below). Metal's answer wherever a fragment reads it, so
+//!   no notice: no fragment reads a tile no draw touches. What the pass leaves in it is a
+//!   `DontCare` store's (`kept_bytes.rs`, `dont-care-store`). On every other driver under the
+//!   default it stays `DontCare`, the driver's faster form, announced
+//!   (`Degradation::DontCareUnstoredLoad`). In a pass whose draws reach no tile it stays
+//!   `DontCare`.
 //! - A `DontCare`-loaded memoryless color attachment clears to zero in a pass whose draws reach a
 //!   tile: Metal's answer in every tile a fragment reads it (an Apple M4), and it is
 //!   never stored, so the answer is exact.
@@ -99,9 +104,10 @@ use super::tracker::{Barrier, Use};
 use super::values::StorageMode;
 use super::Device;
 use ash::vk;
-use metal2vulkan::device::DriverFact;
+use metal2vulkan::device::{DriverFact, UnstoredDontCarePolicy};
 use metal2vulkan::metal::format::ClearRoute;
 use metal2vulkan::metal::PixelFormat;
+use std::collections::BTreeSet;
 
 /// The side, in pixels, of the tiles a `Clear` load's clear reaches past the render area in, on
 /// both axes: Metal's on the M3 Max and an M4, the same at every format, sample count and tile
@@ -278,11 +284,16 @@ pub(super) fn dont_care_clear(pf: PixelFormat) -> vk::ClearColorValue {
 /// `reach`: `Load` where it reaches no tile, else `Clear`, to the format's zero for a color
 /// attachment ([`dont_care_clear`]) and to its clear value for depth and stencil. One of an
 /// attachment the pass does not store takes `Clear` wherever the pass reaches a tile, over its
-/// whole render area, by the load operation (the module docs): no fragment reads past the tiles
-/// its draws touch, and no texel is kept. Which stored attachments took it, and whether the pass
-/// took the near-equivalent (its draws reach the tiles their primitives touch): the attachment it
-/// names, for the notice.
-pub(super) fn dont_care_loads(layout: &mut PassLayout, reach: PassReach) -> DontCareLoads {
+/// whole render area, by the load operation, where `unstored` clears it (the module docs): no
+/// fragment reads past the tiles its draws touch, and no texel is kept; elsewhere it stays
+/// `DontCare`, and is named for its notice. Which stored attachments took it, and whether the
+/// pass took the near-equivalent (its draws reach the tiles their primitives touch): the
+/// attachment it names, for the notice.
+pub(super) fn dont_care_loads(
+    layout: &mut PassLayout,
+    reach: PassReach,
+    unstored: UnstoredLoads,
+) -> DontCareLoads {
     let load = match reach {
         PassReach::Nothing => LoadAction::Load,
         PassReach::Every | PassReach::Draws => LoadAction::Clear,
@@ -290,6 +301,7 @@ pub(super) fn dont_care_loads(layout: &mut PassLayout, reach: PassReach) -> Dont
     let drew = reach == PassReach::Draws;
     let mut loads = DontCareLoads {
         named: None,
+        unstored: None,
         colors: Vec::new(),
         depth: false,
         stencil: false,
@@ -313,9 +325,16 @@ pub(super) fn dont_care_loads(layout: &mut PassLayout, reach: PassReach) -> Dont
             continue;
         }
         if !stores(color.store) {
-            if reach != PassReach::Nothing {
-                color.load = LoadAction::Clear;
-                color.clear = dont_care_clear(color.target.texture.pixel_format());
+            match (reach, unstored) {
+                (PassReach::Nothing, _) => {}
+                (_, UnstoredLoads::Cleared) => {
+                    color.load = LoadAction::Clear;
+                    color.clear = dont_care_clear(color.target.texture.pixel_format());
+                }
+                (_, UnstoredLoads::DontCare) => {
+                    let name = || format!("color attachment {index}");
+                    loads.unstored.get_or_insert_with(name);
+                }
             }
             continue;
         }
@@ -344,8 +363,13 @@ pub(super) fn dont_care_loads(layout: &mut PassLayout, reach: PassReach) -> Dont
                 continue;
             }
             if !stores(aspect.store) {
-                if reach != PassReach::Nothing {
-                    aspect.load = LoadAction::Clear;
+                match (reach, unstored) {
+                    (PassReach::Nothing, _) => {}
+                    (_, UnstoredLoads::Cleared) => aspect.load = LoadAction::Clear,
+                    (_, UnstoredLoads::DontCare) => {
+                        let name = || format!("the {name} attachment");
+                        loads.unstored.get_or_insert_with(name);
+                    }
                 }
                 continue;
             }
@@ -361,11 +385,38 @@ pub(super) fn dont_care_loads(layout: &mut PassLayout, reach: PassReach) -> Dont
     loads
 }
 
+/// How [`dont_care_loads`] answers a `DontCare` load of an attachment the pass does not store, in
+/// a pass whose draws reach a tile: by the device's policy and its driver's measured cost
+/// ([`UnstoredLoads::of`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum UnstoredLoads {
+    /// Cleared over the render area, Metal's answer wherever a draw reads it.
+    Cleared,
+    /// Left to the driver's `DONT_CARE` load, the device's faster form, announced.
+    DontCare,
+}
+
+impl UnstoredLoads {
+    /// Under `UnstoredDontCarePolicy::Cleared`, or on a driver measured to clear such an
+    /// attachment no slower than its `DONT_CARE` load (`DriverFact::UnstoredClearNoSlower`),
+    /// cleared; else left `DontCare`.
+    pub(super) fn of(policy: UnstoredDontCarePolicy, facts: &BTreeSet<DriverFact>) -> Self {
+        match policy == UnstoredDontCarePolicy::Cleared
+            || facts.contains(&DriverFact::UnstoredClearNoSlower)
+        {
+            true => UnstoredLoads::Cleared,
+            false => UnstoredLoads::DontCare,
+        }
+    }
+}
+
 /// What [`dont_care_loads`] did: the attachment it names for the notice where the pass took the
-/// near-equivalent, and the color attachments (by index) and depth and stencil aspects whose
-/// `DontCare` load it gave an answer.
+/// near-equivalent, the attachment it names where it left one the pass does not store `DontCare`,
+/// and the color attachments (by index) and depth and stencil aspects whose `DontCare` load it
+/// gave an answer.
 pub(super) struct DontCareLoads {
     pub(super) named: Option<String>,
+    pub(super) unstored: Option<String>,
     colors: Vec<usize>,
     depth: bool,
     stencil: bool,

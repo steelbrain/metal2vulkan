@@ -6,7 +6,16 @@
 //! same MSL, under the default policy's and `exact_answers()`'s descriptors alike, at both sizes):
 //! such an attachment reads zero (a color) or the pass's clear value (a stencil) wherever a draw
 //! of the pass reads it, never its earlier texels and never zero for the stencil. [`expected`]
-//! is that answer, pixel by pixel.
+//! is that answer, pixel by pixel ([`Answer::Metals`]).
+//!
+//! **The runtime's answer** depends on its `UnstoredDontCarePolicy`. Under `exact_answers()`
+//! (`Cleared`) it clears such an attachment: Metal's answer on every device, and no
+//! `dont-care-unstored-load`. Under the default (`Driver`) it clears it on a driver measured to
+//! clear it no slower (`DriverFact::UnstoredClearNoSlower`), Metal's answer there with no notice,
+//! and elsewhere leaves it to the driver's `DONT_CARE` load and announces `dont-care-unstored-load`:
+//! on lavapipe the draws then read the attachment's earlier texels, the poison pass's
+//! ([`Answer::Earlier`]); on any other driver without the fact what they read is printed, not
+//! checked, as Vulkan leaves it undefined.
 //!
 //! Each run poisons the targets first, with a pass of its own that clears and stores them all (a
 //! first color of [`POISON`], a second `RG16Float` color of (0.75, 0.875), a `Stencil8` of 0xAB),
@@ -29,12 +38,13 @@ use super::split_fetch_order::{completed, encode_readback, texture};
 use super::{at_plan, read_buffer, validated_device_with, Messages, ScratchCache};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::device::DevicePolicy;
+use metal2vulkan::device::{DevicePolicy, DriverFact};
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{
     ColorWriteMask, CompareFunction, PixelFormat, PrimitiveType, StencilOperation, TextureUsage,
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use metal2vulkan::vk::DriverId;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     ClearColor, CommandBuffer, Degradation, DepthStencilState, Device, LoadAction, PipelineOptions,
@@ -88,19 +98,31 @@ const ARMS: [Arm; 7] = [
     Arm::PlainCleared,
 ];
 
-/// Metal's class at pixel (`x`, `y`) after `arm` (the module docs): inside [`MARK`], `dcs_mark`'s
-/// color, or what `dcs_read` reads of `dcs_mark`'s second color; outside it, a read of a zero
-/// second color, or the stencil's clear value failing an `Equal 0` or `Equal` the poison test
-/// and passing an `Equal` the clear value one.
-fn expected(arm: Arm, (x, y): (u64, u64)) -> char {
+/// What the arms' draws read of the attachments loaded `DontCare` (the module docs).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Answer {
+    /// Metal's: zero for the second color, the pass's clear value for the stencil.
+    Metals,
+    /// The attachments' earlier texels, the poison pass's: lavapipe's `DONT_CARE` load.
+    Earlier,
+}
+
+/// The class at pixel (`x`, `y`) after `arm` where the draws read `answer`: inside [`MARK`],
+/// `dcs_mark`'s color, or what `dcs_read` reads of `dcs_mark`'s second color; outside it, a read of
+/// the second color (zero, or the poison's), or the stencil (the clear value, or the poison's)
+/// failing an `Equal 0` test and passing an `Equal` test of its own value.
+fn expected(arm: Arm, answer: Answer, (x, y): (u64, u64)) -> char {
     let marked = (x as f32) < MARK[2] && (y as f32) < MARK[3];
-    match (arm, marked) {
-        (Arm::SplitRead, true) => 'K',
-        (Arm::SplitRead | Arm::FetchRead, _) => 'Z',
-        (Arm::FetchStencil, _) => 'P',
-        (Arm::PlainCleared, false) => 'F',
-        (_, true) => 'M',
-        (_, false) => 'P',
+    match (arm, marked, answer) {
+        (Arm::SplitRead, true, _) => 'K',
+        (Arm::SplitRead | Arm::FetchRead, _, Answer::Metals) => 'Z',
+        (Arm::SplitRead | Arm::FetchRead, _, Answer::Earlier) => 'S',
+        (Arm::FetchStencil, _, _) => 'P',
+        (Arm::PlainCleared, false, Answer::Metals) | (Arm::PlainKept, false, Answer::Earlier) => {
+            'F'
+        }
+        (_, true, _) => 'M',
+        (_, false, _) => 'P',
     }
 }
 
@@ -267,10 +289,11 @@ fn class(bgra: &[u8]) -> char {
     }
 }
 
-/// Each pixel of `bytes` of a target of `sides` whose class is not [`expected`]'s, counted by
-/// (expected, found), and a map of 16x16 cells, each the class of its first such pixel or `.`.
+/// Each pixel of `bytes` of a target of `sides` whose class is not [`expected`]'s under `answer`,
+/// counted by (expected, found), and a map of 16x16 cells, each the class of its first such pixel
+/// or `.`.
 fn mismatches(
-    arm: Arm,
+    (arm, answer): (Arm, Answer),
     bytes: &[u8],
     (width, height): (u64, u64),
 ) -> (BTreeMap<(char, char), usize>, Vec<String>) {
@@ -278,7 +301,7 @@ fn mismatches(
     let mut map = vec![vec!['.'; width.div_ceil(16) as usize]; height.div_ceil(16) as usize];
     for (at, bgra) in bytes.chunks(4).enumerate() {
         let (x, y) = (at as u64 % width, at as u64 / width);
-        let (want, found) = (expected(arm, (x, y)), class(bgra));
+        let (want, found) = (expected(arm, answer, (x, y)), class(bgra));
         if want != found {
             *counts.entry((want, found)).or_default() += 1;
             let cell = &mut map[(y / 16) as usize][(x / 16) as usize];
@@ -291,10 +314,10 @@ fn mismatches(
 }
 
 /// Each arm's first color after its pass, under the default policy and `exact_answers()`, at a
-/// 224x128 and a 128x128 target, twice each: Metal's answer, pixel by pixel (the module docs),
-/// and no `dont-care-load-tiles`.
+/// 224x128 and a 128x128 target, twice each: the setting's answer on the device, pixel by pixel,
+/// and its notice (the module docs); never `dont-care-load-tiles`.
 #[test]
-fn dont_care_loads_the_pass_does_not_store_read_metals_answer() {
+fn dont_care_loads_the_pass_does_not_store_read_the_policy_s_answer() {
     let air = llvm_assemble(&engine_dir().join("dcs_dont_care_split.ll")).unwrap();
     let mut failures = Vec::new();
     for (policy, exact) in [("default", false), ("exact", true)] {
@@ -308,6 +331,18 @@ fn dont_care_loads_the_pass_does_not_store_read_metals_answer() {
             };
         })
         .unwrap();
+        // Whether the runtime clears the attachments (the module docs), and what the draws read
+        // where it does not: lavapipe's earlier texels, any other driver's unchecked.
+        let cleared = exact
+            || device
+                .properties()
+                .driver_facts
+                .contains(&DriverFact::UnstoredClearNoSlower);
+        let answer = match (cleared, device.properties().description.driver_id) {
+            (true, _) => Some(Answer::Metals),
+            (false, Some(DriverId::MESA_LLVMPIPE)) => Some(Answer::Earlier),
+            (false, _) => None,
+        };
         let draws = Draws::new(&device, &air);
         let queue = device.new_command_queue().unwrap();
         for sides in [(224u64, 128u64), (128, 128)] {
@@ -327,35 +362,47 @@ fn dont_care_loads_the_pass_does_not_store_read_metals_answer() {
                     command_buffer.commit().unwrap();
                     completed(&command_buffer);
                     let bytes = read_buffer(&out, 0, sides.0 * sides.1 * 4).unwrap();
-                    let (wrong, map) = mismatches(arm, &bytes, sides);
+                    let (wrong, map) =
+                        mismatches((arm, answer.unwrap_or(Answer::Metals)), &bytes, sides);
                     let case = format!("{arm:?} {policy} {}x{} run {run}", sides.0, sides.1);
                     eprintln!(
                         "DONT-CARE-UNSTORED on {}: {case}: render pass instances {}, splits {}; \
-                         pixels not Metal's (expected, found) {wrong:?}",
+                         answer {answer:?}; pixels not Metal's or not that answer (expected, \
+                         found) {wrong:?}",
                         device.name(),
                         counts.render_passes_begun_instances
                             - counted.render_passes_begun_instances,
                         counts.instance_splits_shape - counted.instance_splits_shape,
                     );
-                    if !wrong.is_empty() {
+                    if answer.is_some() && !wrong.is_empty() {
                         failures.push(format!("{case}: {wrong:?}, cells {map:?}"));
                     }
                 }
             }
         }
-        let tiles = messages.take_notices().iter().any(|m| {
-            m.degradation
-                .as_ref()
-                .is_some_and(|d| d.degradation == Degradation::DontCareLoadTiles)
-        });
+        let notices = messages.take_notices();
+        let announced = |kind: Degradation| {
+            notices.iter().any(|m| {
+                m.degradation
+                    .as_ref()
+                    .is_some_and(|d| d.degradation == kind)
+            })
+        };
         assert!(
-            !tiles,
+            !announced(Degradation::DontCareLoadTiles),
             "{policy}: `dont-care-load-tiles` named an attachment the pass does not store"
+        );
+        assert_eq!(
+            announced(Degradation::DontCareUnstoredLoad),
+            !cleared,
+            "{policy} on {}: `dont-care-unstored-load` announced where the runtime cleared, or \
+             not where it left the load to the driver",
+            device.name()
         );
     }
     assert!(
         failures.is_empty(),
-        "pixels not Metal's answer:\n{}",
+        "pixels not the setting's answer:\n{}",
         failures.join("\n")
     );
 }
