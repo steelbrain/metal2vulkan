@@ -2,25 +2,30 @@
 //! and `logic_operation`), on the device the cfg selects, under the validation layer, over the
 //! owned fixture `a8r_targets` (a fullscreen triangle and a fragment writing buffer 0's color).
 //!
-//! Metal's rule, measured with our own probes `spi` and `spi2` on an Apple M3 Max under macOS
-//! 27.0.1 (4 x 4 targets cleared to one color, a fullscreen triangle of another, every operation,
-//! blended by one and one and not): the low four bits of `logicOperation` choose the operation in
-//! Direct3D's order, applied to the fragment's code and the stored one of each normalized and
-//! integer channel (`RGBA8Unorm`, `RGBA8Snorm`, `BGRA8Unorm`, `RGB10A2Unorm`, `R16Unorm`,
-//! `RGBA8Uint`, `RGBA8Sint`, `R32Uint`), blending ignored; a `RGBA16Float` attachment ignores the
-//! operation and blends. Each draw here is checked against that rule, the codes computed as
-//! Metal converts the colors, and a float attachment's against the same draw without the
-//! operation. Copy and no-op draw on every device; the others where the device has `logicOp`,
-//! and are refused naming it elsewhere (MoltenVK).
+//! Metal's rule, measured with our own probes `spi`, `spi2` and `logic_operation` on an Apple M3
+//! Max under macOS 27.0.1 (targets cleared to one color, a fullscreen triangle of another, every
+//! operation, blended by one and one and not): the low four bits of `logicOperation` choose the
+//! operation in Direct3D's order, applied to the fragment's code and the stored one of each
+//! normalized and integer channel, blending ignored; a `RGBA16Float` attachment ignores the
+//! operation and blends. Each draw here is checked against that rule, the codes computed as Metal
+//! converts the colors, and a float attachment's against the same draw without the operation.
+//! Copy and no-op draw on every device; the others through Vulkan's `logicOp` where the device has
+//! it, and through the fragment function where it does not and orders framebuffer fetch (MoltenVK
+//! through the pixel interlock; lavapipe, its `logicOp` withheld, through rasterization-order input
+//! attachments), each run here both ways where the device has the feature. `RGB10A2Unorm`, whose
+//! operation is not Metal's per-channel rule in general, is refused under the function's
+//! operation; on a device that orders fetch in neither form every other operation is refused
+//! naming the three features.
 //!
 //! Where the device converts a color its own way, the operation takes the device's code: a drawn
-//! channel's where the pipeline's fragment stage records `PrecisionNote::DeviceColorConversion`,
-//! and a cleared channel's where the device announces `device-color-conversion` for the clears
-//! (Vulkan lets a device store either code nearest a normalized value). There each channel holds
-//! the operation of either code nearest the drawn value and either code nearest the cleared one.
-//! Measured on the Radeon 780M (RADV PHOENIX), whose pipelines into `RGB10A2Unorm` record the
-//! note: the drawn green 562.65 stores 562 (Metal 563) with and without the operation, and the
-//! cleared blue 613.8 stores 613 (Metal 614).
+//! channel's where the pipeline's fragment stage records `PrecisionNote::DeviceColorConversion`
+//! (the function's own operation records it for every normalized attachment: its codes are the
+//! device's `float` product rounded to nearest even), and a cleared channel's where the device
+//! announces `device-color-conversion` for the clears (Vulkan lets a device store either code
+//! nearest a normalized value). There each channel holds the operation of either code nearest the
+//! drawn value and either code nearest the cleared one. Measured on the Radeon 780M (RADV
+//! PHOENIX), whose pipelines into `RGB10A2Unorm` record the note: the drawn green 562.65 stores 562
+//! (Metal 563) with and without the operation, and the cleared blue 613.8 stores 613 (Metal 614).
 
 use super::{
     buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT,
@@ -80,19 +85,38 @@ fn layout(pf: PixelFormat) -> Option<Layout> {
             4,
         ),
         PixelFormat::R16Unorm => (&[(16, false, 0)], 2),
+        PixelFormat::RGBA16Snorm => (
+            &[(16, true, 0), (16, true, 1), (16, true, 2), (16, true, 3)],
+            8,
+        ),
         _ => return None,
     })
 }
 
 /// The formats the lane draws.
-const FORMATS: [PixelFormat; 6] = [
+const FORMATS: [PixelFormat; 7] = [
     PixelFormat::RGBA8Unorm,
     PixelFormat::BGRA8Unorm,
     PixelFormat::RGBA8Snorm,
     PixelFormat::RGB10A2Unorm,
     PixelFormat::R16Unorm,
+    PixelFormat::RGBA16Snorm,
     PixelFormat::RGBA16Float,
 ];
+
+/// Whether `pf` holds signed channels, drawn [`DRAWN_SIGNED`].
+fn signed(pf: PixelFormat) -> bool {
+    matches!(pf, PixelFormat::RGBA8Snorm | PixelFormat::RGBA16Snorm)
+}
+
+/// A texel's bytes in `pf`.
+fn texel_bytes(pf: PixelFormat) -> usize {
+    match pf {
+        PixelFormat::RGBA16Float | PixelFormat::RGBA16Snorm => 8,
+        PixelFormat::R16Unorm => 2,
+        _ => 4,
+    }
+}
 
 /// Metal's code of `x` in a channel of `bits` (two's complement where `signed`): the product with
 /// the largest code rounded to nearest.
@@ -199,8 +223,14 @@ struct Lane {
 }
 
 impl Lane {
-    fn new(messages: &Messages, cache: &ScratchCache) -> Lane {
-        let device = validated_device_with(TEST_DEVICE, messages, cache.path(), |_| {}).unwrap();
+    /// The lane's device, its `logicOp` withheld where `withheld`.
+    fn new(messages: &Messages, cache: &ScratchCache, withheld: bool) -> Lane {
+        let device = validated_device_with(TEST_DEVICE, messages, cache.path(), |o| {
+            if withheld {
+                o.withheld_features.insert(VkFeature::LogicOp);
+            }
+        })
+        .unwrap();
         let bitcode = llvm_assemble(&engine_dir().join("a8r_targets.ll")).unwrap();
         Lane {
             queue: device.new_command_queue().unwrap(),
@@ -284,11 +314,19 @@ impl Lane {
         pipeline: Option<&RenderPipelineState>,
         color: [f32; 4],
     ) -> Vec<u8> {
-        let texel = match pf {
-            PixelFormat::RGBA16Float => 8,
-            PixelFormat::R16Unorm => 2,
-            _ => 4,
-        };
+        self.draw_over(pf, pipeline, color, (CLEARED, false))
+    }
+
+    /// [`Lane::draw`] into a target cleared to `cleared`, beside a cleared `Depth32Float_Stencil8`
+    /// depth and stencil attachment where `depth`.
+    fn draw_over(
+        &self,
+        pf: PixelFormat,
+        pipeline: Option<&RenderPipelineState>,
+        color: [f32; 4],
+        (cleared, depth): ([f64; 4], bool),
+    ) -> Vec<u8> {
+        let texel = texel_bytes(pf);
         let mut d = TextureDescriptor::texture_2d(pf, SIDE, SIDE, false);
         d.usage = TextureUsage::RENDER_TARGET;
         d.resource_options = ResourceOptions::shared();
@@ -299,8 +337,21 @@ impl Lane {
         let a = &mut pass.color_attachments[0];
         a.texture = Some(target.clone());
         a.load_action = LoadAction::Clear;
-        a.clear_color = ClearColor::new(CLEARED[0], CLEARED[1], CLEARED[2], CLEARED[3]);
+        a.clear_color = ClearColor::new(cleared[0], cleared[1], cleared[2], cleared[3]);
         a.store_action = StoreAction::Store;
+        if depth {
+            let mut d =
+                TextureDescriptor::texture_2d(PixelFormat::Depth32FloatStencil8, SIDE, SIDE, false);
+            d.usage = TextureUsage::RENDER_TARGET;
+            d.resource_options = ResourceOptions::private();
+            let texture = self.device.new_texture(&d).unwrap();
+            pass.depth_attachment.texture = Some(texture.clone());
+            pass.depth_attachment.load_action = LoadAction::Clear;
+            pass.depth_attachment.store_action = StoreAction::DontCare;
+            pass.stencil_attachment.texture = Some(texture);
+            pass.stencil_attachment.load_action = LoadAction::Clear;
+            pass.stencil_attachment.store_action = StoreAction::DontCare;
+        }
         let command_buffer = self.queue.command_buffer().unwrap();
         let mut e = command_buffer.render_command_encoder(&pass).unwrap();
         if let Some(pipeline) = pipeline {
@@ -328,20 +379,61 @@ impl Lane {
     }
 }
 
+/// Whether the lane's device orders framebuffer fetch, through the pixel interlock or
+/// rasterization-order input attachments: without `logicOp`, the fragment function computes the
+/// operation there.
+fn orders_fetch(device: &Device) -> bool {
+    let features = &device.enabled().features;
+    features.contains(&VkFeature::FragmentShaderPixelInterlock)
+        || features.contains(&VkFeature::RasterizationOrderColorAttachmentAccess)
+}
+
+/// The refusal of an operation other than copy and no-op on a device without `logicOp` that
+/// orders fetch in neither form.
+fn unordered() -> metal2vulkan::error::Unsupported {
+    metal2vulkan::error::Unsupported::needs_any_of(
+        Feature::PrivateRenderState(PrivateRenderField::LogicOperation),
+        vec![
+            vec![Capability::Feature(VkFeature::LogicOp)],
+            vec![Capability::Feature(VkFeature::FragmentShaderPixelInterlock)],
+            vec![Capability::Feature(
+                VkFeature::RasterizationOrderColorAttachmentAccess,
+            )],
+        ],
+    )
+}
+
 /// Every operation (raw 0 to 16, 16 taken as its low four bits) into each format of [`FORMATS`],
-/// blended by one and one and not: a normalized target stores Metal's operation of the codes, a
-/// float one the draw without the operation (the module docs). On a device without `logicOp`,
-/// copy and no-op draw so, and every other operation is refused naming the feature. Where the
-/// device converts a drawn color (the pipeline's note) or the clears (their announcement, taken
-/// from a pass of each normalized format's clear alone, before any pipeline is made) its own way,
-/// that channel's code is either one nearest its value (the module docs).
+/// blended by one and one and not, on the device and, where it has `logicOp`, on the device with
+/// the feature withheld: a normalized target stores Metal's operation of the codes, a float one
+/// the draw without the operation (the module docs). Without `logicOp`, copy and no-op draw so;
+/// every other operation is the fragment function's where the device orders fetch, but into
+/// `RGB10A2Unorm`, refused `NotImplemented`, and refused naming the three features elsewhere.
+/// Where the device converts a drawn color (the pipeline's note) or the clears (their
+/// announcement, taken from a pass of each normalized format's clear alone, before any pipeline
+/// is made) its own way, that channel's code is either one nearest its value (the module docs).
 #[test]
 fn the_logic_operation_stores_metal_s_codes() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let lane = Lane::new(&messages, &cache);
+    let lane = Lane::new(&messages, &cache, false);
+    let has = lane.device.enabled().features.contains(&VkFeature::LogicOp);
+    let mut summaries = vec![run(&lane, &messages)];
+    drop(lane);
+    if has {
+        let withheld = Lane::new(&messages, &cache, true);
+        summaries.push(run(&withheld, &messages));
+        drop(withheld);
+    }
+    eprintln!("{}", summaries.join("\n"));
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// [`the_logic_operation_stores_metal_s_codes`] on `lane`'s device: its summary line.
+fn run(lane: &Lane, messages: &Messages) -> String {
     let name = lane.device.name().to_owned();
     let has = lane.device.enabled().features.contains(&VkFeature::LogicOp);
+    let shader = !has && orders_fetch(&lane.device);
     messages.take_notices();
     for pf in FORMATS.into_iter().filter(|&pf| layout(pf).is_some()) {
         lane.draw(pf, None, DRAWN);
@@ -354,9 +446,9 @@ fn the_logic_operation_stores_metal_s_codes() {
     // The draws whose texel is not Metal's, each where the device converts its own way.
     let (mut theirs, mut noted) = (0usize, 0usize);
     for pf in FORMATS {
-        let drawn = match pf {
-            PixelFormat::RGBA8Snorm => DRAWN_SIGNED,
-            _ => DRAWN,
+        let drawn = match signed(pf) {
+            true => DRAWN_SIGNED,
+            false => DRAWN,
         };
         let float = layout(pf).is_none();
         for blended in [false, true] {
@@ -368,30 +460,34 @@ fn the_logic_operation_stores_metal_s_codes() {
             });
             for raw in 0..=16u64 {
                 let blendless = matches!(raw & 15, 2 | 4);
+                let not_implemented = |u: &metal2vulkan::error::Unsupported| {
+                    assert_eq!(
+                        (&u.feature, &u.needs),
+                        (
+                            &Feature::PrivateRenderState(PrivateRenderField::LogicOperation),
+                            &Needs::NotImplemented
+                        ),
+                        "{name}: {pf:?} {raw}"
+                    );
+                };
                 let pipeline = match lane.pipeline(pf, blended, Some(raw)) {
                     Ok(p) => p,
                     // A float attachment that blends under an operation Vulkan's turns off.
-                    Err(Error::Unsupported(u)) if float && blended && !blendless => {
-                        assert_eq!(
-                            (u.feature, u.needs),
-                            (
-                                Feature::PrivateRenderState(PrivateRenderField::LogicOperation),
-                                Needs::NotImplemented
-                            ),
-                            "{pf:?} {raw}"
-                        );
+                    Err(Error::Unsupported(u)) if has && float && blended && !blendless => {
+                        not_implemented(&u);
                         refused += 1;
                         continue;
                     }
-                    Err(Error::Unsupported(u)) if !has && !blendless => {
-                        assert_eq!(
-                            u,
-                            metal2vulkan::error::Unsupported::needs(
-                                Feature::PrivateRenderState(PrivateRenderField::LogicOperation),
-                                Capability::Feature(VkFeature::LogicOp),
-                            ),
-                            "{pf:?} {raw}"
-                        );
+                    // A format whose Metal operation is not the rule the function computes.
+                    Err(Error::Unsupported(u))
+                        if shader && pf == PixelFormat::RGB10A2Unorm && !blendless =>
+                    {
+                        not_implemented(&u);
+                        refused += 1;
+                        continue;
+                    }
+                    Err(Error::Unsupported(u)) if !has && !shader && !blendless => {
+                        assert_eq!(u, unordered(), "{name}: {pf:?} {raw}");
                         refused += 1;
                         continue;
                     }
@@ -421,17 +517,68 @@ fn the_logic_operation_stores_metal_s_codes() {
             }
         }
     }
+    let form = match (has, shader) {
+        (true, _) => "Vulkan's logicOp",
+        (false, true) => "the fragment function's operation",
+        (false, false) => "no operation but copy and no-op",
+    };
     assert!(
         wrong.is_empty(),
-        "{name}: {} of {checked} draws differ from Metal's:\n{}",
+        "{name} ({form}): {} of {checked} draws differ from Metal's:\n{}",
         wrong.len(),
         wrong.join("\n")
     );
-    eprintln!(
-        "{name}: {checked} logic-operated draws store Metal's texels or the device's conversion's \
-         ({theirs} the device's: {noted} of them through a pipeline noted DeviceColorConversion, \
-         clears announced {cleared_either}), {refused} refused"
-    );
-    drop(lane);
+    format!(
+        "{name} ({form}): {checked} logic-operated draws store Metal's texels or the device's \
+         conversion's ({theirs} the device's: {noted} of them through a pipeline noted \
+         DeviceColorConversion, clears announced {cleared_either}), {refused} refused"
+    )
+}
+
+/// The consumer's shape: an unblended `RGBA8Unorm` attachment written whole beside a
+/// `Depth32Float_Stencil8` depth and stencil attachment, xor (raw 10) of the fragment's (1, 1, 0,
+/// 0) over the stored (64, 128, 191, 255), which Metal stores (191, 127, 191, 255) (the probe on
+/// an Apple M3 Max under macOS 27.0.1): so on the device, and where it has `logicOp`, with the
+/// feature withheld; refused naming the features only where the device orders fetch in neither
+/// form.
+#[test]
+fn the_logic_operation_beside_a_depth_and_stencil_attachment_is_metal_s() {
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    let stored = [64.0 / 255.0, 128.0 / 255.0, 191.0 / 255.0, 1.0];
+    let mut seen = Vec::new();
+    for withheld in [false, true] {
+        // Withholding a feature the device lacks changes nothing.
+        if withheld && !seen.first().is_some_and(|(_, had): &(String, bool)| *had) {
+            break;
+        }
+        let lane = Lane::new(&messages, &cache, withheld);
+        let name = lane.device.name().to_owned();
+        let has = lane.device.enabled().features.contains(&VkFeature::LogicOp);
+        let mut d = lane.descriptor(PixelFormat::RGBA8Unorm, false, Some(10));
+        d.depth_format = Some(PixelFormat::Depth32FloatStencil8);
+        d.stencil_format = Some(PixelFormat::Depth32FloatStencil8);
+        match lane
+            .device
+            .new_render_pipeline_state(&d, &PipelineOptions::default())
+        {
+            Ok(pipeline) => {
+                let got = lane.draw_over(
+                    PixelFormat::RGBA8Unorm,
+                    Some(&pipeline),
+                    [1.0, 1.0, 0.0, 0.0],
+                    (stored, true),
+                );
+                assert_eq!(got, [191, 127, 191, 255], "{name} (logicOp {has})");
+            }
+            Err(Error::Unsupported(u)) if !has && !orders_fetch(&lane.device) => {
+                assert_eq!(u, unordered(), "{name}");
+            }
+            Err(e) => panic!("{name} (logicOp {has}): {e}"),
+        }
+        seen.push((name, has));
+        drop(lane);
+    }
+    eprintln!("the consumer's xor stores Metal's texel on {seen:?} (name, logicOp)");
     layer_reported_nothing_at_all(&messages);
 }
