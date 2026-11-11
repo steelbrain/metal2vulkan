@@ -5894,9 +5894,11 @@ fn a_tangled_instruction_reading_a_helper_call_keeps_the_note_away() {
 
 /// A call no identity shuffle can follow stays bare and records the note: on `moltenvk-m3` with
 /// the fragment stage's shuffle taken out of its subgroup model (the `SHUFFLE` operation, or the
-/// fragment stage), `rch_helper_tangle`'s `before` functions and `rch_tangle_unread` are not
-/// fenced and record `PrecisionNote::HelperBranchDropsSimdgroupStores`, as every profile with the
-/// defect and no fragment shuffle does. Every module passes L3.
+/// fragment stage), `rch_tangle_sample_before` and `rch_tangle_unread`, whose tangled instruction
+/// is an implicit-LOD sample that reads none of the products, are not fenced and record
+/// `PrecisionNote::HelperBranchDropsSimdgroupStores`, as every profile with the defect and no
+/// fragment shuffle does. (`rch_tangle_quad_before`'s `quad_sum` needs the fragment shuffle
+/// itself.) Every module passes L3.
 #[test]
 fn a_helper_call_no_shuffle_can_follow_keeps_the_note() {
     let Some(bc) = fixture("rch_helper_tangle") else {
@@ -5914,11 +5916,7 @@ fn a_helper_call_no_shuffle_can_follow_keeps_the_note() {
         ("no fragment SHUFFLE", &no_op),
         ("no fragment stage", &no_stage),
     ] {
-        for entry in [
-            "rch_tangle_quad_before",
-            "rch_tangle_sample_before",
-            "rch_tangle_unread",
-        ] {
+        for entry in ["rch_tangle_sample_before", "rch_tangle_unread"] {
             let what = format!("{entry} on moltenvk-m3 with {form}");
             let (_, m) =
                 typed_module_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
