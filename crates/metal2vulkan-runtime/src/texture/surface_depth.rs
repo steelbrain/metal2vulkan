@@ -132,7 +132,7 @@ impl Texture {
                 return Err(gap());
             }
             let (raw, at) = texels.buffer.at(base);
-            let mut staging = HeapTiledCopies::staging(device, &tiled, at, hazard)?;
+            let mut staging = HeapTiledCopies::staging(device, &tiled, tight_len, at, hazard)?;
             let start = staging.into.dst_offset;
             staging.into.size = span;
             staging.back = runs
@@ -143,9 +143,9 @@ impl Texture {
                     size: run.end - run.start,
                 })
                 .collect();
-            let shape = (&planes[..], tight_len, 1);
+            let shape = (planes, tight_len, 1);
             let tiles = (tiled, format);
-            let tiles = HeapTiledCopies::new(device, &staging, tiles, shape, &regions, hazard)?;
+            let tiles = HeapTiledCopies::new(device, &staging, tiles, shape, regions)?;
             let (truth, tracked) = texels.buffer.tracked(base..end);
             let copies = ShadowCopies {
                 source: ShadowSource::Bytes {

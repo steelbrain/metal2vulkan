@@ -797,9 +797,9 @@ fn colour(plan: &ImagePlan) -> bool {
 
 /// Whether a shadow of a heap's bytes serves an image of `plan` in a texture of `size` bytes: one
 /// sample (Vulkan copies no multisampled image to a buffer), copy usage, and its planes
-/// ([`heap_planes`]) inside the texture's bytes.
+/// ([`heap_plane_bytes`]) inside the texture's bytes.
 fn shadowable(plan: &ImagePlan, size: u64) -> bool {
-    let (_, length) = heap_planes(
+    let length = heap_plane_bytes(
         plan.format,
         plan.pixel_format,
         plan.extent,
@@ -853,6 +853,11 @@ impl HeapPlane {
             + self.blocks[0] * self.unit
     }
 
+    /// The byte past the plane's last, from the texture's first.
+    fn end(&self) -> u64 {
+        self.offset + self.span()
+    }
+
     /// Where row `row` of blocks of image `image` lies, from block column `column`, counted
     /// from the texture's first byte.
     pub(crate) fn row(&self, image: u64, row: u64, column: u64) -> u64 {
@@ -881,48 +886,71 @@ pub(crate) fn heap_plane_layout(
     levels: u32,
     layers: u32,
 ) -> (Vec<HeapPlane>, u64) {
-    let mut planes = Vec::new();
-    let mut end = 0u64;
-    for (aspect, bytes, [bw, bh]) in texel_units(format, pf) {
+    let planes: Vec<HeapPlane> = each_heap_plane(format, pf, extent, levels, layers).collect();
+    let end = planes.last().map_or(0, HeapPlane::end);
+    (planes, end)
+}
+
+/// The bytes [`heap_plane_layout`]'s planes span, its planes laid out one at a time and kept
+/// nowhere: what a caller that needs only their length asks.
+pub(crate) fn heap_plane_bytes(
+    format: Format,
+    pf: PixelFormat,
+    extent: [u32; 3],
+    levels: u32,
+    layers: u32,
+) -> u64 {
+    let last = each_heap_plane(format, pf, extent, levels, layers).last();
+    last.map_or(0, |plane| plane.end())
+}
+
+/// [`heap_plane_layout`]'s planes, in order, each laid out from the end of the one before.
+fn each_heap_plane(
+    format: Format,
+    pf: PixelFormat,
+    extent: [u32; 3],
+    levels: u32,
+    layers: u32,
+) -> impl Iterator<Item = HeapPlane> {
+    let units = texel_units(format, pf);
+    let planes = units.flat_map(move |unit| (0..levels).map(move |level| (unit, level)));
+    planes.scan(0u64, move |end, ((aspect, bytes, [bw, bh]), level)| {
         let unit = u64::from(bytes);
         // The least common multiple of 4 and the block's bytes.
         let align = 4 * unit / gcd(4, unit.max(1));
-        for level in 0..levels {
-            let level_extent = extent.map(|axis| (axis >> level.min(31)).max(1));
-            let [width, height, depth] = level_extent;
-            let across = u64::from(width.div_ceil(bw.max(1)));
-            let packed = across * unit;
-            let down = u64::from(height.div_ceil(bh.max(1)));
-            let one_plane = one_plane_texel(pf).is_some();
-            let pitch = if chroma_pairs::is_four_two_two(pf) {
-                packed.next_multiple_of(FOUR_TWO_TWO_ALIGNMENT)
-            } else if one_plane {
-                one_plane_pitch(packed, down)
-            } else {
-                packed
-            };
-            // A one-plane array's slices lie as its answer counts them, whatever its rows' pitch.
-            let image_pitch = match one_plane && layers > 1 {
-                true => (packed * down).next_multiple_of(ONE_PLANE_SLICE_ALIGNMENT),
-                false => pitch * down,
-            };
-            let plane = HeapPlane {
-                aspect,
-                level,
-                offset: end.next_multiple_of(align.max(1)),
-                extent: level_extent,
-                blocks: [across, down],
-                images: u64::from(depth) * u64::from(layers),
-                unit,
-                block: [bw.max(1), bh.max(1)],
-                pitch,
-                image_pitch,
-            };
-            end = plane.offset + plane.span();
-            planes.push(plane);
-        }
-    }
-    (planes, end)
+        let level_extent = extent.map(|axis| (axis >> level.min(31)).max(1));
+        let [width, height, depth] = level_extent;
+        let across = u64::from(width.div_ceil(bw.max(1)));
+        let packed = across * unit;
+        let down = u64::from(height.div_ceil(bh.max(1)));
+        let one_plane = one_plane_texel(pf).is_some();
+        let pitch = if chroma_pairs::is_four_two_two(pf) {
+            packed.next_multiple_of(FOUR_TWO_TWO_ALIGNMENT)
+        } else if one_plane {
+            one_plane_pitch(packed, down)
+        } else {
+            packed
+        };
+        // A one-plane array's slices lie as its answer counts them, whatever its rows' pitch.
+        let image_pitch = match one_plane && layers > 1 {
+            true => (packed * down).next_multiple_of(ONE_PLANE_SLICE_ALIGNMENT),
+            false => pitch * down,
+        };
+        let plane = HeapPlane {
+            aspect,
+            level,
+            offset: end.next_multiple_of(align.max(1)),
+            extent: level_extent,
+            blocks: [across, down],
+            images: u64::from(depth) * u64::from(layers),
+            unit,
+            block: [bw.max(1), bh.max(1)],
+            pitch,
+            image_pitch,
+        };
+        *end = plane.end();
+        Some(plane)
+    })
 }
 
 /// The planes of a multisample heap texture's tight buffer, whose image is of `format`
@@ -1001,7 +1029,48 @@ pub(crate) fn heap_planes(
         into: Vec::new(),
         back: Vec::new(),
     };
-    for plane in &planes {
+    each_plane_copy(&planes, layers, |region, way| {
+        if way != Way::Back {
+            copies.into.push(region);
+        }
+        if way != Way::Into {
+            copies.back.push(region);
+        }
+    });
+    (copies, end)
+}
+
+/// [`heap_planes`]'s copies into the image of the planes `planes` of an image of `layers` layers
+/// (a layout [`heap_plane_layout`] or [`tight_planes`] gave), one list of them alone.
+pub(crate) fn copies_into(planes: &[HeapPlane], layers: u32) -> Vec<vk::BufferImageCopy> {
+    let mut into = Vec::with_capacity(planes.len());
+    each_plane_copy(planes, layers, |region, way| {
+        if way != Way::Back {
+            into.push(region);
+        }
+    });
+    into
+}
+
+/// Which way a copy of [`each_plane_copy`]'s goes between a heap shadow's truth and its image.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Way {
+    /// Into the image alone.
+    Into,
+    /// Back out of it alone.
+    Back,
+    /// Both ways.
+    Both,
+}
+
+/// Each copy between a heap shadow's truth laid out as `planes` (of an image of `layers` layers)
+/// and its image, as [`heap_planes`] states them, given to `each` with the way it goes.
+fn each_plane_copy(
+    planes: &[HeapPlane],
+    layers: u32,
+    mut each: impl FnMut(vk::BufferImageCopy, Way),
+) {
+    for plane in planes {
         let [width, height, depth] = plane.extent;
         let row_bytes = plane.blocks[0] * plane.unit;
         if plane.pitch < row_bytes && plane.blocks[1] > 1 {
@@ -1015,8 +1084,8 @@ pub(crate) fn heap_planes(
             };
             let (into, back) =
                 plane_copy_regions(&rows, (plane.unit, None), plane.offset, plane.aspect.into());
-            copies.into.extend(into);
-            copies.back.extend(back);
+            into.into_iter().for_each(|region| each(region, Way::Into));
+            back.into_iter().for_each(|region| each(region, Way::Back));
             continue;
         }
         // A row longer than its blocks is given in texels (Vulkan's `bufferRowLength`).
@@ -1044,16 +1113,18 @@ pub(crate) fn heap_planes(
         };
         // Slices further apart than their rows, which no `bufferImageHeight` of whole rows
         // states, are a region each.
-        let regions = match plane.image_pitch == plane.pitch * plane.blocks[1] {
-            true => vec![region(0, layers, 0)],
-            false => (0..layers)
-                .map(|layer| region(layer, 1, u64::from(layer) * plane.image_pitch))
-                .collect(),
-        };
-        copies.into.extend(regions.iter().copied());
-        copies.back.extend(regions);
+        match plane.image_pitch == plane.pitch * plane.blocks[1] {
+            true => each(region(0, layers, 0), Way::Both),
+            false => {
+                for layer in 0..layers {
+                    each(
+                        region(layer, 1, u64::from(layer) * plane.image_pitch),
+                        Way::Both,
+                    );
+                }
+            }
+        }
     }
-    (copies, end)
 }
 
 /// Whether `regions` copy every aspect of an image of `format`: every aspect but an
@@ -1143,7 +1214,7 @@ const FOUR_TWO_TWO_ALIGNMENT: u64 = 16;
 /// storage mode and usage; the M3 Max's alike where the consumer measured). It is the span of
 /// the texture's planes as the runtime lays them out in the heap (`heap_plane_layout`).
 fn four_two_two_heap_answer(layout: &TextureLayout) -> SizeAndAlign {
-    let (_, size) = heap_plane_layout(
+    let size = heap_plane_bytes(
         chroma_pairs::CARRIER,
         layout.pixel_format,
         layout.extent,
@@ -2173,14 +2244,25 @@ impl Device {
         let shadowed = matches!(image.route, AliasRoute::Shadow | AliasRoute::MemoryShadow)
             || self.keeps_optimized_layout(descriptor, &layout);
         if shadowed {
-            let tiles = shadow_tiles(&layout, image.plan.format, &metal_layout);
+            // The tiles the shadow holds it in (`shadow_tiles`): Metal's own, kept where they
+            // lie, where Metal tiles it; else those laid out for it here.
+            let made = match metal_layout {
+                HeapLayout::Tiled(_) => None,
+                _ => shadow_tiles(&layout, image.plan.format, &metal_layout),
+            };
+            let tiles = match &made {
+                Some(made) => Some(made),
+                None => matches!(metal_layout, HeapLayout::Tiled(_)).then_some(&metal_layout),
+            };
             if let (Some(tiles), Some(answer)) = (tiles, metal_answer) {
                 let serves = (tiles.tiles())
                     .is_some_and(|tiled| self.tiles_serve(&image.plan, tiled, answer.size));
                 if serves {
                     image.route = AliasRoute::Tiled;
                     size_and_align = answer;
-                    metal_layout = tiles;
+                    if let Some(made) = made {
+                        metal_layout = made;
+                    }
                 }
             }
         }
@@ -2365,7 +2447,7 @@ impl Device {
         }
         let facts = &self.properties().driver_facts;
         if facts.contains(&DriverFact::DepthStencilImagesLieApart) && !colour(&optimal) {
-            let (_, length) = heap_planes(
+            let length = heap_plane_bytes(
                 optimal.format,
                 optimal.pixel_format,
                 optimal.extent,
@@ -3655,11 +3737,32 @@ impl Device {
         let linear = p.image.tiling == vk::ImageTiling::LINEAR;
         let in_metal_tiles = p.in_metal_tiles;
         let host = binding.host;
+        // Over host pages, each texture laid out otherwise than Metal tiles it is announced, in
+        // the program's call that made it, with its ID; and in any heap a multisample texture whose
+        // image lies in memory of its own, and a shadow of the uncompressed tiles of a texture
+        // Metal keeps compressed. In any other heap, a texture whose bytes there are not Metal's
+        // layout (`device_heap_layout`): not a linear image whose every element lies where
+        // Metal's tiles place it, whose bytes are Metal's layout (`lies_in_metal_tiles`). Read
+        // here, before a tiled texture's image takes Metal's tiles (below), and announced once it
+        // is made.
         let metal_layout = p.metal_layout;
-        let tiles = metal_layout.tiles().filter(|_| route == AliasRoute::Tiled);
-        let image = if let Some(tiled) = tiles {
+        let tiled = route == AliasRoute::Tiled;
+        let announced = match !host && !matches!(route, AliasRoute::Lossless | AliasRoute::Tiled) {
+            true => (self.device_heap_layout(&p.layout, route, linear, &metal_layout))
+                .filter(|_| !in_metal_tiles),
+            false => {
+                let apart = route == AliasRoute::Lossless;
+                own_heap_layout(&metal_layout, p.layout.samples, apart)
+            }
+        };
+        let tiled_as_metal = tiled && matches!(metal_layout, HeapLayout::Tiled(_));
+        let tiles = match metal_layout {
+            HeapLayout::Tiled(tiles) | HeapLayout::Uncompressed(tiles) if tiled => Some(tiles),
+            _ => None,
+        };
+        let image = if let Some(tiles) = tiles {
             let made = (place, options, descriptor);
-            self.heap_tiled_image(bytes, p.image, &p.layout, tiled.clone(), made)?
+            self.heap_tiled_image(bytes, p.image, &p.layout, tiles, made)?
         } else if matches!(route, AliasRoute::Shadow | AliasRoute::MemoryShadow) {
             self.heap_shadow_image(bytes, p.image, &p.layout, place, options, descriptor)?
         } else if route == AliasRoute::Planes {
@@ -3785,25 +3888,11 @@ impl Device {
         if making.refit.is_some() {
             self.shared().counts.heap_texture_refit();
         }
-        // Over host pages, each texture laid out otherwise than Metal tiles it is announced, in
-        // the program's call that made it, with its ID; and in any heap a multisample texture whose
-        // image lies in memory of its own, and a shadow of the uncompressed tiles of a texture
-        // Metal keeps compressed. In any other heap, a texture whose bytes there are not Metal's
-        // layout (`device_heap_layout`): not a linear image whose every element lies where
-        // Metal's tiles place it, whose bytes are Metal's layout (`lies_in_metal_tiles`).
-        if !host && !matches!(route, AliasRoute::Lossless | AliasRoute::Tiled) {
-            let untiled = self.device_heap_layout(&p.layout, route, linear, &metal_layout);
-            if let Some(untiled) = untiled.filter(|_| !in_metal_tiles) {
-                self.degrade_heap_layout(untiled, texture.object_id());
-            }
-        } else {
-            if route == AliasRoute::Tiled && matches!(metal_layout, HeapLayout::Tiled(_)) {
-                self.shared().counts.heap_texture_tiled();
-            }
-            let apart = route == AliasRoute::Lossless;
-            if let Some(untiled) = own_heap_layout(&metal_layout, p.layout.samples, apart) {
-                self.degrade_heap_layout(untiled, texture.object_id());
-            }
+        if tiled_as_metal {
+            self.shared().counts.heap_texture_tiled();
+        }
+        if let Some(untiled) = announced {
+            self.degrade_heap_layout(untiled, texture.object_id());
         }
         Ok(texture)
     }
@@ -4035,14 +4124,16 @@ impl Device {
         let plan = image.plan;
         let samples = plan.samples.as_raw();
         let (planes, tight_len) = tight_planes(&plan);
-        let (regions, _) = heap_planes(
-            plan.format,
-            plan.pixel_format,
-            plan.extent,
-            plan.levels,
-            plan.layers,
-        );
-        let regions = regions.into;
+        // A single-sample image's copies are its tight planes'; a multisample image's region,
+        // which its moves move, is its planes' one sample a pixel.
+        let regions = match samples {
+            1 => copies_into(&planes, plan.layers),
+            _ => {
+                let (format, pf, extent) = (plan.format, plan.pixel_format, plan.extent);
+                let (one, _) = heap_plane_layout(format, pf, extent, plan.levels, plan.layers);
+                copies_into(&one, plan.layers)
+            }
+        };
         let every = copies_every_aspect(&regions, plan.format);
         if tiled.size > place.size {
             return Err(internal("a tiled heap texture's elements past its range"));
@@ -4051,10 +4142,10 @@ impl Device {
         let buffer = ShadowBuffer::of(bytes, raw);
         let (heap_bytes, tracked) = bytes.tracked(place.offset..place.offset + tiled.size);
         let hazard = options.hazard_tracking_mode()?;
-        let staging = HeapTiledCopies::staging(self, &tiled, start, hazard)?;
-        let shape = (&planes[..], tight_len, samples);
+        let staging = HeapTiledCopies::staging(self, &tiled, tight_len, start, hazard)?;
+        let shape = (planes, tight_len, samples);
         let tiles = (tiled, plan.format);
-        let tiles = HeapTiledCopies::new(self, &staging, tiles, shape, &regions, hazard)?;
+        let tiles = HeapTiledCopies::new(self, &staging, tiles, shape, regions)?;
         let tiles = Box::new(tiles);
         let shadow_range = UseRange::Image {
             aspects: image_aspects(plan.format).into(),

@@ -171,7 +171,6 @@
 //! every byte a command wrote, and the values the copy in changed.
 
 use super::super::blit_plan::BufferLayout;
-use super::super::buffer::Buffer;
 use super::super::copy_plan::{block_bytes, block_extent, depth_bytes, TextureRegion};
 use super::super::degradation::Degradation;
 use super::super::depth_copy;
@@ -185,7 +184,7 @@ use super::super::sample_interleave::InterleaveCopy;
 use super::super::shadow::{self, ShadowStaging};
 use super::super::texture_descriptor::TextureLayout;
 use super::super::tracker::Barrier;
-use super::super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
+use super::super::values::HazardTrackingMode;
 use super::super::{depth_clamp, Device};
 use super::copy_images::{Reused, UseMaker};
 use super::heap::HeapPlane;
@@ -205,8 +204,9 @@ const TILE_BYTES: u64 = 16 << 10;
 const PAGE: u64 = 16 << 10;
 /// The multiple a narrow level's bytes are rounded up to, and any other texture's alignment.
 const LINE: u64 = 128;
-/// Where a shape lies in the shape buffer, per direction: past its bytes, and a multiple of
-/// every `minStorageBufferOffsetAlignment`.
+/// Where a shape lies past the shapes' first byte, per direction: past its bytes, and a multiple
+/// of every `minStorageBufferOffsetAlignment`; the multiple each part of a texture's staging
+/// buffer starts at ([`Scratch`]).
 const SHAPE_SLOT: u64 = 1024;
 /// The side of the square tile of texels whose compression metadata takes `METADATA_BYTES`.
 const METADATA_TILE: u64 = 16;
@@ -1537,17 +1537,56 @@ struct Move {
     groups: [u32; 2],
 }
 
+/// Where the parts of a tiled heap texture's one staging buffer lie
+/// ([`HeapTiledCopies::staging`]), from its first byte, each at a multiple of [`SHAPE_SLOT`]: the
+/// texture's bytes at 0, then the tight elements at `tight`, then the two shapes at `shapes`; and
+/// the buffer's length.
+///
+/// The buffer is made unzeroed (`Device::unzeroed_buffer`), as no move reads a byte of it that no
+/// move wrote before:
+///
+/// - **The texture's bytes.** Each copy in and each copy back first copies the texture's bytes
+///   from its buffer over them, every one (`ShadowStaging::into`, [`HeapTiledCopies::record`]),
+///   before the kernel reads them; a merge's keep from them follows a copy in
+///   (`ShadowCopies::record_kept_from_staging`). A merge's copies out of the image
+///   ([`HeapTiledCopies::record_out`]) carry the bytes between the elements as the last copy left
+///   them, the same in its keep and its changed copy, so the merge writes none of them back.
+/// - **The tight elements.** The kernel's move into them writes every word of each level's
+///   elements, and the image's copy out every element (a multisample image's moves, each sample),
+///   before the copy into the image or the move back reads them; no copy reads the bytes between
+///   the planes.
+/// - **The shapes.** Each dispatch writes its shape (`cmd_update_buffer`) before the kernel reads
+///   it.
+struct Scratch {
+    tight: u64,
+    shapes: u64,
+    length: u64,
+}
+
+impl Scratch {
+    /// The parts of the staging buffer of a texture of `size` bytes whose image's elements take
+    /// `tight_len` bytes.
+    fn of(size: u64, tight_len: u64) -> Scratch {
+        let tight = size.next_multiple_of(SHAPE_SLOT);
+        let shapes = tight + tight_len.next_multiple_of(4).next_multiple_of(SHAPE_SLOT);
+        Scratch {
+            tight,
+            shapes,
+            length: shapes + 2 * SHAPE_SLOT,
+        }
+    }
+}
+
 /// A heap texture's moves between its image and its elements tiled in the heap's bytes (the
 /// module docs): the tight buffer of the image's elements, the shapes, and the kernel's two sets
 /// (into the image, then back).
 pub(crate) struct HeapTiledCopies {
     /// Metal's layout of the texture's elements.
     pub(crate) tiles: TiledTexture,
-    /// The image's elements, each level's from its plane's offset; held for the texture's life.
-    /// No command's uses name it: every copy writes the image or the heap's bytes, so the
-    /// tracker orders it after every other copy of the texture, and each records a full barrier
-    /// first.
-    _tight: Buffer,
+    /// The `VkBuffer` of the image's elements, each level's from its plane's offset: its staging
+    /// buffer's, which the texture holds for its life ([`Scratch`]). No command's uses name it:
+    /// every copy writes the image or the heap's bytes, so the tracker orders it after every
+    /// other copy of the texture, and each records a full barrier first.
     tight_raw: vk::Buffer,
     /// The tight buffer's copies to and from the image, one a level: a single-sample image's
     /// copies; a multisample image's region, which its [`SampleMoves`] move.
@@ -1559,8 +1598,7 @@ pub(crate) struct HeapTiledCopies {
     /// moves are planned over.
     planes: Vec<HeapPlane>,
     tight_at: u64,
-    /// The two shapes; held for the texture's life.
-    _shapes: Buffer,
+    /// The `VkBuffer` of the two shapes: its staging buffer's too.
     shapes_raw: vk::Buffer,
     moves: [Move; 2],
     kernel: OwnedKernel,
@@ -1605,16 +1643,13 @@ impl HeapTiledCopies {
         clamps: bool,
     ) -> Option<Vec<TiledLevelMove>> {
         let narrow = |v: u64| u32::try_from(v).ok();
-        let mut moves = Vec::new();
+        let mut moves = Vec::with_capacity(planes.len());
         for part in &tiles.parts {
             let layout = &part.layout;
-            let own: Vec<&HeapPlane> = (planes.iter())
-                .filter(|plane| part.aspect.is_none_or(|aspect| aspect == plane.aspect))
-                .collect();
-            if own.len() != layout.levels.len() {
-                return None;
-            }
-            for (level, plane) in layout.levels.iter().zip(own) {
+            let mut own = (planes.iter())
+                .filter(|plane| part.aspect.is_none_or(|aspect| aspect == plane.aspect));
+            for level in &layout.levels {
+                let plane = own.next()?;
                 if plane.blocks != level.extent || plane.unit != layout.unit {
                     return None;
                 }
@@ -1635,6 +1670,10 @@ impl HeapTiledCopies {
                     false => moved,
                 });
             }
+            // The part's planes are its levels', no more.
+            if own.next().is_some() {
+                return None;
+            }
         }
         // Every plane is a part's.
         (moves.len() == planes.len()).then_some(moves)
@@ -1653,8 +1692,9 @@ impl HeapTiledCopies {
 
     /// Whether the moves of a texture of `tiles`, its tight buffer laid out as `planes` and
     /// `tight_len` bytes long, fit `device`: every byte they name within `u32`, at most
-    /// `TiledTexelsModule::MAX_LEVELS` levels of all its parts, each buffer within
-    /// `maxStorageBufferRange`, and each dispatch within `maxComputeWorkGroupCount`.
+    /// `TiledTexelsModule::MAX_LEVELS` levels of all its parts, each binding within
+    /// `maxStorageBufferRange`, the one buffer of them all ([`Scratch`]) within the device's
+    /// buffers' length, and each dispatch within `maxComputeWorkGroupCount`.
     pub(crate) fn fit(
         device: &Device,
         tiles: &TiledTexture,
@@ -1678,26 +1718,31 @@ impl HeapTiledCopies {
                 .sum::<u64>();
             u32::try_from(invocations).is_ok() && Self::grid(device, invocations).is_some()
         });
+        let length = Scratch::of(tiles.size, tight_len).length;
         levels.len() <= TiledTexelsModule::MAX_LEVELS as usize
             && tiles.size <= range
             && u32::try_from(tiles.size).is_ok()
             && tight_len.next_multiple_of(4) <= range
             && u32::try_from(tight_len).is_ok()
+            && length <= device.properties().max_buffer_length
             && moves
     }
 
     /// The staging buffer of a texture of `tiles` whose first byte lies at `at` of the heap's
-    /// `VkBuffer`: the texture's bytes, from its first to its last, at its start, of the
-    /// texture's `hazard` tracking; each level's bytes of each chain of each part copied back.
+    /// `VkBuffer`, and whose image's elements take `tight_len` bytes: one buffer of the texture's
+    /// `hazard` tracking that holds the texture's bytes, from its first to its last, at its start,
+    /// then the tight elements and the two shapes ([`Scratch`]); each level's bytes of each chain
+    /// of each part copied back. Its bytes hold no value as it is made: every move writes each
+    /// byte it reads first (`Scratch`).
     pub(crate) fn staging(
         device: &Device,
         tiles: &TiledTexture,
+        tight_len: u64,
         at: u64,
         hazard: HazardTrackingMode,
     ) -> Result<ShadowStaging, Error> {
-        let options =
-            ResourceOptions::new(StorageMode::Private, CpuCacheMode::DefaultCache, hazard);
-        let buffer = device.own_buffer(tiles.size, options)?;
+        let scratch = Scratch::of(tiles.size, tight_len);
+        let buffer = device.unzeroed_buffer(scratch.length, hazard)?;
         let (_, start) = buffer.at(0);
         let back = (tiles.parts.iter())
             .flat_map(|part| {
@@ -1727,78 +1772,66 @@ impl HeapTiledCopies {
         })
     }
 
-    /// The moves of a texture of `tiles` through `staging` (its `staging`),
-    /// whose image of `format` has its elements in its tight buffer as `planes` say, `tight_len`
-    /// bytes, copied to and from the image by `regions` (offsets in that buffer), of the
-    /// texture's `hazard` tracking: a 32-bit float depth clamped into `[0, 1]` on its way into
-    /// the image where the device takes no other value there (`depth_clamp::clamps_depth`). Refused
-    /// as `new_buffer` refuses the tight and shape buffers; the caller checked that they `fit`.
+    /// The moves of a texture of `tiles` through `staging` (its `staging`, which holds the tight
+    /// elements and the shapes past the texture's bytes, [`Scratch`]), whose image of `format`
+    /// has its elements in the tight elements as `planes` say, `tight_len` bytes, copied to and
+    /// from the image by `regions` (offsets from the tight elements' first byte): a 32-bit float
+    /// depth clamped into `[0, 1]` on its way into the image where the device takes no other
+    /// value there (`depth_clamp::clamps_depth`). Internal where `staging` is not one of
+    /// `staging`'s for them; the caller checked that the moves `fit`.
     pub(crate) fn new(
         device: &Device,
         staging: &ShadowStaging,
         (tiles, format): (TiledTexture, Format),
-        (planes, tight_len, samples): (&[HeapPlane], u64, u32),
-        regions: &[vk::BufferImageCopy],
-        hazard: HazardTrackingMode,
+        (planes, tight_len, samples): (Vec<HeapPlane>, u64, u32),
+        mut regions: Vec<vk::BufferImageCopy>,
     ) -> Result<HeapTiledCopies, Error> {
         let clamps = depth_clamp::clamps_depth(device, format, ImageAspectFlags::DEPTH);
-        let levels = Self::levels(&tiles, planes, clamps)
+        let levels = Self::levels(&tiles, &planes, clamps)
             .ok_or_else(|| internal("a tiled heap texture's moves past u32"))?;
-        let options =
-            ResourceOptions::new(StorageMode::Private, CpuCacheMode::DefaultCache, hazard);
+        let scratch = Scratch::of(tiles.size, tight_len);
+        if staging.buffer.length() < scratch.length {
+            return Err(internal(
+                "a tiled heap texture's staging without its moves' bytes",
+            ));
+        }
+        let (raw, staging_at) = (staging.raw(), staging.into.dst_offset);
+        let tight_at = staging_at + scratch.tight;
         let tight_bytes = tight_len.next_multiple_of(4);
-        let tight = device.own_buffer(tight_bytes, options)?;
-        let shapes = device.own_buffer(2 * SHAPE_SLOT, options)?;
-        let (tight_raw, tight_at) = tight.at(0);
-        let (shapes_raw, shapes_at) = shapes.at(0);
-        let (staging_raw, staging_at) = (staging.raw(), staging.into.dst_offset);
+        let shapes_at = staging_at + scratch.shapes;
         let local = TiledTexelsModule::LOCAL_SIZE;
-        let mut moves = Vec::new();
-        for into in [true, false] {
+        let step = |into: bool| {
             let invocations = u64::from(TiledTexelsModule::invocations(&levels, into));
             let groups = Self::grid(device, invocations)
                 .ok_or_else(|| internal("a tiled heap texture's moves past the device's grid"))?;
             let shape = TiledTexelsModule::shape(&levels, into, groups[0] * local)
                 .ok_or_else(|| internal("a tiled heap texture of more levels than a shape"))?;
             let at = shapes_at + if into { 0 } else { SHAPE_SLOT };
-            moves.push(Move { shape, at, groups });
-        }
-        let [into, back] = <[Move; 2]>::try_from(moves)
-            .map_err(|_| internal("a tiled heap texture's moves are two"))?;
+            Ok::<_, Error>(Move { shape, at, groups })
+        };
+        let (into, back) = (step(true)?, step(false)?);
         let shape_bytes = 4 * u64::from(TiledTexelsModule::SHAPE_WORDS);
         let kernel = device.owned_kernel(OwnedModule::TiledTexels)?;
         // Each set binds the tight elements, the tiled bytes and the shape, in binding order.
-        let sets = OwnedSets::write(
-            device,
-            &kernel,
-            &[&into, &back]
-                .iter()
-                .map(|step| {
-                    vec![
-                        (tight_raw, tight_at, tight_bytes),
-                        (staging_raw, staging_at, tiles.size),
-                        (shapes_raw, step.at, shape_bytes),
-                    ]
-                })
-                .collect::<Vec<_>>(),
-        )?;
-        let regions = regions
-            .iter()
-            .map(|region| vk::BufferImageCopy {
-                buffer_offset: tight_at + region.buffer_offset,
-                ..*region
-            })
-            .collect();
+        let set = |step: &Move| {
+            [
+                (raw, tight_at, tight_bytes),
+                (raw, staging_at, tiles.size),
+                (raw, step.at, shape_bytes),
+            ]
+        };
+        let sets = OwnedSets::write(device, &kernel, &[set(&into), set(&back)])?;
+        for region in &mut regions {
+            region.buffer_offset += tight_at;
+        }
         Ok(HeapTiledCopies {
             tiles,
-            _tight: tight,
-            tight_raw,
+            tight_raw: raw,
             regions,
             samples: (samples > 1).then(OnceLock::new),
-            planes: planes.to_vec(),
+            planes,
             tight_at,
-            _shapes: shapes,
-            shapes_raw,
+            shapes_raw: raw,
             moves: [into, back],
             kernel,
             sets,

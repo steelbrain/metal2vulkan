@@ -188,7 +188,7 @@ impl TiledTexelsModule {
         if levels.len() > Self::MAX_LEVELS as usize {
             return None;
         }
-        let mut words = vec![0u32; Self::SHAPE_WORDS as usize];
+        let mut words = [0u32; Self::SHAPE_WORDS as usize];
         words[0] = grid_width;
         words[1] = u32::from(into_tight);
         words[2] = levels.len() as u32;

@@ -224,6 +224,8 @@ mod heap_set_walk;
 mod heap_sets;
 mod heap_tiled;
 mod heap_tiled_blocks;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod heap_tiled_scratch;
 mod heap_usage;
 mod held_depth;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
