@@ -1334,9 +1334,11 @@ driver's. Each is open work.
   refuses the first form (`memory.rs`'s `DmaBufFor::Buffer`,
   `WorkCounts::dma_buf_buffer_imports_dedicated`). A guest RAM's chunk or an object's run inside
   one cannot be: its objects' buffers are bound in it, and Vulkan binds only the dedicated buffer
-  in a dedicated allocation (`VUID-vkBindBufferMemory-memory-01508`). A chunk is 64 MiB or more;
-  an object's run alone of a few pages the driver may refuse so, and the object then takes the
-  runtime's other paths (`host_ram.rs`'s `bind_in_chunk`). It also **closes the descriptor it was
+  in a dedicated allocation (`VUID-vkBindBufferMemory-memory-01508`). A chunk is 64 MiB or more,
+  which the driver takes so (measured: a 64 MiB chunk imported dedicated to nothing on the RTX 5080
+  Laptop, its RAM's first page dedicated to its buffer); an object's run alone of a few pages the
+  driver may refuse so, and the object then takes the runtime's other paths (`host_ram.rs`'s
+  `bind_in_chunk`). It also **closes the descriptor it was
   handed**, which the Vulkan specification gives it only on a successful import: `F_GETFD` on the
   descriptor reads `EBADF` the instant the call returns. Closing it again aborted the process on
   Rust's I/O safety check, so an import now hands the driver a clone and never closes a clone it
