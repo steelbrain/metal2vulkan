@@ -2497,3 +2497,52 @@ fn a_take_given_back_is_taken_again_at_the_next_use() {
     assert_eq!(encode().0, [Moved::Into(k)]);
     assert_eq!(encode().0, []);
 }
+
+/// A recording in place of another that never runs (`ShadowSync::over`: a host step's of work its
+/// commit recorded) takes the copy where that one took it, whatever the mark, keeping its take,
+/// and decides a use that one did not meet by the mark. As it replaces that one, a take of that
+/// one it never met is given back (`Takes::give_back_unheld`), and one it kept is not. A use that
+/// one met and took nothing at takes nothing, the mark left for the next use.
+#[test]
+fn a_recording_in_place_of_another_keeps_its_takes() {
+    let t = taken_at_use(ResourceKey::new(), 0..4096);
+    let u = taken_at_use(ResourceKey::new(), 4096..8192);
+    let (kt, ku) = (t.shadow_key, u.shadow_key);
+    let levels = t.levels.as_ref().expect("a copy taken at use");
+    let first_use = |sync: &mut ShadowSync<u32>, of: &Arc<ShadowCopies>| {
+        moved(&planned(sync, &mut 0, &[(of, false)], &[]))
+    };
+    // The commit's recording takes t's copy.
+    let mut commit = ShadowSync::default();
+    assert_eq!(first_use(&mut commit, &t), [Moved::Into(kt)]);
+    let took = commit.into_takes();
+    // The step's takes t's where the commit's took it, the mark clear, and u's by its mark.
+    let mut step = ShadowSync::over(took.clone());
+    assert_eq!(first_use(&mut step, &t), [Moved::Into(kt)]);
+    assert_eq!(first_use(&mut step, &u), [Moved::Into(ku)]);
+    let kept = step.into_takes();
+    // The take it kept is not given back, and its own holds u's.
+    took.give_back_unheld(&kept);
+    assert_eq!(first_use(&mut ShadowSync::default(), &t), []);
+    assert_eq!(first_use(&mut ShadowSync::default(), &u), []);
+    // Its takes are the ones a failure gives back.
+    kept.give_back();
+    assert_eq!(first_use(&mut ShadowSync::default(), &t), [Moved::Into(kt)]);
+    assert_eq!(first_use(&mut ShadowSync::default(), &u), [Moved::Into(ku)]);
+    // A take of the commit's the step never meets is given back.
+    levels.mark_stale();
+    let mut commit = ShadowSync::default();
+    assert_eq!(first_use(&mut commit, &t), [Moved::Into(kt)]);
+    let took = commit.into_takes();
+    let step = ShadowSync::<u32>::over(took.clone());
+    took.give_back_unheld(&step.into_takes());
+    assert_eq!(first_use(&mut ShadowSync::default(), &t), [Moved::Into(kt)]);
+    // A use the commit's met and took nothing at takes nothing after a `did_modify_data`, which
+    // is the next use's to take.
+    let mut commit = ShadowSync::default();
+    assert_eq!(first_use(&mut commit, &t), []);
+    let took_none = commit.into_takes();
+    levels.mark_stale();
+    assert_eq!(first_use(&mut ShadowSync::over(took_none), &t), []);
+    assert_eq!(first_use(&mut ShadowSync::default(), &t), [Moved::Into(kt)]);
+}

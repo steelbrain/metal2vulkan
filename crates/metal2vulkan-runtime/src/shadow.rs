@@ -252,7 +252,12 @@
 //!   where that take is still the texture's latest and nothing set the mark since. An encoder of
 //!   several parts (split at a host step) gives back every take of its own where any of its parts
 //!   runs nothing, so one that ran in an earlier part is taken again at the next use
-//!   (docs/FAST-PATHS.md, known gaps).
+//!   (docs/FAST-PATHS.md, known gaps). A command buffer dropped without a commit gives back every
+//!   take of its ended encoders (`CommandBufferShared`'s drop). Work its commit recorded and its
+//!   host step records again (`CommandBufferShared::host_step`), the commit's recording never
+//!   submitted, takes the copy where the commit's recording took it, keeping that take, and
+//!   decides a use that recording did not meet by the mark; a take of that recording the step's
+//!   does not meet is given back ([`ShadowSync::over`], [`Takes::give_back_unheld`]).
 //!   For a format `generate_mipmaps` leaves as it is or refuses, the copy in moves the first level
 //!   alone and the later levels keep what they hold (docs/FAST-PATHS.md, known gaps).
 
@@ -3192,10 +3197,32 @@ impl Takes {
     /// ([`LevelsCopy::give_back`]).
     pub(super) fn give_back(&self) {
         for took in self.0.iter().filter_map(|(_, took)| took.as_ref()) {
-            let copies = took.copies.upgrade();
-            if let Some(levels) = copies.as_ref().and_then(|copies| copies.levels.as_ref()) {
-                levels.give_back(took.number);
+            took.give_back();
+        }
+    }
+
+    /// Give back every take that `held` does not hold: these are a recording's that `held`'s
+    /// replaces, which never runs, and `held`'s recording kept the takes it met
+    /// ([`ShadowSync::over`]).
+    pub(super) fn give_back_unheld(&self, held: &Takes) {
+        let holds = |took: &Took| {
+            (held.0.iter().filter_map(|(_, other)| other.as_ref()))
+                .any(|other| other.number == took.number && other.copies.ptr_eq(&took.copies))
+        };
+        for took in self.0.iter().filter_map(|(_, took)| took.as_ref()) {
+            if !holds(took) {
+                took.give_back();
             }
+        }
+    }
+}
+
+impl Took {
+    /// Give the take back, where it is still its texture's latest ([`LevelsCopy::give_back`]).
+    fn give_back(&self) {
+        let copies = self.copies.upgrade();
+        if let Some(levels) = copies.as_ref().and_then(|copies| copies.levels.as_ref()) {
+            levels.give_back(self.number);
         }
     }
 }
@@ -3203,8 +3230,10 @@ impl Takes {
 /// How an encoder's first uses of a copy taken at use decide whether they take it.
 enum TakeBy {
     /// As the program encodes it: where the texture's mark asks ([`LevelsCopy::take`], which
-    /// clears it), each decision noted.
-    Mark(Takes),
+    /// clears it), each decision noted. Recorded in place of a recording that decided `replaced`
+    /// ([`ShadowSync::over`]), a use that one met decides as it did, keeping its take, and
+    /// noted so; only the others ask the mark.
+    Mark { replaced: Takes, noted: Takes },
     /// Encoded again (`command_buffer/reencode.rs`): as the use in its place in the first
     /// encoding decided, the first encoding's decisions not met yet held here. The first
     /// recording is never submitted, so its take is this one's; the mark is left as it is found,
@@ -3214,16 +3243,20 @@ enum TakeBy {
 
 impl TakeBy {
     /// Whether this first use in the encoder of `copies`, whose copy is `levels`, takes the copy,
-    /// and the take's number where it takes it by the mark (none for an encoding again's).
+    /// and the take's number where it takes it by the mark or keeps the take of the recording it
+    /// replaces (none for an encoding again's).
     fn take(&mut self, copies: &Arc<ShadowCopies>, levels: &LevelsCopy) -> (bool, Option<u64>) {
         let key = copies.shadow_key;
         match self {
-            TakeBy::Mark(noted) => {
-                let number = levels.take();
-                let took = number.map(|number| Took {
-                    copies: Arc::downgrade(copies),
-                    number,
-                });
+            TakeBy::Mark { replaced, noted } => {
+                let took = match replaced.0.iter().position(|(met, _)| *met == key) {
+                    Some(at) => replaced.0.remove(at).1,
+                    None => levels.take().map(|number| Took {
+                        copies: Arc::downgrade(copies),
+                        number,
+                    }),
+                };
+                let number = took.as_ref().map(|took| took.number);
                 noted.0.push((key, took));
                 (number.is_some(), number)
             }
@@ -3245,7 +3278,27 @@ impl<M> ShadowSync<M> {
             entries: Vec::new(),
             carry,
             tally: CarryTally::default(),
-            takes: TakeBy::Mark(Takes::default()),
+            takes: TakeBy::Mark {
+                replaced: Takes::default(),
+                noted: Takes::default(),
+            },
+        }
+    }
+
+    /// A core that records work again in place of a recording that decided `replaced` of its
+    /// copies taken at use ([`Takes`]), which never runs: a host step's recording of work its
+    /// commit recorded (`CommandBufferShared::host_step`). Each of its first uses that recording
+    /// met takes the copy where it took it, keeping its take; any other where the texture's mark
+    /// asks. A take of `replaced` it never meets is given back as its recording replaces that
+    /// one ([`Takes::give_back_unheld`]). Nothing is carried: every other texture copies in at
+    /// its first use.
+    pub(super) fn over(replaced: Takes) -> ShadowSync<M> {
+        ShadowSync {
+            takes: TakeBy::Mark {
+                replaced,
+                noted: Takes::default(),
+            },
+            ..ShadowSync::default()
         }
     }
 
@@ -3260,11 +3313,12 @@ impl<M> ShadowSync<M> {
         }
     }
 
-    /// What its first uses of copies taken at use decided, as the program encoded them, for an
-    /// encoding of the encoder again ([`again`](Self::again)); none for an encoding again.
+    /// What its first uses of copies taken at use decided, as the program encoded them or as a
+    /// recording in place of another kept them ([`over`](Self::over)), for an encoding of the
+    /// encoder again ([`again`](Self::again)) and for a give-back; none for an encoding again.
     pub(super) fn into_takes(self) -> Takes {
         match self.takes {
-            TakeBy::Mark(noted) => noted,
+            TakeBy::Mark { noted, .. } => noted,
             TakeBy::Again(_) => Takes::default(),
         }
     }

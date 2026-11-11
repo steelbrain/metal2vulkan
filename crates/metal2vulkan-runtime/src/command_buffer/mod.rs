@@ -855,6 +855,12 @@ pub(super) struct State {
     /// use, which its encoding again takes as they did (`shadow::Takes`,
     /// `command_buffer/reencode.rs`).
     pub(super) replaying_takes: Takes,
+    /// What the recording a host step records a segment again in place of decided of its copies
+    /// taken at use, while the step records it: each core the step records into keeps those
+    /// takes where it meets them (`shadow::ShadowSync::over`, `EncoderCore::segment`). None
+    /// otherwise. The step holds the turn (`reencoding`), so no other recording into the command
+    /// buffer's pool meets it.
+    pub(super) step_takes: Takes,
     /// The pools of its commands' set 0 (`descriptor_arena.rs`), given back or released with
     /// the uploads.
     pub(super) descriptors: DescriptorArena,
@@ -1874,6 +1880,18 @@ impl State {
         }
     }
 
+    /// Give back every take of a copy taken at use its ended encoders and the recordings of
+    /// their segments took (`shadow::Takes::give_back`): none of them runs.
+    fn give_back_takes(&self) {
+        for record in &self.ended {
+            record.takes.give_back();
+        }
+        let segments = self.recorded.iter().flat_map(|part| &part.segments);
+        for done in segments.filter_map(|segment| segment.recorded.as_ref()) {
+            done.takes.give_back();
+        }
+    }
+
     /// A failed encoder's recorded `part` runs nothing: its segments (with their recordings),
     /// sparse updates and writes into ASTC carriers go to `retained`, released with what the
     /// command buffer retained without this lock, its `VkCommandBuffer`s are left unsubmitted,
@@ -2133,7 +2151,15 @@ impl Drop for CommandBufferShared {
         // nothing of its pool is pending. The device's spares keep it (`spares.rs`), which
         // release it only with the device. A timestamp slot it still holds goes back with its
         // state.
-        let pool = lock(&self.state).pool.take();
+        let pool = {
+            let mut state = lock(&self.state);
+            // One never committed ran nothing, as Metal runs nothing of it: each take of a copy
+            // taken at use goes back, so the texture's next use takes the copy.
+            if state.status == CommandBufferStatus::NotEnqueued {
+                state.give_back_takes();
+            }
+            state.pool.take()
+        };
         if let Some(pool) = pool {
             let shared = self.device.shared();
             shared.spares.give_command_pool(shared, pool, false);
@@ -2215,6 +2241,7 @@ impl CommandBuffer {
                 pass_runs: PassRuns::default(),
                 replaying_keeps: Vec::new(),
                 replaying_takes: Takes::default(),
+                step_takes: Takes::default(),
                 descriptors: DescriptorArena::default(),
                 status_words: None,
                 mesh_grid_past: false,
@@ -4560,8 +4587,17 @@ impl CommandBufferShared {
                 lock(&self.state).step_failure = Some(recording_error(device, error));
                 break;
             };
+            // The step's recording keeps the takes of copies taken at use of the one `commit`
+            // made, which never runs (`shadow::ShadowSync::over`).
+            {
+                let mut state = lock(&self.state);
+                let segment = &state.recorded[encoder].segments[at];
+                let replaced = segment.recorded.as_ref().map(|done| done.takes.clone());
+                state.step_takes = replaced.unwrap_or_default();
+            }
             let recorded = work.step(&buffer, &inputs);
             let mut state = lock(&self.state);
+            state.step_takes.clear();
             match recorded {
                 Ok(done) => {
                     let segment = &mut state.recorded[encoder].segments[at];
@@ -4570,6 +4606,10 @@ impl CommandBufferShared {
                     segment.gpu_alone = false;
                     let before = segment.recorded.replace(done);
                     if let Some(mut before) = before {
+                        // What `commit`'s took that the step's did not meet goes back.
+                        if let Some(now) = &segment.recorded {
+                            before.takes.give_back_unheld(&now.takes);
+                        }
                         state.retained.extend(before.retained.into_entry());
                         before.taken.retain_into(&mut state.retained);
                     }

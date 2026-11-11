@@ -468,8 +468,10 @@ the GPU, so it reads the bytes as they are when the command buffer runs. A rebin
 encoder again before its command buffer's first submission (`Buffer::rebind_bytes_no_copy`) takes
 the copy in the encoding again where the first encoding took it, and a `did_modify_data` made since
 is left to the next use encoded. A take whose encoder runs nothing, its command buffer having failed
-before it ran (committed as failed, or a submission that fails), is given back: the next use takes
-the copy. Between takes no write of
+before it ran (committed as failed, or a submission that fails) or dropped without a commit, is
+given back: the next use takes the copy. Work a host step records again after the commit (an
+execution of indirect commands the CPU wrote since) takes the copy where the commit's recording
+took it. Between takes no write of
 the bytes reaches a level, and nothing the GPU writes into a level reaches the bytes or the other
 levels. `get_bytes` and `replace_region` of the first level read and write the buffer's bytes, as
 the Macs' do, and of a later level the image (an accepted difference, section 10). While the

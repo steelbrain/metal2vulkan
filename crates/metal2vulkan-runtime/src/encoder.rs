@@ -741,9 +741,10 @@ impl EncoderCore {
     /// A core of `command_buffer` over a new `VkCommandBuffer` of its pool, begun, that abandons
     /// nothing when dropped.
     fn segment_raw(command_buffer: &CommandBuffer, ordered: bool) -> Result<EncoderCore, Error> {
-        let (raw, keeping) = {
+        let (raw, keeping, replaced) = {
             let mut state = command_buffer.state();
-            (command_buffer.allocate_raw(&mut state)?, state.keeping())
+            let raw = command_buffer.allocate_raw(&mut state)?;
+            (raw, state.keeping(), state.step_takes.clone())
         };
         let device = command_buffer.device().shared().vk();
         // A chunk kept for later command buffers (`kept_commands.rs`) may run in several at once.
@@ -760,7 +761,11 @@ impl EncoderCore {
             .shared()
             .counts
             .encoder_command_buffer_begun(Begun::Segment);
-        Ok(EncoderCore::over(command_buffer, raw, ordered))
+        let mut core = EncoderCore::over(command_buffer, raw, ordered);
+        // A host step's recording keeps the takes of the recording it replaces
+        // (`State::step_takes`); none elsewhere.
+        core.shadows = ShadowSync::over(replaced);
+        Ok(core)
     }
 
     /// A core that records apart for a segment of `command_buffer`, unordered (`kept_commands.rs`):
