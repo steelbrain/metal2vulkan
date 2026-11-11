@@ -537,6 +537,8 @@ mod spares_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod spares_latency;
 mod sparse;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod sparse_host_pages;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod srgb_fetch_images;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
