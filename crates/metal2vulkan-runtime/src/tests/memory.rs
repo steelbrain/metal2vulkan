@@ -1,8 +1,8 @@
 use crate::memory::{
     candidates, dma_buf_candidates, fd_buffer_types, host_cached, host_cached_placement,
-    host_image_types, host_incoherent, kept_budget, overflow_candidates, pooled_block_bytes,
-    worked_first, MemoryClass, Pool, BLOCK_BYTES, KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES,
-    KEPT_EMPTY_FOR,
+    host_image_types, host_incoherent, kept_budget, overflow_candidates, placement_order,
+    pooled_block_bytes, worked_first, MemoryClass, Pool, BLOCK_BYTES, KEPT_EMPTY_BLOCKS,
+    KEPT_EMPTY_BYTES, KEPT_EMPTY_FOR,
 };
 use ash::vk;
 use std::time::Instant;
@@ -171,6 +171,60 @@ fn device_local_classes_overflow_into_system_memory() {
             "{class:?}"
         );
     }
+}
+
+/// A `Private` placement walks the device-local types before any it overflows into, and asks each
+/// type's pool alone for a kept dedicated block: with the memory types of an RTX 5080 Laptop GPU
+/// (NVIDIA 615.71.09, resizable BAR: type 1 device-local, type 4 device-local and host-visible,
+/// types 0, 2 and 3 system memory, 3 host-cached), whose buffers may take every type, kept
+/// 256 MiB dedicated blocks of types 1 and 3 (a two-copy `Managed` pair's device copy and host
+/// copy, released) give a 256 MiB `Private` placement the type-1 block, and the type-3 block only
+/// once no device-local type is left to try.
+#[test]
+fn a_private_placement_takes_a_kept_block_of_a_device_local_type_first() {
+    use vk::MemoryPropertyFlags as P;
+    let host = P::HOST_VISIBLE | P::HOST_COHERENT;
+    let types = [
+        ty(P::empty()),
+        ty(P::DEVICE_LOCAL),
+        ty(host),
+        ty(host | P::HOST_CACHED),
+        ty(P::DEVICE_LOCAL | host),
+    ];
+    let all = 0b1_1111;
+    assert_eq!(
+        placement_order(&types, all, MemoryClass::Private, false),
+        [(1, false), (4, false), (0, true), (2, true), (3, true)]
+    );
+    // One pool per memory type, as `Memory` keeps them; a kept 256 MiB block in types 1 and 3.
+    const BYTES: u64 = 256 << 20;
+    let start = Instant::now();
+    let mut pools: Vec<Pool<u32>> = (0..types.len()).map(|_| Pool::default()).collect();
+    for type_index in [1, 3] {
+        let pool = &mut pools[type_index];
+        let block = pool.add(BYTES, true, type_index as u32, BYTES);
+        assert_eq!(
+            pool.release(block, (0, BYTES), start, u64::MAX, |_| true),
+            None
+        );
+    }
+    // `place`'s walk of the kept blocks: each type's pool in the placement's order.
+    let mut take = |allowed: u32| {
+        placement_order(&types, allowed, MemoryClass::Private, false)
+            .into_iter()
+            .find_map(|(type_index, overflowing)| {
+                let pool = &mut pools[type_index as usize];
+                let block = pool.place_dedicated(BYTES)?;
+                Some((*pool.payload(block)?, overflowing))
+            })
+    };
+    assert_eq!(take(all), Some((1, false)), "the device-local block");
+    assert_eq!(
+        take(all),
+        Some((3, true)),
+        "the system-memory block, overflowing, once no device-local block is kept"
+    );
+    assert_eq!(take(all), None);
 }
 
 /// `Shared` memory prefers a host-cached coherent type, then a device-local one, with unified

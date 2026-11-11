@@ -892,6 +892,26 @@ pub(super) fn overflow_candidates(
     ranked.into_iter().map(|(_, index)| index).collect()
 }
 
+/// The memory types a placement of `class` among `types` (the bits of `allowed`) tries, in the
+/// order [`place`] and [`allocate_exported`] try them, each with whether the class overflows into
+/// it: the class's own [`candidates`] first, then the types it overflows into
+/// ([`overflow_candidates`]). Each type's pool is asked alone, its pooled room, then its kept
+/// dedicated blocks ([`Pool::place_dedicated`]), then a new block: so a kept block of a type the
+/// class overflows into takes the placement only where every one of the class's own types failed
+/// to place it and to make a block for it.
+pub(super) fn placement_order(
+    types: &[vk::MemoryType],
+    allowed: u32,
+    class: MemoryClass,
+    unified: bool,
+) -> Vec<(u32, bool)> {
+    let own = candidates(types, allowed, class, unified).into_iter();
+    let overflow = overflow_candidates(types, allowed, class, unified).into_iter();
+    (own.map(|type_index| (type_index, false)))
+        .chain(overflow.map(|type_index| (type_index, true)))
+        .collect()
+}
+
 /// The memory types an import of a dma-buf takes among `types` (the bits of `allowed`, the types
 /// both the dma-buf and what is bound in it take), in the order they are tried: the [`candidates`]
 /// of `class` first, then every other type of `allowed` the runtime may allocate ([`allocatable`])
@@ -4776,18 +4796,15 @@ pub(super) fn allocate_exported(
         return place(memory, device, requirements, class, None, holds, fit);
     }
     let size = requirements.size.max(1);
-    let (candidates, overflow, maker) = {
+    let (order, maker) = {
         let memory = lock(memory);
         let bits = requirements.memory_type_bits;
         (
-            candidates(&memory.types, bits, class, memory.unified),
-            overflow_candidates(&memory.types, bits, class, memory.unified),
+            placement_order(&memory.types, bits, class, memory.unified),
             memory.maker(),
         )
     };
     let mut failure = Error::OutOfMemory(MemoryKind::Device);
-    let order = (candidates.iter().map(|&type_index| (type_index, false)))
-        .chain(overflow.iter().map(|&type_index| (type_index, true)));
     for (type_index, overflowing) in order {
         // As a new block of [`place`]'s, the frees posted of a heap it would fill complete first.
         let before = lock(memory).frees_before(type_index, size);
@@ -4839,22 +4856,16 @@ fn place(
     if holds == Holds::Images {
         *(lock(memory).image_placements.entry((size, align))).or_default() += 1;
     }
-    let (candidates, overflow, maker) = {
+    let (order, maker) = {
         let memory = lock(memory);
         let bits = requirements.memory_type_bits;
         (
-            candidates(&memory.types, bits, class, memory.unified),
-            overflow_candidates(&memory.types, bits, class, memory.unified),
+            placement_order(&memory.types, bits, class, memory.unified),
             memory.maker(),
         )
     };
-    if candidates.is_empty() && overflow.is_empty() {
-        return Err(Error::OutOfMemory(MemoryKind::Device));
-    }
     let mut failure = Error::OutOfMemory(MemoryKind::Device);
     // The class's own types first, then those it overflows into where none of them has room.
-    let order = (candidates.iter().map(|&type_index| (type_index, false)))
-        .chain(overflow.iter().map(|&type_index| (type_index, true)));
     for (type_index, overflowing) in order {
         let pool = (holds, type_index);
         // Past half of the type's pooled block, a block of its own ([`pooled_block_bytes`]).
