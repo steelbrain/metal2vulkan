@@ -1,8 +1,9 @@
-//! Not a consumer's example: the GPU's bandwidth through two 256 MiB buffers of the runtime's own
-//! memory, made as a program makes them (`new_buffer`, or `new_buffer_with_descriptor` at an
-//! address it picks or at a pinned one), each pair after the pairs before it in the same device
-//! went, so that a pair may take the memory an earlier one left. A kernel reads one buffer and
-//! writes the other, one dispatch a command buffer, committed and waited for, with no CPU access.
+//! Not a consumer's example: the GPU's bandwidth through two 256 MiB buffers, made as a program
+//! makes them (`new_buffer`, `new_buffer_with_descriptor` at an address it picks or at a pinned
+//! one, or `new_buffer_with_bytes_no_copy` over pages of the example's own), each pair after the
+//! pairs before it in the same device went, so that a pair may take the memory an earlier one
+//! left. A kernel reads one buffer and writes the other, one dispatch a command buffer, committed
+//! and waited for, with no CPU access.
 //!
 //! ```sh
 //! METAL2VULKAN_LOG_MEMORY=1 cargo run --release -p metal2vulkan-runtime --example private_bandwidth
@@ -29,8 +30,10 @@ mod common;
 
 use metal2vulkan_runtime::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, CommandQueue, ComputePipelineState,
-    Device, GpuAddress, PipelineOptions, ResourceOptions, Size, StorageMode, WorkCounts,
+    Device, GpuAddress, HostMemory, PipelineOptions, ResourceOptions, Size, StorageMode,
+    WorkCounts,
 };
+use std::ptr::NonNull;
 use std::time::Instant;
 
 /// The bytes of each buffer.
@@ -55,59 +58,123 @@ enum Made {
     Descriptor,
     /// `newBufferWithDescriptor:` at a pinned address.
     Pinned,
+    /// `newBufferWithBytesNoCopy:length:options:deallocator:` over pages of the example's own.
+    NoCopy,
 }
 
-/// A pair: its buffers' storage mode and how they are made.
+/// The resource option bit no Metal header names that programs pass with their buffers' options
+/// (`ResourceOptions::BIT_20`), as a guest's calls carry it.
+const BIT_20: u64 = ResourceOptions::BIT_20;
+
+/// A pair: its buffers' storage mode, how they are made, and the option bits passed beside the
+/// storage mode.
 #[derive(Clone, Copy, Debug)]
-struct Pair(StorageMode, Made);
+struct Pair(StorageMode, Made, u64);
 
 impl Pair {
     fn name(self) -> String {
-        format!("{:?}-{:?}", self.0, self.1)
+        format!("{:?}-{:?}-{:#x}", self.0, self.1, self.options().raw())
+    }
+
+    fn options(self) -> ResourceOptions {
+        let modes = ResourceOptions::new(self.0, Default::default(), Default::default());
+        ResourceOptions::from_raw(modes.raw() | self.2).expect("options a buffer takes")
+    }
+}
+
+/// Anonymous private pages of the example's own, unmapped when dropped, after the buffer over them.
+struct Pages(NonNull<u8>);
+
+impl Pages {
+    fn new() -> common::Result<Pages> {
+        // SAFETY: a new anonymous mapping, which nothing else uses.
+        let pointer = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                BYTES as usize,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        if pointer == libc::MAP_FAILED {
+            return Err("mmap failed".into());
+        }
+        Ok(Pages(NonNull::new(pointer.cast()).ok_or("mmap gave null")?))
+    }
+}
+
+impl Drop for Pages {
+    fn drop(&mut self) {
+        // SAFETY: the mapping `new` made; every buffer over it went before it.
+        unsafe { libc::munmap(self.0.as_ptr().cast(), BYTES as usize) };
     }
 }
 
 /// The sequences, each on a device of its own: a pair first in a device, and after pairs of each
 /// storage mode went.
-const SEQUENCES: [(&str, &[Pair]); 4] = [
+const SEQUENCES: [(&str, &[Pair]); 5] = [
     (
         "first",
         &[
-            Pair(StorageMode::Private, Made::New),
-            Pair(StorageMode::Private, Made::Descriptor),
-            Pair(StorageMode::Private, Made::Pinned),
+            Pair(StorageMode::Private, Made::New, 0),
+            Pair(StorageMode::Private, Made::Descriptor, 0),
+            Pair(StorageMode::Private, Made::Pinned, 0),
         ],
     ),
     (
         "after-managed",
         &[
-            Pair(StorageMode::Managed, Made::New),
-            Pair(StorageMode::Private, Made::New),
-            Pair(StorageMode::Private, Made::Pinned),
+            Pair(StorageMode::Managed, Made::New, 0),
+            Pair(StorageMode::Private, Made::New, 0),
+            Pair(StorageMode::Private, Made::Pinned, 0),
         ],
     ),
     (
         "after-shared",
         &[
-            Pair(StorageMode::Shared, Made::New),
-            Pair(StorageMode::Private, Made::New),
-            Pair(StorageMode::Private, Made::Pinned),
+            Pair(StorageMode::Shared, Made::New, 0),
+            Pair(StorageMode::Private, Made::New, 0),
+            Pair(StorageMode::Private, Made::Pinned, 0),
         ],
     ),
     (
         "shared-managed-private",
         &[
-            Pair(StorageMode::Shared, Made::Pinned),
-            Pair(StorageMode::Managed, Made::Pinned),
-            Pair(StorageMode::Private, Made::Pinned),
+            Pair(StorageMode::Shared, Made::Pinned, 0),
+            Pair(StorageMode::Managed, Made::Pinned, 0),
+            Pair(StorageMode::Private, Made::Pinned, 0),
+        ],
+    ),
+    // As a guest's buffers come: `Shared` and `Managed` ones over its pages, then `Private` ones
+    // at its addresses, each with bit 20.
+    (
+        "no-copy-then-private",
+        &[
+            Pair(StorageMode::Shared, Made::NoCopy, BIT_20),
+            Pair(StorageMode::Managed, Made::NoCopy, BIT_20),
+            Pair(StorageMode::Private, Made::Pinned, BIT_20),
+            Pair(StorageMode::Private, Made::New, BIT_20),
         ],
     ),
 ];
 
-/// One buffer of `pair`, the `index`th of its two.
-fn make(device: &Device, pair: Pair, index: u64) -> common::Result<Buffer> {
-    let options = ResourceOptions::new(pair.0, Default::default(), Default::default());
+/// One buffer of `pair`, the `index`th of its two, over pages it pushes to `pages` where it is a
+/// no-copy one.
+fn make(device: &Device, pair: Pair, index: u64, pages: &mut Vec<Pages>) -> common::Result<Buffer> {
+    let options = pair.options();
     let buffer = match pair.1 {
+        Made::NoCopy => {
+            let host = Pages::new()?;
+            // SAFETY: the pages outlive the buffer (`run_pair` drops them after it), and only its
+            // commands use them.
+            let buffer = unsafe {
+                device.new_buffer_with_bytes_no_copy(HostMemory::new(host.0), BYTES, options, None)
+            }?;
+            pages.push(host);
+            buffer
+        }
         Made::New => device.new_buffer(BYTES, options)?,
         Made::Descriptor => device.new_buffer_with_descriptor(BufferDescriptor::new(
             BYTES,
@@ -210,9 +277,11 @@ fn run_pair(
     sequence: &str,
     pair: Pair,
 ) -> common::Result<()> {
+    // Before the buffers: dropped after them.
+    let mut pages = Vec::new();
     let before = device.work_counts();
-    let input = make(device, pair, 0)?;
-    let output = make(device, pair, 1)?;
+    let input = make(device, pair, 0, &mut pages)?;
+    let output = make(device, pair, 1, &mut pages)?;
     let made = moved(&before, &device.work_counts());
     let command_buffer = queue.command_buffer()?;
     let mut blit = command_buffer.blit_command_encoder()?;
