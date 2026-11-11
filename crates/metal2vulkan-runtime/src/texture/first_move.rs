@@ -1723,6 +1723,11 @@ impl Taken<'_> {
             .iter()
             .copied()
             .partition(|fill| fill.staging.is_none());
+        // Copies into bytes a copy before them wrote land after it, in the order they were noted:
+        // a barrier before each that meets one since the last barrier. A `Managed` no-copy
+        // buffer's copies in (`managed_copy.rs`: its making's, a rebind's, each
+        // `did_modify_range`'s) read its pages at different times.
+        let mut landed: Vec<(vk::Buffer, std::ops::Range<u64>)> = Vec::new();
         for (at, fill) in zeros.iter().chain(&staged).enumerate() {
             if at == zeros.len() && at > 0 {
                 // SAFETY: the caller's contract.
@@ -1756,6 +1761,26 @@ impl Taken<'_> {
             if fill.copies.is_empty() {
                 continue;
             }
+            let ranges = fill
+                .copies
+                .iter()
+                .map(|copy| copy.dst_offset..copy.dst_offset + copy.size);
+            let meets = ranges.clone().any(|range| {
+                (landed.iter()).any(|(buffer, before)| {
+                    *buffer == fill.buffer && range.start < before.end && before.start < range.end
+                })
+            });
+            if meets {
+                // SAFETY: the caller's contract.
+                unsafe {
+                    let flags = vk::DependencyFlags::empty();
+                    let memory = &written();
+                    device.cmd_pipeline_barrier(command_buffer, all, all, flags, memory, &[], &[]);
+                }
+                exit_guard::called(Call::CmdPipelineBarrier);
+                landed.clear();
+            }
+            landed.extend(ranges.map(|range| (fill.buffer, range)));
             // SAFETY: as above; every copy lies within its source, the device's zeros (live and
             // `ZERO_BYTES` long) or a staging buffer the fill keeps, and within the buffer,
             // held, which has `TRANSFER_DST` usage as every buffer of the runtime's.

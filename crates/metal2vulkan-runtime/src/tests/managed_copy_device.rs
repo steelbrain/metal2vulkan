@@ -9,6 +9,7 @@
 //!   a blit's `synchronize_resource`, and not without one. The buffer keeps its Metal address and
 //!   its `contents` pointer, no copy of the pages is made (`copied.rs`), and its deallocator runs
 //!   once, at its release.
+//!   Copies in that wait for one submission land in the order of their calls.
 //! - **Bounded.** A 256 MiB buffer over pages no import maps holds its 256 MiB of device-local
 //!   memory and, across cycles of a whole `did_modify_range` and a command buffer, at most the
 //!   bound of what is staged, none once the cycle completed.
@@ -366,6 +367,40 @@ fn copies_through_an_import() {
 #[test]
 fn copies_through_pages_no_import_maps() {
     copies(Route::Pages);
+}
+
+/// Copies in that wait for one submission land in the order of their calls: the making's, then
+/// two `did_modify_range`s of the whole buffer, each of other bytes, read by one command buffer
+/// (the module docs, **Copies**).
+fn ordered(route: Route) {
+    let pages = Pages::new(BYTES);
+    pages.write_pattern();
+    let scratch = Scratch::new("managed-ordered");
+    let Some(device) = two_copy_device(&scratch, "ordered", route) else {
+        return;
+    };
+    let queue = device.new_command_queue().unwrap();
+    let ran = Ran::default();
+    let buffer = no_copy(&device, &pages, route, managed(), &ran);
+    for byte in [0x61, 0x62] {
+        pages.write(0..BYTES, byte);
+        buffer.did_modify_range(0..BYTES).unwrap();
+    }
+    assert_eq!(
+        read(&device, &queue, &buffer, 0..BYTES),
+        vec![0x62; BYTES as usize],
+        "{route:?}"
+    );
+}
+
+#[test]
+fn copies_in_through_an_import_land_in_their_order() {
+    ordered(Route::Import);
+}
+
+#[test]
+fn copies_in_of_pages_no_import_maps_land_in_their_order() {
+    ordered(Route::Pages);
 }
 
 /// A 256 MiB two-copy buffer over pages no import maps holds 256 MiB of device-local memory and
