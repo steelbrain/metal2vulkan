@@ -424,6 +424,20 @@ recorded here.
   615.71.09); with a 1x1 render encoder of no attachment between every two, 61.5-67.2 ms against
   107.4-118.6 ms and 9.3-12.2 ms against 44.5-47.1 ms (the second to fourth of four such command
   buffers in a process).
+- **A `Managed` no-copy buffer is two copies on a device without unified memory**
+  (`managed_copy.rs`, `HostBacking::DeviceCopy`), as Metal keeps a managed resource on a Mac with
+  a discrete GPU: device-local memory of the buffer's size beside the caller's pages
+  (`WorkCounts::managed_device_copy_bytes`), and copies across the bus, as GPU transfers from the
+  pages' import, else through staging buffers of at most 32 MiB, 256 MiB staged at most before the
+  call submits them and waits: the pages whole at the making and at each rebind, a
+  `did_modify_range`'s range before the next submission, the buffer whole at each
+  `synchronize_resource` of it (of a texture over it, the texels' bytes)
+  (`WorkCounts::managed_bytes_copied_in`, `managed_bytes_copied_out`, `managed_staging_bytes`). A
+  kernel reading one 256 MiB such buffer and writing another (`examples/managed_bandwidth.rs`,
+  release) ran at 864.6-866.8 GB/s on the RX 7900 XTX (RADV), where the buffer lay in its pages
+  before at 11.3-11.4 GB/s, and at 395.6-396.0 GB/s on the RTX 2080 (NVIDIA's driver), 2.7 GB/s
+  before; a `Shared` no-copy buffer, which stays in its pages, ran at 11.3-11.4 and 2.7 GB/s both
+  times, and a `Private` one at 865.0-867.3 and 395.6-396.0 GB/s.
 - **A no-copy buffer's deallocator runs in its release.** On an M3 Max under macOS 27.0.1 an unused
   no-copy buffer's deallocator ran inside its final release, on the releasing thread, every time.
   So a release that frees the buffer's import while a deallocator waits for the free frees it
@@ -450,6 +464,13 @@ recorded here.
 
 Open differences from Metal that no note announces yet, and runtime costs still above the
 driver's. Each is open work.
+
+- **A two-copy buffer over read-only pages keeps the GPU's writes until the command buffer that
+  made them completed** (`managed_copy.rs`, `WorkCounts::managed_writes_undone`): its pages are
+  copied in whole again at that completion, so the command buffer's later commands, and a
+  command buffer submitted before that completion, read the writes, which Metal drops.
+- **A `synchronize_resource` of a two-copy buffer encoded before a rebind copies to the pages
+  the buffer lay in when it was encoded** (`managed_copy.rs`), not to the new ones.
 
 - **A heap texture Metal keeps uncompressed lies in its driver's layout, not Metal's tiles, where
   its image fits Metal's answer in the heap's memory** (`texture/heap.rs`,
