@@ -688,3 +688,150 @@ fn derivation_modules_are_valid() {
         }
     }
 }
+
+/// The flat variant's 64-bit arm divides a `u64` by a `u32` in 32-bit operations
+/// ([`KernelDecl::divmod_64_by_32`]): on the CPU interpreter its quotient and remainder are Rust's
+/// for dividends at and around every power-of-two boundary of interest (2^16, 2^32, 2^58, 2^63,
+/// 2^64 - 1) and the Simulator screen's index range, and divisors 1, small, 1206 and 2622, and at
+/// both sides of 2^31 and 2^32 (where `2r + bit` carries past 32 bits).
+#[test]
+fn the_flat_variant_s_64_bit_division_is_exact() {
+    let mut cases: Vec<(u64, u32)> = Vec::new();
+    let ns = [
+        0u64,
+        1,
+        1 << 16,
+        3_162_132,
+        u64::from(u32::MAX),
+        1 << 32,
+        (1 << 32) + 1,
+        1 << 58,
+        1 << 63,
+        u64::MAX,
+    ];
+    let ds = [
+        1u32,
+        2,
+        3,
+        1206,
+        2622,
+        1 << 31,
+        (1 << 31) + 1,
+        u32::MAX - 1,
+        u32::MAX,
+    ];
+    for &n in &ns {
+        for k in [0u64, 1, 2] {
+            for &d in &ds {
+                cases.push((n.wrapping_sub(k), d));
+                cases.push((n.wrapping_add(k), d));
+            }
+        }
+    }
+    let mut mb = ModuleBuilder::new();
+    let u32_ = mb
+        .ty(Type::Int {
+            width: 32,
+            signed: false,
+        })
+        .expect("u32");
+    let rta = mb
+        .ty(Type::RuntimeArray {
+            elem: u32_,
+            stride: Some(4),
+        })
+        .expect("rta");
+    let layout = natural_layout(mb.types(), LayoutRule::Std430, true, &[rta]).expect("layout");
+    let block = mb
+        .ty(Type::Struct {
+            members: [rta].into(),
+            layout: Some(layout),
+        })
+        .expect("block");
+    let slot = ResourceSlot {
+        stage: Stage::Kernel,
+        kind: ResourceKind::Buffer,
+        index: 0,
+    };
+    let buf = mb
+        .resource(slot, StorageClass::StorageBuffer, block)
+        .expect("resource");
+    let uvec3 = mb.ty(Type::Vector { elem: u32_, len: 3 }).expect("uvec3");
+    let wg_var = mb
+        .builtin(crate::spv::BuiltIn::WorkgroupId, IoDir::Input, uvec3)
+        .expect("wg");
+    let void = mb.ty(Type::Void).expect("void");
+    let mut fb = mb.function(void).expect("function");
+    let f = &mut fb;
+    let k = |f: &mut FunctionBuilder<'_>, n: u32| {
+        let c = f.u32_const(n).expect("const");
+        f.module().const_value(c).expect("value")
+    };
+    // Case `i` (the workgroup's x) reads `[lo, hi, d]` at words `3i..` and writes
+    // `[q_lo, q_hi, r]` there.
+    let p = f.module().global_value(wg_var).expect("global");
+    let wg = f.load(p, MemAccess::default()).expect("load");
+    let i = f.composite_extract(wg, &[0]).expect("x");
+    let three = k(f, 3);
+    let at = f.binary(BinOp::IMul, i, three).expect("mul");
+    let base = f.module().global_value(buf).expect("buf");
+    let zero = k(f, 0);
+    let word = |f: &mut FunctionBuilder<'_>, j: u32| {
+        let j = k(f, j);
+        let a = f.binary(BinOp::IAdd, at, j).expect("add");
+        f.access_chain(base, &[zero, a]).expect("chain")
+    };
+    let (pl, ph, pd) = (word(f, 0), word(f, 1), word(f, 2));
+    let lo = f.load(pl, MemAccess::default()).expect("lo");
+    let hi = f.load(ph, MemAccess::default()).expect("hi");
+    let d = f.load(pd, MemAccess::default()).expect("d");
+    let (q_lo, q_hi, r) = KernelDecl::divmod_64_by_32(f, [lo, hi], d).expect("divide");
+    f.store(pl, q_lo, MemAccess::default()).expect("store");
+    f.store(ph, q_hi, MemAccess::default()).expect("store");
+    f.store(pd, r, MemAccess::default()).expect("store");
+    fb.ret(None).expect("ret");
+    let id = fb.finish().expect("finish");
+    mb.entry(
+        ExecModel::GLCompute,
+        id,
+        vec![ExecMode::LocalSize { x: 1, y: 1, z: 1 }],
+    )
+    .expect("entry");
+    let m = mb.finalize().expect("finalize");
+    let p = crate::pipeline::testing::profile("intel-arl-anv", DevicePolicy::default())
+        .expect("profile");
+    assert_valid(m.clone(), &p);
+    let bytes: Vec<u8> = cases
+        .iter()
+        .flat_map(|&(n, d)| [n as u32, (n >> 32) as u32, d])
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    let res = Resources {
+        buffers: vec![Buffer {
+            slot: Some(slot),
+            address: None,
+            bytes,
+        }],
+        push: Vec::new(),
+        spec: BTreeMap::new(),
+    };
+    let cfg = Config {
+        workgroups: [cases.len() as u32, 1, 1],
+        ..Config::default()
+    };
+    let out = run(&m, &cfg, res).expect("run");
+    let w: Vec<u32> = out.buffers[0]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes(*c))
+        .collect();
+    for (j, &(n, d)) in cases.iter().enumerate() {
+        let q = u64::from(w[3 * j]) | (u64::from(w[3 * j + 1]) << 32);
+        assert_eq!(
+            (q, w[3 * j + 2]),
+            (n / u64::from(d), (n % u64::from(d)) as u32),
+            "{n} / {d}"
+        );
+    }
+}
