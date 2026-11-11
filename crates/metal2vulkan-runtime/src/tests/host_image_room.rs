@@ -3,8 +3,9 @@
 //! types alone, never one the class overflows into: where none of them has room, the texture's
 //! image is made without host-transfer usage, in device-local memory where that image has room.
 //! An RTX 3090 without resizable BAR (NVIDIA 620.70.06) places a host-transfer image in its
-//! 246 MiB BAR heap alone, which every process's devices share; past it such textures lay in
-//! system memory (`device-memory-overflow`) while the 24 GiB device-local heap had room.
+//! 246 MiB BAR heap alone, which every process's devices share, and the image without the usage
+//! in its device-local heap of 24 GiB; the types it would overflow into are system memory
+//! (`device-memory-overflow`).
 //!
 //! Where the first texture's image takes the usage in a device-local type whose heap holds at most
 //! [`FILLED_AT_MOST`], textures of [`SIDE`] squared `Depth32Float` texels are made until their

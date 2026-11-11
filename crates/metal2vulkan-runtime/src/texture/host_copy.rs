@@ -39,8 +39,8 @@
 //!   (`memory::host_image_types`): where none of them has room, the image is made without the
 //!   usage, as on a device without `VK_EXT_host_image_copy`, in device-local memory where that
 //!   image has room there. An RTX 3090 without resizable BAR (NVIDIA 620.70.06) takes such an
-//!   image in its 246 MiB BAR heap alone, which every process's devices share; past it the image
-//!   lay in system memory while its 24 GiB device-local heap had room. Where the
+//!   image in its 246 MiB BAR heap alone, which every process's devices share, and the image
+//!   without the usage in its device-local heap of 24 GiB. Where the
 //!   device reserved a staging queue (`device/staging.rs`: a copy engine, NVIDIA's; or, on a
 //!   device where no memory the host caches holds a texture's image, a queue of compute work
 //!   beside its own, an RX 7900 XTX's), a color texture copies on the host only from host-cached

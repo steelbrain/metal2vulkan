@@ -468,11 +468,10 @@ fn host_transfer_images_prefer_host_cached_memory() {
 /// (`Device::host_placed_image`), which lies in device-local memory where a type of it has room
 /// and overflows only where none has. On an RTX 3090 without resizable BAR (NVIDIA 620.70.06) the
 /// one device-local type such an image takes, 5, lies in the 246 MiB BAR heap that every
-/// process's devices share; with the system memory types 3 and 4 it also allows among its types,
-/// a `Shared` `Depth32Float` texture past that heap lay in system memory, announced as
-/// `device-memory-overflow`, while the 24 GiB heap of type 1, which the image without the usage
-/// takes, had room. Unchanged: the host-cached types where the class has one, and the incoherent
-/// ones left out.
+/// process's devices share; the system memory types 3 and 4 it also allows are those its class
+/// overflows into (`device-memory-overflow`), while the image without the usage takes type 1, in
+/// the 24 GiB device-local heap. Where the class has a type the host caches, those alone; never
+/// an incoherent one.
 #[test]
 fn host_transfer_images_take_no_type_their_class_overflows_into() {
     let types = |raw: &[u32]| -> Vec<vk::MemoryType> {
