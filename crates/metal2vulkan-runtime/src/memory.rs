@@ -658,6 +658,37 @@ pub(super) fn host_cached_placement(
     Some((class, cached))
 }
 
+/// The memory class and types among `types`, as bits, an image of `class` with host-transfer
+/// usage whose requirements allow `allowed` takes (`texture/host_copy.rs`), on a device with
+/// unified memory (`unified`) or without, and whether they are types the host caches: never one
+/// the host maps without coherence ([`host_incoherent`]); those of the class the host caches where
+/// the image may take one ([`host_cached_placement`]); else the class's types among those
+/// allowed. Never a type the class overflows into ([`overflow_candidates`]): where none of the
+/// class's types has room, the image is made without host-transfer usage, and that image lies in
+/// device-local memory where a type of it has room. The types an image with the usage takes can
+/// lie in a heap of their own: an RTX 3090 without resizable BAR (NVIDIA 620.70.06) places such
+/// an image in its 246 MiB BAR heap alone, which every process's devices share, beside a
+/// device-local heap of 24 GiB.
+pub(super) fn host_image_types(
+    types: &[vk::MemoryType],
+    allowed: u32,
+    class: MemoryClass,
+    unified: bool,
+) -> (MemoryClass, u32, bool) {
+    let allowed = allowed & !host_incoherent(types);
+    match host_cached_placement(types, allowed, class, unified) {
+        Some((class, cached)) => (class, class_types(types, cached, class, unified), true),
+        None => (class, class_types(types, allowed, class, unified), false),
+    }
+}
+
+/// The memory types of `class` among `types` (the bits of `allowed`), as bits ([`candidates`]):
+/// none it overflows into.
+fn class_types(types: &[vk::MemoryType], allowed: u32, class: MemoryClass, unified: bool) -> u32 {
+    (candidates(types, allowed, class, unified).into_iter())
+        .fold(0, |bits, index| bits | 1 << index)
+}
+
 /// The memory types `class` may use among `types` (the bits of `allowed`), best first, on a
 /// device with unified memory (`unified`, `DeviceProperties::has_unified_memory`) or without.
 /// Only `Memoryless` uses a lazily allocated type, which serves transient attachments alone, and
@@ -2348,6 +2379,14 @@ impl Memory {
         self.frees = Some(frees);
     }
 
+    /// Memory type `type_index`'s properties and the size of its heap, for the crate's device
+    /// tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn type_and_heap(&self, type_index: u32) -> (vk::MemoryPropertyFlags, u64) {
+        let flags = self.types[type_index as usize].property_flags;
+        (flags, self.heaps[self.heap_of(type_index)].0)
+    }
+
     /// The memory heap of memory type `type_index`.
     fn heap_of(&self, type_index: u32) -> usize {
         self.types[type_index as usize].heap_index as usize
@@ -2544,36 +2583,15 @@ impl Memory {
         host_cached_placement(&self.types, u32::MAX, class, self.unified).is_some()
     }
 
-    /// The memory class an image of `class` with host-transfer usage takes in memory the host
-    /// caches, and its memory types among `allowed`, as bits ([`host_cached_placement`]).
-    pub(super) fn host_cached_placement(
-        &self,
-        allowed: u32,
-        class: MemoryClass,
-    ) -> Option<(MemoryClass, u32)> {
-        host_cached_placement(&self.types, allowed, class, self.unified)
-    }
-
-    /// The memory types the host maps without coherence, as bits ([`host_incoherent`]).
-    pub(super) fn host_incoherent(&self) -> u32 {
-        host_incoherent(&self.types)
-    }
-
     /// The memory class and types, as bits, an image of `class` with host-transfer usage whose
-    /// requirements allow `allowed` takes (`texture/host_copy.rs`), and whether they are types the
-    /// host caches: never one the host maps without coherence ([`host_incoherent`]); those the
-    /// host caches where the image may take one ([`host_cached_placement`]); else `class` and
-    /// every other type allowed.
+    /// requirements allow `allowed` takes, and whether they are types the host caches
+    /// ([`host_image_types`]).
     pub(super) fn host_image_types(
         &self,
         allowed: u32,
         class: MemoryClass,
     ) -> (MemoryClass, u32, bool) {
-        let allowed = allowed & !self.host_incoherent();
-        match self.host_cached_placement(allowed, class) {
-            Some((class, types)) => (class, types, true),
-            None => (class, allowed, false),
-        }
+        host_image_types(&self.types, allowed, class, self.unified)
     }
 
     /// The pool a color texture's host-transfer image places in, found once, where `copies` (read
@@ -2760,9 +2778,7 @@ impl Memory {
 
     /// The memory types of `class` among those `allowed` names, as bits.
     pub(super) fn class_types(&self, allowed: u32, class: MemoryClass) -> u32 {
-        candidates(&self.types, allowed, class, self.unified)
-            .into_iter()
-            .fold(0, |bits, index| bits | 1 << index)
+        class_types(&self.types, allowed, class, self.unified)
     }
 
     /// The index in `pools` of the pool of blocks of memory type `type_index` that hold `holds`.

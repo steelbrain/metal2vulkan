@@ -1,6 +1,7 @@
 use crate::memory::{
-    candidates, fd_buffer_types, host_cached, host_cached_placement, host_incoherent, kept_budget,
-    overflow_candidates, MemoryClass, Pool, KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES, KEPT_EMPTY_FOR,
+    candidates, fd_buffer_types, host_cached, host_cached_placement, host_image_types,
+    host_incoherent, kept_budget, overflow_candidates, MemoryClass, Pool, KEPT_EMPTY_BLOCKS,
+    KEPT_EMPTY_BYTES, KEPT_EMPTY_FOR,
 };
 use ash::vk;
 use std::time::Instant;
@@ -459,6 +460,74 @@ fn host_transfer_images_prefer_host_cached_memory() {
     for listed in [nvidia, radv, moltenvk, types(&[0xf]), both] {
         assert_eq!(host_incoherent(&listed), 0);
     }
+}
+
+/// A texture's image with host-transfer usage takes its class's own memory types alone, never one
+/// the class overflows into past full device-local memory (`overflow_candidates`): where none of
+/// them has room, the placement fails and the image is made without the usage
+/// (`Device::host_placed_image`), which lies in device-local memory where a type of it has room
+/// and overflows only where none has. On an RTX 3090 without resizable BAR (NVIDIA 620.70.06) the
+/// one device-local type such an image takes, 5, lies in the 246 MiB BAR heap that every
+/// process's devices share; with the system memory types 3 and 4 it also allows among its types,
+/// a `Shared` `Depth32Float` texture past that heap lay in system memory, announced as
+/// `device-memory-overflow`, while the 24 GiB heap of type 1, which the image without the usage
+/// takes, had room. Unchanged: the host-cached types where the class has one, and the incoherent
+/// ones left out.
+#[test]
+fn host_transfer_images_take_no_type_their_class_overflows_into() {
+    let types = |raw: &[u32]| -> Vec<vk::MemoryType> {
+        raw.iter()
+            .map(|&flags| ty(vk::MemoryPropertyFlags::from_raw(flags)))
+            .collect()
+    };
+    let private = MemoryClass::Private;
+    let nvidia = types(&[0x0, 0x1, 0x1, 0x6, 0xe, 0x7]);
+    // Allowed: system memory (3, 4) and the BAR heap (5). The image takes 5 alone: nothing it
+    // could overflow into.
+    let (class, taken, cached) = host_image_types(&nvidia, 0b11_1000, private, false);
+    assert_eq!((class, taken, cached), (private, 0b10_0000, false));
+    assert!(overflow_candidates(&nvidia, taken, class, false).is_empty());
+    // What the allowed types alone would overflow into.
+    assert_eq!(
+        overflow_candidates(&nvidia, 0b11_1000, private, false),
+        [3, 4]
+    );
+    // The image without the usage (an optimal depth image there: types 0 and 1) lies in the
+    // device-local type 1 and overflows into 0 only where 1 has no room.
+    assert_eq!(candidates(&nvidia, 0b11, private, false), [1]);
+    assert_eq!(overflow_candidates(&nvidia, 0b11, private, false), [0]);
+    // Allowed system memory alone: no type at all, so the placement fails before any allocation.
+    assert_eq!(
+        host_image_types(&nvidia, 0b1_1000, private, false),
+        (private, 0, false)
+    );
+    // RADV on a discrete GPU (the 780M's types without unified memory): its device-local types
+    // alone, the host-cached system type 5 left out.
+    let radv = types(&[
+        0x1, 0x1, 0x6, 0x7, 0x7, 0xe, 0xe, 0x21, 0x21, 0x21, 0x21, 0x20, 0x20, 0xc1, 0xc6, 0xc7,
+        0xce,
+    ]);
+    let allowed = 0b1_1100_0000_0010_1100;
+    let (class, taken, cached) = host_image_types(&radv, allowed, private, false);
+    assert_eq!((class, taken, cached), (private, 0b1000, false));
+    assert!(overflow_candidates(&radv, taken, class, false).is_empty());
+    // With unified memory nothing overflows, and the host-cached type stays the image's.
+    assert_eq!(
+        host_image_types(&radv, allowed, private, true),
+        (private, 0b10_0000, true)
+    );
+    // A device-local type the host caches, beside a cached system one: the device-local one alone.
+    let cached_both = types(&[0x1, 0xe, 0xf]);
+    assert_eq!(
+        host_image_types(&cached_both, 0b111, private, false),
+        (private, 0b100, true)
+    );
+    // ANV on Arrow Lake-S: the incoherent cached type 1 stays out.
+    let arl = types(&[0x7, 0xb, 0x21, 0x7]);
+    assert_eq!(
+        host_image_types(&arl, 0b1011, private, true),
+        (private, 0b1001, false)
+    );
 }
 
 /// The memory log's line for a large pooled placement names what it is, its class where placed,

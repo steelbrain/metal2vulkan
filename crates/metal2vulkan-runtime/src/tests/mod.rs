@@ -225,6 +225,8 @@ mod host_bytes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_hold_filter;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod host_image_room;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_import_counts;
 mod host_memory;
 #[cfg(m2v_gpu)]

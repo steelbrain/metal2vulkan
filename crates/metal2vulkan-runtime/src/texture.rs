@@ -3822,9 +3822,11 @@ impl Device {
         // host reads slowly where it does not cache it: such memory of the class where the
         // device has it, else `Shared` memory's with unified memory
         // (`memory::host_cached_placement`). Never memory the host maps without coherence, cached
-        // or not: the runtime flushes no mapped range (`memory::host_cached`). Where only such
-        // memory is allowed, the placement fails and `host_placed_image` makes the image without
-        // host-transfer usage, its copies through submissions, as on a device without host copies.
+        // or not: the runtime flushes no mapped range (`memory::host_cached`). Never a type its
+        // class overflows into (`Memory::host_image_types`). Where only such memory is allowed, or
+        // none of its types has room, the placement fails and `host_placed_image` makes the image
+        // without host-transfer usage, its copies through submissions, as on a device without host
+        // copies.
         let hosted = plan.usage.contains(ImageUsageFlags::HOST_TRANSFER);
         let (class, cached) = match hosted {
             true => {
@@ -5441,6 +5443,17 @@ impl Texture {
     pub(super) fn linear_image(&self) -> Result<bool, Error> {
         let image = self.image()?;
         Ok(image.linear && lock(&image.detached).is_none())
+    }
+
+    /// The memory type of the runtime's own memory the texture's image lies in: `None` for an
+    /// image in a buffer's, a heap's or the caller's memory, and where [`image`](Self::image)
+    /// refuses. For the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn placed_type(&self) -> Option<u32> {
+        match &self.image().ok()?.owner {
+            Owner::Runtime { placement, .. } => Some(placement.type_index()),
+            _ => None,
+        }
     }
 
     /// Whether the texture's image lies in memory of the runtime's own that overflowed past

@@ -34,7 +34,13 @@
 //!   device with unified memory, `Shared` memory the host caches (a Radeon 780M's
 //!   system memory, where its GPU uses the image as fast as in device-local memory or faster, and a
 //!   1080p `get_bytes` takes 2.6 ms where it took 108 ms from RADV's uncached device-local type);
-//!   else the class's memory as before, counted (`WorkCounts::uncached_host_images`). Where the
+//!   else the class's memory as before, counted (`WorkCounts::uncached_host_images`). Only the
+//!   class's own types, never one it overflows into past full device-local memory
+//!   (`memory::host_image_types`): where none of them has room, the image is made without the
+//!   usage, as on a device without `VK_EXT_host_image_copy`, in device-local memory where that
+//!   image has room there. An RTX 3090 without resizable BAR (NVIDIA 620.70.06) takes such an
+//!   image in its 246 MiB BAR heap alone, which every process's devices share; past it the image
+//!   lay in system memory while its 24 GiB device-local heap had room. Where the
 //!   device reserved a staging queue (`device/staging.rs`: a copy engine, NVIDIA's; or, on a
 //!   device where no memory the host caches holds a texture's image, a queue of compute work
 //!   beside its own, an RX 7900 XTX's), a color texture copies on the host only from host-cached
