@@ -31,7 +31,9 @@
 //! Each round ends once every worker freed its buffers and the device's live imports fell back to
 //! where they were (`WorkCounts::dma_buf_memories_live`); the test then reads the kernel's list
 //! until the test's dma-bufs on it stop falling (at most 2 s), and prints one line
-//! (`DMA-BUF-LEAK`): the round, the buffers by how each was freed, the runtime's imports made and
+//! (`DMA-BUF-LEAK`): the round, its time, and the workers' time in their buffers' makings (each
+//! one import), their frees and their waits for command buffers, the longest of each, the buffers
+//! by how each was freed, the runtime's imports made and
 //! freed and its live count, the imports released while idle and imported again
 //! (`host_imports_released`, `host_imports_reimported`), and the kernel's count of the test's
 //! dma-bufs still listed (and attached to a device) with their bytes: every one of them was freed
@@ -64,6 +66,17 @@
 //! - `DMA_BUF_LEAK_SUDO` (0): 1 reads the list through `sudo -n cat` where this user cannot read
 //!   it. Where the list cannot be read the lines say so and give the runtime's side alone.
 //! - `DMA_BUF_LEAK_FILE_MIB` (512): the guest RAM's size. `DMA_BUF_LEAK_SEED` (1).
+//! - `DMA_BUF_LEAK_DEADLINE_S` (60): the probe's own bound on its rounds' time. Once it passed,
+//!   each worker makes no more buffers, the round ends as any round does (its buffers freed, its
+//!   command buffers waited for, its checks made) and no round follows; a line says so
+//!   (`DMA-BUF-LEAK ... deadline`). Each wait for a command buffer is bounded too (60 s, a
+//!   failure). A step that never returns (a driver's call) holds its round past both, so the
+//!   rounds run on a thread of their own, and where they still run [`TAIL`] past the deadline the
+//!   test fails at once, naming the workers' steps in progress and how long each has run, and
+//!   leaves that thread to the process's end. Seen: on an RTX 5080 Laptop GPU (NVIDIA 615.71.09),
+//!   beside the runtime suite, the eight threads' first round took 379 s; on an RTX 3090 (NVIDIA
+//!   620.70.06) beside the suite, and on an RTX 2080 (620.70.06) alone, the four threads' first
+//!   round never ended, a worker spinning inside the driver while the others waited for it.
 //! - `DMA_BUF_LEAK_SERIAL`: `none` (the default), `imports` (one lock across the threads around each
 //!   buffer's making, which imports its dma-buf, and each buffer's drop, which frees an import the
 //!   GPU no longer uses) or `all` (that lock around the workers' commits too), to see whether the
@@ -78,15 +91,17 @@ use super::dma_buf_import_cycles::device_idle;
 use super::host_residency::{host_page, udmabuf, udmabuf_list, udmabuf_openable, Scratch};
 use super::merge_scratch::read;
 use super::no_pointer_import::{device, lists_dma_buf_route};
+use crate::device::lock;
 use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DmaBufChunk, DmaBufRequest,
     HostMemory, ResourceOptions, WorkCounts,
 };
+use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const TEST: &str = "DMA-BUF-LEAK";
@@ -109,6 +124,9 @@ const LINGER: Duration = Duration::from_millis(2500);
 /// How long a round waits for the kernel's list to settle.
 const KERNEL_SETTLE: Duration = Duration::from_secs(2);
 const WAIT: Duration = Duration::from_secs(60);
+/// How long past the deadline the rounds may run on, ending the round the deadline cut (its
+/// frees, and its waits for command buffers, each bounded by [`WAIT`]), before the test fails.
+const TAIL: Duration = Duration::from_secs(120);
 
 /// `DMA_BUF_SET_NAME`, `_IOW('b', 1, const char *)` in the generic ioctl encoding.
 const DMA_BUF_SET_NAME: u64 =
@@ -168,6 +186,7 @@ struct Knobs {
     file: u64,
     seed: u64,
     serial: Serial,
+    deadline: Duration,
 }
 
 impl Knobs {
@@ -227,6 +246,7 @@ impl Knobs {
                 "all" => Serial::All,
                 other => panic!("{TEST}: DMA_BUF_LEAK_SERIAL={other}: none, imports or all"),
             },
+            deadline: Duration::from_secs(number("DMA_BUF_LEAK_DEADLINE_S", 60)),
         };
         assert!(
             knobs.smallest >= page && knobs.smallest <= knobs.largest,
@@ -316,6 +336,22 @@ struct Probe {
     /// A naming that failed, said once the round ends.
     unnamed: Arc<AtomicBool>,
     tally: Tally,
+    /// When the first round began: the deadline counts from it ([`Knobs::deadline`]).
+    began: Instant,
+    /// The workers that stopped a round short for the deadline.
+    cut: AtomicU64,
+}
+
+impl Probe {
+    /// Whether the probe's deadline passed: the worker asking makes no more buffers this round,
+    /// and no round follows.
+    fn past_deadline(&self) -> bool {
+        let past = self.began.elapsed() >= self.knobs.deadline;
+        if past {
+            self.cut.fetch_add(1, Ordering::Relaxed);
+        }
+        past
+    }
 }
 
 /// The round's buffers by how each went.
@@ -330,6 +366,73 @@ struct Tally {
     idle: AtomicU64,
     lingered: AtomicU64,
     checked: AtomicU64,
+    /// The workers' time in their buffers' makings, their frees and their waits for command
+    /// buffers.
+    making: Timed,
+    freeing: Timed,
+    waiting: Timed,
+    /// Those steps in progress, which the test names where the rounds outrun their bound.
+    steps: Arc<Steps>,
+}
+
+/// Time spent in one kind of step, in all and at the longest, in nanoseconds.
+#[derive(Default)]
+struct Timed {
+    total: AtomicU64,
+    longest: AtomicU64,
+}
+
+impl Timed {
+    /// Run `step`, named `what` in `steps` while it runs, its time counted.
+    fn time<T>(&self, steps: &Steps, what: &'static str, step: impl FnOnce() -> T) -> T {
+        let start = Instant::now();
+        let done = steps.run(what, step);
+        let nanos = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.total.fetch_add(nanos, Ordering::Relaxed);
+        self.longest.fetch_max(nanos, Ordering::Relaxed);
+        done
+    }
+
+    /// The time so far, in all and at the longest, in milliseconds, said and set back to zero.
+    fn take(&self) -> String {
+        let total = self.total.swap(0, Ordering::Relaxed) as f64 / 1e6;
+        let longest = self.longest.swap(0, Ordering::Relaxed) as f64 / 1e6;
+        format!("{total:.0} ms (longest {longest:.1} ms)")
+    }
+}
+
+/// The workers' steps in progress, each named, with when it began.
+#[derive(Default)]
+struct Steps {
+    next: AtomicU64,
+    running: Mutex<BTreeMap<u64, (&'static str, Instant)>>,
+}
+
+impl Steps {
+    /// Run `step`, listed as `what` while it runs.
+    fn run<T>(&self, what: &'static str, step: impl FnOnce() -> T) -> T {
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        lock(&self.running).insert(id, (what, Instant::now()));
+        let done = step();
+        lock(&self.running).remove(&id);
+        done
+    }
+
+    /// The steps in progress, each with how long it has run, the longest first.
+    fn said(&self) -> String {
+        let running = lock(&self.running);
+        let mut steps: Vec<_> = (running.values())
+            .map(|(what, began)| (began.elapsed(), *what))
+            .collect();
+        steps.sort_by_key(|&(ran, _)| std::cmp::Reverse(ran));
+        match steps.is_empty() {
+            true => "no worker's making, free or wait in progress".to_owned(),
+            false => (steps.iter())
+                .map(|(ran, what)| format!("{what} for {:.1} s", ran.as_secs_f64()))
+                .collect::<Vec<_>>()
+                .join(", "),
+        }
+    }
 }
 
 impl Tally {
@@ -470,15 +573,19 @@ impl Probe {
         // SAFETY: the view stays mapped until the deallocator runs, and the source's dma-buf holds
         // the view's pages, in order.
         let serialised = serial(&self.knobs, Serial::Imports);
-        let buffer = unsafe {
-            self.device.new_buffer_with_bytes_no_copy(
-                HostMemory::with_dma_buf(view, source),
-                length,
-                ResourceOptions::default(),
-                Some(deallocator),
-            )
-        }
-        .unwrap();
+        let tally = &self.tally;
+        let made = tally.making.time(&tally.steps, "a buffer's making", || {
+            // SAFETY: as above.
+            unsafe {
+                self.device.new_buffer_with_bytes_no_copy(
+                    HostMemory::with_dma_buf(view, source),
+                    length,
+                    ResourceOptions::default(),
+                    Some(deallocator),
+                )
+            }
+        });
+        let buffer = made.unwrap();
         drop(serialised);
         self.tally.made.fetch_add(1, Ordering::Relaxed);
         buffer
@@ -500,9 +607,14 @@ fn copy_ends(command_buffer: &CommandBuffer, buffer: &Buffer, out: &Buffer, writ
     encoder.end_encoding().unwrap();
 }
 
-/// Wait for `command_buffer`, which must complete without error.
-fn wait(command_buffer: &CommandBuffer) {
-    command_buffer.wait_until_completed_for(WAIT).unwrap();
+/// Wait for `command_buffer`, which must complete without error, the wait timed in `tally`.
+fn wait(tally: &Tally, command_buffer: &CommandBuffer) {
+    let waited = tally
+        .waiting
+        .time(&tally.steps, "a wait for a command buffer", || {
+            command_buffer.wait_until_completed_for(WAIT)
+        });
+    waited.unwrap();
     assert_eq!(command_buffer.error(), None, "{TEST}: a command buffer");
 }
 
@@ -520,10 +632,13 @@ struct Worker<'a> {
 }
 
 impl<'a> Worker<'a> {
-    /// Drop `buffer`, under the lock where the knobs serialise imports.
+    /// Drop `buffer`, under the lock where the knobs serialise imports, the drop timed.
     fn release(&self, buffer: Buffer) {
         let _serialised = serial(&self.probe.knobs, Serial::Imports);
-        drop(buffer);
+        let tally = &self.probe.tally;
+        tally
+            .freeing
+            .time(&tally.steps, "a buffer's free", || drop(buffer));
     }
 
     fn new(probe: &'a Probe, queue: &'a CommandQueue, stream: u64) -> Worker<'a> {
@@ -577,7 +692,7 @@ impl<'a> Worker<'a> {
                 command_buffer.commit().unwrap();
             }
             if check {
-                wait(&command_buffer);
+                wait(&probe.tally, &command_buffer);
                 self.check(&buffer);
             }
             command_buffer
@@ -642,7 +757,7 @@ impl<'a> Worker<'a> {
             !done
         });
         while self.pending.len() > MOST_PENDING {
-            wait(&self.pending.remove(0));
+            wait(&self.probe.tally, &self.pending.remove(0));
         }
     }
 
@@ -677,14 +792,14 @@ impl<'a> Worker<'a> {
                 self.prune();
             }
             Free::Idle => {
-                wait(&copy);
+                wait(tally, &copy);
                 drop(copy);
                 device_idle(&self.probe.device);
                 self.release(live.buffer);
                 tally.idle.fetch_add(1, Ordering::Relaxed);
             }
             _ => {
-                wait(&copy);
+                wait(tally, &copy);
                 self.release(live.buffer);
                 tally.waited.fetch_add(1, Ordering::Relaxed);
             }
@@ -704,7 +819,7 @@ impl<'a> Worker<'a> {
             let live = self.lingering.swap_remove(index);
             std::thread::sleep(LINGER.saturating_sub(idle));
             if let Some(copy) = &live.copy {
-                wait(copy);
+                wait(&self.probe.tally, copy);
             }
             let command_buffer = self.queue.command_buffer().unwrap();
             copy_ends(
@@ -717,7 +832,7 @@ impl<'a> Worker<'a> {
                 let _serialised = serial(&self.probe.knobs, Serial::All);
                 command_buffer.commit().unwrap();
             }
-            wait(&command_buffer);
+            wait(&self.probe.tally, &command_buffer);
             self.release(live.buffer);
             self.probe.tally.lingered.fetch_add(1, Ordering::Relaxed);
         }
@@ -731,14 +846,18 @@ impl<'a> Worker<'a> {
         }
         self.linger(true);
         for command_buffer in self.pending.drain(..) {
-            wait(&command_buffer);
+            wait(&self.probe.tally, &command_buffer);
         }
     }
 
-    /// `cycles` cycles of making a buffer and freeing one picked at random past the depth.
+    /// `cycles` cycles of making a buffer and freeing one picked at random past the depth, or as
+    /// many as run before the probe's deadline ([`Probe::past_deadline`]).
     fn cycles(&mut self, cycles: usize) {
         let mut live: Vec<Live> = Vec::new();
         for cycle in 0..cycles {
+            if self.probe.past_deadline() {
+                break;
+            }
             live.push(self.make(cycle));
             while live.len() > self.probe.knobs.depth {
                 let index = self.rng.below(live.len() as u64) as usize;
@@ -860,8 +979,37 @@ enum Plan {
     Handoff,
 }
 
-/// Run `plan`'s rounds; the lines.
+/// Run `plan`'s rounds ([`rounds`]) on a thread of their own, bounded: where they still run
+/// [`TAIL`] past the probe's deadline, the test fails, naming the workers' steps in progress, and
+/// leaves that thread to the process's end.
 fn probe(way: &str, plan: Plan) {
+    let deadline = Knobs::read().deadline;
+    let steps = Arc::new(Steps::default());
+    let (ended, ends) = mpsc::channel::<()>();
+    let runner = {
+        let (way, steps) = (way.to_owned(), Arc::clone(&steps));
+        std::thread::spawn(move || {
+            // Dropped as the rounds end, whether they return or panic.
+            let _ended = ended;
+            rounds(&way, plan, steps);
+        })
+    };
+    if let Err(mpsc::RecvTimeoutError::Timeout) = ends.recv_timeout(deadline + TAIL) {
+        panic!(
+            "{TEST}: {way}: the rounds still run {} s past the probe's deadline of {} s \
+             (DMA_BUF_LEAK_DEADLINE_S); in progress: {}",
+            TAIL.as_secs(),
+            deadline.as_secs(),
+            steps.said()
+        );
+    }
+    if let Err(panic) = runner.join() {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// Run `plan`'s rounds, the workers' steps in progress listed in `steps`; the lines.
+fn rounds(way: &str, plan: Plan, steps: Arc<Steps>) {
     if !udmabuf_openable(TEST) {
         return;
     }
@@ -879,7 +1027,12 @@ fn probe(way: &str, plan: Plan) {
         ram: Ram::new(knobs.file),
         tag: CString::new(format!("m2vleak{}", std::process::id())).unwrap(),
         unnamed: Arc::default(),
-        tally: Tally::default(),
+        tally: Tally {
+            steps,
+            ..Tally::default()
+        },
+        began: Instant::now(),
+        cut: AtomicU64::new(0),
         device,
         knobs,
     };
@@ -937,6 +1090,7 @@ fn probe(way: &str, plan: Plan) {
     let start = Counts::of(&device.work_counts());
     let mut kept_total = Some(0);
     for round in 1..=probe.knobs.rounds {
+        let round_began = Instant::now();
         let before = Counts::of(&device.work_counts());
         let listed_before = probe.listed();
         let cycles = probe.knobs.cycles;
@@ -956,6 +1110,9 @@ fn probe(way: &str, plan: Plan) {
                 scope.spawn(move || {
                     let mut worker = Worker::new(probe, importer, (round * 64) as u64);
                     for cycle in 0..cycles {
+                        if probe.past_deadline() {
+                            break;
+                        }
                         let live = worker.make(cycle);
                         send.send(live).unwrap();
                     }
@@ -991,6 +1148,13 @@ fn probe(way: &str, plan: Plan) {
         );
         let [made, unused, waited, in_flight, in_flight_done, idle, lingered, checked] =
             probe.tally.take();
+        let times = format!(
+            "{:.1} s; makings {}, frees {}, waits {}",
+            round_began.elapsed().as_secs_f64(),
+            probe.tally.making.take(),
+            probe.tally.freeing.take(),
+            probe.tally.waiting.take()
+        );
         let imports = after.made - before.made;
         let freed = imports - (after.live - before.live);
         let floor_now = listed_before.map_or(floor, |listed| listed.count);
@@ -1014,11 +1178,11 @@ fn probe(way: &str, plan: Plan) {
             }
         };
         println!(
-            "{TEST} on {}: {way}: round {round}/{}: buffers {made} (unused {unused}, freed \
-             waited for {waited}, in flight {in_flight}, in flight but done {in_flight_done}, \
-             after the device idled {idle}, lingered {lingered}; copies checked {checked}); \
-             runtime: imports made {imports}, freed {freed}, live {}, released while idle {}, \
-             imported again {}; {kernel}",
+            "{TEST} on {}: {way}: round {round}/{}: {times}; buffers {made} (unused {unused}, \
+             freed waited for {waited}, in flight {in_flight}, in flight but done \
+             {in_flight_done}, after the device idled {idle}, lingered {lingered}; copies checked \
+             {checked}); runtime: imports made {imports}, freed {freed}, live {}, released while \
+             idle {}, imported again {}; {kernel}",
             device.name(),
             probe.knobs.rounds,
             after.live,
@@ -1034,6 +1198,16 @@ fn probe(way: &str, plan: Plan) {
             checked > 0 || made < 8 || probe.knobs.write,
             "{TEST}: {way}: no copy checked"
         );
+        if probe.cut.load(Ordering::Relaxed) > 0 {
+            println!(
+                "{TEST} on {}: {way}: the probe's deadline of {} s passed in round {round}: its \
+                 workers stopped making buffers there, and no round follows \
+                 (DMA_BUF_LEAK_DEADLINE_S)",
+                device.name(),
+                probe.knobs.deadline.as_secs()
+            );
+            break;
+        }
     }
     let imports = Counts::of(&device.work_counts()).made - start.made;
     let name = device.name().to_string();
