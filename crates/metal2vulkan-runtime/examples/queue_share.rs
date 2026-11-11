@@ -526,7 +526,9 @@ fn beside(kit: &Arc<Kit>, options: &Options, short: Duration, long_every: usize,
 /// A compositor committing one draw every `options.period` beside an application keeping
 /// `options.in_flight` long command buffers in flight: the compositor's latencies, the
 /// application's long command buffers a second, and the device's counts of waits behind other
-/// queues' batches over the run.
+/// queues' batches over the run. The compositor's queue is made before the application starts, as
+/// a compositor's exists before the applications it shows: other queues' batches are held back
+/// only while an unshared queue exists.
 fn frames(kit: &Arc<Kit>, options: &Options) {
     let stop = Arc::new(AtomicBool::new(false));
     let latencies = Arc::new(Mutex::new(Vec::new()));
@@ -534,12 +536,13 @@ fn frames(kit: &Arc<Kit>, options: &Options) {
     let before = kit.device.work_counts();
     let began = Instant::now();
     let shape = (Duration::ZERO, 1, options.in_flight);
+    let queue = kit.queue(options.unshared);
     let app = application(kit, shape, &stop, Some(Arc::clone(&times)));
     std::thread::sleep(Duration::from_millis(50));
     let rate = 1.0 / options.period.as_secs_f64();
     let comp = compositor(
         kit,
-        kit.queue(options.unshared),
+        queue,
         rate,
         &stop,
         &latencies,
