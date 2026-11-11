@@ -602,7 +602,7 @@ fn a_sparse_buffer_over_imported_host_pages() {
         let outcome = round_trip(
             &mut probe,
             &mut mappings,
-            (flags, common, alignment),
+            (flags, (common, host_bits), alignment),
             &memory,
         );
         say(&name, format!("{variant}: {outcome}"));
@@ -614,12 +614,13 @@ fn a_sparse_buffer_over_imported_host_pages() {
 
 /// Import [`CHUNKS`] separate memfd mappings into memory of a type of `common`, bind them in
 /// reverse order into one sparse buffer of `flags` naming the host handle type, copy a pattern in
-/// on the GPU and read it through the mappings, then write another through the mappings and copy
-/// it out: what happened, printed.
+/// on the GPU and read it through the mappings and back out of the buffer, then write another
+/// through the mappings and copy it out; then the same through a plain buffer bound to one more
+/// chunk ([`control`], of a type of the pointer's `host_bits`): what happened, printed.
 fn round_trip(
     probe: &mut Probe,
     mappings: &mut Vec<Mapping>,
-    (flags, common, alignment): (vk::BufferCreateFlags, u32, u64),
+    (flags, (common, host_bits), alignment): (vk::BufferCreateFlags, (u32, u32), u64),
     memory: &vk::PhysicalDeviceMemoryProperties,
 ) -> String {
     let coherent = vk::MemoryPropertyFlags::HOST_COHERENT;
@@ -732,6 +733,17 @@ fn round_trip(
             *chunks[CHUNKS - 1 - slot].bytes() == staged_bytes[slot * c..(slot + 1) * c]
         })
         .collect();
+    // The buffer itself, copied back out: whether it holds the copy, wherever its bytes lie.
+    let slots_holding = |staged: &[u8], seed: u32| -> Vec<usize> {
+        (0..CHUNKS)
+            .filter(|&slot| (slot * c..(slot + 1) * c).all(|i| staged[i] == pattern(i, seed)))
+            .collect()
+    };
+    staged_bytes.fill(0);
+    if let Err(error) = probe.copy(buffer, staging, size) {
+        return format!("bound; the copy back out of the buffer: {error:?}");
+    }
+    let held = slots_holding(staged_bytes, 1);
     // Out: the host writes pattern 2 through each chunk's mapping; the GPU copies the buffer out.
     for slot in 0..CHUNKS {
         let bytes: Vec<u8> = (slot * c..(slot + 1) * c).map(|i| pattern(i, 2)).collect();
@@ -741,12 +753,79 @@ fn round_trip(
     if let Err(error) = probe.copy(buffer, staging, size) {
         return format!("bound; the copy out of the buffer: {error:?}");
     }
-    let out: Vec<usize> = (0..CHUNKS)
-        .filter(|&slot| (slot * c..(slot + 1) * c).all(|i| staged_bytes[i] == pattern(i, 2)))
-        .collect();
+    let out = slots_holding(staged_bytes, 2);
+    let control = control(
+        probe,
+        mappings,
+        (chunk, host_bits),
+        (staging, staged_bytes),
+        memory,
+    );
     format!(
         "{CHUNKS} memfd chunks of {chunk:#x} bytes imported as type {index}, bound in reverse \
          order: vkQueueBindSparse succeeded; the GPU's copy in reached the chunks of slots \
-         {into:?}, the host's writes copied out matched in slots {out:?} (of 0..{CHUNKS})"
+         {into:?}, copied back out of the buffer it held slots {held:?}, the host's writes \
+         copied out matched in slots {out:?} (of 0..{CHUNKS}); {control}"
+    )
+}
+
+/// The control beside [`round_trip`]: one more memfd chunk of `chunk` bytes imported into memory
+/// of a host-coherent type of the pointer's `host_bits`, bound to a plain buffer naming the host
+/// handle type with `vkBindBufferMemory`, a GPU copy in from `staging` read through the mapping
+/// and a host write copied out: what happened, printed.
+fn control(
+    probe: &mut Probe,
+    mappings: &mut Vec<Mapping>,
+    (chunk, host_bits): (u64, u32),
+    (staging, staged_bytes): (vk::Buffer, &mut [u8]),
+    memory: &vk::PhysicalDeviceMemoryProperties,
+) -> String {
+    let plain = (vk::BufferCreateFlags::empty(), TRANSFER, chunk);
+    let (buffer, requirements) = match probe.buffer(plain, true) {
+        Ok(made) => made,
+        Err(error) => return format!("control: the plain buffer: {error:?}"),
+    };
+    let coherent = vk::MemoryPropertyFlags::HOST_COHERENT;
+    let common = requirements.memory_type_bits & host_bits;
+    let Some(index) = (0..memory.memory_type_count).find(|&i| {
+        common & (1 << i) != 0
+            && memory.memory_types[i as usize]
+                .property_flags
+                .contains(coherent)
+    }) else {
+        return format!(
+            "control: no host-coherent type among {}",
+            types(memory, common)
+        );
+    };
+    mappings.push(Mapping::memfd(chunk as usize));
+    let mapping = mappings.last().expect("the control's mapping");
+    let imported = match probe.import(mapping, index) {
+        Ok(imported) => imported,
+        Err(error) => return format!("control: the import as type {index}: {error:?}"),
+    };
+    // SAFETY: the buffer names the memory's handle type; the memory is the chunk's whole bytes,
+    // of a type the buffer takes.
+    if let Err(error) = unsafe { probe.device.bind_buffer_memory(buffer, imported, 0) } {
+        return format!("control: vkBindBufferMemory: {error:?}");
+    }
+    let c = chunk as usize;
+    for (i, byte) in staged_bytes[..c].iter_mut().enumerate() {
+        *byte = pattern(i, 3);
+    }
+    if let Err(error) = probe.copy(staging, buffer, chunk) {
+        return format!("control: the copy in: {error:?}");
+    }
+    let into = *mapping.bytes() == staged_bytes[..c];
+    let bytes: Vec<u8> = (0..c).map(|i| pattern(i, 4)).collect();
+    mapping.write(&bytes);
+    staged_bytes[..c].fill(0);
+    if let Err(error) = probe.copy(buffer, staging, chunk) {
+        return format!("control: the copy out: {error:?}");
+    }
+    let out = staged_bytes[..c] == bytes[..];
+    format!(
+        "control (a plain buffer bound to one more imported chunk, type {index}): the GPU's copy \
+         in reached the chunk {into}, the host's write copied out matched {out}"
     )
 }
