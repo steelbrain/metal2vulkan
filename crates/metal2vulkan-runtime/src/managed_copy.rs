@@ -245,6 +245,12 @@ impl AtCompletion {
             AtCompletion::CopyBack(back) if completed => back.run(),
             AtCompletion::CopyBack(_) => {}
             AtCompletion::Undo(buffer) => {
+                // A section of the exit guard, on the completion's thread: the copy in reaches
+                // the device (its staging buffers, its first moves). None once the process is
+                // exiting, when no later command buffer reads the buffer.
+                let Some(_busy) = exit_guard::enter() else {
+                    return;
+                };
                 if let Some(caller) = buffer.caller_copy() {
                     buffer.device().shared().counts.managed_write_undone();
                     // Unbounded: the completion makes no submission (the next one takes it).
