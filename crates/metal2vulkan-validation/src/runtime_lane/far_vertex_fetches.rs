@@ -28,6 +28,7 @@ use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
     ScratchCache, WAIT,
 };
+use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::VertexReachPolicy;
 use metal2vulkan::error::RuntimeDriverDefect;
