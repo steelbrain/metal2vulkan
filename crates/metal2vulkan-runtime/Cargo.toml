@@ -90,6 +90,13 @@ path = "examples/managed_bandwidth.rs"
 name = "private_bandwidth"
 path = "examples/private_bandwidth.rs"
 
+# Not a consumer's example: what copies between host and device memory cost on the graphics
+# queue and on a copy engine, alone and beside a compute load, on a Vulkan device of its own
+# (examples/copy_engine.rs).
+[[example]]
+name = "copy_engine"
+path = "examples/copy_engine.rs"
+
 [dependencies]
 # The translator, through its public API only: the compiler checks that the runtime
 # reaches nothing else. `ash` gives `ash_interop`'s conversions and `DeviceDescription::query`.
