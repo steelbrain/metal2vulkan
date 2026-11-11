@@ -27,7 +27,9 @@
 //! - **Over a surface's plane** (`Buffer::new_texture_with_iosurface_plane` over a managed
 //!   no-copy buffer, as a consumer stands one in for an IOSurface): `BGRA8Unorm` at 16x16 (rows of
 //!   64 bytes), 64x32 (rows of 256) and 1307x512 (rows of 5248), each load action at full, half and
-//!   no coverage.
+//!   no coverage. The case reads the buffer's bytes after a blit's `synchronize_resource` of it, as
+//!   Metal asks of a `Managed` resource the GPU wrote: on a device without unified memory the
+//!   buffer is two copies, and its pages take the GPU's writes there alone.
 //! - **Store actions**: `Unknown` left at the pass's end, and `Unknown` set to `DontCare` as the
 //!   pass ends (`set_color_store_action`), keep the bytes; `Unknown` set to `Store` stores the
 //!   draw. `MultisampleResolve` of the single-sampled attachment into an ordinary texture keeps
@@ -87,7 +89,7 @@ use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBufferStatus, CommandQueue, Deallocator, Degradation, Device,
     IoSurfacePlane, Library, LoadAction, PipelineOptions, Region, RenderCommandEncoder,
-    RenderPassDescriptor, RenderPipelineState, ResourceOptions, StoreAction, Texture,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, StorageMode, StoreAction, Texture,
     TextureDescriptor,
 };
 use std::collections::BTreeMap;
@@ -531,8 +533,19 @@ impl<'a> Lane<'a> {
         })
     }
 
-    /// The buffer's bytes.
+    /// The buffer's bytes: a `Managed` one's after a blit's `synchronize_resource` of it, which
+    /// copies the GPU's copy to its pages where the device has no unified memory (and records
+    /// nothing where it has).
     fn bytes(&self, over: &Over) -> Vec<u8> {
+        if over.buffer.storage_mode() == StorageMode::Managed {
+            let command_buffer = self.queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.synchronize_resource((&over.buffer).into()).unwrap();
+            blit.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.error(), None);
+        }
         let contents = over.buffer.contents().unwrap();
         // SAFETY: the buffer's own bytes; no command that writes them is pending.
         unsafe { std::slice::from_raw_parts(contents.as_ptr(), over.len).to_vec() }
