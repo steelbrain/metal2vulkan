@@ -1516,11 +1516,18 @@ fn minimums_and_maximums_answer_as_metal() {
 
 /// Cases whose every word is `half` arithmetic (with the narrowing of `float` operands and the
 /// `half` fused multiply-add of the NaN model's): the NaN model's `half` arithmetic, without and
-/// under fast math, and the `half` denormal results of `+`, `-` and `*`.
-const HALF_ARITHMETIC_CASES: [&str; 3] = [
-    "nan-model-float-to-half-narrowing-and-half-arithmetic",
-    "nan-model-float-to-half-narrowing-and-half-arithmetic-under-fast-math",
-    "half-denormal-results-of-arithmetic-and-conversions",
+/// under fast math, and the `half` denormal results of `+`, `-` and `*`. Each with whether its
+/// kernel's `half` `+`, `-` and `*` carry fast math's flags (contraction allowed).
+const HALF_ARITHMETIC_CASES: [(&str, bool); 3] = [
+    (
+        "nan-model-float-to-half-narrowing-and-half-arithmetic",
+        false,
+    ),
+    (
+        "nan-model-float-to-half-narrowing-and-half-arithmetic-under-fast-math",
+        true,
+    ),
+    ("half-denormal-results-of-arithmetic-and-conversions", false),
 ];
 
 /// The notes of a module's own `half` forms, whose words are the device's: its rounding by the
@@ -1539,7 +1546,9 @@ fn holds_a_nan(w: u32) -> bool {
 
 /// Every word of [`HALF_ARITHMETIC_CASES`] is the Metal row's of the same chip where the profile
 /// takes `DriverDeviation::MetalHalfArithmetic`: the device's 16-bit `OpFAdd`, `OpFSub` and
-/// `Fma(a, b, -0.0)`, kept apart (the kernels then require `VkProperty::MetalHalfArithmetic`).
+/// `Fma(a, b, -0.0)`, kept apart where the AIR forbids contraction (the kernels then require
+/// `VkProperty::MetalHalfArithmetic`), and `OpFAdd`, `OpFSub` and `OpFMul` the device may contract
+/// where fast math allows it (the stage then records `PrecisionNote::FastMathRewrites`).
 /// Elsewhere the module computes in `float` and rounds to `half` by its form
 /// (`lower::arith::narrow::round`), and its words are Metal's where its stage records none of
 /// [`HALF_NATIVE`] (the float controls that make the device's conversion Metal's, or a quantize
@@ -1557,15 +1566,22 @@ fn half_arithmetic_answers_as_metal() {
         let metals = takes(&device, DriverDeviation::MetalHalfArithmetic);
         let mut failures = Vec::new();
         let mut recorded = std::collections::BTreeSet::new();
-        for case_name in HALF_ARITHMETIC_CASES {
+        for (case_name, contracts) in HALF_ARITHMETIC_CASES {
             let case = public_case(case_name).unwrap();
             assert_eq!(
                 requires_property(&device, &case, VkProperty::MetalHalfArithmetic),
-                metals,
-                "{case_name} on {name}: the kernel takes the device's 16-bit arithmetic exactly \
-                 where the profile takes the deviation"
+                metals && !contracts,
+                "{case_name} on {name}: the kernel takes the device's 16-bit arithmetic kept \
+                 apart exactly where the profile takes the deviation and the AIR forbids \
+                 contraction"
             );
-            let native: Vec<PrecisionNote> = case_notes(&device, &case)
+            let notes = case_notes(&device, &case);
+            assert!(
+                !(metals && contracts) || notes.contains(&PrecisionNote::FastMathRewrites),
+                "{case_name} on {name}: the device's 16-bit arithmetic takes the rewrites fast \
+                 math allows, and the stage records them: {notes:?}"
+            );
+            let native: Vec<PrecisionNote> = notes
                 .into_iter()
                 .filter(|note| HALF_NATIVE.contains(note))
                 .collect();
