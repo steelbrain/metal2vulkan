@@ -876,8 +876,8 @@ impl BlitCommandEncoder {
     ///
     /// No runs copy nothing.
     ///
-    /// Refused: a device without `VK_EXT_external_memory_host` (`Unsupported`, naming it); a RAM
-    /// the device does not use ([`Device::use_host_ram`](crate::Device::use_host_ram)), a run that
+    /// Refused: a device that imports no host memory (`Unsupported`, naming
+    /// `VK_EXT_external_memory_host`); a RAM the device does not use ([`Device::use_host_ram`](crate::Device::use_host_ram)), a run that
     /// is empty, starts off a 4-byte word or lies outside the RAM's ranges, bytes of
     /// `destination` that start off a 4-byte word of its memory, or, of a copy by regions (a run
     /// ending off a word), a `destination` over host pages the runs' bytes overlap (`Invalid`,

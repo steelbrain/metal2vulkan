@@ -378,7 +378,10 @@ the record the pass is making.
   refuses shared mappings, a `memfd`'s among them), memory made with `HostMemory::with_dma_buf` is
   imported from dma-bufs of its pages instead
   ([HOWTO](../../docs/HOWTO.md#6-host-memory-a-driver-refuses)), and a no-copy buffer or heap
-  over memory made without a source is a copy of its pages, as below; on NVIDIA's driver the runtime
+  over memory made without a source is a copy of its pages, as below. A device that enables no
+  `VK_EXT_external_memory_host` but imports dma-bufs imports only those: memory made with a
+  source is imported from its dma-bufs, and memory made without one is refused
+  (`Unsupported`, naming the extension); on NVIDIA's driver the runtime
   never hands the driver pages the kernel cannot pin (a dma-buf's mapping): they take the source,
   and else, or where its import fails, a copy, as below. A no-copy buffer's import of such
   dma-bufs that only blits have read may be released while idle and imported again at its next

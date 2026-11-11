@@ -247,7 +247,7 @@ narrow refusal that the call's rustdoc describes.
 | Item | Metal | Runtime |
 |---|---|---|
 | `heap_texture_size_and_align` | `heapTextureSizeAndAlignWithDescriptor:` | `Device::heap_texture_size_and_align`: Metal's answer wherever the runtime models it, the device's images' own footprint where it does not |
-| `new_buffer_over_host_memory` | `newBufferWithBytesNoCopy:length:options:deallocator:` | `unsafe Device::new_buffer_with_bytes_no_copy` over a `HostMemory` (`VK_EXT_external_memory_host`; where the device refuses the pointer, the dma-bufs of `HostMemory::with_dma_buf`'s source, `VK_EXT_external_memory_dma_buf`) *(partial)* |
+| `new_buffer_over_host_memory` | `newBufferWithBytesNoCopy:length:options:deallocator:` | `unsafe Device::new_buffer_with_bytes_no_copy` over a `HostMemory` (`VK_EXT_external_memory_host`; where the device refuses the pointer or imports none, the dma-bufs of `HostMemory::with_dma_buf`'s source, `VK_EXT_external_memory_dma_buf`) *(partial)* |
 | `new_buffer_of_length` | `newBufferWithLength:options:` | `Device::new_buffer` |
 | `new_command_queue` | `newCommandQueue` | `Device::new_command_queue` |
 | `new_compute_pipeline_state` | `newComputePipelineStateWithDescriptor:options:reflection:error:` | `Device::new_compute_pipeline_state` |

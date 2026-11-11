@@ -1,6 +1,7 @@
 //! Dma-bufs of host pages (a runtime extension: Metal has none), the last resort of a no-copy
 //! import (`host_memory.rs`) on a device that refuses the pages' pointer, as RADV refuses any
-//! shared mapping (a `memfd`'s among them). A device that lists `VK_EXT_external_memory_dma_buf`
+//! shared mapping (a `memfd`'s among them), and the only import on one that imports no pointer (it
+//! enables no `VK_EXT_external_memory_host`). A device that lists `VK_EXT_external_memory_dma_buf`
 //! and `VK_KHR_external_memory_fd` enables both, outside the vocabulary
 //! (`device::create::dma_buf_names`), and has a dma-buf importer; one that imports the pointer
 //! never calls a source. The caller's contract is [`DmaBufSource`]'s, [`DmaBufRequest`]'s and
@@ -981,7 +982,7 @@ impl Device {
 
     /// Whether the device imports a dma-buf for a no-copy buffer's `VkBuffer` made with `flags`
     /// without a dedicated allocation (`vkGetPhysicalDeviceExternalBufferProperties`), as it must
-    /// import host allocations for one (`Importer::new`).
+    /// import host allocations for one (`PointerImport::new`).
     fn imports_dma_buf_buffers(&self, flags: vk::BufferCreateFlags) -> bool {
         let shared = self.shared();
         let info = vk::PhysicalDeviceExternalBufferInfo::default()

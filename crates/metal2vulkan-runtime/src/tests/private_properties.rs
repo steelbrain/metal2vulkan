@@ -35,7 +35,15 @@ fn answers(stem: &str, desc: &metal2vulkan::device::DeviceDescription) -> Privat
         compile.metal_properties(),
         &rows,
         (&formats, linear(stem)),
+        no_copy(desc),
     )
+}
+
+/// Whether a device of the committed profile `desc` makes no-copy buffers: one that enables
+/// `VK_EXT_external_memory_host` where it lists it does (a profile names no dma-buf route, which is
+/// outside the vocabulary).
+fn no_copy(desc: &metal2vulkan::device::DeviceDescription) -> bool {
+    (desc.extensions).contains(&metal2vulkan::device::VkExtension::ExtExternalMemoryHost)
 }
 
 /// `ALL` lists each property once, in declaration order, under a selector of its own.
@@ -255,6 +263,7 @@ fn the_core_count_and_fp16_are_the_devices() {
                 compile.metal_properties(),
                 &rows,
                 (&formats, linear(&stem)),
+                no_copy(&desc),
             )
         };
         let unknown = of(&properties).count(PrivateCount::GpuCoreCount);

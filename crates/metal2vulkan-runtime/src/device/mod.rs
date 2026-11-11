@@ -2292,14 +2292,14 @@ impl Device {
         // by their pointer, in the memory types the device imports such pages as, once its
         // submission check found that a held import costs its submissions nothing (`memory.rs`'s
         // "Buffers in the runtime's own pages").
-        let (page_types, page_unit) = match &host_import {
-            Ok(importer) => {
-                let unit = importer.page.max(importer.alignment);
-                // SAFETY: `raw` is the importer's device.
-                let types = unsafe { crate::fresh_pages::own_page_types(importer, &raw, unit) };
+        let (page_types, page_unit) = match host_import.as_ref().ok().and_then(Importer::pointers) {
+            Some(pointers) => {
+                let unit = pointers.unit();
+                // SAFETY: `raw` is the import's device.
+                let types = unsafe { crate::fresh_pages::own_page_types(pointers, &raw, unit) };
                 (types, unit)
             }
-            Err(_) => (Err("the device imports no host pointer"), 1),
+            None => (Err("the device imports no host pointer"), 1),
         };
         memory.page_buffer_blocks(&raw, page_types, page_unit)?;
         // How the device exports a buffer's memory as an opaque file descriptor, and as a dma-buf,

@@ -1,6 +1,7 @@
 //! Buffers over the caller's host memory without a copy (`newBufferWithBytesNoCopy:`), through
-//! `VK_EXT_external_memory_host`, or, where the device refuses the pointer, dma-buf memory of the
-//! pages the caller imports (`VK_EXT_external_memory_dma_buf`, [`DmaBufSource`], `dma_buf.rs`).
+//! `VK_EXT_external_memory_host`, or, where the device refuses the pointer or imports none,
+//! dma-buf memory of the pages the caller imports (`VK_EXT_external_memory_dma_buf`,
+//! [`DmaBufSource`], `dma_buf.rs`).
 //!
 //! - **What Metal takes** (measured on an Apple M3 Max and an M4, plain and under API validation):
 //!   any pointer and any length but 0; the buffer covers the whole host pages its range touches
@@ -16,8 +17,9 @@
 //!   the buffer reads them past its length, the caller's bytes, as plain Metal reads them
 //!   (`Buffer::copy_reach`). The import is never a dedicated allocation in Vulkan's sense
 //!   (`VkMemoryDedicatedAllocateInfo`), which host memory cannot be.
-//! - **What it refuses**, typed: a device without the extension (`Unsupported` naming it), and
-//!   what this device cannot import exactly (`Unsupported`, `not_representable`): an import
+//! - **What it refuses**, typed: memory with no dma-buf source the device imports, on a device
+//!   without the extension (`Unsupported` naming it), and what this device cannot import exactly
+//!   (`Unsupported`, `not_representable`): an import
 //!   alignment above the host page whose rounding would take pages the range does not touch, an
 //!   offset in the pages that misses the buffer's memory alignment, no memory type both allow, or
 //!   a driver that refuses the pointer.
@@ -48,7 +50,12 @@
 //!   binding in it, the memory types, the driver, or the runtime for a driver that breaks on
 //!   pages the kernel cannot pin, [`unpinnable`]) and imports dma-bufs, the buffer is bound in
 //!   imports of the source's dma-bufs of the pages instead (`dma_buf.rs`). Every import the device
-//!   takes by its pointer is made exactly as before, with no call more.
+//!   takes by its pointer is made exactly as before, with no call more. A device that enables no
+//!   `VK_EXT_external_memory_host` (a driver that lists none, or a device made withholding it,
+//!   `DeviceOptions::withheld_extensions`) but imports dma-bufs takes this route alone: no pointer
+//!   is asked of it ([`Importer::pointers`]), the pages are rounded out to the host page, and
+//!   memory that comes with no source is refused, naming the extension
+//!   ([`Importer::pointer_import`]).
 //! - **When**. The pages are imported when the buffer is made, on every platform, as Metal wires
 //!   them then: the GPU uses the pages mapped at the pointer when the buffer was made, whatever is
 //!   mapped there later, but on a driver whose pointer imports follow their address (as the
@@ -1119,15 +1126,17 @@ fn mapping(line: &str, access: Access) -> Option<(u64, u64, bool)> {
     ))
 }
 
-/// What a device knows to import host memory. A clone is the submission checks' own
-/// (`submit_check.rs`), which hold nothing of the device.
+/// What a device knows to import host memory: the pages' pointer ([`PointerImport`]), where it
+/// enables `VK_EXT_external_memory_host`, and dma-bufs of the pages a caller's source makes
+/// (`dma_buf.rs`), where it enables the dma-bufs' route. A device with neither has none
+/// ([`Importer::new`]).
 #[derive(Clone)]
 pub(super) struct Importer {
-    functions: ash::ext::external_memory_host::DeviceFn,
+    /// The import of a pages' pointer, or why the device has none, where it imports only dma-bufs
+    /// of them: every pointer refused unasked, so ([`Importer::pointer_import`]).
+    pointers: Result<PointerImport, Unsupported>,
     /// The host's page size.
     pub(super) page: u64,
-    /// `minImportedHostPointerAlignment`.
-    pub(super) alignment: u64,
     /// `vkGetMemoryFdPropertiesKHR`, where the device enables the dma-buf route (`dma_buf.rs`).
     dma_buf: Option<ash::khr::external_memory_fd::DeviceFn>,
     /// Whether the device also enables the route's image extensions (`create.rs`'s
@@ -1140,10 +1149,24 @@ pub(super) struct Importer {
     pub(super) sparse_granule: std::sync::OnceLock<Option<u64>>,
 }
 
+/// A device's import of host memory by its pointer (`VK_EXT_external_memory_host`). A clone is the
+/// submission checks' own (`submit_check.rs`), which hold nothing of the device.
+#[derive(Clone)]
+pub(super) struct PointerImport {
+    functions: ash::ext::external_memory_host::DeviceFn,
+    /// The host's page size.
+    page: u64,
+    /// `minImportedHostPointerAlignment`.
+    pub(super) alignment: u64,
+}
+
 impl Importer {
-    /// The importer of a device, or the refusal every no-copy buffer on it gets: the device did
-    /// not enable `VK_EXT_external_memory_host`, the runtime does not know the host's page size,
-    /// or the device cannot bind a buffer of `usage` to imported host memory.
+    /// The importer of a device, or the refusal every no-copy buffer on it gets: where it imports
+    /// neither the pages' pointer ([`PointerImport::new`]'s refusal) nor dma-bufs of them
+    /// (`dma_buf`), the pointer's refusal; where the runtime does not know the host's page size,
+    /// not implemented. A device that imports dma-bufs alone imports them only: each no-copy
+    /// buffer's pages come from its caller's source ([`DmaBufSource`]), and memory with none is
+    /// refused as the pointer is ([`Importer::pointer_import`]).
     ///
     /// # Safety
     ///
@@ -1160,55 +1183,55 @@ impl Importer {
         dma_buf: bool,
         dma_buf_images: bool,
     ) -> Result<Importer, Unsupported> {
-        if !enabled
-            .extensions
-            .contains(&VkExtension::ExtExternalMemoryHost)
-        {
-            return Err(Unsupported::needs(
-                Feature::HostMemory,
-                metal2vulkan::error::Capability::Extension(VkExtension::ExtExternalMemoryHost),
-            ));
-        }
-        let page = host_page().ok_or_else(|| Unsupported::not_implemented(Feature::HostMemory))?;
-        let mut host = vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::default();
-        let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut host);
-        // SAFETY: the caller's contract; the structure belongs to an enabled extension.
-        unsafe { instance.get_physical_device_properties2(physical, &mut properties) };
-        let alignment = host.min_imported_host_pointer_alignment;
-        let info = vk::PhysicalDeviceExternalBufferInfo::default()
-            .usage(usage)
-            .handle_type(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
-        let mut external = vk::ExternalBufferProperties::default();
-        // SAFETY: the caller's contract; the query is core in Vulkan 1.1.
-        unsafe {
-            instance.get_physical_device_external_buffer_properties(physical, &info, &mut external)
-        };
-        let features = external.external_memory_properties.external_memory_features;
-        if !features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
-            || features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
-        {
-            return Err(Unsupported::not_representable(Feature::HostMemory));
-        }
         let handle = device.handle();
         let load = |name: &std::ffi::CStr| {
             // SAFETY: the device is live, and the loader serves `vkGetDeviceProcAddr` after its
-            // word is put back; the extension is enabled.
+            // word is put back; each caller loads the functions of an enabled extension.
             let function = unsafe {
                 loader_word.restored(|| instance.get_device_proc_addr(handle, name.as_ptr()))
             };
             function.map_or(std::ptr::null(), |function| function as *const c_void)
         };
-        let functions = ash::ext::external_memory_host::DeviceFn::load(load);
+        // SAFETY: the caller's contract.
+        let pointers = unsafe { PointerImport::new(instance, physical, enabled, usage, load) };
         let dma_buf = dma_buf.then(|| ash::khr::external_memory_fd::DeviceFn::load(load));
+        let page = match (&pointers, &dma_buf) {
+            (Ok(pointers), _) => pointers.page,
+            // Dma-bufs of the pages alone, every pointer refused unasked.
+            (Err(_), Some(_)) => {
+                host_page().ok_or_else(|| Unsupported::not_implemented(Feature::HostMemory))?
+            }
+            (Err(refusal), None) => return Err(refusal.clone()),
+        };
         let dma_buf_images = dma_buf.is_some() && dma_buf_images;
         Ok(Importer {
-            functions,
+            pointers,
             page,
-            alignment,
             dma_buf,
             dma_buf_images,
             sparse_granule: std::sync::OnceLock::new(),
         })
+    }
+
+    /// The device's import of host memory by its pointer (`VK_EXT_external_memory_host`); `None`
+    /// where it imports dma-bufs of the pages alone.
+    pub(super) fn pointers(&self) -> Option<&PointerImport> {
+        self.pointers.as_ref().ok()
+    }
+
+    /// The device's import of host memory by its pointer, or, where it imports dma-bufs of the
+    /// pages alone, its refusal of every pointer, memory that comes with no source of them among
+    /// it: why it imports none, which names `VK_EXT_external_memory_host` where the device does
+    /// not enable it (`PointerImport::new`).
+    pub(super) fn pointer_import(&self) -> Result<&PointerImport, Error> {
+        (self.pointers.as_ref()).map_err(|refusal| Error::Unsupported(refusal.clone()))
+    }
+
+    /// The unit an import's pages round out to: the larger of the host page and the device's
+    /// `minImportedHostPointerAlignment` where it imports the pointer, else the host page, which a
+    /// dma-buf of the pages is made in.
+    pub(super) fn unit(&self) -> u64 {
+        self.pointers().map_or(self.page, PointerImport::unit)
     }
 
     /// Whether the device imports dma-bufs (`VK_EXT_external_memory_dma_buf`), which a no-copy
@@ -1284,12 +1307,69 @@ impl Importer {
         // SAFETY: a new descriptor Vulkan handed over, which the caller owns from here on.
         Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
     }
+}
+
+impl PointerImport {
+    /// The import of a device that enables `VK_EXT_external_memory_host` (in `enabled`), its
+    /// functions loaded through `load`; else the refusal of its pointers: the extension not
+    /// enabled (`Unsupported`, naming it), the host's page size unknown to the runtime (not
+    /// implemented), or no buffer of `usage` bound to imported host memory (`not_representable`).
+    ///
+    /// # Safety
+    ///
+    /// `physical` is a physical device of `instance` whose device was made with `enabled`
+    /// enabled, and `load` answers that device's functions by name.
+    unsafe fn new(
+        instance: &ash::Instance,
+        physical: vk::PhysicalDevice,
+        enabled: &EnableSet,
+        usage: vk::BufferUsageFlags,
+        load: impl FnMut(&std::ffi::CStr) -> *const c_void,
+    ) -> Result<PointerImport, Unsupported> {
+        if !enabled
+            .extensions
+            .contains(&VkExtension::ExtExternalMemoryHost)
+        {
+            return Err(no_pointer_refusal());
+        }
+        let page = host_page().ok_or_else(|| Unsupported::not_implemented(Feature::HostMemory))?;
+        let mut host = vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::default();
+        let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut host);
+        // SAFETY: the caller's contract; the structure belongs to an enabled extension.
+        unsafe { instance.get_physical_device_properties2(physical, &mut properties) };
+        let alignment = host.min_imported_host_pointer_alignment;
+        let info = vk::PhysicalDeviceExternalBufferInfo::default()
+            .usage(usage)
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
+        let mut external = vk::ExternalBufferProperties::default();
+        // SAFETY: the caller's contract; the query is core in Vulkan 1.1.
+        unsafe {
+            instance.get_physical_device_external_buffer_properties(physical, &info, &mut external)
+        };
+        let features = external.external_memory_properties.external_memory_features;
+        if !features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
+            || features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
+        {
+            return Err(Unsupported::not_representable(Feature::HostMemory));
+        }
+        Ok(PointerImport {
+            functions: ash::ext::external_memory_host::DeviceFn::load(load),
+            page,
+            alignment,
+        })
+    }
+
+    /// The unit an import of a pointer's pages rounds out to: the larger of the host page and
+    /// `minImportedHostPointerAlignment`.
+    pub(super) fn unit(&self) -> u64 {
+        self.page.max(self.alignment)
+    }
 
     /// The memory types `pointer` can be imported into (`vkGetMemoryHostPointerPropertiesEXT`).
     ///
     /// # Safety
     ///
-    /// `device` is the importer's device; `pointer` is host memory aligned to its import
+    /// `device` is the import's device; `pointer` is host memory aligned to its import
     /// alignment.
     pub(super) unsafe fn memory_types(
         &self,
@@ -1308,6 +1388,14 @@ impl Importer {
         };
         result.result_with_success(properties.memory_type_bits)
     }
+}
+
+/// The refusal of the pointers of a device that enables no `VK_EXT_external_memory_host`.
+fn no_pointer_refusal() -> Unsupported {
+    Unsupported::needs(
+        Feature::HostMemory,
+        metal2vulkan::error::Capability::Extension(VkExtension::ExtExternalMemoryHost),
+    )
 }
 
 /// What a no-copy buffer gives back when its last reference goes: the caller's range, to its

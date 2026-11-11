@@ -2818,7 +2818,7 @@ impl Device {
             && !plain
             && lead == 0
             && fresh_pages::takes_fresh_pages(size, class)
-            && shared.host_import.is_ok()
+            && (shared.host_import.as_ref()).is_ok_and(|importer| importer.pointers().is_some())
             && (fresh == FreshPages::Wherever || self.fresh_pages_pay_now());
         let making = (!of_heap && !plain && lead == 0 && fresh == FreshPages::WherePaid).then_some(
             BufferMaking {

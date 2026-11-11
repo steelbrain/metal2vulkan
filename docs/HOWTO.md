@@ -207,6 +207,13 @@ pages, announced ([Copied host buffers](#copied-host-buffers),
 `WorkCounts::copied_host_buffers_device_refused`); a rebind to such memory without a working
 source is refused with `Unsupported`, `HostMemory`.
 
+A device that enables no `VK_EXT_external_memory_host` (a driver that lists none, or a device made
+with it in `DeviceOptions::withheld_extensions`) but enables the dma-buf route imports no pointer
+at all: memory made with a source is imported from its dma-bufs, its pages rounded out to the host
+page, and memory made without one is refused (`Unsupported`, naming the extension), as is every
+no-copy object on a device with neither. A guest RAM there (`Device::use_host_ram`) needs a source
+too, and its chunks are its dma-bufs.
+
 No driver that pins imported pages imports a mapping the kernel cannot pin (`VM_IO` or `VM_PFNMAP`:
 a mapping of a dma-buf). NVIDIA's driver fails such an import as out of device memory and then fails
 the process's later host-visible allocations too
@@ -785,7 +792,8 @@ submission, can give the device the guest's RAM once instead:
   page are not). The CPU's writes made before the commit are seen, the GPU's are in the pages at the
   completion, and where the RAM came with a log its scatters are reported to it as the GPU's writes
   in place, so copied buffers and shadows over those pages copy them in at their next commit.
-  Refused: a device without `VK_EXT_external_memory_host` (`Unsupported`); a RAM the device does
+  Refused: a device that imports no host memory (`Unsupported`, naming
+  `VK_EXT_external_memory_host`); a RAM the device does
   not use, a run empty, starting off a 4-byte word or outside the RAM, bytes of the buffer that
   start off a 4-byte word of its memory, or, of a copy by regions, a buffer over host pages the
   runs' bytes overlap (`Invalid`, `Problem::HostRam`); bytes past the buffer (`Invalid`,

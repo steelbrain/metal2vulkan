@@ -592,8 +592,9 @@ impl Device {
     /// Refused: a size of 0 (`Nil`, as [`Device::new_heap`] answers it); storage other than
     /// `Shared`, a sparse heap, an undefined option (`Invalid`); memory whose first byte is not a multiple of the import's unit
     /// (`Invalid`, [`HeapProblem::HostMemoryAlignment`]); and as
-    /// [`Device::new_buffer_with_bytes_no_copy`] refuses the memory: a device without
-    /// `VK_EXT_external_memory_host` (`Unsupported`, naming it), memory it cannot import exactly
+    /// [`Device::new_buffer_with_bytes_no_copy`] refuses the memory: on a device without
+    /// `VK_EXT_external_memory_host`, memory that comes with no dma-buf source it imports
+    /// (`Unsupported`, naming it), memory it cannot import exactly
     /// (`Unsupported`, `HostMemory`), a size past the device's allocation (`OutOfMemory`) or
     /// `maxBufferSize` (`NotImplemented(HeapPastMaxBufferSize)`); a pinned address the space
     /// cannot honour (`PlacementConflict`).

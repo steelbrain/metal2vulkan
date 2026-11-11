@@ -2500,8 +2500,7 @@ fn pages_refused_before_the_driver_with_no_source_are_copied() {
     let Some(device) = device() else {
         return;
     };
-    let importer = device.shared().host_import.as_ref().unwrap();
-    let unit = importer.page.max(importer.alignment);
+    let unit = device.shared().host_import.as_ref().unwrap().unit();
     let length = 4 * unit;
     // Three objects' pages, one after the other: the buffer's, the heap's, the rebind's.
     let pattern: Vec<u8> = (0..3 * length).map(|i| (i % 251) as u8 ^ 0xA5).collect();

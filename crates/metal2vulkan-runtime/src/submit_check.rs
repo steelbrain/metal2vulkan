@@ -159,7 +159,7 @@ use crate::device::submit_stalls::Uses;
 use crate::device::{lock, Device, QueueSlot};
 use crate::exit_guard::{self, Call};
 use crate::freed_memory::Parking;
-use crate::host_memory::Importer;
+use crate::host_memory::{Importer, PointerImport};
 use crate::in_place::DriverIdentity;
 use crate::loader_word::{DeviceWord, Held};
 use crate::recorder::{self, Command};
@@ -944,8 +944,8 @@ struct Parts {
     /// (`step_aside.rs`).
     allocations: Arc<Allocations>,
     store: Arc<Store>,
-    /// The device's importer of host pointers, where it imports them.
-    importer: Option<Importer>,
+    /// The device's import of host pointers, where it imports them.
+    pointers: Option<PointerImport>,
     /// The queue families its buffers are shared among.
     families: Vec<u32>,
     /// Its memory types' properties, by index.
@@ -1019,7 +1019,9 @@ impl Parts {
             checks: Arc::clone(&shared.submit_checks),
             allocations: Arc::clone(&shared.allocations.allocations),
             store: shared.shader_cache.content_store_share(),
-            importer: shared.host_import.as_ref().ok().cloned(),
+            pointers: (shared.host_import.as_ref().ok())
+                .and_then(Importer::pointers)
+                .cloned(),
             families: shared.queue_families.clone(),
             type_flags,
             identity: device.driver_identity(),
@@ -1547,7 +1549,7 @@ impl<'p> Import<'p> {
     /// pointer takes. `Some(None)` where the device imports no host pointer, the pages take no
     /// such type, or a call was refused; `None` where the process is exiting.
     fn make(parts: &Parts, pages: &'p Pages, bound: bool) -> Option<Option<Import<'p>>> {
-        let Some(importer) = &parts.importer else {
+        let Some(pointers) = &parts.pointers else {
             return Some(None);
         };
         let _held = parts.step_held();
@@ -1555,10 +1557,10 @@ impl<'p> Import<'p> {
         let raw = parts.vk();
         // SAFETY: the pages are this process's, at a host page, whose size the import alignment
         // divides where the device imports at all (it is checked below).
-        let Ok(types) = (unsafe { importer.memory_types(raw, pages.start) }) else {
+        let Ok(types) = (unsafe { pointers.memory_types(raw, pages.start) }) else {
             return Some(None);
         };
-        let unit = importer.page.max(importer.alignment);
+        let unit = pointers.unit();
         if !pages.length.is_multiple_of(unit) || !(pages.start.as_ptr() as u64).is_multiple_of(unit)
         {
             return Some(None);

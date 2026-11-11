@@ -27,7 +27,7 @@ use super::host_bytes::HostBytes;
 use super::host_memory::{
     based_size, binds_in, buffer_base, import_refused, import_window, not_importable,
     refuse_unwritable, refused, unpinnable, Deallocator, HostMemory, HostParts, HostRelease,
-    ImportRequest, ImportWindow, Importer, KeepAlive, Release, Source,
+    ImportRequest, ImportWindow, Importer, KeepAlive, PointerImport, Release, Source,
 };
 use super::host_ram::{RamOnDevice, Routed};
 #[cfg(unix)]
@@ -484,9 +484,10 @@ impl Device {
     /// the pages mapped at the pointer now, and memory the device cannot import is refused here,
     /// as Metal answers nil. The import costs work per page here (on macOS about 11 to 20 ms per
     /// GiB measured on an M4 and an M3 Max), where Metal makes the buffer at once and pays at the
-    /// first command using it (24 to 88 ms per GiB). Where the device refuses the pointer and
-    /// `memory` carries a dma-buf source ([`HostMemory::with_dma_buf`]), the dma-bufs it makes of
-    /// the pages are imported instead. With Metal's private option bit 24
+    /// first command using it (24 to 88 ms per GiB). Where the device refuses the pointer, or
+    /// imports none (it enables no `VK_EXT_external_memory_host`), and `memory` carries a dma-buf
+    /// source ([`HostMemory::with_dma_buf`]), the dma-bufs it makes of the pages are imported
+    /// instead. With Metal's private option bit 24
     /// ([`ResourceOptions::PRIVATE_BIT`]), the GPU's writes to the pages are dropped, as Metal's
     /// are: on macOS the pages are imported through a read-only view of them, by their pointer
     /// alone; elsewhere the buffer is made over a copy of them whose GPU writes are dropped,
@@ -505,8 +506,8 @@ impl Device {
     ///
     /// Refused: a length of 0 or past `max_buffer_length` (`Nil`, as plain Metal answers nil);
     /// `Private` or `Memoryless` storage, as Metal stops them, and an undefined
-    /// option (`Invalid`); a device
-    /// without `VK_EXT_external_memory_host` (`Unsupported`, naming it); memory this device
+    /// option (`Invalid`); on a device without `VK_EXT_external_memory_host`, memory that comes
+    /// with no dma-buf source it imports (`Unsupported`, naming it); memory this device
     /// cannot import exactly, by its pointer or by its dma-bufs (`Unsupported`, `HostMemory`),
     /// among it on Linux a page this process cannot write ([`HostMemory::new`]); dma-bufs that
     /// break the source's contract (`Invalid`, `Problem::DmaBuf`); pages past the
@@ -592,8 +593,7 @@ impl Device {
         let shared = self.shared();
         // The unit an import's pages round out to: an import by pointer over a page the call
         // covers is taken anew at its next submission.
-        let unit = (shared.host_import.as_ref())
-            .map_or(1, |importer| importer.page.max(importer.alignment));
+        let unit = (shared.host_import.as_ref()).map_or(1, Importer::unit);
         let imports = (shared.aliases).remapped(start, start.saturating_add(length), unit);
         shared.counts.host_range_remapped(imports);
     }
@@ -751,7 +751,7 @@ impl Device {
         let host = host_window(call, importer, pointer, length, source, drops_writes)?;
         let window = host.window;
         if of_heap && window.offset != 0 {
-            let alignment = importer.page.max(importer.alignment);
+            let alignment = importer.unit();
             let problem = HeapProblem::HostMemoryAlignment { alignment };
             return Err(invalid(call, Problem::Heap(problem)));
         }
@@ -1096,7 +1096,7 @@ impl Device {
         let host = host_window(call, importer, pointer, length, source, drops_writes)?;
         let window = host.window;
         if heap.is_some() && window.offset != 0 {
-            let alignment = importer.page.max(importer.alignment);
+            let alignment = importer.unit();
             let problem = HeapProblem::HostMemoryAlignment { alignment };
             return Err(invalid(call, Problem::Heap(problem)));
         }
@@ -1116,7 +1116,7 @@ impl Device {
         if moved && !copyable {
             return Err(Error::NotImplemented(RuntimeGap::RebindTextures));
         }
-        let unit = importer.page.max(importer.alignment);
+        let unit = importer.unit();
         let copy_window = match moved {
             true => ImportWindow {
                 start: (pointer.as_ptr() as u64).wrapping_sub(cell.offset()),
@@ -1593,16 +1593,16 @@ impl Device {
             source,
             drops_writes,
         } = host;
-        let refusal = match by_pointer {
+        let refusal = match (by_pointer, importer.pointers()) {
             // SAFETY: the caller's.
-            true => match unsafe {
-                self.import_pointer(importer, pointer, length, &window, class, drops_writes)
+            (true, Some(pointers)) => match unsafe {
+                self.import_pointer(pointers, pointer, length, &window, class, drops_writes)
             } {
                 Ok(imported) => return Ok(Ok(imported)),
                 Err(error) if refused(&error) => error,
                 Err(error) => return Err(error),
             },
-            false => not_importable(),
+            _ => not_importable(),
         };
         match source {
             Some(source) => Ok(Err((source, refusal))),
@@ -1622,7 +1622,7 @@ impl Device {
     /// placement is freed.
     pub(super) unsafe fn import_pointer(
         &self,
-        importer: &Importer,
+        pointers: &PointerImport,
         pointer: NonNull<u8>,
         length: u64,
         window: &ImportWindow,
@@ -1635,7 +1635,7 @@ impl Device {
         let start = pointer.as_ptr().wrapping_sub(window.offset as usize);
         let class = (class, drops_writes);
         // SAFETY: the caller's, and the buffer is a new one of this device.
-        match unsafe { self.import_backing(importer, &buffer, start, window, class) } {
+        match unsafe { self.import_backing(pointers, &buffer, start, window, class) } {
             Ok(placement) => Ok((buffer, placement)),
             Err(error) => {
                 // SAFETY: the buffer is unused.
@@ -1661,17 +1661,16 @@ impl Device {
             return Err(self.lost_refusal());
         }
         let shared = self.shared();
-        let importer = shared
-            .host_import
-            .as_ref()
-            .map_err(|_| internal("a pointer import made again on a device that imports none"))?;
+        let pointers = (shared.host_import.as_ref().ok())
+            .and_then(Importer::pointers)
+            .ok_or_else(|| internal("a pointer import made again on a device that imports none"))?;
         let window = &again.window;
         // SAFETY: the caller's pages stay mapped at the pointer while the buffer lives
         // (`HostMemory::new`), and the buffer outlives the placement: the import holds it, and a
         // command buffer that reads it holds the buffer too. An import of a read-only view is
         // never made again (`Device::buffer_over_host_memory`).
         let (buffer, placement) = unsafe {
-            self.import_pointer(importer, pointer, again.length, window, again.class, false)
+            self.import_pointer(pointers, pointer, again.length, window, again.class, false)
         }?;
         Ok(self.pages_of(
             buffer.raw,
@@ -2155,7 +2154,7 @@ impl Device {
     /// allocations.
     unsafe fn import_backing(
         &self,
-        importer: &Importer,
+        pointers: &PointerImport,
         buffer: &HostBuffer,
         start: *mut u8,
         window: &ImportWindow,
@@ -2182,7 +2181,7 @@ impl Device {
         // SAFETY: the imported pages are host memory aligned to the import alignment (the
         // window's).
         let types =
-            unsafe { importer.memory_types(raw_device, imported) }.map_err(import_refused)?;
+            unsafe { pointers.memory_types(raw_device, imported) }.map_err(import_refused)?;
         let allowed = types & requirements.memory_type_bits;
         // An allocation past the device's, refused before the driver sees it.
         let largest = self
@@ -2406,13 +2405,14 @@ fn source_failure(failed: Error, refusal: Error) -> Error {
 
 /// The host pages a no-copy object of `length` bytes at `pointer` imports on the device of
 /// `importer`, for `call`: the pages the range touches ([`import_window`]), imported by their
-/// pointer where the device's import alignment covers them (but where `dma_buf_only`,
-/// `HostMemory::dma_buf_only`), else only as a dma-buf where the caller gave a source the device
-/// can use. A source the device cannot use is dropped uncalled, as is any where `drops_writes`
-/// (imported through a read-only view, `read_only_view.rs`). Refused: memory past the address
-/// space's end (`Nil`, as Metal makes no buffer over it); a range the import alignment cannot
-/// cover, or memory imported only as dma-bufs, with no usable source (`Unsupported`,
-/// `HostMemory`).
+/// pointer where the device imports pointers and its import alignment covers them (but where
+/// `dma_buf_only`, `HostMemory::dma_buf_only`), else only as a dma-buf where the caller gave a
+/// source the device can use. A source the device cannot use is dropped uncalled, as is any where
+/// `drops_writes` (imported through a read-only view, `read_only_view.rs`, or a copy where the
+/// system maps none). Refused: memory past the address space's end (`Nil`, as Metal makes no
+/// buffer over it); with no usable source, memory to be imported that a device without
+/// `VK_EXT_external_memory_host` imports no way (`Unsupported`, naming it), and a range the import
+/// alignment cannot cover, or memory imported only as dma-bufs (`Unsupported`, `HostMemory`).
 fn host_window(
     call: &'static str,
     importer: &Importer,
@@ -2425,10 +2425,19 @@ fn host_window(
     let at = pointer.as_ptr() as u64;
     let window = import_window(at, length, importer.page, 1)
         .map_err(|_| nil(call, Problem::BufferLength { length }))?;
-    let by_pointer =
-        !dma_buf_only && import_window(at, length, importer.page, importer.alignment).is_ok();
-    if !by_pointer && source.is_none() {
-        return Err(not_importable());
+    let by_pointer = !dma_buf_only
+        && (importer.pointers()).is_some_and(|pointers| {
+            import_window(at, length, importer.page, pointers.alignment).is_ok()
+        });
+    // Memory whose GPU writes are dropped where the system maps no read-only view of the pages
+    // is a copy of them, imported by no route (`copied.rs`).
+    let copied = drops_writes && !crate::read_only_view::VIEWS_DROP_WRITES;
+    if !by_pointer && source.is_none() && !copied {
+        // A device that imports no pointer refuses as it imports none, naming what it lacks.
+        return Err(match importer.pointer_import() {
+            Ok(_) => not_importable(),
+            Err(refusal) => refusal,
+        });
     }
     Ok(HostWindow {
         drops_writes,

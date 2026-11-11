@@ -1498,10 +1498,11 @@ fn contents(buffer: &Buffer) -> Result<NonNull<u8>, Unmade> {
 }
 
 /// Pages of `device`'s that its imports did not take as the class's, `why`: a cause that lasts
-/// where the device imports no host memory at all (`VK_EXT_external_memory_host`), else one that
+/// where the device imports no host pointer at all (`VK_EXT_external_memory_host`), else one that
 /// may pass (the import of these pages refused or failed, `copied.rs`).
 fn unimported(device: &Device, why: &str) -> Unmade {
-    match device.shared().host_import.is_ok() {
+    let pointers = (device.shared().host_import.as_ref()).is_ok_and(|i| i.pointers().is_some());
+    match pointers {
         true => Unmade::passing(why),
         false => Unmade::lasting(why),
     }

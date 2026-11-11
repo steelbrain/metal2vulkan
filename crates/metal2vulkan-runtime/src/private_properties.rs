@@ -39,7 +39,7 @@ use crate::linear_plan::LINEAR_ALIGNMENT;
 use crate::render_state::MAX_VIEWPORTS;
 use crate::texture_descriptor::{largest_side, MAX_ARRAY_LENGTH};
 use crate::{Degradation, Device};
-use metal2vulkan::device::{MetalDeviceProperties, VkExtension, VkFeature};
+use metal2vulkan::device::{MetalDeviceProperties, VkFeature};
 use metal2vulkan::error::{Capability, Needs};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureType};
 
@@ -329,7 +329,8 @@ pub enum PrivateFlag {
     /// `areProgrammableSamplePositionsSupported`, which Metal answers alike).
     SupportsProgrammableSamplePositions,
     /// `supportsResourceDetachBacking`: the device's (a no-copy buffer or heap is detached from
-    /// its pages, `detach_backing`, wherever one is made: the device imports host memory).
+    /// its pages, `detach_backing`, wherever one is made: the device imports host memory, by its
+    /// pointer or as dma-bufs of its pages).
     SupportsResourceDetachBacking,
     /// `supportsSharedTextureHandles`: the device's, yes (a shareable texture's handle, within
     /// the process, `new_shared_texture_handle`).
@@ -467,12 +468,14 @@ impl PrivateProperties {
     /// The answers on a device of `properties`, whose compile layer answers
     /// `metal`, and whose rows of [`MEASURED_FAMILY`] are `rows`, and the runtime gives a pixel
     /// format the capabilities `formats` answers and a texture over a buffer the linear
-    /// alignment `linear_alignment` (`Device::device_linear_texture_alignment`).
+    /// alignment `linear_alignment` (`Device::device_linear_texture_alignment`), and makes no-copy
+    /// buffers where `no_copy` (it imports host memory: `host_memory.rs`'s `Importer`).
     pub(crate) fn of(
         properties: &DeviceProperties,
         metal: &MetalDeviceProperties,
         rows: &[RowAudit],
         (formats, linear_alignment): (&dyn Fn(PixelFormat) -> FormatCapabilities, u64),
+        no_copy: bool,
     ) -> PrivateProperties {
         let answers = Answers {
             properties,
@@ -480,6 +483,7 @@ impl PrivateProperties {
             rows,
             formats,
             linear_alignment,
+            no_copy,
         };
         PrivateProperties {
             counts: PrivateCount::ALL.map(|p| {
@@ -521,6 +525,7 @@ impl Device {
                 &|pf| self.pixel_format_capabilities_now(pf),
                 self.device_linear_texture_alignment(),
             ),
+            self.shared().host_import.is_ok(),
         );
         // The properties the device has no answer for, announced once.
         let unknown = answers.unknown();
@@ -552,6 +557,9 @@ struct Answers<'a> {
     formats: &'a dyn Fn(PixelFormat) -> FormatCapabilities,
     /// The device's linear texture alignment (`Device::device_linear_texture_alignment`).
     linear_alignment: u64,
+    /// The device makes no-copy buffers: it imports host memory, by its pointer or as dma-bufs
+    /// of its pages (`host_memory.rs`'s `Importer`).
+    no_copy: bool,
 }
 
 impl Answers<'_> {
@@ -675,11 +683,7 @@ impl Answers<'_> {
                     .are_programmable_sample_positions_supported()
                     == Ok(true)
             }
-            F::SupportsResourceDetachBacking => self
-                .properties
-                .description
-                .extensions
-                .contains(&VkExtension::ExtExternalMemoryHost),
+            F::SupportsResourceDetachBacking => self.no_copy,
             F::SupportsSharedTextureHandles => true,
             F::SupportsSimdReduction => {
                 self.exact(R::SimdReduction) && self.exact(R::QuadReduction)

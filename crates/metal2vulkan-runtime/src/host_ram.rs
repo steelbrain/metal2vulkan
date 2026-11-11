@@ -30,9 +30,11 @@
 //!   import in each submission: measured with a probe on the Radeon 780M, Mesa 26.2.6, Linux 7.3.1,
 //!   an 8 GiB RAM held as 128 dma-bufs of 64 MiB raised a submission's median from 14 us to 60 to
 //!   88 us, as 32 of 256 MiB to 32 to 33 us, as 16 of 512 MiB to 24 us, as 3 of 2730 MiB to 16
-//!   us), and the driver takes the source's dma-bufs (asked as the use begins, by an import of the
-//!   RAM's first page as one, the source asked for that page, released at once; not where it
-//!   refused one before: NVIDIA's refuses a udmabuf, and its RAMs keep their 64 MiB chunks), a
+//!   us) or the device imports no pointer (it enables no `VK_EXT_external_memory_host`, so each
+//!   import of the RAM is a dma-buf), and the driver takes the source's dma-bufs (asked as the
+//!   use begins, by an import of the RAM's first page as one, the source asked for that page,
+//!   released at once; not where it refused one before: NVIDIA's refuses a udmabuf, and its RAMs
+//!   keep their 64 MiB chunks), a
 //!   chunk is as long as [`LONGEST_LISTED_CHUNK`] (512 MiB), one dma-buf of the source
 //!   ([`HostRam::with_largest_dma_buf`]) and the device's `maxMemoryAllocationSize`,
 //!   `maxBufferSize` and `maxStorageBufferRange` take, in whole [`CHUNK_BYTES`]
@@ -2138,9 +2140,13 @@ impl Device {
     /// imported so with a source; with none, it is taken but imports no chunk, and each object
     /// over it is refused as its own import of the pointer is (`Unsupported`, `HostMemory`).
     ///
-    /// Refused: a device without `VK_EXT_external_memory_host` (`Unsupported`, naming it); a RAM
-    /// whose ranges meet those of a RAM the device uses already, itself among them (`Invalid`,
-    /// `Problem::HostRam`); a lost device.
+    /// On a device without `VK_EXT_external_memory_host` that imports dma-bufs, a RAM with a
+    /// source of them has every chunk imported as its dma-buf, never its pointer.
+    ///
+    /// Refused: a device without `VK_EXT_external_memory_host` (`Unsupported`, naming it), unless
+    /// it imports dma-bufs and the RAM has a source of them; a RAM whose ranges meet those of a
+    /// RAM the device uses already, itself among them (`Invalid`, `Problem::HostRam`); a lost
+    /// device.
     pub fn use_host_ram(&self, ram: &Arc<HostRam>) -> Result<HostRamUse, Error> {
         self.at_serving(|device| device.use_host_ram_now(ram))
     }
@@ -2165,8 +2171,12 @@ impl Device {
             return Err(self.lost_refusal());
         }
         let shared = self.shared();
-        if let Err(unsupported) = &shared.host_import {
-            return Err(Error::Unsupported(unsupported.clone()));
+        let importer = (shared.host_import.as_ref())
+            .map_err(|unsupported| Error::Unsupported(unsupported.clone()))?;
+        // A device that imports dma-bufs of the pages alone imports no chunk of a RAM with no
+        // source of them.
+        if let (Err(refusal), None) = (importer.pointer_import(), &ram.dma_buf) {
+            return Err(refusal);
         }
         // A RAM with a source of dma-bufs imports its chunks by the import tax's verdict, so the
         // device's submission checks answer first (`submit_check.rs`), waited for at most
@@ -2265,7 +2275,9 @@ impl Device {
 impl Device {
     /// How the device imports `ram`'s chunks (the module docs): [`Plan::listed`] where the RAM has
     /// a source of dma-bufs, the device imports dma-bufs, its held imports add to the cost of
-    /// every submission (its submission checks' import tax, `submit_check.rs`) and the driver
+    /// every submission (its submission checks' import tax, `submit_check.rs`) or it imports no
+    /// pointer (it enables no `VK_EXT_external_memory_host`, so the RAM's imports are dma-bufs
+    /// alone, as each costs every submission what one import does) and the driver
     /// takes the source's dma-bufs (asked of it, by an import of the RAM's first page as one
     /// released at once, unless it refused one before: `Device::ram_takes_dma_bufs`), so that
     /// its chunks are its dma-bufs; [`Plan::AHEAD`] elsewhere, its chunks of shared memory refused
@@ -2276,7 +2288,8 @@ impl Device {
         let importer = (self.shared().host_import.as_ref()).ok();
         let listed = match (importer, ram.dma_buf.as_ref(), ram.ranges.first()) {
             (Some(importer), Some(source), Some(first)) => {
-                importer.imports_dma_bufs() && self.pointer_imports_tax_submissions() && {
+                let taxed = importer.pointers().is_none() || self.pointer_imports_tax_submissions();
+                importer.imports_dma_bufs() && taxed && {
                     let page = first.start..first.start + importer.page;
                     // SAFETY: the RAM's first page, mapped while the RAM lives, past the import
                     // released before this returns; the source's dma-bufs hold exactly the pages
@@ -2461,7 +2474,8 @@ impl Device {
     /// dma-bufs ([`HostRam::with_dma_buf`]), as one dma-buf of it (`Device::ram_span_as_dma_buf`):
     /// that first where the device's held pointer imports add to the cost of every submission
     /// (its submission checks' import tax, `submit_check.rs`), the pointer where that fails; the
-    /// pointer first elsewhere, the dma-buf where the pointer is refused. Counted:
+    /// pointer first elsewhere, the dma-buf where the pointer is refused; the dma-buf alone where
+    /// the device imports no pointer. Counted:
     /// `WorkCounts::host_ram_dma_buf_imports` (each import of a dma-buf),
     /// `host_ram_dma_buf_imports_failed` (each that failed: NVIDIA's driver refuses a udmabuf,
     /// which the device then remembers, and no later span asks the source) and
@@ -2496,6 +2510,10 @@ impl Device {
             self.shared().counts.host_ram_dma_buf_imported();
             Ok(self.ram_chunk(ram, span, of, raw, placement))
         };
+        // A device that imports no pointer takes the dma-buf alone.
+        if importer.pointers().is_none() {
+            return as_dma_buf(span);
+        }
         match self.pointer_imports_tax_submissions() {
             true => as_dma_buf(span.clone()).or_else(|_: Error| by_pointer(span)),
             false => match by_pointer(span.clone()) {
@@ -2575,9 +2593,9 @@ impl Device {
     /// its pointer: a dedicated block of memory of a coherent type both the pages and a
     /// host-allocation buffer allow, with the device-address flag where the device enables
     /// `bufferDeviceAddress` (`memory::import_host`), and a `VkBuffer` over the whole of it.
-    /// Refused where the device's import alignment misses the span's start or end, it passes the
-    /// device's allocation size, or the driver refuses the pages (or the runtime does for it,
-    /// `Device::refuse_unpinnable`).
+    /// Refused where the device imports no pointer ([`Importer::pointer_import`]), its import
+    /// alignment misses the span's start or end, it passes the device's allocation size, or the
+    /// driver refuses the pages (or the runtime does for it, `Device::refuse_unpinnable`).
     ///
     /// # Safety
     ///
@@ -2589,10 +2607,11 @@ impl Device {
         span: Range<u64>,
         of: Imported,
     ) -> Result<RamChunk, Error> {
+        let pointers = importer.pointer_import()?;
         let shared = self.shared();
         let raw_device = shared.vk();
         let size = span.end - span.start;
-        let alignment = importer.alignment.max(1);
+        let alignment = pointers.alignment.max(1);
         if !span.start.is_multiple_of(alignment) || !size.is_multiple_of(alignment) {
             return Err(not_importable());
         }
@@ -2625,7 +2644,7 @@ impl Device {
         // SAFETY: `raw` is a live buffer of this device.
         let requirements = unsafe { raw_device.get_buffer_memory_requirements(raw) };
         // SAFETY: the pages are host memory aligned to the import alignment (checked above).
-        let types = match unsafe { importer.memory_types(raw_device, pointer) } {
+        let types = match unsafe { pointers.memory_types(raw_device, pointer) } {
             Ok(types) => types & requirements.memory_type_bits,
             Err(error) => {
                 discard();

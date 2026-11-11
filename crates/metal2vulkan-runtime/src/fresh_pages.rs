@@ -53,7 +53,7 @@
 use super::buffer::usage;
 use super::device::lock;
 use super::error::{vulkan, Error};
-use super::host_memory::Importer;
+use super::host_memory::{Importer, PointerImport};
 use super::memory::{self, MemoryClass, Placement, BLOCK_BYTES};
 use crate::release;
 use crate::Device;
@@ -151,9 +151,9 @@ impl Drop for OwnPages {
 ///
 /// # Safety
 ///
-/// `device` is `importer`'s device, and `unit` a multiple of its import alignment.
+/// `device` is `pointers`' device, and `unit` a multiple of its import alignment.
 pub(super) unsafe fn own_page_types(
-    importer: &Importer,
+    pointers: &PointerImport,
     device: &ash::Device,
     unit: u64,
 ) -> Result<u32, &'static str> {
@@ -162,7 +162,7 @@ pub(super) unsafe fn own_page_types(
     };
     // SAFETY: the caller's; the pages are host memory of this process at a host page, which the
     // import alignment divides.
-    match unsafe { importer.memory_types(device, pages.pointer()) } {
+    match unsafe { pointers.memory_types(device, pages.pointer()) } {
         Ok(0) | Err(_) => Err("the device's driver imports anonymous pages as no memory type"),
         Ok(types) => Ok(types),
     }
@@ -195,7 +195,7 @@ impl Device {
         pages: Option<Arc<OwnPages>>,
     ) -> Result<Option<(vk::Buffer, Placement)>, Error> {
         let shared = self.shared();
-        let Ok(importer) = &shared.host_import else {
+        let Some(pointers) = (shared.host_import.as_ref().ok()).and_then(Importer::pointers) else {
             return Ok(None);
         };
         let raw_device = shared.vk();
@@ -214,9 +214,7 @@ impl Device {
         let requirements = unsafe { raw_device.get_buffer_memory_requirements(raw) };
         // Whole units of the host page and the import alignment, as the import requires of the
         // pointer and the length, and room for the buffer's requirements.
-        let unit = (importer.page)
-            .max(importer.alignment)
-            .max(requirements.alignment);
+        let unit = pointers.unit().max(requirements.alignment);
         let length = (requirements.size.max(size)).checked_next_multiple_of(unit);
         let pages = match pages {
             Some(pages) => length
@@ -227,7 +225,7 @@ impl Device {
         let placed = pages.and_then(|pages| {
             // SAFETY: the pages are host memory of this process at a multiple of the unit,
             // which the import alignment divides (both are powers of two).
-            let types = unsafe { importer.memory_types(raw_device, pages.pointer()) }.ok()?;
+            let types = unsafe { pointers.memory_types(raw_device, pages.pointer()) }.ok()?;
             // The memory type the buffer would take without the pages: the pages take it, or
             // the buffer lies there as ever.
             let best = lock(&shared.memory).best_type(requirements.memory_type_bits, class)?;
