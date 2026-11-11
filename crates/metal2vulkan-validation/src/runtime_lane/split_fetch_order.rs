@@ -204,7 +204,7 @@ impl Draws {
 }
 
 /// A texture of `format`, `sides` and `usage`, of `options`.
-fn texture(
+pub(super) fn texture(
     device: &Device,
     format: PixelFormat,
     (width, height): (u64, u64),
@@ -261,7 +261,7 @@ fn encode_pass(
 }
 
 /// Encode a copy of `target` of `sides` into `command_buffer`, to a shared buffer made for it.
-fn encode_readback(
+pub(super) fn encode_readback(
     command_buffer: &CommandBuffer,
     target: &Texture,
     (width, height): (u64, u64),
@@ -312,14 +312,14 @@ fn pass(
 }
 
 /// `command_buffer` completed without error.
-fn completed(command_buffer: &CommandBuffer) {
+pub(super) fn completed(command_buffer: &CommandBuffer) {
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
 }
 
 /// Every pixel's code a readback of a target of `sides` holds: its red, green and blue bytes, which
 /// must agree, and alpha 255.
-fn codes(buffer: &Buffer, (width, height): (u64, u64)) -> Vec<u8> {
+pub(super) fn codes(buffer: &Buffer, (width, height): (u64, u64)) -> Vec<u8> {
     let texels = read_buffer(buffer, 0, width * height * 4).unwrap();
     texels
         .as_chunks::<4>()
@@ -335,7 +335,7 @@ fn codes(buffer: &Buffer, (width, height): (u64, u64)) -> Vec<u8> {
 }
 
 /// The 8x4 groups of `sides` that hold a wrong pixel, by their top left pixel.
-fn wrong_groups(wrong: &[bool], (width, _): (u64, u64)) -> BTreeSet<(u64, u64)> {
+pub(super) fn wrong_groups(wrong: &[bool], (width, _): (u64, u64)) -> BTreeSet<(u64, u64)> {
     wrong
         .iter()
         .enumerate()

@@ -381,6 +381,8 @@ mod device_recovery;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod discard_counts;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod discard_fetch_groups;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod discard_hoist;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod dispatch_costs;
