@@ -23,11 +23,12 @@
 //!   (`copied.rs`), which would be a third. `contents` is the caller's pointer, and the
 //!   deallocator and keep-alive go as a no-copy buffer's do.
 //! - **Copies in.** The buffer's bytes and the rest of their last page ([`CallerCopy::reach`])
-//!   are copied in as it is made, `did_modify_range` copies its range in, and a rebind copies the
-//!   new pages in whole: each by the device's next submission, before any of its commands, after
-//!   the commands before it on its `VkQueue` (`texture/first_move.rs`), which the call does not
-//!   wait for, so every command buffer committed after the call reads them, and none in flight on
-//!   that queue sees the copy land under it. A command buffer in flight on another queue that
+//!   are copied in as it is made, a `did_modify_range`'s range at the device's next commit, as
+//!   the pages hold it then (`managed.rs`: staged by the CPU, [`CallerCopy::copy_in_now`]), and a
+//!   rebind copies the new pages in whole: each by the device's next submission, before any of its
+//!   commands, after the commands before it on its `VkQueue` (`texture/first_move.rs`), which the
+//!   call does not wait for, so every command buffer committed after the call reads them, and none
+//!   in flight on that queue sees the copy land under it. A command buffer in flight on another queue that
 //!   reads the buffer meanwhile races the copy, as on Metal. On a device with a fill queue (a copy
 //!   engine's second queue, `device/staging.rs`), a batch's copies in run there, before the batch,
 //!   which waits for them, after the batches before it on its `VkQueue`. Not on the staging queue,
@@ -422,6 +423,21 @@ impl CallerCopy {
         }
     }
 
+    /// Copy `range` of the pages into `buffer`'s device copy as they hold it now, at a commit
+    /// after a `did_modify_range` (`managed.rs`): the CPU copies the bytes into staging buffers
+    /// ([`stage_in`]), whatever reaches the pages, so a CPU write after the commit reaches no
+    /// command buffer committed before it. Nothing while the pages are detached.
+    pub(super) fn copy_in_now(&self, buffer: &Buffer, range: Range<u64>) -> Result<(), Error> {
+        let range = range.start..range.end.min(self.reach);
+        if range.is_empty() {
+            return Ok(());
+        }
+        let Some(pointer) = self.mapped_contents() else {
+            return Ok(());
+        };
+        stage_in(buffer, pointer, range, true)
+    }
+
     /// `detach_backing` of the buffer: the host copy's (the module docs). An import's detach
     /// answers as a no-copy buffer's; pages no import maps detach at once, their deallocator held
     /// until the buffer's next rebind or its release.
@@ -479,7 +495,7 @@ impl Drop for CallerCopy {
 
 /// Copy `range` of the bytes at `pointer` (the buffer's byte 0) into `buffer`'s device copy
 /// through staging buffers of [`STAGED_CHUNK`] bytes at most, read now.
-fn stage_in(
+pub(super) fn stage_in(
     buffer: &Buffer,
     pointer: NonNull<u8>,
     range: Range<u64>,

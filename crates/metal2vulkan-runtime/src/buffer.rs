@@ -4296,13 +4296,38 @@ impl Buffer {
         }
     }
 
+    /// Copy the bytes `range` of a buffer with a host copy ([`HostCopy`]) to its own as the host
+    /// copy holds them now, at a commit (`managed.rs`'s `Modified`): the CPU copies them into
+    /// staging buffers, which the device's next submission copies from, before any of its
+    /// commands (`managed_copy::stage_in`). Where the staging buffers find no memory, the bytes
+    /// are copied from the host copy as that submission runs ([`upload`](Self::upload)). Nothing
+    /// for a buffer without a host copy, nor for an empty range, nor for pages detached.
+    pub(super) fn upload_now(&self, range: Range<u64>) {
+        let staged = match self.mirror() {
+            Some(HostCopy::Caller(caller)) => caller.copy_in_now(self, range.clone()),
+            Some(HostCopy::Own(_)) => match self.mapped_contents() {
+                Some(contents) => {
+                    super::managed_copy::stage_in(self, contents, range.clone(), true)
+                }
+                None => Ok(()),
+            },
+            None => Ok(()),
+        };
+        // A failed submission past the bound fails the device, which the commit's own
+        // submission reports.
+        if staged.is_err() {
+            let _ = self.upload(range);
+        }
+    }
+
     /// Copy `range` of the bytes of `source` (a `VkBuffer`, and where the buffer's byte
     /// `range.start` lies in it) into the buffer's own, by the device's next submission, before
     /// any of its commands, after the commands before it on its `VkQueue`, as
     /// [`upload`](Self::upload) copies, the submission holding `held` until it completed: a
     /// two-copy buffer's copy in from the caller's pages (`managed_copy.rs`), counted
-    /// (`WorkCounts::managed_bytes_copied_in`). Where `bounded`, past the bound of what is
-    /// staged, a submission waited for makes it now; else it waits for the device's next.
+    /// (`WorkCounts::managed_bytes_copied_in`), or from staging buffers of a host copy's bytes
+    /// ([`upload_now`](Self::upload_now)). Where `bounded`, past the bound of what is staged, a
+    /// submission waited for makes it now; else it waits for the device's next.
     pub(super) fn copy_in_from(
         &self,
         source: (vk::Buffer, u64),
@@ -4323,7 +4348,9 @@ impl Buffer {
             bytes,
             held,
         );
-        device.shared().counts.managed_copied(bytes, true);
+        if self.caller_copy().is_some() {
+            device.shared().counts.managed_copied(bytes, true);
+        }
         match past && bounded {
             true => device.submit_internal(|_, _| {}),
             false => Ok(()),

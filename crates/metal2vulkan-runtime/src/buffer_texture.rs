@@ -2305,7 +2305,8 @@ impl Texels {
         // reported, so the copies of the pages take it (`dirty_pages.rs`).
         let at = target as u64;
         self.buffer.wrote_host(at..at + (end - start));
-        self.buffer.upload(start..end)
+        self.buffer.modified(start..end);
+        Ok(())
     }
 
     /// The mapped bytes the CPU reaches the texels' bytes `start..start + len` of the buffer's
@@ -2372,7 +2373,7 @@ impl Texels {
                 .ok_or_else(|| invalid(call, Problem::Copy(CopyProblem::CpuAccessPrivate)))?;
             let at = contents.as_ptr() as u64 + start;
             self.buffer.wrote_host(at..at + (end - start));
-            self.buffer.upload(start..end)?;
+            self.buffer.modified(start..end);
         }
         Ok(())
     }

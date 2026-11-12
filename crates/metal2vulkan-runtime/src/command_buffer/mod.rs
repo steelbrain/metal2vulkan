@@ -3339,6 +3339,10 @@ impl CommandBuffer {
         failure: Option<CommitFailure>,
         hand: Hand,
     ) -> Result<(), Error> {
+        // The bytes of the ranges `did_modify_range` noted since the last commit, as the host
+        // copies hold them now, for this command buffer's submission or one before it
+        // (`managed.rs`).
+        self.0.device.shared().modified.take_at_commit();
         // Left to wait for the last render encoder's end, where its call left it to the device's
         // lowering thread and the thread has not lowered it, or for the commits left so.
         if failure.is_none() && self.queue_commit(call, hand)? {

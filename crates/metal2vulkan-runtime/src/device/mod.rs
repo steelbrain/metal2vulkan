@@ -576,6 +576,9 @@ pub(super) struct DeviceShared {
     /// Its copied host buffers, compared at each commit and each batch's completion
     /// (`copied.rs`).
     pub(crate) copied: Arc<super::copied::CopiedBuffers>,
+    /// The ranges of buffers with a host copy the CPU named since the last commit, which the next
+    /// commit copies in (`managed.rs`).
+    pub(crate) modified: super::managed::Modified,
     /// How many of the next imports of host pages by their pointer fail as the driver's out of
     /// device memory: for the tests of `copied.rs` (`Device::fail_next_host_imports`).
     #[cfg(test)]
@@ -2933,6 +2936,7 @@ impl Device {
             aliases: Default::default(),
             host_ram: Default::default(),
             copied,
+            modified: Default::default(),
             #[cfg(test)]
             failing_host_imports: Default::default(),
             #[cfg(test)]
