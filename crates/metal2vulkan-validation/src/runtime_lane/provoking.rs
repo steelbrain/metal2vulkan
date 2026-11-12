@@ -37,7 +37,7 @@ use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::metal::{
-    IndexType, IndirectCommandType, PixelFormat, PrimitiveType, TextureUsage,
+    IndexType, IndirectCommandType, PixelFormat, PrimitiveType, TextureUsage, TriangleFillMode,
 };
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, RenderPipelineDescriptor, RuntimeFact, StageSource,
@@ -1041,6 +1041,105 @@ fn draws_of_no_primitive_announce_nothing() {
         }
         layer_reported_nothing_at_all(&messages);
     }
+}
+
+/// Draws of one encoder after the private setters, each kind in turn: under a restart index, a line
+/// width of 2, triangles filled as lines and mode 1, draws of no primitive, direct then indexed,
+/// of every public type and too few vertices or indices for one; and at mode 1, then at modes
+/// past 1, then at 0, draws of three vertices or indices of every type, direct, indexed and
+/// indirect. A draw after one of the same primitive type, of other arguments alone, is rebound
+/// from it (`render/draw_again.rs`), and in a build with debug assertions every second one also
+/// takes every step, which must work out what the rebound did. Every pipeline of the fixture, on
+/// the cfg's device: the encoders end and their command buffers complete.
+#[test]
+fn draws_after_the_private_setters_rebind_what_every_step_binds() {
+    use DrawPrimitiveType::{LineLoop, Public, TriangleFan};
+    use PrimitiveType::{Line, LineStrip, Point, Triangle, TriangleStrip};
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    {
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+        let lane = Lane::new(device);
+        // All zeros: indices of vertex 0, and indirect arguments of no vertex.
+        let zeros = buffer_with(&lane.device, &[0; 64]).unwrap();
+        let direct = |e: &mut RenderCommandEncoder, primitive: DrawPrimitiveType, count| {
+            e.draw_primitives(primitive, 0, count, 1, 0)
+        };
+        let indexed = |e: &mut RenderCommandEncoder, primitive: DrawPrimitiveType, count| {
+            e.draw_indexed_primitives(primitive, count, IndexType::UInt16, &zeros, 0, 1, 0, 0)
+        };
+        let three = |e: &mut RenderCommandEncoder, primitive: DrawPrimitiveType, at: usize| match at
+        {
+            0 => direct(e, primitive, 3),
+            1 => indexed(e, primitive, 3),
+            _ => e.draw_primitives_indirect(primitive, &zeros, 0),
+        };
+        let case = Case::direct(Public(Triangle), Form::Direct, 0, 0);
+        for fragment in FRAGMENTS {
+            let pipeline = lane.pipeline(fragment);
+            lane.render(&case, |e| {
+                e.set_render_pipeline_state(&pipeline)?;
+                e.set_vertex_buffer(Some(&lane.positions), 0, 0)?;
+                e.set_primitive_restart_enabled(true, 0xffff);
+                e.set_line_width(2.0)?;
+                e.set_triangle_fill_mode(TriangleFillMode::Lines)?;
+                e.set_provoking_vertex_mode(1)?;
+                direct(e, Public(Point), 0)?;
+                indexed(e, Public(Point), 0)?;
+                let least = [(Line, 2), (LineStrip, 2), (Triangle, 3), (TriangleStrip, 3)];
+                for (primitive, least) in least {
+                    for count in 0..least {
+                        direct(e, Public(primitive), count)?;
+                        indexed(e, Public(primitive), count)?;
+                    }
+                }
+                Ok(())
+            })
+            .unwrap_or_else(|error| panic!("{}: empty draws: {error:?}", fragment.name));
+            lane.render(&case, |e| {
+                e.set_render_pipeline_state(&pipeline)?;
+                e.set_vertex_buffer(Some(&lane.positions), 0, 0)?;
+                e.set_provoking_vertex_mode(1)?;
+                let at_one = [
+                    (Public(Triangle), 0),
+                    (Public(TriangleStrip), 0),
+                    (Public(Triangle), 1),
+                    (Public(TriangleStrip), 1),
+                    (TriangleFan, 0),
+                    (Public(Triangle), 2),
+                    (Public(TriangleStrip), 2),
+                    (Public(Line), 0),
+                    (Public(LineStrip), 1),
+                    (LineLoop, 0),
+                ];
+                for (primitive, at) in at_one {
+                    three(e, primitive, at)?;
+                }
+                for mode in [2, 7, 1 << 32, 1 << 63, u64::MAX] {
+                    e.set_provoking_vertex_mode(mode)?;
+                    let past_one = [
+                        (Public(Triangle), 0),
+                        (Public(Triangle), 1),
+                        (TriangleFan, 0),
+                        (Public(TriangleStrip), 0),
+                        (Public(TriangleStrip), 0),
+                        (Public(Line), 0),
+                    ];
+                    for (primitive, at) in past_one {
+                        three(e, primitive, at)?;
+                    }
+                }
+                e.set_provoking_vertex_mode(0)?;
+                for (primitive, at) in [(Public(Triangle), 1), (Public(Line), 0), (TriangleFan, 0)]
+                {
+                    three(e, primitive, at)?;
+                }
+                Ok(())
+            })
+            .unwrap_or_else(|error| panic!("{}: draws of three: {error:?}", fragment.name));
+        }
+    }
+    layer_reported_nothing_at_all(&messages);
 }
 
 /// An execution of indirect render commands takes the first vertex at mode 1, as Metal's does: its
