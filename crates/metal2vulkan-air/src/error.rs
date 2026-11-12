@@ -831,10 +831,14 @@ pub enum GenericPointer {
     /// sees and whose generic pointers no other write may overlap, or is an atomic operation's
     /// old value.
     Memory,
-    /// It is held in, or taken from, an aggregate or a vector value.
+    /// It is held in an aggregate or a vector value the translation does not follow element by
+    /// element: one an instruction makes other than `insertvalue`, `extractvalue`,
+    /// `insertelement`, `extractelement`, `shufflevector`, `phi`, `select` and `freeze` (a load's
+    /// is [`GenericPointer::Memory`], a call's [`GenericPointer::Call`]), a part taken from a
+    /// constant aggregate, or a constant expression in an aggregate constant.
     Aggregate,
-    /// It crosses a call: a call's argument or result (other than a space query's pointer), a
-    /// parameter, or the returned value.
+    /// It crosses a call, alone or in an aggregate: a call's argument or result (other than a
+    /// space query's pointer), a parameter, or the returned value.
     Call,
     /// It is made from an integer (`inttoptr`), or is a constant that is no address space's
     /// pointer made generic.

@@ -1565,12 +1565,15 @@ driver's. Each is open work.
   between pointers of two spaces, such as a device and a thread pointer, as the run picks),
   `Memory` (loaded from memory other than a thread allocation whose every use the translation
   sees, such as one whose address a visible function the pipeline does not link takes, or from
-  one whose bytes another write may overlap), `Aggregate` (held in a struct, array or vector
-  value), `Call` (passed across a call that stays a call) or `Integer` (`inttoptr`).
+  one whose bytes another write may overlap, or in an aggregate loaded from memory), `Aggregate`
+  (held in a struct, array or vector value made by no instruction the translation follows field
+  by field, such as an element of a constant aggregate), `Call` (passed across a call that stays
+  a call, alone or in an aggregate) or `Integer` (`inttoptr`).
   Vulkan's logical addressing has no pointer into either of two storage classes. A generic
   pointer that every path gives one space becomes that space's pointer, through a thread
-  allocation's slots too, and its space queries are answered as Metal answers them, including no
-  space for a null pointer (`runtime_lane::generic_pointers`).
+  allocation's slots and a struct's, array's or vector's elements too, and its space queries are
+  answered as Metal answers them, including no space for a null pointer
+  (`runtime_lane::generic_pointers`).
 - **A loop that sums its counter fails to make through MoltenVK.** Apple's MSL front end rewrites a
   loop whose running sum adds its 32-bit counter (`1 + 2 + ... + n`) into a closed form in 33-bit
   integers, which the M3 Max's back end cannot legalize where it lands in the kernel's constant
