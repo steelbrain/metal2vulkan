@@ -349,9 +349,15 @@ it runs once per process. A texture made before its verdict is a shadow, made wi
 the check (`WorkCounts::host_texture_shadows_check_pending`), and moves in place once its kind's
 verdicts pass, with no copy (`WorkCounts::host_textures_moved_in_place`; its shadow's image goes
 once that commit's command buffer completed, `WorkCounts::host_texture_shadows_freed_after_move`), at a quiet commit: one
-made while no other command buffer of the device is uncommitted, that waits for no event and binds
-no texture by its ID, while none that does is still running (a program that never commits so
-keeps them shadows). A program that makes such textures as it starts (a compositor's
+made while no other command buffer of the device is uncommitted and every batch committed before
+was submitted, of a command buffer that ended an encoder, whose every encoder may run, that waits
+for no event, binds no texture by its ID, and leaves none of its work to be recorded after its
+commit (for instance a dispatch whose pipeline was still being made as it was encoded, an indirect
+dispatch, an indirect command buffer's execution, a render pass that executes render commands, a copy
+staged through the CPU, a sparse mapping update a host step applies), while none that binds textures by
+their ID is still running. A program that never commits so keeps them shadows, and one whose
+commits all leave work for later keeps them shadows until a commit that leaves none, such as a
+blit's. A program that makes such textures as it starts (a compositor's
 framebuffers) and wants them in place from their first use on a driver's first run starts the
 check earlier, for instance as it makes the device, with `Device::settle_in_place_checks` and a
 zero timeout, which waits for nothing; the same call with a zero timeout later says whether the
