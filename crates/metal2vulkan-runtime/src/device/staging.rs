@@ -70,17 +70,17 @@
 //! - **Why.** A copy through a queue of the graphics family runs on the engine the program's
 //!   kernels run on. Beside another queue's kernels, a frame that copied a `Managed` buffer's 1 MiB
 //!   in took 3.53 to 3.60 ms (p50) at the start of the batch's work and 1.80 to 1.84 ms through the
-//!   fill queue on an RTX 3090 and an RTX 2080, and one of 64 MiB 40.6 to 48.9 ms and 35.9 to 37.8
+//!   fill queue on an RTX 3090 and an RTX 2080, and one of 64 MiB 40.6 to 49.4 ms and 35.9 to 37.8
 //!   ms (`tests::managed_copies_bench`); in raw Vulkan on an RTX 5080 Laptop GPU (615.71.09),
 //!   buffer copies through the graphics family beside such kernels moved 13.5 GB/s and left them 52
 //!   to 56% of their rate, and through the copy engine 28.5 GB/s and 92 to 97%
 //!   (`examples/copy_engine.rs`).
 //! - **Its least.** Fills of fewer bytes stay at the batch's start. From 1 MiB up, the fill queue's
-//!   frames took at most 1.04 times as long as the others' alone (the RTX 3090's at 1 MiB, traded
-//!   for the halved frame beside the kernels) and no longer beside the kernels, on the RTX 3090,
-//!   RTX 2080 and RTX 5080 Laptop GPU; under it, 0.51 to 2.03 times as long, where two devices that
-//!   both copied at the batch's start differed by 0.31 to 1.39 times
-//!   (`tests::managed_copies_bench`, docs/FAST-PATHS.md).
+//!   frames took at most 1.04 times as long as the others' alone (the RTX 3090's at 1 MiB and the
+//!   RTX 2080's at 64 MiB, in some runs, traded for the halved frame beside the kernels) and no
+//!   longer beside the kernels, on the RTX 3090, RTX 2080 and RTX 5080 Laptop GPU; under it, 0.51
+//!   to 2.03 times as long, where two devices that both copied at the batch's start differed by
+//!   0.31 to 1.85 times (`tests::managed_copies_bench`, docs/FAST-PATHS.md).
 //! - **Why not the staging queue.** A fill comes after the batches before its batch on that
 //!   batch's `VkQueue` (below); on the staging queue, which waits for no work in flight, every
 //!   staging copy behind it would wait for those batches too.
