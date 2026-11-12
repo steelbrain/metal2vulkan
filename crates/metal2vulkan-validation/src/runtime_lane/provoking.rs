@@ -1049,8 +1049,10 @@ fn draws_of_no_primitive_announce_nothing() {
 /// past 1, then at 0, draws of three vertices or indices of every type, direct, indexed and
 /// indirect. A draw after one of the same primitive type, of other arguments alone, is rebound
 /// from it (`render/draw_again.rs`), and in a build with debug assertions every second one also
-/// takes every step, which must work out what the rebound did. Every pipeline of the fixture, on
-/// the cfg's device: the encoders end and their command buffers complete.
+/// takes every step, which must work out what the rebound did. Every pipeline of the fixture, its
+/// vertex function's buffer 0 bound and left unbound (as a consumer's draws leave it; the
+/// function reads zeros there, and each draw binds a zero region of its own, as the buffer is
+/// writable), on the cfg's device: the encoders end and their command buffers complete.
 #[test]
 fn draws_after_the_private_setters_rebind_what_every_step_binds() {
     use DrawPrimitiveType::{LineLoop, Public, TriangleFan};
@@ -1075,11 +1077,13 @@ fn draws_after_the_private_setters_rebind_what_every_step_binds() {
             _ => e.draw_primitives_indirect(primitive, &zeros, 0),
         };
         let case = Case::direct(Public(Triangle), Form::Direct, 0, 0);
-        for fragment in FRAGMENTS {
+        for (fragment, bound) in FRAGMENTS.into_iter().flat_map(|f| [(f, false), (f, true)]) {
             let pipeline = lane.pipeline(fragment);
             lane.render(&case, |e| {
                 e.set_render_pipeline_state(&pipeline)?;
-                e.set_vertex_buffer(Some(&lane.positions), 0, 0)?;
+                if bound {
+                    e.set_vertex_buffer(Some(&lane.positions), 0, 0)?;
+                }
                 e.set_primitive_restart_enabled(true, 0xffff);
                 e.set_line_width(2.0)?;
                 e.set_triangle_fill_mode(TriangleFillMode::Lines)?;
@@ -1095,10 +1099,14 @@ fn draws_after_the_private_setters_rebind_what_every_step_binds() {
                 }
                 Ok(())
             })
-            .unwrap_or_else(|error| panic!("{}: empty draws: {error:?}", fragment.name));
+            .unwrap_or_else(|error| {
+                panic!("{} (bound {bound}): empty draws: {error:?}", fragment.name)
+            });
             lane.render(&case, |e| {
                 e.set_render_pipeline_state(&pipeline)?;
-                e.set_vertex_buffer(Some(&lane.positions), 0, 0)?;
+                if bound {
+                    e.set_vertex_buffer(Some(&lane.positions), 0, 0)?;
+                }
                 e.set_provoking_vertex_mode(1)?;
                 let at_one = [
                     (Public(Triangle), 0),
@@ -1136,7 +1144,12 @@ fn draws_after_the_private_setters_rebind_what_every_step_binds() {
                 }
                 Ok(())
             })
-            .unwrap_or_else(|error| panic!("{}: draws of three: {error:?}", fragment.name));
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{} (bound {bound}): draws of three: {error:?}",
+                    fragment.name
+                )
+            });
         }
     }
     layer_reported_nothing_at_all(&messages);
