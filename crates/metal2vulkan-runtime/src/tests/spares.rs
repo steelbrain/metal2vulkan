@@ -675,22 +675,12 @@ mod device {
         }
     }
 
-    /// The command buffers the device's spare command pools hold once `done` holds of it, or
-    /// after [`WAIT`]: a pool is given back as its command buffer's completion is processed.
-    fn held_once(device: &Device, done: impl Fn(usize) -> bool) -> usize {
-        let start = Instant::now();
-        loop {
-            let held = device.shared().spares.command_buffers_held();
-            if done(held) || start.elapsed() > WAIT {
-                return held;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    }
-
     /// The command buffers of a load that grew to a burst go once the load fell back, the
     /// pool's recent uses and the spans of its uses no longer reaching them, freed on the
-    /// device's free thread, never on the thread that saw a command buffer complete.
+    /// device's free thread, never on the thread that saw a command buffer complete. Each count
+    /// is read once [`fills`] returned, which is final: a command buffer's wait returns once its
+    /// completion's transition ran, its pool's give-back and begin ahead among it
+    /// (`command_buffer/gate.rs`), and the drain once the frees that give-back posted ran.
     #[test]
     fn command_buffers_the_spares_hold_fall_back_after_a_burst_freed_on_the_free_thread() {
         let scratch = std::env::temp_dir().join(format!("m2v-spares-{}", std::process::id()));
@@ -698,12 +688,13 @@ mod device {
         let device = device(&scratch);
         let queue = device.new_command_queue().unwrap();
         let target = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+        let held = || device.shared().spares.command_buffers_held();
         fills(&device, &queue, &target, 1);
-        let before = held_once(&device, |held| held > 0);
+        let before = held();
         let mut grown = Vec::new();
         for encoders in (1..=BURST.ilog2()).map(|power| 1 << power) {
             fills(&device, &queue, &target, encoders);
-            grown.push(held_once(&device, |held| held >= before + encoders / 2));
+            grown.push(held());
         }
         let burst = *grown.last().unwrap();
         // The load idles past the spans of the burst's use, which then leaves the pool's recent
@@ -713,7 +704,7 @@ mod device {
         for _ in 0..more {
             fills(&device, &queue, &target, 1);
         }
-        let after = held_once(&device, |held| held <= before + 2);
+        let after = held();
         let freed_on = device.shared().spares.freed_on();
         println!(
             "SPARES {}: command buffers the spares hold: {before} after a command buffer of one \
