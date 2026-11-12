@@ -8,9 +8,10 @@
 //! fragment function reads no buffer.
 //!
 //! - Where every attribute is fetched in the shader (each layout's stride one fixed-function input
-//!   cannot align), draws and indexed draws of triangles merge into one draw, and each vertex
-//!   fetches its command's own vertex and instance: the same pixels as the host step's, which a
-//!   barrier the CPU set and cleared sends them to.
+//!   cannot align), draws and indexed draws of triangles draw what the host step draws of them,
+//!   which a barrier the CPU set and cleared sends them to: each vertex its command's own vertex
+//!   and instance, from its command's own buffers. The replay variant refuses a vertex function
+//!   that fetches attributes (`LoweringInputs::replay_bindings`), so both take the host step.
 
 use super::degrade_notices::{counts, on_device_with};
 use super::indirect_host_steps::{complete, HOST_STEPS};
@@ -285,12 +286,12 @@ const MARKS: [u32; 6] = [100, 101, 102, 105, 106, 107];
 
 /// Draws and indexed draws of triangles whose vertex function fetches both its attributes in the
 /// shader, positions per vertex and marks per instance (each layout's stride one fixed-function
-/// input cannot align, so the replay variant binds no vertex buffer), merge into one draw that
-/// draws what the host step draws of them: each vertex fetches its command's own vertex (its
-/// vertex start or its index plus its base vertex) and instance (its base instance plus the
-/// instance), from its command's own buffers.
+/// input cannot align, so no layout is bound in fixed function), draw what the host step draws of
+/// them: each vertex fetches its command's own vertex (its vertex start or its index plus its base
+/// vertex) and instance (its base instance plus the instance), from its command's own buffers.
+/// Both take the host step: the replay variant refuses a vertex function that fetches attributes.
 #[test]
-fn merged_draws_fetch_their_commands_pulled_attributes() {
+fn pulled_attributes_of_executed_draws_draw_what_the_host_step_draws() {
     on_device_with(at_plan, |device, messages| {
         let library = library(device);
         let state = device
@@ -338,17 +339,12 @@ fn merged_draws_fetch_their_commands_pulled_attributes() {
                     .take(8)
                     .collect::<Vec<_>>()
             );
-            let (merged, gpu, read) = forms[1];
-            assert!(
-                merged == 0 && gpu == 0 && read >= COMMANDS,
-                "{kernel}: the host step {:?}",
-                forms[1]
-            );
-            assert_eq!(
-                forms[0],
-                (COMMANDS, COMMANDS, 0),
-                "{kernel}: one merged draw"
-            );
+            for (merged, gpu, read) in forms {
+                assert!(
+                    merged == 0 && gpu == 0 && read >= COMMANDS,
+                    "{kernel}: the host step {forms:?}"
+                );
+            }
         }
         let notices = counts(&messages.take_notices());
         assert!(notices.contains_key(&HOST_STEPS[0]), "{notices:?}");
