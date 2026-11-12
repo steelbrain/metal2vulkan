@@ -35,6 +35,13 @@
 //! Icons are made in rounds, and each round's go as it ends, so a later round's textures are made
 //! after the images an earlier round's storage forms swapped out went.
 //!
+//! And icons whose levels only the CPU writes, as a window server's are: `Managed` (or `Shared`)
+//! 128x128 `RGBA16Float` textures of five levels and `ShaderRead` usage alone, each level of its
+//! own colors written by `replace_region`, made before the command buffer that samples them or
+//! while it is open, 21 a round. That command buffer draws every level of each through a sampler
+//! pinned to the level into a target of its size: each target, and each level read by a blit,
+//! must hold what was uploaded.
+//!
 //! The functions are `tob_rect`, `tob_solid` and `tob_sample` of the owned fixture
 //! `validation/fixtures/public/engine/tob_renders.ll`, `alv_rect`, `alv_implicit` and
 //! `alv_level1` of `validation/fixtures/public/engine/alv_levels.ll`, and `fetch_ordered` of
@@ -46,9 +53,10 @@
 use super::blit_holds::{device, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::{
-    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, LoadAction, Origin,
-    PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
-    SamplerState, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
+    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, CpuCacheMode, Device,
+    HazardTrackingMode, LoadAction, Origin, PipelineOptions, Region, RenderPassDescriptor,
+    RenderPipelineState, ResourceOptions, SamplerState, Size, StorageMode, StoreAction, Texture,
+    TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, SamplerMipFilter, TextureUsage};
@@ -456,6 +464,148 @@ fn run(case: &str, way: Way, event: Event) {
         failures.first()
     );
     assert!(failures.is_empty(), "{case}: {failures:?}");
+}
+
+/// The levels of a texture of uploaded levels, and the textures each round makes of it.
+const UPLOADED_LEVELS: u64 = 5;
+const UPLOADED_ICONS: usize = 21;
+
+/// The colors of the left and right halves of level `level` of a texture of uploaded levels,
+/// each level's its own.
+fn uploaded_colors(level: u64) -> [[f32; 4]; 2] {
+    let n = (level + 1) as f32 * 0.125;
+    [[n, 0.5, 0.25, 1.0], [0.5, n, 0.75, 0.5]]
+}
+
+/// The uploaded run: each round [`UPLOADED_ICONS`] textures of `storage`, 128x128
+/// `RGBA16Float` of [`UPLOADED_LEVELS`] levels and `ShaderRead` usage alone, each level written by
+/// `replace_region` and no GPU work, made before the command buffer that samples them or, where
+/// `open`, while it is open; that command buffer draws each level of each into a target of the
+/// level's size through a sampler pinned to the level (its least and greatest level of detail
+/// the level's), and each level and target is then read back by blits. The round's textures go
+/// as it ends.
+fn run_uploaded(case: &str, storage: StorageMode, open: bool) {
+    let scratch = Scratch::new(&format!("icon-mips-{case}"));
+    let device = device(&scratch.0);
+    let tools = Tools::new(&device);
+    let pinned: Vec<SamplerState> = (0..UPLOADED_LEVELS)
+        .map(|level| {
+            let mut descriptor = SamplerDescriptor::new();
+            descriptor.mip_filter = SamplerMipFilter::Nearest;
+            descriptor.lod_min_clamp = level as f32;
+            descriptor.lod_max_clamp = level as f32;
+            device.new_sampler_state(&descriptor).unwrap()
+        })
+        .collect();
+    let options = ResourceOptions::new(
+        storage,
+        CpuCacheMode::DefaultCache,
+        HazardTrackingMode::Default,
+    );
+    let icon = || {
+        let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, SIDE, SIDE, true);
+        d.mipmap_level_count = UPLOADED_LEVELS;
+        d.usage = TextureUsage::SHADER_READ;
+        d.resource_options = options;
+        let icon = device.new_texture(&d).unwrap();
+        for level in 0..UPLOADED_LEVELS {
+            let side = side(level);
+            let [left, right] = uploaded_colors(level).map(|color| color.map(half));
+            let bytes: Vec<u8> = (0..side * side)
+                .flat_map(|i| match i % side < side / 2 {
+                    true => left,
+                    false => right,
+                })
+                .flat_map(u16::to_le_bytes)
+                .collect();
+            let region = Region::new_2d(0, 0, side, side);
+            (icon.replace_region(region, level, 0, &bytes, side * TEXEL, 0)).unwrap();
+        }
+        icon
+    };
+    let want = |level: u64, x: u64| {
+        let [left, right] = uploaded_colors(level);
+        match x < side(level) / 2 {
+            true => left.map(half),
+            false => right.map(half),
+        }
+    };
+    let mut failures = Vec::new();
+    let mut counts = Vec::new();
+    for round in 0..ROUNDS {
+        let before = device.work_counts();
+        let made_first = (!open).then(|| (0..UPLOADED_ICONS).map(|_| icon()).collect());
+        let command_buffer = tools.queue.command_buffer().unwrap();
+        let icons: Vec<Texture> =
+            made_first.unwrap_or_else(|| (0..UPLOADED_ICONS).map(|_| icon()).collect());
+        let targets: Vec<Vec<Texture>> = icons
+            .iter()
+            .map(|icon| {
+                (0..UPLOADED_LEVELS)
+                    .map(|level| {
+                        let side = side(level);
+                        let mut d = TextureDescriptor::texture_2d(
+                            PixelFormat::RGBA16Float,
+                            side,
+                            side,
+                            false,
+                        );
+                        d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+                        d.resource_options = ResourceOptions::private();
+                        let target = device.new_texture(&d).unwrap();
+                        let sampler = &pinned[level as usize];
+                        let draw: Draw = (&tools.implicit, None, Fragment::Sampled(icon, sampler));
+                        tools.pass(&command_buffer, (&target, 0), Some([0.0; 4]), &[draw]);
+                        target
+                    })
+                    .collect()
+            })
+            .collect();
+        finish(&command_buffer);
+        counts.push(moved(&before, &device.work_counts()));
+        for (i, (icon, targets)) in icons.iter().zip(&targets).enumerate() {
+            let mut wrong = Vec::new();
+            for (level, target) in (0..UPLOADED_LEVELS).zip(targets) {
+                let command_buffer = tools.queue.command_buffer().unwrap();
+                tools.read(&command_buffer, (target, 0), 0);
+                tools.read(&command_buffer, (icon, level), SIDE * SIDE * TEXEL);
+                finish(&command_buffer);
+                let sampled = tools.wrong(0, level, |x| want(level, x));
+                let read = tools.wrong(SIDE * SIDE * TEXEL, level, |x| want(level, x));
+                if sampled.0 != 0 || read.0 != 0 {
+                    wrong.push(format!("level {level}: sampled {sampled:?}, read {read:?}"));
+                }
+            }
+            if !wrong.is_empty() {
+                failures.push(format!("round {round} icon {i}: {wrong:?}"));
+            }
+        }
+    }
+    eprintln!(
+        "ICON-MIPS {case} on {}: {} of {} icons wrong; per round (storage forms taken, images \
+         recycled, swapped-out images forgotten, reads through copies, slots narrowed) \
+         {counts:?}; first {:?}",
+        device.name(),
+        failures.len(),
+        ROUNDS * UPLOADED_ICONS,
+        failures.first()
+    );
+    assert!(failures.is_empty(), "{case}: {failures:?}");
+}
+
+#[test]
+fn uploaded_managed_levels_sampled_through_pinned_samplers_read_what_was_uploaded() {
+    run_uploaded("managed", StorageMode::Managed, false);
+}
+
+#[test]
+fn managed_levels_uploaded_while_the_sampling_command_buffer_is_open_read_what_was_uploaded() {
+    run_uploaded("managed-open", StorageMode::Managed, true);
+}
+
+#[test]
+fn uploaded_shared_levels_sampled_through_pinned_samplers_read_what_was_uploaded() {
+    run_uploaded("shared", StorageMode::Shared, false);
 }
 
 #[test]
