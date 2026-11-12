@@ -42,6 +42,11 @@
 //!   (the copy family's queues kept), each made and destroyed at once where the driver makes it:
 //!   which counts the driver accepts beside what is held, and how long each `vkCreateDevice`
 //!   took, refused or made.
+//! - **overlap** (`--overlap K,...`): for the plan's shape and each step a refused device takes
+//!   (16 + 2, 9 + 2, 5 + 2 and 1 + 2 on NVIDIA), K processes each making one device at the same
+//!   moment, `R` rounds (`--rounds`, 3 by default): each `vkCreateDevice`'s time, median, least and
+//!   most, and the time until all K were made, as when every device of a GPU is made again at once
+//!   (a device lost).
 //! - **runtime rooms** (`--runtime-rooms N,...`, opt-in as the exhaust phase is): as the rooms
 //!   phase, beside N of the runtime's own devices (as the runtime fill phase makes them) instead
 //!   of bare ones: a runtime device holds more of what the driver gives than a bare device of its
@@ -740,6 +745,104 @@ fn runtime_child() {
     let _ = std::fs::remove_dir_all(&cache);
 }
 
+/// The overlap phase (`--overlap K,...`, the module docs): for each shape of a refused device's
+/// steps and each count, `rounds` rounds of that many processes making one device each at once.
+fn overlap_phase(gpu: &Gpu, counts: &[usize], rounds: usize) {
+    let exe = std::env::current_exe().expect("this program");
+    let [(_, copies), (most, _)] = gpu.least_and_plan();
+    // The plan's (16 graphics-family queues on NVIDIA: 14 round robin and 2 presenting), the
+    // round robin halved twice with presenting's two, and the least plan's one.
+    let mut shapes: Vec<Shape> = vec![(most, copies)];
+    for graphics in [9, 5, 1] {
+        if graphics < most {
+            shapes.push((graphics, copies));
+        }
+    }
+    for shape in shapes {
+        for &count in counts {
+            let mut each = Vec::new();
+            let mut walls = Vec::new();
+            let mut refused = Vec::new();
+            for _ in 0..rounds {
+                let mut children: Vec<(Child, BufReader<std::process::ChildStdout>)> = (0..count)
+                    .map(|_| {
+                        let mut child = Command::new(&exe)
+                            .args([
+                                "--overlap-child",
+                                &shape.0.to_string(),
+                                &shape.1.to_string(),
+                            ])
+                            .stdin(Stdio::piped())
+                            .stdout(Stdio::piped())
+                            .spawn()
+                            .expect("a child");
+                        let mut stdout = BufReader::new(child.stdout.take().expect("stdout"));
+                        let mut ready = String::new();
+                        stdout.read_line(&mut ready).ok();
+                        (child, stdout)
+                    })
+                    .collect();
+                let start = Instant::now();
+                for (child, _) in &mut children {
+                    let stdin = child.stdin.as_mut().expect("stdin");
+                    stdin.write_all(b"go\n").ok();
+                    stdin.flush().ok();
+                }
+                for (_, stdout) in &mut children {
+                    let mut line = String::new();
+                    stdout.read_line(&mut line).ok();
+                    match line.split_whitespace().collect::<Vec<_>>()[..] {
+                        ["MADE", took] => each.push(took.parse::<f64>().unwrap_or(f64::NAN)),
+                        _ => refused.push(line.trim().to_owned()),
+                    }
+                }
+                walls.push(ms(start.elapsed()));
+                // Destroyed once all are made, so no destroy overlaps a making.
+                for (mut child, _) in children {
+                    drop(child.stdin.take());
+                    child.wait().ok();
+                }
+            }
+            if each.is_empty() {
+                println!(
+                    "QUEUE-PLAN-COST overlap {}+{} x{count}: none made {refused:?}",
+                    shape.0, shape.1
+                );
+                continue;
+            }
+            let (m50, mlo, mhi) = spread(&mut each);
+            let (w50, _, whi) = spread(&mut walls);
+            println!(
+                "QUEUE-PLAN-COST overlap {}+{} = {} queues x{count} at once: create median \
+                 {m50:.1} ms ({mlo:.1} to {mhi:.1}), all made median {w50:.1} ms (most {whi:.1}), \
+                 {rounds} rounds, refused {refused:?}",
+                shape.0,
+                shape.1,
+                queues(shape)
+            );
+        }
+    }
+}
+
+/// The overlap phase's child: says `READY` once its instance is made, makes a device of `shape`
+/// when a line arrives on stdin, says `MADE ms` (or the refusal) and destroys it once stdin closes.
+fn overlap_child(gpu: &Gpu, shape: Shape) {
+    println!("READY");
+    std::io::stdout().flush().ok();
+    let mut go = String::new();
+    std::io::stdin().read_line(&mut go).ok();
+    match gpu.make(shape) {
+        Ok((device, took)) => {
+            println!("MADE {:.1}", ms(took));
+            std::io::stdout().flush().ok();
+            let mut rest = Vec::new();
+            std::io::stdin().read_to_end(&mut rest).ok();
+            destroy(device);
+        }
+        Err(result) => println!("REFUSED {result:?}"),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("--runtime-child") {
@@ -760,6 +863,10 @@ fn main() {
     }
     if args.first().map(String::as_str) == Some("--probe-child") {
         probe_child(&gpu);
+        return;
+    }
+    if args.first().map(String::as_str) == Some("--overlap-child") {
+        overlap_child(&gpu, (args[1].parse().unwrap(), args[2].parse().unwrap()));
         return;
     }
     let value = |flag: &str| {
@@ -804,6 +911,16 @@ fn main() {
         });
     if let Some(rooms) = rooms {
         rooms_phase(&gpu, &rooms);
+    }
+    let overlap = (args.iter().position(|arg| arg == "--overlap"))
+        .and_then(|at| args.get(at + 1))
+        .map(|list| {
+            (list.split(','))
+                .filter_map(|n| n.parse().ok())
+                .collect::<Vec<usize>>()
+        });
+    if let Some(counts) = overlap {
+        overlap_phase(&gpu, &counts, value("--rounds").unwrap_or(3));
     }
     let runtime_rooms = (args.iter().position(|arg| arg == "--runtime-rooms"))
         .and_then(|at| args.get(at + 1))
