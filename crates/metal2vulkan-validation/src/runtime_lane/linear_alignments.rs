@@ -298,12 +298,14 @@ const RENDERED: [(PixelFormat, u64); 3] = [
 /// A render target at the answer is in place. On a device that imports host pages each format's
 /// answer is at least the device's line of memory (`Device::in_place_check_line`, its
 /// `nonCoherentAtomSize`), so a `ShaderRead | RenderTarget` texture over a no-copy buffer at an
-/// offset of the answer, its rows' bytes a multiple of the answer, tight or the answer apart past
-/// them, shares no line with bytes beside its texels. Where the device's check passed renders of
-/// such textures over pages imported by their pointer, it is an image in place (counted
-/// `host_textures_in_place`), and a blit out of it reads the caller's texels. On the Iris Xe,
-/// whose check fails renders of texels that share a line with bytes beside them, the answer was
-/// 16, and such a texture at an offset of 16 a shadow.
+/// offset of the answer, its rows' bytes a multiple of the answer and its rows that far apart
+/// (the pitch the probe tries: a row's bytes rounded up to the answer), shares no line with bytes
+/// beside its texels. Where the device's check passed renders of such textures over pages
+/// imported by their pointer, it is an image in place (counted `host_textures_in_place`), and a
+/// blit out of it reads the caller's texels. A wider pitch is not promised: on lavapipe an
+/// `RGBA8Unorm` render target of rows of 64 bytes, 128 apart, at its answer of 64, was a shadow.
+/// On the Iris Xe, whose check fails renders of texels that share a line with bytes beside them,
+/// the answer was 16, and such a texture at an offset of 16 a shadow.
 #[test]
 fn a_render_target_at_the_answered_alignment_is_in_place() {
     let cache = ScratchCache::new().unwrap();
@@ -323,40 +325,37 @@ fn a_render_target_at_the_answered_alignment_is_in_place() {
                     .unwrap();
                 for lines in [1, 3, 30] {
                     let (w, row) = (lines * answer / texel, lines * answer);
-                    for bpr in [row, row + answer] {
-                        let at = (answer, bpr);
-                        let what = format!("{} {w}x{ROWS} at {at:?}", pf.name());
-                        let before = device.work_counts();
-                        let Some(over) = over_pages(device, (pf, usage), (w, ROWS), at) else {
-                            eprintln!(
-                                "LINEAR-ALIGNMENT on {}: the device imports no host memory",
-                                device.name()
-                            );
-                            assert_eq!(answer, 16, "{pf:?}: Metal's where no image is in place");
-                            return;
-                        };
-                        assert!(answer >= line, "{what}: under the device's line, {line}");
-                        let base = over.buffer.contents().map_or(0, |a| a.as_ptr() as u64);
-                        let on_lines =
-                            in_place_rows::on_lines(device, base + at.0, row, at.1, ROWS);
-                        assert!(on_lines, "{what}: its texels share a line with other bytes");
-                        // SAFETY: the handle is only compared, while the texture lives.
-                        let aliased = unsafe { over.texture.vk_image() }.is_some();
-                        let counted = device.work_counts().host_textures_in_place
-                            - before.host_textures_in_place;
-                        assert_eq!(counted, u64::from(aliased), "{what}: its form not counted");
-                        if renders {
-                            assert!(aliased, "{what}: a shadow at the answered alignment");
-                        }
-                        made += 1;
-                        in_place += u64::from(aliased);
-                        let pages = over.mapping.read(0..over.buffer.length() as usize);
-                        let ours = blitted(device, &over.texture, (w, ROWS), texel);
-                        assert!(
-                            ours == packed(&pages, at, (w, ROWS), texel),
-                            "{what}: the blit out read other bytes than the caller's texels"
+                    let at = (answer, row);
+                    let what = format!("{} {w}x{ROWS} at {at:?}", pf.name());
+                    let before = device.work_counts();
+                    let Some(over) = over_pages(device, (pf, usage), (w, ROWS), at) else {
+                        eprintln!(
+                            "LINEAR-ALIGNMENT on {}: the device imports no host memory",
+                            device.name()
                         );
+                        assert_eq!(answer, 16, "{pf:?}: Metal's where no image is in place");
+                        return;
+                    };
+                    assert!(answer >= line, "{what}: under the device's line, {line}");
+                    let base = over.buffer.contents().map_or(0, |a| a.as_ptr() as u64);
+                    let on_lines = in_place_rows::on_lines(device, base + at.0, row, at.1, ROWS);
+                    assert!(on_lines, "{what}: its texels share a line with other bytes");
+                    // SAFETY: the handle is only compared, while the texture lives.
+                    let aliased = unsafe { over.texture.vk_image() }.is_some();
+                    let counted =
+                        device.work_counts().host_textures_in_place - before.host_textures_in_place;
+                    assert_eq!(counted, u64::from(aliased), "{what}: its form not counted");
+                    if renders {
+                        assert!(aliased, "{what}: a shadow at the answered alignment");
                     }
+                    made += 1;
+                    in_place += u64::from(aliased);
+                    let pages = over.mapping.read(0..over.buffer.length() as usize);
+                    let ours = blitted(device, &over.texture, (w, ROWS), texel);
+                    assert!(
+                        ours == packed(&pages, at, (w, ROWS), texel),
+                        "{what}: the blit out read other bytes than the caller's texels"
+                    );
                 }
             }
             eprintln!(
