@@ -561,10 +561,11 @@ driver's. Each is open work.
 - **On ANV, command buffers whose own recordings fill the driver's dynamic state pool crash the
   process inside the driver** (`spares.rs`). A rate-mapped pass records each draw once per region
   of its map, each with its own viewport and scissor, and ANV (Mesa 26.2.6, an Iris Xe) takes
-  that state from a device-wide pool of 1 GiB: one command buffer of a guest's replayed passes
-  held 97.5 MiB of it. Command buffers alive together that record about ten times that, one
-  alone included, fill it, and ANV then writes through a null state inside `vkCmdDraw*` instead
-  of failing the command buffer. What spare pools keep of such recordings is freed as they go
+  that state from a device-wide pool of 1 GiB, about 110 bytes a region draw. Measured with one
+  draw recorded per region: a guest's command buffer of two such passes, each replaying an
+  indirect command buffer, held 184 to 224 MiB of it, so about five alive at once fill it, and
+  ANV then writes through a null state inside `vkCmdDraw*` instead of failing the command
+  buffer. What spare pools keep of such recordings is freed as they go
   back (`RECORDED`); what command buffers alive at once record is not bounded.
 
 - **A heap texture Metal keeps uncompressed lies in its driver's layout, not Metal's tiles, where

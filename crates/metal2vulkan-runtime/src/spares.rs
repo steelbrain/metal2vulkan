@@ -98,9 +98,9 @@
 //!   changed viewport and scissor state from a device-wide dynamic state pool of 1 GiB, and a
 //!   rate-mapped pass records each draw once per region of its map, each with its own viewport
 //!   and scissor (`rate_mapped_pass.rs`). A guest's host steps replayed an indirect command
-//!   buffer's draws over a map at about 880,000 region draws a step; with four command buffers
-//!   alive the pool was full, one command buffer holding 97.5 MiB of it (about 110 bytes a region
-//!   draw, three commands counted), and ANV wrote through a null state inside
+//!   buffer's draws over a map at about 880,000 region draws a step; with five command buffers
+//!   alive the pool was full, each of their passes holding 92 to 112 MiB of it (about 110 bytes a
+//!   region draw, three commands counted), and ANV wrote through a null state inside
 //!   `vkCmdDrawIndexed`: the process faulted. A command buffer counts the draws its recordings
 //!   recorded, its host steps' included, with the state commands they set
 //!   (`CommandBuffer::recorded`); where they reach [`RECORDED`], each pool it gives back frees
