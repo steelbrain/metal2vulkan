@@ -158,7 +158,10 @@
 //!   (`WorkCounts::device_checks`), not among the process's (`object_churn`). Its
 //!   submission calls hold the device's loader word (`loader_word.rs`).
 //! - **A stalled submission.** A wait for one of its submissions, empty command buffers, that
-//!   passes [`STALL`] takes the device as lost for the checks: nothing is submitted again, the
+//!   passes [`STALL`] takes the device as lost for the checks; so does the wait for the work
+//!   before a refused call among several, which the fence, submitted alone after it, tells
+//!   ([`Objects::idle`]), and a submission of the fence alone the driver refuses until [`STALL`]
+//!   passed. Then nothing is submitted again, the
 //!   checks end unrecorded, what had not answered `Unchecked`, and the instance's sink hears it
 //!   (id name [`STALLED_ID`], `Info` severity). The submission's fence and command buffers are
 //!   still pending, so the checks' thread leaves them to the device's teardown

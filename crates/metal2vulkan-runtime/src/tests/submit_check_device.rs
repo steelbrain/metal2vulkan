@@ -355,9 +355,25 @@ impl Drop for Unblock {
 /// signals the semaphore, so the queue drains.
 #[test]
 fn a_submission_that_never_completes_stalls_the_checks_and_the_teardown_returns() {
-    use crate::submit_check::STALLED_ID;
+    stall("submit-check-stall", false);
+}
+
+/// As [`a_submission_that_never_completes_stalls_the_checks_and_the_teardown_returns`], the
+/// submission one of several calls whose second is refused (injected,
+/// `Injected::refuse_second`): the checks wait for the first call's work, which never completes,
+/// by a submission of their fence alone (`SubmitChecks::idles`), within the same bound, where they
+/// waited for the queue's idle with no end.
+#[test]
+fn work_before_a_refused_call_that_never_completes_stalls_the_checks_and_the_teardown_returns() {
+    stall("submit-check-stall-refused", true);
+}
+
+/// The stall tests: a submission of the checks that never completes, the second of its several
+/// calls refused where `refuse_second`.
+fn stall(name: &str, refuse_second: bool) {
+    use crate::submit_check::{Injected, STALLED_ID};
     use ash::vk;
-    let scratch = Scratch::new("submit-check-stall");
+    let scratch = Scratch::new(name);
     let heard: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
     let mut options = options(&scratch.0);
     let hears = Arc::clone(&heard);
@@ -401,7 +417,11 @@ fn a_submission_that_never_completes_stalls_the_checks_and_the_teardown_returns(
         lineage: Arc::clone(&lineage),
     };
     *crate::device::lock(&checks.stall) = Some(STALL_BOUND);
-    *crate::device::lock(&checks.wait_at_submit) = Some((semaphore, 1));
+    *crate::device::lock(&checks.wait_at_submit) = Some(Injected {
+        semaphore,
+        value: 1,
+        refuse_second,
+    });
     let before = device.work_counts().submit_check_calls;
     let released = Instant::now();
     checks.held.release();
@@ -410,12 +430,21 @@ fn a_submission_that_never_completes_stalls_the_checks_and_the_teardown_returns(
         "the checks never ended"
     );
     let settled = released.elapsed();
+    if crate::device::lock(&checks.wait_at_submit).is_some() {
+        println!(
+            "SKIPPED {}: the checks held past their last submission of several calls",
+            device.name()
+        );
+        return;
+    }
     let counts = device.work_counts();
     let calls = counts.submit_check_calls - before;
+    let idles = checks.idles.load(Ordering::Relaxed);
     let answered = verdicts(&device);
     let report = device.submit_check_report();
     println!(
-        "{}: settled {settled:?} after the hold, {calls} calls, verdicts {answered:?}; {report}",
+        "{}: settled {settled:?} after the hold, {calls} calls, {idles} of the fence alone, \
+         verdicts {answered:?}; {report}",
         device.name()
     );
     assert!(checks.stalled(), "the checks took no submission as stalled");
@@ -427,12 +456,18 @@ fn a_submission_that_never_completes_stalls_the_checks_and_the_teardown_returns(
         checks.left_to_teardown(),
         "the stalled submission's objects were not left to the teardown"
     );
-    // One use of the queue, the stalled one: its calls and, where the device relays its queues'
-    // failures, the relay's mark after them.
+    // One use of the queue, the stalled one, and where a call was refused one more, of the fence
+    // alone: their calls and, where the device relays its queues' failures, the relay's mark
+    // after each.
+    let (most, fence_alone) = match refuse_second {
+        true => (MERGED as u64 + 3, 1),
+        false => (MERGED as u64 + 1, 0),
+    };
     assert!(
-        (1..=MERGED as u64 + 1).contains(&calls),
+        (1..=most).contains(&calls),
         "{calls} calls from the hold: the checks submitted again after the stall"
     );
+    assert_eq!(idles, fence_alone, "submissions of the fence alone");
     assert_eq!(counts.submit_checks_run, 0, "the checks ran to their end");
     assert!(
         !answered.contains(&Verdict::Pending),
@@ -443,7 +478,7 @@ fn a_submission_that_never_completes_stalls_the_checks_and_the_teardown_returns(
     // SAFETY: the semaphore is the test's, of a live device.
     let value = unsafe { raw.get_semaphore_counter_value(semaphore) }.unwrap();
     assert_eq!(value, 0, "the submission's wait was met");
-    let name = record_name(&device.driver_identity());
+    let record = record_name(&device.driver_identity());
     let (live, _, _) = lineage.counts();
     let dropped = Instant::now();
     drop(device);
@@ -458,7 +493,7 @@ fn a_submission_that_never_completes_stalls_the_checks_and_the_teardown_returns(
         left, live,
         "the teardown destroyed the VkDevice of a submission still pending"
     );
-    let found = files_named(&scratch.0, &name);
+    let found = files_named(&scratch.0, &record);
     assert!(found.is_empty(), "stalled checks recorded {found:?}");
 }
 
