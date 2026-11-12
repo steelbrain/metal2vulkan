@@ -687,6 +687,9 @@ impl Objects {
                     .is_some_and(|second| std::ptr::eq(batch, second))
                     && batch.queue == batches[1].queue
                 {
+                    parts
+                        .switch
+                        .signalled_by(batches[..submitted].iter().map(|batch| batch.signal));
                     parts.switch.between.pass();
                 }
                 let fence = match hold {
@@ -739,6 +742,9 @@ impl Objects {
             // submitted (`tests::queue_switch_gate`).
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             if submitted == batches.len() && batches[1].queue == batches[2].queue {
+                parts
+                    .switch
+                    .signalled_by(batches.iter().map(|batch| batch.signal));
                 parts.switch.submitted.pass();
             }
             (submitted, refused, step, marks)

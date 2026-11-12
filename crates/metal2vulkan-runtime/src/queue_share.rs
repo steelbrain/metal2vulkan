@@ -416,6 +416,11 @@ pub(crate) struct QueueSwitch {
     /// submission, its queue's lock held (`tests/queue_switch_gate.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) submitted: crate::freed_memory::held::Held,
+    /// The crate's device tests' record of the timeline values the batches a round submitted
+    /// before [`between`](Self::between) or [`submitted`](Self::submitted) passed signal, set as
+    /// it passes (`tests/queue_switch_gate.rs`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) signalled: Mutex<Vec<(ash::vk::Semaphore, u64)>>,
     /// The crate's device tests' count of the check's late rounds, whose gaps counted for nothing
     /// (`queue_switch_check.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -452,6 +457,8 @@ impl QueueSwitch {
             between: Default::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             submitted: Default::default(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            signalled: Mutex::new(Vec::new()),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             late_rounds: AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -562,6 +569,13 @@ impl QueueSwitch {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn fences_waited(&self) -> u64 {
         self.fences_waited.load(Ordering::Relaxed)
+    }
+
+    /// Record `signals`, the timeline values a held round's submitted batches signal, as a test's
+    /// hold of the round passes ([`signalled`](Self::signalled)).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn signalled_by(&self, signals: impl Iterator<Item = (ash::vk::Semaphore, u64)>) {
+        *lock(&self.signalled) = signals.collect();
     }
 
     /// Record a late round of the check: its gate open as its last submission returned.
