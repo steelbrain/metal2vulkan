@@ -166,12 +166,32 @@ fn make(
 
 /// The records a device over `cache` hands over for [`make_states`]; the device is gone when
 /// this returns, so its cache thread wrote what it was handed.
+///
+/// A creation waits for the makings it hands the device's pool a bound at most
+/// (`DevicePolicy::pipeline_creation_wait`): one past it runs on and holds the device, so a drop
+/// of the states and the device meanwhile leaves the device's teardown, and its cache thread's
+/// last writes, to the reaper's thread, after this drop returns. So the states go only once the
+/// pool is idle, each piece's hold given back to its state.
 pub(super) fn recorded(cache: &Path) -> Vec<PipelineRecord> {
     let records = Arc::new(Mutex::new(Vec::new()));
     let device = device(cache, Some(&records), None);
-    drop(make_states(&device));
+    let states = make_states(&device);
+    let started = Instant::now();
+    while device.work_counts().pipeline_pool_busy != 0 {
+        assert!(
+            started.elapsed() < crate::tests::SETTLE,
+            "the pipeline pool still busy"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    drop(states);
     assert_eq!(device.warm_statistics().records_made, STATES);
+    let weak = device.downgrade();
     drop(device);
+    assert!(
+        weak.upgrade().is_none(),
+        "the device outlived its last handle: its cache thread's writes may not be done"
+    );
     let records = records.lock().unwrap().clone();
     assert_eq!(records.len() as u64, STATES, "one record per creation");
     records
