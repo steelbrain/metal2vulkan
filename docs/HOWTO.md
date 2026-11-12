@@ -469,6 +469,13 @@ first, the pages after. The runtime tells when, for each object:
 - A buffer made over exactly the bytes of another live buffer lies in that one's import: its
   keep-alive or deallocator goes at its release, and the other buffer's comes after the free. Pages
   under several objects go once each of them has signalled.
+- A buffer made over part of another live buffer's bytes, or over the same bytes as memory of
+  another class, is bound inside that one's import, with no import of its own: one live import of a
+  page at a time, as `VK_EXT_external_memory_host` leaves a host allocation imported twice into
+  one device undefined. It holds the import until it goes, so the other buffer's keep-alive, or,
+  given none, its deallocator, comes once both are released and the import is freed, even where
+  the other buffer was released first (`WorkCounts::host_releases_held_inside` counts each
+  release so held). Its own keep-alive or deallocator goes at its release.
 - A guest RAM (`HostRam`): its keep-alive's drop, once every chunk's import was freed.
 
 An import is freed by the thread that drops the last reference to it; by a queue's thread once the

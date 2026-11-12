@@ -3332,6 +3332,10 @@ bound.
   submitted commands may still use (`VUID-vkFreeMemory-memory-00677`), so the pages stay: with no
   keep-alive (`KeepAlive`), while a command buffer submitted before a texture over them was released
   may still read that texture through its resource ID (its image holds the import); with no
+  keep-alive, while a buffer made over part of its bytes, or over the same bytes as memory of
+  another class, while it lived is bound inside its import and holds it (one live import of a page,
+  as `VK_EXT_external_memory_host` leaves a page imported twice into one device undefined;
+  `host_releases_held_inside`, and the detail names it); with no
   keep-alive, while a command buffer whose commands may reach the buffer unnamed holds a table of
   the live buffers that lists it (its first submission's and its host steps', until it completes;
   one a rebind encoded again before its first submission, until then); with no keep-alive on
@@ -3342,10 +3346,11 @@ bound.
   rebind or release while the pages its detach let go of are still so held (the deallocator its
   detach held back, which Metal runs at the replace or the release). With a keep-alive the
   deallocator runs at the release, as Metal's, and the import keeps the keep-alive, which keeps the
-  pages mapped, until it is freed: not announced. Cost: the deallocator runs once every command
-  buffer that may still reach the pages (through a texture over them, or a table of the live buffers
-  it holds) lets go of them, or the batches submitted before the import's memory went complete,
-  where Metal's runs at the release; the pages stay mapped until then.
+  pages mapped, until it is freed: not announced (section 10). Cost: the deallocator runs once every
+  command buffer that may still reach the pages (through a texture over them, or a table of the live
+  buffers it holds) lets go of them, every buffer bound inside their import went, or the batches
+  submitted before the import's memory went complete, where Metal's runs at the release; the pages
+  stay mapped until then.
 - `metal2vulkan-degrade-copied-host-pages` (precision). `CopiedHostPages`: A no-copy buffer, a
   no-copy heap or a buffer's rebind was made over a copy of the caller's host pages in memory of
   the device's own, which no import maps (a heap's textures shadows of its bytes):
@@ -5028,6 +5033,19 @@ each item named states the rule in full.
 - **A heap's texture answers the size that placed it** (`Texture::allocated_size`, Metal's
   `allocatedSize`): the size query's answer for its descriptor, a view's its texture's, as Metal
   answers; `None` for a texture outside a heap, whose Metal answer the runtime does not model.
+- **A no-copy buffer's keep-alive waits for the buffers bound inside its import** (`KeepAlive`, a
+  runtime extension with no Metal counterpart). A no-copy buffer made over part of a live one's
+  bytes, or over the same bytes as memory of another class, is bound inside the live one's import
+  rather than importing the pages again: one live import of a page at a time, as
+  `VK_EXT_external_memory_host` leaves a host allocation imported twice into one device undefined
+  (issue 6 of the extension). It holds that import until it goes, so the first buffer's
+  keep-alive, which keeps the pages that import maps, is dropped once the import is freed: after
+  both buffers' releases, never before. Given with a keep-alive, the first buffer's deallocator
+  still runs at its release, as Metal's; given none, it waits for the free, announced as
+  `host-deallocator-delayed`. Counted: `WorkCounts::host_releases_held_inside`, each release
+  so held, beside `host_keep_alives_kept` (held now) and
+  `ObjectChurn::buffers_bound_in_import`. A program that unmaps the first buffer's pages as its
+  keep-alive drops unmaps them after the later buffer's release too, never before.
 - **Metal's own heap answer, for bookkeeping** (`Device::metal_heap_texture_size_and_align`, no Metal
   counterpart): what plain Metal answers, for a consumer that lays out a guest's heap.
 - **Where Metal's answer is not its image's, every device answers Metal's**, for the few formats

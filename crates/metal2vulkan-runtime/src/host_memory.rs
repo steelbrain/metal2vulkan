@@ -560,8 +560,10 @@ pub type Deallocator = Box<dyn FnOnce(NonNull<u8>, u64) + Send + 'static>;
 /// same bytes lies in the import, or the import keeps such a buffer's keep-alive already (the
 /// module docs). With one, the deallocator runs when the buffer
 /// is released, as Metal's does, though a command buffer submitted before a texture over the
-/// pages was released may still hold the import; with none, the deallocator waits for the import
-/// (the module docs). Dropped on a runtime thread, possibly; a panic inside its drop is caught.
+/// pages was released may still hold the import, or a buffer made over part of the bytes, or over
+/// the same bytes as memory of another class, while it lived, bound inside the import, holds it
+/// until that buffer goes (`WorkCounts::host_releases_held_inside`); with none, the deallocator
+/// waits for the import (the module docs). Dropped on a runtime thread, possibly; a panic inside its drop is caught.
 /// Never dropped while the process exits: the pages stay imported to its end (`exit_guard`).
 /// Its drop is the moment the pages may be unmapped (docs/HOWTO.md, "Unmapping host memory"): a
 /// keep-alive that owns the mapping and unmaps it as it drops keeps the order Vulkan requires.

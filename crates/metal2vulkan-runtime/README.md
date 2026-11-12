@@ -450,7 +450,12 @@ after it, and 0 of 80 with the device dropped first
   after the object goes and its keep-alive is dropped (or, given none, its deallocator ran), never
   before: Vulkan requires imported pages to stay mapped while their import lives, and the
   runtime's threads free imports and submit work over them at any moment
-  ([HOWTO](../../docs/HOWTO.md#unmapping-host-memory)).
+  ([HOWTO](../../docs/HOWTO.md#unmapping-host-memory)). A no-copy buffer made over part of a live
+  one's bytes, or over the same bytes as memory of another class, is bound inside the live one's
+  import (one live import of a page: Vulkan leaves the same pages imported twice undefined) and
+  holds it, so the live one's keep-alive is dropped, or, given none, its deallocator runs, only
+  once both are gone; with a keep-alive its deallocator still runs at its release, as Metal's
+  (`WorkCounts::host_releases_held_inside`).
 - **Hazards** are tracked as Metal tracks them. A heap's resources are untracked by default, so
   encoders that share them order themselves with fences. Commands that reach a resource through an
   address or ID in memory need it resident (`use_resource`, `use_heap`), as on Metal. The runtime
