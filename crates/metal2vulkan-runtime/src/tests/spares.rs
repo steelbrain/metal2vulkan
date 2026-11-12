@@ -913,6 +913,14 @@ mod device {
             first.extend((0..KINDS_EACH).map(|_| encoded(encoders)));
         }
         run(first);
+        // A taker takes a spare holding a primary begun ahead first, and a settled pool given
+        // back begins one only where no thread waited on its command buffer's gate as it
+        // completed, which `run`'s waits may or may not have: each spare begins one now, so they
+        // differ only in what they hold. Left to that timing, a small command buffer took a
+        // large one's pool, the only spare holding one, under load (msi, one run).
+        for (raw, _) in shared.spares.command_pools_held() {
+            shared.spares.begin_ahead(shared, raw);
+        }
         let large = |pools: &[(vk::CommandPool, usize)]| {
             let mut large: Vec<_> = pools
                 .iter()
