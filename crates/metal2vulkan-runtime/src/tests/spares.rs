@@ -908,7 +908,10 @@ mod device {
         }
         run(first);
         let large = |pools: &[(vk::CommandPool, usize)]| {
-            let mut large: Vec<_> = pools.iter().filter(|&&(_, held)| held >= LARGE).collect();
+            let mut large: Vec<_> = pools
+                .iter()
+                .filter(|&&(_, held)| held > LARGE / 2)
+                .collect();
             large.sort();
             large.into_iter().copied().collect::<Vec<_>>()
         };
