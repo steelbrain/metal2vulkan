@@ -24,7 +24,10 @@
 //!   preprocess writes before the dispatch between barriers; and an execution's device replay
 //!   scratch on the GPU alone (its slot tables, region records, arguments or sequences and counts,
 //!   and the sink; `gpu_execute.rs`), which the replay's preprocess writes before the commands
-//!   between barriers; and an emulated tessellation draw's work buffer, whose first words an
+//!   between barriers; and a render execution's draw replay scratch on the GPU alone, whose
+//!   parameters the copy of a range read from a buffer and whose slot tables and arguments its
+//!   preprocess write before the pass between barriers (`render/executions/gpu.rs`); and an
+//!   emulated tessellation draw's work buffer, whose first words an
 //!   indirect draw's copy of its arguments and whose header and chunk slots its scan write before
 //!   its draws between barriers (`render/tessellation_scan.rs`): every chunk carries indirect and
 //!   storage usage and, where the device has them, a device address. The command buffer releases

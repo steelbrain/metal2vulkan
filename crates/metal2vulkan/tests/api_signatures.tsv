@@ -3648,6 +3648,7 @@ field	metal2vulkan::bind::DrawReplay.inheritance	pub inheritance: Inheritance
 field	metal2vulkan::bind::DrawReplay.merged	pub merged: bool
 field	metal2vulkan::bind::DrawReplay.parent	pub parent: Bindings
 field	metal2vulkan::bind::DrawReplay.primitive_types	pub primitive_types: Vec<u32>
+field	metal2vulkan::bind::DrawReplay.range_read	pub range_read: bool
 field	metal2vulkan::bind::DrawReplay.vertex_slots	pub vertex_slots: u32
 field	metal2vulkan::bind::DrawReplayLayout.arguments_offset	pub arguments_offset: u64
 field	metal2vulkan::bind::DrawReplayLayout.bytes	pub bytes: u64
@@ -9027,6 +9028,7 @@ method	metal2vulkan::bind::DrawReplay::new	pub fn new(capacity: u32, first: u32,
 method	metal2vulkan::bind::DrawReplayLayout::argument_offset	pub fn argument_offset(&self, command: u32, type_index: u32) -> u64
 method	metal2vulkan::bind::DrawReplayLayout::fragment_table_offset	pub fn fragment_table_offset(&self, command: u32) -> u64
 method	metal2vulkan::bind::DrawReplayLayout::params_offset	pub fn params_offset(&self) -> u64
+method	metal2vulkan::bind::DrawReplayLayout::range_offset	pub fn range_offset(&self) -> u64
 method	metal2vulkan::bind::DrawReplayLayout::vertex_table_offset	pub fn vertex_table_offset(&self, command: u32) -> u64
 method	metal2vulkan::bind::EtcDecode::block_bytes	pub fn block_bytes(self) -> u32
 method	metal2vulkan::bind::EtcDecode::block_extent	pub fn block_extent(self) -> [u32; 2]
@@ -13034,6 +13036,7 @@ variant	metal2vulkan::bind::ReplayRefusal::KernelBufferBound	KernelBufferBound
 variant	metal2vulkan::bind::ReplayRefusal::NotReplayVariant	NotReplayVariant
 variant	metal2vulkan::bind::ReplayRefusal::OwnPipelines	OwnPipelines
 variant	metal2vulkan::bind::ReplayRefusal::RangeOutsideCapacity	RangeOutsideCapacity
+variant	metal2vulkan::bind::ReplayRefusal::RangeRead	RangeRead
 variant	metal2vulkan::bind::ReplayRefusal::RegionCount	RegionCount { count: u32 }
 variant	metal2vulkan::bind::ReplayRefusal::TooManyCommands	TooManyCommands { count: u32 }
 variant	metal2vulkan::bind::ReplayRefusal::TooManyDispatches	TooManyDispatches { dispatches: u64 }

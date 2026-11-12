@@ -7,7 +7,8 @@
 //!
 //! - **What takes it** ([`RenderExecution::gpu_form`]), decided at commit from the call and from
 //!   what the buffer's records may hold (`written_commands.rs`), never from the records: an
-//!   execution of a range given at the call, not empty, with no visibility result mode set, whose
+//!   execution of a range given at the call, not empty, or of one read from a buffer whose
+//!   commands merge (below), with no visibility result mode set, whose
 //!   caller's check, if it has one (`execute_commands_in_buffer_checked`), has nothing to see
 //!   there (`IndirectCommandCheckNeeds`: no draw of points, a primitive type the writes do not
 //!   state counting as one, where it looks for them; the encoder's state encodes no indirect
@@ -54,6 +55,14 @@
 //!   command, vertex and instance (`bind::replay`'s merged docs), in the commands' order. One
 //!   draw call for the whole range, whatever its count. Otherwise one draw per command, as
 //!   above.
+//! - **A range read from a buffer** (`execute_commands_in_buffer_indirect`), merged alone: the
+//!   GPU reads it as the preprocess runs, a copy of its 8 bytes, where the encoder read them
+//!   (`indirect_execute::range_from`), into the scratch's parameters
+//!   (`DrawReplayLayout::range_offset`), between barriers, before the preprocess. The preprocess
+//!   runs over every command of the buffer, and a command outside the range draws nothing
+//!   (`bind::DrawReplay::range_read`), as the host step takes the range
+//!   (`ExecutionRange::commands`): no host step waits for the work that wrote it. One that does
+//!   not merge takes the host step.
 //! - **What the commands reach.** Their buffers' addresses resolve in the replay's resident set:
 //!   the command buffer's resident resources, then the device's live buffers Metal reaches
 //!   unnamed (`live_buffers.rs`), as the host step resolves them. One in neither is unbound
@@ -78,13 +87,15 @@ use super::super::provoking::ProvokingForms;
 use super::super::{Assembly, DrawBuffers, PrivateForm, Recording, RenderLowering};
 use super::{HostStepCause, PassStorage, RenderExecution, Rendered, CALL};
 use crate::binding::PushWrite;
-use crate::blit::{reads_by, writes_by};
+use crate::blit::{reads, reads_by, writes, writes_by};
+use crate::buffer::Buffer;
 use crate::command_buffer::{CommandBuffer, ReplayTable};
 use crate::draw_source::DrawSource;
 use crate::encoder::EncoderCore;
 use crate::error::{internal, Error};
 use crate::executed_commands::RecordsRead;
-use crate::indirect_execute::ExecutionRange;
+use crate::indirect_command_buffer::IndirectCommandBuffer;
+use crate::indirect_execute::{ExecutionRange, RANGE_BYTES};
 use crate::live_bind::LiveBind;
 use crate::owned_kernel::OwnedModule;
 use crate::pipeline::{BufferForms, GraphicsState, RenderStateKind, Settled};
@@ -289,6 +300,12 @@ impl RenderExecution {
             Ok(commands) => commands,
             Err(cause) => return (core, Err(cause)),
         };
+        // A range read from a buffer is read on the GPU by the merged form alone.
+        let reads_range = self.range.indirect();
+        if reads_range && !draw_replay_merges(primitive_type) {
+            let rule = "the execution reads its range from a buffer, and its commands draw strips";
+            return (core, Err(HostStepCause::Rule(rule)));
+        }
         let Some(pipeline) = &self.pipeline else {
             return (
                 core,
@@ -313,8 +330,10 @@ impl RenderExecution {
                 true,
             );
             core = back;
-            if let Ok(form) = form {
-                return (core, Ok(form));
+            match form {
+                Ok(form) => return (core, Ok(form)),
+                Err(cause) if reads_range => return (core, Err(cause)),
+                Err(_) => {}
             }
         }
         self.form_of(core, inputs, (pipeline, state), commands, false)
@@ -371,10 +390,11 @@ impl RenderExecution {
             true => Ok(()),
             false => Err(HostStepCause::Rule(rule)),
         };
-        let ExecutionRange::Fixed(range) = &self.range else {
-            return Err(HostStepCause::Rule(
-                "the execution reads its range from a buffer",
-            ));
+        // A range read from a buffer: every command of the buffer, each outside the range the
+        // preprocess reads drawing nothing.
+        let range = match &self.range {
+            ExecutionRange::Fixed(range) => range.clone(),
+            ExecutionRange::Indirect { .. } => 0..capacity(&self.icb)?,
         };
         let descriptor = self.icb.descriptor();
         let written = self.icb.written().writes();
@@ -393,7 +413,7 @@ impl RenderExecution {
             !self.snapshot.pass_start.fragment_wrote(),
             "the pass's fragment functions wrote memory before the execution",
         )?;
-        Ok((written, primitive_type, range.clone()))
+        Ok((written, primitive_type, range))
     }
 
     /// Whether the caller's check, if any, has nothing to see among commands whose records may
@@ -421,8 +441,7 @@ impl RenderExecution {
         (vertex_slots, fragment_slots): (u32, u32),
         merged: bool,
     ) -> Result<GpuForm, HostStepCause> {
-        let capacity = u32::try_from(self.icb.size())
-            .map_err(|_| HostStepCause::Rule("the buffer holds 2^32 commands or more"))?;
+        let capacity = capacity(&self.icb)?;
         let live = (device.shared().live_buffers.table(device))
             .map_err(|error| HostStepCause::Refused(error.to_string()))?;
         let mut state = BindState::default();
@@ -436,6 +455,7 @@ impl RenderExecution {
         replay.vertex_slots = vertex_slots;
         replay.fragment_slots = fragment_slots;
         replay.merged = merged;
+        replay.range_read = self.range.indirect();
         let pre = draw_replay_preprocess(device.compile_device(), &state, &replay)
             .map_err(|error| HostStepCause::Refused(error.to_string()))?;
         Ok(GpuForm {
@@ -504,6 +524,11 @@ impl RenderExecution {
         // The preprocess reads the records and writes the scratch past what the host uploaded.
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let (chunk, at) = scratch.buffer();
+        // A range read from a buffer: its bytes into the parameters, for the preprocess.
+        if let ExecutionRange::Indirect { buffer, offset } = &self.range {
+            let into = at + pre.layout.range_offset();
+            copy_range(&mut core, (buffer, *offset), (chunk, into));
+        }
         let uses = [
             reads_by(
                 records,
@@ -636,6 +661,48 @@ impl RenderExecution {
         }
         Ok(encoder)
     }
+}
+
+/// The commands `icb` holds, as the replay counts them; else the rule that keeps a buffer of
+/// more from the GPU form.
+fn capacity(icb: &IndirectCommandBuffer) -> Result<u32, HostStepCause> {
+    u32::try_from(icb.size())
+        .map_err(|_| HostStepCause::Rule("the buffer holds 2^32 commands or more"))
+}
+
+/// Record into `core` the copy of a range read from a buffer, the [`RANGE_BYTES`] at `offset` of
+/// `buffer` where the encoder read them (`indirect_execute::range_from`), to `into` of `chunk`
+/// (a replay scratch's parameters, `DrawReplayLayout::range_offset`), between barriers: from
+/// everything before (the segment's own), and to the preprocess that reads it.
+fn copy_range(
+    core: &mut EncoderCore,
+    (buffer, offset): (&Buffer, u64),
+    (chunk, into): (&Buffer, u64),
+) {
+    let (from, at) = buffer.at(offset);
+    let (to, start) = chunk.at(into);
+    let region = vk::BufferCopy {
+        src_offset: at,
+        dst_offset: start,
+        size: RANGE_BYTES,
+    };
+    let uses = [
+        reads(buffer, offset..offset + RANGE_BYTES),
+        writes(chunk, into..into + RANGE_BYTES),
+    ];
+    core.barrier(Barrier::everything());
+    core.command(
+        vk::PipelineStageFlags2::TRANSFER,
+        &uses,
+        |raw, command_buffer| {
+            // SAFETY: the segment's command buffer is recording outside a render pass; both buffers
+            // live until it completes (the encoder that read the range holds it, the arena the
+            // scratch), and the region lies in both: `check_range_buffer` held the range inside the
+            // buffer, and the parameters inside the scratch.
+            unsafe { raw.cmd_copy_buffer(command_buffer, from, to, &[region]) };
+        },
+    );
+    core.barrier(Barrier::everything());
 }
 
 /// The bytes of a draw replay's scratch the host uploads: the parameters, the resident root

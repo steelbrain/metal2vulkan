@@ -220,11 +220,14 @@
 //!   execution after one from the commands.
 //! - **A range read from a buffer** (`execute_commands_in_buffer_indirect`, a probe on an M3 Max
 //!   and an M4: a render encoder's execution takes its range as a compute encoder's does,
-//!   `indirect_execute::ExecutionRange::commands`). The encoder copies the range's 8 bytes where
-//!   the execution is encoded, behind a barrier from everything before and before the pass, and a
-//!   host step records the pass from the copy once the work before it completed. A draw of the same
-//!   pass that writes the range before the execution is read by Metal's; the copy would not see it,
-//!   so a range a draw of the encoder before the call may write is refused.
+//!   `indirect_execute::ExecutionRange::commands`). The encoder reads the range's 8 bytes where
+//!   the execution is encoded, before the pass (`indirect_execute::range_from`): in place where
+//!   the host maps the bytes the GPU writes, else from a copy behind a barrier from everything
+//!   before. An execution in the GPU form whose commands merge reads them on the GPU before its
+//!   preprocess (`gpu.rs`); otherwise a host step records the pass from them once the work that
+//!   wrote them completed. A draw of the same pass that writes the range before the execution is
+//!   read by Metal's; neither read would see it, so a range a draw of the encoder before the call
+//!   may write is refused.
 //! - **Metal's private primitive types** (`DrawPrimitiveType`, which the CPU's draws take; a
 //!   kernel writes points for them, as Metal's encoding does). A command's draw of types 5 to 8
 //!   draws as the encoder's draw of the type does, the list its program writes. One of type 9
@@ -3125,8 +3128,12 @@ impl DeferredPass {
             *lock(&self.cause) = Some(cause);
             Ok(None)
         };
-        if self.executions.iter().any(|e| e.range.indirect()) {
-            let rule = "an execution of the pass reads its range from a buffer";
+        // A range read from a buffer is read on the GPU by an execution's GPU form alone.
+        let cpu_range = |e: &RenderExecution| e.range.indirect() && !e.icb.gpu_written();
+        if self.executions.iter().any(cpu_range) {
+            let rule =
+                "an execution of the pass whose records the CPU alone writes reads its range \
+                        from a buffer";
             return declined(HostStepCause::Rule(rule));
         }
         // A pass with a shadowed texture runs as any other, its copies around its instances

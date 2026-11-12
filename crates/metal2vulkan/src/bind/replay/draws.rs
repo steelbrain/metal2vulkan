@@ -31,6 +31,15 @@
 //!   the command still draws. A command's own buffer that no slot table holds (past the slots its
 //!   stage's function reads, or of the object or mesh stage) is resolved for the count alone, as
 //!   the host's step resolves every buffer below its stage's count.
+//! - **A range read from a buffer** ([`DrawReplay::range_read`]: `executeCommandsInBuffer:
+//!   indirectBuffer:indirectBufferOffset:`). The replay runs over every command of the buffer,
+//!   merged into one draw, and each invocation first reads the `MTLIndirectCommandBufferExecutionRange`
+//!   (`location`, then `length`, each a `u32`) in the parameters, where the consumer copies it
+//!   before the preprocess runs ([`DrawReplayLayout::range_offset`]), as Metal's execution takes it: from
+//!   `location` to `location + length`, clamped at the buffer's size. A command outside it draws
+//!   nothing and reports nothing; where the location lies past the size, or `location + length`
+//!   passes `2^32 - 1` (Metal's GPU then faults the command buffer, or hangs), no command draws and
+//!   the replay reports `RANGE`, as the host's step does.
 //! - **What it does not run** draws nothing and sets [`StatusBits::REPLAY_FAULT`] with its
 //!   reasons ([`ReplayFaults`]) in the command buffer's `ExecutionStatus`: a record the host's
 //!   decode refuses (`RECORD`, `ENCODING`), a draw of a primitive type the execution does not
@@ -114,9 +123,14 @@ const P_FRAGMENT_SLOTS: u64 = 28;
 /// The primitive types named, then each (`MAX_DRAW_REPLAY_TYPES` words).
 const P_TYPES: u64 = 32;
 const P_TYPE: u64 = 36;
+/// The range a replay that reads one reads (`location`, then `length`), which the consumer
+/// copies there ([`DrawReplayLayout::range_offset`]).
+const P_RANGE: u64 = 48;
 
 /// The parameters' flag bit: the commands inherit the encoder's buffers.
 const INHERIT_BUFFERS: u32 = 1;
+/// The parameters' flag bit: the replay reads its range at `P_RANGE` ([`DrawReplay::range_read`]).
+const RANGE_READ: u32 = 2;
 
 /// What one device replay of GPU-encoded draws runs: commands `first .. first + count` of an
 /// indirect command buffer of `capacity` commands, under the encoder's pipeline state, each
@@ -141,6 +155,9 @@ pub struct DrawReplay {
     /// or points (`primitive_types`), where no fragment function reads a command's buffers
     /// (`fragment_slots` 0).
     pub merged: bool,
+    /// The commands run are those of the range the GPU reads as the preprocess runs (the module
+    /// docs): `first` 0 and `count` the capacity, merged into one draw.
+    pub range_read: bool,
 }
 
 impl DrawReplay {
@@ -163,6 +180,7 @@ impl DrawReplay {
             vertex_slots: BINDING_COUNT as u32,
             fragment_slots: BINDING_COUNT as u32,
             merged: false,
+            range_read: false,
         }
     }
 }
@@ -228,6 +246,13 @@ impl DrawReplayLayout {
     /// Where the parameters start.
     pub fn params_offset(&self) -> u64 {
         self.resident_offset - PARAMS_BYTES
+    }
+
+    /// Where, in the parameters of a replay that reads its range ([`DrawReplay::range_read`]),
+    /// the consumer copies the range's 8 bytes (`location`, then `length`) before the preprocess
+    /// runs, from the scratch's start; the host uploads zero there.
+    pub fn range_offset(&self) -> u64 {
+        self.params_offset() + P_RANGE
     }
 }
 
@@ -300,6 +325,10 @@ pub fn draw_replay_preprocess(
         },
         (true, _) => return Err(refused(ReplayRefusal::DrawPrimitiveTypes)),
     };
+    let whole = replay.first == 0 && replay.count == replay.capacity;
+    if replay.range_read && (corners.is_none() || !whole) {
+        return Err(refused(ReplayRefusal::RangeRead));
+    }
     let most = BINDING_COUNT as u32;
     if replay.vertex_slots > most || replay.fragment_slots > most {
         return Err(refused(ReplayRefusal::NotReplayVariant));
@@ -379,11 +408,14 @@ pub fn draw_replay_preprocess(
         (Some(m), Some(c)) => merged_header(replay, &layout, m, (c, MERGED_CHUNK)),
         _ => Vec::new(),
     };
-    let flags = if replay.inheritance.buffers == StateSource::Parent {
+    let mut flags = if replay.inheritance.buffers == StateSource::Parent {
         INHERIT_BUFFERS
     } else {
         0
     };
+    if replay.range_read {
+        flags |= RANGE_READ;
+    }
     let mut words = vec![
         replay.first,
         replay.count,
@@ -532,6 +564,52 @@ fn resolved(
     Ok((root, offset, hit))
 }
 
+/// The range a replay reads ([`DrawReplay::range_read`]) at `range_param` of the parameters,
+/// over a buffer of `size` commands: where invocation `s`'s command lies
+/// outside it, or the range is one Metal's GPU faults on, zero the command's `types` arguments
+/// at `args` and return, the first invocation reporting the fault into `status`.
+fn outside_range(
+    fb: &mut FunctionBuilder<'_>,
+    t: Types,
+    (range_param, size, s): (Value, Value, Value),
+    (args, types, status): (Value, Value, Value),
+) -> BResult<()> {
+    let location = load32(fb, t, range_param)?;
+    let length_at = at(fb, range_param, 4)?;
+    let length = load32(fb, t, length_at)?;
+    let location = wide(fb, t, location)?;
+    let length = wide(fb, t, length)?;
+    let size = wide(fb, t, size)?;
+    let s64 = wide(fb, t, s)?;
+    let end = fb.binary(BinOp::IAdd, location, length)?;
+    let past_size = fb.binary(BinOp::UGreaterThan, location, size)?;
+    let most = k64(fb, u64::from(u32::MAX))?;
+    let past_most = fb.binary(BinOp::UGreaterThan, end, most)?;
+    let faulted = fb.binary(BinOp::LogicalOr, past_size, past_most)?;
+    let below = fb.binary(BinOp::ULessThan, end, size)?;
+    let end = fb.select(below, end, size)?;
+    let before = fb.binary(BinOp::ULessThan, s64, location)?;
+    let after = fb.binary(BinOp::UGreaterThanEqual, s64, end)?;
+    let outside = fb.binary(BinOp::LogicalOr, before, after)?;
+    let outside = fb.binary(BinOp::LogicalOr, outside, faulted)?;
+    let leave: ArmFn<'_, ()> = Box::new(move |fb, _| {
+        zero_draws(fb, t, args, types)?;
+        let zero = k32(fb, 0)?;
+        let first = fb.binary(BinOp::IEqual, s, zero)?;
+        let reports = fb.binary(BinOp::LogicalAnd, faulted, first)?;
+        let report_range: ArmFn<'_, ()> = Box::new(move |fb, _| {
+            let range = k32(fb, ReplayFaults::RANGE.0)?;
+            report(fb, t, status, range)?;
+            Ok(ArmEnd::FallThrough(Vec::new()))
+        });
+        fb.if_(&mut (), reports, report_range, None)?;
+        fb.ret(None)?;
+        Ok(ArmEnd::Exits)
+    });
+    fb.if_(&mut (), outside, leave, None)?;
+    Ok(())
+}
+
 /// Write zero into every argument of the command whose arguments start at `base`.
 fn zero_draws(fb: &mut FunctionBuilder<'_>, t: Types, base: Value, types: Value) -> BResult<()> {
     count_loop(fb, t, types, move |fb, k| {
@@ -632,6 +710,18 @@ pub fn typed_module() -> BResult<TypedModule> {
     let per_command = fb.binary(BinOp::IMul, types64, per_command)?;
     let rel = fb.binary(BinOp::IMul, s64, per_command)?;
     let args = fb.binary(BinOp::IAdd, arguments, rel)?;
+
+    // A replay that reads its range: a command outside it draws nothing, and a range Metal's GPU
+    // faults on draws nothing at all, reported once.
+    let range_bit = k32(fb, RANGE_READ)?;
+    let range_bits = fb.binary(BinOp::BitwiseAnd, flags, range_bit)?;
+    let reads_range = fb.binary(BinOp::INotEqual, range_bits, zero32)?;
+    let range_param = at(fb, params, P_RANGE)?;
+    let read_range: ArmFn<'_, ()> = Box::new(move |fb, _| {
+        outside_range(fb, t, (range_param, count, s), (args, types, status))?;
+        Ok(ArmEnd::FallThrough(Vec::new()))
+    });
+    fb.if_(&mut (), reads_range, read_range, None)?;
 
     // A command at or past the capacity the storage's header states is not read.
     let capacity_at = at(fb, records, layout::CAPACITY)?;

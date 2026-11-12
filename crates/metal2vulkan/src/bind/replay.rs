@@ -395,6 +395,9 @@ pub enum ReplayRefusal {
     /// replay's ([`DrawReplay::merged`]) are not one list type or points, or its fragment slot
     /// tables hold slots.
     DrawPrimitiveTypes,
+    /// A draw replay that reads its range from a buffer ([`DrawReplay::range_read`]) is not
+    /// merged into one draw, or does not run over every command of the buffer.
+    RangeRead,
 }
 
 /// Where each part of a device replay's scratch lies, in bytes from its start.

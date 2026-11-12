@@ -168,6 +168,17 @@ impl Ran {
 
 /// Run the preprocess of `replay` against `records` under `header`, in both scheduling orders.
 fn preprocess(replay: &DrawReplay, records: &[CommandRecord], header: Header) -> Ran {
+    preprocess_over(replay, records, header, None)
+}
+
+/// [`preprocess`], with `range` (`location`, `length`) in the parameters where a replay that
+/// reads its range takes it, as the consumer copies it there.
+fn preprocess_over(
+    replay: &DrawReplay,
+    records: &[CommandRecord],
+    header: Header,
+    range: Option<[u32; 2]>,
+) -> Ran {
     let dev = device();
     let pre = draw_replay_preprocess(&dev, &state(), replay).expect("preprocess");
     let mut policy = RENDER | DRAW | INHERIT_PIPELINE;
@@ -194,6 +205,10 @@ fn preprocess(replay: &DrawReplay, records: &[CommandRecord], header: Header) ->
     put(l.resident_offset, &resident);
     put(l.extents_offset, &pre.extents);
     put(l.parent_offset, &pre.parent);
+    if let Some([location, length]) = range {
+        put(l.range_offset(), &location.to_le_bytes());
+        put(l.range_offset() + 4, &length.to_le_bytes());
+    }
     let mut push = pre.push_constants.clone();
     for hole in &pre.push_holes {
         let (offset, address) = match *hole {
@@ -799,6 +814,69 @@ fn a_merged_replay_runs_each_command_s_whole_primitives_in_order() {
     let at = m.draw_offset(1) as usize;
     assert_eq!(word(&scratch, at), 21);
     assert_eq!(word(&scratch, m.draw_offset(0) as usize + 4), 0);
+}
+
+/// A replay that reads its range draws the commands inside it as the host's step takes the
+/// range: from `location` to `location + length`, clamped at the size; none, and `RANGE` once,
+/// for a location past the size or an end past `2^32 - 1`. Merged, the commands inside it draw
+/// their corners in order.
+#[test]
+fn a_replay_that_reads_its_range_draws_the_commands_inside_it() {
+    let mut replay = DrawReplay::new(4, 0, 4, vec![3]);
+    replay.merged = true;
+    replay.range_read = true;
+    replay.vertex_slots = 0;
+    replay.fragment_slots = 0;
+    let draws = [[0, 3, 1, 0], [3, 6, 2, 1], [9, 3, 1, 4], [1, 3, 3, 0]];
+    let records: Vec<CommandRecord> = draws
+        .iter()
+        .map(|[s, n, k, b]| record(draw(3, *s, *n, [*k, *b]), &[], &[]))
+        .collect();
+    let cases = [
+        ([1, 2], 1..3, false),
+        ([2, 5], 2..4, false),
+        ([0, u32::MAX], 0..4, false),
+        ([0, 0], 0..0, false),
+        ([4, 1], 0..0, false),
+        ([5, 0], 0..0, true),
+        ([1, u32::MAX], 0..0, true),
+    ];
+    for (range, inside, faults) in cases {
+        let ran = preprocess_over(&replay, &records, clean(4), Some(range));
+        let why = match faults {
+            true => ReplayFaults::RANGE,
+            false => ReplayFaults::default(),
+        };
+        assert_eq!(ran.status.replay_faults, why, "{range:?}");
+        let mut drawn = [None; 4];
+        for (command, [s, n, k, b]) in (0..4).zip(draws) {
+            let expected = match inside.contains(&command) {
+                true => [n, k, s, b],
+                false => [0; 4],
+            };
+            assert_eq!(ran.args(command, 0), expected, "{range:?} {command}");
+            drawn[command as usize] = inside.contains(&command).then_some([s, n, k, b]);
+        }
+        let (scratch, status) = merge(&ran, 6);
+        assert!(!status.replay_fault, "{range:?}: {status:?}");
+        let expected = metal_corners(&ran, &drawn, 3);
+        assert_eq!(decoded(&ran, &scratch, 6), expected, "{range:?}");
+    }
+    // A replay that reads its range runs merged over the whole buffer alone.
+    let dev = device();
+    let refused = Err(BindError::InvalidReplay {
+        reason: ReplayRefusal::RangeRead,
+    });
+    let pre = |r: &DrawReplay| draw_replay_preprocess(&dev, &state(), r);
+    let mut apart = replay.clone();
+    apart.merged = false;
+    assert_eq!(pre(&apart), refused);
+    let mut part = DrawReplay::new(4, 1, 3, vec![3]);
+    part.merged = true;
+    part.range_read = true;
+    part.fragment_slots = 0;
+    assert_eq!(pre(&part), refused);
+    assert!(pre(&replay).is_ok());
 }
 
 /// Points and lines merge as triangles do, a corner per point and two per line.

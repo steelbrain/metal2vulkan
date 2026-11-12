@@ -22,7 +22,10 @@
 //!   the records' buffers as they lie at the first submission, which points the merged draw's
 //!   resident table at them, nothing recorded again, the new pages' points; and after a rebind of
 //!   the buffer a shadowed target lies over: the render encoder encoded again, its copies and its
-//!   merged draw into the new pages.
+//!   merged draw into the new pages;
+//! - through a range read from a buffer (`execute_commands_in_buffer_indirect`), the buffer's
+//!   every command in one merged draw, those outside the range drawing nothing, no host step
+//!   taken: the same pixels and the same execution report as the host step.
 
 use super::degrade_notices::on_device_with;
 use super::degrade_notices::{
@@ -38,6 +41,7 @@ use super::rebinds::rebind;
 use super::render_executions::{forced_with, icb};
 use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
+use metal2vulkan::bind::ReplayFaults;
 use metal2vulkan::metal::RenderStages;
 use metal2vulkan::metal::{
     IndirectCommandType, PixelFormat, PrimitiveType, ResourceUsage, TextureUsage,
@@ -50,8 +54,8 @@ use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBuffer, CommandBufferStatus, ComputePipelineState, Degradation,
     Device, EventRef, IndirectCommandBuffer, IndirectCommandBufferDescriptor, Library, LoadAction,
-    PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size,
-    StoreAction, Texture, TextureDescriptor,
+    PipelineOptions, Region, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
+    ResourceOptions, Size, StoreAction, Texture, TextureDescriptor,
 };
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -251,9 +255,24 @@ impl Scene {
         &self,
         device: &Device,
         command_buffer: &CommandBuffer,
-        (writer, state): (Option<&ComputePipelineState>, &RenderPipelineState),
+        pipelines: (Option<&ComputePipelineState>, &RenderPipelineState),
         (icb, threads, count): (&IndirectCommandBuffer, u64, u64),
     ) {
+        let mut encoder = self.begin(device, command_buffer, pipelines, (icb, threads), |_| {});
+        encoder.execute_commands_in_buffer(icb, 0..count).unwrap();
+        encoder.end_encoding().unwrap();
+    }
+
+    /// [`encode`](Self::encode) up to its execution: the writer's encoder, then what `between`
+    /// encodes, then the pass begun, which the caller executes in and ends.
+    fn begin(
+        &self,
+        device: &Device,
+        command_buffer: &CommandBuffer,
+        (writer, state): (Option<&ComputePipelineState>, &RenderPipelineState),
+        (icb, threads): (&IndirectCommandBuffer, u64),
+        between: impl FnOnce(&CommandBuffer),
+    ) -> RenderCommandEncoder {
         let arguments = buffer_with(device, &icb.gpu_resource_id().0.to_le_bytes()).unwrap();
         // With no kernel, a state that may encode set in an encoder of its own lets the GPU write
         // the records, as the kernel does.
@@ -276,6 +295,7 @@ impl Scene {
             encoder.dispatch_threads(grid, grid).unwrap();
         }
         encoder.end_encoding().unwrap();
+        between(command_buffer);
         let mut pass = RenderPassDescriptor::new();
         let color = &mut pass.color_attachments[0];
         color.texture = Some(self.target.clone());
@@ -293,8 +313,7 @@ impl Scene {
                 )
                 .unwrap();
         }
-        encoder.execute_commands_in_buffer(icb, 0..count).unwrap();
-        encoder.end_encoding().unwrap();
+        encoder
     }
 
     /// The target's pixels, row by row.
@@ -376,6 +395,118 @@ fn merged_points_draw_each_command_s_own_vertices_and_instances() {
         assert_eq!(scene.pixels(), drawn_points(&draws));
         assert_eq!((merged, gpu, read), (8, 8, 0), "drawn in one merged draw");
         assert_made_once(messages, &[], &made(device, &library, &["points"], true));
+    });
+}
+
+/// A buffer holding the range `location`, `length` at byte 8.
+fn range_at_8(device: &Device, [location, length]: [u32; 2]) -> Buffer {
+    buffer_with(device, &words([0, 0, location, length])).unwrap()
+}
+
+/// Points of commands a kernel writes, run through a range read from a buffer
+/// (`execute_commands_in_buffer_indirect`), draw on the GPU alone, in one merged draw over every
+/// command of the buffer, the host reading no record, what the host step draws of them (a barrier
+/// the CPU set and cleared sends the same commands there): the commands from the location,
+/// clamped at the size, the others drawing nothing; none for a location past the size, the
+/// execution report stating `RANGE`, as the host step's; and the range a blit before the pass
+/// wrote.
+#[test]
+fn a_range_read_from_a_buffer_draws_on_the_gpu_what_the_host_step_draws() {
+    on_device_with(at_plan, |device, messages| {
+        let library = library(device);
+        let writer = writer(device, &library, "points");
+        let state = state(device, &library);
+        let draws: Vec<Draw> = vec![
+            [0, 5, 1, 0],
+            [8, 3, 2, 1],
+            [12, 4, 1, 0],
+            [20, 4, 3, 0],
+            [30, 6, 1, 2],
+        ];
+        // The range, whether a blit before the pass writes it, and the commands it runs.
+        let cases = [
+            ([1u32, 3u32], false, 1..4),
+            ([2, 100], false, 2..8),
+            ([9, 1], false, 0..0),
+            ([1, 2], true, 1..3),
+        ];
+        let mut outputs: Vec<Vec<[u32; 4]>> = Vec::new();
+        for host_step in [false, true] {
+            for (range, blitted, _) in cases.clone() {
+                let scene = Scene::new(device, &draws, &point_row());
+                let icb = icb(device, &inheriting(), 8);
+                if host_step {
+                    let command = icb.indirect_render_command_at(7).unwrap();
+                    command.set_barrier().unwrap();
+                    command.clear_barrier().unwrap();
+                }
+                let source = blitted.then(|| range_at_8(device, range));
+                let buffer = range_at_8(device, if blitted { [0, 0] } else { range });
+                let queue = device.new_command_queue().unwrap();
+                let command_buffer = queue.command_buffer().unwrap();
+                let pipelines = (Some(&writer), &state);
+                let commands = (&icb, draws.len() as u64);
+                let (merged, gpu, read) = counted(device, || {
+                    let mut encoder = scene.begin(
+                        device,
+                        &command_buffer,
+                        pipelines,
+                        commands,
+                        |command_buffer| {
+                            if let Some(source) = &source {
+                                let mut blit = command_buffer.blit_command_encoder().unwrap();
+                                blit.copy_from_buffer_to_buffer(source, 8, &buffer, 8, 8)
+                                    .unwrap();
+                                blit.end_encoding().unwrap();
+                            }
+                        },
+                    );
+                    encoder
+                        .execute_commands_in_buffer_indirect(&icb, &buffer, 8)
+                        .unwrap();
+                    encoder.end_encoding().unwrap();
+                    command_buffer.commit().unwrap();
+                    command_buffer.wait_until_completed_for(WAIT).unwrap();
+                });
+                assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+                let faults = match range[0] > 8 {
+                    true => ReplayFaults::RANGE,
+                    false => ReplayFaults::default(),
+                };
+                let report = command_buffer.execution_report().unwrap();
+                assert_eq!(
+                    report.replay_faults, faults,
+                    "{range:?}, host step {host_step}"
+                );
+                match host_step {
+                    false => assert_eq!((merged, gpu, read), (8, 8, 0), "{range:?}: merged"),
+                    true => assert_eq!((merged, gpu), (0, 0), "{range:?}: the host step"),
+                }
+                outputs.push(scene.pixels());
+            }
+            if !host_step {
+                assert_made_once(messages, &[], &made(device, &library, &["points"], true));
+            }
+        }
+        let host_notices = counts(&messages.take_notices());
+        assert!(
+            host_notices.contains_key(&HOST_STEPS[0]),
+            "{host_notices:?}"
+        );
+        let (merged, host) = outputs.split_at(cases.len());
+        for ((range, _, inside), (merged, host)) in cases.iter().zip(merged.iter().zip(host)) {
+            let ran: Vec<Draw> = (0..draws.len())
+                .map(|c| match inside.contains(&c) {
+                    true => draws[c],
+                    false => [0; 4],
+                })
+                .collect();
+            assert_eq!(*merged, drawn_points(&ran), "{range:?}: the merged draw");
+            assert_eq!(
+                merged, host,
+                "{range:?}: the merged draw against the host step"
+            );
+        }
     });
 }
 
