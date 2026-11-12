@@ -30,8 +30,8 @@
 //! (an `addrspacecast` of a pointer not of the space it names is poison). Every other instruction
 //! keeps its operation, its generic constants those of its group's type (a store's, its
 //! value's group's). A query is false for
-//! another space; for the group's own space it is true, or, where a null constant or a load from
-//! thread memory may reach the pointer, whether the pointer is not null, as Metal answers no space
+//! another space; for the group's own space it is true, or, where a null constant may reach the
+//! pointer (through thread memory too), whether the pointer is not null, as Metal answers no space
 //! for a null generic
 //! pointer. That answer is the pointer's structure's where it decides it: a variable's or a
 //! global's address, a cast of one or an in-bounds step from one is not null, a null constant is,
@@ -482,12 +482,9 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
                     }
                 }
             }
-            // A load from a cell's slot is in the slot's group, and may read a null pointer.
+            // A load from a cell's slot is in the slot's group.
             InstKind::Load { .. } => match cells.as_ref().and_then(|c| c.reach(i)) {
-                Some(Some(node)) => {
-                    union(&mut parent, i.index(), slot(node));
-                    z = true;
-                }
+                Some(Some(node)) => union(&mut parent, i.index(), slot(node)),
                 _ => s = Space::Many(GenericPointer::Memory, Some(i)),
             },
             InstKind::AtomicRmw { .. } | InstKind::CmpXchg { .. } => {
@@ -567,17 +564,41 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
         }
     }
     // Nullness, forward to a fixed point: a null constant reaches what it enters and what that
-    // reaches.
+    // reaches, a cell's slot through a store and a load from the slot through it (a slot an
+    // access at an unknown offset reaches, through that access's node). A load of a slot no store
+    // has written reads an undefined pointer, which may be taken as not null.
+    let slots = cells.as_ref().map_or(0, |c| c.slots);
+    let mut slot_null: Vec<bool> = filled(m, held, slots, false)?;
+    let reach = |i: InstId| cells.as_ref().and_then(|c| c.reach(i)).flatten();
     let mut changed = true;
     let mut rounds = 0;
     while changed {
         changed = false;
         rounds += 1;
-        if rounds > n + 1 {
+        if rounds > nodes + 1 {
             return Err(invariant("nullness does not settle"));
+        }
+        for &(a, b) in cells.as_ref().map_or(&[][..], |c| &c.links[..]) {
+            let (x, y) = (slot_null.get(a as usize), slot_null.get(b as usize));
+            let either = x.copied().unwrap_or(false) || y.copied().unwrap_or(false);
+            for k in [a, b] {
+                if let Some(z) = slot_null.get_mut(k as usize) {
+                    changed |= either && !*z;
+                    *z |= either;
+                }
+            }
         }
         for (i, inst) in cx.body.insts.iter() {
             m.tick(1)?;
+            if let (InstKind::Store { val, .. }, Some(node)) = (&inst.kind, reach(i)) {
+                let stored = null.get(i.index()).copied().unwrap_or(false)
+                    || matches!(val, Value::Inst(j) if null.get(j.index()).copied().unwrap_or(false));
+                if let Some(z) = slot_null.get_mut(node as usize) {
+                    changed |= stored && !*z;
+                    *z |= stored;
+                }
+                continue;
+            }
             if !cx.generic(inst.ty) || null.get(i.index()).copied().unwrap_or(true) {
                 continue;
             }
@@ -586,6 +607,9 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
                     op: CastOp::AddrSpaceCast,
                     v,
                 } if !cx.is_generic(*v) => false,
+                InstKind::Load { .. } => reach(i)
+                    .and_then(|node| slot_null.get(node as usize).copied())
+                    .unwrap_or(false),
                 kind => linked(kind).iter().any(|v| match v {
                     Value::Inst(j) => null.get(j.index()).copied().unwrap_or(false),
                     _ => false,

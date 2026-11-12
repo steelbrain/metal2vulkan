@@ -22,6 +22,8 @@ enum Held {
     Mixed,
     /// `in`, made generic, stored to the thread's array and loaded back.
     Loaded,
+    /// As `Loaded`, `in` or null as word 0 of `in` decides.
+    LoadedNullable,
     /// `in` stored at byte 0 of the thread's array and another array's address at byte 8, and
     /// byte 0 loaded back.
     TwoSlots,
@@ -145,6 +147,11 @@ fn queried(held: Held) -> Result<Entry, Error> {
         }
         Held::Loaded => {
             store(&mut f, input, local);
+            load(&mut f, generic, local)
+        }
+        Held::LoadedNullable => {
+            let either = pick(&mut f, input, null);
+            store(&mut f, either, local);
             load(&mut f, generic, local)
         }
         Held::TwoSlots | Held::AnySlot => {
@@ -363,25 +370,29 @@ fn a_generic_pointer_of_two_spaces_or_of_memory_is_refused() {
 }
 
 /// A generic pointer loaded from a slot of thread memory whose every access is visible is in the
-/// group of the pointers stored there: a device pointer, which may be null (the slot may hold
-/// none), so the device query compares it with the device null.
+/// group of the pointers stored there: a device pointer. Where no null is stored there, the
+/// queries are answered; where one may be, the device query compares the pointer with the device
+/// null.
 #[test]
 fn a_generic_pointer_loaded_from_a_thread_slot_is_its_stores_space_s() {
-    for held in [Held::Loaded, Held::TwoSlots] {
+    for (held, device) in [
+        (Held::Loaded, Some(1.0)),
+        (Held::TwoSlots, Some(1.0)),
+        (Held::LoadedNullable, None),
+    ] {
         let e = queried(held).unwrap_or_else(|e| panic!("{held:?}: {e}"));
         let text = body_text(&e);
         assert!(!names_generic(&e), "{held:?}: {text}");
         assert!(text.contains("load ptr addrspace(1),"), "{held:?}: {text}");
-        assert!(
-            text.lines()
-                .any(|l| l.contains("icmp ne") && l.contains("ptr addrspace(1) zeroinitializer")),
-            "{held:?}: {text}"
-        );
+        let compared = text
+            .lines()
+            .any(|l| l.contains("icmp ne") && l.contains("ptr addrspace(1) zeroinitializer"));
+        assert_eq!(compared, device.is_none(), "{held:?}: {text}");
         // The queries' words come last, after the slots' stores and `*p`'s.
         let words = stored(&e);
         assert_eq!(
             words[words.len().saturating_sub(2)..],
-            [None, Some(0.0)],
+            [device, Some(0.0)],
             "{held:?}: {text}"
         );
     }

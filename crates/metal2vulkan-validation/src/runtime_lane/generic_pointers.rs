@@ -122,13 +122,13 @@ fn generic_pointers_answer_as_metal() {
 
 /// What the M3 Max answers (macOS 27.0.1) for `generic_slots` and `generic_fields` alike, four
 /// words a thread: a read through the device pointer and through the thread pointer a `refs`
-/// holds, the space of the threadgroup pointer it holds or of null (3, then 4), and its count.
+/// holds, the space of the second device pointer it holds or of null (1, then 4), and its count.
 #[rustfmt::skip]
 const SLOTS: [[f32; 4]; THREADS] = [
-    [100.0, 201.0, 3.0, 0.0],
-    [101.0, 202.0, 3.0, 1.0],
-    [102.0, 203.0, 3.0, 2.0],
-    [103.0, 204.0, 3.0, 3.0],
+    [100.0, 201.0, 1.0, 0.0],
+    [101.0, 202.0, 1.0, 1.0],
+    [102.0, 203.0, 1.0, 2.0],
+    [103.0, 204.0, 1.0, 3.0],
     [104.0, 205.0, 4.0, 4.0],
     [105.0, 206.0, 4.0, 5.0],
     [106.0, 207.0, 4.0, 6.0],

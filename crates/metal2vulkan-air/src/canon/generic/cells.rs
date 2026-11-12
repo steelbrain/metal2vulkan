@@ -14,9 +14,8 @@
 //! address stored as a value, cast to an integer or to another space, passed to another call,
 //! merged by a `phi` or a `select`, or held in an aggregate), or where bytes other than a generic
 //! pointer's may be read as one: two slots overlap, a write of anything else (a store of another
-//! type, an atomic operation, a copy, a `memset` of a byte other than 0) overlaps a slot or writes
-//! bytes the translation cannot place, or a generic access at an unknown offset meets any such
-//! write. A `memset` of 0 writes null pointers, which bring no space.
+//! type, an atomic operation, a copy or a `memset`) overlaps a slot or writes bytes the
+//! translation cannot place, or a generic access at an unknown offset meets any such write.
 //!
 //! [`GenericPointer::Memory`]: crate::error::GenericPointer::Memory
 
@@ -350,19 +349,10 @@ fn uses(cx: &Cx<'_>, layouts: &TypeLayouts, kind: &InstKind, mut on: impl FnMut(
         InstKind::Call(call) => match (&call.callee, &*call.args) {
             (
                 Callee::Llvm {
-                    op: LlvmIntrinsic::Memset { .. },
-                    ..
-                },
-                [dst, byte, len, ..],
-            ) => {
-                // A `memset` of 0 writes null pointers.
-                if int(cx.parts, *byte) != Some(0) {
-                    on(Use::Write(*dst, int(cx.parts, *len)));
-                }
-            }
-            (
-                Callee::Llvm {
-                    op: LlvmIntrinsic::Memcpy { .. } | LlvmIntrinsic::Memmove { .. },
+                    op:
+                        LlvmIntrinsic::Memset { .. }
+                        | LlvmIntrinsic::Memcpy { .. }
+                        | LlvmIntrinsic::Memmove { .. },
                     ..
                 },
                 [dst, _, len, ..],
