@@ -755,23 +755,26 @@ c:
   %p = load ptr, ptr %s, align 8
 ";
 
-/// A pointer that may be null compared with an object. The array is the private arena's first
-/// object, at offset 0, so an offset compare would call null equal to it: refused. Without the null
-/// store the pointer is the array's, and the compare is its offsets'.
+/// A pointer that may be null compared with an object and with null. The private arena keeps its
+/// first word for null, so the array lies past offset 0 and null is offset 0: each compare is of
+/// offsets and answers as Metal's (odd threads read the array's address back, even ones null).
 #[test]
-fn a_possibly_null_arena_pointer_is_not_compared_by_offset() {
-    let body = format!("{NULL_OR_ARRAY}  %n = icmp eq ptr %p, %x\n{STORE_FLAG}");
-    let control = body.replace("store ptr null, ptr %s", "store ptr %x, ptr %s");
-    refused_unlike("nullable_vs_object", "", &body, &control);
-}
-
-/// A pointer that may be null compared with null is not a constant: refused. Without the null store
-/// the pointer is never null, and the compare folds.
-#[test]
-fn a_possibly_null_arena_pointer_compared_with_null_is_refused() {
-    let body = format!("{NULL_OR_ARRAY}  %n = icmp eq ptr %p, null\n{STORE_FLAG}");
-    let control = body.replace("store ptr null, ptr %s", "store ptr %x, ptr %s");
-    refused_unlike("nullable_vs_null", "", &body, &control);
+fn a_possibly_null_arena_pointer_compares_by_offset() {
+    for (name, rhs, odd) in [
+        ("nullable_vs_object", "%x", 1),
+        ("nullable_vs_null", "null", 0),
+    ] {
+        let body = format!("{NULL_OR_ARRAY}  %n = icmp eq ptr %p, {rhs}\n{STORE_FLAG}");
+        let Some(bc) = assemble(name, &kernel(name, 1, "", &body)) else {
+            return;
+        };
+        let want: Vec<u32> = (0..THREADS)
+            .map(|t| if t % 2 == 1 { odd } else { 1 - odd })
+            .collect();
+        for (stem, bufs) in run_everywhere(&bc, name, &[vec![0; THREADS as usize]], (2, 1)) {
+            assert_eq!(bufs[0], want, "{stem} {name}");
+        }
+    }
 }
 
 /// A signed compare with null depends on the address's sign, which the arena offset does not carry:
