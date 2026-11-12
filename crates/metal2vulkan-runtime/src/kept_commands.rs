@@ -24,7 +24,8 @@
 //!   execution compares its own with each distinct list among its kept chunks' keys once, whole,
 //!   and with the rest by pointer ([`ResidentMet`]).
 //! - **Run again.** A later execution of the chunk's commands under equal inputs, where every
-//!   address resolves as it did, nothing moved, nothing it named is detached, everything it held
+//!   address resolves as it did, nothing moved, nothing it named is detached or a face its
+//!   texture no longer presents (`texture/faces.rs`), everything it held
 //!   lives and every heap set version its draws bound is still its set's one version, announcing
 //!   nothing a binding would (`heap_sets::bound_again`), runs the kept command buffer: its command
 //!   buffer notes the uses again, keeps the keys, holds what the recording held and the chunk,
@@ -410,6 +411,10 @@ impl KeptChunk {
         }
         let rebinds = &command_buffer.device().shared().rebinds;
         if rebinds.any_detached(self.effects.keys.iter().copied()) {
+            return None;
+        }
+        // It names a face its texture presents no more (`texture/faces.rs`).
+        if (command_buffer.device()).names_old_face(self.effects.keys.iter().copied()) {
             return None;
         }
         let held = self.effects.held()?;

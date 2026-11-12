@@ -346,6 +346,7 @@ use super::shadow_merge::{MergeLease, ShadowMerge};
 use super::shadow_stencil::ShadowStencil;
 use super::sparse::emulated::Scrub;
 use super::tessellation::{FactorBuffer, Factors};
+use super::texture::faces::Unturned;
 use super::texture::held_depth;
 use super::texture::Texture;
 use super::tracker::{self, Access, Barrier, GeometryWrites, IndirectReads, UnorderedWrites, Use};
@@ -411,6 +412,7 @@ mod draw_room;
 mod draw_shape;
 mod executions;
 pub(crate) mod extended_shadow;
+pub(crate) mod face_swap;
 mod heap_part;
 mod inline_first;
 mod inline_splits;
@@ -2159,6 +2161,19 @@ impl CommandBuffer {
             Some(_) => EncoderCore::replaying(self, false)?,
         }
         .boxed();
+        // A color's texture with faces that the pass renders whole without loading it turns to
+        // its other face here, before anything of the pass names its image; the kept draw the
+        // last render encoder carried bound the face presented before (`render/face_swap.rs`).
+        let passes = again.is_some() || groups > 1 || rate_map.is_some() || log.is_some();
+        let turns = face_swap::Turns::open(&mut core, &layout, passes.then_some(Unturned::Pass));
+        let carried = match carried {
+            Some(carried) if turns.turned() => {
+                carried.let_go(device);
+                None
+            }
+            carried => carried,
+        };
+        core.take_turns(turns);
         if let Some(pass) = &rate_map {
             let (map, state) = pass.taken();
             core.take_rate_map(map, state);

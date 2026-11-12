@@ -74,6 +74,24 @@ pub(crate) struct UsageShadow {
     announced: AtomicBool,
 }
 
+impl UsageShadow {
+    /// The attached reads' shadow of a texture's face: `image`, the other face, copied in from
+    /// the one presented by `copies` (`texture/faces.rs`).
+    pub(super) fn face(image: Arc<Image>, copies: Arc<ShadowCopies>) -> UsageShadow {
+        UsageShadow {
+            image,
+            copies,
+            truth: "its image",
+            announced: AtomicBool::new(false),
+        }
+    }
+
+    /// Its copies.
+    pub(super) fn copies(&self) -> &Arc<ShadowCopies> {
+        &self.copies
+    }
+}
+
 /// What a binding that takes the texture's shadow needs it for (the module docs).
 #[derive(Clone, Copy)]
 enum Need {
@@ -234,8 +252,19 @@ impl Texture {
         (self.usage_shadow(call, Need::AttachedRead).ok()).map(|shadow| Arc::clone(&shadow.copies))
     }
 
-    /// The copies of the texture's shadow, where a binding made it.
+    /// The copies of the texture's shadow, where a binding made it: its attached reads' now,
+    /// where it has faces (`texture/faces.rs`).
     pub(crate) fn usage_shadow_copies(&self) -> Option<Arc<ShadowCopies>> {
+        if let Some(faces) = self.0.faces.get() {
+            return Some(Arc::clone(faces.shadow().copies()));
+        }
+        (self.0.usage_shadow.get()).map(|shadow| Arc::clone(&shadow.copies))
+    }
+
+    /// The copies of the shadow a binding beyond its usage made of a texture with faces, beside
+    /// its attached reads' (`texture/faces.rs`, **Frozen**); `None` for every other texture.
+    pub(crate) fn usage_shadow_copies_beside(&self) -> Option<Arc<ShadowCopies>> {
+        self.0.faces.get()?;
         (self.0.usage_shadow.get()).map(|shadow| Arc::clone(&shadow.copies))
     }
 
@@ -245,12 +274,32 @@ impl Texture {
     /// listed again at (`shadow::ResidentShadows`), and is named in the shadow log
     /// (`shadow_log.rs`).
     fn usage_shadow(&self, call: &'static str, need: Need) -> Result<Arc<UsageShadow>, Error> {
+        let attached = matches!(need, Need::AttachedRead);
+        // A texture with faces: its attached reads take the face it does not present; any other
+        // binding a shadow of its own of the face it presents, which ends its turns
+        // (`texture/faces.rs`, **Frozen**).
+        if let Some(faces) = self.0.faces.get() {
+            if attached {
+                return Ok(faces.shadow());
+            }
+            self.freeze_faces();
+        }
         if let Some(shadow) = self.0.usage_shadow.get() {
             return Ok(Arc::clone(shadow));
         }
         let _making = lock(&self.0.usage_shadow_making);
+        if let Some(faces) = self.0.faces.get().filter(|_| attached) {
+            return Ok(faces.shadow());
+        }
         if let Some(shadow) = self.0.usage_shadow.get() {
             return Ok(Arc::clone(shadow));
+        }
+        // An attached read of a texture that may take faces makes them in the shadow's place.
+        if attached && self.faces_fit() {
+            let shadow = self.make_faces()?;
+            self.log_usage_shadow(call, need);
+            (self.device().shared().usage_shadows_made).fetch_add(1, Ordering::Release);
+            return Ok(shadow);
         }
         // A converted texture's image has both shader usages: the slot holds its write shadow.
         let shadow = match ycbcr_writes_stored(self.0.record.pixel_format) {
@@ -388,6 +437,11 @@ impl Texture {
                 )
             }
             Storage::Shadow { texels, .. } => (Some(&**texels), "a shadow of the bytes".to_owned()),
+            Storage::Image(_) if self.0.faces.get().is_some() => (
+                None,
+                "an image of its own, one of two faces that take turns (texture/faces.rs)"
+                    .to_owned(),
+            ),
             Storage::Image(_) | Storage::Texels(_) => (None, "an image of its own".to_owned()),
         };
         let why = format!(

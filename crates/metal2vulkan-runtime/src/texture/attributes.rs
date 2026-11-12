@@ -88,7 +88,13 @@ impl Texture {
         if self.0.parent.is_some() {
             return None;
         }
-        match self.storage() {
+        // A texture with two faces keeps its state with its own image, whichever face it
+        // presents (`texture/faces.rs`).
+        let storage = match self.0.faces.get() {
+            Some(_) => &self.0.storage,
+            None => self.storage(),
+        };
+        match storage {
             Storage::Image(image) => match &image.owner {
                 Owner::Runtime {
                     shareable,

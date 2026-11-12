@@ -35,7 +35,8 @@
 //!   not the batch's, is in its sets or table in `UNDEFINED` (`texture/first_move.rs`), and its
 //!   making waits for no submission. A rebind or a detach of host pages writes again the
 //!   elements of the textures whose images or texel views lie in those bytes ([`renew_over`]),
-//!   and of no other texture (`WorkCounts::heap_slots_rewritten`). A texture the class fits that it cannot view (a format
+//!   and of no other texture, and a texture's turn to its other face writes its own again
+//!   ([`rewrite`], `texture/faces.rs`) (`WorkCounts::heap_slots_rewritten`). A texture the class fits that it cannot view (a format
 //!   the device cannot sample or store formatless, or that needs its function's decode) is the
 //!   neutral, announced ([`Degradation::UnnamedTextureUnviewable`]); one whose usage the class
 //!   lacks is the neutral, as Metal's contract leaves the read undefined. A shadowed texture's
@@ -546,6 +547,7 @@ impl DeviceHeaps {
     ) -> Vec<(u64, Error)> {
         let (ids, force): (Vec<u64>, bool) = match slots {
             Slots::Changed(id) => (vec![id], false),
+            Slots::Turned(id) => (vec![id], true),
             Slots::All => (self.textures.keys().copied().collect(), true),
             Slots::Over(key) => {
                 let over = self.textures.iter();
@@ -2286,6 +2288,8 @@ enum Slots {
     /// Those of the live textures whose images and texel views lie in the bytes of the buffer of
     /// a key (`Texture::bytes_key`).
     Over(ResourceKey),
+    /// One, whatever changed: its texture presents another of its faces (`texture/faces.rs`).
+    Turned(u64),
 }
 
 /// Write `slots`: a changed one where its holder changed, the others whatever changed. While a
@@ -2422,6 +2426,13 @@ pub(super) fn renew(device: &Device) {
 /// what its elements were written with.
 pub(super) fn renew_over(device: &Device, key: ResourceKey) {
     sync(device, Slots::Over(key));
+}
+
+/// Write again the elements of the texture at `id`, and no other's: it presents another of its
+/// faces from now on (`texture/faces.rs`), while no command buffer that may read the elements is
+/// pending.
+pub(super) fn rewrite(device: &Device, id: u64) {
+    sync(device, Slots::Turned(id));
 }
 
 /// A program's texture at `id`, of hold serial `serial`, went: its entry is the neutral's where

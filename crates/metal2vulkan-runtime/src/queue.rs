@@ -767,8 +767,10 @@ impl QueueGen {
             return Err(self.0.device.lost_refusal());
         }
         // Counted with its slot: it waits out a fetched render target's switch to its storage
-        // form, if one is under way (`texture/storage_form.rs`).
+        // form, if one is under way (`texture/storage_form.rs`), and a texture's turn to its other
+        // face (`texture/faces.rs`).
         self.0.device.storage_form_wait();
+        self.0.device.face_turn_wait();
         // Refused on a lost generation at rest, past its loss check, its slot held
         // (`device/carry.rs`).
         if self.0.device.shared().carry.refuses() {

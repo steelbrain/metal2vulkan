@@ -50,6 +50,7 @@
 //!   (`NotImplemented(IndirectRenderCommands)`): a command's draw that uses a shadowed texture its
 //!   call did not gather (none can: its tables and residency are the call's).
 
+use super::face_swap;
 use crate::binding::ResidentPrefix;
 use crate::buffer::Buffer;
 use crate::clear_reach::DrawnArea;
@@ -539,6 +540,10 @@ pub(super) fn plan<'a>(
                 shadow.cleared = Some(value);
             }
         }
+        // The shadows a turn of their textures' faces left holding the texels from before the
+        // pass, which the pass's first instance reads with no copy in (`render/face_swap.rs`):
+        // held at the pass's first plan, the first instance's.
+        core.hold_turned(&shadows, |key| instance.clears_in(key));
         // Reserved once: the chained iterators tell no exact length, which would grow the list
         // as it fills.
         uses.clear();
@@ -546,7 +551,9 @@ pub(super) fn plan<'a>(
         uses.extend(instance.uses());
         let own = uses.len();
         uses.extend(attached.iter().cloned());
-        copies.push(core.plan_shadows(&shadows, &uses)?);
+        let planned = core.plan_shadows(&shadows, &uses)?;
+        face_swap::counted(core, layout, &planned);
+        copies.push(planned);
         if bound.is_some() && bounded.is_none() {
             bounded = Some(BoundedWrites::of(layout, drawn)?);
         }

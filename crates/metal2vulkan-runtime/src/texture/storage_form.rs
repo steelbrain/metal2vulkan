@@ -557,6 +557,9 @@ impl Texture {
         if self.0.parent.is_some() {
             return;
         }
+        // A texture with faces takes its form on the face it presents, for good
+        // (`texture/faces.rs`).
+        self.freeze_faces();
         let Storage::Image(image) = self.storage() else {
             return;
         };
@@ -595,6 +598,8 @@ impl Texture {
     /// the texture keeps it (the module docs), in `GENERAL`, its first move made first where it
     /// waits (`texture/first_move.rs`). Refused as `image` is.
     pub(crate) fn exported_image(&self) -> Result<vk::Image, Error> {
+        // The handle is the face the texture presents, for good (`texture/faces.rs`).
+        self.freeze_faces();
         let image = self.image()?;
         let lies_in = match self.storage() {
             Storage::Alias { texels, .. } => Some(texels.buffer.at(0).0),

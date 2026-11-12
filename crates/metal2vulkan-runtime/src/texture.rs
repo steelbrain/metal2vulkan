@@ -160,6 +160,7 @@ mod attached_reads;
 mod attributes;
 pub(super) mod copy_images;
 pub(crate) mod decoded_twin;
+pub(crate) mod faces;
 #[cfg(unix)]
 mod fd_blocks_cover;
 pub(crate) mod first_move;
@@ -452,6 +453,9 @@ pub(super) struct TextureShared {
     usage_shadow: OnceLock<Arc<usage_shadow::UsageShadow>>,
     /// Held while the usage shadow is made, so one binding makes it.
     usage_shadow_making: Mutex<()>,
+    /// The texture's two faces, where an attached read made them in its usage shadow's place
+    /// (`texture/faces.rs`): it presents one of them, [`Texture::storage`].
+    faces: OnceLock<faces::Faces>,
     /// The storage images a draw that reads the texture where its pass renders it takes the
     /// texture's texels into before it reads them (`texture/attached_reads.rs`), one a form, each
     /// made at the first such draw: on the texture a view was made from, never a view's own.
@@ -535,10 +539,14 @@ impl TextureShared {
             | Storage::Alias { image, .. }
             | Storage::Shadow { image, .. } => {
                 // A shadow that moved in place keeps its image in place too, which the command
-                // buffers since read through its ID (`texture/storage_form.rs`).
+                // buffers since read through its ID (`texture/storage_form.rs`); so does a
+                // texture's second face, which its elements named while it presented it
+                // (`texture/faces.rs`).
                 let moved = match self.moved.get() {
                     Some(Storage::Alias { image, .. }) => Some(Arc::clone(image)),
-                    _ => None,
+                    _ => (self.faces.get())
+                        .and_then(faces::Faces::other_image)
+                        .map(Arc::clone),
                 };
                 (&image.device, Some(Box::new((Arc::clone(image), moved))))
             }
@@ -5195,6 +5203,7 @@ impl Texture {
             held_by: HeldBy::default(),
             usage_shadow: OnceLock::new(),
             usage_shadow_making: Mutex::new(()),
+            faces: OnceLock::new(),
             snapshot: Mutex::new(Vec::new()),
             coverage: Mutex::default(),
             kept_backings: Mutex::new(Vec::new()),
@@ -5253,13 +5262,17 @@ impl Texture {
         }
     }
 
-    /// The texture object `shared` names, while it lives (a slot's holder, `resource_ids.rs`).
-    /// The texture's storage: the one it was made with, or the image in place a shadow made
-    /// before its pages' in-place verdict moved to (`TextureShared::moved`).
+    /// The texture's storage: the one it was made with, the image in place a shadow made
+    /// before its pages' in-place verdict moved to (`TextureShared::moved`), or the second of its
+    /// faces where it presents that one (`texture/faces.rs`).
     fn storage(&self) -> &Storage {
+        if let Some(presented) = self.0.faces.get().and_then(faces::Faces::presented) {
+            return presented;
+        }
         self.0.moved.get().unwrap_or(&self.0.storage)
     }
 
+    /// The texture object `shared` names, while it lives (a slot's holder, `resource_ids.rs`).
     pub(super) fn upgrade(shared: &Weak<TextureShared>) -> Option<Texture> {
         shared.upgrade().map(Texture)
     }
@@ -6569,6 +6582,8 @@ impl Texture {
             }
         };
         let mut record = record;
+        // A view presents the face its texture presents now, for good (`texture/faces.rs`).
+        self.freeze_faces();
         // A two-plane YCbCr texture's view as another type reads its luma codes alone
         // (`texture/ycbcr_image.rs`).
         let luma = self.luma_view(call, &record).transpose()?;

@@ -659,6 +659,9 @@ pub(super) struct DeviceShared {
     /// The usage shadows its textures made (`texture/usage_shadow.rs`): a kept list of resident
     /// textures' shadows is listed again where it moved (`shadow::ResidentShadows`).
     pub(super) usage_shadows_made: std::sync::atomic::AtomicU64,
+    /// Its textures' turns between their faces whose passes may not have run, and the flag a
+    /// turn raises (`texture/faces.rs`).
+    pub(crate) face_swaps: crate::texture::faces::FaceSwaps,
     /// One past the highest resource ID a texture is placed at in its heap sets, 0 for none,
     /// stored under `heaps` as it changes and read without it (`heap_sets::TextureTableAt`).
     pub(super) heap_textures_end: std::sync::atomic::AtomicU64,
@@ -2883,6 +2886,7 @@ impl Device {
             coverage_pools: Default::default(),
             live_dispatches: Default::default(),
             usage_shadows_made: Default::default(),
+            face_swaps: Default::default(),
             heap_textures_end: Default::default(),
             bind_memos: Default::default(),
             cores: Default::default(),

@@ -275,6 +275,11 @@ impl ObjectsToken {
         self.objects.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// How many texture objects are over the image or texels now.
+    pub(super) fn count(&self) -> usize {
+        self.objects.load(Ordering::Relaxed)
+    }
+
     /// Keep `token`, as [`KeptToken::keep`].
     pub(super) fn keep(&self, token: RangeToken) -> Result<(), Error> {
         self.token.keep(token)

@@ -567,6 +567,9 @@ impl CommandBufferShared {
         // The decodes into ASTC carriers' second decoded twins: those queued, before its work;
         // its blits' writes', after each part.
         self.record_second_decodes(&mut state, range.clone())?;
+        // The copies between textures' faces around its work, for turns whose passes have not
+        // run (`texture/faces.rs`).
+        self.record_face_fixes(&mut state, range.clone())?;
         let at = Point {
             queue,
             value: scheduler.values[queue] + 1,
@@ -1590,6 +1593,74 @@ impl CommandBufferShared {
         exit_guard::called(Call::EndCommandBuffer);
         ended.map_err(|error| submission_error(device, error))?;
         Ok(buffer)
+    }
+
+    /// Record the copies between textures' faces that the batch of parts `range` takes around
+    /// its work for turns whose passes have not run (`texture/faces.rs`, `FaceSwaps::fixes`):
+    /// each from the face that holds the truth into the face the batch names, in a command buffer
+    /// before its first part's own, and back after its last part's where the batch may write the
+    /// face it names, each joined to its part's summary, so the tracker orders them with the
+    /// batch's work and the standings across command buffers count their writes. The faces are
+    /// held until the command buffer completes. A part that runs nothing (its encoder failed, or
+    /// its use was rebound) leaves a turn of its pass to the next batch that names its face.
+    fn record_face_fixes(
+        &self,
+        state: &mut State,
+        range: std::ops::Range<usize>,
+    ) -> Result<(), CommandBufferError> {
+        let device = &self.device;
+        let swaps = &device.shared().face_swaps;
+        if !swaps.any() || range.is_empty() {
+            return Ok(());
+        }
+        let unnamed = state.reaches_unnamed || state.heaps.bound();
+        let parts = &state.recorded[range.clone()];
+        let summaries = parts.iter().map(|part| &part.summary);
+        let ran = |part: usize| {
+            (part.checked_sub(range.start)).is_some_and(|at| !parts[at].raws.is_empty())
+        };
+        let fixes = swaps.fixes(self.address(), (range.clone(), &ran), summaries, unnamed);
+        if fixes.is_empty() {
+            return Ok(());
+        }
+        let raw = device.shared().vk();
+        let (front, back): (Vec<_>, Vec<_>) = fixes.iter().map(FaceFix::uses).unzip();
+        let record = |state: &mut State, forward: bool| {
+            self.record_raw(state, |_, buffer| {
+                for fix in fixes.iter().filter(|fix| forward || fix.back) {
+                    // SAFETY: the command buffer is recording, outside a render pass; both faces
+                    // are live (held below until the command buffer completes) and rest in
+                    // `GENERAL`.
+                    unsafe { fix.record(raw, buffer, forward) };
+                }
+                Ok(())
+            })
+        };
+        let before = record(state, true)?;
+        let first = &mut state.recorded[range.start];
+        first.raws.insert(0, before);
+        for summary in front {
+            first.summary.join(summary);
+        }
+        let back: Vec<Summary<ResourceKey>> = back.into_iter().flatten().collect();
+        if !back.is_empty() {
+            let after = record(state, false)?;
+            let last = &mut state.recorded[range.end - 1];
+            last.raws.push(after);
+            for summary in back {
+                last.summary.join(summary);
+            }
+        }
+        let counts = &device.shared().counts;
+        for fix in &fixes {
+            let texels = fix.texels();
+            counts.attached_read_swap_fix(texels);
+            if fix.back {
+                counts.attached_read_swap_fix(texels);
+            }
+        }
+        state.retained.push(Box::new(fixes));
+        Ok(())
     }
 
     /// Record the segments of encoders `range` that their batch's submission records: the

@@ -62,6 +62,7 @@ use super::pass_runs::RunKeep;
 use super::pending_dispatch::PendingDispatch;
 use super::pipeline::VariantObjects;
 use super::rebind::{Holds, Taken};
+use super::render::face_swap::Turns;
 use super::replay::Replay;
 use super::residency::{Residency, Used};
 use super::resource::ResourceKey;
@@ -400,6 +401,9 @@ pub(super) struct EncoderCore {
     executions: Vec<Execution>,
     /// Where the shadowed textures the encoder used stand.
     shadows: ShadowSync,
+    /// A render encoder's turns of its pass's colors' textures to their other faces, its pass's
+    /// open's (`render/face_swap.rs`); none for any other encoder.
+    turns: Turns,
     /// The keys its commands' uses named, and its bindings' (`used_resources.rs`): `end` finds the
     /// heaps among them, and hands them to the command buffer.
     keys: BTreeSet<ResourceKey>,
@@ -678,6 +682,7 @@ impl EncoderCore {
             retained: Retained::default(),
             executions: Vec::new(),
             shadows: ShadowSync::carrying(carry),
+            turns: Turns::default(),
             keys: BTreeSet::new(),
             touched: Vec::new(),
             resident_unheld: Vec::new(),
@@ -834,6 +839,7 @@ impl EncoderCore {
             retained: Retained::default(),
             executions: Vec::new(),
             shadows: ShadowSync::default(),
+            turns: Turns::default(),
             keys: BTreeSet::new(),
             touched: Vec::new(),
             resident_unheld: Vec::new(),
@@ -2039,6 +2045,46 @@ impl EncoderCore {
             self.fail_command_buffer(recording_error(&device, error));
         }
         copies
+    }
+
+    /// Take `turns`, the turns of its pass's colors' textures to their other faces its pass's
+    /// open made (`render/face_swap.rs`).
+    pub(super) fn take_turns(&mut self, turns: Turns) {
+        self.turns = turns;
+    }
+
+    /// The turns its pass's open made (`render/face_swap.rs`).
+    pub(super) fn turns(&self) -> &Turns {
+        &self.turns
+    }
+
+    /// Take the images of `copies`, a texture's faces' shadows, no further from what its command
+    /// buffer's earlier encoders left (`render/face_swap.rs`, `shadow::ShadowCarry`).
+    pub(super) fn carry_no_further(&mut self, copies: &[Arc<ShadowCopies>]) {
+        self.shadows.carry_no_further(copies);
+    }
+
+    /// At its pass's first plan of its copies, before the copies of a command that uses the
+    /// shadowed textures `shadows`: hold the attached reads' shadows its pass's turns left holding
+    /// the texels from before the pass current (`render/face_swap.rs`), but those whose copy in
+    /// `clears` says is a clear; each `shadows` reads counted
+    /// (`WorkCounts::attached_read_swap_reads`).
+    pub(super) fn hold_turned(
+        &mut self,
+        shadows: &[ShadowUse],
+        clears: impl Fn(ResourceKey) -> bool,
+    ) {
+        for copies in self.turns.hold() {
+            let key = copies.shadow_key;
+            if clears(key) {
+                continue;
+            }
+            self.shadows.hold_ahead(&copies);
+            if shadows.iter().any(|shadow| shadow.copies.shadow_key == key) {
+                let counts = &self.device().shared().counts;
+                counts.attached_read_swap_read(copies.texels());
+            }
+        }
     }
 
     /// Note that the encoder's pass takes the shadowed texture `key` as an attachment.

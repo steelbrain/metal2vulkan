@@ -1784,7 +1784,8 @@ const KEPT_VIEWS: usize = 256;
 ///
 /// - **A view** of a texture slot is a function of the texture (its storage, image, decoded and
 ///   twin and record are fixed as it is made, but for a shadow over host pages that moves in
-///   place once, `texture/storage_form.rs`; its usage shadow is made once and kept), the
+///   place once, `texture/storage_form.rs`; its usage shadow is made once and kept), the face
+///   it presents where it has two (`texture/faces.rs`, a key of its own each), the
 ///   view's description, whether the binding is a storage one, and its images' views, which an
 ///   image keeps once made until it lets them all go under its views lock (a rebind's or a
 ///   storage form's new `VkImage`, a detach's stand-in, a reattach, a shadow's move in place,
@@ -1813,8 +1814,9 @@ pub(super) struct BindMemo {
 }
 
 /// What a view a bind made or found is a function of ([`BindMemo`]): a binding of the texture at
-/// the address as the view, a storage one where the flag is set, read as [`SlotRead`] says.
-type ViewKey = (usize, ImageViewDesc, bool, SlotRead);
+/// the address as the view, a storage one where the flag is set, read as [`SlotRead`] says, of the
+/// face it presents (`texture/faces.rs`: 0 for a texture without faces).
+type ViewKey = (usize, ImageViewDesc, bool, SlotRead, u8);
 
 /// How a slot binding reads its texture (`Tables::slot_read`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1954,7 +1956,7 @@ fn image_descriptor(
         let Some(kept_views) = kept_views.as_deref_mut() else {
             return read.view(texture, call, view, storage);
         };
-        let key = (texture.address(), *view, storage, read);
+        let key = (texture.address(), *view, storage, read, texture.face());
         if let Some(kept) = kept_views.get(&key) {
             debug_assert_eq!(kept.texture.as_ptr() as usize, key.0);
             return Ok(kept.raw);

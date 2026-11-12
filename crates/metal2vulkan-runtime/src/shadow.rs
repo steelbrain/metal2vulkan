@@ -2844,10 +2844,12 @@ pub(super) fn shadow_uses_of<'a>(
 }
 
 /// A texture's own shadow's copies, and those of the one a binding beyond its usage made
-/// (`texture/usage_shadow.rs`), added to `copies`.
+/// (`texture/usage_shadow.rs`; a texture with faces has its attached reads' beside it,
+/// `texture/faces.rs`), added to `copies`.
 fn texture_copies(texture: &Texture, copies: &mut Vec<Arc<ShadowCopies>>) {
     copies.extend(texture.shadow().cloned());
     copies.extend(texture.usage_shadow_copies());
+    copies.extend(texture.usage_shadow_copies_beside());
 }
 
 /// The shadows' copies of the textures a residency made resident ([`texture_copies`] of each, in
@@ -3410,6 +3412,13 @@ impl<M> ShadowSync<M> {
         }
     }
 
+    /// Take the images of `copies` no further from what the command buffer's earlier encoders
+    /// left (`ShadowCarry::drop_copies`): a texture's faces' shadows, which its turn leaves
+    /// holding what is no longer its truth (`texture/faces.rs`).
+    pub(super) fn carry_no_further(&mut self, copies: &[Arc<ShadowCopies>]) {
+        self.carry.drop_copies(copies);
+    }
+
     /// Note a recorded command with `uses`, whatever it touched: a write of a carried texture's
     /// truth another way leaves its image stale, so the texture is no longer carried and copies
     /// in at its next use. The encoder's own textures are [`after`](Self::after)'s, which holds
@@ -3543,6 +3552,15 @@ impl ShadowCarry {
         self.drop_where(|_| true);
     }
 
+    /// Carry no further the images of `copies` (`texture/faces.rs`: a texture's turn to its other
+    /// face moves its truth).
+    pub(super) fn drop_copies(&mut self, copies: &[Arc<ShadowCopies>]) {
+        let named = |carried: &Carried| {
+            (copies.iter()).any(|copies| copies.shadow_key == carried.copies.shadow_key)
+        };
+        self.drop_where(named);
+    }
+
     /// Carry no further the images `drops` picks (`shadow_standing::Missed::Dropped`).
     fn drop_where(&mut self, drops: impl Fn(&Carried) -> bool) {
         self.entries.retain(|carried| {
@@ -3619,6 +3637,30 @@ pub(super) struct MergeFor {
 }
 
 impl<M: Clone + KeptArea> ShadowSync<M> {
+    /// Hold `copies`' image current, every texel of it, where the encoder has no entry of it: it
+    /// holds its truth's texels as a copy in now would leave them, the face a texture presented
+    /// until its pass's turn (`texture/faces.rs`). An entry the encoder has stays as it is.
+    pub(super) fn hold_ahead(&mut self, copies: &Arc<ShadowCopies>) {
+        let key = copies.shadow_key;
+        if self.entries.iter().any(|e| e.copies.shadow_key == key) {
+            return;
+        }
+        self.entries.push(Entry {
+            copies: Arc::clone(copies),
+            standing: Standing::Current,
+            held: None,
+            dirty: false,
+            area: None,
+            merge: None,
+            two_ways: false,
+            scratch: None,
+            stale: None,
+            carried: false,
+            run: false,
+            took: None,
+        });
+    }
+
     /// The entry of `copies`, made when the encoder had none.
     fn entry(&mut self, copies: &Arc<ShadowCopies>) -> usize {
         match self

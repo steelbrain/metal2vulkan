@@ -105,6 +105,7 @@ use super::shadow::{ShadowCarry, Takes};
 use super::spares::CommandPool;
 use super::sparse::encoder::SparseUpdate;
 use super::sparse::indirect;
+use super::texture::faces::TurnPoint;
 use super::texture::storage_form::Riding;
 use super::texture::Texture;
 use super::tracker::{Footprint, Use};
@@ -1845,13 +1846,15 @@ impl State {
     /// after the parts' own), nor its last part a write into an ASTC carrier (whose second twin's
     /// decode its submission may record after it, `texture/decoded_twin.rs`), and name no texture
     /// over the caller's image that moves between layouts (whose move back its submission plans
-    /// before the end). An event's kept signal that waits for another queue's still goes after
-    /// that wait, in an end of its own at the submission (`submit.rs`).
+    /// before the end), while no texture's turn may leave its submission a copy after its work
+    /// (`texture/faces.rs`). An event's kept signal that waits for another queue's still goes
+    /// after that wait, in an end of its own at the submission (`submit.rs`).
     fn may_fold(&self, device: &Device, index: usize) -> bool {
         let parts = &self.recorded[self.batch_range(index)];
-        parts
-            .iter()
-            .all(|part| part.segments.is_empty() && part.sparse.is_empty())
+        !device.shared().face_swaps.any()
+            && parts
+                .iter()
+                .all(|part| part.segments.is_empty() && part.sparse.is_empty())
             && parts.last().is_none_or(|part| part.twin_writes.is_empty())
             && device
                 .shared()
@@ -2235,6 +2238,9 @@ impl Drop for CommandBufferShared {
             state.pools()
         };
         let shared = self.device.shared();
+        // A turn of a texture's faces its pass made whose part no submission ran: the next batch
+        // that names the face turned to takes the copy (`texture/faces.rs`).
+        shared.face_swaps.ran_nothing(self.address());
         for pool in pool {
             shared.spares.give_command_pool(shared, pool, false);
         }
@@ -2594,6 +2600,17 @@ impl CommandBuffer {
     /// Whether `waiting` holds this command buffer.
     pub(crate) fn is(&self, waiting: &dyn Waiting) -> bool {
         self.0.address() == waiting.address()
+    }
+
+    /// Where a render pass opening now opens, for its textures' turns (`render/face_swap.rs`).
+    pub(crate) fn turn_point(&self) -> TurnPoint {
+        let state = self.state();
+        TurnPoint {
+            owner: self.0.address(),
+            part: state.recorded.len(),
+            bound_heaps: state.heaps.bound(),
+            logs_kept: state.ended.iter().any(|record| record.replay.is_some()),
+        }
     }
 
     /// A handle that does not keep the command buffer: a render encoder's, which its end in
