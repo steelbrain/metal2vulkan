@@ -11109,9 +11109,9 @@ impl RenderLowering {
                 created: created.clone(),
             });
             // What a draw rebound takes of it (`render/draw_again/rebound.rs`), where its state made
-            // no visible-function table: set-0 writes that hold no keeper, its plan's uses alone,
-            // no push hole, and its one recording's parts (its variant and plan are the bind
-            // state's kept settle).
+            // no visible-function table: set-0 writes that hold no keeper and no zero region of its
+            // own (`binding::binds_own_zeros`), its plan's uses alone, no push hole, and its one
+            // recording's parts (its variant and plan are the bind state's kept settle).
             let recorded = match (&draw_states, &draw_pipeline, vk_draws) {
                 (DrawStates::Whole([state]), DrawPipeline::Made(made), [(index, _, command)]) => {
                     Some(draw_again::KeptRecording {
@@ -11130,7 +11130,8 @@ impl RenderLowering {
             let rebinds = function_tables.is_empty()
                 && uses.len() == plan_uses
                 && bound.holes.is_empty()
-                && writes.iter().all(|write| write.held.is_none());
+                && writes.iter().all(|write| write.held.is_none())
+                && !binding::binds_own_zeros(&plan);
             let recorded = recorded.filter(|_| rebinds);
             let rebinds = recorded.is_some();
             if let Some(recorded) = recorded {

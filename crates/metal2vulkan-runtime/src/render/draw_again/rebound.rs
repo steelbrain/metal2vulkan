@@ -9,8 +9,9 @@
 //!   set the encoder's render state, what it decides derived again as the kept draw's
 //!   (`Kept::stated`, `restated.rs`), each table's changes since the kept draw read
 //!   it still listed (`argument_table::Changes`, at most [`SLOTS`] slots), where the kept draw kept
-//!   what this takes ([`KeptStorage`]: a draw whose set-0 writes hold no keeper, of no use beyond
-//!   its plan's and its draw's own, and of a state that made no visible-function table); or the
+//!   what this takes ([`KeptStorage`]: a draw whose set-0 writes hold no keeper and no zero region
+//!   of its own, `binding::binds_own_zeros`, of no use beyond its plan's and its draw's own, and of
+//!   a state that made no visible-function table); or the
 //!   kept draw of other arguments alone, of something to draw (below), after such calls or none.
 //!   The kept
 //!   bind state takes the changed slots (`ArgumentTable::refresh_changed`), and the draw goes on
@@ -112,11 +113,12 @@
 //!   one (`render/carried.rs`), is rebound as one after draws of other states and calls that set
 //!   the render state, through no record: its tables' stamps are the encoder's first ones, so it
 //!   brings in every slot the encoder's calls bound since its opening, whatever table its bind
-//!   state was read from. It stops where that state holds a slot none of them bound (it holds
-//!   only the slots its pipeline state reads: `argument_table::ReadSlots`), or a
-//!   threadgroup memory length or acceleration structure (`WorkCounts::draws_carry_stopped_stale`:
-//!   a new encoder inherits no binding), where it samples a texture an attachment of its pass
-//!   renders (`draws_carry_stopped_attached`), or at any other stop (`draws_carry_stopped_other`).
+//!   state was read from. It stops where that state holds a slot none of them bound (of texture
+//!   and sampler slots it holds only those its pipeline state reads: `argument_table::ReadSlots`),
+//!   or a threadgroup memory length or acceleration structure
+//!   (`WorkCounts::draws_carry_stopped_stale`: a new encoder inherits no binding), where it samples
+//!   a texture an attachment of its pass renders (`draws_carry_stopped_attached`), or at any other
+//!   stop (`draws_carry_stopped_other`).
 //!   Its uses are made again whole; it begins its pass's first instance as every step's first draw
 //!   does (`RenderLowering::inline_begin`), and records every state command it sets into that
 //!   instance's command buffer, whose record holds none (`WorkCounts::draws_rebound_carried`).
