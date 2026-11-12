@@ -6,7 +6,8 @@
 //!   (`WorkCounts::submit_checks_run`), each verdict an answer (never pending once settled), their
 //!   calls counted apart (`WorkCounts::submit_check_calls`), their allocations too
 //!   (`device_checks`), and their commands among none of the device's (`commands_recorded`: a
-//!   device that ran them recorded the copies one that recalled them did); a later device over the
+//!   device that ran them recorded the copies one that recalled them did, besides its priming's,
+//!   which a device made again on what stays loaded leaves out); a later device over the
 //!   same cache recalls them
 //!   (`submit_checks_recalled`), runs none, and holds the verdicts of the last device that ran
 //!   them: the first's, or, where load split its tries or its import tax answered `Holds` short
@@ -80,10 +81,24 @@ fn verdicts(device: &Device) -> [Verdict; Check::COUNT] {
     Check::ALL.map(|check| device.shared().submit_checks.verdict(check))
 }
 
+/// The copies a device's priming records among the device's commands (`device/prime.rs`: one,
+/// within its buffer).
+const PRIMING_COPIES: u64 = 1;
+
+/// The device the cfg selects, its shader cache in `cache`, and the copies its priming recorded:
+/// [`PRIMING_COPIES`] where it was primed, none where it was made again on what stays loaded and
+/// not primed.
+fn device_primed(cache: &Path) -> (Device, u64) {
+    let before = crate::exit_guard::registrations().primings;
+    let device = device(cache);
+    let primed = crate::exit_guard::registrations().primings - before;
+    (device, primed * PRIMING_COPIES)
+}
+
 #[test]
 fn the_checks_answer_once_and_a_second_device_recalls_them() {
     let scratch = Scratch::new("submit-checks");
-    let first = device(&scratch.0);
+    let (first, primed) = device_primed(&scratch.0);
     assert!(
         first.settle_submit_checks(SETTLE),
         "the checks never answered"
@@ -93,7 +108,9 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
     assert!(!answered.contains(&Verdict::Pending), "{answered:?}");
     let imports = first.shared().host_import.is_ok();
     let counts = first.work_counts();
-    let mut copies = counts.commands_recorded.cmd_copy_buffer;
+    // The copies besides its priming's, which a device made again on what stays loaded leaves
+    // out.
+    let mut copies = counts.commands_recorded.cmd_copy_buffer - primed;
     assert_eq!(counts.submit_checks_run, 1);
     assert_eq!(counts.submit_checks_recalled, 0);
     assert!(
@@ -130,7 +147,7 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
     let mut ran = answered;
     let start = std::time::Instant::now();
     loop {
-        let second = device(&scratch.0);
+        let (second, primed) = device_primed(&scratch.0);
         assert!(
             second.settle_submit_checks(SETTLE),
             "the second device never answered"
@@ -141,7 +158,8 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
             assert_eq!(counts.submit_check_calls, 0);
             assert_eq!(verdicts(&second), ran);
             assert_eq!(
-                counts.commands_recorded.cmd_copy_buffer, copies,
+                counts.commands_recorded.cmd_copy_buffer - primed,
+                copies,
                 "the device that ran the checks recorded other copies than one that recalled them"
             );
             break;
@@ -149,7 +167,7 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
         if counts.submit_checks_run == 1 {
             println!("{} again: {}", second.name(), second.submit_check_report());
             ran = verdicts(&second);
-            copies = counts.commands_recorded.cmd_copy_buffer;
+            copies = counts.commands_recorded.cmd_copy_buffer - primed;
         }
         if start.elapsed() >= WAIT {
             let name = record_name(&second.driver_identity());
