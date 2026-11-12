@@ -427,6 +427,8 @@ mod option_bit_20;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod optional_extensions;
 mod options;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod ordered_renders;
 mod own;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod owned_kernel_builds;
