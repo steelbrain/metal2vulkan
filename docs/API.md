@@ -1903,8 +1903,8 @@ bound.
   the RX 550 makes no such image);
   for one that renders, whose rows each to its
   pitch share no line with bytes past them, the check of renders that lets the rows' padding
-  change, as the declaration does, and no byte past the last row's pitch), the image taken at any
-  size over any buffer of the runtime's own;
+  change, as the declaration does, and no byte past the last row's pitch); a texture's size never
+  makes it a shadow there;
   or the buffer is over the caller's
   `VkBuffer`, whose memory backs no image of the runtime's; or it is a tiled texture of more than
   one level (`Buffer::new_tiled_texture`), over any buffer: no image over the buffer's memory holds
