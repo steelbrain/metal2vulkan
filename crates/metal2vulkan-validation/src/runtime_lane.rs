@@ -832,6 +832,8 @@ mod sample_imageblocks;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod sample_positions;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod sampler_tables;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod separate_samples;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod seq_cst_fences;

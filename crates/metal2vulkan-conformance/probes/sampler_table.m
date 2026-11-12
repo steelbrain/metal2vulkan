@@ -14,7 +14,10 @@
 // clamp nearest, repeat linear, clamp linear). Each kernel prints each thread's four floats as
 // words.
 //
-// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): see the runtime lane's `METAL`.
+// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): both kernels made their pipelines (status 4,
+// completed) and answered the same words, the texel each sampler names: at -0.5 white, red, white,
+// red; at 0.75 red, red, and (0.75, 0.25, 0, 1) twice; at 3.75 white, white, (1, 0.75, 0.75, 1),
+// white; at 4.5 red, white, red, white; at 2.5 blue. The runtime lane's `METAL` holds them.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>
