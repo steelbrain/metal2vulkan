@@ -26,6 +26,13 @@
 // space(shared or null), [3] space(nullptr): 1, 2, 3, 4 for t < 4, and 4 four times for the rest
 // (a null generic pointer is in no space).
 //
+// `generic_slots` and `generic_fields`: thread t of eight keeps three generic pointers and a count
+// in a `refs` (as MPS's `array_ref` fields hold generic pointers): r.a = in, r.b = local (local =
+// {t, t + 1}), r.c = shared where in[t] < 4 and null otherwise, r.n = t. `read_refs` reads them
+// from the thread's `r` by reference (`generic_slots`), `read_fields` from a copy passed by value
+// (`generic_fields`); each writes out[4t + j]: [0] weigh(r.a, t) = t + 100; [1] weigh(r.b, 1) =
+// t + 201; [2] space(r.c): 3 for t < 4, 4 for the rest; [3] r.n = t.
+//
 // The locals are declared ahead of the switch's only label (on t >> 31, zero for every thread),
 // so every path into the switch bypasses their declarations and Clang emits no lifetime markers
 // for them (as in ob2_sized_array.metal). Loop-free.
@@ -104,5 +111,66 @@ kernel void generic_null(device float *out [[buffer(0)]],
         out[4 * t + 1] = space(keep ? (const float *)local : nullptr);
         out[4 * t + 2] = space(keep ? (const float *)shared : nullptr);
         out[4 * t + 3] = space(nullptr);
+    }
+}
+
+struct refs {
+    const float *a;
+    const float *b;
+    const float *c;
+    uint n;
+};
+
+__attribute__((noinline)) void read_refs(thread const refs &r, device float *o, uint t) {
+    o[0] = weigh(r.a, t);
+    o[1] = weigh(r.b, 1);
+    o[2] = space(r.c);
+    o[3] = float(r.n);
+}
+
+__attribute__((noinline)) void read_fields(refs r, device float *o, uint t) {
+    o[0] = weigh(r.a, t);
+    o[1] = weigh(r.b, 1);
+    o[2] = space(r.c);
+    o[3] = float(r.n);
+}
+
+kernel void generic_slots(device float *out [[buffer(0)]],
+                          device const float *in [[buffer(1)]],
+                          uint t [[thread_position_in_grid]],
+                          uint l [[thread_position_in_threadgroup]]) {
+    threadgroup float shared[8];
+    switch (t >> 31) {
+        float local[2];
+        refs r;
+    default:
+        local[0] = float(t);
+        local[1] = float(t) + 1.0f;
+        shared[l] = 1.0f;
+        r.a = in;
+        r.b = local;
+        r.c = in[t] < 4.0f ? (const float *)shared : nullptr;
+        r.n = t;
+        read_refs(r, out + 4 * t, t);
+    }
+}
+
+kernel void generic_fields(device float *out [[buffer(0)]],
+                           device const float *in [[buffer(1)]],
+                           uint t [[thread_position_in_grid]],
+                           uint l [[thread_position_in_threadgroup]]) {
+    threadgroup float shared[8];
+    switch (t >> 31) {
+        float local[2];
+        refs r;
+    default:
+        local[0] = float(t);
+        local[1] = float(t) + 1.0f;
+        shared[l] = 1.0f;
+        r.a = in;
+        r.b = local;
+        r.c = in[t] < 4.0f ? (const float *)shared : nullptr;
+        r.n = t;
+        read_fields(r, out + 4 * t, t);
     }
 }

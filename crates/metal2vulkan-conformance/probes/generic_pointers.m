@@ -2,14 +2,17 @@
 // space, which a device, thread or threadgroup pointer converts to, read and written through
 // functions that take them, and asked which space they point into (`is_device_addrspace`,
 // `is_thread_addrspace`, `is_threadgroup_addrspace`). The owned fixture
-// `engine/generic_pointers.metal` holds the same source for `generic_spaces`, `generic_mixed` and
-// `generic_null` (its header gives each word); `generic_null` asks which space a null generic
-// pointer answers, where the run decides whether a pointer is null.
+// `engine/generic_pointers.metal` holds the same source for `generic_spaces`, `generic_mixed`,
+// `generic_null`, `generic_slots` and `generic_fields` (its header gives each word);
+// `generic_null` asks which space a null generic pointer answers, where the run decides whether a
+// pointer is null, and `generic_slots` and `generic_fields` read generic pointers a struct holds,
+// by reference and by value.
 //
 // Build (no cargo target needed):
 //   clang -fobjc-arc -O1 -fmodules -o generic_pointers generic_pointers.m \
 //     -framework Foundation -framework Metal
-// Run: ./generic_pointers spaces   (or mixed, or null), one case a process, MTL_DEBUG_LAYER unset.
+// Run: ./generic_pointers spaces   (or mixed, null, slots, fields), one case a process,
+// MTL_DEBUG_LAYER unset.
 //
 // Each case compiles the source as MSL 4.1, runs its kernel over 8 threads in one threadgroup
 // with `in[i] = i` (16 words), and prints the words.
@@ -91,6 +94,62 @@ static const char *SOURCE =
     "        out[4 * t + 2] = space(keep ? (const float *)shared : nullptr);\n"
     "        out[4 * t + 3] = space(nullptr);\n"
     "    }\n"
+    "}\n"
+    "struct refs {\n"
+    "    const float *a;\n"
+    "    const float *b;\n"
+    "    const float *c;\n"
+    "    uint n;\n"
+    "};\n"
+    "__attribute__((noinline)) void read_refs(thread const refs &r, device float *o, uint t) {\n"
+    "    o[0] = weigh(r.a, t);\n"
+    "    o[1] = weigh(r.b, 1);\n"
+    "    o[2] = space(r.c);\n"
+    "    o[3] = float(r.n);\n"
+    "}\n"
+    "__attribute__((noinline)) void read_fields(refs r, device float *o, uint t) {\n"
+    "    o[0] = weigh(r.a, t);\n"
+    "    o[1] = weigh(r.b, 1);\n"
+    "    o[2] = space(r.c);\n"
+    "    o[3] = float(r.n);\n"
+    "}\n"
+    "kernel void generic_slots(device float *out [[buffer(0)]],\n"
+    "                          device const float *in [[buffer(1)]],\n"
+    "                          uint t [[thread_position_in_grid]],\n"
+    "                          uint l [[thread_position_in_threadgroup]]) {\n"
+    "    threadgroup float shared[8];\n"
+    "    switch (t >> 31) {\n"
+    "        float local[2];\n"
+    "        refs r;\n"
+    "    default:\n"
+    "        local[0] = float(t);\n"
+    "        local[1] = float(t) + 1.0f;\n"
+    "        shared[l] = 1.0f;\n"
+    "        r.a = in;\n"
+    "        r.b = local;\n"
+    "        r.c = in[t] < 4.0f ? (const float *)shared : nullptr;\n"
+    "        r.n = t;\n"
+    "        read_refs(r, out + 4 * t, t);\n"
+    "    }\n"
+    "}\n"
+    "kernel void generic_fields(device float *out [[buffer(0)]],\n"
+    "                           device const float *in [[buffer(1)]],\n"
+    "                           uint t [[thread_position_in_grid]],\n"
+    "                           uint l [[thread_position_in_threadgroup]]) {\n"
+    "    threadgroup float shared[8];\n"
+    "    switch (t >> 31) {\n"
+    "        float local[2];\n"
+    "        refs r;\n"
+    "    default:\n"
+    "        local[0] = float(t);\n"
+    "        local[1] = float(t) + 1.0f;\n"
+    "        shared[l] = 1.0f;\n"
+    "        r.a = in;\n"
+    "        r.b = local;\n"
+    "        r.c = in[t] < 4.0f ? (const float *)shared : nullptr;\n"
+    "        r.n = t;\n"
+    "        read_fields(r, out + 4 * t, t);\n"
+    "    }\n"
     "}\n";
 
 enum { THREADS = 8, WORDS = 8 };
@@ -111,9 +170,11 @@ int main(int argc, char **argv) {
                                          options:o
                                            error:&e];
     if (!lib) { printf("RESULT library error %s\n", e.localizedDescription.UTF8String); return 1; }
-    NSString *name = strcmp(c, "mixed") == 0  ? @"generic_mixed"
-                     : strcmp(c, "null") == 0 ? @"generic_null"
-                                              : @"generic_spaces";
+    NSString *name = strcmp(c, "mixed") == 0    ? @"generic_mixed"
+                     : strcmp(c, "null") == 0   ? @"generic_null"
+                     : strcmp(c, "slots") == 0  ? @"generic_slots"
+                     : strcmp(c, "fields") == 0 ? @"generic_fields"
+                                                : @"generic_spaces";
     id<MTLFunction> f = [lib newFunctionWithName:name];
     id<MTLComputePipelineState> ps = [D newComputePipelineStateWithFunction:f error:&e];
     if (!ps) { printf("RESULT pipeline error %s\n", e.localizedDescription.UTF8String); return 0; }
