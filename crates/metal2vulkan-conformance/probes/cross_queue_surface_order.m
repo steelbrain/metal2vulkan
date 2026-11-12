@@ -27,7 +27,10 @@
 //
 // WHAT IT MEASURED: not yet run.
 //
-// Build (no cargo target needed):
+// Run with no argument for the system default device, or with a part of a device's name to
+// pick it among `MTLCopyAllDevices()` (an x86 Mac's two GPUs: `5300M`, `630`).
+//
+// Build (no cargo target needed; add `-arch x86_64` for an x86 Mac):
 //   clang -fobjc-arc -O1 -fmodules -o cross_queue_surface_order cross_queue_surface_order.m \
 //     -framework Foundation -framework Metal -framework IOSurface
 //
@@ -103,7 +106,9 @@ static id<MTLTexture> over_surface(Probe *p, IOSurfaceRef surface, BOOL tracked)
                                                         height:kSize
                                                      mipmapped:NO];
   desc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-  desc.storageMode = MTLStorageModeShared;
+  // An x86 Mac's GPU takes no shared texture: managed there, its CPU side the surface's.
+  desc.storageMode = [p->device supportsFamily:MTLGPUFamilyApple1] ? MTLStorageModeShared
+                                                                    : MTLStorageModeManaged;
   desc.hazardTrackingMode =
       tracked ? MTLHazardTrackingModeTracked : MTLHazardTrackingModeUntracked;
   return [p->device newTextureWithDescriptor:desc iosurface:surface plane:0];
@@ -223,10 +228,22 @@ static void run_case(Probe *p, const char *name, uint32_t iters, int run) {
   free(pages);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
   @autoreleasepool {
     Probe p;
     p.device = MTLCreateSystemDefaultDevice();
+    if (argc > 1) {
+      p.device = nil;
+      for (id<MTLDevice> device in MTLCopyAllDevices()) {
+        if (strstr(device.name.UTF8String, argv[1])) {
+          p.device = device;
+        }
+      }
+      if (!p.device) {
+        P("no device named like %s", argv[1]);
+        return 1;
+      }
+    }
     NSOperatingSystemVersion v = [[NSProcessInfo processInfo] operatingSystemVersion];
     P("device %s macOS %ld.%ld.%ld", p.device.name.UTF8String, (long)v.majorVersion,
       (long)v.minorVersion, (long)v.patchVersion);
