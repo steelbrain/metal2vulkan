@@ -3258,19 +3258,18 @@ impl Device {
     }
 
     /// A no-copy buffer of `length` bytes lying in `import`, the import of the same bytes a live
-    /// no-copy buffer lies in (`host_aliases.rs`), at `address`, released to `release` once
-    /// nothing holds it. Dropping the result releases every part but the import, which the last
-    /// buffer over it releases.
+    /// no-copy buffer or heap lies in (`host_aliases.rs`), at `address`, released to `release`
+    /// once nothing holds it: a heap's own buffer where `of_heap`, of a heap's identity. Dropping
+    /// the result releases every part but the import, which the last buffer over it releases.
     pub(super) fn buffer_in_import(
         &self,
         import: Arc<HostImport>,
-        length: u64,
-        modes: Modes,
+        (length, modes, of_heap): (u64, Modes, bool),
         (address, reserved): (GpuAddress, Held),
         release: Option<Release>,
         naming: Naming,
     ) -> Buffer {
-        let identity = naming.identity(modes.hazard, false);
+        let identity = naming.identity(modes.hazard, of_heap);
         let own = OwnBytes {
             lie: self.host_lie(identity.key, import, release, false),
             reserved,

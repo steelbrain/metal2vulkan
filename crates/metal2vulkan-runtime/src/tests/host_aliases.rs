@@ -1,6 +1,6 @@
 //! No-copy buffers over the same host memory (`host_aliases.rs`).
 
-use super::super::host_aliases::{Alias, HostAliases, Kind, Memories, Quiet};
+use super::super::host_aliases::{Alias, HostAliases, Kind, Memories, Quiet, Within};
 use super::super::memory::MemoryClass;
 use super::super::resource::ResourceKey;
 use super::super::tracker::{Access, Use, UseRange};
@@ -161,7 +161,10 @@ fn a_buffer_over_the_bytes_a_copy_covers_lies_in_the_copy() {
     assert!(aliases
         .import((0x40000, 0x2000), MemoryClass::Shared)
         .is_none());
-    assert!(!aliases.inside_live((0x40000, 0x2000), MemoryClass::Shared));
+    assert!(matches!(
+        aliases.within((0x40000, 0x2000), PAGE),
+        Within::Free
+    ));
     // A buffer that lies in it joins the memory's key.
     assert_eq!(
         aliases.join(second, memory, Kind::Copy, &copy),
@@ -187,6 +190,113 @@ fn a_buffer_over_the_bytes_a_copy_covers_lies_in_the_copy() {
 
 /// The host page of the tests that name none of their own: an import's unit.
 const PAGE: u64 = 0x1000;
+
+/// The live import, if any, a new import of `window` would lie inside, else whether one meets it.
+fn within(aliases: &Aliases, window: (u64, u64)) -> Option<Option<u32>> {
+    match aliases.within(window, PAGE) {
+        Within::Free => None,
+        Within::Inside(import) => Some(Some(*import)),
+        Within::Meets => Some(None),
+    }
+}
+
+/// One live import of a page (`VK_EXT_external_memory_host` leaves pages imported twice
+/// undefined): a heap's own import is held, joining no key, and a later buffer over its exact
+/// bytes lies in it and is the memory's key; pages a live import (a heap's or a buffer's) holds
+/// all of lie inside it, at any offset, whatever its class; pages one holds some of meet it,
+/// rounded out to the import's unit; a copy is no import, and imports that went hold nothing.
+#[test]
+fn a_page_a_live_import_holds_is_never_imported_again() {
+    let aliases = Aliases::default();
+    let heap_bytes = (0x100000, 0x200000);
+    let (heap, exact, inside, apart) = (
+        ResourceKey::new(),
+        ResourceKey::new(),
+        ResourceKey::new(),
+        ResourceKey::new(),
+    );
+    assert_eq!(within(&aliases, (0x100000, 0x1000)), None);
+    let heap_import = Arc::new(7);
+    aliases.hold(
+        heap,
+        heap_bytes,
+        Kind::Import(MemoryClass::Shared),
+        &heap_import,
+    );
+    // The heap's import is found for its exact bytes and inside them, its key joined by none.
+    assert!(Arc::ptr_eq(
+        &aliases.import(heap_bytes, MemoryClass::Shared).unwrap(),
+        &heap_import
+    ));
+    assert_eq!(aliases.of(heap), None);
+    for window in [
+        heap_bytes,
+        (0x100000, 0x1000),
+        (0x2ff000, 0x1000),
+        (0x180000, 0x8000),
+    ] {
+        assert_eq!(within(&aliases, window), Some(Some(7)), "{window:x?}");
+    }
+    // Across either edge, or around it whole: it meets, and no new import is made.
+    for window in [(0xff000, 0x2000), (0x2ff000, 0x2000), (0xf0000, 0x300000)] {
+        assert_eq!(within(&aliases, window), Some(None), "{window:x?}");
+    }
+    // Beside it: free.
+    assert_eq!(within(&aliases, (0x300000, 0x1000)), None);
+    assert_eq!(within(&aliases, (0xff000, 0x1000)), None);
+    // A buffer over its exact bytes lies in its import and becomes the memory's key; a second
+    // joins that key, not the heap's.
+    assert_eq!(
+        aliases.join(
+            exact,
+            heap_bytes,
+            Kind::Import(MemoryClass::Shared),
+            &heap_import
+        ),
+        None
+    );
+    let second = ResourceKey::new();
+    assert_eq!(
+        aliases.join(
+            second,
+            heap_bytes,
+            Kind::Import(MemoryClass::Shared),
+            &heap_import
+        ),
+        Some(Alias { key: exact })
+    );
+    // A buffer bound inside it, over bytes that miss the page's start, is an import of its own
+    // bytes too: a later buffer inside those lies inside either, never beside both.
+    let bound = Arc::new(8);
+    aliases.join(
+        inside,
+        (0x180010, 0x3000),
+        Kind::Import(MemoryClass::Managed),
+        &bound,
+    );
+    assert!(matches!(
+        within(&aliases, (0x181000, 0x1000)),
+        Some(Some(7 | 8))
+    ));
+    // Across the bound buffer's edge but inside the heap's: inside the heap's.
+    assert_eq!(within(&aliases, (0x182000, 0x4000)), Some(Some(7)));
+    // A copy over other bytes is no import: free.
+    aliases.join(apart, (0x400000, 0x4000), Kind::Copy, &Arc::new(9));
+    assert_eq!(within(&aliases, (0x400000, 0x4000)), None);
+    // Every buffer over the heap's bytes gone, the bound one's still over its own: the heap's
+    // pages are free but those, which its import holds.
+    for key in [heap, exact, second] {
+        aliases.forget(key);
+    }
+    assert_eq!(within(&aliases, (0x100000, 0x1000)), None);
+    assert_eq!(within(&aliases, (0x180000, 0x1000)), Some(Some(8)));
+    // Its import gone, though it is still noted: free.
+    drop(bound);
+    assert_eq!(within(&aliases, (0x180000, 0x1000)), None);
+    aliases.forget(inside);
+    aliases.forget(apart);
+    drop(heap_import);
+}
 
 /// A reported remap counts the ranges placed buffers lie over that have a page among its bytes
 /// rounded out to the import's unit, with or without memories noted: none for bytes beside

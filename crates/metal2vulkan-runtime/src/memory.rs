@@ -1822,6 +1822,26 @@ pub(super) struct Placement {
     /// The device's import of a chunk of a guest RAM the placement lies in (`host_ram.rs`), which
     /// no block of the placement's holds: kept until the placement goes.
     ram_chunk: Option<Arc<RamChunk>>,
+    /// The live import of the caller's pages the placement lies inside (`host_aliases.rs`, "One
+    /// page, one import"), whose memory it is, which no block of the placement's holds: kept
+    /// until the placement goes.
+    in_import: Option<InImport>,
+}
+
+/// A placement's hold on the live import of host pages it lies inside ([`Placement::in_import`]),
+/// and the external handle type that import's memory was imported as.
+#[derive(Clone)]
+pub(super) struct InImport {
+    _import: Arc<crate::buffer::HostImport>,
+    handle: vk::ExternalMemoryHandleTypeFlags,
+}
+
+impl std::fmt::Debug for InImport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InImport")
+            .field("handle", &self.handle)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Placement {
@@ -1852,6 +1872,7 @@ impl Placement {
             #[cfg(unix)]
             dma_buf: None,
             ram_chunk: None,
+            in_import: None,
         }
     }
 
@@ -1886,6 +1907,44 @@ impl Placement {
             #[cfg(unix)]
             dma_buf,
             ram_chunk: Some(chunk),
+            in_import: None,
+        }
+    }
+
+    /// The placement of a no-copy buffer's `size` bytes of host pages that lie inside the pages of
+    /// `import`, a live import of them (`host_aliases.rs`, "One page, one import"), from `offset`
+    /// of the memory of `within`, that import's placement, which was imported as `handle`; the
+    /// caller reaches them at `mapped`. No block of the runtime's, so freeing it returns nothing;
+    /// it keeps the import until it goes, and lends its dma-bufs and guest RAM chunk where it
+    /// lies in those.
+    pub(super) fn in_import(
+        import: Arc<crate::buffer::HostImport>,
+        (within, handle): (&Placement, vk::ExternalMemoryHandleTypeFlags),
+        offset: u64,
+        size: u64,
+        mapped: Mapped,
+    ) -> Placement {
+        Placement {
+            type_index: within.type_index,
+            holds: Holds::Buffers,
+            block: None,
+            size,
+            memory: within.memory,
+            offset,
+            mapped: Some(mapped),
+            address: None,
+            own_pages: false,
+            pooled_pages: false,
+            read_only_view: false,
+            overflowed: false,
+            fresh: false,
+            #[cfg(unix)]
+            dma_buf: within.dma_buf.clone(),
+            ram_chunk: within.ram_chunk.clone(),
+            in_import: Some(InImport {
+                _import: import,
+                handle,
+            }),
         }
     }
 
@@ -1919,6 +1978,7 @@ impl Placement {
             fresh: false,
             dma_buf: Some(pages),
             ram_chunk: None,
+            in_import: None,
         }
     }
 
@@ -2048,6 +2108,7 @@ impl Placement {
             #[cfg(unix)]
             dma_buf: self.dma_buf.clone(),
             ram_chunk: self.ram_chunk.clone(),
+            in_import: self.in_import.clone(),
         }
     }
 }
@@ -3408,6 +3469,7 @@ impl Memory {
             #[cfg(unix)]
             dma_buf: None,
             ram_chunk: None,
+            in_import: None,
         }
     }
 
@@ -3762,6 +3824,9 @@ impl Memory {
         }
         if let Some(chunk) = &placement.ram_chunk {
             return BoundMemory::External(chunk.handle_type());
+        }
+        if let Some(inside) = &placement.in_import {
+            return BoundMemory::External(inside.handle);
         }
         let Some(index) = placement.block else {
             return BoundMemory::NoImage(NoImage::Caller);

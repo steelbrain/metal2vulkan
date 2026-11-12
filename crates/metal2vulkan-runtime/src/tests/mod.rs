@@ -372,6 +372,8 @@ mod noted_apart;
 mod notice_command_buffers;
 mod numbered_samplers;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod one_import;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod opencl_data;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod opencl_images;

@@ -375,6 +375,7 @@ pub(crate) struct Counters {
     copied_rebind_pages_moved: AtomicU64,
     copied_read_only_memory: AtomicU64,
     copied_unwritable_pages: AtomicU64,
+    copied_over_live_imports: AtomicU64,
     copied_rebind_pages_made: AtomicU64,
     copied_rebind_images_made: AtomicU64,
     copied_heaps_made: AtomicU64,
@@ -3380,6 +3381,7 @@ impl Counters {
             CopiedBecause::Moved => &self.copied_rebind_pages_moved,
             CopiedBecause::ReadOnly => &self.copied_read_only_memory,
             CopiedBecause::Unwritable => &self.copied_unwritable_pages,
+            CopiedBecause::OverImport => &self.copied_over_live_imports,
         }
         .fetch_add(1, Ordering::Relaxed);
     }
@@ -7230,6 +7232,13 @@ pub struct WorkCounts {
     /// tried and their dma-buf source never called; the caller's gate is asked first where the
     /// pointer would be imported, and a copy it refused is counted as refused.
     pub copied_unwritable_pages: u64,
+    /// Of `copied_host_buffers_made`: no-copy buffers and heaps whose pages a live import of
+    /// another held some of, and not all (a buffer's bytes across the edge of another's or a
+    /// heap's), or a heap whose pages one held more of than the heap's own bytes, made over a
+    /// copy so that no page is imported twice (`host_aliases.rs`, "One page, one import"):
+    /// `VK_EXT_external_memory_host` leaves a host allocation imported twice into a device
+    /// undefined. Their import is never tried, their gate never asked.
+    pub copied_over_live_imports: u64,
     /// Of the copies made, those a rebind gave a buffer as its new pages
     /// (`Buffer::rebind_bytes_no_copy`), in `copied_host_buffers_made` and its kin too.
     pub copied_rebind_pages_made: u64,
@@ -9268,6 +9277,7 @@ impl Device {
             copied_rebind_pages_moved: counters.copied_rebind_pages_moved.load(Ordering::Relaxed),
             copied_read_only_memory: counters.copied_read_only_memory.load(Ordering::Relaxed),
             copied_unwritable_pages: counters.copied_unwritable_pages.load(Ordering::Relaxed),
+            copied_over_live_imports: counters.copied_over_live_imports.load(Ordering::Relaxed),
             copied_rebind_pages_made: counters.copied_rebind_pages_made.load(Ordering::Relaxed),
             copied_rebind_images_made: counters.copied_rebind_images_made.load(Ordering::Relaxed),
             copied_heaps_made: counters.copied_heaps_made.load(Ordering::Relaxed),
@@ -9723,4 +9733,7 @@ pub(crate) enum CopiedBecause {
     /// The process maps some of the pages read-only, whose GPU writes Metal drops and no import
     /// on Linux keeps out of them: the copy drops them.
     Unwritable,
+    /// A live import of another buffer or heap holds some of the pages and not all, or more than
+    /// a heap's own bytes: a second import would pin them twice (`host_aliases.rs`).
+    OverImport,
 }

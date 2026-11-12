@@ -165,8 +165,10 @@ pub(crate) struct ChurnCounters {
     /// By [`Recycled`]: the objects a making took from a recycler, parked there, and let go of
     /// past its bounds (`recycle.rs`).
     recycled: [[AtomicU64; 3]; 2],
-    /// No-copy buffers that imported their pages where a live import holds them all.
+    /// No-copy buffers and heaps that imported their pages where a live import holds some.
     imports_inside_live: AtomicU64,
+    /// No-copy buffers bound inside a live import's memory, with no import of their own.
+    buffers_bound_in_import: AtomicU64,
     /// By [`KeepBy`], then cut or whole: the keeps, then their texels.
     keeps: [[AtomicU64; 4]; 3],
 }
@@ -177,9 +179,14 @@ impl ChurnCounters {
         self.owned[owned as usize].fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A no-copy buffer imported its pages where a live import holds them all.
+    /// A no-copy buffer or heap imported its pages where a live import holds some of them.
     pub(crate) fn import_inside_live(&self) {
         self.imports_inside_live.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A no-copy buffer was bound inside a live import's memory, with no import of its own.
+    pub(crate) fn buffer_bound_in_import(&self) {
+        self.buffers_bound_in_import.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A making took a parked object of `what`.
@@ -243,6 +250,7 @@ impl ChurnCounters {
                 buffers_parked: recycled(Recycled::Buffer, 1),
                 buffers_evicted: recycled(Recycled::Buffer, 2),
                 imports_inside_live: self.imports_inside_live.load(Ordering::Relaxed),
+                buffers_bound_in_import: self.buffers_bound_in_import.load(Ordering::Relaxed),
                 release_sites: RELEASE_SITES.read(),
                 release_sites_dropped: RELEASE_SITES.dropped(),
             },
@@ -324,9 +332,17 @@ pub struct ObjectChurn {
     pub buffers_parked: u64,
     /// Parked buffers destroyed past the recycler's bounds.
     pub buffers_evicted: u64,
-    /// No-copy buffers that imported their pages where a live import of another no-copy buffer
-    /// held all of them (`host_aliases.rs`): imports a buffer could have lain in, at an offset.
+    /// No-copy buffers and heaps that imported their pages where a live import of another held
+    /// some of them all the same (`host_aliases.rs`, "One page, one import"): two made at once
+    /// over them, each looking before the other's import was noted. A page imported twice, which
+    /// `VK_EXT_external_memory_host` leaves undefined; every other buffer over pages a live
+    /// import holds lies inside it (`buffers_bound_in_import`) or is a copy
+    /// (`WorkCounts::copied_over_live_imports`).
     pub imports_inside_live: u64,
+    /// No-copy buffers bound inside the memory of a live import that holds all their pages, at
+    /// their offset, with no import of their own (`host_aliases.rs`, "One page, one import"):
+    /// over part of another no-copy buffer's or heap's bytes.
+    pub buffers_bound_in_import: u64,
     /// The places that released the images, buffers, buffer views and memory counted above, each
     /// with its calls (`regions` unused): the first 32 the process met.
     pub release_sites: [CopySite; COPY_SITES],
