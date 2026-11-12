@@ -349,7 +349,10 @@ impl State {
     /// `VkCommandBuffer`s go with the pool unsubmitted. Refused, changing nothing and giving
     /// `replayed` back, where its place holds other parts than the encoding again's, or a segment
     /// but one whose pipelines are being made (which goes, the encoding again having left one of
-    /// its own in its place), work its commit recorded on the GPU alone, a run's merge (which
+    /// its own in its place), a render pass left for its draws' pipelines alone and recorded or
+    /// not since they were made (which goes, the encoding again having recorded those draws, or
+    /// left a segment of its own where it found them still being made), work its commit recorded
+    /// on the GPU alone, a run's merge (which
     /// goes, the encoding again merging after itself, `pass_runs.rs`), or a staged gather (which
     /// goes, the encoding again copying through the imports, `host_ram/copy.rs`), or its group
     /// was submitted, or the command buffer completed.
@@ -368,6 +371,7 @@ impl State {
             recorded.sparse.is_empty()
                 && (recorded.segments.iter()).all(|segment| {
                     segment.keeps_pipelines()
+                        || segment.work.left_for_pipelines()
                         || segment.gpu_alone
                         || segment.work.joins_a_run()
                         || segment.work.recorded_by_an_encoding_again()

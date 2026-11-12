@@ -2957,6 +2957,14 @@ impl DeferredPass {
             || self.steps.tile_pipelines().any(TilePipelines::failed)
     }
 
+    /// Whether it was left for the pipelines of its draws or tile dispatches alone, made since or
+    /// not: it has such draws or dispatches (`render/pending.rs`, `render/pending_tile.rs`) and
+    /// executes no render commands.
+    pub(crate) fn left_for_pipelines(&self) -> bool {
+        !self.executes()
+            && (!self.pending.is_empty() || self.steps.tile_pipelines().next().is_some())
+    }
+
     /// Whether it executes render commands, whose records its recording reads: everything else it
     /// records its calls resolved (`Deferred::resolved_at_its_calls`).
     pub(crate) fn executes(&self) -> bool {

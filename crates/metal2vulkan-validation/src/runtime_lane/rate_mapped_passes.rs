@@ -701,6 +701,72 @@ fn a_reset_shows_in_every_pass_not_yet_submitted() {
     });
 }
 
+/// A reset from the identity to half quality shows in a pass whose draw's `VkPipeline` was still
+/// being made as it was encoded (`render/pending.rs`) and was made before the reset: after the
+/// draw, and after `commit` while the command buffer waits for an event the CPU signals after
+/// the reset. The runtime encodes the pass again in its place (`command_buffer/reencode.rs`):
+/// the half-quality map's 33 by 33 physical pixels, as Metal's GPU reads the map as it runs the
+/// pass, and without a notice. Where the device made the draw's pipeline before the draw (a
+/// device without the multi-draw route, whose variant a rate-mapped draw takes), the reset shows
+/// as in [`a_reset_shows_in_a_pass_not_yet_submitted`].
+#[test]
+fn a_reset_shows_in_a_pass_whose_pipeline_was_made_after_its_draw() {
+    let half = (33 * 33, [0, 0, 32, 32], [[0.5, 0.5], [32.5, 32.5]]);
+    for held in [false, true] {
+        fresh(|fixture, messages| {
+            let device = &fixture.device;
+            let map = reset_map(fixture, 1.0, true);
+            let target = fixture.target(64);
+            let to = descriptor(SCREEN, SCREEN, &[(0.5, 0.5)]);
+            let queue = device.new_command_queue().unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            let event = device.new_shared_event().unwrap();
+            if held {
+                (command_buffer.encode_wait_for_event(EventRef::from(&event), 1)).unwrap();
+            }
+            let before = device.work_counts();
+            let mut encoder = command_buffer
+                .render_command_encoder(&pass(&map, &target))
+                .unwrap();
+            encoder.set_render_pipeline_state(&fixture.state).unwrap();
+            (encoder.set_fragment_buffer(Some(&fixture.screen), 0, 0)).unwrap();
+            (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
+            // Its pipeline made: the making counted, and a moment for its outcome to land.
+            let pended = device.work_counts().draws_unkept_making > before.draws_unkept_making;
+            if pended {
+                let deadline = std::time::Instant::now() + WAIT;
+                while device.work_counts().variant_pipelines_made == before.variant_pipelines_made {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "held {held}: never made"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            if !held {
+                map.reset_using_descriptor(&to).unwrap();
+            }
+            encoder.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
+            if held {
+                map.reset_using_descriptor(&to).unwrap();
+                event.set_signaled_value(1);
+            }
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+            let case = format!("held {held}, pended {pended}");
+            eprintln!("RESET-AFTER-MAKING {case}");
+            assert_eq!(shaded(&target), half, "{case}");
+            let kinds = counts(&messages.take_notices());
+            assert!(
+                !kinds.contains_key(&Degradation::RateMapResetUnencoded),
+                "{case}: {kinds:?}"
+            );
+        });
+    }
+}
+
 /// Our probe `rs`'s resets to another screen (the M3 Max under macOS 27.0.1, each case in a
 /// process of its own, repeated alike): a pass over the identity of a mutable map of `taken`
 /// pixels a side, reset to the identity of `now` pixels after its encoder opened, after

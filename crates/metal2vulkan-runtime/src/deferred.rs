@@ -700,6 +700,17 @@ impl Deferred {
         }
     }
 
+    /// Whether it is a render pass left for its draws' or tile dispatches' pipelines alone, made
+    /// since or not (`DeferredPass::left_for_pipelines`): an encoding again records those draws
+    /// where it finds their pipelines made, and leaves a segment of its own where they are still
+    /// being made, so it takes such a pass's place (`State::splice_replay`).
+    pub(super) fn left_for_pipelines(&self) -> bool {
+        match self {
+            Deferred::RenderPass(pass) => pass.left_for_pipelines(),
+            _ => false,
+        }
+    }
+
     /// Whether a pipeline the work records is still being made (`render/pending.rs`).
     pub(super) fn making(&self) -> bool {
         match self {
