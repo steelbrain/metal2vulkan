@@ -913,16 +913,37 @@ pub(super) fn placement_order(
 }
 
 /// The memory types an import of a dma-buf takes among `types` (the bits of `allowed`, the types
-/// both the dma-buf and what is bound in it take), in the order they are tried: the [`candidates`]
-/// of `class` first, then every other type of `allowed` the runtime may allocate ([`allocatable`])
-/// that is neither protected nor lazily allocated, in Vulkan's order. The runtime never maps such
-/// an import (the CPU reaches the pages through the caller's own mapping of them), so a type the
-/// host does not map serves it as well, where the driver imports the dma-buf as no type of the
-/// class: NVIDIA's 620.70.06 on an RTX 3090 lists a udmabuf's types as its type 0 (system memory,
-/// no property flag) and its type 4 (host-visible, coherent and cached), answers
-/// `ERROR_OUT_OF_DEVICE_MEMORY` for the import into type 4, with a dedicated allocation or
-/// without, and imports it as type 0.
+/// both the dma-buf and what is bound in it take), in the order they are tried: those the host
+/// does not map first, then those it maps, each in [`dma_buf_class_order`]'s order. The runtime
+/// never maps such an import (the CPU reaches the pages through the caller's own mapping of
+/// them), so a type the host does not map serves it as well, and a driver's refused import as a
+/// type the host maps can break the device's later allocations: NVIDIA's 620.70.06 on an RTX
+/// 3090 lists a udmabuf's types as its type 0 (system memory, no property flag) and its type 4
+/// (host-visible, coherent and cached), answers `ERROR_OUT_OF_DEVICE_MEMORY` for the import into
+/// type 4, with a dedicated allocation or without, and imports it as type 0; once it refused an
+/// import into type 4, it answers `ERROR_OUT_OF_DEVICE_MEMORY` to every allocation of its
+/// device-local type 1 exportable as an opaque file descriptor or a dma-buf, of 12,441,600 bytes
+/// and of 64 MiB, for the device's life, where it made each before (measured,
+/// `tests::export_after_dma_buf`), and the runtime's exportable buffers overflowed into system
+/// memory. A driver that lists only types the host maps for a dma-buf (RADV's, ANV's and
+/// lavapipe's udmabufs) takes the class's order as before.
 pub(super) fn dma_buf_candidates(
+    types: &[vk::MemoryType],
+    allowed: u32,
+    class: MemoryClass,
+    unified: bool,
+) -> Vec<u32> {
+    let mut ranked = dma_buf_class_order(types, allowed, class, unified);
+    // Stable: each group keeps the class's order.
+    ranked.sort_by_key(|&index| host_mapped(types, index));
+    ranked
+}
+
+/// The memory types of `types` among `allowed` a dma-buf's import takes, in its class's order:
+/// the [`candidates`] of `class` first, then every other type of `allowed` the runtime may
+/// allocate ([`allocatable`]) that is neither protected nor lazily allocated, in Vulkan's order
+/// ([`dma_buf_candidates`] tries those the host does not map among them first).
+pub(super) fn dma_buf_class_order(
     types: &[vk::MemoryType],
     allowed: u32,
     class: MemoryClass,
@@ -935,6 +956,32 @@ pub(super) fn dma_buf_candidates(
         .collect();
     ranked.extend(others);
     ranked
+}
+
+/// Whether the host maps memory of type `index` of `types` (`HOST_VISIBLE`).
+fn host_mapped(types: &[vk::MemoryType], index: u32) -> bool {
+    (types[index as usize].property_flags).contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+}
+
+/// A dma-buf import's attempts, each a form (dedicated to what it backs, or not) and a type: the
+/// types the host does not map among `ranked` (a [`dma_buf_candidates`] order) in each of the
+/// `dedications` in turn, then those it maps, so that no form is tried as a type the host maps
+/// while a type it does not map is left untried ([`dma_buf_candidates`]).
+pub(super) fn dma_buf_attempts(
+    types: &[vk::MemoryType],
+    ranked: &[u32],
+    dedications: &[bool],
+) -> Vec<(bool, u32)> {
+    let mut attempts: Vec<(bool, u32)> = (dedications.iter())
+        .flat_map(|&dedicated| {
+            ranked
+                .iter()
+                .map(move |&type_index| (dedicated, type_index))
+        })
+        .collect();
+    // Stable: the forms keep their order within each group.
+    attempts.sort_by_key(|&(_, type_index)| host_mapped(types, type_index));
+    attempts
 }
 
 /// `ranked` (a dma-buf import's attempts, each a form and a type, [`import_dma_buf`]) with
@@ -4375,9 +4422,10 @@ pub(super) enum DmaBufFor {
 }
 
 /// Import the dma-buf `fd`, `size` bytes, as memory of `memory`'s best type among `allowed` (the
-/// types both the dma-buf and what is bound in it take) for `class`, those of the class first and
-/// then the dma-buf's others ([`dma_buf_candidates`]), in each form `purpose` takes
-/// ([`DmaBufFor`]), but the form and type the device's last import of the same kind (what it
+/// types both the dma-buf and what is bound in it take) for `class`, those the host does not map
+/// first, then those it maps, each in the class's order ([`dma_buf_candidates`]), in each form
+/// `purpose` takes ([`DmaBufFor`]), every form of the first before any of the second
+/// ([`dma_buf_attempts`]), but the form and type the device's last import of the same kind (what it
 /// backs, and its class) succeeded as first ([`worked_first`]): the memory, its type and whether
 /// it is dedicated to its buffer ([`DmaBufFor::Buffer`]), the caller's to free (`dma_buf.rs`'s
 /// `DmaBufPages`), in no block and never mapped. Allocated with the device-address flag where the
@@ -4394,12 +4442,13 @@ pub(super) enum DmaBufFor {
 ///
 /// The form and type that worked go first because a driver may list a type for the dma-buf that
 /// it then refuses, or refuse a form: NVIDIA lists a udmabuf of host pages as types 0 and 4
-/// (host-visible, coherent and cached, the class's first) and refuses 4 as out of device memory
-/// (620.70.06 on an RTX 2080 and an RTX 3090, measured), and 615.71.09 refuses most udmabufs of
-/// scattered pages dedicated to nothing, of 16 KiB to 63 MiB, and imports them dedicated to their
-/// buffer (measured on an RTX 5080 Laptop GPU: 4346 of the leak probe's 6000 imports). So every
-/// import made a failed import first, and a failed import there is where the driver's faults lie
-/// (below). Every form and type stays among those tried, so a refusal that passes is tried again.
+/// (host-visible, coherent and cached, the class's first, tried after 0) and refuses 4 as out of
+/// device memory (620.70.06 on an RTX 2080 and an RTX 3090, measured), and 615.71.09 refuses most
+/// udmabufs of scattered pages dedicated to nothing, of 16 KiB to 63 MiB, and imports them
+/// dedicated to their buffer (measured on an RTX 5080 Laptop GPU: 4346 of the leak probe's 6000
+/// imports). So an import may make a failed import first, and a failed import there is where the
+/// driver's faults lie (below). Every form and type stays among those tried, so a refusal that
+/// passes is tried again.
 ///
 /// An import of a kind that no import has yet succeeded as on the device holds the device's lock
 /// of such first imports through its attempts (`Memory::dma_buf_first_imports`), so those imports,
@@ -4442,9 +4491,7 @@ pub(super) fn import_dma_buf(
     let (ranked, device_address, first_imports) = {
         let memory = lock(memory);
         let types = dma_buf_candidates(&memory.types, allowed, class, memory.unified);
-        let ranked: Vec<(bool, u32)> = (dedications.iter())
-            .flat_map(|&dedicated| types.iter().map(move |&type_index| (dedicated, type_index)))
-            .collect();
+        let ranked = dma_buf_attempts(&memory.types, &types, dedications);
         let worked = memory.dma_buf_imported_as.get(&kind).copied();
         let first_imports = worked
             .is_none()

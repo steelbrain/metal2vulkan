@@ -1703,8 +1703,15 @@ driver's. Each is open work.
   Laptop, its RAM's first page dedicated to its buffer); an object's run alone of a few pages the
   driver may refuse so, and the object then takes the runtime's other paths (`host_ram.rs`'s
   `bind_in_chunk`). It lists a udmabuf of host pages as two memory types, 0 and 4 (host-visible,
-  coherent and cached, the one the runtime ranks first), and refuses every import as 4 as out of
-  device memory (620.70.06 on an RTX 2080 and an RTX 3090, measured). 615.71.09 also refuses
+  coherent and cached, the `Shared` class's), and refuses every import as 4 as out of device
+  memory (620.70.06 on an RTX 2080 and an RTX 3090, measured). Once it refused an import as 4,
+  620.70.06 refuses every later allocation of device-local memory exportable as an opaque file
+  descriptor or a dma-buf, as out of device memory, for the device's life, where it made each
+  before and makes them after a successful import as 0 (measured on an RTX 3090,
+  `tests::export_after_dma_buf`): an exportable buffer then overflowed into system memory. So a
+  dma-buf import tries the memory types the host does not map before those it maps, in every
+  form (`memory.rs`'s `dma_buf_candidates`; the runtime maps no dma-buf import), and NVIDIA's
+  udmabuf imports never try type 4 where type 0 takes them. 615.71.09 also refuses
   most udmabufs of scattered pages dedicated to nothing, of 16 KiB to 63 MiB, and takes them
   dedicated to their buffer (measured on an RTX 5080 Laptop GPU: 4346 of the leak probe's 6000
   imports). So an import tries first the form and type its kind (what it backs, and its class)

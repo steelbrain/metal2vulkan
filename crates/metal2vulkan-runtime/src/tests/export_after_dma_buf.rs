@@ -13,9 +13,18 @@
 //! and after the exports (the runtime reads neither: a placement overflows only where the
 //! driver's `vkAllocateMemory` answers out of memory for every device-local type).
 //!
-//! It prints its findings (`EXPORT-AFTER-DMA-BUF`) and asserts only that the exports' memory is
-//! where the control's is. Where `/dev/udmabuf` cannot be opened, or the device exports no such
-//! memory, it says so and passes.
+//! It prints its findings (`EXPORT-AFTER-DMA-BUF`) and asserts that each export lies in a
+//! device-local memory type with the control's flags, no overflow counted. Where `/dev/udmabuf`
+//! cannot be opened, or the device exports no such memory, it says so and passes.
+//!
+//! The driver's behaviour behind it, as evidence (`EXPORT-AFTER-DMA-BUF-RAW`, printed, not
+//! asserted: a driver may change it): NVIDIA's 620.70.06 on an RTX 3090, once it refused an
+//! import of the udmabuf into a type the host maps (its type 4, `ERROR_OUT_OF_DEVICE_MEMORY`),
+//! answers `ERROR_OUT_OF_DEVICE_MEMORY` to every exportable allocation of its device-local type,
+//! for the device's life, where its successful import into type 0 leaves them made. So the
+//! runtime's imports try the types the host does not map first (`memory::dma_buf_candidates`),
+//! and `DMA-BUF-IMPORT-TYPES` prints where that order puts each class's import on the device under
+//! test, against the class's order alone.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on Linux.
 
@@ -298,7 +307,7 @@ fn raw_import(device: &Device, dma_buf: &OwnedFd, size: u64, type_index: u32) ->
 }
 
 /// The memory types `dma_buf` may be imported as, as bits (`vkGetMemoryFdPropertiesKHR`).
-fn dma_buf_types(device: &Device, dma_buf: &OwnedFd) -> u32 {
+fn dma_buf_types(device: &Device, dma_buf: &OwnedFd) -> Result<u32, vk::Result> {
     // SAFETY: as in `budgets`.
     let handles = unsafe { device.raw() };
     let loader = ash::khr::external_memory_fd::Device::new(handles.instance, handles.device);
@@ -311,8 +320,7 @@ fn dma_buf_types(device: &Device, dma_buf: &OwnedFd) -> u32 {
             &mut properties,
         )
     }
-    .unwrap();
-    properties.memory_type_bits
+    .map(|()| properties.memory_type_bits)
 }
 
 /// A udmabuf of [`PAGES`] scattered pages of a sealed `memfd` of [`FILE_PAGES`], as the probe's.
@@ -344,12 +352,16 @@ fn scattered_udmabuf(page: u64) -> OwnedFd {
 }
 
 /// What a device answers after each kind of dma-buf import, each on a device of its own: none
-/// (the control); the test's own import of a scattered udmabuf as the type the driver last imports
-/// it as, and as each other type it lists; the runtime's no-copy buffer over the udmabuf's mapping
-/// (the probe), as it imports it, and with its import dedicated to nothing refused (a test's
-/// stand-in), so it is dedicated to the buffer. After each: the driver's answers to device-local
-/// allocations of a pooled block's bytes and of the exportable buffer's, of each chain, and where
-/// the runtime places the exportable buffers. It prints them (`EXPORT-AFTER-DMA-BUF-RAW`).
+/// (the control); the test's own import of a scattered udmabuf as each type the driver lists for
+/// it; the runtime's no-copy buffer over the udmabuf's mapping (the probe), as it imports it, and
+/// with its import dedicated to nothing refused (a test's stand-in), so it is dedicated to the
+/// buffer. After each: the driver's answers to device-local allocations of a pooled block's bytes
+/// and of the exportable buffer's, of each chain, and where the runtime places the exportable
+/// buffers. It prints them (`EXPORT-AFTER-DMA-BUF-RAW`) and asserts nothing: it is the evidence
+/// of a driver's behaviour, which a driver may change. Measured on NVIDIA's 620.70.06 on an RTX
+/// 3090: after a refused import as type 4 (host-visible) every exportable chain answered
+/// `ERROR_OUT_OF_DEVICE_MEMORY` (-2) at both sizes, the plain and device-address ones made; after
+/// a successful import as type 0, every chain was made.
 #[test]
 fn the_driver_s_answers_after_each_kind_of_dma_buf_import() {
     const RAW: &str = "EXPORT-AFTER-DMA-BUF-RAW";
@@ -384,7 +396,7 @@ fn the_driver_s_answers_after_each_kind_of_dma_buf_import() {
     // The test's own imports, one type at a time, each on a device of its own.
     let probe_device = device(&scratch.0);
     let udmabuf = scattered_udmabuf(page);
-    let types = dma_buf_types(&probe_device, &udmabuf);
+    let types = dma_buf_types(&probe_device, &udmabuf).unwrap();
     drop(probe_device);
     eprintln!("{RAW}: the udmabuf's types {types:#b}");
     for type_index in (0..32).filter(|at| types & (1 << at) != 0) {
@@ -416,8 +428,11 @@ fn the_driver_s_answers_after_each_kind_of_dma_buf_import() {
     );
 }
 
+/// After the runtime's import of a dma-buf (the probe's), a `Private` buffer exportable as an
+/// opaque file descriptor and as a dma-buf lies in a device-local type, as on a device that
+/// imported none, with no overflow counted.
 #[test]
-fn a_private_exportable_buffer_after_a_dedicated_dma_buf_import_lies_where_it_would_without() {
+fn a_private_exportable_buffer_after_a_dma_buf_import_lies_in_device_local_memory() {
     if !udmabuf_openable(TEST) {
         return;
     }
@@ -450,9 +465,203 @@ fn a_private_exportable_buffer_after_a_dedicated_dma_buf_import_lies_where_it_wo
          {live}; heaps before {before:?}, after its free {after_free:?}, after the exports \
          {after:?}; opaque fd {fd:?}; dma-buf {dma_buf:?}"
     );
-    assert_eq!(fd.map(|found| found.1), control_fd.map(|found| found.1));
-    assert_eq!(
-        dma_buf.map(|found| found.1),
-        control_dma_buf.map(|found| found.1)
-    );
+    let local = vk::MemoryPropertyFlags::DEVICE_LOCAL.as_raw();
+    for (export, found, control) in [
+        ("opaque fd", fd, control_fd),
+        ("dma-buf", dma_buf, control_dma_buf),
+    ] {
+        assert_eq!(found.is_some(), control.is_some(), "{export}: exported");
+        let (Some(found), Some(control)) = (found, control) else {
+            continue;
+        };
+        assert_eq!(found.1, control.1, "{export}: the control's type flags");
+        assert_ne!(found.1 & local, 0, "{export}: a device-local type");
+        assert_eq!(found.3, 0, "{export}: no overflow");
+    }
+}
+
+/// A dma-buf the device exports of `bytes` bytes of its device-local memory (a type of
+/// `DEVICE_LOCAL` alone, else the first with it), with the memory, which the caller frees; `None`
+/// where the driver refuses either.
+fn device_local_dma_buf(device: &Device, bytes: u64) -> Option<(OwnedFd, vk::DeviceMemory)> {
+    // SAFETY: as in `budgets`.
+    let handles = unsafe { device.raw() };
+    // SAFETY: the physical device is the instance's.
+    let memory = unsafe {
+        handles
+            .instance
+            .get_physical_device_memory_properties(handles.physical_device)
+    };
+    let local = device_local_type(device).or_else(|| {
+        (0..memory.memory_type_count).find(|&at| {
+            (memory.memory_types[at as usize].property_flags)
+                .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+        })
+    })?;
+    let mut exportable = vk::ExportMemoryAllocateInfo::default()
+        .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+    let mut flags =
+        vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+    let info = vk::MemoryAllocateInfo::default()
+        .allocation_size(bytes)
+        .memory_type_index(local)
+        .push_next(&mut exportable)
+        .push_next(&mut flags);
+    // SAFETY: a valid allocation of the device's type, freed by the caller.
+    let made = unsafe { handles.device.allocate_memory(&info, None) }.ok()?;
+    let loader = ash::khr::external_memory_fd::Device::new(handles.instance, handles.device);
+    let info = vk::MemoryGetFdInfoKHR::default()
+        .memory(made)
+        .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+    // SAFETY: memory just made, exportable as a dma-buf.
+    match unsafe { loader.get_memory_fd(&info) } {
+        // SAFETY: the driver hands the descriptor over.
+        Ok(fd) => Some((
+            unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd) },
+            made,
+        )),
+        Err(_) => {
+            // SAFETY: just made, used by nothing.
+            unsafe { handles.device.free_memory(made, None) };
+            None
+        }
+    }
+}
+
+/// The memory types a buffer of `bytes` bytes, importable from a dma-buf, takes, as bits.
+fn dma_buf_buffer_types(device: &Device, bytes: u64) -> u32 {
+    // SAFETY: as in `budgets`.
+    let handles = unsafe { device.raw() };
+    let mut external = vk::ExternalMemoryBufferCreateInfo::default()
+        .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+    let info = vk::BufferCreateInfo::default()
+        .size(bytes)
+        .usage(
+            vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::TRANSFER_DST
+                | vk::BufferUsageFlags::STORAGE_BUFFER,
+        )
+        .push_next(&mut external);
+    // SAFETY: a valid buffer, destroyed at once.
+    let buffer = unsafe { handles.device.create_buffer(&info, None) }.unwrap();
+    // SAFETY: the buffer just made.
+    let bits = unsafe { handles.device.get_buffer_memory_requirements(buffer) }.memory_type_bits;
+    // SAFETY: just made, bound to nothing.
+    unsafe { handles.device.destroy_buffer(buffer, None) };
+    bits
+}
+
+/// Where the runtime's order of a dma-buf import's types (those the host does not map first,
+/// `memory::dma_buf_candidates`) puts a buffer's import of each class, against the class's order
+/// alone (`memory::dma_buf_class_order`, the order before): for a scattered udmabuf and for a
+/// dma-buf of the device's own device-local memory, the types the driver lists and a buffer
+/// takes, both orders, the type the runtime's import took (`memory::import_dma_buf`, dedicated
+/// to nothing) and the first type of the class's order the driver imports the dma-buf as (the
+/// test's own imports, made after the runtime's, so that a refusal among them reaches none of
+/// the runtime's), each with its flags. It prints them (`DMA-BUF-IMPORT-TYPES`), and asserts that
+/// where both orders are the same the runtime's import took the type the class's order took.
+#[test]
+fn the_type_each_class_s_dma_buf_import_takes_against_the_class_s_order() {
+    const TYPES: &str = "DMA-BUF-IMPORT-TYPES";
+    use crate::memory::{
+        dma_buf_candidates, dma_buf_class_order, import_dma_buf, DmaBufFor, MemoryClass,
+    };
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let page = device
+        .shared()
+        .host_import
+        .as_ref()
+        .map_or(4096, |import| import.page);
+    let bytes = PAGES * page;
+    // SAFETY: as in `budgets`.
+    let handles = unsafe { device.raw() };
+    // SAFETY: the physical device is the instance's.
+    let properties = unsafe {
+        handles
+            .instance
+            .get_physical_device_memory_properties(handles.physical_device)
+    };
+    let types = &properties.memory_types[..properties.memory_type_count as usize];
+    let unified = device.properties().has_unified_memory;
+    let flags = |index: u32| types[index as usize].property_flags;
+    let mut sources = Vec::new();
+    // The device's own dma-buf first: no import was refused yet when it is made.
+    let own = device_local_dma_buf(&device, bytes);
+    match &own {
+        Some((fd, _)) => sources.push(("device-local", fd.try_clone().unwrap())),
+        None => eprintln!(
+            "{TYPES} on {}: no dma-buf of device-local memory",
+            device.name()
+        ),
+    }
+    match udmabuf_openable(TYPES) {
+        true => sources.push(("udmabuf", scattered_udmabuf(page))),
+        false => eprintln!("{TYPES} on {}: no udmabuf", device.name()),
+    }
+    let buffer_types = dma_buf_buffer_types(&device, bytes);
+    let classes = [
+        MemoryClass::Shared,
+        MemoryClass::WriteCombined,
+        MemoryClass::Private,
+        MemoryClass::Managed,
+    ];
+    // Per source and class: the allowed types, both orders and the runtime's import's type.
+    let mut found = Vec::new();
+    for (source, fd) in &sources {
+        let listed = match dma_buf_types(&device, fd) {
+            Ok(listed) => listed,
+            Err(error) => {
+                eprintln!(
+                    "{TYPES} on {}: {source}: types refused, {error:?}",
+                    device.name()
+                );
+                continue;
+            }
+        };
+        let allowed = listed & buffer_types;
+        for class in classes {
+            let before = dma_buf_class_order(types, allowed, class, unified);
+            let after = dma_buf_candidates(types, allowed, class, unified);
+            let handed = fd.try_clone().unwrap();
+            let imported = import_dma_buf(
+                &device.shared().memory,
+                device.shared().vk(),
+                handed,
+                bytes,
+                (allowed, class),
+                DmaBufFor::Shared,
+            );
+            let took = imported.map(|(memory, type_index, _)| {
+                // SAFETY: the import just made, used by nothing.
+                unsafe { handles.device.free_memory(memory, None) };
+                type_index
+            });
+            found.push((*source, class, allowed, before, after, took));
+        }
+    }
+    // The test's own imports in the class's order, after every one of the runtime's.
+    for (source, class, allowed, before, after, took) in found {
+        let fd = &sources.iter().find(|(name, _)| *name == source).unwrap().1;
+        let took_before = (before.iter())
+            .copied()
+            .find(|&index| raw_import(&device, fd, bytes, index) == 0);
+        eprintln!(
+            "{TYPES} on {}: {source}, {class:?}: allowed {allowed:#b}; class order {before:?}, \
+             unmapped first {after:?}; the runtime's import took {:?}, the class's order takes \
+             {:?}",
+            device.name(),
+            took.map(|index| (index, flags(index))),
+            took_before.map(|index| (index, flags(index))),
+        );
+        if before == after {
+            assert_eq!(took.ok(), took_before, "{source}, {class:?}");
+        }
+    }
+    drop(sources);
+    if let Some((fd, memory)) = own {
+        drop(fd);
+        // SAFETY: the test's memory, which no import holds any more.
+        unsafe { handles.device.free_memory(memory, None) };
+    }
 }
