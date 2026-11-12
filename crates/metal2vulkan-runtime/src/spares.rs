@@ -34,17 +34,19 @@
 //!   the spare holding the most of that level ([`take_command_pool_holding`]), up to
 //!   [`TAKEN_PAST_FIRST`] past its first; where no spare holds one, or past those, it makes what
 //!   it lacks in the last it took, else in its first; each goes back with its first
-//!   (`command_buffer/mod.rs`'s `CommandBufferShared::allocate`). A command buffer never makes a
-//!   pool past its first: a pool made per command buffer stays among the spares for the
-//!   device's life. So the larger command buffers of a load use the pools that
-//!   hold the most, which the smaller leave, and the pools' command buffers follow what the load
-//!   holds at once. Each pool taking the newest spare and keeping its own uses' most, a load of
-//!   64 command buffers in flight, a cycle of one of 200 blit encoders and nine of 2, had every
-//!   pool keep the large one's; past [`HELD`] together, each give-back then shed the oldest
-//!   spare, whose next taker made its command buffers again (`tests::spares`). On RADV each
-//!   command buffer freed and trimmed destroys two buffer objects, each a walk of libdrm's list of
-//!   free address ranges under its lock, which every other buffer object's making and freeing
-//!   takes too. Counted: `WorkCounts::spare_command_pools_taken_past_first`.
+//!   (`command_buffer/mod.rs`'s `CommandBufferShared::allocate`). It makes no pool past its
+//!   first: every pool made stays among the spares for the device's life. So the larger command
+//!   buffers of a load use the pools that hold the most, which the smaller leave, and the pools'
+//!   command buffers follow what the load holds at once. Each pool taking the newest spare and
+//!   keeping its own uses' most, a load of 64 command buffers in flight, a cycle of one of 200
+//!   blit encoders and nine of 2, had every pool keep the large one's: past [`HELD`] together,
+//!   each give-back then shed the oldest spare, whose next taker made its command buffers again,
+//!   3,093 made and 2,951 freed (109 trims) in 60 cycles once warm on lavapipe; now none freed
+//!   and none or a few dozen made in those cycles, none in cycles 300 to 400, the spares holding
+//!   about 1,500 to 2,400 against 3,953 (`tests::spares`). On RADV each command buffer freed and
+//!   trimmed destroys two buffer objects, each a walk of libdrm's list of free address ranges
+//!   under its lock, which every other buffer object's making and freeing takes too. Counted:
+//!   `WorkCounts::spare_command_pools_taken_past_first`.
 //! - **The spares hold at most [`HELD`] command buffers together.** Counted with them: the pool
 //!   given back, and what each pool out of the spares held as it went out, taken by a command
 //!   buffer, freeing command buffers or beginning a primary ahead ([`CommandPools::out`]), whose
