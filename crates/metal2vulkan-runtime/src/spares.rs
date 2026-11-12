@@ -679,19 +679,20 @@ impl Spares {
         let now = Instant::now();
         pool.recording = !settled;
         let mut past = pool.given_back(now);
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        let recent = past.len() as u64;
+        let recent = past.len();
         pool.stock(device);
+        let mut freed = [recent, 0, 0];
         let (given, shed) = {
             let mut pools = lock(&self.command_pools);
             pools.came_back(&mut pool);
             let idle = take_idle(&mut pools.spares, now);
             let out = pools.out;
             let (oldest, held) = past_held(&mut pools.spares, out, &mut pool);
+            freed[1] = held.len();
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             {
                 let mut churn = lock(&self.churn);
-                churn.past_recent_uses += recent;
+                churn.past_recent_uses += recent as u64;
                 churn.past_held += held.len() as u64;
             }
             past.extend(held);
@@ -708,6 +709,7 @@ impl Spares {
             let shed: Vec<_> = (idle.into_iter().chain(oldest))
                 .map(|mut pool| {
                     let shed = pool.shed();
+                    freed[2] += shed.len();
                     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                     {
                         lock(&self.churn).shed += shed.len() as u64;
@@ -718,6 +720,11 @@ impl Spares {
                 .collect();
             (given, shed)
         };
+        let trims = (given.iter().chain(&shed))
+            .filter(|frees| frees.trim)
+            .map(|frees| frees.buffers.len().div_ceil(FREED_AT_ONCE))
+            .sum();
+        device.counts.spare_command_buffers_freed(freed, trims);
         for frees in given.into_iter().chain(shed) {
             // SAFETY: nothing of a pool given back or of a spare is pending, and each is out of
             // the spares.

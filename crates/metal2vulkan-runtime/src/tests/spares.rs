@@ -594,6 +594,7 @@ mod device {
     use super::{HELD, RECENT_FOR, RECENT_USES};
     use crate::command_buffer::kept_barriers::KEPT;
     use crate::free_thread::FreeThread;
+    use crate::spares::FREED_AT_ONCE;
     use crate::tests::freed_memory::device;
     use crate::{Buffer, CommandBufferStatus, CommandQueue, Device, ResourceOptions};
     use std::sync::Arc;
@@ -723,6 +724,27 @@ mod device {
         assert!(
             after <= before + 2,
             "{after} held after {more} command buffers of one encoder, {before} before the burst"
+        );
+        // The device's counts say what the spares freed and why (`WorkCounts`).
+        let (churn, counts) = (device.shared().spares.churn(), device.work_counts());
+        let freed = [
+            counts.spare_command_buffers_freed_past_recent_uses,
+            counts.spare_command_buffers_freed_past_held,
+            counts.spare_command_buffers_shed,
+        ];
+        assert_eq!(freed, [churn.past_recent_uses, churn.past_held, churn.shed]);
+        assert!(
+            freed[0] > 0,
+            "the burst's command buffers were freed past recent uses"
+        );
+        let trims = match device.shared().spares.trims() {
+            true => freed[0].div_ceil(FREED_AT_ONCE as u64),
+            false => 0,
+        };
+        assert!(
+            counts.spare_command_pool_trims >= trims,
+            "{} trims after {freed:?} freed",
+            counts.spare_command_pool_trims
         );
         drop((target, queue, device));
         let _ = std::fs::remove_dir_all(&scratch);

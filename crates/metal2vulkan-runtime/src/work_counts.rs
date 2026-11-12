@@ -61,6 +61,11 @@ pub(crate) struct Counters {
     command_pools_made: AtomicU64,
     spare_command_pools_taken: AtomicU64,
     spare_command_pools_reset: AtomicU64,
+    /// The command buffers the spare command pools freed, by why (`spares.rs`): past a pool's
+    /// recent uses, past `HELD` of a pool given back, and shed by a spare; then the trims of
+    /// their pools.
+    spare_command_buffers_freed: [AtomicU64; 3],
+    spare_command_pool_trims: AtomicU64,
     live_tables_uploaded: AtomicU64,
     timeline_waits: AtomicU64,
     fence_waits: AtomicU64,
@@ -1893,6 +1898,22 @@ impl Counters {
     pub(crate) fn spare_command_pool_reset(&self) {
         self.spare_command_pools_reset
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A pool given back freed `recent` command buffers past its recent uses and `held` past
+    /// `HELD`, spares shed `shed`, and their pools are trimmed `trims` times (`spares.rs`).
+    pub(crate) fn spare_command_buffers_freed(
+        &self,
+        [recent, held, shed]: [usize; 3],
+        trims: usize,
+    ) {
+        for (count, freed) in [recent, held, shed]
+            .into_iter()
+            .zip(&self.spare_command_buffers_freed)
+        {
+            freed.fetch_add(count as u64, Ordering::Relaxed);
+        }
+        (self.spare_command_pool_trims).fetch_add(trims as u64, Ordering::Relaxed);
     }
 
     /// The live buffers' table was uploaded to a buffer made for it, no spare reused.
@@ -4951,6 +4972,20 @@ pub struct WorkCounts {
     /// failed, was dropped unsubmitted, or left a command buffer of it unended (a recording it did
     /// not use).
     pub spare_command_pools_reset: u64,
+    /// The command buffers a spare `VkCommandPool` given back freed (`vkFreeCommandBuffers`, on
+    /// the device's free thread, `spares.rs`) past the most one of its recent uses handed out:
+    /// what a later use of the pool that hands out more allocates again.
+    pub spare_command_buffers_freed_past_recent_uses: u64,
+    /// The command buffers a pool given back freed past the 4096 the spares hold at most
+    /// (`spares.rs`'s `HELD`).
+    pub spare_command_buffers_freed_past_held: u64,
+    /// The command buffers spares freed whole: one no command buffer took for 10 s, and the
+    /// oldest ones past the 4096 the spares hold at most (`spares.rs`).
+    pub spare_command_buffers_shed: u64,
+    /// The `vkTrimCommandPool` calls after those frees, one after each 32 command buffers freed
+    /// at most, which return to the device what its driver kept of them (none on a driver whose
+    /// trim fails the kept barriers, `spares.rs`).
+    pub spare_command_pool_trims: u64,
     /// Buffers made to upload a live buffers' table to, where no spare one held it.
     pub live_tables_uploaded: u64,
     /// The queues' waiters' waits for a timeline's value, where the batch one waited for had
@@ -8774,6 +8809,13 @@ impl Device {
             copy_regions_split: self.shared().vk().copy_regions_split(),
             spare_command_pools_taken: counters.spare_command_pools_taken.load(Ordering::Relaxed),
             spare_command_pools_reset: counters.spare_command_pools_reset.load(Ordering::Relaxed),
+            spare_command_buffers_freed_past_recent_uses: counters.spare_command_buffers_freed[0]
+                .load(Ordering::Relaxed),
+            spare_command_buffers_freed_past_held: counters.spare_command_buffers_freed[1]
+                .load(Ordering::Relaxed),
+            spare_command_buffers_shed: counters.spare_command_buffers_freed[2]
+                .load(Ordering::Relaxed),
+            spare_command_pool_trims: counters.spare_command_pool_trims.load(Ordering::Relaxed),
             live_tables_uploaded: counters.live_tables_uploaded.load(Ordering::Relaxed),
             timeline_waits: counters.timeline_waits.load(Ordering::Relaxed),
             fence_waits: counters.fence_waits.load(Ordering::Relaxed),
