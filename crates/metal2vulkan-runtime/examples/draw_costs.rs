@@ -71,7 +71,9 @@
 //! instructions and cycles are libSystem's `thread_selfcounts` (readable unprivileged), which hold
 //! the kernel's where it ran on the thread; on Linux they are the thread's own user-space counts
 //! (`perf_event_open`, where `kernel.perf_event_paranoid` is at most 2; on a hybrid Intel CPU its
-//! performance cores' counters alone, so pin the run there with `taskset`). Printed per shape and
+//! performance cores' counters alone, so pin the run there with `taskset`), with its L1 data
+//! cache's read misses and its cache misses (`PERF_COUNT_HW_CACHE_MISSES`: the L2 on AMD's Zen,
+//! the last-level cache on Intel's), what its memory touches cost it. Printed per shape and
 //! figure: the figure a draw, the median over the runs with the lowest and the highest
 //! (`DRAW-COST` lines). Instructions are the figure to compare between builds: a busy host moves
 //! them little where it moves time. The thread asks for the performance cores
@@ -991,6 +993,9 @@ impl Compositor {
 struct Counts {
     nanos: u64,
     instructions: Option<[u64; 2]>,
+    /// Its L1 data cache's read misses and its cache misses where the system counts them
+    /// ([`data_misses`]).
+    misses: Option<[u64; 2]>,
     process: [u64; 2],
 }
 
@@ -1011,6 +1016,7 @@ impl Counts {
         Counts {
             nanos: at.tv_sec as u64 * 1_000_000_000 + at.tv_nsec as u64,
             instructions: instructions_and_cycles(),
+            misses: data_misses(),
             process: [usage.ru_minflt as u64, usage.ru_nvcsw as u64],
         }
     }
@@ -1022,6 +1028,10 @@ impl Counts {
             instructions: self
                 .instructions
                 .zip(start.instructions)
+                .map(|(now, then)| [now[0] - then[0], now[1] - then[1]]),
+            misses: self
+                .misses
+                .zip(start.misses)
                 .map(|(now, then)| [now[0] - then[0], now[1] - then[1]]),
             process: [
                 self.process[0] - start.process[0],
@@ -1036,6 +1046,10 @@ impl Counts {
             instructions: self
                 .instructions
                 .zip(more.instructions)
+                .map(|(a, b)| [a[0] + b[0], a[1] + b[1]]),
+            misses: self
+                .misses
+                .zip(more.misses)
                 .map(|(a, b)| [a[0] + b[0], a[1] + b[1]]),
             process: [
                 self.process[0] + more.process[0],
@@ -1059,10 +1073,35 @@ fn instructions_and_cycles() -> Option<[u64; 2]> {
 }
 
 /// On Linux, the calling thread's user-space instructions and cycles since its counters opened
-/// at its first call (`perf_event_open`, where `kernel.perf_event_paranoid` is at most 2): on a
-/// hybrid Intel CPU its performance cores' counters (`cpu_core`), which count only there.
+/// at its first call ([`thread_counters`]).
 #[cfg(target_os = "linux")]
 fn instructions_and_cycles() -> Option<[u64; 2]> {
+    let [instructions, cycles, _, _] = thread_counters()?;
+    Some([instructions, cycles])
+}
+
+/// The calling thread's user-space read misses of its L1 data cache and its cache misses (the
+/// last level a core's `PERF_COUNT_HW_CACHE_MISSES` names: its L2 on AMD's Zen, its last-level
+/// cache on Intel's) since its counters opened at its first call ([`thread_counters`]): what a
+/// draw's memory touches cost it, which its instructions do not show.
+#[cfg(target_os = "linux")]
+fn data_misses() -> Option<[u64; 2]> {
+    let [_, _, l1d, cache] = thread_counters()?;
+    Some([l1d, cache])
+}
+
+/// Elsewhere no misses are counted.
+#[cfg(not(target_os = "linux"))]
+fn data_misses() -> Option<[u64; 2]> {
+    None
+}
+
+/// On Linux, the calling thread's user-space instructions, cycles, L1 data read misses and cache
+/// misses since its counters opened at its first call (`perf_event_open`, where
+/// `kernel.perf_event_paranoid` is at most 2): on a hybrid Intel CPU its performance cores'
+/// counters (`cpu_core`), which count only there.
+#[cfg(target_os = "linux")]
+fn thread_counters() -> Option<[u64; 4]> {
     use std::cell::Cell;
 
     /// `struct perf_event_attr` as its first published size (`PERF_ATTR_SIZE_VER0`).
@@ -1080,26 +1119,32 @@ fn instructions_and_cycles() -> Option<[u64; 2]> {
         config1: u64,
     }
 
-    /// `PERF_TYPE_HARDWARE`; `PERF_COUNT_HW_CPU_CYCLES` and `PERF_COUNT_HW_INSTRUCTIONS`; the
-    /// `exclude_kernel` and `exclude_hv` flags.
+    /// `PERF_TYPE_HARDWARE`; `PERF_COUNT_HW_CPU_CYCLES`, `PERF_COUNT_HW_INSTRUCTIONS` and
+    /// `PERF_COUNT_HW_CACHE_MISSES`; `PERF_TYPE_HW_CACHE` with `PERF_COUNT_HW_CACHE_L1D`,
+    /// `PERF_COUNT_HW_CACHE_OP_READ` and `PERF_COUNT_HW_CACHE_RESULT_MISS`; the `exclude_kernel`
+    /// and `exclude_hv` flags.
     const HARDWARE: u32 = 0;
+    const HW_CACHE: u32 = 3;
     const CYCLES: u64 = 0;
     const INSTRUCTIONS: u64 = 1;
+    const CACHE_MISSES: u64 = 3;
+    const L1D_READ_MISS: u64 = 1 << 16;
     const EXCLUDE_KERNEL_HV: u64 = (1 << 5) | (1 << 6);
 
     thread_local! {
-        /// The thread's two counters' descriptors, opened at its first read; -1 where one is not.
-        static COUNTERS: Cell<Option<[i32; 2]>> = const { Cell::new(None) };
+        /// The thread's four counters' descriptors, opened at its first read; -1 where one is
+        /// not.
+        static COUNTERS: Cell<Option<[i32; 4]>> = const { Cell::new(None) };
     }
 
-    fn open(event: u64) -> i32 {
+    fn open((kind, event): (u32, u64)) -> i32 {
         // A hybrid CPU's performance cores' PMU, in the config's upper half; none elsewhere.
         let pmu = std::fs::read_to_string("/sys/bus/event_source/devices/cpu_core/type")
             .ok()
             .and_then(|text| text.trim().parse::<u64>().ok())
             .unwrap_or(0);
         let attr = Attr {
-            kind: HARDWARE,
+            kind,
             size: size_of::<Attr>() as u32,
             config: event | (pmu << 32),
             sample_period: 0,
@@ -1132,15 +1177,22 @@ fn instructions_and_cycles() -> Option<[u64; 2]> {
         (read == 8).then_some(count)
     }
 
-    let [instructions, cycles] = COUNTERS.with(|cell| match cell.get() {
+    let fds = COUNTERS.with(|cell| match cell.get() {
         Some(fds) => fds,
         None => {
-            let fds = [open(INSTRUCTIONS), open(CYCLES)];
+            let events = [
+                (HARDWARE, INSTRUCTIONS),
+                (HARDWARE, CYCLES),
+                (HW_CACHE, L1D_READ_MISS),
+                (HARDWARE, CACHE_MISSES),
+            ];
+            let fds = events.map(open);
             cell.set(Some(fds));
             fds
         }
     });
-    Some([read(instructions)?, read(cycles)?])
+    let [a, b, c, d] = fds.map(read);
+    Some([a?, b?, c?, d?])
 }
 
 /// Elsewhere the CPU time alone.
@@ -1293,6 +1345,15 @@ fn measure(bench: &Bench, shape: Shape, runs: usize, options: Options) -> Result
             let values = seen
                 .iter()
                 .filter_map(|c| c.instructions.map(|i| i[index] as f64 / draws))
+                .collect();
+            figures.push((figure, values));
+        }
+    }
+    if seen.iter().all(|c| c.misses.is_some()) {
+        for (figure, index) in [("l1d_read_misses", 0), ("cache_misses", 1)] {
+            let values = seen
+                .iter()
+                .filter_map(|c| c.misses.map(|m| m[index] as f64 / draws))
                 .collect();
             figures.push((figure, values));
         }
