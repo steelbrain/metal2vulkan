@@ -530,7 +530,8 @@ impl Device {
             return Ok(None);
         };
         let shared = self.shared();
-        let value = fill_queue.submit_after(after, |raw, command_buffer, _| {
+        let raw = shared.vk();
+        let value = fill_queue.submit_after(after, |_, command_buffer, _| {
             // SAFETY: recording for the fill queue's family, outside a render pass: fills of
             // buffers alone, each shared with that family, as their sources are (`sharing.rs`);
             // the batch that uses them waits for the submission.

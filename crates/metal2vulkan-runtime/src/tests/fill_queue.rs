@@ -175,8 +175,11 @@ fn a_batch_s_fills_run_on_the_fill_queue_in_order_with_exact_bytes() {
     }
     let counts = device.work_counts();
     let submissions = counts.fill_queue_submissions - before.fill_queue_submissions;
+    let shown = (place
+        .map(|(family, flags)| format!("family {family}, flags {:#x}", flags.as_raw())))
+    .unwrap_or_else(|| "none".to_owned());
     eprintln!(
-        "FILL-QUEUE {name}: fill queue {place:?}, submissions {submissions}, first command buffer \
+        "FILL-QUEUE {name}: fill queue {shown}, submissions {submissions}, first command buffer \
          still running as the second committed: {still_running}"
     );
     assert!(
