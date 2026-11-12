@@ -4,11 +4,14 @@
 //! (generic pointers the run may make null) compile; `generic_mixed` (one generic pointer into the
 //! thread or the device space as the run decides) is refused as a generic pointer of two spaces.
 
+use crate::air::ir::print::print;
 use crate::budget::Budget;
 use crate::device::{Device, DevicePolicy};
 use crate::error::{Error, Feature};
-use crate::library::Library;
-use crate::pipeline::testing::{description, engine_dir, llvm_assemble, AssembleError};
+use crate::library::{FunctionConstantValues, Library};
+use crate::pipeline::testing::{
+    description, engine_dir, llvm_assemble, meter, profile, specialized_entry, AssembleError,
+};
 use crate::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
 
 fn fixture() -> Option<Vec<u8>> {
@@ -38,6 +41,17 @@ fn compiled(library: &Library, stem: &str, entry: &str) -> Result<(), Error> {
         .map(|_| ())
 }
 
+/// Kernel `entry` of `bc` as the compile specializes it for profile `stem`, printed: the module a
+/// refusal's location names an instruction of.
+fn specialized(bc: &[u8], stem: &str, entry: &str) -> String {
+    let p = profile(stem, DevicePolicy::default()).expect("profile");
+    let none = FunctionConstantValues::defaults();
+    match specialized_entry(bc, entry, &p, &none, &[], &mut meter()) {
+        Ok(e) => print(&e.module),
+        Err(e) => format!("not specialized: {e}"),
+    }
+}
+
 /// Generic pointers each of one space, the null pointer among them, compile on every profile.
 #[test]
 fn generic_pointers_of_one_space_compile() {
@@ -45,7 +59,9 @@ fn generic_pointers_of_one_space_compile() {
     let library = Library::from_air(&bc).expect("library");
     for stem in PROFILES {
         for entry in ["generic_spaces", "generic_null"] {
-            compiled(&library, stem, entry).unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
+            if let Err(e) = compiled(&library, stem, entry) {
+                panic!("{stem} {entry}: {e}\n{}", specialized(&bc, stem, entry));
+            }
         }
     }
 }
