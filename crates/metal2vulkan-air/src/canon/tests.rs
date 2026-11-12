@@ -28,6 +28,7 @@ mod global_builtins;
 mod opencl;
 mod private_memory;
 mod private_reach;
+mod sampler_tables;
 mod static_divisions;
 mod table_copies;
 mod texture_writes;

@@ -32,7 +32,9 @@
 //!    inlined in turn, round after round, until none is made.
 //! 7. **SCCP** over the inlined entry, including `air.is_function_constant_defined`, loads of
 //!    bound constants, loads of the integer fields of a constant-space global whose value is
-//!    its initializer (`const_loads`), the integer `llvm.*` operations on constants, and the
+//!    its initializer (`const_loads`), a pointer loaded from a constant table at an index only the
+//!    run knows as the `select` chain over its elements (`const_tables`), the integer `llvm.*`
+//!    operations on constants, and the
 //!    float operations a constant operand decides whatever the others hold (a NaN operand, and a
 //!    product by a zero under `nnan` and `nsz`); unreachable blocks are deleted. A call whose immediates were not constants where it was
 //!    decoded (`Callee::Unbound`: an internal function's parameter passed on to the intrinsic) is
@@ -90,6 +92,7 @@ mod block_read;
 mod byval;
 mod command_writes;
 mod const_loads;
+mod const_tables;
 mod devirt;
 #[cfg(test)]
 mod devirt_tests;
@@ -639,7 +642,10 @@ pub fn specialize_dynamic(
     // sampler` that SCCP's folded select picked is its sampler state. SCCP runs again over a body
     // that changed, to fold what those constants decide.
     let (body, folded) = const_loads::fold(body, &mut parts, m)?;
-    let mut body = if folded {
+    // A pointer loaded from a constant table at an index only the run knows is the `select` chain
+    // over the table's elements: a `constexpr` sampler table read at a dynamic index.
+    let (body, tabled) = const_tables::fold(body, &mut parts, func, m)?;
+    let mut body = if folded || tabled {
         let solved = solve(&body, &mut parts, &fcs, &name, m)?;
         body.release(m);
         undefined_reads.extend(solved.reads);

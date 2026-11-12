@@ -136,7 +136,11 @@ fn find(
 /// global (empty for the global itself): `@g`, a `getelementptr` over the field's type at
 /// constant indices whose first is 0 (an instruction of `body` or a constant expression), through
 /// no-op pointer casts. `None` for any other address.
-fn field_address(body: &Body, parts: &ModuleParts, v: Value) -> Option<(GlobalId, Vec<u64>)> {
+pub(super) fn field_address(
+    body: &Body,
+    parts: &ModuleParts,
+    v: Value,
+) -> Option<(GlobalId, Vec<u64>)> {
     let (types, consts, globals) = (&parts.types, &parts.consts, &parts.globals);
     match v {
         Value::Inst(i) => match &body.insts.get(i)?.kind {
@@ -217,7 +221,7 @@ fn stepped(
 
 /// The value of the constant `getelementptr` index `k`. A negative index (its sign bit set)
 /// addresses no field.
-fn index(types: &TypeTable, consts: &ConstTable, k: ConstId) -> Option<u64> {
+pub(super) fn index(types: &TypeTable, consts: &ConstTable, k: ConstId) -> Option<u64> {
     let bits = types.int_bits(consts.ty(k)?)?;
     let x = match consts.get(k)?.value {
         Const::Int(x) => x,
@@ -228,7 +232,7 @@ fn index(types: &TypeTable, consts: &ConstTable, k: ConstId) -> Option<u64> {
 }
 
 /// The type of the member at indices `path` below type `t`: a struct's field, an array's element.
-fn member_type(types: &TypeTable, mut t: TypeId, path: &[u64]) -> Option<TypeId> {
+pub(super) fn member_type(types: &TypeTable, mut t: TypeId, path: &[u64]) -> Option<TypeId> {
     for &i in path {
         t = match types.get(t)? {
             Type::Struct { fields, .. } => usize::try_from(i).ok().and_then(|i| fields.get(i))?,
@@ -342,7 +346,7 @@ pub(super) fn integers_only(types: &TypeTable, ty: TypeId) -> bool {
 /// that may be written or is initialized from outside (a function constant left unsupplied), an
 /// index past its aggregate, a part the initializer leaves `undef` or `poison`, and a member of
 /// another type.
-fn field_value(
+pub(super) fn field_value(
     (types, consts, globals): (&TypeTable, &mut ConstTable, &Arena<GlobalId, Global>),
     g: GlobalId,
     path: &[u64],
