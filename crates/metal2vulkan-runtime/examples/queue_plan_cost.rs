@@ -43,8 +43,8 @@
 //!   which counts the driver accepts beside what is held, and how long each `vkCreateDevice`
 //!   took, refused or made.
 //! - **overlap** (`--overlap K,...`): for the plan's shape, two between (round robins of 7 and 3
-//!   with the two presenting) and the least plan's (16 + 2, 9 + 2, 5 + 2 and 1 + 2 on NVIDIA), K processes each making one device at the same
-//!   moment, `R` rounds (`--rounds`, 3 by default): each `vkCreateDevice`'s time, median, least and
+//!   with the two presenting) and the least plan's (16 + 2, 9 + 2, 5 + 2 and 1 + 2 on NVIDIA), K
+//!   processes each making one device at the same moment, `R` rounds (`--rounds`, 3 by default): each `vkCreateDevice`'s time, median, least and
 //!   most, and the time until all K were made, as when every device of a GPU is made again at once
 //!   (a device lost).
 //! - **runtime rooms** (`--runtime-rooms N,...`, opt-in as the exhaust phase is): as the rooms
