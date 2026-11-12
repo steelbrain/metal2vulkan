@@ -2,6 +2,7 @@
 //! takes (`texture/route.rs`) answers its own placement, and every shadow cause its own reason.
 
 use crate::in_place::{Access, Padding, PagesClass, Refusal, RowEnds, ShadowCause};
+use crate::linear_plan::Between;
 use crate::texture::{HostWay, Route};
 use crate::{InPlaceAccess, InPlaceRefusal, InPlaceRowEnds, TexturePlacement, TextureShadowReason};
 
@@ -25,7 +26,10 @@ fn each_route_answers_its_own_placement() {
         P::Shadow(R::Mipmapped { levels: 6 })
     );
     assert_eq!(Route::Past.placement(), P::Shadow(R::PastLength));
-    assert_eq!(Route::Device { holds: Ok(()) }.placement(), P::NotHostPages);
+    for between in [Between::Nothing, Between::Unobserved, Between::Kept] {
+        let holds = Ok(between);
+        assert_eq!(Route::Device { holds }.placement(), P::NotHostPages);
+    }
     assert_eq!(
         Route::Device {
             holds: Err("its rows lie apart".to_owned())

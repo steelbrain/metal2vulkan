@@ -399,7 +399,12 @@ texels to its pitch (the last row's included) and nothing past the last row's pi
 and the bytes between slices may change whenever the texture is made or used, and no other byte
 does (`WorkCounts::unobserved_padding_aliases` counts such images; `Buffer::texture_placement`
 answers `NotHostPages` for such a texture, else the shadow's cause, and
-`Shadow(TextureShadowReason::BytesBetweenRows)` without the declaration).
+`Shadow(TextureShadowReason::BytesBetweenRows)` without the declaration). Without it, a texture
+that renders nothing over a buffer whose bytes only the device's ordered commands write (a
+`Private` buffer, a `Managed` one's own on a device without unified memory) is the device's linear
+image at the pitch too, where the device lays one out so, made `PREINITIALIZED`, whose one layout
+transition keeps the bytes between its rows (`WorkCounts::kept_padding_aliases`; docs/API.md,
+`shadowed-texture`).
 
 Such an image is bound at the buffer's memory offset plus the texture's offset, which must be a
 multiple of the device's linear-image alignment (`Device::minimum_linear_texture_alignment_for_pixel_format`

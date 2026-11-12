@@ -124,7 +124,10 @@ pub enum TextureShadowReason {
     /// and a render pass's load and store write the bytes it holds; the buffer does not declare
     /// the bytes between rows unobserved
     /// ([`BufferDescriptor::padding_unobserved`](crate::BufferDescriptor::padding_unobserved),
-    /// which no rows that share bytes take).
+    /// which no rows that share bytes take), and the texture renders, or other writers than the
+    /// device's ordered commands may write the bytes (a buffer of `Shared` storage, a `Managed`
+    /// one on unified memory, one whose `VkBuffer` was handed out or whose memory is exportable),
+    /// where its linear image, made `PREINITIALIZED`, would keep them.
     BytesBetweenRows,
     /// On a discrete GPU, a `Managed` texture over a no-copy buffer's bytes (not an IOSurface
     /// plane's) that only samples or reads, over memory that carries a log of its writes, tracked,
@@ -356,7 +359,7 @@ impl Route {
                 return TexturePlacement::Shadow(TextureShadowReason::Mipmapped { levels });
             }
             Route::Past => return TexturePlacement::Shadow(TextureShadowReason::PastLength),
-            Route::Device { holds: Ok(()) } => return TexturePlacement::NotHostPages,
+            Route::Device { holds: Ok(_) } => return TexturePlacement::NotHostPages,
             Route::Device { holds: Err(_) } => {
                 return TexturePlacement::Shadow(TextureShadowReason::BytesBetweenRows)
             }

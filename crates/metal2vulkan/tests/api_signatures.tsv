@@ -3028,6 +3028,7 @@ field	metal2vulkan-runtime::WorkCounts.kept_draws_carried	pub kept_draws_carried
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_between	pub kept_draws_carry_dropped_between: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_layout	pub kept_draws_carry_dropped_layout: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_under	pub kept_draws_carry_dropped_under: u64
+field	metal2vulkan-runtime::WorkCounts.kept_padding_aliases	pub kept_padding_aliases: u64
 field	metal2vulkan-runtime::WorkCounts.kept_resident_keys_compared	pub kept_resident_keys_compared: u64
 field	metal2vulkan-runtime::WorkCounts.kept_texels_passes	pub kept_texels_passes: u64
 field	metal2vulkan-runtime::WorkCounts.late_reservation_withheld	pub late_reservation_withheld: u64
@@ -3047,10 +3048,14 @@ field	metal2vulkan-runtime::WorkCounts.live_tables_uploaded	pub live_tables_uplo
 field	metal2vulkan-runtime::WorkCounts.long_queue_settles	pub long_queue_settles: u64
 field	metal2vulkan-runtime::WorkCounts.managed_bytes_copied_in	pub managed_bytes_copied_in: u64
 field	metal2vulkan-runtime::WorkCounts.managed_bytes_copied_out	pub managed_bytes_copied_out: u64
+field	metal2vulkan-runtime::WorkCounts.managed_bytes_modified	pub managed_bytes_modified: u64
+field	metal2vulkan-runtime::WorkCounts.managed_bytes_synchronized	pub managed_bytes_synchronized: u64
 field	metal2vulkan-runtime::WorkCounts.managed_device_copies	pub managed_device_copies: u64
 field	metal2vulkan-runtime::WorkCounts.managed_device_copies_in_place	pub managed_device_copies_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.managed_device_copies_made	pub managed_device_copies_made: u64
 field	metal2vulkan-runtime::WorkCounts.managed_device_copy_bytes	pub managed_device_copy_bytes: u64
+field	metal2vulkan-runtime::WorkCounts.managed_ranges_modified	pub managed_ranges_modified: u64
+field	metal2vulkan-runtime::WorkCounts.managed_resources_synchronized	pub managed_resources_synchronized: u64
 field	metal2vulkan-runtime::WorkCounts.managed_staging_bytes	pub managed_staging_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.managed_writes_undone	pub managed_writes_undone: u64
 field	metal2vulkan-runtime::WorkCounts.memory_allocations_refused_at_limit	pub memory_allocations_refused_at_limit: u64

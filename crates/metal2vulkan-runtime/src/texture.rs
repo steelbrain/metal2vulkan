@@ -87,7 +87,9 @@ use super::image_plan::{
 };
 use super::in_place::{self, PagesClass, Refusal, ShadowCause, Verdict};
 use super::key_hash::KeyMap;
-use super::linear_plan::{aliases, check_linear_limits, linear_lack, LinearImage, LinearLack};
+use super::linear_plan::{
+    aliases, check_linear_limits, linear_lack, Between, LinearImage, LinearLack,
+};
 use super::memory::{BoundMemory, MemoryClass, Placement, FD_BLOCKS_HANDLE};
 use super::nan_clear;
 use super::neutral::Neutrals;
@@ -917,6 +919,9 @@ struct AliasCount {
     /// Its rows (or slices) lie apart over bytes its buffer declares unobserved
     /// (`WorkCounts::unobserved_padding_aliases`).
     unobserved: bool,
+    /// Its rows (or slices) lie apart over bytes only the device's ordered commands write, which
+    /// its image, made `PREINITIALIZED`, keeps (`WorkCounts::kept_padding_aliases`).
+    kept: bool,
     /// It took the feedback loop usage (`WorkCounts::feedback_loop_alias_images`).
     feedback: bool,
 }
@@ -929,6 +934,9 @@ impl AliasCount {
         }
         if self.unobserved {
             counts.unobserved_padding_alias();
+        }
+        if self.kept {
+            counts.kept_padding_alias();
         }
         if self.feedback {
             counts.feedback_loop_alias_image();
@@ -2932,11 +2940,16 @@ impl Device {
     /// (`memory.rs`'s `Memory::bound_memory`), with whether it is the `DRM_FORMAT_MOD_LINEAR` one:
     ///
     /// - In memory the device allocated with no export: the device's own linear image, made
-    ///   `PREINITIALIZED`, where it holds exactly Metal's texels there (`linear_plan::aliases`) in
-    ///   memory of the buffer's type; else a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch, made
-    ///   `UNDEFINED`, where the device makes one so and its check passed for its pooled memory
-    ///   ([`Device::pooled_pitched_image`]). The device's check of its pooled memory makes no
+    ///   `PREINITIALIZED`, where it holds exactly Metal's texels there (`linear_plan::aliases`, and
+    ///   the bytes `between` their rows lets it) in memory of the buffer's type; else a
+    ///   `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch, made `UNDEFINED`, where the device makes
+    ///   one so and its check passed for its pooled memory ([`Device::pooled_pitched_image`]), but
+    ///   for rows whose bytes between them only the linear image keeps (`Between::Kept`), which
+    ///   that image's first move may discard. The device's check of its pooled memory makes no
     ///   linear image: it measures the pitched one.
+    /// - Rows whose bytes between them only the linear image made `PREINITIALIZED` keeps
+    ///   (`Between::Kept`), in memory allocated exportable (either kind below): no image, as one
+    ///   there names the memory's handle type and so starts `UNDEFINED`.
     /// - In a block exported as an opaque file descriptor or a dma-buf (`exported_memory.rs`):
     ///   the same two images, each made for that handle type, which an image bound there must name
     ///   (`VUID-vkBindImageMemory-memory-02728`), and so made `UNDEFINED`
@@ -2965,8 +2978,7 @@ impl Device {
     fn alias_unbound(
         &self,
         plan: &ImagePlan,
-        texels: &Texels,
-        usage: TextureUsage,
+        (texels, between, usage): (&Texels, Between, TextureUsage),
         facts: &ImageFacts<'_>,
     ) -> Result<Result<(LinearMade, bool), (String, ShadowCause)>, Error> {
         // The buffer lies in a block of the runtime's buffers allocated exportable.
@@ -3005,11 +3017,23 @@ impl Device {
                 )));
             }
         };
+        // Bytes between the rows that the device's linear image, made `PREINITIALIZED`, alone
+        // keeps (`linear_plan::holding`): an image in memory allocated exportable names its handle
+        // type, and so starts `UNDEFINED`.
+        let kept = between == Between::Kept;
+        if kept && (blocks || memory != ModifierMemory::Own) {
+            let why = "its rows lie with bytes between them that only the device's linear image \
+                       made PREINITIALIZED keeps, and an image in memory allocated exportable \
+                       names its handle type and starts UNDEFINED"
+                .to_owned();
+            let cause = ShadowCause::Refused(Refusal::Image, why.clone());
+            return Ok(Err((why, cause)));
+        }
         let (_, buffer_offset, type_index) = texels.buffer.memory();
         let memory_offset = buffer_offset + texels.layout.offset;
         let raw_device = self.shared().vk();
         let room = texels.buffer.padded_length() - texels.layout.offset;
-        let unobserved = texels.buffer.padding_unobserved();
+        let held = between.held();
         // Why an image the device made does not hold exactly Metal's texels in the buffer's
         // memory: `None` where it does (`aliases`) and takes memory of the buffer's type.
         let elsewhere = |made: &LinearMade| {
@@ -3021,7 +3045,7 @@ impl Device {
                 row_pitch: made.report.row_pitch,
                 array_pitch: made.report.array_pitch,
             };
-            let lies = aliases(&texels.layout, memory_offset, room, &image, unobserved);
+            let lies = aliases(&texels.layout, memory_offset, room, &image, held);
             let typed = made.requirements.memory_type_bits & (1 << type_index) != 0;
             (!lies || !typed).then(|| {
                 format!(
@@ -3065,6 +3089,13 @@ impl Device {
             Err(why) => format!("the device makes no linear image of the texture: {why}"),
         };
         let pitched = match (memory, blocks) {
+            // Its first move, out of `UNDEFINED`, may discard the bytes between the rows.
+            _ if kept => Err(ShadowCause::Refused(
+                Refusal::Pitch,
+                "its rows lie with bytes between them that a DRM_FORMAT_MOD_LINEAR image at \
+                 Metal's pitch, made UNDEFINED, may discard at its first move"
+                    .to_owned(),
+            )),
             (_, true) => Err(ShadowCause::Refused(
                 Refusal::Pitch,
                 "a block of the runtime's buffers allocated exportable takes no \
@@ -3119,16 +3150,17 @@ impl Device {
     }
 
     /// Whether [`alias_image`](Self::alias_image) makes an image over `texels` (of a texture of
-    /// Metal `usage` and `plan`), by its steps up to the bind ([`Device::alias_unbound`]), the
-    /// image released unbound; else the cause of the shadow the texture is.
+    /// Metal `usage` and `plan`, holding `between` besides them), by its steps up to the bind
+    /// ([`Device::alias_unbound`]), the image released unbound; else the cause of the shadow the
+    /// texture is.
     pub(crate) fn alias_image_made(
         &self,
         plan: &ImagePlan,
-        texels: &Texels,
-        usage: TextureUsage,
+        (texels, between, usage): (&Texels, Between, TextureUsage),
         facts: &ImageFacts<'_>,
     ) -> Result<Result<(), ShadowCause>, Error> {
-        Ok(match self.alias_unbound(plan, texels, usage, facts)? {
+        let made = self.alias_unbound(plan, (texels, between, usage), facts)?;
+        Ok(match made {
             Ok((made, _)) => {
                 // SAFETY: the image is live and unbound, and no command uses it.
                 unsafe { release::object(self.shared().vk(), made.raw) };
@@ -3356,16 +3388,18 @@ impl Device {
     /// an image bound to it would have to be made for (a texture over the caller's host pages
     /// takes the image in place or a shadow: `storage_over_buffer`, `in_place.rs`). It starts `PREINITIALIZED`, which its move to
     /// `GENERAL` keeps. The image's hazard tracking is the buffer's. `holds`: whether an image may
-    /// hold the texels (`linear_plan::holding`), or why not. Over a buffer that declares the bytes
-    /// between rows and slices unobserved (`BufferDescriptor::padding_unobserved`), the image may
-    /// hold those bytes too (`linear_plan::within_padding`). With what it counts as the texture's
-    /// ([`AliasCount`]: a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch, rows or slices that lie
-    /// apart over unobserved bytes, the feedback loop usage), which the caller counts.
+    /// hold the texels (`linear_plan::holding`), and what besides, or why not. Over a buffer that
+    /// declares the bytes between rows and slices unobserved (`BufferDescriptor::padding_unobserved`),
+    /// and over one whose bytes only the device's ordered commands write for a texture that renders
+    /// nothing (its linear image alone, made `PREINITIALIZED`), the image may hold those bytes too
+    /// (`linear_plan::within_padding`). With what it counts as the texture's ([`AliasCount`]: a
+    /// `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch, rows or slices that lie apart over
+    /// unobserved or kept bytes, the feedback loop usage), which the caller counts.
     fn alias_image(
         &self,
         plan: ImagePlan,
         descriptor: &TextureDescriptor,
-        (texels, holds, usage): (&Texels, &Result<(), String>, TextureUsage),
+        (texels, holds, usage): (&Texels, &Result<Between, String>, TextureUsage),
         facts: &ImageFacts<'_>,
     ) -> Result<Aliased, Error> {
         match texels.buffer.caller_memory() {
@@ -3382,13 +3416,15 @@ impl Device {
                 )))
             }
         }
-        if let Err(why) = holds {
-            return Ok(Err((why.clone(), None)));
-        }
+        let between = match holds {
+            Ok(between) => *between,
+            Err(why) => return Ok(Err((why.clone(), None))),
+        };
         let (memory, buffer_offset, _) = texels.buffer.memory();
         let memory_offset = buffer_offset + texels.layout.offset;
         let raw_device = self.shared().vk();
-        let (made, pitched) = match self.alias_unbound(&plan, texels, usage, facts)? {
+        let over = (texels, between, usage);
+        let (made, pitched) = match self.alias_unbound(&plan, over, facts)? {
             Ok(made) => made,
             Err((linear, cause)) => {
                 let last =
@@ -3455,6 +3491,7 @@ impl Device {
         let count = AliasCount {
             pitched,
             unobserved: texels.buffer.padding_unobserved() && texels.layout.padded(),
+            kept: between == Between::Kept,
             feedback: (image.plan().usage).contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT),
         };
         Ok(Ok((image.shared(), count)))
@@ -3516,6 +3553,7 @@ impl Device {
         let count = AliasCount {
             pitched: false,
             unobserved: texels.buffer.padding_unobserved() && texels.layout.padded(),
+            kept: false,
             feedback: (image.plan().usage).contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT),
         };
         (image.shared(), count)
@@ -3551,7 +3589,7 @@ impl Device {
         &self,
         plan: &ImagePlan,
         (descriptor, layout): (&TextureDescriptor, &TextureLayout),
-        (texels, holds, usage): (&Texels, &Result<(), String>, TextureUsage),
+        (texels, holds, usage): (&Texels, &Result<Between, String>, TextureUsage),
         facts: &ImageFacts<'_>,
     ) -> Result<Aliased, Error> {
         let wider = undeclared_usage(plan.clone(), layout, usage, facts, |_, w| Ok(w))?;
@@ -3585,7 +3623,8 @@ impl Device {
             return Ok(None);
         };
         let unobserved = texels.buffer.padding_unobserved();
-        let holds = crate::linear_plan::holding(&texels.layout, pending.usage, unobserved);
+        let ordered = texels.buffer.gpu_bytes_ordered();
+        let holds = crate::linear_plan::holding(&texels.layout, pending.usage, unobserved, ordered);
         let over = (texels, &holds, pending.usage);
         let made = self.alias_over_device(&pending.plan, (descriptor, &layout), over, facts)?;
         Ok(made.ok())

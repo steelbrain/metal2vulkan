@@ -54,6 +54,12 @@ impl Buffer {
                 },
             ));
         }
+        // A two-copy buffer over the caller's pages (`managed_copy.rs`): the range the program
+        // asked, which the upload copies in.
+        if self.caller_copy().is_some() && !range.is_empty() {
+            let counts = &self.device().shared().counts;
+            counts.managed_asked(range.end - range.start, true);
+        }
         self.upload(range)
     }
 }

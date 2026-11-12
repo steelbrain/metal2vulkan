@@ -14,7 +14,7 @@ use crate::buffer::CallerMemory;
 use crate::buffer_texture::Texels;
 use crate::image_plan::{plan_image, ImageFacts, ImagePlan};
 use crate::in_place::{self, Access, Padding, PagesClass, Refusal, RowEnds, ShadowCause, Verdict};
-use crate::linear_plan::holding;
+use crate::linear_plan::{holding, Between};
 use crate::texture_descriptor::{texture_usage, TextureDescriptor, TextureLayout};
 use crate::texture_placement::TexturePlacement;
 use crate::{Device, Error};
@@ -31,11 +31,12 @@ pub(crate) enum Route {
     /// the shadow, its tail holding them.
     Past,
     /// The buffer's bytes are no host pages: an image aliasing the buffer's memory where `holds`
-    /// (an image over the texels may hold them, `linear_plan::holding`: their rows lie one after
-    /// another, or the buffer declares the bytes between them unobserved,
-    /// `BufferDescriptor::padding_unobserved`) and the device makes one on Metal's layout, else
+    /// (an image over the texels may hold them, and what besides, `linear_plan::holding`: their
+    /// rows lie one after another, the buffer declares the bytes between them unobserved,
+    /// `BufferDescriptor::padding_unobserved`, or only the device's ordered commands write those
+    /// bytes, of a texture that renders nothing) and the device makes one on Metal's layout, else
     /// the shadow; `holds` says why not where it does not.
-    Device { holds: Result<(), String> },
+    Device { holds: Result<Between, String> },
     /// Over host pages of `class`, its texels lying in the device's lines as `rows` says, and
     /// `padding` saying whether a shader's writes may change their rows' padding.
     Host {
@@ -116,11 +117,12 @@ impl Device {
             // Over the device's own memory, whether the making's image aliases the bytes: the
             // device's linear image, or one at Metal's pitch where its check passed for its pooled
             // memory (`Device::alias_image_made`); else the cause of the shadow it is.
-            Route::Device { holds: Ok(()) } if texels.buffer.caller_memory().is_none() => {
-                if let Err(cause) = self.alias_image_made(&plan, texels, usage, &facts)? {
+            Route::Device { holds: Ok(between) } if texels.buffer.caller_memory().is_none() => {
+                let over = (texels, between, usage);
+                if let Err(cause) = self.alias_image_made(&plan, over, &facts)? {
                     return Ok(cause.placement());
                 }
-                Route::Device { holds: Ok(()) }
+                Route::Device { holds: Ok(between) }
             }
             route => route,
         };
@@ -176,9 +178,11 @@ impl Device {
             _ => {
                 // Whether an image may hold the texels: none where their rows (or slices) lie
                 // with the buffer's bytes between them, unless the buffer declares those bytes
-                // unobserved (`linear_plan::holding`), and else why.
+                // unobserved, or only the device's ordered commands write them and the texture
+                // renders nothing (`linear_plan::holding`), and else why.
                 let unobserved = texels.buffer.padding_unobserved();
-                let holds = holding(&texels.layout, usage, unobserved);
+                let ordered = texels.buffer.gpu_bytes_ordered();
+                let holds = holding(&texels.layout, usage, unobserved, ordered);
                 return Route::Device { holds };
             }
         };

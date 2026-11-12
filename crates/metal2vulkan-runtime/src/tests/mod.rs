@@ -326,6 +326,8 @@ mod kept_heap_uses;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod kept_images;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod kept_padding;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod kept_shadowed_draws;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod kept_variants;

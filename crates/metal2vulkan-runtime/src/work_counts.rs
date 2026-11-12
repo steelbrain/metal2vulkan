@@ -452,6 +452,10 @@ pub(crate) struct Counters {
     managed_device_copies_in_place: AtomicU64,
     managed_bytes_copied_in: AtomicU64,
     managed_bytes_copied_out: AtomicU64,
+    managed_ranges_modified: AtomicU64,
+    managed_bytes_modified: AtomicU64,
+    managed_resources_synchronized: AtomicU64,
+    managed_bytes_synchronized: AtomicU64,
     managed_staging_bytes: AtomicU64,
     managed_writes_undone: AtomicU64,
     dma_buf_textures_in_place: AtomicU64,
@@ -568,6 +572,7 @@ pub(crate) struct Counters {
     stand_ins_after_pins: AtomicU64,
     feedback_loop_alias_images: AtomicU64,
     unobserved_padding_aliases: AtomicU64,
+    kept_padding_aliases: AtomicU64,
     pooled_pitched_images: AtomicU64,
     pooled_textures_moved_in_place: AtomicU64,
     pooled_texture_shadows_freed_after_move: AtomicU64,
@@ -3861,6 +3866,20 @@ impl Counters {
         };
     }
 
+    /// The program asked a two-copy buffer (`managed_copy.rs`) to copy a range of `bytes` bytes:
+    /// in, by `did_modify_range` (`modified`), or out, by `synchronize_resource`.
+    pub(crate) fn managed_asked(&self, bytes: u64, modified: bool) {
+        let (calls, asked) = match modified {
+            true => (&self.managed_ranges_modified, &self.managed_bytes_modified),
+            false => (
+                &self.managed_resources_synchronized,
+                &self.managed_bytes_synchronized,
+            ),
+        };
+        calls.fetch_add(1, Ordering::Relaxed);
+        asked.fetch_add(bytes, Ordering::Relaxed);
+    }
+
     /// A staging buffer of `bytes` bytes of a two-copy buffer's copies was made (`made`), or
     /// went (`managed_copy.rs`).
     pub(crate) fn managed_staging(&self, bytes: u64, made: bool) {
@@ -4429,6 +4448,13 @@ impl Counters {
     pub(crate) fn unobserved_padding_alias(&self) {
         self.unobserved_padding_aliases
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device made its linear image, `PREINITIALIZED`, aliasing a buffer's bytes that holds
+    /// the bytes between the texture's rows or slices, which only the device's ordered commands
+    /// write (`linear_plan::Between::Kept`, `Device::storage_over_buffer`).
+    pub(crate) fn kept_padding_alias(&self) {
+        self.kept_padding_aliases.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The device made a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch aliasing a buffer's bytes
@@ -7734,6 +7760,17 @@ pub struct WorkCounts {
     /// (counted at the command for an import of the pages, at the command buffer's completion for
     /// pages no import maps).
     pub managed_bytes_copied_out: u64,
+    /// The program's `did_modify_range` calls of a nonempty range on such buffers: each copies
+    /// its range in (`managed_bytes_copied_in` counts the bytes copied).
+    pub managed_ranges_modified: u64,
+    /// The bytes of those ranges.
+    pub managed_bytes_modified: u64,
+    /// The program's `synchronize_resource` commands of such a buffer, or of a texture over one,
+    /// of a nonempty range: the buffer's length, or the texture's span in it, which each copies
+    /// out (`managed_bytes_copied_out` counts the bytes copied).
+    pub managed_resources_synchronized: u64,
+    /// The bytes those commands asked.
+    pub managed_bytes_synchronized: u64,
     /// The bytes of the staging buffers of their copies held now: those of copies into or out of
     /// pages no import maps, each held until the submission or command buffer that uses it
     /// completed.
@@ -8414,6 +8451,14 @@ pub struct WorkCounts {
     /// declaration the texture is a shadow (`shadowed_textures`). One per image made. A runtime
     /// extension: Metal has none.
     pub unobserved_padding_aliases: u64,
+    /// Linear images aliasing a buffer of the device's own memory, of textures that render
+    /// nothing, whose rows or slices lie with bytes between them that only the device's ordered
+    /// commands write (a `Private` buffer, a `Managed` buffer's own on a device without unified
+    /// memory): each image, made `PREINITIALIZED`, holds those bytes, which its one layout
+    /// transition preserves (Vulkan's Image Layout Transitions) and which the buffer and the image
+    /// read alike (Memory Aliasing), where a buffer other writers reach makes the texture a shadow
+    /// (`shadowed_textures`). One per image made.
+    pub kept_padding_aliases: u64,
     /// Images aliasing a buffer of the device's own memory that are `DRM_FORMAT_MOD_LINEAR` images
     /// at Metal's row pitch (`VK_EXT_image_drm_format_modifier`), made where the device's own
     /// linear image of the texture lays its rows out otherwise and the device's check of such
@@ -9568,6 +9613,11 @@ impl Device {
                 .load(Ordering::Relaxed),
             managed_bytes_copied_in: counters.managed_bytes_copied_in.load(Ordering::Relaxed),
             managed_bytes_copied_out: counters.managed_bytes_copied_out.load(Ordering::Relaxed),
+            managed_ranges_modified: counters.managed_ranges_modified.load(Ordering::Relaxed),
+            managed_bytes_modified: counters.managed_bytes_modified.load(Ordering::Relaxed),
+            managed_resources_synchronized: (counters.managed_resources_synchronized)
+                .load(Ordering::Relaxed),
+            managed_bytes_synchronized: counters.managed_bytes_synchronized.load(Ordering::Relaxed),
             managed_staging_bytes: counters.managed_staging_bytes.load(Ordering::Relaxed),
             managed_writes_undone: counters.managed_writes_undone.load(Ordering::Relaxed),
             dma_buf_textures_in_place: counters.dma_buf_textures_in_place.load(Ordering::Relaxed),
@@ -9663,6 +9713,7 @@ impl Device {
             stand_ins_after_pins: counters.stand_ins_after_pins.load(Ordering::Relaxed),
             feedback_loop_alias_images: counters.feedback_loop_alias_images.load(Ordering::Relaxed),
             unobserved_padding_aliases: counters.unobserved_padding_aliases.load(Ordering::Relaxed),
+            kept_padding_aliases: counters.kept_padding_aliases.load(Ordering::Relaxed),
             pooled_pitched_images: counters.pooled_pitched_images.load(Ordering::Relaxed),
             pooled_textures_moved_in_place: (counters.pooled_textures_moved_in_place)
                 .load(Ordering::Relaxed),

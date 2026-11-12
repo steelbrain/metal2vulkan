@@ -4022,6 +4022,18 @@ impl Buffer {
         self.s().padding_unobserved.load(Ordering::Acquire)
     }
 
+    /// Whether only the device's commands, in the order the runtime records and submits them,
+    /// write the bytes the GPU uses: a `Private` buffer's, which no CPU maps
+    /// ([`Buffer::mapped_contents`]), and a `Managed` buffer's own on a device without unified
+    /// memory ([`HostCopy`]), which the CPU's writes reach only through the copies the device's
+    /// next submission makes before its commands (`managed.rs`, `managed_copy.rs`). Not one whose
+    /// `VkBuffer` was handed out (`Buffer::vk_buffer`) or whose memory was made exportable
+    /// (`exported_memory.rs`), which work of another API's may write.
+    pub(super) fn gpu_bytes_ordered(&self) -> bool {
+        let own = self.storage_mode() == StorageMode::Private || self.mirror().is_some();
+        own && !self.s().handed_out.load(Ordering::Acquire) && self.exported().is_none()
+    }
+
     /// [`Buffer::at`] for `reason`, which a no-copy buffer's import counts its read apart for
     /// (`HostImport::note_read_apart`).
     pub(super) fn at_for(&self, offset: u64, reason: ReadApart) -> (vk::Buffer, u64) {

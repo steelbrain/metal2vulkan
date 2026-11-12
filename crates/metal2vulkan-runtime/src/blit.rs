@@ -638,6 +638,11 @@ impl BlitCommandEncoder {
                 }
                 let (own, start) = buffer.at(range.start);
                 let bytes = range.end - range.start;
+                // A two-copy buffer over the caller's pages (`managed_copy.rs`): the range the
+                // program asked, which the command copies out.
+                if buffer.caller_copy().is_some() {
+                    (this.core.device().shared().counts).managed_asked(bytes, false);
+                }
                 match host {
                     SyncTarget::Own(host) => {
                         let copy = region(start, range.start, bytes);

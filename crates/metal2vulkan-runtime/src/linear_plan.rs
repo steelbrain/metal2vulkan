@@ -1261,20 +1261,19 @@ pub(super) struct LinearImage {
 /// memory block), holds exactly Metal's texels in the `room` bytes from there to the end of the
 /// buffer's memory: the binding is a multiple of the image's alignment, its texels start at the
 /// binding, its row pitch is Metal's and so is its slice pitch where it has several slices, its
-/// subresources hold no byte but the texture's texels ([`texels_alone`]), or, where the buffer
-/// declares the bytes between rows and slices unobserved (`padding_unobserved`,
-/// `BufferDescriptor::padding_unobserved`), none but its texels and those bytes
-/// ([`within_padding`]), and its memory stays in the buffer's. A driver may report a pitch other
-/// than the one asked of it (NVIDIA does for explicit layouts it does not support), so the image's
-/// own report decides.
+/// subresources hold no byte but the texture's texels ([`texels_alone`]), or, where `between` (the
+/// image may hold the bytes between rows and slices: [`Between::Unobserved`],
+/// [`Between::Kept`]), none but its texels and those bytes ([`within_padding`]), and its memory
+/// stays in the buffer's. A driver may report a pitch other than the one asked of it (NVIDIA does
+/// for explicit layouts it does not support), so the image's own report decides.
 pub(super) fn aliases(
     layout: &BufferLayout,
     memory_offset: u64,
     room: u64,
     image: &LinearImage,
-    padding_unobserved: bool,
+    between: bool,
 ) -> bool {
-    let held = match padding_unobserved {
+    let held = match between {
         true => within_padding(layout, image.subresource, image.array_pitch),
         false => texels_alone(layout, image.subresource, image.array_pitch),
     };
@@ -1285,6 +1284,28 @@ pub(super) fn aliases(
         && (layout.slices == 1 || image.array_pitch == layout.slice_pitch)
         && held
         && image.size <= room
+}
+
+/// What an image over a buffer's texels holds besides them, as [`holding`] lets it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Between {
+    /// No byte: the texels' rows (and slices) lie one after another, or there is one of each.
+    Nothing,
+    /// The bytes between their rows and slices, which the buffer declares unobserved
+    /// (`BufferDescriptor::padding_unobserved`): any image over the texels may hold them, and its
+    /// operations change them.
+    Unobserved,
+    /// The bytes between their rows and slices, which only the device's ordered commands write, of
+    /// a texture that renders nothing: the device's linear image made `PREINITIALIZED` alone holds
+    /// them, its one transition keeping them.
+    Kept,
+}
+
+impl Between {
+    /// Whether an image may hold the bytes between the texels' rows and slices.
+    pub(crate) fn held(self) -> bool {
+        self != Between::Nothing
+    }
 }
 
 /// Whether an image over `layout`'s texels, for a texture of Metal `usage`, may hold them: where
@@ -1318,14 +1339,30 @@ pub(super) fn aliases(
 /// `Keep`), undoing a CPU write made to them meanwhile, where Metal keeps every one; and lavapipe's
 /// shader writes read the bytes its 4-texel blocks reach past a row's texels and write them back, a
 /// signaling NaN's bits quieted. So such a texture is a shadow, whose copies address its texels
-/// alone; but where `padding_unobserved` (the buffer, of the runtime's own memory, declares that
-/// nothing reads those bytes: `BufferDescriptor::padding_unobserved`), an image over its rows and
-/// slices may hold the bytes between them, which those operations may then change.
+/// alone; but an image over its rows and slices may hold the bytes between them ([`Between`]):
+///
+/// - where `padding_unobserved` (the buffer, of the runtime's own memory, declares that nothing
+///   reads those bytes: `BufferDescriptor::padding_unobserved`), any such image, whose operations
+///   may then change them ([`Between::Unobserved`]);
+/// - where `ordered` (only the device's commands, in the order the runtime records them, write the
+///   bytes the GPU uses: `Buffer::gpu_bytes_ordered`) and the texture renders nothing, the device's
+///   linear image made `PREINITIALIZED` alone ([`Between::Kept`]). Its one transition, its first
+///   move to `GENERAL`, is from the layout it is in, and of such a one the same section says "If
+///   the old layout matches the current layout of the image subresource range, the transition
+///   preserves the contents of that range" (Vulkan 7.1.1), ordered after every write of those
+///   bytes before it and before every one after; and in `GENERAL`, the image and the buffer are
+///   both host-accessible subresources, which "interpret the contents of the memory in
+///   consistent ways, and data written to one alias can be read by the other alias" (12.11, Memory
+///   Aliasing). A shader's writes of the texture may change its rows' padding, as on the x86 Macs
+///   (`in_place::Padding::Free`); no render pass writes them back. An image made `UNDEFINED`, as a
+///   `DRM_FORMAT_MOD_LINEAR` one and one for external memory are, takes none of them: its first
+///   move may discard them.
 pub(super) fn holding(
     layout: &BufferLayout,
     usage: TextureUsage,
     padding_unobserved: bool,
-) -> Result<(), String> {
+    ordered: bool,
+) -> Result<Between, String> {
     // An IOSurface plane's rows that overlap: no image holds them, whatever its usage.
     let shared = layout.shared_bytes();
     if shared != 0 {
@@ -1337,7 +1374,7 @@ pub(super) fn holding(
     }
     let (rows, slices) = apart(layout);
     if padding_unobserved {
-        return Ok(());
+        return Ok(Between::Unobserved);
     }
     let apart = if rows {
         format!(
@@ -1350,9 +1387,13 @@ pub(super) fn holding(
             layout.slice_pitch, layout.rows, layout.row_pitch
         )
     } else {
-        return Ok(());
+        return Ok(Between::Nothing);
     };
-    let writers = if usage.contains(TextureUsage::RENDER_TARGET) {
+    let renders = usage.contains(TextureUsage::RENDER_TARGET);
+    if ordered && !renders {
+        return Ok(Between::Kept);
+    }
+    let writers = if renders {
         "its layout transitions read and write, and a render pass's load and store operations \
          write back"
     } else {

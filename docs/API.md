@@ -459,7 +459,8 @@ then (`TexturePlacement`): in place; `Pending`, a shadow made before its verdict
 where the verdict passes; a shadow and why (`TextureShadowReason`: the policy, the texel width, the
 check's failed or unchecked verdict with its access and row ends, a refusal, a tiled texture's
 levels, texels past the buffer's length, a device copy, and over the device's own memory rows with
-bytes between them the buffer does not declare unobserved, `BytesBetweenRows`); no host pages (an
+bytes between them the buffer does not declare unobserved, of a texture that renders or of a
+buffer other writers than the device's ordered commands reach, `BytesBetweenRows`); no host pages (an
 image aliasing the buffer's memory: the device's linear image where it lays one out as Metal does,
 else a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch where the device's check passed for its pooled
 memory; a texture over that memory that takes neither answers its shadow's cause); or a shape no
@@ -1885,7 +1886,20 @@ bound.
   operations read and write back any byte of an attachment's image subresource, and Metal leaves
   them as the program writes them, unless the buffer, of the runtime's own memory, declares them
   unobserved (`BufferDescriptor::padding_unobserved`, a runtime extension: they may then change,
-  and no other byte does); or no linear image of the device lays its texels out as Metal
+  and no other byte does), or only the device's commands, in the runtime's order, write the
+  buffer's bytes (a `Private` buffer, and a `Managed` buffer's own on a device without unified
+  memory, whose host copy the program's `didModifyRange:` copies in; not one whose `VkBuffer` was
+  handed out or whose memory is exportable) and the texture renders nothing: then the device's
+  linear image, made `PREINITIALIZED`, holds them where its rows lie at the buffer's pitch
+  (`WorkCounts::kept_padding_aliases`). Its one layout transition is out of the layout it is in,
+  of which Vulkan says "If the old layout matches the current layout of the image subresource
+  range, the transition preserves the contents of that range" (7.1.1, Image Layout Transitions),
+  ordered with every write of those bytes; in `GENERAL` the buffer and the image are both
+  host-accessible subresources, which "interpret the contents of the memory in consistent ways,
+  and data written to one alias can be read by the other alias" (12.11, Memory Aliasing). A
+  kernel's writes of such a texture may change those bytes as on the x86 Macs (section 10,
+  **Kernels**); no `DRM_FORMAT_MOD_LINEAR` image and no image over exportable memory holds them,
+  as each is made `UNDEFINED`, whose first move may discard them; or no linear image of the device lays its texels out as Metal
   does in the buffer's memory, holding no byte past them (among them a texture whose offset in the
   buffer misses the device's linear-image alignment, as one 32 bytes in does on RADV, whose
   images start on a multiple of 256: a buffer made with `BufferDescriptor::aligned_byte` at that
