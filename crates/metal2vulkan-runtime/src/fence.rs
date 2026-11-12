@@ -5,7 +5,10 @@
 //!   "after this encoder's work" in the device's submission order, and a later encoder's
 //!   `wait_for_fence` becomes a barrier from that work's stages, or a wait for its `VkQueue` when
 //!   the update ran on another ([`tracker`](super::tracker)). A fence has no Vulkan object: it is
-//!   an identity the tracker keys on.
+//!   an identity the tracker keys on. So it is no generation's (`device/line.rs`): it holds a
+//!   root handle of its device, and goes on past the device's recovery as Metal's fence does, an
+//!   encoder of any generation updating and waiting for it, its updates on a lost generation
+//!   gone with that generation's work.
 //! - **Resource barriers** order dispatches of one compute encoder: one global memory barrier,
 //!   as for a scope barrier.
 //! - **A render encoder's** fences order the render stages its calls name, as the M3 Max's do
@@ -90,6 +93,7 @@ use std::sync::{Arc, Mutex};
 pub struct Fence(Arc<FenceShared>);
 
 struct FenceShared {
+    /// A root handle of the device (`device/line.rs`): of whatever generation serves.
     device: Device,
     key: ResourceKey,
     label: Mutex<Option<String>>,
@@ -123,10 +127,11 @@ impl Device {
         self.current().new_fence_now()
     }
 
-    /// [`Device::new_fence`] on the generation that serves (`device/line.rs`).
+    /// [`Device::new_fence`] on the generation that serves (`device/line.rs`): a fence of the
+    /// device whatever generation serves, which holds none (the module docs).
     pub(crate) fn new_fence_now(&self) -> Fence {
         Fence(Arc::new(FenceShared {
-            device: self.clone(),
+            device: self.root(),
             key: ResourceKey::new(),
             label: Mutex::new(None),
         }))
@@ -134,7 +139,8 @@ impl Device {
 }
 
 impl Fence {
-    /// `device`.
+    /// `device`: a root handle, whose calls go to the generation that serves, as the fence is no
+    /// generation's (the module docs).
     pub fn device(&self) -> &Device {
         &self.0.device
     }

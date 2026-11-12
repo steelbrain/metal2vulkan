@@ -832,14 +832,15 @@ meanwhile wait for it.
   second run could not have, runs on the new `VkDevice` where the loss came before it took them,
   and completes on the lost one where the loss came after, its object then one made before the
   recovery.
-- The recovery carries the events, the uses of guest RAM (`HostRamUse`), the no-copy buffers, the
-  `Private` buffers, the buffers in the runtime's own pages and the `Private` heaps with the
-  buffers placed in them to the new `VkDevice`: the same objects, at the same addresses. An event keeps the value the host saw and its listeners'
-  notifications. A buffer in the runtime's own pages keeps its bytes and its `contents` pointer:
-  a long host-visible buffer's fresh pages, and, on a device whose checks found that a held import
-  of host pages costs its submissions nothing and that textures over such pages take in place
-  what they take over the device's own memory, the blocks of pages the `Shared` and `Managed`
-  (unified memory) buffers lie in, imported again on the new `VkDevice`. A no-copy buffer is
+- The recovery carries the events, the fences, the uses of guest RAM (`HostRamUse`), the no-copy
+  buffers, the `Private` buffers, the buffers in the runtime's own pages and the `Private` heaps
+  with the buffers placed in them to the new `VkDevice`: the same objects, at the same addresses.
+  An event keeps the value the host saw and its listeners' notifications. A buffer in the
+  runtime's own pages keeps its bytes and its `contents` pointer: a long host-visible buffer's
+  fresh pages, and, on a device whose checks found that a held import of host pages costs its
+  submissions nothing and that textures over such pages take in place what they take over the
+  device's own memory, the blocks of pages the `Shared` and `Managed` (unified memory) buffers lie
+  in, imported again on the new `VkDevice`. A no-copy buffer is
   made again over the same pages, so it keeps its bytes and its pointer (a two-copy `Managed` one
   makes its GPU copy again and copies the pages in: what the GPU wrote and no synchronize copied
   out is lost, as a `Private` buffer's contents are); its import gate, run

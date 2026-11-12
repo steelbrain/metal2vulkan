@@ -3670,7 +3670,7 @@ bound.
   recovery announced: where a call waited past 10 seconds for the recovery under way, where its
   command buffers in flight took past 10 seconds to fail, and where its new `VkDevice` could not
   be made, after which the device answers as a lost one. `Device::recover_for_test` runs the
-  same recovery with no GPU fault. Cost: the events, uses of guest RAM, no-copy buffers,
+  same recovery with no GPU fault. Cost: the events, fences, uses of guest RAM, no-copy buffers,
   `Private` buffers, buffers in the runtime's own pages (fresh pages, and the blocks of pages the
   `Shared` and `Managed` buffers lie in where the device's checks found a held host-page import
   costs its submissions nothing and textures over such pages take what they take over its own
