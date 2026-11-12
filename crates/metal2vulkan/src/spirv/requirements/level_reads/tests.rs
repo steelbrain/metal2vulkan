@@ -491,7 +491,8 @@ fn the_lowest_level_follows_the_bound_sampler() {
     assert_eq!(at(&constants(3.0, 5.0), biased(0.0, -1.0)), Some(2));
     assert_eq!(at(&constants(3.0, 5.0), biased(0.0, 1.0)), Some(3));
     assert_eq!(at(&computed, biased(2.0, -1.0)), Some(2));
-    assert_eq!(at(&constants(3.0, 5.0), biased(0.0, f32::NAN)), Some(0));
+    // A NaN bias is none, as a device's sampler takes it.
+    assert_eq!(at(&constants(3.0, 5.0), biased(0.0, f32::NAN)), Some(3));
     // Crossed or unbounded sampler levels: the first level.
     assert_eq!(at(&computed, levels(2.0, 1.0, false, true)), Some(0));
     assert_eq!(

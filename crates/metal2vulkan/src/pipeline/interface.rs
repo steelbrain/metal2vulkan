@@ -642,11 +642,11 @@ impl SampledLevels {
         let computed = self.computed.then_some(s.min_lod);
         let explicit = match self.lowest_lod() {
             Some(c) if c.is_nan() => return 0,
-            // A positive bias is not counted on to raise the level.
+            // A positive bias is not counted on to raise the level, and a NaN one is none, as a
+            // device's sampler takes it (`metal::sampler::device_lod_bias`).
             Some(c) => Some((c + s.bias.min(0.0)).clamp(s.min_lod, s.max_lod)),
             None => None,
         };
-        // A NaN bias makes the bound NaN, which `max` takes as 0.
         let low = (computed.into_iter().chain(explicit)).reduce(f32::min);
         low.map_or(0, |low| low.max(0.0).floor() as u32)
     }
