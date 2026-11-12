@@ -1293,6 +1293,10 @@ engine/hlf_half_dims.air.ll	hlf_half_dims	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/hlf_half_dims.ll	hlf_half_dims	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/hlf_half_forms.air.ll	hlf_half_forms	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/hlf_half_forms.ll	hlf_half_forms	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/hnq_half_layer_composite.air.ll	hnq_layer_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/hnq_half_layer_composite.air.ll	hnq_half_layer_composite	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/hnq_half_layer_composite.ll	hnq_layer_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/hnq_half_layer_composite.ll	hnq_half_layer_composite	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/hrd_half_read.air.ll	hrd_half_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/hrd_half_read.ll	hrd_half_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/hrd_half_widen.air.ll	hrd_half_widen	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
