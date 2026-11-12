@@ -1,7 +1,10 @@
 //! Device tests of a draw that reads, at its own pixels, a texture its own render pass instance
 //! renders as color 0, and writes nothing of that color: it writes what it read into color 1
 //! alone (`ipr_read_second` of the owned fixture `ipr_reads.metal`), under the validation layer.
-//! Where the device enabled `attachmentFeedbackLoopLayout` and the color's image took feedback
+//! Where the device enabled `attachmentFeedbackLoopLayout`, its passes fetch no color as an input
+//! attachment (it has `fragmentShaderPixelInterlock` and not
+//! `rasterizationOrderColorAttachmentAccess`: lavapipe and a device without the interlock fetch
+//! so, and their subpass would name the color in two layouts) and the color's image took feedback
 //! loop usage, the draw reads the attachment in place, with a memory barrier before it or not
 //! (`render/snapshot.rs`, in place; `WorkCounts::reading_draws_in_place`): no copy, snapshot or
 //! split, and it reads what the draw before it wrote, the x86 Macs' answer (`docs/API.md`'s
@@ -18,8 +21,8 @@
 //! - [`a_reader_that_writes_nothing_of_its_color_reads_in_place`]: a private target, and a surface
 //!   over host pages (a texture of an IOSurface plane over a no-copy buffer, as a compositor's
 //!   guest makes its layers), each with the barrier and without: in place wherever the device
-//!   enabled the feature and the image the pass renders took feedback loop usage (the counts
-//!   printed say).
+//!   enabled the feature, its passes fetch no color, and the image the pass renders took feedback
+//!   loop usage (the counts printed say).
 //! - [`with_the_feedback_loop_withheld_it_reads_the_copy`]: the private target with
 //!   `attachmentFeedbackLoopLayout` withheld: the copy, [`CLEARED`] without the barrier.
 
@@ -246,6 +249,13 @@ fn holds(what: &str, bytes: &[u8], block: u8, outside: u8) {
     }
 }
 
+/// Whether `device`'s passes fetch no color attachment as an input attachment: it has the pixel
+/// interlock and not rasterization-order color attachment access (`framebuffer_fetch.rs`).
+fn fetches_no_color(device: &Device) -> bool {
+    let fragment = device.compile_device().profile().fragment();
+    fragment.pixel_interlock && !fragment.rasterization_order_color_access
+}
+
 /// The lane's device under the default policy, the consumer's, with `adjust` applied too.
 fn on_default_policy(adjust: impl FnOnce(&mut DeviceOptions), test: impl FnOnce(&Device)) {
     on_device_with(
@@ -269,10 +279,11 @@ fn a_reader_that_writes_nothing_of_its_color_reads_in_place() {
                     let left = read_pass(device, &queue, surface, barrier);
                     let moved = &left.moved;
                     eprintln!(
-                        "in-place reads, {what}, feedback loop {}: {moved:?}",
-                        left.feedback
+                        "in-place reads, {what}, feedback loop {}, fetches no color {}: {moved:?}",
+                        left.feedback,
+                        fetches_no_color(device)
                     );
-                    if left.feedback {
+                    if left.feedback && fetches_no_color(device) {
                         let want = Moved {
                             in_place: 1,
                             snapshotted: 0,

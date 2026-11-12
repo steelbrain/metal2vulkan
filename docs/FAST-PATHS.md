@@ -280,7 +280,9 @@ recorded here.
   pass that loads it (`shadow_standing.rs`, `WorkCounts::shadow_texels_unskipped_stale_within`).
   A draw that reads the color at its own pixels alone and writes no channel of it reads the
   attachment in place instead, no copy, with a barrier before it or not, where the device enabled
-  `attachmentFeedbackLoopLayout` (`render/snapshot.rs`, `WorkCounts::reading_draws_in_place`):
+  `attachmentFeedbackLoopLayout` and its passes fetch no color as an input attachment (it has
+  `fragmentShaderPixelInterlock` and not `rasterizationOrderColorAttachmentAccess`; lavapipe and
+  the RX 550 keep the copy) (`render/snapshot.rs`, `WorkCounts::reading_draws_in_place`):
   a by-region barrier before it orders the load's and the earlier draws' writes before its reads,
   and one after it its reads before the later color writes. With no barrier it then reads what the
   earlier draws wrote, the x86 Macs' answer, where the M3 Max reads the texels from before the pass

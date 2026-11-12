@@ -5020,12 +5020,14 @@ each item named states the rule in full.
   Graphics 630 (macOS 26.7.1) it read the earlier draw's texels at 98.6% and 99.99% of the pixels,
   and at all of them after a barrier over the render targets; the rest read the load's or the
   clear's texels. The runtime answers as the x86 Macs, which costs no copy: where the device
-  enabled `attachmentFeedbackLoopLayout`, a draw whose fragment function reads the texture at the
-  fragment's own pixel alone, and that writes no channel of the color, reads the attachment
-  itself, behind a barrier inside the pass, and sees the load and every earlier draw of the pass
-  (`WorkCounts::reading_draws_in_place`, the runtime's `render/snapshot.rs`). A draw that writes
-  the color it reads still reads a copy taken before the pass, the M3 Max's answer, and so does
-  every such draw on a device without the feature.
+  enabled `attachmentFeedbackLoopLayout` and its passes fetch no color as an input attachment (it
+  has `fragmentShaderPixelInterlock` and not `rasterizationOrderColorAttachmentAccess`), a draw
+  whose fragment function reads the texture at the fragment's own pixel alone, and that writes no
+  channel of the color, reads the attachment itself, behind a barrier inside the pass, and sees
+  the load and every earlier draw of the pass (`WorkCounts::reading_draws_in_place`, the runtime's
+  `render/snapshot.rs`). A draw that writes the color it reads still reads a copy taken before the
+  pass, the M3 Max's answer, and so does every such draw on any other device (lavapipe, which has
+  rasterization-order access, and a device without the interlock, such as the Radeon RX 550).
 
 **GPU hangs and faults** (a draw of private primitive type 9, `DrawPrimitiveType::Nine`)
 

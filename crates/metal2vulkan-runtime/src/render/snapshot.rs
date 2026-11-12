@@ -66,8 +66,11 @@
 //!   not, where the device enabled `attachmentFeedbackLoopLayout`, the color renders the
 //!   texture's image in place with feedback loop usage, no other color renders that image, the
 //!   pipeline fetches no color, and the checks below that concern the pass and its colors hold
-//!   (`RenderLowering::in_instance`: the pass's shape, the format, the pins, one image a color);
-//!   not those of the second draw (the area rule, its features, the visibility query). The color
+//!   (`RenderLowering::in_instance`: the pass's shape, among it no input attachment fetch, which
+//!   every pass with a color makes on a device with rasterization-order color attachment access or
+//!   without the pixel interlock, `framebuffer_fetch::through_inputs`, as its subpass would name
+//!   the color in two layouts; the format, the pins, one image a color); not those of the second
+//!   draw (the area rule, its features, the visibility query). The color
 //!   is in the feedback loop layout for the instance as below, the pipeline made with
 //!   `VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT` (`GraphicsKey::feedback_loop`),
 //!   and the slot bound to the texture in that layout. `B1` before the draw, from the color
