@@ -30,6 +30,9 @@ const BUSY: Duration = Duration::from_millis(1500);
 /// The bytes of the buffer the busy work fills.
 const FILLED: u64 = 256 << 20;
 
+/// The probes of the fills' pace.
+const PROBES: usize = 3;
+
 #[test]
 fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_zero() {
     let scratch = Scratch::new("zeroed-start");
@@ -47,12 +50,28 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
         blit.end_encoding().unwrap();
         command_buffer
     };
-    // The fills' pace on this GPU, so the busy work lasts about `BUSY` on any.
-    let probe = fill(8);
+    // The target's first use, which waits for its zeros, apart from the probes: on a device with a
+    // fill queue (NVIDIA's copy engine, `device/staging.rs`) they run there, behind whatever
+    // other work holds the copy engine. On an RTX 5080 Laptop GPU beside the runtime suite, a
+    // probe that included them read 58 ms a fill where the 25 fills queued after it ran in under
+    // 0.5 ms each, so the busy work completed before the making returned.
+    let first = fill(1);
+    first.commit().unwrap();
+    first.wait_until_completed().unwrap();
+    // The fills' pace on this GPU, so the busy work lasts about `BUSY` on any: the fastest of
+    // [`PROBES`], since other work on the GPU only slows a probe, and a slowed one would queue too
+    // few fills, done before the making returns.
     let at = Instant::now();
-    probe.commit().unwrap();
-    probe.wait_until_completed().unwrap();
-    let each = at.elapsed() / 8;
+    let each = (0..PROBES)
+        .map(|_| {
+            let probe = fill(8);
+            let from = Instant::now();
+            probe.commit().unwrap();
+            probe.wait_until_completed().unwrap();
+            from.elapsed() / 8
+        })
+        .min()
+        .unwrap();
     let count = (BUSY.as_secs_f64() / each.as_secs_f64().max(1e-6)).clamp(8.0, 20_000.0) as u32;
     // The block the device's first creation call started making ready for host copies is ready
     // before the busy work is queued (`memory/ready.rs`): what this holds is that the textures
