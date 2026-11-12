@@ -2411,9 +2411,11 @@ declare { <4 x float>, i8 } @air.sample_texture_cube_grad.v4f32(ptr addrspace(1)
     assert!(compiled > 0, "no committed profile has the sampled heap");
 }
 
-/// Several sampler candidates beside a heap texture are not built: a typed refusal.
+/// Several sampler candidates beside a heap texture are a switch-at-use over them, one arm per
+/// runtime sampler slot, each the heap element through that slot's heap sampler binding: the
+/// module compiles and passes L3.
 #[test]
-fn a_selected_sampler_beside_a_heap_texture_is_not_implemented() {
+fn a_selected_sampler_beside_a_heap_texture_is_a_switch() {
     let Some(bc) = assemble(
         "heap_selected_sampler",
         r#"%struct.T = type { ptr addrspace(1) }
@@ -2450,9 +2452,9 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
     ) else {
         return;
     };
-    let u = unsupported(compile(&bc, "heap_selected_sampler", &m3()).expect_err("refused"));
-    assert_eq!(u.feature, Feature::ArgumentBufferTextures);
-    assert_eq!(u.needs, Needs::NotImplemented);
+    let p = m3();
+    let a = compile(&bc, "heap_selected_sampler", &p).unwrap_or_else(|e| panic!("{e}"));
+    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("L3: {e}"));
 }
 
 /// A kernel that writes a slice of its explicit imageblock (one `elem` field per cell, `lanes`
