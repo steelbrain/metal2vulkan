@@ -593,7 +593,7 @@ impl Sweeper {
             let fewer = |resident: u64| Some(resident.saturating_sub(1));
             let _ = shared
                 .resident
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, fewer);
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, fewer);
             return;
         }
         let resident = shared.resident.fetch_add(1, Ordering::Relaxed) + 1;
