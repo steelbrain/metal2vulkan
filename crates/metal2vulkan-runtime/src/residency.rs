@@ -356,6 +356,18 @@ impl Used {
             Used::Texture(_) | Used::IndirectCommandBuffer(_) => None,
         }
     }
+
+    /// A use of all of it, reading by `read` and writing by `write` (either may be
+    /// `Access::NONE`): a buffer's, a heap's own buffer's and an indirect command buffer's records'
+    /// bytes, a texture's whole image (`Texture::bound_use`).
+    fn whole_use(&self, read: Access, write: Access) -> Use<ResourceKey> {
+        let bytes = match self {
+            Used::Texture(texture) => return texture.bound_use(read, write),
+            Used::Buffer(buffer) | Used::Heap { bytes: buffer, .. } => buffer,
+            Used::IndirectCommandBuffer(icb) => icb.storage(),
+        };
+        whole_use(bytes, read, write)
+    }
 }
 
 impl Residency {
@@ -631,13 +643,24 @@ impl Residency {
                     true => Access::new(stages, vk::AccessFlags2::MEMORY_WRITE),
                     false => Access::NONE,
                 };
-                let bytes = match used {
-                    Used::Texture(texture) => return texture.bound_use(read, write),
-                    Used::Buffer(buffer) | Used::Heap { bytes: buffer, .. } => buffer,
-                    Used::IndirectCommandBuffer(icb) => icb.storage(),
-                };
-                whole_use(bytes, read, write)
+                used.whole_use(read, write)
             })
+            .collect()
+    }
+
+    /// What any work of a command buffer whose residency this is may write of it, for the
+    /// device's tracker (`State::resident_writes` in `command_buffer/mod.rs`): each resource made
+    /// resident for writing, written over all its bytes (a texture over its whole image) in every
+    /// stage. Residency is the command buffer's (the module docs), so a function of any of its
+    /// encoders may write such a resource, through an address or an ID held in memory, in an
+    /// encoder whose commands name it nowhere. A resource made resident for reading alone is not
+    /// among them.
+    pub(super) fn written_uses(&self) -> Vec<Use<ResourceKey>> {
+        let stages = vk::PipelineStageFlags2::ALL_COMMANDS;
+        let write = Access::new(stages, vk::AccessFlags2::MEMORY_WRITE);
+        (self.held().used.iter())
+            .filter(|(_, usage, _)| usage.contains(ResourceUsage::WRITE))
+            .map(|(used, ..)| used.whole_use(Access::NONE, write))
             .collect()
     }
 

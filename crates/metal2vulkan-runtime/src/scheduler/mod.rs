@@ -2527,7 +2527,11 @@ fn gate_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits: 
 /// (`Tracker::last_writes`), so the step waits for those batches alone, and a command buffer's
 /// executions behind one writer wait for it once; else every queue's last submitted value,
 /// `values`. A gate that leaves out work submitted before it is counted
-/// (`WorkCounts::host_step_gates_narrowed`).
+/// (`WorkCounts::host_step_gates_narrowed`). The tracker holds a write through a command buffer's
+/// residency as one of each of its batches (`State::resident_writes` in `command_buffer/mod.rs`):
+/// so the gate of a step that reads records made resident for writing covers the batch whose
+/// function wrote them unnamed, an earlier one of the step's own command buffer or one of an
+/// earlier command buffer of any queue.
 ///
 /// Every batch that may write what the step reads was submitted by then: an earlier batch of its
 /// line went before it, a batch of an earlier commit on another line that may write those bytes

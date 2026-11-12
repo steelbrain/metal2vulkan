@@ -120,6 +120,15 @@
 //! image outside the encoder joined to its summary, and recorded the same way, after the barrier
 //! the tracker planned for the encoder. The layouts the batch leaves count from its submission on.
 //!
+//! **Writes through the residency** (`State::resident_writes`). Residency is the command
+//! buffer's (`residency.rs`), so a function of any of its encoders may write a resource any of
+//! them made resident for writing, in an encoder whose commands name it nowhere. Each batch with a
+//! part plans those writes with its first part, as writes of each whole resource in every stage
+//! that widen none of the stages the part's fences cover: the tracker then holds the batch as their
+//! last writer, so what reads them later on any queue, and a later host step's gate
+//! (`scheduler/mod.rs`'s `gate_heads`), orders after it. A resource made resident for reading
+//! alone is planned as the commands that name it use it.
+//!
 //! **New resources' first work** (`texture/first_move.rs`). Every batch first does the first GPU
 //! work of the resources made since the device's last submission: each new image's move to
 //! `GENERAL`, and the zeros a new texture, stand-in or buffer reads. It runs before every command
@@ -716,20 +725,30 @@ impl CommandBufferShared {
                 None => (&unnamed, &[][..]),
             }
         }));
-        // Each encoder's summary with its moves' uses joined, where it has moves.
-        let moved: Vec<Option<Summary<ResourceKey>>> = match held_moves.is_empty() {
-            true => Vec::new(),
-            false => (encoders.iter().enumerate())
-                .map(|(at, recorded)| {
-                    let uses = held_moves.uses(at);
-                    (!uses.is_empty()).then(|| {
-                        let mut summary = recorded.summary.clone();
-                        summary.join(Summary::outside_encoders(uses.to_vec()));
-                        summary
+        // Each encoder's summary with its moves' uses joined, where it has moves; the first's
+        // with what the command buffer's work may write through its residency, which any of its
+        // encoders may write (`State::resident_writes`).
+        let resident_writes = state.resident_writes.as_ref();
+        let moved: Vec<Option<Summary<ResourceKey>>> =
+            match held_moves.is_empty() && resident_writes.is_none() {
+                true => Vec::new(),
+                false => (encoders.iter().enumerate())
+                    .map(|(at, recorded)| {
+                        let uses = held_moves.uses(at);
+                        let writes = resident_writes.filter(|_| at == 0);
+                        (!uses.is_empty() || writes.is_some()).then(|| {
+                            let mut summary = recorded.summary.clone();
+                            if !uses.is_empty() {
+                                summary.join(Summary::outside_encoders(uses.to_vec()));
+                            }
+                            if let Some(writes) = writes {
+                                summary.join(writes.clone());
+                            }
+                            summary
+                        })
                     })
-                })
-                .collect(),
-        };
+                    .collect(),
+            };
         let summaries = (encoders.iter().enumerate()).map(|(at, recorded)| {
             let moved = moved.get(at).and_then(Option::as_ref);
             moved.unwrap_or(&recorded.summary)

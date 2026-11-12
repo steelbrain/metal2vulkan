@@ -2111,6 +2111,27 @@ impl<K: Copy + Ord> Summary<K> {
         }
     }
 
+    /// The summary of what work of no stage of its own may make: `uses` of the resources Metal
+    /// tracks, one per resource and range. Joined to an encoder's summary
+    /// ([`join`](Self::join)), it widens none of the stages the encoder's fences cover: a
+    /// command buffer's writes through its residency, which may lie in any of its encoders
+    /// (`State::resident_writes` in `command_buffer/mod.rs`).
+    pub(super) fn of_no_stage(mut uses: Vec<Use<K>>) -> Summary<K> {
+        uses.retain(|used| used.tracked && !used.is_nothing());
+        merge(&mut uses);
+        Summary {
+            uses,
+            stages: vk::PipelineStageFlags2::NONE,
+            waits: Vec::new(),
+            updates: Vec::new(),
+        }
+    }
+
+    /// Whether it holds no use, no wait and no update.
+    pub(super) fn is_empty(&self) -> bool {
+        self.uses.is_empty() && self.waits.is_empty() && self.updates.is_empty()
+    }
+
     /// The summary of a resource state encoder, which records no command: it waits for the fences
     /// `waits` and updates `updates`, in every stage, so a wait on its queue orders after all of
     /// its batch's work before it, which its sparse binding precedes.

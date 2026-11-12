@@ -109,7 +109,7 @@ use super::sparse::indirect;
 use super::texture::faces::TurnPoint;
 use super::texture::storage_form::Riding;
 use super::texture::Texture;
-use super::tracker::{Footprint, Use};
+use super::tracker::{Footprint, Summary, Use};
 use super::unique_identifier::ScheduledWork;
 use super::upload::{Upload, Uploads};
 use super::used_resources::{names_any, EncoderKind, EncoderRecord, Reached, ReadRecord};
@@ -942,6 +942,16 @@ pub(super) struct State {
     residency: Option<Residency>,
     /// The ended encoders whose resources `residency` holds joined: those before this place.
     joined: usize,
+    /// What its work may write through its residency (`Residency::written_uses`), set at its
+    /// commit: every resource made resident for writing, by any of its encoders. A function of
+    /// any of its encoders may write such a resource unnamed (residency is the command
+    /// buffer's), so the device's tracker takes each of its batches as writing them all: joined
+    /// to the summary of the batch's first part, in the plan its submission makes (`submit.rs`)
+    /// and in its footprint ([`CommandBufferShared::footprint`]). A host step's gate then
+    /// covers such a writer of what it reads (`scheduler/mod.rs`'s `gate_heads`): an earlier
+    /// batch of its own command buffer, or one of an earlier command buffer of any queue. `None`
+    /// where no encoder made a resource resident for writing.
+    resident_writes: Option<Summary<ResourceKey>>,
     /// Its ended encoders, in the order they ended, each with what its commands use
     /// (`used_resources.rs`): the keys its commands' uses and bindings named, its placed
     /// segments' among them, and what it made resident. Their uses are let go as it completes.
@@ -1337,6 +1347,25 @@ impl State {
             }
         }
         shadows
+    }
+
+    /// Set [`resident_writes`](Self::resident_writes) from what each ended encoder made resident
+    /// for writing, read from the encoders' own residencies (joining them into its residency
+    /// would cost a command buffer whose work never reads that residency the join), with the
+    /// uses of their host memory `aliases` adds, as an encoder's tracked uses take them: at its
+    /// commit.
+    fn note_resident_writes(&mut self, aliases: &super::host_aliases::HostAliases) {
+        let uses: Vec<Use<ResourceKey>> = (self.ended.iter())
+            .filter_map(|record| record.residency.as_ref())
+            .flat_map(Residency::written_uses)
+            .collect();
+        self.resident_writes = match uses.is_empty() {
+            true => None,
+            false => {
+                let uses = aliases.augment(&uses).unwrap_or(uses);
+                Some(Summary::of_no_stage(uses)).filter(|summary| !summary.is_empty())
+            }
+        };
     }
 
     /// Let go of what its ended encoders' commands use, as it completes: their keys, and what
@@ -2348,6 +2377,7 @@ impl CommandBuffer {
                 holds: Vec::new(),
                 residency: None,
                 joined: 0,
+                resident_writes: None,
                 ended: Vec::new(),
                 root_tables: Vec::new(),
                 root_ranges: HashSet::new(),
@@ -3569,6 +3599,9 @@ impl CommandBuffer {
             // Its heaps reach every texture they hold now, for the work recorded below and by its
             // host steps.
             state.sync_heaps(&self.0.device.shared().counts);
+            // Each of its batches writes what any of its encoders made resident for writing, for
+            // the device's tracker (`State::resident_writes`).
+            state.note_resident_writes(&device.shared().aliases);
             let (segments, places): (Vec<(Deferred, bool)>, Vec<usize>) = state
                 .recorded
                 .iter()
@@ -4640,7 +4673,9 @@ impl CommandBufferShared {
     }
 
     /// What batch `index` uses, for the scheduler's order across queues (`scheduler/order.rs`):
-    /// its encoders' summaries and its segments' recordings, and for a segment its host step
+    /// its encoders' summaries and its segments' recordings, with what the command buffer's work
+    /// may write through its residency where the batch has a part (`State::resident_writes`),
+    /// and for a segment its host step
     /// records for the pipelines it waits for alone, what its work uses, known at encode time
     /// (`Segment::known_summary`): Metal makes the pipeline at `newRenderPipelineState`, so only a
     /// batch that shares a resource with it waits for it; and for a segment its host step records
@@ -4682,6 +4717,11 @@ impl CommandBufferShared {
             let mut summaries = Vec::new();
             let mut known = Vec::new();
             let mut probes = Vec::new();
+            // What its work may write through its residency, as its submission's plan takes it
+            // (`State::resident_writes`).
+            if !recorded.is_empty() {
+                summaries.extend(&state.resident_writes);
+            }
             for (at, encoder) in recorded.iter().enumerate() {
                 if !encoder.sparse.is_empty() {
                     return None;

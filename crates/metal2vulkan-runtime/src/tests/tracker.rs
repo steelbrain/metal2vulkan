@@ -2485,3 +2485,56 @@ fn a_host_read_waits_for_the_last_writes_of_its_bytes_alone() {
     tracker.completed(1, 2);
     assert_eq!(last(&tracker, &records), Some(vec![0, 0]), "seen complete");
 }
+
+/// A command buffer's writes through its residency (`State::resident_writes` in
+/// `command_buffer/mod.rs`), joined to its batch's first encoder, which names none of them: they
+/// keep the tracked uses that touch something, leave the stages the encoder's fence update covers
+/// as they were (a later wait on the fence orders after the encoder's transfer alone), and make
+/// the batch the last writer a later host read of their bytes waits for.
+#[test]
+fn writes_of_no_stage_widen_no_fence_and_name_their_batch_the_writer() {
+    let fence: Key = 100;
+    let every = vk::PipelineStageFlags2::ALL_COMMANDS;
+    let written = Access::new(every, vk::AccessFlags2::MEMORY_WRITE);
+    let resident = Summary::of_no_stage(vec![
+        writes(9, bytes(0..64), written),
+        Use::writes(8, false, bytes(0..64), written),
+        writes(7, bytes(0..0), written),
+        writes(9, bytes(0..64), written),
+    ]);
+    assert_eq!(
+        resident.keys().collect::<Vec<_>>(),
+        [9],
+        "tracked, touching something, once"
+    );
+    let mut first = EncoderUses::new(true);
+    first.record(TRANSFER, &[writes(5, bytes(0..64), copy_write())], None);
+    first.update_fence(fence, None);
+    let mut joined = first.finish();
+    joined.join(resident);
+    let mut tracker = Tracker::default();
+    submit(&mut tracker, &[joined], on(0, 1));
+    let mut second = EncoderUses::new(false);
+    second.wait_for_fence(fence, None);
+    second.record(COMPUTE, &[reads(6, bytes(0..64), shader_read())], None);
+    let (barriers, _) = submit(&mut tracker, &[second.finish()], on(0, 2));
+    let after = Access::new(
+        COMPUTE,
+        vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+    );
+    assert_eq!(
+        barriers,
+        [barrier(
+            Access::new(TRANSFER, vk::AccessFlags2::MEMORY_WRITE),
+            after
+        )],
+        "the fence's stages"
+    );
+    let read = Access::new(every, vk::AccessFlags2::MEMORY_READ);
+    let records = reads(9, bytes(0..8), read);
+    assert_eq!(
+        tracker.last_writes(std::slice::from_ref(&records), 2),
+        Some(vec![1, 0]),
+        "the batch writes them"
+    );
+}
