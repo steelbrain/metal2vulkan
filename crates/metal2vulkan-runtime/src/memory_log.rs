@@ -22,6 +22,11 @@
 //!   so their comings and goings show what makes and frees blocks. A placement that takes a kept
 //!   empty dedicated block (`memory.rs`'s `Pool::place_dedicated`), which makes no block, says so
 //!   too, with the block's handle and memory type.
+//! - **Copied host pages.** One line per copy of the caller's host pages a no-copy buffer or heap
+//!   lies in (`copied.rs`, `copied-host-pages`) as it is made and as it goes ([`copied_line`]):
+//!   the caller's pointer and length, and the copy's host address, the two ranges the runtime's
+//!   comparisons write on the CPU (each commit's copy in writes the copy, each batch's merge back
+//!   the caller's pages), so a write found in memory that is neither can be placed against them.
 //! - **The device address.** A block with a buffer of addresses (`memory.rs`) gives that buffer's.
 //!   Any other memory's line says the address is unknown: the log makes and binds no Vulkan object
 //!   to learn one, as a diagnostic changes no GPU work. A buffer of `SHADER_DEVICE_ADDRESS` usage
@@ -114,6 +119,22 @@ pub(super) fn refused_line(
         "metal2vulkan: memory: refused, a block of type {type_index}: {bytes} bytes, allocation \
          flags 0x{:x}, {export}, {dedicated}: {result:?}",
         flags.as_raw()
+    )
+}
+
+/// The line saying `what` happened to the copy numbered `id` of the caller's `length` bytes at
+/// `pages`, held at `copy` in memory the host maps (the module docs).
+pub(super) fn copied_line(
+    what: &str,
+    id: u64,
+    (pages, length): (usize, usize),
+    copy: usize,
+) -> String {
+    format!(
+        "metal2vulkan: memory: copy {id} {what}: the caller's pages at 0x{pages:x} to 0x{:x} \
+         ({length} bytes), held at 0x{copy:x} to 0x{:x}",
+        pages.saturating_add(length),
+        copy.saturating_add(length)
     )
 }
 

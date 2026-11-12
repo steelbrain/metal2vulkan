@@ -193,6 +193,7 @@ use crate::device::lock;
 use crate::dirty_pages::{new_writer, DirtySource, DirtyTally, PagesLog};
 use crate::host_memory::{mapped_readable, mapped_writable};
 use crate::key_hash::KeyMap;
+use crate::memory_log::{copied_line, MemoryLog};
 use crate::resource::ResourceKey;
 use crate::work_counts::Counters;
 use crate::DirtyStamp;
@@ -227,6 +228,9 @@ pub(crate) struct CopiedBuffers {
     /// The tests' stand-in for a host with no memory for a base ([`CopiedBuffers::refuse_bases`]).
     #[cfg(test)]
     bases_refused: AtomicBool,
+    /// The device's memory log, where it is on: each copy's making and going are lines of it
+    /// (`memory_log.rs`).
+    log: Option<MemoryLog>,
 }
 
 /// The copies commands reached, by the keys of their uses, or every copy: what the batches a
@@ -1144,13 +1148,31 @@ impl Drop for Copied {
             (self.buffers.base_host_blocks).fetch_sub(blocks, Ordering::Relaxed);
         }
         // Its watches end, and its base's memory goes, with no lock of the copies' held: a
-        // watch's end is the consumer's call, and the device's memory takes its own lock.
+        // watch's end is the consumer's call, and the device's memory takes its own lock. So
+        // does its log line, which the consumer's sink takes.
         drop(entries);
+        if let (Some(log), Some(entry)) = (&self.buffers.log, &removed) {
+            let at = (entry.pages.as_ptr() as usize, entry.length);
+            log.line(copied_line(
+                "gone",
+                entry.id,
+                at,
+                entry.copy.as_ptr() as usize,
+            ));
+        }
         drop(removed);
     }
 }
 
 impl CopiedBuffers {
+    /// None yet, each copy's making and going said to `log` where the device's memory log is on.
+    pub(crate) fn logged(log: Option<MemoryLog>) -> CopiedBuffers {
+        CopiedBuffers {
+            log,
+            ..CopiedBuffers::default()
+        }
+    }
+
     /// Whether a copy is live: a batch submitted now may write one, so its event signals are seen
     /// at its completion turn alone (`event_timeline.rs`).
     pub(crate) fn any(&self) -> bool {
@@ -1224,6 +1246,10 @@ impl CopiedBuffers {
             keys: Vec::new(),
         });
         self.live.fetch_add(1, Ordering::Relaxed);
+        if let Some(log) = &self.log {
+            let at = (pages.as_ptr() as usize, length);
+            log.line(copied_line("made", id, at, copy.as_ptr() as usize));
+        }
         Copied {
             buffers: Arc::clone(self),
             id,

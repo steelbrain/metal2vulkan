@@ -2405,6 +2405,10 @@ impl Device {
         );
         memory.share_buffers_among(buffer_families.clone());
         memory.log_to(MemoryLog::new(instance.sink()));
+        // Its copied host buffers' lines go to the same log (`copied.rs`).
+        let copied = Arc::new(super::copied::CopiedBuffers::logged(MemoryLog::new(
+            instance.sink(),
+        )));
         if zero_initialize_device_memory {
             memory.zero_image_blocks();
         }
@@ -2884,7 +2888,7 @@ impl Device {
             rebinds: Default::default(),
             aliases: Default::default(),
             host_ram: Default::default(),
-            copied: Default::default(),
+            copied,
             #[cfg(test)]
             failing_host_imports: Default::default(),
             #[cfg(test)]

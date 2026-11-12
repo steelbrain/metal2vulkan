@@ -746,6 +746,25 @@ fn the_memory_log_names_a_placement_s_kind_class_and_place() {
     );
 }
 
+/// The memory log's line for a copy of the caller's host pages names the copy, the caller's
+/// pointer and length, and the copy's host address, each range's end too (`memory_log.rs`).
+#[test]
+fn the_memory_log_names_a_copy_s_pages_and_where_it_is_held() {
+    use crate::memory_log::copied_line;
+    let made = copied_line("made", 3, (0x7ff1_4c40_0000, 0x20_0000), 0x7f00_0000_1000);
+    assert_eq!(
+        made,
+        "metal2vulkan: memory: copy 3 made: the caller's pages at 0x7ff14c400000 to \
+         0x7ff14c600000 (2097152 bytes), held at 0x7f0000001000 to 0x7f0000201000"
+    );
+    let gone = copied_line("gone", 3, (0x1000, 16), 0x2000);
+    assert_eq!(
+        gone,
+        "metal2vulkan: memory: copy 3 gone: the caller's pages at 0x1000 to 0x1010 (16 bytes), \
+         held at 0x2000 to 0x2010"
+    );
+}
+
 /// Pooled blocks take placements until full; a block that empties is kept while fewer than
 /// `KEPT_EMPTY_BLOCKS` empty ones are, and freed past that, so a working set that dips by a block
 /// and comes back makes and frees none. Freed slots are reused.
