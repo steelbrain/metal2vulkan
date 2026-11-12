@@ -22,12 +22,15 @@
 //! So on a device that enables `maintenance4`, an image of the same creation parameters has the
 //! same requirements, and a query of parameters asked before takes the answer kept for them
 //! ([`RequirementAnswers`]); elsewhere each query makes its image, as alignment is not fixed. A
-//! plan and a tiling fix every parameter of the image a query makes (`ImagePlan::create_info`, the
-//! device's sharing, and the tiling's initial layout), so they are the key. A kept answer is the
-//! whole query's: it is kept only once the device's limits for the image took it, and those limits
+//! plan and a [`Query`] fix every parameter of the image a query makes (`ImagePlan::create_info`,
+//! the device's sharing, the tiling and its initial layout, and the handle type of a linear image
+//! made for host allocations), so they are the key. A kept answer is the whole query's: it is kept
+//! only once the device's limits for the image took it, and those limits
 //! (`vkGetPhysicalDeviceImageFormatProperties2`) are the physical device's for the same
 //! parameters, so a query answered from it asks nothing more (`WorkCounts::requirement_limits_asked`
-//! counts the limits asked).
+//! counts the limits asked). An image made for host allocations whose limits took its handle type
+//! without a dedicated allocation requires none ("requiresDedicatedAllocation will otherwise be
+//! VK_FALSE", `VkMemoryDedicatedRequirements`), so its kept answer needs no second query of that.
 
 use crate::image_plan::ImagePlan;
 use ash::vk;
@@ -36,12 +39,22 @@ use std::collections::VecDeque;
 /// The answers kept at most: the least recently asked goes first.
 const KEPT: usize = 64;
 
-/// The memory requirements of planned images by their plan and tiling (the module docs), kept
+/// What an answer kept for a plan is of: its image in a tiling, made for memory the device
+/// allocates (`texture/heap.rs`'s `planned_requirements`), or its linear image made for host
+/// allocations (`VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT`, made `UNDEFINED`:
+/// `texture/heap.rs`'s `host_image_requirements`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Query {
+    Tiling(vk::ImageTiling),
+    HostLinear,
+}
+
+/// The memory requirements of planned images by their plan and [`Query`] (the module docs), kept
 /// only where the device enables `maintenance4`.
 pub(crate) struct RequirementAnswers {
     keeps: bool,
     /// The most recently asked first.
-    answers: VecDeque<(ImagePlan, vk::ImageTiling, vk::MemoryRequirements)>,
+    answers: VecDeque<(ImagePlan, Query, vk::MemoryRequirements)>,
 }
 
 impl RequirementAnswers {
@@ -53,26 +66,26 @@ impl RequirementAnswers {
         }
     }
 
-    /// The requirements kept for an image of `plan` and `tiling`, now the most recently asked.
+    /// The requirements kept for an image of `plan` and `query`, now the most recently asked.
     pub(crate) fn answer(
         &mut self,
         plan: &ImagePlan,
-        tiling: vk::ImageTiling,
+        query: Query,
     ) -> Option<vk::MemoryRequirements> {
         let at = (self.answers.iter())
-            .position(|(kept, kept_tiling, _)| *kept_tiling == tiling && kept == plan)?;
+            .position(|(kept, kept_query, _)| *kept_query == query && kept == plan)?;
         let entry = self.answers.remove(at)?;
         let requirements = entry.2;
         self.answers.push_front(entry);
         Some(requirements)
     }
 
-    /// Keep `requirements`, the answer for an image of `plan` and `tiling`, where the device
+    /// Keep `requirements`, the answer for an image of `plan` and `query`, where the device
     /// enables `maintenance4`.
     pub(crate) fn keep(
         &mut self,
         plan: &ImagePlan,
-        tiling: vk::ImageTiling,
+        query: Query,
         requirements: vk::MemoryRequirements,
     ) {
         if !self.keeps {
@@ -81,7 +94,6 @@ impl RequirementAnswers {
         if self.answers.len() == KEPT {
             self.answers.pop_back();
         }
-        self.answers
-            .push_front((plan.clone(), tiling, requirements));
+        self.answers.push_front((plan.clone(), query, requirements));
     }
 }

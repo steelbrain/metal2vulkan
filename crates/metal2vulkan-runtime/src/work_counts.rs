@@ -5607,11 +5607,12 @@ pub struct WorkCounts {
     /// texture of the queue.
     pub heap_sample_move_images_lent: u64,
     /// The images heap textures' plans made only to ask their memory requirements, destroyed at
-    /// once: none for a plan and tiling asked before on a device that enables `maintenance4`,
-    /// which fixes the answer (`texture/requirements.rs`).
+    /// once (in a heap over host pages, its linear image made for host allocations among them):
+    /// none for a plan and image asked before on a device that enables `maintenance4`, which
+    /// fixes the answer (`texture/requirements.rs`).
     pub requirement_images_made: u64,
     /// The device's limits (`vkGetPhysicalDeviceImageFormatProperties2`) heap textures' plans
-    /// asked for the images whose memory requirements they ask: none for a plan and tiling whose
+    /// asked for the images whose memory requirements they ask: none for a plan and image whose
     /// requirements were kept (`texture/requirements.rs`), which the limits took already.
     pub requirement_limits_asked: u64,
     /// The descriptor pools the runtime's descriptor arenas made, where no spare of the device's

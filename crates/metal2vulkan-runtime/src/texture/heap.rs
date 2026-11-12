@@ -228,6 +228,7 @@ use super::heap_tiled::{
     shadow_tiles, HeapLayout, HeapTiledCopies, TiledMoves, TiledPart, TiledTexture, Untiled,
 };
 use super::heap_two_planes::{HeapPlaneCopies, TwoPlaneHeapLayout};
+use super::requirements::Query;
 use super::stand_in::StandIn;
 use super::{
     image_aspects, image_error, pages_hold, texel_units, DetachedImage, IdUse, Image, ImageObjects,
@@ -2830,7 +2831,7 @@ impl Device {
         tiling: vk::ImageTiling,
     ) -> Result<vk::MemoryRequirements, Error> {
         let answers = &self.shared().textures.requirements;
-        if let Some(requirements) = lock(answers).answer(plan, tiling) {
+        if let Some(requirements) = lock(answers).answer(plan, Query::Tiling(tiling)) {
             return Ok(requirements);
         }
         let view_formats = plan.ash_view_formats();
@@ -2858,7 +2859,7 @@ impl Device {
             release::object(raw_device, raw);
             requirements
         };
-        lock(answers).keep(plan, tiling, requirements);
+        lock(answers).keep(plan, Query::Tiling(tiling), requirements);
         Ok(requirements)
     }
 
@@ -3578,11 +3579,18 @@ impl Device {
     /// `UNDEFINED` layout as Vulkan has such an image made; `None` where the device imports no
     /// host memory for such an image (`VkExternalImageFormatProperties`), makes none within its
     /// limits, or asks a dedicated allocation of it (RADV's: an image bound at an offset of the
-    /// heap's imported memory is none).
+    /// heap's imported memory is none). The answer kept for the plan where Vulkan fixes it
+    /// (`texture/requirements.rs`), with no other query; else the device's limits are asked, then
+    /// an image is made for the query (`WorkCounts::requirement_limits_asked`,
+    /// `requirement_images_made`), as for the plan's other images (`planned_requirements`).
     fn host_image_requirements(
         &self,
         plan: &ImagePlan,
     ) -> Result<Option<vk::MemoryRequirements>, Error> {
+        let answers = &self.shared().textures.requirements;
+        if let Some(requirements) = lock(answers).answer(plan, Query::HostLinear) {
+            return Ok(Some(requirements));
+        }
         let view_formats = plan.ash_view_formats();
         let mut list = vk::ImageFormatListCreateInfo::default();
         let mut external = vk::ExternalMemoryImageCreateInfo::default()
@@ -3593,7 +3601,9 @@ impl Device {
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .push_next(&mut external);
         let host = crate::dma_buf::ModifierMemory::Host;
-        let Ok(limits) = self.external_image_limits(&info, &view_formats, host)? else {
+        let limits = self.external_image_limits(&info, &view_formats, host)?;
+        self.shared().counts.requirement_limits_asked();
+        let Ok(limits) = limits else {
             return Ok(None);
         };
         if check_linear_limits(plan, &limits).is_err() {
@@ -3603,6 +3613,7 @@ impl Device {
         // SAFETY: the device is live and `info` (with its chain) valid and within the device's
         // limits for an image of host allocations.
         let raw = unsafe { crate::creation::image(raw_device, &info) }?;
+        self.shared().counts.requirement_image_made();
         let mut dedicated = vk::MemoryDedicatedRequirements::default();
         let mut requirements = vk::MemoryRequirements2::default().push_next(&mut dedicated);
         let query = vk::ImageMemoryRequirementsInfo2::default().image(raw);
@@ -3613,7 +3624,11 @@ impl Device {
             release::object(raw_device, raw);
         }
         let requirements = requirements.memory_requirements;
-        Ok((dedicated.requires_dedicated_allocation == vk::FALSE).then_some(requirements))
+        if dedicated.requires_dedicated_allocation != vk::FALSE {
+            return Ok(None);
+        }
+        lock(answers).keep(plan, Query::HostLinear, requirements);
+        Ok(Some(requirements))
     }
 
     /// An image of `image`'s plan and tiling bound at `at` of the heap's memory, whose
