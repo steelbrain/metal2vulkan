@@ -82,6 +82,15 @@
 //! cell (`SNAPSHOT-AREA-COST`): the median GPU time per frame of the baseline and of the readers
 //! on each device, and per frame the readers snapshotted and split on each.
 //!
+//! `backdrop_costs` is a window compositor's backdrop reads in a frame: one command buffer of a
+//! pass over each of [`BACKDROP_SIZES`] (`BGRA8Unorm` surfaces, each a texture of an IOSurface
+//! plane over a private buffer at packed rows, as a host keeps a surface's device copy), loaded
+//! but the last, the framebuffer, which its pass clears; in each, a fill, a draw that reads the
+//! surface at its own pixels over it with no barrier before it and writes what it read
+//! (`tob_read`), and another fill. On the default device and on one that withholds
+//! `extendedDynamicState3ColorWriteMask` (no snapshot: the copy taken before each pass), printed
+//! per device (`BACKDROP-COST`): the median GPU time per frame and the work counts per frame.
+//!
 //! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`.
 
 use super::attachment_reads::{floats, function};
@@ -1294,6 +1303,127 @@ fn area_frame(
             .unwrap();
     }
     encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap()
+}
+
+/// The `backdrop_costs` surfaces' sizes: five layers', then the framebuffer's, which its pass
+/// clears.
+const BACKDROP_SIZES: [[u64; 2]; 6] = [
+    [1600, 1000],
+    [1280, 800],
+    [1024, 768],
+    [800, 600],
+    [512, 512],
+    [3840, 2400],
+];
+const BGRA8: PixelFormat = PixelFormat::BGRA8Unorm;
+
+#[test]
+#[ignore = "a release-mode measurement: run by name"]
+fn backdrop_costs() {
+    let open = |withheld: Option<VkFeature>| {
+        let mut options = DeviceOptions::default();
+        options.withheld_features.extend(withheld);
+        open_device(TEST_DEVICE, options).unwrap()
+    };
+    let devices = [
+        ("default", open(None)),
+        (
+            "masks withheld",
+            open(Some(VkFeature::ExtendedDynamicState3ColorWriteMask)),
+        ),
+    ];
+    for (name, device) in &devices {
+        let draws = (
+            state(device, "tob_solid", "tob_renders.ll", BGRA8),
+            state(device, "tob_read", "tob_renders.ll", BGRA8),
+        );
+        let held: Vec<(Texture, Buffer)> = (BACKDROP_SIZES.iter())
+            .map(|&[width, height]| {
+                let row = width * 4;
+                let buffer = device
+                    .new_buffer(row * height, ResourceOptions::private())
+                    .unwrap();
+                let mut d = TextureDescriptor::texture_2d(BGRA8, width, height, false);
+                d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+                d.resource_options = buffer.resource_options();
+                let plane = IoSurfacePlane::new(0, row, false);
+                let texture = buffer.new_texture_with_iosurface_plane(&d, plane).unwrap();
+                (texture, buffer)
+            })
+            .collect();
+        let surfaces: Vec<&Texture> = held.iter().map(|(texture, _)| texture).collect();
+        let queue = device.new_command_queue().unwrap();
+        for _ in 0..WARM {
+            backdrop_frame(&queue, &surfaces, (&draws.0, &draws.1));
+        }
+        let before = device.work_counts();
+        let gpu: Vec<f64> = (0..TIMED)
+            .map(|_| backdrop_frame(&queue, &surfaces, (&draws.0, &draws.1)))
+            .collect();
+        let after = device.work_counts();
+        let per = |a: u64, b: u64| (b - a) as f64 / TIMED as f64;
+        println!(
+            "BACKDROP-COST {} {name}: GPU {:.3} ms/frame (median); in place {:.1}, {}",
+            device.name(),
+            median(gpu) * 1e3,
+            per(before.reading_draws_in_place, after.reading_draws_in_place),
+            per_frame(&before, &after, TIMED)
+        );
+    }
+}
+
+/// One `backdrop_costs` frame on `queue`: one command buffer of a pass over each of `surfaces`,
+/// loaded but the last, cleared, and stored, of a fill of a rectangle, a reader at its own pixels
+/// over it with no barrier before it (`tob_read`, which writes what it read), and a fill of
+/// another. Its GPU time, in seconds.
+fn backdrop_frame(
+    queue: &CommandQueue,
+    surfaces: &[&Texture],
+    (fill, read): (&RenderPipelineState, &RenderPipelineState),
+) -> f64 {
+    let command_buffer = queue.command_buffer().unwrap();
+    for (index, &surface) in surfaces.iter().enumerate() {
+        let (width, height) = (surface.width(), surface.height());
+        let mut d = RenderPassDescriptor::new();
+        let color = &mut d.color_attachments[0];
+        color.texture = Some(surface.clone());
+        color.load_action = match index + 1 == surfaces.len() {
+            true => LoadAction::Clear,
+            false => LoadAction::Load,
+        };
+        color.store_action = StoreAction::Store;
+        let corners = |[x0, y0, x1, y1]: [u64; 4]| {
+            let x = |p: u64| p as f32 / width as f32 * 2.0 - 1.0;
+            let y = |p: u64| 1.0 - p as f32 / height as f32 * 2.0;
+            floats([x(x0), y(y1), x(x1), y(y0)])
+        };
+        let window = [width / 8, height / 8, width * 5 / 8, height * 5 / 8];
+        let other = [width / 2, height / 2, width * 7 / 8, height * 7 / 8];
+        let mut encoder = command_buffer.render_command_encoder(&d).unwrap();
+        encoder.set_render_pipeline_state(fill).unwrap();
+        encoder
+            .set_fragment_bytes(&floats([0.25, 0.5, 0.0, 1.0]), 0)
+            .unwrap();
+        encoder.set_vertex_bytes(&corners(window), 0).unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+            .unwrap();
+        encoder.set_render_pipeline_state(read).unwrap();
+        encoder.set_fragment_texture(Some(surface), 0).unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+            .unwrap();
+        encoder.set_render_pipeline_state(fill).unwrap();
+        encoder.set_vertex_bytes(&corners(other), 0).unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+            .unwrap();
+        encoder.end_encoding().unwrap();
+    }
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
