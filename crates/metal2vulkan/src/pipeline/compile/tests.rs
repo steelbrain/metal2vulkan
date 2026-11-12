@@ -3447,6 +3447,12 @@ fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
         assert!(input.bindings.is_empty(), "merged {merged}");
         assert_eq!(input.pulled.len(), 1, "merged {merged}");
         assert_eq!(input.variant_pulled, layouts);
+        // The pulled layout's buffer is read through its root entry, as every other slot.
+        let slots = forms(&p);
+        assert!(
+            !slots.is_empty() && slots.iter().all(|f| *f == BufferForm::Psb),
+            "merged {merged}: {slots:?}"
+        );
         for stage in &p.stages {
             l3(&stage.spirv, &p.requirements, &dev);
         }

@@ -1273,10 +1273,15 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         lowering.push(Some(l));
     }
     // Source buffers no accessed slot shares: read-only `Whole` storage slots of their own, whose
-    // range is never provably within `maxStorageBufferRange`.
+    // range is never provably within `maxStorageBufferRange`; a replay variant's are read through
+    // their root entries, as its other slots are.
     let mut own: Vec<(SlotRef, SlotLowering)> = Vec::new();
     for &s in &sources {
         if shared_slot(s).is_some() {
+            continue;
+        }
+        if replay {
+            own.push((s, psb_lowering(Window::Whole)?));
             continue;
         }
         cx.facts.insert(RuntimeFact::BufferRangeLimit { slot: s });

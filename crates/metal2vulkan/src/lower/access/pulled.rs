@@ -26,7 +26,8 @@
 //! `maxStorageBufferRange`, so it declares `BufferRangeLimit`; a `BufferRangeLimit` variant
 //! (`LowerInputs.psb_slots`) or Profile A's per-stage descriptor-limit fallback moves it to its
 //! device address, and a shared slot takes the device address the argument's wide pointers or typed
-//! atomics need. The fetch reads a storage view at the bind residual plus its Metal displacement,
+//! atomics need. A device-replay variant (`LowerInputs.replay_bindings`) reads it, as every other
+//! slot, through its root entry in the replayed command's slot table. The fetch reads a storage view at the bind residual plus its Metal displacement,
 //! contained by the profile's encoding, and a device address through the slot's root entry (`psb`,
 //! window start 0), always contained unless containment is off. Reads are plain: a vertex function
 //! has no barrier a coherence could order them with.
