@@ -398,3 +398,34 @@ fn a_call_under_way_keeps_the_parts_it_read_past_the_lost_generation_s_rest() {
     assert!(!matches!(made, Ok(true)), "{made:?}");
     assert!(buffer.first_parts_freed());
 }
+
+/// A fence made before a recovery goes on after it: an encoder of the next generation updates
+/// it and a later one waits for it, as Metal's fence goes on, and the fence holds nothing of the
+/// lost generation, which goes while the fence lives.
+#[test]
+fn a_fence_goes_on_past_a_recovery() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    let fence = device.new_fence();
+    fence.set_label("fence");
+    let buffer = device
+        .new_buffer(BYTES, ResourceOptions::private())
+        .unwrap();
+    device.recover_for_test().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.fill_buffer(&buffer, 0..BYTES, 3).unwrap();
+    blit.update_fence(&fence).unwrap();
+    blit.end_encoding().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.wait_for_fence(&fence).unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    assert_eq!(
+        outcome(&command_buffer),
+        (CommandBufferStatus::Completed, None)
+    );
+    assert_eq!(fence.label().as_deref(), Some("fence"));
+    assert_eq!(live_vk_devices(&device, 1), 1);
+}
