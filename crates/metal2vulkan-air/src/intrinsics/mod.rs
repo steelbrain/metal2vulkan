@@ -225,8 +225,8 @@ impl AirIntrinsic {
     /// Another operand form the same name may be declared with (a texture read's legacy form, a
     /// 64-bit atomic min or max without its result, the AIR 2.9 form of an atomic or a barrier,
     /// the AIR 2.7 form of a simdgroup-matrix block load or store, the AIR 2.5 kernel or vertex
-    /// buffer setter without its attribute stride, the AIR 2.9 form of a strided tensor's
-    /// initialization).
+    /// buffer setter without its attribute stride, the AIR 2.9 form of a tensor's extent or
+    /// strided initialization).
     fn alternative(self) -> Option<AirIntrinsic> {
         match self {
             AirIntrinsic::Texture(t) => t.alternative().map(AirIntrinsic::Texture),

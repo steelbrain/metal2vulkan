@@ -834,7 +834,7 @@ fn tensor_op(
     m: &mut Meter,
 ) -> Result<Option<Value>, Error> {
     match t {
-        Tensor::Extent => tensor::extent(out, args, m).map(Some),
+        Tensor::Extent { .. } => tensor::extent(out, args, m).map(Some),
         Tensor::InitStrided { .. } => tensor::init(out, args, rank, m).map(|()| None),
         Tensor::Slice => tensor::copy(out, args, rank, m).map(|()| None),
         Tensor::DescriptorSize => Err(invariant("a tensor size lowered as a body")),

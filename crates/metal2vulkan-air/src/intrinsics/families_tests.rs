@@ -536,7 +536,11 @@ const OBSERVED: &[(&str, &str)] = &[
     // AIR 2.9 (`xcrun metal` 32023.921 at deployment target macOS 27): a barrier takes its order,
     // and a memory atomic its `mem_flags` before the volatile flag.
     ("air.wg.barrier", "void (i32, i32, i32)"),
-    // AIR 2.9: a strided tensor's initialization takes three more operands.
+    // AIR 2.9: a tensor's extent takes one more operand, a strided initialization three.
+    (
+        "air.get_extent_private_tensor.i32",
+        "i32 (p0, i16, i16, i16)",
+    ),
     (
         "air.init_strided_private_tensor.i32.global",
         "void (p0, i16, p1, p0, p0, i8, p1, i32, i8)",
@@ -3734,6 +3738,26 @@ fn interpolation_functions_read_their_location_and_interpolant() {
         "air.interpolate_centerperspective.f32",
     ] {
         assert_eq!(AirIntrinsic::parse(name), None, "{name}");
+    }
+}
+
+/// A tensor's extent has two declarations: AIR 2.8's three operands and AIR 2.9's four. Another
+/// added operand is a mismatch.
+#[test]
+fn a_tensor_extent_has_its_air_2_9_form() {
+    let name = "air.get_extent_private_tensor.i32";
+    for (decl, trailing) in [
+        ("i32 (p0, i16, i16)", false),
+        ("i32 (p0, i16, i16, i16)", true),
+    ] {
+        assert_eq!(
+            declared_air(name, decl),
+            AirIntrinsic::Tensor(Tensor::Extent { trailing }),
+            "{decl}"
+        );
+    }
+    for decl in ["i32 (p0, i16, i16, i32)", "i32 (p0, i16, i16, i16, i16)"] {
+        assert_eq!(declared(name, decl), DeclClass::Mismatch, "{decl}");
     }
 }
 
