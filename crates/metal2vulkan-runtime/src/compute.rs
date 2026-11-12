@@ -1845,9 +1845,15 @@ fn settle_indirect(
 /// of the interior and ragged-edge regions a split plans — Metal's own one dispatch, on one
 /// `VkPipeline`, with no barrier between regions and no `Degradation::SplitDispatch`.
 ///
+/// So a grid narrower than one threadgroup on an axis, which the split runs as one region of the
+/// grid's own size, a `VkPipeline` of each width, takes the flat form's one `VkPipeline` of the
+/// call's size too: on a guest's run on an RX 7900 XTX, a kernel dispatched at 64 such widths
+/// made 185,566 `VkPipeline`s in 45 s, past the most its variant keeps (`PIPELINES`).
+///
 /// `None`, so the dispatch keeps its exact split, where its grid is already a whole number of
-/// threadgroups on every axis (the split is one region, which the flat form cannot better), where
-/// the kernel observes its threadgroup partition or the device reaches no memory by device address
+/// threadgroups on every axis (the split is one region of the call's size, which the flat form
+/// cannot better) or is empty, where the kernel observes its threadgroup partition or the device
+/// reaches no memory by device address
 /// (the compile layer's refusal, which the state remembers), where the flat form cannot cover the
 /// grid within the device's `maxComputeWorkGroupCount`, or in the large-buffer form, whose key
 /// `settle_flat` does not take.
@@ -1868,15 +1874,10 @@ fn flat_direct(
         return Ok(None);
     }
     // The split's regions per axis: its interior where whole threadgroups fill it, and an edge of
-    // the remainder. More than one region in all is what the flat form replaces with one.
-    let pieces = |i: usize| -> u32 {
-        let (full, rem) = match threads_per_group[i] {
-            0 => return 0,
-            l => (threads[i] / l, threads[i] % l),
-        };
-        u32::from(full > 0) + u32::from(rem > 0)
-    };
-    if (0..3).map(pieces).product::<u32>() <= 1 {
+    // the remainder, of a local size of its own. A remainder on any axis, the edge alone where the
+    // grid is narrower than one threadgroup, is what the flat form replaces with its one region.
+    let empty = (0..3).any(|i| threads[i] == 0 || threads_per_group[i] == 0);
+    if empty || (0..3).all(|i| threads[i] % threads_per_group[i] == 0) {
         return Ok(None);
     }
     match pipeline.settle_flat(shape, threads_per_group, dispatch) {
