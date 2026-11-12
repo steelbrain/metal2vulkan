@@ -20,6 +20,16 @@
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. A device without a framebuffer fetch in
 //! the pixel interlock says so and checks nothing.
+//!
+//! An `RGBA8Unorm_sRGB` target over host pages, loaded, renders through a scratch on a device that
+//! fetches through storage, whatever its image: a fetching draw reads and writes it through an
+//! unsigned-integer view no texture's image is made mutable to (`framebuffer_fetch.rs`). Where
+//! the pass's first instance (the first icon) recorded inline into the target itself, the scratch
+//! arrives with the first fetch and takes the target's texels after that instance, and the words
+//! the later instances changed are merged back into the host pages (`linear_merge.rs`): kept
+//! after that copy, not before the pass, where the scratch held what it held before (in the
+//! second round, the image of the first round's scratch, recycled, with that round's pixels).
+//! Its codes are the device's own sRGB conversions, compared within one code.
 
 use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
@@ -49,14 +59,37 @@ enum Home {
     HostPages,
 }
 
+/// The target's pixel format.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Format {
+    /// `RGBA16Float`, a texel's channels the bits of halves.
+    Half,
+    /// `RGBA8Unorm_sRGB`, a texel's channels 8-bit codes.
+    Srgb,
+}
+
+impl Format {
+    fn pixel_format(self) -> PixelFormat {
+        match self {
+            Format::Half => PixelFormat::RGBA16Float,
+            Format::Srgb => PixelFormat::RGBA8UnormSRGB,
+        }
+    }
+
+    /// A texel's bytes.
+    fn texel(self) -> u64 {
+        match self {
+            Format::Half => 8,
+            Format::Srgb => 4,
+        }
+    }
+}
+
 /// The target's side, in pixels.
 const SIDE: u64 = 128;
 
 /// The icon's side, in texels.
 const ICON_SIDE: u64 = 64;
-
-/// An `RGBA16Float` texel's bytes.
-const TEXEL: u64 = 8;
 
 /// The icon's color and the target's clear color.
 const ICON: [f64; 4] = [0.25, 0.5, 0.75, 1.0];
@@ -82,11 +115,11 @@ const DRAWS: [Draw; 4] = [
     Draw::Fetch(F2),
 ];
 
-/// The state of `tob_rect` and `fixture`'s `fragment`, into an `RGBA16Float` color.
+/// The state of `tob_rect` and `fixture`'s `fragment`, into a color of `format`.
 fn state(
     device: &Device,
-    fixture: &str,
-    fragment: &str,
+    (fixture, fragment): (&str, &str),
+    format: Format,
 ) -> Result<RenderPipelineState, crate::Error> {
     let function = |path: &str, name: &str| {
         let function = library(device, path).new_function_with_name(name).unwrap();
@@ -95,8 +128,7 @@ fn state(
     let mut descriptor =
         RenderPipelineDescriptor::new(function("engine/tob_renders.ll", "tob_rect"));
     descriptor.fragment = Some(function(fixture, fragment));
-    descriptor.color_attachments[0] =
-        Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float));
+    descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(format.pixel_format()));
     device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())
 }
 
@@ -120,26 +152,82 @@ fn half(value: f64) -> u16 {
     }
 }
 
-/// The color the composite leaves at pixel `(x, y)`.
-fn expected(x: u64, y: u64) -> [u16; 4] {
+/// The 8-bit sRGB code of `value` in channel `channel` (alpha linear).
+fn code(channel: usize, value: f64) -> u16 {
+    let encoded = match channel {
+        3 => value,
+        _ if value <= 0.0031308 => value * 12.92,
+        _ => 1.055 * value.powf(1.0 / 2.4) - 0.055,
+    };
+    (encoded * 255.0).round() as u16
+}
+
+/// The value of the 8-bit sRGB code `code` in channel `channel` (alpha linear).
+fn value(channel: usize, code: u16) -> f64 {
+    let encoded = f64::from(code) / 255.0;
+    match channel {
+        3 => encoded,
+        _ if encoded <= 0.04045 => encoded / 12.92,
+        _ => ((encoded + 0.055) / 1.055).powf(2.4),
+    }
+}
+
+/// The texel `color` stores in `format`.
+fn stored(format: Format, color: [f64; 4]) -> [u16; 4] {
+    match format {
+        Format::Half => color.map(half),
+        Format::Srgb => std::array::from_fn(|channel| code(channel, color[channel])),
+    }
+}
+
+/// The texel the composite leaves at pixel `(x, y)` of a target of `format`: each draw's over
+/// what the target stores, a fetch reading the stored texel back.
+fn expected(format: Format, x: u64, y: u64) -> [u16; 4] {
     let within = |[x0, y0, x1, y1]: [u64; 4]| x >= x0 && x < x1 && y >= y0 && y < y1;
-    let mut color = BACKGROUND;
+    let mut texel = stored(format, BACKGROUND);
     for draw in DRAWS {
         match draw {
-            Draw::Icon(rect) if within(rect) => color = ICON,
-            Draw::Fetch(rect) if within(rect) => color = color.map(|c| c * 0.5),
+            Draw::Icon(rect) if within(rect) => texel = stored(format, ICON),
+            Draw::Fetch(rect) if within(rect) => {
+                let read: [f64; 4] = match format {
+                    // Every half the test writes, halved, is exact.
+                    Format::Half => std::array::from_fn(|channel| half_value(texel[channel]) * 0.5),
+                    Format::Srgb => {
+                        std::array::from_fn(|channel| value(channel, texel[channel]) * 0.5)
+                    }
+                };
+                texel = stored(format, read);
+            }
             _ => {}
         }
     }
-    color.map(half)
+    texel
 }
 
-/// The tools: the queue, the two states, and the icon's sampler.
+/// The value of the half bits `bits`, for the values the test writes.
+fn half_value(bits: u16) -> f64 {
+    [1.0, 0.75, 0.5, 0.375, 0.25, 0.125]
+        .into_iter()
+        .find(|&v| half(v) == bits)
+        .unwrap_or_else(|| panic!("no value for half {bits:#x}"))
+}
+
+/// Whether `got` is the composite's `want` in `format`: the same bits of halves, or 8-bit sRGB
+/// codes within one of it (the device's own conversions).
+fn matches(format: Format, got: [u16; 4], want: [u16; 4]) -> bool {
+    match format {
+        Format::Half => got == want,
+        Format::Srgb => (got.iter().zip(want)).all(|(&g, w)| g.abs_diff(w) <= 1),
+    }
+}
+
+/// The tools: the queue, the two states, the icon's sampler, and the target's format.
 struct Tools {
     queue: CommandQueue,
     sample: RenderPipelineState,
     fetch: RenderPipelineState,
     sampler: SamplerState,
+    format: Format,
 }
 
 impl Tools {
@@ -202,6 +290,7 @@ impl Tools {
 
     /// `target`'s texels, copied into `back` by a blit in `command_buffer`.
     fn read(&self, command_buffer: &CommandBuffer, target: &Texture, back: &Buffer) {
+        let texel = self.format.texel();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         blit.copy_from_texture_to_buffer(
             target,
@@ -211,8 +300,8 @@ impl Tools {
             Size::new(SIDE, SIDE, 1),
             back,
             0,
-            SIDE * TEXEL,
-            SIDE * SIDE * TEXEL,
+            SIDE * texel,
+            SIDE * SIDE * texel,
             BlitOption::None,
         )
         .unwrap();
@@ -220,54 +309,62 @@ impl Tools {
     }
 }
 
-/// `buffer`'s texels, a host-visible buffer no command writes now.
-fn texels(buffer: &Buffer) -> Vec<[u16; 4]> {
+/// `buffer`'s texels of `format`, a host-visible buffer no command writes now.
+fn texels(buffer: &Buffer, format: Format) -> Vec<[u16; 4]> {
     let contents = buffer.contents().unwrap();
-    // SAFETY: the buffer's first `SIDE * SIDE * TEXEL` bytes, which no command buffer writes now.
-    let bytes =
-        unsafe { std::slice::from_raw_parts(contents.as_ptr(), (SIDE * SIDE * TEXEL) as usize) };
-    bytes
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .map(|t| {
-            let h = |i: usize| u16::from_le_bytes([t[i], t[i + 1]]);
-            [h(0), h(2), h(4), h(6)]
-        })
-        .collect()
+    let length = (SIDE * SIDE * format.texel()) as usize;
+    // SAFETY: the buffer's first `length` bytes, which no command buffer writes now.
+    let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), length) };
+    match format {
+        Format::Half => (bytes.as_chunks::<8>().0.iter())
+            .map(|t| {
+                let h = |i: usize| u16::from_le_bytes([t[i], t[i + 1]]);
+                [h(0), h(2), h(4), h(6)]
+            })
+            .collect(),
+        Format::Srgb => (bytes.as_chunks::<4>().0.iter())
+            .map(|t| t.map(u16::from))
+            .collect(),
+    }
 }
 
-/// The pixels of `texels` that differ from the composite's answer, with their texels, at most
-/// the first 8, and how many differ.
-fn wrong(texels: &[[u16; 4]]) -> (usize, Vec<((u64, u64), [u16; 4], [u16; 4])>) {
+/// The pixels of `texels` (of `format`) that differ from the composite's answer, with their
+/// texels, at most the first 8, and how many differ.
+fn wrong(texels: &[[u16; 4]], format: Format) -> (usize, Vec<((u64, u64), [u16; 4], [u16; 4])>) {
     let all: Vec<_> = (texels.iter().enumerate())
         .map(|(i, &texel)| ((i as u64 % SIDE, i as u64 / SIDE), texel))
-        .filter(|&((x, y), texel)| texel != expected(x, y))
-        .map(|((x, y), texel)| ((x, y), texel, expected(x, y)))
+        .map(|((x, y), texel)| ((x, y), texel, expected(format, x, y)))
+        .filter(|&(_, texel, want)| !matches(format, texel, want))
         .collect();
     (all.len(), all.into_iter().take(8).collect())
 }
 
-/// Write [`BACKGROUND`] into every texel of the target over `buffer`'s first bytes, a
-/// host-visible buffer no command uses now.
-fn fill_background(buffer: &Buffer) {
+/// Write [`BACKGROUND`] into every texel of the target of `format` over `buffer`'s first bytes,
+/// a host-visible buffer no command uses now.
+fn fill_background(buffer: &Buffer, format: Format) {
     let contents = buffer.contents().unwrap();
-    let texel: Vec<u8> = (BACKGROUND.map(half).iter())
-        .flat_map(|h| h.to_le_bytes())
-        .collect();
+    let background = stored(format, BACKGROUND);
+    let texel: Vec<u8> = match format {
+        Format::Half => background.iter().flat_map(|h| h.to_le_bytes()).collect(),
+        Format::Srgb => background.iter().map(|&c| c as u8).collect(),
+    };
     let bytes = texel.repeat((SIDE * SIDE) as usize);
-    // SAFETY: the buffer holds at least the target's `SIDE * SIDE * TEXEL` bytes, which no
-    // command buffer uses now.
+    // SAFETY: the buffer holds at least the target's `SIDE * SIDE` texels, which no command
+    // buffer uses now.
     unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents.as_ptr(), bytes.len()) };
 }
 
-fn run(case: &str, home: Home) {
+fn run(case: &str, home: Home, format: Format) {
     // The host pages outlive the buffer over them, made later and dropped first.
     let host = Host::new();
     let runs = Arc::new(AtomicUsize::new(0));
     let scratch = Scratch::new(&format!("fetch-composite-{case}"));
     let device = device(&scratch.0);
-    let fetch = match state(&device, "engine/fragment_fetch.ll", "fetch_ordered") {
+    let fetch = match state(
+        &device,
+        ("engine/fragment_fetch.ll", "fetch_ordered"),
+        format,
+    ) {
         Ok(fetch) => fetch,
         Err(error) => {
             eprintln!(
@@ -279,12 +376,14 @@ fn run(case: &str, home: Home) {
     };
     let tools = Tools {
         queue: device.new_command_queue().unwrap(),
-        sample: state(&device, "engine/tob_renders.ll", "tob_sample").unwrap(),
+        sample: state(&device, ("engine/tob_renders.ll", "tob_sample"), format).unwrap(),
         fetch,
         sampler: (device.new_sampler_state(&SamplerDescriptor::new())).unwrap(),
+        format,
     };
-    let length = SIDE * SIDE * TEXEL;
-    let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, SIDE, SIDE, false);
+    let texel = format.texel();
+    let length = SIDE * SIDE * texel;
+    let mut d = TextureDescriptor::texture_2d(format.pixel_format(), SIDE, SIDE, false);
     d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
     let (target, backing) = match home {
         Home::Buffer => {
@@ -292,7 +391,7 @@ fn run(case: &str, home: Home) {
             let backing = device
                 .new_buffer(length, ResourceOptions::shared())
                 .unwrap();
-            let target = backing.new_texture(&d, 0, SIDE * TEXEL).unwrap();
+            let target = backing.new_texture(&d, 0, SIDE * texel).unwrap();
             (target, Some(backing))
         }
         Home::HostPages => {
@@ -303,7 +402,7 @@ fn run(case: &str, home: Home) {
             // them: an image in place, not a shadow waiting for them.
             device.settle_in_place_checks(Duration::from_secs(120));
             d.resource_options = backing.resource_options();
-            let target = backing.new_texture(&d, 0, SIDE * TEXEL).unwrap();
+            let target = backing.new_texture(&d, 0, SIDE * texel).unwrap();
             (target, Some(backing))
         }
         Home::Private => {
@@ -314,26 +413,28 @@ fn run(case: &str, home: Home) {
     // Over host pages, the pass loads what the CPU wrote there before each round.
     let load = home == Home::HostPages;
     let mut failures = Vec::new();
+    let fetches = through_storage(device.compile_device().profile());
+    let in_place =
+        home == Home::HostPages && target.shadow().is_none() && target.linear_image().unwrap();
     // In place over host pages where the device's check passed for a shader's writes of its
     // texels, on a device that fetches through storage, the image takes the storage usage, and
-    // the pass fetches it in place (`texture/in_place_image.rs`).
-    if home == Home::HostPages {
+    // the pass fetches it in place (`texture/in_place_image.rs`); but an 8-bit sRGB one's, which
+    // renders through a scratch.
+    if home == Home::HostPages && format == Format::Half {
         let backing = backing.as_ref().unwrap();
-        let in_place = target.shadow().is_none() && target.linear_image().unwrap();
         let layout = crate::linear_plan::BufferLayout {
             offset: 0,
-            row_pitch: SIDE * TEXEL,
+            row_pitch: SIDE * texel,
             slice_pitch: length,
-            row_bytes: SIDE * TEXEL,
+            row_bytes: SIDE * texel,
             rows: SIDE,
             slices: 1,
         };
         let start = backing.contents().map_or(0, |at| at.as_ptr().addr() as u64);
         let checks = &device.shared().in_place;
         let rows = RowEnds::of(start, &layout, checks.line());
-        let writes = Access::written(TEXEL, Padding::Kept)
+        let writes = Access::written(texel, Padding::Kept)
             .is_some_and(|w| checks.verdict(PagesClass::Pointer, w, rows) == Verdict::Passed);
-        let fetches = through_storage(device.compile_device().profile());
         let usage = target.image_plan().unwrap().usage;
         let storage = usage.contains(ImageUsageFlags::STORAGE);
         eprintln!(
@@ -358,7 +459,7 @@ fn run(case: &str, home: Home) {
     let mut icon = None;
     for round in 0..2 {
         if load {
-            fill_background(backing.as_ref().unwrap());
+            fill_background(backing.as_ref().unwrap(), format);
         }
         let before = device.work_counts();
         let command_buffer = tools.queue.command_buffer().unwrap();
@@ -378,19 +479,28 @@ fn run(case: &str, home: Home) {
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.error(), None);
         let after = device.work_counts();
-        let (count, first) = wrong(&texels(&back));
+        let (count, first) = wrong(&texels(&back, format), format);
+        let merges = after.linear_merges_recorded - before.linear_merges_recorded;
         eprintln!(
             "FETCH-COMPOSITE {case} round {round} on {}: wrong pixels {count} of {}, instances \
-             {}, interlocked-write splits {}, storage forms {}; first wrong (pixel, got, want) \
-             {first:x?}",
+             {}, interlocked-write splits {}, storage forms {}, inline passes {}, linear merges \
+             {merges}; first wrong (pixel, got, want) {first:x?}",
             device.name(),
             SIDE * SIDE,
             after.render_passes_begun_instances - before.render_passes_begun_instances,
             after.instance_splits_interlocked_writes - before.instance_splits_interlocked_writes,
             after.storage_forms_taken - before.storage_forms_taken,
+            after.inline_passes - before.inline_passes,
         );
         if count != 0 {
             failures.push(format!("round {round}: {count} pixels, first {first:x?}"));
+        }
+        // The 8-bit sRGB target in place over host pages, on a device that fetches through
+        // storage, rendered through a scratch merged back into the pages: the route checked.
+        if format == Format::Srgb && home == Home::HostPages && in_place && fetches && merges == 0 {
+            failures.push(format!(
+                "round {round}: no linear merge: not the scratch's route"
+            ));
         }
     }
     assert!(
@@ -401,15 +511,20 @@ fn run(case: &str, home: Home) {
 
 #[test]
 fn a_private_targets_composite_of_icons_and_fetches_keeps_every_draw() {
-    run("private", Home::Private);
+    run("private", Home::Private, Format::Half);
 }
 
 #[test]
 fn a_composite_over_a_buffers_bytes_of_icons_and_fetches_keeps_every_draw() {
-    run("over-buffer", Home::Buffer);
+    run("over-buffer", Home::Buffer, Format::Half);
 }
 
 #[test]
 fn a_loaded_composite_over_host_pages_fetches_them_in_place_and_keeps_every_draw() {
-    run("over-host-pages", Home::HostPages);
+    run("over-host-pages", Home::HostPages, Format::Half);
+}
+
+#[test]
+fn a_loaded_srgb_composite_over_host_pages_through_a_scratch_keeps_every_draw() {
+    run("srgb-over-host-pages", Home::HostPages, Format::Srgb);
 }
