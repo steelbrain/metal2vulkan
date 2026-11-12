@@ -513,8 +513,19 @@ impl Bounds<'_, '_> {
                 _ => None,
             },
             InstKind::BinOp { op, a, b, .. } => {
-                let (Some((a0, a1)), Some((b0, b1))) = (self.of(*a, d, m)?, self.of(*b, d, m)?)
-                else {
+                let (ra, rb) = (self.of(*a, d, m)?, self.of(*b, d, m)?);
+                // Bounded by one operand alone: `and` by its bounded operand, and an unsigned
+                // remainder by its divisor, whatever the other holds.
+                match (op, ra, rb) {
+                    (BinOp::And, Some((_, x)), None) | (BinOp::And, None, Some((_, x))) => {
+                        return Ok(Some((0, x)));
+                    }
+                    (BinOp::URem, None, Some((b0, b1))) if b0 >= 1 => {
+                        return Ok(Some((0, b1 - 1)));
+                    }
+                    _ => {}
+                }
+                let (Some((a0, a1)), Some((b0, b1))) = (ra, rb) else {
                     return Ok(None);
                 };
                 // The greatest value of the bits of `x`.
