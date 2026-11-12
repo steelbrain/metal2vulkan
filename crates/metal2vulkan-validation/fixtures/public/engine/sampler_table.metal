@@ -3,16 +3,17 @@
 // texture slot and a texture held in an argument buffer.
 //
 // Thread i samples row 0 of a 4 by 1 texture at x = xs[i] through samplers[which[i]] and writes
-// the texel; the four samplers differ in their address mode (repeat, clamp to edge) and filter
-// (nearest, linear), so the texel says which one sampled.
+// the texel; the four samplers differ in their address mode (repeat, clamp to edge, mirrored
+// repeat, clamp to zero), so a texel outside the texture says which one sampled. Each samples the
+// nearest texel, which every device answers exactly.
 #include <metal_stdlib>
 using namespace metal;
 
 constant constexpr array<sampler, 4> samplers = {
     sampler(address::repeat, filter::nearest),
     sampler(address::clamp_to_edge, filter::nearest),
-    sampler(address::repeat, filter::linear),
-    sampler(address::clamp_to_edge, filter::linear),
+    sampler(address::mirrored_repeat, filter::nearest),
+    sampler(address::clamp_to_zero, filter::nearest),
 };
 
 kernel void sampler_table_slot(texture2d<float> t [[texture(0)]],

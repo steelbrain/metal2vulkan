@@ -9,22 +9,18 @@
 // Run: ./sampler_table <the fixture's .metal>, MTL_DEBUG_LAYER unset.
 //
 // The texture is 4 by 1 RGBA8Unorm: red, green, blue, white. Thread i = 4c + s samples at
-// x = X[c] (texel units -0.5, 0.75, 3.75, 4.5, 2.5: outside the texture on both sides, and a
-// quarter of the way between texel centers) and y = 0.5 through samplers[s] (repeat nearest,
-// clamp nearest, repeat linear, clamp linear). Each kernel prints each thread's four floats as
-// words.
+// x = X[c] (texel units -0.5, 4.5, -1.5, 2.5, 5.5: outside the texture on both sides, and inside)
+// and y = 0.5 through samplers[s] (repeat, clamp to edge, mirrored repeat, clamp to zero, all
+// nearest). Each kernel prints each thread's four floats as words.
 //
-// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): both kernels made their pipelines (status 4,
-// completed) and answered the same words, the texel each sampler names: at -0.5 white, red, white,
-// red; at 0.75 red, red, and (0.75, 0.25, 0, 1) twice; at 3.75 white, white, (1, 0.75, 0.75, 1),
-// white; at 4.5 red, white, red, white; at 2.5 blue. The runtime lane's `METAL` holds them.
+// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): to be run.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>
 #include <string.h>
 
 enum { THREADS = 20 };
-static const float X[5] = {-0.125f, 0.1875f, 0.9375f, 1.125f, 0.625f};
+static const float X[5] = {-0.125f, 1.125f, -0.375f, 0.625f, 1.375f};
 
 static int run(id<MTLDevice> d, id<MTLLibrary> lib, NSString *name, id<MTLTexture> tex) {
     NSError *e = nil;
