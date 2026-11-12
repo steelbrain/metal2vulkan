@@ -3094,7 +3094,11 @@ impl Device {
             .shared()
             .textures
             .facts(self.compile_device().profile());
-        let made = match pages.as_deref().and_then(HostPages::dma_buf) {
+        let dma_buf = match pages.as_deref() {
+            Some(pages) => pages.dma_buf()?,
+            None => None,
+        };
+        let made = match dma_buf {
             None => Err("the heap's bytes lie in no dma-buf pages".to_owned()),
             Some((imports, start, type_index)) => {
                 let pages = (&*imports, type_index, start + offset);
