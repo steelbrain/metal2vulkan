@@ -554,8 +554,8 @@ fn run(case: &str, form: Form, home: Home) {
                 &tools.back
             }
         };
-        for index in 0..ICONS {
-            let facts = (icons[index].clear, icons[index].stencil_tests);
+        for (index, icon) in icons.iter().enumerate() {
+            let facts = (icon.clear, icon.stencil_tests);
             if let (n @ 1.., first) = wrong(read, pitch, (index, facts)) {
                 failures.push(format!(
                     "round {round} icon {index}: {n} wrong texels, first {first:x?}"
