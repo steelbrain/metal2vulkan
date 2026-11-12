@@ -45,8 +45,6 @@ fn a_cube_sample_no_picked_unit_reaches_is_deleted() {
     let library = Library::from_air(&bc).expect("library");
     for stem in PROFILES {
         let text = specialized(&bc, stem);
-        assert!(!text.contains("sample_texture_cube"), "{stem}: {text}");
-        assert!(text.contains("sample_texture_2d_array"), "{stem}: {text}");
         let dev = Device::new(
             description(stem).expect("committed description"),
             DevicePolicy::default(),
@@ -58,5 +56,7 @@ fn a_cube_sample_no_picked_unit_reaches_is_deleted() {
         if let Err(e) = dev.compile_compute_pipeline(&d, &Budget::standard()) {
             panic!("{stem}: {e}\n{text}");
         }
+        assert!(!text.contains("sample_texture_cube"), "{stem}: {text}");
+        assert!(text.contains("sample_texture_2d_array"), "{stem}: {text}");
     }
 }
