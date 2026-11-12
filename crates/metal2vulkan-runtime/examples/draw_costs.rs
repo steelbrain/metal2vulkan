@@ -46,9 +46,9 @@
 //!   loaded, all stored. Each pass binds vertex buffer 0 (a mesh's vertices, read through the
 //!   pipeline's vertex descriptor), vertex buffer 1 (transforms) and fragment buffer 0 (material
 //!   scales), all in one no-copy buffer over host pages. Every 4 draws a material of 6 takes
-//!   its turn: the pipeline state (one of 2), `set_fragment_textures` (its 8 of 48 64x64
-//!   textures) and `set_fragment_sampler_states` (8 samplers of their own filters and address
-//!   modes). Each draw moves buffer 1's and fragment buffer 0's offsets to its own slots
+//!   its turn: the pipeline state (one of 2), `set_fragment_textures` (its 8 of 48 textures,
+//!   64x64, 32x32 or 16x16 by material, each with its whole mipmap chain) and
+//!   `set_fragment_sampler_states` (8 samplers of their own filters and address modes). Each draw moves buffer 1's and fragment buffer 0's offsets to its own slots
 //!   (`set_vertex_buffer_offset`, `set_fragment_buffer_offset`), then draws one of 64 pieces of
 //!   the mesh by 6 indices (`UInt16`) at the piece's offset.
 //! - **rebinds**: as **scene**, but each draw first binds its material's 8 textures and 8
@@ -1143,15 +1143,13 @@ impl Scene {
                 Ok(device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())?)
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut sampled = TextureDescriptor::texture_2d(
-            PixelFormat::RGBA8Unorm,
-            TEXTURE_SIDE,
-            TEXTURE_SIDE,
-            false,
-        );
-        sampled.usage = TextureUsage::SHADER_READ;
+        // Material `m`'s textures: of side 64, 32 or 16 as `m` goes, each with its levels.
         let materials = (0..SCENE_MATERIALS)
-            .map(|_| {
+            .map(|material| {
+                let side = TEXTURE_SIDE >> (material % 3);
+                let mut sampled =
+                    TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, side, side, true);
+                sampled.usage = TextureUsage::SHADER_READ;
                 (0..SCENE_UNITS)
                     .map(|_| Ok(device.new_texture(&sampled)?))
                     .collect::<Result<Vec<_>>>()
