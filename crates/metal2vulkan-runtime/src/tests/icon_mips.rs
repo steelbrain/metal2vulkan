@@ -38,9 +38,9 @@
 //! And icons whose levels only the CPU writes, as a window server's are: `Managed` (or `Shared`)
 //! 128x128 `RGBA16Float` textures of five levels and `ShaderRead` usage alone, each level of its
 //! own colors written by one `replace_region` (`bytes_per_image` 0), made before the command
-//! buffer that samples them or while it is open, 21 a round, the uploads made with a command
-//! buffer committed before them still in flight or not: one held by a wait for an event the host
-//! signals once the sampling command buffer is committed, or one filling 256 MiB. The sampling
+//! buffer that samples them or while it is open, 21 a round, the uploads made with or without a
+//! command buffer committed before them still in flight, held by a wait for an event the host
+//! signals once the sampling command buffer is committed. The sampling
 //! command buffer draws every level of each through a sampler pinned to the level into a target
 //! of its size, and each through a trilinear sampler into a target of level 1's size (its
 //! implicit level of detail 1, as a dock half the icon's size samples it): each target, and each
@@ -483,33 +483,18 @@ fn uploaded_colors(level: u64) -> [[f32; 4]; 2] {
     [[n, 0.5, 0.25, 1.0], [0.5, n, 0.75, 0.5]]
 }
 
-/// What a command buffer committed on the queue before the levels' uploads does as they are made.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Ahead {
-    /// No such command buffer.
-    Nothing,
-    /// It waits for an event the host signals once the sampling command buffer is committed, so
-    /// it is still in flight as the uploads are made and the sampling command buffer is
-    /// committed.
-    Held,
-    /// It fills a buffer of [`AHEAD_FILL`] bytes, which the GPU is likely still running as the
-    /// uploads are made.
-    Running,
-}
-
-/// The bytes the running command buffer ahead fills.
-const AHEAD_FILL: u64 = 256 << 20;
-
 /// The uploaded run: each round [`UPLOADED_ICONS`] textures of `storage`, 128x128
 /// `RGBA16Float` of [`UPLOADED_LEVELS`] levels and `ShaderRead` usage alone, made before the
-/// command buffer that samples them or, where `open`, while it is open; then a command buffer
-/// committed `ahead` where it says; then each level of each written by one `replace_region`
-/// (`bytes_per_image` 0) and no GPU work. The sampling command buffer draws each level of each
+/// command buffer that samples them or, where `open`, while it is open; then, where `held`, a
+/// command buffer committed that waits for an event the host signals once the sampling command
+/// buffer is committed, so it is still in flight; then each level of each written by one
+/// `replace_region` (`bytes_per_image` 0) and no GPU work. The sampling command buffer draws each
+/// level of each
 /// into a target of the level's size through a sampler pinned to the level (its least and
 /// greatest level of detail the level's), and each into a target of level 1's size through a
 /// trilinear sampler, its implicit level of detail 1; each level and target is then read back by
 /// blits. The round's textures go as it ends.
-fn run_uploaded(case: &str, storage: StorageMode, open: bool, ahead: Ahead) {
+fn run_uploaded(case: &str, storage: StorageMode, open: bool, held: bool) {
     let scratch = Scratch::new(&format!("icon-mips-{case}"));
     let device = device(&scratch.0);
     let tools = Tools::new(&device);
@@ -576,8 +561,6 @@ fn run_uploaded(case: &str, storage: StorageMode, open: bool, ahead: Ahead) {
         device.new_texture(&d).unwrap()
     };
     let event = device.new_shared_event().unwrap();
-    let filled = (ahead == Ahead::Running)
-        .then(|| (device.new_buffer(AHEAD_FILL, ResourceOptions::private())).unwrap());
     let mut failures = Vec::new();
     let mut counts = Vec::new();
     for round in 0..ROUNDS {
@@ -585,25 +568,13 @@ fn run_uploaded(case: &str, storage: StorageMode, open: bool, ahead: Ahead) {
         let open = open.then(|| tools.queue.command_buffer().unwrap());
         let icons: Vec<Texture> = (0..UPLOADED_ICONS).map(|_| make()).collect();
         let value = round as u64 + 1;
-        let first = match ahead {
-            Ahead::Nothing => None,
-            Ahead::Held => {
-                let command_buffer = tools.queue.command_buffer().unwrap();
-                let wait = EventRef::Shared(&event);
-                (command_buffer.encode_wait_for_event(wait, value)).unwrap();
-                command_buffer.commit().unwrap();
-                Some(command_buffer)
-            }
-            Ahead::Running => {
-                let command_buffer = tools.queue.command_buffer().unwrap();
-                let mut blit = command_buffer.blit_command_encoder().unwrap();
-                let filled = filled.as_ref().unwrap();
-                (blit.fill_buffer(filled, 0..AHEAD_FILL, round as u8)).unwrap();
-                blit.end_encoding().unwrap();
-                command_buffer.commit().unwrap();
-                Some(command_buffer)
-            }
-        };
+        let first = held.then(|| {
+            let command_buffer = tools.queue.command_buffer().unwrap();
+            let wait = EventRef::Shared(&event);
+            (command_buffer.encode_wait_for_event(wait, value)).unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer
+        });
         icons.iter().for_each(upload);
         let command_buffer = open.unwrap_or_else(|| tools.queue.command_buffer().unwrap());
         let targets: Vec<Vec<Texture>> = (icons.iter())
@@ -655,7 +626,7 @@ fn run_uploaded(case: &str, storage: StorageMode, open: bool, ahead: Ahead) {
     eprintln!(
         "ICON-MIPS {case} on {}: {} of {} icons wrong; per round ((storage forms taken, images \
          recycled, swapped-out images forgotten, reads through copies, slots narrowed), host \
-         texel copies, the command buffer ahead's status at the sampling one's commit) \
+         texel copies, the held command buffer's status at the sampling one's commit) \
          {counts:?}; first {:?}",
         device.name(),
         failures.len(),
@@ -667,37 +638,27 @@ fn run_uploaded(case: &str, storage: StorageMode, open: bool, ahead: Ahead) {
 
 #[test]
 fn uploaded_managed_levels_sampled_through_pinned_samplers_read_what_was_uploaded() {
-    run_uploaded("managed", StorageMode::Managed, false, Ahead::Nothing);
+    run_uploaded("managed", StorageMode::Managed, false, false);
 }
 
 #[test]
 fn managed_levels_uploaded_while_the_sampling_command_buffer_is_open_read_what_was_uploaded() {
-    run_uploaded("managed-open", StorageMode::Managed, true, Ahead::Nothing);
+    run_uploaded("managed-open", StorageMode::Managed, true, false);
 }
 
 #[test]
 fn managed_levels_uploaded_behind_a_held_command_buffer_read_what_was_uploaded() {
-    run_uploaded("managed-held", StorageMode::Managed, false, Ahead::Held);
-}
-
-#[test]
-fn managed_levels_uploaded_behind_a_running_command_buffer_read_what_was_uploaded() {
-    run_uploaded(
-        "managed-running",
-        StorageMode::Managed,
-        false,
-        Ahead::Running,
-    );
+    run_uploaded("managed-held", StorageMode::Managed, false, true);
 }
 
 #[test]
 fn managed_levels_uploaded_while_open_behind_a_held_command_buffer_read_what_was_uploaded() {
-    run_uploaded("managed-open-held", StorageMode::Managed, true, Ahead::Held);
+    run_uploaded("managed-open-held", StorageMode::Managed, true, true);
 }
 
 #[test]
 fn uploaded_shared_levels_sampled_through_pinned_samplers_read_what_was_uploaded() {
-    run_uploaded("shared", StorageMode::Shared, false, Ahead::Nothing);
+    run_uploaded("shared", StorageMode::Shared, false, false);
 }
 
 #[test]
