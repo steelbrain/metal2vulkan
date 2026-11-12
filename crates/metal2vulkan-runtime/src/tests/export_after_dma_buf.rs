@@ -43,7 +43,7 @@ const TEST: &str = "EXPORT-AFTER-DMA-BUF";
 /// The consumer's exportable buffer's bytes.
 const LENGTH: u64 = 12_441_600;
 /// The pages of the probe's one udmabuf, and of the file they are drawn from.
-pub(super) const PAGES: u64 = 1024;
+const PAGES: u64 = 1024;
 const FILE_PAGES: u64 = 4 * PAGES;
 
 /// Each heap's size, `VK_EXT_memory_budget` budget and usage, in MiB; empty where the device does
@@ -272,7 +272,7 @@ fn raw_answers(device: &Device, type_index: u32, size: u64) -> Vec<(&'static str
 /// The test's own import of `dma_buf`'s `size` bytes as memory type `type_index`, dedicated to
 /// nothing, freed at once where made: the driver's answer, as a `VkResult` code. The driver is
 /// handed a duplicate, closed here where the driver left it open after a failure.
-pub(super) fn raw_import(device: &Device, dma_buf: &OwnedFd, size: u64, type_index: u32) -> i32 {
+fn raw_import(device: &Device, dma_buf: &OwnedFd, size: u64, type_index: u32) -> i32 {
     // SAFETY: as in `budgets`.
     let handles = unsafe { device.raw() };
     // SAFETY: a descriptor the test holds.
@@ -308,7 +308,7 @@ pub(super) fn raw_import(device: &Device, dma_buf: &OwnedFd, size: u64, type_ind
 }
 
 /// The memory types `dma_buf` may be imported as, as bits (`vkGetMemoryFdPropertiesKHR`).
-pub(super) fn dma_buf_types(device: &Device, dma_buf: &OwnedFd) -> Result<u32, vk::Result> {
+fn dma_buf_types(device: &Device, dma_buf: &OwnedFd) -> Result<u32, vk::Result> {
     // SAFETY: as in `budgets`.
     let handles = unsafe { device.raw() };
     let loader = ash::khr::external_memory_fd::Device::new(handles.instance, handles.device);
@@ -325,7 +325,7 @@ pub(super) fn dma_buf_types(device: &Device, dma_buf: &OwnedFd) -> Result<u32, v
 }
 
 /// A udmabuf of [`PAGES`] scattered pages of a sealed `memfd` of [`FILE_PAGES`], as the probe's.
-pub(super) fn scattered_udmabuf(page: u64) -> OwnedFd {
+fn scattered_udmabuf(page: u64) -> OwnedFd {
     // SAFETY: a name and flags the call takes.
     let raw = unsafe {
         libc::memfd_create(

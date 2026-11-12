@@ -22,11 +22,13 @@
 //!   lock that the check's next call takes, therefore waits for work that completes. Seen
 //!   otherwise, when the host signalled the gate once both batches were submitted: on an RTX 5080
 //!   Laptop GPU (NVIDIA 615.71.09) beside the runtime suite, another device's `vkDestroyDevice`
-//!   never returned while the check sat in the `vkQueueSubmit` of its round's second batch, the
-//!   first waiting on the GPU for that signal (`tests::queue_switch_gate`). A round whose gate
-//!   had opened as its last batch's submission returned (the host slower than the fills) may have
-//!   run its first batch before the second was submitted, so its gap counts for nothing, and the
-//!   later rounds' openings repeat the fill twice as many times, up to [`MOST_REPEATS`].
+//!   never returned while the check's thread sat in a `vkQueueSubmit` of its round, before its
+//!   signal of the gate, and on an RTX 3090 (NVIDIA 620.70.06) a recovery's `vkDestroyDevice` of
+//!   its old `VkDevice` beside the new one's check so (`tests::queue_switch_gate` holds a round
+//!   and waits for its batches). A round whose gate had opened as its last batch's submission
+//!   returned (the host slower than the fills) may have run its first batch before the second was
+//!   submitted, so its gap counts for nothing, and the later rounds' openings repeat the fill twice
+//!   as many times, up to [`MOST_REPEATS`].
 //! - **Which timestamps.** Timestamps of two `VkQueue`s compare only where the device calibrates
 //!   them: "An implementation supporting `VK_KHR_calibrated_timestamps` or
 //!   `VK_EXT_calibrated_timestamps` will use the same time domain for all its `VkQueue` so that
