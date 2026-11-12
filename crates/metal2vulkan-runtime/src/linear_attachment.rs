@@ -39,33 +39,24 @@
 //! that its buffer keeps its bytes (`kept_bytes.rs`, settled before these as the pass ends): an
 //! attachment that is not linear beside the others.
 //!
-//! **Where the rule allows it, the pass renders in place** ([`choose`], as it ends). A pass that
-//! loads a bound attachment renders it in place: a copy of it into the image its texture keeps
-//! would make a draw's read of the texture's bytes (a sampled texture over them, a buffer, a
-//! pointer: the consumer's x86 guest samples the surface it renders into) miss the pass's earlier
-//! draws, and no structure proves a pass free of such reads in general. A pass that clears one
-//! renders it through the image its texture keeps, cleared there and copied back over the clear's
-//! reach (announced `linear-attachment-clear-copies`), only where no command of the pass may read
-//! the texture's bytes: the pass has no memory barrier inside it, no draw or tile dispatch reaches
-//! memory it does not name (a root table: its functions load pointers from memory, which reach
-//! every live buffer; a handle table, which reaches every texture of the heap set), it executes no
-//! render commands, and no command names a resource over the texture's host pages or its buffer.
-//! Then nothing the pass reads tells the ways apart, and the clear writes every pixel of its reach
-//! either way; else it renders in place too. (Before, a pass that loaded one chose between in
-//! place and copies of its draws' box by the times of its kind on the GPU, which wrote the
-//! box's undrawn pixels back as the copy in read them and hid the pass's earlier draws from its
-//! reads: the consumer's x86 guest's alert corners and hover fills.)
+//! **Where the rule allows it, the pass renders in place** ([`choose`], as it ends), whatever it
+//! loads: the copies above are a fallback for an attachment the device cannot render in place,
+//! never a choice for speed. A copy of a loaded attachment into the image its texture keeps would
+//! make a draw's read of the texture's bytes (a sampled texture over them, a buffer, a pointer:
+//! the consumer's x86 guest samples the surface it renders into) miss the pass's earlier draws,
+//! and no structure proves a pass free of such reads in general; a cleared one renders in place
+//! too, though clearing an image of the device's and copying it back costs less (below).
 //!
 //! Measured (on an RTX 3090 and the consumer's run of it on an RTX 5080 Laptop
 //! GPU; 1080p `BGRA8` over host pages, in place against copies of the draws' box, medians of 31
 //! interleaved): on the 5080 a blending draw reads and writes its pixels across the bus once each
 //! in place, so one layer costs 0.55 to 0.87 of the copies at every area and two or more 1.5 to 7.4
-//! times them; an opaque layer costs 0.63, two 1.23; a pass that clears the linear image costs 10
-//! to 17 times the copy back (1.9 to 4.5 on the 3090), which clears an image of the device's on
-//! chip. A draw's pixels are bounded by its Vulkan scissors (its scissor rectangles within its
-//! viewports' pixels, `EncoderState::vk_scissors`), outside which Vulkan writes none; an execution
-//! of render commands, a tile dispatch, and a pass through a rasterization-rate map bound none, and
-//! count as writing the whole render area.
+//! times them; an opaque layer costs 0.63, two 1.23; a pass that clears the linear image in place
+//! costs 10 to 17 times clearing an image of the device's on chip and copying it back (1.9 to 4.5
+//! on the 3090). A draw's pixels are bounded by its Vulkan scissors (its scissor rectangles within
+//! its viewports' pixels, `EncoderState::vk_scissors`), outside which Vulkan writes none; an
+//! execution of render commands, a tile dispatch, and a pass through a rasterization-rate map
+//! bound none, and count as writing the whole render area.
 
 use super::attachment_stand_in::{self, Cause, StandIn};
 use super::color_reformat::Routing;
@@ -246,24 +237,17 @@ pub(super) fn apart(
     };
     for index in bound_at {
         if let Some(Some(color)) = colors.get_mut(index) {
-            through_backing(
-                maker,
-                index,
-                color,
-                None,
-                Degradation::LinearAttachmentCopies,
-                || match why {
-                    Apart::Color(other) => {
-                        rule_broken(format!("the pass's color attachment {other} is not linear"))
-                    }
-                    Apart::DepthStencil(attachment) => format!(
-                        "the device renders a linear image of the format as a color attachment \
-                         only in a render pass instance with no depth or stencil attachment, as \
-                         a depth or stencil image is never linear (NVIDIA: an RTX 3090 lost the \
-                         device on one), and the pass has {attachment}"
-                    ),
-                },
-            )?;
+            through_backing(maker, index, color, || match why {
+                Apart::Color(other) => {
+                    rule_broken(format!("the pass's color attachment {other} is not linear"))
+                }
+                Apart::DepthStencil(attachment) => format!(
+                    "the device renders a linear image of the format as a color attachment \
+                     only in a render pass instance with no depth or stencil attachment, as \
+                     a depth or stencil image is never linear (NVIDIA: an RTX 3090 lost the \
+                     device on one), and the pass has {attachment}"
+                ),
+            })?;
         }
     }
     Ok(())
@@ -300,33 +284,25 @@ pub(super) fn settle(
     }
     for index in bound_at {
         if let Some(Some(color)) = colors.get_mut(index) {
-            through_backing(
-                maker,
-                index,
-                color,
-                None,
-                Degradation::LinearAttachmentCopies,
-                || {
-                    rule_broken(format!(
-                        "an instance of the pass renders its color {other} through an image of \
-                         the runtime's"
-                    ))
-                },
-            )?;
+            through_backing(maker, index, color, || {
+                rule_broken(format!(
+                    "an instance of the pass renders its color {other} through an image of \
+                     the runtime's"
+                ))
+            })?;
         }
     }
     Ok(())
 }
 
 /// Render `color`, a pass's bound color attachment `index`, through the image its texture keeps
-/// for `maker`'s queue, copied in where the pass loads it and back where it stores it, over
-/// `area` alone where given (`StandIn::area`); announced as `degradation`, `reason` saying why.
+/// for `maker`'s queue, copied in where the pass loads it and back where it stores it (over the
+/// render area, until [`choose`] bounds a loaded one's copies by its draws' box), announced
+/// `linear-attachment-copies`, `reason` saying why.
 fn through_backing(
     maker: &CommandBuffer,
     index: usize,
     color: &mut ColorTarget,
-    area: Option<[u32; 4]>,
-    degradation: Degradation,
     reason: impl FnOnce() -> String,
 ) -> Result<(), Error> {
     attachment_stand_in::check_copies(&color.target)?;
@@ -334,18 +310,15 @@ fn through_backing(
     let own = color.target.clone();
     color.target = attachment_stand_in::kept_backing(maker, &own, queue, true)?;
     let format = own.texture.pixel_format();
-    maker.device().degrade(degradation, || {
-        (
-            format!(
-                "a {format:?} texture's linear image, color attachment {index} of a render pass"
-            ),
-            reason(),
-        )
-    });
+    let site = || {
+        format!("a {format:?} texture's linear image, color attachment {index} of a render pass")
+    };
+    let kind = Degradation::LinearAttachmentCopies;
+    maker.device().degrade(kind, || (site(), reason()));
     color.stand_in = Some(StandIn {
         own,
         cause: Cause::Linear,
-        area,
+        area: None,
     });
     Ok(())
 }
@@ -361,18 +334,15 @@ fn rule_broken(beside: String) -> String {
 }
 
 /// Settle each bound attachment among `colors`, a pass's as it ends (the module docs): one
-/// rendered apart that the pass loads, over the box its draws write in (`coverage`); one that
-/// renders in place yet (no stand-in, and no draw took a view of it: `taken`) through the image
-/// its texture keeps where the pass clears it and no command of the pass may read its bytes
-/// (`may_read`), announced `linear-attachment-clear-copies` (copied back where the pass stores
-/// it, over the reach of its clear); every other one in place. Counted as the pass renders them
-/// (`WorkCounts::linear_passes_in_place`, `linear_passes_through_copies`).
+/// rendered apart that the pass loads, over the box its draws write in (`coverage`); every other
+/// one (no stand-in) in place, whatever its load. Counted as the pass renders them
+/// (`WorkCounts::linear_passes_in_place`, `linear_passes_through_copies`), but for one a draw
+/// took a view of (`taken`).
 pub(super) fn choose(
     maker: &CommandBuffer,
     colors: &mut [Option<ColorTarget>],
     coverage: &Coverage,
     taken: impl Fn(usize) -> bool,
-    may_read: impl Fn(usize) -> bool,
 ) -> Result<(), Error> {
     let device = maker.device();
     let (mut any, mut through) = (false, false);
@@ -389,26 +359,7 @@ pub(super) fn choose(
             }
             continue;
         }
-        if taken(index) || !bound(device, &color.target)? {
-            continue;
-        }
-        any = true;
-        if color.load == LoadAction::Clear && !may_read(index) {
-            through = true;
-            through_backing(
-                maker,
-                index,
-                color,
-                None,
-                Degradation::LinearAttachmentClearCopies,
-                || {
-                    "the pass clears it, no command of it may read its bytes, and clearing a \
-                     linear image of host memory in place costs more than clearing an image of \
-                     the device's and copying it back"
-                        .to_owned()
-                },
-            )?;
-        }
+        any |= !taken(index) && bound(device, &color.target)?;
     }
     if any {
         device.shared().counts.linear_pass(through);

@@ -1688,12 +1688,12 @@ pub(crate) struct RenderLowering {
     barriered: bool,
     /// A memory barrier was encoded inside the pass (before the next draw, or between draws
     /// over the render targets): a command after it may read what one before it wrote of an
-    /// attachment (`linear_attachment::choose`).
+    /// attachment, so no run of passes takes the pass (`pass_runs.rs`).
     barrier_inside: bool,
     /// A command of the pass may reach memory it does not name: a draw or tile dispatch whose
     /// functions load pointers from memory (a root table: dynamic roots, which reach every live
     /// buffer, `live_buffers.rs`) or handles (a handle table, which reaches every texture of
-    /// the device's heap set) (`linear_attachment::choose`).
+    /// the device's heap set), so no run of passes takes the pass (`pass_runs.rs`).
     reaches_unnamed: bool,
     /// The instances (by index among the pass's) that follow a memory barrier: before each, the
     /// colors rendered through a copied stand-in over a buffer's bytes are merged back into them
@@ -4683,40 +4683,14 @@ impl RenderLowering {
         linear_attachment::settle(core.command_buffer(), &mut layout.colors, other, |index| {
             taken.contains(index)
         })?;
-        // One the pass loads renders in place, apart over the box its draws write in; one it
-        // clears through such an image, copied back, only where no command of the pass may read
-        // its bytes: no barrier inside it, no command reaching memory it does not name, and no
-        // command naming the attachment's bytes or a resource over its host pages or in a heap
-        // (`linear_attachment::choose`).
+        // One rendered apart that the pass loads, over the box its draws write in; every other
+        // one in place (`linear_attachment::choose`).
         let reached_heaps = core.reached_heaps();
-        let rebinds = &core.device().shared().rebinds;
-        let may_read = ColorIndices::of((0..layout.colors.len()).filter(|&index| {
-            let Some(color) = layout.colors[index].as_ref() else {
-                return false;
-            };
-            if unnamed_reads || reached_heaps {
-                return true;
-            }
-            let none = crate::tracker::Access::NONE;
-            let key = color.target.texture.bound_use(none, none).key;
-            let named = core.named_keys();
-            if named.contains(&key) {
-                return true;
-            }
-            rebinds.host_range(key).is_some_and(|bytes| {
-                named.iter().any(|&other| {
-                    rebinds
-                        .host_range(other)
-                        .is_some_and(|other| other.start < bytes.end && bytes.start < other.end)
-                })
-            })
-        }));
         linear_attachment::choose(
             core.command_buffer(),
             &mut layout.colors,
             &coverage,
             |index| taken.contains(index),
-            |index| may_read.contains(index),
         )?;
         let device = core.device().clone();
         // The pass's clears write a new texture's unwritten texels where they reach it: through
@@ -5110,7 +5084,7 @@ impl RenderLowering {
                 && core.uses().parts() == 1;
             let named = core.named_keys();
             let rebinds = &device.shared().rebinds;
-            // Overlapping host ranges name the same bytes (`may_read` above).
+            // Overlapping host ranges name the same bytes.
             let host_overlap = |key: ResourceKey| {
                 rebinds.host_range(key).is_some_and(|bytes| {
                     named.iter().any(|&other| {

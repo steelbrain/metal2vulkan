@@ -3329,12 +3329,6 @@ bound.
   the render pass instance be linear, and the pass breaks it: another of its color attachments is
   not linear, or it resolves a multisampled attachment into the texture. Cost: its texels are copied
   into an image the pass renders, and what the pass wrote is merged or copied back after it.
-- `metal2vulkan-degrade-linear-attachment-clear-copies` (performance).
-  `LinearAttachmentClearCopies`: A pass clears a color attachment whose texture's image is linear
-  and which the device renders under `VK_NV_linear_color_attachment`, where the rule allows it in
-  place: it clears an image its texture keeps and copies it back after, as clearing a linear image
-  of host memory in place measured slower than that copy. Cost: the pass clears an image of the
-  device's and copies it back after, as clearing the texture's linear image in place costs more.
 - `metal2vulkan-degrade-dont-care-stand-in` (performance). `DontCareStandIn`: A pass renders a color
   attachment that it stores with `DontCare` (or resolves alone, `MultisampleResolve`) and whose
   texture's image lies over the buffer the texture lies in (a linear image over an ordinary buffer's

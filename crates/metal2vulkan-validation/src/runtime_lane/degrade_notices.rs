@@ -113,8 +113,7 @@
 //! in `astc_textures` ([`ASTC_TWINS`]; PVRTC ones take the first in `pvrtc_textures`) and CPU
 //! writes into their decoded twins there ([`CPU_DECODES`]), kernel writes into ASTC textures in
 //! `astc_passes_and_writes` ([`ASTC_STORAGE`]), passes rendering a linear image apart in
-//! `linear_attachments` ([`LINEAR_COPIES`]) and those rendering one through copies as they clear
-//! it and no command of them may read it, there too ([`CHOSEN_COPIES`]), passes rendering a texture
+//! `linear_attachments` ([`LINEAR_COPIES`]), passes rendering a texture
 //! over a buffer they do not store through the image its texture keeps in `kept_buffer_bytes`
 //! ([`KEPT_BYTES`]), the device's
 //! first sparse texture on a driver whose first sparse resource waits for every queue's work in
@@ -206,7 +205,7 @@ use super::indirect_host_steps::HOST_STEPS;
 use super::interlocked_primitive_order::BOUND_INTERLOCKS;
 use super::kept_buffer_bytes::KEPT_BYTES;
 use super::line_widths::{LINE_TIES, SUBPIXEL_SNAP, WIDE_LINES};
-use super::linear_attachments::{CHOSEN_COPIES, LINEAR_COPIES};
+use super::linear_attachments::LINEAR_COPIES;
 use super::lod_bias::CAPPED_LOD_BIAS;
 use super::memoryless::MEMORYLESS_TEXEL_BUFFERS;
 use super::mesh_draws::EMULATED_MESH;
@@ -598,7 +597,6 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &QUEUE_SHARING,
         &PAST_METAL_SIZES,
         &LINEAR_COPIES,
-        &CHOSEN_COPIES,
         &KEPT_BYTES,
         &DELAYED_DEALLOCATORS,
         &MISPLACED,

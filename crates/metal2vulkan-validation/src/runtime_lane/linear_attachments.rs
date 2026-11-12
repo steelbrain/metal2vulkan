@@ -12,11 +12,11 @@
 //! runtime's, copied in and back, and announce `linear-attachment-copies` ([`LINEAR_COPIES`]) once
 //! a device. Elsewhere nothing is announced.
 //!
-//! - [`a_cleared_render_target_over_a_shared_buffer_renders_through_copies`]: a 256x64
+//! - [`a_cleared_render_target_over_a_shared_buffer_renders_in_place`]: a 256x64
 //!   `BGRA8Unorm` render target over a `Shared` buffer, aliased; a pass of it alone that loads it
 //!   and draws nothing changes no texel and records nothing, counted neither way; one that clears
-//!   it renders it through copies and announces `linear-attachment-clear-copies`, by the rule
-//!   (counted so); the buffer holds what each pass stored.
+//!   it renders it in place, by the rule (counted so), announcing nothing; the buffer holds what
+//!   each pass stored. A 1920x1080 one cleared, its GPU time printed.
 //! - [`a_render_target_over_host_pages_is_a_shadow`]: a 256x64 `BGRA8Unorm` render target over a
 //!   no-copy buffer is a shadow, never an image bound to the pages; a pass of it alone that loads
 //!   it and one that clears it each leave the pages holding what it stored, and neither announces
@@ -29,11 +29,8 @@
 //!   attachment cleared and resolved into the texture: the buffer holds the clear; announced
 //!   exactly where the texture is aliased by the rule.
 //!
-//! Where the rule lets a pass render the texture in place, the pass still chooses as it ends
-//! (`linear_attachment::choose`): one that loads it renders it in place; one that clears it renders
-//! it through copies, copied back, announcing `linear-attachment-clear-copies` ([`CHOSEN_COPIES`]),
-//! only where no command of it may read the texture's bytes (no barrier inside it, no draw reaching
-//! memory it does not name, no command naming the bytes), else in place. A pass rendered apart
+//! Where the rule lets a pass render the texture in place, it does, whatever it loads
+//! (`linear_attachment::choose`). A pass rendered apart
 //! (beside a private color, or a depth or stencil attachment) copies the texture in over its draws'
 //! box and merges the words it changed back into the bytes (`linear_merge.rs`), merging and copying
 //! in again before the draws after a memory barrier inside it. Each pass's pages are compared with
@@ -127,10 +124,6 @@ use std::time::Duration;
 
 /// The kind a pass that renders a linear image apart takes.
 pub(super) const LINEAR_COPIES: [Degradation; 1] = [Degradation::LinearAttachmentCopies];
-
-/// The kind a pass that could render a linear image in place takes where it renders it through
-/// copies: it clears it, and no command of it may read the texture's bytes.
-pub(super) const CHOSEN_COPIES: [Degradation; 1] = [Degradation::LinearAttachmentClearCopies];
 
 /// The texture's size, and its texel's bytes.
 const W: u64 = 256;
@@ -369,15 +362,10 @@ fn cleared() -> Vec<u8> {
         .collect()
 }
 
-/// The [`LINEAR_COPIES`] notices among those delivered so far (removed), counted.
+/// The [`LINEAR_COPIES`] notices among those delivered so far (all removed), counted.
 fn copies_announced(messages: &Messages) -> usize {
-    announced(messages, Degradation::LinearAttachmentCopies)
-}
-
-/// The notices of `kind` among those delivered so far (all removed), counted.
-fn announced(messages: &Messages, kind: Degradation) -> usize {
     counts(&messages.take_notices())
-        .get(&kind)
+        .get(&Degradation::LinearAttachmentCopies)
         .copied()
         .unwrap_or(0)
 }
@@ -588,7 +576,6 @@ fn blends_over_the_pages(start: usize, scissor: Option<ScissorRect>, corners: &[
             "the passes' ways, in place and through copies"
         );
         let notices = counts(&messages.take_notices());
-        assert_eq!(notices.get(&Degradation::LinearAttachmentClearCopies), None);
         assert_eq!(notices.get(&Degradation::LinearAttachmentCopies), None);
     });
 }
@@ -1183,8 +1170,7 @@ fn sampling_pass(
 /// [`sampling_pass`] over a [`WIDE`] render target over a `Shared` buffer (counting from `start`),
 /// and over a private texture of the same bytes: its bytes hold the private texture's texels, so
 /// the draw after the barrier read the panel the pass drew. Where the texture is aliased by the
-/// rule the pass renders in place, loaded or cleared (a command of it may read the texture's bytes,
-/// so no clear is copied), announcing no `linear-attachment-clear-copies`; beside a stencil
+/// rule the pass renders in place, loaded or cleared, announcing nothing; beside a stencil
 /// attachment apart, split at the barrier: the stand-in merged back (or, cleared, copied back) and
 /// copied in again before the reading draw. Where the device renders the texture's own image as any
 /// other, the pass alone records both its instances inline, the reading draw's after the split
@@ -1245,7 +1231,7 @@ fn sampling(start: usize, load: LoadAction, stencil: bool) {
             "the pass's way, in place and through copies"
         );
         let notices = counts(&messages.take_notices());
-        assert_eq!(notices.get(&Degradation::LinearAttachmentClearCopies), None);
+        assert_eq!(notices.get(&Degradation::LinearAttachmentCopies), None);
         drop((texture, buffer));
         drop(contents);
     });
@@ -1468,10 +1454,9 @@ fn a_rebind_while_a_pass_over_host_pages_is_open_is_refused() {
 /// A render target over a `Shared` buffer is aliased, and on a device that renders it by the rule
 /// a pass of it alone that loads it and draws nothing changes no texel, so it records nothing
 /// (`render/untouched.rs`) and is counted neither way, announcing nothing; one that clears it
-/// renders it through copies, announcing `linear-attachment-clear-copies` once, counted so. The
-/// buffer holds what each stored.
+/// renders it in place, counted so, announcing nothing. The buffer holds what each stored.
 #[test]
-fn a_cleared_render_target_over_a_shared_buffer_renders_through_copies() {
+fn a_cleared_render_target_over_a_shared_buffer_renders_in_place() {
     on_device(|device, messages| {
         messages.take_notices();
         let (contents, buffer, texture) = surface(device, 3);
@@ -1494,16 +1479,11 @@ fn a_cleared_render_target_over_a_shared_buffer_renders_through_copies() {
             contents.read(0..n) == counting(n, 3),
             "a load and store changed the buffer"
         );
-        assert_eq!(
-            announced(messages, Degradation::LinearAttachmentClearCopies),
-            0,
-            "a pass that loads the texture"
-        );
         let before = device.work_counts();
         pass(&queue, &[(&texture, LoadAction::Clear, None)]);
         assert_eq!(
             ways(device, &before),
-            (0, u64::from(rule)),
+            (u64::from(rule), 0),
             "a pass that clears the texture, in place and through copies"
         );
         assert!(
@@ -1511,16 +1491,10 @@ fn a_cleared_render_target_over_a_shared_buffer_renders_through_copies() {
             "a clear did not reach the buffer"
         );
         let notices = counts(&messages.take_notices());
-        let count = |kind| notices.get(&kind).copied().unwrap_or(0);
         assert_eq!(
-            count(Degradation::LinearAttachmentCopies),
-            0,
+            notices.get(&Degradation::LinearAttachmentCopies),
+            None,
             "a pass of the texture alone"
-        );
-        assert_eq!(
-            count(Degradation::LinearAttachmentClearCopies),
-            usize::from(rule),
-            "a pass that clears the texture, once a device that renders it by the rule"
         );
         drop((texture, buffer));
         drop(contents);
@@ -1529,7 +1503,7 @@ fn a_cleared_render_target_over_a_shared_buffer_renders_through_copies() {
 }
 
 /// Passes clearing a 1920x1080 `BGRA8Unorm` render target over a `Shared` buffer, printed for the
-/// record: their ways, and the median GPU time of [`TIMED`] after one; the buffer holds the clear.
+/// record: their ways, and the median GPU time of `TIMED` after one; the buffer holds the clear.
 fn cleared_1080p(device: &Device, queue: &CommandQueue) {
     /// The passes timed.
     const TIMED: usize = 7;
@@ -1567,9 +1541,8 @@ fn cleared_1080p(device: &Device, queue: &CommandQueue) {
 
 /// A render target over host pages is an image bound to them exactly where the device's check
 /// passed for render targets over pointer pages, else a shadow: a pass of it alone that loads it
-/// and one that clears it each leave the pages holding what it stored; a shadow's passes announce
-/// no linear attachment's copies, and an image in place announces the clear's copies once where
-/// the device renders it by the rule, as one over a `Shared` buffer does.
+/// and one that clears it each leave the pages holding what it stored, and neither announces a
+/// linear attachment's copies.
 #[test]
 fn a_render_target_over_host_pages_is_in_place_where_the_check_passed() {
     on_device(|device, messages| {
@@ -1603,13 +1576,9 @@ fn a_render_target_over_host_pages_is_in_place_where_the_check_passed() {
             "a clear did not reach the pages"
         );
         let notices = counts(&messages.take_notices());
-        let count = |kind| notices.get(&kind).copied().unwrap_or(0);
         assert_eq!(
-            (
-                count(Degradation::LinearAttachmentCopies),
-                count(Degradation::LinearAttachmentClearCopies)
-            ),
-            (0, usize::from(in_place && rule)),
+            notices.get(&Degradation::LinearAttachmentCopies),
+            None,
             "a pass of the texture alone, and one that clears it"
         );
         drop((texture, buffer));

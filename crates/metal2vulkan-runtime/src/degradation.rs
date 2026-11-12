@@ -2053,15 +2053,6 @@ degradations! {
         LinearAttachmentCopies = "linear-attachment-copies", Performance,
             "its texels are copied into an image the pass renders, and what the pass wrote is \
              merged or copied back after it";
-        /// A pass clears a color attachment whose texture's image is linear and which the device
-        /// renders under `VK_NV_linear_color_attachment`, where the rule allows it in place:
-        /// it clears an image its texture keeps and copies it back after, as clearing a linear
-        /// image of host memory in place measured slower than that copy. Only where no command of
-        /// the pass may read the texture's bytes (`linear_attachment::choose`), so the two ways
-        /// cannot be told apart.
-        LinearAttachmentClearCopies = "linear-attachment-clear-copies", Performance,
-            "the pass clears an image of the device's and copies it back after, as clearing the \
-             texture's linear image in place costs more";
         /// A pass renders a color attachment that it stores with `DontCare` (or resolves alone,
         /// `MultisampleResolve`) and whose texture's image lies over the buffer the texture lies
         /// in (a linear image over an ordinary buffer's memory) through an image its texture keeps, so that the buffer keeps its bytes, as
