@@ -906,6 +906,10 @@ mod device {
         let (counts, churn) = (device.work_counts(), device.shared().spares.churn());
         let allocated =
             churn.allocated.values().sum::<u64>() - churn_warm.allocated.values().sum::<u64>();
+        let made_at: Vec<_> = (churn.allocated.iter())
+            .map(|(at, &n)| (at, n - churn_warm.allocated.get(at).copied().unwrap_or(0)))
+            .filter(|&(_, n)| n > 0)
+            .collect();
         let freed = [
             churn.past_recent_uses - churn_warm.past_recent_uses,
             churn.past_held - churn_warm.past_held,
@@ -916,7 +920,7 @@ mod device {
         let trims = counts.spare_command_pool_trims - warm.spare_command_pool_trims;
         println!(
             "SPARES-MIXED {}: {MIXED_IN_FLIGHT} in flight of {MIXED:?}, {} cycles once warm: made \
-             {allocated} command buffers, freed {freed:?} (past recent uses, past the bound, \
+             {allocated} command buffers ({made_at:?}), freed {freed:?} (past recent uses, past the bound, \
              shed), {trims} trims; {past_first} spares taken past a first pool; the spares hold \
              {} of {} begun",
             device.name(),
