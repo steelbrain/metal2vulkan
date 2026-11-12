@@ -18,14 +18,29 @@
 //!   plane (`texture/surface_depth.rs`); and a YCbCr texture's converted image and its render
 //!   shadow (`texture/ycbcr_image.rs`; its write shadow is a usage shadow). A device copy is no shadow it names, nor is a heap texture's
 //!   (its own notice names it), a view's shadow of an image or a texture buffer's staging.
-//! - **Off, it costs nothing.** The switch is read once; no line is formatted.
+//! - **What a shadowed texture's first draw reads.** One line per shadowed texture (one whose
+//!   reads go through a shadow of its truth, a usage shadow or two faces that take turns), at the
+//!   first draw whose pipeline uses a slot that binds it, after the draw's bindings made the
+//!   shadow it reads: the slot, whether the function fetches, samples or writes it, and for each
+//!   sampler it samples it through, a sampler state's minification, magnification and mipmap
+//!   filters (Metal's names) or a constexpr sampler's (Vulkan's names, as the layout bakes it).
+//!   A texture's line names it once in the process ([`drew`]).
+//! - **Off, it costs nothing.** The switch is read once; no line is formatted, and a draw names
+//!   no texture.
 
+use super::argument_table::ArgumentTable;
 use super::buffer_texture::Texels;
+use super::device::lock;
 use super::driver_facts::inform_through;
 use super::texture_descriptor::{TextureDescriptor, TextureLayout};
-use super::Device;
+use super::{Device, Texture};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
-use std::sync::OnceLock;
+use metal2vulkan::pipeline::{
+    BindingSource, RenderPipeline, SamplerRef, SlotClass, SlotInterface, SlotRef, Stage,
+};
+use metal2vulkan::vk;
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
 
 /// The id name of the log's messages.
 const ID_NAME: &str = "metal2vulkan-shadows";
@@ -111,4 +126,131 @@ pub(super) fn made_of(
         texture.pixel_format, texture.levels, texture.usage,
     );
     inform_through(device.shared().instance.sink(), ID_NAME, text);
+}
+
+/// Where the log is on, name each shadowed texture that `stages`' tables bind at a slot a function
+/// of `compiled`, a draw's pipeline, uses, where no line named it before (the module's **What a
+/// shadowed texture's first draw reads**).
+pub(crate) fn drew(device: &Device, compiled: &RenderPipeline, stages: &[(Stage, &ArgumentTable)]) {
+    if !enabled() {
+        return;
+    }
+    /// The object IDs of the textures a line named.
+    static NAMED: OnceLock<Mutex<HashSet<u64>>> = OnceLock::new();
+    for &(stage, table) in stages {
+        for (&index, texture) in &table.textures {
+            let Some(kind) = shadowed(texture) else {
+                continue;
+            };
+            let slot = SlotRef {
+                stage,
+                class: SlotClass::Texture,
+                index,
+            };
+            let Some(SlotInterface::Texture(used)) = compiled.interface.slots.get(&slot) else {
+                continue;
+            };
+            let id = texture.object_id().get();
+            if !lock(NAMED.get_or_init(Mutex::default)).insert(id) {
+                continue;
+            }
+            let access = used.access;
+            let uses = [
+                (access.read, "fetches"),
+                (access.sample, "samples"),
+                (access.write, "writes"),
+            ];
+            let uses: Vec<&str> = (uses.iter())
+                .filter_map(|&(used, name)| used.then_some(name))
+                .collect();
+            let samplers = match access.sample {
+                true => format!("; {}", samplers_named(compiled, table, slot)),
+                false => String::new(),
+            };
+            let text = format!(
+                "metal2vulkan: shadow: the first draw that binds the {:?} texture of {}x{} and {} \
+                 levels, object {id}, through {kind}, at {stage:?} texture {index}: its function \
+                 {} it{samples}",
+                texture.pixel_format(),
+                texture.width(),
+                texture.height(),
+                texture.mipmap_level_count(),
+                uses.join(" and "),
+            );
+            inform_through(device.shared().instance.sink(), ID_NAME, text);
+        }
+    }
+}
+
+/// What a draw's reads of `texture` go through, where they go through a shadow: its faces
+/// (`texture/faces.rs`), a usage shadow (`texture/usage_shadow.rs`) or a shadow of its truth.
+fn shadowed(texture: &Texture) -> Option<&'static str> {
+    if texture.has_faces() {
+        return Some("two faces that take turns");
+    }
+    if texture.usage_shadow_copies().is_some() {
+        return Some("a usage shadow");
+    }
+    texture.shadow().map(|_| "a shadow of its truth")
+}
+
+/// The samplers the function of `compiled` samples the texture at `slot` through, each with its
+/// filters: a sampler state bound in `table` by Metal's names, a constexpr sampler by the layout's
+/// Vulkan sampler.
+fn samplers_named(compiled: &RenderPipeline, table: &ArgumentTable, slot: SlotRef) -> String {
+    let stage = match slot.stage {
+        Stage::Vertex => vk::ShaderStage::VERTEX,
+        Stage::Fragment => vk::ShaderStage::FRAGMENT,
+        Stage::Object => vk::ShaderStage::TASK_EXT,
+        Stage::Mesh => vk::ShaderStage::MESH_EXT,
+        _ => return "its samplers unknown".to_owned(),
+    };
+    let reads = (compiled.stages.iter())
+        .find(|module| module.stage == stage)
+        .and_then(|module| module.level_reads.iter().find(|r| r.slot == slot.index));
+    let Some(reads) = reads else {
+        return "its samplers unknown".to_owned();
+    };
+    let mut named: Vec<String> = Vec::new();
+    for sampled in &reads.sampled {
+        let name = match sampled.sampler {
+            SamplerRef::Slot(index) => match table.samplers.get(&index) {
+                Some((state, _)) => {
+                    let d = state.descriptor();
+                    format!(
+                        "sampler {index}: min {:?}, mag {:?}, mip {:?}",
+                        d.min_filter, d.mag_filter, d.mip_filter
+                    )
+                }
+                None => format!("sampler {index}: none bound"),
+            },
+            SamplerRef::Constexpr(words) => {
+                let baked = (compiled.layout.sets.iter())
+                    .flat_map(|set| set.bindings.iter())
+                    .find_map(|binding| match binding.source {
+                        BindingSource::CombinedTextureSampler {
+                            texture, sampler, ..
+                        } if texture == slot && sampler.sampler == SamplerRef::Constexpr(words) => {
+                            binding.immutable_sampler
+                        }
+                        _ => None,
+                    });
+                match baked {
+                    Some(desc) => format!(
+                        "a constexpr sampler: min {:?}, mag {:?}, mipmap mode {:?}",
+                        desc.min_filter, desc.mag_filter, desc.mipmap_mode
+                    ),
+                    None => format!("a constexpr sampler {:#x}:{:#x}", words[0], words[1]),
+                }
+            }
+            other => format!("{other:?}"),
+        };
+        if !named.contains(&name) {
+            named.push(name);
+        }
+    }
+    match named.is_empty() {
+        true => "its samplers unknown".to_owned(),
+        false => format!("through {}", named.join("; ")),
+    }
 }

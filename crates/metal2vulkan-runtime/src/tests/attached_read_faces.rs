@@ -18,19 +18,28 @@
 //! first; and a turn whose command buffer goes uncommitted, after which the next read of the
 //! texture takes that copy, and the texture turns again.
 //!
+//! A second test runs while the device has a buffer over host pages, so every pass logs its calls
+//! for a rebind (`replay.rs`): a logged pass turns as any other, and a rebind of the buffer before
+//! a turning command buffer's submission encodes again its blit that read the texture before the
+//! turn and its turning pass, which read the texels each read at its first encoding
+//! (`texture/faces.rs`, **Encoded again**). The same lane beside an open command buffer, where no
+//! pass turns and every read copies in, reads the same bytes.
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_rect`,
 //! `tob_solid` and `tob_read` of the owned fixture `validation/fixtures/public/engine/tob_renders.ll`.
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::{
-    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, LoadAction, Origin,
-    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, Size,
-    StoreAction, Texture, TextureDescriptor, WorkCounts,
+    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, EventRef, LoadAction,
+    Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
+    ScissorRect, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 /// The texture: `WIDTH` texels a row of 4 bytes (`BGRA8Unorm`), `HEIGHT` rows.
 const WIDTH: u64 = 64;
@@ -168,6 +177,18 @@ impl Tools {
         clear: Option<u8>,
         draw: Draw,
     ) {
+        self.encode_over(command_buffer, texture, (clear, draw), None);
+    }
+
+    /// As [`encode`](Self::encode), its draw's corners read from `corners_in`, a buffer and the
+    /// offset of the corners in it, where it is given, else from bytes set at the call.
+    fn encode_over(
+        &self,
+        command_buffer: &CommandBuffer,
+        texture: &Texture,
+        (clear, draw): (Option<u8>, Draw),
+        corners_in: Option<(&Buffer, u64)>,
+    ) {
         let mut pass = RenderPassDescriptor::new();
         let color = &mut pass.color_attachments[0];
         color.texture = Some(texture.clone());
@@ -196,7 +217,11 @@ impl Tools {
             }
         }
         if !matches!(draw, Draw::Nothing) {
-            encoder.set_vertex_bytes(&corners, 0).unwrap();
+            match corners_in {
+                Some((buffer, offset)) => encoder.set_vertex_buffer(Some(buffer), offset, 0),
+                None => encoder.set_vertex_bytes(&corners, 0),
+            }
+            .unwrap();
             encoder.set_scissor_rect(RECT).unwrap();
             (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
         }
@@ -260,6 +285,15 @@ impl Tools {
     }
 }
 
+/// The texture the passes render and read: `Private`, its reads sampled.
+fn texture(device: &Device) -> Texture {
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, WIDTH, HEIGHT, false);
+    descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+    descriptor.resource_options = ResourceOptions::private();
+    device.new_texture(&descriptor).unwrap()
+}
+
 /// The steps of the module docs: every read takes the texels from before its pass, the clears
 /// and solid draws land where the next command reads them, and a turned pass copies nothing in.
 #[test]
@@ -267,11 +301,7 @@ fn a_texture_s_faces_take_turns_for_its_attached_reads() {
     let scratch = Scratch::new("attached-read-faces");
     let device = device(&scratch.0);
     let tools = Tools::new(&device);
-    let mut descriptor =
-        TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, WIDTH, HEIGHT, false);
-    descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
-    descriptor.resource_options = ResourceOptions::private();
-    let texture = device.new_texture(&descriptor).unwrap();
+    let texture = texture(&device);
     let check = |want: Vec<u8>, what: &str| {
         let (got, moved) = tools.bytes(&texture);
         assert_eq!(
@@ -387,4 +417,155 @@ fn a_texture_s_faces_take_turns_for_its_attached_reads() {
     let moved = tools.pass(&texture, Some(0xb0), Draw::Read);
     assert_eq!(moved, turned, "the turn after the uncommitted one");
     check(image(0xb0, 0x64), "the turn after the uncommitted one");
+}
+
+/// Where the corners lie in the pages of the second test: past the bytes its blit writes.
+const CORNERS_AT: u64 = 64 << 10;
+
+/// What a lane of the second test moved and read.
+struct Logged {
+    /// What its logged pass moved, the one before the command buffer the rebind encodes again.
+    logged: Moved,
+    /// What that command buffer moved, from its encoding to its completion, and how many of its
+    /// encoders the rebind encoded again.
+    again: Moved,
+    reencoded: u64,
+    /// The bytes its blit read, through its encoding again: the texture before the turning pass.
+    blit: Vec<u8>,
+    /// The texture's bytes after the command buffer.
+    after: Vec<u8>,
+}
+
+/// A lane of the second test, its buffer over `first` rebound over `second` (each holding the
+/// corners at [`CORNERS_AT`]), beside an open command buffer where `busy`, so that no pass turns;
+/// `None`, printed, where the device imports no host memory.
+fn logged_lane(
+    device: &Device,
+    tools: &Tools,
+    [first, second]: [&Host; 2],
+    busy: bool,
+) -> Option<Logged> {
+    let pages = over_host(device, first, &Arc::new(AtomicUsize::new(0)))?;
+    let corners = [-1.0f32, -1.0, 1.0, 1.0].map(f32::to_bits);
+    let at = (CORNERS_AT / 4) as usize;
+    first.set(at, &corners);
+    second.set(at, &corners);
+    let texture = texture(device);
+    let open = busy.then(|| tools.queue.command_buffer().unwrap());
+    // The faces, made by the first read; then a logged pass that reads 0x50 inside the rectangle.
+    tools.pass(&texture, Some(0x10), Draw::Nothing);
+    tools.pass(&texture, None, Draw::Solid(0x40));
+    tools.pass(&texture, Some(0x20), Draw::Read);
+    tools.pass(&texture, None, Draw::Solid(0x50));
+    let logged = tools.pass(&texture, Some(0x30), Draw::Read);
+    tools.pass(&texture, None, Draw::Solid(0x62));
+    // Behind a wait: a blit of the texture into the pages, then a pass that clears it and reads
+    // it, its corners from the pages. The rebind before the signal encodes both again.
+    let before = device.work_counts();
+    let gate = device.new_shared_event().unwrap();
+    let command_buffer = tools.queue.command_buffer().unwrap();
+    (command_buffer.encode_wait_for_event(EventRef::Shared(&gate), 1)).unwrap();
+    Tools::encode_read(&command_buffer, &texture, &pages);
+    let corners_in = Some((&pages, CORNERS_AT));
+    tools.encode_over(
+        &command_buffer,
+        &texture,
+        (Some(0x90), Draw::Read),
+        corners_in,
+    );
+    command_buffer.commit().unwrap();
+    // SAFETY: the pages outlive the buffer (declared before the device, dropped after it), and
+    // only the buffer's commands use them while it lives.
+    unsafe { pages.rebind_bytes_no_copy(second.memory(), None, None) }.unwrap();
+    gate.set_signaled_value(1);
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    let counts = device.work_counts();
+    let refused = counts.reencodes_refused - before.reencodes_refused;
+    assert_eq!(refused, 0, "a rebind refused to encode an encoder again");
+    let again = Moved::of(&before, &counts);
+    let reencoded = counts.encoders_reencoded - before.encoders_reencoded;
+    let words = &second.words()[..(LENGTH / 4) as usize];
+    let blit = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+    drop(open);
+    let (after, _) = tools.bytes(&texture);
+    Some(Logged {
+        logged,
+        again,
+        reencoded,
+        blit,
+        after,
+    })
+}
+
+/// The second test of the module docs: with a buffer over host pages alive, a logged pass turns
+/// and copies nothing in; the rebind encodes the turning command buffer's blit and pass again, the
+/// blit reading the texels from before the turn and the pass taking its turn again, reading them
+/// too with no copy in. Each lane's bytes are those the same lane reads where no pass turns.
+#[test]
+fn a_logged_pass_turns_and_its_encoding_again_meets_the_faces_as_first_met() {
+    // The pages, declared before the device that uses them, so dropped after it.
+    let hosts: [Host; 4] = std::array::from_fn(|_| Host::new());
+    let scratch = Scratch::new("attached-read-faces-logged");
+    let device = device(&scratch.0);
+    let tools = Tools::new(&device);
+    let Some(turned) = logged_lane(&device, &tools, [&hosts[0], &hosts[1]], false) else {
+        return;
+    };
+    let copied = logged_lane(&device, &tools, [&hosts[2], &hosts[3]], true).unwrap();
+    for (lane, name) in [(&turned, "turned"), (&copied, "copied")] {
+        eprintln!(
+            "ATTACHED-READ-FACES: logged, {name}: the logged pass {:?}; encoded again ({} \
+             encoders) {:?}",
+            lane.logged, lane.reencoded, lane.again
+        );
+        assert_eq!(
+            lane.reencoded, 2,
+            "{name}: the blit and the pass encoded again"
+        );
+        let differ =
+            |got: &[u8], want: &[u8]| (0..got.len()).filter(|&at| got[at] != want[at]).count();
+        let blit = differ(&lane.blit, &image(0x30, 0x62));
+        assert_eq!(
+            blit, 0,
+            "{name}: the blit encoded again: {blit} bytes differ"
+        );
+        let after = differ(&lane.after, &image(0x90, 0x62));
+        assert_eq!(
+            after, 0,
+            "{name}: the pass encoded again: {after} bytes differ"
+        );
+    }
+    let turn = Moved {
+        swaps: 1,
+        reads: 1,
+        ..Moved::default()
+    };
+    assert_eq!(turned.logged, turn, "the logged pass turns");
+    assert_eq!(
+        (
+            turned.again.swaps,
+            turned.again.copied_in,
+            turned.again.unswapped
+        ),
+        (1, 0, 0),
+        "the pass turns, and its encoding again takes the turn again with no copy in"
+    );
+    assert_eq!(
+        (copied.logged.swaps, copied.logged.busy, copied.again.swaps),
+        (0, 1, 0),
+        "beside an open command buffer, no pass turns"
+    );
+    assert!(
+        copied.again.copied_in > 0,
+        "beside an open command buffer, the pass copies in"
+    );
+    assert_eq!(
+        turned.blit, copied.blit,
+        "the blit's bytes, turned and copied"
+    );
+    assert_eq!(
+        turned.after, copied.after,
+        "the texture's bytes, turned and copied"
+    );
 }

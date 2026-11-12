@@ -2662,7 +2662,6 @@ impl CommandBuffer {
             owner: self.0.address(),
             part: state.recorded.len(),
             bound_heaps: state.heaps.bound(),
-            logs_kept: state.ended.iter().any(|record| record.replay.is_some()),
         }
     }
 

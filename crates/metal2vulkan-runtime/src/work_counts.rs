@@ -9069,8 +9069,8 @@ pub struct WorkCounts {
     /// buffer or one whose pass was not submitted yet.
     pub attached_read_unswapped_busy: u64,
     /// The copies in of an attached read's shadow before a pass's first instance that no turn took
-    /// off, for a pass that turns nothing: an encoding again, color groups, a rasterization-rate
-    /// map, a log of its calls or an earlier encoder's.
+    /// off, for a pass that turns nothing: color groups, a rasterization-rate map, or an encoding
+    /// again whose first encoding turned nothing (`texture/faces.rs`, **Encoded again**).
     pub attached_read_unswapped_pass: u64,
     /// The copies in of an attached read's shadow before a later instance of a pass, turned or not:
     /// a read after a barrier, which reads the draws before it.

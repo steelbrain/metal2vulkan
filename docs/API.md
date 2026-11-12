@@ -1840,7 +1840,11 @@ the bytes with or without the feedback loop usage, a shadow, or an image of its 
 texture's image of its stored frame and its twin, a two-plane extended-range texture's image, a
 depth or stencil texture's tiled twin over a surface plane, and a YCbCr texture's converted image
 and render shadow. A heap texture's shadow, a view's shadow of an image and a texture buffer's
-staging are not logged.
+staging are not logged. It also logs, once per shadowed texture (a shadow of its truth, a usage
+shadow or two faces that take turns), at the first draw whose pipeline uses a slot that binds it:
+the slot, whether the function fetches, samples or writes the texture, and the filters of each
+sampler it samples it through (a sampler state's minification, magnification and mipmap filters,
+or a constexpr sampler's as the pipeline layout bakes it).
 With `METAL2VULKAN_LOG_PASSES` set to a comma-separated list of `FORMAT:WIDTHxHEIGHT` (the format
 as the notices print it or as Metal names it, `*` for any format or any size, for example
 `RGBA16Float:128x128`), a device logs a line at the end of each render pass that renders into a

@@ -638,6 +638,8 @@ mod linked_signatures;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod lod_bias;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod logged_face_turns;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod logic_ops;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod made_at_creation;

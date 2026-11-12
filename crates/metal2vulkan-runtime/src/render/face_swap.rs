@@ -4,14 +4,18 @@
 //! (`WorkCounts::attached_read_unswapped_*`).
 //!
 //! - **At the open** ([`Turns::open`]). A color whose texture has faces turns it where the pass
-//!   turns textures at all (it encodes no encoder again, draws its colors in one group, over no
-//!   rasterization-rate map, logs none of its calls, and no ended encoder of its command buffer
-//!   keeps a log a rebind encodes again: each would record commands again that name the face
-//!   presented on one side of the turn on the other), and the color loads `Clear` or `DontCare`
-//!   and renders the whole texture: level 0 and slice 0, one layer, the render area the texture's
-//!   extent, single-sampled, resolving nowhere, no other attachment of the pass the same texture,
-//!   and the pass failing no command buffer. The turn checks the rest
-//!   ([`Texture::turn_face`](crate::Texture)). A turned texture's faces' shadows are carried no
+//!   turns textures at all (it draws its colors in one group, over no rasterization-rate map: each
+//!   records the pass's calls again, a later group's or a reset map's, after the turn), and the
+//!   color loads `Clear` or `DontCare` and renders the whole texture: level 0 and slice 0, one
+//!   layer, the render area the texture's extent, single-sampled, resolving nowhere, no other
+//!   attachment of the pass the same texture, and the pass failing no command buffer. The turn
+//!   checks the rest ([`Texture::turn_face`](crate::Texture)). A pass that logs its calls for a
+//!   rebind (`replay.rs`) turns as any other: a rebind's encoding again of the command buffer's
+//!   encoders meets the faces as their first encodings met them (`texture/faces.rs`, **Encoded
+//!   again**). A pass encoded again so turns nothing anew; where its first encoding turned a
+//!   texture, it takes that turn again ([`Texture::retake_turn`](crate::Texture)), its first
+//!   instance reading the face from before the turn with no copy in, as the first encoding's did.
+//!   A turned texture's faces' shadows are carried no
 //!   further from the command buffer's earlier encoders (`shadow::ShadowCarry`): what they held
 //!   is no longer where the truth is. Nor is the kept draw the command buffer's last render
 //!   encoder carried (`render/carried.rs`): it bound the face presented before.
@@ -54,11 +58,14 @@ pub(crate) struct Turns {
 
 impl Turns {
     /// The turns of the pass of `layout` whose encoder `core` just opened (the module docs),
-    /// `pass` why the pass turns no texture where it turns none for its own reasons.
+    /// `pass` why the pass turns no texture where it turns none for its own reasons, `again`
+    /// where the pass is encoded again (`replay.rs`): it takes again the turns its first encoding
+    /// took, and no other.
     pub(super) fn open(
         core: &mut EncoderCore,
         layout: &PassLayout,
         pass: Option<Unturned>,
+        again: bool,
     ) -> Turns {
         let mut turns = Turns {
             pass,
@@ -78,11 +85,13 @@ impl Turns {
                 None => color_verdict(layout, index, color),
             };
             let verdict = checked.and_then(|()| {
-                let point = point.get_or_insert_with(|| core.command_buffer().turn_point());
-                if point.logs_kept {
-                    return Err(Unturned::Pass);
-                }
-                let turned = texture.turn_face(point)?;
+                let turned = match again {
+                    true => texture.retake_turn().ok_or(Unturned::Pass)?,
+                    false => {
+                        let point = point.get_or_insert_with(|| core.command_buffer().turn_point());
+                        texture.turn_face(point)?
+                    }
+                };
                 if let Some(copies) = texture.face_copies() {
                     core.carry_no_further(&copies);
                 }

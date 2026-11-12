@@ -107,7 +107,9 @@ pub const REGISTRY: &[EnvVar] = &[
                  device's message sink or on stderr: the call, the texture's format, size, \
                  levels and usage, its truth (the buffer's storage mode, length and object ID, \
                  the texels' offset and row pitch, or its own image), and what made it a \
-                 shadow; set to anything but empty or 0",
+                 shadow; and once per shadowed texture, at the first draw that binds it, \
+                 whether its function fetches, samples or writes it and its samplers' filters; \
+                 set to anything but empty or 0",
     },
     EnvVar {
         name: "METAL2VULKAN_LOG_PASSES",

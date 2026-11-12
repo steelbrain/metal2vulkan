@@ -17,8 +17,8 @@
 //!   renders one level would leave the other face's other levels stale, and one view cannot present
 //!   levels of two images.
 //! - **The turn** (`render/face_swap.rs`): at the open of a render pass, once its encoder is open,
-//!   where the pass runs once (no replay, one group, no rate map or log, no ended encoder of its
-//!   command buffer keeping a replay log) and a color attachment renders the whole texture (level
+//!   where the pass runs once (one group, no rate map; a pass encoded again turns nothing anew,
+//!   **Encoded again** below) and a color attachment renders the whole texture (level
 //!   0, slice 0, the pass's extent the texture's), loaded `Clear` or `DontCare`, with no resolve,
 //!   no depth or stencil attachment and no other attachment of it, the texture presents its other
 //!   face from then on ([`Texture::turn_face`]). The pass renders into it; its draws read the face
@@ -51,6 +51,17 @@
 //!   see what it wrote. Where the turning command buffer goes uncommitted, or commits nothing of
 //!   its work ([`FaceSwaps::ran_nothing`]), the next batch to name the new face takes the same
 //!   copies, once. Where its pass is submitted, every later batch is after it.
+//! - **Encoded again** (`command_buffer/reencode.rs`). A pass logs its calls while the device has
+//!   a buffer over host pages (`replay.rs`), and a rebind of such a buffer before the turning
+//!   command buffer's submission encodes again its encoders that named it, the turning pass and
+//!   encoders before it among them. The turning pass encoded again takes its turn again
+//!   ([`Texture::retake_turn`]): the texture already presents the face it turned to, its draws
+//!   read the face from before the turn with no copy in, as the first encoding's did, since none of
+//!   the command buffer's work has run and that face still holds the texels from before the pass.
+//!   An encoder before it, encoded again, names the face it named at its first encoding, the one
+//!   from before the turn ([`with_faces_as_of`], read by every resolution of the face presented):
+//!   its first encoding's commands ran before the pass, on that face. Any other pass encoded again
+//!   turns nothing ([`Unturned::Pass`]).
 //! - **Frozen** ([`Texture::freeze_faces`]): a view of the texture, its `VkImage` handed out, a
 //!   binding beyond its usage (whose shadow names one face as its truth for good) or a storage form
 //!   end its turns: it presents the face it presents then from then on, the other kept as its
@@ -77,6 +88,8 @@ use ash::vk;
 use metal2vulkan::metal::format::ycbcr_writes_stored;
 use metal2vulkan::metal::TextureType;
 use metal2vulkan::vk::{ImageType, ImageUsageFlags};
+use std::cell::RefCell;
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -96,8 +109,12 @@ pub(super) struct Faces {
 }
 
 impl Faces {
-    /// The face presented.
+    /// The face presented: to an encoder encoded again before a later pass of its command buffer
+    /// turned the texture, the face from before that turn ([`with_faces_as_of`]).
     fn face(&self) -> usize {
+        if let Some(face) = face_as_of(self) {
+            return usize::from(face);
+        }
         usize::from(self.face.load(Ordering::Acquire))
     }
 
@@ -144,8 +161,9 @@ pub(crate) enum Unturned {
     /// scheduler holds, a heap ticket out, a heap set this command buffer bound, a turn whose
     /// pass is not submitted, or a turn earlier in this command buffer.
     Busy,
-    /// The pass takes no turn of any texture: an encoding again, color groups, a
-    /// rasterization-rate map, or a log for a later encoding.
+    /// The pass takes no turn of any texture: color groups, a rasterization-rate map, or an
+    /// encoding again whose first encoding did not turn the texture (the module's **Encoded
+    /// again**).
     Pass,
     /// A swapped pass's copies after its first instance: a read after a barrier, whose copy in
     /// the turn does not take off.
@@ -165,14 +183,82 @@ pub(crate) struct Turned {
 
 /// Where a render pass opens in its command buffer, for its turns (`CommandBuffer::turn_point`):
 /// the command buffer's address, which names it while it lives; the place among its ended
-/// encoders' parts that the pass's encoder's first part takes; whether a command of it bound a
-/// heap set; and whether an ended encoder of it keeps a log that a rebind encodes again
-/// (`replay.rs`), whose commands would then name the face presented after the turn.
+/// encoders' parts that the pass's encoder's first part takes; and whether a command of it bound a
+/// heap set.
 pub(crate) struct TurnPoint {
     pub(crate) owner: usize,
     pub(crate) part: usize,
     pub(crate) bound_heaps: bool,
-    pub(crate) logs_kept: bool,
+}
+
+/// What a thread encoding again an encoder of a command buffer takes of its turns (the module's
+/// **Encoded again**): the command buffer's address, the encoder's parts, and, for each texture a
+/// later pass of the command buffer turned, its faces (by address) and the face from before that
+/// turn.
+struct AsOf {
+    owner: usize,
+    parts: Range<usize>,
+    earlier: Vec<(usize, u8)>,
+}
+
+thread_local! {
+    /// The turns of the command buffer whose encoder this thread encodes again now
+    /// ([`with_faces_as_of`]).
+    static AS_OF: RefCell<Option<AsOf>> = const { RefCell::new(None) };
+}
+
+/// Run `f`, which encodes again the encoder of parts `parts` of the command buffer at `owner` on
+/// `device` (`command_buffer/reencode.rs`), with the faces of its turns as that encoder's first
+/// encoding met them (the module's **Encoded again**): a texture a later pass of the command buffer
+/// turned presents the face from before that turn, and the pass of the turn takes it again
+/// ([`Texture::retake_turn`]). With no turn of the command buffer pending, `f` runs as it is.
+pub(crate) fn with_faces_as_of<T>(
+    device: &Device,
+    (owner, parts): (usize, Range<usize>),
+    f: impl FnOnce() -> T,
+) -> T {
+    let swaps = &device.shared().face_swaps;
+    if !swaps.any() {
+        return f();
+    }
+    let earlier = swaps.earlier_faces(owner, parts.end);
+    /// Ends the context as `f` returns or unwinds.
+    struct Clear(Option<AsOf>);
+    impl Drop for Clear {
+        fn drop(&mut self) {
+            let before = self.0.take();
+            AS_OF.with(|as_of| *as_of.borrow_mut() = before);
+        }
+    }
+    let before = AS_OF.with(|as_of| {
+        as_of.borrow_mut().replace(AsOf {
+            owner,
+            parts,
+            earlier,
+        })
+    });
+    let _clear = Clear(before);
+    f()
+}
+
+/// The face `faces` presents to the encoder this thread encodes again, where a later pass of its
+/// command buffer turned it ([`with_faces_as_of`]); `None` elsewhere.
+fn face_as_of(faces: &Faces) -> Option<u8> {
+    let at = faces as *const Faces as usize;
+    AS_OF.with(|as_of| {
+        let as_of = as_of.borrow();
+        let earlier = &as_of.as_ref()?.earlier;
+        (earlier.iter()).find_map(|&(faces, face)| (faces == at).then_some(face))
+    })
+}
+
+/// The command buffer and parts of the encoder this thread encodes again
+/// ([`with_faces_as_of`]); `None` where it encodes none so.
+fn encoding_again() -> Option<(usize, Range<usize>)> {
+    AS_OF.with(|as_of| {
+        let as_of = as_of.borrow();
+        as_of.as_ref().map(|a| (a.owner, a.parts.clone()))
+    })
 }
 
 impl Texture {
@@ -293,9 +379,9 @@ impl Texture {
     }
 
     /// The face the texture presents: 0 its own image (a texture without faces too), 1 its
-    /// second.
+    /// second; to an encoder encoded again, as its first encoding met it ([`with_faces_as_of`]).
     pub(crate) fn face(&self) -> u8 {
-        (self.0.faces.get()).map_or(0, |faces| faces.face.load(Ordering::Acquire))
+        (self.0.faces.get()).map_or(0, |faces| faces.face() as u8)
     }
 
     /// End the texture's turns, where it has faces (the module's **Frozen**): it presents the
@@ -361,6 +447,7 @@ impl Texture {
             owner: point.owner,
             part: point.part,
             texture: Arc::downgrade(&self.0),
+            from: from as u8,
             base,
             turned,
             stale: AtomicBool::new(false),
@@ -368,6 +455,22 @@ impl Texture {
         swaps.turning.store(false, Ordering::SeqCst);
         shared.counts.attached_read_swap();
         Ok(Turned {
+            copies: Arc::clone(faces.shadows[to].copies()),
+        })
+    }
+
+    /// Take again, in the encoding again of the pass that turned the texture (the module's
+    /// **Encoded again**), the turn that pass's first encoding took: where this thread encodes
+    /// again an encoder whose parts hold a pending turn of the texture by its command buffer, and
+    /// the texture still presents the face that turn turned to, the shadow the pass's first
+    /// instance reads without a copy in, the face from before the turn; else `None`.
+    pub(crate) fn retake_turn(&self) -> Option<Turned> {
+        let faces = self.0.faces.get()?;
+        let (owner, parts) = encoding_again()?;
+        let swaps = &self.device().shared().face_swaps;
+        let from = swaps.turned_in(&self.0, owner, &parts)?;
+        let to = 1 - usize::from(from);
+        (usize::from(faces.face.load(Ordering::Acquire)) == to).then(|| Turned {
             copies: Arc::clone(faces.shadows[to].copies()),
         })
     }
@@ -442,6 +545,8 @@ struct SwapRecord {
     owner: usize,
     part: usize,
     texture: Weak<TextureShared>,
+    /// The face presented before the turn: 0 the texture's own image, 1 its second.
+    from: u8,
     /// The face that holds the truth until the pass runs, and the face presented from the turn.
     base: Arc<Image>,
     turned: Arc<Image>,
@@ -586,6 +691,36 @@ impl FaceSwaps {
         }
         let records = lock(&self.records);
         (records.iter()).any(|record| std::ptr::eq(record.texture.as_ptr(), texture))
+    }
+
+    /// For each texture a pass of the command buffer at `owner` turned at a part from `part` on,
+    /// whose pass has not run: its faces' address and the face it presented before the turn
+    /// ([`with_faces_as_of`]).
+    fn earlier_faces(&self, owner: usize, part: usize) -> Vec<(usize, u8)> {
+        let records = lock(&self.records);
+        (records.iter())
+            .filter(|record| record.owner == owner && record.part >= part)
+            .filter(|record| !record.stale.load(Ordering::Acquire))
+            .filter_map(|record| {
+                let texture = record.texture.upgrade()?;
+                let faces = texture.faces.get()? as *const Faces as usize;
+                Some((faces, record.from))
+            })
+            .collect()
+    }
+
+    /// The face `texture` presented before a pending turn of it by a pass of the command buffer at
+    /// `owner` among parts `parts` ([`Texture::retake_turn`]); `None` where there is none.
+    fn turned_in(&self, texture: &TextureShared, owner: usize, parts: &Range<usize>) -> Option<u8> {
+        if !self.any() {
+            return None;
+        }
+        let records = lock(&self.records);
+        (records.iter())
+            .filter(|record| record.owner == owner && parts.contains(&record.part))
+            .filter(|record| !record.stale.load(Ordering::Acquire))
+            .find(|record| std::ptr::eq(record.texture.as_ptr(), texture))
+            .map(|record| record.from)
     }
 
     /// The command buffer at `owner` will run none of its work: its went uncommitted, or its commit

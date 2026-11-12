@@ -43,6 +43,10 @@
 //!   its host step needs. Work a host step recorded again since (with the barriers between its
 //!   commands, `gpu_execute::Rerecord`, or as a route outgrew it, `DeferredPass::outgrown`)
 //!   keeps that step's recording.
+//! - **Faces as first met.** Each encoding again (and each recording again on the GPU alone)
+//!   meets the faces of the command buffer's turns as its first encoding met them: a texture a
+//!   later pass of the command buffer turned presents the face from before the turn, and the
+//!   turning pass takes its turn again (`texture/faces.rs`, **Encoded again**).
 //! - **Copies taken at use.** A tiled texture's copy of its bytes taken at use (`shadow.rs`) is
 //!   taken by the first use encoded after its mark was set, which clears it. An encoder encoded
 //!   again takes it where the use in its place in its first encoding took it, whose recording is
@@ -72,6 +76,7 @@ use crate::pipeline::budget::Urgency;
 use crate::replay::Replay;
 use crate::residency::Residency;
 use crate::resource::ResourceKey;
+use crate::texture::faces::with_faces_as_of;
 use crate::used_resources::EncoderKind;
 use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
@@ -151,7 +156,7 @@ impl CommandBufferShared {
             // (`Predication::replaying`).
             // The merges its first encoding left to runs of passes (`pass_runs.rs`): encoded again,
             // it leaves them, and keeps after itself what a later pass of a run went on over.
-            let (residency, runs) = {
+            let (residency, runs, parts) = {
                 let mut state = lock(&self.state);
                 state.replaying_predication = match state.predicated {
                     true => state.predication.replaying(at),
@@ -169,9 +174,18 @@ impl CommandBufferShared {
                 // Its first encoding's takes of copies taken at use, taken again where they were:
                 // that encoding's recording is never submitted (`shadow::Takes`).
                 state.replaying_takes = state.ended[at].takes.clone();
-                (state.residency_before(at, replay.kind()), runs)
+                // Its parts, by which the encoding again meets the faces of the command buffer's
+                // turns as its first encoding met them (`texture/faces.rs`, **Encoded again**).
+                let mut parts = (state.recorded.iter().enumerate())
+                    .filter(|(_, part)| part.encoder == at)
+                    .map(|(index, _)| index);
+                let first = parts.next().unwrap_or(state.recorded.len());
+                let parts = first..parts.last().map_or(first + 1, |last| last + 1);
+                (state.residency_before(at, replay.kind()), runs, parts)
             };
-            let run = replay.run(&handle, residency);
+            let run = with_faces_as_of(device, (self.address(), parts), || {
+                replay.run(&handle, residency)
+            });
             {
                 let mut state = lock(&self.state);
                 state.replaying_keeps.clear();
@@ -295,7 +309,10 @@ impl CommandBufferShared {
         for (place, work) in alone {
             // Its notices were announced as it committed (`replay::is_replaying`), and its
             // commands take what they use without holding it.
-            let again = crate::replay::replaying(|| work.record_on_gpu(&handle));
+            let (part, _) = place;
+            let again = with_faces_as_of(device, (self.address(), part..part + 1), || {
+                crate::replay::replaying(|| work.record_on_gpu(&handle))
+            });
             let counts = &device.shared().counts;
             let Ok(Some((recorded, inputs))) = again else {
                 counts.reencode_refused();

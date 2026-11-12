@@ -2231,8 +2231,14 @@ impl CommandBuffer {
         // A color's texture with faces that the pass renders whole without loading it turns to
         // its other face here, before anything of the pass names its image; the kept draw the
         // last render encoder carried bound the face presented before (`render/face_swap.rs`).
-        let passes = again.is_some() || groups > 1 || rate_map.is_some() || log.is_some();
-        let turns = face_swap::Turns::open(&mut core, &layout, passes.then_some(Unturned::Pass));
+        // A pass encoded again takes again the turns its first encoding took.
+        let passes = groups > 1 || rate_map.is_some();
+        let turns = face_swap::Turns::open(
+            &mut core,
+            &layout,
+            passes.then_some(Unturned::Pass),
+            again.is_some(),
+        );
         let carried = match carried {
             Some(carried) if turns.turned() => {
                 carried.let_go(device);
@@ -9529,6 +9535,9 @@ impl RenderLowering {
             binding::command_uses_into(call, parts, sources, &mut live.uses)?;
         }
         self.count_narrowed(narrowed_slots, written);
+        // The shadowed textures the draw binds, at the first draw of each, its shadow made now
+        // (`shadow_log.rs`).
+        crate::shadow_log::drew(&device, variant.pipeline(), &stages);
         let resident_made = live.uses.made() as u64;
         let counts = self.core.counts();
         if resident_made > 0 {
