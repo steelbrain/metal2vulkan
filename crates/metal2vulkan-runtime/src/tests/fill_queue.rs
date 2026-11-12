@@ -9,8 +9,8 @@
 //!   zeros and a `Private` buffer made with bytes read back exactly, through a blit into a
 //!   `Shared` buffer.
 //! - **Order.** A command buffer whose blit reads the `Managed` buffer behind a long run of
-//!   kernels, still in flight as the CPU writes the buffer again and a second command buffer of
-//!   the same queue takes the copy in: the first reads the first bytes, the second the new ones.
+//!   kernels, submitted and still in flight as the CPU writes the buffer again and a second
+//!   command buffer of the same queue takes the copy in: the first reads the first bytes, the second the new ones.
 //!   Where the device has unified memory (lavapipe), whose `Managed` buffer is one copy, the first
 //!   completes before the CPU writes again.
 //!
@@ -151,10 +151,12 @@ fn a_batch_s_fills_run_on_the_fill_queue_in_order_with_exact_bytes() {
     load(&behind, &state, &load_buffer, &load_scratch);
     copy(&behind, &managed, &first_read);
     behind.commit().unwrap();
-    // The CPU writes the buffer again while that command buffer may still run, and a second
-    // command buffer of the queue takes the copy in, with a new buffer's zeros and another's
-    // bytes. Where the device has unified memory the buffer is one copy, which the CPU's write
-    // would race, as on Metal: there the first command buffer completes first.
+    // Once it was submitted, so its submission took the first copy in, the CPU writes the buffer
+    // again while it may still run, and a second command buffer of the queue takes that copy in,
+    // with a new buffer's zeros and another's bytes. Where the device has unified memory the
+    // buffer is one copy, which the CPU's write would race, as on Metal: there the first command
+    // buffer completes first.
+    behind.wait_until_scheduled().unwrap();
     if device.properties().has_unified_memory {
         behind.wait_until_completed_for(WAIT).unwrap();
     }
