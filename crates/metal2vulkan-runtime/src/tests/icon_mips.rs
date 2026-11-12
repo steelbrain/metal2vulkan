@@ -37,10 +37,14 @@
 //!
 //! And icons whose levels only the CPU writes, as a window server's are: `Managed` (or `Shared`)
 //! 128x128 `RGBA16Float` textures of five levels and `ShaderRead` usage alone, each level of its
-//! own colors written by `replace_region`, made before the command buffer that samples them or
-//! while it is open, 21 a round. That command buffer draws every level of each through a sampler
-//! pinned to the level into a target of its size: each target, and each level read by a blit,
-//! must hold what was uploaded.
+//! own colors written by one `replace_region` (`bytes_per_image` 0), made before the command
+//! buffer that samples them or while it is open, 21 a round, the uploads made with a command
+//! buffer committed before them still in flight or not: one held by a wait for an event the host
+//! signals once the sampling command buffer is committed, or one filling 256 MiB. The sampling
+//! command buffer draws every level of each through a sampler pinned to the level into a target
+//! of its size, and each through a trilinear sampler into a target of level 1's size (its
+//! implicit level of detail 1, as a dock half the icon's size samples it): each target, and each
+//! level read by a blit, must hold what was uploaded.
 //!
 //! The functions are `tob_rect`, `tob_solid` and `tob_sample` of the owned fixture
 //! `validation/fixtures/public/engine/tob_renders.ll`, `alv_rect`, `alv_implicit` and
@@ -53,13 +57,15 @@
 use super::blit_holds::{device, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::{
-    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, CpuCacheMode, Device,
+    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, CpuCacheMode, Device, EventRef,
     HazardTrackingMode, LoadAction, Origin, PipelineOptions, Region, RenderPassDescriptor,
     RenderPipelineState, ResourceOptions, SamplerState, Size, StorageMode, StoreAction, Texture,
     TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::metal::{PixelFormat, PrimitiveType, SamplerMipFilter, TextureUsage};
+use metal2vulkan::metal::{
+    PixelFormat, PrimitiveType, SamplerMinMagFilter, SamplerMipFilter, TextureUsage,
+};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 
 /// The icon's level-0 side, its levels (every one down to 1x1), and the levels checked.
@@ -477,37 +483,71 @@ fn uploaded_colors(level: u64) -> [[f32; 4]; 2] {
     [[n, 0.5, 0.25, 1.0], [0.5, n, 0.75, 0.5]]
 }
 
+/// What a command buffer committed on the queue before the levels' uploads does as they are made.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Ahead {
+    /// No such command buffer.
+    Nothing,
+    /// It waits for an event the host signals once the sampling command buffer is committed, so
+    /// it is still in flight as the uploads are made and the sampling command buffer is
+    /// committed.
+    Held,
+    /// It fills a buffer of [`AHEAD_FILL`] bytes, which the GPU is likely still running as the
+    /// uploads are made.
+    Running,
+}
+
+/// The bytes the running command buffer ahead fills.
+const AHEAD_FILL: u64 = 256 << 20;
+
 /// The uploaded run: each round [`UPLOADED_ICONS`] textures of `storage`, 128x128
-/// `RGBA16Float` of [`UPLOADED_LEVELS`] levels and `ShaderRead` usage alone, each level written by
-/// `replace_region` and no GPU work, made before the command buffer that samples them or, where
-/// `open`, while it is open; that command buffer draws each level of each into a target of the
-/// level's size through a sampler pinned to the level (its least and greatest level of detail
-/// the level's), and each level and target is then read back by blits. The round's textures go
-/// as it ends.
-fn run_uploaded(case: &str, storage: StorageMode, open: bool) {
+/// `RGBA16Float` of [`UPLOADED_LEVELS`] levels and `ShaderRead` usage alone, made before the
+/// command buffer that samples them or, where `open`, while it is open; then a command buffer
+/// committed `ahead` where it says; then each level of each written by one `replace_region`
+/// (`bytes_per_image` 0) and no GPU work. The sampling command buffer draws each level of each
+/// into a target of the level's size through a sampler pinned to the level (its least and
+/// greatest level of detail the level's), and each into a target of level 1's size through a
+/// trilinear sampler, its implicit level of detail 1; each level and target is then read back by
+/// blits. The round's textures go as it ends.
+fn run_uploaded(case: &str, storage: StorageMode, open: bool, ahead: Ahead) {
     let scratch = Scratch::new(&format!("icon-mips-{case}"));
     let device = device(&scratch.0);
     let tools = Tools::new(&device);
+    let sampler = |filter: SamplerMinMagFilter, mip: SamplerMipFilter, lods: [f32; 2]| {
+        let mut descriptor = SamplerDescriptor::new();
+        (descriptor.min_filter, descriptor.mag_filter) = (filter, filter);
+        descriptor.mip_filter = mip;
+        [descriptor.lod_min_clamp, descriptor.lod_max_clamp] = lods;
+        device.new_sampler_state(&descriptor).unwrap()
+    };
     let pinned: Vec<SamplerState> = (0..UPLOADED_LEVELS)
         .map(|level| {
-            let mut descriptor = SamplerDescriptor::new();
-            descriptor.mip_filter = SamplerMipFilter::Nearest;
-            descriptor.lod_min_clamp = level as f32;
-            descriptor.lod_max_clamp = level as f32;
-            device.new_sampler_state(&descriptor).unwrap()
+            let lod = level as f32;
+            sampler(
+                SamplerMinMagFilter::Nearest,
+                SamplerMipFilter::Nearest,
+                [lod, lod],
+            )
         })
         .collect();
+    let trilinear = sampler(
+        SamplerMinMagFilter::Linear,
+        SamplerMipFilter::Linear,
+        [0.0, f32::MAX],
+    );
     let options = ResourceOptions::new(
         storage,
         CpuCacheMode::DefaultCache,
         HazardTrackingMode::Default,
     );
-    let icon = || {
+    let make = || {
         let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, SIDE, SIDE, true);
         d.mipmap_level_count = UPLOADED_LEVELS;
         d.usage = TextureUsage::SHADER_READ;
         d.resource_options = options;
-        let icon = device.new_texture(&d).unwrap();
+        device.new_texture(&d).unwrap()
+    };
+    let upload = |icon: &Texture| {
         for level in 0..UPLOADED_LEVELS {
             let side = side(level);
             let [left, right] = uploaded_colors(level).map(|color| color.map(half));
@@ -521,7 +561,6 @@ fn run_uploaded(case: &str, storage: StorageMode, open: bool) {
             let region = Region::new_2d(0, 0, side, side);
             (icon.replace_region(region, level, 0, &bytes, side * TEXEL, 0)).unwrap();
         }
-        icon
     };
     let want = |level: u64, x: u64| {
         let [left, right] = uploaded_colors(level);
@@ -530,44 +569,74 @@ fn run_uploaded(case: &str, storage: StorageMode, open: bool) {
             false => right.map(half),
         }
     };
+    let target = |side: u64| {
+        let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, side, side, false);
+        d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+        d.resource_options = ResourceOptions::private();
+        device.new_texture(&d).unwrap()
+    };
+    let event = device.new_shared_event().unwrap();
+    let filled = (ahead == Ahead::Running)
+        .then(|| (device.new_buffer(AHEAD_FILL, ResourceOptions::private())).unwrap());
     let mut failures = Vec::new();
     let mut counts = Vec::new();
     for round in 0..ROUNDS {
         let before = device.work_counts();
-        let made_first = (!open).then(|| (0..UPLOADED_ICONS).map(|_| icon()).collect());
-        let command_buffer = tools.queue.command_buffer().unwrap();
-        let icons: Vec<Texture> =
-            made_first.unwrap_or_else(|| (0..UPLOADED_ICONS).map(|_| icon()).collect());
-        let targets: Vec<Vec<Texture>> = icons
-            .iter()
+        let open = open.then(|| tools.queue.command_buffer().unwrap());
+        let icons: Vec<Texture> = (0..UPLOADED_ICONS).map(|_| make()).collect();
+        let value = round as u64 + 1;
+        let first = match ahead {
+            Ahead::Nothing => None,
+            Ahead::Held => {
+                let command_buffer = tools.queue.command_buffer().unwrap();
+                let wait = EventRef::Shared(&event);
+                (command_buffer.encode_wait_for_event(wait, value)).unwrap();
+                command_buffer.commit().unwrap();
+                Some(command_buffer)
+            }
+            Ahead::Running => {
+                let command_buffer = tools.queue.command_buffer().unwrap();
+                let mut blit = command_buffer.blit_command_encoder().unwrap();
+                let filled = filled.as_ref().unwrap();
+                (blit.fill_buffer(filled, 0..AHEAD_FILL, round as u8)).unwrap();
+                blit.end_encoding().unwrap();
+                command_buffer.commit().unwrap();
+                Some(command_buffer)
+            }
+        };
+        icons.iter().for_each(upload);
+        let command_buffer = open.unwrap_or_else(|| tools.queue.command_buffer().unwrap());
+        let targets: Vec<Vec<Texture>> = (icons.iter())
             .map(|icon| {
-                (0..UPLOADED_LEVELS)
-                    .map(|level| {
-                        let side = side(level);
-                        let mut d = TextureDescriptor::texture_2d(
-                            PixelFormat::RGBA16Float,
-                            side,
-                            side,
-                            false,
-                        );
-                        d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
-                        d.resource_options = ResourceOptions::private();
-                        let target = device.new_texture(&d).unwrap();
-                        let sampler = &pinned[level as usize];
-                        let draw: Draw = (&tools.implicit, None, Fragment::Sampled(icon, sampler));
-                        tools.pass(&command_buffer, (&target, 0), Some([0.0; 4]), &[draw]);
-                        target
-                    })
-                    .collect()
+                let draw = |sampler: &SamplerState, side: u64| {
+                    let target = target(side);
+                    let draw: Draw = (&tools.implicit, None, Fragment::Sampled(icon, sampler));
+                    tools.pass(&command_buffer, (&target, 0), Some([0.0; 4]), &[draw]);
+                    target
+                };
+                let pinned =
+                    (0..UPLOADED_LEVELS).map(|level| draw(&pinned[level as usize], side(level)));
+                pinned.chain([draw(&trilinear, side(1))]).collect()
             })
             .collect();
-        finish(&command_buffer);
+        command_buffer.commit().unwrap();
+        let in_flight = first.as_ref().map(CommandBuffer::status);
+        // Lets the held command buffer go; nothing else waits for it.
+        event.set_signaled_value(value);
+        if let Some(first) = &first {
+            first.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(first.error(), None);
+        }
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
         let now = device.work_counts();
         let copies = now.host_texel_copies - before.host_texel_copies;
-        counts.push((moved(&before, &now), copies));
+        counts.push((moved(&before, &now), copies, in_flight));
         for (i, (icon, targets)) in icons.iter().zip(&targets).enumerate() {
             let mut wrong = Vec::new();
-            for (level, target) in (0..UPLOADED_LEVELS).zip(targets) {
+            // Each level pinned, then level 1 through the trilinear sampler.
+            let reads = (0..UPLOADED_LEVELS).chain([1]);
+            for (level, target) in reads.zip(targets) {
                 let command_buffer = tools.queue.command_buffer().unwrap();
                 tools.read(&command_buffer, (target, 0), 0);
                 tools.read(&command_buffer, (icon, level), SIDE * SIDE * TEXEL);
@@ -584,9 +653,10 @@ fn run_uploaded(case: &str, storage: StorageMode, open: bool) {
         }
     }
     eprintln!(
-        "ICON-MIPS {case} on {}: {} of {} icons wrong; per round (storage forms taken, images \
-         recycled, swapped-out images forgotten, reads through copies, slots narrowed), host texel \
-         copies {counts:?}; first {:?}",
+        "ICON-MIPS {case} on {}: {} of {} icons wrong; per round ((storage forms taken, images \
+         recycled, swapped-out images forgotten, reads through copies, slots narrowed), host \
+         texel copies, the command buffer ahead's status at the sampling one's commit) \
+         {counts:?}; first {:?}",
         device.name(),
         failures.len(),
         ROUNDS * UPLOADED_ICONS,
@@ -597,17 +667,37 @@ fn run_uploaded(case: &str, storage: StorageMode, open: bool) {
 
 #[test]
 fn uploaded_managed_levels_sampled_through_pinned_samplers_read_what_was_uploaded() {
-    run_uploaded("managed", StorageMode::Managed, false);
+    run_uploaded("managed", StorageMode::Managed, false, Ahead::Nothing);
 }
 
 #[test]
 fn managed_levels_uploaded_while_the_sampling_command_buffer_is_open_read_what_was_uploaded() {
-    run_uploaded("managed-open", StorageMode::Managed, true);
+    run_uploaded("managed-open", StorageMode::Managed, true, Ahead::Nothing);
+}
+
+#[test]
+fn managed_levels_uploaded_behind_a_held_command_buffer_read_what_was_uploaded() {
+    run_uploaded("managed-held", StorageMode::Managed, false, Ahead::Held);
+}
+
+#[test]
+fn managed_levels_uploaded_behind_a_running_command_buffer_read_what_was_uploaded() {
+    run_uploaded(
+        "managed-running",
+        StorageMode::Managed,
+        false,
+        Ahead::Running,
+    );
+}
+
+#[test]
+fn managed_levels_uploaded_while_open_behind_a_held_command_buffer_read_what_was_uploaded() {
+    run_uploaded("managed-open-held", StorageMode::Managed, true, Ahead::Held);
 }
 
 #[test]
 fn uploaded_shared_levels_sampled_through_pinned_samplers_read_what_was_uploaded() {
-    run_uploaded("shared", StorageMode::Shared, false);
+    run_uploaded("shared", StorageMode::Shared, false, Ahead::Nothing);
 }
 
 #[test]
