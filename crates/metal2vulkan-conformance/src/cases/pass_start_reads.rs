@@ -28,9 +28,12 @@
 //! gives and the runtime orders (`fence.rs`), which the case states from what each draw writes:
 //! the clear where the barrier is the pass's first command, and the solid draw's color where that
 //! draw came before it. Its justification is `docs/API.md`'s accepted difference
-//! [`MAC2_BARRIER`]. The rows with no barrier accept nothing else: a draw reads, at its own pixel,
-//! the texels from before the pass on the M3 Max and on the runtime alike
-//! (`texture/attached_reads.rs`).
+//! [`MAC2_BARRIER`]. The rows that read at their own pixels with no barrier accept the clear too,
+//! what the draws before the read wrote, an x86 Mac's answer, which the runtime reads where it
+//! takes the read through a snapshot (a target over a buffer, on a device with the snapshot
+//! route: `render/snapshot.rs`): `docs/API.md`'s accepted difference [`DRAWN_WITHOUT_BARRIER`].
+//! Elsewhere it reads the copy taken before the pass, the texels from before it, as the M3 Max
+//! does (`texture/attached_reads.rs`). The rows that sample with no barrier accept nothing else.
 //!
 //! A texture's texels are recorded as their runs of equal rows, each row's texels as their runs
 //! of equal texels (`fresh_contents::texel_runs`): a lossless encoding whose size follows how often
@@ -101,6 +104,9 @@ const BLENDED_STATE: [Option<ColorState>; 1] = [Some(ColorState::new(FORMAT).ble
 /// The slug of `docs/API.md`'s accepted difference the rows with a barrier name.
 pub const MAC2_BARRIER: &str =
     "a-barrier-over-the-render-targets-orders-what-it-names-as-a-mac2-gpu-s-does";
+
+/// The slug of `docs/API.md`'s accepted difference the rows that read with no barrier name.
+pub const DRAWN_WITHOUT_BARRIER: &str = "a-draw-that-reads-its-own-pass-s-color-attachment-at-its-own-pixels-reads-what-the-draws-before-it-wrote-with-no-barrier-too-where-the-runtime-takes-no-copy-for-it";
 
 /// The runs record mode takes each row over.
 const RUNS: u32 = 3;
@@ -747,6 +753,21 @@ impl Row {
             Shape::Composited => vec![composited(|_, _| reordered(texel(CLEAR)))],
         })
     }
+
+    /// What the runtime answers for a row that reads at its own pixels with no barrier, where it
+    /// takes the read through a snapshot (the module docs): the clear, as the barrier's rows
+    /// answer. `None` for every other row.
+    fn drawn(&self) -> Option<Vec<u8>> {
+        match self.shape {
+            Shape::Small {
+                read: Small::Read, ..
+            } => Some(image([SMALL; 2], |x, y| match inside(AREA, x, y) {
+                true => reordered(texel(CLEAR)),
+                false => texel(CLEAR),
+            })),
+            _ => None,
+        }
+    }
 }
 
 /// The composited row's target after its passes, where the sample of itself wrote `sampled(x,
@@ -827,6 +848,15 @@ impl Case for PassStartRead {
                 )
             })
             .collect();
+        // A read with no barrier may answer the clear where the runtime reads it through a
+        // snapshot (the module docs).
+        if let Some(bytes) = self.row.drawn() {
+            allowances.push(Allowance::new(
+                format!("case/{}", texels_site(0)),
+                Loosening::AnyOf(vec![texel_rows(&bytes, SMALL)]),
+                Justification::accepted(DRAWN_WITHOUT_BARRIER),
+            ));
+        }
         // The notices the runtime announces for the row's shape (the module docs). Each loosens
         // the notices site alone, so every texel still compares.
         if matches!(
@@ -1057,9 +1087,14 @@ mod tests {
     fn every_row_has_a_name_of_its_own_and_a_barrier_row_an_answer_of_its_own() {
         let names: BTreeSet<&str> = ROWS.iter().map(|row| row.case).collect();
         assert_eq!(names.len(), ROWS.len());
-        assert!(crate::allowance::accepted_differences()
-            .iter()
-            .any(|slug| slug == MAC2_BARRIER));
+        for named in [MAC2_BARRIER, DRAWN_WITHOUT_BARRIER] {
+            assert!(
+                crate::allowance::accepted_differences()
+                    .iter()
+                    .any(|slug| slug == named),
+                "{named}"
+            );
+        }
         for row in &ROWS {
             let targets = row.targets();
             match row.ordered() {

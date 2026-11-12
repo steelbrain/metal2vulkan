@@ -8761,11 +8761,14 @@ pub struct WorkCounts {
     /// color after an earlier one read them, each the draws' subpass's whole dependency on itself
     /// (`framebuffer_fetch.rs`). 0 on every other device.
     pub fetch_draw_barriers: u64,
-    /// Draws that sample a color attachment's texture after a memory barrier of their render
-    /// pass, each reading it through a snapshot inside its instance in place of a split: drawn
-    /// twice, first copying each fragment's texel into the snapshot, then reading the snapshot
-    /// (`render/snapshot.rs`). They count in neither `attachment_reads_through_copies` nor
-    /// `attachment_read_splits`.
+    /// Draws that sample a color attachment's texture of their render pass instance at their own
+    /// pixel, each reading it through a snapshot inside its instance in place of a split, after
+    /// a memory barrier of their render pass, or of the copy taken before the pass, with none:
+    /// drawn twice, first copying each fragment's texel into the snapshot, then reading the
+    /// snapshot (`render/snapshot.rs`). They count in neither `attachment_reads_through_copies`
+    /// nor `attachment_read_splits`. Without a memory barrier the draw reads what the draws
+    /// before it in the instance wrote, an x86 Mac's answer, where an M3 Max reads the texels
+    /// from before the pass (`docs/API.md`'s accepted differences).
     pub reading_draws_snapshotted: u64,
     /// Draws that sample a color attachment's texture of their render pass instance at their
     /// own pixel alone and write no channel of that color, each reading the attachment in place,

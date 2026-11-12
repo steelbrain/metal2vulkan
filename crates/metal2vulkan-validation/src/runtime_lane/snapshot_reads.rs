@@ -67,10 +67,17 @@
 //!   color in place (an `RGBA8Unorm` one's on every such device; the counts printed say which
 //!   others did).
 //! - [`without_a_barrier_the_readers_read_the_texels_from_before_the_pass`]: the same draws with
-//!   no barrier: every reader reads [`CLEARED`], the texel from before the pass at its own pixel,
-//!   through the copy taken before the pass: `FILL + 3 * CLEARED`, no snapshot. The M3 Max's
+//!   no barrier, through the block's scissor: every reader reads [`CLEARED`], the texel from
+//!   before the pass at its own pixel, through the copy taken before the pass, which the area
+//!   rule weighs cheaper than a snapshot there: `FILL + 3 * CLEARED`, no snapshot. The M3 Max's
 //!   answer (probe `overlap.m` under macOS 27.0.1: 232 at every block pixel at sides 32, 256
 //!   and 1024, with the barriers or without, as Apple GPUs do not support that scope).
+//! - [`without_a_barrier_a_surfaces_readers_take_the_snapshot`]: the same draws with no barrier
+//!   over the surface of [`a_surfaces_readers_take_the_snapshot_at_any_area`], through the whole
+//!   target's scissor: a snapshot for each reader where the device takes the path and the image
+//!   took feedback loop usage, each reading what the draws before it wrote (`6 * FILL`), the x86
+//!   Macs' answer with no barrier (`docs/API.md`'s accepted differences); else the copy taken
+//!   before the pass for each (`FILL + 3 * CLEARED`), the M3 Max's.
 //! - [`with_a_feature_withheld_the_readers_take_the_split`]: the first test's draws, with each of
 //!   the three features withheld in turn: the same answers, through a split for each reader.
 //! - [`a_reader_in_a_pass_with_depth_or_stencil_takes_the_split`]: F, a barrier and the reader in
@@ -798,6 +805,31 @@ fn without_a_barrier_the_readers_read_the_texels_from_before_the_pass() {
                 "snapshots, splits"
             );
             assert_eq!(moved.copies, 2, "each reader through the copy");
+        },
+    );
+}
+
+#[test]
+fn without_a_barrier_a_surfaces_readers_take_the_snapshot() {
+    on_default_policy(
+        |_| {},
+        |device| {
+            let queue = device.new_command_queue().unwrap();
+            let format = PixelFormat::RGBA8Unorm;
+            let (bytes, moved, made) =
+                readers_over(device, &queue, format, false, None, true, READ);
+            eprintln!("snapshot reads, surface, no barrier: {made:?}, {moved:?}");
+            let snapshotted = snapshots(device) && made.feedback && made.fetched;
+            let (want, counts) = match snapshotted {
+                true => (6 * FILL, (2, 0, 0)),
+                false => (FILL + 3 * CLEARED, (0, 0, 2)),
+            };
+            holds("surface, no barrier", &bytes, want);
+            assert_eq!(
+                (moved.snapshotted, moved.splits, moved.copies),
+                counts,
+                "a surface's readers with no barrier: snapshots, splits, copies"
+            );
         },
     );
 }

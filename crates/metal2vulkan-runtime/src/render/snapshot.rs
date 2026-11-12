@@ -1,12 +1,15 @@
-//! A draw that reads a texture its own render pass instance renders, after a memory barrier,
-//! read through a snapshot inside the instance: two draws of one pipeline in the same subpass,
-//! in place of a split of the pass (`texture/attached_reads.rs`). And a draw that writes nothing
-//! of the color it reads so, read in place, with a barrier or without (in place, below).
+//! A draw that reads, at its own pixels, a texture its own render pass instance renders, with a
+//! memory barrier before it or not, read through a snapshot inside the instance: two draws of one
+//! pipeline in the same subpass, in place of a split of the pass or of the copy taken before it
+//! (`texture/attached_reads.rs`). And a draw that writes nothing of the color it reads so, read in
+//! place (in place, below).
 //!
 //! - **What it replaces.** After a barrier inside an instance, a draw that samples a color
 //!   attachment's texture records into a new instance, before which the texture's copy is taken
 //!   (`WorkCounts::attachment_read_splits`). The split ends the render pass instance, copies the
-//!   texture and begins another, on every device. Here the draw stays in its instance.
+//!   texture and begins another, on every device. With no barrier, it reads a copy taken before
+//!   the pass, the texels from before it (`WorkCounts::attachment_reads_through_copies`). Here the
+//!   draw stays in its instance and takes no copy.
 //! - **The two draws.** The draw runs the variant whose fragment function reads each such slot
 //!   through its snapshot (`BindState::snapshot_textures`, `VariantKey::snapshot_textures`), a
 //!   pipeline made with `VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT` and the color
@@ -58,7 +61,14 @@
 //!   another reader sees what that one wrote. (An M3 Max reads, at a draw's own pixel, what the
 //!   texture held before the pass with a barrier or without: probe `readers.m`, two readers of a
 //!   texture a draw wrote, barriers before each or not, 64 to 2048 pixels wide, 0 to 500 draws
-//!   between. Apple GPUs do not support that scope, so they are no answer for it.)
+//!   between. Apple GPUs do not support that scope, so they are no answer for it.) With no
+//!   barrier the pair is the same, and the reader reads what the draws before it wrote, as an
+//!   AMD Radeon Pro 5300M and an Intel UHD Graphics 630 read without one (probe `ownread.m`),
+//!   where an M3 Max reads the texels from before the pass, the copy's (`docs/API.md`'s accepted
+//!   differences): the Macs disagree, and the snapshot is the cheaper form where the route takes
+//!   the draw (a compositor's frame of six such readers over surfaces on the Radeon 780M, 3.41 ms
+//!   of GPU time against 4.07 with the copies, `runtime_lane::attachment_read_costs`'s
+//!   `backdrop_costs`).
 //! - **In place.** A draw whose fragment function reads such a texture at the fragment's own
 //!   pixel alone (`StageModule::own_pixel_textures`), and that writes no channel of the color
 //!   that renders it (no color of its state placed there has a write mask, and its routing zeroes
@@ -84,7 +94,7 @@
 //!   after a barrier, Metal's answer on a Mac2 GPU; without one, an x86 Mac's, where an M3 Max
 //!   answers the texels from before the pass (`docs/API.md`'s accepted differences). No snapshot,
 //!   copy or split (`WorkCounts::reading_draws_in_place`). A draw that writes the color it reads
-//!   takes the checks below, after a barrier, else the copy.
+//!   takes the checks below, with a barrier before it or not.
 //! - **The snapshot** is a texture's storage image of its level-0 extent in the form the plan
 //!   names for the slot (`VariantKey::snapshot_textures`, `SnapshotForm::of` the bound view: the
 //!   texel's codes, whatever the device's decode, or the fetched lanes' bits), made at the first
@@ -94,10 +104,11 @@
 //!   one's or a half-float one's, 16 for the bits (`SnapshotForm::format`). The draw's use of it
 //!   is a fragment shader's storage read and write, so draws of other instances and encoders
 //!   that take it are ordered as any image's.
-//! - **Where it runs** (each check else the split, as before): the device enabled
+//! - **Where it runs** (each check else the split, or with no barrier the copy, as before): the
+//!   device enabled
 //!   `attachmentFeedbackLoopLayout`, `extendedDynamicState3ColorWriteMask` and
-//!   `fragmentShaderPixelInterlock` (`dynamic_state::ColorWriteMasks`); the draw follows a barrier
-//!   inside its instance, records no execution's command or reroute, and runs in a pass
+//!   `fragmentShaderPixelInterlock` (`dynamic_state::ColorWriteMasks`); the draw records no
+//!   execution's command or reroute, and runs in a pass
 //!   with no visibility query active, no input attachment fetch, rasterization-rate map, views or
 //!   more than one sample or layer; every slot of the draw that reads a color attachment's texture
 //!   is a fragment slot its function can read through a snapshot (`StageModule::snapshot_textures`)
