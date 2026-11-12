@@ -424,10 +424,20 @@ impl ImagePlacement {
 /// A Metal texture (`MTLTexture`), or a view of one. Cheap to clone (a retain); `Send + Sync`. Two handles are
 /// equal when they are the same texture object (a view is another object than its texture).
 #[derive(Clone)]
-pub struct Texture(Arc<TextureShared>);
+pub struct Texture(Arc<TextureShared>, Option<Arc<Retain>>);
+
+/// What a texture's handles hold, but those a heap use holds ([`Texture::for_heap_use`]) and
+/// those [`Texture::upgrade`] makes once no handle holds it: while it lives, the texture is among
+/// the textures of its heap that `use_heap` makes resident (`Heap::textures_from`). Metal's
+/// `useHeap:` holds the heap, not its textures: a texture the program released, which only command
+/// buffers that used its heap hold, is not made resident again by a later use of the heap, so it
+/// goes as those command buffers complete.
+pub(super) struct Retain;
 
 pub(super) struct TextureShared {
     storage: Storage,
+    /// The [`Retain`] the texture's handles hold, while one does.
+    retain: Weak<Retain>,
     /// The storage a shadow over host pages made before its pages' in-place verdict moved to
     /// once the verdict passed (`texture/storage_form.rs`): an image in place over its texels,
     /// which the texture presents from then on instead of `storage` ([`Texture::storage`]).
@@ -5210,8 +5220,10 @@ impl Texture {
             },
             Storage::Texels(_) | Storage::Alias { .. } | Storage::Shadow { .. } => None,
         };
-        let texture = Texture(Arc::new(TextureShared {
+        let retain = Arc::new(Retain);
+        let shared = Arc::new(TextureShared {
             storage,
+            retain: Arc::downgrade(&retain),
             moved: OnceLock::new(),
             pending_move: Mutex::new(None),
             record,
@@ -5230,7 +5242,8 @@ impl Texture {
             heap,
             facts: OnceLock::new(),
             planes_in_place,
-        }));
+        });
+        let texture = Texture(shared, Some(retain));
         if let Some(objects) = texture.storage().objects() {
             objects.object_made();
         }
@@ -5291,9 +5304,20 @@ impl Texture {
         self.0.moved.get().unwrap_or(&self.0.storage)
     }
 
-    /// The texture object `shared` names, while it lives (a slot's holder, `resource_ids.rs`).
+    /// The texture object `shared` names, while it lives (a slot's holder, `resource_ids.rs`),
+    /// holding its [`Retain`] while another handle does.
     pub(super) fn upgrade(shared: &Weak<TextureShared>) -> Option<Texture> {
-        shared.upgrade().map(Texture)
+        let shared = shared.upgrade()?;
+        let retain = shared.retain.upgrade();
+        Some(Texture(shared, retain))
+    }
+
+    /// The texture as a heap use holds it (`Heap::textures_from`), while it holds its [`Retain`]:
+    /// the texture object without the retain, so the use keeps the texture among its heap's
+    /// textures no longer than the other handles do. `None` for one that holds no retain.
+    pub(super) fn for_heap_use(self) -> Option<Texture> {
+        let Texture(shared, retain) = self;
+        retain.map(|_| Texture(shared, None))
     }
 
     /// The texture object, held while something else keeps it (a heap's, `heap.rs`).

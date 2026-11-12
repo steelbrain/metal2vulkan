@@ -1242,8 +1242,10 @@ impl ComputeCommandEncoder {
     /// through an address held in memory, and every texture made in it or over a buffer placed
     /// in it through its resource ID, as Metal's contract makes a heap's resources resident for
     /// reading only (`residency`): the textures that live now, and each made later, from the first
-    /// dispatch encoded after it is made. The heap's whole range is one used resource, ordered as
-    /// the one resource its tracked buffers and textures are.
+    /// dispatch encoded after it is made. As Metal's, it holds the heap, not its textures: one the
+    /// program released, which only command buffers that used the heap hold, is not made resident
+    /// again. The heap's whole range is one used resource, ordered as the one resource its
+    /// tracked buffers and textures are.
     ///
     /// A sparse heap holds no buffer: its live sparse textures are made resident, as
     /// `use_resource` with `READ` makes each.

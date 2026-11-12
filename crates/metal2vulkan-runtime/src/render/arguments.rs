@@ -205,7 +205,9 @@ impl RenderCommandEncoder {
     /// placed in `heap` in render `stages` through an address held in memory, and every texture
     /// made in it or over a buffer placed in it through its resource ID, as Metal's contract makes
     /// a heap's resources resident for reading only (`residency.rs`): the textures that live now,
-    /// and each made later, from the first command encoded after it is made.
+    /// and each made later, from the first command encoded after it is made. As Metal's, it holds
+    /// the heap, not its textures: one the program released, which only command buffers that
+    /// used the heap hold, is not made resident again.
     ///
     /// A sparse heap's live sparse textures are made resident, as on a compute encoder.
     ///

@@ -684,7 +684,7 @@ impl Device {
         keys.into_iter().any(|key| {
             (faced.iter())
                 .filter(|(faces, _)| faces.contains(&key))
-                .filter_map(|(_, texture)| texture.upgrade().map(Texture))
+                .filter_map(|(_, texture)| Texture::upgrade(texture))
                 .any(|texture| texture.image().is_ok_and(|image| image.identity.key != key))
         })
     }

@@ -302,9 +302,9 @@ struct HeapShared {
     /// An automatic heap's free ranges of `[0, size)`; a placement heap's and a sparse heap's
     /// stay whole.
     ranges: Mutex<RangeAllocator>,
-    /// The textures made in the heap, while they live, which `use_heap` makes resident, and an
-    /// encoder that used the heap makes resident as it encodes each later command
-    /// (`residency.rs`).
+    /// The textures made in the heap, while they live: those a handle other than a heap use's
+    /// holds are what `use_heap` makes resident, and an encoder that used the heap makes resident
+    /// as it encodes each later command (`residency.rs`, [`Heap::textures_from`]).
     textures: Mutex<Numbered<TextureShared>>,
     /// How many textures `textures` numbered, stored under its lock as each is held: what an
     /// encoder that used the heap reads at each command to see whether it made one since, at one
@@ -1227,12 +1227,23 @@ impl Heap {
         self.0.textures_made.load(Ordering::Acquire)
     }
 
-    /// The heap's live textures numbered `from` or later, in the order they were made, and the
-    /// number the next texture it makes takes.
+    /// The heap's textures numbered `from` or later that a handle other than a heap use's holds,
+    /// in the order they were made, each as a heap use holds it (`Texture::for_heap_use`), and
+    /// the number the next texture it makes takes. Metal's `useHeap:` holds the heap, not its
+    /// textures: one the program released, which only command buffers that used the heap hold,
+    /// is not among them, so a later use does not hold it again and it goes as they complete.
     pub(super) fn textures_from(&self, from: u64) -> (Vec<Texture>, u64) {
-        let textures = lock(&self.0.textures);
-        let live = textures.since(from).filter_map(Texture::upgrade).collect();
-        (live, textures.made())
+        let (found, made) = {
+            let textures = lock(&self.0.textures);
+            let found: Vec<Texture> = textures.since(from).filter_map(Texture::upgrade).collect();
+            (found, textures.made())
+        };
+        // With the lock free: a texture only heap uses hold may go here.
+        let live = found
+            .into_iter()
+            .filter_map(Texture::for_heap_use)
+            .collect();
+        (live, made)
     }
 
     /// The resource of `length` bytes at `offset` is gone: an automatic heap's range goes back

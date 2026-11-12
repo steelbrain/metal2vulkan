@@ -20,7 +20,11 @@
 //!     each texture over a buffer placed in it, which Metal's heap holds as it holds the buffer. A
 //!     sparse heap holds no buffer and no range of its own: its live sparse textures alone are made
 //!     resident. Metal's `useHeap:` makes a heap's resources resident for reading only, so its
-//!     usage is `READ`;
+//!     usage is `READ`. It holds the heap, not its textures: a texture lives for a heap use while a
+//!     handle other than a heap use's holds it (`texture::Retain`, `Heap::textures_from`), so one
+//!     the program released, which only command buffers that used the heap hold, is not made
+//!     resident again by a later use, and goes as those command buffers complete, while later
+//!     users of the heap are in flight;
 //!   - a texture made in a heap after the encoder used it is made resident too, as the encoder
 //!     encodes its next command (`sync_heaps`): Metal's `useHeap:` reaches every texture the heap
 //!     holds when the command buffer is committed, those made after the call included (SPH heap
