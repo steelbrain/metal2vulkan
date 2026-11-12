@@ -2012,7 +2012,7 @@ impl Device {
     /// writable texture would always lack them. Asked of the driver once per format and kept
     /// (`TextureState::modifier_features`): a physical device's answer does not change, and ANV's
     /// took most of the making of a texture over host pages at Metal's row pitch.
-    fn modifier_features(&self, format: Format) -> FormatFeatureFlags2 {
+    pub(super) fn modifier_features(&self, format: Format) -> FormatFeatureFlags2 {
         let kept = &self.shared().textures.modifier_features;
         if let Some(&features) = lock(kept).get(&format) {
             return features;

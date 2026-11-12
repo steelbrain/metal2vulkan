@@ -97,7 +97,7 @@ impl Device {
             .facts(self.compile_device().profile());
         // An `A8Unorm` texture made as an `R8Unorm` texture's storage takes that texture's route
         // (`texture/red_held_alpha.rs`).
-        let held = super::red_held_alpha::red_held_alpha(descriptor, layout, &facts);
+        let held = super::red_held_alpha::red_held_alpha(self, descriptor, layout, &facts);
         let (descriptor, layout) = match &held {
             Some(held) => (&held.descriptor, &held.layout),
             None => (descriptor, layout),

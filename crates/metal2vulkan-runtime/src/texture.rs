@@ -2463,7 +2463,7 @@ impl Device {
             .shared()
             .textures
             .facts(self.compile_device().profile());
-        let storage = match red_held_alpha::red_held_alpha(descriptor, layout, &facts) {
+        let storage = match red_held_alpha::red_held_alpha(self, descriptor, layout, &facts) {
             Some(held) => {
                 let storage =
                     self.storage_over_buffer(call, over, &held.descriptor, &held.layout)?;
