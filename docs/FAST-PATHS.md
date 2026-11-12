@@ -636,7 +636,9 @@ driver's. Each is open work.
   row of 1920) and refuses a `DRM_FORMAT_MOD_LINEAR` image with an explicit plane at any other
   pitch: `vkCreateImage` returns `VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT` for rows
   192, 384 or 1920 bytes apart, over a dma-buf and the runtime's own memory alike, at plane offsets
-  0, 256 and 32, and makes one at rows 256 bytes apart; its
+  0, 256 and 32, and for a plane at offset 32 at rows 256 bytes apart too, and makes one at rows
+  256 bytes apart at offsets 0 and 256 (an image's memory offset is a multiple of its own
+  alignment, `VUID-vkBindImageMemory-None-10735`, so no bind takes the 32 instead); its
   `minimumLinearTextureAlignmentForPixelFormat` answers 256. So an `RGBA16Float` 18x28 IOSurface
   plane at its 192-byte rows, and dma-buf planes at rows 384 or 1920 bytes apart, are shadows on
   the Radeon 780M and the RX 7900 XTX (Mesa 26.2.6), where lavapipe lays its linear rows at those
