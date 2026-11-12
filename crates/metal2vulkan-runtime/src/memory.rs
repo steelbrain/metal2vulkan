@@ -3348,6 +3348,7 @@ impl Memory {
             device_address: self.device_address,
             families: self.buffer_families.clone(),
             zero_images: self.zero_images,
+            log: self.log.clone(),
         }
     }
 
@@ -3981,6 +3982,8 @@ struct BlockMaker {
     families: Vec<u32>,
     /// As [`Memory`]'s.
     zero_images: bool,
+    /// [`Memory`]'s log, which a refused block is said to (`memory_log::refused_line`).
+    log: Option<MemoryLog>,
 }
 
 impl BlockMaker {
@@ -4175,6 +4178,15 @@ impl BlockMaker {
         let memory = match unsafe { crate::creation::allocate_memory(device, &info) } {
             Ok(memory) => memory,
             Err(error) => {
+                if let Some(log) = &self.log {
+                    log.line(memory_log::refused_line(
+                        (type_index, info.allocation_size),
+                        allocate,
+                        handle,
+                        dedicated_to,
+                        error,
+                    ));
+                }
                 release_addresses();
                 return Err(vulkan(error));
             }

@@ -10,6 +10,11 @@
 //!   bytes and range again. Memory that waits for the batches in flight before it is freed
 //!   (`freed_memory.rs`) is named as it starts to wait. The memory device creation makes and frees
 //!   to prime the driver (`device/prime.rs`) is not logged.
+//! - **Refused blocks.** One line per block of the runtime's the driver refused to allocate
+//!   ([`refused_line`]): its memory type and bytes, what its `vkAllocateMemory` chain asked (the
+//!   allocation flags, the handle types it was to be exportable as, the buffer it was dedicated
+//!   to), and the `VkResult` the driver answered. A placement that then takes another memory type
+//!   (`Degradation::DeviceMemoryOverflow` among them) follows the refusals that sent it there.
 //! - **Large placements.** One line per placement of at least `LOGGED_PLACEMENT_BYTES` (4 MiB)
 //!   in a pooled block, as it is placed and as it is returned ([`placement_line`]): whether it is
 //!   an image or a buffer, its memory class where placed, its bytes, its offset and its block's
@@ -42,6 +47,7 @@ fn enabled() -> bool {
 }
 
 /// A device's memory log, where the switch is on: where its lines go.
+#[derive(Clone)]
 pub(super) struct MemoryLog {
     sink: Option<MessageSink>,
 }
@@ -83,6 +89,32 @@ impl MemoryLog {
     pub(super) fn line(&self, text: String) {
         inform_through(self.sink.as_ref(), ID_NAME, text);
     }
+}
+
+/// The line saying the driver refused a block of `bytes` bytes of memory type `type_index`,
+/// `vkAllocateMemory` answering `result` to a chain of the allocation `flags`, exportable as
+/// `export` where given, dedicated to `dedicated_to` where it is not null (the module docs).
+pub(super) fn refused_line(
+    (type_index, bytes): (u32, u64),
+    flags: vk::MemoryAllocateFlags,
+    export: Option<vk::ExternalMemoryHandleTypeFlags>,
+    dedicated_to: vk::Buffer,
+    result: vk::Result,
+) -> String {
+    use ash::vk::Handle;
+    let export = match export {
+        Some(handles) => format!("exportable as handle types 0x{:x}", handles.as_raw()),
+        None => "not exportable".to_owned(),
+    };
+    let dedicated = match dedicated_to == vk::Buffer::null() {
+        true => "dedicated to nothing".to_owned(),
+        false => format!("dedicated to buffer 0x{:x}", dedicated_to.as_raw()),
+    };
+    format!(
+        "metal2vulkan: memory: refused, a block of type {type_index}: {bytes} bytes, allocation \
+         flags 0x{:x}, {export}, {dedicated}: {result:?}",
+        flags.as_raw()
+    )
 }
 
 /// The line saying `what` happened to a placement of `bytes` bytes, an image's (`image`) or a
