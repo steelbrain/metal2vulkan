@@ -33,12 +33,13 @@
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Where the device has unified memory
 //! (lavapipe's, Apple silicon's), a two-copy leg checks only that the buffer is one copy.
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{device, options, Scratch, WAIT};
 use super::host_ram_device::gate;
 use crate::{
-    BlitCommandEncoder, BlitOption, Buffer, CommandBufferStatus, CommandQueue, CpuCacheMode,
-    Deallocator, Device, HazardTrackingMode, HostBacking, HostMemory, ImportRequest, Origin,
-    Region, ResourceOptions, ResourceRef, Size, StorageMode, TextureDescriptor, WorkCounts,
+    BlitCommandEncoder, BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue,
+    CpuCacheMode, Deallocator, Device, DeviceOptions, HazardTrackingMode, HostBacking, HostMemory,
+    ImportRequest, MessageSeverity, MessageSink, Origin, Region, ResourceOptions, ResourceRef,
+    Size, StorageMode, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::metal::PixelFormat;
 use std::ptr::NonNull;
@@ -144,18 +145,29 @@ impl Pages {
     /// They outlive every buffer over them (declared before the device).
     unsafe fn memory(&self, route: Route) -> HostMemory {
         // SAFETY: the caller's contract.
-        let memory = unsafe { HostMemory::new(self.at) };
-        let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
-        match route {
-            Route::Import => memory,
-            Route::Pages => memory.with_import_gate(gate(&asked, false)),
-            // SAFETY: the test's mapping is writable until `read_only`, which no such leg calls.
-            Route::Vouched => unsafe {
-                memory
-                    .with_import_gate(gate(&asked, false))
-                    .assume_writable()
-            },
-        }
+        unsafe { memory_at(self.at, route) }
+    }
+}
+
+/// The pages at `at`, for a no-copy buffer or a rebind, by `route`.
+///
+/// # Safety
+///
+/// They are writable pages of the test's own (until `read_only`, which no such leg calls), which
+/// outlive every buffer over them.
+unsafe fn memory_at(at: NonNull<u8>, route: Route) -> HostMemory {
+    // SAFETY: the caller's contract.
+    let memory = unsafe { HostMemory::new(at) };
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    match route {
+        Route::Import => memory,
+        Route::Pages => memory.with_import_gate(gate(&asked, false)),
+        // SAFETY: the caller's contract: the pages are writable.
+        Route::Vouched => unsafe {
+            memory
+                .with_import_gate(gate(&asked, false))
+                .assume_writable()
+        },
     }
 }
 
@@ -868,4 +880,172 @@ fn a_texture_over_a_two_copy_buffer_through_an_import_follows_its_device_copy() 
 #[test]
 fn a_texture_over_a_two_copy_buffer_over_pages_no_import_maps_follows_its_device_copy() {
     texture(Route::Pages);
+}
+
+/// The rounds of each thread of the cross-queue leg.
+const ROUNDS: u8 = 48;
+
+/// The bytes of a two-copy buffer each round of the cross-queue leg writes and names.
+const SPAN: u64 = 64 << 10;
+
+/// A round of the cross-queue leg: the byte its host copy held at the commit, the `Shared` buffer
+/// its command buffer copied the range into, and the command buffer.
+type Round = (u8, Buffer, CommandBuffer);
+
+/// A buffer of the cross-queue leg and its host copy's bytes, which the CPU writes.
+struct HostCopied {
+    buffer: Buffer,
+    at: usize,
+}
+
+impl HostCopied {
+    /// Set its first [`SPAN`] bytes to `byte` from the CPU.
+    fn write(&self, byte: u8) {
+        // SAFETY: the host copy holds at least `SPAN` bytes from `at` while the buffer lives (the
+        // runtime's own host copy, or the leg's pages, unmapped only after every buffer went).
+        unsafe { std::ptr::write_bytes(self.at as *mut u8, byte, SPAN as usize) };
+    }
+}
+
+/// `ROUNDS` rounds on `queue`, the byte of each `salt` apart from the other thread's, over buffers
+/// `make` makes, a new one every fourth round: write the range, name it, commit a copy of it,
+/// then write it again unnamed, or, every fourth round, let the buffer go with its command buffer
+/// pending.
+fn rounds(
+    device: &Device,
+    queue: &CommandQueue,
+    salt: u8,
+    make: impl Fn(usize) -> HostCopied,
+) -> Vec<Round> {
+    let mut made: Option<HostCopied> = None;
+    let mut rounds = Vec::new();
+    for round in 0..ROUNDS {
+        let copied = made.get_or_insert_with(|| make(usize::from(round / 4)));
+        let byte = 1 + 2 * round + salt;
+        copied.write(byte);
+        copied.buffer.did_modify_range(0..SPAN).unwrap();
+        let target = device.new_buffer(SPAN, ResourceOptions::shared()).unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.copy_from_buffer_to_buffer(&copied.buffer, 0, &target, 0, SPAN)
+            .unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        match round % 4 {
+            3 => made = None,
+            // Made after the commit: no command buffer committed before reads it.
+            _ => copied.write(0xee),
+        }
+        rounds.push((byte, target, command_buffer));
+    }
+    rounds
+}
+
+/// `did_modify_range` across commits of two queues on two threads, each its own two-copy buffers:
+/// the runtime's own host copy on one, the caller's pages by `route` on the other. The device's
+/// next commit, of either queue, takes a range's bytes (`managed.rs`), so each command buffer
+/// reads the bytes its host copy held at its commit, and none written after it. Every fourth round
+/// lets its buffer go with its command buffer pending. No command buffer fails, no message the
+/// device hears is an error (a validation layer's, where `VK_INSTANCE_LAYERS` loads one), and
+/// the staging buffers go once all completed.
+fn across_queues(route: Route) {
+    let generations = usize::from(ROUNDS / 4);
+    let pages: Vec<Pages> = (0..generations).map(|_| Pages::new(BYTES)).collect();
+    let addresses: Vec<usize> = pages
+        .iter()
+        .map(|pages| pages.at.as_ptr() as usize)
+        .collect();
+    let scratch = Scratch::new("managed-across-queues");
+    let errors: Arc<Mutex<Vec<String>>> = Arc::default();
+    let heard = Arc::clone(&errors);
+    let options = DeviceOptions {
+        messages: Some(MessageSink::new(move |message| {
+            if message.severity == MessageSeverity::Error {
+                let text = format!("{}: {}", message.id_name, message.text);
+                heard.lock().unwrap().push(text);
+            }
+        })),
+        ..options(&scratch.0)
+    };
+    let device = Device::system_default_with(&options).unwrap();
+    if device.properties().has_unified_memory {
+        eprintln!(
+            "MANAGED-ACROSS-QUEUES {}: the device has unified memory; one copy",
+            device.name()
+        );
+        return;
+    }
+    let before = device.work_counts();
+    let ran = Ran::default();
+    let own = |_: usize| {
+        let buffer = device.new_buffer(BYTES, managed()).unwrap();
+        let at = buffer.contents().unwrap().as_ptr() as usize;
+        HostCopied { buffer, at }
+    };
+    let callers = |generation: usize| {
+        let at = addresses[generation];
+        // SAFETY: the leg's writable pages, unmapped only after every buffer over them went.
+        let memory = unsafe { memory_at(NonNull::new(at as *mut u8).unwrap(), route) };
+        // SAFETY: as above.
+        let buffer = unsafe {
+            device.new_buffer_with_bytes_no_copy(memory, BYTES, managed(), Some(counted(&ran)))
+        }
+        .unwrap();
+        assert_eq!(buffer.host_backing(), Some(HostBacking::DeviceCopy));
+        HostCopied { buffer, at }
+    };
+    let (first, second) = std::thread::scope(|scope| {
+        let first = scope.spawn(|| rounds(&device, &device.new_command_queue().unwrap(), 0, own));
+        let second =
+            scope.spawn(|| rounds(&device, &device.new_command_queue().unwrap(), 1, callers));
+        (first.join().unwrap(), second.join().unwrap())
+    });
+    for (thread, done) in [("own", first), ("caller's", second)] {
+        for (byte, target, command_buffer) in done {
+            assert!(
+                command_buffer.wait_until_completed_for(WAIT).is_ok(),
+                "{route:?} {thread}: a command buffer did not complete in {WAIT:?}"
+            );
+            assert_eq!(
+                (command_buffer.status(), command_buffer.error()),
+                (CommandBufferStatus::Completed, None),
+                "{route:?} {thread}: round of byte {byte:#x}"
+            );
+            let contents = target.contents().unwrap();
+            // SAFETY: the target's bytes, which no command writes now.
+            let seen = unsafe { std::slice::from_raw_parts(contents.as_ptr(), SPAN as usize) };
+            assert!(
+                seen.iter().all(|&seen| seen == byte),
+                "{route:?} {thread}: round of byte {byte:#x} read {:#x?}",
+                &seen[..8]
+            );
+        }
+    }
+    assert!(
+        ran_to(&ran, generations),
+        "{route:?}: a deallocator did not run"
+    );
+    let rest = staged_down_to(&device, before.managed_staging_bytes);
+    assert_eq!(rest.managed_staging_bytes, before.managed_staging_bytes);
+    let errors = errors.lock().unwrap().clone();
+    eprintln!(
+        "MANAGED-ACROSS-QUEUES {} {route:?}: {} rounds a thread, ranges named {}, error messages {}",
+        device.name(),
+        ROUNDS,
+        rest.managed_ranges_modified - before.managed_ranges_modified,
+        errors.len()
+    );
+    assert!(errors.is_empty(), "{route:?}: {errors:#?}");
+    drop(device);
+    drop(pages);
+}
+
+#[test]
+fn ranges_named_across_two_queues_reach_each_command_buffer_through_an_import() {
+    across_queues(Route::Import);
+}
+
+#[test]
+fn ranges_named_across_two_queues_reach_each_command_buffer_over_pages_no_import_maps() {
+    across_queues(Route::Pages);
 }
