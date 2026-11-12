@@ -9,9 +9,9 @@
 //!
 //! The queue times (`METAL2VULKAN_QUEUE_TIMES`, a default-off diagnostic): with them noted, each
 //! of a queue's command buffers committed back to back became its queue's head no later than its
-//! kernel start and after the one before it did, and its submission returned after its kernel end
-//! and before the next one's kernel start; without them, each reads 0 and its kernel times as
-//! before.
+//! kernel start and after the one before it did, and its submission returned after its kernel end;
+//! heads, kernel starts and ends and returns all come in commit order (two that waited in a group
+//! return from one call); without them, each reads 0 and its kernel times as before.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -163,13 +163,20 @@ fn queue_times_are_noted_in_the_order_of_a_queue_s_submissions_and_only_where_as
             "head {head}, kernel {start}..{end}, returned {returned}, read at {after}"
         );
     }
+    // In commit order each time: the head, the kernel start and end, the return. Not the next
+    // one's kernel start after this one's return: batches that wait in a group for one kernel
+    // submission (`command_buffer/group.rs`) begin and are held before the call that carries
+    // them all returns (the 780M under RADV: the second and the third returned from one call).
     for pair in times.windows(2) {
-        let ([head, ..], [next_head, next_start, ..]) = (pair[0], pair[1]);
-        let returned = pair[0][3];
-        assert!(head <= next_head, "a later commit became head first");
+        let ([head, start, end, returned], [next_head, next_start, next_end, next_returned]) =
+            (pair[0], pair[1]);
         assert!(
-            returned <= next_start,
-            "a later commit's submission began before the earlier one's returned"
+            head <= next_head && start <= next_start && end <= next_end,
+            "a later commit became head, began or ended its submission first: {pair:?}"
+        );
+        assert!(
+            returned <= next_returned,
+            "a later commit's submission returned first: {pair:?}"
         );
     }
 }
