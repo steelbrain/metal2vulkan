@@ -24,18 +24,19 @@
 //!   copied in, and `synchronize_resource` copies its span out (`managed_resources_synchronized`,
 //!   `managed_bytes_synchronized`): the caller's pages hold both rows, and every byte between the
 //!   rows as given. The same texture over a `Shared` buffer, which the CPU writes at any time, is
-//!   a shadow (`BytesBetweenRows`), whose copy of the texels in before the same blit is counted
-//!   (`shadow_texels_copied_in`): what the `Managed` texture paid before its route.
+//!   a shadow (`BytesBetweenRows`), whose copy of the texels in before a kernel reads them is
+//!   counted (`shadow_texels_copied_in`): what the `Managed` texture paid before its route.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`KEPT-PADDING`): each pitch's
 //! answer and route, and the counts.
 
 use super::blit_holds::{device, Host, Scratch, BYTES, WAIT};
+use super::encoder_holds::library;
 use crate::{
     BlitCommandEncoder, BlitOption, Buffer, CommandQueue, CpuCacheMode, Device, HazardTrackingMode,
-    HostBacking, Origin, ResourceOptions, ResourceRef, Size, StorageMode, Texture,
-    TextureDescriptor, TexturePlacement, TextureShadowReason,
+    HostBacking, Origin, PipelineOptions, Region, ResourceOptions, ResourceRef, Size, StorageMode,
+    Texture, TextureDescriptor, TexturePlacement, TextureShadowReason,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 
@@ -136,6 +137,32 @@ fn blitted(device: &Device, queue: &CommandQueue, texture: &Texture) -> Vec<u8> 
         .unwrap();
     });
     mapped(&read, ROW * HEIGHT)
+}
+
+/// The texels of `texture` as a kernel (`invert_texels`) reads them, one thread a texel, and
+/// writes them inverted (alpha kept) into a texture of its own, rows one after another.
+fn inverted(device: &Device, queue: &CommandQueue, texture: &Texture) -> Vec<u8> {
+    let examples = library(device, "examples/runtime_examples.ll");
+    let kernel = examples.new_function_with_name("invert_texels").unwrap();
+    let options = PipelineOptions::default();
+    let invert = (device.new_compute_pipeline_state_with_function(&kernel, &options)).unwrap();
+    let mut plain = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, WIDTH, HEIGHT, false);
+    plain.usage = TextureUsage::SHADER_WRITE;
+    let written = device.new_texture(&plain).unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&invert).unwrap();
+    encoder.set_texture(Some(texture), 0).unwrap();
+    encoder.set_texture(Some(&written), 1).unwrap();
+    (encoder.dispatch_threads(Size::new(WIDTH, HEIGHT, 1), Size::new(1, 1, 1))).unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    let mut bytes = vec![0; (ROW * HEIGHT) as usize];
+    let region = Region::new_2d(0, 0, WIDTH, HEIGHT);
+    (written.get_bytes(&mut bytes, ROW, 0, region, 0, 0)).unwrap();
+    bytes
 }
 
 /// The texels `bytes` holds at `pitch`, rows one after another.
@@ -418,30 +445,25 @@ fn a_managed_texture_changed_in_one_row_reads_it_in_place_where_a_shared_one_cop
     let shadowed = shared.new_texture(&d, 0, pitch).unwrap();
     assert!(shadowed.shadow().is_some());
     write(&shared, row.start as u64, &expected[row]);
-    // A blit reads a texture over a buffer from the buffer's bytes; one that writes a row of it
-    // writes its shadow, which takes the texels in first, as `blit_cover.rs`'s partial copy does.
+    // A blit reads and writes a texture over a buffer at the buffer's bytes; a kernel reads its
+    // shadow, which takes the texels in first.
     let before = device.work_counts();
-    run(&queue, |blit| {
-        blit.copy_from_buffer_to_texture(
-            &source,
-            0,
-            ROW,
-            ROW,
-            Size::new(WIDTH, 1, 1),
-            &shadowed,
-            0,
-            0,
-            Origin::new(0, 20, 0),
-            BlitOption::None,
-        )
-        .unwrap();
-    });
+    let inverted = inverted(&device, &queue, &shadowed);
     let after = device.work_counts();
     let shared_in = after.shadow_texels_copied_in - before.shadow_texels_copied_in;
     assert!(shared_in > 0, "the shadow copies its texels in");
-    let read = blitted(&device, &queue, &shadowed);
-    assert!(read[7 * ROW as usize..8 * ROW as usize] == named(ROW, 99));
-    assert!(read[20 * ROW as usize..21 * ROW as usize] == row20);
+    let row7: Vec<u8> = named(ROW, 99)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|&[r, g, b, a]| [255 - r, 255 - g, 255 - b, a])
+        .collect();
+    // Within 1: the device's own rounding of the kernel's float answer to unorm.
+    let off = (inverted[7 * ROW as usize..8 * ROW as usize].iter())
+        .zip(&row7)
+        .filter(|(read, wanted)| read.abs_diff(**wanted) > 1)
+        .count();
+    assert_eq!(off, 0, "bytes of row 7 the kernel reads otherwise");
     eprintln!(
         "KEPT-PADDING on {}: Managed at {pitch} in place: row 7 asked {asked:?}, copied in \
          {copied_in} bytes, shadow texels copied in {shadow_in}; synchronize_resource asked \
