@@ -48,12 +48,15 @@
 use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::{
-    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, Library, LoadAction,
-    Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
-    SamplerState, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
+    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, DepthStencilState, Device,
+    Library, LoadAction, Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState,
+    ResourceOptions, SamplerState, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
+use metal2vulkan::metal::state::DepthStencilDescriptor;
+use metal2vulkan::metal::{
+    CompareFunction, PixelFormat, PrimitiveType, StencilOperation, TextureUsage,
+};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -95,6 +98,10 @@ enum Form {
     /// starts, as a process started again makes its own: each state's first draw is in the
     /// round's first pass.
     FreshStates,
+    /// One command buffer, the content pass's stencil cleared to 0 and its draws testing it:
+    /// the mark writes 1 over the left half, the first coverage draw passes where it is 1 and
+    /// the second where it is not, across the instances the fetching draws split the pass into.
+    StencilTests,
 }
 
 /// Where a bitmap's texels lie.
@@ -118,10 +125,12 @@ impl Home {
 }
 
 /// An icon's textures: its content and the content pass's second color, its clear (`None`:
-/// loaded `DontCare`) and stencil; its bitmap and the bitmap pass's second color and stencil.
+/// loaded `DontCare`) and stencil, whether its draws test the stencil; its bitmap and the bitmap
+/// pass's second color and stencil.
 struct Icon {
     content: Texture,
     clear: Option<[f32; 2]>,
+    stencil_tests: bool,
     coverage: Texture,
     stencil: Texture,
     bitmap: Texture,
@@ -129,8 +138,9 @@ struct Icon {
     bitmap_stencil: Texture,
 }
 
-/// The queue, the states, the sampler, the target's size as `dcs_rect` takes it, the coverage's
-/// tint, and a read-back buffer.
+/// The queue, the states, the stencil states (write the reference; pass where it equals it,
+/// where it does not, always), the sampler, the target's size as `dcs_rect` takes it, the
+/// coverage's tint, and a read-back buffer.
 struct Tools {
     queue: CommandQueue,
     mark: RenderPipelineState,
@@ -139,6 +149,7 @@ struct Tools {
     halve: RenderPipelineState,
     read: RenderPipelineState,
     copy: RenderPipelineState,
+    stencil_states: [DepthStencilState; 4],
     sampler: SamplerState,
     size: Vec<u8>,
     tint: Vec<u8>,
@@ -170,7 +181,24 @@ impl Tools {
             device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())
         };
         let rect = |fragment: StageSource| state(function(&dcs, "dcs_rect"), fragment);
+        let stencil = |compare: CompareFunction, pass: StencilOperation| {
+            let mut descriptor = DepthStencilDescriptor::default();
+            for face in [
+                &mut descriptor.front_face_stencil,
+                &mut descriptor.back_face_stencil,
+            ] {
+                face.stencil_compare_function = compare;
+                face.depth_stencil_pass_operation = pass;
+            }
+            device.new_depth_stencil_state(&descriptor).unwrap()
+        };
         Some(Tools {
+            stencil_states: [
+                stencil(CompareFunction::Always, StencilOperation::Replace),
+                stencil(CompareFunction::Equal, StencilOperation::Keep),
+                stencil(CompareFunction::NotEqual, StencilOperation::Keep),
+                stencil(CompareFunction::Always, StencilOperation::Keep),
+            ],
             queue: device.new_command_queue().unwrap(),
             mark: rect(function(&dcs, "dcs_mark")).unwrap(),
             coverage: rect(function(&con, "con_fetch_coverage")).ok()?,
@@ -220,11 +248,11 @@ impl Tools {
     }
 
     /// A pass over `color`, beside `second` and `stencil`, both loaded and stored `DontCare` but
-    /// that `second` is cleared to `clear` where it is given.
+    /// that `second` is cleared to `clear` where it is given, and `stencil` to 0 where `tested`.
     fn descriptor(
         (color, load): (&Texture, LoadAction),
         (second, clear): (&Texture, Option<[f32; 2]>),
-        stencil: &Texture,
+        (stencil, tested): (&Texture, bool),
     ) -> RenderPassDescriptor {
         let mut pass = RenderPassDescriptor::new();
         let first = &mut pass.color_attachments[0];
@@ -244,7 +272,10 @@ impl Tools {
         coverage.store_action = StoreAction::DontCare;
         let depth_stencil = &mut pass.stencil_attachment;
         depth_stencil.texture = Some(stencil.clone());
-        depth_stencil.load_action = LoadAction::DontCare;
+        depth_stencil.load_action = match tested {
+            true => LoadAction::Clear,
+            false => LoadAction::DontCare,
+        };
         depth_stencil.store_action = StoreAction::DontCare;
         pass
     }
@@ -254,19 +285,26 @@ impl Tools {
         let pass = Tools::descriptor(
             (&icon.content, LoadAction::Load),
             (&icon.coverage, icon.clear),
-            &icon.stencil,
+            (&icon.stencil, icon.stencil_tests),
         );
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
         encoder.set_fragment_bytes(&self.tint, 0).unwrap();
+        encoder.set_stencil_reference_value(1);
+        // Each draw's stencil state where the draws test it: the mark writes 1, the first
+        // coverage draw passes where it is 1 and the second where it is not.
+        let [write, equal, unequal, always] = &self.stencil_states;
         let draws = [
-            (&self.mark, MARK),
-            (&self.coverage, MIDDLE),
-            (&self.flag, FLAG),
-            (&self.halve, WHOLE),
-            (&self.coverage, MIDDLE),
-            (&self.read, BOTTOM),
+            (&self.mark, MARK, write),
+            (&self.coverage, MIDDLE, equal),
+            (&self.flag, FLAG, always),
+            (&self.halve, WHOLE, always),
+            (&self.coverage, MIDDLE, unequal),
+            (&self.read, BOTTOM, always),
         ];
-        for (state, rect) in draws {
+        for (state, rect, stencil) in draws {
+            if icon.stencil_tests {
+                encoder.set_depth_stencil_state(stencil).unwrap();
+            }
             encoder.set_render_pipeline_state(state).unwrap();
             let rect = bytes_of(&rect.map(|p| p as f32), f32::to_le_bytes);
             encoder.set_vertex_bytes(&rect, 0).unwrap();
@@ -277,7 +315,7 @@ impl Tools {
         let pass = Tools::descriptor(
             (&icon.bitmap, LoadAction::Clear),
             (&icon.bitmap_coverage, None),
-            &icon.bitmap_stencil,
+            (&icon.bitmap_stencil, false),
         );
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
         encoder.set_render_pipeline_state(&self.copy).unwrap();
@@ -316,11 +354,12 @@ impl Tools {
 }
 
 /// Icon `index`'s wrong texels in `bytes` (the icons one after another, their rows `pitch`
-/// apart), its second color cleared to `clear`, and the first: its pixel and texel.
+/// apart), its second color cleared to `facts`' clear and its draws testing the stencil or not,
+/// and the first: its pixel and texel.
 fn wrong(
     bytes: &Buffer,
     pitch: u64,
-    (index, clear): (usize, Option<[f32; 2]>),
+    (index, facts): (usize, (Option<[f32; 2]>, bool)),
 ) -> (usize, Option<((u64, u64), [u16; 4])>) {
     let contents = bytes.contents().unwrap();
     let span = (pitch * SIDE) as usize;
@@ -333,7 +372,7 @@ fn wrong(
             let h = |i: usize| u16::from_le_bytes([bytes[at + i], bytes[at + i + 1]]);
             ((x, y), [h(0), h(2), h(4), h(6)])
         })
-        .filter(|&(pixel, texel)| texel != expected(clear, pixel))
+        .filter(|&(pixel, texel)| texel != expected(facts, pixel))
         .collect();
     (wrong.len(), wrong.first().copied())
 }
@@ -357,22 +396,29 @@ fn half(value: f32) -> u16 {
 }
 
 /// A bitmap at `(x, y)` whose second color was cleared to `clear` (`None`: loaded `DontCare`).
-fn expected(clear: Option<[f32; 2]>, (x, y): (u64, u64)) -> [u16; 4] {
+fn expected((clear, stencil_tests): (Option<[f32; 2]>, bool), (x, y): (u64, u64)) -> [u16; 4] {
     // The second color there before the coverage draws: the mark's, or the clear (zero where it
     // loads `DontCare`).
-    let [r, g] = match x < MARK[2] {
+    let left = x < MARK[2];
+    let [r, g] = match left {
         true => [0.25, 0.5],
         false => clear.unwrap_or([0.0; 2]),
     };
+    // A coverage draw's `w = c1.x / 2 + c1.y`, after which `c1 = (w, c1.y / 4)`.
+    let first = r / 2.0 + g;
     if y < FLAG[3] {
         // The flag, halved.
         [half(0.5), 0, half(0.5), half(0.5)]
+    } else if y < MIDDLE[3] && stencil_tests && left {
+        // The first coverage draw passes where the mark wrote the stencil, then the halving;
+        // the second fails there.
+        [half(first / 2.0); 4]
+    } else if y < MIDDLE[3] && stencil_tests {
+        // Only the second coverage draw passes there.
+        [half(first); 4]
     } else if y < MIDDLE[3] {
-        // Two coverage draws: `w = c1.x / 2 + c1.y`, then `c1 = (w, c1.y / 4)`; the halving
-        // between them is drawn over.
-        let first = r / 2.0 + g;
-        let second = half(first / 2.0 + g / 4.0);
-        [second; 4]
+        // Both coverage draws; the halving between them is drawn over.
+        [half(first / 2.0 + g / 4.0); 4]
     } else {
         [half(r), half(g), ONE, ONE]
     }
@@ -453,6 +499,7 @@ fn run(case: &str, form: Form, home: Home) {
                     TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
                 ),
                 clear: clear(index, form),
+                stencil_tests: form == Form::StencilTests,
                 coverage: match form {
                     Form::KeptCoverage => kept.clone(),
                     _ => tools.second(),
@@ -464,7 +511,7 @@ fn run(case: &str, form: Form, home: Home) {
             })
             .collect();
         match form {
-            Form::OneBuffer | Form::KeptCoverage | Form::FreshStates => {
+            Form::OneBuffer | Form::KeptCoverage | Form::FreshStates | Form::StencilTests => {
                 let command_buffer = tools.queue.command_buffer().unwrap();
                 for icon in &icons {
                     tools.render(&command_buffer, icon);
@@ -508,7 +555,8 @@ fn run(case: &str, form: Form, home: Home) {
             }
         };
         for index in 0..ICONS {
-            if let (n @ 1.., first) = wrong(read, pitch, (index, icons[index].clear)) {
+            let facts = (icons[index].clear, icons[index].stencil_tests);
+            if let (n @ 1.., first) = wrong(read, pitch, (index, facts)) {
                 failures.push(format!(
                     "round {round} icon {index}: {n} wrong texels, first {first:x?}"
                 ));
@@ -592,6 +640,20 @@ fn icon_bitmaps_over_host_pages_whose_states_are_made_new_each_round_keep_their_
     run(
         "over-host-fresh-states",
         Form::FreshStates,
+        Home::HostPages(PADDED),
+    );
+}
+
+#[test]
+fn icons_whose_draws_test_the_stencil_across_the_split_keep_their_fetched_colors_values() {
+    run("stencil-tests", Form::StencilTests, Home::Private);
+}
+
+#[test]
+fn icon_bitmaps_over_host_pages_whose_draws_test_the_stencil_keep_their_fetched_colors_values() {
+    run(
+        "over-host-stencil-tests",
+        Form::StencilTests,
         Home::HostPages(PADDED),
     );
 }
