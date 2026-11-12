@@ -263,11 +263,13 @@ fn rebuild(
     for (i, _) in body.insts.iter() {
         m.tick(1)?;
         match chain(i) {
-            Some(c) if c.elems.len() == 1 => result.push(Some(Value::Const(c.elems[0]))),
-            Some(c) => {
-                next += c.emitted();
-                result.push(Some(Value::Inst(id(next - 1)?)));
-            }
+            Some(c) => match c.elems.as_slice() {
+                [only] => result.push(Some(Value::Const(*only))),
+                _ => {
+                    next += c.emitted();
+                    result.push(Some(Value::Inst(id(next - 1)?)));
+                }
+            },
             None if dropped.contains(&i) => result.push(None),
             None => {
                 next += 1;
@@ -301,10 +303,12 @@ fn rebuild(
                     let index = map(c.index)?;
                     let ty = value_ty(body, parts, func, c.index)
                         .ok_or_else(|| invariant("a table index without a type"))?;
-                    let last = c.elems.len() - 1;
+                    let Some((&last, rest)) = c.elems.split_last() else {
+                        return Err(invariant("a table without elements"));
+                    };
                     let mut compares = Vec::new();
-                    m.reserve(&mut compares, last)?;
-                    for k in 0..last {
+                    m.reserve(&mut compares, rest.len())?;
+                    for k in 0..rest.len() {
                         let at = parts.consts.intern(
                             Constant {
                                 ty,
@@ -325,14 +329,14 @@ fn rebuild(
                         )?;
                         compares.push(cmp);
                     }
-                    let mut chosen = Value::Const(c.elems[last]);
-                    for k in (0..last).rev() {
+                    let mut chosen = Value::Const(last);
+                    for (&cmp, &elem) in compares.iter().zip(rest).rev() {
                         let s = out.push_inst(
                             Inst {
                                 ty: inst.ty,
                                 kind: InstKind::Select {
-                                    c: Value::Inst(compares[k]),
-                                    t: Value::Const(c.elems[k]),
+                                    c: Value::Inst(cmp),
+                                    t: Value::Const(elem),
                                     f: chosen,
                                     fmf: FastMath::default(),
                                 },
