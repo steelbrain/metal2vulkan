@@ -265,12 +265,16 @@ fn expected(index: usize, (x, y): (u64, u64)) -> [u16; 4] {
 }
 
 /// The counts that say how the passes ran: render pass instances, splits for the interlocked
-/// writes, storage forms taken.
-fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 3] {
+/// writes, storage forms taken, textures over bytes shadowed, linear merges recorded, shadow
+/// copies.
+fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 6] {
     [
         after.render_passes_begun_instances - before.render_passes_begun_instances,
         after.instance_splits_interlocked_writes - before.instance_splits_interlocked_writes,
         after.storage_forms_taken - before.storage_forms_taken,
+        after.shadowed_textures - before.shadowed_textures,
+        after.linear_merges_recorded - before.linear_merges_recorded,
+        after.shadow_copies - before.shadow_copies,
     ]
 }
 
@@ -385,7 +389,8 @@ fn run(case: &str, form: Form, home: Home) {
     }
     eprintln!(
         "ICON-COVERAGE {case} on {}: {} of {} icons wrong; per round (instances, interlocked \
-         splits, storage forms) {counts:?}; first {:?}",
+         splits, storage forms, shadowed textures, linear merges, shadow copies) {counts:?}; \
+         first {:?}",
         device.name(),
         failures.len(),
         ROUNDS * ICONS,
