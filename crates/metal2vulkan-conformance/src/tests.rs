@@ -7220,12 +7220,15 @@ fn the_tagged_sampler_words_tell_every_field_apart() {
     let mut one = SamplerSpec::new();
     one.reduction_mode = SamplerReductionMode::Minimum;
     specs.push(one);
+    let mut one = SamplerSpec::new();
+    one.lod_bias = 1.0;
+    specs.push(one);
 
     let words: BTreeSet<Vec<u8>> = specs.iter().map(SamplerSpec::words).collect();
     assert_eq!(
         words.len(),
         specs.len(),
-        "two of the ten states fingerprint alike"
+        "two of the eleven states fingerprint alike"
     );
     // A clamp fingerprints as its bits, so a signed zero and a NaN are each their own input
     // rather than values a float comparison would fold into the default or into each other.

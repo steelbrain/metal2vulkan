@@ -2334,6 +2334,7 @@ impl Side for RuntimeSide<'_> {
         descriptor.max_anisotropy = spec.max_anisotropy;
         descriptor.compare_function = spec.compare_function;
         descriptor.reduction_mode = spec.reduction_mode;
+        descriptor.lod_bias = spec.lod_bias;
         let mut options = SamplerStateOptions::default();
         options.support_argument_buffers = spec.support_argument_buffers;
         let sampler = self

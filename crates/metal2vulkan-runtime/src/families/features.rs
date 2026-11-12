@@ -976,7 +976,9 @@ impl FeatureRow {
                 f.properties.supports_sampler_reduction_mode(),
                 Query::SamplerReductionMode,
             )]),
-            // `SamplerDescriptor::lod_bias` (Apple10): not on the runtime's sampler descriptor.
+            // `SamplerDescriptor::lod_bias` (Apple10): the runtime samples it as an Apple9 GPU
+            // does, every level as with no bias (an Apple M3 Max on macOS 27.0.1). Apple10's
+            // biased level is not built.
             F::SamplerLodBias => first([gap(G::Textures)]),
             // 16-bit coordinates in a texture read, a texture's swizzle, `Shared` and `Managed`
             // depth/stencil textures, and the clamp-to-edge read: the compile layer and the

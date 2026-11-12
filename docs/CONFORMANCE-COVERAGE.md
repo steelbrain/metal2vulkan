@@ -14,7 +14,7 @@ The suite reaches Metal through `objc2-metal`, whose Rust name for a binding is 
 
 Its limits, measured rather than asserted:
 
-- **1667 of 1722 call sites** in the Metal leg resolve to an item of the SDK. 23 of those resolve because only one type in `objc2-metal` binds the name at all, so no typing was needed.
+- **1668 of 1723 call sites** in the Metal leg resolve to an item of the SDK. 23 of those resolve because only one type in `objc2-metal` binds the name at all, so no typing was needed.
 - **2 call sites send a selector `objc2-metal` binds on no Metal type at all**, so they are an item of no Metal container and there is no count for them to cost: `alloc`, `class`, which are `NSObject`'s.
 - **4 call sites send a selector by hand that `objc2-metal` binds no name for**, which is why they are sent with `msg_send!` rather than called. The crate names no container for such a selector, so no receiver typing can reach one and no item here is credited: `detachBacking`, `fillTexture:level:slice:region:bytes:length:`, `setFramebufferOnly:`, `setRotation:`. None of them is an implemented row of the coverage map — the generator fails rather than writing this document if one is, because that would be an item the suite exercises and nothing counts.
 - **8 call sites resolve to no item although some Metal type binds the selector**: an instance send whose receiver this could not type, a message to a class that does not bind the name sent to it, or a selector sent by hand to a receiver whose Rust type is a **supertype** of the one that binds it — which is often why it is sent by hand, since `objc2` casts between two protocol objects nowhere. Each sent its selector to exactly one receiver, so each exercised one item; which one is what the typing could not say. **Every one of their selectors is bound by at least one item some other call site credits**, so none of these sites proves an item is missing from the count. That is not a proof that the count is complete: such a site may have sent its selector to a type other than the credited one, and this cannot tell. To rule it out, spell the receiver's type at the call site — a `let` with a type, rather than a `let` with none — and this re-derives with the item credited to the case that calls it. A pattern binding is not one of the shapes that costs a site: a tuple, a `for`, a `match` arm and a closure parameter are each typed from what made them.
@@ -32,17 +32,17 @@ Its limits, measured rather than asserted:
 
 | | |
 |---|---|
-| implemented Metal items | 978 |
+| implemented Metal items | 979 |
 | of those, unreachable: `objc2-metal` binds no name for them | 3 |
-| so reachable by some case | 975 |
-| of the reachable, exercised by the suite's Metal leg | 814 |
+| so reachable by some case | 976 |
+| of the reachable, exercised by the suite's Metal leg | 815 |
 | of the reachable, not exercised | 161 |
-| share of the reachable exercised | 83% |
+| share of the reachable exercised | 84% |
 | of those exercised, no case reaching it loosens anything | 572 |
-| of those exercised, a case reaching it loosens some site | 242 |
+| of those exercised, a case reaching it loosens some site | 243 |
 | case modules | 165 |
 | committed recordings | 1277 |
-| distinct SDK items the Metal leg reaches, of any status | 821 |
+| distinct SDK items the Metal leg reaches, of any status | 822 |
 | of those, reached only where this cannot name the family | 3 |
 | ledger rows (a case whose gap is recorded) | 3610 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
@@ -441,7 +441,7 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLRenderPipelineFunctionsDescriptor` | 4 | 0 | 4 | 0 | `pipeline_functions` |
 | `MTLResource` | 12 | 0 | 12 | 0 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
 | `MTLResourceStateCommandEncoder` | 7 | 0 | 7 | 0 | `command_buffer_facts`, `sparse_mappings` |
-| `MTLSamplerDescriptor` | 16 | 0 | 16 | 0 | `argument_encoder_crossings`, `argument_encoders`, `border_swizzles`, `chroma_pairs`… |
+| `MTLSamplerDescriptor` | 17 | 0 | 17 | 0 | `argument_encoder_crossings`, `argument_encoders`, `border_swizzles`, `chroma_pairs`… |
 | `MTLSharedEventHandle` | 2 | 0 | 2 | 0 | `shared_events` |
 | `MTLSharedTextureHandle` | 2 | 0 | 2 | 0 | `shared_creator_formats`, `texture_views` |
 | `MTLStencilDescriptor` | 7 | 0 | 7 | 0 | `depth_resolve_pairs`, `depth_stencil_space`, `layered_targets`, `pass_sequence_actions`… |
@@ -487,7 +487,7 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 | `MTLFunctionConstantValues.h` | 5 | 4 | 1 |
 | `MTLPipeline.h` | 5 | 4 | 1 |
 | `MTLRenderPass.h` | 42 | 41 | 1 |
-| `MTLSampler.h` | 19 | 18 | 1 |
+| `MTLSampler.h` | 20 | 19 | 1 |
 | `MTLAllocation.h` | 1 | 1 | 0 |
 | `MTLArgumentEncoder.h` | 23 | 23 | 0 |
 | `MTLBinaryArchive.h` | 10 | 10 | 0 |
@@ -545,9 +545,9 @@ An implemented container no case's Metal leg touches. These are the families of 
 | `Side` methods the Metal leg reaches an SDK item through | 124 |
 | SDK items a case's Metal leg reaches, median | 55 |
 | the same, least and most | 0 and 216 |
-| Metal call sites in the leg | 1722 |
-| distinct selectors the leg sends | 661 |
-| of those, resolved to an item of the coverage map | 654 |
+| Metal call sites in the leg | 1723 |
+| distinct selectors the leg sends | 662 |
+| of those, resolved to an item of the coverage map | 655 |
 | oracles the recordings name | `apple-m3-max` ×1277 |
 
 ## By family
@@ -557,8 +557,8 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | family | cases | Metal ran | compared | items reached |
 |---|---|---|---|---|
 | `alpha_coverage_pairs` | 17 | 17 | every field | 121 |
-| `argument_encoder_crossings` | 4 | 4 | every field | 57 |
-| `argument_encoders` | 5 | 5 | every field | 84 |
+| `argument_encoder_crossings` | 4 | 4 | every field | 58 |
+| `argument_encoders` | 5 | 5 | every field | 85 |
 | `astc_textures` | 42 | 42 | 1 tolerance(s): `Degradation` | 43 |
 | `attribute_formats` | 2 | 2 | every field | 48 |
 | `attribute_strides` | 4 | 4 | every field | 51 |
@@ -567,14 +567,14 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `blend_sweeps` | 12 | 12 | every field | 125 |
 | `blit_encoder_commands` | 11 | 11 | every field | 64 |
 | `blit_indirect_commands` | 3 | 3 | every field | 121 |
-| `border_swizzles` | 8 | 8 | every field | 60 |
+| `border_swizzles` | 8 | 8 | every field | 61 |
 | `buffer_blits` | 4 | 4 | every field | 27 |
 | `buffer_depth_samples` | 5 | 5 | every field | 69 |
 | `buffer_tails` | 2 | 2 | every field | 59 |
 | `buffer_target_clears` | 6 | 6 | every field | 65 |
 | `buffer_texture_blits` | 2 | 2 | every field | 47 |
 | `buffer_textures` | 3 | 2 | every field | 56 |
-| `chroma_pairs` | 6 | 6 | every field | 75 |
+| `chroma_pairs` | 6 | 6 | every field | 76 |
 | `color_write_masks` | 5 | 5 | every field | 122 |
 | `command_buffer_facts` | 1 | 1 | every field | 29 |
 | `command_queues` | 1 | 1 | every field | 5 |
@@ -582,18 +582,18 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `compressed_decode` | 10 | 10 | every field | 43 |
 | `compressed_moves` | 14 | 14 | every field | 41 |
 | `compressed_views` | 14 | 14 | every field | 48 |
-| `compute_encoder_commands` | 8 | 8 | every field | 65 |
+| `compute_encoder_commands` | 8 | 8 | every field | 66 |
 | `compute_heap_residency` | 1 | 1 | every field | 58 |
 | `compute_pipeline_descriptors` | 3 | 3 | 1 tolerance(s): `AcceptedDifference` | 24 |
-| `compute_render_chains` | 3 | 3 | every field | 150 |
+| `compute_render_chains` | 3 | 3 | every field | 151 |
 | `compute_threadgroups` | 2 | 1 | every field | 28 |
 | `denormal_word_fetches` | 1 | 1 | every field | 43 |
 | `depth_resolve_pairs` | 2 | 2 | every field | 139 |
 | `depth_stencil_space` | 8 | 8 | every field | 142 |
-| `depth_texel_reads` | 1 | 1 | every field | 50 |
+| `depth_texel_reads` | 1 | 1 | every field | 51 |
 | `device_queries` | 5 | 5 | every field | 7 |
-| `discard_hoist` | 1 | 1 | 1 tolerance(s): `Degradation` | 143 |
-| `draw_state_changes` | 1 | 1 | every field | 145 |
+| `discard_hoist` | 1 | 1 | 1 tolerance(s): `Degradation` | 144 |
+| `draw_state_changes` | 1 | 1 | every field | 146 |
 | `dynamic_libraries` | 3 | 3 | every field | 15 |
 | `empty_command_buffers` | 1 | 1 | every field | 20 |
 | `etc_textures` | 10 | 10 | 1 tolerance(s): `Degradation` | 43 |
@@ -604,17 +604,17 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `extended_range_planes` | 4 | 4 | every field | 30 |
 | `extended_range_targets` | 22 | 22 | every field | 130 |
 | `extended_range_two_planes` | 2 | 2 | every field | 34 |
-| `extended_swizzles` | 15 | 15 | every field | 60 |
+| `extended_swizzles` | 15 | 15 | every field | 61 |
 | `fetch_ordered` | 4 | 4 | every field | 124 |
 | `format_copies` | 16 | 16 | every field | 48 |
 | `format_footprints` | 6 | 6 | every field | 21 |
 | `fragment_imageblock_reflection` | 1 | 1 | every field | 74 |
-| `frame_chains` | 1 | 1 | every field | 147 |
+| `frame_chains` | 1 | 1 | every field | 148 |
 | `fresh_contents` | 87 | 87 | 1 tolerance(s): `Degradation` | 50 |
 | `function_bindings` | 15 | 15 | every field | 65 |
 | `function_facts` | 15 | 15 | every field | 38 |
 | `half_output_blends` | 6 | 6 | every field | 125 |
-| `half_read_nans` | 6 | 6 | every field | 50 |
+| `half_read_nans` | 6 | 6 | every field | 51 |
 | `half_storage_writes` | 9 | 9 | every field | 34 |
 | `half_texel_nans` | 8 | 8 | every field | 33 |
 | `half_write_nans` | 7 | 7 | every field | 33 |
@@ -637,7 +637,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `mesh_partial_barriers` | 4 | 4 | every field | 52 |
 | `mesh_pipeline_descriptors` | 3 | 3 | every field | 49 |
 | `mesh_pipeline_reflection` | 2 | 2 | every field | 78 |
-| `nearest_positions` | 1 | 1 | every field | 50 |
+| `nearest_positions` | 1 | 1 | every field | 51 |
 | `norm_storage_writes` | 7 | 7 | every field | 45 |
 | `padded_blends` | 17 | 17 | every field | 124 |
 | `padded_fetch` | 11 | 11 | every field | 124 |
@@ -653,30 +653,30 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `pipeline_limits` | 27 | 27 | every field | 29 |
 | `pipeline_option_reflection` | 3 | 3 | every field | 65 |
 | `pipeline_options` | 21 | 21 | every field | 77 |
-| `pixel_downscales` | 7 | 7 | every field | 53 |
-| `pixel_samplers` | 20 | 20 | every field | 53 |
+| `pixel_downscales` | 7 | 7 | every field | 54 |
+| `pixel_samplers` | 20 | 20 | every field | 54 |
 | `primitive_type_crossings` | 1 | 1 | every field | 123 |
 | `pvrtc_cpu_order` | 6 | 6 | every field | 48 |
 | `pvrtc_rows` | 8 | 8 | every field | 48 |
 | `rate_map_degenerate_forms` | 3 | 3 | every field | 28 |
 | `rate_map_sweeps` | 9 | 9 | every field | 31 |
 | `rate_maps` | 2 | 2 | every field | 23 |
-| `read_through` | 13 | 13 | every field | 63 |
+| `read_through` | 13 | 13 | every field | 64 |
 | `read_write_tiers` | 6 | 6 | every field | 48 |
-| `render_chains` | 3 | 3 | every field | 143 |
+| `render_chains` | 3 | 3 | every field | 144 |
 | `render_depth_stencil_state` | 3 | 3 | every field | 143 |
 | `render_draw_forms` | 4 | 4 | every field | 130 |
 | `render_pass_descriptors` | 12 | 12 | every field | 40 |
 | `render_residency` | 2 | 2 | every field | 143 |
-| `render_state` | 3 | 3 | every field | 163 |
+| `render_state` | 3 | 3 | every field | 164 |
 | `resource_facts` | 4 | 4 | every field | 54 |
-| `rgb10a2_srgb` | 8 | 8 | every field | 78 |
+| `rgb10a2_srgb` | 8 | 8 | every field | 79 |
 | `rotated_planes` | 20 | 20 | 1 tolerance(s): `Degradation` | 122 |
 | `rotated_targets` | 14 | 14 | every field | 125 |
 | `sample_fills` | 17 | 0 | 1 tolerance(s): `Degradation` | 0 |
 | `sample_positions` | 19 | 16 | every field | 123 |
-| `sampler_crossings` | 8 | 8 | every field | 62 |
-| `sampler_filtering` | 15 | 15 | every field | 62 |
+| `sampler_crossings` | 8 | 8 | every field | 63 |
+| `sampler_filtering` | 15 | 15 | every field | 63 |
 | `scheduled_handlers` | 1 | 1 | every field | 16 |
 | `shader_stencil` | 2 | 2 | every field | 139 |
 | `shared_creator_formats` | 2 | 2 | every field | 42 |
@@ -710,7 +710,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `topology_classes` | 2 | 2 | every field | 121 |
 | `two_plane_copies` | 3 | 1 | every field | 52 |
 | `two_plane_heap_blits` | 1 | 1 | every field | 51 |
-| `two_plane_samples` | 16 | 16 | every field | 50 |
+| `two_plane_samples` | 16 | 16 | every field | 51 |
 | `vertex_attribute_strides` | 2 | 2 | every field | 111 |
 | `vertex_fetch_reach` | 1 | 1 | every field | 110 |
 | `vertex_formats` | 4 | 4 | every field | 109 |
@@ -718,8 +718,8 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `visible_tables` | 18 | 18 | every field | 55 |
 | `wide_int_attributes` | 2 | 2 | every field | 109 |
 | `wide_points` | 1 | 1 | every field | 124 |
-| `ycbcr_gathers` | 4 | 4 | every field | 51 |
-| `ycbcr_minify` | 2 | 2 | every field | 51 |
+| `ycbcr_gathers` | 4 | 4 | every field | 52 |
+| `ycbcr_minify` | 2 | 2 | every field | 52 |
 | `ycbcr_textures` | 2 | 2 | every field | 41 |
 
 ## Every implemented item
@@ -1889,6 +1889,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `lodMinClamp` | yes | `argument_encoder_crossings`, `argument_encoders`, `border_swizzles`, `chroma_pairs`, `compute_encoder_commands`, `compute_render_chains`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `extended_swizzles`, `frame_chains`, `half_read_nans`, `nearest_positions`, `pixel_downscales`, `pixel_samplers`, `read_through`, `render_chains`, `render_state`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `two_plane_samples`, `ycbcr_gathers`, `ycbcr_minify` | 159 |
 | `lodMaxClamp` | yes | `argument_encoder_crossings`, `argument_encoders`, `border_swizzles`, `chroma_pairs`, `compute_encoder_commands`, `compute_render_chains`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `extended_swizzles`, `frame_chains`, `half_read_nans`, `nearest_positions`, `pixel_downscales`, `pixel_samplers`, `read_through`, `render_chains`, `render_state`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `two_plane_samples`, `ycbcr_gathers`, `ycbcr_minify` | 159 |
 | `lodAverage` | yes | `argument_encoder_crossings`, `argument_encoders`, `border_swizzles`, `chroma_pairs`, `compute_encoder_commands`, `compute_render_chains`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `extended_swizzles`, `frame_chains`, `half_read_nans`, `nearest_positions`, `pixel_downscales`, `pixel_samplers`, `read_through`, `render_chains`, `render_state`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `two_plane_samples`, `ycbcr_gathers`, `ycbcr_minify` | 159 |
+| `lodBias` | yes | `argument_encoder_crossings`, `argument_encoders`, `border_swizzles`, `chroma_pairs`, `compute_encoder_commands`, `compute_render_chains`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `extended_swizzles`, `frame_chains`, `half_read_nans`, `nearest_positions`, `pixel_downscales`, `pixel_samplers`, `read_through`, `render_chains`, `render_state`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `two_plane_samples`, `ycbcr_gathers`, `ycbcr_minify` | 159 |
 | `compareFunction` | yes | `argument_encoder_crossings`, `argument_encoders`, `border_swizzles`, `chroma_pairs`, `compute_encoder_commands`, `compute_render_chains`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `extended_swizzles`, `frame_chains`, `half_read_nans`, `nearest_positions`, `pixel_downscales`, `pixel_samplers`, `read_through`, `render_chains`, `render_state`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `two_plane_samples`, `ycbcr_gathers`, `ycbcr_minify` | 159 |
 | `supportArgumentBuffers` | yes | `argument_encoder_crossings`, `argument_encoders`, `border_swizzles`, `chroma_pairs`, `compute_encoder_commands`, `compute_render_chains`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `extended_swizzles`, `frame_chains`, `half_read_nans`, `nearest_positions`, `pixel_downscales`, `pixel_samplers`, `read_through`, `render_chains`, `render_state`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `two_plane_samples`, `ycbcr_gathers`, `ycbcr_minify` | 159 |
 

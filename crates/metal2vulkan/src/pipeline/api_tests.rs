@@ -967,6 +967,7 @@ mod bind_serde_round_trips {
                     max_anisotropy: 1,
                     compare_function: metal::CompareFunction::Never,
                     reduction_mode: metal::SamplerReductionMode::WeightedAverage,
+                    lod_bias: 1.5,
                 },
                 resource_id: None,
             },

@@ -1950,7 +1950,7 @@ MTLSampler.h	MTLSamplerDescriptor	property	normalizedCoordinates		I	translator	S
 MTLSampler.h	MTLSamplerDescriptor	property	lodMinClamp		I	translator	SamplerDescriptor.lod_min_clamp			
 MTLSampler.h	MTLSamplerDescriptor	property	lodMaxClamp		I	translator	SamplerDescriptor.lod_max_clamp			
 MTLSampler.h	MTLSamplerDescriptor	property	lodAverage		I	translator	SamplerDescriptor.lod_average			
-MTLSampler.h	MTLSamplerDescriptor	property	lodBias		M			a sampler's LOD bias (a family row's gap; Metal's rounding unmeasured)	M	lod-bias
+MTLSampler.h	MTLSamplerDescriptor	property	lodBias		I	translator	SamplerDescriptor.lod_bias			
 MTLSampler.h	MTLSamplerDescriptor	property	compareFunction		I	translator	SamplerDescriptor.compare_function			
 MTLSampler.h	MTLSamplerDescriptor	property	supportArgumentBuffers		I	runtime	SamplerStateOptions.support_argument_buffers			
 MTLSampler.h	MTLSamplerDescriptor	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels

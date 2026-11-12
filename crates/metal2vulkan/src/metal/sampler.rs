@@ -354,6 +354,12 @@ pub(crate) fn vk_filtering(
 /// a nearest mip filter's next level past one half; MoltenVK hands the clamp to Metal's sampler,
 /// which does so itself.
 ///
+/// Its `mipLodBias` is 0 whatever the descriptor's `lod_bias`: an Apple GPU of the families the
+/// runtime claims samples every level as with no bias ([`SamplerDescriptor::lod_bias`]), and
+/// Vulkan adds `mipLodBias` to every sample's level, an explicit one's included. So no bias is
+/// past the device's `maxSamplerLodBias`, and none needs `samplerMipLodBias` of a portability
+/// subset.
+///
 /// A use that reads texel coordinates ([`SamplerUse::unnormalized`]) takes the device's
 /// unnormalized sampler: its filters, address modes and border as above, the nearest mip mode at
 /// the level clamp `[0, 0]` (which Vulkan requires; a pixel sampler reads level 0 by one filter),
@@ -1120,6 +1126,7 @@ mod tests {
             max_anisotropy: 1,
             compare_function: CompareFunction::Never,
             reduction_mode: SamplerReductionMode::WeightedAverage,
+            lod_bias: 0.0,
         }
     }
 
@@ -1266,6 +1273,90 @@ mod tests {
         assert_eq!(s.max_anisotropy, None);
         assert_eq!(s.address_mode_u, vk::SamplerAddressMode::CLAMP_TO_EDGE);
         assert_eq!(s.reduction, vk::SamplerReductionMode::WEIGHTED_AVERAGE);
+    }
+
+    /// A descriptor's LOD bias makes, on every committed device and for every use, the Vulkan
+    /// sampler and the binding shape its zero bias makes: an Apple GPU of the families the runtime
+    /// claims samples every level as with no bias (`SamplerDescriptor::lod_bias`). So a bias is
+    /// never the device's `mipLodBias` and is refused nowhere: past the device's
+    /// `maxSamplerLodBias`, NaN or infinite, and through a portability subset that withholds
+    /// `samplerMipLodBias`.
+    #[test]
+    fn a_lod_bias_makes_the_unbiased_sampler() {
+        use crate::bind::state::BoundSampler;
+        use SamplerMinMagFilter::{Linear, Nearest};
+        let biases = [
+            1.0,
+            -1.0,
+            0.5,
+            -0.0,
+            15.999,
+            16.0,
+            -16.0,
+            16.5,
+            -17.0,
+            100.0,
+            -1000.0,
+            f32::MAX,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ];
+        let (mut checked, mut past_limit, mut withheld) = (0, 0, 0);
+        for (stem, description) in committed_descriptions() {
+            let dev = Device::new(description, DevicePolicy::default()).unwrap();
+            let p = dev.profile();
+            let limit = f32::from_bits(p.fields().limits.max_sampler_lod_bias_bits);
+            if p.fields()
+                .enabled
+                .portability_withholds(VkFeature::SamplerMipLodBias)
+            {
+                withheld += 1;
+            }
+            let mut descs = Vec::new();
+            for mip in [
+                SamplerMipFilter::NotMipmapped,
+                SamplerMipFilter::Nearest,
+                SamplerMipFilter::Linear,
+            ] {
+                for (min, mag) in [(Linear, Linear), (Linear, Nearest), (Nearest, Linear)] {
+                    let mut d = metal_default();
+                    (d.mip_filter, d.min_filter, d.mag_filter) = (mip, min, mag);
+                    d.lod_min_clamp = 1.0;
+                    d.lod_max_clamp = 3.0;
+                    for (compare, integer) in
+                        [(false, false), (true, false), (false, true), (true, true)]
+                    {
+                        descs.push((d, SamplerUse::new(compare, integer)));
+                    }
+                }
+            }
+            let mut pixel = metal_default();
+            pixel.normalized_coordinates = false;
+            pixel.mag_filter = Linear;
+            pixel.min_filter = Linear;
+            descs.push((pixel, SamplerUse::default().with_unnormalized(true)));
+            for (unbiased, use_) in descs {
+                let want = vk_sampler(&unbiased, use_, p);
+                let shape = BoundSampler::new(unbiased).shape();
+                for bias in biases {
+                    let mut d = unbiased;
+                    d.lod_bias = bias;
+                    let got = vk_sampler(&d, use_, p);
+                    assert_eq!(got, want, "{stem}: bias {bias}, {d:?} {use_:?}");
+                    if let Ok(s) = got {
+                        assert_eq!(s.mip_lod_bias.to_bits(), 0, "{stem}: bias {bias}");
+                    }
+                    assert_eq!(BoundSampler::new(d).shape(), shape, "{stem}: bias {bias}");
+                    past_limit += usize::from(bias.abs() > limit);
+                    checked += 1;
+                }
+            }
+        }
+        // The cases above reach a device that withholds `samplerMipLodBias` (MoltenVK) and biases
+        // past every device's limit.
+        assert!(withheld > 0 && past_limit > 0, "{withheld} {past_limit}");
+        assert!(checked > 0);
     }
 
     /// A sampler without a mip filter reads the base level, its minification filter exactly where

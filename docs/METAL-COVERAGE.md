@@ -10,12 +10,12 @@ Every public item of the macOS 27.2 SDK (Xcode 27.2, 27B52)'s Metal headers, by 
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 979 | 36 |
-| missing | 807 | 27 |
+| implemented | 980 | 36 |
+| missing | 806 | 27 |
 | out of scope | 349 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 647; by the translator's values: 332. Missing by size: S 124, M 147, L 160, XL 376.
+Implemented by the runtime: 647; by the translator's values: 333. Missing by size: S 124, M 146, L 160, XL 376.
 
 ## Missing, in build order
 
@@ -39,7 +39,6 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | placement sparse page sizes | S | 2 | `MTLHeapDescriptor.maxCompatiblePlacementSparsePageSize`, `MTLTextureDescriptor.placementSparsePageSize` |
 | parallel render encoding | M | 9 | `MTLCommandBuffer.parallelRenderCommandEncoderWithDescriptor:`, `MTLParallelRenderCommandEncoder`, `MTLParallelRenderCommandEncoder.renderCommandEncoder`, ... |
 | depth/stencil states in argument buffers | M | 2 | `MTLArgumentEncoder.setDepthStencilState:atIndex:`, `MTLArgumentEncoder.setDepthStencilStates:withRange:` |
-| a sampler's LOD bias | M | 1 | `MTLSamplerDescriptor.lodBias` |
 | depth bounds | M | 1 | `MTLRenderCommandEncoder.setDepthTestMinBound:maxBound:` |
 | a texture's minimum LOD (macOS 27) | M | 2 | `MTLTextureViewDescriptor.minLOD`, `MTLTexture.minLOD` |
 | pipeline specialization (macOS 26) | M | 1 | `MTLRenderPipelineState.newRenderPipelineDescriptorForSpecialization` |
@@ -2433,7 +2432,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLSamplerDescriptor.lodMinClamp` | property | implemented | `SamplerDescriptor.lod_min_clamp` (translator) |
 | `MTLSamplerDescriptor.lodMaxClamp` | property | implemented | `SamplerDescriptor.lod_max_clamp` (translator) |
 | `MTLSamplerDescriptor.lodAverage` | property | implemented | `SamplerDescriptor.lod_average` (translator) |
-| `MTLSamplerDescriptor.lodBias` | property | missing | M: a sampler's LOD bias (a family row's gap; Metal's rounding unmeasured) |
+| `MTLSamplerDescriptor.lodBias` | property | implemented | `SamplerDescriptor.lod_bias` (translator) |
 | `MTLSamplerDescriptor.compareFunction` | property | implemented | `SamplerDescriptor.compare_function` (translator) |
 | `MTLSamplerDescriptor.supportArgumentBuffers` | property | implemented | `SamplerStateOptions.support_argument_buffers` (runtime) |
 | `MTLSamplerDescriptor.label` | property | missing | S: labels of samplers, depth/stencil states, functions, libraries and texture handles |

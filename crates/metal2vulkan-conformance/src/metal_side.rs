@@ -2894,6 +2894,7 @@ impl Side for MetalSide {
         descriptor.setReductionMode(MTLSamplerReductionMode(
             spec.reduction_mode.as_raw() as usize
         ));
+        descriptor.setLodBias(spec.lod_bias);
         descriptor.setSupportArgumentBuffers(spec.support_argument_buffers);
         let sampler = self
             .device

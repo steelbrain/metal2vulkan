@@ -62,7 +62,11 @@
 //! refused where it is used, `Unsupported` (`samplerAnisotropy`), since a function reading it
 //! there knows not its anisotropy. A minimum or maximum reduction reads the weighted average, as
 //! on an Apple M4 without Metal's validation layer (which refuses one), and
-//! `DeviceProperties::supports_sampler_reduction_mode` answers no.
+//! `DeviceProperties::supports_sampler_reduction_mode` answers no. Metal takes any `lodBias`, its
+//! validation layer too (an M3 Max on macOS 27.0.1: -100 to 100, ±16 and past them, NaN and the
+//! infinities), and samples nothing differently for it there: every sample reads the level a bias
+//! of 0 reads (`SamplerDescriptor::lod_bias`). So does the runtime, whose Vulkan samplers' bias is
+//! 0; a state of another bias is another state ([`SamplerKey`]).
 //!
 //! A min or mag filter `Cubic` (`MTLSamplerMinMagFilterCubic`, raw value 2) is made. Without a
 //! mip filter, Metal samples through such a state as through a constexpr `filter::bicubic`
@@ -113,8 +117,11 @@ pub struct SamplerStateOptions {
 
 /// What decides whether two requests share one state (probe 5, an M3 Max and an M4: each
 /// descriptor field changed alone, and `supportArgumentBuffers`, gave another state; the
-/// resource index never did): every field of the descriptor, its LOD clamps by their bits, and
-/// argument-buffer support. Metal's label decides too; the runtime's states have none.
+/// resource index never did): every field of the descriptor, its LOD clamps by their bits, its
+/// LOD bias by its bits with `-0.0` taken as `0.0`, and argument-buffer support. The bias as an
+/// M3 Max on macOS 27.0.1 keys it, with and without API validation: biases 0 and 1, 1 and
+/// 1.0001, and 20 and 30 gave two states each; 0 and -0, and two NaNs of one encoding, one.
+/// Metal's label decides too; the runtime's states have none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct SamplerKey {
     filters: (SamplerMinMagFilter, SamplerMinMagFilter, SamplerMipFilter),
@@ -126,6 +133,7 @@ pub(super) struct SamplerKey {
     max_anisotropy: u32,
     compare_function: CompareFunction,
     reduction_mode: SamplerReductionMode,
+    lod_bias: u32,
     support_argument_buffers: bool,
 }
 
@@ -142,6 +150,9 @@ impl SamplerKey {
             max_anisotropy: d.max_anisotropy,
             compare_function: d.compare_function,
             reduction_mode: d.reduction_mode,
+            // Adding `0.0` takes `-0.0` to `0.0` and keeps the bits of every other number and of
+            // a quiet NaN.
+            lod_bias: (d.lod_bias + 0.0).to_bits(),
             support_argument_buffers: options.support_argument_buffers,
         }
     }

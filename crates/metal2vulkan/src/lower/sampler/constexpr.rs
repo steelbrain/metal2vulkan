@@ -239,6 +239,9 @@ fn descriptor(s: &SamplerState) -> Result<SamplerDescriptor, Error> {
             Reduction::Minimum => SamplerReductionMode::Minimum,
             Reduction::Maximum => SamplerReductionMode::Maximum,
         },
+        // A constexpr sampler's own bias is its `mipLodBias` ([`constexpr_desc`]), not a runtime
+        // descriptor's `lodBias`, which samples nothing differently.
+        lod_bias: 0.0,
     })
 }
 

@@ -1555,13 +1555,23 @@ pub struct SamplerDescriptor {
     /// `Never` (the Metal default) on a sampler used without comparison.
     pub compare_function: metal::CompareFunction,
     pub reduction_mode: metal::SamplerReductionMode,
+    /// `lodBias`: any value, NaN and the infinities included, as Metal takes it, its validation
+    /// layer too. It changes no sample: an Apple GPU of the families the runtime claims, which
+    /// lists the bias under Apple10 alone, samples every level as with a bias of 0 (an Apple M3
+    /// Max on macOS 27.0.1, Apple9: implicit, biased, explicit-level, gradient and clamped samples
+    /// in fragment functions and kernels, float and integer textures, every mip filter, biases
+    /// from -1000 to 1000), so the Vulkan sampler's `mipLodBias` is 0 whatever it holds
+    /// ([`vk_sampler`](crate::metal::sampler::vk_sampler)). Metal makes another sampler state for
+    /// another bias.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub lod_bias: f32,
 }
 
 impl SamplerDescriptor {
     /// `MTLSamplerDescriptor`'s defaults: nearest filtering without mipmaps, clamp to edge,
     /// transparent black borders, normalized coordinates, LOD clamps `[0, FLT_MAX]`, no
-    /// anisotropy, no comparison, and weighted-average reduction. The fields are public; set the
-    /// ones that differ.
+    /// anisotropy, no comparison, weighted-average reduction, and no LOD bias. The fields are
+    /// public; set the ones that differ.
     pub fn new() -> SamplerDescriptor {
         SamplerDescriptor {
             min_filter: metal::SamplerMinMagFilter::Nearest,
@@ -1578,6 +1588,7 @@ impl SamplerDescriptor {
             max_anisotropy: 1,
             compare_function: metal::CompareFunction::Never,
             reduction_mode: metal::SamplerReductionMode::WeightedAverage,
+            lod_bias: 0.0,
         }
     }
 }

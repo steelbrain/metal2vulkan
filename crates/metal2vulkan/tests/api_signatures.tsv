@@ -3899,6 +3899,7 @@ field	metal2vulkan::bind::RowsCopyModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::SamplerDescriptor.border_color	pub border_color: metal::SamplerBorderColor
 field	metal2vulkan::bind::SamplerDescriptor.compare_function	pub compare_function: metal::CompareFunction
 field	metal2vulkan::bind::SamplerDescriptor.lod_average	pub lod_average: bool
+field	metal2vulkan::bind::SamplerDescriptor.lod_bias	pub lod_bias: f32
 field	metal2vulkan::bind::SamplerDescriptor.lod_max_clamp	pub lod_max_clamp: f32
 field	metal2vulkan::bind::SamplerDescriptor.lod_min_clamp	pub lod_min_clamp: f32
 field	metal2vulkan::bind::SamplerDescriptor.mag_filter	pub mag_filter: metal::SamplerMinMagFilter

@@ -173,8 +173,7 @@ pub enum ArgumentSlot {
 ///
 /// Every field of the descriptor is here, and both sides set every one of them, so a field a case
 /// leaves alone is Metal's own default **set by the case** rather than a field one leg never
-/// touched. The one Metal property left out is `lodBias`, which the runtime's
-/// `SamplerDescriptor` has no counterpart for, so a case stating it could reach only one leg.
+/// touched.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SamplerSpec {
     pub min_filter: SamplerMinMagFilter,
@@ -201,6 +200,8 @@ pub struct SamplerSpec {
     pub compare_function: CompareFunction,
     /// `reductionMode`: how a linear footprint's texels are combined.
     pub reduction_mode: SamplerReductionMode,
+    /// `lodBias`: what the sampler adds to a sample's level, where the GPU applies it.
+    pub lod_bias: f32,
     /// `supportArgumentBuffers`: whether the state has a GPU resource ID, which is what an
     /// argument buffer needs of it ([`ArgumentSlot::Sampler`]). Metal gives a state made without
     /// it no resource ID at all.
@@ -210,7 +211,8 @@ pub struct SamplerSpec {
 impl SamplerSpec {
     /// `MTLSamplerDescriptor`'s defaults: nearest filtering without mipmaps, clamp to edge on all
     /// three axes, transparent black borders, normalized coordinates, LOD clamps `[0, FLT_MAX]`,
-    /// no quad-averaged level, no anisotropy, no comparison, and weighted-average reduction.
+    /// no quad-averaged level, no anisotropy, no comparison, weighted-average reduction, and no
+    /// LOD bias.
     pub const fn new() -> Self {
         Self {
             min_filter: SamplerMinMagFilter::Nearest,
@@ -227,6 +229,7 @@ impl SamplerSpec {
             max_anisotropy: 1,
             compare_function: CompareFunction::Never,
             reduction_mode: SamplerReductionMode::WeightedAverage,
+            lod_bias: 0.0,
             support_argument_buffers: false,
         }
     }
@@ -258,7 +261,7 @@ impl SamplerSpec {
     /// is a change to the case's inputs.
     ///
     /// **A field is a word only where it is not Metal's default.** `supportArgumentBuffers`
-    /// established the pattern and the eight fields added beside it keep it, for one reason: a
+    /// established the pattern and the nine fields added beside it keep it, for one reason: a
     /// state at the default of every one of them fingerprints exactly as it did before those
     /// fields existed, so every committed recording stays the answer to the inputs it was taken
     /// from and not one of them decays. The two forms still fingerprint apart — one carries the
@@ -311,6 +314,10 @@ impl SamplerSpec {
         }
         if self.reduction_mode != default.reduction_mode {
             tagged(7, self.reduction_mode.as_raw());
+        }
+        // As the clamps, by its bits.
+        if self.lod_bias.to_bits() != default.lod_bias.to_bits() {
+            tagged(8, self.lod_bias.to_bits());
         }
         words.iter().flat_map(|word| word.to_le_bytes()).collect()
     }

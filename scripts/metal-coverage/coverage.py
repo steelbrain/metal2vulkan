@@ -38,7 +38,7 @@ SIZES = ["S", "M", "L", "XL"]
 ORDER = [
     "labels", "cmdbuf", "queue", "passdesc", "library", "queries", "barriers", "reflection",
     "function-handles", "functions", "archive", "events", "mesh-descriptor", "sparse",
-    "parallel", "icb-depth-stencil", "lod-bias", "depthbounds", "min-lod", "specialization",
+    "parallel", "icb-depth-stencil", "depthbounds", "min-lod", "specialization",
     "sparsebuf", "counters", "residency", "colormap", "viewpool", "logging", "notifications",
     "compression", "capture", "persistent", "shadervalidation", "stitching", "io", "tensor",
     "mtl4", "ml", "access-counters",
@@ -61,7 +61,6 @@ GROUP_NAMES = {
     "sparse": "placement sparse page sizes",
     "parallel": "parallel render encoding",
     "icb-depth-stencil": "depth/stencil states in argument buffers",
-    "lod-bias": "a sampler's LOD bias",
     "depthbounds": "depth bounds",
     "min-lod": "a texture's minimum LOD (macOS 27)",
     "specialization": "pipeline specialization (macOS 26)",
