@@ -2729,6 +2729,10 @@ impl Device {
         let depth_ranges = DepthRanges::of(invariant.compile.profile());
         let lineage = Arc::clone(&line.lineage);
         let generation = lineage.made();
+        let region_ledger = Arc::new(crate::pipeline::region_ledger::RegionLedger::new(
+            crate::pipeline::region_ledger::DEVICE_REGION_PIPELINES,
+            Arc::clone(&carried.counts),
+        ));
         let shared = Arc::new(DeviceShared {
             addresses: Arc::clone(&carried.addresses),
             identifiers: Arc::clone(&carried.identifiers),
@@ -2850,10 +2854,7 @@ impl Device {
             planes: Mutex::new(PlanesObjects::default()),
             interleave: Mutex::default(),
             kept: Mutex::default(),
-            region_ledger: Arc::new(crate::pipeline::region_ledger::RegionLedger::new(
-                crate::pipeline::region_ledger::DEVICE_REGION_PIPELINES,
-                Arc::clone(&carried.counts),
-            )),
+            region_ledger,
             shader_modules: Mutex::default(),
             pipeline_layouts: Mutex::default(),
             flights: crate::pipeline::flight::Flights::default(),
