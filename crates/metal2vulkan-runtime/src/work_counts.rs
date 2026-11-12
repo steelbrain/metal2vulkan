@@ -5189,7 +5189,7 @@ pub struct WorkCounts {
     /// oldest ones past the 4096 the spares hold at most (`spares.rs`).
     pub spare_command_buffers_shed: u64,
     /// The command buffers a pool given back freed, every one it held, as the command buffer
-    /// that gave it back recorded 65,536 draws and state commands or more (`spares.rs`'s
+    /// that gave it back recorded 16,384 draws and state commands or more (`spares.rs`'s
     /// `RECORDED`): a rate-mapped pass records each draw once per region of its map, and what a
     /// recording took of its driver's device-wide pools stays taken until its command buffer is
     /// begun again, reset or freed.

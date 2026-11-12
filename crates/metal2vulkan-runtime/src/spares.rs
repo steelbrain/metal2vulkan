@@ -106,8 +106,11 @@
 //!   [`RECORDED`], each pool it gives back frees every command buffer it holds, on the device's
 //!   free thread, as a spare left idle does, and goes back among the spares as the newest, stocked
 //!   with a secondary. Below [`RECORDED`] a pool keeps its command buffers, as above. Counted:
-//!   `WorkCounts::spare_command_buffers_freed_past_recorded`. A command buffer whose own
-//!   recordings fill the driver's pool is a known gap (docs/FAST-PATHS.md).
+//!   `WorkCounts::spare_command_buffers_freed_past_recorded`. A guest's host step recorded about
+//!   880,000 region draws, and a command buffer of such steps held 97.5 MiB of the pool: about
+//!   110 bytes a region draw, each three commands counted; so a pool kept below [`RECORDED`]
+//!   holds at most about 0.6 MiB of it. A command buffer whose own recordings fill the driver's
+//!   pool is a known gap (docs/FAST-PATHS.md).
 //! - **Freed on the device's free thread** ([`PoolFrees`], `free_thread.rs`), not on the thread
 //!   giving the pool back, which for a command buffer that completed is its queue's completion
 //!   thread before its completed handlers run and its waiters return: [`FREED_AT_ONCE`] command
@@ -275,8 +278,9 @@ pub(super) const HELD: usize = 4096;
 
 /// The commands (draws and the state commands they set) past which a command buffer's pools free
 /// every command buffer they hold as it gives them back, with what their recordings took of the
-/// driver's device-wide pools (the module docs).
-pub(super) const RECORDED: u64 = 1 << 16;
+/// driver's device-wide pools (the module docs): on ANV about 0.6 MiB of its dynamic state pool,
+/// at about 110 bytes a region draw of three commands (its viewport, its scissor, its draw).
+pub(super) const RECORDED: u64 = 1 << 14;
 
 /// The command buffers a command buffer hands out of its first pool alone, making those it lacks
 /// there; past them, its pools out of one of a level, it takes a spare holding the most of that
