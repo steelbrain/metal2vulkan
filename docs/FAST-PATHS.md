@@ -216,7 +216,13 @@ recorded here.
 - **Idle dma-buf imports are released.** RADV lists every imported memory in every kernel
   submission, so a no-copy buffer's dma-buf import that only blits have read is released after its
   idle window (2 s, doubled at each import again up to 64 s). The encoding thread pays its import
-  again at the first blit after the window (HOWTO.md section 6). For the same reason a guest RAM
+  again at the first blit after the window (HOWTO.md section 6). A texture in place over such a
+  buffer lies in an import of its own (`dma_buf.rs`) and leaves the buffer's import to this
+  release; a blit of the texture runs on the buffer's bytes, so it imports the buffer again as any
+  blit does. On the Radeon 780M (`runtime_lane::submit_per_surface`, three runs), 128 surfaces of
+  64 KiB, each a buffer and a texture in place over it, list 256 dma-bufs in each kernel
+  submission (115 to 129 µs in the ioctl) while their buffers are in use, and 128 once the buffers
+  sat idle past their window (58 to 67 µs). For the same reason a guest RAM
   there (`Device::use_host_ram`, with a source of dma-bufs) is imported in chunks longer than 64
   MiB, as long as one dma-buf of the source holds (`HostRam::with_largest_dma_buf`) within the
   device's allocation, buffer and storage-range limits, none ahead of the objects. Each live chunk
@@ -524,6 +530,22 @@ driver's. Each is open work.
   right after the device woke took 3.2 to 4.0 ms and 18.7 to 20.8 ms). The runtime starts no
   wake ahead and holds off no suspend: what first needs the GPU after the delay pays the resume
   (`tests::cpu_copy_times`' measurement after a runtime suspend, run by name).
+
+- **On RADV every live import adds to every kernel submission** (`runtime_lane::submit_per_import`,
+  `runtime_lane::submit_per_surface`): RADV lists each imported or exportable `VkDeviceMemory` in
+  each kernel submission's list of buffer objects, and the kernel's work per submission is per
+  entry. On the Radeon 780M and the RX 7900 XTX (Mesa 26.2.6, Linux 7.3.3, a raw Vulkan probe) a
+  `vkQueueSubmit` of one command buffer took 7 to 8 µs (median) beside no import and 229 to 234 µs
+  beside 512 dma-buf imports of 1 MiB, 0.43 to 0.44 µs each (64 of 1 MiB: 32 µs; 64 of 16 MiB: 45
+  to 80 µs); 64 pointer imports of 1 MiB took 191 to 200 µs. Memory at a low `VK_EXT_memory_priority`
+  priority, and memory with no buffer device address, listed as many objects and took the same
+  time, and neither device lists `VK_EXT_pageable_device_local_memory`. Submitting command buffers
+  in one call makes one kernel submission where Mesa can merge them (no signal between them), so
+  each call apart lists every import again. The runtime keeps fewer imports live where nothing of
+  Metal's changes (idle imports released, a guest RAM in chunks, above), but a texture in place
+  over a dma-buf keeps its image's import, which RADV takes only as a dedicated allocation, while
+  the texture lives: on the 780M, 128 such textures listed 128 dma-bufs in each kernel submission
+  with their buffers released (58 to 67 µs in the ioctl, against 10 to 12 µs with none).
 
 - **A draw that reads and writes a color in the pixel interlock after an earlier draw of its
   instance wrote it begins a render pass instance of its own on MoltenVK on Apple's GPUs**
