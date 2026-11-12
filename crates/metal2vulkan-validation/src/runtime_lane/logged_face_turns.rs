@@ -17,7 +17,8 @@
 //! corners from that buffer (it turns back). A rebind of the buffer before the signal encodes both
 //! encoders again: the blit reads the texels from before the turn, `0x30` around `0x62`, and the
 //! pass takes its turn again, reading the `0x62` with no copy in. The same lane beside an open
-//! command buffer, where no pass turns and every read copies in, reads the same bytes. The layer
+//! command buffer, where no pass turns and every read copies in, with no rebind, reads the same
+//! bytes. The layer
 //! reports nothing; under `METAL2VULKAN_LANE_VALIDATION=sync` its synchronization checks run too.
 
 use super::attachment_reads::function;
@@ -224,8 +225,11 @@ struct Lane {
     after: Vec<u8>,
 }
 
-/// The lane of the module docs over a buffer over `first`, rebound over `second`, beside an open
-/// command buffer where `busy`; `None`, printed, where the device imports no host memory.
+/// The lane of the module docs over a buffer over `first`, rebound over `second`; where `busy`,
+/// beside an open command buffer, so that no pass turns, and not rebound: its pass's first copy in
+/// goes to its batch's submission (the runtime's `shadow_standing.rs`), a host step that keeps
+/// what the command buffer's commands took until it completes, so a rebind is refused
+/// (`RebindProblem::EncodedUses`). `None`, printed, where the device imports no host memory.
 fn lane(
     device: &Device,
     tools: &Tools,
@@ -260,9 +264,7 @@ fn lane(
     descriptor.resource_options = ResourceOptions::private();
     let texture = device.new_texture(&descriptor).unwrap();
     let open = busy.then(|| tools.queue.command_buffer().unwrap());
-    // Each pass takes its corners from the pages, as the command buffer behind the wait does:
-    // its draws' pipelines are made before that command buffer's commit, which a rebind refuses
-    // while one is still being made (`RebindProblem::EncodedUses`).
+    // Each pass takes its corners from the pages, as the command buffer behind the wait does.
     let corners_in = (&pages, CORNERS_AT);
     let pass = |clear: Option<u8>, draw: Draw| {
         let before = device.work_counts();
@@ -288,15 +290,22 @@ fn lane(
         corners_in,
     );
     command_buffer.commit().unwrap();
-    // SAFETY: as above.
-    let memory = unsafe { HostMemory::new(second.pointer()) };
-    // SAFETY: as above.
-    unsafe { pages.rebind_bytes_no_copy(memory, None, None) }.unwrap();
+    let rebinds = !busy;
+    if rebinds {
+        // SAFETY: as above.
+        let memory = unsafe { HostMemory::new(second.pointer()) };
+        // SAFETY: as above.
+        unsafe { pages.rebind_bytes_no_copy(memory, None, None) }.unwrap();
+    }
     gate.set_signaled_value(1);
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
     let again = Moved::of(&before, &device.work_counts());
-    let blit = second.read(0..LENGTH as usize);
+    let read = match rebinds {
+        true => second,
+        false => first,
+    };
+    let blit = read.read(0..LENGTH as usize);
     drop(open);
     let after = tools.bytes(&texture);
     Some(Lane {
@@ -307,7 +316,8 @@ fn lane(
     })
 }
 
-/// The module docs' lane, turned and beside an open command buffer: the same bytes, Metal's.
+/// The module docs' lane, turned and rebound, and beside an open command buffer with no rebind:
+/// the same bytes, Metal's.
 #[test]
 fn a_logged_pass_turns_and_its_encoding_again_reads_the_texels_from_before_it() {
     // Made before the device, dropped after it.
@@ -324,28 +334,23 @@ fn a_logged_pass_turns_and_its_encoding_again_reads_the_texels_from_before_it() 
                  again {:?}",
                 lane.logged, lane.again
             );
-            assert_eq!(
-                (lane.again.reencoded, lane.again.refused),
-                (2, 0),
-                "{name}: the blit and the pass encoded again"
-            );
+            assert_eq!(lane.again.refused, 0, "{name}: no encoder refused");
             let differ =
                 |got: &[u8], want: &[u8]| (0..got.len()).filter(|&at| got[at] != want[at]).count();
             let blit = differ(&lane.blit, &image(0x30, 0x62));
-            assert_eq!(
-                blit, 0,
-                "{name}: the blit encoded again: {blit} bytes differ"
-            );
+            assert_eq!(blit, 0, "{name}: the blit: {blit} bytes differ");
             let after = differ(&lane.after, &image(0x90, 0x62));
-            assert_eq!(
-                after, 0,
-                "{name}: the pass encoded again: {after} bytes differ"
-            );
+            assert_eq!(after, 0, "{name}: the pass: {after} bytes differ");
         }
         assert_eq!(
             (turned.logged.swaps, turned.logged.copied_in),
             (1, 0),
             "the logged pass turns, with no copy in"
+        );
+        assert_eq!(
+            (turned.again.reencoded, copied.again.reencoded),
+            (2, 0),
+            "the rebind encodes the blit and the pass again"
         );
         assert_eq!(
             (turned.again.swaps, turned.again.copied_in),
@@ -360,6 +365,14 @@ fn a_logged_pass_turns_and_its_encoding_again_reads_the_texels_from_before_it() 
         assert!(
             copied.again.copied_in > 0,
             "beside an open command buffer, the pass copies in"
+        );
+        assert_eq!(
+            turned.blit, copied.blit,
+            "the blit's bytes, turned and copied"
+        );
+        assert_eq!(
+            turned.after, copied.after,
+            "the texture's bytes, turned and copied"
         );
     });
 }

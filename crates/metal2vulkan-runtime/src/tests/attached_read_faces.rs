@@ -23,7 +23,7 @@
 //! a turning command buffer's submission encodes again its blit that read the texture before the
 //! turn and its turning pass, which read the texels each read at its first encoding
 //! (`texture/faces.rs`, **Encoded again**). The same lane beside an open command buffer, where no
-//! pass turns and every read copies in, reads the same bytes.
+//! pass turns and every read copies in, with no rebind, reads the same bytes.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_rect`,
@@ -436,8 +436,11 @@ struct Logged {
     after: Vec<u8>,
 }
 
-/// A lane of the second test, its buffer over `first` rebound over `second` (each holding the
-/// corners at [`CORNERS_AT`]), beside an open command buffer where `busy`, so that no pass turns;
+/// A lane of the second test over a buffer over `first`, rebound over `second` (each holding the
+/// corners at [`CORNERS_AT`]); where `busy`, beside an open command buffer, so that no pass turns,
+/// and not rebound: its pass's first copy in goes to its batch's submission
+/// (`shadow_standing.rs`, `shadow::GatedCopyIn`), a host step that keeps what the command buffer's
+/// commands took until it completes, so a rebind is refused (`RebindProblem::EncodedUses`).
 /// `None`, printed, where the device imports no host memory.
 fn logged_lane(
     device: &Device,
@@ -453,9 +456,7 @@ fn logged_lane(
     let texture = texture(device);
     let open = busy.then(|| tools.queue.command_buffer().unwrap());
     // The faces, made by the first read; then a logged pass that reads 0x50 inside the rectangle.
-    // Each pass takes its corners from the pages, as the command buffer behind the wait does:
-    // its draws' pipelines are made before that command buffer's commit, which a rebind refuses
-    // while one is still being made (`RebindProblem::EncodedUses`).
+    // Each pass takes its corners from the pages, as the command buffer behind the wait does.
     let corners_in = Some((&pages, CORNERS_AT));
     let pass = |clear: Option<u8>, draw: Draw| {
         let before = device.work_counts();
@@ -472,6 +473,7 @@ fn logged_lane(
     pass(None, Draw::Solid(0x62));
     // Behind a wait: a blit of the texture into the pages, then a pass that clears it and reads
     // it, its corners from the pages. The rebind before the signal encodes both again.
+    let rebinds = !busy;
     let before = device.work_counts();
     let gate = device.new_shared_event().unwrap();
     let command_buffer = tools.queue.command_buffer().unwrap();
@@ -484,9 +486,11 @@ fn logged_lane(
         corners_in,
     );
     command_buffer.commit().unwrap();
-    // SAFETY: the pages outlive the buffer (declared before the device, dropped after it), and
-    // only the buffer's commands use them while it lives.
-    unsafe { pages.rebind_bytes_no_copy(second.memory(), None, None) }.unwrap();
+    if rebinds {
+        // SAFETY: the pages outlive the buffer (declared before the device, dropped after it),
+        // and only the buffer's commands use them while it lives.
+        unsafe { pages.rebind_bytes_no_copy(second.memory(), None, None) }.unwrap();
+    }
     gate.set_signaled_value(1);
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
@@ -495,7 +499,11 @@ fn logged_lane(
     assert_eq!(refused, 0, "a rebind refused to encode an encoder again");
     let again = Moved::of(&before, &counts);
     let reencoded = counts.encoders_reencoded - before.encoders_reencoded;
-    let words = &second.words()[..(LENGTH / 4) as usize];
+    let read = match rebinds {
+        true => second,
+        false => first,
+    };
+    let words = &read.words()[..(LENGTH / 4) as usize];
     let blit = words.iter().flat_map(|word| word.to_le_bytes()).collect();
     drop(open);
     let (after, _) = tools.bytes(&texture);
@@ -511,7 +519,8 @@ fn logged_lane(
 /// The second test of the module docs: with a buffer over host pages alive, a logged pass turns
 /// and copies nothing in; the rebind encodes the turning command buffer's blit and pass again, the
 /// blit reading the texels from before the turn and the pass taking its turn again, reading them
-/// too with no copy in. Each lane's bytes are those the same lane reads where no pass turns.
+/// too with no copy in. Its bytes are those the same lane reads where no pass turns, every read
+/// copying in, with no rebind ([`logged_lane`]).
 #[test]
 fn a_logged_pass_turns_and_its_encoding_again_meets_the_faces_as_first_met() {
     // The pages, declared before the device that uses them, so dropped after it.
@@ -529,22 +538,12 @@ fn a_logged_pass_turns_and_its_encoding_again_meets_the_faces_as_first_met() {
              encoders) {:?}",
             lane.logged, lane.reencoded, lane.again
         );
-        assert_eq!(
-            lane.reencoded, 2,
-            "{name}: the blit and the pass encoded again"
-        );
         let differ =
             |got: &[u8], want: &[u8]| (0..got.len()).filter(|&at| got[at] != want[at]).count();
         let blit = differ(&lane.blit, &image(0x30, 0x62));
-        assert_eq!(
-            blit, 0,
-            "{name}: the blit encoded again: {blit} bytes differ"
-        );
+        assert_eq!(blit, 0, "{name}: the blit: {blit} bytes differ");
         let after = differ(&lane.after, &image(0x90, 0x62));
-        assert_eq!(
-            after, 0,
-            "{name}: the pass encoded again: {after} bytes differ"
-        );
+        assert_eq!(after, 0, "{name}: the pass: {after} bytes differ");
     }
     let turn = Moved {
         swaps: 1,
@@ -552,6 +551,11 @@ fn a_logged_pass_turns_and_its_encoding_again_meets_the_faces_as_first_met() {
         ..Moved::default()
     };
     assert_eq!(turned.logged, turn, "the logged pass turns");
+    assert_eq!(
+        (turned.reencoded, copied.reencoded),
+        (2, 0),
+        "the rebind encodes the blit and the pass again"
+    );
     assert_eq!(
         (
             turned.again.swaps,
