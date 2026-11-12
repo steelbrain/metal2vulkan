@@ -180,7 +180,7 @@ impl CommandBufferShared {
                     .filter(|(_, part)| part.encoder == at)
                     .map(|(index, _)| index);
                 let first = parts.next().unwrap_or(state.recorded.len());
-                let parts = first..parts.last().map_or(first + 1, |last| last + 1);
+                let parts = first..parts.next_back().map_or(first + 1, |last| last + 1);
                 (state.residency_before(at, replay.kind()), runs, parts)
             };
             let run = with_faces_as_of(device, (self.address(), parts), || {
