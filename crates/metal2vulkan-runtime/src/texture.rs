@@ -920,7 +920,9 @@ struct AliasCount {
     /// (`WorkCounts::unobserved_padding_aliases`).
     unobserved: bool,
     /// Its rows (or slices) lie apart over bytes only the device's ordered commands write, which
-    /// its image, made `PREINITIALIZED`, keeps (`WorkCounts::kept_padding_aliases`).
+    /// its image keeps: made `PREINITIALIZED`, or the `DRM_FORMAT_MOD_LINEAR` one whose first move
+    /// keeps them by copies (`texture/first_move.rs`'s `GpuKeep`)
+    /// (`WorkCounts::kept_padding_aliases`).
     kept: bool,
     /// It took the feedback loop usage (`WorkCounts::feedback_loop_alias_images`).
     feedback: bool,

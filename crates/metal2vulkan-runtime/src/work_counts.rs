@@ -4452,9 +4452,10 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// The device made its linear image, `PREINITIALIZED`, aliasing a buffer's bytes that holds
-    /// the bytes between the texture's rows or slices, which only the device's ordered commands
-    /// write (`linear_plan::Between::Kept`, `Device::storage_over_buffer`).
+    /// The device made its linear image, `PREINITIALIZED`, or a `DRM_FORMAT_MOD_LINEAR` one whose
+    /// first move keeps them by copies, aliasing a buffer's bytes that holds the bytes between the
+    /// texture's rows or slices, which only the device's ordered commands write
+    /// (`linear_plan::Between::Kept`, `Device::storage_over_buffer`).
     pub(crate) fn kept_padding_alias(&self) {
         self.kept_padding_aliases.fetch_add(1, Ordering::Relaxed);
     }
@@ -8468,10 +8469,12 @@ pub struct WorkCounts {
     /// Linear images aliasing a buffer of the device's own memory, of textures that render
     /// nothing, whose rows or slices lie with bytes between them that only the device's ordered
     /// commands write (a `Private` buffer, a `Managed` buffer's own on a device without unified
-    /// memory): each image, made `PREINITIALIZED`, holds those bytes, which its one layout
-    /// transition preserves (Vulkan's Image Layout Transitions) and which the buffer and the image
-    /// read alike (Memory Aliasing), where a buffer other writers reach makes the texture a shadow
-    /// (`shadowed_textures`). One per image made.
+    /// memory): each image holds those bytes, which the buffer and the image read alike (Memory
+    /// Aliasing), where a buffer other writers reach makes the texture a shadow
+    /// (`shadowed_textures`). The device's linear image, made `PREINITIALIZED`, keeps them through
+    /// its one layout transition (Vulkan's Image Layout Transitions); a `DRM_FORMAT_MOD_LINEAR`
+    /// one at the buffer's pitch, made `UNDEFINED`, through copies around it
+    /// (`first_moves_kept`). One per image made.
     pub kept_padding_aliases: u64,
     /// First moves of images aliasing a buffer's bytes that kept those bytes by copies on the
     /// device around the move's layout transition: a `DRM_FORMAT_MOD_LINEAR` image at the

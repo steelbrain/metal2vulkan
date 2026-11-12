@@ -6,18 +6,27 @@
 //! - **Over a `Private` buffer.** An `RGBA8Unorm` texture of 101x48 texels (404 bytes a row) at 416,
 //!   448 and 512 bytes a row (the next multiples of 16, 64 and 256, at which drivers lay linear
 //!   rows: MoltenVK, llvmpipe and ANV, RADV and NVIDIA), read alone or read and written by shaders,
-//!   is the device's linear image, made `PREINITIALIZED`, over the buffer's memory where the device
-//!   lays its rows at the pitch: counted (`WorkCounts::kept_padding_aliases`), no shadow
-//!   (`shadowed_textures`), answering `NotHostPages`; else a shadow whose answer names its cause,
-//!   never `BytesBetweenRows`. At least one pitch takes the image. A blit reads the texels the
-//!   buffer holds, and once that blit took the image's first move, the buffer read back holds
-//!   every byte it was given, the bytes between the rows among them.
+//!   is in place over the buffer's memory: the device's linear image, made `PREINITIALIZED`, where
+//!   the device lays its rows at the pitch, else the `DRM_FORMAT_MOD_LINEAR` image at the pitch
+//!   where the device takes it, whose first move the GPU keeps the bytes through
+//!   (`WorkCounts::first_moves_kept`, `first_move_bytes_kept`). In place: counted
+//!   (`kept_padding_aliases`), no shadow (`shadowed_textures`), answering `NotHostPages`; else a
+//!   shadow whose answer names its cause, never `BytesBetweenRows`. At least one pitch takes an
+//!   image. A blit reads the texels the buffer holds, and once that blit took the image's first
+//!   move, the buffer read back holds every byte it was given, the bytes between the rows among
+//!   them.
 //! - **At the device's linear pitch.** At the pitch `Device::linear_texture_bytes_per_row` answers
-//!   for the texture, it is in place over a `Private` buffer; at each other of those pitches, a
-//!   shadow.
+//!   for the texture, it is in place over a `Private` buffer with no keep; at each other of those
+//!   pitches, a shadow, or in place where its first move is kept.
+//! - **At a pitch the driver takes only explicitly.** A `BGRA8Unorm` texture of 1760 texels a row
+//!   at 7168 bytes a row (7040 its texels'), and one of 96 at 512 (384), both multiples of the
+//!   128 bytes NVIDIA aligns linear rows to, neither its own linear pitch: in place on NVIDIA, its
+//!   first move kept once, of at least the texels' span (the image's memory size); the texels and
+//!   every byte between the rows read back as given. Elsewhere printed, as the route depends on
+//!   the driver's answer.
 //! - **A `Managed` texture changed in one row.** On a device without unified memory, over a
-//!   `Managed` no-copy buffer that is two copies (`managed_copy.rs`), at the first pitch the
-//!   device lays its linear rows at: in place, as over a `Private` buffer. The CPU writes one row
+//!   `Managed` no-copy buffer that is two copies (`managed_copy.rs`), at the first of those
+//!   pitches that takes an image: in place, as over a `Private` buffer. The CPU writes one row
 //!   of the caller's pages and `did_modify_range` names it
 //!   (`WorkCounts::managed_ranges_modified`, `managed_bytes_modified`); the next blit of the
 //!   texture reads that row. A blit writes another row into the texture, with no shadow texel
@@ -36,7 +45,7 @@ use super::encoder_holds::library;
 use crate::{
     BlitCommandEncoder, BlitOption, Buffer, CommandQueue, CpuCacheMode, Device, HazardTrackingMode,
     HostBacking, Origin, PipelineOptions, Region, ResourceOptions, ResourceRef, Size, StorageMode,
-    Texture, TextureDescriptor, TexturePlacement, TextureShadowReason,
+    Texture, TextureDescriptor, TexturePlacement, TextureShadowReason, WorkCounts,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 
@@ -116,10 +125,13 @@ fn read_back(device: &Device, queue: &CommandQueue, buffer: &Buffer, length: u64
     mapped(&read, length)
 }
 
-/// The texels of `texture` as a blit copies them into a buffer of rows one after another.
+/// The texels of `texture` (of 4 bytes a texel) as a blit copies them into a buffer of rows one
+/// after another.
 fn blitted(device: &Device, queue: &CommandQueue, texture: &Texture) -> Vec<u8> {
+    let (width, height) = (texture.width(), texture.height());
+    let row = width * 4;
     let read = device
-        .new_buffer(ROW * HEIGHT, ResourceOptions::shared())
+        .new_buffer(row * height, ResourceOptions::shared())
         .unwrap();
     run(queue, |blit| {
         blit.copy_from_texture_to_buffer(
@@ -127,16 +139,16 @@ fn blitted(device: &Device, queue: &CommandQueue, texture: &Texture) -> Vec<u8> 
             0,
             0,
             Origin::new(0, 0, 0),
-            Size::new(WIDTH, HEIGHT, 1),
+            Size::new(width, height, 1),
             &read,
             0,
-            ROW,
-            ROW * HEIGHT,
+            row,
+            row * height,
             BlitOption::None,
         )
         .unwrap();
     });
-    mapped(&read, ROW * HEIGHT)
+    mapped(&read, row * height)
 }
 
 /// The texels of `texture` as a kernel (`invert_texels`) reads them, one thread a texel, and
@@ -167,12 +179,25 @@ fn inverted(device: &Device, queue: &CommandQueue, texture: &Texture) -> Vec<u8>
 
 /// The texels `bytes` holds at `pitch`, rows one after another.
 fn texels_of(bytes: &[u8], pitch: u64) -> Vec<u8> {
-    (0..HEIGHT)
+    rows_of(bytes, pitch, ROW, HEIGHT)
+}
+
+/// The `height` rows of `row` bytes `bytes` holds at `pitch`, one after another.
+fn rows_of(bytes: &[u8], pitch: u64, row: u64, height: u64) -> Vec<u8> {
+    (0..height)
         .flat_map(|y| {
             let at = (y * pitch) as usize;
-            bytes[at..at + ROW as usize].iter().copied()
+            bytes[at..at + row as usize].iter().copied()
         })
         .collect()
+}
+
+/// The keeps a first move made between `before` and `after`, and their bytes.
+fn kept(before: &WorkCounts, after: &WorkCounts) -> (u64, u64) {
+    (
+        after.first_moves_kept - before.first_moves_kept,
+        after.first_move_bytes_kept - before.first_move_bytes_kept,
+    )
 }
 
 #[test]
@@ -201,6 +226,7 @@ fn a_texture_over_a_private_buffer_holds_its_rows_padding_in_place_and_keeps_it(
                     .unwrap();
             });
             let d = descriptor(ResourceOptions::private(), usage);
+            let own = device.linear_texture_bytes_per_row(&d).unwrap();
             let answer = buffer.texture_placement(&d, 0, pitch).unwrap();
             let before = device.work_counts();
             let texture = buffer.new_texture(&d, 0, pitch).unwrap();
@@ -227,9 +253,18 @@ fn a_texture_over_a_private_buffer_holds_its_rows_padding_in_place_and_keeps_it(
                 u64::from(!aliases),
                 "{what}: counted as a shadow"
             );
+            let moved = device.work_counts();
             assert!(
                 blitted(&device, &queue, &texture) == texels_of(&written, pitch),
                 "{what}: a blit reads the buffer's texels"
+            );
+            let keeps = kept(&moved, &device.work_counts());
+            // The device's own linear image takes no keep; the explicit-pitch one takes one.
+            let keep = aliases && own != Some(pitch);
+            assert_eq!(
+                keeps.0,
+                u64::from(keep),
+                "{what}: first moves kept {keeps:?}"
             );
             let back = read_back(&device, &queue, &buffer, length);
             let changed = (0..length as usize)
@@ -240,18 +275,20 @@ fn a_texture_over_a_private_buffer_holds_its_rows_padding_in_place_and_keeps_it(
                 in_place.push(what.clone());
             }
             eprintln!(
-                "KEPT-PADDING on {}: {what} over a Private buffer: {answer:?}, in place {aliases}",
+                "KEPT-PADDING on {}: {what} over a Private buffer: {answer:?}, in place {aliases}, \
+                 the device's own pitch {own:?}, kept {keeps:?}",
                 device.name()
             );
         }
     }
-    assert!(!in_place.is_empty(), "no pitch took the linear image");
+    assert!(!in_place.is_empty(), "no pitch took an image");
 }
 
 #[test]
 fn a_texture_over_a_private_buffer_at_the_device_s_linear_pitch_is_in_place() {
     let scratch = Scratch::new("kept-padding-pitch");
     let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
     for usage in [
         TextureUsage::SHADER_READ,
         TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
@@ -266,19 +303,102 @@ fn a_texture_over_a_private_buffer_at_the_device_s_linear_pitch_is_in_place() {
             .unwrap();
         let texture = buffer.new_texture(&d, 0, pitch).unwrap();
         assert!(texture.aliases_buffer(), "{usage:?}: in place at {pitch}");
-        // At every other padded pitch it is a shadow: only the image at the device's own pitch
-        // holds the bytes between the rows.
+        let moved = device.work_counts();
+        blitted(&device, &queue, &texture);
+        let keeps = kept(&moved, &device.work_counts());
+        assert_eq!(keeps.0, 0, "{usage:?}: at {pitch}, kept {keeps:?}");
+        // At every other padded pitch it is a shadow, or in place where the device takes the
+        // pitch explicitly: only the image at the device's own pitch holds the bytes between the
+        // rows through its first move, and the other's first move keeps them.
+        let mut others = Vec::new();
         for other in PITCHES.into_iter().filter(|&other| other != pitch) {
             let buffer = device
                 .new_buffer(other * HEIGHT, ResourceOptions::private())
                 .unwrap();
             let texture = buffer.new_texture(&d, 0, other).unwrap();
-            assert!(!texture.aliases_buffer(), "{usage:?}: in place at {other}");
+            let moved = device.work_counts();
+            blitted(&device, &queue, &texture);
+            let keeps = kept(&moved, &device.work_counts());
+            let aliases = texture.aliases_buffer();
+            assert_eq!(
+                keeps.0,
+                u64::from(aliases),
+                "{usage:?}: at {other}, kept {keeps:?}"
+            );
+            others.push((other, aliases));
         }
         eprintln!(
-            "KEPT-PADDING on {}: {usage:?}: the device's linear rows lie at {pitch} bytes",
+            "KEPT-PADDING on {}: {usage:?}: the device's linear rows lie at {pitch} bytes; \
+             in place, kept, at the others {others:?}",
             device.name()
         );
+    }
+}
+
+#[test]
+fn a_texture_over_a_private_buffer_at_a_pitch_the_driver_takes_only_explicitly_is_kept_in_place() {
+    // Texels a row, bytes a row, rows.
+    const SHAPES: [(u64, u64, u64); 2] = [(1760, 7168, 16), (96, 512, 64)];
+    let scratch = Scratch::new("kept-padding-explicit");
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    let nvidia = device.properties().vendor_id == 0x10de;
+    for (width, pitch, height) in SHAPES {
+        let row = width * 4;
+        let what = format!("{width} texels at {pitch} ({row})");
+        let length = pitch * height;
+        let written = named(length, width);
+        let staging = device
+            .new_buffer_with_bytes(&written, ResourceOptions::shared())
+            .unwrap();
+        let buffer = device
+            .new_buffer(length, ResourceOptions::private())
+            .unwrap();
+        run(&queue, |blit| {
+            blit.copy_from_buffer_to_buffer(&staging, 0, &buffer, 0, length)
+                .unwrap();
+        });
+        let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
+        d.usage = TextureUsage::SHADER_READ;
+        d.resource_options = ResourceOptions::private();
+        let own = device.linear_texture_bytes_per_row(&d).unwrap();
+        let answer = buffer.texture_placement(&d, 0, pitch).unwrap();
+        let texture = buffer.new_texture(&d, 0, pitch).unwrap();
+        let aliases = texture.aliases_buffer();
+        assert_eq!(
+            aliases,
+            answer == TexturePlacement::NotHostPages,
+            "{what}: {answer:?}"
+        );
+        let moved = device.work_counts();
+        assert!(
+            blitted(&device, &queue, &texture) == rows_of(&written, pitch, row, height),
+            "{what}: a blit reads the buffer's texels"
+        );
+        let keeps = kept(&moved, &device.work_counts());
+        let back = read_back(&device, &queue, &buffer, length);
+        let changed = (0..length as usize)
+            .filter(|&i| back[i] != written[i])
+            .count();
+        assert_eq!(changed, 0, "{what}: bytes of the buffer changed");
+        eprintln!(
+            "KEPT-PADDING on {}: {what} over a Private buffer: {answer:?}, in place {aliases}, the \
+             device's own pitch {own:?}, kept {keeps:?}",
+            device.name()
+        );
+        if aliases && own != Some(pitch) {
+            let span = (height - 1) * pitch + row;
+            assert_eq!(keeps.0, 1, "{what}: one first move kept");
+            assert!(
+                keeps.1 >= span,
+                "{what}: kept {} bytes, the texels' span {span}",
+                keeps.1
+            );
+        }
+        if nvidia {
+            assert!(aliases, "{what}: in place on NVIDIA");
+            assert_ne!(own, Some(pitch), "{what}: not NVIDIA's own pitch");
+        }
     }
 }
 
