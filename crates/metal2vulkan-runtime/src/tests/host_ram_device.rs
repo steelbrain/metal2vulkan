@@ -52,7 +52,11 @@
 //!   two encoders of one command buffer and across queues; so do a buffer in the chunk's import
 //!   and a copy of its pages (`copy_from_host_ram` after a fill through the buffer,
 //!   `copy_to_host_ram` before a copy out of it). Within the allocation limit's margin the object
-//!   imports its chunk too.
+//!   imports its chunk too. A heap over the RAM's pages made before the use imports its own
+//!   pages: the chunk that holds them is held back while that import lives, neither the device's
+//!   thread nor an object over its other pages importing it (the object imports its own and reads
+//!   the RAM's bytes), and imported by the first object over it once that import and the
+//!   object's went.
 //!
 //! - **Shared RAM a device refuses.** On a device that refuses pointers to shared memory (RADV),
 //!   a RAM of a `memfd` mapped shared with no dma-buf source imports no chunk, and an object over
@@ -67,6 +71,7 @@
 //! of device the cfg selects. A device that imports no host memory says so and passes.
 
 use super::dispatch_pending::state;
+use crate::host_aliases::Within;
 use crate::host_ram::AHEAD_CHUNKS;
 use crate::{
     Buffer, CommandBufferStatus, Degradation, Device, DeviceKind, DeviceOptions, Error, EventRef,
@@ -2018,6 +2023,108 @@ fn a_no_copy_heap_over_one_run_is_bound_in_the_chunk() {
         bytes(at + page..at + 5 * page)
     );
     drop((placed, heap, used, ram));
+    assert!(settles(&dropped));
+}
+
+/// A heap over a RAM's pages made before the device's use of the RAM began imports its own pages,
+/// outside the RAM's routing: the chunk that holds them is not imported while that import lives
+/// (one page, one import: `RamOnDevice::held_back`), neither by the device's thread nor for an
+/// object over the chunk's other pages, which imports its own and reads the RAM's bytes. Once the
+/// heap and that object went, the next object over the chunk imports it and is bound there. No
+/// import is made over pages a live one holds (`imports_inside_live`).
+#[test]
+fn a_chunk_a_live_import_made_before_the_use_holds_waits_for_it_to_go() {
+    let Some(device) = ahead_device() else {
+        return;
+    };
+    let (ram, start, dropped) = fresh_ram(&device, 2 * 64 * MIB);
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    // The heap: 2 MiB of the RAM's first chunk, made before the use, as a guest's early heap is.
+    const HEAP: u64 = 2 * MIB;
+    let heap_at = start + 4 * MIB;
+    // SAFETY: the RAM's bytes, mapped until its keep-alive goes, after every device let go.
+    let memory = unsafe { HostMemory::new(NonNull::new(heap_at as *mut u8).unwrap()) };
+    let descriptor = HeapDescriptor::new(HeapType::Placement, HEAP, ResourceOptions::default());
+    // SAFETY: as above.
+    let heap =
+        unsafe { device.new_heap_with_bytes_no_copy(memory, &descriptor, None, None) }.unwrap();
+    let before = device.work_counts();
+    let inside = |counts: &crate::WorkCounts| {
+        counts.object_churn.imports_inside_live - before.object_churn.imports_inside_live
+    };
+    let held = |counts: &crate::WorkCounts| {
+        counts.host_ram_chunks_held_back - before.host_ram_chunks_held_back
+    };
+    let used = device.use_host_ram(&ram).unwrap();
+    // The device's thread asks for the RAM's first chunk, and holds it back.
+    let asked = settled(&device, |counts| held(counts) == 1);
+    assert_eq!(
+        (held(&asked), inside(&asked)),
+        (1, 0),
+        "the thread held the chunk back"
+    );
+    assert_eq!(
+        asked.host_ram_chunks_imported_ahead, before.host_ram_chunks_imported_ahead,
+        "nothing imported ahead before any take"
+    );
+    // A buffer over the chunk's other pages, through the resolver: an import of its own.
+    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    let at = start + 32 * MIB;
+    let over = |at: u64| {
+        // SAFETY: as above.
+        let memory = unsafe { HostMemory::new(NonNull::new(at as *mut u8).unwrap()) }
+            .with_runs(resolver(&runs, itself))
+            .with_import_gate(gate(&gates, true));
+        // SAFETY: as above.
+        unsafe {
+            device.new_buffer_with_bytes_no_copy(memory, 4 * page, ResourceOptions::default(), None)
+        }
+        .unwrap()
+    };
+    fill_pattern(at..at + 4 * page);
+    let own = over(at);
+    let made = device.work_counts();
+    assert_eq!(
+        (
+            made.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
+            made.run_bound_buffers_made - before.run_bound_buffers_made,
+            own.host_backing(),
+            inside(&made),
+        ),
+        (0, 0, Some(HostBacking::ImportedByPointer), 0),
+        "the buffer imported its own pages"
+    );
+    assert!(
+        held(&made) >= 2,
+        "the buffer's take held the chunk back too"
+    );
+    assert_eq!(gpu_bytes(&device, &own, 4 * page), bytes(at..at + 4 * page));
+    // Once the heap and the buffer went (their imports freed as their command buffer's holds
+    // go), the next buffer over the chunk imports it.
+    drop((own, heap));
+    let unit = device.shared().host_import.as_ref().unwrap().unit();
+    let chunk = (start, 64 * MIB);
+    let started = Instant::now();
+    while !matches!(device.shared().aliases.within(chunk, unit), Within::Free) {
+        assert!(
+            started.elapsed() < WAIT,
+            "the heap's and the buffer's imports never went"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let bound = over(at);
+    let after = device.work_counts();
+    assert_eq!(
+        after.chunk_bound_buffers_made - made.chunk_bound_buffers_made,
+        1,
+        "the buffer is bound in the chunk"
+    );
+    assert_eq!(inside(&after), 0, "no import over a live one's pages");
+    assert_eq!(
+        gpu_bytes(&device, &bound, 4 * page),
+        bytes(at..at + 4 * page)
+    );
+    drop((bound, used, ram));
     assert!(settles(&dropped));
 }
 

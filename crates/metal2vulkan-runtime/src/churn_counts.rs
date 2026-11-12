@@ -418,7 +418,9 @@ pub struct ObjectChurn {
     /// (`host_aliases.rs`, "One page, one import"): a no-copy buffer's or heap's own import (a
     /// heap's own buffer's among them) over a live import of another no-copy buffer or heap, or
     /// over a live import of a guest RAM's chunk (`host_ram.rs`), and a chunk's import over a
-    /// live import of a no-copy buffer or heap. A page imported twice, which
+    /// live import of a no-copy buffer or heap made as the chunk's was being made (a chunk such an
+    /// import held pages of before is not imported, `WorkCounts::host_ram_chunks_held_back`). A
+    /// page imported twice, which
     /// `VK_EXT_external_memory_host` leaves undefined for a host pointer; every other buffer
     /// over pages a live import holds lies inside it (`buffers_bound_in_import`, or a chunk's
     /// `WorkCounts::chunk_bound_buffers_made`) or is a copy

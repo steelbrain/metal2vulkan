@@ -2921,6 +2921,7 @@ field	metal2vulkan-runtime::WorkCounts.host_ram_chunk_bytes	pub host_ram_chunk_b
 field	metal2vulkan-runtime::WorkCounts.host_ram_chunk_import_nanos	pub host_ram_chunk_import_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_chunks_faulted_ahead	pub host_ram_chunks_faulted_ahead: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_chunks_given_back	pub host_ram_chunks_given_back: u64
+field	metal2vulkan-runtime::WorkCounts.host_ram_chunks_held_back	pub host_ram_chunks_held_back: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_chunks_imported	pub host_ram_chunks_imported: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_chunks_imported_ahead	pub host_ram_chunks_imported_ahead: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_chunks_live	pub host_ram_chunks_live: u64

@@ -680,7 +680,11 @@ submission, can give the device the guest's RAM once instead:
   and `VK_EXT_external_memory_host` leaves the same host allocation imported twice into a device
   undefined (its issue 6), so no object's run, nor a copy's range, is imported by its own pointer
   beside the chunk's (`ObjectChurn::imports_inside_live` counts an import made over host
-  addresses a live import holds). The price is a making that waits for its chunk's import where
+  addresses a live import holds). Nor is a chunk imported over a live import of an object's own
+  made outside the RAM's routing (a no-copy heap over the RAM's pages made before
+  `use_host_ram`, or one with no run resolver): the chunk waits until every such import over its
+  pages went, the objects over it meanwhile take the paths of memory no RAM holds and the copies
+  over it go through the CPU (`WorkCounts::host_ram_chunks_held_back`). The price is a making that waits for its chunk's import where
   the window has not reached the chunk (the window bench below). Only a device whose chunks are dma-bufs
   (`HostRam::with_dma_buf`, below) imports an object's run alone while its chunk's import is made,
   as one more dma-buf. The thread faults in no more than the window past the objects, and never goes back for

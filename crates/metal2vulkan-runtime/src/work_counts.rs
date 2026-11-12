@@ -412,6 +412,7 @@ pub(crate) struct Counters {
     host_ram_pointer_imports_failed: AtomicU64,
     host_ram_dma_buf_imports_failed: AtomicU64,
     host_ram_chunks_imported_ahead: AtomicU64,
+    host_ram_chunks_held_back: AtomicU64,
     host_ram_chunks_faulted_ahead: AtomicU64,
     host_ram_chunks_given_back: AtomicU64,
     host_ram_chunks_released: AtomicU64,
@@ -3490,6 +3491,12 @@ impl Counters {
     /// (`host_ram.rs`), besides counting it as [`Counters::host_ram_chunk_imported`] does.
     pub(crate) fn host_ram_chunk_imported_ahead(&self) {
         (self.host_ram_chunks_imported_ahead).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A chunk of a guest RAM was not imported, as a live import of an object's own held some of
+    /// its pages (`host_ram.rs`).
+    pub(crate) fn host_ram_chunk_held_back(&self) {
+        (self.host_ram_chunks_held_back).fetch_add(1, Ordering::Relaxed);
     }
 
     /// The device's thread faulted a chunk of a guest RAM in before its import (`host_ram.rs`).
@@ -7430,6 +7437,15 @@ pub struct WorkCounts {
     /// an object last took. The thread imports while the device's allocations leave a quarter of
     /// its `maxMemoryAllocationCount`, and stops there.
     pub host_ram_chunks_imported_ahead: u64,
+    /// The times a chunk of guest RAM was not imported because a live import of a no-copy
+    /// buffer's or heap's own pages held some of its pages: one made outside the RAM's routing
+    /// (before the device's use of the RAM began, or with no run resolver). A page a live import
+    /// holds is never imported again while it lives (`VK_EXT_external_memory_host`'s issue 6), so
+    /// the chunk waits for every such import over it to go: the objects over it meanwhile take
+    /// their own paths, as over memory no RAM holds, and the copies over it go through the CPU.
+    /// Each ask of the chunk while it waits counts once: the device's thread's, an object's, a
+    /// copy's.
+    pub host_ram_chunks_held_back: u64,
     /// The chunks of guest RAM the device's thread faulted in, on Linux, before it imported them
     /// ahead of the objects: none of a chunk the device refuses whatever its pages hold (shared
     /// memory on a device that imports no pointer to it, the RAM given no source of dma-bufs:
@@ -9370,6 +9386,7 @@ impl Device {
             host_ram_chunks_imported_ahead: counters
                 .host_ram_chunks_imported_ahead
                 .load(Ordering::Relaxed),
+            host_ram_chunks_held_back: counters.host_ram_chunks_held_back.load(Ordering::Relaxed),
             host_ram_chunks_faulted_ahead: counters
                 .host_ram_chunks_faulted_ahead
                 .load(Ordering::Relaxed),
