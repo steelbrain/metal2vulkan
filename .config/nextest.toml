@@ -94,3 +94,15 @@ threads-required = 'num-test-threads'
 [[profile.default.overrides]]
 filter = 'package(metal2vulkan-runtime) & test(/^tests::teardown_threads::a_running_queue_switch_check_leaves_the_device_to_the_program_s_thread$/)'
 threads-required = 'num-test-threads'
+
+# A GPU whose driver has few channels runs its device tests three at a time
+# (`cargo nextest run --profile few-channels`). On NVIDIA's driver each `VkQueue` is a channel,
+# and a device of the runtime's queue plan takes 18 (14 for the round robin, 2 presenting, the
+# staging and fill queues). With no other process's devices, an RTX 2080 (NVIDIA 620.70.06) held
+# 10 such devices at once and refused the 11th, and held 68 of the least plan's 3 `VkQueue`s;
+# an RTX 3090 (620.70.06) and an RTX 5080 Laptop GPU (615.71.09) held 61 of the plan's
+# (`crates/metal2vulkan-runtime/examples/queue_plan_cost.rs`). At the default parallelism a
+# 16-thread host runs 16 test processes, which ask a 2080 for 288 `VkQueue`s at one device each;
+# three ask it for 54, leaving room for other programs' devices on the same GPU.
+[profile.few-channels]
+test-threads = 3

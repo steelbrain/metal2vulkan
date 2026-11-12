@@ -80,6 +80,12 @@ CARGO_TARGET_DIR=target/gpuhazards RUSTFLAGS='--cfg m2v_gpu --cfg m2v_gpu_hazard
 - **Device selection is an argument.** Every device-opening binary takes `--device-type cpu|gpu`,
   with no default. `cpu` matches only a CPU device and never falls back to a GPU; `gpu` takes the
   loader's first GPU. `corpus-metal` takes only `gpu`.
+- **A GPU of few channels runs three device tests at a time.** NVIDIA's driver gives each
+  `VkQueue` a channel, and a runtime device of the queue plan takes 18: an RTX 2080 holds 10 such
+  devices at once, so its device tests run with `cargo nextest run --profile few-channels`
+  (`.config/nextest.toml` has the measurement). Past that, the driver refuses a device the plan's
+  queues and the runtime makes it with its least plan's three, announcing
+  `metal2vulkan-degrade-least-queue-plan`: a test may then pass on fewer queues than the plan's.
 - **Waits are bounded.** Every host wait on device work goes through `src/gpu/wait.rs` (10 seconds
   by default; `--gpu-wait-timeout SECONDS` raises it for one command). A test fails if an
   unbounded wait appears elsewhere.
