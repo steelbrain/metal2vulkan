@@ -2777,6 +2777,99 @@ fn a_chunk_imported_while_an_object_s_own_import_is_in_flight_imports_none_of_it
     assert!(settles(&dropped));
 }
 
+/// A buffer rebound onto two runs of a chunk not imported yet imports its new pages itself; while
+/// that import lives the chunk is not imported (one page, one import), so the next object over
+/// the chunk's other pages takes its own path, counted held back. Once the rebound buffer went,
+/// the next object over the chunk imports it and is bound there.
+#[test]
+fn a_rebind_s_own_import_holds_its_chunk_back_while_it_lives() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start, dropped) = new_ram();
+    let used = device.use_host_ram(&ram).unwrap();
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    let length = 4 * page;
+    // Made over two runs of the second chunk (its own import), rebound onto two of the first's.
+    let (made_at, rebound_at, other) = (
+        start + 64 * MIB + 20 * page,
+        start + 20 * page,
+        start + 40 * page,
+    );
+    fill_pattern(made_at..made_at + length);
+    fill_pattern(rebound_at..rebound_at + length);
+    fill_pattern(other..other + length);
+    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    let made = buffer(
+        &device,
+        made_at,
+        length,
+        resolver(&runs, halves),
+        gate(&gates, true),
+    )
+    .unwrap();
+    rebind(
+        &made,
+        rebound_at,
+        resolver(&runs, halves),
+        gate(&gates, true),
+    )
+    .unwrap();
+    assert_eq!(made.host_backing(), Some(HostBacking::ImportedByPointer));
+    let before = device.work_counts();
+    let over = |at: u64| {
+        buffer(
+            &device,
+            at,
+            length,
+            resolver(&runs, itself),
+            gate(&gates, true),
+        )
+        .unwrap()
+    };
+    let own = over(other);
+    let after = device.work_counts();
+    eprintln!(
+        "HOST-RAM-REBIND: an object over a chunk a rebound buffer's own import holds pages of: \
+         {:?}; chunks imported {}, held back {}",
+        own.host_backing(),
+        after.host_ram_chunks_imported - before.host_ram_chunks_imported,
+        after.host_ram_chunks_held_back - before.host_ram_chunks_held_back,
+    );
+    assert_eq!(
+        after.host_ram_chunks_imported - before.host_ram_chunks_imported,
+        0,
+        "the chunk is not imported while the rebound buffer's import lives"
+    );
+    assert!(after.host_ram_chunks_held_back > before.host_ram_chunks_held_back);
+    assert_eq!(own.host_backing(), Some(HostBacking::ImportedByPointer));
+    assert_eq!(
+        gpu_bytes(&device, &own, length),
+        bytes(other..other + length)
+    );
+    assert_eq!(
+        gpu_bytes(&device, &made, length),
+        bytes(rebound_at..rebound_at + length)
+    );
+    // Once both went, the next buffer over the chunk imports it.
+    drop((own, made));
+    let unit = device.shared().host_import.as_ref().unwrap().unit();
+    let chunk = (start, 64 * MIB);
+    let started = Instant::now();
+    while !matches!(device.shared().aliases.within(chunk, unit), Within::Free) {
+        assert!(started.elapsed() < WAIT, "the buffers' imports never went");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let bound = over(other);
+    assert_eq!(bound.host_backing(), Some(HostBacking::InHostRam));
+    assert_eq!(
+        gpu_bytes(&device, &bound, length),
+        bytes(other..other + length)
+    );
+    drop((bound, used, ram));
+    assert!(settles(&dropped));
+}
+
 /// Whether `device`'s driver breaks its later allocations as it fails an import of pages the
 /// kernel cannot pin (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`, NVIDIA's).
 #[cfg(target_os = "linux")]
