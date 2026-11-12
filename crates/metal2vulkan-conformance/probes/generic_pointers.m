@@ -2,8 +2,8 @@
 // space, which a device, thread or threadgroup pointer converts to, read and written through
 // functions that take them, and asked which space they point into (`is_device_addrspace`,
 // `is_thread_addrspace`, `is_threadgroup_addrspace`). The owned fixture
-// `engine/generic_pointers.metal` holds the same source for `generic_spaces` and `generic_mixed`
-// (its header gives each word); `generic_null` is this probe's own: which space a null generic
+// `engine/generic_pointers.metal` holds the same source for `generic_spaces`, `generic_mixed` and
+// `generic_null` (its header gives each word); `generic_null` asks which space a null generic
 // pointer answers, where the run decides whether a pointer is null.
 //
 // Build (no cargo target needed):

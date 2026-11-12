@@ -226,7 +226,12 @@ fn a_query_of_a_pointer_a_null_may_reach_asks_whether_it_is_null() {
     let e = queried(Held::Nullable).unwrap_or_else(|e| panic!("{e}"));
     assert!(!names_generic(&e), "{}", body_text(&e));
     let text = body_text(&e);
-    assert!(text.contains("icmp ne ptr addrspace(1)"), "{text}");
+    // The device query compares the device pointer with the device null.
+    assert!(
+        text.lines()
+            .any(|l| l.contains("icmp ne") && l.contains("ptr addrspace(1) zeroinitializer")),
+        "{text}"
+    );
     // The device query is the run's; the thread query is false.
     assert_eq!(stored(&e)[1..], [None, Some(0.0)], "{text}");
 }

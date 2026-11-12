@@ -21,6 +21,11 @@
 // otherwise, a generic pointer into the thread or the device space as the run decides, and writes
 // out[t] = weigh(p, t & 1): 210 + (t & 1) for t < 4, (t & 1) + 100 for the rest.
 //
+// `generic_null`: thread t of eight keeps its pointers where in[t] < 4 and makes them null
+// otherwise, and writes out[4t + j]: [0] space(in or null), [1] space(local or null), [2]
+// space(shared or null), [3] space(nullptr): 1, 2, 3, 4 for t < 4, and 4 four times for the rest
+// (a null generic pointer is in no space).
+//
 // The locals are declared ahead of the switch's only label (on t >> 31, zero for every thread),
 // so every path into the switch bypasses their declarations and Clang emits no lifetime markers
 // for them (as in ob2_sized_array.metal). Loop-free.
@@ -81,5 +86,23 @@ kernel void generic_mixed(device float *out [[buffer(0)]],
         local[1] = 11.0f;
         const float *p = in[t] < 4.0f ? (const float *)local : (const float *)in;
         out[t] = weigh(p, t & 1);
+    }
+}
+
+kernel void generic_null(device float *out [[buffer(0)]],
+                         device const float *in [[buffer(1)]],
+                         uint t [[thread_position_in_grid]],
+                         uint l [[thread_position_in_threadgroup]]) {
+    threadgroup float shared[8];
+    switch (t >> 31) {
+        float local[2];
+    default:
+        local[0] = 1.0f;
+        shared[l] = 1.0f;
+        bool keep = in[t] < 4.0f;
+        out[4 * t + 0] = space(keep ? in : nullptr);
+        out[4 * t + 1] = space(keep ? (const float *)local : nullptr);
+        out[4 * t + 2] = space(keep ? (const float *)shared : nullptr);
+        out[4 * t + 3] = space(nullptr);
     }
 }
