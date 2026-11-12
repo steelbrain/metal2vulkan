@@ -3689,7 +3689,9 @@ impl Device {
         };
         let unobserved = texels.buffer.padding_unobserved();
         let ordered = texels.buffer.gpu_bytes_ordered();
-        let holds = crate::linear_plan::holding(&texels.layout, pending.usage, unobserved, ordered);
+        let kept = self.ordered_renders_kept(texels, pending.usage);
+        let holds =
+            crate::linear_plan::holding(&texels.layout, pending.usage, unobserved, (ordered, kept));
         let over = (texels, &holds, pending.usage);
         let made = self.alias_over_device(&pending.plan, (descriptor, &layout), over, facts)?;
         Ok(made.ok())

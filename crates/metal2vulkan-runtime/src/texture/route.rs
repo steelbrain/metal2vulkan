@@ -34,7 +34,8 @@ pub(crate) enum Route {
     /// (an image over the texels may hold them, and what besides, `linear_plan::holding`: their
     /// rows lie one after another, the buffer declares the bytes between them unobserved,
     /// `BufferDescriptor::padding_unobserved`, or only the device's ordered commands write those
-    /// bytes, of a texture that renders nothing) and the device makes one on Metal's layout, else
+    /// bytes, of a texture that renders nothing or whose renders the device's check found keeping
+    /// them, `Device::ordered_renders_kept`) and the device makes one on Metal's layout, else
     /// the shadow; `holds` says why not where it does not.
     Device { holds: Result<Between, String> },
     /// Over host pages of `class`, its texels lying in the device's lines as `rows` says, and
@@ -136,6 +137,30 @@ impl Device {
         Ok(route.placement())
     }
 
+    /// Whether a texture of Metal `usage` that renders over `texels`, whose bytes only the
+    /// device's ordered commands write (`Buffer::gpu_bytes_ordered`), keeps the bytes between its
+    /// rows and slices in an image over them (`linear_plan::holding`'s `renders_kept`): where the
+    /// device's policy takes images in place and its check of renders over its pooled memory
+    /// ([`PagesClass::Pooled`], [`Access::Renders`]) passed for texels that lie in its lines as
+    /// these do. That check renders into a linear image over a buffer's rows with bytes between
+    /// them, through its moves into the layouts a render takes and a pass that clears and stores
+    /// it and one that draws over its last column, while the CPU writes the bytes beside its
+    /// texels, and passes where every byte but a texel reads what was last written there
+    /// (`in_place_check.rs`). Vulkan lets a load and a store "read and write back any memory
+    /// locations within the image subresource" (the Render Pass chapter); in ordered memory no
+    /// other agent writes those bytes meanwhile, and the check found the device writing back
+    /// nothing older there. A pending verdict starts the check, and a texture made meanwhile is a
+    /// shadow.
+    pub(super) fn ordered_renders_kept(&self, texels: &Texels, usage: TextureUsage) -> bool {
+        if !usage.contains(TextureUsage::RENDER_TARGET) || !texels.buffer.gpu_bytes_ordered() {
+            return false;
+        }
+        let policy = self.compile_device().policy().host_page_textures;
+        let rows = texels.rows(self.shared().in_place.line());
+        policy == HostPageTexturePolicy::InPlace
+            && self.in_place_verdict(PagesClass::Pooled, Access::Renders, rows) == Verdict::Passed
+    }
+
     /// The route of a texture of Metal `usage` (as the image is planned for it) and `levels` over
     /// `texels`, `past` where they run past the buffer's length (the module docs): the shadow for
     /// a tiled texture of more than one level, whatever holds the bytes. Over host pages (a no-copy
@@ -186,10 +211,11 @@ impl Device {
                 // Whether an image may hold the texels: none where their rows (or slices) lie
                 // with the buffer's bytes between them, unless the buffer declares those bytes
                 // unobserved, or only the device's ordered commands write them and the texture
-                // renders nothing (`linear_plan::holding`), and else why.
+                // renders nothing or its renders keep them (`linear_plan::holding`), and else why.
                 let unobserved = texels.buffer.padding_unobserved();
                 let ordered = texels.buffer.gpu_bytes_ordered();
-                let holds = holding(&texels.layout, usage, unobserved, ordered);
+                let kept = self.ordered_renders_kept(texels, usage);
+                let holds = holding(&texels.layout, usage, unobserved, (ordered, kept));
                 return Route::Device { holds };
             }
         };

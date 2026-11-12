@@ -1896,9 +1896,12 @@ bound.
   and no other byte does), or only the device's commands, in the runtime's order, write the
   buffer's bytes (a `Private` buffer, and a `Managed` buffer's own on a device without unified
   memory, whose host copy the program's `didModifyRange:` copies in; not one whose `VkBuffer` was
-  handed out or whose memory is exportable) and the texture renders nothing: then the device's
-  linear image, made `PREINITIALIZED`, holds them where its rows lie at the buffer's pitch
-  (`WorkCounts::kept_padding_aliases`). Its one layout transition is out of the layout it is in,
+  handed out or whose memory is exportable) and the texture renders nothing, or renders on a
+  device whose policy takes images in place and whose check of renders over its pooled memory
+  passed for texels that lie in its lines as these do (that a render pass's load and store, and
+  the image's moves, left every byte beside the texels, the rows' padding among them): then the
+  device's linear image, made `PREINITIALIZED`, holds them where its rows lie at the buffer's
+  pitch (`WorkCounts::kept_padding_aliases`). Its one layout transition is out of the layout it is in,
   of which Vulkan says "If the old layout matches the current layout of the image subresource
   range, the transition preserves the contents of that range" (7.1.1, Image Layout Transitions),
   ordered with every write of those bytes; in `GENERAL` the buffer and the image are both

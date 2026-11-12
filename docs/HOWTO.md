@@ -400,7 +400,8 @@ and the bytes between slices may change whenever the texture is made or used, an
 does (`WorkCounts::unobserved_padding_aliases` counts such images; `Buffer::texture_placement`
 answers `NotHostPages` for such a texture, else the shadow's cause, and
 `Shadow(TextureShadowReason::BytesBetweenRows)` without the declaration). Without it, a texture
-that renders nothing over a buffer whose bytes only the device's ordered commands write (a
+that renders nothing (or renders, on a device whose check of renders over its pooled memory
+passed) over a buffer whose bytes only the device's ordered commands write (a
 `Private` buffer, a `Managed` one's own on a device without unified memory) is the device's linear
 image at the pitch too, where the device lays one out so, made `PREINITIALIZED`, whose one layout
 transition keeps the bytes between its rows (`WorkCounts::kept_padding_aliases`; docs/API.md,

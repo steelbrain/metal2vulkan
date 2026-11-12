@@ -1296,7 +1296,8 @@ pub(crate) enum Between {
     /// operations change them.
     Unobserved,
     /// The bytes between their rows and slices, which only the device's ordered commands write, of
-    /// a texture that renders nothing: the device's linear image made `PREINITIALIZED` holds
+    /// a texture that renders nothing, or whose renders the device's check found keeping them
+    /// ([`holding`]'s `renders_kept`): the device's linear image made `PREINITIALIZED` holds
     /// them, its one transition keeping them, or a `DRM_FORMAT_MOD_LINEAR` image of the runtime's
     /// own memory, made `UNDEFINED`, whose first move keeps them by copies around its transition
     /// (`texture/first_move.rs`'s `GpuKeep`).
@@ -1347,8 +1348,9 @@ impl Between {
 ///   reads those bytes: `BufferDescriptor::padding_unobserved`), any such image, whose operations
 ///   may then change them ([`Between::Unobserved`]);
 /// - where `ordered` (only the device's commands, in the order the runtime records them, write the
-///   bytes the GPU uses: `Buffer::gpu_bytes_ordered`) and the texture renders nothing, the device's
-///   linear image made `PREINITIALIZED` alone ([`Between::Kept`]). Its one transition, its first
+///   bytes the GPU uses: `Buffer::gpu_bytes_ordered`) and the texture renders nothing (or
+///   `renders_kept`, below), the device's linear image made `PREINITIALIZED` alone
+///   ([`Between::Kept`]). Its one transition, its first
 ///   move to `GENERAL`, is from the layout it is in, and of such a one the same section says "If
 ///   the old layout matches the current layout of the image subresource range, the transition
 ///   preserves the contents of that range" (Vulkan 7.1.1), ordered after every write of those
@@ -1356,7 +1358,13 @@ impl Between {
 ///   both host-accessible subresources, which "interpret the contents of the memory in
 ///   consistent ways, and data written to one alias can be read by the other alias" (12.11, Memory
 ///   Aliasing). A shader's writes of the texture may change its rows' padding, as on the x86 Macs
-///   (`in_place::Padding::Free`); no render pass writes them back. An image made `UNDEFINED` for
+///   (`in_place::Padding::Free`). A texture that renders is held so too where `renders_kept`: the
+///   device's policy takes images in place and its check of renders over its pooled memory
+///   passed for texels that lie in its lines as these do (`Device::ordered_renders_kept`), the
+///   check that a render pass's load and store and the image's moves leave every byte beside the
+///   texels as it was, the rows' padding among them, while the CPU writes them
+///   (`in_place_check.rs`), a render pass taking the device's one store path for linear images
+///   whatever memory they lie in. An image made `UNDEFINED` for
 ///   external memory takes none of them: its first move may discard them. A
 ///   `DRM_FORMAT_MOD_LINEAR` one of the runtime's own memory, made `UNDEFINED` too
 ///   (`PREINITIALIZED` is for linear tiling alone), takes them where its first move copies what it
@@ -1367,7 +1375,7 @@ pub(super) fn holding(
     layout: &BufferLayout,
     usage: TextureUsage,
     padding_unobserved: bool,
-    ordered: bool,
+    (ordered, renders_kept): (bool, bool),
 ) -> Result<Between, String> {
     // An IOSurface plane's rows that overlap: no image holds them, whatever its usage.
     let shared = layout.shared_bytes();
@@ -1396,10 +1404,14 @@ pub(super) fn holding(
         return Ok(Between::Nothing);
     };
     let renders = usage.contains(TextureUsage::RENDER_TARGET);
-    if ordered && !renders {
+    if ordered && (!renders || renders_kept) {
         return Ok(Between::Kept);
     }
-    let writers = if renders {
+    let writers = if renders && ordered {
+        "its layout transitions read and write, and a render pass's load and store operations \
+         write back, and the device's check of renders over its pooled memory has not passed for \
+         texels that lie as these do"
+    } else if renders {
         "its layout transitions read and write, and a render pass's load and store operations \
          write back"
     } else {

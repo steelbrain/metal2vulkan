@@ -259,7 +259,8 @@ impl Device {
     /// meet exactly. The texture's offset must meet the image's memory alignment too
     /// (`BufferDescriptor::with_aligned_byte`), and rows with bytes between them hold those bytes
     /// in the image only over a buffer that declares them unobserved
-    /// (`BufferDescriptor::with_padding_unobserved`) or, for a texture that renders nothing, one
+    /// (`BufferDescriptor::with_padding_unobserved`) or, for a texture that renders nothing (or
+    /// renders, where the device's check of renders over its pooled memory passed), one
     /// that only the device's commands write (a `Private` buffer, a `Managed` one on a device
     /// without unified memory): docs/API.md, `shadowed-texture`. `None` for a texture of more than
     /// one level, sample or slice, or of another type than 2D, and where the device makes no

@@ -869,9 +869,12 @@ fn a_linear_image_aliases_only_metals_layout() {
         TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
         TextureUsage::SHADER_READ,
     ] {
-        assert!(holding(&padded, usage, false, false).is_err(), "{usage:?}");
+        assert!(
+            holding(&padded, usage, false, (false, false)).is_err(),
+            "{usage:?}"
+        );
         assert_eq!(
-            holding(&single, usage, false, false),
+            holding(&single, usage, false, (false, false)),
             Ok(Between::Nothing),
             "{usage:?}"
         );
@@ -883,7 +886,7 @@ fn a_linear_image_aliases_only_metals_layout() {
         ..padded
     };
     assert_eq!(
-        holding(&row, TextureUsage::SHADER_READ, false, false),
+        holding(&row, TextureUsage::SHADER_READ, false, (false, false)),
         Ok(Between::Nothing)
     );
     assert!(!aliases(
@@ -934,7 +937,10 @@ fn a_linear_image_aliases_only_metals_layout() {
         TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
         TextureUsage::SHADER_READ,
     ] {
-        assert!(holding(&apart, usage, false, false).is_err(), "{usage:?}");
+        assert!(
+            holding(&apart, usage, false, (false, false)).is_err(),
+            "{usage:?}"
+        );
     }
     assert!(!aliases(
         &apart,
@@ -999,7 +1005,7 @@ fn unobserved_padding_lets_an_image_hold_the_bytes_between_rows_alone() {
         TextureUsage::SHADER_WRITE,
     ] {
         assert_eq!(
-            holding(&padded, usage, true, false),
+            holding(&padded, usage, true, (false, false)),
             Ok(Between::Unobserved),
             "{usage:?}"
         );
@@ -1033,7 +1039,7 @@ fn unobserved_padding_lets_an_image_hold_the_bytes_between_rows_alone() {
         ..padded
     };
     assert_eq!(
-        holding(&apart, TextureUsage::SHADER_READ, true, false),
+        holding(&apart, TextureUsage::SHADER_READ, true, (false, false)),
         Ok(Between::Unobserved)
     );
     let stacked = LinearImage {
@@ -1052,7 +1058,7 @@ fn unobserved_padding_lets_an_image_hold_the_bytes_between_rows_alone() {
         row_bytes: 96,
         ..padded
     };
-    assert!(holding(&shared, TextureUsage::SHADER_READ, true, false).is_err());
+    assert!(holding(&shared, TextureUsage::SHADER_READ, true, (false, false)).is_err());
     assert!(!aliases(&shared, 4096, 320, &image, true));
 }
 
@@ -1060,8 +1066,10 @@ fn unobserved_padding_lets_an_image_hold_the_bytes_between_rows_alone() {
 /// the device's linear image made `PREINITIALIZED` may hold the bytes between a texture's rows and
 /// slices where the texture renders nothing (`Between::Kept`), as within declared padding
 /// (`linear_plan::within_padding`); a render target's stay refused, as a render pass's load and
-/// store write them back, and so do rows that share bytes. A declaration of the padding unobserved
-/// takes precedence, and texels with nothing between their rows hold nothing more.
+/// store write them back, but where the device's check of renders over its pooled memory found
+/// them kept (`Device::ordered_renders_kept`), and so do rows that share bytes. A declaration of
+/// the padding unobserved takes precedence, and texels with nothing between their rows hold
+/// nothing more.
 #[test]
 fn ordered_writes_let_a_texture_that_renders_nothing_hold_its_rows_padding() {
     let padded = BufferLayout {
@@ -1079,12 +1087,12 @@ fn ordered_writes_let_a_texture_that_renders_nothing_hold_its_rows_padding() {
         TextureUsage::SHADER_READ | TextureUsage::PIXEL_FORMAT_VIEW,
     ] {
         assert_eq!(
-            holding(&padded, usage, false, true),
+            holding(&padded, usage, false, (true, false)),
             Ok(Between::Kept),
             "{usage:?}"
         );
         assert_eq!(
-            holding(&padded, usage, true, true),
+            holding(&padded, usage, true, (true, false)),
             Ok(Between::Unobserved),
             "{usage:?}"
         );
@@ -1094,7 +1102,21 @@ fn ordered_writes_let_a_texture_that_renders_nothing_hold_its_rows_padding() {
         TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
         effective_usage(TextureUsage::UNKNOWN),
     ] {
-        assert!(holding(&padded, usage, false, true).is_err(), "{usage:?}");
+        assert!(
+            holding(&padded, usage, false, (true, false)).is_err(),
+            "{usage:?}"
+        );
+        // Where the device's check of renders over its pooled memory passed, its renders keep
+        // them; never outside ordered memory, and never over rows that share bytes.
+        assert_eq!(
+            holding(&padded, usage, false, (true, true)),
+            Ok(Between::Kept),
+            "{usage:?}"
+        );
+        assert!(
+            holding(&padded, usage, false, (false, true)).is_err(),
+            "{usage:?}"
+        );
     }
     let apart = BufferLayout {
         slices: 3,
@@ -1102,7 +1124,7 @@ fn ordered_writes_let_a_texture_that_renders_nothing_hold_its_rows_padding() {
         ..padded
     };
     assert_eq!(
-        holding(&apart, TextureUsage::SHADER_READ, false, true),
+        holding(&apart, TextureUsage::SHADER_READ, false, (true, false)),
         Ok(Between::Kept)
     );
     let packed = BufferLayout {
@@ -1110,14 +1132,16 @@ fn ordered_writes_let_a_texture_that_renders_nothing_hold_its_rows_padding() {
         ..padded
     };
     assert_eq!(
-        holding(&packed, TextureUsage::SHADER_READ, false, true),
+        holding(&packed, TextureUsage::SHADER_READ, false, (true, false)),
         Ok(Between::Nothing)
     );
     let shared = BufferLayout {
         row_bytes: 96,
         ..padded
     };
-    assert!(holding(&shared, TextureUsage::SHADER_READ, false, true).is_err());
+    assert!(holding(&shared, TextureUsage::SHADER_READ, false, (true, false)).is_err());
+    let renders = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    assert!(holding(&shared, renders, false, (true, true)).is_err());
     // The image holds the bytes between rows to the last row's pitch, as within declared padding.
     let image = LinearImage {
         alignment: 16,
@@ -1167,7 +1191,7 @@ fn a_padded_texture_s_shadow_names_what_may_write_its_padding() {
         TextureUsage::BLOCK_WRITES_ONLY,
     ] {
         assert_eq!(
-            holding(&padded, usage, false, false),
+            holding(&padded, usage, false, (false, false)),
             Err(transitions.to_owned()),
             "{usage:?}"
         );
@@ -1178,7 +1202,7 @@ fn a_padded_texture_s_shadow_names_what_may_write_its_padding() {
         effective_usage(TextureUsage::UNKNOWN),
     ] {
         assert_eq!(
-            holding(&padded, usage, false, false),
+            holding(&padded, usage, false, (false, false)),
             Err(passes.to_owned()),
             "{usage:?}"
         );

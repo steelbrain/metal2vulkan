@@ -261,7 +261,8 @@ degradations! {
         /// Vulkan lets the image's layout transitions read and write any byte of its subresources,
         /// and a render pass's load and store operations read and write back any byte of an
         /// attachment's image subresource, and Metal leaves them as the program writes them (but
-        /// for a texture that renders nothing over a buffer only the device's ordered commands
+        /// for a texture that renders nothing, or renders on a device whose check of renders over
+        /// its pooled memory passed, over a buffer only the device's ordered commands
         /// write, a `Private` one or a `Managed` one's own on a device without unified memory,
         /// whose linear image, made `PREINITIALIZED`, keeps them through its one layout
         /// transition, or whose `DRM_FORMAT_MOD_LINEAR` image at the buffer's pitch keeps them by
