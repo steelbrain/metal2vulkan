@@ -642,6 +642,8 @@ mod vertex_conversion_notices;
 mod video_interop;
 mod view_plan;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod waited_reads;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod waiter_submits;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod warm;

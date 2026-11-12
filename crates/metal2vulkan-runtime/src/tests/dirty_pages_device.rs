@@ -101,7 +101,7 @@ const ROW: u64 = 256;
 
 /// The test's log: every write it is told of, stamped, with its writer (0 the consumer's).
 #[derive(Default)]
-struct Log {
+pub(super) struct Log {
     next: AtomicU64,
     writes: Mutex<Vec<(u64, Range<u64>, u64)>>,
     /// The wait answers `false` while set.
@@ -114,7 +114,7 @@ struct Log {
 }
 
 impl Log {
-    fn told(&self, range: Range<u64>, writer: u64) {
+    pub(super) fn told(&self, range: Range<u64>, writer: u64) {
         let stamp = self.next.fetch_add(1, Ordering::SeqCst) + 1;
         self.writes.lock().unwrap().push((stamp, range, writer));
     }
