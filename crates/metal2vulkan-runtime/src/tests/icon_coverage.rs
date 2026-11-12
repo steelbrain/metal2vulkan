@@ -48,6 +48,11 @@ const SIDE: u64 = 128;
 const TEXEL: u64 = 8;
 const ICON_BYTES: u64 = SIDE * SIDE * TEXEL;
 
+/// The rows of an icon over bytes: one after another, and 64 bytes apart past that, as a
+/// surface's rows lie, at a pitch a device's linear image may not take.
+const TIGHT: u64 = SIDE * TEXEL;
+const PADDED: u64 = SIDE * TEXEL + 64;
+
 /// The icons each round renders, the rounds, and the threads that render them in the threaded
 /// form.
 const ICONS: usize = 24;
@@ -75,10 +80,20 @@ enum Form {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Home {
     Private,
-    /// A `Shared` buffer's bytes.
-    Buffer,
-    /// Host pages a no-copy buffer imports.
-    HostPages,
+    /// A `Shared` buffer's bytes, its rows this far apart.
+    Buffer(u64),
+    /// Host pages a no-copy buffer imports, its rows this far apart.
+    HostPages(u64),
+}
+
+impl Home {
+    /// How far apart an icon's rows lie where the CPU reads them.
+    fn pitch(self) -> u64 {
+        match self {
+            Home::Private => TIGHT,
+            Home::Buffer(pitch) | Home::HostPages(pitch) => pitch,
+        }
+    }
 }
 
 /// The queue, the states, the target's size as `dcs_rect` takes it, and a read-back buffer.
@@ -129,8 +144,9 @@ impl Tools {
         self.queue.device().new_texture(&d).unwrap()
     }
 
-    /// Icon `index`'s new texture: `Private`, or over `bytes` at the icon's place in them.
-    fn icon(&self, bytes: Option<&Buffer>, index: usize) -> Texture {
+    /// Icon `index`'s new texture: `Private`, or over `bytes` at the icon's place in them, its
+    /// rows `pitch` apart.
+    fn icon(&self, (bytes, pitch): (Option<&Buffer>, u64), index: usize) -> Texture {
         let usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
         let usage = usage | TextureUsage::RENDER_TARGET;
         let Some(bytes) = bytes else {
@@ -139,7 +155,7 @@ impl Tools {
         let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, SIDE, SIDE, false);
         d.usage = usage;
         d.resource_options = bytes.resource_options();
-        (bytes.new_texture(&d, index as u64 * ICON_BYTES, SIDE * TEXEL)).unwrap()
+        (bytes.new_texture(&d, index as u64 * pitch * SIDE, pitch)).unwrap()
     }
 
     /// Icon `index`'s pass into `icon`, beside `coverage` as its second color and `stencil`,
@@ -208,23 +224,19 @@ impl Tools {
     }
 }
 
-/// Icon `index`'s wrong texels in `bytes` (the icons one after another), and the first: its
-/// pixel and texel.
-fn wrong(bytes: &Buffer, index: usize) -> (usize, Option<((u64, u64), [u16; 4])>) {
+/// Icon `index`'s wrong texels in `bytes` (the icons one after another, their rows `pitch`
+/// apart), and the first: its pixel and texel.
+fn wrong(bytes: &Buffer, pitch: u64, index: usize) -> (usize, Option<((u64, u64), [u16; 4])>) {
     let contents = bytes.contents().unwrap();
+    let span = (pitch * SIDE) as usize;
     // SAFETY: bytes within the buffer, which no command buffer writes now.
-    let bytes = unsafe {
-        std::slice::from_raw_parts(
-            contents.as_ptr().add(index * ICON_BYTES as usize),
-            ICON_BYTES as usize,
-        )
-    };
-    let wrong: Vec<((u64, u64), [u16; 4])> = (bytes.as_chunks::<8>().0.iter())
-        .enumerate()
-        .map(|(at, t)| {
-            let h = |i: usize| u16::from_le_bytes([t[i], t[i + 1]]);
-            let pixel = (at as u64 % SIDE, at as u64 / SIDE);
-            (pixel, [h(0), h(2), h(4), h(6)])
+    let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr().add(index * span), span) };
+    let wrong: Vec<((u64, u64), [u16; 4])> = (0..SIDE)
+        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+        .map(|(x, y)| {
+            let at = (y * pitch + x * TEXEL) as usize;
+            let h = |i: usize| u16::from_le_bytes([bytes[at + i], bytes[at + i + 1]]);
+            ((x, y), [h(0), h(2), h(4), h(6)])
         })
         .filter(|&(pixel, texel)| texel != expected(index, pixel))
         .collect();
@@ -301,15 +313,16 @@ fn run(case: &str, form: Form, home: Home) {
         );
         return;
     };
-    let length = ICON_BYTES * ICONS as u64;
+    let pitch = home.pitch();
+    let length = pitch * SIDE * ICONS as u64;
     let bytes = match home {
         Home::Private => None,
-        Home::Buffer => Some(
+        Home::Buffer(_) => Some(
             device
                 .new_buffer(length, ResourceOptions::shared())
                 .unwrap(),
         ),
-        Home::HostPages => {
+        Home::HostPages(_) => {
             let Some(bytes) = over_host(&device, &host, &Arc::new(AtomicUsize::new(0))) else {
                 return;
             };
@@ -323,7 +336,7 @@ fn run(case: &str, form: Form, home: Home) {
     for round in 0..ROUNDS {
         let before = device.work_counts();
         let icons: Vec<Texture> = (0..ICONS)
-            .map(|index| tools.icon(bytes.as_ref(), index))
+            .map(|index| tools.icon((bytes.as_ref(), pitch), index))
             .collect();
         let coverages: Vec<Texture> = (0..ICONS)
             .map(|_| match form {
@@ -380,7 +393,7 @@ fn run(case: &str, form: Form, home: Home) {
             }
         };
         for index in 0..ICONS {
-            if let (n @ 1.., first) = wrong(read, index) {
+            if let (n @ 1.., first) = wrong(read, pitch, index) {
                 failures.push(format!(
                     "round {round} icon {index}: {n} wrong texels, first {first:x?}"
                 ));
@@ -421,20 +434,34 @@ fn icons_sharing_one_kept_second_color_keep_its_fetched_value() {
 
 #[test]
 fn icons_over_a_buffers_bytes_keep_their_fetched_second_colors_value() {
-    run("over-buffer", Form::OneBuffer, Home::Buffer);
+    run("over-buffer", Form::OneBuffer, Home::Buffer(TIGHT));
+}
+
+#[test]
+fn icons_over_a_buffers_padded_rows_keep_their_fetched_second_colors_value() {
+    run("over-buffer-padded", Form::OneBuffer, Home::Buffer(PADDED));
 }
 
 #[test]
 fn icons_over_host_pages_keep_their_fetched_second_colors_value() {
-    run("over-host", Form::OneBuffer, Home::HostPages);
+    run("over-host", Form::OneBuffer, Home::HostPages(TIGHT));
+}
+
+#[test]
+fn icons_over_host_pages_padded_rows_keep_their_fetched_second_colors_value() {
+    run("over-host-padded", Form::OneBuffer, Home::HostPages(PADDED));
 }
 
 #[test]
 fn icons_over_host_pages_rendered_on_several_threads_keep_their_fetched_second_colors_value() {
-    run("over-host-threads", Form::Threads, Home::HostPages);
+    run("over-host-threads", Form::Threads, Home::HostPages(PADDED));
 }
 
 #[test]
 fn icons_over_host_pages_in_command_buffers_of_their_own_keep_their_fetched_second_colors_value() {
-    run("over-host-own-buffers", Form::OwnBuffers, Home::HostPages);
+    run(
+        "over-host-own-buffers",
+        Form::OwnBuffers,
+        Home::HostPages(PADDED),
+    );
 }
