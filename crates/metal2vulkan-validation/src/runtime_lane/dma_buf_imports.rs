@@ -889,8 +889,12 @@ fn a_ycbcr_texture_over_a_buffer_of_chunks_reads_its_planes_in_place() {
 /// for their write permission before its import (`WorkCounts::host_mappings_queried`), refused or
 /// not. A second buffer over the same bytes, made while the first lives, lies in its import and
 /// asks about none, its source uncalled, and the GPU reads the CPU's bytes through it. A buffer
-/// over the first half of the bytes, not the same range, makes its own import and asks about its
-/// 32 mappings.
+/// over the first half of the bytes, not the same range, never imports them again
+/// (`host_aliases.rs`, "One page, one import": `VK_EXT_external_memory_host` leaves a page
+/// imported twice undefined): it is bound inside the live import, or, where that import's memory
+/// is the first buffer's alone (a buffer's own dma-bufs), a copy of its pages. Either way it asks
+/// about no mapping, the live import's making having asked about them all, and its source is
+/// uncalled; the GPU reads the CPU's bytes through it.
 #[test]
 fn a_buffer_that_lies_in_a_live_import_asks_about_no_mapping() {
     const TEST: &str = "dma-buf joined import";
@@ -934,22 +938,36 @@ fn a_buffer_that_lies_in_a_live_import_asks_about_no_mapping() {
             gpu_read(&queue, &second, 0..length as u64) == expected,
             "{TEST}: the GPU's read through the second buffer"
         );
-        let before = queried();
-        let half = no_copy(
-            device,
-            &view,
-            0,
-            length / 2,
-            ram.source(&view, &Calls::default()),
-        );
+        let (before, counts) = (queried(), device.work_counts());
+        let halved = Calls::default();
+        let half = no_copy(device, &view, 0, length / 2, ram.source(&view, &halved)).unwrap();
+        let after = device.work_counts();
+        let inside = after.object_churn.buffers_bound_in_import
+            - counts.object_churn.buffers_bound_in_import;
+        let copied = after.copied_over_live_imports - counts.copied_over_live_imports;
         assert_eq!(
             queried() - before,
-            RUNS as u64 / 2,
-            "{TEST}: the half's mappings asked ({:?})",
-            half.as_ref().err()
+            0,
+            "{TEST}: the half's mappings asked (inside {inside}, copied {copied})"
+        );
+        assert_eq!(
+            inside + copied,
+            1,
+            "{TEST}: the half inside the live import or a copy of its pages"
+        );
+        assert_eq!(
+            after.object_churn.imports_inside_live, counts.object_churn.imports_inside_live,
+            "{TEST}: no page imported again"
+        );
+        let halved = halved.lock().unwrap().clone();
+        assert!(halved.is_empty(), "{TEST}: the half's source: {halved:?}");
+        assert!(
+            gpu_read(&queue, &half, 0..length as u64 / 2) == expected[..length / 2],
+            "{TEST}: the GPU's read through the half"
         );
         eprintln!(
-            "{TEST}: on {}: {RUNS} mappings asked for the first buffer, none for the second",
+            "{TEST}: on {}: {RUNS} mappings asked for the first buffer, none for the second or the \
+             half (inside the import {inside}, a copy {copied})",
             device.name()
         );
         drop(half);
