@@ -24,6 +24,10 @@
 //! at a padded pitch (a shadow past the bound) and at their tight one (the device's own linear
 //! image, in place at any size).
 //!
+//! [`pooled_crossover_costs`] weighs one texture over a `Private` buffer, from 16 KiB to 4 MiB,
+//! in place at its pitch against a shadow, as a compositor samples it each frame, the texture
+//! changing every frame or every 60th: the pooled bound's crossover on the device.
+//!
 //! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`.
 
 use super::attachment_reads::{floats, function};
@@ -33,7 +37,10 @@ use super::no_copy_textures::staged;
 use super::pitched_surfaces::reading;
 use super::{validated_device_with, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::metal::{BlendFactor, PixelFormat, PrimitiveType, TextureUsage};
+use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::metal::{
+    BlendFactor, PixelFormat, PrimitiveType, SamplerMinMagFilter, TextureUsage,
+};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor};
 use metal2vulkan_runtime::{
     Buffer, BufferContents, BufferDescriptor, ClearColor, Device, LoadAction, PipelineOptions,
@@ -76,11 +83,11 @@ fn settled_device(cache: &ScratchCache, messages: &Messages) -> Device {
     device
 }
 
-/// The `tob_rect` and `tob_solid` state into a `BGRA8Unorm` color, blended premultiplied.
-fn blending(device: &Device) -> RenderPipelineState {
+/// The `tob_rect` and `tob_solid` state into a color of `pf`, blended premultiplied.
+fn blending(device: &Device, pf: PixelFormat) -> RenderPipelineState {
     let mut d = RenderPipelineDescriptor::new(function(device, "tob_rect", "tob_renders.ll"));
     d.fragment = Some(function(device, "tob_solid", "tob_renders.ll"));
-    let mut color = ColorAttachmentDescriptor::new(PixelFormat::BGRA8Unorm);
+    let mut color = ColorAttachmentDescriptor::new(pf);
     color.blending_enabled = true;
     color.source_rgb_blend_factor = BlendFactor::One;
     color.source_alpha_blend_factor = BlendFactor::One;
@@ -122,7 +129,7 @@ fn pooled_draw_costs() {
     let queue = device.new_command_queue().unwrap();
     let bgra = PixelFormat::BGRA8Unorm;
     let reads = reading(&device, bgra, "tob_read");
-    let blends = blending(&device);
+    let blends = blending(&device, bgra);
     let corners = staged(&device, &floats([-1.0, -1.0, 1.0, 1.0]));
     let half = floats([0.25, 0.125, 0.0625, 0.5]);
     let mut d = TextureDescriptor::texture_2d(bgra, 1640, 820, false);
@@ -239,7 +246,7 @@ fn pooled_surface_costs() {
     let queue = device.new_command_queue().unwrap();
     let bgra = PixelFormat::BGRA8Unorm;
     let reads = reading(&device, bgra, "tob_read");
-    let blends = blending(&device);
+    let blends = blending(&device, bgra);
     let whole = staged(&device, &floats([-1.0, -1.0, 1.0, 1.0]));
     let half = floats([0.25, 0.125, 0.0625, 0.5]);
     let mut d = TextureDescriptor::texture_2d(bgra, 3662, 2038, false);
@@ -462,6 +469,207 @@ fn pooled_sample_costs() {
                     ),
                 );
             }
+        }
+    }
+    messages.take_notices();
+}
+
+/// The `pooled_crossover_costs` textures, (bytes of a row's texels, rows, row bytes): from 16 KiB
+/// to 4 MiB to their pitch, each pitch a multiple of 256 bytes at least 256 past the multiple of
+/// 256 its texels' bytes round up to, so that no device's own linear image lays rows there; and,
+/// of `BGRA8Unorm`, the shape of a guest's most common shadow of its linear cost on an RTX 2080
+/// (723x625 at 3072-byte rows), which a device that lays linear rows on 256 bytes takes as its
+/// own linear image.
+const CROSSOVER: [(u64, u64, u64); 10] = [
+    (240, 32, 512),
+    (240, 64, 512),
+    (720, 64, 1024),
+    (720, 128, 1024),
+    (1760, 128, 2048),
+    (1760, 256, 2048),
+    (1760, 512, 2048),
+    (2892, 625, 3072),
+    (3840, 512, 4096),
+    (3840, 1024, 4096),
+];
+/// The frames from one change of a `pooled_crossover_costs` texture to the next.
+const PERIODS: [usize; 2] = [1, 60];
+/// The timed frames of each `pooled_crossover_costs` case: two changes at every 60th frame.
+const CROSSOVER_TIMED: usize = 120;
+
+/// How a `pooled_crossover_costs` texture changes: through a pass that clears it and draws a
+/// blended rectangle over it whole (a shadow's image copied back after it), or through a blit that
+/// copies its buffer's bytes whole from another buffer (a shadow's image copied in at its next
+/// use).
+#[derive(Clone, Copy, Debug)]
+enum Change {
+    Render,
+    Blit,
+}
+
+/// What one texture over a `Private` buffer costs a frame in place at its pitch and as a shadow:
+/// of `BGRA8Unorm` and `RGBA16Float`, render target and shader read usage, each of [`CROSSOVER`],
+/// in place over a buffer that declares its padding unobserved, over which a one-row texture was
+/// made first (so the measured one takes the `DRM_FORMAT_MOD_LINEAR` image at any size,
+/// `texture_spans.rs`), and a shadow over one that does not declare it. Each frame is one command
+/// buffer: every [`PERIODS`]th frame the texture changes ([`Change`]), then a draw samples it
+/// whole, one texel a pixel through a linear filter (`tob_sample`), into a private target, as a
+/// compositor draws a window's surface. [`WARM`] frames run untimed, then [`CROSSOVER_TIMED`]
+/// frames; printed per case (`POOLED-CROSSOVER`): each form's mean GPU time and wall time (encode,
+/// commit and wait) of a frame and the shadow's copies a frame. `POOLED-CROSSOVER-FORMS` names
+/// each texture's placement as the query answers it and whether it was made in that form.
+#[test]
+#[ignore = "a release-mode measurement: run by name"]
+fn pooled_crossover_costs() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = settled_device(&cache, &messages);
+    let queue = device.new_command_queue().unwrap();
+    let bgra = PixelFormat::BGRA8Unorm;
+    let samples = reading(&device, bgra, "tob_sample");
+    let mut sd = SamplerDescriptor::new();
+    sd.min_filter = SamplerMinMagFilter::Linear;
+    sd.mag_filter = SamplerMinMagFilter::Linear;
+    let sampler = device.new_sampler_state(&sd).unwrap();
+    let corners = staged(&device, &floats([-1.0, -1.0, 1.0, 1.0]));
+    let half = floats([0.25, 0.125, 0.0625, 0.5]);
+    let mut d = TextureDescriptor::texture_2d(bgra, 1024, 1024, false);
+    d.usage = TextureUsage::RENDER_TARGET;
+    d.resource_options = ResourceOptions::private();
+    let target = device.new_texture(&d).unwrap();
+    let private = ResourceOptions::private();
+    for (pf, texel) in [(bgra, 4), (PixelFormat::RGBA16Float, 8)] {
+        let blends = blending(&device, pf);
+        for (row, h, bpr) in CROSSOVER {
+            let (w, bytes) = (row / texel, bpr * h);
+            let mut d = TextureDescriptor::texture_2d(pf, w, h, false);
+            d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+            d.resource_options = private;
+            let declared = BufferDescriptor::new(bytes, private, BufferContents::Zero)
+                .with_padding_unobserved();
+            let aliased = device.new_buffer_with_descriptor(declared).unwrap();
+            let mut first = d;
+            first.height = 1;
+            let first = aliased.new_texture(&first, 0, bpr).unwrap();
+            let placed_in = aliased.texture_placement(&d, 0, bpr).unwrap();
+            let before = device.work_counts();
+            let placed = aliased.new_texture(&d, 0, bpr).unwrap();
+            let after = device.work_counts();
+            let in_place_made = after.shadowed_textures == before.shadowed_textures
+                && after.pooled_pitched_images > before.pooled_pitched_images;
+            let plain = BufferDescriptor::new(bytes, private, BufferContents::Zero);
+            let plain = device.new_buffer_with_descriptor(plain).unwrap();
+            let placed_shadow = plain.texture_placement(&d, 0, bpr).unwrap();
+            let before = device.work_counts();
+            let shadow = plain.new_texture(&d, 0, bpr).unwrap();
+            let shadow_made = device.work_counts().shadowed_textures > before.shadowed_textures;
+            println!(
+                "POOLED-CROSSOVER-FORMS {} {pf:?} {w}x{h} at {bpr} ({bytes} bytes): in place \
+                 {placed_in:?}, made {in_place_made}; shadow {placed_shadow:?}, made {shadow_made}",
+                device.name(),
+            );
+            let source = BufferDescriptor::new(bytes, private, BufferContents::Zero);
+            let source = device.new_buffer_with_descriptor(source).unwrap();
+            let forms = [
+                ("in place", in_place_made, &aliased, &placed),
+                ("shadow", shadow_made, &plain, &shadow),
+            ];
+            for change in [Change::Render, Change::Blit] {
+                for period in PERIODS {
+                    let mut costs = Vec::new();
+                    for (form, made, buffer, texture) in forms {
+                        if !made {
+                            costs.push(format!("{form} not made"));
+                            continue;
+                        }
+                        let frame = |n: usize| {
+                            let start = std::time::Instant::now();
+                            let command_buffer = queue.command_buffer().unwrap();
+                            if n % period == 0 {
+                                match change {
+                                    Change::Render => {
+                                        let mut pass = RenderPassDescriptor::new();
+                                        let color = &mut pass.color_attachments[0];
+                                        color.texture = Some(texture.clone());
+                                        color.load_action = LoadAction::Clear;
+                                        color.clear_color =
+                                            ClearColor::new(n as f64 / 256.0, 0.5, 0.25, 1.0);
+                                        color.store_action = StoreAction::Store;
+                                        let mut encoder =
+                                            command_buffer.render_command_encoder(&pass).unwrap();
+                                        encoder.set_render_pipeline_state(&blends).unwrap();
+                                        encoder.set_vertex_buffer(Some(&corners), 0, 0).unwrap();
+                                        encoder.set_fragment_bytes(&half, 0).unwrap();
+                                        encoder
+                                            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+                                            .unwrap();
+                                        encoder.end_encoding().unwrap();
+                                    }
+                                    Change::Blit => {
+                                        let mut encoder =
+                                            command_buffer.blit_command_encoder().unwrap();
+                                        encoder
+                                            .copy_from_buffer_to_buffer(
+                                                &source, 0, buffer, 0, bytes,
+                                            )
+                                            .unwrap();
+                                        encoder.end_encoding().unwrap();
+                                    }
+                                }
+                            }
+                            let mut pass = RenderPassDescriptor::new();
+                            let color = &mut pass.color_attachments[0];
+                            color.texture = Some(target.clone());
+                            color.load_action = LoadAction::DontCare;
+                            color.store_action = StoreAction::Store;
+                            let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+                            encoder.set_render_pipeline_state(&samples).unwrap();
+                            encoder
+                                .set_scissor_rect(ScissorRect::new(0, 0, w, h))
+                                .unwrap();
+                            encoder.set_vertex_buffer(Some(&corners), 0, 0).unwrap();
+                            encoder.set_fragment_texture(Some(texture), 0).unwrap();
+                            encoder
+                                .set_fragment_sampler_state(Some(&sampler), 0)
+                                .unwrap();
+                            encoder
+                                .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+                                .unwrap();
+                            encoder.end_encoding().unwrap();
+                            command_buffer.commit().unwrap();
+                            command_buffer.wait_until_completed_for(WAIT).unwrap();
+                            assert_eq!(command_buffer.error(), None);
+                            let wall = start.elapsed().as_secs_f64();
+                            let gpu = command_buffer.gpu_end_time().unwrap()
+                                - command_buffer.gpu_start_time().unwrap();
+                            (gpu, wall)
+                        };
+                        for n in 0..WARM {
+                            frame(n);
+                        }
+                        let copies = device.work_counts().shadow_copies;
+                        let times: Vec<(f64, f64)> =
+                            (WARM..WARM + CROSSOVER_TIMED).map(&frame).collect();
+                        let copies = device.work_counts().shadow_copies - copies;
+                        let mean = |f: fn(&(f64, f64)) -> f64| {
+                            times.iter().map(f).sum::<f64>() / CROSSOVER_TIMED as f64 * 1e6
+                        };
+                        costs.push(format!(
+                            "{form} GPU {:.1} us wall {:.1} us copies {:.2}",
+                            mean(|t| t.0),
+                            mean(|t| t.1),
+                            copies as f64 / CROSSOVER_TIMED as f64,
+                        ));
+                    }
+                    println!(
+                        "POOLED-CROSSOVER {} {pf:?} {w}x{h} at {bpr} ({bytes} bytes) changes by \
+                         {change:?} every {period}: {}",
+                        device.name(),
+                        costs.join("; "),
+                    );
+                }
+            }
+            drop(first);
         }
     }
     messages.take_notices();
