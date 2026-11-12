@@ -301,11 +301,6 @@ impl Texture {
         }
     }
 
-    /// Whether the texture has faces whose turns are over.
-    pub(crate) fn faces_frozen(&self) -> Option<bool> {
-        (self.0.faces.get()).map(|faces| faces.frozen.load(Ordering::Acquire))
-    }
-
     /// Present the texture's other face from now on, for a pass opening at `point` of its
     /// command buffer (the module's **The turn** and **When**); the caller checked the pass. The
     /// shadow the pass's first instance reads without a copy in, or why it did not turn.

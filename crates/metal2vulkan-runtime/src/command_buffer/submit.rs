@@ -222,6 +222,7 @@ use crate::shadow_standing::{LetGo, Missed, Unskipped};
 use crate::sparse::bind::{bind_batch, BindFailure, Bound};
 use crate::sparse::encoder::SparseUpdate;
 use crate::texture::decoded_twin::{SecondDecode, TwinWrite};
+use crate::texture::faces::FaceFix;
 use crate::texture::first_move::{last_of_each, FillTake};
 use crate::texture::wrapped::Transition;
 use crate::texture::Texture;
@@ -1617,7 +1618,8 @@ impl CommandBufferShared {
         let parts = &state.recorded[range.clone()];
         let summaries = parts.iter().map(|part| &part.summary);
         let ran = |part: usize| {
-            (part.checked_sub(range.start)).is_some_and(|at| !parts[at].raws.is_empty())
+            let at = part.checked_sub(range.start);
+            (at.and_then(|at| parts.get(at))).is_some_and(|part| !part.raws.is_empty())
         };
         let fixes = swaps.fixes(self.address(), (range.clone(), &ran), summaries, unnamed);
         if fixes.is_empty() {
