@@ -1,0 +1,411 @@
+target triple = "air64_v28-apple-macosx26.0.0"
+source_filename = "-"
+; datalayout DataLayout { endian: Little, pointers: {0: PointerSpec { size_bits: 64, abi_bits: 64, pref_bits: 64, index_bits: 64 }}, ints: {1: AlignSpec { abi_bits: 8, pref_bits: 8 }, 8: AlignSpec { abi_bits: 8, pref_bits: 8 }, 16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }}, floats: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }}, vectors: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 24: AlignSpec { abi_bits: 32, pref_bits: 32 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 48: AlignSpec { abi_bits: 64, pref_bits: 64 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 96: AlignSpec { abi_bits: 128, pref_bits: 128 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }, 192: AlignSpec { abi_bits: 256, pref_bits: 256 }, 256: AlignSpec { abi_bits: 256, pref_bits: 256 }, 512: AlignSpec { abi_bits: 512, pref_bits: 512 }, 1024: AlignSpec { abi_bits: 1024, pref_bits: 1024 }}, aggregate: AlignSpec { abi_bits: 0, pref_bits: 64 }, native_ints: [8, 16, 32], stack_align_bits: None, alloca_space: 0, program_space: 0, globals_space: 0, mangling: None, fn_ptr_align: None, non_integral: [] }
+%t3 = type { i32, ptr addrspace(0), ptr addrspace(0) }
+%t4 = type [1 x %t3]
+%t7 = type void (ptr addrspace(1), ptr addrspace(1), i32)
+%t9 = type float (i32)
+%t10 = type float (float, i32)
+%t11 = type i32 (float)
+%t12 = type void ()
+%t15 = type [2 x i32]
+%t16 = type [4 x float]
+%t17 = type [4 x %t16]
+%t18 = type [4 x %t17]
+%t19 = type [32 x %t18]
+%t20 = type [32 x %t19]
+c16 = %t3 [65535, @f5, zeroinitializer]
+c17 = %t4 [c16]
+c18 = %t15 [27, 2]
+@g0 "_ZL6tile_p" = internal addrspace(2) global i32 undef, align 4
+@g1 "_Z6tile_p.MTL_FC_INIT_0_j" = linkonce_odr externally_initialized addrspace(2) constant i32 undef, align 4, section air.fc_initializer
+@g2 "_ZL6tile_o" = internal addrspace(2) global i32 undef, align 4
+@g3 "_Z6tile_o.MTL_FC_INIT_1_j" = linkonce_odr externally_initialized addrspace(2) constant i32 undef, align 4, section air.fc_initializer
+@g4 "llvm.global_ctors" = appending addrspace(0) global %t4 c17
+
+define %t7 @f0 "private_reach_tiles" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = alloca %t20, i32 1, align 4
+  %i1 = bitcast %i0 to ptr addrspace(0)
+  %i2 = load i32, ptr addrspace(2) @g0, align 4
+  %i3 = icmp eq %i2, i32 0
+  %i4 = load i32, ptr addrspace(2) @g2, align 4
+  br %i3, bb4, bb1
+bb1:
+  %i6 = icmp eq %i4, i32 0
+  br bb2
+bb2:
+  %i8 = phi i32 [i32 0, bb1], [%i17, bb6]
+  br %i6, bb6, bb3
+bb3:
+  %i10 = zext %i8 to i64
+  br bb5
+bb4:
+  %i12 = icmp eq %i4, i32 0
+  br bb11
+bb5:
+  %i14 = phi i32 [i32 0, bb3], [%i20, bb7]
+  %i15 = zext %i14 to i64
+  br bb8
+bb6:
+  %i17 = add nuw i32 %i8, i32 1
+  %i18 = icmp eq %i17, %i2
+  br %i18, bb4, bb2, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb7:
+  %i20 = add nuw i32 %i14, i32 1
+  %i21 = icmp eq %i20, %i4
+  br %i21, bb6, bb5, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb8:
+  %i23 = phi i32 [i32 0, bb5], [%i27, bb8]
+  %i24 = zext %i23 to i64
+  %i25 = getelementptr inbounds %t20, %i0, i64 0, %i10, %i15, %i24, i64 0, i64 0
+  store float 0x0, %i25, align 4
+  %i27 = add nuw nsw i32 %i23, i32 1
+  %i28 = icmp eq %i27, i32 4
+  br %i28, bb7, bb8, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb9:
+  br %i3, bb21, bb10
+bb10:
+  %i31 = shl i32 %a2, i32 7
+  br bb19
+bb11:
+  %i33 = phi i32 [i32 0, bb4], [%i45, bb14]
+  %i34 = add i32 %i33, %a2
+  %i35 = and i32 %i34, i32 63
+  %i36 = zext %i35 to i64
+  %i37 = getelementptr inbounds float, %a1, %i36
+  %i38 = load float, %i37, align 4
+  br %i3, bb14, bb12
+bb12:
+  %i40 = phi i32 [%i52, bb16], [i32 0, bb11]
+  br %i12, bb16, bb13
+bb13:
+  %i42 = shl i32 %i40, i32 4
+  %i43 = zext %i40 to i64
+  br bb15
+bb14:
+  %i45 = add nuw nsw i32 %i33, i32 1
+  %i46 = icmp eq %i45, i32 16
+  br %i46, bb9, bb11, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb15:
+  %i48 = phi i32 [i32 0, bb13], [%i55, bb17]
+  %i49 = shl i32 %i48, i32 2
+  %i50 = zext %i48 to i64
+  br bb18
+bb16:
+  %i52 = add nuw i32 %i40, i32 1
+  %i53 = icmp eq %i52, %i2
+  br %i53, bb14, bb12, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb17:
+  %i55 = add nuw i32 %i48, i32 1
+  %i56 = icmp eq %i55, %i4
+  br %i56, bb16, bb15, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb18:
+  %i58 = phi i32 [i32 0, bb15], [%i59, bb18]
+  %i59 = add i32 %i58, i32 1
+  %i60 = add i32 %i59, %i42
+  %i61 = add i32 %i60, %i49
+  %i62 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i61)
+  %i63 = fmul reassoc nnan ninf nsz arcp contract afn float %i62, %i38
+  %i64 = zext %i58 to i64
+  %i65 = getelementptr inbounds %t20, %i0, i64 0, %i43, %i50, %i64, i64 0, i64 0
+  %i66 = load float, %i65, align 4
+  %i67 = fadd reassoc nnan ninf nsz arcp contract afn float %i66, %i63
+  store %i67, %i65, align 4
+  %i69 = icmp eq %i59, i32 4
+  br %i69, bb17, bb18, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb19:
+  %i71 = phi i32 [%i2, bb10], [%i84, bb24]
+  %i72 = phi i32 [%i4, bb10], [%i85, bb24]
+  %i73 = phi i32 [i32 0, bb10], [%i86, bb24]
+  %i74 = icmp eq %i72, i32 0
+  br %i74, bb24, bb20
+bb20:
+  %i76 = zext %i73 to i64
+  br bb22
+bb21:
+  ret void
+bb22:
+  %i79 = phi i32 [i32 0, bb20], [%i89, bb25]
+  %i80 = zext %i79 to i64
+  br bb26
+bb23:
+  %i82 = load i32, ptr addrspace(2) @g0, align 4
+  br bb24
+bb24:
+  %i84 = phi i32 [%i82, bb23], [%i71, bb19]
+  %i85 = phi i32 [%i90, bb23], [i32 0, bb19]
+  %i86 = add nuw i32 %i73, i32 1
+  %i87 = icmp ult %i86, %i84
+  br %i87, bb19, bb21, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb25:
+  %i89 = add nuw i32 %i79, i32 1
+  %i90 = load i32, ptr addrspace(2) @g2, align 4
+  %i91 = icmp ult %i89, %i90
+  br %i91, bb22, bb23, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb26:
+  %i93 = phi i32 [i32 0, bb22], [%i107, bb26]
+  %i94 = load i32, ptr addrspace(2) @g2, align 4
+  %i95 = mul i32 %i94, %i73
+  %i96 = add i32 %i95, %i79
+  %i97 = shl i32 %i96, i32 2
+  %i98 = add nuw i32 %i97, %i93
+  %i99 = zext %i93 to i64
+  %i100 = getelementptr inbounds %t20, %i0, i64 0, %i76, %i80, %i99, i64 0, i64 0
+  %i101 = load float, %i100, align 4
+  %i102 = tail call reassoc nnan ninf nsz arcp contract afn float @f2(%i101, %i98) "no-builtins"=""
+  %i103 = add i32 %i98, %i31
+  %i104 = zext %i103 to i64
+  %i105 = getelementptr inbounds float, %a0, %i104
+  store %i102, %i105, align 4
+  %i107 = add nuw nsw i32 %i93, i32 1
+  %i108 = icmp eq %i107, i32 4
+  br %i108, bb25, bb26, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+}
+
+declare %t9 @f1 "air.convert.f.f32.u.i32" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t10 @f2 "postfix.MTL_VISIBLE_FN_REF", section "air.externally_defined"
+
+define %t7 @f3 "private_reach_rows" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = alloca %t20, i32 1, align 4
+  %i1 = bitcast %i0 to ptr addrspace(0)
+  %i2 = getelementptr inbounds float, %a1, i64 64
+  %i3 = load float, %i2, align 4
+  %i4 = tail call i32 @f4 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i3)
+  %i5 = icmp eq %i4, i32 0
+  %i6 = load i32, ptr addrspace(2) @g2, align 4
+  br %i5, bb4, bb1
+bb1:
+  %i8 = icmp eq %i6, i32 0
+  br bb2
+bb2:
+  %i10 = phi i32 [i32 0, bb1], [%i19, bb6]
+  br %i8, bb6, bb3
+bb3:
+  %i12 = zext %i10 to i64
+  br bb5
+bb4:
+  %i14 = icmp eq %i6, i32 0
+  br bb11
+bb5:
+  %i16 = phi i32 [i32 0, bb3], [%i22, bb7]
+  %i17 = zext %i16 to i64
+  br bb8
+bb6:
+  %i19 = add nuw i32 %i10, i32 1
+  %i20 = icmp eq %i19, %i4
+  br %i20, bb4, bb2, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb7:
+  %i22 = add nuw i32 %i16, i32 1
+  %i23 = icmp eq %i22, %i6
+  br %i23, bb6, bb5, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb8:
+  %i25 = phi i32 [i32 0, bb5], [%i29, bb8]
+  %i26 = zext %i25 to i64
+  %i27 = getelementptr inbounds %t20, %i0, i64 0, %i12, %i17, %i26, i64 0, i64 0
+  store float 0x0, %i27, align 4
+  %i29 = add nuw nsw i32 %i25, i32 1
+  %i30 = icmp eq %i29, i32 4
+  br %i30, bb7, bb8, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb9:
+  br %i5, bb21, bb10
+bb10:
+  %i33 = shl i32 %a2, i32 7
+  br bb19
+bb11:
+  %i35 = phi i32 [i32 0, bb4], [%i47, bb14]
+  %i36 = add i32 %i35, %a2
+  %i37 = and i32 %i36, i32 63
+  %i38 = zext %i37 to i64
+  %i39 = getelementptr inbounds float, %a1, %i38
+  %i40 = load float, %i39, align 4
+  br %i5, bb14, bb12
+bb12:
+  %i42 = phi i32 [%i54, bb16], [i32 0, bb11]
+  br %i14, bb16, bb13
+bb13:
+  %i44 = shl i32 %i42, i32 4
+  %i45 = zext %i42 to i64
+  br bb15
+bb14:
+  %i47 = add nuw nsw i32 %i35, i32 1
+  %i48 = icmp eq %i47, i32 16
+  br %i48, bb9, bb11, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb15:
+  %i50 = phi i32 [i32 0, bb13], [%i57, bb17]
+  %i51 = shl i32 %i50, i32 2
+  %i52 = zext %i50 to i64
+  br bb18
+bb16:
+  %i54 = add nuw i32 %i42, i32 1
+  %i55 = icmp eq %i54, %i4
+  br %i55, bb14, bb12, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb17:
+  %i57 = add nuw i32 %i50, i32 1
+  %i58 = icmp eq %i57, %i6
+  br %i58, bb16, bb15, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb18:
+  %i60 = phi i32 [i32 0, bb15], [%i61, bb18]
+  %i61 = add i32 %i60, i32 1
+  %i62 = add i32 %i61, %i44
+  %i63 = add i32 %i62, %i51
+  %i64 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i63)
+  %i65 = fmul reassoc nnan ninf nsz arcp contract afn float %i64, %i40
+  %i66 = zext %i60 to i64
+  %i67 = getelementptr inbounds %t20, %i0, i64 0, %i45, %i52, %i66, i64 0, i64 0
+  %i68 = load float, %i67, align 4
+  %i69 = fadd reassoc nnan ninf nsz arcp contract afn float %i68, %i65
+  store %i69, %i67, align 4
+  %i71 = icmp eq %i61, i32 4
+  br %i71, bb17, bb18, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb19:
+  %i73 = phi i32 [%i6, bb10], [%i83, bb23]
+  %i74 = phi i32 [i32 0, bb10], [%i84, bb23]
+  %i75 = icmp eq %i73, i32 0
+  br %i75, bb23, bb20
+bb20:
+  %i77 = zext %i74 to i64
+  br bb22
+bb21:
+  ret void
+bb22:
+  %i80 = phi i32 [i32 0, bb20], [%i87, bb24]
+  %i81 = zext %i80 to i64
+  br bb25
+bb23:
+  %i83 = phi i32 [i32 0, bb19], [%i88, bb24]
+  %i84 = add nuw i32 %i74, i32 1
+  %i85 = icmp eq %i84, %i4
+  br %i85, bb21, bb19, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb24:
+  %i87 = add nuw i32 %i80, i32 1
+  %i88 = load i32, ptr addrspace(2) @g2, align 4
+  %i89 = icmp ult %i87, %i88
+  br %i89, bb22, bb23, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb25:
+  %i91 = phi i32 [i32 0, bb22], [%i105, bb25]
+  %i92 = load i32, ptr addrspace(2) @g2, align 4
+  %i93 = mul i32 %i92, %i74
+  %i94 = add i32 %i93, %i80
+  %i95 = shl i32 %i94, i32 2
+  %i96 = add nuw i32 %i95, %i91
+  %i97 = zext %i91 to i64
+  %i98 = getelementptr inbounds %t20, %i0, i64 0, %i77, %i81, %i97, i64 0, i64 0
+  %i99 = load float, %i98, align 4
+  %i100 = tail call reassoc nnan ninf nsz arcp contract afn float @f2(%i99, %i96) "no-builtins"=""
+  %i101 = add i32 %i96, %i33
+  %i102 = zext %i101 to i64
+  %i103 = getelementptr inbounds float, %a0, %i102
+  store %i100, %i103, align 4
+  %i105 = add nuw nsw i32 %i91, i32 1
+  %i106 = icmp eq %i105, i32 4
+  br %i106, bb24, bb25, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+}
+
+declare %t11 @f4 "air.convert.u.i32.f.f32" memory(NoModRef, NoModRef, NoModRef)
+
+define internal %t12 @f5 "_GLOBAL__sub_I__" memory(Mod, Mod, Mod) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true", section air.static_init {
+bb0:
+  %i0 = load i32, ptr addrspace(2) @g1, align 4
+  store %i0, ptr addrspace(2) @g0, align 4
+  %i2 = load i32, ptr addrspace(2) @g3, align 4
+  store %i2, ptr addrspace(2) @g2, align 4
+  ret void
+}
+!md0 = !"SDK Version"
+!md1 = !"wchar_size"
+!md2 = !"frame-pointer"
+!md3 = !"air.max_device_buffers"
+!md4 = !"air.max_constant_buffers"
+!md5 = !"air.max_threadgroup_buffers"
+!md6 = !"air.max_textures"
+!md7 = !"air.max_read_write_textures"
+!md8 = !"air.max_samplers"
+!md9 = !"air.buffer"
+!md10 = !"air.location_index"
+!md11 = !"air.read_write"
+!md12 = !"air.address_space"
+!md13 = !"air.arg_type_size"
+!md14 = !"air.arg_type_align_size"
+!md15 = !"air.arg_type_name"
+!md16 = !"float"
+!md17 = !"air.arg_name"
+!md18 = !"out"
+!md19 = !"air.read"
+!md20 = !"in"
+!md21 = !"air.thread_position_in_grid"
+!md22 = !"uint"
+!md23 = !"tid"
+!md24 = !"air.compile.denorms_disable"
+!md25 = !"air.compile.fast_math_enable"
+!md26 = !"air.compile.framebuffer_fetch_enable"
+!md27 = !"tile_p"
+!md28 = !"tile_o"
+!md29 = !"air.visible_function_reference"
+!md30 = !"postfix"
+!md31 = !"Apple metal version 32023.922 (metalfe-32023.922.4)"
+!md32 = !"Metal"
+!md33 = !"int"
+!md34 = !"omnipotent char"
+!md35 = !"Simple C++ TBAA"
+!md36 = !"llvm.loop.mustprogress"
+!md37 = !"air-alias-scope-arg(1)"
+!md38 = !"air-alias-scope-arg(0)"
+!md39 = i32 2
+!md40 = %t15 c18
+!md41 = i32 1
+!md42 = i32 4
+!md43 = i32 7
+!md44 = i32 31
+!md45 = i32 128
+!md46 = i32 8
+!md47 = i32 16
+!md48 = ptr addrspace(0) @f0
+!md49 = i32 0
+!md50 = ptr addrspace(0) @f3
+!md51 = ptr addrspace(2) @g1
+!md52 = ptr addrspace(2) @g3
+!md53 = ptr addrspace(0) @f2
+!md54 = i64 0
+!md55 = !{!md39, !md0, !md40}
+!md56 = !{!md41, !md1, !md42}
+!md57 = !{!md43, !md2, !md39}
+!md58 = !{!md43, !md3, !md44}
+!md59 = !{!md43, !md4, !md44}
+!md60 = !{!md43, !md5, !md44}
+!md61 = !{!md43, !md6, !md45}
+!md62 = !{!md43, !md7, !md46}
+!md63 = !{!md43, !md8, !md47}
+!md64 = !{}
+!md65 = !{!md49, !md9, !md10, !md49, !md41, !md11, !md12, !md41, !md13, !md42, !md14, !md42, !md15, !md16, !md17, !md18}
+!md66 = !{!md41, !md9, !md10, !md41, !md41, !md19, !md12, !md41, !md13, !md42, !md14, !md42, !md15, !md16, !md17, !md20}
+!md67 = !{!md39, !md21, !md15, !md22, !md17, !md23}
+!md68 = !{!md65, !md66, !md67}
+!md69 = !{!md48, !md64, !md68}
+!md70 = !{!md50, !md64, !md68}
+!md71 = !{!md24}
+!md72 = !{!md25}
+!md73 = !{!md26}
+!md74 = !{!md51, !md22, !md27, !md49}
+!md75 = !{!md52, !md22, !md28, !md41}
+!md76 = !{!md29, !md53, !md30}
+!md77 = !{!md31}
+!md78 = !{!md39, !md46, !md49}
+!md79 = !{!md32, !md42, !md49, !md49}
+!md80 = !{!md35}
+!md81 = !{!md34, !md80, !md54}
+!md82 = !{!md33, !md81, !md54}
+!md83 = !{!md82, !md82, !md54}
+!md84 = !{!md36}
+!md85 = !{!md16, !md81, !md54}
+!md86 = !{!md85, !md85, !md54}
+!"llvm.module.flags" = !{!md55, !md56, !md57, !md58, !md59, !md60, !md61, !md62, !md63}
+!"air.kernel" = !{!md69, !md70}
+!"air.compile_options" = !{!md71, !md72, !md73}
+!"air.function_constants" = !{!md74, !md75}
+!"air.visible_function_references" = !{!md76}
+!"llvm.ident" = !{!md77}
+!"air.version" = !{!md78}
+!"air.language_version" = !{!md79}
