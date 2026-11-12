@@ -3069,14 +3069,15 @@ impl<M> Entry<M> {
 
 /// A command's writes of a texture's bytes that change none of its texels outside a rectangle:
 /// a render pass instance's of a color attachment it loads, which only its draws change, inside
-/// their scissors (`render/shadows.rs`).
-pub(super) struct Within {
+/// their scissors (`render/shadows.rs`). It borrows what it names, of the pass's writes.
+#[derive(Clone, Copy)]
+pub(super) struct Within<'a> {
     /// The writes' uses of the bytes.
-    pub(super) uses: Vec<Use<ResourceKey>>,
+    pub(super) uses: &'a [Use<ResourceKey>],
     /// A shadow of the texture, whose texels are the attachment's pixels: an image whose texels
     /// are laid out as its ([`ShadowCopies::same_texels`]) changed inside `area` alone. `None`
     /// where the texture has none, and then every image over the bytes changed anywhere.
-    pub(super) texels: Option<Arc<ShadowCopies>>,
+    pub(super) texels: Option<&'a Arc<ShadowCopies>>,
     /// The rectangle, `[x0, y0, x1, y1)` of the texels.
     pub(super) area: [u32; 4],
 }
@@ -4121,7 +4122,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
         &mut self,
         shadows: &[ShadowUse],
         uses: &[Use<ResourceKey>],
-        within: &[Within],
+        within: &[Within<'_>],
     ) {
         for entry in &mut self.entries {
             // A texture's own uses are its image's, never its bytes'.

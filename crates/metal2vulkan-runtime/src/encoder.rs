@@ -2081,21 +2081,25 @@ impl EncoderCore {
         &mut self,
         shadows: &[ShadowUse],
         uses: &[Use<ResourceKey>],
-        within: &[Within],
+        within: &[Within<'_>],
     ) {
         let aliased = self.aliased(uses);
-        let within: Vec<Within> = within
-            .iter()
-            .map(|part| Within {
-                uses: self
-                    .aliased(&part.uses)
-                    .unwrap_or_else(|| part.uses.clone()),
-                texels: part.texels.clone(),
-                area: part.area,
+        let uses = aliased.as_deref().unwrap_or(uses);
+        // Each part's uses as the device's host aliases augment them, where they augment any:
+        // else the parts as they are.
+        let augmented: Vec<Option<Vec<Use<ResourceKey>>>> =
+            within.iter().map(|part| self.aliased(part.uses)).collect();
+        if augmented.iter().all(Option::is_none) {
+            self.shadows.after(shadows, uses, within);
+            return;
+        }
+        let within: Vec<Within<'_>> = (within.iter().zip(&augmented))
+            .map(|(part, augmented)| Within {
+                uses: augmented.as_deref().unwrap_or(part.uses),
+                ..*part
             })
             .collect();
-        self.shadows
-            .after(shadows, aliased.as_deref().unwrap_or(uses), &within);
+        self.shadows.after(shadows, uses, &within);
     }
 
     /// Record shadowed textures' `copies` as commands of the encoder: ordered as any command

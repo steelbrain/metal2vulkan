@@ -516,6 +516,9 @@ pub(super) fn plan<'a>(
     // The writes an instance bounds, made at the first that bounds its own.
     let mut bounded: Option<BoundedWrites> = None;
     let mut copies = Vec::new();
+    // Each instance's uses, then the pass's attachments' (or those an instance does not bound),
+    // in one list whose room goes from one instance to the next.
+    let mut uses: Vec<Use<ResourceKey>> = Vec::new();
     for (index, (instance, bound)) in instances.enumerate() {
         let bound = bound.filter(|_| drawn.is_some());
         let attachments = attachment_shadows(layout, reached, drawn, bound);
@@ -536,10 +539,13 @@ pub(super) fn plan<'a>(
                 shadow.cleared = Some(value);
             }
         }
-        // Sized once: the chained iterators tell no exact length, which would grow the list as
-        // it fills.
-        let mut uses = Vec::with_capacity(instance.uses_len() + attached.len());
-        uses.extend(instance.uses().chain(attached.iter().cloned()));
+        // Reserved once: the chained iterators tell no exact length, which would grow the list
+        // as it fills.
+        uses.clear();
+        uses.reserve(instance.uses_len() + attached.len());
+        uses.extend(instance.uses());
+        let own = uses.len();
+        uses.extend(attached.iter().cloned());
         copies.push(core.plan_shadows(&shadows, &uses)?);
         if bound.is_some() && bounded.is_none() {
             bounded = Some(BoundedWrites::of(layout, drawn)?);
@@ -549,14 +555,13 @@ pub(super) fn plan<'a>(
             .filter(|bounded| !bounded.writes.is_empty());
         match bound.zip(writes) {
             Some((area, bounded)) => {
-                let uses: Vec<Use<ResourceKey>> = instance
-                    .uses()
-                    .chain(bounded.others.iter().cloned())
-                    .collect();
-                let within: Vec<Within> = (bounded.writes.iter())
+                // The instance's own uses kept, the attachments' but the bounded colors' after.
+                uses.truncate(own);
+                uses.extend(bounded.others.iter().cloned());
+                let within: Vec<Within<'_>> = (bounded.writes.iter())
                     .map(|(uses, texels)| Within {
-                        uses: uses.clone(),
-                        texels: texels.clone(),
+                        uses,
+                        texels: texels.as_ref(),
                         area,
                     })
                     .collect();
