@@ -398,7 +398,11 @@ recorded here.
   draws race under load (`DriverFact::InterlockedDrawsRaceUnderLoad`), the later draw begins a
   render pass instance of its own instead (a known gap below).
 - **A heap texture Metal keeps uncompressed is a shadow of Metal's tiles where no image in place
-  lays its elements there.** Metal lays such a texture's bytes out in its tiles
+  lays its elements there, under `heap_answers = HeapAnswerPolicy::Metal`.** Under the default
+  `HeapAnswerPolicy::Device` such a texture answers its device's image and lies in it (the Fast
+  defaults row), with no shadow, wherever that image's alignment is within the row's bounds; what
+  follows is the switch's, and that of a texture past the bounds whose 4 KiB image does not fit
+  either. Metal lays such a texture's bytes out in its tiles
   (`texture/heap_tiled.rs`). Where the device's image of it takes more of the heap than Metal's
   answer, an image that fits takes its place in the heap's bytes where Metal compresses the
   texture (its bytes are no layout of its texels) or its layout is not modelled
