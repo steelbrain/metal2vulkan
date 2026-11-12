@@ -102,6 +102,7 @@ use ash::vk;
 use metal2vulkan::bind::{ResidentRange, ResourceClass, UsedResource};
 use metal2vulkan::metal::{RenderStages, ResourceUsage};
 use metal2vulkan::pipeline::{BindingSource, PipelineLayout, Stage, SyntheticBinding};
+use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -132,8 +133,10 @@ pub(super) enum Used {
 #[derive(Clone, Default)]
 pub(super) struct Residency {
     /// The resources (the module docs' **Copies**): shared by its copies until one of them
-    /// changes them.
-    held: Arc<Held>,
+    /// changes them. `None` until it is given one, so a new residency, which every compute and
+    /// render encoder's open makes (`CommandBufferShared::inherited`), allocates nothing; read as
+    /// [`NOTHING`] ([`held`](Self::held)).
+    held: Option<Arc<Held>>,
     /// Whether one of `textures` is sampled through an address-mode map other than the identity
     /// (`Texture::address_mode_map`, fixed as the texture is made; a view's is its texture's):
     /// set as such a texture is made resident, which none is ever made no longer, so a command's
@@ -195,11 +198,21 @@ impl Clone for Held {
     }
 }
 
+/// What a residency given nothing holds. Read only: its kept key is never listed here
+/// ([`Residency::kept_key`]), so it holds nothing of any device's.
+static NOTHING: Held = Held {
+    used: Vec::new(),
+    tokens: KeyMap::with_hasher(BuildHasherDefault::new()),
+    indirect: Vec::new(),
+    textures: Vec::new(),
+    kept: Mutex::new(None),
+};
+
 impl Held {
-    /// `held`, to change: its own (a copy where copies share it), its kept key to be listed
-    /// again.
-    fn changed(held: &mut Arc<Held>) -> &mut Held {
-        let held = Arc::make_mut(held);
+    /// `held`, to change: its own (a copy where copies share it, a new one where it held
+    /// nothing), its kept key to be listed again.
+    fn changed(held: &mut Option<Arc<Held>>) -> &mut Held {
+        let held = Arc::make_mut(held.get_or_insert_with(Arc::default));
         *held.kept.get_mut().unwrap_or_else(PoisonError::into_inner) = None;
         held
     }
@@ -346,9 +359,14 @@ impl Used {
 }
 
 impl Residency {
+    /// What it made resident: [`NOTHING`] until it is given a resource.
+    fn held(&self) -> &Held {
+        self.held.as_deref().unwrap_or(&NOTHING)
+    }
+
     /// Whether it holds nothing: no resource, heap or live table.
     pub(super) fn is_empty(&self) -> bool {
-        self.held.used.is_empty() && self.heaps.is_empty() && self.live.is_none()
+        self.held().used.is_empty() && self.heaps.is_empty() && self.live.is_none()
     }
 
     /// Its generation (the module docs): equal to another residency's only where neither changed
@@ -361,11 +379,11 @@ impl Residency {
     /// state's used resources made of it ([`used_resources`](Self::used_resources)), states: a
     /// buffer made later with the ID takes the slot (`address.rs`) without changing the residency.
     pub(super) fn holds_slots_as(&self, used: &[UsedResource]) -> bool {
-        self.held.indirect.iter().all(|&token| {
+        self.held().indirect.iter().all(|&token| {
             let stated = used
                 .get(token as usize)
                 .map(|used| used.gpu_address.is_some());
-            match self.held.used.get(token as usize) {
+            match self.held().used.get(token as usize) {
                 Some((Used::IndirectCommandBuffer(icb), ..)) => stated == Some(icb.holds_id_slot()),
                 _ => false,
             }
@@ -459,7 +477,7 @@ impl Residency {
     /// The heaps of what the encoder made resident: those it used, and those its resident
     /// buffers, textures and indirect command buffers lie in.
     pub(super) fn heaps(&self) -> impl Iterator<Item = Heap> + '_ {
-        self.held.used.iter().filter_map(|(used, ..)| match used {
+        self.held().used.iter().filter_map(|(used, ..)| match used {
             Used::Buffer(buffer) => buffer.heap().cloned(),
             Used::Texture(texture) => texture.heap().cloned(),
             Used::Heap { heap, .. } => Some(heap.clone()),
@@ -520,10 +538,10 @@ impl Residency {
     /// The resources of [`join_encoder`](Self::join_encoder): each with its usage, in the render
     /// stages it named, or every render stage for a compute encoder's. How many `ended` holds.
     pub(super) fn join_encoder_resources(&mut self, ended: &Residency, compute: bool) -> usize {
-        for (used, usage, stages) in &ended.held.used {
+        for (used, usage, stages) in &ended.held().used {
             self.join(used.clone(), *usage, reached(*stages, compute));
         }
-        ended.held.used.len()
+        ended.held().used.len()
     }
 
     /// The heaps of [`join_encoder`](Self::join_encoder): each in the render stages it named, or
@@ -549,7 +567,7 @@ impl Residency {
     /// resource with its usage, and each heap with the textures it holds now (held as
     /// [`use_resource`](Self::use_resource) holds what it makes resident).
     pub(super) fn carry(&mut self, from: &Residency) {
-        for (used, usage, _) in &from.held.used {
+        for (used, usage, _) in &from.held().used {
             self.join(used.clone(), *usage, RenderStages::empty());
         }
         for heap in &from.heaps {
@@ -561,7 +579,7 @@ impl Residency {
     /// stages), so its plan is a kernel's of the same shape as the encoder's own dispatch's
     /// (`tile_resources` alike).
     pub(super) fn kernel(mut self) -> Residency {
-        let staged = (self.held.used.iter()).any(|(_, _, stages)| !stages.is_empty());
+        let staged = (self.held().used.iter()).any(|(_, _, stages)| !stages.is_empty());
         if staged {
             for (_, _, stages) in &mut Held::changed(&mut self.held).used {
                 *stages = RenderStages::empty();
@@ -579,7 +597,7 @@ impl Residency {
     /// The indirect command buffers made resident for writing, each once.
     pub(super) fn writable_indirect_command_buffers(&self) -> Vec<IndirectCommandBuffer> {
         let mut writable: Vec<IndirectCommandBuffer> = Vec::new();
-        for (used, usage, _) in &self.held.used {
+        for (used, usage, _) in &self.held().used {
             if let Used::IndirectCommandBuffer(icb) = used {
                 if usage.contains(ResourceUsage::WRITE) && !writable.contains(icb) {
                     writable.push(icb.clone());
@@ -591,7 +609,7 @@ impl Residency {
 
     /// The resources made resident.
     pub(super) fn resources(&self) -> impl Iterator<Item = &Used> {
-        self.held.used.iter().map(|(used, ..)| used)
+        self.held().used.iter().map(|(used, ..)| used)
     }
 
     /// What a recording that may reach every resource it holds may use of them, for the
@@ -602,7 +620,7 @@ impl Residency {
     /// resident with; what the commands reach unnamed (`live_buffers.rs`) it does not order.
     pub(super) fn bound_uses(&self) -> Vec<Use<ResourceKey>> {
         let stages = vk::PipelineStageFlags2::ALL_COMMANDS;
-        (self.held.used.iter())
+        (self.held().used.iter())
             .map(|(used, usage, _)| {
                 let reads = usage.intersects(ResourceUsage::READ.union(ResourceUsage::SAMPLE));
                 let read = match reads {
@@ -630,16 +648,16 @@ impl Residency {
 
     /// The resources it holds that `other` does not.
     pub(super) fn past<'a>(&'a self, other: &'a Residency) -> impl Iterator<Item = &'a Used> {
-        (self.held.used.iter())
+        (self.held().used.iter())
             .map(|(used, ..)| used)
-            .filter(|used| !other.held.tokens.contains_key(used))
+            .filter(|used| !other.held().tokens.contains_key(used))
     }
 
     /// `used` resident with `usage` in `stages`, joined to the usage and stages it had: `used`,
     /// when it is new here.
     fn join(&mut self, used: Used, usage: ResourceUsage, stages: RenderStages) -> Option<Used> {
-        if let Some(&token) = self.held.tokens.get(&used) {
-            let (_, had_usage, had_stages) = &self.held.used[token as usize];
+        if let Some(&token) = self.held().tokens.get(&used) {
+            let (_, had_usage, had_stages) = &self.held().used[token as usize];
             let (usage, stages) = (had_usage.union(usage), had_stages.union(stages));
             if (usage, stages) != (*had_usage, *had_stages) {
                 let held = Held::changed(&mut self.held);
@@ -673,7 +691,7 @@ impl Residency {
     /// heap as its own buffer is (`Heap::bytes`), whose range holds every buffer placed in it; a
     /// texture by its facts and resource ID.
     pub(super) fn used_resources(&self) -> Vec<UsedResource> {
-        self.held
+        self.held()
             .used
             .iter()
             .zip(0u32..)
@@ -721,11 +739,16 @@ impl Residency {
     /// (`buffer::host_cells_moved`: a buffer's statement), an image of `device` let its views go
     /// (`DeviceShared::views_epoch`: a texture's key), or an indirect command buffer's hold on
     /// its ID's slot changed ([`holds_slots_as`](Self::holds_slots_as)). Each listing counted
-    /// (`WorkCounts::resident_kept_keys_listed`).
+    /// (`WorkCounts::resident_kept_keys_listed`). One given nothing answers the one empty listing
+    /// every such residency shares, of no device.
     pub(super) fn kept_key(&self, device: &Device) -> Arc<KeptListing> {
+        static EMPTY: OnceLock<Arc<KeptListing>> = OnceLock::new();
+        let Some(held) = self.held.as_deref() else {
+            return Arc::clone(EMPTY.get_or_init(|| Arc::new(self.listing())));
+        };
         let epoch = device.shared().views_epoch.load(Ordering::Acquire);
         let at = (host_cells_moved(), epoch);
-        if let Some((moved, epoch, listing)) = &*lock(&self.held.kept) {
+        if let Some((moved, epoch, listing)) = &*lock(&held.kept) {
             if (*moved, *epoch) == at && self.holds_slots_as(&listing.used) {
                 debug_assert!(
                     **listing == self.listing(),
@@ -736,14 +759,14 @@ impl Residency {
         }
         let listing = Arc::new(self.listing());
         let counts = &device.shared().counts;
-        counts.resident_kept_keys_listed(self.held.used.len() as u64);
-        *lock(&self.held.kept) = Some((at.0, at.1, Arc::clone(&listing)));
+        counts.resident_kept_keys_listed(held.used.len() as u64);
+        *lock(&held.kept) = Some((at.0, at.1, Arc::clone(&listing)));
         listing
     }
 
     /// Its [`kept_key`](Self::kept_key), listed now.
     fn listing(&self) -> KeptListing {
-        let keys: Vec<ResourceKey> = (self.held.used.iter())
+        let keys: Vec<ResourceKey> = (self.held().used.iter())
             .map(|(used, ..)| match used {
                 Used::Buffer(buffer) => buffer.identity().key,
                 Used::Heap { bytes, .. } => bytes.identity().key,
@@ -762,7 +785,7 @@ impl Residency {
 
     /// The resource of `token`.
     pub(super) fn get(&self, token: u32) -> Option<&Used> {
-        self.held.used.get(token as usize).map(|(used, ..)| used)
+        self.held().used.get(token as usize).map(|(used, ..)| used)
     }
 
     /// The command buffer's residency with `live`, the device's live buffers at its commit.
@@ -814,7 +837,7 @@ impl Residency {
     /// resident: a look costs the logarithm of their count, not their count.
     pub(super) fn resolve(&self, address: u64) -> Option<(Buffer, u64)> {
         let index = self.addresses.get_or_init(|| {
-            let index = AddressIndex::of_used(&self.held.used);
+            let index = AddressIndex::of_used(&self.held().used);
             if let Some((buffer, _)) = self.buffers_written().next() {
                 let counts = &buffer.device().shared().counts;
                 counts.resident_address_index_made();
@@ -822,7 +845,7 @@ impl Residency {
             Arc::new(index)
         });
         let found = index.first_holding(address).and_then(|token| {
-            let buffer = match self.held.used.get(token as usize)? {
+            let buffer = match self.held().used.get(token as usize)? {
                 (Used::Buffer(buffer), ..) | (Used::Heap { bytes: buffer, .. }, ..) => buffer,
                 (Used::Texture(_) | Used::IndirectCommandBuffer(_), ..) => return None,
             };
@@ -844,14 +867,16 @@ impl Residency {
     /// Look for the shadowed textures (`shadowed`) among those made resident since it last
     /// looked, in the order they were made resident.
     fn find_shadowed(&mut self) {
-        for &token in &self.held.textures[self.textures_looked_at..] {
-            if let Some((Used::Texture(texture), ..)) = self.held.used.get(token as usize) {
+        // The field alone, so `shadowed` may change meanwhile.
+        let held = self.held.as_deref().unwrap_or(&NOTHING);
+        for &token in &held.textures[self.textures_looked_at..] {
+            if let Some((Used::Texture(texture), ..)) = held.used.get(token as usize) {
                 if texture.shadow().is_some() {
                     self.shadowed.push(token);
                 }
             }
         }
-        self.textures_looked_at = self.held.textures.len();
+        self.textures_looked_at = held.textures.len();
     }
 
     /// Join onto `shadows`, what a command buffer's next compute or render (`render`) encoder
@@ -862,7 +887,8 @@ impl Residency {
     pub(super) fn shadows_onto(&mut self, shadows: &mut Residency, render: bool, compute: bool) {
         self.find_shadowed();
         for &token in &self.shadowed {
-            let Some((Used::Texture(texture), usage, stages)) = self.held.used.get(token as usize)
+            let Some((Used::Texture(texture), usage, stages)) =
+                self.held().used.get(token as usize)
             else {
                 continue;
             };
@@ -876,13 +902,12 @@ impl Residency {
 
     /// The textures made resident, each with its usage and render stages.
     fn resident_textures(&self) -> impl Iterator<Item = (&Texture, ResourceUsage, RenderStages)> {
-        self.held
-            .textures
-            .iter()
-            .filter_map(|&token| match self.held.used.get(token as usize) {
+        self.held().textures.iter().filter_map(|&token| {
+            match self.held().used.get(token as usize) {
                 Some((Used::Texture(texture), usage, stages)) => Some((texture, *usage, *stages)),
                 _ => None,
-            })
+            }
+        })
     }
 
     /// Whether a texture made resident is sampled through an address-mode map other than the
@@ -917,7 +942,7 @@ impl Residency {
     /// The buffers made resident, a heap as its own buffer, each with whether a function's use
     /// of it may write, as [`textures_written`](Self::textures_written) says it of a texture.
     pub(super) fn buffers_written(&self) -> impl Iterator<Item = (&Buffer, bool)> {
-        self.held.used.iter().filter_map(|(used, usage, _)| {
+        self.held().used.iter().filter_map(|(used, usage, _)| {
             let buffer = match used {
                 Used::Buffer(buffer) => buffer,
                 Used::Heap { bytes, .. } => bytes,
