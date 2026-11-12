@@ -621,7 +621,28 @@ driver's. Each is open work.
   runtime's to bind. So over the caller's pages imported by their pointer and over a copied host
   buffer's copy alike, whose bytes are the buffer's length (ANV on the Iris Xe, RADV). The shadow
   copies the texels in before each command buffer that uses the texture and merges them back
-  after each write.
+  after each write. Vulkan binds an image only where the memory holds its whole size from the
+  bind's offset (`VUID-vkBindImageMemory-None-10737`), and a host pointer import covers the
+  `allocationSize` bytes the pointer holds (`VUID-VkImportMemoryHostPointerInfoEXT-handleType-01750`),
+  and the pages past a no-copy buffer's length are not the buffer's to import. A `BGRA8Unorm`
+  1024x1014 texture at rows 14592 bytes apart over a no-copy buffer of 3612 pages, which holds
+  13056 bytes of its last row, is a shadow on the RTX 3090, and in place over a buffer one page
+  longer.
+- **On RADV, a texture whose rows lie a number of bytes apart that is no multiple of 256 is a
+  shadow where only an image at that pitch would hold it** (`shadowed-texture`, naming the pitch;
+  `WorkCounts::host_texture_shadows_refused_pitch` over host pages and dma-bufs). RADV lays a
+  linear image's rows at multiples of 256 bytes (`vkGetImageSubresourceLayout`'s `rowPitch`: 256
+  for an `RGBA16Float` row of 18 texels, 512 for a `BGRA8Unorm` row of 96, 2048 for an `R8Unorm`
+  row of 1920) and refuses a `DRM_FORMAT_MOD_LINEAR` image with an explicit plane at any other
+  pitch: `vkCreateImage` returns `VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT` for rows
+  192, 384 or 1920 bytes apart, over a dma-buf and the runtime's own memory alike, at plane offsets
+  0, 256 and 32, and makes one at rows 256 bytes apart; its
+  `minimumLinearTextureAlignmentForPixelFormat` answers 256. So an `RGBA16Float` 18x28 IOSurface
+  plane at its 192-byte rows, and dma-buf planes at rows 384 or 1920 bytes apart, are shadows on
+  the Radeon 780M (Mesa 26.2.6), where lavapipe lays its linear rows at those pitches and makes
+  each explicit plane. The surface or the dma-buf
+  sets the pitch, not the runtime: a consumer that lays out a surface of its own can lay its rows
+  at the alignment `Device::minimum_linear_texture_alignment_for_pixel_format` answers.
 - **A copied host buffer costs O(its size) at every batch's completion that may have written it, and
   at every commit where its pages carry no log** (`copied.rs`, `copied-host-pages`), and again at
   the submission of each batch that waits for an event value its commit found not reached
