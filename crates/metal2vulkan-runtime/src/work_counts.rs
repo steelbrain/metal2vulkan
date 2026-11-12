@@ -850,7 +850,8 @@ impl CarryDropped {
 pub(crate) enum CarryStop {
     /// A slot its bind state holds bound that no call of the encoder bound (`render/carried.rs`).
     Stale,
-    /// It samples a texture an attachment of the encoder's pass renders.
+    /// It reads a texture an attachment of the encoder's pass renders through a slot narrowed to
+    /// levels apart from the attached ones, which the kept draw did not narrow.
     Attached,
     /// Any other step of a rebind.
     Other,
@@ -6598,8 +6599,11 @@ pub struct WorkCounts {
     /// Render encoders that opened from the kept draw their command buffer's last render encoder
     /// carried into them, with that encoder's bind state and settle (`render/carried.rs`): the
     /// encoder's first draw of it is rebound (`draws_rebound_carried`). An encoder ended with a
-    /// kept draw of its pass's first instance that read no attachment of its pass carries it,
-    /// with those of other pipeline states it set aside (`kept_draws_carried_aside`).
+    /// kept draw of its pass's first instance carries it, with those of other pipeline states it
+    /// set aside (`kept_draws_carried_aside`), a draw that reads the texture of a color attachment
+    /// of its pass through its copy among them (`texture/attached_reads.rs`), but not one that
+    /// reads it through a slot narrowed to levels apart from the attached ones
+    /// (`kept_draws_uncarried_attached`).
     pub kept_draws_carried: u64,
     /// Kept draws carried that were let go before a render encoder started from them because
     /// another call of the command buffer came first: another encoder's opening, an event, or
@@ -6632,10 +6636,10 @@ pub struct WorkCounts {
     pub kept_draws_carry_capped: u64,
     /// Kept draws a render encoder ended with, its last draw's or those set aside with the states
     /// of other pipeline states, that would carry into its command buffer's next render encoder
-    /// but read a texture a color attachment of their pass renders: through its copy
-    /// (`texture/attached_reads.rs`), or through a sampled slot narrowed to levels apart from the
-    /// attached ones (`render/attached_levels.rs`). Let go, so the next encoder's first draw of
-    /// each one's state takes every step (`draws_none_kept`).
+    /// but read a texture a color attachment of their pass renders through a sampled slot narrowed
+    /// to levels apart from the attached ones (`render/attached_levels.rs`). Let go, so the next
+    /// encoder's first draw of each one's state takes every step (`draws_none_kept`). One that
+    /// reads it through its copy carries (`kept_draws_carried`).
     pub kept_draws_uncarried_attached: u64,
     /// Those of them that ended with more than one instance.
     pub inline_passes_split: u64,
@@ -7265,9 +7269,10 @@ pub struct WorkCounts {
     /// Of `draws_rebound`, render encoders' first draws of a kept draw their command buffer's
     /// last render encoder carried into them (`kept_draws_carried`, `kept_draws_carried_aside`,
     /// `render/carried.rs`): each derived again what the encoder's render state decides of it,
-    /// brought in every slot the encoder's calls bound, made its uses whole, began its pass's
-    /// first instance as every step begins it where no draw before it began it, and recorded
-    /// every state command it sets into the instance's command buffer.
+    /// brought in every slot the encoder's calls bound, made its uses whole, gathered its uses of
+    /// shadowed textures into its instance (a copy of its pass's attachment's texture among them),
+    /// began its pass's first instance as every step begins it where no draw before it began it,
+    /// and recorded every state command it sets into the instance's command buffer.
     pub draws_rebound_carried: u64,
     /// Render encoders' direct draws whose encoder kept no draw of their pipeline state to draw
     /// again or rebind (`render/draw_again.rs`): its first draw of the state where no kept draw
@@ -7283,7 +7288,9 @@ pub struct WorkCounts {
     /// Of `draws_carry_stopped`, those whose bind state held a slot bound that no call of their
     /// encoder bound: a new encoder inherits no binding, so the state is stale there.
     pub draws_carry_stopped_stale: u64,
-    /// Of `draws_carry_stopped`, those that sample a texture an attachment of their pass renders.
+    /// Of `draws_carry_stopped`, those that read a texture an attachment of their pass renders
+    /// through a slot narrowed to levels apart from the attached ones
+    /// (`render/attached_levels.rs`), which their kept draw, carried, did not narrow.
     pub draws_carry_stopped_attached: u64,
     /// Of `draws_carry_stopped`, those that stopped at another step of a rebind
     /// (`draws_rebind_stopped`'s).

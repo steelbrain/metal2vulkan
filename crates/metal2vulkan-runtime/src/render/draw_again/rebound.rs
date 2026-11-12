@@ -39,9 +39,10 @@
 //!   writes a color attachment's texture, or an extended-range texture binds through a shadow, a
 //!   read of a color its pass clears behind its load actions, uses of shadowed textures other than
 //!   the kept draw's (another shadow, or one used otherwise: written, or its reads bounded
-//!   elsewhere, as a scissor restated bounds a read at the fragments' own pixels), or a barrier
-//!   its fragments need after an earlier draw's geometry writes: the draw takes every step, which
-//!   answers as it would have. Only the
+//!   elsewhere, as a scissor restated bounds a read at the fragments' own pixels; of a carried
+//!   draw, below, only uses where the kept draw used none, or none where it used some), or a
+//!   barrier its fragments need after an earlier draw's geometry writes: the draw takes every step,
+//!   which answers as it would have. Only the
 //!   attachments' reads' refusal is answered here, the last of its checks, which may have
 //!   announced.
 //! - **Of other arguments.** A draw that differs from the kept draw only in its arguments (its
@@ -115,12 +116,18 @@
 //!   state was read from. It stops where that state holds a slot none of them bound (of texture
 //!   and sampler slots it holds only those its pipeline state reads: `argument_table::ReadSlots`),
 //!   or a threadgroup memory length or acceleration structure
-//!   (`WorkCounts::draws_carry_stopped_stale`: a new encoder inherits no binding), where it samples
-//!   a texture an attachment of its pass renders (`draws_carry_stopped_attached`), or at any other
-//!   stop (`draws_carry_stopped_other`).
-//!   Its uses are made again whole; it begins its pass's first instance as every step's first draw
-//!   does (`RenderLowering::inline_begin`), and records every state command it sets into that
-//!   instance's command buffer, whose record holds none (`WorkCounts::draws_rebound_carried`).
+//!   (`WorkCounts::draws_carry_stopped_stale`: a new encoder inherits no binding), where it reads
+//!   a texture an attachment of its pass renders through a slot narrowed to levels apart from the
+//!   attached ones (`draws_carry_stopped_attached`), or at any other stop
+//!   (`draws_carry_stopped_other`).
+//!   Its uses are made again whole, and so are its uses of shadowed textures, a texture of its
+//!   pass's color attachment it reads through the texture's copy among them: its kept draw's were
+//!   gathered into the ended encoder's instance, so it gathers its own into its instance, as
+//!   every step gathers them, where it uses some exactly where its kept draw used some (and stops
+//!   otherwise), and keeps them for the encoder's next draw rebound to compare with. It begins its
+//!   pass's first instance as every step's first draw does (`RenderLowering::inline_begin`), and
+//!   records every state command it sets into that instance's command buffer, whose record holds
+//!   none (`WorkCounts::draws_rebound_carried`).
 //! - **Checked in builds with debug assertions.** As a draw again is: the first rebound draw of a
 //!   kept draw and every second after it work out the rebind, then take every step instead, which
 //!   must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes, vertex
@@ -209,8 +216,7 @@ impl KeptStorage {
         recording: KeptRecording,
         shadows: &[ShadowUse],
     ) {
-        self.shadows.clear();
-        self.shadows.extend(shadows.iter().map(ShadowUse::used_as));
+        self.keep_shadows(shadows);
         self.writes.clear();
         self.writes.extend(writes.iter().filter_map(Write::unheld));
         self.dynamic.clear();
@@ -219,6 +225,14 @@ impl KeptStorage {
         let unheld = dynamic.iter().filter(|&&state| !Bound::holds_value(state));
         self.unheld.extend(unheld);
         self.recording = Some(recording);
+    }
+
+    /// Keep `shadows` as the kept draw's uses of shadowed textures: a carried draw rebound's,
+    /// gathered into its instance (`render/carried.rs`), against which the encoder's next draw
+    /// rebound compares its own.
+    fn keep_shadows(&mut self, shadows: &[ShadowUse]) {
+        self.shadows.clear();
+        self.shadows.extend(shadows.iter().map(ShadowUse::used_as));
     }
 
     /// The kept draw's set-0 writes.
@@ -335,7 +349,6 @@ impl Changed {
 /// moved slots' uses, listed in its bind state's kept storage (`KeptStorage::moved`): the draw is
 /// narrowed; and whether, narrowed, each of those uses lies inside the bytes of the last draw's at
 /// its place: the draw is inside (the module docs).
-#[derive(Clone, Copy)]
 struct Rebinding {
     moved: bool,
     writes_kept: bool,
@@ -347,6 +360,10 @@ struct Rebinding {
     /// Whether it reads another index buffer than the kept draw, which its encoder holds once it
     /// is recorded, as every step's does.
     reindexed: bool,
+    /// The uses of shadowed textures it gathers into its instance: a carried draw's, whose kept
+    /// draw gathered its own into the ended encoder's instance (`render/carried.rs`); none for
+    /// any other, whose kept draw's are its own, gathered into its instance already.
+    gathers: Vec<ShadowUse>,
 }
 
 impl RenderLowering {
@@ -454,7 +471,7 @@ impl RenderLowering {
         }
         let counted = (stamps, changed.images());
         let recorded =
-            self.record_rebound(live, (call, assembly, draw), buffers, (counted, rebinding));
+            self.record_rebound(live, (call, assembly, draw), buffers, (counted, &rebinding));
         if let Err(refused) = recorded {
             return Again::Refused(refused);
         }
@@ -822,11 +839,6 @@ impl RenderLowering {
         if attached && self.loads_ordered && self.samples_attachment(facts, Texture::cleared_in) {
             return None;
         }
-        // A carried draw reads no texture its pass's attachments render (`render/carried.rs`).
-        if attached && carried {
-            stop.1 = CarryStop::Attached;
-            return None;
-        }
         let images = changed.images();
         if images && (self.storage_colors(facts) != 0 || !live.state.extended_shadows.is_empty()) {
             return None;
@@ -839,6 +851,7 @@ impl RenderLowering {
         ];
         // Its slots narrowed to the levels before an attached one, worked out as every step
         // works them out (`render/attached_levels.rs`): the kept draw's, else it takes every step.
+        // A carried draw's kept draw narrowed none (`render/carried.rs`).
         let narrowed = match attached {
             true => {
                 let device = self.core.device();
@@ -849,6 +862,9 @@ impl RenderLowering {
         };
         let kept_narrowed = (self.again.kept.as_ref()).map(|kept| &kept.narrowed[..]);
         if !kept_narrowed.is_some_and(|kept| narrowed.listed().eq(kept.iter().copied())) {
+            if carried {
+                stop.1 = CarryStop::Attached;
+            }
             return None;
         }
         let commands = &live.commands;
@@ -1008,9 +1024,20 @@ impl RenderLowering {
             worked_out || self.draw_shadows(resident, uses, reading).0.is_empty(),
             "a draw moved met a shadow its kept draw did not"
         );
-        if !(shadows.iter().map(ShadowUse::used_as)).eq(live.kept.shadows.iter().copied()) {
-            return None;
-        }
+        // A carried draw's kept draw gathered its shadows into the ended encoder's instance: it
+        // gathers its own into its instance, as every step gathers them (`render/carried.rs`),
+        // where it uses some exactly where the kept draw did (a draw that uses some is never kept
+        // for recording again, `Kept::again`, which a carried draw takes as it was).
+        let gathers = match carried {
+            true if shadows.is_empty() == live.kept.shadows.is_empty() => shadows,
+            true => return None,
+            false => {
+                if !(shadows.iter().map(ShadowUse::used_as)).eq(live.kept.shadows.iter().copied()) {
+                    return None;
+                }
+                Vec::new()
+            }
+        };
         let named =
             || (uses.iter().map(|used| used.key)).filter(|key| !uses.resident().contains(key));
         debug_assert!(
@@ -1043,6 +1070,7 @@ impl RenderLowering {
             inside,
             through_copies: (attached, own_pixel),
             reindexed,
+            gathers,
         };
         (unbarriered && (moved || !self.core.would_skip(named()))).then_some(rebinding)
     }
@@ -1054,7 +1082,7 @@ impl RenderLowering {
         live: &mut LiveBind,
         (call, assembly, draw): (&'static str, Assembly, &DrawCall),
         buffers: &DrawBuffers<'_>,
-        ((stamps, images), rebinding): (([Stamp; 4], bool), Rebinding),
+        ((stamps, images), rebinding): (([Stamp; 4], bool), &Rebinding),
     ) -> Result<(), Error> {
         let kept = settles_kept(self, live)
             .then_some(live.settled.as_ref())
@@ -1216,9 +1244,13 @@ impl RenderLowering {
                     gathering.add(&[], uses);
                 }
             }
-            (false, None) => self.gathering().add(&[], uses),
+            // A carried draw's shadows with them (`Rebinding::gathers`), as every step's.
+            (false, None) => self.gathering().add(&rebinding.gathers, uses),
             (false, Some(prefix)) => {
-                if self.gathering().add_draw(&[], (uses, prefix)) {
+                if self
+                    .gathering()
+                    .add_draw(&rebinding.gathers, (uses, prefix))
+                {
                     self.core.counts().resident_uses_gathered(prefix.len as u64);
                 }
             }
@@ -1297,10 +1329,15 @@ impl RenderLowering {
         kept.settled = Some(settled);
         kept.between = false;
         kept.stated = stated;
-        // A carried draw is the encoder's own from here, recorded into the instance it began.
+        // A carried draw is the encoder's own from here, recorded into the instance it began, with
+        // its reads through copies and its shadows', which the next draw rebound compares.
         let carried = kept.carried;
         kept.carried = false;
         kept.command_buffer = self.current.draws;
+        kept.through_copies = rebinding.through_copies;
+        if carried {
+            live.kept.keep_shadows(&rebinding.gathers);
+        }
         // Whether its uses read an image: what its drawing again notes (`Kept::reads_images`).
         if images {
             kept.reads_images = live.uses.iter().any(super::reads_image);

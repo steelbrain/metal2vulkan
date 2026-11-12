@@ -2,8 +2,10 @@
 //! (`render/carried.rs`): the next encoder's first draw of the same state is rebound against it
 //! (`WorkCounts::draws_rebound_carried`), with the pixels of the same passes drawn every step, the
 //! values its own calls bound, a texture slot its state does not read left unbound there stopping
-//! nothing; it stops where the bind state holds a slot the new encoder did not bind
-//! (`draws_carry_stopped_stale`) or where the draw samples an attachment of its pass
+//! nothing; a draw that reads its pass's color attachment through the texture's copy carries too,
+//! and the next encoder's draw reads that encoder's copy; it stops where the bind state holds a
+//! slot the new encoder did not bind (`draws_carry_stopped_stale`) or where the draw reads an
+//! attachment of its pass through a slot narrowed to other levels
 //! (`draws_carry_stopped_attached`); and the carry is let go where a call comes between the
 //! encoders (`kept_draws_carry_dropped_between`) or the next pass is of another layout
 //! (`kept_draws_carry_dropped_layout`). In builds with debug assertions the first carried draw of
@@ -409,6 +411,198 @@ fn a_texture_slot_no_function_reads_left_unbound_keeps_the_carry() {
     );
 }
 
+/// A state of `tob_rect` (a rectangle from vertex bytes 0's corners) and `fragment` of the owned
+/// fixture `engine/tob_renders.ll` into one `RGBA8Unorm` color.
+fn rect_state(device: &Device, fragment: &str) -> RenderPipelineState {
+    let renders = library(device, "engine/tob_renders.ll");
+    let function = |name| {
+        let function = renders.new_function_with_name(name).unwrap();
+        StageSource::Function(function.function_descriptor())
+    };
+    let mut descriptor = RenderPipelineDescriptor::new(function("tob_rect"));
+    descriptor.fragment = Some(function(fragment));
+    descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+    (device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())).unwrap()
+}
+
+/// The corners, in normalized device coordinates, of the target's pixels `[x0, x1) x [y0, y1)`.
+fn corners([x0, y0, x1, y1]: [u64; 4]) -> Vec<u8> {
+    let x = |p: u64| p as f32 / SIDE as f32 * 2.0 - 1.0;
+    let y = |p: u64| 1.0 - p as f32 / SIDE as f32 * 2.0;
+    bytes_of(&[x(x0), y(y1), x(x1), y(y0)], f32::to_le_bytes)
+}
+
+/// The target's quarters and its left half, `[x0, y0, x1, y1]`.
+const HALF: u64 = SIDE / 2;
+const TOP_LEFT: [u64; 4] = [0, 0, HALF, HALF];
+const TOP_RIGHT: [u64; 4] = [HALF, 0, SIDE, HALF];
+const BOTTOM_LEFT: [u64; 4] = [0, HALF, HALF, SIDE];
+const BOTTOM_RIGHT: [u64; 4] = [HALF, HALF, SIDE, SIDE];
+const LEFT: [u64; 4] = [0, 0, HALF, SIDE];
+
+/// The colors the solid draws write, and the clear: each channel 0 or 1, so each is its bytes.
+const SOLID: [[f32; 4]; 4] = [
+    [1.0, 0.0, 0.0, 1.0],
+    [0.0, 1.0, 0.0, 1.0],
+    [0.0, 0.0, 1.0, 1.0],
+    [1.0, 1.0, 0.0, 1.0],
+];
+const CLEAR: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
+
+/// The word of `color` in an `RGBA8Unorm` texel.
+fn word_of(color: [f32; 4]) -> u32 {
+    u32::from_le_bytes(color.map(|channel| (channel * 255.0) as u8))
+}
+
+/// The backdrop frame (the test's docs) over a new target that shaders read, its passes in one
+/// command buffer or in command buffers of their own (`apart`), each a draw of `read` (reading the
+/// target at each pixel of a rectangle) and of `solid` (a color of `colors` over another), the
+/// first only of `solid`, clearing the target: what it drew.
+fn backdrop_frame(
+    queue: &CommandQueue,
+    (solid, read): (&RenderPipelineState, &RenderPipelineState),
+    colors: &[(&Buffer, u64); 4],
+    apart: Apart,
+) -> Frame {
+    let device = queue.device();
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::private();
+    let target = device.new_texture(&descriptor).unwrap();
+    let back = device
+        .new_buffer(SIDE * SIDE * 4, ResourceOptions::shared())
+        .unwrap();
+    // Each pass's read rectangle (none in the first), and its solid one.
+    let passes = [
+        (None, TOP_LEFT),
+        (Some(TOP_RIGHT), BOTTOM_RIGHT),
+        (Some(BOTTOM_RIGHT), BOTTOM_LEFT),
+        (Some(LEFT), TOP_RIGHT),
+    ];
+    let before = device.work_counts();
+    let mut command_buffer = queue.command_buffer().unwrap();
+    for (at, (reads, solid_over)) in passes.into_iter().enumerate() {
+        if at > 0 && matches!(apart, Apart::CommandBuffers) {
+            command_buffer.commit().unwrap();
+            command_buffer = queue.command_buffer().unwrap();
+        }
+        let mut pass = pass_over((&target, 0), at == 0);
+        let [r, g, b, a] = CLEAR.map(f64::from);
+        pass.color_attachments[0].clear_color = ClearColor::new(r, g, b, a);
+        let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        if let Some(reads) = reads {
+            encoder.set_render_pipeline_state(read).unwrap();
+            encoder.set_vertex_bytes(&corners(reads), 0).unwrap();
+            (encoder.set_fragment_texture(Some(&target), 0)).unwrap();
+            let drawn = encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0);
+            assert_eq!(drawn, Ok(()));
+        }
+        encoder.set_render_pipeline_state(solid).unwrap();
+        encoder.set_vertex_bytes(&corners(solid_over), 0).unwrap();
+        let (color, offset) = colors[at];
+        (encoder.set_fragment_buffer(Some(color), offset, 0)).unwrap();
+        let drawn = encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0);
+        assert_eq!(drawn, Ok(()));
+        encoder.end_encoding().unwrap();
+    }
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_texture_to_buffer(
+        &target,
+        0,
+        0,
+        Origin::new(0, 0, 0),
+        Size::new(SIDE, SIDE, 1),
+        &back,
+        0,
+        SIDE * 4,
+        SIDE * SIDE * 4,
+        BlitOption::None,
+    )
+    .unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    Frame {
+        words: words_of(&back),
+        before,
+        after: device.work_counts(),
+    }
+}
+
+/// Passes over one target loaded and stored, each after the first drawing a backdrop (`tob_read`,
+/// which reads its pass's color attachment's texture at the fragment's own pixel, through the
+/// texture's copy taken before the pass: `texture/attached_reads.rs`) over a rectangle, then a
+/// solid color over another (`tob_solid`). The backdrop's kept draw carries into the next pass
+/// (`render/carried.rs`), whose backdrop is rebound against it and must read that pass's copy,
+/// which the pass before changed: each backdrop reads the solid color the pass before drew (the
+/// bottom right quarter, then the bottom left one), which a copy from before that pass does not
+/// hold, and writes it back, so the target ends with each pass's solid color in place. The same
+/// frame in command buffers of its own, which carries nothing, draws the same pixels, with as many
+/// reads through copies.
+#[test]
+fn a_carried_backdrop_reads_its_own_pass_s_copy() {
+    let scratch = Scratch::new("carried-backdrop");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let queue = device.new_command_queue().unwrap();
+    let solid = rect_state(&device, "tob_solid");
+    let read = rect_state(&device, "tob_read");
+    let firsts = colors(&device, &SOLID[..3]);
+    let last = colors(&device, &SOLID[3..]);
+    let colors = [
+        (&firsts, 0),
+        (&firsts, SECOND),
+        (&firsts, 2 * SECOND),
+        (&last, 0),
+    ];
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    let sampled = device.new_texture(&descriptor).unwrap();
+    warm(&device, |encoder| {
+        rectangle(encoder, &solid, colors[0]);
+        encoder.set_render_pipeline_state(&read).unwrap();
+        encoder.set_vertex_bytes(&corners(TOP_LEFT), 0).unwrap();
+        (encoder.set_fragment_texture(Some(&sampled), 0)).unwrap();
+        let drawn = encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0);
+        assert_eq!(drawn, Ok(()));
+    });
+    let states = (&solid, &read);
+    let together = backdrop_frame(&queue, states, &colors, Apart::Together);
+    let alone = backdrop_frame(&queue, states, &colors, Apart::CommandBuffers);
+    // Three passes opened from a carry; five carried draws rebound (three solid, two backdrops),
+    // the backdrop's kept draw carried aside twice.
+    let mut expected = rebound(5);
+    expected[0] = 3;
+    assert_eq!(together.carries(), expected, "the counts");
+    let aside = |frame: &Frame| frame.counted(|c| c.kept_draws_carried_aside);
+    assert_eq!(aside(&together), 2, "carried aside");
+    // Every step: the first pass's solid draw and the second's backdrop together; each pass's
+    // first draw, and the second's and later passes' second, alone.
+    let none_kept = |frame: &Frame| frame.counted(|c| c.draws_none_kept);
+    assert_eq!(
+        (none_kept(&together), none_kept(&alone)),
+        (2, 7),
+        "none kept"
+    );
+    let through = |frame: &Frame| frame.counted(|c| c.attachment_reads_through_copies);
+    assert_eq!(
+        (through(&together), through(&alone)),
+        (3, 3),
+        "reads through copies"
+    );
+    assert_eq!(together.words, alone.words, "the pixels");
+    let quarter = |[x0, y0, x1, y1]: [u64; 4], color: [f32; 4]| {
+        let mut texels = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (y * SIDE + x) as usize));
+        let wrong = texels.find(|&at| together.words[at] != word_of(color));
+        assert_eq!(wrong, None, "{color:?} over {:?}", [x0, y0, x1, y1]);
+    };
+    quarter(TOP_LEFT, SOLID[0]);
+    quarter(BOTTOM_RIGHT, SOLID[1]);
+    quarter(BOTTOM_LEFT, SOLID[2]);
+    quarter(TOP_RIGHT, SOLID[3]);
+}
+
 /// A pass of another layout (an `R8Unorm` target) after a pass that carries its kept draw lets
 /// it go, counted.
 #[test]
@@ -452,8 +646,9 @@ const LEVEL_BYTES: [u8; LEVELS] = [0x10, 0x40, 0x80, 0xc0, 0xf0];
 
 /// A pass's draw that samples a texture an attachment of its pass renders (`alv_level1`, which
 /// reads level 1 of fragment texture 0, the pass rendering level 2 of it), after a pass of the
-/// same state that samples it into another target: the carried draw's rebind stops (attached), and
-/// the draw takes every step, reading the texture's level 1 into both targets.
+/// same state that samples it into another target: the carried draw's rebind stops (attached: its
+/// slot is narrowed to level 1, which its kept draw's was not), and the draw takes every step,
+/// reading the texture's level 1 into both targets.
 #[test]
 fn a_carried_draw_that_samples_its_attachment_stops() {
     let scratch = Scratch::new("carried-attached");

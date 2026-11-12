@@ -7,8 +7,10 @@
 //! - **What carries.** Where an encoder ends with a kept draw that rebinds (`Kept::rebinds`),
 //!   recorded into its pass's first instance (no split, no executed commands or tile dispatches,
 //!   no stand-in, shadow or reformat of its own, the instance's views the default) through a bind
-//!   state whose settle it holds (`LiveBind::settled`), that read no texture an attachment of its
-//!   pass renders, in a pass of no color groups, rasterization-rate map or replay, its command
+//!   state whose settle it holds (`LiveBind::settled`), with no sampled slot narrowed to levels
+//!   apart from those an attachment of its pass renders (`render/attached_levels.rs`; else it is
+//!   let go, `WorkCounts::kept_draws_uncarried_attached`), in a pass of no color groups,
+//!   rasterization-rate map or replay, its command
 //!   buffer holds the bind state, with the settle, and the kept draw ([`Carried`]) in place of
 //!   giving the state to its device's spares (`live_bind::SpareLiveBinds`). With it go the kept
 //!   draws its bind state set aside with the states of other pipeline states (`LiveBind::select`)
@@ -51,8 +53,15 @@
 //!   state holds a slot bound that none of them bound (`WorkCounts::draws_carry_stopped_stale`):
 //!   the state is the ended encoder's there, not this one's. A texture or sampler slot its
 //!   pipeline state does not read is no part of that state (`argument_table::ReadSlots`), so one
-//!   the new encoder leaves unbound stops nothing. Its uses are made again whole, and
-//!   it stops where it samples a texture an attachment of its pass renders
+//!   the new encoder leaves unbound stops nothing. Its uses are made again whole, and so are its
+//!   uses of shadowed textures (`RenderLowering::draw_shadows`), a texture of a color attachment
+//!   of its pass it reads through the texture's copy among them (`texture/attached_reads.rs`):
+//!   the kept draw gathered its own into the ended encoder's instance, so it gathers these into
+//!   its instance, whose copies in its pass's plan then takes (`render/shadows.rs`), as every
+//!   step gathers them. It goes on only where it uses some exactly where the kept draw used some:
+//!   whether a draw may be recorded again into another instance follows from that
+//!   (`Kept::again`), which it takes of the kept draw. It stops where it reads such a texture
+//!   through a slot narrowed to levels apart from the attached ones, which the kept draw did not
 //!   (`draws_carry_stopped_attached`). It begins its pass's first instance as every step's draw
 //!   begins it (`render/inline_first.rs`), where no draw before it began it. What it compares at
 //!   a draw again is the encoder's: the command buffer its instance records into, and what it

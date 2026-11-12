@@ -87,7 +87,9 @@
 //!   (`render/carried.rs`): each draw is kept there as one after draws of other states, recorded
 //!   through no record, under another render state ([`Kept::carried`]), in the instance that
 //!   encoder opened with, so its state's first draw there is rebound (`rebound.rs`), bringing in
-//!   every slot that encoder's calls bound.
+//!   every slot that encoder's calls bound and gathering its own shadowed textures' uses (a
+//!   texture of that pass's color attachment it reads through the texture's copy among them)
+//!   into that instance, as every step gathers them.
 //! - **What a kept draw left holds for the next.** Each of its steps adds to what the encoder
 //!   holds, and adding the same again changes nothing: its drawn area and coverage (rectangles
 //!   and boxes, `clear_reach::DrawnArea`, `linear_attachment::Coverage`), the pass's reads
@@ -266,15 +268,16 @@ impl Kept {
         (under.moved, under.residency, under.samplers) == (moved, residency, samplers)
     }
 
-    /// Whether the draw read a texture an attachment of its pass renders: through its copy, or
-    /// through a sampled slot narrowed to levels apart from the attached ones.
+    /// Whether the draw read a texture an attachment of its pass renders through a sampled slot
+    /// narrowed to levels apart from the attached ones (`render/attached_levels.rs`). One that
+    /// reads it through its copy carries: the next encoder's draw rebound gathers its own copies
+    /// (`rebound.rs`).
     fn reads_attached(&self) -> bool {
-        self.through_copies != (false, false) || !self.narrowed.is_empty()
+        !self.narrowed.is_empty()
     }
 
     /// Whether the draw, of its own, may be carried into the next render encoder
-    /// (`render/carried.rs`): it rebinds, through no copy of an attachment's texture and with no
-    /// sampled slot narrowed.
+    /// (`render/carried.rs`): it rebinds, with no sampled slot narrowed.
     pub(super) fn carries(&self) -> bool {
         self.rebinds && !self.reads_attached()
     }
