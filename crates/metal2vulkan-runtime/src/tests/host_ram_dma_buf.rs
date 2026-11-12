@@ -1693,6 +1693,126 @@ fn a_listed_chunk_an_object_s_own_dma_bufs_hold_pages_of_is_imported_for_a_copy(
     }
 }
 
+/// Where each listed import costs every submission (the import tax forced held on the device), an
+/// object over a chunk not imported, at the RAM's own addresses, whose own import holds the chunk
+/// back (`RamOnDevice::held_back`): one of its pointer (no source of dma-bufs given), which the
+/// device took, as ANV's and lavapipe take a shared mapping's. A gather by runs over that chunk
+/// whose ranges are more than a copy imports alone, over the object's bytes, goes through the CPU
+/// (`CopyTake::CpuOnly`) in a part of its own after the GPU completed the work before it
+/// (`host_ram_staged_fills_gated`), imports no chunk and reads the file's bytes; one after a fill
+/// through the object in the same command buffer reads the fill; a scatter over the same pages
+/// goes through the CPU too, and the object reads what it wrote. Where the device takes no
+/// pointer of a shared mapping (RADV), the object is a copy and nothing more is tested.
+#[test]
+fn a_listed_chunk_an_object_s_own_import_holds_back_takes_its_copies_through_the_cpu() {
+    let scratch = Scratch::new();
+    if !udmabuf_openable() {
+        return;
+    }
+    let device = device(&scratch.0);
+    if device.shared().host_import.is_err() {
+        eprintln!("HOST-RAM-HELD: the device imports no host memory here; nothing to test");
+        return;
+    }
+    (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
+    let (ram, start, _view, _asked, dropped) = ram(true);
+    let ram = Arc::into_inner(ram).expect("the test's RAM");
+    let ram = Arc::new(ram.with_largest_dma_buf(udmabuf_size_limit()));
+    fill_pattern(start, RAM_BYTES);
+    let used = device.use_host_ram(&ram).unwrap();
+    let chunks = device.host_ram_chunks();
+    let [(true, spans)] = &chunks[..] else {
+        eprintln!(
+            "HOST-RAM-HELD {}: not listed ({chunks:?}); nothing more to test",
+            device.name()
+        );
+        drop((used, ram));
+        return;
+    };
+    let first = spans[0].clone();
+    let page = crate::host_ram::copy::PAGE;
+    let before = device.work_counts();
+    let delta = |now: &WorkCounts, field: fn(&WorkCounts) -> u64| field(now) - field(&before);
+    // The object, at the RAM's own addresses, with no source of dma-bufs of its pages.
+    let object = buffer(&device, start, start, AT, LENGTH);
+    if object.host_backing() != Some(HostBacking::ImportedByPointer) {
+        eprintln!(
+            "HOST-RAM-HELD {}: the object is {:?}, not its pointer's import; nothing more to test",
+            device.name(),
+            object.host_backing()
+        );
+        drop((object, used, ram));
+        return;
+    }
+    let pages = crate::host_ram::copy::MOST_ALONE as u64 + 1;
+    let runs: Vec<std::ops::Range<u64>> = (0..pages)
+        .map(|index| first.start + AT + index * 3 * MIB)
+        .map(|at| at..at + page)
+        .collect();
+    let gathered = read_back(&device, pages * page, |encoder, own| {
+        let copied = encoder.copy_from_host_ram(&ram, &runs, own, 0);
+        copied.expect("the gather over the chunk the object's import holds back");
+    });
+    let expected: Vec<u8> = (runs.iter())
+        .flat_map(|run| bytes(start, run.start - start..run.end - start))
+        .collect();
+    assert!(gathered == expected, "the gather reads the file's bytes");
+    // A fill through the object, then a gather of its first page, in one command buffer.
+    let filled = read_back(&device, page, |encoder, own| {
+        (encoder.fill_buffer(&object, 0..LENGTH, 0x5a)).unwrap();
+        let run = first.start + AT..first.start + AT + page;
+        (encoder.copy_from_host_ram(&ram, std::slice::from_ref(&run), own, 0)).unwrap();
+    });
+    assert!(
+        filled.iter().all(|&b| b == 0x5a),
+        "the gather after the fill through the object"
+    );
+    // A scatter of a page of 0x3c over the object's second page; the object reads it.
+    let source = device.new_buffer(page, ResourceOptions::shared()).unwrap();
+    // SAFETY: the buffer's bytes, which no command uses yet.
+    unsafe { std::ptr::write_bytes(source.contents().unwrap().as_ptr(), 0x3c, page as usize) };
+    let second = first.start + AT + page..first.start + AT + 2 * page;
+    blit(&device, |encoder| {
+        let scattered = encoder.copy_to_host_ram(&source, 0, &ram, std::slice::from_ref(&second));
+        scattered.expect("the scatter over the chunk the object's import holds back");
+    });
+    let read = read_back(&device, page, |encoder, own| {
+        (encoder.copy_from_buffer_to_buffer(&object, page, own, 0, page)).unwrap();
+    });
+    assert!(
+        read.iter().all(|&b| b == 0x3c),
+        "the object reads the scatter"
+    );
+    let copied = device.work_counts();
+    let held_back = delta(&copied, |c| c.host_ram_chunks_held_back);
+    let imported = delta(&copied, |c| c.host_ram_chunks_imported);
+    let staged = delta(&copied, |c| c.host_ram_copies_staged);
+    let gated = delta(&copied, |c| c.host_ram_staged_fills_gated);
+    let scattered = delta(&copied, |c| c.host_ram_scatters_staged);
+    println!(
+        "HOST-RAM-HELD {}: the object {:?}; the chunk held back {held_back} time(s), {imported} \
+         chunk(s) imported; {staged} gather(s) staged, {gated} after the GPU; {scattered} \
+         scatter(s) staged",
+        device.name(),
+        object.host_backing(),
+    );
+    assert!(held_back > 0, "the chunk was not held back");
+    assert_eq!(
+        (imported, staged, gated, scattered),
+        (0, 2, 2, 1),
+        "the copies through the CPU, the gathers after the GPU, no chunk imported"
+    );
+    drop((object, source, used, ram));
+    let began = Instant::now();
+    while !dropped.load(Ordering::SeqCst) {
+        assert!(
+            began.elapsed() < WAIT,
+            "the RAM's keep-alive was never dropped"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// The pages of a guest's tile as a consumer copies them: 4 KiB pages, about 7 MiB.
 const TILE_PAGES: u64 = 1800;
 
