@@ -429,6 +429,16 @@ pub enum ResourceKind {
     /// image sampler whose immutable sampler is the device's conversion of this
     /// (`vk::SamplerDesc::ycbcr`), whose image the consumer views with the same conversion.
     YCbCrPlanes(crate::bind::YCbCrPlanesSampler),
+    /// The constexpr samplers one heap sampling chooses among by its sampler handle: an array of
+    /// one immutable sampler per candidate, each made for this use (with comparison or without,
+    /// of an integer texture or not), indexed by the handle's distance from the first
+    /// candidate's. `ResourceSlot::index` numbers the stage's arrays; the stage's interface lists
+    /// each one's samplers in element order (`StageInterface::sampler_arrays`), which link bakes
+    /// into the layout.
+    SamplerArray {
+        compare: bool,
+        integer: bool,
+    },
 }
 
 /// What a bound acceleration structure holds: the binder binds a top-level structure, so a

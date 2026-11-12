@@ -4648,6 +4648,7 @@ field	metal2vulkan::pipeline::DescriptorBinding.binding	pub binding: u32
 field	metal2vulkan::pipeline::DescriptorBinding.count	pub count: u32
 field	metal2vulkan::pipeline::DescriptorBinding.flags	pub flags: vk::DescriptorBindingFlags
 field	metal2vulkan::pipeline::DescriptorBinding.immutable_sampler	pub immutable_sampler: Option<vk::SamplerDesc>
+field	metal2vulkan::pipeline::DescriptorBinding.immutable_samplers	pub immutable_samplers: Vec<vk::SamplerDesc>
 field	metal2vulkan::pipeline::DescriptorBinding.source	pub source: BindingSource
 field	metal2vulkan::pipeline::DescriptorBinding.stages	pub stages: vk::ShaderStageFlags
 field	metal2vulkan::pipeline::DescriptorBinding.ty	pub ty: vk::DescriptorType
@@ -4960,6 +4961,8 @@ field	metal2vulkan::pipeline::SampledLevels.computed	pub computed: bool
 field	metal2vulkan::pipeline::SampledLevels.highest_lod_bits	pub highest_lod_bits: Option<u32>
 field	metal2vulkan::pipeline::SampledLevels.lowest_lod_bits	pub lowest_lod_bits: Option<u32>
 field	metal2vulkan::pipeline::SampledLevels.sampler	pub sampler: crate::pipeline::sym::SamplerRef
+field	metal2vulkan::pipeline::SamplerArray.samplers	pub samplers: Vec<crate::pipeline::sym::SamplerRef>
+field	metal2vulkan::pipeline::SamplerArray.slot	pub slot: ResourceSlot
 field	metal2vulkan::pipeline::SamplerLevels.bias	pub bias: f32
 field	metal2vulkan::pipeline::SamplerLevels.finite_texels	pub finite_texels: bool
 field	metal2vulkan::pipeline::SamplerLevels.linear	pub linear: bool
@@ -10498,6 +10501,7 @@ struct	metal2vulkan::pipeline::RenderPipelineKeys	#[derive(Clone, Debug, Partial
 struct	metal2vulkan::pipeline::ResourceSlot	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct ResourceSlot
 struct	metal2vulkan::pipeline::RuntimeDependency	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct RuntimeDependency
 struct	metal2vulkan::pipeline::SampledLevels	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct SampledLevels
+struct	metal2vulkan::pipeline::SamplerArray	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct SamplerArray
 struct	metal2vulkan::pipeline::SamplerLevels	#[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct SamplerLevels
 struct	metal2vulkan::pipeline::SamplerSlot	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct SamplerSlot
 struct	metal2vulkan::pipeline::ShaderTestsUse	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ShaderTestsUse
@@ -14460,6 +14464,7 @@ variant	metal2vulkan::pipeline::BindingSource::Heap	Heap(HandleClass)
 variant	metal2vulkan::pipeline::BindingSource::HeapSampler	HeapSampler { stage: Stage, sampler: CombinedSampler }
 variant	metal2vulkan::pipeline::BindingSource::InputAttachment	InputAttachment(u32)
 variant	metal2vulkan::pipeline::BindingSource::Sampler	Sampler(SlotRef)
+variant	metal2vulkan::pipeline::BindingSource::SamplerArray	SamplerArray { stage: Stage, compare: bool, integer: bool }
 variant	metal2vulkan::pipeline::BindingSource::SeparateSampler	SeparateSampler { stage: Stage, sampler: CombinedSampler }
 variant	metal2vulkan::pipeline::BindingSource::SeparateTexture	SeparateTexture { texture: SlotRef, sampler: CombinedSampler }
 variant	metal2vulkan::pipeline::BindingSource::SnapshotTexels	SnapshotTexels(u32)
@@ -14667,6 +14672,7 @@ variant	metal2vulkan::pipeline::ResourceKind::Heap	Heap(HandleClass)
 variant	metal2vulkan::pipeline::ResourceKind::HeapSampler	HeapSampler(SamplerRef)
 variant	metal2vulkan::pipeline::ResourceKind::InputAttachment	InputAttachment(u32)
 variant	metal2vulkan::pipeline::ResourceKind::Sampler	Sampler
+variant	metal2vulkan::pipeline::ResourceKind::SamplerArray	SamplerArray { compare: bool, integer: bool }
 variant	metal2vulkan::pipeline::ResourceKind::SeparateSampler	SeparateSampler(SamplerRef)
 variant	metal2vulkan::pipeline::ResourceKind::SeparateTexture	SeparateTexture(SamplerRef)
 variant	metal2vulkan::pipeline::ResourceKind::SnapshotTexels	SnapshotTexels(u32)

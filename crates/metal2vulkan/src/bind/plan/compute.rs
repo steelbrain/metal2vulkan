@@ -512,6 +512,10 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
                 descriptors.extend(planner(&mut heap)?.array(set.set, b)?);
                 continue;
             }
+            // A constexpr sampler array: the layout's immutable samplers, no write.
+            if let BindingSource::SamplerArray { .. } = b.source {
+                continue;
+            }
             // A separate sampler: a constexpr one is the layout's immutable sampler, no write; a
             // runtime one the sampler bound at its slot, made for the use.
             if let BindingSource::SeparateSampler { stage, sampler } = b.source {

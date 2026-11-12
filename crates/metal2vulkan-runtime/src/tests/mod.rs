@@ -249,6 +249,8 @@ mod heap_one_plane_rows;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod heap_refused_notice;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod heap_sampler_array;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod heap_set_copies;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod heap_set_unlocked;

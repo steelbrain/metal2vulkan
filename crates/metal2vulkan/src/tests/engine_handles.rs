@@ -2457,6 +2457,134 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("L3: {e}"));
 }
 
+/// The words of a nearest constexpr sampler in normalized coordinates, every axis addressed by
+/// `address` (1 clamp to edge, 2 repeat, 3 mirrored repeat), no mip filter, with the fields Apple's
+/// compiler writes for the rest (as `LINEAR_EDGE`'s).
+pub(super) const fn nearest_sampler(address: u64) -> u64 {
+    0x007b_ff00_0008_0000 | address | address << 3 | address << 6
+}
+
+/// The constexpr samplers [`chosen_sampler_kernel`] lists, in order: clamped to the edge,
+/// repeating, and mirrored.
+pub(super) const CHOSEN_SAMPLERS: [u64; 3] =
+    [nearest_sampler(1), nearest_sampler(2), nearest_sampler(3)];
+
+/// A kernel `chosen` that samples the `texture2d<float>` its argument buffer (buffer 0) holds at
+/// level 0 and `(1.375, 0.5)` through the constexpr sampler its lane `gid` chooses,
+/// `pick[gid % pick.len()]` (indices of [`CHOSEN_SAMPLERS`], each a constexpr sampler of the
+/// module, listed in order), adds the sample through sampler `direct` alone where it names one, and
+/// writes the sum to buffer 1's lane `gid` (a `float4`).
+pub(super) fn chosen_sampler_kernel(pick: &[usize], direct: Option<usize>) -> String {
+    let call = |s: &str| {
+        format!(
+            "call {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) {s}, <2 x float> <float 1.375, float 0.5>, i1 true, <2 x i32> zeroinitializer, i1 true, float 0.0, float 0.0, i32 0)"
+        )
+    };
+    let n = pick.len();
+    let mut choose = format!("  %m = urem i32 %gid, {n}\n");
+    let mut chosen = format!("@s{}", pick[n - 1]);
+    for (k, s) in pick[..n - 1].iter().enumerate().rev() {
+        choose += &format!(
+            "  %c{k} = icmp eq i32 %m, {k}\n  %p{k} = select i1 %c{k}, ptr addrspace(2) @s{s}, ptr addrspace(2) {chosen}\n"
+        );
+        chosen = format!("%p{k}");
+    }
+    let sum = match direct {
+        Some(d) => format!(
+            "  %dr = {}\n  %dv = extractvalue {{ <4 x float>, i8 }} %dr, 0\n  %y = fadd <4 x float> %v, %dv\n",
+            call(&format!("@s{d}"))
+        ),
+        None => "  %y = fadd <4 x float> %v, zeroinitializer\n".to_string(),
+    };
+    let globals: String = (CHOSEN_SAMPLERS.iter().enumerate())
+        .map(|(i, w)| {
+            format!("@s{i} = internal addrspace(2) constant [2 x i64] [i64 {w}, i64 0], align 8\n")
+        })
+        .collect();
+    let states: String = (0..CHOSEN_SAMPLERS.len())
+        .map(|i| {
+            format!(
+                "!{} = !{{!\"air.sampler_state\", ptr addrspace(2) @s{i}}}\n",
+                20 + i
+            )
+        })
+        .collect();
+    format!(
+        r#"%struct.M = type {{ ptr addrspace(1) }}
+{globals}
+define void @chosen(ptr addrspace(2) %m, ptr addrspace(1) %out, i32 %gid) {{
+  %pt = getelementptr inbounds %struct.M, ptr addrspace(2) %m, i64 0, i32 0
+  %t = load ptr addrspace(1), ptr addrspace(2) %pt, align 8
+{choose}  %r = {}
+  %v = extractvalue {{ <4 x float>, i8 }} %r, 0
+{sum}  %o = getelementptr inbounds <4 x float>, ptr addrspace(1) %out, i32 %gid
+  store <4 x float> %y, ptr addrspace(1) %o, align 16
+  ret void
+}}
+declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)
+!air.kernel = !{{!0}}
+!air.version = !{{!11}}
+!air.language_version = !{{!12}}
+!air.sampler_states = !{{!20, !21, !22}}
+!0 = !{{ptr @chosen, !1, !2}}
+!1 = !{{}}
+!2 = !{{!3, !6, !8}}
+!3 = !{{i32 0, !"air.indirect_buffer", !"air.buffer_size", i32 8, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.struct_type_info", !4, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"M", !"air.arg_name", !"m"}}
+!4 = !{{i32 0, i32 8, i32 0, !"texture2d<float, sample>", !"t", !"air.indirect_argument", !5}}
+!5 = !{{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.sample", !"air.arg_type_name", !"texture2d<float, sample>", !"air.arg_name", !"t"}}
+!6 = !{{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"out"}}
+!8 = !{{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"gid"}}
+!11 = !{{i32 2, i32 8, i32 0}}
+!12 = !{{!"Metal", i32 4, i32 0, i32 0}}
+{states}"#,
+        call(&chosen)
+    )
+}
+
+/// Constexpr samplers of consecutive handles that a lane chooses among beside a heap texture are
+/// one sampling through a set-0 array of their samplers (`ResourceKind::SamplerArray`, one element
+/// per candidate), indexed by the handle: one sampled image, where a switch over them makes one
+/// per candidate. Where the handles are not consecutive (a constexpr sampler between them sampled
+/// through apart), the switch stays: a sampled image per candidate and one for the sample apart.
+/// Every profile with the sampled heap compiles both and passes L3.
+#[test]
+fn chosen_constexpr_samplers_beside_a_heap_texture_are_one_sampler_array() {
+    let (Some(array), Some(apart)) = (
+        assemble("chosen_samplers", &chosen_sampler_kernel(&[0, 1, 2], None)),
+        assemble(
+            "chosen_samplers_apart",
+            &chosen_sampler_kernel(&[0, 2], Some(1)),
+        ),
+    ) else {
+        return;
+    };
+    let arrays = |a: &FunctionArtifact| -> Vec<u32> {
+        (a.interface.descriptors.iter())
+            .filter(|d| matches!(d.slot.kind, ResourceKind::SamplerArray { .. }))
+            .map(|d| d.count)
+            .collect()
+    };
+    let mut compiled = 0;
+    for (stem, p) in committed_profiles().expect("profiles") {
+        if !has_sampled_heap(&p) {
+            continue;
+        }
+        let a = compile(&array, "chosen", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        assert_eq!(arrays(&a), vec![3], "{stem}");
+        assert_eq!(uses(&a, "sampler.sampler_array.sample"), 1, "{stem}");
+        assert_eq!(count(&a, OP_SAMPLED_IMAGE), 1, "{stem}");
+        assert!(heap_samplers(&a).is_empty(), "{stem}");
+        let b = compile(&apart, "chosen", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&b, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        assert!(arrays(&b).is_empty(), "{stem}");
+        assert_eq!(uses(&b, "sampler.sampler_array.sample"), 0, "{stem}");
+        assert_eq!(count(&b, OP_SAMPLED_IMAGE), 3, "{stem}");
+        compiled += 1;
+    }
+    assert!(compiled > 0, "no committed profile has the sampled heap");
+}
+
 /// A kernel that writes a slice of its explicit imageblock (one `elem` field per cell, `lanes`
 /// lanes) to the texture of an argument buffer's one member (`texture2d<half, write>` or
 /// `texture2d<short, write>`).

@@ -1252,6 +1252,75 @@ fn heap_samplers_take_no_write_and_meet_every_held_member() {
     }
 }
 
+/// Constexpr samplers a lane chooses among beside a heap texture are one set-0 sampler array
+/// (`BindingSource::SamplerArray`): a `SAMPLER` binding of one element per candidate whose
+/// immutable samplers are, element by element, exactly the immutable sampler a heap texture sampled
+/// through that candidate alone bakes, and which the plan never writes.
+#[test]
+fn a_constexpr_sampler_array_bakes_each_candidates_own_sampler() {
+    use super::engine_handles::{chosen_sampler_kernel, CHOSEN_SAMPLERS};
+    let dev = m3();
+    let Some(bc) = assemble("chosen", &chosen_sampler_kernel(&[0, 1, 2], None)) else {
+        return;
+    };
+    let pipe = compute(&dev, &bc, "chosen");
+    let set = &pipe.layout.sets[0].bindings;
+    assert!(
+        !set.iter()
+            .any(|b| matches!(b.source, BindingSource::HeapSampler { .. })),
+        "{set:?}"
+    );
+    let arrays: Vec<_> = set
+        .iter()
+        .filter(|b| matches!(b.source, BindingSource::SamplerArray { .. }))
+        .collect();
+    assert_eq!(arrays.len(), 1, "{set:?}");
+    let array = arrays[0];
+    assert_eq!(
+        array.source,
+        BindingSource::SamplerArray {
+            stage: Stage::Kernel,
+            compare: false,
+            integer: false,
+        }
+    );
+    assert_eq!(array.ty, vk::DescriptorType::SAMPLER);
+    assert_eq!(array.count, 3);
+    assert_eq!(array.immutable_sampler, None);
+    // Each element is the sampler a heap sample through that candidate alone bakes.
+    let alone: Vec<vk::SamplerDesc> = (0..CHOSEN_SAMPLERS.len())
+        .map(|i| {
+            let bc = assemble("chosen_alone", &chosen_sampler_kernel(&[i], None))
+                .expect("assembled once already");
+            let one = compute(&dev, &bc, "chosen");
+            let heap: Vec<_> = (one.layout.sets[0].bindings.iter())
+                .filter(|b| matches!(b.source, BindingSource::HeapSampler { .. }))
+                .collect();
+            assert_eq!(heap.len(), 1, "sampler {i}");
+            heap[0].immutable_sampler.expect("a constexpr heap sampler")
+        })
+        .collect();
+    assert_eq!(array.immutable_samplers, alone);
+    let state = BindState {
+        used_resources: vec![used(
+            1,
+            TextureType::Type2D,
+            PixelFormat::R32Float,
+            read(),
+            Some(A),
+        )],
+        ..Default::default()
+    };
+    let plan = pipe.plan(&dev, &state.shape()).expect("plan");
+    assert!(
+        !plan
+            .descriptors
+            .iter()
+            .any(|d| d.set == 0 && d.binding == array.binding),
+        "the plan writes an immutable sampler array"
+    );
+}
+
 /// `argument_buffer_runtime_sampler` of the owned `handles` fixture samples a heap texture through
 /// its runtime `[[sampler(0)]]`. Its set-0 heap sampler binding has no immutable sampler; the plan
 /// writes it with the sampler bound at the kernel's slot 0, made for the use (no comparison, a

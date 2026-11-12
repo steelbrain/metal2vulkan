@@ -141,6 +141,7 @@ pub(super) fn iface(
         snapshot_refusals: Vec::new(),
         level_reads: Vec::new(),
         private_bytes: 0,
+        sampler_arrays: Vec::new(),
     }
 }
 

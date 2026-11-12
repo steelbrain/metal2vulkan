@@ -784,7 +784,52 @@ fn binding_source(slot: ResourceSlot) -> BindingSource {
         ResourceKind::ExtendedShadow(color) => BindingSource::ExtendedShadow(color),
         ResourceKind::SnapshotTexels(texture) => BindingSource::SnapshotTexels(texture),
         ResourceKind::YCbCrPlanes(_) => BindingSource::YCbCrPlanes(metal(SlotClass::Texture)),
+        ResourceKind::SamplerArray { compare, integer } => BindingSource::SamplerArray {
+            stage: slot.stage,
+            compare,
+            integer,
+        },
     }
+}
+
+/// The immutable samplers of constexpr sampler array `slot` (`ResourceKind::SamplerArray`),
+/// whose binding holds `count` of them: each element's constexpr sampler, as its stage's interface
+/// lists them, made for the kind's use. Empty for every other binding.
+fn immutable_samplers(
+    slot: ResourceSlot,
+    count: u32,
+    ifaces: &[&StageInterface],
+    p: &DeviceProfile,
+) -> Result<Vec<vk::SamplerDesc>, Error> {
+    let ResourceKind::SamplerArray { compare, integer } = slot.kind else {
+        return Ok(Vec::new());
+    };
+    let invariant = |detail: &str| {
+        Error::Internal(InternalError::new(
+            InternalKind::Invariant,
+            format!("sampler array {slot:?}: {detail}"),
+        ))
+    };
+    let array = ifaces
+        .iter()
+        .filter(|i| i.stage == slot.stage)
+        .flat_map(|i| &i.sampler_arrays)
+        .find(|a| a.slot == slot)
+        .ok_or_else(|| invariant("not in its stage's interface"))?;
+    if u32::try_from(array.samplers.len()).ok() != Some(count) {
+        return Err(invariant("its samplers do not fill its count"));
+    }
+    let use_ = crate::metal::sampler::SamplerUse::new(compare, integer);
+    array
+        .samplers
+        .iter()
+        .map(|s| match *s {
+            crate::pipeline::sym::SamplerRef::Constexpr(words) => {
+                crate::lower::sampler::constexpr_desc(words, use_, p)
+            }
+            crate::pipeline::sym::SamplerRef::Slot(_) => Err(invariant("a runtime sampler")),
+        })
+        .collect()
 }
 
 /// The immutable sampler of binding `slot`: a combined image sampler's, heap sampler's, or
@@ -982,6 +1027,7 @@ fn layout(
             immutable_sampler: immutable_sampler(slot, p)?,
             flags: vk::DescriptorBindingFlags::empty(),
             variables: 0,
+            immutable_samplers: immutable_samplers(slot, d.count, ifaces, p)?,
         });
     }
     check_set_limits(&bindings, p)?;
@@ -1111,6 +1157,7 @@ fn heap_set(
             immutable_sampler: None,
             flags,
             variables: 0,
+            immutable_samplers: Vec::new(),
         });
     }
     Ok(Some(DescriptorSetLayout {

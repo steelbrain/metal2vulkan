@@ -62,6 +62,11 @@ pub struct DescriptorBinding {
     /// binding of more than one.
     #[cfg_attr(feature = "serde", serde(default))]
     pub variables: u32,
+    /// The constexpr samplers baked into a sampler array's binding
+    /// (`BindingSource::SamplerArray`), one per element (`count` of them); empty for every other
+    /// binding.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub immutable_samplers: Vec<vk::SamplerDesc>,
 }
 
 /// What feeds a [`DescriptorBinding`].
@@ -138,6 +143,15 @@ pub enum BindingSource {
     /// The snapshot of the texture the draw binds at this fragment texture slot
     /// (`ResourceKind::SnapshotTexels`), bound as a storage image.
     SnapshotTexels(u32),
+    /// A constexpr sampler array of `stage` (`ResourceKind::SamplerArray`) that samples set-1
+    /// heap images, made for the use with comparison or without (`compare`) of an integer texture
+    /// or not (`integer`): its samplers are the binding's `immutable_samplers`, which take no
+    /// descriptor write.
+    SamplerArray {
+        stage: Stage,
+        compare: bool,
+        integer: bool,
+    },
 }
 
 /// One push-constant range of a [`PipelineLayout`]: a stage's fixed window (vertex `[0, 64)`,

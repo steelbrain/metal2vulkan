@@ -522,6 +522,9 @@ fn select_heap_switch(
     cands: &[Candidate],
     m: &mut Meter,
 ) -> Result<TextureStrategy, Error> {
+    if let Some(array) = select_heap_array(cx, call, heap, smp_handle, cands, m)? {
+        return Ok(array);
+    }
     let ops = Operands {
         t: call.t,
         args: call.args,
@@ -545,6 +548,138 @@ fn select_heap_switch(
         null: NullArm::Zero(cx.lowered_repr(Value::Inst(call.at), call.inst.ty)?),
         prelude,
     })))
+}
+
+/// A heap image sampled through one of the constexpr samplers `cands`, chosen by handle
+/// `smp_handle`, as one sampling through an array of the candidates' samplers
+/// (`Source::HeapArray`): its element `smp_handle - first` is exactly the sampler of the candidate
+/// of that handle, and the raw emulation reads that element's state word
+/// (`heap_raw::State::Table`). Where every candidate is a constexpr sampler, their handles
+/// consecutive (`first..first + n`); the device indexes an array of samplers by a value that may
+/// differ between invocations (`shaderSampledImageArrayNonUniformIndexing`, which the heap's own
+/// image array already needs); the use is not tangled; and each candidate's sampling is the same
+/// but for its sampler and the state its raw emulation follows. `None` otherwise, and the switch
+/// over the candidates stays.
+fn select_heap_array(
+    cx: &mut SelectCx<'_>,
+    call: Call<'_>,
+    heap: (u32, ValueId),
+    smp_handle: ValueId,
+    cands: &[Candidate],
+    m: &mut Meter,
+) -> Result<Option<TextureStrategy>, Error> {
+    use super::heap_raw::State;
+    if cands.len() < 2 || !cx.profile.fields().descriptors.non_uniform_sampled_image {
+        return Ok(None);
+    }
+    if !cands
+        .iter()
+        .all(|c| matches!(c, Candidate::Constexpr { .. }))
+    {
+        return Ok(None);
+    }
+    let ops = Operands {
+        t: call.t,
+        args: call.args,
+    };
+    if !matches!(tangled(cx, &ops, 1)?, (None, false)) {
+        return Ok(None);
+    }
+    let mut order = cands.to_vec();
+    order.sort_by_key(|c| c.handle());
+    let Some(first) = order.first().map(|c| c.handle()) else {
+        return Ok(None);
+    };
+    if order.iter().zip(first..).any(|(c, h)| c.handle() != h) {
+        return Ok(None);
+    }
+    // Each candidate's sampling, as the switch's arm would take it; the heap sampler uses they
+    // add are dropped where the array replaces them.
+    let before = cx.families.sampler.heap.clone();
+    let mut arms = Vec::with_capacity(order.len());
+    for &c in &order {
+        let sampler = sampler_of(cx, c)?;
+        match select_heap_arm(cx, call, heap, sampler, Some(false), m)? {
+            TextureStrategy::Sampling(x) => arms.push(*x),
+            _ => return Ok(None),
+        }
+    }
+    // A candidate's sampling but for its sampler and its raw emulation's constant state.
+    let shape = |x: &Sampling| -> Option<Sampling> {
+        let mut y = x.clone();
+        let Source::Heap { handle, key } = y.source else {
+            return None;
+        };
+        y.source = Source::Heap {
+            handle,
+            key: HeapKey {
+                sampler: SamplerRef::Slot(0),
+                ..key
+            },
+        };
+        if let Some(raw) = &mut y.heap_raw {
+            if !matches!(raw.state, State::Constant { .. }) {
+                return None;
+            }
+            raw.state = State::Table { words: Vec::new() };
+        }
+        Some(y)
+    };
+    let Some(one) = arms.first().and_then(shape) else {
+        return Ok(None);
+    };
+    if arms.iter().any(|x| shape(x).as_ref() != Some(&one)) {
+        return Ok(None);
+    }
+    let mut samplers = Vec::with_capacity(arms.len());
+    for x in &arms {
+        match x.source {
+            Source::Heap {
+                key:
+                    HeapKey {
+                        sampler: SamplerRef::Constexpr(words),
+                        ..
+                    },
+                ..
+            } => samplers.push(words),
+            _ => return Ok(None),
+        }
+    }
+    let mut words = Vec::with_capacity(samplers.len());
+    for w in &samplers {
+        words.push(super::constexpr::sampler_word(*w)?.0);
+    }
+    let array = super::ConstexprArray { first, samplers };
+    let arrays = &mut cx.families.sampler.arrays;
+    let index = match arrays.iter().position(|a| *a == array) {
+        Some(i) => i,
+        None => {
+            arrays.push(array);
+            arrays.len() - 1
+        }
+    };
+    let index =
+        u32::try_from(index).map_err(|_| cx.invariant("constexpr sampler arrays past u32"))?;
+    let mut x = one;
+    let Source::Heap { handle, key } = x.source else {
+        return Err(cx.invariant("a heap sampling without its heap source"));
+    };
+    let key = super::HeapArrayKey {
+        group: key.group,
+        compare: key.compare,
+        array: index,
+    };
+    x.source = Source::HeapArray {
+        handle,
+        sampler: smp_handle,
+        key,
+    };
+    if let Some(raw) = &mut x.heap_raw {
+        raw.state = State::Table { words };
+    }
+    cx.families.sampler.heap = before;
+    cx.families.sampler.heap_arrays.insert(key);
+    Ok(Some(TextureStrategy::Sampling(Box::new(x))))
 }
 
 /// The emulation of heap sampling call `call` of element `handle` of heap group `group` through
@@ -712,7 +847,7 @@ fn heap_raw_sample(
         State::Constant { address, .. } => address
             .get(a)
             .is_some_and(|m| matches!(m, TapAddress::Repeat | TapAddress::Mirror)),
-        State::Slot { .. } => true,
+        State::Slot { .. } | State::Table { .. } => true,
     };
     let moved = offset.as_deref().unwrap_or_default();
     if moved.iter().enumerate().any(|(a, k)| *k != 0 && wraps(a)) {
@@ -731,7 +866,8 @@ fn heap_raw_sample(
         let note = PrecisionNote::BicubicFilterArithmetic;
         let raw = NoteTest::equal(NoteOn::HeapRaw(cx.stage), FILTERED, FILTERED);
         let when: Vec<crate::lower::select::NoteClause> = match state {
-            State::Constant { linear: false, .. } => Vec::new(),
+            // A sampler array's table is made of candidates whose states each noted their own.
+            State::Constant { linear: false, .. } | State::Table { .. } => Vec::new(),
             State::Constant { .. } => vec![[raw].into()],
             State::Slot { sampler: n } => super::linear::filtering_word(n)
                 .into_iter()

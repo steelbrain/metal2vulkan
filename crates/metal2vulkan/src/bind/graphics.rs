@@ -1915,6 +1915,10 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 descriptors.extend(planner(&mut heap)?.array(set.set, b)?);
                 continue;
             }
+            // A constexpr sampler array: the layout's immutable samplers, no write.
+            if let BindingSource::SamplerArray { .. } = b.source {
+                continue;
+            }
             // A separate sampler: a constexpr one is the layout's immutable sampler, no write; a
             // runtime one the sampler bound at its slot, made for the use.
             if let BindingSource::SeparateSampler { stage, sampler } = b.source {
@@ -2129,7 +2133,9 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                     SyntheticBinding::ExecutionStatus => WriteSource::ExecutionStatus,
                     other => return Err(internal(format!("a render binding {other:?}"))),
                 },
-                BindingSource::Heap(_) | BindingSource::HeapSampler { .. } => {
+                BindingSource::Heap(_)
+                | BindingSource::HeapSampler { .. }
+                | BindingSource::SamplerArray { .. } => {
                     return Err(internal("a heap binding outside the heap planner"))
                 }
                 BindingSource::SeparateSampler { .. } => {

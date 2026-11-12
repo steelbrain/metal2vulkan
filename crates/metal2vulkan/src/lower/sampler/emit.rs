@@ -705,7 +705,59 @@ pub(super) fn sampled_image(
             };
             Ok((si, image, Some(element.live)))
         }
+        Source::HeapArray {
+            handle,
+            sampler,
+            key,
+        } => {
+            let Some(g) = cx.decl.families.sampler.heap_arrays.get(&key).copied() else {
+                return Err(cx.fail(format!("constexpr sampler array {key:?} is not declared")));
+            };
+            let element = heap_element(cx, fb, (key.group, !key.compare), handle)?;
+            // The element the sampler handle names (element 0 where it names none, whose result
+            // `sampling_value` makes zero), which may differ between invocations.
+            let (index, _) = array_element(cx, fb, sampler, key)?;
+            let base = fb.module().global_value(g)?;
+            let p = fb.access_chain_non_uniform(base, index)?;
+            let sampler = fb.load(p, MemAccess::default())?;
+            let si = fb.sampled_image(element.img, sampler)?;
+            let image = CombinedImage {
+                plane: super::plane_of(element.decl.dim),
+                arrayed: element.decl.arrayed,
+                texel: element.decl.texel,
+            };
+            Ok((si, image, Some(element.live)))
+        }
     }
+}
+
+/// The element of constexpr sampler array `key` that sampler handle `sampler` names (its distance
+/// from the array's first candidate's handle), 0 where it names none, and whether it names one (a
+/// `bool`): a handle outside the array is a switch over the candidates' null arm.
+pub(super) fn array_element(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    sampler: ValueId,
+    key: super::HeapArrayKey,
+) -> BResult<(SValue, SValue)> {
+    let array = usize::try_from(key.array)
+        .ok()
+        .and_then(|a| cx.plan.families.sampler.arrays.get(a));
+    let Some(array) = array else {
+        return Err(cx.fail(format!("constexpr sampler array {key:?} is not planned")));
+    };
+    let (first, len) = (array.first, array.samplers.len());
+    let len = u32::try_from(len).map_err(|_| cx.fail("a constexpr sampler array past u32"))?;
+    let h = cx.operand(fb, sampler)?;
+    let first = fb.u32_const(first)?;
+    let first = fb.module().const_value(first)?;
+    let i = fb.binary(BinOp::ISub, h, first)?;
+    let len = fb.u32_const(len)?;
+    let len = fb.module().const_value(len)?;
+    let named = fb.binary(BinOp::ULessThan, i, len)?;
+    let zero = fb.u32_const(0)?;
+    let zero = fb.module().const_value(zero)?;
+    Ok((fb.select(named, i, zero)?, named))
 }
 
 /// Where a sampling operation observes its residency on a slot with a sparse arm: the slot's
@@ -753,6 +805,14 @@ pub fn sampling_value(
         if cx.plan.families.sampler.cubic_reach {
             cubic_reach(cx, fb, sampler)?;
         }
+    }
+    // A sampler handle outside a constexpr sampler array: zero, as the switch's null arm.
+    if let Source::HeapArray { sampler, key, .. } = s.source {
+        let (_, named) = array_element(cx, fb, sampler, key)?;
+        let ty = fb.value_ty(value)?;
+        let zero = fb.module().constant(Constant::Null { ty })?;
+        let zero = fb.module().const_value(zero)?;
+        return fb.select(named, value, zero);
     }
     Ok(value)
 }
@@ -931,7 +991,7 @@ pub(super) fn sampled_value(
     // selection gives a slot whose observed samples or gathers it does not answer no tile-map arm.
     let tiled = match s.source {
         Source::Combined(key) => tile_map(cx, key.texture),
-        Source::Heap { .. } | Source::HeapSampler { .. } => None,
+        Source::Heap { .. } | Source::HeapSampler { .. } | Source::HeapArray { .. } => None,
     };
     let fetched = matches!(s.op, SampleOp::PixelFetch { .. });
     if arm.is_some() && tiled.is_some() && !fetched && s.footprint.is_none() {
@@ -2072,7 +2132,9 @@ pub(super) fn held_value(
         Source::Combined(key) if !s.depth && s.half_texel => {
             half_class(cx, &ImageRef::Slot(key.texture), form)
         }
-        Source::Heap { handle, .. } | Source::HeapSampler { handle, .. }
+        Source::Heap { handle, .. }
+        | Source::HeapSampler { handle, .. }
+        | Source::HeapArray { handle, .. }
             if !s.depth && s.half_texel =>
         {
             crate::lower::texture::heap_half_class(cx, fb, handle, form)?

@@ -407,6 +407,24 @@ pub struct StageInterface {
     /// `PrecisionNote::FunctionStorageAssumed`'s announcement names.
     #[cfg_attr(feature = "serde", serde(default))]
     pub private_bytes: u64,
+    /// The samplers of each constexpr sampler array the module declares
+    /// (`ResourceKind::SamplerArray`), which link bakes into its binding as the immutable samplers
+    /// (`DescriptorBinding::immutable_samplers`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub sampler_arrays: Vec<SamplerArray>,
+}
+
+/// One constexpr sampler array of a stage (`ResourceKind::SamplerArray`): the binding a heap
+/// sampling indexes by its sampler handle's distance from the first candidate's, Metal's
+/// `constexpr sampler`s it chooses among.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SamplerArray {
+    /// The array's binding symbol, whose kind states the use its samplers are made for.
+    pub slot: ResourceSlot,
+    /// Each element's constexpr sampler, in element order.
+    pub samplers: Vec<crate::pipeline::sym::SamplerRef>,
 }
 
 /// What leaves an own-pixel texture slot of a fragment function out of the slots a draw can read

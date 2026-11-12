@@ -72,7 +72,10 @@
 //! - **Heap samplers**. A heap image is sampled through a separate sampler binding
 //!   (`BindingSource::HeapSampler`) in set 0: a constexpr sampler is the layout's immutable sampler
 //!   and takes no write; a runtime `[[sampler(n)]]` is written with the sampler bound at slot `n`
-//!   made for the use, or the neutral sampler where none is. One with an opaque-black border (the
+//!   made for the use, or the neutral sampler where none is. A sampling that chooses among
+//!   constexpr samplers by its sampler handle reads an element of a constexpr sampler array
+//!   (`BindingSource::SamplerArray`), whose elements are the layout's immutable samplers and take
+//!   no write, each checked as a constexpr heap sampler is. One with an opaque-black border (the
 //!   immutable sampler's, or the bound sampler's shape) meets every member a sampled array holds,
 //!   so each such member's sampled view must read that border exactly
 //!   (`metal::sampler::check_border_view`), as a separate slot sampler's textures must. One that
@@ -924,6 +927,25 @@ impl<'a> HeapPlanner<'a> {
                                 filtering,
                                 compare: sampler.compare,
                             });
+                        }
+                    }
+                    // A constexpr sampler array's elements: each its immutable sampler's border
+                    // and filtering.
+                    BindingSource::SamplerArray {
+                        stage,
+                        compare,
+                        integer,
+                    } => {
+                        for d in &b.immutable_samplers {
+                            opaque_black |= opaque_black_border(d);
+                            let filtering = desc_filtering(d);
+                            if filtering.0 && !integer {
+                                filters.push(HeapFilter {
+                                    stage,
+                                    filtering,
+                                    compare,
+                                });
+                            }
                         }
                     }
                     _ => {}

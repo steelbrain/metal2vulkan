@@ -406,6 +406,7 @@ surface! {
         struct RecordField N;
         enum RecordValue N;
         struct SampledLevels N;
+        struct SamplerArray N;
         struct SamplerLevels N;
         struct SamplerSlot N;
         enum SlotInterface N;

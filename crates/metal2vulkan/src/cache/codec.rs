@@ -48,9 +48,9 @@ use crate::pipeline::graphics::{
 use crate::pipeline::interface::{
     AccessSet, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView, LevelReads,
     MeshRecords, NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc,
-    PushPlacement, RecordField, RecordValue, SampledLevels, SamplerSlot, SlotInterface,
-    SnapshotRefusal, StageDescriptor, StageInterface, StageSpec, TessellationStage, TextureAccess,
-    TextureSlot, ThreadgroupArgument, Window,
+    PushPlacement, RecordField, RecordValue, SampledLevels, SamplerArray, SamplerSlot,
+    SlotInterface, SnapshotRefusal, StageDescriptor, StageInterface, StageSpec, TessellationStage,
+    TextureAccess, TextureSlot, ThreadgroupArgument, Window,
 };
 use crate::pipeline::layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,
@@ -853,6 +853,7 @@ codec_enum! {
         ExtendedShadow(f0),
         SnapshotTexels(f0),
         YCbCrPlanes(f0),
+        SamplerArray { compare, integer },
     }
     AccelerationStructureLevel { Primitive, Instance }
     SamplerRef { Slot(f0), Constexpr(f0) }
@@ -1115,8 +1116,9 @@ codec_struct! {
         emulated_payload,
         payload, reaches_command_buffers, command_writes, writes_textures, numbered_samplers,
         own_pixel_textures,
-        snapshot_textures, snapshot_refusals, level_reads, private_bytes,
+        snapshot_textures, snapshot_refusals, level_reads, private_bytes, sampler_arrays,
     }
+    SamplerArray { slot, samplers }
     LevelReads { slot, any, named, lowest_read, sampled }
     SampledLevels { sampler, highest_lod_bits, lowest_lod_bits, computed }
     TessellationStage { domain, control_points, emulated }
@@ -1372,6 +1374,7 @@ codec_struct! {
     DescriptorSetLayout { set, bindings, flags }
     DescriptorBinding {
         binding, ty, count, stages, source, immutable_sampler, flags, variables,
+        immutable_samplers,
     }
     PushConstantRange { stages, offset, size }
     VertexInputState { bindings, attributes, pulled, variant_pulled }
@@ -1494,6 +1497,7 @@ codec_enum! {
         ExtendedShadow(f0),
         SnapshotTexels(f0),
         YCbCrPlanes(f0),
+        SamplerArray { stage, compare, integer },
     }
     VertexStride { Static(f0), PerBind }
 }

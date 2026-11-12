@@ -1911,7 +1911,7 @@ impl RawLayout {
         if layout
             .bindings
             .iter()
-            .any(|b| b.immutable_sampler.is_some())
+            .any(|b| b.immutable_sampler.is_some() || !b.immutable_samplers.is_empty())
         {
             return Err(internal("a heap set with an immutable sampler"));
         }

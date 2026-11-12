@@ -903,6 +903,7 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
                 immutable_sampler: None,
                 flags: vk::DescriptorBindingFlags::empty(),
                 variables: 1,
+                immutable_samplers: Vec::new(),
             },
             DescriptorBinding {
                 binding: 1,
@@ -913,6 +914,7 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
                 immutable_sampler: None,
                 flags: vk::DescriptorBindingFlags::empty(),
                 variables: 1,
+                immutable_samplers: Vec::new(),
             },
         ],
         flags: vk::DescriptorSetLayoutCreateFlags::empty(),
@@ -932,6 +934,7 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
             immutable_sampler: None,
             flags: vk::DescriptorBindingFlags::PARTIALLY_BOUND,
             variables: 1,
+            immutable_samplers: Vec::new(),
         },
         DescriptorBinding {
             binding: 3,
@@ -945,6 +948,7 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
             immutable_sampler: None,
             flags: vk::DescriptorBindingFlags::empty(),
             variables: 1,
+            immutable_samplers: Vec::new(),
         },
     ];
     if let Some(last) = p.layout.sets.last_mut() {

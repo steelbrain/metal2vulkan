@@ -3326,5 +3326,6 @@ fn stage_interface(
         snapshot_refusals: snapshots.refusals,
         level_reads,
         private_bytes: plan.private_bytes,
+        sampler_arrays: crate::lower::sampler::sampler_arrays(plan),
     }
 }

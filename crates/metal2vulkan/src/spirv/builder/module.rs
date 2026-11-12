@@ -645,6 +645,13 @@ impl ModuleBuilder {
                     }) if !matches!(dim, Dim::Buffer | Dim::SubpassData)
                 ),
                 ResourceKind::SeparateSampler(_) => matches!(self.types.get(ty)?, Type::Sampler),
+                // A constexpr sampler array is exactly a sized array of samplers.
+                ResourceKind::SamplerArray { .. } => match self.types.get(ty)? {
+                    Type::Array {
+                        elem, stride: None, ..
+                    } => matches!(self.types.get(*elem)?, Type::Sampler),
+                    _ => false,
+                },
                 _ => true,
             };
         if !ok {

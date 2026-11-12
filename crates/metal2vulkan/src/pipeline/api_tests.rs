@@ -502,6 +502,7 @@ mod serde_round_trips {
                         immutable_sampler: None,
                         flags: vk::DescriptorBindingFlags::empty(),
                         variables: 1,
+                        immutable_samplers: Vec::new(),
                     },
                     DescriptorBinding {
                         binding: 1,
@@ -515,6 +516,7 @@ mod serde_round_trips {
                         immutable_sampler: None,
                         flags: vk::DescriptorBindingFlags::empty(),
                         variables: 1,
+                        immutable_samplers: Vec::new(),
                     },
                 ],
                 flags: vk::DescriptorSetLayoutCreateFlags::empty(),

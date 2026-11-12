@@ -1418,6 +1418,7 @@ fn a_form_a_heap_reads_is_held_raw_in_the_unsigned_class() {
         immutable_sampler: None,
         flags: vk::DescriptorBindingFlags::empty(),
         variables: 1,
+        immutable_samplers: Vec::new(),
     };
     let mut reads = planner(vec![f2d, u2d], BTreeSet::new());
     let float = reads.array(1, &binding(f2d)).expect("float array");
@@ -1469,6 +1470,7 @@ fn a_heap_member_a_mode_two_write_would_round_is_refused() {
         immutable_sampler: None,
         flags: vk::DescriptorBindingFlags::empty(),
         variables: 1,
+        immutable_samplers: Vec::new(),
     };
     let mut checked = 0;
     for (stem, p) in committed_profiles().expect("profiles") {

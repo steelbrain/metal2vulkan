@@ -691,13 +691,16 @@ impl VariantObjects {
         let push_set_zero = pushes_set_zero(device, layout, stages, pipeline);
         let dynamic = dynamic_bindings(device, layout, push_set_zero);
         let set_needs = needs_of(device, layout, push_set_zero, &dynamic)?;
-        // One sampler per binding that bakes one, in the layout's order: the live set of the same
-        // samplers where it holds one, else one made now (`sampler_set`).
+        // One sampler per binding that bakes one, and one per element of a sampler array, in the
+        // layout's order: the live set of the same samplers where it holds one, else one made now
+        // (`sampler_set`).
         let descs: Vec<metal2vulkan::vk::SamplerDesc> = layout
             .sets
             .iter()
             .flat_map(|set| &set.bindings)
-            .filter_map(|binding| binding.immutable_sampler)
+            .flat_map(|binding| {
+                (binding.immutable_sampler.into_iter()).chain(binding.immutable_samplers.clone())
+            })
             .collect();
         let (samplers, made) = sampler_set(device, descs)?;
         if made && exit_guard::in_host_step() {
@@ -1440,6 +1443,7 @@ fn set_zero_shape(layout: &PipelineLayout, push_set_zero: bool, dynamic: &[u32])
             binding.count.hash(&mut hasher);
             binding.stages.hash(&mut hasher);
             binding.immutable_sampler.hash(&mut hasher);
+            binding.immutable_samplers.hash(&mut hasher);
             binding.flags.hash(&mut hasher);
         }
     }
@@ -1860,22 +1864,34 @@ fn immutable_pushes(
     let mut baked = samplers.iter().copied();
     let mut pushes = Vec::new();
     for (index, set) in layout.sets.iter().enumerate() {
-        for binding in set
-            .bindings
-            .iter()
-            .filter(|b| b.immutable_sampler.is_some())
-        {
-            let sampler = baked
-                .next()
-                .ok_or_else(|| internal("a sampler set shorter than its layout"))?;
+        for binding in &set.bindings {
+            // The sampler of each element: a binding's one for all, a sampler array's its own.
+            let each: Vec<vk::Sampler> = match binding.immutable_sampler {
+                Some(_) => {
+                    let sampler = baked
+                        .next()
+                        .ok_or_else(|| internal("a sampler set shorter than its layout"))?;
+                    vec![sampler; binding.count as usize]
+                }
+                None => (&mut baked)
+                    .take(binding.immutable_samplers.len())
+                    .collect(),
+            };
+            if each.len() < binding.immutable_samplers.len() {
+                return Err(internal("a sampler set shorter than its layout"));
+            }
             let ty: vk::DescriptorType = binding.ty.into();
             if index == 0 && ty == vk::DescriptorType::SAMPLER {
-                pushes.extend((0..binding.count).map(|element| SetWrite {
-                    binding: binding.binding,
-                    element,
-                    ty,
-                    info: Info::Image(vk::DescriptorImageInfo::default().sampler(sampler)),
-                }));
+                pushes.extend(
+                    (0..binding.count)
+                        .zip(each)
+                        .map(|(element, sampler)| SetWrite {
+                            binding: binding.binding,
+                            element,
+                            ty,
+                            info: Info::Image(vk::DescriptorImageInfo::default().sampler(sampler)),
+                        }),
+                );
             }
         }
     }

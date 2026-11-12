@@ -1243,6 +1243,17 @@ for dependency in &pipeline.dependencies {
   (`DescriptorCount`), and a stage that would bind it only to test its argument samplers for a
   cubic filter binds nothing, so the plan refuses a cubic sampler listed beside it
   (`SamplerBicubicFilter`).
+- A heap texture sampled through one of several constexpr samplers, the one a sampler handle names
+  at run time (a table of constexpr samplers read at a computed index), samples once through a
+  set-0 array of those samplers (`ResourceKind::SamplerArray`, `BindingSource::SamplerArray`),
+  at the element the handle names. The binding's `immutable_samplers` holds each element's sampler,
+  `count` of them, each made as a heap texture sampled through that sampler alone bakes it; it takes
+  no descriptor write, and a pushed set 0 pushes them. `StageInterface::sampler_arrays` lists each
+  array's constexpr samplers by its slot. The module takes this form where the candidates' handles
+  are consecutive, each candidate's sampling is the same but for its sampler, and the device indexes
+  a sampler array by a value that may differ between invocations
+  (`shaderSampledImageArrayNonUniformIndexing`, which heap textures already need); otherwise it
+  switches over the candidates, one sampling per candidate.
 - Each binding's `variables` is the most variables one stage's entry point uses at it (those its
   `OpEntryPoint` lists): a function that reaches a buffer through several types uses a variable of
   each type at the buffer's binding. A set-0 uniform or storage buffer binding may be created as its dynamic type

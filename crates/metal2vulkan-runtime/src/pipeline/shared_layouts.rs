@@ -130,7 +130,16 @@ pub(crate) fn shared_layout(
                         .ok_or_else(|| internal("a sampler set shorter than its layout"))?;
                     vec![sampler; binding.count as usize]
                 }
-                None => Vec::new(),
+                // A sampler array's: one sampler per element, each its own.
+                None => {
+                    let each: Vec<vk::Sampler> = (&mut baked)
+                        .take(binding.immutable_samplers.len())
+                        .collect();
+                    if each.len() != binding.immutable_samplers.len() {
+                        return Err(internal("a sampler set shorter than its layout"));
+                    }
+                    each
+                }
             };
             let ty: vk::DescriptorType = binding.ty.into();
             let made_dynamic = index == 0 && dynamic.contains(&binding.binding);

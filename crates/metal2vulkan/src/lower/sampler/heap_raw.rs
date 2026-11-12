@@ -70,7 +70,15 @@ pub enum State {
     /// filter, the address modes, the border color, and the coordinates; emulated where it states
     /// one filter for minification and magnification, no mip filter, and no anisotropy.
     Slot { sampler: u32 },
+    /// The constexpr sampler a sampling through a constexpr sampler array reads
+    /// (`Source::HeapArray`): each element's [`SamplerWord`], in element order, the one at the
+    /// element the sampler handle names read as a runtime slot's word is.
+    Table { words: Vec<u32> },
 }
+
+/// The words of one element of a [`State::Table`] word's selection: its comparison, its select,
+/// and their constants.
+const TABLE_ELEMENT_WORDS: u32 = 5 + 6 + 2 * 4;
 
 /// The census words of the emulation's head: the handle's class index, its test and the form, the
 /// word's tests, the branch and its merge, the unsigned element's access chain and load, and the
@@ -105,10 +113,23 @@ impl HeapRaw {
         let (word, taps) = match &self.state {
             State::Constant { pixel: true, .. } => (0, 0),
             State::Constant { pixel: false, .. } => (position, 0),
-            State::Slot { .. } => (
-                super::linear::WORD_WORDS + position + axes * super::position::MODE_POSITION_WORDS,
-                axes * super::linear::WORD_TAP_WORDS,
-            ),
+            State::Slot { .. } | State::Table { .. } => {
+                // A table's element index, read again, and its selection of the element's word.
+                let table = match &self.state {
+                    State::Table { words } => super::ELEMENT_WORDS.saturating_add(
+                        TABLE_ELEMENT_WORDS
+                            .saturating_mul(u32::try_from(words.len()).unwrap_or(u32::MAX)),
+                    ),
+                    _ => 0,
+                };
+                (
+                    super::linear::WORD_WORDS
+                        + table
+                        + position
+                        + axes * super::position::MODE_POSITION_WORDS,
+                    axes * super::linear::WORD_TAP_WORDS,
+                )
+            }
         };
         let linear = super::linear::PLANE_WORDS + 4 * DECODE_CALL_WORDS + offset + word + 2 * taps;
         let nearest =
@@ -137,6 +158,7 @@ pub(crate) fn emit(
     let (group, handle) = match s.source {
         Source::Heap { handle, key } => (key.group, handle),
         Source::HeapSampler { handle, key, .. } => (key.group, handle),
+        Source::HeapArray { handle, key, .. } => (key.group, handle),
         Source::Combined(_) => return Err(cx.fail("a raw heap sample of a slot")),
     };
     let f32_routine = cx.decl.families.texture.heap_raw.get(&false).copied();
@@ -152,9 +174,11 @@ pub(crate) fn emit(
     let flags = crate::lower::texture::heap_flags(cx, fb, h)?;
     let (form, member) = crate::lower::texture::heap_raw_form(fb, cx.plan.stage, flags)?;
     let bfloat = bfloat_form(fb, &t, form)?;
-    // A runtime sampler's word, and whether it states a filter the emulation answers.
+    // A runtime sampler's word, or the word of the constexpr sampler a sampler array's element
+    // holds, and whether it states a filter the emulation answers.
     let word = match &raw.state {
         State::Slot { sampler } => Some(super::emit::sampler_word(cx, fb, Pixel::Spec(*sampler))?),
+        State::Table { words } => Some(table_word(cx, fb, s, words)?),
         State::Constant { .. } => None,
     };
     let mut take = member;
@@ -221,8 +245,12 @@ pub(crate) fn emit(
                 border: *border,
                 pixel: *pixel,
             },
-            (State::Slot { .. }, Some(word)) => Addressing::Word { word, axes: AXES },
-            (State::Slot { .. }, None) => return Err(cx.fail("a raw heap sample without its word")),
+            (State::Slot { .. } | State::Table { .. }, Some(word)) => {
+                Addressing::Word { word, axes: AXES }
+            }
+            (State::Slot { .. } | State::Table { .. }, None) => {
+                return Err(cx.fail("a raw heap sample without its word"))
+            }
         };
         // Whether Metal filters linearly: a linear sampler's sample of a form but a bfloat one.
         let filter = match (raw.gather, &raw.state, linear_word) {
@@ -230,11 +258,11 @@ pub(crate) fn emit(
             (None, State::Constant { linear: true, .. }, _) => {
                 Some(fb.unary(crate::spirv::ir::UnOp::LogicalNot, bfloat)?)
             }
-            (None, State::Slot { .. }, Some(linear)) => {
+            (None, State::Slot { .. } | State::Table { .. }, Some(linear)) => {
                 let not_bfloat = fb.unary(crate::spirv::ir::UnOp::LogicalNot, bfloat)?;
                 Some(fb.binary(BinOp::LogicalAnd, linear, not_bfloat)?)
             }
-            (None, State::Slot { .. }, None) => {
+            (None, State::Slot { .. } | State::Table { .. }, None) => {
                 return Err(cx.fail("a raw heap sample without its word's filter"))
             }
         };
@@ -270,6 +298,36 @@ pub(crate) fn emit(
         [x] => Ok(x),
         _ => Err(cx.fail("a raw heap sample's branch without its value")),
     }
+}
+
+/// The word of the constexpr sampler at the element of sampling `s`'s sampler array its sampler
+/// handle names (`Source::HeapArray`): `words[element]`, selected at run time (element 0's where
+/// the handle names none, whose result the sampling makes zero).
+fn table_word(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    s: &Sampling,
+    words: &[u32],
+) -> BResult<SValue> {
+    let Source::HeapArray { sampler, key, .. } = s.source else {
+        return Err(cx.fail("a sampler array's word outside a sampler array"));
+    };
+    let (element, _) = super::emit::array_element(cx, fb, sampler, key)?;
+    let mut word = None;
+    for (k, &w) in (0u32..).zip(words) {
+        let w = fb.u32_const(w)?;
+        let w = fb.module().const_value(w)?;
+        word = Some(match word {
+            None => w,
+            Some(v) => {
+                let k = fb.u32_const(k)?;
+                let k = fb.module().const_value(k)?;
+                let is = fb.binary(BinOp::IEqual, element, k)?;
+                fb.select(is, w, v)?
+            }
+        });
+    }
+    word.ok_or_else(|| cx.fail("a sampler array without samplers"))
 }
 
 /// Whether the form at index `form` (a `u32`) of `ExtendedRange::HEAP_READ` is a bfloat one (a

@@ -14,9 +14,14 @@
 //! class through a comparison heap sampler. A runtime `[[sampler(n)]]` beside a heap image is a
 //! heap sampler binding without an immutable sampler, which the binder writes with the sampler
 //! bound at slot `n` made for the use, as a combined binding's runtime sampler. A sampler of
-//! several static candidates beside a heap image (a table of constexpr samplers read at an index
-//! the run knows) is a switch-at-use over them, one arm per candidate, each the heap element
-//! through that candidate's heap sampler.
+//! several constexpr candidates beside a heap image (a table of constexpr samplers read at an index
+//! the run knows), their handles consecutive, each candidate's sampling the same but for its
+//! sampler, is one sampling through a set-0 array of their samplers (`ResourceKind::SamplerArray`,
+//! one immutable sampler per candidate, its element `NonUniform` and at the handle's distance from
+//! the first candidate's; a handle outside it reads zero), where the device indexes a sampler array
+//! by a value that may differ between invocations (`shaderSampledImageArrayNonUniformIndexing`).
+//! Any other sampler of several static candidates beside a heap image is a switch-at-use over
+//! them, one arm per candidate, each the heap element through that candidate's heap sampler.
 //!
 //! **Argument buffers' samplers** (the sampler half). A heap image sampled through a sampler loaded
 //! from an argument buffer reads `OpSampledImage` of its heap element and of the heap sampler's
@@ -261,6 +266,37 @@ pub struct HeapSamplerKey {
     pub compare: bool,
 }
 
+/// One use of a constexpr sampler array: heap group `group` sampled, with comparison or without,
+/// through the element of array `array` ([`SamplerPlan::arrays`]) a sampler handle chooses. Its
+/// binding is final once the group's numeric type is ([`finish`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct HeapArrayKey {
+    pub group: u32,
+    pub compare: bool,
+    pub array: u32,
+}
+
+/// The constexpr samplers a sampler handle chooses among in one heap sampling: element `i` is the
+/// candidate of handle `first + i` (`memory::handles::CONSTEXPR_SAMPLER_BASE` plus the entry's
+/// ordinal), every handle of `first..first + samplers.len()` one candidate's.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConstexprArray {
+    pub first: u32,
+    /// Each element's canonical state words (`SamplerRef::Constexpr`).
+    pub samplers: Vec<[u64; 2]>,
+}
+
+/// The SPIR-V words of one reading of a constexpr sampler array's element index
+/// (`emit::array_element`): the handle less the first candidate's, its range test, and the select
+/// of a valid index.
+pub(crate) const ELEMENT_WORDS: u32 = 5 + 5 + 6;
+
+/// The SPIR-V words a sampling through a constexpr sampler array adds to a heap element's: the
+/// element index read for the sampler and again for the result, their constants (the first
+/// handle, the length, zero), the access chain and the sampler's load, and the select of the
+/// result or zero (a handle outside the array is the switch's null arm) with its constant.
+pub(crate) const ARRAY_WORDS: u32 = 2 * ELEMENT_WORDS + 3 * 4 + 5 + 4 + 6 + 4;
+
 /// An upper estimate of the SPIR-V words of an argument-buffer sampler's cubic test past its
 /// entry's word: the mask, the test, the selection construct, and the status mark (the push field's
 /// load, the address, the pointer, the bit, and the atomic `OR`).
@@ -280,6 +316,15 @@ pub enum Source {
         handle: ValueId,
         sampler: ValueId,
         key: HeapSamplerKey,
+    },
+    /// Element `handle` of the heap array of `key.group`, through element `sampler - first` (a
+    /// constexpr sampler handle's value, [`ConstexprArray::first`]) of the constexpr sampler array
+    /// of `key`, whose elements are the candidates' samplers. A handle outside the array reads
+    /// zero, as a switch over the candidates' null arm does.
+    HeapArray {
+        handle: ValueId,
+        sampler: ValueId,
+        key: HeapArrayKey,
     },
 }
 
@@ -810,6 +855,16 @@ impl Sampling {
                 SampleOp::QueryLevel { .. } => "sampler.argument_sampler.query_level",
             };
         }
+        if let Source::HeapArray { .. } = self.source {
+            return match &self.op {
+                SampleOp::Sample { .. } => "sampler.sampler_array.sample",
+                SampleOp::PixelFetch { .. } => "sampler.sampler_array.pixel_fetch",
+                SampleOp::Bicubic(_) => "sampler.sampler_array.bicubic",
+                SampleOp::Gather { .. } => "sampler.sampler_array.gather",
+                SampleOp::Lod { .. } => "sampler.sampler_array.query_lod",
+                SampleOp::QueryLevel { .. } => "sampler.sampler_array.query_level",
+            };
+        }
         if let Source::Heap { .. } = self.source {
             return match &self.op {
                 SampleOp::Sample { .. } => "sampler.heap.sample",
@@ -956,6 +1011,7 @@ impl Sampling {
         let heap = match self.source {
             Source::Combined(_) => 0,
             Source::Heap { .. } => 32,
+            Source::HeapArray { .. } => 32 + ARRAY_WORDS,
             Source::HeapSampler { .. } => 56 + 2 * ENTRY_FIELD_WORDS + CUBIC_REACH_WORDS,
         };
         let residency = if self.residency {
@@ -971,7 +1027,9 @@ impl Sampling {
             // A heap color texture's call reads the class its handle carries first.
             (_, Some(f)) if f.conv == crate::lower::texture::TexelConv::F16 => {
                 let class = match self.source {
-                    Source::Heap { .. } | Source::HeapSampler { .. } if !self.depth => {
+                    Source::Heap { .. } | Source::HeapSampler { .. } | Source::HeapArray { .. }
+                        if !self.depth =>
+                    {
                         crate::lower::texture::HEAP_CLASS_WORDS
                     }
                     _ => 0,
@@ -1157,6 +1215,13 @@ pub struct SamplerPlan {
     pub heap_samplers: BTreeSet<HeapSamplerKey>,
     /// The sampler array each reads, by its use, set by [`finish`].
     pub heap_sampler_decls: BTreeMap<HeapSamplerKey, SamplerUse>,
+    /// The constexpr sampler arrays heap samplings choose among, by [`HeapArrayKey::array`].
+    pub arrays: Vec<ConstexprArray>,
+    /// Every use of a constexpr sampler array.
+    pub heap_arrays: BTreeSet<HeapArrayKey>,
+    /// The use each one's binding is made for, set by [`finish`]: one binding per distinct array
+    /// and use.
+    pub heap_array_decls: BTreeMap<HeapArrayKey, SamplerUse>,
     /// The texture slots a bicubic sample reads, each with its `BicubicTexels` specialization.
     pub bicubic: BTreeSet<u32>,
     /// The bicubic routines the samples call, by dimension, an extended-range sample's among them.
@@ -1216,6 +1281,8 @@ pub struct Declared {
     pub heap: BTreeMap<HeapKey, GlobalId>,
     /// The set-1 sampler array of each use of an argument buffer's sampler.
     pub heap_samplers: BTreeMap<HeapSamplerKey, GlobalId>,
+    /// The constexpr sampler array variable of each use of one.
+    pub heap_arrays: BTreeMap<HeapArrayKey, GlobalId>,
     /// The `SamplerState` specialization constant (`u32`) of each runtime sampler slot whose
     /// word the function reads, masked by [`RuntimeSlot::fields`].
     pub words: BTreeMap<u32, SValue>,
@@ -1322,18 +1389,53 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     // One heap sampler binding per distinct sampler use (`declare`).
     let heap_samplers: BTreeSet<CombinedSampler> = heap_decls.values().copied().collect();
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    // One constexpr sampler array binding per distinct array and use (`declare`), each element a
+    // sampler of the stage.
+    let mut heap_array_decls = BTreeMap::new();
+    for key in &cx.families.sampler.heap_arrays {
+        let h = cx
+            .families
+            .texture
+            .heap
+            .get(&key.group)
+            .filter(|h| h.decl.is_some())
+            .ok_or_else(|| invariant("a constexpr sampler array of an undeclared heap group"))?;
+        let texel = h.texel.unwrap_or(TexelClass::Float);
+        let use_ = SamplerUse::new(key.compare, texel != TexelClass::Float);
+        let array = usize::try_from(key.array)
+            .ok()
+            .and_then(|a| cx.families.sampler.arrays.get(a))
+            .ok_or_else(|| invariant("a constexpr sampler array out of range"))?;
+        for words in &array.samplers {
+            constexpr_desc(*words, use_, cx.profile)?;
+        }
+        heap_array_decls.insert(*key, use_);
+    }
+    let array_bindings: BTreeSet<(u32, SamplerUse)> = heap_array_decls
+        .iter()
+        .map(|(k, u)| (k.array, *u))
+        .collect();
+    let array_samplers = array_bindings
+        .iter()
+        .filter_map(|(a, _)| usize::try_from(*a).ok())
+        .filter_map(|a| cx.families.sampler.arrays.get(a))
+        .fold(0u32, |n, a| n.saturating_add(count(a.samplers.len())));
     // Each combined binding is one sampled image and one sampler. Where they are more samplers than
     // the stage may have, the stage takes them apart: the same sampled image per binding, and one
     // separate sampler per distinct use, which counts as one sampler however many textures it
     // samples. The sampled images, and every other count, are the same in both forms, so this is
     // the one limit the separate form relieves; one it still exceeds is the stage's refusal
     // (`select`).
-    let combined = count(decls.len()).saturating_add(count(heap_samplers.len()));
+    let combined = count(decls.len())
+        .saturating_add(count(heap_samplers.len()))
+        .saturating_add(array_samplers);
     let limit = cx.profile.fields().limits.max_per_stage_descriptor_samplers;
     let separate = combined > limit;
     let uses: BTreeSet<CombinedSampler> = decls.values().map(|d| d.sampler).collect();
     counts.samplers = if separate {
-        count(uses.len()).saturating_add(count(heap_samplers.len()))
+        count(uses.len())
+            .saturating_add(count(heap_samplers.len()))
+            .saturating_add(array_samplers)
     } else {
         combined
     };
@@ -1389,6 +1491,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     cx.families.sampler.separate = separate;
     cx.families.sampler.heap_decls = heap_decls;
     cx.families.sampler.heap_sampler_decls = heap_sampler_decls;
+    cx.families.sampler.heap_array_decls = heap_array_decls;
     cx.descriptors = cx.descriptors.plus(&counts);
     Ok(())
 }
@@ -1406,6 +1509,48 @@ pub fn heap_layout_features(plan: &Plan) -> Vec<crate::device::requirements::VkF
         VkFeature::DescriptorBindingPartiallyBound,
         VkFeature::DescriptorBindingSampledImageUpdateAfterBind,
     ]
+}
+
+/// The binding symbol of constexpr sampler array `array` of `stage` made for use `use_`.
+fn array_slot(stage: crate::pipeline::sym::Stage, array: u32, use_: SamplerUse) -> ResourceSlot {
+    ResourceSlot {
+        stage,
+        kind: ResourceKind::SamplerArray {
+            compare: use_.compare,
+            integer: use_.integer_texture,
+        },
+        index: array,
+    }
+}
+
+/// The constexpr sampler arrays `plan` declares (`StageInterface::sampler_arrays`): each binding's
+/// samplers in element order, which link bakes into the layout.
+pub fn sampler_arrays(plan: &Plan) -> Vec<crate::pipeline::interface::SamplerArray> {
+    let bindings: BTreeSet<(u32, SamplerUse)> = plan
+        .families
+        .sampler
+        .heap_array_decls
+        .iter()
+        .map(|(k, u)| (k.array, *u))
+        .collect();
+    bindings
+        .into_iter()
+        .filter_map(|(array, use_)| {
+            let a = plan
+                .families
+                .sampler
+                .arrays
+                .get(usize::try_from(array).ok()?)?;
+            Some(crate::pipeline::interface::SamplerArray {
+                slot: array_slot(plan.stage, array, use_),
+                samplers: a
+                    .samplers
+                    .iter()
+                    .map(|w| SamplerRef::Constexpr(*w))
+                    .collect(),
+            })
+        })
+        .collect()
 }
 
 /// Declare the combined bindings, or their separate textures and samplers, and the runtime
@@ -1496,6 +1641,45 @@ pub fn declare(
             }
         };
         d.heap_samplers.insert(*key, g);
+    }
+    // One constexpr sampler array per distinct array and use: a sized array of samplers.
+    let mut constexpr_arrays: BTreeMap<(u32, SamplerUse), GlobalId> = BTreeMap::new();
+    for (key, use_) in &plan.families.sampler.heap_array_decls {
+        let g = match constexpr_arrays.get(&(key.array, *use_)) {
+            Some(g) => *g,
+            None => {
+                let missing = crate::spirv::error::BuildError::Global(
+                    crate::spirv::error::GlobalRule::ResourceType,
+                );
+                let len = usize::try_from(key.array)
+                    .ok()
+                    .and_then(|a| plan.families.sampler.arrays.get(a))
+                    .map(|a| a.samplers.len())
+                    .ok_or(missing)?;
+                let u32_ = mb.ty(SType::Int {
+                    width: 32,
+                    signed: false,
+                })?;
+                let len = mb.constant(crate::spirv::ir::Constant::Scalar {
+                    ty: u32_,
+                    bits: ConstBits(u64::try_from(len).unwrap_or(u64::MAX)),
+                })?;
+                let sampler = mb.ty(SType::Sampler)?;
+                let array = mb.ty(SType::Array {
+                    elem: sampler,
+                    len,
+                    stride: None,
+                })?;
+                let g = mb.resource(
+                    array_slot(plan.stage, key.array, *use_),
+                    StorageClass::UniformConstant,
+                    array,
+                )?;
+                constexpr_arrays.insert((key.array, *use_), g);
+                g
+            }
+        };
+        d.heap_arrays.insert(*key, g);
     }
     for (n, r) in &plan.families.sampler.slots {
         let fields = r.fields();
