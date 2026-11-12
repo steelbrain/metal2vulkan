@@ -65,8 +65,9 @@ mismatch instead is a bug of the suite's rather than a finding about Metal; it w
 ways in this round, and each way lost both the refused count and the ledger row.
 
 A replay takes the accurate form of each of the runtime's speed-for-accuracy switches
-(`DevicePolicy::exact_answers()`: `heap_compression` `Uncompressed`, `completion` `Exact`,
-`batch_order` `Exact`, `render_lowering` `AtCall`, `host_page_textures` `Shadow`); no switch touches
+(`DevicePolicy::exact_answers()`: `heap_compression` `Uncompressed`, `heap_answers` `Metal`,
+`completion` `Exact`, `batch_order` `Exact`, `render_lowering` `AtCall`, `host_page_textures`
+`Shadow`); no switch touches
 arithmetic, which is the device's native answer under either policy. `conformance replay
 --default-policy` replays under the runtime's own defaults instead — the fast form of every
 speed-for-accuracy choice, which is what a consumer runs — so the suite can say whether a

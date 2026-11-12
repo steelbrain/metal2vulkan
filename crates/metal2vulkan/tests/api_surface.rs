@@ -229,6 +229,7 @@ surface! {
         enum ContainmentPolicy N;
         struct DevicePolicy N;
         enum HeapCompressionPolicy N;
+        enum HeapAnswerPolicy N;
         enum CompletionPolicy N;
         enum BatchOrderPolicy N;
         enum RenderLoweringPolicy N;

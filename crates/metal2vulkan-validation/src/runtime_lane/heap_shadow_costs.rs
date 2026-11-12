@@ -17,14 +17,18 @@
 //!   its own (and of one that only blits it), the work counts that moved and the GPU time's
 //!   median, beside the same frames over a texture of the same descriptor outside a heap.
 //!
-//! A second measurement records and submits nothing: `HEAP-IMAGES` lines, for every shape of the
-//! count, Metal's answer, the device's, and the device's images of it as above.
+//! A second measurement submits nothing, under each `HeapAnswerPolicy`: `HEAP-IMAGES` lines, for
+//! every shape of the count, Metal's answer, the device's, and the device's images of it as above;
+//! then each made in an automatic heap of its own, and a `HEAP-COUNT` line: how many lie in place
+//! of their first image (`heap_textures_refit`) and how many are shadows in Metal's tiles
+//! (`heap_textures_tiled`), and the bytes their answers and Metal's take of heaps placed one after
+//! another.
 
 use super::video_frames::moved_per_frame;
 use super::{validated_device_with, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
 use ash::vk;
-use metal2vulkan::device::HeapCompressionPolicy;
+use metal2vulkan::device::{HeapAnswerPolicy, HeapCompressionPolicy};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan_runtime::{
     CommandBuffer, CommandQueue, Device, HeapDescriptor, HeapType, LoadAction,
@@ -297,30 +301,58 @@ fn images(queue: &CommandQueue, shape: (PixelFormat, TextureType, u64, u64)) -> 
 #[test]
 #[ignore = "a measurement, not a check: run by name with --run-ignored all"]
 fn heap_texture_images() {
-    let messages = Messages::default();
-    let cache = ScratchCache::new().unwrap();
-    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
-        options.layers.clear();
-    })
-    .unwrap();
-    let queue = device.new_command_queue().unwrap();
-    for shape in COUNTED {
-        let d = descriptor(shape);
-        let (format, texture_type, width, height) = shape;
-        let metal = device.metal_heap_texture_size_and_align(&d).unwrap();
-        let metal = metal.map_or_else(
-            || "none".to_owned(),
-            |m| format!("{} at {}", m.size, m.align),
-        );
-        let answer = device.heap_texture_size_and_align(&d).unwrap();
-        let [optimal, mutable, transfer, linear] = images(&queue, shape);
+    for answers in [HeapAnswerPolicy::Metal, HeapAnswerPolicy::Device] {
+        let messages = Messages::default();
+        let cache = ScratchCache::new().unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.layers.clear();
+            options.policy.heap_answers = answers;
+        })
+        .unwrap();
+        let queue = device.new_command_queue().unwrap();
+        let before = device.work_counts();
+        let (mut metal_bytes, mut answer_bytes) = (0, 0);
+        for shape in COUNTED {
+            let d = descriptor(shape);
+            let (format, texture_type, width, height) = shape;
+            let metal = device.metal_heap_texture_size_and_align(&d).unwrap();
+            let answer = device.heap_texture_size_and_align(&d).unwrap();
+            // What the texture takes of a heap it is placed in after another: its answer's
+            // size, from an offset rounded up to its alignment (at most `align - 1` bytes more).
+            answer_bytes += answer.size + answer.align - 1;
+            metal_bytes += metal.map_or(0, |m| m.size + m.align - 1);
+            let heap = device
+                .new_heap(&HeapDescriptor::new(
+                    HeapType::Automatic,
+                    2 * answer.size.max(answer.align),
+                    ResourceOptions::private(),
+                ))
+                .unwrap();
+            heap.new_texture(&d).unwrap();
+            let metal = metal.map_or_else(
+                || "none".to_owned(),
+                |m| format!("{} at {}", m.size, m.align),
+            );
+            let [optimal, mutable, transfer, linear] = images(&queue, shape);
+            eprintln!(
+                "HEAP-IMAGES on {} ({answers:?}) {format:?} {texture_type:?} {width}x{height}: \
+                 Metal answers {metal}, the device {} at {}; images: optimal {optimal}, mutable \
+                 {mutable}, host-transfer {transfer}, linear {linear}",
+                device.name(),
+                answer.size,
+                answer.align
+            );
+        }
+        let after = device.work_counts();
         eprintln!(
-            "HEAP-IMAGES on {} {format:?} {texture_type:?} {width}x{height}: Metal answers {metal}, \
-             the device {} at {}; images: optimal {optimal}, mutable {mutable}, host-transfer \
-             {transfer}, linear {linear}",
+            "HEAP-COUNT on {} ({answers:?}): of {} textures, {} in place of their first image \
+             (heap_textures_refit), {} shadows in Metal's tiles (heap_textures_tiled); their \
+             answers take at most {answer_bytes} bytes of heaps placed one after another, \
+             Metal's {metal_bytes}",
             device.name(),
-            answer.size,
-            answer.align
+            COUNTED.len(),
+            after.heap_textures_refit - before.heap_textures_refit,
+            after.heap_textures_tiled - before.heap_textures_tiled,
         );
     }
 }

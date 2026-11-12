@@ -266,7 +266,7 @@ fn loader() -> Option<PathBuf> {
 pub enum Policy {
     /// `DevicePolicy::exact_answers()`: the accurate form of each of the runtime's
     /// speed-for-accuracy switches, which are all it selects — `heap_compression`
-    /// `Uncompressed`, `completion` `Exact`, `batch_order` `Exact`, `render_lowering` `AtCall`,
+    /// `Uncompressed`, `heap_answers` `Metal`, `completion` `Exact`, `batch_order` `Exact`, `render_lowering` `AtCall`,
     /// `host_page_textures` `Shadow`, `half_chains` `EachOperation`, `pipeline_waits` `Exact`,
     /// `wide_lines` `Exact`, `extended_range_blits` `Canonical`, `queue_sharing` `PerQueue`,
     /// `dont_care_colors` `Kept`, `unstored_dont_care_loads` `Cleared` and `vertex_reach` `Exact`.

@@ -7,9 +7,9 @@
 
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DevicePolicy, DontCareColorPolicy, ExtendedRangeBlitPolicy,
-    HalfChainPolicy, HeapCompressionPolicy, HostPageTexturePolicy, PipelineWaitPolicy,
-    QueueSharingPolicy, RenderLoweringPolicy, UnsharedIsolationPolicy, UnstoredDontCarePolicy,
-    VertexReachPolicy, WideLinePolicy, YCbCrInPlacePolicy,
+    HalfChainPolicy, HeapAnswerPolicy, HeapCompressionPolicy, HostPageTexturePolicy,
+    PipelineWaitPolicy, QueueSharingPolicy, RenderLoweringPolicy, UnsharedIsolationPolicy,
+    UnstoredDontCarePolicy, VertexReachPolicy, WideLinePolicy, YCbCrInPlacePolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -59,7 +59,8 @@ fn choices() -> Vec<Choice> {
         containment: _,
         isolation: _,
         // The accuracy choices, below.
-        // The runtime's: a heap's compressed texture's image, when the host sees a command buffer
+        // The runtime's: a heap's compressed texture's image, what a heap texture's size query
+        // answers where its image needs more than Metal's answer, when the host sees a command buffer
         // complete, how a batch begins after the earlier ones of its queue, where a render
         // encoder's calls are lowered, what holds a sampled texture over host pages, whether and
         // how long a pipeline being made is waited for (the bounds' values:
@@ -70,6 +71,7 @@ fn choices() -> Vec<Choice> {
         // `DontCare` and does not store, and which draws pull a vertex layout past a wrapping
         // fixed-function input.
         heap_compression: _,
+        heap_answers: _,
         completion: _,
         batch_order: _,
         render_lowering: _,
@@ -91,6 +93,7 @@ fn choices() -> Vec<Choice> {
     } = p;
     vec![
         choice!(p.heap_compression: HeapCompressionPolicy { Compressed, Uncompressed }),
+        choice!(p.heap_answers: HeapAnswerPolicy { Device, Metal }),
         choice!(p.completion: CompletionPolicy { Grouped, Exact }),
         choice!(p.batch_order: BatchOrderPolicy { Ends, Exact }),
         choice!(p.render_lowering: RenderLoweringPolicy { AtCall, Worker }),
@@ -408,6 +411,24 @@ fn the_runtime_s_heap_compression_choice_keys_no_profile() {
     for ((stem, c), (other, u)) in compressed.iter().zip(&uncompressed) {
         assert_eq!(stem, other);
         assert_eq!(c.fingerprint(), u.fingerprint(), "{stem}");
+    }
+}
+
+/// The runtime's choice of what a heap texture's size query answers (`heap_answers`) moves no
+/// committed profile's fingerprint: no profile carries it, so no translation follows it.
+#[test]
+fn the_runtime_s_heap_answer_choice_keys_no_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let device = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let metal = committed_profiles_with(DevicePolicy {
+        heap_answers: HeapAnswerPolicy::Metal,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(device.len(), metal.len());
+    for ((stem, d), (other, m)) in device.iter().zip(&metal) {
+        assert_eq!(stem, other);
+        assert_eq!(d.fingerprint(), m.fingerprint(), "{stem}");
     }
 }
 

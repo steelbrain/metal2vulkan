@@ -254,7 +254,7 @@ use crate::two_planes;
 use crate::values::{ResourceOptions, StorageMode};
 use crate::Device;
 use ash::vk;
-use metal2vulkan::device::{DriverFact, HeapCompressionPolicy};
+use metal2vulkan::device::{DriverFact, HeapAnswerPolicy, HeapCompressionPolicy};
 use metal2vulkan::error::{Feature, LinearNeed, Unsupported};
 use metal2vulkan::metal::format::{footprint, is_depth_stencil, ycbcr_format, Footprint};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
@@ -1549,6 +1549,56 @@ pub(crate) fn images_fit(images: SizeAndAlign, metal: SizeAndAlign) -> bool {
     images.size <= metal.size && images.align <= metal.align
 }
 
+/// The coarsest alignment a heap texture's answer takes from its device's image under
+/// `HeapAnswerPolicy::Device` ([`device_heap_answer`]): 64 KiB, the largest a Mac answers
+/// (`heapTextureSizeAndAlignWithDescriptor:` on an AMD Radeon Pro 5300M; an Intel UHD Graphics 630
+/// answers 4096, Apple's GPUs 128 and, for arrays, 16384).
+pub(crate) const DEVICE_ANSWER_MOST_ALIGN: u64 = 64 << 10;
+
+/// The alignment a heap texture's answer takes from its device's image under
+/// `HeapAnswerPolicy::Device` whatever its size ([`device_heap_answer`]): 4096 bytes, what an
+/// Intel UHD Graphics 630 answers for every texture. A coarser one is taken only up to the
+/// answer's own size, so a heap's padding before a texture at most doubles its bytes.
+pub(crate) const DEVICE_ANSWER_FREE_ALIGN: u64 = 4 << 10;
+
+/// What a heap texture answers under `HeapAnswerPolicy::Device`, where its images need more of
+/// the heap than Metal's answer `metal`: the larger of `metal` and every route's image the
+/// texture may take of a heap of its storage, `routes` (the image of the route the device first
+/// took, and for a `Shared` texture the linear image a heap over host pages binds), each
+/// [`heap_extent`]. `None`, so Metal's answer holds as under `HeapAnswerPolicy::Metal`, where
+/// those images fit Metal's answer; where the texture's image does not bind into the heap's
+/// memory (`shape.apart`, or `in_own_memory`: a shadow already) or it is a 4:2:2, one-plane YCbCr
+/// or multisample texture; where Metal's answer is a measured route's (`measured_route`); and
+/// where the answer would be aligned past [`DEVICE_ANSWER_MOST_ALIGN`], or past both its own size
+/// and [`DEVICE_ANSWER_FREE_ALIGN`], so that a heap's padding before a texture is at most a page
+/// or its own bytes (ANV's compressed image of a small texture asks 64 KiB for 16 KiB: the image
+/// a 4 KiB alignment holds takes its place, `Device::heap_plan`).
+pub(crate) fn device_heap_answer(
+    metal: SizeAndAlign,
+    routes: &[SizeAndAlign],
+    shape: HeapTextureShape,
+    (measured_route, in_own_memory): (bool, bool),
+) -> Option<SizeAndAlign> {
+    if shape.apart || shape.rows || shape.multisample || measured_route || in_own_memory {
+        return None;
+    }
+    let need = routes
+        .iter()
+        .fold(SizeAndAlign { size: 0, align: 1 }, |a, b| SizeAndAlign {
+            size: a.size.max(b.size),
+            align: a.align.max(b.align),
+        });
+    if images_fit(need, metal) {
+        return None;
+    }
+    let answer = SizeAndAlign {
+        size: need.size.max(metal.size),
+        align: need.align.max(metal.align),
+    };
+    let padding = answer.align <= answer.size.max(DEVICE_ANSWER_FREE_ALIGN);
+    (answer.align <= DEVICE_ANSWER_MOST_ALIGN && padding).then_some(answer)
+}
+
 /// What a heap texture's descriptor and its planned images decide about holding it to Metal's
 /// answer, apart from the numbers ([`held_to_metal`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2173,16 +2223,74 @@ impl Device {
         // one-plane YCbCr one's, lies apart from the heap's bytes (above). Metal's answer the
         // texture cannot be held to, announced below.
         let mut past_metal = None;
-        if let Some(metal) = metal_answer {
-            let shape = HeapTextureShape {
-                apart: matches!(
-                    image.route,
-                    AliasRoute::Unaliased | AliasRoute::Planes | AliasRoute::Lossless
-                ),
-                rows: chroma_pairs::is_four_two_two(layout.pixel_format)
-                    || one_plane_texel(layout.pixel_format).is_some(),
-                multisample: layout.samples > 1,
-            };
+        // Where the device's policy answers its own image's (`HeapAnswerPolicy::Device`), the
+        // texture lies in the image of the route it took, the answer that image's where it needs
+        // more than Metal's (`device_heap_answer`), with no image put in its place and no shadow.
+        let shape = HeapTextureShape {
+            apart: matches!(
+                image.route,
+                AliasRoute::Unaliased | AliasRoute::Planes | AliasRoute::Lossless
+            ),
+            rows: chroma_pairs::is_four_two_two(layout.pixel_format)
+                || one_plane_texel(layout.pixel_format).is_some(),
+            multisample: layout.samples > 1,
+        };
+        let answers = self.compile_device().policy().heap_answers;
+        let device_answer = match metal_answer {
+            Some(metal) if answers == HeapAnswerPolicy::Device => {
+                // A `Shared` texture may lie in a heap over host pages, whose image is the linear
+                // one made for host allocations (`host_heap_plan`): its answer holds that too.
+                let host = match descriptor.resource_options.storage_mode()? {
+                    StorageMode::Shared => self.host_route_extent(&layout, usage, &facts)?,
+                    _ => None,
+                };
+                let own = image.route.in_own_memory();
+                let answered = |images: SizeAndAlign| {
+                    let routes: Vec<SizeAndAlign> =
+                        [Some(images), host].into_iter().flatten().collect();
+                    device_heap_answer(metal, &routes, shape, (measured_route, own))
+                };
+                match answered(images) {
+                    Some(answer) => Some((metal, answer, None)),
+                    // An image whose alignment the answer may take where the first route's is too
+                    // coarse (ANV's compressed image of a small texture, 64 KiB): its optimal
+                    // image of host-transfer usage, else its linear image (`fitting_heap_image`),
+                    // in the driver's layout whatever Metal's, the answer that image's, before
+                    // any shadow.
+                    None if !images_fit(images, metal)
+                        && colour(&image.plan)
+                        && !(shape.apart || shape.rows || shape.multisample)
+                        && !(measured_route || own) =>
+                    {
+                        let bound = SizeAndAlign {
+                            size: u64::MAX,
+                            align: DEVICE_ANSWER_FREE_ALIGN,
+                        };
+                        let where_ = (layout.texture_type, class, placement);
+                        let fitting =
+                            self.fitting_heap_image(&image, plan.clone(), where_, bound, None)?;
+                        fitting.and_then(|fitting| {
+                            let extent =
+                                heap_extent(&fitting.requirements, fitting.placement(placement));
+                            answered(extent).map(|answer| (metal, answer, Some((fitting, extent))))
+                        })
+                    }
+                    None => None,
+                }
+            }
+            _ => None,
+        };
+        let device_answered = device_answer.is_some();
+        if let Some((metal, answer, fitting)) = device_answer {
+            past_metal = Some(metal);
+            size_and_align = answer;
+            if let Some((fitting, extent)) = fitting {
+                first = Some(images);
+                images = extent;
+                image = fitting;
+            }
+        }
+        if let (Some(metal), false) = (metal_answer, device_answered) {
             let mut held =
                 held_to_metal(images, metal, shape, || shadowable(&image.plan, metal.size));
             // A single-sample colour image bound in the heap's memory that does not fit Metal's
@@ -2297,7 +2405,8 @@ impl Device {
         if let Some(metal) = past_metal {
             let past = size_and_align.size > metal.size || size_and_align.align > metal.align;
             if past && !self.keeps_optimized_layout(descriptor, &layout) {
-                self.degrade_past_metal_size(call, &layout, size_and_align, metal);
+                let chosen = device_answered;
+                self.degrade_past_metal_size(call, &layout, (size_and_align, metal), chosen);
             }
         }
         Ok(HeapPlan {
@@ -2314,14 +2423,15 @@ impl Device {
 
     /// Announce that a heap texture of `layout` takes `answer` of a heap for `call`, more bytes
     /// or a coarser alignment than Metal's modelled answer `metal`
-    /// (`Degradation::HeapTextureLargerThanMetal`): its images need them and no shadow of the
-    /// texture's bytes holds it to Metal's answer ([`held_to_metal`]).
+    /// (`Degradation::HeapTextureLargerThanMetal`): its images need them, and the device's
+    /// policy answers them (`chosen`: `HeapAnswerPolicy::Device`, [`device_heap_answer`]) or no
+    /// shadow of the texture's bytes holds it to Metal's answer ([`held_to_metal`]).
     fn degrade_past_metal_size(
         &self,
         call: &'static str,
         layout: &TextureLayout,
-        answer: SizeAndAlign,
-        metal: SizeAndAlign,
+        (answer, metal): (SizeAndAlign, SizeAndAlign),
+        chosen: bool,
     ) {
         self.degrade(Degradation::HeapTextureLargerThanMetal, || {
             let [width, height, depth] = layout.extent;
@@ -2329,11 +2439,18 @@ impl Device {
                 "{call} of a {:?} {:?} texture of {width}x{height}x{depth}, {} levels, {} samples",
                 layout.pixel_format, layout.texture_type, layout.levels, layout.samples
             );
+            let held = match chosen {
+                true => {
+                    "the device's policy answers its image's (HeapAnswerPolicy::Device), so \
+                         the texture lies in it"
+                }
+                false => "no shadow of the texture's bytes holds it to Metal's",
+            };
             let why = format!(
                 "the device's images take {:#x} bytes at an alignment of {:#x} (their own, in \
                  whole chunks of compression data where the driver writes them past an image's \
-                 size), where Metal answers {:#x} at {:#x}, and no shadow of the texture's bytes \
-                 holds it to Metal's: the answer is the device's",
+                 size), where Metal answers {:#x} at {:#x}, and {held}: the answer is the \
+                 device's",
                 answer.size, answer.align, metal.size, metal.align
             );
             (object, why)
@@ -3396,6 +3513,37 @@ impl Device {
         let texture = Device::new_planned_texture(self, &descriptor, one.clone())?;
         let (planes, _) = tight_planes(&one);
         HeapTiledCopies::samples_run(self, &texture, &planes)
+    }
+
+    /// What the image a `Shared` texture of `layout` and image `usage` takes in a heap over host
+    /// pages imported by their pointer needs of the heap: the linear image made for host
+    /// allocations that [`host_heap_plan`](Self::host_heap_plan) binds there, its size and
+    /// alignment as the device asks them; `None` where no such image serves the texture (the
+    /// device imports no host memory, lays depth and stencil images apart from their memory, or
+    /// makes no such linear image of the plan), so a texture there is a shadow whatever the answer.
+    fn host_route_extent(
+        &self,
+        layout: &TextureLayout,
+        usage: TextureUsage,
+        facts: &crate::image_plan::ImageFacts<'_>,
+    ) -> Result<Option<SizeAndAlign>, Error> {
+        if self.shared().host_import.is_err() {
+            return Ok(None);
+        }
+        let Ok(linear) = plan_image(layout, usage, false, facts) else {
+            return Ok(None);
+        };
+        let driver = &self.properties().driver_facts;
+        let apart = !colour(&linear) && driver.contains(&DriverFact::DepthStencilImagesLieApart);
+        if apart || linear_lack(&linear, facts).is_some() {
+            return Ok(None);
+        }
+        Ok(self
+            .host_image_requirements(&linear)?
+            .map(|requirements| SizeAndAlign {
+                size: requirements.size,
+                align: requirements.alignment,
+            }))
     }
 
     /// The memory requirements of a linear image of `plan` made for host allocations, in the

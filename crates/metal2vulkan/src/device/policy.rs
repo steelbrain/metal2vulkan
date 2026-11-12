@@ -4,13 +4,14 @@
 use crate::device::profile::{GuestIsolation, HandleDomain, PointerDomain};
 use std::time::Duration;
 
-/// Policy inputs of `Device::new`. Every field but `heap_compression`, `completion`, `batch_order`,
-/// `render_lowering`, `host_page_textures`, `pipeline_waits`, `pipeline_creation_wait`,
-/// `pipeline_commit_wait`, `wide_lines`, `extended_range_blits`, `queue_sharing`,
-/// `unshared_isolation`, `dont_care_colors`, `unstored_dont_care_loads` and `vertex_reach` can
-/// change emitted code, so the profile carries it (containment as the encoding it selects) and its
-/// fingerprint covers it; those fifteen are the runtime's alone (a heap's compressed texture's
-/// image, when the host sees a command buffer complete, how a batch begins after the earlier ones
+/// Policy inputs of `Device::new`. Every field but `heap_compression`, `heap_answers`,
+/// `completion`, `batch_order`, `render_lowering`, `host_page_textures`, `pipeline_waits`,
+/// `pipeline_creation_wait`, `pipeline_commit_wait`, `wide_lines`, `extended_range_blits`,
+/// `queue_sharing`, `unshared_isolation`, `dont_care_colors`, `unstored_dont_care_loads` and
+/// `vertex_reach` can change emitted code, so the profile carries it (containment as the encoding
+/// it selects) and its fingerprint covers it; those sixteen are the runtime's alone (a heap's
+/// compressed texture's image, what a heap texture's size query answers, when the host sees a
+/// command buffer complete, how a batch begins after the earlier ones
 /// of its queue, where a render encoder's calls are lowered, what holds a sampled texture over host
 /// pages, whether and how long a pipeline the driver is still making is waited for, which lines
 /// draw a wide line, what a blit through a compressed extended-range texture writes, which
@@ -37,6 +38,11 @@ pub struct DevicePolicy {
     /// default) or one the driver keeps uncompressed in the heap's bytes. The runtime's choice
     /// alone: no emitted code changes.
     pub heap_compression: HeapCompressionPolicy,
+    /// Whether a heap texture whose image needs more of the heap than Metal's answer on Apple's
+    /// GPUs answers the device's image (the default) and lies in it, or answers Metal's and is
+    /// held to it by an image that fits or a shadow. The runtime's choice alone: no emitted code
+    /// changes.
+    pub heap_answers: HeapAnswerPolicy,
     /// Whether command buffers committed on one `VkQueue` that the runtime's scheduler finds ready
     /// together go to the driver in one kernel submission, each seen complete once the last of
     /// them completed (the default, on a driver that merges such submissions), or each in a
@@ -132,7 +138,8 @@ pub struct DevicePolicy {
 
 impl DevicePolicy {
     /// The untrusted-guest production policy: containment and isolation on, the driver's
-    /// compressed image of a heap's texture Metal keeps compressed, command buffers ready together
+    /// compressed image of a heap's texture Metal keeps compressed, a heap texture's size query
+    /// the device's image where it needs more than Metal's answer, command buffers ready together
     /// in one kernel submission, batches of one queue ordered by their ends where the driver runs
     /// them one after another, and a sampled
     /// texture over host pages in place where the device's check passed, a pipeline still
@@ -149,6 +156,7 @@ impl DevicePolicy {
         containment: ContainmentPolicy::Contained,
         isolation: GuestIsolation::On,
         heap_compression: HeapCompressionPolicy::Compressed,
+        heap_answers: HeapAnswerPolicy::Device,
         completion: CompletionPolicy::Grouped,
         batch_order: BatchOrderPolicy::Ends,
         render_lowering: RenderLoweringPolicy::AtCall,
@@ -169,7 +177,9 @@ impl DevicePolicy {
 
     /// This policy with Metal's answer wherever the choices offer it: a heap's texture whose bytes
     /// alias the heap's
-    /// as written ([`HeapCompressionPolicy::Uncompressed`]), each command buffer seen complete
+    /// as written ([`HeapCompressionPolicy::Uncompressed`]), every heap texture's size query
+    /// Metal's answer wherever the runtime models it ([`HeapAnswerPolicy::Metal`]), each command
+    /// buffer seen complete
     /// at its own end ([`CompletionPolicy::Exact`]), each batch ordered after the earlier ones of
     /// its queue by
     /// the accesses it depends on alone ([`BatchOrderPolicy::Exact`]), each render encoder
@@ -196,6 +206,7 @@ impl DevicePolicy {
     pub const fn exact_answers(self) -> DevicePolicy {
         DevicePolicy {
             heap_compression: HeapCompressionPolicy::Uncompressed,
+            heap_answers: HeapAnswerPolicy::Metal,
             completion: CompletionPolicy::Exact,
             batch_order: BatchOrderPolicy::Exact,
             render_lowering: RenderLoweringPolicy::AtCall,
@@ -240,8 +251,12 @@ pub enum ContainmentPolicy {
 /// on Intel's GPUs). Metal's own texture shows no aliased write as written either: an M3 Max read
 /// opaque magenta (`0xffff00ff`) in every texel of drawn content a buffer's fill over the
 /// texture's bytes covered, and the fill's bytes where the texture held only a clear. A texture
-/// Metal keeps uncompressed takes the uncompressed image under either value. The runtime's choice
-/// alone: no emitted code changes.
+/// Metal keeps uncompressed takes the uncompressed image under either value, and so does every
+/// texture of a heap over the caller's host pages, whose image is the one over the pages (a linear
+/// image made for host allocations, else a shadow of the heap's bytes): the choice is made for
+/// heaps over the device's own memory. The compressed image lies in the heap's bytes only where
+/// the heap's answer for the texture holds it ([`HeapAnswerPolicy`]). The runtime's choice alone:
+/// no emitted code changes.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -257,6 +272,41 @@ pub enum HeapCompressionPolicy {
     /// image, else the optimal one (each announced as such), so a write through a buffer over the
     /// texture's bytes shows in its texels as written.
     Uncompressed,
+}
+
+/// What `heap_texture_size_and_align` (Metal's `heapTextureSizeAndAlignWithDescriptor:`)
+/// answers for a texture whose image binds into a heap's memory, where that image needs more
+/// bytes or a coarser alignment than Metal's answer on Apple's GPUs, which the runtime models.
+/// Metal's query is the device's own: the Macs answer alignments from 128 bytes (an M3 Max) to
+/// 4096 (an Intel UHD Graphics 630) and 65536 (an AMD Radeon Pro 5300M), and every driver measured
+/// off MoltenVK aligns its optimal images coarser than Apple's 128 (1024 bytes on an RTX 5080
+/// Laptop, 65536 for ANV's compressed images, up to 64 KiB on a Radeon 780M). The runtime's choice
+/// alone: no emitted code changes.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum HeapAnswerPolicy {
+    /// The larger of Metal's answer and the device's image of the texture's first route (the
+    /// default), for a single-sample texture whose image binds into the heap's memory, where that
+    /// image's alignment is at most 64 KiB (the largest a Mac answers) and at most 4 KiB or its
+    /// answer's size, so a heap's padding at most doubles a texture's bytes past a page: the
+    /// texture lies in that image, its compression kept as `HeapCompressionPolicy` says, with no
+    /// image put in its place to fit Metal's answer and no shadow of Metal's tiles. Where that
+    /// image's alignment is coarser, the texture's image that a 4 KiB alignment holds (its
+    /// optimal image of host-transfer usage, else its linear one) lies there in its place, the
+    /// answer that image's. A `Shared` texture's answer also holds the linear image a heap over
+    /// host pages binds there. A texture whose answer Metal measures apart from its image (4:2:2,
+    /// one-plane YCbCr, two-plane extended-range, `X32_Stencil8`, `BlockWritesOnly`), a
+    /// multisample one, one whose image lies in memory of its own and every other texture take
+    /// Metal's answer as under `Metal`. Announced `heap-texture-larger-than-metal` where the
+    /// answer is past Metal's.
+    #[default]
+    Device,
+    /// Metal's answer wherever the runtime models it: a texture whose image needs more takes an
+    /// image that fits in its place (host-transfer usage, or a linear image), else a shadow of
+    /// the heap's bytes (Metal's tiles where Metal keeps it uncompressed), and the device's own
+    /// answer only where neither holds it.
+    Metal,
 }
 
 /// When the host sees a command buffer complete, on a driver that merges a submission signalling
