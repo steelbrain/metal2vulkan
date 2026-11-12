@@ -788,6 +788,9 @@ impl<'a> AddrFacts<'a> {
             }
         }
         let Guards { below, lone } = self.guards(access.block, m)?;
+        let held = self.held(&below, m)?;
+        let span = self.span(ptr, &held, m)?;
+        m.release(crate::budget::vec_bytes(&held));
         let leaves = if access.stored.is_some() && !access.read {
             self.leaves(ptr, m)?
         } else {
@@ -795,7 +798,7 @@ impl<'a> AddrFacts<'a> {
         };
         Ok(Addr {
             roots: self.roots(ptr, m)?,
-            span: self.span(ptr, m)?,
+            span,
             anchor,
             homes,
             stored_home,
@@ -1047,6 +1050,28 @@ impl<'a> AddrFacts<'a> {
         m.charge(tree_bytes(1, std::mem::size_of::<(u32, Guards)>()))?;
         charge(&out, m)?;
         self.guards.insert(x0.raw(), out.clone());
+        Ok(out)
+    }
+
+    /// The largest values the unsigned facts `below` leave their smaller sides where an access
+    /// runs: `x < y` with `y` at most `hi` there gives `x <= hi - 1`. The list is charged to
+    /// `m`; the caller releases it.
+    fn held(
+        &self,
+        below: &[(Value, Value, bool)],
+        m: &mut Meter,
+    ) -> Result<Vec<(Value, u64)>, Error> {
+        let mut out = Vec::new();
+        for &(x, y, signed) in below {
+            m.tick(1)?;
+            if signed {
+                continue;
+            }
+            if let Some((_, hi)) = self.range(y, 0, m)?.filter(|&(_, hi)| hi >= 1) {
+                m.grow(&mut out, 1)?;
+                out.push((x, hi - 1));
+            }
+        }
         Ok(out)
     }
 
@@ -1554,9 +1579,22 @@ impl<'a> AddrFacts<'a> {
     /// simdgroup 32 threads), a multisampled texture's sample count (at most 64), a loop counter
     /// ([`AddrFacts::counter`]), and exact steps from one
     /// (extensions, a truncation that keeps it, a mask, a remainder or right shift by a
-    /// constant, and an addition, subtraction, scaling, or left shift by a constant that does
-    /// not wrap).
+    /// constant, an addition, subtraction, scaling, or left shift by a constant that does
+    /// not wrap, and a bitwise or with a constant, which lies between both and their sum).
     fn range(&self, v: Value, depth: u32, m: &mut Meter) -> Result<Option<(u64, u64)>, Error> {
+        self.range_under(v, &[], depth, m)
+    }
+
+    /// [`range`](AddrFacts::range) where an access runs: `held` are the largest unsigned
+    /// values its guards leave values (`(x, hi)`: `x <= hi` there, [`AddrFacts::held`]), which
+    /// bound `x` and every exact step from it.
+    fn range_under(
+        &self,
+        v: Value,
+        held: &[(Value, u64)],
+        depth: u32,
+        m: &mut Meter,
+    ) -> Result<Option<(u64, u64)>, Error> {
         if depth >= MAX_CHAIN {
             return Ok(None);
         }
@@ -1570,7 +1608,7 @@ impl<'a> AddrFacts<'a> {
             Value::Const(c) => const_int(self.e, c).map(|k| (k as u64) & top),
             _ => None,
         };
-        Ok(match v {
+        let found = match v {
             Value::Const(_) => unsigned(v).map(|k| (k, k)),
             Value::Arg(a) => self
                 .e
@@ -1593,19 +1631,19 @@ impl<'a> AddrFacts<'a> {
                     op: CastOp::ZExt,
                     v: x,
                 })
-                | Some(InstKind::Freeze(x)) => self.range(*x, depth + 1, m)?,
+                | Some(InstKind::Freeze(x)) => self.range_under(*x, held, depth + 1, m)?,
                 Some(InstKind::Cast {
                     op: CastOp::SExt,
                     v: x,
                 }) => {
                     let w1 = self.width(*x).unwrap_or(0);
-                    self.range(*x, depth + 1, m)?
+                    self.range_under(*x, held, depth + 1, m)?
                         .filter(|r| w1 >= 1 && r.1 < 1u64 << (w1 - 1))
                 }
                 Some(InstKind::Cast {
                     op: CastOp::Trunc,
                     v: x,
-                }) => self.range(*x, depth + 1, m)?.and_then(fit),
+                }) => self.range_under(*x, held, depth + 1, m)?.and_then(fit),
                 Some(InstKind::Phi { incoming, .. }) => self
                     .counter(v, incoming, w, depth, m)?
                     .map(|k| (k.lo, k.hi))
@@ -1628,36 +1666,42 @@ impl<'a> AddrFacts<'a> {
                     };
                     match op {
                         BinOp::And => {
-                            let hi = self.range(x, depth + 1, m)?.map_or(k, |r| r.1.min(k));
+                            let hi = self
+                                .range_under(x, held, depth + 1, m)?
+                                .map_or(k, |r| r.1.min(k));
                             Some((0, hi))
                         }
                         BinOp::URem if k > 0 => {
                             let hi = self
-                                .range(x, depth + 1, m)?
+                                .range_under(x, held, depth + 1, m)?
                                 .map_or(k - 1, |r| r.1.min(k - 1));
                             Some((0, hi))
                         }
                         BinOp::LShr if k < u64::from(w) => Some(
-                            self.range(x, depth + 1, m)?
+                            self.range_under(x, held, depth + 1, m)?
                                 .map_or((0, top >> k), |r| (r.0 >> k, r.1 >> k)),
                         ),
                         BinOp::Add => self
-                            .range(x, depth + 1, m)?
+                            .range_under(x, held, depth + 1, m)?
                             .and_then(|r| Some((r.0.checked_add(k)?, r.1.checked_add(k)?)))
                             .and_then(fit),
                         BinOp::Or if flags.contains(IntFlags::DISJOINT) => self
-                            .range(x, depth + 1, m)?
+                            .range_under(x, held, depth + 1, m)?
                             .and_then(|r| Some((r.0.checked_add(k)?, r.1.checked_add(k)?)))
                             .and_then(fit),
+                        // `x | k` is at least `x` and `k` and at most `x + k`.
+                        BinOp::Or => self
+                            .range_under(x, held, depth + 1, m)?
+                            .map(|r| (r.0.max(k), r.1.saturating_add(k).min(top))),
                         BinOp::Sub => self
-                            .range(x, depth + 1, m)?
+                            .range_under(x, held, depth + 1, m)?
                             .and_then(|r| Some((r.0.checked_sub(k)?, r.1.checked_sub(k)?))),
                         BinOp::Mul => self
-                            .range(x, depth + 1, m)?
+                            .range_under(x, held, depth + 1, m)?
                             .and_then(|r| Some((r.0.checked_mul(k)?, r.1.checked_mul(k)?)))
                             .and_then(fit),
                         BinOp::Shl if k < u64::from(w) => self
-                            .range(x, depth + 1, m)?
+                            .range_under(x, held, depth + 1, m)?
                             .and_then(|r| {
                                 Some((r.0.checked_mul(1 << k)?, r.1.checked_mul(1 << k)?))
                             })
@@ -1678,7 +1722,22 @@ impl<'a> AddrFacts<'a> {
                 }
                 _ => None,
             },
-        })
+        };
+        // A guard's bound on `v` itself.
+        Ok(
+            match held
+                .iter()
+                .filter(|&&(x, _)| x == v)
+                .map(|&(_, hi)| hi)
+                .min()
+            {
+                Some(hi) => match found {
+                    Some((lo, h)) => Some((lo.min(hi), h.min(hi))),
+                    None => fit((0, hi)),
+                },
+                None => found,
+            },
+        )
     }
 
     /// Loop counter `phi` (a `w`-bit PHI with `incoming`): one incoming value is the start, the
@@ -2112,7 +2171,12 @@ impl<'a> AddrFacts<'a> {
     /// is a GEP whose indices are constants or bounded ([`AddrFacts::range`]), or a cast.
     /// Offsets outside `[0, 2^31)` are left unknown (no threadgroup object is that large, and
     /// the pointer's own width may wrap them).
-    fn span(&self, ptr: Value, m: &mut Meter) -> Result<Option<Span>, Error> {
+    fn span(
+        &self,
+        ptr: Value,
+        held: &[(Value, u64)],
+        m: &mut Meter,
+    ) -> Result<Option<Span>, Error> {
         let (mut lo, mut hi) = (0i64, 0i64);
         let mut v = ptr;
         let mut idx = Vec::new();
@@ -2156,7 +2220,7 @@ impl<'a> AddrFacts<'a> {
                         let Some(bits) = self.index_bits(v) else {
                             return Ok(None);
                         };
-                        let step = self.gep_span(*src_ty, indices, bits, m)?;
+                        let step = self.gep_span(*src_ty, indices, bits, held, m)?;
                         v = *base;
                         step
                     }
@@ -2188,6 +2252,7 @@ impl<'a> AddrFacts<'a> {
         src_ty: TypeId,
         indices: &[Value],
         bits: u32,
+        held: &[(Value, u64)],
         m: &mut Meter,
     ) -> Result<Option<(i64, i64)>, Error> {
         let types = self.e.module.types();
@@ -2237,7 +2302,7 @@ impl<'a> AddrFacts<'a> {
             ty = next;
             let range = match konst {
                 Some(c) => Some((c, c)),
-                None => self.index_range(k, bits, m)?,
+                None => self.index_range(k, bits, held, m)?,
             };
             let step = range.and_then(|(a, b)| {
                 let (a, b) = (a.checked_mul(stride)?, b.checked_mul(stride)?);
@@ -2253,12 +2318,18 @@ impl<'a> AddrFacts<'a> {
 
     /// The values GEP index `k` may take as the signed number the GEP reads (extended or
     /// truncated to `bits`), when its range lies below half its width's.
-    fn index_range(&self, k: Value, bits: u32, m: &mut Meter) -> Result<Option<(i64, i64)>, Error> {
+    fn index_range(
+        &self,
+        k: Value,
+        bits: u32,
+        held: &[(Value, u64)],
+        m: &mut Meter,
+    ) -> Result<Option<(i64, i64)>, Error> {
         let Some(w) = self.width(k).filter(|&w| w >= 2 && w <= bits) else {
             return Ok(None);
         };
         Ok(self
-            .range(k, 0, m)?
+            .range_under(k, held, 0, m)?
             .filter(|&(_, hi)| hi < 1u64 << (w - 1).min(62))
             .and_then(|(lo, hi)| Some((i64::try_from(lo).ok()?, i64::try_from(hi).ok()?))))
     }

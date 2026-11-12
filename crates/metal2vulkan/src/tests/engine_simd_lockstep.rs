@@ -28,7 +28,7 @@
 //! two objects, two constant words, words further apart than a simdgroup spans, words a loop
 //! counter's bounds keep apart, each thread's own word of whichever row an iteration picks, a
 //! counter stepping by more than its threads' starts differ, a tree reduction's halves under
-//! its guard) take nothing, and so do stores of one value every thread stores alike and accesses
+//! its guard, a guarded word below the bytes the others touch) take nothing, and so do stores of one value every thread stores alike and accesses
 //! one thread of a simdgroup at most runs (`if (t == 0)`). No GPU is used; `llvm-as` assembles the
 //! kernels and a missing tool skips visibly.
 
@@ -600,6 +600,61 @@ done:
   %11 = load i32, ptr addrspace(3) %10, align 4
   %12 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %3
   store i32 %11, ptr addrspace(1) %12, align 4
+  ret void
+}
+"#;
+
+/// In simdgroup 0, threads below 4 (`t < 4`) store two 16-byte words each into the first 128
+/// bytes of `@wide` (vector words `2t` and `2t | 1`); then every thread of the simdgroup stores
+/// its own word at byte `128 + 4 lane` and again 128 bytes on, in the same barrier interval and
+/// through other address shapes. Only the guard keeps the vector words below byte 128, so the
+/// pairs are apart by the bytes each access may touch where it runs. After a barrier thread `t`
+/// adds word `t` (its group of eight's `100 + t / 8`) to word `32 + t` (`t`): `out[t] = 100 +
+/// t / 8 + t`.
+const GUARDED_TILE: &str = r#"
+define void @guarded_tile(ptr addrspace(1) %0, i32 %1, i32 %sg) #0 {
+  %3 = zext i32 %1 to i64
+  %first = icmp eq i32 %sg, 0
+  br i1 %first, label %work, label %done
+
+work:
+  %low = icmp ult i32 %1, 4
+  br i1 %low, label %head, label %tile
+
+head:
+  %h0 = shl nuw nsw i32 %1, 1
+  %h1 = or i32 %h0, 1
+  %i0 = zext i32 %h0 to i64
+  %i1 = zext i32 %h1 to i64
+  %p0 = getelementptr inbounds <4 x i32>, ptr addrspace(3) @wide, i64 %i0
+  %p1 = getelementptr inbounds <4 x i32>, ptr addrspace(3) @wide, i64 %i1
+  %v = add i32 %1, 100
+  %one = insertelement <4 x i32> poison, i32 %v, i64 0
+  %all = shufflevector <4 x i32> %one, <4 x i32> poison, <4 x i32> zeroinitializer
+  store <4 x i32> %all, ptr addrspace(3) %p0, align 4
+  store <4 x i32> %all, ptr addrspace(3) %p1, align 4
+  br label %tile
+
+tile:
+  %base = getelementptr inbounds i32, ptr addrspace(3) @wide, i64 32
+  %lane = and i32 %1, 31
+  %l = zext i32 %lane to i64
+  %q = getelementptr inbounds i32, ptr addrspace(3) %base, i64 %l
+  store i32 %lane, ptr addrspace(3) %q, align 4
+  %r = getelementptr inbounds i32, ptr addrspace(3) %q, i64 32
+  store i32 %lane, ptr addrspace(3) %r, align 4
+  br label %done
+
+done:
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  %4 = getelementptr inbounds [128 x i32], ptr addrspace(3) @wide, i64 0, i64 %3
+  %5 = load i32, ptr addrspace(3) %4, align 4
+  %6 = add nuw nsw i64 %3, 32
+  %7 = getelementptr inbounds [128 x i32], ptr addrspace(3) @wide, i64 0, i64 %6
+  %8 = load i32, ptr addrspace(3) %7, align 4
+  %9 = add i32 %5, %8
+  %10 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %3
+  store i32 %9, ptr addrspace(1) %10, align 4
   ret void
 }
 "#;
@@ -1545,6 +1600,33 @@ fn bounded_rowed_strided_and_guarded_accesses_take_no_barrier() {
                 "{name} on {profile_name}: {census:?}"
             );
         }
+    }
+}
+
+/// A guarded store and the stores after it in its barrier interval, apart only by the bytes
+/// the guard leaves the guarded one ([`GUARDED_TILE`]): no barrier, so no simdgroup semantics
+/// and no pinned subgroup, on the Iris profile (whose tangle barriers would pin 32 lanes) and on
+/// lavapipe (whose simdgroups would be emulated).
+#[test]
+fn a_guarded_access_apart_by_its_bytes_takes_no_barrier() {
+    let expect = |t: u32| 100 + t / 8 + t;
+    for profile_name in ["intel-irisxe-rplp-anv", "lavapipe"] {
+        let Some(plan) = check(
+            "guarded_tile",
+            GUARDED_TILE,
+            profile_name,
+            32,
+            &CHUNKED,
+            expect,
+        ) else {
+            return;
+        };
+        let census = plan.census();
+        assert!(
+            !census.keys().any(|k| k.starts_with("barrier.lockstep")),
+            "{profile_name}: {census:?}"
+        );
+        assert_eq!(plan.simd.1, Tier::NoSubgroup, "{profile_name}");
     }
 }
 

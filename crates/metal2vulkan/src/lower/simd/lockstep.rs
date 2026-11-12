@@ -23,7 +23,8 @@
 //!
 //! - different objects (root sets), or byte ranges of one object that the bounds of every index
 //!   keep apart (spans: constants, and values bounded by a threadgroup's 1024 threads, a
-//!   simdgroup's 32, masks and shifts, or a loop counter's exit test);
+//!   simdgroup's 32, masks and shifts, a loop counter's exit test, or an unsigned test of a
+//!   branch that dominates the access, `if (t < 4)`);
 //! - disjoint constant ranges off one anchor (the address up to its last non-constant step,
 //!   with a constant that step's index adds folded into the offset where it cannot wrap) that is
 //!   either the same for both threads or differs between them by an amount whose bounds keep the
