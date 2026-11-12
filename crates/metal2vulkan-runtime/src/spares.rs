@@ -77,6 +77,20 @@
 //!   frees ran 220 times on the free thread against 14 to 17; it allocated 12,559 command buffers
 //!   in four runs and 9,864 in the fifth against 10,193 in each; and it took 13.6 to 14.0 s
 //!   against 13.6 to 13.9 s. Beside the runtime suite it failed in none of 76 runs.
+//! - **A kept command buffer keeps the buffer objects its recordings grew; the spares bound
+//!   only their count.** Begun again, a command buffer is reset without
+//!   `VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT` (below). RADV keeps through any reset its
+//!   last command stream buffer object, whose size grew with the recording, and its upload buffer
+//!   object, which doubles as a recording outgrows it; its reset takes no flag
+//!   (`radv_reset_cmd_buffer`, Mesa 27.0-devel's source), so only a free returns them. Measured on
+//!   an RX 7900 XTX (RADV), whose command streams sit in VRAM (the process's GTT read 66.1 MiB
+//!   throughout), by the process's DRM memory (`/proc/self/fdinfo`), under short command buffers
+//!   of one dispatch, four in flight, from 202.4 MiB of VRAM: four command buffers at once, each
+//!   one compute encoder of 50,000 dispatches, added 29.8 MiB, and the short command buffers that
+//!   took their pools then held 11.3 MiB of it (2.8 MiB each) after 17 s; four of 2,000 encoders
+//!   of one dispatch each added 378 MiB, the spares holding 4,000 command buffers of about 96 KiB
+//!   each, which went as those pools sat idle past [`IDLE_FOR`], 15.1 MiB over the start left
+//!   after 17 s.
 //! - **Freed on the device's free thread** ([`PoolFrees`], `free_thread.rs`), not on the thread
 //!   giving the pool back, which for a command buffer that completed is its queue's completion
 //!   thread before its completed handlers run and its waiters return: [`FREED_AT_ONCE`] command
