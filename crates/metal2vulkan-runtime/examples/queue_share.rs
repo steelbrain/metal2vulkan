@@ -48,6 +48,14 @@
 //!   queue on one `VkQueue`, each lent once (`with_vk_queue`) so it never moves.
 //! - **idle-queues**: one thread committing draws in turn over 16, then 2,048 queues, 3 in flight:
 //!   command buffers a second, and the thread's time in `command_buffer` per command buffer.
+//! - **churn**: command queues made and dropped as a guest's processes make them (about 350 in a
+//!   250 s walk, here `--churn N` over `--seconds`): a compositor thread commits one draw every
+//!   `--period-ms` (16 ms) and never waits (`--unshared` makes its queue unshared), three kept
+//!   queues commit a draw every 8 ms each, and every `seconds / N` a new queue is made that commits
+//!   one long command buffer, then a draw at each later tick, and is dropped 1 to 8 ticks later
+//!   (a deterministic sequence). `--untimed` makes the device answer GPU times from the host, as a
+//!   consumer that does so does not share `VkQueue`s. The compositor's latencies, the most queues
+//!   live at once, and the device's counts of command buffers that waited behind another queue's.
 
 use metal2vulkan::device::{DevicePolicy, QueueSharingPolicy, UnsharedIsolationPolicy};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
@@ -91,6 +99,10 @@ struct Options {
     long: Duration,
     /// `frames`: the compositor's period between commits.
     period: Duration,
+    /// `churn`: the queues made over the run.
+    churn: usize,
+    /// The device answers GPU times from the host (`DeviceOptions::gpu_times_from_host`).
+    untimed: bool,
 }
 
 fn options() -> Options {
@@ -107,6 +119,8 @@ fn options() -> Options {
         one_vk_queue: false,
         long: Duration::from_millis(30),
         period: Duration::from_millis(16),
+        churn: 340,
+        untimed: false,
     };
     while let Some(arg) = args.next() {
         let mut value = || args.next().unwrap_or_else(|| panic!("{arg} needs a value"));
@@ -131,6 +145,8 @@ fn options() -> Options {
             "--threads" => options.threads = value().parse().unwrap(),
             "--in-flight" => options.in_flight = value().parse().unwrap(),
             "--one-vk-queue" => options.one_vk_queue = true,
+            "--churn" => options.churn = value().parse().unwrap(),
+            "--untimed" => options.untimed = true,
             "--long-ms" => {
                 options.long = Duration::from_secs_f64(value().parse::<f64>().unwrap() / 1e3)
             }
@@ -334,6 +350,7 @@ fn device(options: &Options) -> Device {
     device.policy = DevicePolicy::UNTRUSTED;
     device.policy.queue_sharing = options.policy;
     device.policy.unshared_isolation = options.isolation;
+    device.gpu_times_from_host = options.untimed;
     Device::system_default_with(&device).unwrap()
 }
 
@@ -605,6 +622,108 @@ fn frames(kit: &Arc<Kit>, options: &Options) {
         ) / 1e6,
         c.unshared_waits_over_16ms_behind_one_long_run
             - before.unshared_waits_over_16ms_behind_one_long_run,
+    );
+}
+
+/// The `churn` mode (the module docs).
+fn churn(kit: &Arc<Kit>, options: &Options) {
+    let stop = Arc::new(AtomicBool::new(false));
+    let latencies = Arc::new(Mutex::new(Vec::new()));
+    let before = kit.device.work_counts();
+    let comp = compositor(
+        kit,
+        kit.queue(options.unshared),
+        1.0 / options.period.as_secs_f64(),
+        &stop,
+        &latencies,
+        None,
+    );
+    let kept: Vec<std::thread::JoinHandle<()>> = (0..3)
+        .map(|_| {
+            let kit = Arc::clone(kit);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                let queue = kit.device.new_command_queue().unwrap();
+                let target = kit.target();
+                while !stop.load(Ordering::Relaxed) {
+                    kit.draw(&queue, &target).commit().unwrap();
+                    std::thread::sleep(Duration::from_millis(8));
+                }
+            })
+        })
+        .collect();
+    let tick = Duration::from_secs_f64(options.seconds / options.churn.max(1) as f64);
+    let target = kit.target();
+    let mut live: Vec<(CommandQueue, usize, CommandBuffer)> = Vec::new();
+    let mut seed = 0x2545_f491_4f6c_dd1du64;
+    let mut most = 0;
+    let mut next = Instant::now();
+    for made in 0..options.churn {
+        live.retain(|(_, until, last)| {
+            let keep = *until > made;
+            if !keep {
+                last.wait_until_completed().unwrap();
+            }
+            keep
+        });
+        for (queue, _, last) in &mut live {
+            let draw = kit.draw(queue, &target);
+            draw.commit().unwrap();
+            *last = draw;
+        }
+        let queue = kit.device.new_command_queue().unwrap();
+        let long = kit.long(&queue);
+        long.commit().unwrap();
+        seed =
+            (seed.wrapping_mul(6_364_136_223_846_793_005)).wrapping_add(1_442_695_040_888_963_407);
+        live.push((queue, made + 1 + ((seed >> 33) % 8) as usize, long));
+        // The compositor's, the kept ones and the churn's.
+        most = most.max(1 + 3 + live.len());
+        next += tick;
+        let now = Instant::now();
+        if next > now {
+            std::thread::sleep(next - now);
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    comp.join().unwrap();
+    for thread in kept {
+        thread.join().unwrap();
+    }
+    for (_, _, last) in &live {
+        last.wait_until_completed().unwrap();
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    let c = kit.device.work_counts();
+    let mut samples = latencies.lock().unwrap().clone();
+    let over_16 = samples.iter().filter(|&&ms| ms > 16.0).count();
+    println!(
+        "churn (policy {:?}, untimed {}, compositor {} every {:?}, {} queues made, one every {:.0} ms, each with one long command buffer of {:.1} ms, at most {most} live): compositor {}, {over_16} over 16 ms; {} queues past the round robin",
+        options.policy,
+        options.untimed,
+        if options.unshared { "unshared" } else { "shared" },
+        options.period,
+        options.churn,
+        tick.as_secs_f64() * 1e3,
+        kit.long_time.as_secs_f64() * 1e3,
+        summary(&mut samples),
+        c.queues_sharing_a_vk_queue - before.queues_sharing_a_vk_queue,
+    );
+    println!(
+        "  behind other queues: {} ({} over 16 ms, {} over 33 ms, longest {:.1} ms); unshared {} ({} over 16 ms, {} over 33 ms, longest {:.1} ms)",
+        c.command_buffers_behind_other_queues - before.command_buffers_behind_other_queues,
+        c.command_buffers_behind_other_queues_over_16ms
+            - before.command_buffers_behind_other_queues_over_16ms,
+        c.command_buffers_behind_other_queues_over_33ms
+            - before.command_buffers_behind_other_queues_over_33ms,
+        c.wait_behind_other_queues_longest_nanos as f64 / 1e6,
+        c.unshared_command_buffers_behind_other_queues
+            - before.unshared_command_buffers_behind_other_queues,
+        c.unshared_command_buffers_behind_other_queues_over_16ms
+            - before.unshared_command_buffers_behind_other_queues_over_16ms,
+        c.unshared_command_buffers_behind_other_queues_over_33ms
+            - before.unshared_command_buffers_behind_other_queues_over_33ms,
+        c.unshared_wait_behind_other_queues_longest_nanos as f64 / 1e6,
     );
 }
 
@@ -972,6 +1091,7 @@ fn main() {
             idle_queues(&kit, &options, 16);
             idle_queues(&kit, &options, 2048);
         }
+        "churn" => churn(&kit, &options),
         other => panic!("no mode {other}"),
     }
 }
