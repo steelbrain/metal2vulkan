@@ -3297,11 +3297,13 @@ bound.
   `VkQueue` it took at its creation.
 - `metal2vulkan-degrade-heap-texture-larger-than-metal` (precision). `HeapTextureLargerThanMetal`: A
   heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`) whose images on the
-  device need more bytes or a coarser alignment than Metal's answer, which the runtime models, and
-  which no shadow of the texture's bytes holds it to: not a multisample texture, whose image lies in
-  memory of its own, nor one whose planes or Metal's tiles fit its bytes. The answer is then the larger of the two, since no image binds at Metal's offsets.
-  Every other such texture answers Metal's numbers and announces nothing here. Not where
-  `optimized-depth-stencil-texture` says why. Cost:
+  device need more bytes or a coarser alignment than Metal's answer, which the runtime models: under
+  the default `HeapAnswerPolicy::Device`, a single-sample texture whose image binds into the heap's
+  memory, which lies in that image; under `HeapAnswerPolicy::Metal`, one that no shadow of its bytes
+  holds to Metal's answer: not a multisample texture, whose image lies in memory of its own, nor one
+  whose planes or Metal's tiles fit its bytes. The answer is then the larger of the two, since no
+  image binds at Metal's offsets. Every other such texture answers Metal's numbers and announces
+  nothing here. Not where `optimized-depth-stencil-texture` says why. Cost:
   heap_texture_size_and_align answers more bytes or a coarser alignment than Metal's, so a heap
   sized by Metal's answers holds fewer such textures, and they lie at other offsets; each texture
   keeps its own bytes.
@@ -5027,9 +5029,19 @@ each item named states the rule in full.
 
 **Heaps and memory**
 
-- **A heap's size and alignment answers are the device's own**
-  (`Device::heap_texture_size_and_align`): the requirement of the image the runtime makes. A
-  placement heap's `newTextureWithDescriptor:offset:` is held to Metal's own alignment, not that
+- **A heap texture answers Metal's size and alignment where the device's image fits them, else
+  the device's** (`Device::heap_texture_size_and_align`, `DevicePolicy::heap_answers`). Under the
+  default `HeapAnswerPolicy::Device`, a single-sample texture whose image binds into the heap's
+  memory and needs more than Metal's answer answers the larger of the two and lies in that image:
+  no image is put in its place and no shadow holds it. The alignment it takes is at most 64 KiB
+  (an AMD Radeon Pro 5300M's answer on a Mac), and at most 4 KiB or its own size; where its image
+  asks more, its image that a 4 KiB alignment holds (host-transfer usage, else linear) takes its
+  place. A `Shared` texture's answer also holds the linear image a heap over host pages binds.
+  Under `HeapAnswerPolicy::Metal` (in `exact_answers`), the answer is Metal's: an image that fits
+  it takes the place of one that does not, else a shadow of the heap's bytes holds the texture
+  there, and only a texture neither holds answers the device's (`heap-texture-larger-than-metal`).
+  Metal's measured answers (4:2:2, one-plane YCbCr, two-plane extended-range, `X32_Stencil8`,
+  `BlockWritesOnly`) hold under either value. A placement heap's `newTextureWithDescriptor:offset:` is held to Metal's own alignment, not that
   answer, for a texture whose image lies in memory of its own (a shadow of the heap's bytes, a
   multisample texture's samples in Metal's tiles): no image binds to the heap's memory there, so
   every offset Metal makes the texture at makes it here, and such a texture is held to no

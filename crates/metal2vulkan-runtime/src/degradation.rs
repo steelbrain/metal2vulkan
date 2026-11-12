@@ -2015,13 +2015,15 @@ degradations! {
              `VkQueue` it took at its creation";
         /// A heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`)
         /// whose images on the device need more bytes or a coarser alignment than Metal's answer,
-        /// which the runtime models (`texture/heap_tiled.rs`), and which no shadow of the
-        /// texture's bytes holds it to (`texture/heap::held_to_metal`): not a multisample texture,
-        /// whose image lies in memory of its own, nor one whose planes or Metal's tiles fit its
-        /// bytes. The answer is then the larger of the two,
-        /// since no image binds at Metal's offsets. Every other such texture answers Metal's
-        /// numbers and announces nothing here. Not where `optimized-depth-stencil-texture` says
-        /// why.
+        /// which the runtime models (`texture/heap_tiled.rs`): under the default
+        /// `HeapAnswerPolicy::Device`, a single-sample texture whose image binds into the heap's
+        /// memory, which lies in that image (`texture/heap::device_heap_answer`); under
+        /// `HeapAnswerPolicy::Metal`, one that no shadow of its bytes holds to Metal's answer
+        /// (`texture/heap::held_to_metal`): not a multisample texture, whose image lies in memory
+        /// of its own, nor one whose planes or Metal's tiles fit its bytes. The answer is then the
+        /// larger of the two, since no image binds at Metal's offsets. Every other such texture
+        /// answers Metal's numbers and announces nothing here. Not where
+        /// `optimized-depth-stencil-texture` says why.
         HeapTextureLargerThanMetal = "heap-texture-larger-than-metal", Precision,
             "heap_texture_size_and_align answers more bytes or a coarser alignment than Metal's, \
              so a heap sized by Metal's answers holds fewer such textures, and they lie at other \

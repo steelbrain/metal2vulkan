@@ -4,16 +4,26 @@
 //!
 //! - **Size and alignment.** [`Device::heap_texture_size_and_align`] answers **Metal's** answer
 //!   wherever the runtime models it (`heap_tiled.rs`: plain and block-compressed formats;
-//!   multisample textures; the measured routes below), because that number is what a program sizes
-//!   a heap and places its resources by: a consumer that lays a heap out at Metal's offsets and is
-//!   told a coarser alignment or a larger size under-allocates and its placements do not fit. An
-//!   M4 on macOS 27.0.1 and an M3 Max on macOS 26.7 answer alike (128-byte alignment and the sizes
-//!   of Apple's layouts, 16384 bytes for a 64x64 `RGBA8Unorm` texture a shader writes and 16512
-//!   for one it only reads, which Metal compresses), so the answer is the device's only where the
-//!   model has none. It depends on the device and the descriptor alone, never on what was
+//!   multisample textures; the measured routes below) and the device's image fits it, because that
+//!   number is what a program sizes a heap and places its resources by. An M4 on macOS 27.0.1 and
+//!   an M3 Max on macOS 26.7 answer alike (128-byte alignment and the sizes of Apple's layouts,
+//!   16384 bytes for a 64x64 `RGBA8Unorm` texture a shader writes and 16512 for one it only reads,
+//!   which Metal compresses). Where the image of the route the device takes needs more bytes or a
+//!   coarser alignment, the default `HeapAnswerPolicy::Device` answers the larger of the two and
+//!   the texture lies in that image ([`device_heap_answer`]): Metal's query is the device's own,
+//!   and the Macs answer alignments from 128 bytes to 65536 (an AMD Radeon Pro 5300M), so a program
+//!   places a heap's resources by the query, not by Apple's numbers. The alignment it takes is at
+//!   most 64 KiB, and at most 4 KiB or the answer's size; where the route's image asks more (ANV's
+//!   compressed image of a small texture: 64 KiB), the texture's image that a 4 KiB alignment
+//!   holds (`Device::fitting_heap_image`) lies there in its place, the answer that one's. A
+//!   `Shared` texture's answer also holds the linear image a heap over host pages binds for it
+//!   (`Device::host_route_extent`). A measured route's, a multisample texture's and a texture
+//!   whose image lies in memory of its own keep Metal's answer, and under
+//!   `HeapAnswerPolicy::Metal` (in `exact_answers`) every texture does, held to it as below. The
+//!   answer depends on the device, its policy and the descriptor alone, never on what was
 //!   allocated.
 //!
-//!   The texture is held to that answer in one of two ways ([`images_fit`]). Where the image the
+//!   A texture takes Metal's answer in one of two ways ([`images_fit`]). Where the image the
 //!   runtime makes of the descriptor (the plan `new_texture` makes, with the usage the runtime
 //!   adds itself, `with_free_usage`) asks no more bytes and no coarser alignment, the image is
 //!   bound at the texture's offset of the heap's memory. Its footprint is the image's own: a heap's

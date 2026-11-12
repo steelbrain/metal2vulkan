@@ -5583,10 +5583,11 @@ pub struct WorkCounts {
     pub heap_textures_tiled: u64,
     /// Textures made in heaps whose image of the route the device first took (a compressed
     /// optimal image, say) takes more bytes or a coarser alignment of the heap than Metal's
-    /// answer, bound in the heap's memory in place as an image of them that fits it instead: its
-    /// optimal image of host-transfer usage, or its linear image (`heap-texture-host-transfer`,
-    /// `heap-texture-linear`; `texture/heap.rs`). Each would else be a shadow of the heap's bytes
-    /// (`heap_textures_tiled`).
+    /// answer (under `HeapAnswerPolicy::Device`, an alignment coarser than the answer takes: past
+    /// 64 KiB, or past both 4 KiB and its size), bound in the heap's memory in place as an image
+    /// of them that fits it instead: its optimal image of host-transfer usage, or its linear image
+    /// (`heap-texture-host-transfer`, `heap-texture-linear`; `texture/heap.rs`). Each would else
+    /// be a shadow of the heap's bytes (`heap_textures_tiled`).
     pub heap_textures_refit: u64,
     /// The images a heap's multisample texture's moves between its image and Metal's tiles made
     /// for a copy, as an encoder records it: each a wide, scratch or draw image of a band of one
