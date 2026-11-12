@@ -8,7 +8,7 @@
 //! [`RECT`] after the pass are those its read took: the texels from before the pass, Metal's
 //! answer and the copy's (`texture/attached_reads.rs`), and every texel outside it the clear's.
 //! A read of the wrong face takes a value two passes old. Each step checks those bytes and what
-//! the pass moved: the texels copied in (`WorkCounts::shadow_texels_copied_in`, none for a
+//! the pass moved: the texels copied in (`WorkCounts::shadow_texels_copied_in_images`, none for a
 //! turned pass) and the turns, reads and copies between the faces it counted.
 //!
 //! The steps: the first attached read, which makes the faces and copies in; a turn; a blit read
