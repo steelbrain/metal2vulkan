@@ -304,8 +304,11 @@ fn a_managed_texture_changed_in_one_row_reads_it_in_place_where_a_shared_one_cop
     };
     let length = pitch * HEIGHT;
     let written = named(length, 7);
-    let words: Vec<u32> = (written.chunks_exact(4))
-        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+    let words: Vec<u32> = written
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&word| u32::from_le_bytes(word))
         .collect();
     host.set(0, &words);
     // SAFETY: as above.
