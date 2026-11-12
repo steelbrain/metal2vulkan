@@ -471,8 +471,11 @@ impl<'m> Cx<'m, '_> {
             }
             _ => {}
         }
-        let vertex_input = (role, cx) == (Key::VertexInput, Context::Input);
-        self.attrs(&mut ops, &mut node.attrs, vertex_input)?;
+        let attribute = matches!(
+            (role, cx),
+            (Key::VertexInput | Key::StageIn, Context::Input)
+        );
+        self.attrs(&mut ops, &mut node.attrs, attribute)?;
         ops.finish()?;
         node.site = ops.site;
         Ok(node)
@@ -491,11 +494,13 @@ impl<'m> Cx<'m, '_> {
         Ok(Predicate { global, name })
     }
 
-    /// Read attributes until the node ends. A `vertex_input` node's location may be followed by
-    /// its attribute's user key, which AIR 2.2 (macOS 13's compiler) writes there as
-    /// `generated(..)`: a vertex input binds by its location alone, so the key is read and not
-    /// kept. Any other node's non-key string is `UnknownKey`.
-    fn attrs(&mut self, ops: &mut Ops<'m>, a: &mut Attrs, vertex_input: bool) -> Result<(), Error> {
+    /// Read attributes until the node ends. A `vertex_input` or `stage_in` node's location may be
+    /// followed by its attribute's user key, which AIR 2.2 (macOS 13's compiler) writes there as
+    /// `generated(..)` for a vertex input, and Apple's OpenGL front end as the attribute's name
+    /// (`attrib_0`) for a vertex input and a kernel's stage-in attribute alike: an attribute binds
+    /// by its location alone, so the key is read and not kept. Any other node's non-key string is
+    /// `UnknownKey`.
+    fn attrs(&mut self, ops: &mut Ops<'m>, a: &mut Attrs, attribute: bool) -> Result<(), Error> {
         while !ops.is_done() {
             self.meter.tick(1)?;
             let k = key(ops)?;
@@ -509,7 +514,7 @@ impl<'m> Cx<'m, '_> {
                         index: ops.abi_int(name)?,
                         count: ops.abi_int(name)?,
                     });
-                    if vertex_input
+                    if attribute
                         && matches!(ops.peek(), Some(Tok::Str(s)) if Key::parse(s).is_none())
                     {
                         ops.string(name)?;

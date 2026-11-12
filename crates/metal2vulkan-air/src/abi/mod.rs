@@ -23,11 +23,13 @@
 //! the return type; likewise each `!air.visible` function binds every parameter once and has an
 //! output exactly when it returns a value, and each `!air.ci` Core Image kernel also binds every
 //! parameter once, with a role that agrees with the parameter's type, and has a scalar or vector
-//! output exactly when it returns a value. For typed-pointer bitcode, a buffer's (or Core Image
-//! pointer's) `air.arg_type_size` equals the allocation size of its pointee under the DataLayout, a
-//! buffer's `air.buffer_size` is a multiple of it (a reference to an array), and every
-//! `air.struct_type_info` member starts inside its container, with arrays and nested structs wholly
-//! inside. `air.arg_type_align_size` is Metal's alignment, which the LLVM type does not carry
+//! output exactly when it returns a value. For typed-pointer bitcode, the `air.arg_type_size` of an
+//! argument buffer, a threadgroup argument, a buffer with a struct layout or a Core Image pointer
+//! equals the allocation size of its pointee under the DataLayout; a plain buffer's states its
+//! declared type, which may differ from the pointee (Apple's OpenGL front end declares byte buffers
+//! behind typed pointers). A buffer's `air.buffer_size` is a multiple of its declared type's size
+//! (a reference to an array), and every `air.struct_type_info` member starts inside its container,
+//! with arrays and nested structs wholly inside. `air.arg_type_align_size` is Metal's alignment, which the LLVM type does not carry
 //! (clang lowers many structs packed), so it is only required to be a power of two. A metallib
 //! function's container metadata is cross-checked by [`AirAbi::check_container`].
 //!

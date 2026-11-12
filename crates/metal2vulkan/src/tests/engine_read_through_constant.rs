@@ -8,14 +8,18 @@
 //! rewritten node; Metal takes it (`abi::check`'s `read_through_constant`), and the runtime's
 //! `read_through_constant` device test runs both forms against the M3 Max's answers.
 //!
-//! `llvm-as` assembles the modules; without it the test skips visibly.
+//! `llvm-as` assembles the modules; without it the test skips visibly. The owned fixture
+//! `engine/kernel_read_through_constant` holds the same kernel in MSL with the rewritten node, and
+//! its typed-pointer text (`metal-as`, macOS only) points the parameter at the 160-byte `Params`
+//! while the node states one `char`.
 
 use crate::air::abi::{Access, ParamRole};
 use crate::air::ir::AddrSpace;
 use crate::budget::{Budget, Meter};
 use crate::device::DevicePolicy;
 use crate::pipeline::testing::{
-    compile, link_and_validate, llvm_assemble_text, profile, AssembleError,
+    compile, engine_dir, link_and_validate, llvm_assemble, llvm_assemble_text, metal_assemble,
+    profile, AssembleError,
 };
 
 /// The node of the `Params` buffer as Metal's compiler writes it for `constant Params *p`.
@@ -102,4 +106,29 @@ fn a_read_only_device_buffer_read_through_a_constant_pointer_compiles() {
     };
     assert_eq!((b.space, b.access), (AddrSpace::Device, Access::Read));
     eprintln!("compiled {compiled} modules of the two forms");
+}
+
+/// The fixture's typed-pointer form, whose parameter points at the 160-byte `Params` while its node
+/// states one `char`, compiles on every profile here to the module its opaque form compiles to: a
+/// plain buffer's `air.arg_type_size` is its declared type's, which its pointee need not be.
+#[test]
+fn the_typed_fixture_compiles_as_its_opaque_form_does() {
+    let dir = engine_dir();
+    let typed = match metal_assemble(&dir.join("kernel_read_through_constant.air.ll")) {
+        Ok(b) => b,
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(AssembleError::Rejected(why)) => panic!("metal-as rejected the fixture: {why}"),
+    };
+    let opaque = llvm_assemble(&dir.join("kernel_read_through_constant.ll"))
+        .unwrap_or_else(|e| panic!("llvm-as: {e:?}"));
+    for stem in ["lavapipe", "moltenvk-m3", "amd-780m-radv", "vk12-floor"] {
+        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let [typed, opaque] = [&typed, &opaque].map(|bc| {
+            compile(bc, "read_through_constant", &p).unwrap_or_else(|e| panic!("{stem}: {e}"))
+        });
+        assert_eq!(typed.spirv, opaque.spirv, "{stem}");
+    }
 }

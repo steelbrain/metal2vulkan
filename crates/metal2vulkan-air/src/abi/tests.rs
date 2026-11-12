@@ -1594,7 +1594,7 @@ fn a_vertex_input_s_location_may_carry_its_user_key() {
         );
     }
     let key = S("generated(__air_placeholder__)");
-    let refused: [&[O<'_>]; 4] = [
+    let refused: [&[O<'_>]; 3] = [
         // A second string after the location.
         &[
             I(0),
@@ -1607,15 +1607,7 @@ fn a_vertex_input_s_location_may_carry_its_user_key() {
         ],
         // The string after another attribute.
         &input(None, &[key]),
-        // The string after a stage-in member's or a buffer's location.
-        &[
-            I(0),
-            S("air.stage_in"),
-            S("air.location_index"),
-            I(3),
-            I(1),
-            key,
-        ],
+        // The string after a buffer's location.
         &[
             I(0),
             S("air.buffer"),
@@ -1631,6 +1623,46 @@ fn a_vertex_input_s_location_may_carry_its_user_key() {
             single_io("air.vertex", ops, Some(position)),
             AbiError::UnknownKey,
         );
+    }
+}
+
+/// Apple's OpenGL front end follows a kernel's stage-in attribute's location with the attribute's
+/// name (`attrib_0`), as it does a vertex input's. A stage-in attribute binds by its location, so
+/// the key is read and dropped; a second string, or one after another attribute, stays an unknown
+/// key.
+#[test]
+fn a_stage_in_attribute_s_location_may_carry_its_user_key() {
+    let input = |key: Option<&'static str>, more: &[O<'static>]| {
+        let mut ops = vec![I(0), S("air.stage_in"), S("air.location_index"), I(2), I(1)];
+        ops.extend(key.map(S));
+        ops.extend([S("air.arg_type_name"), S("int"), S("air.arg_name"), S("a")]);
+        ops.extend_from_slice(more);
+        ops
+    };
+    let unkeyed = single_io("air.kernel", &input(None, &[]), None).unwrap();
+    let keyed = single_io("air.kernel", &input(Some("attrib_0"), &[]), None).unwrap();
+    assert_eq!(keyed, unkeyed);
+    assert_eq!(
+        keyed.entries[0].params[0].role,
+        ParamRole::StageIn {
+            location: Slot {
+                index: AbiInt::Const(2),
+                count: AbiInt::Const(1),
+            }
+        }
+    );
+    let key = S("attrib_0");
+    let twice: &[O<'_>] = &[
+        I(0),
+        S("air.stage_in"),
+        S("air.location_index"),
+        I(2),
+        I(1),
+        key,
+        key,
+    ];
+    for ops in [twice, &input(None, &[key])] {
+        expect_abi(single_io("air.kernel", ops, None), AbiError::UnknownKey);
     }
 }
 
@@ -2585,9 +2617,54 @@ fn pointee_size_and_layout_checks() {
         check(&fields, &param(Some(8), Some(4), Some(8), s0), st),
         Ok(())
     );
-    // Size disagrees with the pointee.
+    // Size disagrees with the pointee whose fields the layout describes.
     assert_eq!(
         check(&fields, &param(Some(12), Some(4), None, s0), st),
+        Err(AbiError::TypeSizeMismatch)
+    );
+    // A plain buffer with no layout states its declared type, which need not be the pointee:
+    // OpenGL's byte buffer behind a `float *`, a by-value argument's one `char` behind its struct.
+    // Its buffer size is a multiple of the declared size, and its alignment still a power of two.
+    let plain = abi(vec![]);
+    for (pointee, size) in [(f32t, 1), (st, 1), (i32t, 16)] {
+        assert_eq!(
+            check(&plain, &param(Some(size), Some(1), None, None), pointee),
+            Ok(()),
+            "{size}"
+        );
+    }
+    assert_eq!(
+        check(&plain, &param(Some(16), Some(16), Some(48), None), f32t),
+        Ok(())
+    );
+    for bad in [
+        param(Some(16), Some(16), Some(40), None),
+        param(Some(1), Some(3), None, None),
+        param(Some(0), None, Some(4), None),
+    ] {
+        assert_eq!(
+            check(&plain, &bad, f32t),
+            Err(AbiError::TypeSizeMismatch),
+            "{bad:?}"
+        );
+    }
+    // With no stated size, the pointee is the declared type.
+    assert_eq!(
+        check(&plain, &param(None, None, Some(12), None), f32t),
+        Ok(())
+    );
+    assert_eq!(
+        check(&plain, &param(None, None, Some(6), None), f32t),
+        Err(AbiError::TypeSizeMismatch)
+    );
+    // An argument buffer's stated size is its element stride, which is the pointee's.
+    let mut argument = param(Some(1), Some(1), None, None);
+    let ParamRole::Buffer(arg) = argument.role else {
+        unreachable!("a buffer")
+    };
+    argument.role = ParamRole::ArgumentBuffer(arg);
+    assert_eq!(
+        check(&plain, &argument, f32t),
         Err(AbiError::TypeSizeMismatch)
     );
     // Alignment is not a power of two.
@@ -2847,6 +2924,23 @@ fn debug_info_and_recorded_sources_leave_the_abi_unchanged() {
     })
     .unwrap();
     assert_eq!(debug, plain);
+}
+
+/// Apple's OpenGL front end adds an empty `!gld.plugin_info` list to every module it writes: the
+/// module decodes to the ABI it has without it. An entry in the list says something unknown, and
+/// is refused as a key outside the contract.
+#[test]
+fn an_empty_opengl_plugin_list_leaves_the_abi_unchanged() {
+    let plain = module_with(|_| {}).unwrap();
+    let listed = module_with(|b| b.named_md("gld.plugin_info", &[])).unwrap();
+    assert_eq!(listed, plain);
+    expect_abi(
+        module_with(|b| {
+            let n = node(b, &[S("plugin")]);
+            b.named_md("gld.plugin_info", &[n]);
+        }),
+        AbiError::UnknownKey,
+    );
 }
 
 /// The debug-info and recorded-source lists are read by their shapes: a compile unit that is not a

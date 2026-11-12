@@ -464,12 +464,23 @@ pub(super) fn pointee_check(
     let Some(layout) = layouts.get(pointee) else {
         return Ok(());
     };
-    size_and_align(p.ty.size, p.ty.align, layout.alloc_size, site)?;
-    // `air.buffer_size` is the size of the referenced object, which is an array of the pointee
-    // for a reference to an array (`constant T (&)[n]`).
+    // The size of the argument's declared type, which reflection answers. A plain buffer's may
+    // differ from its pointee's, which is only the IR's typing of the parameter: Apple's OpenGL
+    // front end declares a byte buffer (`uchar`, `air.arg_type_size 1`) behind a `float *` or
+    // `uint *` parameter, and Apple's compiler a by-value argument as one `char` behind a pointer
+    // to its struct, and Metal makes a pipeline of both. Elsewhere the declared type is the
+    // pointee: an argument buffer's stated size is the stride memory reads its elements at, and a
+    // struct layout's members are its pointee's fields.
+    let declared = match (&p.role, buffer.layout, p.ty.size) {
+        (ParamRole::Buffer(_), None, Some(size)) => u64::from(size),
+        _ => layout.alloc_size,
+    };
+    size_and_align(p.ty.size, p.ty.align, declared, site)?;
+    // `air.buffer_size` is the size of the referenced object, which is an array of the declared
+    // type for a reference to an array (`constant T (&)[n]`).
     if buffer
         .buffer_size
-        .is_some_and(|s| layout.alloc_size == 0 || u64::from(s) % layout.alloc_size != 0)
+        .is_some_and(|s| declared == 0 || u64::from(s) % declared != 0)
     {
         return Err(site.err(AbiError::TypeSizeMismatch, Some("air.buffer_size")));
     }
@@ -481,11 +492,11 @@ pub(super) fn pointee_check(
     Ok(())
 }
 
-/// `air.arg_type_size` and `air.arg_type_align_size` of a pointer against its pointee's
-/// allocation size. The LLVM type's alignment is not Metal's: clang lowers a struct whose natural
-/// LLVM layout differs from the C++ one as a packed struct (alignment 1), and `alignas` raises
-/// Metal's. The size must agree, and Metal's alignment must be a power of two (it need not
-/// divide the size: an over-aligned struct keeps its unpadded size here).
+/// `air.arg_type_size` and `air.arg_type_align_size` of a pointer against the size its declared
+/// type has. The LLVM type's alignment is not Metal's: clang lowers a struct whose natural LLVM
+/// layout differs from the C++ one as a packed struct (alignment 1), and `alignas` raises Metal's.
+/// The size must agree, and Metal's alignment must be a power of two (it need not divide the
+/// size: an over-aligned struct keeps its unpadded size here).
 fn size_and_align(
     size: Option<u32>,
     align: Option<u32>,
