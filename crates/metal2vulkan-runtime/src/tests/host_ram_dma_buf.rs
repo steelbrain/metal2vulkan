@@ -38,9 +38,13 @@
 //!   as a consumer's objects come, takes its own import, and no chunk is imported nor asked of
 //!   the RAM's source for it. A copy over a chunk imports its range alone and asks the device's
 //!   thread for the chunk, which imports it; the objects after that lie in the chunk, which is
-//!   kept while an object over it lives. On a driver whose barriers do not order blits through two
-//!   imports of the same pages (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, ANV's among
-//!   the listed), no range is imported alone: the copy makes the chunk's import. Where the RAM does not fit in the memory the device's
+//!   kept while an object over it lives. An object's own import of dma-bufs at the RAM's own
+//!   addresses holds the chunk back from no copy: a copy that takes the chunk imports it beside
+//!   the object's, as one dma-buf, and reads what the object's fill wrote before it. On a driver
+//!   whose barriers do not order blits through two imports of the same pages
+//!   (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, ANV's among the listed), no range is
+//!   imported alone and no object takes its own import: the copy, or the object, makes the
+//!   chunk's import. Where the RAM does not fit in the memory the device's
 //!   imports count against (made so by the test), the device's thread releases it once none did for
 //!   its idle window (`WorkCounts::host_ram_chunks_released`), and a copy over it then imports its
 //!   run alone and asks for the chunk again (or, on such a driver, imports the chunk); where the
@@ -1262,34 +1266,44 @@ fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_o
     // The first object over a chunk not imported, with a source of its own pages as a consumer's
     // objects come: not bound in the RAM. It takes its own import, as over memory no RAM holds,
     // and asks for no chunk: a second later none is imported, and the RAM's source was asked for
-    // nothing past the use's question.
+    // nothing past the use's question. Where the device's barriers do not order blits through two
+    // imports of the same pages (ANV's), it lies in the chunk's import, which it made.
     let alone = runs_alone(&device);
     let first = sourced_buffer(&device, (view, start), &asked, AT, LENGTH);
     let made = device.work_counts();
+    let in_chunk = 1 - alone;
     assert_eq!(
         delta(&made, chunk_bound),
-        0,
-        "the first object over a chunk not imported lies in no chunk"
+        in_chunk,
+        "the first object over a chunk not imported lies in a chunk only where it made its import"
+    );
+    let own = matches!(
+        first.host_backing(),
+        Some(HostBacking::ImportedAsDmaBuf | HostBacking::ImportedByPointer)
     );
     assert!(
-        matches!(
-            first.host_backing(),
-            Some(HostBacking::ImportedAsDmaBuf | HostBacking::ImportedByPointer)
-        ),
-        "the first object's own import: {:?}",
+        match alone {
+            1 => own,
+            _ => first.host_backing() == Some(HostBacking::InHostRam),
+        },
+        "the first object's own import, or its chunk's: {:?}",
         first.host_backing()
     );
     std::thread::sleep(Duration::from_secs(1));
     let unasked = device.work_counts();
     assert_eq!(
         (delta(&unasked, imported), unasked.host_ram_chunks_live),
-        (0, before.host_ram_chunks_live),
-        "no chunk imported for an object"
+        (in_chunk, before.host_ram_chunks_live + in_chunk),
+        "no chunk imported for an object but where it lies in it"
     );
+    let first_span = (spans[0].start, spans[0].end - spans[0].start);
+    let first_chunk = (first_span.0, first_span.1, first_span.1);
+    let mut asked_now = vec![probe];
+    asked_now.extend((alone == 0).then_some(first_chunk));
     assert_eq!(
         asked.lock().unwrap().requests,
-        [probe],
-        "no chunk asked of the RAM's source for an object"
+        asked_now,
+        "no chunk asked of the RAM's source for an object but the one it lies in"
     );
     // A copy over each chunk: its range imported alone and the chunk asked for, which the
     // device's thread imports; where the device's barriers do not order blits through two
@@ -1579,6 +1593,124 @@ fn where_the_ram_fits_its_listed_chunks_stay_imported_once_idle() {
     }
 }
 
+/// Where each listed import costs every submission (the import tax forced held on the device), an
+/// object over a chunk not imported, at the RAM's own addresses and with a source of dma-bufs of
+/// its own pages as a consumer's objects come, then a gather by runs over that chunk which no CPU
+/// stage takes (the object lies over its bytes) and whose ranges are more than a copy imports
+/// alone (`copy::MOST_ALONE`), so that it takes the chunk's import. Where the device's barriers
+/// order blits through two imports of the same pages, the object takes its own import of
+/// dma-bufs, and the copy imports the chunk beside it as one dma-buf of the RAM's source
+/// (`ObjectChurn::dma_buf_imports_beside_live`): the chunk is not held back
+/// (`host_ram_chunks_held_back`), the gather reads the file's bytes, and one after a fill through
+/// the object in the same command buffer reads the fill. Where they do not (ANV's), the object
+/// lies in the chunk's import, which it made, and the copy reads through it.
+#[test]
+fn a_listed_chunk_an_object_s_own_dma_bufs_hold_pages_of_is_imported_for_a_copy() {
+    let scratch = Scratch::new();
+    if !udmabuf_openable() {
+        return;
+    }
+    let device = device(&scratch.0);
+    if device.shared().host_import.is_err() {
+        eprintln!("HOST-RAM-BESIDE: the device imports no host memory here; nothing to test");
+        return;
+    }
+    (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
+    let (ram, start, _view, asked, dropped) = ram(true);
+    let ram = Arc::into_inner(ram).expect("the test's RAM");
+    let ram = Arc::new(ram.with_largest_dma_buf(udmabuf_size_limit()));
+    fill_pattern(start, RAM_BYTES);
+    let used = device.use_host_ram(&ram).unwrap();
+    let chunks = device.host_ram_chunks();
+    let [(true, spans)] = &chunks[..] else {
+        eprintln!(
+            "HOST-RAM-BESIDE {}: not listed ({chunks:?}); nothing more to test",
+            device.name()
+        );
+        drop((used, ram));
+        return;
+    };
+    let first = spans[0].clone();
+    let beside = runs_alone(&device) == 1;
+    let page = crate::host_ram::copy::PAGE;
+    let before = device.work_counts();
+    let delta = |now: &WorkCounts, field: fn(&WorkCounts) -> u64| field(now) - field(&before);
+    // The object, at the RAM's own addresses, over the first chunk's bytes from `AT`.
+    let object = sourced_buffer(&device, (start, start), &asked, AT, LENGTH);
+    let made = device.work_counts();
+    match beside {
+        true => assert_eq!(
+            (
+                object.host_backing(),
+                delta(&made, |c| c.chunk_bound_buffers_made)
+            ),
+            (Some(HostBacking::ImportedAsDmaBuf), 0),
+            "the object's own import of its dma-bufs"
+        ),
+        false => assert_eq!(
+            (
+                object.host_backing(),
+                delta(&made, |c| c.chunk_bound_buffers_made)
+            ),
+            (Some(HostBacking::InHostRam), 1),
+            "the object in the chunk's import, which it made"
+        ),
+    }
+    // A gather of one page every 3 MiB from the object's first, more ranges than a copy imports
+    // alone, the first of them the object's.
+    let pages = crate::host_ram::copy::MOST_ALONE as u64 + 1;
+    let runs: Vec<std::ops::Range<u64>> = (0..pages)
+        .map(|index| first.start + AT + index * 3 * MIB)
+        .map(|at| at..at + page)
+        .collect();
+    assert!(runs.last().is_some_and(|run| run.end <= first.end));
+    let gathered = read_back(&device, pages * page, |encoder, own| {
+        let copied = encoder.copy_from_host_ram(&ram, &runs, own, 0);
+        copied.expect("the gather over the chunk the object's import holds pages of");
+    });
+    let expected: Vec<u8> = (runs.iter())
+        .flat_map(|run| bytes(start, run.start - start..run.end - start))
+        .collect();
+    assert!(gathered == expected, "the gather reads the file's bytes");
+    let copied = device.work_counts();
+    let held_back = delta(&copied, |c| c.host_ram_chunks_held_back);
+    let imported = delta(&copied, |c| c.host_ram_chunks_imported);
+    let alongside = delta(&copied, |c| c.object_churn.dma_buf_imports_beside_live);
+    println!(
+        "HOST-RAM-BESIDE {}: the object {:?}; the gather of {pages} pages held the chunk back \
+         {held_back} time(s), {imported} chunk(s) imported, {alongside} beside live dma-bufs",
+        device.name(),
+        object.host_backing(),
+    );
+    assert_eq!(held_back, 0, "the chunk was held back");
+    assert_eq!(imported, 1, "the chunk, imported once");
+    assert_eq!(
+        alongside,
+        u64::from(beside),
+        "the chunk's import beside the object's"
+    );
+    // A fill through the object, then a gather of its first page through the chunk's import, in
+    // one command buffer: the gather reads the fill.
+    let filled = read_back(&device, page, |encoder, own| {
+        (encoder.fill_buffer(&object, 0..LENGTH, 0x5a)).unwrap();
+        let run = first.start + AT..first.start + AT + page;
+        (encoder.copy_from_host_ram(&ram, std::slice::from_ref(&run), own, 0)).unwrap();
+    });
+    assert!(
+        filled.iter().all(|&b| b == 0x5a),
+        "the gather after the fill through the object"
+    );
+    drop((object, used, ram));
+    let began = Instant::now();
+    while !dropped.load(Ordering::SeqCst) {
+        assert!(
+            began.elapsed() < WAIT,
+            "the RAM's keep-alive was never dropped"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// The pages of a guest's tile as a consumer copies them: 4 KiB pages, about 7 MiB.
 const TILE_PAGES: u64 = 1800;
 
@@ -1842,11 +1974,11 @@ impl TileRound<'_> {
     }
 }
 
-/// 1 where the device binds an object over a chunk not imported yet of a RAM whose chunks are
-/// dma-bufs (`Plan::listed`, this file's listed RAMs) in an import of its own run alone, 0 where its
-/// barriers do not order blits through two imports of the same pages
-/// (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, ANV's) and the object imports the chunk,
-/// as one that finds the device's thread stopped does. A RAM whose chunks are imports of their
+/// 1 where a copy over a chunk not imported yet of a RAM whose chunks are dma-bufs
+/// (`Plan::listed`, this file's listed RAMs) imports its ranges alone, and an object over it with
+/// a source of its own pages takes its own import; 0 where the device's barriers do not order
+/// blits through two imports of the same pages (`RuntimeDriverDefect::AliasedImportBlitsUnordered`,
+/// ANV's) and the copy, and the object, import the chunk. A RAM whose chunks are imports of their
 /// pointer never imports a run alone (`RamOnDevice::runs_alone`).
 fn runs_alone(device: &Device) -> u64 {
     let defect = metal2vulkan::error::RuntimeDriverDefect::AliasedImportBlitsUnordered;
