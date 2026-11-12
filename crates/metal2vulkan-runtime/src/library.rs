@@ -293,7 +293,9 @@ impl Library {
     /// ignored, as Metal ignores it. The others are checked against the constants the function
     /// declares when a pipeline state compiles it, where Metal checks them here: a value of
     /// another type, or a used constant without a value, refuses that pipeline state
-    /// (`Compile`). A dynamic library's function is refused as
+    /// (`Compile`), and so do values that put two of the function's arguments on overlapping
+    /// slots of one argument table (`Compile(InvalidDescriptor(OverlappingArgument))`; Metal's
+    /// "argument has invalid location"). A dynamic library's function is refused as
     /// [`new_function_with_name`](Self::new_function_with_name) refuses it.
     pub fn new_function_with_name_constant_values(
         &self,

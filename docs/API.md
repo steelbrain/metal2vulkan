@@ -924,7 +924,10 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
 - What Metal refuses, the link refuses as `InvalidDescriptor(ColorAttachment)`: an output with
   fewer components than its attachment's channels, a blend that reads the second output without
   the first, alpha to coverage over an integer attachment 0. Function-constant values that put two
-  outputs at one attachment are `InvalidDescriptor(DuplicateColorOutput)`.
+  outputs at one attachment are `InvalidDescriptor(DuplicateColorOutput)`, and values that put two
+  arguments of one argument table (buffer, threadgroup memory, texture or sampler) on overlapping
+  slots are `InvalidDescriptor(OverlappingArgument)`, naming the later argument, of any stage:
+  Metal refuses both when it makes the function.
 - `ColorAttachment`'s `metal` is how plain Metal answers the pipeline (measured on an Apple M3 Max
   under macOS 27.0.1): `MetalAnswer::NilWithError`, nil and an `NSError` (code 3), for an output or
   color input of another numeric class than its attachment, an output with fewer components, a

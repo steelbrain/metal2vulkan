@@ -33,10 +33,10 @@
 //! A constant can feed an argument's binding: its slot (`[[texture(c)]]`) or a table's length.
 //! Metal binds one resource per slot of an argument table, so a set under which two live
 //! arguments of the row's entry share a slot ([`shared_slot`]; a zero puts `[[texture(c)]]` at
-//! another texture's 0) describes no pipeline whose arguments are distinct resources. A constant
-//! can also gate an output, and a set that leaves two color outputs at one attachment and blend
-//! index ([`shared_color`]) is one Metal refuses when it makes the function (as the translation
-//! does, `DuplicateColorOutput`). The plan keeps such a synthetic set apart ([`AliasedSet`]) and
+//! another texture's 0) is one Metal refuses when it makes the function ("argument has invalid
+//! location"; the translation's `OverlappingArgument`). A constant can also gate an output, and a
+//! set that leaves two color outputs at one attachment and blend index ([`shared_color`]) is one
+//! Metal refuses when it makes the function (as the translation does, `DuplicateColorOutput`). The plan keeps such a synthetic set apart ([`AliasedSet`]) and
 //! the audit does not attempt it: its refusal would measure the planner's value, not the
 //! translation. An authored set, which Metal ran, is always attempted.
 

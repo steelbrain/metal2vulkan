@@ -4571,6 +4571,210 @@ fn argument_table_slots_past_metal_s_tables_are_invalid_input() {
     )));
 }
 
+/// The specialization of a kernel `k(p0, p1)` of address spaces `spaces` whose parameters have
+/// roles `first` and `second`, each given the global of function constant 0 (`n`, supplied as
+/// `n`); `gated` puts parameter 0 behind a predicate that is false.
+fn pair_spec(
+    first: impl FnOnce(GlobalId) -> ParamRole,
+    second: impl FnOnce(GlobalId) -> ParamRole,
+    spaces: [AddrSpace; 2],
+    n: u32,
+    gated: bool,
+) -> Result<(), Error> {
+    let mut m = ModuleBuilder::new();
+    let void = m.void();
+    let i8t = m.int(8);
+    let i32t = m.int(32);
+    let off = m.constant(i8t, Const::Int(0));
+    let p_off = m.simple_global("p_off", i8t, AddrSpace::Constant, Some(off));
+    let at = fc_global(&mut m, "n", i32t);
+    let (p0, p1) = (m.ptr(spaces[0]), m.ptr(spaces[1]));
+    let fty = m.fn_ty(void, &[p0, p1]);
+    let mut f = m.define("k", fty);
+    f.ret(None);
+    let k = f.finish();
+    let module = m.finish().unwrap();
+    let (mut a, mut b) = (buffer(0, 0), buffer(1, 0));
+    a.role = first(at);
+    b.role = second(at);
+    if gated {
+        a.predicate = Some(Predicate {
+            global: p_off,
+            name: DiagName::new("p"),
+        });
+    }
+    let abi = abi(vec![kernel(k, vec![a, b])], vec![fc_decl(0, at, i32t)]);
+    specialize(module, &abi, &request(&[(0, int(n))]), &mut meter()).map(|_| ())
+}
+
+/// Two parameters that remain in one argument table at overlapping slots, one slot a function
+/// constant sets, are an invalid request naming the later parameter, its index and its count, as
+/// Metal refuses the function when it makes it ("argument has invalid location (<index,count>)",
+/// measured on an M3 Max for each case here): two buffers, a buffer and a threadgroup memory
+/// argument apart, two textures, a texture and a texture array, two samplers, two threadgroup
+/// memory arguments, and an acceleration structure and an intersection function table (both bind
+/// at buffer indices). Slots apart, arguments of two tables at one index, a count of 0, and a
+/// parameter gated off overlap nothing.
+#[test]
+fn arguments_at_overlapping_slots_of_one_table_are_an_invalid_request() {
+    use crate::abi::{AccelerationStructureKind, ObjectArg, TextureArg};
+    use crate::error::RequestError;
+    let fixed = |index: u32, count: u32| Slot {
+        index: AbiInt::Const(index),
+        count: AbiInt::Const(count),
+    };
+    let set = |g: GlobalId, count: u32| Slot {
+        index: AbiInt::Global(g),
+        count: AbiInt::Const(count),
+    };
+    let buf = |location: Slot, space: AddrSpace| match buffer(0, 0).role {
+        ParamRole::Buffer(b) => ParamRole::Buffer(BufferArg {
+            location,
+            space,
+            ..b
+        }),
+        other => other,
+    };
+    let tg = |location: Slot| match buffer(0, 0).role {
+        ParamRole::Buffer(b) => ParamRole::Threadgroup(BufferArg {
+            location,
+            space: AddrSpace::Threadgroup,
+            ..b
+        }),
+        other => other,
+    };
+    let tex = |location: Slot, access: Access| {
+        ParamRole::Texture(TextureArg {
+            location,
+            access,
+            raster_order_group: None,
+        })
+    };
+    let refused = |r: Result<(), Error>, index: u32, count: u32| {
+        r == Err(Error::InvalidRequest(RequestError::OverlappingArgument {
+            param: 1,
+            index,
+            count,
+        }))
+    };
+    let (dev, cst, thr) = (AddrSpace::Device, AddrSpace::Constant, AddrSpace::Thread);
+    let tgs = AddrSpace::Threadgroup;
+    // Two buffers: buffer(0) and buffer(n).
+    let buffers = |n: u32| {
+        pair_spec(
+            |_| buf(fixed(0, 1), dev),
+            |g| buf(set(g, 1), cst),
+            [dev, cst],
+            n,
+            false,
+        )
+    };
+    assert!(refused(buffers(0), 0, 1));
+    assert_eq!(buffers(1), Ok(()));
+    // A buffer and threadgroup memory at one index: two tables.
+    assert_eq!(
+        pair_spec(
+            |_| buf(fixed(0, 1), dev),
+            |g| tg(set(g, 1)),
+            [dev, tgs],
+            0,
+            false
+        ),
+        Ok(())
+    );
+    // Two threadgroup memory arguments.
+    let tgmem = |n: u32| pair_spec(|_| tg(fixed(0, 1)), |g| tg(set(g, 1)), [tgs, tgs], n, false);
+    assert!(refused(tgmem(0), 0, 1));
+    assert_eq!(tgmem(1), Ok(()));
+    // A write texture at texture(0) and a sampled one at texture(n).
+    let textures = |n: u32| {
+        pair_spec(
+            |_| tex(fixed(0, 1), Access::Write),
+            |g| tex(set(g, 1), Access::Sample),
+            [dev, dev],
+            n,
+            false,
+        )
+    };
+    assert!(refused(textures(0), 0, 1));
+    assert_eq!(textures(1), Ok(()));
+    // A texture at texture(n) and an array of two at texture(1): the array is the later.
+    let arrays = |n: u32| {
+        pair_spec(
+            |g| tex(set(g, 1), Access::Write),
+            |_| tex(fixed(1, 2), Access::Sample),
+            [dev, thr],
+            n,
+            false,
+        )
+    };
+    assert_eq!(arrays(0), Ok(()));
+    assert!(refused(arrays(1), 1, 2));
+    assert!(refused(arrays(2), 1, 2));
+    assert_eq!(arrays(3), Ok(()));
+    // Two samplers.
+    let samplers = |n: u32| {
+        pair_spec(
+            |_| ParamRole::Sampler {
+                location: fixed(0, 1),
+            },
+            |g| ParamRole::Sampler {
+                location: set(g, 1),
+            },
+            [cst, cst],
+            n,
+            false,
+        )
+    };
+    assert!(refused(samplers(0), 0, 1));
+    assert_eq!(samplers(1), Ok(()));
+    // An acceleration structure at buffer(1) and an intersection function table at buffer(n).
+    let objects = |n: u32| {
+        pair_spec(
+            |_| ParamRole::AccelerationStructure {
+                kind: AccelerationStructureKind::Primitive,
+                arg: ObjectArg {
+                    location: fixed(1, 1),
+                    access: None,
+                },
+            },
+            |g| {
+                ParamRole::IntersectionTable(ObjectArg {
+                    location: set(g, 1),
+                    access: None,
+                })
+            },
+            [dev, dev],
+            n,
+            false,
+        )
+    };
+    assert!(refused(objects(1), 1, 1));
+    assert_eq!(objects(2), Ok(()));
+    // A buffer table of count 0 binds no slot.
+    assert_eq!(
+        pair_spec(
+            |_| buf(fixed(0, 0), thr),
+            |g| buf(set(g, 1), dev),
+            [thr, dev],
+            0,
+            false
+        ),
+        Ok(())
+    );
+    // A texture gated off at texture(0) binds no slot.
+    assert_eq!(
+        pair_spec(
+            |_| tex(fixed(0, 1), Access::Write),
+            |g| tex(set(g, 1), Access::Sample),
+            [dev, dev],
+            0,
+            true
+        ),
+        Ok(())
+    );
+}
+
 /// A site of the `matmul2d` lowering calls a `matmul2d` ABI declaration or a tensor intrinsic, so
 /// in a module that declares neither, the expansion and the refusal of what is left read no
 /// instruction: each costs one step per function, however long the entry. A module that declares

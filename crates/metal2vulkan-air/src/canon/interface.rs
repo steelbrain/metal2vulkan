@@ -45,7 +45,10 @@
 //! `index .. index + count`; an acceleration structure or function table binds at a buffer index),
 //! 31 threadgroup memory entries, 128 texture entries, and 16 sampler entries. A binding past its
 //! table is one no Metal compiler emits, so it is invalid input (`AbiError::SlotPastTable`) rather
-//! than a shape the lowering has to bound.
+//! than a shape the lowering has to bound. Two present parameters whose slots overlap in one table
+//! are an invalid request (`RequestError::OverlappingArgument`, naming the later one): MSL refuses
+//! such a pair outright, so only function constants that set a slot make one, and Metal then
+//! refuses the specialization when it makes the function.
 
 use crate::abi::{AbiInt, AirAbi, EntryPoint, OutputRole, ParamRole, PatchInput, Predicate};
 use crate::abi::{MemberKind, OutputBinding, ParamBinding, Slot, StructInfo};
@@ -207,6 +210,7 @@ impl Values<'_> {
             }
             params.push(p);
         }
+        overlapping(&ep.name, &params)?;
         out.params = params;
         let mut outputs = Vec::with_capacity(out.outputs.len());
         for mut o in out.outputs {
@@ -263,36 +267,97 @@ fn duplicate_color(name: &DiagName, outputs: &[OutputBinding]) -> Result<(), Err
     Ok(())
 }
 
-/// Metal's argument tables per function, every GPU family's maximum in Metal's feature set tables:
-/// buffer, threadgroup memory, texture, and sampler entries.
-const BUFFER_TABLE: u64 = 31;
-const THREADGROUP_TABLE: u64 = 31;
-const TEXTURE_TABLE: u64 = 128;
-const SAMPLER_TABLE: u64 = 16;
+/// One of Metal's argument tables per function.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Table {
+    Buffer,
+    Threadgroup,
+    Texture,
+    Sampler,
+}
 
-/// Whether the resolved argument-table slots of entry parameter role `r` run past Metal's table
-/// for its kind. A buffer or argument buffer, whose `count` elements are a buffer table's slots
-/// `index .. index + count`, and an acceleration structure, visible function table, or intersection
-/// function table, which the API binds at a buffer index, lie in the 31 buffer entries; threadgroup
-/// memory in the 31 threadgroup memory entries; a texture or texture array in the 128 texture
-/// entries; a sampler or sampler array in the 16 sampler entries. No Metal compiler emits such a
-/// binding, so it is malformed AIR (`AbiError::SlotPastTable`). An argument buffer's members index
-/// its own resource IDs, not these tables, and are not checked.
-fn past_table(r: &ParamRole) -> bool {
-    let (location, table) = match r {
-        ParamRole::Buffer(b) | ParamRole::ArgumentBuffer(b) => (b.location, BUFFER_TABLE),
+impl Table {
+    /// Its entries, every GPU family's maximum in Metal's feature set tables.
+    fn entries(self) -> u64 {
+        match self {
+            Table::Buffer | Table::Threadgroup => 31,
+            Table::Texture => 128,
+            Table::Sampler => 16,
+        }
+    }
+}
+
+/// The argument table entry parameter role `r` binds in, and its slots. A buffer or argument
+/// buffer, whose `count` elements are a buffer table's slots `index .. index + count`, and an
+/// acceleration structure, visible function table, or intersection function table, which the API
+/// binds at a buffer index, lie in the buffer table; threadgroup memory in the threadgroup memory
+/// table; a texture or texture array in the texture table; a sampler or sampler array in the
+/// sampler table. An argument buffer's members index its own resource IDs, not these tables.
+fn table_slots(r: &ParamRole) -> Option<(Table, Slot)> {
+    match r {
+        ParamRole::Buffer(b) | ParamRole::ArgumentBuffer(b) => Some((Table::Buffer, b.location)),
         ParamRole::AccelerationStructure { arg, .. }
         | ParamRole::FunctionTable(arg)
-        | ParamRole::IntersectionTable(arg) => (arg.location, BUFFER_TABLE),
-        ParamRole::Threadgroup(b) => (b.location, THREADGROUP_TABLE),
-        ParamRole::Texture(t) => (t.location, TEXTURE_TABLE),
-        ParamRole::Sampler { location } => (*location, SAMPLER_TABLE),
-        _ => return false,
+        | ParamRole::IntersectionTable(arg) => Some((Table::Buffer, arg.location)),
+        ParamRole::Threadgroup(b) => Some((Table::Threadgroup, b.location)),
+        ParamRole::Texture(t) => Some((Table::Texture, t.location)),
+        ParamRole::Sampler { location } => Some((Table::Sampler, *location)),
+        _ => None,
+    }
+}
+
+/// Whether the resolved argument-table slots of entry parameter role `r` run past Metal's table
+/// for its kind ([`table_slots`]). No Metal compiler emits such a binding, so it is malformed AIR
+/// (`AbiError::SlotPastTable`).
+fn past_table(r: &ParamRole) -> bool {
+    let Some((table, location)) = table_slots(r) else {
+        return false;
     };
     match (location.index, location.count) {
-        (AbiInt::Const(index), AbiInt::Const(count)) => u64::from(index) + u64::from(count) > table,
+        (AbiInt::Const(index), AbiInt::Const(count)) => {
+            u64::from(index) + u64::from(count) > table.entries()
+        }
         _ => false,
     }
+}
+
+/// Refuse the first of the present `params` of entry `name` whose resolved slots overlap, in one
+/// argument table ([`table_slots`]), those of an earlier one. MSL refuses such a pair outright, so
+/// only function constants that set a slot (`[[texture(c)]]`) make one, and Metal then refuses the
+/// specialization when it makes the function ("argument has invalid location (<index,count>)",
+/// naming the later argument; measured on an M3 Max for buffers, constant and argument buffers,
+/// visible and intersection function tables, acceleration structures, textures and texture
+/// arrays, samplers, and threadgroup memory): the request is invalid
+/// (`RequestError::OverlappingArgument`). Arguments of different tables never overlap, and a
+/// parameter gated off binds no slot. A count of 0 binds none either.
+fn overlapping(name: &DiagName, params: &[ParamBinding]) -> Result<(), Error> {
+    let mut seen: Vec<(Table, u64, u64)> = Vec::with_capacity(params.len());
+    for p in params {
+        let Some((table, location)) = table_slots(&p.role) else {
+            continue;
+        };
+        let (AbiInt::Const(index), AbiInt::Const(count)) = (location.index, location.count) else {
+            continue;
+        };
+        let (lo, hi) = (u64::from(index), u64::from(index) + u64::from(count));
+        if seen.iter().any(|&(t, a, b)| t == table && a < hi && lo < b) {
+            return Err(InputError::new(
+                InputErrorKind::Request(RequestError::OverlappingArgument {
+                    param: p.param,
+                    index,
+                    count,
+                }),
+                Location::metadata(
+                    Some(name.clone()),
+                    Some(p.param),
+                    Some("air.location_index"),
+                ),
+            )
+            .into());
+        }
+        seen.push((table, lo, hi));
+    }
+    Ok(())
 }
 
 /// How an absent argument of role `r` is read. A buffer or argument buffer reads as the null

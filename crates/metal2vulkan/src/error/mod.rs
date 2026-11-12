@@ -319,6 +319,15 @@ impl From<RequestError> for DescriptorError {
             RequestError::DuplicateColorOutput { color, index } => {
                 DescriptorError::DuplicateColorOutput { color, index }
             }
+            RequestError::OverlappingArgument {
+                param,
+                index,
+                count,
+            } => DescriptorError::OverlappingArgument {
+                param,
+                index,
+                count,
+            },
         }
     }
 }
@@ -2022,6 +2031,13 @@ pub enum DescriptorError {
     /// refuses the specialization when it makes the function. MSL refuses such a pair outright, so
     /// only constants that leave both outputs of a gated pair present make one.
     DuplicateColorOutput { color: u32, index: u32 },
+    /// Parameter `param` of the function remains under its function-constant values in an
+    /// argument table (buffer, threadgroup memory, texture, or sampler) at slots `index .. index +
+    /// count` that overlap those of an earlier parameter that remains: Metal refuses the
+    /// specialization when it makes the function ("argument has invalid location
+    /// (<index,count>)", measured on an M3 Max for every table). MSL refuses such a pair outright,
+    /// so only constants that set an argument's slot (`[[texture(c)]]`) make one.
+    OverlappingArgument { param: u32, index: u32, count: u32 },
     /// A `StageSource::Compiled` stage whose recursion's call stack was sized for
     /// `maxCallStackDepth` `compiled` (`RuntimeFact::CallStackDepth`) in a pipeline whose depth
     /// for that stage is `given` (0 taken as 1): a compute or tile pipeline's, or a render

@@ -965,6 +965,19 @@ pub enum RequestError {
         /// The blend index both write.
         index: u32,
     },
+    /// Entry parameter `param` remains under the function's function-constant values in an
+    /// argument table (buffer, threadgroup memory, texture, or sampler) at slots `index ..
+    /// index + count` that overlap those of an earlier parameter that remains: Metal refuses the
+    /// specialization when it makes the function ("argument has invalid location (<index,count>)").
+    /// MSL refuses such a pair outright, so only constants that set an argument's slot make one.
+    OverlappingArgument {
+        /// The later parameter, by its index in the function.
+        param: u32,
+        /// Its first slot.
+        index: u32,
+        /// Its slot count.
+        count: u32,
+    },
 }
 
 /// Why a linked function cannot resolve a visible-function reference.

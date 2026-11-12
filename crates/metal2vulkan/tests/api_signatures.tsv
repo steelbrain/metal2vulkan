@@ -11143,6 +11143,7 @@ variant	metal2vulkan-air::error::RequestError::EntryNotFound	EntryNotFound { req
 variant	metal2vulkan-air::error::RequestError::FunctionConstantIndex	FunctionConstantIndex { index: u32 }
 variant	metal2vulkan-air::error::RequestError::FunctionConstantType	FunctionConstantType { index: u32 }
 variant	metal2vulkan-air::error::RequestError::LinkedFunction	LinkedFunction { name: DiagName, problem: LinkProblem }
+variant	metal2vulkan-air::error::RequestError::OverlappingArgument	OverlappingArgument { param: u32, index: u32, count: u32 }
 variant	metal2vulkan-air::error::RequestError::UnknownEnumValue	UnknownEnumValue { ty: &'static str, value: u32 }
 variant	metal2vulkan-air::error::VerifyError::BadBlockRef	BadBlockRef
 variant	metal2vulkan-air::error::VerifyError::BadValueRef	BadValueRef
@@ -13996,6 +13997,7 @@ variant	metal2vulkan::error::DescriptorError::MaxTessellationFactor	MaxTessellat
 variant	metal2vulkan::error::DescriptorError::MeshPipeline	MeshPipeline { problem: MeshPipelineProblem }
 variant	metal2vulkan::error::DescriptorError::MissingStage	MissingStage { stage: Stage }
 variant	metal2vulkan::error::DescriptorError::OpenClMode	OpenClMode { compiled: bool }
+variant	metal2vulkan::error::DescriptorError::OverlappingArgument	OverlappingArgument { param: u32, index: u32, count: u32 }
 variant	metal2vulkan::error::DescriptorError::PixelFormatUsage	PixelFormatUsage { format: u32, usage: FormatUsage }
 variant	metal2vulkan::error::DescriptorError::PlaceholderEnumValue	PlaceholderEnumValue { ty: &'static str, value: u32 }
 variant	metal2vulkan::error::DescriptorError::RasterizedVoidVertex	RasterizedVoidVertex
