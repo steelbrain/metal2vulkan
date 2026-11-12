@@ -8052,9 +8052,8 @@ pub struct WorkCounts {
     /// The no-copy buffers (and no-copy heaps' own buffers) bound in a chunk of guest RAM, whose
     /// pages their caller resolved to one run inside one chunk (`HostMemory::with_runs`): each
     /// made with no import of its own, its import gate not asked. Where each listed import costs
-    /// every submission (RADV), of an object with a source of dma-bufs of its own pages, only over
-    /// a chunk a copy imported: an object over a chunk not imported takes its own path, and asks
-    /// for no chunk.
+    /// every submission (RADV), only over a chunk a copy imported: an object over a chunk not
+    /// imported takes its own path, and asks for no chunk.
     pub chunk_bound_buffers_made: u64,
     /// Every import of runs of guest RAM made so far for copies, those `run_imports_live` counts
     /// while they live: a copy's ranges alone, and a copy's lists (`host_ram_run_list_imports`). With `run_imports_live`, the imports of runs freed so

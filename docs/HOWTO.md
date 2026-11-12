@@ -783,14 +783,12 @@ submission, can give the device the guest's RAM once instead:
   `udmabuf` allocates the pages of the `memfd` the guest never touched, which stay allocated after
   the chunk is freed, so a longer chunk makes more of the guest's untouched RAM resident. Without the call, or where a
   kernel caps it at 64 MiB, the chunks stay 64 MiB. On such a device no chunk is imported ahead,
-  and no object with a source of dma-bufs of its own pages (`HostMemory::with_dma_buf`) asks for
-  one: such an object over a chunk not imported takes its own path, as over memory no RAM holds:
-  an import of the source's dma-bufs alone (never its pointer, and the gate not asked), or a copy
-  where that fails; the objects over a chunk imported lie in its import
-  (`chunk_bound_buffers_made`). An object with no such source, and every object on a
-  driver whose barriers do not order blits through two imports of the same pages
-  (`RuntimeDriverDefect::AliasedImportBlitsUnordered`: ANV's), imports the chunk itself, so that
-  every object and copy over its pages lies in its one import. A chunk is imported for the copies
+  and no object asks for one: an object over a chunk not imported takes its own path (an import
+  of its own or a copy), as over memory no RAM holds, and the objects over a chunk imported lie in
+  its import (`chunk_bound_buffers_made`). Where the driver's barriers order blits through two
+  imports of the same pages, the own import of an object with a source of dma-bufs of its pages
+  (`HostMemory::with_dma_buf`) is of those dma-bufs alone (never its pointer, and the gate not
+  asked), or a copy where that fails. A chunk is imported for the copies
   over it: a copy over a chunk not imported imports its ranges alone (`run_imports_live`) and asks
   a thread of the device's for the chunk, which imports it, pinning every page of the chunk (660
   to 692 ms for 2.7 GiB on the Radeon 780M and the RX 7900 XTX); on a driver whose barriers do

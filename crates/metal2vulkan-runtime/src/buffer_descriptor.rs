@@ -885,13 +885,10 @@ impl Device {
             }
             _ => None,
         };
-        // Its own import, were it not bound in the RAM, of the caller's dma-bufs.
-        let sourced = host.source.is_some();
         // SAFETY: the window's pages are the bytes of the run in the RAM (the resolver's
         // contract, `HostMemory::with_runs`).
-        let in_chunk = (routed.as_ref().filter(|_| !drops_writes)).and_then(|routed| unsafe {
-            self.bind_in_chunk(importer, routed, &window, length, sourced)
-        });
+        let in_chunk = (routed.as_ref().filter(|_| !drops_writes))
+            .and_then(|routed| unsafe { self.bind_in_chunk(importer, routed, &window, length) });
         let kept_runs = routed.as_ref().map(Routed::kept);
         // The logs of the writes to the pages, where their memory came with one or their guest
         // RAM did (`dirty_pages::PagesLog`), kept with their import or copy.
@@ -1329,14 +1326,10 @@ impl Device {
                     }
                     _ => None,
                 };
-                // Their own import, were they not bound in the RAM, of the caller's dma-bufs.
-                let sourced = host.source.is_some();
                 // SAFETY: the window's pages are the bytes of the run in the RAM (the resolver's
                 // contract, `HostMemory::with_runs`).
                 let in_chunk = (routed.as_ref().filter(|_| !moved && !drops_writes)).and_then(
-                    |routed| unsafe {
-                        self.bind_in_chunk(importer, routed, &window, length, sourced)
-                    },
+                    |routed| unsafe { self.bind_in_chunk(importer, routed, &window, length) },
                 );
                 // One page, one import (`host_aliases.rs`), as at a buffer's making: new pages a
                 // live import holds all of are bound inside it (a buffer's, not a heap's own),

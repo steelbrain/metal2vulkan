@@ -43,8 +43,7 @@
 //!   the object's, as one dma-buf, and reads what the object's fill wrote before it. On a driver
 //!   whose barriers do not order blits through two imports of the same pages
 //!   (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, ANV's among the listed), no range is
-//!   imported alone and no object takes its own import: the copy, or the object, makes the
-//!   chunk's import. Where the RAM does not fit in the memory the device's
+//!   imported alone: the copy makes the chunk's import. Where the RAM does not fit in the memory the device's
 //!   imports count against (made so by the test), the device's thread releases it once none did for
 //!   its idle window (`WorkCounts::host_ram_chunks_released`), and a copy over it then imports its
 //!   run alone and asks for the chunk again (or, on such a driver, imports the chunk); where the
@@ -1266,44 +1265,34 @@ fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_o
     // The first object over a chunk not imported, with a source of its own pages as a consumer's
     // objects come: not bound in the RAM. It takes its own import, as over memory no RAM holds,
     // and asks for no chunk: a second later none is imported, and the RAM's source was asked for
-    // nothing past the use's question. Where the device's barriers do not order blits through two
-    // imports of the same pages (ANV's), it lies in the chunk's import, which it made.
+    // nothing past the use's question.
     let alone = runs_alone(&device);
     let first = sourced_buffer(&device, (view, start), &asked, AT, LENGTH);
     let made = device.work_counts();
-    let in_chunk = 1 - alone;
     assert_eq!(
         delta(&made, chunk_bound),
-        in_chunk,
-        "the first object over a chunk not imported lies in a chunk only where it made its import"
-    );
-    let own = matches!(
-        first.host_backing(),
-        Some(HostBacking::ImportedAsDmaBuf | HostBacking::ImportedByPointer)
+        0,
+        "the first object over a chunk not imported lies in no chunk"
     );
     assert!(
-        match alone {
-            1 => own,
-            _ => first.host_backing() == Some(HostBacking::InHostRam),
-        },
-        "the first object's own import, or its chunk's: {:?}",
+        matches!(
+            first.host_backing(),
+            Some(HostBacking::ImportedAsDmaBuf | HostBacking::ImportedByPointer)
+        ),
+        "the first object's own import: {:?}",
         first.host_backing()
     );
     std::thread::sleep(Duration::from_secs(1));
     let unasked = device.work_counts();
     assert_eq!(
         (delta(&unasked, imported), unasked.host_ram_chunks_live),
-        (in_chunk, before.host_ram_chunks_live + in_chunk),
-        "no chunk imported for an object but where it lies in it"
+        (0, before.host_ram_chunks_live),
+        "no chunk imported for an object"
     );
-    let first_span = (spans[0].start, spans[0].end - spans[0].start);
-    let first_chunk = (first_span.0, first_span.1, first_span.1);
-    let mut asked_now = vec![probe];
-    asked_now.extend((alone == 0).then_some(first_chunk));
     assert_eq!(
         asked.lock().unwrap().requests,
-        asked_now,
-        "no chunk asked of the RAM's source for an object but the one it lies in"
+        [probe],
+        "no chunk asked of the RAM's source for an object"
     );
     // A copy over each chunk: its range imported alone and the chunk asked for, which the
     // device's thread imports; where the device's barriers do not order blits through two
@@ -1602,8 +1591,7 @@ fn where_the_ram_fits_its_listed_chunks_stay_imported_once_idle() {
 /// dma-bufs, and the copy imports the chunk beside it as one dma-buf of the RAM's source
 /// (`ObjectChurn::dma_buf_imports_beside_live`): the chunk is not held back
 /// (`host_ram_chunks_held_back`), the gather reads the file's bytes, and one after a fill through
-/// the object in the same command buffer reads the fill. Where they do not (ANV's), the object
-/// lies in the chunk's import, which it made, and the copy reads through it.
+/// the object in the same command buffer reads the fill. Not run where they do not (ANV's).
 #[test]
 fn a_listed_chunk_an_object_s_own_dma_bufs_hold_pages_of_is_imported_for_a_copy() {
     let scratch = Scratch::new();
@@ -1630,13 +1618,20 @@ fn a_listed_chunk_an_object_s_own_dma_bufs_hold_pages_of_is_imported_for_a_copy(
         drop((used, ram));
         return;
     };
+    if runs_alone(&device) == 0 {
+        eprintln!(
+            "HOST-RAM-BESIDE {}: its barriers do not order two imports of the same pages; not run",
+            device.name()
+        );
+        drop((used, ram));
+        return;
+    }
     let first = spans[0].clone();
-    let beside = runs_alone(&device) == 1;
     let page = crate::host_ram::copy::PAGE;
     let before = device.work_counts();
     let delta = |now: &WorkCounts, field: fn(&WorkCounts) -> u64| field(now) - field(&before);
     // The object, at the RAM's own addresses, over the first chunk's bytes from `AT`: its own
-    // import of its dma-bufs, or the chunk's (both checked once the gather ran).
+    // import of its dma-bufs (checked once the gather ran).
     let object = sourced_buffer(&device, (start, start), &asked, AT, LENGTH);
     let made = device.work_counts();
     // A gather of one page every 3 MiB from the object's first, more ranges than a copy imports
@@ -1665,31 +1660,17 @@ fn a_listed_chunk_an_object_s_own_dma_bufs_hold_pages_of_is_imported_for_a_copy(
         device.name(),
         object.host_backing(),
     );
-    match beside {
-        true => assert_eq!(
-            (
-                object.host_backing(),
-                delta(&made, |c| c.chunk_bound_buffers_made)
-            ),
-            (Some(HostBacking::ImportedAsDmaBuf), 0),
-            "the object's own import of its dma-bufs"
+    assert_eq!(
+        (
+            object.host_backing(),
+            delta(&made, |c| c.chunk_bound_buffers_made)
         ),
-        false => assert_eq!(
-            (
-                object.host_backing(),
-                delta(&made, |c| c.chunk_bound_buffers_made)
-            ),
-            (Some(HostBacking::InHostRam), 1),
-            "the object in the chunk's import, which it made"
-        ),
-    }
+        (Some(HostBacking::ImportedAsDmaBuf), 0),
+        "the object's own import of its dma-bufs"
+    );
     assert_eq!(held_back, 0, "the chunk was held back");
     assert_eq!(imported, 1, "the chunk, imported once");
-    assert_eq!(
-        alongside,
-        u64::from(beside),
-        "the chunk's import beside the object's"
-    );
+    assert_eq!(alongside, 1, "the chunk's import beside the object's");
     // A fill through the object, then a gather of its first page through the chunk's import, in
     // one command buffer: the gather reads the fill.
     let filled = read_back(&device, page, |encoder, own| {
@@ -1976,11 +1957,11 @@ impl TileRound<'_> {
 }
 
 /// 1 where a copy over a chunk not imported yet of a RAM whose chunks are dma-bufs
-/// (`Plan::listed`, this file's listed RAMs) imports its ranges alone, and an object over it with
-/// a source of its own pages takes its own import; 0 where the device's barriers do not order
-/// blits through two imports of the same pages (`RuntimeDriverDefect::AliasedImportBlitsUnordered`,
-/// ANV's) and the copy, and the object, import the chunk. A RAM whose chunks are imports of their
-/// pointer never imports a run alone (`RamOnDevice::runs_alone`).
+/// (`Plan::listed`, this file's listed RAMs) imports its ranges alone; 0 where the device's
+/// barriers do not order blits through two imports of the same pages
+/// (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, ANV's) and the copy imports the chunk. A
+/// RAM whose chunks are imports of their pointer never imports a run alone
+/// (`RamOnDevice::runs_alone`).
 fn runs_alone(device: &Device) -> u64 {
     let defect = metal2vulkan::error::RuntimeDriverDefect::AliasedImportBlitsUnordered;
     u64::from(!device.properties().driver_defects.contains(&defect))
