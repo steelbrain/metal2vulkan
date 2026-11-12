@@ -6542,8 +6542,9 @@ pub struct WorkCounts {
     pub fill_queue_waits: u64,
     /// Of [`fill_queue_waits`](Self::fill_queue_waits), the batches whose commands reach none of
     /// the memory the submissions they waited for filled: neither a resource their encoders'
-    /// uses name owns it, nor may a command of theirs reach memory no use names (a pointer, a
-    /// texture's handle, work recorded on the GPU alone). Each waited for work it does not use.
+    /// uses name or make resident owns it, nor may a command of theirs reach memory no use names
+    /// (a pointer loaded from memory, work recorded on the GPU alone). Each waited for work it
+    /// does not use.
     pub fill_queue_waits_unused: u64,
     /// New `Shared` and `Managed` textures' images with host-transfer usage placed in memory the
     /// host does not cache, where the device has none the image may take

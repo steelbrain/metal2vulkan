@@ -94,9 +94,11 @@
 //!   every command buffer of the fill queue's pending ([`Device::fill_queue_has_room`]), as a wait
 //!   on the host for one may wait for work that waits for the caller.
 //! - **Which fills a batch takes.** Those of memory its commands may reach: memory a resource its
-//!   encoders' uses name owns (`used_resources::owner_of`: the buffer, or the heap it lies in);
-//!   every one where a command of it may reach memory no use names (a pointer loaded from memory,
-//!   a texture's handle, work recorded on the GPU alone: `State::reaches_unnamed`), or where it
+//!   encoders' uses name owns (`used_resources::owner_of`: the buffer, or the heap it lies in),
+//!   those they make resident among them (`useResource`, `useHeap`, as Metal asks of what a
+//!   command reaches through an argument buffer); every one where a command of it may reach
+//!   memory no use names (a pointer loaded from memory, work recorded on the GPU alone:
+//!   `State::reaches_unnamed`), or where it
 //!   takes a move of an image in memory another resource owns or a staged copy, which come after
 //!   every fill of that memory; and those of the device's own buffers, which no use names
 //!   (`texture/first_move.rs`, `FillTake::Reached`). The rest wait for a batch that may reach
