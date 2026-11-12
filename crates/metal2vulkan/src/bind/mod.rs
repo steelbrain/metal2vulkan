@@ -275,7 +275,8 @@ pub use replay::{
 };
 pub use replay::{
     draw_replay_draw, draw_replay_indexed, draw_replay_merges, draw_replay_primitive_type,
-    draw_replay_slots, draw_replay_state, DrawReplayRule, DRAW_REPLAY_WRITES,
+    draw_replay_slots, draw_replay_state, draw_replay_vertex_layouts, DrawReplayRule,
+    DRAW_REPLAY_WRITES,
 };
 pub use replay::{
     draw_replay_module, draw_replay_preprocess, DrawReplay, DrawReplayLayout, DrawReplayModule,

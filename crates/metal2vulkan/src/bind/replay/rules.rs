@@ -6,12 +6,16 @@
 //! executor's device replay of an authored case's executions; a broken rule is a
 //! [`DrawReplayRule`], which a host-step notice names.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use super::super::{BindingPlan, DrawCommands, PushHole, ViewSetup};
 use crate::cache::VariantKey;
-use crate::metal::{IndirectCommandType, PrimitiveType};
-use crate::pipeline::{CommandWrites, GraphicsState, PipelineInterface, SlotClass, Stage};
+use crate::metal::{IndirectCommandType, PrimitiveType, VertexStepFunction};
+use crate::pipeline::{
+    CommandWrites, GraphicsState, PipelineInterface, SlotClass, Stage, VertexInputState,
+    VertexStride,
+};
 use crate::vk;
 
 /// What the records of a draw replay may hold beside draws: buffers, resets and cleared barriers
@@ -58,7 +62,8 @@ pub enum DrawReplayRule {
     DispatchesFirst,
     /// The state's draw is amplified or draws views.
     Amplified,
-    /// The state's vertex function fetches attributes.
+    /// The state's vertex function fetches attributes of a layout whose stride is set per bind
+    /// (`MTLBufferLayoutStrideDynamic`), which each command binds at its own.
     VertexAttributes,
     /// The state's fragment function reads the primitive ID of an indexed draw.
     IndexedPrimitiveIds,
@@ -123,7 +128,7 @@ impl fmt::Display for DrawReplayRule {
             }
             DrawReplayRule::Amplified => "the inherited state's draw is amplified or draws views",
             DrawReplayRule::VertexAttributes => {
-                "the inherited state's vertex function fetches attributes"
+                "the inherited state's vertex function fetches attributes at a stride set per bind"
             }
             DrawReplayRule::IndexedPrimitiveIds => {
                 "the inherited state's fragment function reads the primitive ID of an indexed draw"
@@ -240,11 +245,31 @@ pub fn draw_replay_state(graphics: &GraphicsState, merged: bool) -> Result<(), D
     }
 }
 
+/// The layouts of a state of vertex input `input` (its base's) that a draw replay pulls
+/// (`BindState::far_vertex_buffers` of its draws, the pulled-vertex-buffer variant): every
+/// fixed-function binding's, whose attributes fixed-function input cannot fetch from a command's
+/// own buffers, where a pulled attribute reads its command's slot table; else
+/// [`DrawReplayRule::VertexAttributes`] where an attribute's layout has a stride set per bind (a
+/// fixed-function binding's, or a pulled attribute's whose step reads one), which the binder
+/// writes from the encoder's bind where each command binds its own.
+pub fn draw_replay_vertex_layouts(
+    input: &VertexInputState,
+) -> Result<BTreeSet<u32>, DrawReplayRule> {
+    let per_bind = (input.bindings.iter()).any(|b| b.stride == VertexStride::PerBind)
+        || (input.pulled.iter()).any(|a| {
+            a.stride == VertexStride::PerBind && a.step_function != VertexStepFunction::Constant
+        });
+    if per_bind {
+        return Err(DrawReplayRule::VertexAttributes);
+    }
+    Ok(input.bindings.iter().map(|b| b.buffer_index).collect())
+}
+
 /// The instantiated draw's rules for a draw replay, `merged` into one draw or not: `commands`,
 /// instantiated for one indirect draw by `plan`, the plan of the replay variant `key`, record as
 /// one indirect draw whose arguments the device reads, with no index bound, dispatch, amplification,
-/// view or fetched attribute, each slot table one function's (a merged draw's in its header alone,
-/// the vertex function's).
+/// view or attribute fixed-function input fetches ([`draw_replay_vertex_layouts`] pulls each),
+/// each slot table one function's (a merged draw's in its header alone, the vertex function's).
 pub fn draw_replay_draw(
     commands: &DrawCommands,
     (plan, key): (&BindingPlan, &VariantKey),
