@@ -44,11 +44,19 @@
 //!   waited for, and no page pinned for it; each chunk is taken as an object takes it, and asked
 //!   of the device's thread, which imports it before its window's next
 //!   (`RamOnDevice::ask_for_copy`), so the copies after it go through the chunks' imports. A
-//!   copy over a chunk the device refuses whatever it holds (shared memory on a device that
-//!   imports no pointer to it, the RAM given no source of dma-bufs: `ChunkSlot::refused`) is
-//!   staged always, whether the device's thread tried the chunk or not, so that a copy Metal
-//!   takes is never refused for when it came; a gather over bytes a scatter wrote there is
-//!   staged too, the scatter's bytes written by the CPU in a host step before the gather's.
+//!   copy over a chunk that takes no import while it runs is staged always, whatever else it
+//!   touches, whether the device's thread tried the chunk or not, so that a copy Metal takes is
+//!   never refused for when it came (`CopyTake::CpuOnly`): a chunk the device refuses whatever it
+//!   holds (shared memory on a device that imports no pointer to it, the RAM given no source of
+//!   dma-bufs: `ChunkSlot::refused`), and one a live import of an object's own pages holds back
+//!   (`RamOnDevice::held_back`: an import of their pointer at the RAM's own addresses, or any on
+//!   a device whose barriers do not order two imports of the same pages, ANV's among them). A
+//!   gather over such a chunk whose host bytes some use but a copy's read may write goes in a
+//!   part of its own (`Staging::after_the_gpu`), so that the work before it in its command
+//!   buffer is submitted, and completed, before its step reads the pages; and its encoder keeps no
+//!   log an encoding again would copy it through the imports from. A gather over bytes a
+//!   scatter wrote there is staged too, the scatter's bytes written by the CPU in a host step
+//!   before the gather's.
 //!   - A gather leaves its work to the host step of its batch (`Deferred::GatherStage`), before
 //!     the batch is submitted: the step takes a region of the command buffer's arena as long as
 //!     the copy's bytes, host-visible memory of the runtime's own, so the region's memory is made
@@ -311,9 +319,38 @@ pub(crate) struct StagedGather {
     touched: Vec<(usize, Range<u64>)>,
     /// The host step found that the GPU may write them ([`StagedGather::waits_for_the_gpu`]).
     gated: AtomicBool,
+    /// How [`stages`](BlitCommandEncoder::stages) staged it.
+    staging: Staging,
+}
+
+/// How a copy is staged through the CPU ([`stages`](BlitCommandEncoder::stages)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Staging {
+    /// It is over a chunk that takes no import while it runs ([`CopyTake::CpuOnly`]): an encoding
+    /// again of its encoder could not copy it through the imports, so the encoder keeps no log one
+    /// encodes it again from (`Deferred::recorded_by_an_encoding_again`).
+    cpu_only: bool,
+    /// A gather over such a chunk whose host bytes some use but a copy's read may write
+    /// ([`RamOnDevice::written_over`]): its host step goes in a part of its own, after the work
+    /// before it in its command buffer was submitted, and waits for every `VkQueue` to complete
+    /// what was submitted before it (`Deferred::gpu_written`), so it reads the bytes a command
+    /// before it in its own command buffer wrote.
+    after_the_gpu: bool,
 }
 
 impl StagedGather {
+    /// Whether its host step goes in a part of its own after the work before it completed
+    /// ([`Staging::after_the_gpu`]).
+    pub(crate) fn after_the_gpu(&self) -> bool {
+        self.staging.after_the_gpu
+    }
+
+    /// Whether an encoding again of its encoder copies it through the imports in its place: not
+    /// where one of its chunks takes no import while it runs ([`Staging::cpu_only`]).
+    pub(crate) fn encoded_again_through_imports(&self) -> bool {
+        !self.staging.cpu_only
+    }
+
     /// Whether its host step waits for every batch submitted before it to complete: some use but
     /// a copy's read may write its host bytes ([`RamOnDevice::written_over`]), which the GPU may
     /// be doing. Else no work on the GPU may write them, and the CPU's writes before the commit
@@ -1080,26 +1117,28 @@ impl BlitCommandEncoder {
             for &slot in ranges.keys() {
                 ram.copy_wrote(slot);
             }
-            if self.stages(
+            let staged = self.stages(
                 ram,
                 importer,
                 (&pieces, &spans),
                 (&ranges, PagesCopy::Scatter),
-            ) {
+            );
+            if staged.is_some() {
                 let bytes = (raw, at, span, total);
                 return self.record_staged_scatter(call, ram, (&pieces, &spans), bytes);
             }
         }
-        if call.copy == PagesCopy::Gather
-            && self.stages(
+        if call.copy == PagesCopy::Gather {
+            let staged = self.stages(
                 ram,
                 importer,
                 (&pieces, &spans),
                 (&ranges, PagesCopy::Gather),
-            )
-        {
-            let bytes = (raw, at, span, total);
-            return self.record_staged(call, ram, (&pieces, &spans), bytes);
+            );
+            if let Some(staging) = staged {
+                let bytes = (raw, at, span, total);
+                return self.record_staged(call, ram, (&pieces, &spans), bytes, staging);
+            }
         }
         // The bytes of each chunk the pieces touch, and the imports they are read or written
         // through, held until the command buffer completes: the chunk's, or, where it is not
@@ -1262,53 +1301,71 @@ impl BlitCommandEncoder {
         Ok(())
     }
 
-    /// Whether a copy of `pieces` (cut where the chunks of `spans` end, the bytes of each chunk
-    /// they touch `ranges`: [`chunk_ranges`]), a gather or a scatter as `copy` says, is staged
-    /// through the CPU (the module docs' "First touch"): it is over a
-    /// chunk not imported yet that the device's thread imports ([`CopyTake::ThroughCpu`]), over
-    /// none whose import only it would make ([`CopyTake::Waits`]); and, of a gather, no use but a
-    /// copy's read may write its host bytes ([`RamOnDevice::written_over`]), none in its own
-    /// command buffer before it among them. A scatter's CPU copy waits for every batch submitted
-    /// before it to complete, its own command buffer's before it among them. Not in an encoder
-    /// encoded again (`replay.rs`, `command_buffer/reencode.rs`), whose recording takes no host
-    /// step of its own.
+    /// How a copy of `pieces` (cut where the chunks of `spans` end, the bytes of each chunk they
+    /// touch `ranges`: [`chunk_ranges`]), a gather or a scatter as `copy` says, is staged through
+    /// the CPU (the module docs' "First touch"), where it is: over a chunk that takes no import
+    /// while it runs ([`CopyTake::CpuOnly`]: refused, or held back by objects' own imports of its
+    /// pages), always, a gather some use but a copy's read may write the host bytes of
+    /// ([`RamOnDevice::written_over`]) in a part of its own after the GPU completed the work
+    /// before it ([`Staging::after_the_gpu`]); else over a chunk not imported yet that the
+    /// device's thread imports ([`CopyTake::ThroughCpu`]), over none whose import only it would
+    /// make ([`CopyTake::Waits`]), and, of a gather, where no use but a copy's read may write its
+    /// host bytes, none in its own command buffer before it among them. A scatter's CPU copy
+    /// waits for every batch submitted before it to complete, its own command buffer's before it
+    /// among them. Not in an encoder encoded again (`replay.rs`, `command_buffer/reencode.rs`),
+    /// whose recording takes no host step of its own.
     fn stages(
         &mut self,
         ram: &RamOnDevice,
         importer: &super::Importer,
         (pieces, spans): (&[Piece], &[Range<u64>]),
         (ranges, copy): (&BTreeMap<usize, Vec<Range<u64>>>, PagesCopy),
-    ) -> bool {
+    ) -> Option<Staging> {
         if self.core().encodes_again() {
-            return false;
+            return None;
         }
         let device = self.core().device().clone();
-        let mut through_cpu = false;
+        let (mut through_cpu, mut cpu_only, mut waits) = (false, false, false);
         for (&slot, ranges) in ranges {
             match ram.copy_take(&device, importer, slot, &alone_ranges(ranges)) {
                 CopyTake::Now => {}
                 CopyTake::ThroughCpu => through_cpu = true,
-                CopyTake::Waits => return false,
+                CopyTake::CpuOnly => cpu_only = true,
+                CopyTake::Waits => waits = true,
             }
         }
-        through_cpu
-            && (copy == PagesCopy::Scatter
-                || !ram.written_over(&device, &touched_bytes(pieces, spans)))
+        let written = || {
+            copy == PagesCopy::Gather && ram.written_over(&device, &touched_bytes(pieces, spans))
+        };
+        match (cpu_only, through_cpu && !waits) {
+            (true, _) => Some(Staging {
+                cpu_only: true,
+                after_the_gpu: written(),
+            }),
+            (false, true) => (!written()).then_some(Staging {
+                cpu_only: false,
+                after_the_gpu: false,
+            }),
+            (false, false) => None,
+        }
     }
 
-    /// Record `call`, a gather staged through the CPU ([`stages`](Self::stages)), into the
-    /// buffer's bytes `span`, from byte `at` of its `raw` (the module docs' "First touch"): its
-    /// work left to its batch's host step ([`StagedGather`]), at its place in the encoder, its
-    /// uses noted there: the chunks' bytes it reads, by their keys, and the buffer's writes. Each
-    /// chunk is taken as an object over it takes it, and asked of the device's thread where it is
-    /// not imported ([`RamOnDevice::ask_for_copy`]). A buffer detached since records nothing, as a
-    /// command over it does.
+    /// Record `call`, a gather staged through the CPU as `staging` says ([`stages`](Self::stages)),
+    /// into the buffer's bytes `span`, from byte `at` of its `raw` (the module docs' "First
+    /// touch"): its work left to its batch's host step ([`StagedGather`]), at its place in the
+    /// encoder, its uses noted there: the chunks' bytes it reads, by their keys, and the buffer's
+    /// writes. One [`Staging::after_the_gpu`] starts a part of its own there, whose host step waits
+    /// for the work before it to complete, and its uses are noted again at that part's start,
+    /// where its copy lies. Each chunk is taken as an object over it takes it, and asked of the
+    /// device's thread where it is not imported ([`RamOnDevice::ask_for_copy`]). A buffer detached
+    /// since records nothing, as a command over it does.
     fn record_staged(
         &mut self,
         call: &HostRamCall,
         ram: &Arc<RamOnDevice>,
         (pieces, spans): (&[Piece], &[Range<u64>]),
         (raw, at, span, total): (vk::Buffer, u64, Range<u64>, u64),
+        staging: Staging,
     ) -> Result<(), Error> {
         let device = self.core().device().clone();
         let read = Access::new(TRANSFER, vk::AccessFlags2::TRANSFER_READ);
@@ -1341,9 +1398,14 @@ impl BlitCommandEncoder {
             covered: covered(pieces),
             pieces: in_pages,
             touched: touched_bytes(pieces, spans),
-            gated: AtomicBool::new(false),
+            // A gather in a part of its own steps after the work before it completed.
+            gated: AtomicBool::new(staging.after_the_gpu),
+            staging,
         };
         self.core().defer(Deferred::GatherStage(Arc::new(staged)))?;
+        if staging.after_the_gpu {
+            self.core().note_left_uses(TRANSFER, &uses);
+        }
         for slot in touched.keys() {
             ram.take_for_copy(*slot);
             ram.ask_for_copy(*slot);

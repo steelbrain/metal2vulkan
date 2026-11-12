@@ -797,8 +797,11 @@ submission, can give the device the guest's RAM once instead:
   object's own import of dma-bufs and a chunk's may hold the same pages, as two dma-bufs of them,
   in either order (`dma_buf_imports_beside_live` counts each chunk's made so); their uses order by
   their host addresses, as any two no-copy buffers over shared bytes do. A live import of an
-  object's pointer at the RAM's own addresses keeps the chunk from being imported while it lives
-  (`host_ram_chunks_held_back`), and the copies over it then go through the CPU. The first kernel submission after a chunk's import waits while
+  object's pointer at the RAM's own addresses, and any import of an object's own pages there on a
+  driver whose barriers do not order two imports of the same pages, keeps the chunk from being
+  imported while it lives (`host_ram_chunks_held_back`): the copies over it then go through the
+  CPU (`host_ram_copies_staged`, `host_ram_scatters_staged`), a gather over bytes some use may
+  write after the GPU completed the work before it (`host_ram_staged_fills_gated`). The first kernel submission after a chunk's import waits while
   the kernel writes the chunk's page tables, and so does every other submission of the device
   (231 to 275 ms for a 3.94 GiB chunk on the Radeon 780M), so a chunk stays imported once
   imported where the whole RAM fits in half the device's memory heaps with unified memory, or in

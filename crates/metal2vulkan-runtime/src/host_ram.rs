@@ -673,6 +673,10 @@ pub(crate) enum CopyTake {
     ThroughCpu,
     /// By waiting for the chunk's import, which the copy makes or another object is making.
     Waits,
+    /// Through the CPU always: no import of the chunk is made while the copy runs, as the device
+    /// refuses it whatever it holds ([`ChunkSlot::refused`]) or objects' own imports of its pages
+    /// hold it back ([`RamOnDevice::held_back`]'s [`Held::Back`]).
+    CpuOnly,
 }
 
 /// Where a chunk's import stands ([`ChunkSlot::import`]).
@@ -1300,10 +1304,11 @@ impl RamOnDevice {
     /// waiting for the chunk's import, which no one else makes ([`CopyTake::Waits`]: the thread
     /// stopped, failed it or holds back for the allocation limit's margin, or the plan is
     /// listed). A chunk the device refuses whatever it holds ([`ChunkSlot::refused`]) is taken
-    /// through the CPU always, whether the thread runs, tried it or not: no import of it will be
-    /// made, and a copy Metal takes is never refused for when it came; so is one held back by
-    /// objects' own imports of its pages ([`RamOnDevice::held_back`]'s [`Held::Back`]). The
-    /// device's thread's window is not moved: [`RamOnDevice::take_for_copy`] moves it.
+    /// through the CPU always ([`CopyTake::CpuOnly`]), whether the thread runs, tried it or not: no
+    /// import of it will be made, and a copy Metal takes is never refused for when it came; so is
+    /// one held back by objects' own imports of its pages ([`RamOnDevice::held_back`]'s
+    /// [`Held::Back`]), whose import waits for them to go. The device's thread's window is not
+    /// moved: [`RamOnDevice::take_for_copy`] moves it.
     ///
     /// Why not alone. An import of a copy's ranges pins every page between them that lies
     /// less than 2 MiB from the next ([`copy::alone_ranges`]), on the encoding thread: a cache of
@@ -1325,7 +1330,7 @@ impl RamOnDevice {
         }
         let held = || self.held_back(device, importer, slot, &lock(&self.claims));
         if span.refused || held() == Held::Back {
-            return CopyTake::ThroughCpu;
+            return CopyTake::CpuOnly;
         }
         let running = self.wake.running.load(Ordering::Relaxed)
             && !span.tried.load(Ordering::Relaxed)
