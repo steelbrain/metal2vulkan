@@ -76,8 +76,8 @@ fn budgets(device: &Device) -> Vec<(u64, u64, u64)> {
         .collect()
 }
 
-/// The property flags of `device`'s memory type `index`.
-fn type_flags(device: &Device, index: u32) -> vk::MemoryPropertyFlags {
+/// The property flags of `device`'s memory type `index`, as bits (`VkMemoryPropertyFlagBits`).
+fn type_flags(device: &Device, index: u32) -> u32 {
     // SAFETY: as in `budgets`.
     let handles = unsafe { device.raw() };
     // SAFETY: the physical device is the instance's.
@@ -86,16 +86,13 @@ fn type_flags(device: &Device, index: u32) -> vk::MemoryPropertyFlags {
             .instance
             .get_physical_device_memory_properties(handles.physical_device)
     };
-    memory.memory_types[index as usize].property_flags
+    memory.memory_types[index as usize].property_flags.as_raw()
 }
 
 /// What a `Private` buffer of [`LENGTH`] bytes exportable as `export` lies in: its memory type and
 /// flags, whether dedicated, and the overflows the device counted for it; `None` where the device
 /// exports no such memory.
-fn exported(
-    device: &Device,
-    export: MemoryExport,
-) -> Option<(u32, vk::MemoryPropertyFlags, bool, u64)> {
+fn exported(device: &Device, export: MemoryExport) -> Option<(u32, u32, bool, u64)> {
     let overflows = device.work_counts().device_memory_overflows;
     let descriptor =
         BufferDescriptor::new(LENGTH, ResourceOptions::private(), BufferContents::Zero)
