@@ -20,7 +20,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// The bytes the tests write and read of each buffer.
-const BYTES: u64 = 4096;
+pub(super) const BYTES: u64 = 4096;
 
 /// The bytes of each of [`REUSED_BUFFERS`] buffers the program lets go of before a loss: under half
 /// a pooled block, so that each is placed in a pooled block whatever a driver pads it by, and more
@@ -37,7 +37,7 @@ const RECOVERIES: u64 = 7;
 
 /// `buffer`'s first [`BYTES`] bytes set to `byte` by `queue`'s GPU work, completed.
 #[track_caller]
-fn fill(queue: &CommandQueue, buffer: &Buffer, byte: u8) {
+pub(super) fn fill(queue: &CommandQueue, buffer: &Buffer, byte: u8) {
     let command_buffer = queue.command_buffer().unwrap();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.fill_buffer(buffer, 0..BYTES, byte).unwrap();
@@ -53,7 +53,11 @@ fn fill(queue: &CommandQueue, buffer: &Buffer, byte: u8) {
 /// buffer of `device`'s serving generation, completed. Refused as the copy's encoding refuses
 /// `source`.
 #[track_caller]
-fn read(device: &Device, queue: &CommandQueue, source: &Buffer) -> Result<Vec<u8>, Error> {
+pub(super) fn read(
+    device: &Device,
+    queue: &CommandQueue,
+    source: &Buffer,
+) -> Result<Vec<u8>, Error> {
     let target = device.new_buffer(BYTES, ResourceOptions::shared())?;
     let command_buffer = queue.command_buffer()?;
     let mut blit = command_buffer.blit_command_encoder()?;
@@ -85,7 +89,7 @@ fn signal(queue: &CommandQueue, event: &SharedEvent, value: u64) {
 
 /// The device's live `VkDevice`s once they are `live`, waited for at most [`WAIT`]: a generation
 /// goes as its last holder lets go of it, which a runtime thread may be a moment after the test's.
-fn live_vk_devices(device: &Device, live: u64) -> u64 {
+pub(super) fn live_vk_devices(device: &Device, live: u64) -> u64 {
     let began = Instant::now();
     loop {
         let now = device.work_counts().vk_devices_live;
