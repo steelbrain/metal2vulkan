@@ -188,6 +188,33 @@ fn modifier_features(device: &Device, format: ash::vk::Format) -> String {
     }
 }
 
+/// The placement of an `A8Unorm` texture of each of a glyph's widths, 16 rows a multiple of 16
+/// bytes apart, over a `Shared` buffer, beside the row pitch of the device's linear image of its
+/// plan (`Device::linear_texture_bytes_per_row`) and the format's minimum linear alignment:
+/// printed alone.
+fn widths(device: &Device) {
+    let alignment = device.minimum_linear_texture_alignment_for_pixel_format(PixelFormat::A8Unorm);
+    println!(
+        "{TEST} on {}: A8Unorm's minimum linear texture alignment {alignment:?}",
+        device.name()
+    );
+    for width in [10_u64, 24, 64, 100, 128, 200, 256, 448] {
+        let pitch = width.next_multiple_of(16);
+        let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::A8Unorm, width, 16, false);
+        descriptor.usage = TextureUsage::SHADER_READ;
+        let buffer = device
+            .new_buffer(pitch * 16, ResourceOptions::shared())
+            .unwrap();
+        let placement = buffer.texture_placement(&descriptor, 0, pitch);
+        let linear = device.linear_texture_bytes_per_row(&descriptor);
+        println!(
+            "{TEST} on {}: width {width}, rows {pitch} apart: {placement:?}; the device's \
+             linear image's rows {linear:?} apart",
+            device.name()
+        );
+    }
+}
+
 /// A texture over `buffer`'s first bytes, rows `WIDTH` apart, with what it read, whether it is a
 /// shadow, and its image's format.
 fn over(
@@ -236,6 +263,7 @@ fn an_a8_texture_over_a_buffer_that_only_reads_is_in_place_and_reads_its_alpha()
     for format in [ash::vk::Format::A8_UNORM_KHR, ash::vk::Format::R8_UNORM] {
         println!("{TEST} on {}: {}", device.name(), features(&device, format));
     }
+    widths(&device);
     let state = reader(&device);
     let bytes = codes();
     // The device's own texture of the same bytes: what the kernel reads of an `A8Unorm` texture.
