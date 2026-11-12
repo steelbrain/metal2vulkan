@@ -1195,7 +1195,9 @@ const HELD_RUNS: usize = 5;
 /// 30 ms committed at once on a `VkQueue` an unshared queue shares with theirs go one at a time,
 /// each held until the one ahead is nearly done (`unshared_hold.rs`), so the unshared queue's
 /// small command buffer committed once the first was scheduled runs before the second; under
-/// `Off` all three go at once, and it runs after the third. Their queue's expected run is a long
+/// `Off` all three go at once, and it runs after the third (ends with or after it, on a device
+/// that answers GPU times from the host, MoltenVK 1.4.1 on Apple's GPUs among them, whose GPU
+/// start is the command buffer's kernel end). Their queue's expected run is a long
 /// one's first: four run one at a time beforehand.
 ///
 /// The second is let go about 28 ms after the first went: a run whose unshared command buffer was
@@ -1227,9 +1229,17 @@ fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
                 let run = work.run(false);
                 run.print("Off");
                 assert!(
-                    run.short.0 >= run.longs[2].1 - 0.001,
-                    "the unshared one ran after the third"
+                    run.short.1 >= run.longs[2].1 - 0.001,
+                    "the unshared one ended with or after the third"
                 );
+                // A device that answers GPU times from the host starts it at its kernel end
+                // (`gpu_time.rs`), not where the GPU took it up.
+                if !work.device.shared().timing.answers_from_host() {
+                    assert!(
+                        run.short.0 >= run.longs[2].1 - 0.001,
+                        "the unshared one ran after the third"
+                    );
+                }
                 assert_eq!(run.held, 0, "none held");
             }
         }
