@@ -394,6 +394,9 @@ fn a_frame_s_executions_wait_for_the_culling_alone() {
         fill.end_encoding().unwrap();
         unrelated.commit().unwrap();
         unrelated.wait_until_scheduled().unwrap();
+        // The culling's own host steps (a dispatch whose pipeline was still being made) are
+        // behind it once it is scheduled.
+        culling.wait_until_scheduled().unwrap();
         let before = device.work_counts();
         let targets = [target(device, None), target(device, None)];
         let frame = queue.command_buffer().unwrap();
