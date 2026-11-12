@@ -325,15 +325,17 @@ fn the_runtime_s_own_kernels_found_in_their_records_write_nothing() {
 /// and both are handed the first's caches; a whole making is handed the first's one. A format
 /// the translation reads keeps a record of its own: under `TextureWriteRoundingMode::NearestEven`
 /// the fragment function rounds a half-float channel itself (`pipeline/color_writes.rs`), so its
-/// module for an `RGBA16Float` attachment is another, and only its pre-rasterization part, whose
-/// stages are the same, takes the first's.
+/// module for an `RGBA16Float` attachment is another, and its making is handed a cache of its
+/// own. Where the device links, that creation makes its fragment shader library alone: its
+/// pre-rasterization library is the one the `RGBA16Float` creation before it made against the
+/// same pass.
 ///
 /// The counts are this crate's own arrangement and hold on every device. What the driver
 /// reports it found is the driver's: ANV finds a fragment shader library of one module made
 /// against another format's pass in the shared cache (Mesa 26.2.6, Iris Xe:
-/// `APPLICATION_PIPELINE_CACHE_HIT`, where a cache of its own compiled it again, 3.3 to 3.7 s for
-/// a module of some 200,000 words), so the run prints it and asserts only that a reporting device reports
-/// one answer per making of shaders.
+/// `APPLICATION_PIPELINE_CACHE_HIT`, where a cache of its own compiled it again, 3.3 to 3.7 s
+/// for a module of some 200,000 words), so the run prints it and asserts only that a reporting
+/// device reports one answer per making of shaders.
 #[test]
 fn creations_over_colour_formats_take_the_first_s_records() {
     use metal2vulkan::metal::{PixelFormat, TextureWriteRoundingMode};
@@ -401,21 +403,34 @@ fn creations_over_colour_formats_take_the_first_s_records() {
         }
         kept.push(state);
     }
-    // A format the translation reads: the rounding module is another, so its fragment shader's
-    // making names a record of its own, and only the pre-rasterization part's, where the device
-    // links, takes the first's.
-    let (_rounded, shared, _, hits, misses) = create(&with(
+    // A format the translation reads: the rounding module is another, so its making names a
+    // record of its own and is handed no earlier making's cache. Where the device links, its
+    // fragment shader library is the one library it makes.
+    let (_rounded, shared, fragment_shaders, hits, misses) = create(&with(
         PixelFormat::RGBA16Float,
         TextureWriteRoundingMode::NearestEven,
     ));
-    let expected = if links { 1 } else { 0 };
     println!(
         "DRIVER-PIPELINE-FORMATS: RGBA16Float rounded to nearest even: {shared} makings took an \
-         earlier making's cache, {hits} hits and {misses} misses reported"
+         earlier making's cache, {fragment_shaders} fragment shader libraries made, {hits} hits \
+         and {misses} misses reported"
     );
     assert_eq!(
-        shared, expected,
+        shared, 0,
         "a fragment module the format changes keeps a record of its own: {shared} makings took an \
-         earlier making's cache, {expected} expected"
+         earlier making's cache"
     );
+    if links {
+        assert_eq!(
+            fragment_shaders, 1,
+            "the rounding module takes a fragment shader library of its own"
+        );
+    }
+    if hits + misses > 0 {
+        assert_eq!(
+            hits + misses,
+            1,
+            "a device that reports what it found reports one answer per making of shaders"
+        );
+    }
 }
