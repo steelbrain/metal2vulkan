@@ -97,6 +97,12 @@ path = "examples/private_bandwidth.rs"
 name = "copy_engine"
 path = "examples/copy_engine.rs"
 
+# Not a consumer's example: what a device's `VkQueue`s cost the driver to make, drop and hold, by
+# how many it takes (examples/queue_plan_cost.rs).
+[[example]]
+name = "queue_plan_cost"
+path = "examples/queue_plan_cost.rs"
+
 [dependencies]
 # The translator, through its public API only: the compiler checks that the runtime
 # reaches nothing else. `ash` gives `ash_interop`'s conversions and `DeviceDescription::query`.
