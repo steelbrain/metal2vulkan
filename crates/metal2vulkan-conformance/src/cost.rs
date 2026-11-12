@@ -432,6 +432,25 @@ const COMPLEMENT: &str = "which of our own threads ran a command buffer's transi
 const QUIET: &str = "a pooled memory block freed because it had been kept empty past its quiet \
      period, which is a question about elapsed time rather than about the case's work";
 
+/// Why `memory_frees_paced` is reported and never gated: it counts the frees of the runtime's own
+/// background threads that waited first, and a free waits only where it came sooner after the one
+/// before it than that one took (`step_aside::pace` in the runtime). Those threads' frees are
+/// themselves timed: the free thread's are the ones `memory_frees_posted` counts, which the
+/// quiet period already reports ([`QUIET`]), the residency thread's are imports idle past their
+/// window, and a guest RAM's thread's are chunks and lists idle past theirs. So whether a paced
+/// free lands in a case's window, and whether it waited, is a question about when those threads
+/// ran. Its partner `memory_frees_paced_nanos` is an accumulated time, reported by its suffix.
+///
+/// Measured on this M3 Max at `43d2308170`: the whole-set measurement moved it between the runs
+/// of one case (`depthstencil-depth-codes` 0..2, `read-write-tier-round-trip-uint` 0..1), and a
+/// whole-set replay put it at 1 on `fresh-buffer-private` and 2 on
+/// `fresh-texture-2d-rgba8unorm-shared` where the measurement read 0, two cases that free nothing
+/// of their own, alone or together (no free of any kind in eight runs of each shape).
+const PACED: &str = "a free of one of the runtime's own background threads that waited after \
+     the free before it, which happens only where it came sooner after that one than it took, \
+     and those threads free on timers (the quiet period, the idle windows), which is a question \
+     about elapsed time rather than about the case's work";
+
 /// Why `finales_folded` is reported and never gated: it is one half of a split the **submission
 /// path** decides as it runs, not a count of what the case asked for.
 ///
@@ -491,7 +510,7 @@ const POOLED: &str = "an object made because no spare was free, where a spare co
 /// replays of a larger case set — which reads like a regression and is not one. See [`BORROWED`].
 /// `slot_returns` beside it stays gated: it counts work items, one a command buffer, and has held
 /// still alone and in both case sets.
-const RACY: [(&str, &str); 45] = [
+const RACY: [(&str, &str); 46] = [
     ("fences_made", POOLED),
     // What is alive, parked or waiting at the instant the counts were read.
     ("memory_blocks_live", INSTANTANEOUS),
@@ -579,6 +598,7 @@ const RACY: [(&str, &str); 45] = [
     ("memory_frees.kept_stale", QUIET),
     ("memory_frees.blocks", QUIET),
     ("memory_frees_posted", QUIET),
+    ("memory_frees_paced", PACED),
     ("blocks_ahead_unused", QUIET),
     ("finales_folded", FOLDED),
     ("command_pools_made", POOLED),

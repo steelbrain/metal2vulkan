@@ -5106,6 +5106,9 @@ fn a_count_that_says_which_thread_arrived_first_is_never_gated() {
         "memory_frees.blocks",
         "memory_frees_posted",
         "blocks_ahead_unused",
+        // A background thread's free that waited after the one before it: a whole-set replay read
+        // 1 and 2 where the measurement read 0, on two cases that free nothing of their own.
+        "memory_frees_paced",
         "finales_folded",
         // A waiter's own submission of batches the scheduler's thread had not reached yet:
         // `xr-gradient-bgra10xr-srgb-unblended-x4` read 1 alone and 0 or 1 across one whole-set
