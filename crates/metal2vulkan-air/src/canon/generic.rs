@@ -8,38 +8,41 @@
 //!
 //! Generic pointers that must share a type share a space: a `getelementptr`, `bitcast`,
 //! `addrspacecast` or `freeze` of a generic pointer and its operand, a `phi` or `select` and its
-//! operands, the two sides of an `icmp`, and the generic pointers stored into and loaded from one
-//! slot of thread memory whose every access the translation sees ([`cells`]). Each such group has
-//! one space where every pointer entering it does:
+//! operands, the two sides of an `icmp`, the generic pointers stored into and loaded from one
+//! slot of thread memory whose every access the translation sees ([`cells`]), and a generic
+//! pointer an aggregate or a vector value holds (a *leaf*) and what it comes from ([`leaves`]).
+//! The links are the union-find of [`plan`]. Each such group has one space where every pointer
+//! entering it does:
 //!
 //! - an `addrspacecast` from a pointer of a device, thread or threadgroup space brings in that
 //!   space, and so does a constant expression of such a cast;
 //! - a null, undefined or poison constant brings in none: it points nowhere;
-//! - a generic pointer a call, an `inttoptr`, an atomic, an aggregate or a load from other memory
-//!   gives, or a parameter, brings in a space only the run knows.
+//! - a generic pointer a call, an `inttoptr`, an atomic or a load from other memory gives, or a
+//!   parameter, brings in a space only the run knows, and so does an aggregate a load or a call
+//!   gives for each of its leaves.
 //!
 //! A group that pointers of two spaces enter, or one a space only the run knows, is
 //! `Unsupported{GenericPointer(..)}` at the instruction where it does, naming how
 //! ([`GenericPointer`]): no Vulkan pointer holds either. So is a generic pointer passed to a call
-//! other than a query (the callee's type names the generic space) or returned (`Call`), or held
-//! in an aggregate or a vector value (`Aggregate`).
+//! other than a query (the callee's type names the generic space) or returned, alone or in an
+//! aggregate (`Call`).
 //!
 //! Each generic pointer then is its group's pointer type, and a group that no space enters a
-//! thread pointer (it addresses nothing). A cast into the generic space is its operand. A cast
-//! out of it is its operand where it names the group's space, and poison where it names another
-//! (an `addrspacecast` of a pointer not of the space it names is poison). Every other instruction
-//! keeps its operation, its generic constants those of its group's type (a store's, its
-//! value's group's). A query is false for
-//! another space; for the group's own space it is true, or, where a null constant may reach the
-//! pointer (through thread memory too), whether the pointer is not null, as Metal answers no space
-//! for a null generic
-//! pointer. That answer is the pointer's structure's where it decides it: a variable's or a
-//! global's address, a cast of one or an in-bounds step from one is not null, a null constant is,
-//! and a `select` between two such pointers is not null where its condition picks the one that
-//! is not. Else it is a comparison with the null pointer of the group's space. A generic pointer
-//! that only answered queries read goes, with what only it reads. Aggregate types that hold
-//! generic pointers (an `alloca`'s or a `getelementptr`'s source type) keep them: they lay out
-//! bytes, and a pointer of every space is 64 bits.
+//! thread pointer (it addresses nothing); an aggregate or a vector value's type is its type with
+//! each leaf its group's pointer. A cast into the generic space is its operand. A cast out of it
+//! is its operand where it names the group's space, and poison where it names another (an
+//! `addrspacecast` of a pointer not of the space it names is poison). Every other instruction
+//! keeps its operation, its generic constants those of its group's type (a store's, its value's
+//! group's; an aggregate constant's, its leaves'). A query is false for another space; for the
+//! group's own space it is true, or, where a null constant may reach the pointer (through thread
+//! memory and aggregates too), whether the pointer is not null, as Metal answers no space for a
+//! null generic pointer. That answer is the pointer's structure's where it decides it: a
+//! variable's or a global's address, a cast of one or an in-bounds step from one is not null, a
+//! null constant is, and a `select` between two such pointers is not null where its condition
+//! picks the one that is not. Else it is a comparison with the null pointer of the group's space.
+//! A generic pointer that only answered queries read goes, with what only it reads. Aggregate
+//! types that hold generic pointers in memory (an `alloca`'s or a `getelementptr`'s source type)
+//! keep them: they lay out bytes, and a pointer of every space is 64 bits.
 
 use crate::budget::Meter;
 use crate::error::{DiagName, Error, Feature, GenericPointer, Location, Unsupported};
@@ -50,6 +53,10 @@ use crate::ir::{FuncId, Idx, InstId, InstKind, IntPredicate, ModuleParts, Type, 
 use super::rewrite::{apply, filled, invariant, scoped, BodyEdit};
 
 mod cells;
+mod leaves;
+mod plan;
+
+use plan::{plan, Plan};
 
 /// The most aggregate levels searched for a generic pointer in a type.
 const DEPTH: u32 = 32;
@@ -281,48 +288,6 @@ enum NotNull {
     Run,
 }
 
-/// The generic operands of `kind` that share the result's group (or, for an `icmp`, each other's).
-fn linked(kind: &InstKind) -> Vec<Value> {
-    match kind {
-        InstKind::Gep { base, .. } => vec![*base],
-        InstKind::Cast {
-            op: CastOp::Bitcast | CastOp::AddrSpaceCast,
-            v,
-        }
-        | InstKind::Freeze(v) => vec![*v],
-        InstKind::Phi { incoming, .. } => incoming.iter().map(|&(v, _)| v).collect(),
-        InstKind::Select { t, f, .. } => vec![*t, *f],
-        InstKind::ICmp { a, b, .. } => vec![*a, *b],
-        _ => Vec::new(),
-    }
-}
-
-/// The group's representative of `i` (path halving).
-fn find(parent: &mut [u32], i: usize) -> usize {
-    let mut x = i;
-    while let Some(&p) = parent.get(x) {
-        let p = p as usize;
-        if p == x {
-            break;
-        }
-        let grand = parent.get(p).copied().unwrap_or(p as u32);
-        if let Some(slot) = parent.get_mut(x) {
-            *slot = grand;
-        }
-        x = grand as usize;
-    }
-    x
-}
-
-fn union(parent: &mut [u32], a: usize, b: usize) {
-    let (ra, rb) = (find(parent, a), find(parent, b));
-    if ra != rb {
-        if let Some(slot) = parent.get_mut(ra) {
-            *slot = rb as u32;
-        }
-    }
-}
-
 /// `body` with every generic pointer a pointer of its group's space (module docs), and whether a
 /// query folded (SCCP then folds what it decides). `func` is the entry whose body it is.
 pub(super) fn resolve(
@@ -353,277 +318,6 @@ pub(super) fn resolve(
     })?;
     body.release(m);
     Ok((edited, plan.folds))
-}
-
-/// Each generic instruction's group space and nullness; `None` when the body holds no generic
-/// pointer.
-struct Plan {
-    /// Per instruction: its group's space (`Unseen` for a non-generic instruction).
-    space: Vec<Space>,
-    /// Per instruction: whether a null constant may reach it.
-    null: Vec<bool>,
-    /// Whether a query is answered.
-    folds: bool,
-}
-
-fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Error> {
-    let n = cx.body.insts.len();
-    // Whether anything is generic: an instruction's result or any operand.
-    let mut any = false;
-    for inst in cx.body.insts.values() {
-        m.tick(1)?;
-        any |= cx.generic(inst.ty);
-        inst.kind.for_each_value(|v| any |= cx.is_generic(v));
-        if any {
-            break;
-        }
-    }
-    if !any {
-        return Ok(None);
-    }
-    // Union-find nodes: the instructions, then the slots of thread memory generic pointers pass
-    // through.
-    let cells = cells::find(cx, m, held)?;
-    let nodes = n + cells.as_ref().map_or(0, |c| c.slots);
-    let mut parent: Vec<u32> = filled(m, held, nodes, 0)?;
-    for (k, slot) in parent.iter_mut().enumerate() {
-        *slot = u32::try_from(k).map_err(|_| invariant("instruction ids past u32"))?;
-    }
-    let slot = |node: u32| n + node as usize;
-    let mut source: Vec<Space> = filled(m, held, n, Space::Unseen)?;
-    let mut null: Vec<bool> = filled(m, held, n, false)?;
-    let mut folds = false;
-    for (i, inst) in cx.body.insts.iter() {
-        m.tick(1)?;
-        let generic = cx.generic(inst.ty);
-        // Generic values held where no group reaches: an aggregate or a vector.
-        if !generic && cx.holds_generic(inst.ty, 0)? {
-            return Err(cx.refuse(GenericPointer::Aggregate, i));
-        }
-        // A store of a generic pointer is in its value's group, and in its slot's where it
-        // stores into a cell.
-        if let InstKind::Store { val, .. } = inst.kind {
-            if cx.is_generic(val) {
-                let (vs, vz) = cx.operand(val)?;
-                if let Some(x) = source.get_mut(i.index()) {
-                    *x = vs;
-                }
-                if let Some(x) = null.get_mut(i.index()) {
-                    *x = vz;
-                }
-                if let Value::Inst(j) = val {
-                    union(&mut parent, i.index(), j.index());
-                }
-                if let Some(Some(node)) = cells.as_ref().and_then(|c| c.reach(i)) {
-                    union(&mut parent, i.index(), slot(node));
-                }
-            }
-        }
-        match &inst.kind {
-            InstKind::Call(call) => {
-                let query = matches!(
-                    call.callee,
-                    Callee::Air {
-                        op: AirIntrinsic::PointerSpace(_),
-                        ..
-                    }
-                );
-                if call.args.iter().any(|&a| cx.is_generic(a)) && !query {
-                    return Err(cx.refuse(GenericPointer::Call, i));
-                }
-                folds |= query;
-                // A query's pointer is its own group's.
-            }
-            InstKind::Ret(Some(v)) if cx.is_generic(*v) => {
-                return Err(cx.refuse(GenericPointer::Call, i))
-            }
-            _ => {}
-        }
-        if !generic {
-            // An `icmp` of generic pointers joins its sides' groups.
-            if let InstKind::ICmp { a, b, .. } = inst.kind {
-                if let (Value::Inst(x), Value::Inst(y)) = (a, b) {
-                    if cx.is_generic(a) && cx.is_generic(b) {
-                        union(&mut parent, x.index(), y.index());
-                    }
-                }
-            }
-            continue;
-        }
-        let (mut s, mut z) = (Space::Unseen, false);
-        match &inst.kind {
-            InstKind::Cast {
-                op: CastOp::AddrSpaceCast,
-                v,
-            } if !cx.is_generic(*v) => match cx.ty(*v).and_then(|t| cx.parts.types.get(t)) {
-                Some(Type::Ptr { space }) => {
-                    s = Space::One(*space);
-                    z = matches!(
-                        v,
-                        Value::Const(c) if matches!(cx.parts.consts.get(*c).map(|k| &k.value), Some(Const::Null))
-                    );
-                }
-                _ => s = Space::Many(GenericPointer::Integer, Some(i)),
-            },
-            InstKind::Gep { .. }
-            | InstKind::Cast {
-                op: CastOp::Bitcast | CastOp::AddrSpaceCast,
-                ..
-            }
-            | InstKind::Freeze(_)
-            | InstKind::Phi { .. }
-            | InstKind::Select { .. } => {
-                for v in linked(&inst.kind) {
-                    let (vs, vz) = cx.operand(v)?;
-                    s = s.join(vs, Some(i));
-                    z |= vz;
-                    if let Value::Inst(j) = v {
-                        union(&mut parent, i.index(), j.index());
-                    }
-                }
-            }
-            // A load from a cell's slot is in the slot's group.
-            InstKind::Load { .. } => match cells.as_ref().and_then(|c| c.reach(i)) {
-                Some(Some(node)) => union(&mut parent, i.index(), slot(node)),
-                _ => s = Space::Many(GenericPointer::Memory, Some(i)),
-            },
-            InstKind::AtomicRmw { .. } | InstKind::CmpXchg { .. } => {
-                s = Space::Many(GenericPointer::Memory, Some(i));
-            }
-            InstKind::Call(_) => s = Space::Many(GenericPointer::Call, Some(i)),
-            InstKind::ExtractValue { .. }
-            | InstKind::ExtractElement { .. }
-            | InstKind::InsertValue { .. }
-            | InstKind::InsertElement { .. }
-            | InstKind::ShuffleVector { .. } => s = Space::Many(GenericPointer::Aggregate, Some(i)),
-            // An `inttoptr`: no other operation makes a pointer.
-            _ => s = Space::Many(GenericPointer::Integer, Some(i)),
-        }
-        if let Some(slot) = source.get_mut(i.index()) {
-            *slot = s;
-        }
-        if let Some(slot) = null.get_mut(i.index()) {
-            *slot = z;
-        }
-    }
-    // An access at an unknown offset of a cell may be at any of its slots.
-    for &(a, b) in cells.as_ref().map_or(&[][..], |c| &c.links[..]) {
-        union(&mut parent, slot(a), slot(b));
-    }
-    // Each group's space: the join of what enters each of its members.
-    let mut group: Vec<Space> = filled(m, held, nodes, Space::Unseen)?;
-    for (i, _) in cx.body.insts.iter() {
-        m.tick(1)?;
-        let r = find(&mut parent, i.index());
-        let s = source.get(i.index()).copied().unwrap_or(Space::Unseen);
-        if let Some(slot) = group.get_mut(r) {
-            *slot = slot.join(s, Some(i));
-        }
-    }
-    // An `icmp`'s constant sides enter its group too.
-    for inst in cx.body.insts.values() {
-        if let InstKind::ICmp { a, b, .. } = inst.kind {
-            if !(cx.is_generic(a) && cx.is_generic(b)) {
-                continue;
-            }
-            if let (Value::Inst(x), c @ Value::Const(_)) | (c @ Value::Const(_), Value::Inst(x)) =
-                (a, b)
-            {
-                let r = find(&mut parent, x.index());
-                let (s, _) = cx.operand(c)?;
-                if let Some(slot) = group.get_mut(r) {
-                    *slot = slot.join(s, Some(x));
-                }
-            }
-        }
-    }
-    let mut space: Vec<Space> = filled(m, held, n, Space::Unseen)?;
-    for (i, inst) in cx.body.insts.iter() {
-        m.tick(1)?;
-        if !cx.generic(inst.ty) && !shares(cx, &inst.kind) {
-            continue;
-        }
-        let r = match &inst.kind {
-            // A query's or a comparison's group is its pointer's.
-            InstKind::Call(call) if !cx.generic(inst.ty) => match call.args.first() {
-                Some(Value::Inst(p)) => find(&mut parent, p.index()),
-                _ => continue,
-            },
-            InstKind::ICmp { a, b, .. } if !cx.generic(inst.ty) => match (a, b) {
-                (Value::Inst(p), _) | (_, Value::Inst(p)) => find(&mut parent, p.index()),
-                _ => continue,
-            },
-            _ => find(&mut parent, i.index()),
-        };
-        let s = group.get(r).copied().unwrap_or(Space::Unseen);
-        if let Space::Many(how, at) = s {
-            return Err(cx.refuse(how, at.unwrap_or(i)));
-        }
-        if let Some(slot) = space.get_mut(i.index()) {
-            *slot = s;
-        }
-    }
-    // Nullness, forward to a fixed point: a null constant reaches what it enters and what that
-    // reaches, a cell's slot through a store and a load from the slot through it (a slot an
-    // access at an unknown offset reaches, through that access's node). A load of a slot no store
-    // has written reads an undefined pointer, which may be taken as not null.
-    let slots = cells.as_ref().map_or(0, |c| c.slots);
-    let mut slot_null: Vec<bool> = filled(m, held, slots, false)?;
-    let reach = |i: InstId| cells.as_ref().and_then(|c| c.reach(i)).flatten();
-    let mut changed = true;
-    let mut rounds = 0;
-    while changed {
-        changed = false;
-        rounds += 1;
-        if rounds > nodes + 1 {
-            return Err(invariant("nullness does not settle"));
-        }
-        for &(a, b) in cells.as_ref().map_or(&[][..], |c| &c.links[..]) {
-            let (x, y) = (slot_null.get(a as usize), slot_null.get(b as usize));
-            let either = x.copied().unwrap_or(false) || y.copied().unwrap_or(false);
-            for k in [a, b] {
-                if let Some(z) = slot_null.get_mut(k as usize) {
-                    changed |= either && !*z;
-                    *z |= either;
-                }
-            }
-        }
-        for (i, inst) in cx.body.insts.iter() {
-            m.tick(1)?;
-            if let (InstKind::Store { val, .. }, Some(node)) = (&inst.kind, reach(i)) {
-                let stored = null.get(i.index()).copied().unwrap_or(false)
-                    || matches!(val, Value::Inst(j) if null.get(j.index()).copied().unwrap_or(false));
-                if let Some(z) = slot_null.get_mut(node as usize) {
-                    changed |= stored && !*z;
-                    *z |= stored;
-                }
-                continue;
-            }
-            if !cx.generic(inst.ty) || null.get(i.index()).copied().unwrap_or(true) {
-                continue;
-            }
-            let reached = match &inst.kind {
-                InstKind::Cast {
-                    op: CastOp::AddrSpaceCast,
-                    v,
-                } if !cx.is_generic(*v) => false,
-                InstKind::Load { .. } => reach(i)
-                    .and_then(|node| slot_null.get(node as usize).copied())
-                    .unwrap_or(false),
-                kind => linked(kind).iter().any(|v| match v {
-                    Value::Inst(j) => null.get(j.index()).copied().unwrap_or(false),
-                    _ => false,
-                }),
-            };
-            if reached {
-                if let Some(slot) = null.get_mut(i.index()) {
-                    *slot = true;
-                }
-                changed = true;
-            }
-        }
-    }
-    Ok(Some(Plan { space, null, folds }))
 }
 
 /// Whether `kind` is a query or a comparison of generic pointers, whose space is its pointer's,
@@ -769,6 +463,17 @@ fn rewrite(
             })
         );
         let own = plan.space.get(i.index()).copied().unwrap_or(Space::Unseen);
+        // An aggregate or a vector that holds generic pointers: its leaves' spaces.
+        if let Some(leaves) = plan.leaves.as_ref() {
+            if let Some(at) = leaves.of(i, parts, inst.ty) {
+                let mut r = leaves::Retyped {
+                    leaves,
+                    interned: &mut interned,
+                };
+                leaves::rewrite(parts, &mut r, &plan.leaf_space, (i, inst), at, &mut edit, m)?;
+                continue;
+            }
+        }
         // A cast into the generic space, or a no-op cast within it, is its operand.
         if let InstKind::Cast {
             op: CastOp::AddrSpaceCast | CastOp::Bitcast,
@@ -922,10 +627,18 @@ fn rewrite(
             }
         }
         // Every other instruction: its generic result its group's type, its generic constants
-        // that type's.
+        // that type's, and each aggregate constant holding generic pointers each the space its
+        // leaf brings.
+        let holds = |parts: &ModuleParts, v: Value| match (v, plan.leaves.as_ref()) {
+            (Value::Const(c), Some(l)) => parts
+                .consts
+                .ty(c)
+                .is_some_and(|t| !generic_of(parts, v) && l.counted(parts, t).unwrap_or(0) > 0),
+            _ => false,
+        };
         let mut constants = false;
         inst.kind.for_each_value(|v| {
-            constants |= matches!(v, Value::Const(_)) && generic_of(parts, v);
+            constants |= matches!(v, Value::Const(_)) && (generic_of(parts, v) || holds(parts, v));
         });
         let shared = result_generic || shares_in(parts, body, (name, params), &inst.kind);
         if constants {
@@ -971,6 +684,35 @@ fn rewrite(
                         mapped.push((c, retyped(parts, &mut interned, c, s, 0, m)?));
                     }
                 }
+            }
+            let mut aggregates: Vec<ConstId> = Vec::new();
+            kind.for_each_value(|v| {
+                if let (Value::Const(c), true) = (v, holds(parts, v)) {
+                    aggregates.push(c);
+                }
+            });
+            for c in aggregates {
+                if mapped.iter().any(|(k, _)| *k == c) {
+                    continue;
+                }
+                let (Some(leaves), Some(old)) = (plan.leaves.as_ref(), parts.consts.ty(c)) else {
+                    continue;
+                };
+                let cx = Cx {
+                    name,
+                    body,
+                    parts,
+                    params,
+                };
+                let Some(spaces) = leaves::own_spaces(&cx, leaves, c)? else {
+                    continue;
+                };
+                let mut r = leaves::Retyped {
+                    leaves,
+                    interned: &mut interned,
+                };
+                let t = r.ty(parts, old, &spaces, m)?;
+                mapped.push((c, r.constant(parts, c, t, &spaces, m)?));
             }
             kind.for_each_value_mut(|v| {
                 if let Value::Const(c) = *v {

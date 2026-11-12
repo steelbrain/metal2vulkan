@@ -33,6 +33,18 @@ enum Held {
     Overwritten,
     /// As `Loaded`, the array's address written to `out[3]` as an integer.
     Escaped,
+    /// Field 0 of a `{ptr, i32}` built from `in` and 1.
+    Field,
+    /// Field 0 of a `{ptr, ptr}` of `in` and the thread's array.
+    Fields,
+    /// Field 0 of one of two `{ptr, i32}`s, of `in` and of `in + 2`, as word 0 of `in` decides.
+    FieldSelect,
+    /// As `Field`, of `in` or null as word 0 of `in` decides.
+    FieldNullable,
+    /// Element 0 of a `[2 x ptr]` of `in` and the thread's array.
+    ArrayMixed,
+    /// Field 0 of a `{ptr, i32}` loaded from the thread's array.
+    FieldLoaded,
 }
 
 /// `kernel k(device float* out, device float* in)` with a generic pointer `p` that `held` gives:
@@ -219,6 +231,80 @@ fn queried(held: Held) -> Result<Entry, Error> {
             store(&mut f, bits, o);
             load(&mut f, generic, local)
         }
+        Held::Field
+        | Held::Fields
+        | Held::FieldSelect
+        | Held::FieldNullable
+        | Held::ArrayMixed
+        | Held::FieldLoaded => {
+            let pair = f.module().struct_ty(&[generic, i32t]);
+            let both = f.module().struct_ty(&[generic, generic]);
+            let array = f.module().array(generic, 2);
+            // `val` inserted at field or element `k` of `agg`, or of the type's poison.
+            let insert = |f: &mut FunctionBuilder<'_>, ty, agg: Option<Value>, val, k: u32| {
+                let agg =
+                    agg.unwrap_or_else(|| Value::Const(f.module().constant(ty, Const::Poison)));
+                f.push(
+                    ty,
+                    InstKind::InsertValue {
+                        agg,
+                        val,
+                        indices: Box::new([k]),
+                    },
+                )
+            };
+            let agg = match held {
+                Held::Field => {
+                    let s = insert(&mut f, pair, None, input, 0);
+                    insert(&mut f, pair, Some(s), one, 1)
+                }
+                Held::Fields => {
+                    let mine = cast(&mut f, local);
+                    let s = insert(&mut f, both, None, mine, 1);
+                    insert(&mut f, both, Some(s), input, 0)
+                }
+                Held::FieldSelect => {
+                    let other = at(&mut f, input, two);
+                    let a = insert(&mut f, pair, None, input, 0);
+                    let b = insert(&mut f, pair, None, other, 0);
+                    let word = load(&mut f, i32t, arg(1));
+                    let c = f.push(
+                        i1,
+                        InstKind::ICmp {
+                            pred: IntPredicate::Ne,
+                            a: word,
+                            b: zero,
+                        },
+                    );
+                    f.push(
+                        pair,
+                        InstKind::Select {
+                            c,
+                            t: a,
+                            f: b,
+                            fmf: FastMath::NONE,
+                        },
+                    )
+                }
+                Held::FieldNullable => {
+                    let either = pick(&mut f, input, null);
+                    insert(&mut f, pair, None, either, 0)
+                }
+                Held::ArrayMixed => {
+                    let mine = cast(&mut f, local);
+                    let s = insert(&mut f, array, None, input, 0);
+                    insert(&mut f, array, Some(s), mine, 1)
+                }
+                _ => load(&mut f, pair, local),
+            };
+            f.push(
+                generic,
+                InstKind::ExtractValue {
+                    agg,
+                    indices: Box::new([0]),
+                },
+            )
+        }
     };
     let x = match held {
         Held::LocalOrNull | Held::NullOrLocal => no,
@@ -256,18 +342,19 @@ fn queried(held: Held) -> Result<Entry, Error> {
 }
 
 /// Whether any instruction of the specialized entry names the generic space in its type or in an
-/// operand's.
+/// operand's, at any depth of an aggregate or a vector.
 fn names_generic(e: &Entry) -> bool {
     let types = e.module.types();
     let body = e.module.func(e.func).unwrap().body.as_ref().unwrap();
-    let generic = |t: Option<TypeId>| {
-        matches!(
-            t.and_then(|t| types.get(t)),
-            Some(Type::Ptr {
-                space: AddrSpace::Generic
-            })
-        )
-    };
+    fn holds(types: &crate::ir::TypeTable, t: TypeId) -> bool {
+        match types.get(t) {
+            Some(Type::Ptr { space }) => *space == AddrSpace::Generic,
+            Some(Type::Array { elem, .. } | Type::Vector { elem, .. }) => holds(types, *elem),
+            Some(Type::Struct { fields, .. }) => fields.iter().any(|&f| holds(types, f)),
+            _ => false,
+        }
+    }
+    let generic = |t: Option<TypeId>| t.is_some_and(|t| holds(types, t));
     body.insts.values().any(|inst| {
         let mut any = generic(Some(inst.ty));
         inst.kind.for_each_value(|v| {
@@ -367,6 +454,40 @@ fn a_generic_pointer_of_two_spaces_or_of_memory_is_refused() {
     assert!(refused(queried(Held::AnySlot), GenericPointer::TwoSpaces));
     assert!(refused(queried(Held::Overwritten), GenericPointer::Memory));
     assert!(refused(queried(Held::Escaped), GenericPointer::Memory));
+    // An array's elements share one space.
+    assert!(refused(
+        queried(Held::ArrayMixed),
+        GenericPointer::TwoSpaces
+    ));
+    assert!(refused(queried(Held::FieldLoaded), GenericPointer::Memory));
+}
+
+/// A generic pointer an aggregate holds is in the group of what its field takes: a device
+/// pointer, through one field of two of different spaces and through a `select` of two
+/// aggregates. Where no null reaches the field, the queries are answered; where one may, the
+/// device query compares the pointer with the device null.
+#[test]
+fn a_generic_pointer_an_aggregate_holds_is_its_field_s_space() {
+    for (held, device) in [
+        (Held::Field, Some(1.0)),
+        (Held::Fields, Some(1.0)),
+        (Held::FieldSelect, Some(1.0)),
+        (Held::FieldNullable, None),
+    ] {
+        let e = queried(held).unwrap_or_else(|e| panic!("{held:?}: {e}"));
+        let text = body_text(&e);
+        assert!(!names_generic(&e), "{held:?}: {text}");
+        let compared = text
+            .lines()
+            .any(|l| l.contains("icmp ne") && l.contains("ptr addrspace(1) zeroinitializer"));
+        assert_eq!(compared, device.is_none(), "{held:?}: {text}");
+        let words = stored(&e);
+        assert_eq!(
+            words[words.len().saturating_sub(2)..],
+            [device, Some(0.0)],
+            "{held:?}: {text}"
+        );
+    }
 }
 
 /// A generic pointer loaded from a slot of thread memory whose every access is visible is in the
