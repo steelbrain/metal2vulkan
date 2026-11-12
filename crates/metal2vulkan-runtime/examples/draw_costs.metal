@@ -29,3 +29,57 @@ fragment float4 draw_costs_texture(DrawCostsOut in [[stage_in]],
                                    sampler linear [[sampler(0)]]) {
     return source.sample(linear, in.position.xy / 64.0) * in.colour;
 }
+
+// The compositor shape's functions: a quad's corner (a position in [0, 1] and its texture
+// coordinate) from vertex buffer 0 by vertex, placed by buffer 1's scale and offset; fragments
+// that sample texture 0 tinted by fragment buffer 0, masked by texture 1's alpha, or blended over
+// texture 1 read at the fragment's own pixel (the pass's own color attachment, a backdrop).
+struct DrawCostsCorner {
+    float2 position;
+    float2 uv;
+};
+
+struct DrawCostsPlace {
+    float2 scale;
+    float2 offset;
+};
+
+struct DrawCostsQuad {
+    float4 position [[position]];
+    float2 uv;
+};
+
+vertex DrawCostsQuad draw_costs_quad_vertex(uint vid [[vertex_id]],
+                                            const device DrawCostsCorner *corners [[buffer(0)]],
+                                            constant DrawCostsPlace &place [[buffer(1)]]) {
+    DrawCostsCorner corner = corners[vid];
+    DrawCostsQuad out;
+    out.position = float4(corner.position * place.scale + place.offset, 0.0, 1.0);
+    out.uv = corner.uv;
+    return out;
+}
+
+fragment float4 draw_costs_quad(DrawCostsQuad in [[stage_in]],
+                                texture2d<float> source [[texture(0)]],
+                                sampler linear [[sampler(0)]],
+                                constant float4 &tint [[buffer(0)]]) {
+    return source.sample(linear, in.uv) * tint;
+}
+
+fragment float4 draw_costs_quad_masked(DrawCostsQuad in [[stage_in]],
+                                       texture2d<float> source [[texture(0)]],
+                                       texture2d<float> mask [[texture(1)]],
+                                       sampler linear [[sampler(0)]],
+                                       constant float4 &tint [[buffer(0)]]) {
+    return source.sample(linear, in.uv) * tint * mask.sample(linear, in.uv).a;
+}
+
+fragment float4 draw_costs_quad_backdrop(DrawCostsQuad in [[stage_in]],
+                                         texture2d<float> source [[texture(0)]],
+                                         texture2d<float, access::read> backdrop [[texture(1)]],
+                                         sampler linear [[sampler(0)]],
+                                         constant float4 &tint [[buffer(0)]]) {
+    float4 colour = source.sample(linear, in.uv) * tint;
+    float4 under = backdrop.read(uint2(in.position.xy));
+    return float4(mix(under.rgb, colour.rgb, colour.a), 1.0);
+}

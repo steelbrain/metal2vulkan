@@ -3,7 +3,7 @@
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--threads N] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--threads N] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -25,6 +25,21 @@
 //! - **damage**, a compositor's frames of damaged rectangles: as **clips**, but each draw after a
 //!   `set_scissor_rect` of its own, the next cell of a grid of 25 by 20 cells of 20x25 pixels, so
 //!   a pass's 500 draws are bounded by 500 rectangles.
+//! - **compositor**, a window compositor's frame as the consumer's per-draw table measures it:
+//!   8 command buffers of 6 passes and 35 draws. Five passes each load a layer's surface
+//!   (1600x1000, 1280x800, 1024x768, 800x600, 512x512) and draw 4 quads into it, then one clears
+//!   a 3840x2400 framebuffer surface and draws 15. Every surface is `BGRA8Unorm`, a texture over
+//!   its own buffer's one IOSurface plane at packed rows (`new_texture_with_iosurface_plane`):
+//!   a `Private` buffer, as a host keeps a surface's device copy, or with `--pages` a no-copy
+//!   buffer over host pages of its own. Each pass begins with `set_viewport`; each draw sets the
+//!   pipeline state where its kind differs from the last draw's (plain, masked or backdrop, each
+//!   blended), vertex buffers 0 (corners) and 1 (placement) and fragment buffer 0 (a tint) at
+//!   slots of one no-copy buffer over host pages that move every draw, fragment texture 0 (one
+//!   of 12 sampled surfaces: a 3840x2400 desktop picture, then windows of 1920x1200, 1024x768,
+//!   512x512 and 256x256), a masked draw's texture 1 (another of them) or a backdrop draw's
+//!   (its own pass's color attachment, read at the fragment's pixel), a sampler and a scissor
+//!   rectangle, then draws 6 vertices, three draws of five indexed (`UInt16`). One draw in each
+//!   pass is a backdrop.
 //!
 //! The slots lie in 64 KiB no-copy buffers over host pages (`new_buffer_with_bytes_no_copy`), as
 //! a guest's upload chunks do, each command buffer's in chunks of its own. With `--heap`, the
@@ -39,6 +54,9 @@
 //! function that returns fragment buffer 0's first value or samples texture 0 with sampler 0,
 //! each opaque and blended over (`draw_costs.metal`). The device is opened with GPU times from
 //! the host's clock and a message sink, the rest at its defaults.
+//!
+//! With `METAL2VULKAN_LOG_SHADOWS=1` (`metal2vulkan::env_vars`), each shadow the device makes is
+//! printed on stderr with why, and so is each degrade notice's text.
 //!
 //! With `--shadowed`, the target is a texture over a no-copy buffer of host pages, as a guest's
 //! window surface is, each pass loading it rather than clearing it, and the device is opened with
@@ -80,13 +98,15 @@
 
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::device::HostPageTexturePolicy;
-use metal2vulkan::metal::{BlendFactor, PixelFormat, PrimitiveType, TextureUsage};
+use metal2vulkan::metal::{
+    BlendFactor, IndexType, PixelFormat, PrimitiveType, SamplerMinMagFilter, TextureUsage,
+};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceOptions,
-    Heap, HeapDescriptor, HeapType, HostMemory, Library, LoadAction, MessageSink, PipelineOptions,
-    RenderPassDescriptor, RenderPipelineState, ResourceOptions, SamplerState, ScissorRect,
-    StoreAction, Texture, TextureDescriptor,
+    Heap, HeapDescriptor, HeapType, HostMemory, IoSurfacePlane, Library, LoadAction, MessageSink,
+    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, SamplerState,
+    ScissorRect, StoreAction, Texture, TextureDescriptor, Viewport,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -137,6 +157,8 @@ enum Stream {
     /// A compositor's under damaged rectangles: as [`Stream::Clipped`], each draw after a
     /// scissor rectangle of its own ([`damaged`]).
     Damaged,
+    /// A window compositor's frame of passes over surfaces ([`Compositor`]).
+    Composited,
 }
 
 /// The columns of the grid of damaged rectangles a [`Stream::Damaged`] pass's draws take in turn,
@@ -182,7 +204,7 @@ struct Shape {
 }
 
 /// The shapes, in the order they run.
-const SHAPES: [Shape; 5] = [
+const SHAPES: [Shape; 6] = [
     Shape {
         name: "ws",
         buffers: 8,
@@ -213,6 +235,12 @@ const SHAPES: [Shape; 5] = [
         draws: 500,
         stream: Stream::Damaged,
     },
+    Shape {
+        name: "compositor",
+        buffers: 8,
+        draws: COMPOSITOR_DRAWS,
+        stream: Stream::Composited,
+    },
 ];
 
 impl Shape {
@@ -221,6 +249,8 @@ impl Shape {
         match self.stream {
             Stream::Bytes | Stream::Clipped | Stream::Damaged => 1,
             Stream::Layers => 2,
+            // Its slots lie in the compositor's own buffer.
+            Stream::Composited => 0,
         }
     }
 
@@ -238,7 +268,7 @@ impl Shape {
 }
 
 /// The calls `--calls` counts apart, by their index in a [`Tally`].
-const CALLS: [&str; 12] = [
+const CALLS: [&str; 14] = [
     "command_buffer",
     "render_command_encoder",
     "set_render_pipeline_state",
@@ -251,6 +281,8 @@ const CALLS: [&str; 12] = [
     "add_completed_handler",
     "commit",
     "set_scissor_rect",
+    "set_viewport",
+    "draw_indexed_primitives",
 ];
 
 /// Each call's count and instructions, over a run's counted repetitions.
@@ -288,13 +320,18 @@ fn read_cost() -> f64 {
 /// One call of a command buffer's pass, its objects looked up before a count starts.
 #[derive(Clone, Copy)]
 enum Step<'a> {
+    /// End the open encoder, if any, and open the compositor's pass of this index, its viewport
+    /// set; a command buffer whose steps start otherwise opens the bench's one pass first.
+    Pass(usize),
     Pipeline(&'a RenderPipelineState),
     VertexBuffer(&'a Buffer, u64, u32),
     FragmentBuffer(&'a Buffer, u64, u32),
-    FragmentTexture(&'a Texture),
+    FragmentTexture(&'a Texture, u32),
     FragmentSampler(&'a SamplerState),
     Scissor(ScissorRect),
     Draw(PrimitiveType, u32),
+    /// Six `UInt16` indices of a triangle list at this offset of the buffer.
+    DrawIndexed(&'a Buffer, u64),
 }
 
 /// The objects every shape draws with.
@@ -308,6 +345,8 @@ struct Bench {
     constants: Buffer,
     /// With `--shadowed`, the no-copy buffer the target is a texture over.
     _target_pages: Option<Buffer>,
+    /// The compositor shape's objects, where it runs.
+    compositor: Option<Compositor>,
 }
 
 /// A shape's chunks, and with `--heap` the heap they are placed in and the buffer over the guest
@@ -319,7 +358,12 @@ struct Chunks {
 }
 
 impl Bench {
-    fn new(device: Device, library: &Library, shadowed: bool) -> Result<Bench> {
+    fn new(
+        device: Device,
+        library: &Library,
+        shadowed: bool,
+        compositor: Option<bool>,
+    ) -> Result<Bench> {
         let function = |name: &str| -> Result<StageSource> {
             let function = library.new_function_with_name(name)?;
             Ok(StageSource::Function(function.function_descriptor()))
@@ -385,6 +429,10 @@ impl Bench {
         color.load_action = load;
         color.store_action = StoreAction::Store;
         color.clear_color = ClearColor::new(0.0, 0.0, 0.0, 1.0);
+        let compositor = match compositor {
+            Some(pages) => Some(Compositor::new(&device, library, pages)?),
+            None => None,
+        };
         Ok(Bench {
             queue: device.new_command_queue()?,
             sampler: device.new_sampler_state(&SamplerDescriptor::new())?,
@@ -394,6 +442,7 @@ impl Bench {
             pipelines,
             textures,
             _target_pages: target_pages,
+            compositor,
         })
     }
 
@@ -402,6 +451,13 @@ impl Bench {
     /// (the module docs), kept mapped for the process's life, so no import outlives its pages.
     fn chunks(&self, shape: Shape, threads: usize, heap: bool) -> Result<Chunks> {
         let count = shape.chunks_a_buffer() * (shape.buffers * threads) as u64;
+        if count == 0 {
+            return Ok(Chunks {
+                buffers: Vec::new(),
+                _heap: None,
+                _ram: None,
+            });
+        }
         // With `heap`, one chunk before the heap's pages that only the guest RAM's buffer covers.
         let ahead = u64::from(heap) * CHUNK;
         let bytes = (ahead + count * CHUNK) as usize;
@@ -469,6 +525,9 @@ impl Bench {
 
     /// Command buffer `buffer`'s calls of a repetition of `shape`, over `chunks`.
     fn steps<'a>(&'a self, chunks: &'a [Buffer], shape: Shape, buffer: usize) -> Vec<Step<'a>> {
+        if let (Stream::Composited, Some(compositor)) = (shape.stream, &self.compositor) {
+            return compositor.steps(buffer);
+        }
         let mut steps = vec![
             Step::Pipeline(&self.pipelines[0]),
             Step::VertexBuffer(&self.constants, 0, 1),
@@ -487,18 +546,22 @@ impl Bench {
                         steps.push(Step::Pipeline(&self.pipelines[draw / RUN % PIPELINES]));
                         steps.push(Step::FragmentSampler(&self.sampler));
                     }
-                    steps.push(Step::FragmentTexture(&self.textures[draw % TEXTURES]));
+                    steps.push(Step::FragmentTexture(&self.textures[draw % TEXTURES], 0));
                     let (chunk, offset) = shape.slot(buffer, slot + 1);
                     steps.push(Step::FragmentBuffer(&chunks[chunk], offset, 0));
                     let (chunk, offset) = shape.slot(buffer, slot);
                     steps.push(Step::VertexBuffer(&chunks[chunk], offset, 0));
                     steps.push(Step::Draw(PrimitiveType::TriangleStrip, 4));
                 }
+                Stream::Composited => {}
                 Stream::Clipped | Stream::Damaged => {
                     if draw % RUN == 0 {
                         steps.push(Step::Pipeline(&self.pipelines[draw / RUN % PIPELINES]));
                         steps.push(Step::FragmentSampler(&self.sampler));
-                        steps.push(Step::FragmentTexture(&self.textures[draw / RUN % TEXTURES]));
+                        steps.push(Step::FragmentTexture(
+                            &self.textures[draw / RUN % TEXTURES],
+                            0,
+                        ));
                     } else if draw % 2 == 1 && shape.stream == Stream::Clipped {
                         steps.push(Step::Scissor(CLIPS[draw / 2 % CLIPS.len()]));
                     }
@@ -526,11 +589,32 @@ impl Bench {
         let start = Counts::now();
         for steps in buffers {
             let command_buffer = call(&mut tally, 0, || self.queue.command_buffer())?;
-            let mut encoder = call(&mut tally, 1, || {
-                command_buffer.render_command_encoder(&self.pass)
-            })?;
+            let mut open = match steps.first() {
+                Some(Step::Pass(_)) => None,
+                _ => Some(call(&mut tally, 1, || {
+                    command_buffer.render_command_encoder(&self.pass)
+                })?),
+            };
             for &step in steps {
+                if let Step::Pass(at) = step {
+                    if let Some(encoder) = open.take() {
+                        call(&mut tally, 8, || encoder.end_encoding())?;
+                    }
+                    let compositor = self
+                        .compositor
+                        .as_ref()
+                        .ok_or("a pass with no compositor")?;
+                    let (descriptor, viewport) = &compositor.passes[at];
+                    let mut encoder = call(&mut tally, 1, || {
+                        command_buffer.render_command_encoder(descriptor)
+                    })?;
+                    call(&mut tally, 12, || encoder.set_viewport(*viewport))?;
+                    open = Some(encoder);
+                    continue;
+                }
+                let encoder = open.as_mut().ok_or("a step before its pass")?;
                 match step {
+                    Step::Pass(_) => {}
                     Step::Pipeline(state) => {
                         call(&mut tally, 2, || encoder.set_render_pipeline_state(state))
                     }
@@ -540,8 +624,8 @@ impl Bench {
                     Step::FragmentBuffer(buffer, offset, index) => call(&mut tally, 4, || {
                         encoder.set_fragment_buffer(Some(buffer), offset, index)
                     }),
-                    Step::FragmentTexture(texture) => call(&mut tally, 5, || {
-                        encoder.set_fragment_texture(Some(texture), 0)
+                    Step::FragmentTexture(texture, index) => call(&mut tally, 5, || {
+                        encoder.set_fragment_texture(Some(texture), index)
                     }),
                     Step::FragmentSampler(sampler) => call(&mut tally, 6, || {
                         encoder.set_fragment_sampler_states(&[Some(sampler)], None, 0)
@@ -550,9 +634,23 @@ impl Bench {
                     Step::Draw(primitive, count) => call(&mut tally, 7, || {
                         encoder.draw_primitives(primitive, 0, count, 1, 0)
                     }),
+                    Step::DrawIndexed(buffer, offset) => call(&mut tally, 13, || {
+                        encoder.draw_indexed_primitives(
+                            PrimitiveType::Triangle,
+                            6,
+                            IndexType::UInt16,
+                            buffer,
+                            offset,
+                            1,
+                            0,
+                            0,
+                        )
+                    }),
                 }?;
             }
-            call(&mut tally, 8, || encoder.end_encoding())?;
+            if let Some(encoder) = open {
+                call(&mut tally, 8, || encoder.end_encoding())?;
+            }
             let sender = sender.clone();
             call(&mut tally, 9, || {
                 command_buffer.add_completed_handler(Box::new(move |done: &CommandBuffer| {
@@ -572,6 +670,313 @@ impl Bench {
             }
         }
         Ok(spent)
+    }
+}
+
+/// The compositor shape's framebuffer surface, its five layer surfaces, and the draws of a layer's
+/// pass and of the framebuffer's.
+const FRAMEBUFFER: (u64, u64) = (3840, 2400);
+const LAYERS: [(u64, u64); 5] = [
+    (1600, 1000),
+    (1280, 800),
+    (1024, 768),
+    (800, 600),
+    (512, 512),
+];
+const LAYER_DRAWS: usize = 4;
+const FRAMEBUFFER_DRAWS: usize = 15;
+const COMPOSITOR_DRAWS: usize = LAYERS.len() * LAYER_DRAWS + FRAMEBUFFER_DRAWS;
+
+/// The sampled surfaces: the first a desktop picture of the framebuffer's size, the rest windows
+/// of these sizes in turn.
+const SOURCES: usize = 12;
+const SOURCE_SIZES: [(u64, u64); 4] = [(1920, 1200), (1024, 768), (512, 512), (256, 256)];
+
+/// The compositor's per-draw data in its buffer over host pages: `COMPOSITOR_SLOTS` slots of each
+/// kind, a draw taking the next: 4 corners (64 bytes a slot), 6 corners (128), 6 `UInt16`
+/// indices (64), a placement (256) and a tint (256).
+const COMPOSITOR_SLOTS: u64 = 256;
+const CORNERS4: u64 = 0;
+const CORNERS6: u64 = 64 << 10;
+const INDICES: u64 = 128 << 10;
+const PLACEMENT: u64 = 256 << 10;
+const TINT: u64 = 512 << 10;
+const COMPOSITOR_BYTES: u64 = 16 << 20;
+
+/// A compositor draw's fragment function: its pipeline state's index.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Quad {
+    Plain,
+    Masked,
+    Backdrop,
+}
+
+/// One draw of a compositor frame: its pass, its kind, whether it is indexed, its scissor
+/// rectangle and its pass's size.
+#[derive(Clone, Copy)]
+struct FrameDraw {
+    pass: usize,
+    quad: Quad,
+    indexed: bool,
+    scissor: ScissorRect,
+    size: (u64, u64),
+}
+
+/// The compositor shape's objects (the module docs): its passes with their viewports, their
+/// targets, the sampled surfaces, its three pipeline states, its sampler and the buffer of its
+/// per-draw data, and the buffers its surfaces lie in.
+struct Compositor {
+    passes: Vec<(RenderPassDescriptor, Viewport)>,
+    targets: Vec<Texture>,
+    sources: Vec<Texture>,
+    pipelines: Vec<RenderPipelineState>,
+    sampler: SamplerState,
+    data: Buffer,
+    _surfaces: Vec<Buffer>,
+}
+
+impl Compositor {
+    fn new(device: &Device, library: &Library, pages: bool) -> Result<Compositor> {
+        let function = |name: &str| -> Result<StageSource> {
+            let function = library.new_function_with_name(name)?;
+            Ok(StageSource::Function(function.function_descriptor()))
+        };
+        let pipelines = [
+            "draw_costs_quad",
+            "draw_costs_quad_masked",
+            "draw_costs_quad_backdrop",
+        ]
+        .iter()
+        .map(|fragment| {
+            let mut descriptor = RenderPipelineDescriptor::new(function("draw_costs_quad_vertex")?);
+            descriptor.fragment = Some(function(fragment)?);
+            let mut color = ColorAttachmentDescriptor::new(PixelFormat::BGRA8Unorm);
+            color.blending_enabled = true;
+            color.source_rgb_blend_factor = BlendFactor::One;
+            color.source_alpha_blend_factor = BlendFactor::One;
+            color.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
+            color.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
+            descriptor.color_attachments[0] = Some(color);
+            Ok(device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+        let mut sampler = SamplerDescriptor::new();
+        sampler.min_filter = SamplerMinMagFilter::Linear;
+        sampler.mag_filter = SamplerMinMagFilter::Linear;
+        let sampler = device.new_sampler_state(&sampler)?;
+        let mut surfaces = Vec::new();
+        let mut surface = |(width, height): (u64, u64), target: bool| -> Result<Texture> {
+            let (row, mut descriptor) = (
+                width * 4,
+                TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false),
+            );
+            descriptor.usage = match target {
+                true => TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
+                false => TextureUsage::SHADER_READ,
+            };
+            let buffer = match pages {
+                // SAFETY: page-aligned read-write memory of the surface's bytes, never unmapped,
+                // which outlives the buffer.
+                true => unsafe {
+                    device.new_buffer_with_bytes_no_copy(
+                        HostMemory::new(host_pages((row * height) as usize)?),
+                        row * height,
+                        ResourceOptions::shared(),
+                        None,
+                    )?
+                },
+                false => {
+                    descriptor.resource_options = ResourceOptions::private();
+                    device.new_buffer(row * height, ResourceOptions::private())?
+                }
+            };
+            let plane = IoSurfacePlane::new(0, row, false);
+            let texture = buffer.new_texture_with_iosurface_plane(&descriptor, plane)?;
+            surfaces.push(buffer);
+            Ok(texture)
+        };
+        let targets = (LAYERS.iter().copied().chain([FRAMEBUFFER]))
+            .map(|size| surface(size, true))
+            .collect::<Result<Vec<_>>>()?;
+        let sources = (0..SOURCES)
+            .map(|at| match at {
+                0 => surface(FRAMEBUFFER, false),
+                at => surface(SOURCE_SIZES[(at - 1) % SOURCE_SIZES.len()], false),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let passes = (targets.iter().zip(LAYERS.iter().chain([&FRAMEBUFFER])))
+            .enumerate()
+            .map(|(at, (target, &(width, height)))| {
+                let mut descriptor = RenderPassDescriptor::new();
+                let color = &mut descriptor.color_attachments[0];
+                color.texture = Some(target.clone());
+                color.store_action = StoreAction::Store;
+                match at < LAYERS.len() {
+                    true => color.load_action = LoadAction::Load,
+                    false => {
+                        color.load_action = LoadAction::Clear;
+                        color.clear_color = ClearColor::new(0.1, 0.1, 0.1, 1.0);
+                    }
+                }
+                let viewport = Viewport {
+                    origin_x: 0.0,
+                    origin_y: 0.0,
+                    width: width as f64,
+                    height: height as f64,
+                    znear: 0.0,
+                    zfar: 1.0,
+                };
+                (descriptor, viewport)
+            })
+            .collect();
+        let memory = host_pages(COMPOSITOR_BYTES as usize)?;
+        // SAFETY: page-aligned read-write memory of its length, never unmapped, which outlives
+        // the buffer.
+        let data = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                HostMemory::new(memory),
+                COMPOSITOR_BYTES,
+                ResourceOptions::shared(),
+                None,
+            )?
+        };
+        let write = |at: u64, values: &[f32]| {
+            let bytes: Vec<u8> = values
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect();
+            // SAFETY: inside the mapping, which nothing reads yet.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    memory.as_ptr().add(at as usize),
+                    bytes.len(),
+                )
+            }
+        };
+        // A corner is a position in [0, 1] and its texture coordinate, y down for both.
+        let [tl, tr, bl, br] =
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0f32]].map(|[x, y]| [x, y, x, y]);
+        let plan = Compositor::plan();
+        for slot in 0..COMPOSITOR_SLOTS {
+            write(CORNERS4 + slot * 64, &[tl, tr, bl, br].concat());
+            write(CORNERS6 + slot * 128, &[tl, tr, bl, bl, tr, br].concat());
+            write(TINT + slot * 256, &[1.0, 1.0, 1.0, 0.9]);
+            let FrameDraw { scissor, size, .. } = plan[slot as usize % plan.len()];
+            let (w, h) = (size.0 as f32, size.1 as f32);
+            let placement = [
+                2.0 * scissor.width as f32 / w,
+                -2.0 * scissor.height as f32 / h,
+                2.0 * scissor.x as f32 / w - 1.0,
+                1.0 - 2.0 * scissor.y as f32 / h,
+            ];
+            write(PLACEMENT + slot * 256, &placement);
+            let indices: Vec<u8> = [0u16, 1, 2, 2, 1, 3]
+                .iter()
+                .flat_map(|index| index.to_le_bytes())
+                .collect();
+            // SAFETY: as above.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    indices.as_ptr(),
+                    memory.as_ptr().add((INDICES + slot * 64) as usize),
+                    indices.len(),
+                )
+            }
+        }
+        Ok(Compositor {
+            passes,
+            targets,
+            sources,
+            pipelines,
+            sampler,
+            data,
+            _surfaces: surfaces,
+        })
+    }
+
+    /// A frame's draws in order.
+    fn plan() -> Vec<FrameDraw> {
+        let mut draws = Vec::with_capacity(COMPOSITOR_DRAWS);
+        for pass in 0..=LAYERS.len() {
+            let (count, (width, height)) = match pass < LAYERS.len() {
+                true => (LAYER_DRAWS, LAYERS[pass]),
+                false => (FRAMEBUFFER_DRAWS, FRAMEBUFFER),
+            };
+            for k in 0..count {
+                let d = draws.len();
+                let backdrop = (pass < LAYERS.len() && k == 1) || (pass == LAYERS.len() && k == 7);
+                let kind = match () {
+                    _ if backdrop => Quad::Backdrop,
+                    _ if d % 3 == 2 => Quad::Masked,
+                    _ => Quad::Plain,
+                };
+                let scissor = ScissorRect {
+                    x: (d * 97 % 8) as u64 * width / 16,
+                    y: (d * 53 % 8) as u64 * height / 16,
+                    width: width / 2,
+                    height: height / 2,
+                };
+                draws.push(FrameDraw {
+                    pass,
+                    quad: kind,
+                    indexed: matches!(d % 5, 0 | 2 | 3),
+                    scissor,
+                    size: (width, height),
+                });
+            }
+        }
+        draws
+    }
+
+    /// Command buffer `buffer`'s steps: its six passes and their draws, each draw's slots the
+    /// next of the buffer's.
+    fn steps(&self, buffer: usize) -> Vec<Step<'_>> {
+        let (mut steps, mut kind, mut open) = (Vec::new(), None, None);
+        for (d, draw) in Compositor::plan().into_iter().enumerate() {
+            let FrameDraw {
+                pass,
+                quad,
+                indexed,
+                scissor,
+                ..
+            } = draw;
+            if open != Some(pass) {
+                steps.push(Step::Pass(pass));
+                (open, kind) = (Some(pass), None);
+            }
+            let slot = (buffer * COMPOSITOR_DRAWS + d) as u64 % COMPOSITOR_SLOTS;
+            if kind != Some(quad) {
+                steps.push(Step::Pipeline(&self.pipelines[quad as usize]));
+                kind = Some(quad);
+            }
+            let corners = match indexed {
+                true => CORNERS4 + slot * 64,
+                false => CORNERS6 + slot * 128,
+            };
+            steps.push(Step::VertexBuffer(&self.data, corners, 0));
+            steps.push(Step::VertexBuffer(&self.data, PLACEMENT + slot * 256, 1));
+            steps.push(Step::FragmentBuffer(&self.data, TINT + slot * 256, 0));
+            steps.push(Step::FragmentTexture(
+                &self.sources[(d * 5 + buffer) % SOURCES],
+                0,
+            ));
+            match quad {
+                Quad::Plain => {}
+                Quad::Masked => {
+                    let mask = &self.sources[(d * 7 + 3 + buffer) % SOURCES];
+                    steps.push(Step::FragmentTexture(mask, 1));
+                }
+                Quad::Backdrop => steps.push(Step::FragmentTexture(&self.targets[pass], 1)),
+            }
+            steps.push(Step::FragmentSampler(&self.sampler));
+            steps.push(Step::Scissor(scissor));
+            steps.push(match indexed {
+                true => Step::DrawIndexed(&self.data, INDICES + slot * 64),
+                false => Step::Draw(PrimitiveType::Triangle, 6),
+            });
+        }
+        steps
     }
 }
 
@@ -974,7 +1379,7 @@ fn compile(scratch: &Path) -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     let mut shapes = Vec::new();
-    let (mut runs, mut metallib, mut shadowed) = (RUNS, None, false);
+    let (mut runs, mut metallib, mut shadowed, mut pages) = (RUNS, None, false, false);
     let mut options = Options {
         calls: false,
         counts: false,
@@ -989,6 +1394,7 @@ fn main() -> Result<()> {
             "--counts" => options.counts = true,
             "--heap" => options.heap = true,
             "--shadowed" => shadowed = true,
+            "--pages" => pages = true,
             "--threads" => {
                 options.threads = args.next().ok_or("--threads N")?.parse()?;
                 if options.threads == 0 {
@@ -996,12 +1402,9 @@ fn main() -> Result<()> {
                 }
             }
             "--metallib" => metallib = Some(PathBuf::from(args.next().ok_or("--metallib PATH")?)),
-            name => shapes.push(
-                *SHAPES
-                    .iter()
-                    .find(|shape| shape.name == name)
-                    .ok_or_else(|| format!("no shape {name}: ws, many, 10k, clips or damage"))?,
-            ),
+            name => shapes.push(*SHAPES.iter().find(|shape| shape.name == name).ok_or_else(
+                || format!("no shape {name}: ws, many, 10k, clips, damage or compositor"),
+            )?),
         }
     }
     if shapes.is_empty() {
@@ -1019,15 +1422,23 @@ fn main() -> Result<()> {
     if shadowed {
         device_options.policy.host_page_textures = HostPageTexturePolicy::Shadow;
     }
-    device_options.messages = Some(MessageSink::new(|message| {
+    // With the shadow log on, its lines and each notice's text on stderr.
+    let log = metal2vulkan::env_vars::log_shadows();
+    device_options.messages = Some(MessageSink::new(move |message| {
         if message.degradation.is_some() {
             NOTICES.fetch_add(1, Ordering::Relaxed);
+        }
+        if log && (message.degradation.is_some() || message.id_name == "metal2vulkan-shadows") {
+            eprintln!("{}: {}", message.id_name, message.text);
         }
     }));
     let device = Device::system_default_with(&device_options)?;
     println!("device: {}", device.name());
     let library = library(&device, metallib.as_deref())?;
-    let bench = Bench::new(device, &library, shadowed)?;
+    let compositor = (shapes.iter())
+        .any(|shape| shape.stream == Stream::Composited)
+        .then_some(pages);
+    let bench = Bench::new(device, &library, shadowed, compositor)?;
     for shape in shapes {
         measure(&bench, shape, runs, options)?;
     }
