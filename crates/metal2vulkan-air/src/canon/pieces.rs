@@ -324,7 +324,7 @@ pub(super) fn offset_from(
 const STEPS: usize = 64;
 
 /// The byte offset a `getelementptr` over `src_ty` at constant, non-negative `indices` adds.
-fn gep_offset(
+pub(super) fn gep_offset(
     parts: &ModuleParts,
     layouts: &TypeLayouts,
     src_ty: TypeId,

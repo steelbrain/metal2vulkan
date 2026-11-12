@@ -8,14 +8,15 @@
 //!
 //! Generic pointers that must share a type share a space: a `getelementptr`, `bitcast`,
 //! `addrspacecast` or `freeze` of a generic pointer and its operand, a `phi` or `select` and its
-//! operands, and the two sides of an `icmp`. Each such group has one space where every pointer
-//! entering it does:
+//! operands, the two sides of an `icmp`, and the generic pointers stored into and loaded from one
+//! slot of thread memory whose every access the translation sees ([`cells`]). Each such group has
+//! one space where every pointer entering it does:
 //!
 //! - an `addrspacecast` from a pointer of a device, thread or threadgroup space brings in that
 //!   space, and so does a constant expression of such a cast;
 //! - a null, undefined or poison constant brings in none: it points nowhere;
-//! - a generic pointer a load, a call, an `inttoptr`, an atomic or an aggregate gives, or a
-//!   parameter, brings in a space only the run knows.
+//! - a generic pointer a call, an `inttoptr`, an atomic, an aggregate or a load from other memory
+//!   gives, or a parameter, brings in a space only the run knows.
 //!
 //! A group that pointers of two spaces enter, or one a space only the run knows, is
 //! `Unsupported{GenericPointer(..)}` at the instruction where it does, naming how
@@ -27,9 +28,11 @@
 //! thread pointer (it addresses nothing). A cast into the generic space is its operand. A cast
 //! out of it is its operand where it names the group's space, and poison where it names another
 //! (an `addrspacecast` of a pointer not of the space it names is poison). Every other instruction
-//! keeps its operation, its generic constants those of its group's type. A query is false for
-//! another space; for the group's own space it is true, or, where a null constant may reach the
-//! pointer, whether the pointer is not null, as Metal answers no space for a null generic
+//! keeps its operation, its generic constants those of its group's type (a store's, its
+//! value's group's). A query is false for
+//! another space; for the group's own space it is true, or, where a null constant or a load from
+//! thread memory may reach the pointer, whether the pointer is not null, as Metal answers no space
+//! for a null generic
 //! pointer. That answer is the pointer's structure's where it decides it: a variable's or a
 //! global's address, a cast of one or an in-bounds step from one is not null, a null constant is,
 //! and a `select` between two such pointers is not null where its condition picks the one that
@@ -45,6 +48,8 @@ use crate::ir::{AddrSpace, Body, Callee, CastOp, Const, ConstExpr, ConstId, Cons
 use crate::ir::{FuncId, Idx, InstId, InstKind, IntPredicate, ModuleParts, Type, TypeId, Value};
 
 use super::rewrite::{apply, filled, invariant, scoped, BodyEdit};
+
+mod cells;
 
 /// The most aggregate levels searched for a generic pointer in a type.
 const DEPTH: u32 = 32;
@@ -376,10 +381,15 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
     if !any {
         return Ok(None);
     }
-    let mut parent: Vec<u32> = filled(m, held, n, 0)?;
+    // Union-find nodes: the instructions, then the slots of thread memory generic pointers pass
+    // through.
+    let cells = cells::find(cx, m, held)?;
+    let nodes = n + cells.as_ref().map_or(0, |c| c.slots);
+    let mut parent: Vec<u32> = filled(m, held, nodes, 0)?;
     for (k, slot) in parent.iter_mut().enumerate() {
         *slot = u32::try_from(k).map_err(|_| invariant("instruction ids past u32"))?;
     }
+    let slot = |node: u32| n + node as usize;
     let mut source: Vec<Space> = filled(m, held, n, Space::Unseen)?;
     let mut null: Vec<bool> = filled(m, held, n, false)?;
     let mut folds = false;
@@ -389,6 +399,25 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
         // Generic values held where no group reaches: an aggregate or a vector.
         if !generic && cx.holds_generic(inst.ty, 0)? {
             return Err(cx.refuse(GenericPointer::Aggregate, i));
+        }
+        // A store of a generic pointer is in its value's group, and in its slot's where it
+        // stores into a cell.
+        if let InstKind::Store { val, .. } = inst.kind {
+            if cx.is_generic(val) {
+                let (vs, vz) = cx.operand(val)?;
+                if let Some(x) = source.get_mut(i.index()) {
+                    *x = vs;
+                }
+                if let Some(x) = null.get_mut(i.index()) {
+                    *x = vz;
+                }
+                if let Value::Inst(j) = val {
+                    union(&mut parent, i.index(), j.index());
+                }
+                if let Some(Some(node)) = cells.as_ref().and_then(|c| c.reach(i)) {
+                    union(&mut parent, i.index(), slot(node));
+                }
+            }
         }
         match &inst.kind {
             InstKind::Call(call) => {
@@ -453,7 +482,15 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
                     }
                 }
             }
-            InstKind::Load { .. } | InstKind::AtomicRmw { .. } | InstKind::CmpXchg { .. } => {
+            // A load from a cell's slot is in the slot's group, and may read a null pointer.
+            InstKind::Load { .. } => match cells.as_ref().and_then(|c| c.reach(i)) {
+                Some(Some(node)) => {
+                    union(&mut parent, i.index(), slot(node));
+                    z = true;
+                }
+                _ => s = Space::Many(GenericPointer::Memory, Some(i)),
+            },
+            InstKind::AtomicRmw { .. } | InstKind::CmpXchg { .. } => {
                 s = Space::Many(GenericPointer::Memory, Some(i));
             }
             InstKind::Call(_) => s = Space::Many(GenericPointer::Call, Some(i)),
@@ -472,8 +509,12 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
             *slot = z;
         }
     }
+    // An access at an unknown offset of a cell may be at any of its slots.
+    for &(a, b) in cells.as_ref().map_or(&[][..], |c| &c.links[..]) {
+        union(&mut parent, slot(a), slot(b));
+    }
     // Each group's space: the join of what enters each of its members.
-    let mut group: Vec<Space> = filled(m, held, n, Space::Unseen)?;
+    let mut group: Vec<Space> = filled(m, held, nodes, Space::Unseen)?;
     for (i, _) in cx.body.insts.iter() {
         m.tick(1)?;
         let r = find(&mut parent, i.index());
@@ -502,7 +543,7 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
     let mut space: Vec<Space> = filled(m, held, n, Space::Unseen)?;
     for (i, inst) in cx.body.insts.iter() {
         m.tick(1)?;
-        if !cx.generic(inst.ty) && !query_or_compare(cx, &inst.kind) {
+        if !cx.generic(inst.ty) && !shares(cx, &inst.kind) {
             continue;
         }
         let r = match &inst.kind {
@@ -561,8 +602,9 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
     Ok(Some(Plan { space, null, folds }))
 }
 
-/// Whether `kind` is a query or a comparison of generic pointers, whose space is its pointer's.
-fn query_or_compare(cx: &Cx<'_>, kind: &InstKind) -> bool {
+/// Whether `kind` is a query or a comparison of generic pointers, whose space is its pointer's,
+/// or a store of a generic pointer, whose space is its value's.
+fn shares(cx: &Cx<'_>, kind: &InstKind) -> bool {
     match kind {
         InstKind::Call(call) => matches!(
             call.callee,
@@ -572,6 +614,7 @@ fn query_or_compare(cx: &Cx<'_>, kind: &InstKind) -> bool {
             }
         ),
         InstKind::ICmp { a, b, .. } => cx.is_generic(*a) && cx.is_generic(*b),
+        InstKind::Store { val, .. } => cx.is_generic(*val),
         _ => false,
     }
 }
@@ -860,7 +903,7 @@ fn rewrite(
         inst.kind.for_each_value(|v| {
             constants |= matches!(v, Value::Const(_)) && generic_of(parts, v);
         });
-        let shared = result_generic || query_or_compare_in(parts, body, (name, params), &inst.kind);
+        let shared = result_generic || shares_in(parts, body, (name, params), &inst.kind);
         if constants {
             let mut kind = inst.kind.clone();
             let mut failed = None;
@@ -1036,14 +1079,14 @@ fn retyped_null(
     )
 }
 
-/// [`query_or_compare`] over the module's tables alone.
-fn query_or_compare_in(
+/// [`shares`] over the module's tables alone.
+fn shares_in(
     parts: &ModuleParts,
     body: &Body,
     (name, params): (&DiagName, &[TypeId]),
     kind: &InstKind,
 ) -> bool {
-    query_or_compare(
+    shares(
         &Cx {
             name,
             body,

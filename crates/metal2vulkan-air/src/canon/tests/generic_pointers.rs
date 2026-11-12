@@ -20,8 +20,17 @@ enum Held {
     NullOrLocal,
     /// `in` or the thread's own array as word 0 of `in` decides.
     Mixed,
-    /// A generic pointer stored to the thread's array and loaded back.
+    /// `in`, made generic, stored to the thread's array and loaded back.
     Loaded,
+    /// `in` stored at byte 0 of the thread's array and another array's address at byte 8, and
+    /// byte 0 loaded back.
+    TwoSlots,
+    /// As `TwoSlots`, loaded back at the float `in[0]` names: either slot.
+    AnySlot,
+    /// As `Loaded`, the array's float 0 written over it before the load.
+    Overwritten,
+    /// As `Loaded`, the array's address written to `out[3]` as an integer.
+    Escaped,
 }
 
 /// `kernel k(device float* out, device float* in)` with a generic pointer `p` that `held` gives:
@@ -136,6 +145,71 @@ fn queried(held: Held) -> Result<Entry, Error> {
         }
         Held::Loaded => {
             store(&mut f, input, local);
+            load(&mut f, generic, local)
+        }
+        Held::TwoSlots | Held::AnySlot => {
+            store(&mut f, input, local);
+            let other = f.push(
+                thread,
+                InstKind::Alloca {
+                    ty: words,
+                    count: one,
+                    align: None,
+                },
+            );
+            let theirs = cast(&mut f, other);
+            let second = f.push(
+                thread,
+                InstKind::Gep {
+                    src_ty: f32t,
+                    base: local,
+                    indices: Box::new([two]),
+                    inbounds: true,
+                },
+            );
+            store(&mut f, theirs, second);
+            let from = if held == Held::AnySlot {
+                let word = load(&mut f, i32t, arg(1));
+                f.push(
+                    thread,
+                    InstKind::Gep {
+                        src_ty: f32t,
+                        base: local,
+                        indices: Box::new([word]),
+                        inbounds: true,
+                    },
+                )
+            } else {
+                local
+            };
+            load(&mut f, generic, from)
+        }
+        Held::Overwritten => {
+            store(&mut f, input, local);
+            store(&mut f, yes, local);
+            load(&mut f, generic, local)
+        }
+        Held::Escaped => {
+            store(&mut f, input, local);
+            let i64t = f.module().int(64);
+            let bits = f.push(
+                i64t,
+                InstKind::Cast {
+                    op: CastOp::PtrToInt,
+                    v: local,
+                },
+            );
+            let three = f.module().const_int(i32t, 3);
+            let o = f.push(
+                dev,
+                InstKind::Gep {
+                    src_ty: f32t,
+                    base: arg(0),
+                    indices: Box::new([three]),
+                    inbounds: true,
+                },
+            );
+            store(&mut f, bits, o);
             load(&mut f, generic, local)
         }
     };
@@ -283,5 +357,26 @@ fn a_query_of_a_variable_or_null_is_the_condition_that_picks() {
 #[test]
 fn a_generic_pointer_of_two_spaces_or_of_memory_is_refused() {
     assert!(refused(queried(Held::Mixed), GenericPointer::TwoSpaces));
-    assert!(refused(queried(Held::Loaded), GenericPointer::Memory));
+    assert!(refused(queried(Held::AnySlot), GenericPointer::TwoSpaces));
+    assert!(refused(queried(Held::Overwritten), GenericPointer::Memory));
+    assert!(refused(queried(Held::Escaped), GenericPointer::Memory));
+}
+
+/// A generic pointer loaded from a slot of thread memory whose every access is visible is in the
+/// group of the pointers stored there: a device pointer, which may be null (the slot may hold
+/// none), so the device query compares it with the device null.
+#[test]
+fn a_generic_pointer_loaded_from_a_thread_slot_is_its_stores_space_s() {
+    for held in [Held::Loaded, Held::TwoSlots] {
+        let e = queried(held).unwrap_or_else(|e| panic!("{held:?}: {e}"));
+        let text = body_text(&e);
+        assert!(!names_generic(&e), "{held:?}: {text}");
+        assert!(text.contains("load ptr addrspace(1),"), "{held:?}: {text}");
+        assert!(
+            text.lines()
+                .any(|l| l.contains("icmp ne") && l.contains("ptr addrspace(1) zeroinitializer")),
+            "{held:?}: {text}"
+        );
+        assert_eq!(stored(&e)[1..], [None, Some(0.0)], "{held:?}: {text}");
+    }
 }
