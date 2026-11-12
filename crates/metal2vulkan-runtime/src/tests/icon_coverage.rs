@@ -91,6 +91,10 @@ enum Form {
     OwnBuffers,
     Threads,
     KeptCoverage,
+    /// One command buffer a round, every round's states, samplers and queue made new as it
+    /// starts, as a process started again makes its own: each state's first draw is in the
+    /// round's first pass.
+    FreshStates,
 }
 
 /// Where a bitmap's texels lie.
@@ -376,8 +380,9 @@ fn expected(clear: Option<[f32; 2]>, (x, y): (u64, u64)) -> [u16; 4] {
 
 /// The counts that say how the passes ran: render pass instances, splits for the interlocked
 /// writes, storage forms taken, textures over bytes shadowed, linear merges recorded, shadow
-/// copies.
-fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 6] {
+/// copies; variant pipelines made, host steps recorded, splits for a pipeline still being made,
+/// draws dropped while their pipeline was being made.
+fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 10] {
     [
         after.render_passes_begun_instances - before.render_passes_begun_instances,
         after.instance_splits_interlocked_writes - before.instance_splits_interlocked_writes,
@@ -385,6 +390,10 @@ fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 6] {
         after.shadowed_textures - before.shadowed_textures,
         after.linear_merges_recorded - before.linear_merges_recorded,
         after.shadow_copies - before.shadow_copies,
+        after.variant_pipelines_made - before.variant_pipelines_made,
+        after.host_steps_recorded - before.host_steps_recorded,
+        after.instance_splits_pending_pipeline - before.instance_splits_pending_pipeline,
+        after.draws_dropped_still_making - before.draws_dropped_still_making,
     ]
 }
 
@@ -404,7 +413,7 @@ fn run(case: &str, form: Form, home: Home) {
     let host = Host::new();
     let scratch = Scratch::new(&format!("icon-coverage-{case}"));
     let device = device(&scratch.0);
-    let Some(tools) = Tools::new(&device) else {
+    let Some(mut tools) = Tools::new(&device) else {
         eprintln!(
             "ICON-COVERAGE {case} on {}: no framebuffer fetch: nothing to check",
             device.name()
@@ -434,6 +443,9 @@ fn run(case: &str, form: Form, home: Home) {
     let mut counts = Vec::new();
     for round in 0..ROUNDS {
         let before = device.work_counts();
+        if form == Form::FreshStates && round > 0 {
+            tools = Tools::new(&device).unwrap();
+        }
         let icons: Vec<Icon> = (0..ICONS)
             .map(|index| Icon {
                 content: tools.target(
@@ -452,7 +464,7 @@ fn run(case: &str, form: Form, home: Home) {
             })
             .collect();
         match form {
-            Form::OneBuffer | Form::KeptCoverage => {
+            Form::OneBuffer | Form::KeptCoverage | Form::FreshStates => {
                 let command_buffer = tools.queue.command_buffer().unwrap();
                 for icon in &icons {
                     tools.render(&command_buffer, icon);
@@ -505,8 +517,8 @@ fn run(case: &str, form: Form, home: Home) {
     }
     eprintln!(
         "ICON-COVERAGE {case} on {}: {} of {} icons wrong; per round (instances, interlocked \
-         splits, storage forms, shadowed textures, linear merges, shadow copies) {counts:?}; \
-         first {:?}",
+         splits, storage forms, shadowed textures, linear merges, shadow copies, variants made, \
+         host steps, pending-pipeline splits, draws dropped) {counts:?}; first {:?}",
         device.name(),
         failures.len(),
         ROUNDS * ICONS,
@@ -565,6 +577,21 @@ fn icon_bitmaps_over_host_pages_in_command_buffers_of_their_own_keep_their_fetch
     run(
         "over-host-own-buffers",
         Form::OwnBuffers,
+        Home::HostPages(PADDED),
+    );
+}
+
+#[test]
+fn icons_whose_states_are_made_new_each_round_keep_their_fetched_colors_values() {
+    run("fresh-states", Form::FreshStates, Home::Private);
+}
+
+#[test]
+fn icon_bitmaps_over_host_pages_whose_states_are_made_new_each_round_keep_their_fetched_colors_values(
+) {
+    run(
+        "over-host-fresh-states",
+        Form::FreshStates,
         Home::HostPages(PADDED),
     );
 }
