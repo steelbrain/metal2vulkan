@@ -29,6 +29,10 @@
 //! - Two color outputs at one `[[color(0)]]`, each gated by its own constant, compile under every
 //!   set that leaves at most one; the set that leaves both is the invalid request
 //!   `DuplicateColorOutput`, as Metal refuses it when it makes the function.
+//! - A sampled texture whose slot a function constant sets (`engine/overlapping_slots`) compiles
+//!   where the constant puts it apart from the write texture at texture(1); where it puts both on
+//!   slot 1, the compile is the invalid request `OverlappingArgument`, as Metal refuses it when it
+//!   makes the function.
 //!
 //! `llvm-as` assembles the fixtures; without it the tests skip visibly. No GPU is used.
 
@@ -707,6 +711,56 @@ fn two_remaining_outputs_at_one_color_are_an_invalid_request() {
                 ))
             ),
             "{stem}: {refused:?}"
+        );
+    }
+}
+
+/// The owned fixture `engine/overlapping_slots`, whose sampled texture `src` is at texture(n) beside
+/// a write texture at texture(1), n function constant 0: with n = 0 it compiles and passes L3 on
+/// every committed profile that writes a storage texture without its format, and needs the
+/// format on the others; with n = 1 both are on texture slot 1, which Metal refuses when it makes
+/// the function ("texture argument src has invalid location (<1,1>)", `overlapping_slots.m` on an
+/// M3 Max), and the compile is the invalid request naming `src`, never a translation of one
+/// texture standing for both.
+#[test]
+fn two_textures_on_one_slot_are_an_invalid_request() {
+    let Some(bc) = assemble(&engine_dir().join("overlapping_slots.ll")) else {
+        return;
+    };
+    let entry = "overlapping_slots";
+    let compile = |n: u32, p: &DeviceProfile| {
+        let values = FunctionConstantValues::defaults().with_index(
+            0,
+            FunctionConstantValue::new(DataType::UInt, n.to_le_bytes()),
+        );
+        compile_bitcode(
+            &bc,
+            EntryRef::Name(entry),
+            &values,
+            p,
+            &LoweringInputs::new(),
+            &mut meter(),
+            SPIRV_WORDS,
+        )
+    };
+    for (stem, p) in committed_profiles().expect("profiles") {
+        match compile(0, &p) {
+            Ok(apart) => validate(&apart, &p),
+            Err(Error::NeedsInput(RuntimeInput::StorageTextureFormat { .. }))
+                if !p.fields().images.storage_write_without_format => {}
+            Err(e) => panic!("{stem} n = 0: {e}"),
+        }
+        let refused = compile(1, &p).map(|_| ());
+        assert_eq!(
+            refused,
+            Err(Error::InvalidDescriptor(
+                DescriptorError::OverlappingArgument {
+                    param: 1,
+                    index: 1,
+                    count: 1
+                }
+            )),
+            "{stem}"
         );
     }
 }

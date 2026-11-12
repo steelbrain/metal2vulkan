@@ -690,6 +690,8 @@ mod nullable_private;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod numbered_samplers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod overlapping_slots;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod pack_conversions;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod padded_loads;
