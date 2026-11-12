@@ -95,7 +95,7 @@ fn case(queue: &CommandQueue, what: &str, options: ResourceOptions, bytes: &[u8]
     let after = device.work_counts();
     let shadows = after.shadowed_textures - before.shadowed_textures;
     let kept = after.kept_padding_aliases - before.kept_padding_aliases;
-    let verdicts = verdicts(&device);
+    let verdicts = verdicts(device);
     println!(
         "{TEST} on {}: {what}: {placement:?}; {shadows} shadow(s), {kept} kept padding \
          alias(es) ({reads_kept} for one that only reads); renders over pooled memory \
