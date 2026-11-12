@@ -284,6 +284,8 @@ mod host_step_neutrals;
 mod icon_coverage;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod icon_levels;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod icon_mips;
 mod image_barriers;
 mod image_plan;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
