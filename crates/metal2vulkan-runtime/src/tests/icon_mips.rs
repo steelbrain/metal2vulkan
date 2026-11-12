@@ -562,7 +562,9 @@ fn run_uploaded(case: &str, storage: StorageMode, open: bool) {
             })
             .collect();
         finish(&command_buffer);
-        counts.push(moved(&before, &device.work_counts()));
+        let now = device.work_counts();
+        let copies = now.host_texel_copies - before.host_texel_copies;
+        counts.push((moved(&before, &now), copies));
         for (i, (icon, targets)) in icons.iter().zip(&targets).enumerate() {
             let mut wrong = Vec::new();
             for (level, target) in (0..UPLOADED_LEVELS).zip(targets) {
@@ -583,8 +585,8 @@ fn run_uploaded(case: &str, storage: StorageMode, open: bool) {
     }
     eprintln!(
         "ICON-MIPS {case} on {}: {} of {} icons wrong; per round (storage forms taken, images \
-         recycled, swapped-out images forgotten, reads through copies, slots narrowed) \
-         {counts:?}; first {:?}",
+         recycled, swapped-out images forgotten, reads through copies, slots narrowed), host texel \
+         copies {counts:?}; first {:?}",
         device.name(),
         failures.len(),
         ROUNDS * UPLOADED_ICONS,
