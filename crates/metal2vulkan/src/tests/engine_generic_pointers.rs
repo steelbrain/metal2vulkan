@@ -59,7 +59,12 @@ fn generic_pointers_of_one_space_compile() {
     let Some(bc) = fixture() else { return };
     let library = Library::from_air(&bc).expect("library");
     for stem in PROFILES {
-        for entry in ["generic_spaces", "generic_null"] {
+        for entry in [
+            "generic_spaces",
+            "generic_null",
+            "generic_slots",
+            "generic_fields",
+        ] {
             if let Err(e) = compiled(&library, stem, entry) {
                 panic!("{stem} {entry}: {e}\n{}", specialized(&bc, stem, entry));
             }
