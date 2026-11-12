@@ -847,12 +847,12 @@ impl BindState {
             private_list,
             far_vertex_buffers,
         } = shape;
-        // Every other field first, and the stage tables, whose slots' shapes are worked out as
-        // they are compared, last: a shape another field tells apart (a draw's primitive type
-        // picks its viewport compensation and its band) is passed over before any slot's shape
-        // is worked out.
         let tables = self.stages.iter().filter(|(_, t)| !t.has_empty_shape());
-        self.vertex_amplification == *vertex_amplification
+        tables.clone().count() == stages.len()
+            && tables.zip(stages).all(|((stage, t), (of, s))| {
+                stage == of && t.has_shape(s, self.view_base_alignment)
+            })
+            && self.vertex_amplification == *vertex_amplification
             && self.imageblock_size == *imageblock_size
             && self.render_target_array_length == *render_target_array_length
             && self.tessellation_factors.buffer.is_some() == *tessellation_factor_buffer
@@ -876,10 +876,6 @@ impl BindState {
             && self.quad_primitive_ids == *quad_primitive_ids
             && self.private_list == *private_list
             && self.far_vertex_buffers == *far_vertex_buffers
-            && tables.clone().count() == stages.len()
-            && tables.zip(stages).all(|((stage, t), (of, s))| {
-                stage == of && t.has_shape(s, self.view_base_alignment)
-            })
     }
 
     /// `used_resources` by token ([`BindShape::used`]): one token names one resource, and listing
