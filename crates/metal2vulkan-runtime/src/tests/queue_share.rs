@@ -8,8 +8,9 @@
 //!   most recently used idle one (off an unshared queue's, any other where none is idle).
 //! - **Passed over.** A busy `VkQueue` no long or unshared queue holds, whose oldest batch is not
 //!   young, is one a queue passes over for that batch alone (counted where it joins none).
-//! - **Settling.** A long queue takes the least recently used idle `VkQueue` no long or unshared
-//!   queue holds, or stays.
+//! - **Settling.** A long queue takes an idle `VkQueue` no long or unshared queue holds, one no
+//!   command queue holds where one is (else the one the fewest hold), least recently used among
+//!   equals, or stays.
 //! - **Unshared.** An unshared queue tries the `VkQueue`s no queue holds, least recently used
 //!   first, then those no long or unshared queue holds, fewest queues first.
 //! - **Placement at creation.** A new queue takes the `VkQueue` the fewest live queues hold, of
@@ -189,9 +190,34 @@ fn a_long_queue_settles_on_the_least_recently_used_idle_vk_queue_no_long_or_unsh
         },
         busy(5, 2, 10, 0),
     ];
-    assert_eq!(settle(0, &looks), Some(2));
-    assert_eq!(settle(0, &looks[..1]), None, "with no other, it stays");
-    assert_eq!(settle(0, &[looks[0], looks[3], looks[4], looks[5]]), None);
+    let empty = |looks: &[Look]| looks.iter().map(|&look| (look, 0)).collect::<Vec<_>>();
+    assert_eq!(settle(0, &empty(&looks)), Some(2));
+    assert_eq!(
+        settle(0, &empty(&looks[..1])),
+        None,
+        "with no other, it stays"
+    );
+    let none = [looks[0], looks[3], looks[4], looks[5]];
+    assert_eq!(settle(0, &empty(&none)), None);
+}
+
+/// A long queue settles on an idle `VkQueue` no command queue holds where one is, even one used
+/// more recently than an idle one a short queue holds: a compositor that has just left the long
+/// queue's `VkQueue` for an idle one, its last command buffer complete, is not followed there
+/// (the RTX 5080 Laptop GPU's isolation run beside a queue waiting on the GPU). Where every idle
+/// one is held, the one the fewest hold, the least recently used among equals.
+#[test]
+fn a_long_queue_settles_on_an_idle_vk_queue_no_command_queue_holds_before_a_held_one() {
+    let long = Look {
+        long: true,
+        ..busy(1, 1, 0, 9)
+    };
+    // The compositor's new `VkQueue`, used long ago until its one command buffer there; and an
+    // empty one used since.
+    let looks = [(long, 1), (idle(2, 1), 1), (idle(3, 5), 0)];
+    assert_eq!(settle(1, &looks), Some(3));
+    let held = [(long, 1), (idle(2, 1), 2), (idle(3, 5), 1), (idle(4, 3), 1)];
+    assert_eq!(settle(1, &held), Some(4));
 }
 
 #[test]

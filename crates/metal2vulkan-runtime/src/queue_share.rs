@@ -52,8 +52,12 @@
 //!   (`gpu_times_from_host`, a driver whose timestamps wait for every queue's, or no calibrated
 //!   timestamps) does not share ([`Verdict::Unchecked`],
 //!   `WorkCounts::queue_sharing_untimed`). A long queue moves once more, at its next such make: to an
-//!   idle `VkQueue` of its family that no long or unshared queue holds, the one used least
-//!   recently, else it stays; then never again. So the first long command buffer of a queue that
+//!   idle `VkQueue` of its family that no long or unshared queue holds, one no command queue holds
+//!   where one is, else the one the fewest hold, the one used least recently among equals; else it
+//!   stays; then never again. Never onto a short queue's `VkQueue` while another is empty: a
+//!   compositor that had just left the long queue's `VkQueue` for an idle one was followed there by
+//!   the long queue, and waited behind its 30 ms work again (the RTX 5080 Laptop GPU, 128 stalls
+//!   over 10 ms in 2 s). So the first long command buffer of a queue that
 //!   shared holds the command buffers the queues sharing its `VkQueue` committed behind it for its
 //!   whole length (29 ms behind 30 ms command buffers on the RTX 5080 Laptop GPU), and those its
 //!   later command buffers while the long queue holds work until its next idle point; a queue
@@ -293,14 +297,17 @@ pub(crate) fn old_busy(current: usize, look: &Look) -> bool {
         && !look.head_age.is_some_and(|age| age < YOUNG_HEAD)
 }
 
-/// The `VkQueue` a long queue on `current` settles on, among `looks`: an idle one no long or
-/// unshared queue holds, the one used least recently; `None` to stay.
-pub(crate) fn settle(current: usize, looks: &[Look]) -> Option<usize> {
+/// The `VkQueue` a long queue on `current` settles on, among `looks` with each one's command
+/// queues: an idle one no long or unshared queue holds, the one the fewest command queues hold
+/// (none where one is), the one used least recently among equals; `None` to stay.
+pub(crate) fn settle(current: usize, looks: &[(Look, usize)]) -> Option<usize> {
     looks
         .iter()
-        .filter(|look| look.depth == 0 && !look.long && !look.unshared && look.index != current)
-        .min_by_key(|look| look.last_submit)
-        .map(|look| look.index)
+        .filter(|(look, _)| {
+            look.depth == 0 && !look.long && !look.unshared && look.index != current
+        })
+        .min_by_key(|(look, homes)| (*homes, look.last_submit))
+        .map(|(look, _)| look.index)
 }
 
 /// The `VkQueue`s an unshared queue may take, among `looks` with each one's command queues, in the
@@ -855,7 +862,7 @@ impl Device {
 
     /// Where a long queue on `current` settles ([`settle`]): `None` to stay.
     pub(crate) fn settle_long_queue(&self, current: usize) -> Option<usize> {
-        let looks: Vec<Look> = self.looks(current).map(|(look, _)| look).collect();
+        let looks: Vec<(Look, usize)> = self.looks(current).collect();
         settle(current, &looks)
     }
 
