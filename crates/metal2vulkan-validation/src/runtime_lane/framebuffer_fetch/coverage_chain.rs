@@ -781,7 +781,7 @@ fn a_coverage_chain_through_fetch_keeps_every_block() {
             ran(|c| c.instance_splits_interlocked_writes),
             ran(|c| c.instance_splits_barrier),
             ran(|c| c.instance_splits_memoryless_write),
-            ran(|c| c.draws_dropped_still_making + c.draws_dropped_unmade),
+            ran(|c| c.draws_dropped_unmade),
         );
         if count != 0 {
             failed.push(case.name);

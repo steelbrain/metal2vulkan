@@ -37,31 +37,30 @@
 //!   (the host step, or `commit` for records the CPU writes), so it takes no pending recording:
 //!   its pipeline, most begun on the device's pool by the execution's settle at commit
 //!   (`RenderExecution::settle`), which the batch's host step waits for as for a pending draw's.
-//!   A making the replay waits for itself, one the settle left the host step no wait for, is
-//!   waited for until its command buffer's bound at most, and one still being made then makes the draw record
-//!   nothing, before anything of it is tracked, named by its execution's encoder's place and its
-//!   order among the replay's draws with the error `VK_TIMEOUT`, counted
-//!   (`WorkCounts::draws_dropped_still_making`) and announced (`draw-dropped-still-making`,
-//!   [`RenderLowering::drop_late_replayed_draw`]): the open gap (`docs/FAST-PATHS.md`). A device
-//!   replay's draw, one recording for every command, waits until the pipeline is made.
+//!   A making the replay begins itself, one the settle did not foresee, is waited for in a host
+//!   step until it is made, on the step's thread; in `commit`, until its command buffer's bound
+//!   at most, past which the replay stops, before anything of the draw is tracked, and leaves
+//!   the pass to the host step, which records it once that making is made
+//!   (`CommandBuffer::leave_unmade`, `DeferredPass::left_for_makings`). A device replay's draw,
+//!   one recording for every command, waits until the pipeline is made.
 //! - **Recorded once.** A pass recorded at commit and again by a host step (an execution's
 //!   buffer the GPU may write since) records each such draw once, its secondary executed by the
 //!   recording that is submitted.
 
 use super::bound::{Bound, Recorded};
-use super::{DrawState, Recording, RenderLowering};
+use super::{DrawState, Recording};
 use crate::binding::PushWrite;
 use crate::command_buffer::CommandBuffer;
 use crate::device::lock;
 use crate::draw_source::IndexBind;
 use crate::dynamic_state::ExtendedDynamicState;
-use crate::error::{internal, vulkan, Error, FailedPipeline, FailedState};
-use crate::pipeline::{Pending, RawPipeline, RenderPipelineState, RenderVariant};
+use crate::error::{vulkan, Error, FailedPipeline, FailedState};
+use crate::pipeline::{Pending, RawPipeline, RenderPipelineState};
 use crate::render_target;
 use crate::tracker::LegacyBarrier;
 use crate::visibility::Lent;
 use ash::vk;
-use metal2vulkan::cache::{SpecializationKey, VariantKey};
+use metal2vulkan::cache::VariantKey;
 use metal2vulkan::pipeline::SpecKey;
 use std::sync::Mutex;
 
@@ -242,33 +241,6 @@ impl PendingDraw {
             }
             command_buffer.end_raw(cb).map_err(vulkan)?;
         }
-        Ok(())
-    }
-}
-
-impl RenderLowering {
-    /// Drop a draw of an execution's replay whose `VkPipeline` of `variant` under
-    /// `specialization` was still being made at its command buffer's bound (the module docs):
-    /// named by its execution's encoder's place and its order among the replay's draws, its error
-    /// `VK_TIMEOUT`; counted and announced as any draw past the bound
-    /// (`CommandBuffer::drop_late_draw`).
-    pub(super) fn drop_late_replayed_draw(
-        &self,
-        variant: &RenderVariant,
-        specialization: &SpecializationKey,
-    ) -> Result<(), Error> {
-        let state = self
-            .pipeline
-            .clone()
-            .ok_or_else(|| internal("a draw without its pipeline state"))?;
-        self.core.command_buffer().drop_late_draw(FailedPipeline {
-            encoder: self.executing_encoder.unwrap_or_default(),
-            draw: self.draw_calls,
-            state: FailedState::Render(state),
-            variant: variant.key().clone(),
-            specialization: variant.constants(specialization),
-            error: vulkan(vk::Result::TIMEOUT),
-        });
         Ok(())
     }
 }

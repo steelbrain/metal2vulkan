@@ -778,7 +778,6 @@ impl RenderLowering {
                 .map_or(IndirectCommandCheckNeeds::ALL, |(_, needs)| *needs),
             check: check.map(|(check, _)| Mutex::new(check)),
             read_at: AtomicU64::new(indirect_execute::NOT_READ),
-            encoder: self.core.command_buffer().state().open_encoder_place(),
         });
         // Its commands may name any pipeline state, reading handles in any stage.
         self.command_encoded(every_render_stage());
@@ -986,9 +985,6 @@ pub(crate) struct RenderExecution {
     /// read them after (`IndirectCommandBuffer::cpu_writes`); `indirect_execute::NOT_READ` until
     /// then ([`rewritten`](Self::rewritten)).
     read_at: AtomicU64,
-    /// Its encoder's place among the command buffer's ended encoders, which names a draw of its
-    /// commands that its replay drops (`CommandBuffer::drop_late_draw`).
-    encoder: usize,
 }
 
 /// The encoder's state an execution's draws take: as the call found it, its tables only where
@@ -2559,7 +2555,6 @@ impl RenderExecution {
             replay_plain: true,
             plain_drawn: false,
             replayed_heaps: Vec::new(),
-            executing_encoder: Some(self.encoder),
             rerouting: false,
             forms,
             replayed: None,
@@ -2819,8 +2814,9 @@ pub(crate) struct DeferredPass {
     /// What the commit made ahead for the host step that records it (`ahead.rs`), once made.
     ahead: OnceLock<Arc<Ahead>>,
     /// The makings its executions' settle at commit handed to the device's pool
-    /// ([`settle`](Self::settle)), which its host step waits for, until its command buffer's bound
-    /// at most, as for its draws' pipelines.
+    /// ([`settle`](Self::settle)), and those its replay at commit began and found still being
+    /// made at its command buffer's bound ([`left_for_makings`](Self::left_for_makings)): its
+    /// host step records the pass once they are made, as for its draws' pipelines.
     settled: Mutex<Vec<Pending<RawPipeline>>>,
     /// Where `commit` recorded the pass with executions in their GPU form (`gpu.rs`), what each
     /// such execution's buffer's records may hold as the decision found it: a route encoded
@@ -3066,6 +3062,20 @@ impl DeferredPass {
         }
     }
 
+    /// Take the makings `command_buffer`'s recording of the pass at commit left unmade
+    /// (`CommandBuffer::leave_unmade`): its executions' replay began them and found them still
+    /// being made at the command buffer's bound, so the pass is left to its host step, which
+    /// records it from the records as they stand then once they are made
+    /// ([`making`](Self::making), [`when_made`](Self::when_made)), as `commit` leaves a pass whose
+    /// settled makings it found still being made. Whether it took any: a recording that took
+    /// none failed for another cause.
+    pub(crate) fn left_for_makings(&self, command_buffer: &CommandBuffer) -> bool {
+        let unmade = command_buffer.take_unmade();
+        let left = !unmade.is_empty();
+        lock(&self.settled).extend(unmade);
+        left
+    }
+
     /// Run the makings of the pipelines its draws and tile dispatches record before the
     /// device's pool's pieces of a lower rank than `urgency`: a submission waits for them.
     pub(crate) fn hasten(&self, urgency: Urgency) {
@@ -3181,7 +3191,15 @@ impl DeferredPass {
             let rule = "a pipeline state the pass draws with is being made or failed to make";
             return declined(HostStepCause::Rule(rule));
         }
-        let recorded = self.record_forms(command_buffer, false, &forms)?;
+        let recorded = match self.record_forms(command_buffer, false, &forms) {
+            Ok(recorded) => recorded,
+            Err(_) if self.left_for_makings(command_buffer) => {
+                let rule = "a pipeline state the pass's executions draw with was still being made \
+                            at the command buffer's bound";
+                return declined(HostStepCause::Rule(rule));
+            }
+            Err(error) => return Err(error),
+        };
         let decided = (self.executions.iter().zip(&forms)).filter_map(|(execution, form)| {
             Some((Arc::clone(execution.icb.written()), form.as_ref()?.decided))
         });
@@ -3585,8 +3603,8 @@ impl DeferredPass {
     /// creation compiled its variant in the large-buffer form, which the commit looks up, and the
     /// commit begins the `VkPipeline`s: under `PipelineWaitPolicy::Bounded` (the default) each
     /// making is handed to the device's pool (`RenderVariant::settle_graphics_pipeline`), kept here
-    /// for the host step to wait for until its command buffer's bound at most, so the commit
-    /// compiles none on the program's thread; under `Exact` made now. It compiles a variant only
+    /// for the host step to wait for until it is made, so the commit compiles none on the
+    /// program's thread; under `Exact` made now. It compiles a variant only
     /// where the encoder's state asks for another, and the step only where a command's own buffers
     /// or strides ask for another, or the draw records into a run of another shape. Returns what it
     /// made, which the command buffer holds until it completes; what it cannot settle, the step

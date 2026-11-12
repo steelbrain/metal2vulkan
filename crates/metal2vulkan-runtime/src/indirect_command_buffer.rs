@@ -4323,11 +4323,11 @@ fn low_bits(size: Size) -> [u32; 3] {
 /// command's index in the buffer and the command as [`IndirectCommandBuffer::commands`] reads it
 /// then: at `commit`, on the thread that commits, where it records the execution from the CPU's
 /// records as they stand then; in a host step, on the thread that runs the step, where the step
-/// records it from the records as the GPU and the CPU left them. An execution `commit` recorded
-/// that a host step records again before its batch is submitted (an encoder made its buffer
-/// resident for writing since, or a route outgrew its render pass's form on the GPU) is checked
-/// again there. Neither calls it
-/// where what the records may hold leaves it nothing to see ([`IndirectCommandCheckNeeds`]). A
+/// records it from the records as the GPU and the CPU left them. An execution whose records
+/// `commit` read that a host step records again before its batch is submitted (an encoder made
+/// its buffer resident for writing since, a route outgrew its render pass's form on the GPU, or a
+/// draw of its pass's replay at commit met its pipeline still being made at the command buffer's
+/// bound) is checked again there. Neither calls it where what the records may hold leaves it nothing to see ([`IndirectCommandCheckNeeds`]). A
 /// command whose record faulted runs nothing and is not checked; nor is any where the buffer's
 /// header faulted. The check may end the process, and must not unwind; returning lets the commands
 /// run. A command buffer dropped before its host step never calls the step's check.

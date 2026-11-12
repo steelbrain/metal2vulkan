@@ -411,8 +411,8 @@ fn counters(before: &WorkCounts, after: &WorkCounts) -> String {
     format!(
         "host steps {} taking {:.2} ms, making {} pipelines; heads held for host steps {}, at \
          their gate {}, behind earlier commits {}; variant pipelines made {}, render pipeline \
-         create {:.1} ms, graphics pipelines looked up {}, draws settled {}, draws dropped still \
-         making {}; records read {}",
+         create {:.1} ms, graphics pipelines looked up {}, draws settled {}, draws dropped \
+         unmade {}; records read {}",
         delta(|c| c.host_steps_recorded),
         delta(|c| c.host_step_nanos) as f64 / 1e6,
         delta(|c| c.host_step_pipelines_made),
@@ -423,7 +423,7 @@ fn counters(before: &WorkCounts, after: &WorkCounts) -> String {
         delta(|c| c.render_pipeline_create_nanos) as f64 / 1e6,
         delta(|c| c.graphics_pipelines_looked_up),
         delta(|c| c.draws_settled),
-        delta(|c| c.draws_dropped_still_making),
+        delta(|c| c.draws_dropped_unmade),
         delta(|c| c.indirect_records_read),
     )
 }

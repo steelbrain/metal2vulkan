@@ -2188,22 +2188,6 @@ degradations! {
              a queue's next one run with its own, before the batch before them is submitted; \
              their commands, barriers and GPU times are unchanged; CompletionPolicy::Exact \
              submits and checks each batch alone";
-        /// A draw of an execution's replay (render commands of an indirect command buffer
-        /// replayed on the CPU) whose `VkPipeline` the replay waits for itself (a making its commit's
-        /// settle left no host step to wait for), and the driver was still making once its command
-        /// buffer's bound passed (`PipelineWaitPolicy::Bounded`, the default: its commit plus the
-        /// policy's `pipeline_commit_wait`, 4.5 s by default, `render/pending.rs`) ran nothing:
-        /// its recording records nothing of it, and the command buffer runs on without error.
-        /// Every other draw and dispatch waits for its making, its command buffer completing
-        /// later. Metal makes a render state's pipelines inside `newRenderPipelineState`, so every
-        /// draw it encodes runs: this is an open gap, not a choice (`docs/FAST-PATHS.md`).
-        /// Announced where the draw is recorded: in the program's `commit`, or the command
-        /// buffer's host step.
-        DrawDroppedStillMaking = "draw-dropped-still-making", Precision,
-            "the draw's commands ran nothing, where Metal's draw renders; the command buffers \
-             committed after the pipeline is made draw with it; CommandBuffer::dropped_draw \
-             names the first such draw with the error VK_TIMEOUT; PipelineWaitPolicy::Exact \
-             waits until the pipeline is made";
         /// A draw whose `VkPipeline` the driver failed to make after the draw returned (the
         /// runtime makes a draw's pipeline while the draw goes on, `render/pending.rs`) ran
         /// nothing: its recording records the barriers and the visibility query around it and no

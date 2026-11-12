@@ -3159,8 +3159,8 @@ impl RenderVariant {
     /// (`render/executions.rs`), against `render_pass`: from the memo, the making in flight for
     /// it, or begun now as a draw's is ([`begin_graphics_pipeline`](Self::begin_graphics_pipeline):
     /// linked here where its shaders' libraries are made, else handed to `device`'s pool), so the
-    /// commit compiles nothing on the program's thread; the host step's draw of the key waits for
-    /// it until its command buffer's bound at most (`render.rs`). Under
+    /// commit compiles nothing on the program's thread; the host step records the draw of the key
+    /// once it is made (`render.rs`). Under
     /// `PipelineWaitPolicy::Exact` made now ([`graphics_pipeline`](Self::graphics_pipeline)).
     pub(crate) fn settle_graphics_pipeline(
         self: &Arc<Self>,

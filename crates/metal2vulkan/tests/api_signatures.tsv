@@ -2806,7 +2806,6 @@ field	metal2vulkan-runtime::WorkCounts.draws_carry_stopped_attached	pub draws_ca
 field	metal2vulkan-runtime::WorkCounts.draws_carry_stopped_other	pub draws_carry_stopped_other: u64
 field	metal2vulkan-runtime::WorkCounts.draws_carry_stopped_stale	pub draws_carry_stopped_stale: u64
 field	metal2vulkan-runtime::WorkCounts.draws_counted_past_early_masks	pub draws_counted_past_early_masks: u64
-field	metal2vulkan-runtime::WorkCounts.draws_dropped_still_making	pub draws_dropped_still_making: u64
 field	metal2vulkan-runtime::WorkCounts.draws_dropped_unmade	pub draws_dropped_unmade: u64
 field	metal2vulkan-runtime::WorkCounts.draws_moved	pub draws_moved: u64
 field	metal2vulkan-runtime::WorkCounts.draws_moved_inside	pub draws_moved_inside: u64
@@ -5617,7 +5616,6 @@ macro-member	metal2vulkan-runtime::Degradation::DontCareLoadTiles	DontCareLoadTi
 macro-member	metal2vulkan-runtime::Degradation::DontCareStandIn	DontCareStandIn = "dont-care-stand-in", Performance,
 macro-member	metal2vulkan-runtime::Degradation::DontCareStore	DontCareStore = "dont-care-store", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DontCareUnstoredLoad	DontCareUnstoredLoad = "dont-care-unstored-load", Precision,
-macro-member	metal2vulkan-runtime::Degradation::DrawDroppedStillMaking	DrawDroppedStillMaking = "draw-dropped-still-making", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DrawDroppedUnmade	DrawDroppedUnmade = "draw-dropped-unmade", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DrawnDepthCopy	DrawnDepthCopy = "drawn-depth-copy", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DriverPipelineCacheKept	DriverPipelineCacheKept = "driver-pipeline-cache-kept", Performance,

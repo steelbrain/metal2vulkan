@@ -433,7 +433,7 @@ fn expected((clear, stencil_tests): (Option<[f32; 2]>, bool), (x, y): (u64, u64)
 /// The counts that say how the passes ran: render pass instances, splits for the interlocked
 /// writes, storage forms taken, textures over bytes shadowed, linear merges recorded, shadow
 /// copies; variant pipelines made, host steps recorded, splits for a pipeline still being made,
-/// draws dropped while their pipeline was being made.
+/// draws dropped for a pipeline the driver did not make.
 fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 10] {
     [
         after.render_passes_begun_instances - before.render_passes_begun_instances,
@@ -445,7 +445,7 @@ fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 10] {
         after.variant_pipelines_made - before.variant_pipelines_made,
         after.host_steps_recorded - before.host_steps_recorded,
         after.instance_splits_pending_pipeline - before.instance_splits_pending_pipeline,
-        after.draws_dropped_still_making - before.draws_dropped_still_making,
+        after.draws_dropped_unmade - before.draws_dropped_unmade,
     ]
 }
 

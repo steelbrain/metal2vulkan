@@ -13,7 +13,8 @@
 //!   records, on the thread that reads them ([`RecordsRead`]), with no lock of the command buffer
 //!   held. An execution `commit` recorded from the CPU's records whose buffer an encoder makes
 //!   resident for writing before its batch is submitted is read again in its host step, and the
-//!   handler sees it again. An execution in an encoder the command buffer's failure runs nothing
+//!   handler sees it again; so is one whose render pass `commit` left to its host step for a
+//!   pipeline its replay met still being made at the command buffer's bound. An execution in an encoder the command buffer's failure runs nothing
 //!   of (`commit_failed`) is never read.
 //! - **Its cost.** None without a handler but one lock of the command buffer's state per
 //!   execution read; with one, the facts are gathered from what the reading resolved already.

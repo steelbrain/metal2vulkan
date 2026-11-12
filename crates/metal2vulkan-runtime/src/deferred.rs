@@ -398,26 +398,30 @@ impl Deferred {
             }
             // A pass of draws whose pipelines are being made, or one of which failed, is
             // recorded by a host step once they are made, which drops the draw of a failed one
-            // (`render/pending.rs`). One whose executions read the CPU's records as
-            // they stand now waits for them first.
+            // (`render/pending.rs`). One whose executions read the CPU's records as they stand now
+            // waits for them first, until the command buffer's bound at most; so does its
+            // executions' replay for a making it begins itself, which leaves the pass to the host
+            // step past that bound (`DeferredPass::left_for_makings`).
             Deferred::RenderPass(pass) => {
+                let left = Prepared {
+                    recorded: None,
+                    for_good: false,
+                    inputs: StepInputs::RenderPass,
+                    retained: None,
+                    pipelines: true,
+                    bound: None,
+                    held: false,
+                };
                 if pass.reads_at_commit() {
                     let deadline = command_buffer.making_deadline();
                     commit_times::phase(Phase::PipelineWait, || pass.wait_made(deadline));
                 }
                 if pass.making() || pass.failed() {
-                    return Ok(Prepared {
-                        recorded: None,
-                        for_good: false,
-                        inputs: StepInputs::RenderPass,
-                        retained: None,
-                        pipelines: true,
-                        bound: None,
-                        held: false,
-                    });
+                    return Ok(left);
                 }
                 let recorded = match pass.record(command_buffer, false) {
                     Ok(recorded) => recorded,
+                    Err(_) if pass.left_for_makings(command_buffer) => return Ok(left),
                     // Held for its host step (`held`), as a step's pass is prepared above.
                     Err(error) => {
                         let residency = command_buffer.residency()?;

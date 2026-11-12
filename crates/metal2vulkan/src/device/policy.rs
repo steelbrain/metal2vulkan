@@ -74,10 +74,11 @@ pub struct DevicePolicy {
     /// (the default), or converts and filters every tap as Metal does, exactly. Changes emitted
     /// code: the profile carries it.
     pub ycbcr_in_place_reads: YCbCrInPlacePolicy,
-    /// Whether a render or compute state's creation, and a committed command buffer, wait a
-    /// bound for a pipeline the driver is still making, the command buffer then dropping the
-    /// draws and dispatches whose pipeline is not made (the default), or until it is made. The
-    /// bounds are the two fields below. The runtime's choice alone: no emitted code changes.
+    /// Whether a render or compute state's creation, and a `commit` that records a pass whose
+    /// executions read the CPU's records, wait a bound for a pipeline the driver is still making
+    /// (the default), or until it is made. A committed command buffer waits for its draws' and
+    /// dispatches' pipelines until they are made under either. The bounds are the two fields
+    /// below. The runtime's choice alone: no emitted code changes.
     pub pipeline_waits: PipelineWaitPolicy,
     /// Under [`PipelineWaitPolicy::Bounded`], the longest a render or compute state's creation
     /// waits for the pipelines it hands to the runtime's pool, one deadline for all of them from
@@ -88,9 +89,9 @@ pub struct DevicePolicy {
     pub pipeline_creation_wait: Duration,
     /// Under [`PipelineWaitPolicy::Bounded`], how long after its commit a command buffer's
     /// `commit` waits for the pipelines of a pass that executes render commands the CPU writes,
-    /// leaving the pass to its host step past it, and how long an execution's replay waits for a
-    /// making it waits for itself, past which that draw records as nothing (the open gap,
-    /// `draw-dropped-still-making`). Every other command's making is waited for until made. 4.5 s
+    /// and for those its executions' replay begins itself, leaving the pass to its host step past
+    /// it, which records it once they are made. Every other command's making is waited for until
+    /// made. 4.5 s
     /// by default (as the creation wait, above). Unread under `Exact`. The runtime's alone: no
     /// emitted code changes.
     pub pipeline_commit_wait: Duration,
@@ -489,10 +490,10 @@ pub enum PipelineWaitPolicy {
     /// most (4.5 s by default), then returns with it still being made. A committed command buffer
     /// waits for its draws' and dispatches' pipelines still being made until they are made, under
     /// either value, on the runtime's scheduler thread, which no program call waits for: it
-    /// completes later, and no command is dropped, but one, an open gap: a draw of an
-    /// execution's replay whose making the replay waits for itself, still being made at its
-    /// commit plus [`DevicePolicy::pipeline_commit_wait`] (4.5 s by default), records nothing, the
-    /// command buffer running on, counted, named, announced `draw-dropped-still-making`.
+    /// completes later, and no command is dropped. A `commit` that records a pass whose
+    /// executions read the CPU's records waits for its pipelines, and for those its executions'
+    /// replay begins itself, until its commit plus [`DevicePolicy::pipeline_commit_wait`] (4.5 s
+    /// by default) at most, and leaves the pass to its host step past it.
     ///
     /// What one call blocks for, waiting for the driver's makings: a state's creation, its
     /// creation wait; a `commit`, which records there what it can (a pass whose pipelines are

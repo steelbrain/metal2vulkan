@@ -94,6 +94,7 @@ use super::merge_scratch::MergeScratch;
 use super::pass_runs::{PassRuns, RunKeep, RunPoint};
 use super::pipeline::budget::Urgency;
 use super::pipeline::kept::StepNumbers;
+use super::pipeline::{Pending, RawPipeline};
 use super::predication::{Event, Predication};
 use super::program_objects;
 use super::queue::{QueueGen, Slot};
@@ -274,6 +275,11 @@ pub(super) struct CommandBufferShared {
     /// a guest's command buffer encoding made (the guest's 10 s FIFO check ended its task);
     /// docs/FAST-PATHS.md holds the row.
     making_deadline: OnceLock<Instant>,
+    /// The makings an execution's replay in its `commit` began itself and found still being
+    /// made at [`making_deadline`](Self::making_deadline) (`render/pending.rs`), until the pass it
+    /// replays for takes them and is left to its host step (`DeferredPass::left_for_makings`).
+    /// Apart from the state, as `own_textures`.
+    unmade: Mutex<Vec<Pending<RawPipeline>>>,
     /// The textures its encoders made for their own commands (`Device::new_planned_texture`),
     /// held from their making until it completes, whichever of its commands use them (its
     /// first batch takes them, `submit.rs`). The device's next submission moves each one's image
@@ -2428,6 +2434,7 @@ impl CommandBuffer {
             relayed: Arc::default(),
             step_numbers: OnceLock::new(),
             making_deadline: OnceLock::new(),
+            unmade: Mutex::new(Vec::new()),
             own_textures: Mutex::new(Vec::new()),
             fill_slot: Mutex::new([0; 16]),
             merge_scratch: Arc::default(),
@@ -3497,7 +3504,7 @@ impl CommandBuffer {
     ) -> Result<(), Error> {
         let device = &self.0.device;
         let committed = Instant::now();
-        // From here its draws' pipelines still being made are waited for a bound at most: a
+        // From here its `commit` waits for a pipeline still being made a bound at most: a
         // driver's cold compile can outlast a guest's watchdog (`PipelineWaitPolicy`).
         let policy = device.compile_device().policy();
         if policy.pipeline_waits == PipelineWaitPolicy::Bounded {
@@ -4044,12 +4051,9 @@ impl CommandBuffer {
     /// draw returned (the runtime makes a draw's pipeline while the draw goes on,
     /// `render/pending.rs`): the draw ran nothing, the command buffer running on, without error.
     /// Named as [`failed_pipeline`](Self::failed_pipeline) names a dispatch. Counted, each such
-    /// draw: `WorkCounts::draws_dropped_unmade`. Under `PipelineWaitPolicy::Bounded` (the
-    /// default), also the first draw of an execution's replay whose `VkPipeline` the replay began
-    /// making itself and that was still being made once the command buffer's bound passed, with
-    /// the error `VK_TIMEOUT`: `WorkCounts::draws_dropped_still_making` (`render/pending.rs`).
-    /// Every other draw and dispatch waits for its making. No Metal counterpart: Metal makes a
-    /// state's pipelines as it makes the state.
+    /// draw: `WorkCounts::draws_dropped_unmade`. Every draw and dispatch waits for its making,
+    /// however long it takes (`render/pending.rs`). No Metal counterpart: Metal makes a state's
+    /// pipelines as it makes the state.
     pub fn dropped_draw(&self) -> Option<FailedPipeline> {
         self.settle_ended();
         self.state().dropped_draw.clone()
@@ -4104,33 +4108,6 @@ impl CommandBuffer {
         self.keep_dropped(failed);
     }
 
-    /// Note `late`, a draw of an execution's replay whose making the replay waits for itself
-    /// and that was still being made once the command buffer's bound passed
-    /// ([`making_deadline`](Self::making_deadline)), whose recording drops the draw (the open gap,
-    /// `render/pending.rs`): kept where it is the first, its error `VK_TIMEOUT`, which no
-    /// driver's creation returns; counted (`WorkCounts::draws_dropped_still_making`), and
-    /// announced (`draw-dropped-still-making`) where its recording runs, in the program's
-    /// `commit` or a host step.
-    pub(super) fn drop_late_draw(&self, late: FailedPipeline) {
-        let device = self.device();
-        device.shared().counts.draw_dropped_still_making();
-        let (encoder, draw) = (late.encoder, late.draw);
-        device.degrade(Degradation::DrawDroppedStillMaking, || {
-            (
-                format!("draw {draw} of render encoder {encoder} of a command buffer"),
-                format!(
-                    "its pipeline was still being made {} ms after the command buffer's commit",
-                    device
-                        .compile_device()
-                        .policy()
-                        .pipeline_commit_wait
-                        .as_millis()
-                ),
-            )
-        });
-        self.keep_dropped(late);
-    }
-
     /// Keep `dropped` as the command buffer's first draw that ran nothing, unless one
     /// was kept already: the recordings run in encoding order.
     fn keep_dropped(&self, dropped: FailedPipeline) {
@@ -4141,12 +4118,25 @@ impl CommandBuffer {
     }
 
     /// Until when its `commit` waits for the pipelines of a pass that executes render commands the
-    /// CPU writes, which it leaves to its host step past it, and an execution's replay for a
-    /// making it begins itself (`render/pending.rs`): set at its commit under
+    /// CPU writes, and an execution's replay in its `commit` for a making it begins itself, which
+    /// leave the pass to its host step past it (`render/pending.rs`): set at its commit under
     /// `PipelineWaitPolicy::Bounded`, none before it or under `Exact`. Every other making its
     /// commands record is waited for until made, under either.
     pub(crate) fn making_deadline(&self) -> Option<Instant> {
         self.0.making_deadline.get().copied()
+    }
+
+    /// Keep `making`, which an execution's replay in its `commit` began itself and found still
+    /// being made at [`making_deadline`](Self::making_deadline), for the pass it replays for
+    /// (`DeferredPass::left_for_makings`), whose recording it ends.
+    pub(crate) fn leave_unmade(&self, making: Pending<RawPipeline>) {
+        lock(&self.0.unmade).push(making);
+    }
+
+    /// The makings [`leave_unmade`](Self::leave_unmade) kept since the last call: none where the
+    /// recording of the pass that takes them ended for another cause.
+    pub(crate) fn take_unmade(&self) -> Vec<Pending<RawPipeline>> {
+        lock(&self.0.unmade).drain(..).collect()
     }
 
     /// What the command buffer's execution status words report, once it completed: resident-set

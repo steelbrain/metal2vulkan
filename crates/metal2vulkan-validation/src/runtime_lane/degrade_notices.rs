@@ -600,7 +600,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &KEPT_BYTES,
         &DELAYED_DEALLOCATORS,
         &MISPLACED,
-        &STILL_MAKING,
+        &UNMADE,
         &COPIED_PAGES,
         &OVERFLOWED,
         &LEAST_PLANS,
@@ -807,18 +807,11 @@ fn an_anisotropic_state_without_mips_is_announced_through_metals_sampler() {
 /// takes its site, as a build without debug assertions does.
 const MISPLACED: [Degradation; 1] = [Degradation::MisplacedNotice];
 
-/// The kinds a draw of an execution's replay takes whose making the replay waits for itself
-/// and that was still being made once its command buffer's bound passed
-/// (`PipelineWaitPolicy::Bounded`, `pipeline_commit_wait` after its commit: the runtime's open
-/// gap), and a draw whose pipeline the driver failed to make. No lane meets them: a lane holds
-/// none of the runtime's pipeline makings, a driver's compile outlasting the bound is a timing no
-/// lane may count on, and no lane's pipeline fails. The runtime's own test
-/// `a_draw_whose_pipeline_was_not_made_runs_nothing_and_its_command_buffer_runs_on` takes the
-/// second's site, its failure injected.
-const STILL_MAKING: [Degradation; 2] = [
-    Degradation::DrawDroppedStillMaking,
-    Degradation::DrawDroppedUnmade,
-];
+/// The kind a draw takes whose pipeline the driver failed to make. No lane meets it: no lane's
+/// pipeline fails. The runtime's own test
+/// `a_draw_whose_pipeline_was_not_made_runs_nothing_and_its_command_buffer_runs_on` takes its
+/// site, its failure injected.
+const UNMADE: [Degradation; 1] = [Degradation::DrawDroppedUnmade];
 
 /// The kind a no-copy buffer takes whose import of the caller's pages the caller's gate
 /// (`HostMemory::with_import_gate`) refused, or whose import the gate and the device admitted and

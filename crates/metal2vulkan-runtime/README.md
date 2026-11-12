@@ -796,23 +796,21 @@ state's creation waits `DevicePolicy::pipeline_creation_wait`, 4.5 s by default,
 pipeline it hands to the runtime's pool): the command buffer completes later, as on a slower GPU,
 and renders and writes what Metal's does. `commit` and every other call return as before; only
 calls that wait for the GPU (its completion or scheduling, an event it signals, a new command
-buffer of a queue whose most are all uncompleted) wait for it. One draw is still dropped, an open
-gap: a draw of an execution's replay whose making the replay waits for itself, still being
-made `DevicePolicy::pipeline_commit_wait` (4.5 s by default) after the commit, runs nothing, its
-command buffer running on, and the command buffers after it draw with the pipeline once made.
-While it waits, another queue's command buffer committed after it goes first, even over a tracked
+buffer of a queue whose most are all uncompleted) wait for it. No draw or dispatch is dropped for
+its making's time. While it waits, another queue's command buffer committed after it goes first, even over a tracked
 resource the two share, and the waiting one runs after it, as an x86 Mac's GPU may take a later
 commit of another queue first; a fence the two share keeps commit order. One
 call so waits for the driver's makings at most: a state's creation, its creation wait; a `commit`,
-until its commit plus its commit wait, for a pass that executes render commands the CPU writes,
-which it leaves to its host step past that (the commit records there only what it can); neither
+until its commit plus its commit wait (`DevicePolicy::pipeline_commit_wait`, 4.5 s by default),
+for a pass that executes render commands the CPU writes, its pipelines and those its executions'
+replay begins itself, which it leaves to its host step past that (the commit records there only
+what it can; the step records the pass once they are made, and waits on its own thread for a
+making it begins itself); neither
 waits on the other's bound, so a host step that creates a state and commits waits 9 s at most by
 default. Made until made under either value, in the call that makes them: a
 draw that records nothing, a draw in a pass of custom sample positions or recorded again into
 another instance of its pass (in the draw's call or an execution's replay), a device replay's draws
-(in its `commit`), and a making that failed, made again by its command's recording. The open gap's
-draw is named by `dropped_draw` with the error `VK_TIMEOUT`, counted:
-`WorkCounts::draws_dropped_still_making`, announced `draw-dropped-still-making`.
+(in its `commit`), and a making that failed, made again by its command's recording.
 `PipelineWaitPolicy::Exact` waits until the pipeline is made, the creation too.
 
 ## A lost device

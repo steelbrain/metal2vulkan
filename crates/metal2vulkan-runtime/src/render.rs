@@ -1713,10 +1713,6 @@ pub(crate) struct RenderLowering {
     /// The heap set versions the plain draws it replayed bound (`heap_sets::Bound`), each once,
     /// which a kept recording of them binds again (`kept_commands::KeptEffects`).
     replayed_heaps: Vec<Weak<SetVersion>>,
-    /// The place among the command buffer's ended encoders of the encoder whose execution it
-    /// replays (`RenderExecution`), which names a draw of the commands it drops
-    /// (`CommandBuffer::drop_late_draw`); `None` where it replays none.
-    executing_encoder: Option<usize>,
     /// The encoder records the current instance's draws again into an instance that leaves more
     /// colors out of its subpass (`render/reroute.rs`): a draw that would record elsewhere, or
     /// whose variant the interlocked storage form refuses, fails the reroute.
@@ -2473,7 +2469,6 @@ impl RenderLowering {
                 replay_plain: false,
                 plain_drawn: false,
                 replayed_heaps: Vec::new(),
-                executing_encoder: None,
                 rerouting: false,
                 forms: BufferForms::Bound,
                 replayed: None,
@@ -9866,13 +9861,15 @@ impl RenderLowering {
             None => {
                 let watch = EachWatch::start();
                 let key = draw_key();
-                // An execution's replay records now: under its command buffer's bound its draw
-                // waits for its making on the device's pool (most begun by the settle at commit,
-                // `RenderExecution::settle`) until the bound at most, past which it records
-                // nothing. Not a device replay's draw, of one recording for every command.
+                // An execution's replay in `commit` records now: under its command buffer's
+                // bound its draw waits for its making on the device's pool until the bound at
+                // most, past which the replay leaves the pass to the host step
+                // (`render/pending.rs`). A host step's waits until it is made, on the step's
+                // thread, as does a device replay's draw, of one recording for every command.
                 let bounded = (self.replaying && self.replayed.is_none() && !self.rerouting)
                     && !(empty || culled)
-                    && self.layout.sample_positions.is_empty();
+                    && self.layout.sample_positions.is_empty()
+                    && !crate::exit_guard::in_host_step();
                 let deadline = match bounded {
                     true => self.core.command_buffer().making_deadline(),
                     false => None,
@@ -9906,12 +9903,16 @@ impl RenderLowering {
                                         )?;
                                         (DrawPipeline::Made(made), own)
                                     }
-                                    // Still being made at the bound: the draw records nothing,
-                                    // before anything of it is tracked, as a draw whose pipeline
-                                    // a capture misses does; later command buffers draw with it.
+                                    // Still being made at the bound: the replay stops, before
+                                    // anything of the draw is tracked, and its pass is left to
+                                    // the host step, which waits for the making
+                                    // (`DeferredPass::left_for_makings`).
                                     None => {
-                                        self.drop_late_replayed_draw(&variant, specialization)?;
-                                        return Ok(());
+                                        self.core.command_buffer().leave_unmade(making);
+                                        return Err(internal(
+                                            "a replayed draw's pipeline still being made at its \
+                                             command buffer's bound",
+                                        ));
                                     }
                                 }
                             }
