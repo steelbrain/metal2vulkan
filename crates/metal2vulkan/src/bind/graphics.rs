@@ -187,9 +187,10 @@
 //!   `Unsupported{VertexAmplification; Limit}`. `DrawCommands.uses` lists the draw's index buffer
 //!   and indirect arguments. A draw of a rate-mapped pass's regions several at a time
 //!   (`BindShape::region_viewports`) runs the variant whose vertex function stores its draw's
-//!   index among a multi-draw's as `ViewportIndex` (`VariantKey::region_viewports`); a mesh or
-//!   amplified draw asking for it is an internal error, the runtime drawing those region by
-//!   region.
+//!   index among a multi-draw's as `ViewportIndex` (`VariantKey::region_viewports`), where its
+//!   pipeline is a vertex pipeline without tessellation drawn in one pass of no views; a mesh,
+//!   tessellated or amplified draw keeps the plain variant, and the consumer draws its regions one
+//!   at a time: the plan's variant says which.
 //! - **Index buffer bounds**. A direct indexed draw whose indices run past where Metal's fetch
 //!   stops reading its index buffer (`IndexBufferRef::fetch_end`: the length rounded up to 4 bytes;
 //!   Metal's API validation rejects the draw, and Apple's GPUs read index 0 past there) is drawn
@@ -1152,9 +1153,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .dependencies
         .iter()
         .any(|d| d.fact == RuntimeFact::PrivateList);
-    // A draw of a rate-mapped pass's regions several at a time, one a draw of a multi-draw: the
-    // variant whose vertex function stores its draw's index as `ViewportIndex`.
-    let region_viewports = shape.region_viewports;
     let compiled_regions = p
         .dependencies
         .iter()
@@ -1189,6 +1187,15 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             )
         }
     };
+    // A draw of a rate-mapped pass's regions several at a time, each a draw of a multi-draw: the
+    // variant whose vertex function stores its draw's index as `ViewportIndex`, where the
+    // pipeline is a vertex pipeline drawn in one pass of no views; a mesh or amplified draw keeps
+    // the plain variant, which the consumer draws region by region.
+    let region_viewports = shape.region_viewports
+        && !mesh
+        && !tessellation
+        && amplification_draws.is_none()
+        && views.view_mask == 0;
     // The variant the pipeline was compiled under: its vertex function states it.
     let compiled_draws = p.dependencies.iter().find_map(|d| match d.fact {
         RuntimeFact::AmplificationDraws { layered, viewports } => {
@@ -2576,13 +2583,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     variant.primitive_id_indices = primitive_id_indices;
     variant.quad_primitive_ids = quad_primitive_ids;
     variant.private_list = private_list;
-    // Only a vertex pipeline's draw of one pass of views draws regions so: a mesh draw's and an
-    // amplified draw's are drawn region by region.
-    if region_viewports && (mesh || amplification_draws.is_some() || views.view_mask != 0) {
-        return Err(internal(
-            "regions drawn several at a time by a mesh or amplified draw",
-        ));
-    }
     variant.region_viewports = region_viewports;
     // Tables that may pass `maxStorageBufferRange`: the variant that reads them at their
     // addresses (and a pipeline compiled so states it).

@@ -9,11 +9,12 @@
 //! the encoder, each its own rectangle's bytes, and half through an indirect command buffer the CPU
 //! encoded, its buffers inherited, executed once. Each frame is a command buffer of its own, and
 //! [`WARM`] untimed frames precede [`TIMED`] timed ones. The same frame over no map is the
-//! baseline. Each is printed as a `RATE-MAP-COST` line: the draws the device recorded a frame
-//! (`WorkCounts::commands_recorded`: draws, viewports and scissors set) and those per guest draw
-//! (each draw's regions, in a rate-mapped pass), and the median of the encoding thread's own CPU
-//! time and of the wall time a frame, from the encoder's creation through `commit`, per guest
-//! draw and per recorded draw.
+//! baseline. Each is printed as a `RATE-MAP-COST` line: the draw commands the device recorded a
+//! frame (`WorkCounts::commands_recorded`: plain draws and multi-draws, the multi-draws among them,
+//! and the viewport and scissor commands) and those per guest draw (each draw's regions, or its
+//! batches of regions where the device draws several at a time, in a rate-mapped pass), and the
+//! median of the encoding thread's own CPU time and of the wall time a frame, from the encoder's
+//! creation through `commit`, per guest draw and per draw command.
 //!
 //! Ignored by default: a measurement, not a check. Run it by name with `--run-ignored all`, in a
 //! build with `--cfg m2v_system_alloc`, whose lib test binary keeps the system allocator as a
@@ -62,7 +63,7 @@ struct Workload {
 struct Frame {
     cpu: Duration,
     wall: Duration,
-    counts: [u64; 3],
+    counts: [u64; 4],
 }
 
 impl Workload {
@@ -197,20 +198,23 @@ impl Workload {
         Frame {
             cpu,
             wall,
-            counts: [0, 1, 2].map(|i| after[i] - before[i]),
+            counts: [0, 1, 2, 3].map(|i| after[i] - before[i]),
         }
     }
 }
 
-/// The draws, viewports and scissors the device recorded so far.
-fn counts(work: &WorkCounts) -> [u64; 3] {
+/// The draw commands (plain and multi-draw), the multi-draws among them, and the viewports and
+/// scissors set the device recorded so far.
+fn counts(work: &WorkCounts) -> [u64; 4] {
     assert_eq!(
         work.commands_uncounted, 0,
         "the device's commands are counted"
     );
     let recorded = &work.commands_recorded;
+    let multi = recorded.cmd_draw_multi + recorded.cmd_draw_multi_indexed;
     [
-        recorded.cmd_draw_indexed + recorded.cmd_draw,
+        recorded.cmd_draw_indexed + recorded.cmd_draw + multi,
+        multi,
         recorded.cmd_set_viewport,
         recorded.cmd_set_scissor,
     ]
@@ -248,15 +252,15 @@ fn rate_map_costs() {
             work.frame(&target, mapped);
         }
         let frames: Vec<Frame> = (0..TIMED).map(|_| work.frame(&target, mapped)).collect();
-        let [draws, viewports, scissors] = frames[TIMED - 1].counts;
+        let [draws, multi, viewports, scissors] = frames[TIMED - 1].counts;
         let ms = |d: Duration| d.as_secs_f64() * 1e3;
         let [_, cpu, _] = percentiles(frames.iter().map(|f| ms(f.cpu)).collect());
         let [_, wall, _] = percentiles(frames.iter().map(|f| ms(f.wall)).collect());
         eprintln!(
-            "RATE-MAP-COST {name}: {}: {draws} draws, {viewports} viewports and {scissors} \
-             scissors set a frame ({:.1} draws a guest draw); encode through commit {cpu:.2} ms \
-             of the thread's CPU, {wall:.2} ms wall a frame: {:.2} us CPU a guest draw, {:.0} ns \
-             CPU a recorded draw",
+            "RATE-MAP-COST {name}: {}: {draws} draw commands ({multi} of them multi-draws), \
+             {viewports} viewport and {scissors} scissor commands a frame ({:.1} draw commands a \
+             guest draw); encode through commit {cpu:.2} ms of the thread's CPU, {wall:.2} ms \
+             wall a frame: {:.2} us CPU a guest draw, {:.0} ns CPU a draw command",
             match mapped {
                 true => "rate-mapped",
                 false => "no map",

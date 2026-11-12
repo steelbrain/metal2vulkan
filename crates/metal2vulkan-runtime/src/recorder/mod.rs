@@ -215,6 +215,110 @@ pub(crate) unsafe fn unrouted<F: Copy>(slot: Option<&Slot>, command: Command, ro
     unsafe { std::mem::transmute_copy::<*const c_void, F>(&real) }
 }
 
+/// The extension commands of `VK_EXT_multi_draw` a draw of a rate-mapped pass records its regions
+/// with, several at a time, routed (`render.rs`, `rate_mapped_pass.rs`), and how many regions
+/// one command draws.
+#[derive(Clone, Copy)]
+pub(crate) struct MultiDraws {
+    draw: vk::PFN_vkCmdDrawMultiEXT,
+    indexed: vk::PFN_vkCmdDrawMultiIndexedEXT,
+    /// The regions one command draws at most: the least of the device's `maxViewports` and one
+    /// below its `maxMultiDrawCount` ("drawCount must be less than" it,
+    /// `VUID-vkCmdDrawMultiEXT-drawCount-04934`), at least 2.
+    batch: u32,
+}
+
+impl MultiDraws {
+    /// The commands of `loaded`, through `slot` where the device has one, drawing `batch`
+    /// regions a command at most.
+    pub(crate) fn new(
+        loaded: &ash::ext::multi_draw::Device,
+        slot: Option<&Slot>,
+        batch: u32,
+    ) -> MultiDraws {
+        let functions = loaded.fp();
+        let (draw, indexed) = (
+            functions.cmd_draw_multi_ext,
+            functions.cmd_draw_multi_indexed_ext,
+        );
+        match slot {
+            // SAFETY: each is the device's command of that name.
+            Some(slot) => unsafe {
+                MultiDraws {
+                    draw: slot.route(Command::CmdDrawMulti, draw),
+                    indexed: slot.route(Command::CmdDrawMultiIndexed, indexed),
+                    batch,
+                }
+            },
+            None => MultiDraws {
+                draw,
+                indexed,
+                batch,
+            },
+        }
+    }
+
+    /// The regions one command draws at most.
+    pub(crate) fn batch(&self) -> u32 {
+        self.batch
+    }
+
+    /// `vkCmdDrawMultiEXT` of `draws`, packed (their stride their size).
+    ///
+    /// # Safety
+    ///
+    /// As the command's.
+    pub(crate) unsafe fn cmd_draw_multi(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        draws: &[vk::MultiDrawInfoEXT],
+        instance_count: u32,
+        first_instance: u32,
+    ) {
+        let stride = std::mem::size_of::<vk::MultiDrawInfoEXT>() as u32;
+        // SAFETY: the caller's; `draws` holds `draws.len()` entries `stride` bytes apart.
+        unsafe {
+            (self.draw)(
+                command_buffer,
+                draws.len() as u32,
+                draws.as_ptr(),
+                instance_count,
+                first_instance,
+                stride,
+            )
+        }
+    }
+
+    /// `vkCmdDrawMultiIndexedEXT` of `draws`, packed (their stride their size), each with its
+    /// own vertex offset.
+    ///
+    /// # Safety
+    ///
+    /// As the command's.
+    pub(crate) unsafe fn cmd_draw_multi_indexed(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        draws: &[vk::MultiDrawIndexedInfoEXT],
+        instance_count: u32,
+        first_instance: u32,
+    ) {
+        let stride = std::mem::size_of::<vk::MultiDrawIndexedInfoEXT>() as u32;
+        // SAFETY: the caller's; `draws` holds `draws.len()` entries `stride` bytes apart, and a
+        // null `pVertexOffset` takes each one's own.
+        unsafe {
+            (self.indexed)(
+                command_buffer,
+                draws.len() as u32,
+                draws.as_ptr(),
+                instance_count,
+                first_instance,
+                stride,
+                std::ptr::null(),
+            )
+        }
+    }
+}
+
 /// The extension commands of `VK_EXT_mesh_shader` a draw records, routed (`render.rs`).
 #[derive(Clone, Copy)]
 pub(crate) struct MeshDraws {

@@ -639,6 +639,7 @@ impl ShapeInputs<'_> {
             stencil_reference: self.state.stencil_reference(),
             depth_bias,
             blend_color: self.state.blend_color(),
+            draws: 1,
         };
         Ok(ShapedState {
             state,

@@ -87,6 +87,7 @@ impl RenderLowering {
             && state.quad_primitive_ids == routed.private.quad_primitive_ids
             && state.private_list == routed.private.private_list
             && state.far_vertex_buffers == routed.far.pulled
+            && state.region_viewports == routed.region_viewports
             && state.rotated_weights == routed.provoking_forms.rotated_weights
             && state.mesh_last_first == routed.provoking_forms.mesh_last_first;
         if !routed_as_kept {

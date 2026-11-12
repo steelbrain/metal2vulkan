@@ -23,6 +23,9 @@
 //!   probe's cases drew on an M4 wherever the map was made while no map of layers had been
 //!   released. Made after one was, Metal draws physical rows 0 to 15 (an M4 and an M3 Max alike),
 //!   the runtime nothing, and announces it.
+//! - Over a map of many regions, a direct draw, whose regions a device with the multi-draw route
+//!   draws several at a time, shades bit for bit what the same draw from an indirect buffer,
+//!   drawn region by region, shades, plain and indexed.
 
 use super::degrade_notices::{
     assert_made_once, counts, made_render_kinds, shared_in_system_memory,
@@ -36,8 +39,10 @@ use super::{
 use crate::candidate::runtime_case::{render_pipeline_descriptor, render_pipeline_state};
 use crate::gpu::TEST_DEVICE;
 use crate::store::CorpusStore;
+use metal2vulkan::bind::{RateMapDescriptor, RateMapLayerDescriptor};
+use metal2vulkan::device::VkFeature;
 use metal2vulkan::metal::Mutability;
-use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureType, TextureUsage};
+use metal2vulkan::metal::{IndexType, PixelFormat, PrimitiveType, TextureType, TextureUsage};
 use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue,
@@ -1025,4 +1030,150 @@ fn rate_mapped_passes_are_refused_where_metal_or_the_runtime_refuses_them() {
         )))
     );
     layer_reported_nothing_at_all(&messages);
+}
+
+/// The side of the screen [`regions_drawn_several_at_a_time_shade_as_region_by_region`] draws:
+/// at [`FALLING`], its plan holds 36 regions, more than one multi-draw takes on any device here
+/// (16 viewports), its last batch a part of one.
+const BATCHED_SCREEN: u32 = 256;
+
+/// A quality falling from 1 at the centre to 0.3 at the edges, the consumer's.
+const FALLING: [f32; 5] = [0.3, 0.6, 1.0, 0.6, 0.3];
+
+/// The case's triangle drawn into `target` over `map`: from an indirect buffer where `indirect`,
+/// through `indices` where `indexed`; the draw commands the device recorded for it, `[plain,
+/// multi-draw, indirect]`.
+fn counted_draw(
+    fixture: &Fixture,
+    (map, target): (&RasterizationRateMap, &Texture),
+    (indirect, indexed): (bool, bool),
+    indices: &Buffer,
+) -> [u64; 3] {
+    let device = &fixture.device;
+    let arguments: &[u32] = match indexed {
+        // `indexCount`, `instanceCount`, `indexStart`, `baseVertex`, `baseInstance`.
+        true => &[3, 1, 0, 0, 0],
+        // `vertexCount`, `instanceCount`, `vertexStart`, `baseInstance`.
+        false => &[3, 1, 0, 0],
+    };
+    let arguments: Vec<u8> = arguments.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let arguments = buffer_with(device, &arguments).unwrap();
+    let before = device.work_counts().commands_recorded;
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer
+        .render_command_encoder(&pass(map, target))
+        .unwrap();
+    encoder.set_render_pipeline_state(&fixture.state).unwrap();
+    encoder
+        .set_fragment_buffer(Some(&fixture.screen), 0, 0)
+        .unwrap();
+    let triangle = PrimitiveType::Triangle;
+    let u16 = IndexType::UInt16;
+    match (indirect, indexed) {
+        (false, false) => encoder.draw_primitives(triangle, 0, 3, 1, 0),
+        (true, false) => encoder.draw_primitives_indirect(triangle, &arguments, 0),
+        (false, true) => encoder.draw_indexed_primitives(triangle, 3, u16, indices, 0, 1, 0, 0),
+        (true, true) => {
+            encoder.draw_indexed_primitives_indirect(triangle, u16, indices, 0, &arguments, 0)
+        }
+    }
+    .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    let after = device.work_counts().commands_recorded;
+    [
+        (after.cmd_draw + after.cmd_draw_indexed) - (before.cmd_draw + before.cmd_draw_indexed),
+        (after.cmd_draw_multi + after.cmd_draw_multi_indexed)
+            - (before.cmd_draw_multi + before.cmd_draw_multi_indexed),
+        (after.cmd_draw_indirect + after.cmd_draw_indexed_indirect)
+            - (before.cmd_draw_indirect + before.cmd_draw_indexed_indirect),
+    ]
+}
+
+/// Every byte of `target`'s first slice.
+fn texel_bytes(target: &Texture) -> Vec<u8> {
+    let side = target.width();
+    let mut bytes = vec![0u8; (side * side * 16) as usize];
+    target
+        .get_bytes(
+            &mut bytes,
+            side * 16,
+            0,
+            Region::new_2d(0, 0, side, side),
+            0,
+            0,
+        )
+        .unwrap();
+    bytes
+}
+
+/// A draw whose regions the device draws several at a time, each a draw of a multi-draw through
+/// the viewport and scissor at its index (`VK_EXT_multi_draw`, with `multiViewport`,
+/// `shaderOutputViewportIndex` and `shaderDrawParameters`), shades bit for bit the pixels the
+/// same draw from an indirect buffer shades, which the runtime draws region by region: over a
+/// [`BATCHED_SCREEN`] screen at [`FALLING`] quality, plain and indexed, every physical pixel
+/// shaded at its centre. The device's command counts show each route ran: the direct draw
+/// records multi-draws, fewer commands than regions, where the device has the route and plain
+/// draws elsewhere; the indirect one an indirect draw a region.
+#[test]
+fn regions_drawn_several_at_a_time_shade_as_region_by_region() {
+    fresh(|fixture, _| {
+        let device = &fixture.device;
+        let mut map = RateMapDescriptor::new([BATCHED_SCREEN; 2]);
+        map.layers = vec![RateMapLayerDescriptor::new(
+            FALLING.to_vec(),
+            FALLING.to_vec(),
+        )];
+        let map = device.new_rasterization_rate_map(&map).unwrap();
+        let physical = map.physical_size_for_layer(0);
+        let enabled = &device.enabled().features;
+        let route = [
+            VkFeature::MultiDraw,
+            VkFeature::MultiViewport,
+            VkFeature::ShaderOutputViewportIndex,
+            VkFeature::ShaderDrawParameters,
+        ]
+        .iter()
+        .all(|f| enabled.contains(f));
+        let indices: Vec<u8> = [0u16, 1, 2, 0]
+            .iter()
+            .flat_map(|i| i.to_le_bytes())
+            .collect();
+        let indices = buffer_with(device, &indices).unwrap();
+        for indexed in [false, true] {
+            let side = u64::from(BATCHED_SCREEN);
+            let (direct, from_buffer) = (fixture.target(side), fixture.target(side));
+            let direct_counts = counted_draw(fixture, (&map, &direct), (false, indexed), &indices);
+            let indirect_counts =
+                counted_draw(fixture, (&map, &from_buffer), (true, indexed), &indices);
+            // A draw a region (its arguments read on the CPU where nothing bounds an indexed
+            // draw's index fetch, `DrawCommands::indirect_needs_arguments`).
+            let [plain, multi, from_arguments] = indirect_counts;
+            let regions = plain + from_arguments;
+            eprintln!(
+                "indexed {indexed}: {regions} regions; direct [plain, multi, indirect] \
+                 {direct_counts:?}, from a buffer {indirect_counts:?}; route {route}"
+            );
+            assert_eq!(multi, 0, "indexed {indexed}");
+            assert!(regions > 16, "indexed {indexed}: {regions} regions");
+            match route {
+                true => {
+                    let [plain, multi, _] = direct_counts;
+                    assert!(multi > 0 && plain + multi < regions, "indexed {indexed}");
+                }
+                false => assert_eq!(direct_counts, [regions, 0, 0], "indexed {indexed}"),
+            }
+            let (count, _, _) = shaded(&direct);
+            let expected = u64::from(physical.width) * u64::from(physical.height);
+            assert_eq!(count as u64, expected, "indexed {indexed}");
+            assert!(
+                texel_bytes(&direct) == texel_bytes(&from_buffer),
+                "indexed {indexed}: the batched draw's pixels differ from the region by region \
+                 draw's"
+            );
+        }
+    });
 }

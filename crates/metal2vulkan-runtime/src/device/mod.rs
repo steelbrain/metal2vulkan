@@ -92,7 +92,7 @@ use super::stencil_copy::StencilCopyObjects;
 use super::texture::TextureState;
 use super::unique_identifier::UniqueIdentifiers;
 use crate::image_barrier::MemoryReads;
-use crate::recorder::{Command, MeshDraws, Slot};
+use crate::recorder::{Command, MeshDraws, MultiDraws, Slot};
 use crate::release;
 use ash::vk::{self, Handle};
 use functions::{Functions, Vk};
@@ -451,6 +451,11 @@ pub(super) struct DeviceShared {
     pub(super) sized_index_bind: Option<SizedIndexBind>,
     /// The mesh draw commands, where the device enabled `meshShader` (`render/mesh.rs`).
     pub(super) mesh_draws: Option<MeshDraws>,
+    /// The multi-draw commands a rate-mapped pass's draw records its regions with several at a
+    /// time, where the device enabled `multiDraw`, `multiViewport`, `shaderOutputViewportIndex`
+    /// and `shaderDrawParameters` and one command may draw at least two regions
+    /// (`rate_mapped_pass.rs`).
+    pub(super) multi_draws: Option<MultiDraws>,
     /// `vkCmdPushDescriptorSet`, from Vulkan 1.4 or `VK_KHR_push_descriptor`
     /// (`binding::push_set`). Where the driver has `RuntimeDriverDefect::PushedBufferSizesUnset`
     /// only the variants `pipeline::objects::pushes_set_zero` names push with it there, and no
@@ -2612,6 +2617,44 @@ impl Device {
         } else {
             None
         };
+        // The multi-draw commands, where a rate-mapped pass may draw its regions with them
+        // (`rate_mapped_pass.rs`).
+        let multi_draws = {
+            use metal2vulkan::device::VkFeature as F;
+            let needs = [
+                F::MultiDraw,
+                F::MultiViewport,
+                F::ShaderOutputViewportIndex,
+                F::ShaderDrawParameters,
+            ];
+            match needs.iter().all(|f| enabled.features.contains(f)) {
+                true => {
+                    let mut multi = vk::PhysicalDeviceMultiDrawPropertiesEXT::default();
+                    let mut properties =
+                        vk::PhysicalDeviceProperties2::default().push_next(&mut multi);
+                    // SAFETY: `physical` belongs to `instance`, created at Vulkan 1.2 or later,
+                    // and the device enabled `VK_EXT_multi_draw`, whose properties these are.
+                    unsafe {
+                        instance
+                            .raw
+                            .get_physical_device_properties2(physical, &mut properties)
+                    };
+                    let batch = limits
+                        .max_viewports
+                        .min(multi.max_multi_draw_count.saturating_sub(1));
+                    (batch >= 2).then(|| {
+                        // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the
+                        // word is put back.
+                        let loaded = unsafe {
+                            loader_word
+                                .restored(|| ash::ext::multi_draw::Device::new(&instance.raw, &raw))
+                        };
+                        MultiDraws::new(&loaded, recording.as_ref(), batch)
+                    })
+                }
+                false => None,
+            }
+        };
         let budget = |header| {
             crate::gpu_pools::pool_budget(
                 &memory_properties,
@@ -2845,6 +2888,7 @@ impl Device {
             extended_dynamic_state,
             sized_index_bind,
             mesh_draws,
+            multi_draws,
             push_descriptor,
             pushes_after_pipeline_binds,
             color_write_masks,

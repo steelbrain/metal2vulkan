@@ -428,6 +428,23 @@ commands! {
                 max_count: u32,
                 stride: u32
             );
+        CmdDrawMulti cmd_draw_multi c"vkCmdDrawMultiEXT"
+            (
+                count: u32,
+                draws: *const vk::MultiDrawInfoEXT,
+                instances: u32,
+                first_instance: u32,
+                stride: u32
+            );
+        CmdDrawMultiIndexed cmd_draw_multi_indexed c"vkCmdDrawMultiIndexedEXT"
+            (
+                count: u32,
+                draws: *const vk::MultiDrawIndexedInfoEXT,
+                instances: u32,
+                first_instance: u32,
+                stride: u32,
+                vertex_offset: *const i32
+            );
         CmdExecuteGeneratedCommands cmd_execute_generated_commands
             c"vkCmdExecuteGeneratedCommandsEXT"
             (preprocessed: vk::Bool32, info: *const GeneratedCommandsInfo);

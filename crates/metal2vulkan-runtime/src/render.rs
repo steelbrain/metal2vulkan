@@ -960,6 +960,9 @@ struct RoutedDraw {
     /// (`BindState::far_vertex_buffers`), and one it leaves unchecked
     /// (`render/vertex_reach.rs`).
     far: vertex_reach::FarLayouts,
+    /// It asks to draw its rate-mapped pass's regions several at a time
+    /// (`BindState::region_viewports`, [`RenderCommandEncoder::draws_region_batches`]).
+    region_viewports: bool,
 }
 
 /// The render encoder state one draw takes, statically or as dynamic state, in Vulkan's terms
@@ -974,6 +977,10 @@ struct DrawState {
     /// The depth bias's factors and the command they record by.
     depth_bias: DepthBiasRecord,
     blend_color: [f32; 4],
+    /// The draws one command records, each through the viewport and scissor at its index: 1 for
+    /// a plain draw, and the regions of a rate-mapped pass a multi-draw records several at a
+    /// time (`rate_mapped_pass.rs`, `MultiDraws`), at most its viewports.
+    draws: u32,
 }
 
 impl PartialEq for DrawState {
@@ -988,11 +995,72 @@ impl PartialEq for DrawState {
             && self.stencil_reference == other.stencil_reference
             && self.depth_bias == other.depth_bias
             && self.blend_color == other.blend_color
+            && self.draws == other.draws
     }
 }
 
+/// The states a draw of `state` records a rate-mapped pass's `regions` with
+/// (`rate_mapped_pass.rs`), each region's viewport taking the depth range `depth` where the draw
+/// compensates it: one a region, or, `batch` the most one multi-draw takes
+/// (`VariantKey::region_viewports`), one per `k` regions in order, `k` the least of their count
+/// and `batch`. Such a state sets `k` viewports and scissors, its regions' at the indices of its
+/// draws (`DrawState::draws`, its regions' count), the last's past its regions repeating its
+/// first viewport through an empty scissor: every command of the draw sets the `k` its
+/// `VkPipeline` takes (`FixedState::viewports`), and draws its own regions alone.
+fn region_states(
+    regions: &[(vk::Viewport, vk::Rect2D)],
+    batch: Option<usize>,
+    state: &DrawState,
+    depth: Option<[f32; 2]>,
+) -> Vec<DrawState> {
+    let ranged = |viewport: vk::Viewport| {
+        let [min_depth, max_depth] = depth.unwrap_or([viewport.min_depth, viewport.max_depth]);
+        vk::Viewport {
+            min_depth,
+            max_depth,
+            ..viewport
+        }
+    };
+    let Some(batch) = batch else {
+        return (regions.iter())
+            .map(|&(viewport, scissor)| DrawState {
+                viewports: ViewportList::One(ranged(viewport)),
+                scissors: ViewportList::One(scissor),
+                ..state.clone()
+            })
+            .collect();
+    };
+    let k = regions.len().min(batch).max(1);
+    regions
+        .chunks(k)
+        .filter_map(|chunk| {
+            let &(first, _) = chunk.first()?;
+            let viewports = (chunk.iter().map(|&(viewport, _)| viewport))
+                .chain(std::iter::repeat(first))
+                .take(k)
+                .map(ranged)
+                .collect();
+            let scissors = (chunk.iter().map(|&(_, scissor)| scissor))
+                .chain(std::iter::repeat(vk::Rect2D::default()))
+                .take(k)
+                .collect();
+            Some(DrawState {
+                viewports,
+                scissors,
+                fixed: FixedState {
+                    viewports: k as u32,
+                    ..state.fixed
+                },
+                draws: chunk.len() as u32,
+                ..state.clone()
+            })
+        })
+        .collect()
+}
+
 /// The states a draw records with (`draw_resident`): the whole draw's, or in a rate-mapped pass
-/// each region's of each amplification drawn alone, in order (`rate_mapped_pass.rs`).
+/// each region's of each amplification drawn alone, in order (`rate_mapped_pass.rs`), or each
+/// batch's of its regions (`region_states`).
 enum DrawStates {
     Whole([DrawState; 1]),
     Regions(Vec<Vec<DrawState>>),
@@ -8355,6 +8423,7 @@ impl RenderLowering {
                     routed.private,
                     routed.provoking_forms,
                     &routed.far.pulled,
+                    routed.region_viewports,
                 ),
                 (&pass_start, &sampler_maps),
                 (&mut argument_samplers, &mut unlisted),
@@ -9601,7 +9670,19 @@ impl RenderLowering {
                 shaped
             }
         };
-        let fixed = draw_state.fixed;
+        let mut fixed = draw_state.fixed;
+        // Where its plan's variant draws them so (`VariantKey::region_viewports`), the draw
+        // records those regions several at a time, as many a command as the device's multi-draw
+        // commands take (`MultiDraws::batch`).
+        let batch = match (variant.key().region_viewports, &device.shared().multi_draws) {
+            (false, _) => None,
+            (true, Some(multi)) => Some(multi.batch() as usize),
+            (true, None) => {
+                return Err(internal(
+                    "regions drawn several at a time without the multi-draw commands",
+                ))
+            }
+        };
         // A rate-mapped pass records the draw once per region of the map's layer of the slice
         // it renders (`rate_mapped_pass.rs`): each amplification drawn one at a time its own
         // slice's, else the draw's one slice, or none known where its primitives choose.
@@ -9632,26 +9713,16 @@ impl RenderLowering {
                             &device.shared().region_limits,
                             render_area,
                         )?;
-                        Ok(regions
-                            .into_iter()
-                            .map(|(viewport, scissor)| {
-                                let [min_depth, max_depth] =
-                                    depth.unwrap_or([viewport.min_depth, viewport.max_depth]);
-                                DrawState {
-                                    viewports: ViewportList::One(vk::Viewport {
-                                        min_depth,
-                                        max_depth,
-                                        ..viewport
-                                    }),
-                                    scissors: ViewportList::One(scissor),
-                                    ..draw_state.clone()
-                                }
-                            })
-                            .collect())
+                        Ok(region_states(&regions, batch, &draw_state, depth))
                     })
                     .collect::<Result<_, Error>>()?
             }),
         };
+        // Its `VkPipeline` takes as many viewports as each of its commands sets
+        // (`region_states`).
+        if let Some(first) = draw_states.iter_mut().next().filter(|_| batch.is_some()) {
+            fixed.viewports = first.fixed.viewports;
+        }
         // A draw that reaches no fragment runs its vertex function alone, through empty scissors,
         // and so do unsized points.
         if failing == Some(FailingDraw::Untouched) || unsized_points {
@@ -10053,6 +10124,19 @@ impl RenderLowering {
             )),
         };
         let vk_draws = &vk_draws[..count];
+        // Regions drawn several at a time are direct draws' alone (`draws_region_batches`).
+        let direct = |&(_, _, draw): &(_, _, metal2vulkan::vk::DrawCommand)| {
+            matches!(
+                draw,
+                metal2vulkan::vk::DrawCommand::Draw { .. }
+                    | metal2vulkan::vk::DrawCommand::DrawIndexed { .. }
+            )
+        };
+        if batch.is_some() && !vk_draws.iter().all(direct) {
+            return Err(internal(
+                "regions drawn several at a time by a draw of another command",
+            ));
+        }
         // The draw's steps before the pass (its copies, its index bounds or rewrite pass) read
         // what an earlier draw or tile dispatch of the encoder wrote behind a memory barrier: they
         // record before the draw's render pass instance instead, which follows the writer's.
@@ -10865,6 +10949,7 @@ impl RenderLowering {
                                 state,
                                 extended,
                                 mesh: device.shared().mesh_draws.as_ref(),
+                                multi: device.shared().multi_draws.as_ref(),
                                 draw,
                                 pair,
                             };
@@ -11360,6 +11445,8 @@ impl RenderLowering {
             true => vertex_reach::FarLayouts::default(),
             false => self.far_vertex_buffers(pipeline.base(), draw),
         };
+        let direct = matches!(draw, DrawCall::Primitives { .. } | DrawCall::Indexed { .. });
+        let region_viewports = self.draws_region_batches(pipeline, &settings, direct);
         Ok(RoutedDraw {
             provoking,
             provoking_forms,
@@ -11371,7 +11458,48 @@ impl RenderLowering {
             shape_token,
             primitive_id_indices,
             far,
+            region_viewports,
         })
+    }
+
+    /// Whether a draw of `pipeline` under `settings`, `direct` (not from an indirect buffer), asks
+    /// to record its rate-mapped pass's regions several at a time, each one draw of a multi-draw
+    /// through the viewport and scissor at its index (`rate_mapped_pass.rs`): where the device
+    /// has the multi-draw commands (`DeviceShared::multi_draws`), the pass's map may plan several
+    /// regions, the draw is direct and of one amplification, and its pipeline is a vertex and
+    /// fragment pipeline whose vertex function's `ViewportIndex` reaches the rasterizer as it
+    /// stores it: no stage after it, and no index, position compensation or band of its own. Not
+    /// a device replay's draw, whose commands record one at a time. The plan settles whether it
+    /// does (`VariantKey::region_viewports`).
+    fn draws_region_batches(
+        &self,
+        pipeline: &DrawingState,
+        settings: &DrawSettings,
+        direct: bool,
+    ) -> bool {
+        let base = pipeline.base();
+        let graphics = &base.graphics;
+        let plain_stages = (base.stages.iter()).all(|s| {
+            matches!(
+                s.stage,
+                metal2vulkan::vk::ShaderStage::VERTEX | metal2vulkan::vk::ShaderStage::FRAGMENT
+            )
+        });
+        self.core.device().shared().multi_draws.is_some()
+            && self
+                .rate_map
+                .as_ref()
+                .is_some_and(|pass| pass.regions_vary())
+            && self.replayed.is_none()
+            && direct
+            && settings.amplification.count == 1
+            && settings.compensation.is_none()
+            && !matches!(settings.line, LineRoute::Band { .. })
+            && plain_stages
+            && graphics.tessellation.is_none()
+            && graphics.emulated_tessellation.is_none()
+            && !graphics.writes_viewport_index
+            && !pipeline.vertex_chooses_slice()
     }
 
     /// A draw's settings ([`draw_settings`](Self::draw_settings), of a draw of `assembly` that may
@@ -11466,13 +11594,14 @@ impl RenderLowering {
     fn settle_draw(
         &self,
         live: &mut LiveBind,
-        (pipeline, settings, primitive_id_indices, private, provoking, far): (
+        (pipeline, settings, primitive_id_indices, private, provoking, far, region_viewports): (
             &DrawingState,
             &DrawSettings,
             Option<IndexType>,
             PrivateForm,
             ProvokingForms,
             &BTreeSet<u32>,
+            bool,
         ),
         (pass_start, sampler_maps): (&PassStartTables, &SamplerMaps),
         (argument_samplers, unlisted): (&mut ArgumentSamplers, &mut Option<(u64, u64)>),
@@ -11515,6 +11644,7 @@ impl RenderLowering {
             reshape.field(&mut state.quad_primitive_ids, private.quad_primitive_ids);
             reshape.field(&mut state.private_list, private.private_list);
             reshape.field_from(&mut state.far_vertex_buffers, far);
+            reshape.field(&mut state.region_viewports, region_viewports);
             reshape.field(&mut state.rotated_weights, provoking.rotated_weights);
             reshape.field(&mut state.mesh_last_first, provoking.mesh_last_first);
             reshape.field_from(&mut state.dropped_colors, &colors.dropped);
@@ -12680,6 +12810,9 @@ struct Recording<'a> {
     extended: Option<super::dynamic_state::ExtendedDynamicState>,
     /// The device's mesh draw commands, where it enabled `meshShader`.
     mesh: Option<&'a crate::recorder::MeshDraws>,
+    /// The device's multi-draw commands, where a rate-mapped pass may record its regions with
+    /// them (`DrawState::draws`).
+    multi: Option<&'a crate::recorder::MultiDraws>,
     draw: metal2vulkan::vk::DrawCommand,
     /// Its part in a draw read through snapshots, or in place (`render/snapshot.rs`): the
     /// barrier, write masks and phase it records before its draw, and the barrier after it.
@@ -12916,7 +13049,11 @@ impl Recording<'_> {
             if let Some(pair) = &self.pair {
                 pair.record(raw, cb, self.layout);
             }
-            record_draw_command(raw, cb, self.draw, self.indirect, self.mesh);
+            let regions = self
+                .multi
+                .filter(|_| s.draws > 1)
+                .map(|multi| (multi, s.draws));
+            record_draw_command(raw, cb, self.draw, self.indirect, (self.mesh, regions));
             if let Some(pair) = &self.pair {
                 pair.record_after(raw, cb);
             }
@@ -12931,19 +13068,25 @@ impl Recording<'_> {
 }
 
 /// Record `draw`, the Vulkan draw command, into `cb`: an indirect one from `indirect`, a mesh one
-/// through `mesh`, the device's mesh draw commands.
+/// through `mesh`, the device's mesh draw commands, and a direct one `n` times in one command
+/// through `multi` where `regions` is `Some((multi, n))`: a rate-mapped pass's `n` regions, draw
+/// `i` through the viewport and scissor at index `i` (`DrawState::draws`).
 ///
 /// # Safety
 ///
 /// `cb` is recording inside a pass compatible with the bound pipeline's, with every state the
 /// pipeline and the command take bound or set, and every handle live until it completes; `mesh`
-/// is the device's, where it enabled `meshShader`.
+/// is the device's, where it enabled `meshShader`, and `multi` its multi-draw commands, `n` at
+/// most their batch.
 unsafe fn record_draw_command(
     raw: &ash::Device,
     cb: vk::CommandBuffer,
     draw: metal2vulkan::vk::DrawCommand,
     indirect: Option<vk::Buffer>,
-    mesh: Option<&crate::recorder::MeshDraws>,
+    (mesh, regions): (
+        Option<&crate::recorder::MeshDraws>,
+        Option<(&crate::recorder::MultiDraws, u32)>,
+    ),
 ) {
     // SAFETY: the caller's contract.
     unsafe {
@@ -12953,13 +13096,23 @@ unsafe fn record_draw_command(
                 instance_count,
                 first_vertex,
                 first_instance,
-            } => raw.cmd_draw(
-                cb,
-                vertex_count,
-                instance_count,
-                first_vertex,
-                first_instance,
-            ),
+            } => match regions {
+                Some((multi, n)) => {
+                    let one = vk::MultiDrawInfoEXT {
+                        first_vertex,
+                        vertex_count,
+                    };
+                    let draws = vec![one; n as usize];
+                    multi.cmd_draw_multi(cb, &draws, instance_count, first_instance)
+                }
+                None => raw.cmd_draw(
+                    cb,
+                    vertex_count,
+                    instance_count,
+                    first_vertex,
+                    first_instance,
+                ),
+            },
             metal2vulkan::vk::DrawCommand::DrawIndexed {
                 index_count,
                 instance_count,
@@ -12967,14 +13120,25 @@ unsafe fn record_draw_command(
                 vertex_offset,
                 first_instance,
                 ..
-            } => raw.cmd_draw_indexed(
-                cb,
-                index_count,
-                instance_count,
-                first_index,
-                vertex_offset,
-                first_instance,
-            ),
+            } => match regions {
+                Some((multi, n)) => {
+                    let one = vk::MultiDrawIndexedInfoEXT {
+                        first_index,
+                        index_count,
+                        vertex_offset,
+                    };
+                    let draws = vec![one; n as usize];
+                    multi.cmd_draw_multi_indexed(cb, &draws, instance_count, first_instance)
+                }
+                None => raw.cmd_draw_indexed(
+                    cb,
+                    index_count,
+                    instance_count,
+                    first_index,
+                    vertex_offset,
+                    first_instance,
+                ),
+            },
             metal2vulkan::vk::DrawCommand::DrawIndirect {
                 offset,
                 draw_count,

@@ -236,6 +236,7 @@ impl PendingDraw {
                         state: &owned.state,
                         extended: owned.extended,
                         mesh: shared.mesh_draws.as_ref(),
+                        multi: shared.multi_draws.as_ref(),
                         draw: owned.draw,
                         pair: owned.pair.clone(),
                     }

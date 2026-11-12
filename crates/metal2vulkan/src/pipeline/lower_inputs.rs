@@ -827,10 +827,9 @@ pub struct LoweringInputs {
     /// within such a command (the specification's `DrawIndex`), which selects "the viewport
     /// transform, scissor rectangle, and exclusive scissor rectangle" (its `ViewportIndex`); the
     /// index is the same at every vertex of a draw, so of a primitive. It needs the device to
-    /// store `ViewportIndex` from a vertex function (`shaderOutputViewportIndex`, or
-    /// `VK_EXT_shader_viewport_index_layer`), to read `DrawIndex` (`shaderDrawParameters`) and to
-    /// take several viewports (`multiViewport`): `Unsupported(RasterizationRateMap)` names them
-    /// otherwise. A function that writes its own `[[viewport_array_index]]` or
+    /// store `ViewportIndex` from a vertex function (`shaderOutputViewportIndex`), to read
+    /// `DrawIndex` (`shaderDrawParameters`) and to take several viewports (`multiViewport`):
+    /// `Unsupported(RasterizationRateMap)` names them otherwise. A function that writes its own `[[viewport_array_index]]` or
     /// `[[render_target_array_index]]`, one compiled under `amplification_draws`,
     /// `viewport_compensation`, `replay_bindings` or `merged_draws`, and a post-tessellation
     /// vertex function, is `NotImplemented(RasterizationRateMap)` under it: the runtime draws

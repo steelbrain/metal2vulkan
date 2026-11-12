@@ -35,6 +35,29 @@
 //!   overlaps. The lines are this crate's tiles', so a pass over a map that is not the identity is
 //!   a near-equivalent within the bound; the map's creation announced it
 //!   (`rasterization-rate-map`).
+//! - **Regions several at a time.** Where the device enables `multiDraw` (`VK_EXT_multi_draw`),
+//!   `multiViewport`, `shaderOutputViewportIndex` and `shaderDrawParameters`, a direct draw of one
+//!   amplification whose pipeline is a vertex and a fragment function, its vertex function
+//!   choosing no slice or viewport and taking no position compensation or band
+//!   (`RenderCommandEncoder::draws_region_batches`), records its regions `k` at a time, `k` the
+//!   least of their count, the device's `maxViewports` and one below its `maxMultiDrawCount`
+//!   ("drawCount must be less than" it, `VUID-vkCmdDrawMultiEXT-drawCount-04934`): each batch
+//!   sets `k` viewports and scissors, its regions' (the last batch's past its regions repeating
+//!   its first viewport through empty scissors), and records one `vkCmdDrawMultiEXT` or
+//!   `vkCmdDrawMultiIndexedEXT` of as many draws as it has regions, each the draw's vertices,
+//!   indices and instances, packed (`VUID-vkCmdDrawMultiEXT-drawCount-09628`). Its variant's
+//!   vertex function stores `ViewportIndex` as `DrawIndex` (`VariantKey::region_viewports`): "the
+//!   zero-based index of the draw" of such a command, dynamically uniform (the specification's
+//!   `DrawIndex`), so every vertex of a primitive stores the same index, and that index selects
+//!   "the viewport transform, scissor rectangle, and exclusive scissor rectangle" (its
+//!   `ViewportIndex`), which its `VkPipeline` takes `k` of. Each region's draw so rasterizes
+//!   through the viewport and scissor a draw of it alone takes. The regions' scissors are
+//!   disjoint, so a pixel's fragments all come from its region's draw, whose primitives keep the
+//!   specification's primitive order (instances, then vertices or indices), whatever order the
+//!   specification leaves between a command's draws: the pixels are the region by region
+//!   route's. A fragment
+//!   function that reads `[[viewport_array_index]]` reads 0 under it, as it does drawn region by
+//!   region. Every other draw, and every draw on another device, records region by region.
 //! - **Layers**. Metal rasterizes each primitive by the map's layer of the slice it renders (probes
 //!   on the M3 Max and an M4, alike with and without API validation: over a 2-slice target and a
 //!   map whose layer 0 is at quality 0.5 and layer 1 the identity, a vertex function's slice,
@@ -275,6 +298,14 @@ impl RateMappedPass {
     /// in and default to.
     pub(super) fn area(&self) -> [u32; 2] {
         self.area
+    }
+
+    /// Whether the map as the pass took it has layers and is not the identity: its plans may hold
+    /// several regions, which a draw may record several at a time (the module docs).
+    pub(super) fn regions_vary(&self) -> bool {
+        self.state
+            .compiled()
+            .is_some_and(|map| map.layer_count() > 0 && !map.is_identity())
     }
 
     /// The `(viewport, scissor)` each recording of a draw of `graphics` takes, one per region of

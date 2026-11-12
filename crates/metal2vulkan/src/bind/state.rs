@@ -145,8 +145,9 @@ pub struct BindState {
     /// draw of a `vkCmdDrawMultiEXT` or `vkCmdDrawMultiIndexedEXT` whose index selects its
     /// viewport and scissor: the pipeline runs the variant whose vertex function stores
     /// `ViewportIndex` as `DrawIndex` (`VariantKey::region_viewports`), and its `VkPipeline` takes
-    /// as many viewports as a command draws regions. Part of the shape
-    /// (`BindShape::region_viewports`); `false` for every other draw.
+    /// as many viewports as a command draws regions. The plan's variant draws so only for a vertex
+    /// pipeline without tessellation drawn in one pass of no views (`bind::graphics`'s module
+    /// docs). Part of the shape (`BindShape::region_viewports`); `false` for every other draw.
     #[cfg_attr(feature = "serde", serde(default))]
     pub region_viewports: bool,
     /// Where the heap arrays (set 1) hold the command's heap members and argument samplers

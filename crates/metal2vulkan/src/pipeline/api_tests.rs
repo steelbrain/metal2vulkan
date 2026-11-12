@@ -268,6 +268,7 @@ mod serde_round_trips {
             )]),
             anisotropic_samplers: BTreeSet::from([slot(Stage::Fragment, SlotClass::Sampler, 1)]),
             color_group: 1,
+            region_viewports: true,
         });
         round_trip(&SpecializationKey {
             data: vec![1, 0, 0, 0],
@@ -482,6 +483,7 @@ mod serde_round_trips {
                 group: 1,
             }),
             object_payload: Some(64),
+            region_viewports: true,
         });
     }
 
@@ -1056,6 +1058,7 @@ mod bind_serde_round_trips {
             quad_primitive_ids: true,
             private_list: true,
             far_vertex_buffers: BTreeSet::from([2]),
+            region_viewports: true,
         });
         let mut shape = StageShape::default();
         shape.buffers.insert(
@@ -1119,6 +1122,7 @@ mod bind_serde_round_trips {
             quad_primitive_ids: true,
             private_list: true,
             far_vertex_buffers: BTreeSet::from([1, 30]),
+            region_viewports: true,
         });
     }
 

@@ -1902,7 +1902,9 @@ impl RenderLowering {
         let pass_start = PassStartTables::default();
         let sampler_maps = self.sampler_maps(state, &pass_start)?;
         // The commands' own arguments, which decide the layouts a draw pulls past 4 GiB
-        // (`render/vertex_reach.rs`), are the step's: none here.
+        // (`render/vertex_reach.rs`), are the step's: none here. A command's draw is direct, and
+        // draws a rate-mapped pass's regions as the encoder's direct draw would.
+        let region_viewports = self.draws_region_batches(state, &settings, true);
         let settled = self.settle_draw(
             live,
             (
@@ -1912,6 +1914,7 @@ impl RenderLowering {
                 PrivateForm::default(),
                 ProvokingForms::default(),
                 &BTreeSet::new(),
+                region_viewports,
             ),
             (&pass_start, &sampler_maps),
             (&mut argument_samplers, &mut None),
