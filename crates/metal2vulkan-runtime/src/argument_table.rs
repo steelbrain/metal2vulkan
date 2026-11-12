@@ -184,15 +184,18 @@ impl StageReads {
 }
 
 /// The slots of its tables a pipeline state's bind state holds (`ArgumentTable::refresh_reading`,
-/// `refresh_changed`): of a render pipeline state none of whose functions resolves texture or
-/// sampler handles, translates pointers or reaches an indirect command buffer
-/// (`PipelineInterface::needs_handle_translation`, `needs_pointer_translation`,
-/// `reaches_command_buffers`), the slots its functions statically use (`PipelineInterface::slots`)
+/// `refresh_changed`): of a render pipeline state that indirect command buffers may not hold, none
+/// of whose functions resolves texture or sampler handles, translates pointers or reaches an
+/// indirect command buffer (`PipelineInterface::needs_handle_translation`,
+/// `needs_pointer_translation`, `reaches_command_buffers`), the slots its functions statically use
+/// (`PipelineInterface::slots`)
 /// and the buffers its vertex descriptor's layouts fetch or pull (`VertexInputState`), the only
 /// slots a plan of it reads (checked against each variant its draws settle in builds with debug
 /// assertions: [`check_variant`](Self::check_variant)); of any other, every slot. A handle table
 /// holds the textures bound at any slot, and a root table every bound buffer, so a state whose
-/// functions read either holds them all.
+/// functions read either holds them all. So does a state indirect command buffers may hold: an
+/// execution of their commands draws through variants of it that read every buffer through the
+/// root table (`LoweringInputs::replay_bindings`), whose resident set is every bound argument.
 ///
 /// A slot it leaves out is no part of the bind state: a bind there changes neither its shape nor
 /// its plan, as it changes none of the state's commands. So draws of a state whose functions
@@ -208,10 +211,12 @@ impl ReadSlots {
         ReadSlots(None)
     }
 
-    /// The slots a render pipeline state of `pipeline`, its base, holds (the type's docs).
-    pub(crate) fn of(pipeline: &RenderPipeline) -> ReadSlots {
+    /// The slots a render pipeline state of `pipeline`, its base, holds, one indirect command
+    /// buffers may hold where `executable` (the type's docs).
+    pub(crate) fn of(pipeline: &RenderPipeline, executable: bool) -> ReadSlots {
         let interface = &pipeline.interface;
-        if interface.needs_handle_translation
+        if executable
+            || interface.needs_handle_translation
             || interface.needs_pointer_translation
             || interface.reaches_command_buffers
         {

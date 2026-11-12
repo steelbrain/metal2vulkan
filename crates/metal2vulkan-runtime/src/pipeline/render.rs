@@ -2008,7 +2008,7 @@ impl GraphicsState {
             )?),
         };
         let samplers = descriptor.number_samplers(device, &base.shared_pipeline().interface);
-        let read = ReadSlots::of(base.shared_pipeline());
+        let read = ReadSlots::of(base.shared_pipeline(), indirect);
         let at_bind_views = AtBindViews::new(device, &base.shared_pipeline().interface, read);
         let log = match warming {
             true => None,
