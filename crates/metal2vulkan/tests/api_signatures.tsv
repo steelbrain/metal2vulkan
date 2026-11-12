@@ -10145,7 +10145,7 @@ struct	metal2vulkan-runtime::SparseFeatures	#[derive(Clone, Copy, Debug, Default
 struct	metal2vulkan-runtime::StoreActionOptions	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct StoreActionOptions(u64)
 struct	metal2vulkan-runtime::Submission	pub struct Submission<'a>
 struct	metal2vulkan-runtime::TessellationRecordsOverflow	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct TessellationRecordsOverflow
-struct	metal2vulkan-runtime::Texture	#[derive(Clone)] pub struct Texture(Arc<TextureShared>)
+struct	metal2vulkan-runtime::Texture	#[derive(Clone)] pub struct Texture(Arc<TextureShared>, Option<Arc<Retain>>)
 struct	metal2vulkan-runtime::TextureDescriptor	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct TextureDescriptor
 struct	metal2vulkan-runtime::TextureLevelInfo	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct TextureLevelInfo
 struct	metal2vulkan-runtime::TextureLevelQuery	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct TextureLevelQuery
