@@ -97,7 +97,7 @@ threads-required = 'num-test-threads'
 
 # The runtime's video interop tests run alone on Linux. Each makes a device with extra compute and
 # video decode queues; on an RTX 3090 (NVIDIA 620.70.06) several such devices made at once by
-# processes of these tests now and then met a pushbuffer error the kernel logged (Xid 69 and 32),
+# processes of these tests now and then met an error the kernel logged (Xid 69, 32 or 13),
 # their devices lost, and another process's submission never completed (HOWTO.md, section 8).
 [[profile.default.overrides]]
 platform = 'cfg(target_os = "linux")'

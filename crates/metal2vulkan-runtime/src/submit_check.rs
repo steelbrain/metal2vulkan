@@ -165,11 +165,12 @@
 //!   ([`SubmitChecks::stop`]), which waits for that fence up to [`STALL`] more and releases them
 //!   once it signalled. Where it still has not, the teardown leaves the device, its objects and
 //!   its instance to the process's end, as where the process began to exit: its wait for the
-//!   device's idle would never return. Seen on the RTX 3090 (NVIDIA, Linux): six processes
-//!   making their devices at once, the kernel logged a pushbuffer error on two of their channels
-//!   (Xid 69 and 32), and one process's checks waited on their fence with no end, its teardown
-//!   behind them. The checks' longest wait otherwise, in [`Device::submit_check_report`],
-//!   stays far below [`STALL`].
+//!   device's idle would never return. Seen on the RTX 3090 (NVIDIA 620.70.06, Linux), with
+//!   processes making devices with extra compute and video decode queues at once (the HOWTO's
+//!   host note): with six, one process's checks waited on their fence with no end, its teardown
+//!   behind them; with eight, 5 of 48 processes' checks met a submission that had not completed
+//!   at [`STALL`], where every other process's longest wait for one (in
+//!   [`Device::submit_check_report`]) was 1.3 to 12.0 ms (lavapipe's 0.05 ms).
 
 use crate::allocations::Allocations;
 use crate::command_buffer::fences::Fences;
@@ -273,7 +274,9 @@ const WAIT_SLICE: Duration = Duration::from_millis(100);
 /// The longest the checks wait for one of their submissions, empty command buffers on the
 /// device's first `VkQueue`, before they take it as stalled (the module docs, "A stalled
 /// submission"); and the longest the device's teardown waits for it again before it leaves the
-/// device to the process's end ([`SubmitChecks::stop`]).
+/// device to the process's end ([`SubmitChecks::stop`]). Past their longest wait for one that
+/// completed, 12.0 ms on the RTX 3090 with eight processes making devices at once, by about a
+/// thousand times; as long as a call waits for their verdicts (`ANSWER_WAIT`).
 pub(crate) const STALL: Duration = Duration::from_secs(10);
 
 /// The id name of the message that tells of a stalled submission of the checks.
