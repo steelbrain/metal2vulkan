@@ -230,18 +230,12 @@ impl Segment {
         (!self.stepped && (self.host || self.work.gpu_written())) || self.work.outgrown()
     }
 
-    /// Whether its host step waits for a pipeline still being made, or its batch for what its
-    /// step left (`Deferred::holds`), which wakes the scheduler as it ends.
+    /// Whether its host step waits for a pipeline still being made, however long it takes (no
+    /// draw or dispatch is dropped for its making's time, `render/pending.rs`,
+    /// `pending_dispatch.rs`), or its batch for what its step left (`Deferred::holds`), which
+    /// wakes the scheduler as it ends.
     pub(super) fn steps_after_pipelines(&self) -> bool {
         (!self.stepped && self.work.making()) || self.work.holds()
-    }
-
-    /// [`steps_after_pipelines`](Self::steps_after_pipelines) once its command buffer's bound
-    /// passed (`CommandBuffer::making_deadline`): its step records a draw or dispatch whose
-    /// pipeline is still being made as nothing, so its batch waits only for what its step left
-    /// (`Deferred::holds`).
-    pub(super) fn holds(&self) -> bool {
-        self.work.holds()
     }
 
     /// Whether it is a dispatch whose pipelines were being made (`pending_dispatch.rs`): an

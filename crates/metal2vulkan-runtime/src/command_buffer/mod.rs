@@ -4045,11 +4045,11 @@ impl CommandBuffer {
     /// `render/pending.rs`): the draw ran nothing, the command buffer running on, without error.
     /// Named as [`failed_pipeline`](Self::failed_pipeline) names a dispatch. Counted, each such
     /// draw: `WorkCounts::draws_dropped_unmade`. Under `PipelineWaitPolicy::Bounded` (the
-    /// default), also the first draw or dispatch (a compute dispatch, a render pass's tile
-    /// dispatch) whose `VkPipeline` was still being made once the command buffer's bound passed,
-    /// with the error `VK_TIMEOUT`: `WorkCounts::draws_dropped_still_making` and
-    /// `dispatches_dropped_still_making`. No Metal counterpart: Metal makes a state's pipelines as
-    /// it makes the state.
+    /// default), also the first draw of an execution's replay whose `VkPipeline` the replay began
+    /// making itself and that was still being made once the command buffer's bound passed, with
+    /// the error `VK_TIMEOUT`: `WorkCounts::draws_dropped_still_making` (`render/pending.rs`).
+    /// Every other draw and dispatch waits for its making. No Metal counterpart: Metal makes a
+    /// state's pipelines as it makes the state.
     pub fn dropped_draw(&self) -> Option<FailedPipeline> {
         self.settle_ended();
         self.state().dropped_draw.clone()
@@ -4104,9 +4104,10 @@ impl CommandBuffer {
         self.keep_dropped(failed);
     }
 
-    /// Note `late`, a draw whose pipeline was still being made once the command buffer's bound
-    /// passed ([`making_deadline`](Self::making_deadline)), whose recording drops the draw
-    /// (`render/pending.rs`): kept where it is the first, its error `VK_TIMEOUT`, which no
+    /// Note `late`, a draw of an execution's replay whose pipeline the replay itself began making
+    /// and that was still being made once the command buffer's bound passed
+    /// ([`making_deadline`](Self::making_deadline)), whose recording drops the draw (the open gap,
+    /// `render/pending.rs`): kept where it is the first, its error `VK_TIMEOUT`, which no
     /// driver's creation returns; counted (`WorkCounts::draws_dropped_still_making`), and
     /// announced (`draw-dropped-still-making`) where its recording runs, in the program's
     /// `commit` or a host step.
@@ -4130,43 +4131,7 @@ impl CommandBuffer {
         self.keep_dropped(late);
     }
 
-    /// Note `late`, a dispatch whose pipeline was still being made once the command buffer's
-    /// bound passed ([`making_deadline`](Self::making_deadline)): a compute encoder's
-    /// (`pending_dispatch.rs`), or a render pass's tile dispatch where `tile`
-    /// (`render/pending_tile.rs`), whose recording records no dispatch. Kept as
-    /// [`drop_late_draw`](Self::drop_late_draw) keeps a draw, its error `VK_TIMEOUT`; counted
-    /// (`WorkCounts::dispatches_dropped_still_making`), and announced
-    /// (`dispatch-dropped-still-making`) where its recording runs, in the program's `commit` or a
-    /// host step.
-    pub(crate) fn drop_late_dispatch(&self, late: FailedPipeline, tile: bool) {
-        let device = self.device();
-        device.shared().counts.dispatch_dropped_still_making();
-        let (encoder, dispatch) = (late.encoder, late.draw);
-        device.degrade(Degradation::DispatchDroppedStillMaking, || {
-            let what = match tile {
-                true => "tile dispatch",
-                false => "dispatch",
-            };
-            let of = match tile {
-                true => "render encoder",
-                false => "compute encoder",
-            };
-            (
-                format!("{what} {dispatch} of {of} {encoder} of a command buffer"),
-                format!(
-                    "its pipeline was still being made {} ms after the command buffer's commit",
-                    device
-                        .compile_device()
-                        .policy()
-                        .pipeline_commit_wait
-                        .as_millis()
-                ),
-            )
-        });
-        self.keep_dropped(late);
-    }
-
-    /// Keep `dropped` as the command buffer's first draw or dispatch that ran nothing, unless one
+    /// Keep `dropped` as the command buffer's first draw that ran nothing, unless one
     /// was kept already: the recordings run in encoding order.
     fn keep_dropped(&self, dropped: FailedPipeline) {
         let mut held = self.state();
@@ -4175,8 +4140,11 @@ impl CommandBuffer {
         }
     }
 
-    /// Until when its recordings wait for its draws' and dispatches' pipelines still being made:
-    /// set at its commit under `PipelineWaitPolicy::Bounded`, none before it or under `Exact`.
+    /// Until when its `commit` waits for the pipelines of a pass that executes render commands the
+    /// CPU writes, which it leaves to its host step past it, and an execution's replay for a
+    /// making it begins itself (`render/pending.rs`): set at its commit under
+    /// `PipelineWaitPolicy::Bounded`, none before it or under `Exact`. Every other making its
+    /// commands record is waited for until made, under either.
     pub(crate) fn making_deadline(&self) -> Option<Instant> {
         self.0.making_deadline.get().copied()
     }
@@ -4678,20 +4646,13 @@ impl CommandBufferShared {
             && segments()
                 .filter(|segment| segment.steps_after_the_gpu())
                 .all(|segment| matches!(segment.work, Deferred::Loop(_)));
-        // Past its bound its step records the draws and dispatches whose pipelines are still
-        // being made as nothing (`render/pending.rs`, `pending_dispatch.rs`), waiting for no
-        // making.
-        let deadline = self.making_deadline.get().copied();
-        let late = deadline.is_some_and(|at| Instant::now() >= at);
-        let pipelines = match late {
-            false => segments().any(Segment::steps_after_pipelines),
-            true => segments().any(Segment::holds),
-        };
+        // Its step records the draws and dispatches once their pipelines are made, past its bound
+        // too (`render/pending.rs`, `pending_dispatch.rs`, `render/pending_tile.rs`): no command is
+        // dropped for its making's time.
         StepWaits {
             gpu: segments().any(Segment::steps_after_the_gpu) || sparse || staged,
             queue_alone: checks_alone.then(|| self.queue.vk_queue()),
-            pipelines,
-            until: deadline.filter(|_| pipelines && !late),
+            pipelines: segments().any(Segment::steps_after_pipelines),
         }
     }
 

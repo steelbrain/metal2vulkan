@@ -22,14 +22,11 @@
 //!   `CommandBuffer::failed_pipeline` names the dispatch: its encoder's place, its order among the
 //!   encoder's tile dispatch calls, the tile state, its variant and specialization, and the
 //!   driver's error.
-//! - **A making past its bound.** Under `PipelineWaitPolicy::Bounded` (the default) the pass's
-//!   recording waits for a making until its command buffer's bound at most, its commit plus the
-//!   policy's `pipeline_commit_wait` (4.5 s by default), as for a draw's (`render/pending.rs`): a
-//!   tile dispatch whose making is still in flight then records its copies into its scratch and
-//!   back and no dispatch, the command buffer running on without error.
-//!   `CommandBuffer::dropped_draw` names the first such command with the error `VK_TIMEOUT`;
-//!   counted, `WorkCounts::dispatches_dropped_still_making`; announced
-//!   `dispatch-dropped-still-making`.
+//! - **However long the making takes.** Under either `PipelineWaitPolicy` the pass's batch waits
+//!   for its tile dispatches' makings until they are made, past its command buffer's bound
+//!   (`CommandBuffer::making_deadline`) too (`Segment::steps_after_pipelines`), as a
+//!   compute encoder's dispatch's does (`pending_dispatch.rs`): a tile dispatch writes what
+//!   Metal's writes, its command buffer completing later.
 //! - **Encoded again** (`replay.rs`): an encoder encoded again waits for its tile dispatches'
 //!   makings no more than its first encoding did, and leaves its pass to record later in the
 //!   first encoding's place (`command_buffer/reencode.rs`), prepared as the commit prepared that
@@ -40,13 +37,12 @@
 use super::pass_steps::PassSteps;
 use crate::command_buffer::CommandBuffer;
 use crate::degradation::BoundFormats;
-use crate::error::{vulkan, Error, FailedPipeline, FailedState};
+use crate::error::{Error, FailedPipeline, FailedState};
 use crate::pipeline::budget::Urgency;
 use crate::pipeline::{
     ComputePipelineState, Pending, RawPipeline, RegionKey, RegionPipeline, RenderPipelineState,
     Variant,
 };
-use ash::vk;
 use metal2vulkan::bind::DispatchRegion;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -188,11 +184,9 @@ impl TilePipelines {
         Some(pending.created(made))
     }
 
-    /// Its `VkPipeline`s, waiting for each making until `command_buffer`'s bound at most, where
-    /// it has one: one whose making failed made again here, on this thread. Where that fails,
-    /// `command_buffer` fails so (`CommandBuffer::fail_pipeline`). Where a making is still in
-    /// flight at the bound, none: the dispatch is dropped (`CommandBuffer::drop_late_dispatch`),
-    /// its pass recording no dispatch for it (the module docs).
+    /// Its `VkPipeline`s, waiting for each making until it is made, which its pass's host step
+    /// runs only after (`Segment::steps_after_pipelines`): one whose making failed made again here, on this
+    /// thread. Where that fails, `command_buffer` fails so (`CommandBuffer::fail_pipeline`).
     pub(super) fn made(
         &self,
         command_buffer: &CommandBuffer,
@@ -201,7 +195,6 @@ impl TilePipelines {
             TilePipelines::Made(made) => return Ok(made.clone()),
             TilePipelines::Making(pending) => pending,
         };
-        let deadline = command_buffer.making_deadline();
         let failed = |key: &RegionKey, error| FailedPipeline {
             encoder: pending.call.encoder,
             draw: pending.call.dispatch,
@@ -215,18 +208,7 @@ impl TilePipelines {
             let outcome = match pipeline {
                 RegionPipeline::Made(made) => Ok(Arc::clone(made)),
                 RegionPipeline::Making(making) => {
-                    let waited = match deadline {
-                        Some(deadline) => making.wait_until(deadline),
-                        None => Some(making.wait()),
-                    };
-                    let Some(waited) = waited else {
-                        // Still being made at the bound: the dispatch runs nothing, and a later
-                        // command buffer dispatches with the pipeline once it is made.
-                        let late = failed(key, vulkan(vk::Result::TIMEOUT));
-                        command_buffer.drop_late_dispatch(late, true);
-                        return Ok(Vec::new());
-                    };
-                    waited.or_else(|_| pending.variant.make_region(key))
+                    (making.wait()).or_else(|_| pending.variant.make_region(key))
                 }
             };
             match outcome {

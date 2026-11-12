@@ -2188,15 +2188,17 @@ degradations! {
              a queue's next one run with its own, before the batch before them is submitted; \
              their commands, barriers and GPU times are unchanged; CompletionPolicy::Exact \
              submits and checks each batch alone";
-        /// A draw whose `VkPipeline` the driver was still making once its command buffer's bound
-        /// passed (`PipelineWaitPolicy::Bounded`, the default: its commit plus the policy's
-        /// `pipeline_commit_wait`, 4.5 s by default, `render/pending.rs`) ran nothing: its recording records the barriers and the
-        /// visibility query around it and no draw, and the command buffer runs on without error.
-        /// Metal makes a render state's pipelines inside `newRenderPipelineState`, so none of its
-        /// draws waits for a compile; the runtime makes them on its pool, a state's predicted one
-        /// among them, so a driver's cold compile (seconds on MoltenVK with a cold Metal compiler
-        /// service) cannot hold the command buffer past a guest's watchdog. Announced where the
-        /// draw is recorded: in the program's `commit`, or the command buffer's host step.
+        /// A draw of an execution's replay (render commands of an indirect command buffer
+        /// replayed on the CPU) whose `VkPipeline` the replay itself began making, of a key its
+        /// commit's settle did not foresee, and the driver was still making once its command
+        /// buffer's bound passed (`PipelineWaitPolicy::Bounded`, the default: its commit plus the
+        /// policy's `pipeline_commit_wait`, 4.5 s by default, `render/pending.rs`) ran nothing:
+        /// its recording records nothing of it, and the command buffer runs on without error.
+        /// Every other draw and dispatch waits for its making, its command buffer completing
+        /// later. Metal makes a render state's pipelines inside `newRenderPipelineState`, so every
+        /// draw it encodes runs: this is an open gap, not a choice (`docs/FAST-PATHS.md`).
+        /// Announced where the draw is recorded: in the program's `commit`, or the command
+        /// buffer's host step.
         DrawDroppedStillMaking = "draw-dropped-still-making", Precision,
             "the draw's commands ran nothing, where Metal's draw renders; the command buffers \
              committed after the pipeline is made draw with it; CommandBuffer::dropped_draw \
@@ -2215,21 +2217,6 @@ degradations! {
              need the same pipeline make it again; CommandBuffer::dropped_draw names the first \
              such draw with the driver's error, and WorkCounts::draws_dropped_unmade counts \
              them";
-        /// A compute dispatch, or a render pass's tile dispatch, whose `VkPipeline` the driver was
-        /// still making once its command buffer's bound passed (`PipelineWaitPolicy::Bounded`,
-        /// the default: its commit plus the policy's `pipeline_commit_wait`, 4.5 s by default,
-        /// `pending_dispatch.rs`, `render/pending_tile.rs`) ran nothing: its recording records its barriers (a tile dispatch's copies into its
-        /// scratch and back) and no dispatch, and the command buffer runs on without error.
-        /// Metal makes a compute state's pipeline inside `newComputePipelineState`, so none of
-        /// its dispatches waits for a compile; the runtime makes a dispatch's on its pool, so a
-        /// driver's cold compile cannot hold the command buffer past a guest's watchdog.
-        /// Announced where the dispatch is recorded: in the program's `commit`, or the command
-        /// buffer's host step.
-        DispatchDroppedStillMaking = "dispatch-dropped-still-making", Precision,
-            "the dispatch ran nothing and wrote nothing, where Metal's dispatch runs; the command \
-             buffers committed after the pipeline is made dispatch with it; \
-             CommandBuffer::dropped_draw names the first such dispatch with the error \
-             VK_TIMEOUT; PipelineWaitPolicy::Exact waits until the pipeline is made";
         /// In a build without debug assertions, a notice announced where the runtime's rule
         /// announces none ([`DegradeNotice::misplaced`] names its kind and [`NoticePlace`]):
         /// inside a pipeline pool's piece, or, for a kind announced at every occurrence, outside

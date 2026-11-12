@@ -3042,7 +3042,8 @@ impl DeferredPass {
 
     /// Wait until every pipeline its draws and tile dispatches record is made, or failed, each
     /// making hastened first (`pipeline/pool.rs`), until `deadline` at most, its command buffer's
-    /// bound, past which its recording drops the draw or tile dispatch (`render/pending.rs`,
+    /// bound: the program's `commit` waits no longer, and leaves a pass whose makings are still in
+    /// flight then to its host step, which waits for them until made (`render/pending.rs`,
     /// `render/pending_tile.rs`).
     pub(crate) fn wait_made(&self, deadline: Option<Instant>) {
         self.hasten(Urgency::Committed);

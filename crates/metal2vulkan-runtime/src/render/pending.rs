@@ -26,23 +26,24 @@
 //!   there), the state, its variant and specialization, and the driver's error. Counted:
 //!   `WorkCounts::draws_dropped_unmade`. Where creation ran at the draw, the draw returned that
 //!   error.
-//! - **A making past the bound.** Under `PipelineWaitPolicy::Bounded` (the default) a recording
-//!   waits for the draw's pipeline until its command buffer's commit plus the policy's
-//!   `pipeline_commit_wait` (4.5 s by default) at most (`CommandBuffer::making_deadline`; the
-//!   scheduler's host step runs then, `StepWaits::until`): a pipeline still being made then is not
-//!   waited for, and the draw records as nothing, as for a failed making, its making going on for
-//!   the command buffers after it. `CommandBuffer::dropped_draw` names the first such draw with the
-//!   error `VK_TIMEOUT`, which no driver's creation returns. Counted:
-//!   `WorkCounts::draws_dropped_still_making`; announced `draw-dropped-still-making`. Under
-//!   `PipelineWaitPolicy::Exact` the recording waits until the pipeline is made.
+//! - **However long the making takes.** Under either `PipelineWaitPolicy` the batch waits for the
+//!   draw's making until it is made, past its command buffer's bound
+//!   (`CommandBuffer::making_deadline`) too (`Segment::steps_after_pipelines`): the draw renders
+//!   what Metal's renders, its command buffer completing later, as on a slower GPU. Only its
+//!   queue's line waits for it; `commit` records the pass only where its pipelines are made, a
+//!   pass that executes render commands the CPU writes after waiting for them until that bound
+//!   at most, and leaves it to the host step otherwise.
 //! - **An execution's replay.** A draw of an execution's commands records as the replay runs
 //!   (the host step, or `commit` for records the CPU writes), so it takes no pending recording:
 //!   its pipeline, most begun on the device's pool by the execution's settle at commit
-//!   (`RenderExecution::settle`), is waited for until its command buffer's bound at most, and one
-//!   still being made then makes the draw record nothing, before anything of it is tracked,
-//!   named by its execution's encoder's place and its order among the replay's draws, counted and
-//!   announced as above ([`RenderLowering::drop_late_replayed_draw`]). A device replay's draw,
-//!   one recording for every command, waits until the pipeline is made.
+//!   (`RenderExecution::settle`), which the batch's host step waits for as for a pending draw's.
+//!   A making the replay itself begins, of a key the settle did not foresee, is waited for until
+//!   its command buffer's bound at most, and one still being made then makes the draw record
+//!   nothing, before anything of it is tracked, named by its execution's encoder's place and its
+//!   order among the replay's draws with the error `VK_TIMEOUT`, counted
+//!   (`WorkCounts::draws_dropped_still_making`) and announced (`draw-dropped-still-making`,
+//!   [`RenderLowering::drop_late_replayed_draw`]): the open gap (`docs/FAST-PATHS.md`). A device
+//!   replay's draw, one recording for every command, waits until the pipeline is made.
 //! - **Recorded once.** A pass recorded at commit and again by a host step (an execution's
 //!   buffer the GPU may write since) records each such draw once, its secondary executed by the
 //!   recording that is submitted.
@@ -152,15 +153,13 @@ impl PendingDraw {
     }
 
     fn record_once(&self, command_buffer: &CommandBuffer) -> Result<(), Error> {
-        // Until the command buffer's bound at most, where it has one (`PipelineWaitPolicy`).
-        let waited = match command_buffer.making_deadline() {
-            Some(deadline) => self.pipeline.wait_until(deadline),
-            None => Some(self.pipeline.wait()),
-        };
+        // Until it is made, which its batch's host step waits for before it records
+        // (`Segment::steps_after_pipelines`), past its command buffer's bound too.
+        let waited = self.pipeline.wait();
         // A device test's failure of the making (`CommandBuffer::fail_draw_making`).
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         let waited = match command_buffer.state().injected_making_failure() {
-            Some(error) => Some(Err(error)),
+            Some(error) => Err(error),
             None => waited,
         };
         let failed = |error| FailedPipeline {
@@ -172,15 +171,9 @@ impl PendingDraw {
             error,
         };
         let pipeline = match waited {
-            Some(Ok(pipeline)) => Some(pipeline),
-            Some(Err(error)) => {
+            Ok(pipeline) => Some(pipeline),
+            Err(error) => {
                 command_buffer.drop_draw(failed(error));
-                None
-            }
-            // Still being made at the bound: the draw runs nothing, and a later command buffer
-            // draws with the pipeline once it is made.
-            None => {
-                command_buffer.drop_late_draw(failed(vulkan(vk::Result::TIMEOUT)));
                 None
             }
         };

@@ -807,19 +807,16 @@ fn an_anisotropic_state_without_mips_is_announced_through_metals_sampler() {
 /// takes its site, as a build without debug assertions does.
 const MISPLACED: [Degradation; 1] = [Degradation::MisplacedNotice];
 
-/// The kinds a draw and a dispatch take whose pipeline was still being made once their command
-/// buffer's bound passed (`PipelineWaitPolicy::Bounded`, `pipeline_commit_wait` after its
-/// commit), and a draw whose pipeline the driver failed to make. No lane meets them: a lane holds
+/// The kinds a draw of an execution's replay takes whose pipeline the replay itself began making
+/// and that was still being made once its command buffer's bound passed
+/// (`PipelineWaitPolicy::Bounded`, `pipeline_commit_wait` after its commit: the runtime's open
+/// gap), and a draw whose pipeline the driver failed to make. No lane meets them: a lane holds
 /// none of the runtime's pipeline makings, a driver's compile outlasting the bound is a timing no
-/// lane may count on, and no lane's pipeline fails. The runtime's own tests
-/// `a_draw_whose_pipeline_is_still_being_made_at_its_bound_runs_nothing`,
-/// `a_dispatch_whose_pipeline_is_still_being_made_at_its_bound_runs_nothing` and
-/// `a_draw_whose_pipeline_was_not_made_runs_nothing_and_its_command_buffer_runs_on` take their
-/// sites, the makings held in the device's pool by the runtime's test hold, the last one's
-/// failure injected.
-const STILL_MAKING: [Degradation; 3] = [
+/// lane may count on, and no lane's pipeline fails. The runtime's own test
+/// `a_draw_whose_pipeline_was_not_made_runs_nothing_and_its_command_buffer_runs_on` takes the
+/// second's site, its failure injected.
+const STILL_MAKING: [Degradation; 2] = [
     Degradation::DrawDroppedStillMaking,
-    Degradation::DispatchDroppedStillMaking,
     Degradation::DrawDroppedUnmade,
 ];
 

@@ -2781,7 +2781,6 @@ field	metal2vulkan-runtime::WorkCounts.dispatch_pipelines_pooled	pub dispatch_pi
 field	metal2vulkan-runtime::WorkCounts.dispatch_shapes_found	pub dispatch_shapes_found: u64
 field	metal2vulkan-runtime::WorkCounts.dispatch_shapes_made	pub dispatch_shapes_made: u64
 field	metal2vulkan-runtime::WorkCounts.dispatch_used_resources_listed	pub dispatch_used_resources_listed: u64
-field	metal2vulkan-runtime::WorkCounts.dispatches_dropped_still_making	pub dispatches_dropped_still_making: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_planned_as_before	pub dispatches_planned_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_pushing_set_zero	pub dispatches_pushing_set_zero: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_settled_as_before	pub dispatches_settled_as_before: u64
@@ -5614,7 +5613,6 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceTranscendentals	DeviceTran
 macro-member	metal2vulkan-runtime::Degradation::DeviceVertexConversion	DeviceVertexConversion = "device-vertex-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DeviceWideLines	DeviceWideLines = "device-wide-lines", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DiscardDropsSimdgroupStores	DiscardDropsSimdgroupStores = "discard-drops-simdgroup-stores";
-macro-member	metal2vulkan-runtime::Degradation::DispatchDroppedStillMaking	DispatchDroppedStillMaking = "dispatch-dropped-still-making", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DontCareLoadTiles	DontCareLoadTiles = "dont-care-load-tiles", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DontCareStandIn	DontCareStandIn = "dont-care-stand-in", Performance,
 macro-member	metal2vulkan-runtime::Degradation::DontCareStore	DontCareStore = "dont-care-store", Precision,

@@ -74,9 +74,9 @@ fn device(cache: &Path) -> Device {
         },
         ..DeviceOptions::default()
     };
-    // The held making is waited for until it is made, whatever the hold's length: under
-    // `PipelineWaitPolicy::Bounded` a draw whose making is held past its command buffer's bound
-    // runs nothing (`tests/deferred_calls.rs` takes that form).
+    // The held making is waited for until it is made, whatever the hold's length, under either
+    // value; under `PipelineWaitPolicy::Exact` the state's creation makes its own pipeline before
+    // it returns, held pool or not (`tests/deferred_calls.rs` takes the default's form).
     options.policy.pipeline_waits = PipelineWaitPolicy::Exact;
     Device::system_default_with(&options).unwrap()
 }

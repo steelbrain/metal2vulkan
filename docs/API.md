@@ -181,18 +181,24 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   Notices a logged call's lowering announces name the call (`DegradeNotice::call`) and may reach
   the message sink on the lowering thread, and `DeviceOptions::lowering_refuses` turns the kinds
   it lists into such refusals (section 9).
-- **A pipeline still being made waited for a bound** (`PipelineWaitPolicy::Bounded`, the
-  default; the runtime's choice, no pipeline differs). A render or compute state's creation
+- **A pipeline still being made: a creation waits a bound, a command buffer until made**
+  (`PipelineWaitPolicy::Bounded`, the default; the runtime's choice, no pipeline differs). A render or compute state's creation
   hands the driver's making of its predicted pipeline to the runtime's pool and waits for it
-  `DevicePolicy::pipeline_creation_wait` at most; a committed command buffer waits until its
-  commit plus `DevicePolicy::pipeline_commit_wait` at most, one deadline its commands share, for
-  its draws' and dispatches' (a compute encoder's, a render pass's tile dispatches) pipelines
-  still being made, an execution's replayed draws among them (whose pipelines the commit hands to
-  the pool), then records each such command as nothing (`draw-dropped-still-making`,
-  `dispatch-dropped-still-making`, the first named by `CommandBuffer::dropped_draw` with
-  `VK_TIMEOUT`, counted `WorkCounts::draws_dropped_still_making` and
-  `dispatches_dropped_still_making`), and later command buffers draw and dispatch with the
-  pipeline once made. Meanwhile it holds back only its own queue's later command buffers: one of
+  `DevicePolicy::pipeline_creation_wait` at most. A committed command buffer waits for its draws'
+  and dispatches' (a compute encoder's, a render pass's tile dispatches, an execution's replayed
+  draws, whose pipelines the commit hands to the pool) pipelines still being made until they are
+  made, however long that takes, and records them then: each renders and writes what Metal's
+  does, its command buffer completing later, as on a slower GPU. `commit` waits for none of them
+  but a pass that executes render commands the CPU writes, until its commit plus
+  `DevicePolicy::pipeline_commit_wait` at most, which it leaves to the command buffer's host step
+  past that; no other program call blocks for a making but those that wait for the GPU (a wait
+  for the command buffer's completion or scheduling, an event it signals, a new command buffer
+  of a queue whose most are all uncompleted). One draw is still dropped, an open gap: an
+  execution's replayed draw whose pipeline the replay itself began making, of a key the commit's
+  settle did not foresee, still being made at that bound (`draw-dropped-still-making`, named by
+  `CommandBuffer::dropped_draw` with `VK_TIMEOUT`, counted
+  `WorkCounts::draws_dropped_still_making`). Meanwhile it holds back only its own queue's later
+  command buffers: one of
   another queue committed after it goes first, even where the two touch one tracked resource
   that one of them writes, and the waiting one runs after it, as an x86 Mac's GPU may take a
   later commit of another queue first (`metal2vulkan-conformance`'s
@@ -3556,18 +3562,17 @@ bound.
   batch before them is submitted; their commands, barriers and GPU times are unchanged;
   `CompletionPolicy::Exact` submits and checks each batch alone.
 - `metal2vulkan-degrade-draw-dropped-still-making` (precision). `DrawDroppedStillMaking`: A draw
-  whose `VkPipeline` the driver was still making once its command buffer's bound passed
+  of an execution's replay (render commands of an indirect command buffer replayed on the CPU)
+  whose `VkPipeline` the replay itself began making, of a key its commit's settle did not foresee,
+  and the driver was still making once its command buffer's bound passed
   (`PipelineWaitPolicy::Bounded`, the default: its commit plus
-  `DevicePolicy::pipeline_commit_wait`, 4.5 s by default) ran nothing: its recording
-  records the barriers and the visibility query around it and no draw, and the command buffer runs
-  on without error. Metal makes a render state's pipelines inside `newRenderPipelineState`, so none
-  of its draws waits for a compile; the runtime makes them on its pool, a state's predicted one
-  among them (the creation waits for it `DevicePolicy::pipeline_creation_wait` at most), so a
-  driver's cold compile (seconds on
-  MoltenVK with a cold Metal compiler service) cannot hold the command buffer past a guest's
-  watchdog. Announced where the draw is recorded: in the program's `commit`, or the command
-  buffer's host step. Cost: the draw's commands ran nothing, where Metal's draw renders; the
-  command buffers committed after the pipeline is made draw with it;
+  `DevicePolicy::pipeline_commit_wait`, 4.5 s by default) ran nothing: its recording records
+  nothing of it, and the command buffer runs on without error. Every other draw and dispatch waits
+  for its making, its command buffer completing later. Metal makes a render state's pipelines
+  inside `newRenderPipelineState`, so every draw it encodes runs: this is an open gap, not a
+  choice (`docs/FAST-PATHS.md`). Announced where the draw is recorded: in the program's `commit`,
+  or the command buffer's host step. Cost: the draw's commands ran nothing, where Metal's draw
+  renders; the command buffers committed after the pipeline is made draw with it;
   `CommandBuffer::dropped_draw` names the first such draw with the error VK_TIMEOUT;
   `PipelineWaitPolicy::Exact` waits until the pipeline is made.
 - `metal2vulkan-degrade-draw-dropped-unmade` (precision). `DrawDroppedUnmade`: A draw whose
@@ -3581,21 +3586,6 @@ bound.
   the draws after it that need the same pipeline make it again; `CommandBuffer::dropped_draw`
   names the first such draw with the driver's error, and `WorkCounts::draws_dropped_unmade` counts
   them.
-- `metal2vulkan-degrade-dispatch-dropped-still-making` (precision). `DispatchDroppedStillMaking`: A
-  compute dispatch, or a render pass's tile dispatch, whose `VkPipeline` the driver was still
-  making once its command buffer's bound passed (`PipelineWaitPolicy::Bounded`, the default: its
-  commit plus `DevicePolicy::pipeline_commit_wait`, 4.5 s by default) ran nothing: its recording
-  records its barriers (a tile dispatch's copies into
-  its scratch and back) and no dispatch, and the command buffer runs on without error. Metal makes
-  a compute state's pipeline inside `newComputePipelineState`, so none of its dispatches waits for
-  a compile; the runtime makes a dispatch's on its pool, a compute state's predicted one among them
-  (the creation waits for it `DevicePolicy::pipeline_creation_wait` at most), so a driver's cold
-  compile cannot hold the command
-  buffer past a guest's watchdog. Announced where the dispatch is recorded: in the program's
-  `commit`, or the command buffer's host step. Cost: the dispatch ran nothing and wrote nothing,
-  where Metal's dispatch runs; the command buffers committed after the pipeline is made dispatch
-  with it; `CommandBuffer::dropped_draw` names the first such dispatch with the error VK_TIMEOUT;
-  `PipelineWaitPolicy::Exact` waits until the pipeline is made.
 - `metal2vulkan-degrade-misplaced-notice` (performance). `MisplacedNotice`: In a build without debug
   assertions, a notice announced where the runtime's rule announces none (`DegradeNotice::misplaced`
   names its kind and `NoticePlace`): inside a pipeline pool's piece, or, for a kind announced at

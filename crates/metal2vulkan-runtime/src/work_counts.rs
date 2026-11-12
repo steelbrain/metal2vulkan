@@ -118,7 +118,6 @@ pub(crate) struct Counters {
     unlisted_argument_sampler_buffers: AtomicU64,
     draws_dropped_unmade: AtomicU64,
     draws_dropped_still_making: AtomicU64,
-    dispatches_dropped_still_making: AtomicU64,
     host_step_sampler_sets_made: AtomicU64,
     host_steps_recorded: AtomicU64,
     host_step_nanos: AtomicU64,
@@ -2333,17 +2332,10 @@ impl Counters {
         self.draws_dropped_unmade.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A draw whose pipeline was still being made at its command buffer's bound ran nothing
-    /// (`CommandBuffer::drop_late_draw`).
+    /// A draw of an execution's replay whose pipeline the replay itself began making was still
+    /// being made at its command buffer's bound and ran nothing (`CommandBuffer::drop_late_draw`).
     pub(crate) fn draw_dropped_still_making(&self) {
         self.draws_dropped_still_making
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A dispatch, or a render pass's tile dispatch, whose pipeline was still being made at its
-    /// command buffer's bound ran nothing (`CommandBuffer::drop_late_dispatch`).
-    pub(crate) fn dispatch_dropped_still_making(&self) {
-        self.dispatches_dropped_still_making
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -5509,19 +5501,13 @@ pub struct WorkCounts {
     /// a draw's pipeline while the draw goes on): each ran nothing, its command buffer running on
     /// without error (`CommandBuffer::dropped_draw` names the first of a command buffer).
     pub draws_dropped_unmade: u64,
-    /// Draws whose `VkPipeline` was still being made once their command buffer's bound passed
-    /// (`PipelineWaitPolicy::Bounded`, the default: its commit plus the policy's
-    /// `pipeline_commit_wait`): each ran nothing, its command buffer running on without error, and the command buffers after it draw with
-    /// the pipeline once it is made (`CommandBuffer::dropped_draw` names the first of a command
-    /// buffer, with the error `VK_TIMEOUT`).
+    /// Draws of executions' replays whose `VkPipeline` the replay itself began making and that was
+    /// still being made once their command buffer's bound passed (`PipelineWaitPolicy::Bounded`,
+    /// the default: its commit plus the policy's `pipeline_commit_wait`; the open gap): each ran
+    /// nothing, its command buffer running on without error, and the command buffers after it draw
+    /// with the pipeline once it is made (`CommandBuffer::dropped_draw` names the first of a command
+    /// buffer, with the error `VK_TIMEOUT`). Every other draw and dispatch waits for its making.
     pub draws_dropped_still_making: u64,
-    /// Compute dispatches and render passes' tile dispatches whose `VkPipeline` was still being
-    /// made once their command buffer's bound passed (`PipelineWaitPolicy::Bounded`, the default:
-    /// its commit plus the policy's `pipeline_commit_wait`): each ran nothing, so wrote nothing, its command buffer running on
-    /// without error, and the command buffers after it dispatch with the pipeline once it is made
-    /// (`CommandBuffer::dropped_draw` names the first of a command buffer, with the error
-    /// `VK_TIMEOUT`).
-    pub dispatches_dropped_still_making: u64,
     /// Immutable sampler sets a command buffer's host step made, counting samplers on the
     /// scheduler's thread, because the device's map held no set of its variant's samplers: the
     /// open break (a render execution's step drawing a state made after its commit, on the variant
@@ -9406,9 +9392,6 @@ impl Device {
                 .load(Ordering::Relaxed),
             draws_dropped_unmade: counters.draws_dropped_unmade.load(Ordering::Relaxed),
             draws_dropped_still_making: counters.draws_dropped_still_making.load(Ordering::Relaxed),
-            dispatches_dropped_still_making: counters
-                .dispatches_dropped_still_making
-                .load(Ordering::Relaxed),
             host_step_sampler_sets_made: counters
                 .host_step_sampler_sets_made
                 .load(Ordering::Relaxed),

@@ -86,12 +86,13 @@ pub struct DevicePolicy {
     /// most for the driver's makings, under a guest's 10 s check of its FIFO. Unread under
     /// `Exact`. The runtime's alone: no emitted code changes.
     pub pipeline_creation_wait: Duration,
-    /// Under [`PipelineWaitPolicy::Bounded`], how long after its commit a command buffer waits
-    /// for the pipelines of its commands the driver is still making: one deadline, its commit plus
-    /// this, which its draws, compute dispatches, tile dispatches and execution replays share,
-    /// wherever they record (in its `commit`, or on the runtime's scheduler thread), past which
-    /// each such command records as nothing. 4.5 s by default (as the creation wait, above). Unread
-    /// under `Exact`. The runtime's alone: no emitted code changes.
+    /// Under [`PipelineWaitPolicy::Bounded`], how long after its commit a command buffer's
+    /// `commit` waits for the pipelines of a pass that executes render commands the CPU writes,
+    /// leaving the pass to its host step past it, and how long an execution's replay waits for a
+    /// making it began itself, past which that draw records as nothing (the open gap,
+    /// `draw-dropped-still-making`). Every other command's making is waited for until made. 4.5 s
+    /// by default (as the creation wait, above). Unread under `Exact`. The runtime's alone: no
+    /// emitted code changes.
     pub pipeline_commit_wait: Duration,
     /// Whether a line Apple's `setLineWidth:` widens, at a width the device's own lines draw (which
     /// no device's are taken to draw as Metal's: strict lines, lines that are not parallelograms, a
@@ -471,12 +472,12 @@ pub enum YCbCrInPlacePolicy {
     Exact,
 }
 
-/// How long the runtime waits for a draw's `VkPipeline` the driver is still making. Metal makes a
+/// How long the runtime's calls wait for a `VkPipeline` the driver is still making. Metal makes a
 /// render state's pipeline inside `newRenderPipelineState`, so no command buffer of Metal's waits
 /// for a compile, and no draw of a state that was made is dropped. The runtime makes a state's
 /// pipelines on its pool while the draws that need them go on (a draw's own key, and a state's
-/// predicted key), so a command buffer committed before one is made waits for it. A driver's cold
-/// compile (MoltenVK on a cold Metal compiler service) can take seconds, past a guest's watchdog,
+/// predicted key), so a command buffer committed before one is made waits for it, and completes
+/// later. A driver's cold compile (MoltenVK on a cold Metal compiler service) can take seconds,
 /// where a host that creates a state lazily inside a command buffer's encoding would wait inside
 /// it. The runtime's choice alone: no emitted code changes.
 #[non_exhaustive]
@@ -485,14 +486,13 @@ pub enum YCbCrInPlacePolicy {
 pub enum PipelineWaitPolicy {
     /// The default. A render or compute state's creation hands the making of its predicted
     /// pipeline to the runtime's pool and waits for it [`DevicePolicy::pipeline_creation_wait`] at
-    /// most (4.5 s by default), then returns with it still being made; a committed command buffer
-    /// waits for its draws' and dispatches' (a compute encoder's, a render pass's tile
-    /// dispatches, an execution replay's draws) pipelines still being made until its commit plus
-    /// [`DevicePolicy::pipeline_commit_wait`] at most (4.5 s by default), one deadline its
-    /// commands share, then records those commands as nothing, the command buffer running on,
-    /// each counted, the first named, announced `draw-dropped-still-making` or
-    /// `dispatch-dropped-still-making`. Later command buffers draw and dispatch with each pipeline
-    /// once made.
+    /// most (4.5 s by default), then returns with it still being made. A committed command buffer
+    /// waits for its draws' and dispatches' pipelines still being made until they are made, under
+    /// either value, on the runtime's scheduler thread, which no program call waits for: it
+    /// completes later, and no command is dropped, but one, an open gap: a draw of an
+    /// execution's replay whose pipeline the replay itself began making, still being made at its
+    /// commit plus [`DevicePolicy::pipeline_commit_wait`] (4.5 s by default), records nothing, the
+    /// command buffer running on, counted, named, announced `draw-dropped-still-making`.
     ///
     /// What one call blocks for, waiting for the driver's makings: a state's creation, its
     /// creation wait; a `commit`, which records there what it can (a pass whose pipelines are
@@ -512,7 +512,8 @@ pub enum PipelineWaitPolicy {
     Bounded,
     /// A render or compute state's creation makes its predicted pipeline before it returns, as
     /// Metal compiles there, and a committed command buffer waits for each of its draws' and
-    /// dispatches' pipelines until it is made: no command is dropped for its making's time.
+    /// dispatches' pipelines until it is made, an execution replay's among them: no command is
+    /// dropped for its making's time.
     Exact,
 }
 
