@@ -39,7 +39,6 @@ enum Named {
     WorkingDirectory,
     RecordedSources,
     DebugCompileUnits,
-    GlPluginInfo,
 }
 
 const NAMED: &[(&str, Named)] = &[
@@ -67,7 +66,6 @@ const NAMED: &[(&str, Named)] = &[
     ("llvm_utils.workingdir", Named::WorkingDirectory),
     ("llvm_utils.sources", Named::RecordedSources),
     ("llvm.dbg.cu", Named::DebugCompileUnits),
-    ("gld.plugin_info", Named::GlPluginInfo),
 ];
 
 /// Apple's named list of a module's program-scope buffer bindings (MSL 3.2): each entry
@@ -191,13 +189,6 @@ pub(super) fn decode(
                     if !matches!(m.md(id), Some(Md::Debug)) {
                         return Err(site.err(AbiError::BadValue, Some("llvm.dbg.cu")));
                     }
-                }
-            }
-            // Apple's OpenGL front end names an empty list here in every module it writes. What
-            // an entry of it would say is unknown, so one is refused as a key outside the contract.
-            Named::GlPluginInfo => {
-                if !ops.is_empty() {
-                    return Err(site.err(AbiError::UnknownKey, Some("gld.plugin_info")));
                 }
             }
             Named::Kernel | Named::Vertex | Named::Fragment | Named::Object | Named::Mesh => {}

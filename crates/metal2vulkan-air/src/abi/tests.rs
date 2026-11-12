@@ -2926,23 +2926,6 @@ fn debug_info_and_recorded_sources_leave_the_abi_unchanged() {
     assert_eq!(debug, plain);
 }
 
-/// Apple's OpenGL front end adds an empty `!gld.plugin_info` list to every module it writes: the
-/// module decodes to the ABI it has without it. An entry in the list says something unknown, and
-/// is refused as a key outside the contract.
-#[test]
-fn an_empty_opengl_plugin_list_leaves_the_abi_unchanged() {
-    let plain = module_with(|_| {}).unwrap();
-    let listed = module_with(|b| b.named_md("gld.plugin_info", &[])).unwrap();
-    assert_eq!(listed, plain);
-    expect_abi(
-        module_with(|b| {
-            let n = node(b, &[S("plugin")]);
-            b.named_md("gld.plugin_info", &[n]);
-        }),
-        AbiError::UnknownKey,
-    );
-}
-
 /// The debug-info and recorded-source lists are read by their shapes: a compile unit that is not a
 /// debug-info record, a recorded source without its text, or a file that is not a node is refused.
 #[test]

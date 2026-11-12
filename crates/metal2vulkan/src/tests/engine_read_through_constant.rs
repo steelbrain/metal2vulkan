@@ -129,6 +129,6 @@ fn the_typed_fixture_compiles_as_its_opaque_form_does() {
         let [typed, opaque] = [&typed, &opaque].map(|bc| {
             compile(bc, "read_through_constant", &p).unwrap_or_else(|e| panic!("{stem}: {e}"))
         });
-        assert_eq!(typed.spirv, opaque.spirv, "{stem}");
+        assert_eq!(typed.module.words, opaque.module.words, "{stem}");
     }
 }
