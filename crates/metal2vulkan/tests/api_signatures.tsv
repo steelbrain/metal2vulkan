@@ -2104,6 +2104,7 @@ field	metal2vulkan-runtime::DeviceOptions.instance_extensions	pub instance_exten
 field	metal2vulkan-runtime::DeviceOptions.kinds	pub kinds: Vec<DeviceKind>
 field	metal2vulkan-runtime::DeviceOptions.layer_settings	pub layer_settings: Vec<LayerSetting>
 field	metal2vulkan-runtime::DeviceOptions.layers	pub layers: Vec<CString>
+field	metal2vulkan-runtime::DeviceOptions.load_no_dynamic_library_file	pub load_no_dynamic_library_file: bool
 field	metal2vulkan-runtime::DeviceOptions.loader	pub loader: Option<PathBuf>
 field	metal2vulkan-runtime::DeviceOptions.lowering_refuses	pub lowering_refuses: BTreeSet<crate::Degradation>
 field	metal2vulkan-runtime::DeviceOptions.mac_class	pub mac_class: Option<crate::MacClass>
@@ -2360,6 +2361,7 @@ field	metal2vulkan-runtime::RawDevice.gpu_times_from_host	pub gpu_times_from_hos
 field	metal2vulkan-runtime::RawDevice.host_image_copy	pub host_image_copy: bool
 field	metal2vulkan-runtime::RawDevice.instance	pub instance: vk::Instance
 field	metal2vulkan-runtime::RawDevice.instance_api_version	pub instance_api_version: metal2vulkan::vk::ApiVersion
+field	metal2vulkan-runtime::RawDevice.load_no_dynamic_library_file	pub load_no_dynamic_library_file: bool
 field	metal2vulkan-runtime::RawDevice.lowering_refuses	pub lowering_refuses: BTreeSet<crate::Degradation>
 field	metal2vulkan-runtime::RawDevice.mac_class	pub mac_class: Option<crate::MacClass>
 field	metal2vulkan-runtime::RawDevice.physical_device	pub physical_device: vk::PhysicalDevice
@@ -11987,6 +11989,7 @@ variant	metal2vulkan-runtime::DriverFact::TimestampsWaitForEveryQueue	Timestamps
 variant	metal2vulkan-runtime::DriverFact::UnstoredClearNoSlower	UnstoredClearNoSlower
 variant	metal2vulkan-runtime::DriverSetting::MoltenVkArgumentBuffersOff	MoltenVkArgumentBuffersOff
 variant	metal2vulkan-runtime::DynamicLibraryError::InvalidFile	InvalidFile { path: PathBuf }
+variant	metal2vulkan-runtime::DynamicLibraryError::NoFileLoading	NoFileLoading { path: PathBuf }
 variant	metal2vulkan-runtime::DynamicLibraryError::Read	Read { path: PathBuf, kind: std::io::ErrorKind, message: String }
 variant	metal2vulkan-runtime::DynamicLibraryError::Write	Write { path: PathBuf, kind: std::io::ErrorKind, message: String }
 variant	metal2vulkan-runtime::EncoderKind::Blit	Blit

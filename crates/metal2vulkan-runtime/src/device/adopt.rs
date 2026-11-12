@@ -107,6 +107,10 @@ pub struct RawDevice {
     /// [`DeviceOptions::pipeline_records`](crate::DeviceOptions::pipeline_records) says: `None`
     /// by default, no record made. Metal has no such setting.
     pub pipeline_records: Option<Arc<dyn Fn(crate::PipelineRecord) + Send + Sync>>,
+    /// Load no dynamic library from a file, as
+    /// [`DeviceOptions::load_no_dynamic_library_file`](crate::DeviceOptions::load_no_dynamic_library_file)
+    /// says: false by default, Metal's behaviour. No Metal counterpart.
+    pub load_no_dynamic_library_file: bool,
 }
 
 impl std::fmt::Debug for RawDevice {
@@ -131,6 +135,7 @@ impl std::fmt::Debug for RawDevice {
             announce_each,
             lowering_refuses,
             pipeline_records,
+            load_no_dynamic_library_file,
         } = self;
         f.debug_struct("RawDevice")
             .field("get_instance_proc_addr", get_instance_proc_addr)
@@ -154,6 +159,7 @@ impl std::fmt::Debug for RawDevice {
                 "pipeline_records",
                 &pipeline_records.as_ref().map(|_| "hook"),
             )
+            .field("load_no_dynamic_library_file", load_no_dynamic_library_file)
             .finish()
     }
 }
@@ -188,6 +194,7 @@ impl RawDevice {
             announce_each: BTreeSet::new(),
             lowering_refuses: BTreeSet::new(),
             pipeline_records: None,
+            load_no_dynamic_library_file: false,
         }
     }
 }
@@ -353,6 +360,7 @@ impl Device {
             mac_class: raw.mac_class,
             // An adopted device keeps no execution record: validation makes its own devices.
             record_executions: false,
+            load_no_dynamic_library_file: raw.load_no_dynamic_library_file,
             pipeline_records: raw.pipeline_records,
             fail_in_place_check: false,
             assume_submissions_merge: false,

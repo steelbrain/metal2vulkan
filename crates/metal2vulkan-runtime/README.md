@@ -192,6 +192,7 @@ Vulkan-side choices Metal has no counterpart for:
 | `announce_each` | Degradation kinds to announce at every occurrence instead of once. |
 | `lowering_refuses` | Degradation kinds that refuse a render encoder's call when its lowering after the call meets them (`RenderLoweringPolicy::Worker`), failing its command buffer, instead of being announced. Empty by default. |
 | `record_executions` | Keep, per command buffer, which pipeline each dispatch and draw ran (`CommandBuffer::executions`). Off by default. |
+| `load_no_dynamic_library_file` | Open no dynamic library's file, for libraries that come from a party that must not read the host's files (a guest's). Pipeline creations link only the libraries their function descriptors give (`libraries.preloaded`, and `libraries.loaded` by install name); an install name `loaded` lacks loads nothing, so a creation whose import survives specialization fails (`Compile(NeedsInput(DynamicLibrary))`), and `Device::new_dynamic_library_with_url` is refused (`DynamicLibraryError::NoFileLoading`). Off by default: as Metal does, a creation reads the file each install name names, a regular file alone (a FIFO, a device or a directory loads nothing). Also on `RawDevice`. |
 
 **A driver short of resources.** Where the driver refuses a device with its queue plan's `VkQueue`s
 for want of its resources (`vkCreateDevice` answering `VK_ERROR_TOO_MANY_OBJECTS`,

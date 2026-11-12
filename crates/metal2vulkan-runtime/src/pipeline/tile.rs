@@ -148,7 +148,7 @@ impl TileState {
         )?;
         let requested = descriptor;
         let mut descriptor = descriptor.clone();
-        descriptor.tile = crate::dynamic_library::stage_with_dependencies(&descriptor.tile);
+        descriptor.tile = crate::dynamic_library::stage_with_dependencies(device, &descriptor.tile);
         let kernel = ComputePipelineState::of_kernel(
             device,
             Kernel::Tile(descriptor.clone()),

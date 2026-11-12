@@ -1321,6 +1321,13 @@ pub enum DynamicLibraryError {
         /// The I/O error's text.
         message: String,
     },
+    /// The file to load was not opened: the device was made to load no dynamic library from a
+    /// file ([`DeviceOptions::load_no_dynamic_library_file`](crate::DeviceOptions::load_no_dynamic_library_file)).
+    /// No Metal counterpart: Metal reads the file.
+    NoFileLoading {
+        /// The file.
+        path: PathBuf,
+    },
 }
 
 impl fmt::Display for DynamicLibraryError {
@@ -1328,6 +1335,13 @@ impl fmt::Display for DynamicLibraryError {
         match self {
             DynamicLibraryError::InvalidFile { path } => {
                 write!(f, "{} is not a dynamic library's file", path.display())
+            }
+            DynamicLibraryError::NoFileLoading { path } => {
+                write!(
+                    f,
+                    "the device loads no dynamic library from a file: {} was not opened",
+                    path.display()
+                )
             }
             DynamicLibraryError::Read { path, message, .. } => {
                 write!(

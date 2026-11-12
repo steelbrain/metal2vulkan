@@ -4746,6 +4746,17 @@ each item named states the rule in full.
   path, not a URL.
 - **A dynamic library's file is its metallib.** `DynamicLibrary::serialize_to_url` writes the bytes
   the library was made from, without a slice of GPU code; the runtime loads either form.
+- **Only a regular file is read.** A pipeline creation's install name, a
+  `Device::new_dynamic_library_with_url` path or a binary archive's path that names a FIFO, a
+  device or a directory is not opened for reading: the install name loads nothing, and the other
+  two are `InvalidFile`. A file is read once, no further than its length when opened. Metal's
+  answer for such paths is not measured.
+- **A device can be made to open no dynamic library's file.** Under
+  `DeviceOptions::load_no_dynamic_library_file` (and `RawDevice`'s), a creation links only the
+  libraries its function descriptors give, an install name `libraries.loaded` lacks fails a
+  creation whose import survives specialization (`Compile(NeedsInput(DynamicLibrary))`) where Metal
+  would read the file, and `new_dynamic_library_with_url` is refused
+  (`DynamicLibraryError::NoFileLoading`). Off by default.
 
 **Resource IDs and identifiers**
 

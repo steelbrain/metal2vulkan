@@ -343,9 +343,21 @@ fn computed(
     preloaded: &[&DynamicLibrary],
     options: &PipelineOptions,
 ) -> Result<Vec<f32>, Error> {
-    let device = library.device();
-    let state =
-        device.new_compute_pipeline_state(&descriptor(library, kernel, preloaded), options)?;
+    dispatched(
+        library.device(),
+        &descriptor(library, kernel, preloaded),
+        options,
+    )
+}
+
+/// What the compute state of `descriptor` writes over `N` threads under `options`, or the
+/// creation's error.
+fn dispatched(
+    device: &Device,
+    descriptor: &ComputePipelineDescriptor,
+    options: &PipelineOptions,
+) -> Result<Vec<f32>, Error> {
+    let state = device.new_compute_pipeline_state(descriptor, options)?;
     let out = device
         .new_buffer(u64::from(N) * 12, ResourceOptions::shared())
         .unwrap();
@@ -662,6 +674,114 @@ fn kernels_link_their_imports_as_metal_s_do() {
         b.serialize_to_url(Path::new(&nb)).unwrap();
         assert_eq!(plain(&cl1_ba, "cl1", &[]), a_rows(|x| 5.0 * x));
     });
+}
+
+/// A device made to load no dynamic library from a file
+/// (`DeviceOptions::load_no_dynamic_library_file`) opens none: a client linked against A, whose
+/// install name names A's file, is refused as for a file that loads nothing, A preloaded or not,
+/// and links A where its descriptor gives A for that install name (`libraries.loaded`); a kernel
+/// whose imports specialization deletes is made; and `new_dynamic_library_with_url` of A's file
+/// is refused.
+#[test]
+fn a_device_that_loads_no_file_links_only_the_libraries_it_is_given() {
+    on_device_with(
+        |options| {
+            at_plan(options);
+            options.load_no_dynamic_library_file = true;
+        },
+        |device| {
+            let dir = Scratch::new();
+            let na = dir.name("A");
+            let a = dylib(
+                device,
+                &dir,
+                "A",
+                &library_a(false),
+                &[SCALE, ADD, TWICE],
+                (&[], &[]),
+            );
+            assert!(Path::new(&na).is_file(), "A's file is there");
+            let cl1 = client_cl1(device, &[&na]);
+            let options = PipelineOptions::default();
+            assert_eq!(computed(&cl1, "cl1", &[], &options), Err(unloaded(&na)));
+            assert_eq!(computed(&cl1, "cl1", &[&a], &options), Err(unloaded(&na)));
+            assert_eq!(plain(&cl1, "cl_none", &[]), rows(|x| [x, 0.0, 0.0]));
+            let given = DynamicLibraries::new().with_loaded(na.clone(), a.preloaded_library());
+            let function = cl1.new_function_with_name("cl1").unwrap();
+            let kernel =
+                StageSource::Function(function.function_descriptor().with_libraries(given));
+            assert_eq!(
+                dispatched(device, &ComputePipelineDescriptor::new(kernel), &options),
+                Ok(rows(|x| [3.0 * x + 1.0, 102.0 + x, 6.0 * x + 2.0]))
+            );
+            assert_eq!(
+                device
+                    .new_dynamic_library_with_url(Path::new(&na))
+                    .map(|_| ()),
+                Err(Error::DynamicLibrary(DynamicLibraryError::NoFileLoading {
+                    path: PathBuf::from(&na)
+                }))
+            );
+        },
+    );
+}
+
+/// An install name of a FIFO, or of a device whose reads never end (`/dev/zero`), loads nothing
+/// and waits on nothing: the creation is refused as for a file that holds no library, and
+/// `new_dynamic_library_with_url` answers `InvalidFile`. Each call runs on a thread of its own for
+/// at most 60 s; a call still waiting then is let go (the FIFO opened for writing) before the test
+/// fails, so the failure ends the test.
+#[test]
+fn an_install_name_of_no_regular_file_loads_nothing_and_waits_on_nothing() {
+    on_device_with(at_plan, |device| {
+        let dir = Scratch::new();
+        let fifo = dir.name("fifo");
+        make_fifo(Path::new(&fifo));
+        let bounded = |name: &str, call: Box<dyn FnOnce() -> Result<(), Error> + Send>| {
+            let (answer, answered) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = answer.send(call());
+            });
+            answered
+                .recv_timeout(std::time::Duration::from_secs(60))
+                .unwrap_or_else(|_| {
+                    drop(std::fs::OpenOptions::new().write(true).open(&fifo));
+                    panic!("{name} waited");
+                })
+        };
+        for name in [fifo.as_str(), "/dev/zero"] {
+            let client = client_cl1(device, &[name]);
+            let created = bounded(
+                name,
+                Box::new(move || {
+                    computed(&client, "cl1", &[], &PipelineOptions::default()).map(|_| ())
+                }),
+            );
+            assert_eq!(created, Err(unloaded(name)));
+            let loader = device.clone();
+            let path = PathBuf::from(name);
+            let url = path.clone();
+            let loaded = bounded(
+                name,
+                Box::new(move || loader.new_dynamic_library_with_url(&url).map(|_| ())),
+            );
+            assert_eq!(
+                loaded,
+                Err(Error::DynamicLibrary(DynamicLibraryError::InvalidFile {
+                    path
+                }))
+            );
+        }
+    });
+}
+
+/// A FIFO made at `path`.
+fn make_fifo(path: &Path) {
+    use std::os::unix::ffi::OsStrExt as _;
+    let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: `name` is a NUL-terminated path.
+    let made = unsafe { libc::mkfifo(name.as_ptr(), 0o600) };
+    assert_eq!(made, 0, "mkfifo {}", path.display());
 }
 
 /// Neither a preloaded library nor a dependency's contents is in a binary archive's key, as on

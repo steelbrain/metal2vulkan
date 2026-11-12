@@ -16,8 +16,14 @@
 //!   creation, so a replaced file links its new code. A name that is not an absolute path, or
 //!   whose file does not hold a dynamic library, loads nothing, and the creation fails only where
 //!   an import survives specialization, as Metal's does.
+//! - **Reading a file.** Only a regular file is read, once, no further than its length when
+//!   opened (`container::read_file`): a name of a FIFO, a device or a directory loads nothing,
+//!   and `new_dynamic_library_with_url` answers it `InvalidFile`, as for a file that holds no
+//!   library. A device made with `DeviceOptions::load_no_dynamic_library_file` opens no such file
+//!   at all: its creations link only the libraries their function descriptors give, and
+//!   `new_dynamic_library_with_url` is refused (`NoFileLoading`).
 
-use super::binary_archive::container::{write_file, WriteFailure};
+use super::binary_archive::container::{read_file, write_file, ReadFailure, WriteFailure};
 use super::device::{device_error, lock};
 use super::error::{DynamicLibraryError, Error};
 use super::library::Library;
@@ -65,9 +71,13 @@ impl Device {
     /// Metal's; its install name is the file's. A file that cannot be read is
     /// `DynamicLibrary(Read)` (a missing one is Metal's `NSCocoaErrorDomain` 260), and one that
     /// holds no library `DynamicLibrary(InvalidFile)`, as Metal answers (a probe), bare AIR bitcode
-    /// included, raw or wrapped ("its AIR slice is missing"). A library that is not one
-    /// `new_dynamic_library` takes is refused as it refuses it, where Metal's answer for a file is
-    /// not measured.
+    /// included, raw or wrapped ("its AIR slice is missing"). A path that names no regular file
+    /// (a FIFO, a device or a directory) is not opened for reading and is
+    /// `DynamicLibrary(InvalidFile)` too, where Metal's answer is not measured. A library that is
+    /// not one `new_dynamic_library` takes is refused as it refuses it, where Metal's answer for a
+    /// file is not measured. On a device made with
+    /// [`DeviceOptions::load_no_dynamic_library_file`](crate::DeviceOptions::load_no_dynamic_library_file)
+    /// the file is not opened, and the call is refused (`DynamicLibrary(NoFileLoading)`).
     pub fn new_dynamic_library_with_url(&self, url: &Path) -> Result<DynamicLibrary, Error> {
         self.at_serving(|device| device.new_dynamic_library_with_url_now(url))
     }
@@ -77,18 +87,24 @@ impl Device {
         &self,
         url: &Path,
     ) -> Result<DynamicLibrary, Error> {
-        let bytes = std::fs::read(url).map_err(|error| {
-            Error::DynamicLibrary(DynamicLibraryError::Read {
-                path: url.to_path_buf(),
-                kind: error.kind(),
-                message: error.to_string(),
+        let path = url.to_path_buf();
+        if self.shared().load_no_dynamic_library_file {
+            return Err(Error::DynamicLibrary(DynamicLibraryError::NoFileLoading {
+                path,
+            }));
+        }
+        let bytes = read_file(url).map_err(|failure| {
+            Error::DynamicLibrary(match failure {
+                ReadFailure::NotRegular => DynamicLibraryError::InvalidFile { path: path.clone() },
+                ReadFailure::Io(error) => DynamicLibraryError::Read {
+                    path: path.clone(),
+                    kind: error.kind(),
+                    message: error.to_string(),
+                },
             })
         })?;
-        let library = metal2vulkan::library::Library::from_metallib(&bytes).map_err(|_| {
-            Error::DynamicLibrary(DynamicLibraryError::InvalidFile {
-                path: url.to_path_buf(),
-            })
-        })?;
+        let library = metal2vulkan::library::Library::from_metallib(&bytes)
+            .map_err(|_| Error::DynamicLibrary(DynamicLibraryError::InvalidFile { path }))?;
         self.dynamic_library(library)
     }
 
@@ -170,9 +186,12 @@ impl DynamicLibrary {
 /// directory for), or a file that cannot be read or holds no dynamic library with an install
 /// name, loads nothing: the compile then refuses an import that survives specialization
 /// (`NeedsInput(DynamicLibrary)`), as Metal's creation fails, and makes the others. A stage the
-/// compile layer already compiled links nothing more.
-pub(crate) fn stage_with_dependencies(stage: &StageSource) -> StageSource {
+/// compile layer already compiled links nothing more. On a device made with
+/// `DeviceOptions::load_no_dynamic_library_file`, no file is opened: the stage is as its
+/// descriptor gave it, and an install name its `libraries.loaded` lacks loads nothing.
+pub(crate) fn stage_with_dependencies(device: &Device, stage: &StageSource) -> StageSource {
     match stage {
+        StageSource::Function(_) if device.shared().load_no_dynamic_library_file => stage.clone(),
         StageSource::Function(function) => {
             StageSource::Function(function.clone().with_loaded_dependencies(load))
         }
@@ -181,13 +200,14 @@ pub(crate) fn stage_with_dependencies(stage: &StageSource) -> StageSource {
 }
 
 /// The dynamic library in the file `name` names, or `None` where none loads: as
-/// `new_dynamic_library_with_url`, a file of bare AIR holds none.
+/// `new_dynamic_library_with_url`, a file of bare AIR holds none, nor does a path of anything but
+/// a regular file (`read_file`).
 fn load(name: &str) -> Option<metal2vulkan::library::DynamicLibrary> {
     let path = Path::new(name);
     if !path.is_absolute() {
         return None;
     }
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = read_file(path).ok()?;
     let library = metal2vulkan::library::Library::from_metallib(&bytes).ok()?;
     metal2vulkan::library::DynamicLibrary::loaded(library).ok()
 }

@@ -748,7 +748,8 @@ impl ComputePipelineState {
     ) -> Result<ComputePipelineState, Error> {
         let requested = descriptor;
         let mut descriptor = descriptor.clone();
-        descriptor.kernel = crate::dynamic_library::stage_with_dependencies(&descriptor.kernel);
+        descriptor.kernel =
+            crate::dynamic_library::stage_with_dependencies(device, &descriptor.kernel);
         let state = ComputePipelineState::of_kernel(
             device,
             Kernel::Compute(descriptor),

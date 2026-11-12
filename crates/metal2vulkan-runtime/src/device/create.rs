@@ -140,6 +140,17 @@ pub struct DeviceOptions {
     /// in a shadow the encoders copy (`Degradation::ShadowedTextureView`), and the subset's
     /// feature stays disabled. For runs of the path such a device takes.
     pub withhold_view_reinterpretation: bool,
+    /// Load no dynamic library from a file: the device opens no file a library's install names
+    /// name, nor the file [`Device::new_dynamic_library_with_url`](crate::Device::new_dynamic_library_with_url)
+    /// names. For a consumer whose libraries come from a party that must not read the host's
+    /// files (a guest's). A pipeline state's creation then links only the libraries its function
+    /// descriptors give (`libraries.preloaded`, and `libraries.loaded` by install name): an
+    /// install name `loaded` lacks loads nothing, and the creation fails where an import
+    /// survives specialization (`Compile(NeedsInput(DynamicLibrary))`), as Metal's fails for a
+    /// file it cannot load; `new_dynamic_library_with_url` is refused
+    /// (`DynamicLibrary(NoFileLoading)`). Off by default: Metal's behaviour, each install name's
+    /// file read at each creation. No Metal counterpart.
+    pub load_no_dynamic_library_file: bool,
     /// The Vulkan API version the instance requests (`VkApplicationInfo::apiVersion`), at which
     /// the runtime reads each physical device's description; Vulkan 1.2 when `None`. Metal has
     /// no such setting: it is a Vulkan-side option, for a consumer whose layers read later
@@ -386,6 +397,7 @@ impl std::fmt::Debug for DeviceOptions {
             shader_cache,
             withhold_generated_commands,
             withhold_view_reinterpretation,
+            load_no_dynamic_library_file,
             instance_api_version,
             gpu_times_from_host,
             mac_class,
@@ -420,6 +432,7 @@ impl std::fmt::Debug for DeviceOptions {
                 "withhold_view_reinterpretation",
                 withhold_view_reinterpretation,
             )
+            .field("load_no_dynamic_library_file", load_no_dynamic_library_file)
             .field("instance_api_version", instance_api_version)
             .field("gpu_times_from_host", gpu_times_from_host)
             .field("mac_class", mac_class)
@@ -2378,6 +2391,7 @@ pub(super) fn create_on(
         announce_each: options.announce_each.clone(),
         lowering_refuses: options.lowering_refuses.clone(),
         record_executions: options.record_executions,
+        load_no_dynamic_library_file: options.load_no_dynamic_library_file,
         pipeline_records: options.pipeline_records.clone(),
         fail_in_place_check: options.fail_in_place_check,
         assume_submissions_merge: options.assume_submissions_merge,
@@ -2572,6 +2586,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         shader_cache,
         withhold_generated_commands,
         withhold_view_reinterpretation,
+        load_no_dynamic_library_file,
         instance_api_version,
         gpu_times_from_host,
         mac_class,
@@ -2601,6 +2616,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *shader_cache == b.shader_cache
         && *withhold_generated_commands == b.withhold_generated_commands
         && *withhold_view_reinterpretation == b.withhold_view_reinterpretation
+        && *load_no_dynamic_library_file == b.load_no_dynamic_library_file
         && *instance_api_version == b.instance_api_version
         && *gpu_times_from_host == b.gpu_times_from_host
         && *mac_class == b.mac_class

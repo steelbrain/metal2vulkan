@@ -182,9 +182,10 @@ impl<'a> Reader<'a> {
 /// The archive in the file `path`: an archive of ours, or a metallib, which Metal takes as an
 /// archive (`newBinaryArchiveWithDescriptor:error:` answers one, measured on an M3 Max under
 /// macOS 27.0.1) and which holds nothing of ours, so it loads as an archive holding nothing,
-/// whose lookups miss as Metal's archive of a metallib does (`binary-archive-sources`).
+/// whose lookups miss as Metal's archive of a metallib does (`binary-archive-sources`). A path
+/// that names no regular file (a FIFO, a device or a directory) is no archive ([`read_file`]).
 pub(crate) fn read(path: &Path) -> Result<Contents, Error> {
-    let bytes = std::fs::read(path).map_err(|_| invalid_file(path))?;
+    let bytes = read_file(path).map_err(|_| invalid_file(path))?;
     if let Some(contents) = decode(&bytes) {
         return Ok(contents);
     }
@@ -192,6 +193,55 @@ pub(crate) fn read(path: &Path) -> Result<Contents, Error> {
         Ok(_) => Ok(Contents::default()),
         Err(_) => Err(invalid_file(path)),
     }
+}
+
+/// Why [`read_file`] could not read a file.
+pub(crate) enum ReadFailure {
+    /// The path names no regular file: a FIFO, a device, a socket or a directory.
+    NotRegular,
+    /// Reading failed (a missing file, for one).
+    Io(std::io::Error),
+}
+
+/// The bytes of the regular file `path`, read once and no further than the length it has when
+/// opened: a binary archive's file, and a dynamic library's (`dynamic_library.rs`). A path that
+/// names anything else is [`ReadFailure::NotRegular`], and nothing that could wait for a writer or
+/// act on a device is done to it: it is looked at before it is opened, opened without waiting
+/// (`O_NONBLOCK`, which a regular file's reads ignore) and looked at again through the handle, in
+/// case it changed between the two. A length the process cannot hold is refused (`OutOfMemory`)
+/// rather than allocated.
+pub(crate) fn read_file(path: &Path) -> Result<Vec<u8>, ReadFailure> {
+    use std::io::Read as _;
+    if !std::fs::metadata(path).map_err(ReadFailure::Io)?.is_file() {
+        return Err(ReadFailure::NotRegular);
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
+    }
+    let file = options.open(path).map_err(ReadFailure::Io)?;
+    let metadata = file.metadata().map_err(ReadFailure::Io)?;
+    if !metadata.is_file() {
+        return Err(ReadFailure::NotRegular);
+    }
+    let length = metadata.len();
+    let mut bytes = Vec::new();
+    usize::try_from(length)
+        .ok()
+        .and_then(|length| bytes.try_reserve_exact(length).ok())
+        .ok_or_else(|| {
+            ReadFailure::Io(std::io::Error::new(
+                std::io::ErrorKind::OutOfMemory,
+                format!("{length} bytes cannot be held"),
+            ))
+        })?;
+    file.take(length)
+        .read_to_end(&mut bytes)
+        .map_err(ReadFailure::Io)?;
+    Ok(bytes)
 }
 
 /// Write `bytes`, an archive's encoding, to the file `url`, replacing what is there.

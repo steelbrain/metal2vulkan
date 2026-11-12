@@ -707,6 +707,9 @@ pub(super) struct DeviceShared {
     /// Its command buffers keep execution records (`DeviceOptions::record_executions`): where
     /// not, its encoders build none (`EncoderCore::executed`).
     pub(crate) record_executions: bool,
+    /// It loads no dynamic library from a file (`DeviceOptions::load_no_dynamic_library_file`,
+    /// `dynamic_library.rs`).
+    pub(crate) load_no_dynamic_library_file: bool,
     /// Counts the times an image of the device let its views go, under its views lock (a
     /// rebind's or a storage form's new `VkImage`, a detach's stand-in, a reattach, a shadow's
     /// move in place, whose views go after it): a view kept by what it was made of
@@ -1828,6 +1831,8 @@ pub(super) struct Parts {
     pub(super) lowering_refuses: BTreeSet<Degradation>,
     /// Its command buffers keep execution records (`DeviceOptions::record_executions`).
     pub(super) record_executions: bool,
+    /// It loads no dynamic library from a file (`DeviceOptions::load_no_dynamic_library_file`).
+    pub(super) load_no_dynamic_library_file: bool,
     /// Where its pipeline records go (`DeviceOptions::pipeline_records`, `warm/record.rs`).
     pub(super) pipeline_records: Option<crate::warm::RecordHook>,
     /// Its check of the first move over host pages fails whatever the moves did
@@ -1940,6 +1945,7 @@ impl Device {
             announce_each,
             lowering_refuses,
             record_executions,
+            load_no_dynamic_library_file,
             pipeline_records,
             fail_in_place_check,
             assume_submissions_merge,
@@ -2753,6 +2759,7 @@ impl Device {
             lowering_refuses,
             deferred: crate::render::DeferredEncoders::default(),
             record_executions,
+            load_no_dynamic_library_file,
             views_epoch: AtomicU64::new(0),
             pipeline_recording: crate::warm::Recording::new(pipeline_records),
             warmer: crate::warm::Warmer::default(),

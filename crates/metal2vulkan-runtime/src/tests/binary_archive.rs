@@ -187,6 +187,42 @@ fn a_file_that_is_missing_or_not_an_archive_is_an_invalid_file() {
     }
 }
 
+/// A path of no regular file is no archive, and reading it waits on nothing: a FIFO, whose open
+/// for reading would wait for a writer, and a device whose reads never end (`/dev/zero`). Each
+/// read runs on a thread of its own for at most 30 s; a read still waiting then is let go (the
+/// FIFO opened for writing) before the test fails, so the failure ends the test.
+#[cfg(unix)]
+#[test]
+fn a_path_of_no_regular_file_is_no_archive_and_is_not_waited_on() {
+    let scratch = Scratch::new();
+    let fifo = scratch.path().join("fifo");
+    make_fifo(&fifo);
+    for path in [fifo.clone(), PathBuf::from("/dev/zero")] {
+        let (answer, answered) = std::sync::mpsc::channel();
+        let read = path.clone();
+        std::thread::spawn(move || {
+            let _ = answer.send(container::read(&read));
+        });
+        match answered.recv_timeout(std::time::Duration::from_secs(30)) {
+            Ok(read) => assert_eq!(read, Err(invalid_file(&path)), "{}", path.display()),
+            Err(_) => {
+                drop(fs::OpenOptions::new().write(true).open(&fifo));
+                panic!("reading {} waited", path.display());
+            }
+        }
+    }
+}
+
+/// A FIFO made at `path`.
+#[cfg(unix)]
+fn make_fifo(path: &Path) {
+    use std::os::unix::ffi::OsStrExt as _;
+    let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: `name` is a NUL-terminated path.
+    let made = unsafe { libc::mkfifo(name.as_ptr(), 0o600) };
+    assert_eq!(made, 0, "mkfifo {}", path.display());
+}
+
 #[test]
 fn writing_replaces_the_file_whole_and_leaves_nothing_else() {
     let scratch = Scratch::new();
