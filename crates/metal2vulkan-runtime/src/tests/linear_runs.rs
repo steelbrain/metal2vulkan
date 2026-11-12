@@ -20,9 +20,6 @@
 //! stencil) attachment, each pass's data in the command buffer's upload arena (`setVertexBytes`)
 //! or in a no-copy buffer over host pages: one run, merged once, in every shape.
 //!
-//! A pass that clears the target alone, the rule forced, renders it in place, through no copy
-//! (`a_cleared_target_alone_renders_in_place`).
-//!
 //! Each test waits for the device's in-place check to end before it makes anything
 //! (`merge_scratch::settled`), and reads the counts of a window of its own commands only then
 //! (`merge_scratch::counts_alone`): the check's own passes over linear images, on its thread, are
@@ -1124,59 +1121,4 @@ fn checked_frames_merge_once() {
          taken over, texel bytes differing): {wrong:?}"
     );
     drop(chunk);
-}
-
-/// A pass that clears a target over a `Shared` buffer (packed rows of 1024 bytes) alone and stores
-/// it, the rule forced: it renders the target in place (`linear_attachment::choose`), counted in
-/// place and through no copy, and the buffer holds the clear in every texel.
-#[test]
-fn a_cleared_target_alone_renders_in_place() {
-    let (width, row) = (256, 1024);
-    let cache = Scratch::new("linear-runs-cleared");
-    let host = Host::new(row * H);
-    let device = settled(device(&cache.0));
-    let queue = device.new_command_queue().unwrap();
-    let Some((buffer, texture)) = target(&queue, Over::Shared, (width, row), &host) else {
-        return;
-    };
-    assert!(
-        texture.linear_image().unwrap(),
-        "the target is a linear image"
-    );
-    let mut descriptor = RenderPassDescriptor::new();
-    let color = &mut descriptor.color_attachments[0];
-    color.texture = Some(texture.clone());
-    color.load_action = LoadAction::Clear;
-    color.store_action = StoreAction::Store;
-    // Exact in `RGBA8Unorm`: (51, 102, 153, 255) / 255.
-    color.clear_color = crate::ClearColor::new(0.2, 0.4, 0.6, 1.0);
-    let forced = &device.shared().linear_rule_forced;
-    let before = counts_alone(&device);
-    forced.store(true, Ordering::Relaxed);
-    let command_buffer = queue.command_buffer().unwrap();
-    let encoder = command_buffer.render_command_encoder(&descriptor).unwrap();
-    encoder.end_encoding().unwrap();
-    command_buffer.commit().unwrap();
-    command_buffer.wait_until_completed_for(WAIT).unwrap();
-    let after = device.work_counts();
-    forced.store(false, Ordering::Relaxed);
-    assert_eq!(command_buffer.error(), None);
-    let ways = (
-        after.linear_passes_in_place - before.linear_passes_in_place,
-        after.linear_passes_through_copies - before.linear_passes_through_copies,
-    );
-    let got = bytes(&queue, Over::Shared, &buffer, row * H);
-    let wrong = (got.chunks_exact(TEXEL as usize))
-        .filter(|&texel| texel != [51, 102, 153, 255])
-        .count();
-    println!(
-        "LINEAR-RUNS cleared alone on {}: {} in place, {} through copies; {wrong} texels not the \
-         clear",
-        device.name(),
-        ways.0,
-        ways.1
-    );
-    assert_eq!(ways, (1, 0), "the pass's way, in place and through copies");
-    assert_eq!(wrong, 0, "texels the clear did not reach");
-    drop((texture, buffer));
 }

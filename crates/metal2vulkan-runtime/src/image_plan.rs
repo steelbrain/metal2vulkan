@@ -1138,6 +1138,43 @@ pub(super) fn takes_views_of(plan: &ImagePlan, pf: PixelFormat, profile: &Device
     })
 }
 
+/// `plan` mutable to the views the runtime makes of a texture of `pf` and of its sRGB twin on
+/// `profile` (`view_formats`, for the plan's usages), its own format first and those it lists
+/// already kept: the image a texture takes for a pass that renders into a view of `pf` in place
+/// (`texture/storage_form.rs`'s view form). `None` where an image of `plan` takes those views
+/// already ([`takes_views_of`]), or where one of them is of another compatibility class than the
+/// image's format, which no Vulkan view of the image takes (an `A8Unorm` view of an `R8Unorm`
+/// texture).
+pub(super) fn view_candidate(
+    plan: &ImagePlan,
+    pf: PixelFormat,
+    profile: &DeviceProfile,
+) -> Option<ImagePlan> {
+    if takes_views_of(plan, pf, profile) {
+        return None;
+    }
+    let formats: Vec<Format> = std::iter::once(pf)
+        .chain(srgb_twin(pf))
+        .flat_map(|pf| view_formats(pf, plan.usage, profile))
+        .collect();
+    if formats.is_empty() || !formats.iter().all(|&f| compatible(plan.format, f, false)) {
+        return None;
+    }
+    let mut candidate = ImagePlan {
+        flags: plan.flags | ImageCreateFlags::MUTABLE_FORMAT,
+        ..plan.clone()
+    };
+    if candidate.view_formats.is_empty() {
+        candidate.view_formats.push(plan.format);
+    }
+    for format in formats {
+        if !candidate.view_formats.contains(&format) {
+            candidate.view_formats.push(format);
+        }
+    }
+    Some(candidate)
+}
+
 /// The cube compatibility a sampled image of a texture of `layout` takes: a cube's, and a square
 /// 2D array's of six layers or more ([`cube_compatible`]), which a cube view may present.
 pub(super) fn cube_flags(layout: &TextureLayout) -> ImageCreateFlags {
