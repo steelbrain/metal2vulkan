@@ -258,6 +258,8 @@ mod heap_tiled_blocks;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod heap_tiled_scratch;
 mod heap_usage;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod heap_use_released;
 mod held_depth;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod hold_sites;
