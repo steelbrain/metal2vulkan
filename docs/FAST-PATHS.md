@@ -481,12 +481,15 @@ recorded here.
   a frame that copied a `Managed` buffer's 1 MiB in took 1.80 to 1.81 ms (p50) through the fill
   queue against 3.53 to 3.57 ms at the batch's start on the RTX 3090 and RTX 2080, and 64 MiB 35.9
   to 36.2 against 40.6 to 48.9 ms (3.39 against 5.92 ms on the RTX 5080 Laptop GPU); alone, from 1
-  MiB up, the fill queue's frames took at most 1.04 times as long. Under 1 MiB they took up to 2.0
-  times as long alone (256 KiB on the RTX 2080, 0.94 against 0.46 ms) and 1.11 times beside the
-  kernels (128 KiB there) (`tests::managed_copies_bench`), so smaller fills stay at the batch's
-  start. From 1 MiB up the other queue's kernels' share of their rate moved by -5 to +8 points on
-  the RTX 3090 and RTX 2080 and by +3 to +20 on the RTX 5080 Laptop GPU; every other submission of
-  the device's waits on the GPU for the fill queue's last until the host saw it complete.
+  MiB up, the fill queue's frames took at most 1.04 times as long. That 1.04 is the RTX 3090's at 1
+  MiB, 0.06 ms a frame, traded for the halved frame beside the kernels there: the swept size from
+  which the fill queue is within 1% alone on all three is 64 MiB, and the fills under it would lose
+  that gain. Under 1 MiB they took up to 2.0 times as long alone (256 KiB on the RTX 2080, 0.94
+  against 0.46 ms) and 1.11 times beside the kernels (128 KiB there)
+  (`tests::managed_copies_bench`), so smaller fills stay at the batch's start. From 1 MiB up the
+  other queue's kernels' share of their rate moved by -5 to +8 points on the RTX 3090 and RTX 2080
+  and by +3 to +20 on the RTX 5080 Laptop GPU; every other submission of the device's waits on the
+  GPU for the fill queue's last until the host saw it complete.
 - **A no-copy buffer's deallocator runs in its release.** On an M3 Max under macOS 27.0.1 an unused
   no-copy buffer's deallocator ran inside its final release, on the releasing thread, every time.
   So a release that frees the buffer's import while a deallocator waits for the free frees it
