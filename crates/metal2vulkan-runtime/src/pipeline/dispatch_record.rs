@@ -19,7 +19,8 @@
 //!   pass that creates such a record's state then plans the dispatch as a creation's prediction
 //!   plans its first one (nothing bound but Metal's default sampler at each runtime sampler slot
 //!   that does not compare), with the recorded threadgroup memory lengths, settles its variant as
-//!   a dispatch does (compiling it where it is not the base), and makes each region's `VkPipeline`
+//!   the program's direct dispatch does (`compute::settle_direct`: a ragged grid's flat variant
+//!   where it takes one, compiled where it is not the base), and makes each region's `VkPipeline`
 //!   on the pass's thread, below every other making: its translation lands in the shader cache and
 //!   its driver data in its record, under the names a later dispatch of the same shape asks for. A
 //!   dispatch whose bindings specialize its regions otherwise (a bound texture's format the
@@ -148,7 +149,9 @@ impl ComputePipelineState {
             .or_default()
             .threadgroup_lengths;
         lengths.extend(recorded.threadgroup_lengths.iter().copied());
-        let Ok((variant, plan)) = self.settle(&state.shape(), &dispatch, BufferForms::Bound) else {
+        let shape = state.shape();
+        let settled = crate::compute::settle_direct(self, &shape, &dispatch, BufferForms::Bound);
+        let Ok((variant, plan)) = settled else {
             return 0;
         };
         let Ok(mut commands) = plan.instantiate_dispatch(&state, &dispatch) else {

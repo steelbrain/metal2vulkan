@@ -1887,6 +1887,23 @@ fn flat_direct(
     }
 }
 
+/// The variant a direct dispatch of a bind state of `shape` in `forms` runs on, and its plan for
+/// `shape`: its flat variant where it takes one ([`flat_direct`]), else
+/// `ComputePipelineState::settle`'s. A program's dispatch plans so ([`plan_now`]), and so does a
+/// warm pass's dispatch of a record (`pipeline/dispatch_record.rs`), so both ask for the same
+/// variant and its regions' keys.
+pub(crate) fn settle_direct(
+    pipeline: &ComputePipelineState,
+    shape: &BindShape,
+    dispatch: &Dispatch,
+    forms: BufferForms,
+) -> Result<(Arc<Variant>, Arc<BindingPlan>), Error> {
+    match flat_direct(pipeline, shape, dispatch, forms)? {
+        Some(flat) => Ok(flat),
+        None => pipeline.settle(shape, dispatch, forms),
+    }
+}
+
 /// Whether a dispatch of `objects`'s variant records in a `VkCommandBuffer` of its own, its
 /// pipelines made: where its layout bakes samplers, which the device's driver loses after a copy
 /// in the same `VkCommandBuffer` (`RuntimeDriverDefect::ImmutableSamplersLostAfterCopies`).
@@ -2029,11 +2046,7 @@ fn plan_now<'a>(
 ) -> Result<Option<(Arc<Planned>, Flat<'a>)>, Error> {
     match (direct, gpu) {
         (Some(dispatch), _) => {
-            let flat = flat_direct(pipeline, &shape, &dispatch, forms)?;
-            let (variant, plan) = match flat {
-                Some(flat) => flat,
-                None => pipeline.settle(&shape, &dispatch, forms)?,
-            };
+            let (variant, plan) = settle_direct(pipeline, &shape, &dispatch, forms)?;
             let planned = Planned {
                 shape,
                 dispatch,
