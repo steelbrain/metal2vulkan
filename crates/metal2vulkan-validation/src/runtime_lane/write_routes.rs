@@ -24,6 +24,12 @@
 //! [`a_refused_command_another_queue_writes_again_runs_what_it_wrote`]: a command the runtime
 //! refuses at commit, which a later command buffer of another queue writes again before the
 //! execution runs, runs what that one wrote, as Metal's does.
+//!
+//! [`a_slow_writer_s_batch_holds_the_execution_s_host_step`] and
+//! [`a_slow_writer_in_an_earlier_command_buffer_holds_the_execution_s_host_step`]: slow work before
+//! the kernel ([`Scene::slow`]) keeps its batch running while the execution's host step could
+//! read the records, so the render command runs the kernel's write only where the step waits for
+//! that batch, whose commands never name the buffer.
 
 use super::degrade_notices::on_device_with;
 use super::{at_plan, buffer_with, read_buffer, WAIT};
@@ -55,8 +61,25 @@ enum Resident {
     Nowhere,
 }
 
+/// Which command buffer holds the kernel, after slow work ([`Scene::slow`]), against the one
+/// that executes what it wrote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Writer {
+    /// The executing one.
+    Same,
+    /// An earlier one of the same queue, committed first.
+    Earlier,
+}
+
 /// The target's width and height.
 const SIDE: u64 = 16;
+
+/// The threads of each of the slow work's dispatches ([`Scene::slow`]), in threadgroups of 256,
+/// each writing one word.
+const SLOW_THREADS: u64 = 1 << 23;
+
+/// How many dispatches the slow work makes, one after another over the same words.
+const SLOW_DISPATCHES: usize = 16;
 
 /// The fixture's functions on a device.
 struct Scene {
@@ -176,8 +199,10 @@ impl Scene {
         (target, pass)
     }
 
-    /// The render command's run, as `resident` says: the target's centre texel.
-    fn render(&self, resident: Resident) -> [u8; 4] {
+    /// The render command's run, as `resident` says: the target's centre texel. Where `slow`
+    /// says, slow work ([`Scene::slow`]) goes before the kernel, in the command buffer `slow`
+    /// names.
+    fn render(&self, resident: Resident, slow: Option<Writer>) -> [u8; 4] {
         let device = &self.device;
         let state = self.render_state("irw_vertex");
         let writer = self.kernel("irw_encode_draw", false);
@@ -190,10 +215,22 @@ impl Scene {
         let corners = floats(device, &[-1.0, -1.0, 3.0, -1.0, -1.0, 3.0]);
         let table = self.table(&icb, state.gpu_resource_id().0);
         let queue = device.new_command_queue().unwrap();
-        let command_buffer = queue.command_buffer().unwrap();
-        Scene::write(&command_buffer, resident, (&writer, &table, &corners), &icb);
+        let writes = queue.command_buffer().unwrap();
+        if slow.is_some() {
+            self.slow(&writes);
+        }
+        Scene::write(&writes, resident, (&writer, &table, &corners), &icb);
+        let later;
+        let executes = match slow {
+            Some(Writer::Earlier) => {
+                writes.commit().unwrap();
+                later = queue.command_buffer().unwrap();
+                &later
+            }
+            Some(Writer::Same) | None => &writes,
+        };
         let [centre] = self.pass(
-            &command_buffer,
+            executes,
             |encoder| {
                 let vertex = RenderStages::VERTEX;
                 (encoder.use_resource(corners.as_resource(), ResourceUsage::READ, vertex)).unwrap();
@@ -201,7 +238,30 @@ impl Scene {
             },
             [(SIDE / 2, SIDE / 2)],
         );
+        writes.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(writes.status(), CommandBufferStatus::Completed);
         centre
+    }
+
+    /// A compute encoder of `command_buffer` that keeps the GPU busy: [`SLOW_DISPATCHES`]
+    /// dispatches of `irw_mark` over [`SLOW_THREADS`] threads each, into a new buffer of their
+    /// own, which nothing else names. Encoded before a kernel that writes an indirect command
+    /// buffer's records, it holds the kernel's batch back past the time a host step that does not
+    /// wait for that batch reads the records.
+    fn slow(&self, command_buffer: &CommandBuffer) {
+        let mark = self.kernel("irw_mark", false);
+        let bytes = 4 * SLOW_THREADS;
+        let scratch = (self.device)
+            .new_buffer(bytes, ResourceOptions::private())
+            .unwrap();
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder.set_compute_pipeline_state(&mark).unwrap();
+        encoder.set_buffer(Some(&scratch), 0, 0).unwrap();
+        let (grid, group) = (Size::new(SLOW_THREADS, 1, 1), Size::new(256, 1, 1));
+        for _ in 0..SLOW_DISPATCHES {
+            encoder.dispatch_threads(grid, group).unwrap();
+        }
+        encoder.end_encoding().unwrap();
     }
 
     /// The inherited state's run of the point command and the CPU's triangle, as `resident`
@@ -328,7 +388,7 @@ fn an_execution_after_its_writer_runs_what_metal_runs() {
         let mut seen = Vec::new();
         let mut steps = Vec::new();
         for (resident, _) in METAL {
-            let render = drawn(scene.render(resident), "the render command");
+            let render = drawn(scene.render(resident, None), "the render command");
             let before = device.work_counts().host_steps_recorded;
             let [centre, corner] = scene.points(resident);
             steps.push((resident, device.work_counts().host_steps_recorded - before));
@@ -350,6 +410,43 @@ fn an_execution_after_its_writer_runs_what_metal_runs() {
         }
         let steps = format!("the inherited state's host steps: {steps:?}");
         assert_eq!(seen, expected, "{steps}");
+    });
+}
+
+/// The render command of [`Scene::render`], written by a kernel after slow work of its own
+/// command buffer ([`Scene::slow`]), in the shapes where only an encoder with no command made the
+/// buffer resident for writing (`Before`, `After`): the execution's host step reads the records
+/// once the kernel's batch completed, though no command of that batch names the buffer, so it
+/// draws the kernel's triangle, as Metal's run does ([`METAL`]). The tracker holds every batch of
+/// a command buffer as writing what any of its encoders made resident for writing
+/// (`State::resident_writes` in the runtime's `command_buffer/mod.rs`), and the step's gate covers
+/// the batches that wrote what it reads; without that, the gate let the step read the records
+/// while the slow work still ran, and it drew the CPU's records, none: the red clear colour.
+#[test]
+fn a_slow_writer_s_batch_holds_the_execution_s_host_step() {
+    on_device_with(at_plan, |device, _| {
+        let scene = Scene::new(device);
+        for resident in [Resident::Before, Resident::After] {
+            let centre = scene.render(resident, Some(Writer::Same));
+            assert_eq!(centre, [0, 255, 0, 255], "{resident:?}");
+        }
+    });
+}
+
+/// [`a_slow_writer_s_batch_holds_the_execution_s_host_step`], the kernel and the encoder that
+/// makes the buffer resident for writing in an earlier command buffer of the execution's queue,
+/// committed first: the execution's host step reads the records once that command buffer's batch
+/// completed, so it draws the kernel's triangle. Metal orders the execution after that write of
+/// the buffer, which the earlier command buffer made resident for writing (expected from its
+/// hazard tracking of the buffer; the probe runs the shapes of one command buffer alone).
+#[test]
+fn a_slow_writer_in_an_earlier_command_buffer_holds_the_execution_s_host_step() {
+    on_device_with(at_plan, |device, _| {
+        let scene = Scene::new(device);
+        for resident in [Resident::Before, Resident::After] {
+            let centre = scene.render(resident, Some(Writer::Earlier));
+            assert_eq!(centre, [0, 255, 0, 255], "{resident:?}");
+        }
     });
 }
 
