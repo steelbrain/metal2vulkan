@@ -65,8 +65,8 @@
 //! `DeviceProperties::supports_sampler_reduction_mode` answers no. Metal takes any `lodBias`, its
 //! validation layer too (an M3 Max on macOS 27.0.1: -100 to 100, ±16 and past them, NaN and the
 //! infinities), and samples nothing differently for it there: every sample reads the level a bias
-//! of 0 reads (`SamplerDescriptor::lod_bias`). So does the runtime, whose Vulkan samplers' bias is
-//! 0; a state of another bias is another state ([`SamplerKey`]).
+//! of 0 reads (`SamplerDescriptor::lod_bias`). So does the runtime: a state samples with a bias of
+//! 0 ([`taken_descriptor`]), and a state of another bias is another state ([`SamplerKey`]).
 //!
 //! A min or mag filter `Cubic` (`MTLSamplerMinMagFilterCubic`, raw value 2) is made. Without a
 //! mip filter, Metal samples through such a state as through a constexpr `filter::bicubic`
@@ -477,8 +477,9 @@ pub fn sampler_border_color(raw: u64) -> SamplerBorderColor {
 }
 
 /// The descriptor a state of `descriptor` samples with (the module's rules): `descriptor` itself
-/// with plain Metal's anisotropy ([`metal_anisotropy`]) and LOD clamps ([`metal_lod_clamps`]),
-/// and for a pixel-coordinate one its repeat and mirrored-repeat axes `ClampToEdge`, its `r`
+/// with plain Metal's anisotropy ([`metal_anisotropy`]) and LOD clamps ([`metal_lod_clamps`]), a
+/// LOD bias of 0 whatever its own (Metal samples none on the families the runtime claims), and
+/// for a pixel-coordinate one its repeat and mirrored-repeat axes `ClampToEdge`, its `r`
 /// axis's `MirrorClampToEdge` too (`r` addresses nothing such a sampler samples), mip filter
 /// `NotMipmapped` and anisotropy 1, as plain Metal samples it. A pixel-coordinate
 /// `MirrorClampToEdge` `s` or `t` axis keeps its mode, which Metal mirrors once by texel index and
@@ -489,6 +490,7 @@ pub(super) fn taken_descriptor(descriptor: &SamplerDescriptor) -> SamplerDescrip
     taken.max_anisotropy = metal_anisotropy(descriptor.max_anisotropy);
     [taken.lod_min_clamp, taken.lod_max_clamp] =
         metal_lod_clamps([descriptor.lod_min_clamp, descriptor.lod_max_clamp]);
+    taken.lod_bias = 0.0;
     if !descriptor.normalized_coordinates {
         for mode in [&mut taken.s_address_mode, &mut taken.t_address_mode] {
             if matches!(*mode, A::Repeat | A::MirrorRepeat) {

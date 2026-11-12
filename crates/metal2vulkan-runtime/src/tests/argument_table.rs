@@ -89,9 +89,9 @@ fn field_names(printed: &str) -> Vec<String> {
         .collect()
 }
 
-/// Two bound samplers compare alike exactly where they print alike: LOD clamps of opposite zero
-/// signs differ, NaN clamps of any sign and payload are alike, and every other field differs
-/// where its value does.
+/// Two bound samplers compare alike exactly where they print alike: LOD clamps or LOD biases of
+/// opposite zero signs differ, NaN clamps or biases of any sign and payload are alike, and every
+/// other field differs where its value does.
 #[test]
 fn samplers_compare_as_they_print() {
     let base = BoundSampler::new(SamplerDescriptor::new());
@@ -117,6 +117,17 @@ fn samplers_compare_as_they_print() {
         ),
         (clamped(f32::NAN, 1.0), clamped(0.0, 1.0)),
         (clamped(0.0, f32::MAX), clamped(0.0, f32::INFINITY)),
+        (base, other(|s| s.desc.lod_bias = -0.0)),
+        (base, other(|s| s.desc.lod_bias = 1.0)),
+        (
+            other(|s| s.desc.lod_bias = f32::NAN),
+            other(|s| s.desc.lod_bias = -f32::NAN),
+        ),
+        (
+            other(|s| s.desc.lod_bias = f32::NAN),
+            other(|s| s.desc.lod_bias = f32::from_bits(0x7fc0_0001)),
+        ),
+        (base, other(|s| s.desc.lod_bias = f32::NAN)),
         (base, other(|s| s.desc.max_anisotropy = 4)),
         (base, other(|s| s.desc.normalized_coordinates = false)),
         (base, other(|s| s.resource_id = Some(7))),
@@ -167,7 +178,8 @@ fn the_check_compares_every_field() {
             "lod_average",
             "max_anisotropy",
             "compare_function",
-            "reduction_mode"
+            "reduction_mode",
+            "lod_bias"
         ]
     );
 }

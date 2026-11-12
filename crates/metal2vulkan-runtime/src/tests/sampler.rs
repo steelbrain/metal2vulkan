@@ -143,6 +143,28 @@ fn metal_takes_what_probe_7_saw_it_take() {
             "clamps {min}..{max}"
         );
     }
+    // Any LOD bias, taken as none: Metal samples every level as with no bias (an M3 Max on macOS
+    // 27.0.1, `runtime_lane::lod_bias` in the validation crate).
+    for bias in [
+        1.0,
+        -1.0,
+        -0.0,
+        15.999,
+        -16.0,
+        100.0,
+        f32::MAX,
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    ] {
+        for d in [descriptor(|_| {}), pixel(|_| {})] {
+            let mut biased = d;
+            biased.lod_bias = bias;
+            let taken = taken_descriptor(&biased);
+            assert_eq!(taken.lod_bias.to_bits(), 0, "bias {bias}");
+            assert_eq!(taken, taken_descriptor(&d), "bias {bias}");
+        }
+    }
 }
 
 /// A `maxAnisotropy` outside 1 to 16, which Metal's validation stops, samples as plain Metal

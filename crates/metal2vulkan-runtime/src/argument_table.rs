@@ -600,19 +600,22 @@ fn bound_texture(texture: &Texture) -> BoundTexture {
 
 /// Whether `a` and `b` print alike (`{:?}`), told without printing them
 /// ([`ArgumentTable::check_reading`]): every field as `==` compares it, but the descriptor's LOD
-/// clamps, which print a float's sign (`0.0` and `-0.0` differ, where `==` takes them for equal)
-/// and print every NaN alike (where `==` takes no NaN for equal). `tests/argument_table.rs` fails
-/// when `BoundSampler` or `SamplerDescriptor` gains a field, so a new one is compared here too.
+/// clamps and LOD bias, which print a float's sign (`0.0` and `-0.0` differ, where `==` takes
+/// them for equal) and print every NaN alike (where `==` takes no NaN for equal).
+/// `tests/argument_table.rs` fails when `BoundSampler` or `SamplerDescriptor` gains a field, so a
+/// new one is compared here too.
 #[cfg(debug_assertions)]
 pub(super) fn same_as_printed(a: &BoundSampler, b: &BoundSampler) -> bool {
     let alike = |x: f32, y: f32| x.to_bits() == y.to_bits() || (x.is_nan() && y.is_nan());
-    let clamps = alike(a.desc.lod_min_clamp, b.desc.lod_min_clamp)
-        && alike(a.desc.lod_max_clamp, b.desc.lod_max_clamp);
+    let floats = |s: &BoundSampler| [s.desc.lod_min_clamp, s.desc.lod_max_clamp, s.desc.lod_bias];
+    let floats_alike = (floats(a).into_iter())
+        .zip(floats(b))
+        .all(|(x, y)| alike(x, y));
     let [mut a, mut b] = [*a, *b];
     for desc in [&mut a.desc, &mut b.desc] {
-        [desc.lod_min_clamp, desc.lod_max_clamp] = [0.0; 2];
+        [desc.lod_min_clamp, desc.lod_max_clamp, desc.lod_bias] = [0.0; 3];
     }
-    clamps && a == b
+    floats_alike && a == b
 }
 
 impl ArgumentTable {
