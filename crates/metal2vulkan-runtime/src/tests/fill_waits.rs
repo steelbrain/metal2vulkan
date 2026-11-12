@@ -369,8 +369,8 @@ fn new_memory_reads_zero_through_every_reach() {
         .unwrap();
     let (placed_back, own_back) = (shared(TEXTURE_BYTES), shared(TEXTURE_BYTES));
     let written = named.command_buffer().unwrap();
-    through(&written, &source, &placed, &placed_back);
-    through(&written, &source, &own, &own_back);
+    write_and_read(&written, &source, &placed, &placed_back);
+    write_and_read(&written, &source, &own, &own_back);
     written.commit().unwrap();
     for command_buffer in [&held, &unrelated, &written] {
         completed(&name, command_buffer);
@@ -404,7 +404,12 @@ fn pattern() -> Vec<u8> {
 }
 
 /// A blit of `source` into `texture`, whole, then of `texture` into `back`.
-fn through(command_buffer: &CommandBuffer, source: &Buffer, texture: &Texture, back: &Buffer) {
+fn write_and_read(
+    command_buffer: &CommandBuffer,
+    source: &Buffer,
+    texture: &Texture,
+    back: &Buffer,
+) {
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     let (size, origin) = (Size::new(SIDE, SIDE, 1), Origin::new(0, 0, 0));
     let (row, image) = (SIDE * 4, TEXTURE_BYTES);
@@ -472,7 +477,7 @@ fn a_batch_that_reaches_no_new_texture_waits_for_none_of_its_first_work() {
         );
         let texture = device.new_texture(&private_texture()).unwrap();
         let back = shared(TEXTURE_BYTES);
-        through(&work, &source, &texture, &back);
+        write_and_read(&work, &source, &texture, &back);
         work.commit().unwrap();
         let first = frame();
         // A texture the compositor's next frame moves, which the app's next command buffer
@@ -481,7 +486,7 @@ fn a_batch_that_reaches_no_new_texture_waits_for_none_of_its_first_work() {
         let second = frame();
         let next = app.command_buffer().unwrap();
         let moved_back = shared(TEXTURE_BYTES);
-        through(&next, &source, &moved, &moved_back);
+        write_and_read(&next, &source, &moved, &moved_back);
         next.commit().unwrap();
         completed(&name, &first);
         completed(&name, &second);
