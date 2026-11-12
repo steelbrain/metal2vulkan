@@ -2592,6 +2592,7 @@ field	metal2vulkan-runtime::WorkCounts.attached_read_slots_apart	pub attached_re
 field	metal2vulkan-runtime::WorkCounts.attached_read_slots_first_level	pub attached_read_slots_first_level: u64
 field	metal2vulkan-runtime::WorkCounts.attached_read_slots_narrowed	pub attached_read_slots_narrowed: u64
 field	metal2vulkan-runtime::WorkCounts.attached_read_slots_one_level	pub attached_read_slots_one_level: u64
+field	metal2vulkan-runtime::WorkCounts.attached_read_slots_past	pub attached_read_slots_past: u64
 field	metal2vulkan-runtime::WorkCounts.attached_read_slots_reaching	pub attached_read_slots_reaching: u64
 field	metal2vulkan-runtime::WorkCounts.attached_read_slots_written	pub attached_read_slots_written: u64
 field	metal2vulkan-runtime::WorkCounts.attachment_clears_recorded	pub attachment_clears_recorded: u64

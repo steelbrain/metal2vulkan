@@ -259,6 +259,8 @@ mod astc_passes_and_writes;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod astc_textures;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod attached_levels;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod attachment_read_costs;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod attachment_reads;

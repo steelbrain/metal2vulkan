@@ -191,10 +191,13 @@ pub(crate) struct Kept {
     /// that, at its fragments' own pixels alone (`WorkCounts::attachment_reads_through_copies`,
     /// `own_pixel_reads`), which a draw again counts as it did.
     pub(super) through_copies: (bool, bool),
-    /// Its sampled slots narrowed to the levels of their texture before an attached one, each
-    /// with the levels its view holds (`render/attached_levels.rs`): a draw rebound is rebound
-    /// only where it narrows the same.
-    pub(super) narrowed: Vec<(metal2vulkan::pipeline::SlotRef, u32)>,
+    /// Its sampled slots narrowed to the levels of their texture apart from the attached ones,
+    /// each with its levels (`render/attached_levels.rs`): a draw rebound is rebound only where it
+    /// narrows the same.
+    pub(super) narrowed: Vec<(
+        metal2vulkan::pipeline::SlotRef,
+        crate::binding::NarrowedLevels,
+    )>,
     /// Whether one of its uses reads an image other than as an attachment: its noting looks
     /// for fresh textures among them (`EncoderCore::note_again`).
     pub(super) reads_images: bool,

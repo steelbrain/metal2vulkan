@@ -740,36 +740,44 @@ struct CommandCounters {
 }
 
 /// How the levels a draw's slot reads of a texture a color attachment of its render pass instance
-/// renders meet the attached level (`render/attached_levels.rs`, `WorkCounts::attached_read_slots`
+/// renders meet the attached levels (`render/attached_levels.rs`, `WorkCounts::attached_read_slots`
 /// and kin): the first that holds, in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AttachedLevels {
     /// The texture has one level.
     OneLevel,
-    /// The attachment renders the texture's own first level.
-    FirstLevel,
     /// A read of the slot may reach any level of its view (`LevelReads::any`), or the module
     /// states no reads of the slot.
     AnyLevel,
-    /// A read reaches the lowest attached level or one past it, through the sampler the draw binds
-    /// or at a level it names, or the draw binds the slot through no write whose sampler it knows.
+    /// A read may reach the lowest attached level or one past it, and one the highest attached
+    /// level or one before it (or the instance holds an attached level in the feedback loop
+    /// layout), through the sampler the draw binds or at a level it names, or the draw binds the
+    /// slot through no write whose sampler it knows; the lowest attached level is the texture's
+    /// own first level.
+    FirstLevel,
+    /// The same, the lowest attached level past the texture's own first.
     Reaching,
-    /// Every read reaches only levels before the lowest attached one, but the texture's own
-    /// image cannot serve them in place: the texture is no image of its own, or a sparse one, or
-    /// one with a decoded twin, or one whose image lacks the sampled usage.
+    /// Every read reaches only levels before the lowest attached one, or only levels past the
+    /// highest, but the texture's own image cannot serve them in place: the texture is no image
+    /// of its own, or a sparse one, or one with a decoded twin, or one whose image lacks the
+    /// sampled usage.
     Apart,
-    /// Every read reaches only levels before the lowest attached one, but a write the draw's
-    /// tracked uses or the instance's unordered writes since its last barrier hold, or an
-    /// attachment of the instance, meets those levels.
+    /// Every read reaches only levels before the lowest attached one, or only levels past the
+    /// highest, but a write the draw's tracked uses or the instance's unordered writes since its
+    /// last barrier hold, or an attachment of the instance, meets those levels.
     Written,
     /// Every read reaches only levels before the lowest attached one, and the slot binds the
     /// texture's own image through a view of those levels, in place of its copy.
     Narrowed,
+    /// Every read reaches only levels past the highest attached one, and the slot binds the
+    /// texture's own image through a view of the levels from its first up to the highest it
+    /// reads, in place of its copy.
+    Past,
 }
 
 impl AttachedLevels {
     /// How many there are.
-    pub(crate) const COUNT: usize = 7;
+    pub(crate) const COUNT: usize = 8;
 }
 
 /// Why a render encoder's kept draw carried into its command buffer's next render encoder
@@ -8253,8 +8261,9 @@ pub struct WorkCounts {
     /// Draws that sample, at a slot, a texture that presents a color attachment of their own
     /// render pass, each reading the texture's copy, taken before its render pass instance, in
     /// the attachment's place where the texture's shadow is served (`texture/attached_reads.rs`;
-    /// the copies count in `shadow_copies`), or at a slot narrowed to the levels before the
-    /// attached one, the texture's own image (`attached_read_slots_narrowed`). A draw again or
+    /// the copies count in `shadow_copies`), or at a slot narrowed to the levels apart from the
+    /// attached ones, the texture's own image (`attached_read_slots_narrowed`,
+    /// `attached_read_slots_past`). A draw again or
     /// rebound of one counts as it did (`render/draw_again.rs`).
     pub attachment_reads_through_copies: u64,
     /// Draws that sample a color attachment's texture after a memory barrier of their render
@@ -8463,40 +8472,49 @@ pub struct WorkCounts {
     /// The slots of draws that take every step (not a draw again or rebound,
     /// `render/draw_again.rs`) that sample a texture a color attachment of their render pass
     /// instance renders at a level and layer the slot's view presents, and so read its copy
-    /// (`texture/attached_reads.rs`): one per such slot of each draw. The seven counts after it
+    /// (`texture/attached_reads.rs`): one per such slot of each draw. The eight counts after it
     /// split them by how the levels the slot's reads reach (`StageModule::level_reads`, through
-    /// the samplers the draw binds) meet the lowest attached level, counted from the view's
-    /// first, and whether the slot then reads the texture's own levels before that one in
-    /// place of its copy (`render/attached_levels.rs`).
+    /// the samplers the draw binds) meet the attached levels, counted from the view's first, and
+    /// whether the slot then reads the texture's own levels before the lowest attached one, or
+    /// past the highest, in place of its copy (`render/attached_levels.rs`).
     pub attached_read_slots: u64,
     /// Of `attached_read_slots`, those of a texture of one level.
     pub attached_read_slots_one_level: u64,
-    /// Those of a texture of several levels whose own first level an attachment renders.
-    pub attached_read_slots_first_level: u64,
     /// Those a read of which may reach any level of the view (`LevelReads::any`: a level the
     /// function computes, a level-count query beyond a constant's containment, a level-of-detail
     /// query, a sample through no sampler or with a minimum level of detail).
     pub attached_read_slots_any_level: u64,
-    /// Those a read of which reaches the lowest attached level or one past it: a sample through
-    /// the sampler the draw binds (its `maxLod`, or an explicit level of detail clamped into its
-    /// range), a fetch or size query at a constant level, or a sample through a sampler the draw
-    /// binds apart from the texture (a separate sampler), whose levels are not counted.
+    /// Those of a texture of several levels whose own first level an attachment renders, a read
+    /// of which may reach an attached level or one before it, and one past it: a sample through
+    /// the sampler the draw binds (its bounds, or an explicit level of detail clamped into them),
+    /// a fetch, gather or size query at a constant level, or a sample through a sampler the draw
+    /// binds apart from the texture (a separate sampler), whose levels are not counted; or whose
+    /// instance holds an attached level in the feedback loop layout.
+    pub attached_read_slots_first_level: u64,
+    /// The same, of a texture whose lowest attached level is past its own first.
     pub attached_read_slots_reaching: u64,
-    /// Those every read of which reaches only levels before the lowest attached one, which keep
-    /// the copy as the texture's own image cannot serve them: no image of its own (a texture
-    /// over a buffer's bytes), a sparse one, one with a decoded twin, or one whose image lacks
-    /// the sampled usage.
+    /// Those every read of which reaches only levels before the lowest attached one, or only
+    /// levels past the highest, which keep the copy as the texture's own image cannot serve them:
+    /// no image of its own (a texture over a buffer's bytes), a sparse one, one with a decoded
+    /// twin, or one whose image lacks the sampled usage.
     pub attached_read_slots_apart: u64,
-    /// Those every read of which reaches only levels before the lowest attached one, which keep
-    /// the copy as something writes those levels: a write among the draw's tracked uses, an
-    /// earlier draw's write since the instance's last barrier, or an attachment of the instance
-    /// (a resolve's, a depth or stencil one's) at them.
+    /// Those every read of which reaches only levels before the lowest attached one, or only
+    /// levels past the highest, which keep the copy as something writes those levels: a write
+    /// among the draw's tracked uses, an earlier draw's write since the instance's last barrier,
+    /// or an attachment of the instance (a resolve's, a depth or stencil one's) at them.
     pub attached_read_slots_written: u64,
     /// Those every read of which reaches only levels before the lowest attached one, each bound
     /// through a view of the texture's own image of its levels from its first up to the lowest
     /// attached one, in place of the copy: no copy of the texture is taken for the slot, and its
     /// texels are the copy's, which holds the same levels as they were before the instance.
     pub attached_read_slots_narrowed: u64,
+    /// Those every read of which reaches only levels past the highest attached one, each bound
+    /// through a view of the texture's own image of its levels from its first up to the highest
+    /// the slot reads (every level where its sampler's `maxLod` reaches past the last), in place
+    /// of the copy: no copy of the texture is taken for the slot, and the levels it reads hold the
+    /// copy's texels, as nothing the instance does writes them. The view holds the attached levels
+    /// too, unread, in `GENERAL` as the instance holds them.
+    pub attached_read_slots_past: u64,
     /// Ended compute and blit encoders whose logs their command buffers kept, as a rebind before
     /// the first submission may encode them again (`replay.rs`), and the bytes of those logs.
     pub replay_logs_kept: u64,
@@ -9288,6 +9306,7 @@ impl Device {
             attached_read_slots_apart: attached(AttachedLevels::Apart),
             attached_read_slots_written: attached(AttachedLevels::Written),
             attached_read_slots_narrowed: attached(AttachedLevels::Narrowed),
+            attached_read_slots_past: attached(AttachedLevels::Past),
             draws_moved: commands(|counts| &counts.draws_moved),
             draws_moved_inside: commands(|counts| &counts.draws_moved_inside),
             draws_restated: commands(|counts| &counts.draws_restated),

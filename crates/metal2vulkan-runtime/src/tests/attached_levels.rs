@@ -1,7 +1,8 @@
 //! Draws that sample a mipmapped texture their own render pass renders at another level
 //! (`render/attached_levels.rs`): a slot every read of which reaches only levels before the
-//! attached one reads the texture's own image through a view of those levels, with no copy; any
-//! other reads the copy, as before. Either way the draw reads the texels from before the pass.
+//! attached one, or only levels past it, reads the texture's own image through a view of the
+//! levels up to the attached one or up to the highest it reads, with no copy; any other reads the
+//! copy, as before. Either way the draw reads the texels from before the pass.
 //!
 //! The texture is a private 16 x 16 `RGBA8Unorm` of five levels, each level `l` holding
 //! [`COLORS`]`[l]` in every channel of every texel, so a read's level shows in the color it
@@ -38,9 +39,10 @@ fn side(level: u64) -> u64 {
 /// What one pass moved, between its counts.
 #[derive(Debug, PartialEq, Eq)]
 struct Moved {
-    /// `WorkCounts::attached_read_slots_narrowed`, `attached_read_slots_reaching` and
-    /// `attached_read_slots_first_level`.
+    /// `WorkCounts::attached_read_slots_narrowed`, `attached_read_slots_past`,
+    /// `attached_read_slots_reaching` and `attached_read_slots_first_level`.
     narrowed: u64,
+    past: u64,
     reaching: u64,
     first_level: u64,
     /// Whether the pass copied anything in (`WorkCounts::shadow_copies`,
@@ -53,6 +55,7 @@ impl Moved {
         let delta = |count: fn(&WorkCounts) -> u64| count(after) - count(before);
         Moved {
             narrowed: delta(|c| c.attached_read_slots_narrowed),
+            past: delta(|c| c.attached_read_slots_past),
             reaching: delta(|c| c.attached_read_slots_reaching),
             first_level: delta(|c| c.attached_read_slots_first_level),
             copied: delta(|c| c.shadow_copies) > 0
@@ -192,10 +195,12 @@ impl Tools {
     }
 }
 
-/// A sampler of nearest filters and mip filter, its levels of detail clamped at `max_lod`.
-fn sampler(device: &Device, max_lod: f32) -> SamplerState {
+/// A sampler of nearest filters and mip filter, its levels of detail clamped into
+/// `[min_lod, max_lod]`.
+fn sampler(device: &Device, (min_lod, max_lod): (f32, f32)) -> SamplerState {
     let mut descriptor = SamplerDescriptor::new();
     descriptor.mip_filter = SamplerMipFilter::Nearest;
+    descriptor.lod_min_clamp = min_lod;
     descriptor.lod_max_clamp = max_lod;
     device.new_sampler_state(&descriptor).unwrap()
 }
@@ -204,29 +209,42 @@ fn sampler(device: &Device, max_lod: f32) -> SamplerState {
 /// view of levels 0 and 1, with no copy, and writes level 1's color, the copy's texels there;
 /// one of level 2 reads the copy, and writes level 2's color from before the pass; a read at
 /// the level of detail its derivatives give (2 here: a pixel of level 2 spans a texel of it)
-/// reads in place where the bound sampler clamps it to level 1, and through the copy where it
-/// does not. With level 0 attached, the read of level 1 reads the copy.
+/// reads in place where the bound sampler clamps it to level 1, or to level 3 and above, and
+/// through the copy where it does not. With level 0 attached, the read of level 1 reads in place
+/// too, through a view of levels 0 and 1, as does one of level 2 with level 1 attached; the read
+/// at its derivatives' level of detail reads level 0, the attached one, through the copy.
 #[test]
-fn reads_of_the_levels_before_the_attached_one_read_them_in_place() {
+fn reads_of_the_levels_apart_from_the_attached_one_read_them_in_place() {
     let scratch = Scratch::new("attached-levels");
     let device = device(&scratch.0);
     let tools = Tools::new(&device);
-    let unclamped = sampler(&device, f32::MAX);
-    let clamped = sampler(&device, 1.0);
+    let unclamped = sampler(&device, (0.0, f32::MAX));
+    let clamped = sampler(&device, (0.0, 1.0));
+    let from_three = sampler(&device, (3.0, f32::MAX));
     let in_place = Moved {
         narrowed: 1,
+        past: 0,
+        reaching: 0,
+        first_level: 0,
+        copied: false,
+    };
+    let past = Moved {
+        narrowed: 0,
+        past: 1,
         reaching: 0,
         first_level: 0,
         copied: false,
     };
     let through_copy = Moved {
         narrowed: 0,
+        past: 0,
         reaching: 1,
         first_level: 0,
         copied: true,
     };
     let first_level = Moved {
         narrowed: 0,
+        past: 0,
         reaching: 0,
         first_level: 1,
         copied: true,
@@ -265,11 +283,35 @@ fn reads_of_the_levels_before_the_attached_one_read_them_in_place() {
             &through_copy,
         ),
         (
+            "implicit, at least 3",
+            2,
+            "alv_implicit",
+            &from_three,
+            3,
+            &past,
+        ),
+        (
             "level 1, level 0 attached",
             0,
             "alv_level1",
             &unclamped,
             1,
+            &past,
+        ),
+        (
+            "level 2, level 1 attached",
+            1,
+            "alv_level2",
+            &unclamped,
+            2,
+            &past,
+        ),
+        (
+            "implicit, level 0 attached",
+            0,
+            "alv_implicit",
+            &unclamped,
+            0,
             &first_level,
         ),
     ];

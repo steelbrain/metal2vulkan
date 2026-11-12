@@ -2486,7 +2486,7 @@ impl RenderExecution {
                 kept: None,
                 planned: false,
                 feedback: Feedback::NONE,
-                storage_colors: 0,
+                general_colors: 0,
             },
             layout: Versioned::new(layout),
             passes: vec![(snapshot.shape.clone(), Arc::clone(&snapshot.compatible))],

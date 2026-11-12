@@ -795,7 +795,8 @@ impl RenderLowering {
         let narrowed = match attached {
             true => {
                 let device = self.core.device();
-                self.attached_slots(device, (&**plan, compiled), &stages, false)
+                let feedback = self.current.feedback;
+                self.attached_slots(device, (&**plan, compiled), &stages, (feedback, false))
             }
             false => NarrowedSlots::default(),
         };

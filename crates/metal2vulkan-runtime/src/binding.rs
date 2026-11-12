@@ -150,37 +150,73 @@ pub(super) struct Tables<'a> {
     /// A merged draw replay's header's address (`render/executions/gpu.rs`): its vertex
     /// function's `PushHole::MergedDrawAddress` takes it.
     merged_header: Option<u64>,
-    /// A draw's sampled slots that read the levels of their texture's own image before an
-    /// attached one, in place of its copy (`render/attached_levels.rs`).
+    /// A draw's sampled slots that read the levels of their texture's own image apart from the
+    /// attached ones, in place of its copy (`render/attached_levels.rs`).
     narrowed: Option<&'a NarrowedSlots>,
 }
 
-/// The sampled texture slots of a draw narrowed to the levels of their texture's own image before
-/// a level its render pass instance renders (`render/attached_levels.rs`): each binds the image
-/// through a view of its levels `0..n`, counted from the texture's own first level, and names
-/// those levels in its uses, in place of the texture's copy (`texture/attached_reads.rs`). Once
-/// withdrawn, every slot binds as it would without them: its copy.
+/// The levels a narrowed slot reads of its texture's own image (`NarrowedSlots`), counted from
+/// the texture's own first level: its view holds `0..view`, and its reads reach `first..view`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct NarrowedLevels {
+    pub(super) first: u32,
+    pub(super) view: u32,
+}
+
+/// The sampled texture slots of a draw narrowed to the levels of their texture's own image apart
+/// from those its render pass instance renders (`render/attached_levels.rs`): each binds the image
+/// through a view of its levels `0..view`, counted from the texture's own first level, and names
+/// the levels its reads reach in its uses, in place of the texture's copy
+/// (`texture/attached_reads.rs`). Once withdrawn, every slot binds as it would without them: its
+/// copy.
 #[derive(Default)]
 pub(super) struct NarrowedSlots {
-    /// Each slot, the levels its view holds, and its use of them.
-    slots: Vec<(SlotRef, u32, Use<ResourceKey>)>,
+    /// Each slot, its levels, its use of them, and the colors of the instance that render levels
+    /// its view holds (bit `i` for color `i`).
+    slots: Vec<(SlotRef, NarrowedLevels, Use<ResourceKey>, u32)>,
     withdrawn: Cell<bool>,
 }
 
 impl NarrowedSlots {
-    /// Narrow `slot` to its texture's levels `0..levels`, whose use `used` names them.
-    pub(super) fn narrow(&mut self, slot: SlotRef, levels: u32, used: Use<ResourceKey>) {
-        self.slots.push((slot, levels, used));
+    /// Narrow `slot` to its texture's levels `levels`, whose use `used` names those its reads
+    /// reach, past the attached levels of the colors `spanned` where its view holds them.
+    pub(super) fn narrow(
+        &mut self,
+        slot: SlotRef,
+        levels: NarrowedLevels,
+        used: Use<ResourceKey>,
+        spanned: u32,
+    ) {
+        self.slots.push((slot, levels, used, spanned));
     }
 
     /// The levels `slot` is narrowed to, where it is and they are not withdrawn.
-    fn levels(&self, slot: SlotRef) -> Option<u32> {
+    fn levels(&self, slot: SlotRef) -> Option<NarrowedLevels> {
         if self.withdrawn.get() {
             return None;
         }
         (self.slots.iter())
             .find(|(narrowed, ..)| *narrowed == slot)
-            .map(|&(_, levels, _)| levels)
+            .map(|&(_, levels, ..)| levels)
+    }
+
+    /// The colors of the instance whose attached levels the slots' views hold, none once
+    /// withdrawn: the instance must hold them in `GENERAL`, the layout the views' descriptors name
+    /// (`render/attached_levels.rs`).
+    pub(super) fn spanned(&self) -> u32 {
+        match self.withdrawn.get() {
+            true => 0,
+            false => (self.slots.iter()).fold(0, |colors, &(.., spanned)| colors | spanned),
+        }
+    }
+
+    /// How many slots are narrowed to levels before the attached ones, and how many to levels
+    /// past them, withdrawn or not.
+    pub(super) fn kinds(&self) -> (usize, usize) {
+        let past = (self.slots.iter())
+            .filter(|(_, levels, ..)| levels.first > 0)
+            .count();
+        (self.slots.len() - past, past)
     }
 
     /// How many slots are narrowed, none once withdrawn.
@@ -192,16 +228,16 @@ impl NarrowedSlots {
     }
 
     /// The narrowed slots and their levels, in the order they were narrowed; none once withdrawn.
-    pub(super) fn listed(&self) -> impl Iterator<Item = (SlotRef, u32)> + '_ {
+    pub(super) fn listed(&self) -> impl Iterator<Item = (SlotRef, NarrowedLevels)> + '_ {
         let withdrawn = self.withdrawn.get();
         (self.slots.iter())
             .filter(move |_| !withdrawn)
-            .map(|&(slot, levels, _)| (slot, levels))
+            .map(|&(slot, levels, ..)| (slot, levels))
     }
 
     /// Whether a write among `uses` meets the levels a narrowed slot reads.
     pub(super) fn written_by(&self, uses: &[Use<ResourceKey>]) -> bool {
-        (self.slots.iter()).any(|(.., narrowed)| {
+        (self.slots.iter()).any(|(.., narrowed, _)| {
             (uses.iter()).any(|used| {
                 !used.write.is_empty()
                     && used.key == narrowed.key
@@ -263,7 +299,7 @@ impl<'a> Tables<'a> {
         }
     }
 
-    /// The tables, with the draw's slots narrowed to the levels before an attached one
+    /// The tables, with the draw's slots narrowed to the levels apart from the attached ones
     /// (`Tables::narrowed`).
     pub(super) fn with_narrowed(self, narrowed: &'a NarrowedSlots) -> Tables<'a> {
         Tables {
@@ -273,9 +309,9 @@ impl<'a> Tables<'a> {
     }
 
     /// How a slot binding of `texture` at `slot`, of the kind `storage`, reads it: through a view
-    /// of its levels before an attached one where the slot is narrowed (a sampled binding alone),
-    /// else through its copy where it presents an attachment of the draw's instance and the slot
-    /// reads no snapshot, else its own image.
+    /// of its own image where the slot is narrowed to levels apart from the attached ones (a
+    /// sampled binding alone), else through its copy where it presents an attachment of the draw's
+    /// instance and the slot reads no snapshot, else its own image.
     fn slot_read(&self, texture: &Texture, slot: SlotRef, storage: bool) -> SlotRead {
         let narrowed = (self.narrowed.filter(|_| !storage)).and_then(|n| n.levels(slot));
         match narrowed {
@@ -1787,8 +1823,8 @@ enum SlotRead {
     Own,
     /// Its copy, as it presents an attachment of the draw's instance (`texture/attached_reads.rs`).
     Copy,
-    /// Its own image's levels `0..n` before an attached one (`render/attached_levels.rs`).
-    Levels(u32),
+    /// Its own image's levels apart from the attached ones (`render/attached_levels.rs`).
+    Levels(NarrowedLevels),
 }
 
 impl SlotRead {
@@ -1801,7 +1837,7 @@ impl SlotRead {
         storage: bool,
     ) -> Result<vk::ImageView, Error> {
         match self {
-            SlotRead::Levels(levels) => texture.levels_view(call, view, levels),
+            SlotRead::Levels(levels) => texture.levels_view(call, view, levels.view),
             read => texture.slot_view(call, view, storage, read == SlotRead::Copy),
         }
     }
@@ -2869,7 +2905,10 @@ fn other_use(
                     access(write, resource.access.write),
                 );
                 return match tables.slot_read(texture, slot, storage) {
-                    SlotRead::Levels(levels) => Ok(Some(texture.levels_use(levels, accesses))),
+                    SlotRead::Levels(levels) => {
+                        let levels = levels.first..levels.view;
+                        Ok(Some(texture.levels_use(levels, accesses)))
+                    }
                     read => (texture.slot_use(call, storage, read == SlotRead::Copy, accesses))
                         .map(Some),
                 };

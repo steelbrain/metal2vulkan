@@ -719,9 +719,10 @@ impl RenderLowering {
     /// one cannot hold its colors in the feedback loop layout: it records inline, its render
     /// pass instance begun already (`render/inline_first.rs`, `render/inline_splits.rs`); it
     /// runs an execution of render commands, whose runs begin render pass instances of their
-    /// own (`render/executions.rs`); a draw recorded into it binds such a color's image as a
-    /// storage image (`storage_colors`); or it leaves such a color out of its subpass (the
-    /// storage form).
+    /// own (`render/executions.rs`); a draw recorded into it needs such a color in `GENERAL`
+    /// (`general_colors`: it binds its image as a storage image, or reads levels past the
+    /// attached ones through a view that holds them); or it leaves such a color out of its
+    /// subpass (the storage form).
     pub(super) fn snapshot_apart(&self, wanted: &Wanted) -> bool {
         let current = &self.current;
         current.inline
@@ -729,7 +730,7 @@ impl RenderLowering {
                 .pieces
                 .iter()
                 .any(|piece| matches!(piece, super::Piece::Execution(_)))
-            || current.storage_colors & wanted.feedback.0 != 0
+            || current.general_colors & wanted.feedback.0 != 0
             || current
                 .shape
                 .storage

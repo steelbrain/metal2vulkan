@@ -1298,11 +1298,12 @@ struct Instance {
     /// for its render pass instance (`render/snapshot.rs`, `render_target::Feedback`). Such an
     /// instance records in a secondary, never inline, and runs as one render pass instance.
     feedback: Feedback,
-    /// The colors whose images a draw recorded into it binds as a storage image
-    /// (`RenderCommandEncoder::storage_colors`): a draw that reads one of them through a
-    /// snapshot records into another instance, as the feedback loop layout serves no storage
-    /// access (`render/snapshot.rs`).
-    storage_colors: u32,
+    /// The colors a draw recorded into it needs in `GENERAL`: those whose images it binds as a
+    /// storage image (`RenderCommandEncoder::storage_colors`), as the feedback loop layout serves
+    /// no storage access, and those whose attached levels the view of a slot narrowed past them
+    /// holds, as its descriptor names `GENERAL` (`render/attached_levels.rs`). A draw that reads
+    /// one of them through a snapshot records into another instance (`render/snapshot.rs`).
+    general_colors: u32,
 }
 
 /// A pass color a draw renders in another format than the attachment's, where the state's color
@@ -2338,7 +2339,7 @@ impl RenderLowering {
                     kept: None,
                     planned: false,
                     feedback: Feedback::NONE,
-                    storage_colors: 0,
+                    general_colors: 0,
                 },
                 state: Versioned::new(EncoderState::metal_defaults(area)),
                 scissors: ScissorRects::metal_default(area),
@@ -7104,7 +7105,7 @@ impl RenderLowering {
             kept: None,
             planned: false,
             feedback: Feedback::NONE,
-            storage_colors: 0,
+            general_colors: 0,
         };
         let instance = Box::new(instance);
         Ok((Next::New { instance, split }, stood))
@@ -7218,7 +7219,7 @@ impl RenderLowering {
             kept: None,
             planned: false,
             feedback: Feedback::NONE,
-            storage_colors: 0,
+            general_colors: 0,
         };
         Ok(Next::New {
             instance: Box::new(instance),
@@ -9274,10 +9275,18 @@ impl RenderLowering {
             (Stage::Object, pass_start.or(Stage::Object, &self.object)),
             (Stage::Mesh, pass_start.or(Stage::Mesh, &self.mesh)),
         ];
-        // The sampled slots that read the levels of their texture before an attached one in
-        // place of its copy (`render/attached_levels.rs`).
+        // The sampled slots that read the levels of their texture apart from the attached ones
+        // in place of its copy (`render/attached_levels.rs`), in the instance the draw records
+        // into.
+        let feedback = match &next {
+            Next::Current => self.current.feedback,
+            Next::New { instance, .. } => instance.feedback,
+        };
         let narrowed = match attached {
-            true => self.attached_slots(&device, (&*plan, variant.pipeline()), &stages, true),
+            true => {
+                let parts = (&*plan, variant.pipeline());
+                self.attached_slots(&device, parts, &stages, (feedback, true))
+            }
             false => binding::NarrowedSlots::default(),
         };
         let mut tables = binding::Tables::new(&stages)
@@ -9435,8 +9444,8 @@ impl RenderLowering {
         binding::command_uses_into(call, parts, sources, &mut live.uses)?;
         // A narrowed slot whose levels a write of the draw's own meets: every one takes its copy,
         // its uses made again (`render/attached_levels.rs`).
-        let narrowed_slots = narrowed.len();
-        let written = narrowed_slots > 0 && narrowed.written_by(&live.uses);
+        let narrowed_slots = narrowed.kinds();
+        let written = narrowed.len() > 0 && narrowed.written_by(&live.uses);
         if written {
             narrowed.withdraw();
             binding::command_uses_into(call, parts, sources, &mut live.uses)?;
@@ -10505,7 +10514,7 @@ impl RenderLowering {
             device.shared().counts.reading_draw_pinned();
         }
         self.current.feedback.0 |= feedback.0;
-        self.current.storage_colors |= storage_colors;
+        self.current.general_colors |= storage_colors | narrowed.spanned();
         if let Some(begin) = inline {
             self.begin_inline(begin);
         }

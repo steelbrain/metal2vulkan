@@ -281,7 +281,8 @@ recorded here.
   its own and earlier draws' writes of the attachment, a data race Vulkan forbids; none where every read
   of the slot reaches only levels before the lowest one the instance renders, which it reads in
   the texture's own image through a view of those levels (`render/attached_levels.rs`,
-  `WorkCounts::attached_read_slots_narrowed`). After a barrier inside
+  `WorkCounts::attached_read_slots_narrowed`), or only levels past the highest one, through a view
+  of the levels up to the highest it reads (`attached_read_slots_past`). After a barrier inside
   the instance, an own-pixel read takes a snapshot drawn in its subpass (`render/snapshot.rs`,
   docs/API.md "Snapshot reads") or splits the instance; both are exact. A private texture of the
   runtime's own whose image lacks `STORAGE` (the device lays it out otherwise with it) splits at

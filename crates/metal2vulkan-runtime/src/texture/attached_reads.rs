@@ -72,13 +72,15 @@
 //!   the attachment; before the first, ahead of the pass's load actions. Each such draw counts
 //!   (`WorkCounts::attachment_reads_through_copies`, the shadow served or not), and so does each
 //!   copy (`WorkCounts::shadow_copies`). It is exact and announces nothing.
-//! - **Levels before the attached one.** A slot every read of which reaches only levels of the
-//!   texture before the lowest one an attachment of the instance renders, through the samplers
-//!   the draw binds (`StageModule::level_reads`), reads the texture's own image through a view of
-//!   those levels in place of the copy, and names them in its uses (`render/attached_levels.rs`,
-//!   `WorkCounts::attached_read_slots_narrowed`): the copy would hold the same texels there, as
-//!   nothing the instance does writes them. Its view's first level is the texture's, so an
-//!   explicit level of detail selects the same level through either.
+//! - **Levels apart from the attached ones.** A slot every read of which reaches only levels of
+//!   the texture before the lowest one an attachment of the instance renders, or only levels past
+//!   the highest, through the samplers the draw binds (`StageModule::level_reads`), reads the
+//!   texture's own image in place of the copy, through a view of the levels up to the lowest
+//!   attached one, or up to the highest it reads, and names the levels it reads in its uses
+//!   (`render/attached_levels.rs`, `WorkCounts::attached_read_slots_narrowed`,
+//!   `attached_read_slots_past`): the copy would hold the same texels there, as nothing the
+//!   instance does writes them. Its view's first level is the texture's, so an explicit level of
+//!   detail selects the same level through either.
 //! - **Only what the instances drew.** A copy after the pass's first instance, of a buffer's
 //!   bytes or of an image's one level and slice, where the instances since the last copy changed
 //!   them only by their draws into a color attachment the pass loads (the encoder's load,
@@ -173,6 +175,20 @@ use metal2vulkan::vk::{
     ComponentMapping, Format, ImageAspectFlags, ImageCreateFlags, ImageType, ImageUsageFlags,
     ImageViewType, SampleCountFlags,
 };
+use std::ops::Range;
+
+/// The levels of a texture that the color attachments of a render pass instance render
+/// ([`Texture::attached_span`]), each counted from the texture's own first level.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AttachedSpan {
+    /// The lowest and the highest attached level.
+    pub(crate) lowest: u32,
+    pub(crate) highest: u32,
+    /// The colors that render them, by index: bit `i` for color `i`.
+    pub(crate) colors: u32,
+    /// The texture's level count.
+    pub(crate) level_count: u32,
+}
 
 /// The pixel format of a snapshot of format `format` (`SnapshotForm::format`, an unsigned
 /// integer format of four channels), as the runtime's memory counts it; `None` for another.
@@ -286,12 +302,24 @@ impl Texture {
         self.attached_levels(layout, keep).next().is_some()
     }
 
-    /// The lowest level of the texture, counted from its own first level, that a color attachment
-    /// of `layout` renders at a layer it presents, as [`attached_in`](Self::attached_in) tells,
-    /// and the texture's level count.
-    pub(crate) fn lowest_attached_level(&self, layout: &PassLayout) -> Option<(u32, u32)> {
-        let lowest = self.attached_levels(layout, |_| true).min()?;
-        Some((lowest, self.0.record.level_count))
+    /// The levels of the texture, counted from its own first level, that the color attachments of
+    /// `layout` render at a layer it presents, as [`attached_in`](Self::attached_in) tells; `None`
+    /// where none does.
+    pub(crate) fn attached_span(&self, layout: &PassLayout) -> Option<AttachedSpan> {
+        let mut attached = self.attached_levels(layout, |_| true);
+        let (color, level) = attached.next()?;
+        let first = AttachedSpan {
+            lowest: level,
+            highest: level,
+            colors: 1 << color,
+            level_count: self.0.record.level_count,
+        };
+        Some(attached.fold(first, |span, (color, level)| AttachedSpan {
+            lowest: span.lowest.min(level),
+            highest: span.highest.max(level),
+            colors: span.colors | 1 << color,
+            ..span
+        }))
     }
 
     /// Whether a sampled slot binding of the texture can read its own image's levels before an
@@ -306,17 +334,18 @@ impl Texture {
             && image.plan().usage.contains(ImageUsageFlags::SAMPLED)
     }
 
-    /// A slot binding's use of the texture's levels `0..levels`, counted from its own first
-    /// level, at every layer it presents, reading by `read` and writing by `write`: its own
-    /// image's, as [`reads_levels_in_place`](Self::reads_levels_in_place) holds.
+    /// A slot binding's use of the texture's levels `levels`, counted from its own first level,
+    /// at every layer it presents, reading by `read` and writing by `write`: its own image's, as
+    /// [`reads_levels_in_place`](Self::reads_levels_in_place) holds.
     pub(crate) fn levels_use(
         &self,
-        levels: u32,
+        levels: Range<u32>,
         (read, write): (Access, Access),
     ) -> Use<ResourceKey> {
         let mut used = self.bound_use(read, write);
         if let UseRange::Image { levels: range, .. } = &mut used.range {
-            range.end = range.end.min(range.start + levels);
+            let first = range.start;
+            *range = (first + levels.start).min(range.end)..(first + levels.end).min(range.end);
         }
         used
     }
@@ -341,23 +370,25 @@ impl Texture {
         image.view(&view)
     }
 
-    /// The levels, counted from the texture's own first level, that the color attachments of
-    /// `layout` that `keep` keeps render of it at a layer it presents: of its image, at one of
-    /// its levels, and at one of its layers (any layer of a 3D image's).
+    /// The color attachments of `layout` that `keep` keeps that render the texture at a layer it
+    /// presents, each by its index and the level it renders, counted from the texture's own first
+    /// level: of its image, at one of its levels, and at one of its layers (any layer of a 3D
+    /// image's).
     fn attached_levels<'s>(
         &'s self,
         layout: &'s PassLayout,
         keep: impl Fn(&ColorTarget) -> bool + 's,
-    ) -> impl Iterator<Item = u32> + 's {
+    ) -> impl Iterator<Item = (usize, u32)> + 's {
         let image = self.image().ok();
         let record = &self.0.record;
         let levels = record.base_level..record.base_level + record.level_count;
         let layers = record.base_layer..record.base_layer + record.layer_count;
         let volume = image.is_some_and(|image| image.plan().image_type == ImageType::TYPE_3D);
-        let colors = image.map(|_| layout.colors.iter().flatten());
+        let colors = image.map(|_| layout.colors.iter().enumerate());
         (colors.into_iter().flatten())
-            .filter(move |c| keep(c))
-            .filter_map(move |color| {
+            .filter_map(|(index, color)| color.as_ref().map(|color| (index, color)))
+            .filter(move |(_, c)| keep(c))
+            .filter_map(move |(index, color)| {
                 let target = &color.target;
                 let same = (target.texture.image())
                     .is_ok_and(|other| image.is_some_and(|i| other.identity.key == i.identity.key));
@@ -365,7 +396,7 @@ impl Texture {
                 let presented =
                     volume || (rendered.start < layers.end && layers.start < rendered.end);
                 (same && levels.contains(&target.level) && presented)
-                    .then(|| target.level - record.base_level)
+                    .then(|| (index, target.level - record.base_level))
             })
     }
 }
