@@ -684,6 +684,8 @@ mod norm_storage_writes;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod normalized_vertex_fetch;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod nullable_private;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod numbered_samplers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod pack_conversions;

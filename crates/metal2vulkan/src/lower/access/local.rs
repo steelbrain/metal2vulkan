@@ -6,6 +6,9 @@
 //! object, `Repr::TgTyped`, a `Workgroup` variable; `memory::alloca`, `memory::plan::SharedPlan`)
 //! are `u32` byte offsets from their [`Home`]'s start, demoted as `DemoteTy::ArenaOffset`:
 //!
+//! - a null (or undefined) private pointer is offset 0: where a pointer into the private arena may
+//!   be null, the arena keeps its first word for it (`memory::plan::ArenaLayout::null_word`), so
+//!   no object lies there and a pointer cell's zero bytes read back as null;
 //! - an alloca placed in the private arena is its plan offset; a typed alloca's, a constant
 //!   global's and a typed threadgroup object's address are 0; a static threadgroup global's
 //!   address is its plan offset (a
@@ -19,7 +22,10 @@
 //! - `icmp` of two pointers into one arena or one typed object compares their offsets, which are
 //!   exact within an object and order an arena's objects by the plan's layout (an order MSL
 //!   leaves unspecified); a pointer whose roots are objects only (no null, no `Dynamic`) is
-//!   never null, so its unsigned or equality compare with the null constant is a constant;
+//!   never null, so its unsigned or equality compare with the null constant is a constant; a
+//!   private pointer that may be null compares its offset with 0, below every object as Metal's
+//!   null is below every address;
+//! - a `phi` whose constant incoming values are all null takes offset 0 from each;
 //! - a non-atomic load or store of a scalar or 2–4-lane vector is one word-composed leaf
 //!   (`memory::leaf`) in the arena's word memory (`memory::arena::ArenaMem`), or, in a typed
 //!   object, an `OpLoad`/`OpStore` of the held form through an access chain whose dynamic indices
@@ -30,7 +36,10 @@
 //! **Containment** of an arena access is on unless the profile's containment is `UnsafeOff` (no
 //! robustness feature covers arenas): with `inb` the normative check against the arena's exact byte
 //! size, a load reads at `select(inb, off, 0)` and yields `select(inb, v, 0)`, and a store sits in
-//! a builder-closed `if_(inb)`. A typed access's dynamic indices are **contained** under
+//! a builder-closed `if_(inb)`. A dereference of a null private pointer (undefined in Metal) reads
+//! or writes the kept first word, or an object's bytes at a field's offset: inside the arena
+//! under containment, and unchecked under `UnsafeOff`. A typed access's dynamic indices are
+//! **contained** under
 //! `GuestIsolation::On` (`memory::alloca`), so the access never leaves its object: a thread's own
 //! object's (an alloca's) are checked against their levels' lengths, a load past a level reading
 //! zero and a store past one sitting in a builder-closed `if_` that drops it; a threadgroup or
@@ -61,8 +70,9 @@
 //!
 //! Not lowered here (`Unsupported{Lowering(Access), NotImplemented}`): pointers into these homes
 //! stored anywhere else or converted to integers, a compare of pointers into different homes or
-//! of a pointer that may be null, a signed compare with null, a phi with a constant pointer
-//! operand, a `select` on a constant condition, and aggregate accesses.
+//! of a threadgroup or typed pointer that may be null, a signed compare with null, a phi with a
+//! constant pointer operand other than a private pointer's null, a `select` on a constant
+//! condition, and aggregate accesses.
 //!
 //! **An integer threadgroup address** (`inttoptr` of an integer literal) names a byte of Metal's
 //! threadgroup layout, which the arena is (`memory::plan` places the static objects as Metal does).

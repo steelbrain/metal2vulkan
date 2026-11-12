@@ -619,6 +619,60 @@ fn typed_allocas_and_the_private_arena() {
         .collect();
     assert_eq!(offsets, vec![(0, 4), (8, 8), (16, 4)]);
     assert_eq!(plan.priv_arena.static_size, 20);
+    assert!(!plan.priv_arena.null_word);
+}
+
+/// A private pointer that may be null (a select of an alloca's address and null) puts its alloca
+/// in the private arena, and the arena keeps its first word for null: the alloca lies past it.
+#[test]
+fn a_private_pointer_that_may_be_null_keeps_the_arena_s_first_word() {
+    let mut k = Kernel::new();
+    k.param(AddrSpace::Device, buffer(0, AddrSpace::Device, None));
+    let mut ptrs = Vec::new();
+    let e = k.build(|fb| {
+        let i1 = fb.module().int(1);
+        let i32t = fb.module().int(32);
+        let i64t = fb.module().int(64);
+        let p0 = fb.module().ptr(AddrSpace::Thread);
+        let one = fb.module().const_int(i32t, 1);
+        let a = fb.push(
+            p0,
+            InstKind::Alloca {
+                ty: i64t,
+                count: one,
+                align: align(8),
+            },
+        );
+        let null = fb.module().constant(p0, Const::Null);
+        let c = fb.module().const_int(i1, 0);
+        let s = fb.push(
+            p0,
+            InstKind::Select {
+                c,
+                t: a,
+                f: Value::Const(null),
+                fmf: FastMath::NONE,
+            },
+        );
+        let _ = load(fb, i32t, s);
+        ptrs.extend([a, s]);
+        fb.ret(None);
+    });
+    let plan = ok(&e);
+    let [a, s] = ptrs[..] else { unreachable!() };
+    assert!(plan.typed_allocas.is_empty());
+    for v in [a, s] {
+        assert_eq!(plan.repr(v), Some(Repr::PrivPtr(PrivForm::Arena)));
+    }
+    assert!(plan.priv_arena.null_word);
+    let offsets: Vec<(u64, u64)> = plan
+        .priv_arena
+        .entries
+        .iter()
+        .map(|e| (e.offset, e.size))
+        .collect();
+    assert_eq!(offsets, vec![(NULL_WORD.next_multiple_of(8), 8)]);
+    assert_eq!(plan.priv_arena.static_size, 16);
 }
 
 // ---- Threadgroup arena ----

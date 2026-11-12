@@ -240,7 +240,10 @@ impl Default for DevicePolicy {
 pub enum ContainmentPolicy {
     /// Every access stays inside the resources the binder supplied (the default).
     Contained,
-    /// No containment. Only valid with `GuestIsolation::Off`; recorded in the fingerprint.
+    /// No containment. Only valid with `GuestIsolation::Off`; recorded in the fingerprint. No
+    /// access is checked: one past its buffer or its object, and a dereference of a null thread
+    /// pointer (undefined in Metal, which reads or writes the private arena's first word, or past
+    /// it at a field's offset), reach whatever memory the device puts there.
     UnsafeOff,
 }
 
