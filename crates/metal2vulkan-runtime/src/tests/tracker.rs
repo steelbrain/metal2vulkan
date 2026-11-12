@@ -2458,7 +2458,9 @@ fn a_host_read_waits_for_the_last_writes_of_its_bytes_alone() {
         vk::AccessFlags2::MEMORY_READ,
     );
     let records = reads(1, bytes(0..8), read);
-    let last = |tracker: &Tracker<Key>, read: &Use<Key>| tracker.last_writes(&[read.clone()], 2);
+    let last = |tracker: &Tracker<Key>, read: &Use<Key>| {
+        tracker.last_writes(std::slice::from_ref(read), 2)
+    };
     assert_eq!(last(&tracker, &records), Some(vec![1, 0]), "the writer");
     let unwritten = reads(1, bytes(64..72), read);
     assert_eq!(last(&tracker, &unwritten), Some(vec![0, 0]), "no writer");
@@ -2476,7 +2478,7 @@ fn a_host_read_waits_for_the_last_writes_of_its_bytes_alone() {
     let untracked = Use::reads(1, false, bytes(0..8), read);
     assert_eq!(last(&tracker, &untracked), None, "untracked");
     assert_eq!(
-        tracker.last_writes(&[records.clone()], 1),
+        tracker.last_writes(std::slice::from_ref(&records), 1),
         None,
         "a queue past the count"
     );
