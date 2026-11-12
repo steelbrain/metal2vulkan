@@ -4045,7 +4045,8 @@ impl Counters {
     }
 
     /// The program asked a two-copy buffer (`managed_copy.rs`) to copy a range of `bytes` bytes:
-    /// in, by `did_modify_range` (`modified`), or out, by `synchronize_resource`.
+    /// in, by `did_modify_range` (`modified`), or out, by `synchronize_resource` or
+    /// `synchronize_texture`.
     pub(crate) fn managed_asked(&self, bytes: u64, modified: bool) {
         let (calls, asked) = match modified {
             true => (&self.managed_ranges_modified, &self.managed_bytes_modified),
@@ -8186,8 +8187,8 @@ pub struct WorkCounts {
     /// `did_modify_range`, rebind, and copy in again after a write the pages drop.
     pub managed_bytes_copied_in: u64,
     /// The bytes copied out of their device copies into their pages, by `synchronize_resource`
-    /// (counted at the command for an import of the pages, at the command buffer's completion for
-    /// pages no import maps).
+    /// and `synchronize_texture` (counted at the command for an import of the pages, at the
+    /// command buffer's completion for pages no import maps).
     pub managed_bytes_copied_out: u64,
     /// The program's `did_modify_range` calls of a nonempty range on such buffers: each copies
     /// its range in (`managed_bytes_copied_in` counts the bytes copied).
@@ -8195,8 +8196,9 @@ pub struct WorkCounts {
     /// The bytes of those ranges.
     pub managed_bytes_modified: u64,
     /// The program's `synchronize_resource` commands of such a buffer, or of a texture over one,
-    /// of a nonempty range: the buffer's length, or the texture's span in it, which each copies
-    /// out (`managed_bytes_copied_out` counts the bytes copied).
+    /// and its `synchronize_texture` commands of such a texture, of a nonempty range: the
+    /// buffer's length, or the texture's span in it, which each copies out
+    /// (`managed_bytes_copied_out` counts the bytes copied).
     pub managed_resources_synchronized: u64,
     /// The bytes those commands asked.
     pub managed_bytes_synchronized: u64,

@@ -5431,7 +5431,7 @@ impl Texture {
     /// from its own first) reach its image alone: a tiled texture's level past its root's first
     /// ([`tiled_levels`](Self::tiled_levels)), which lies apart from the buffer's bytes. Its first
     /// level is the bytes to the CPU, as on a Mac.
-    fn level_in_image(&self, level: u64) -> bool {
+    pub(super) fn level_in_image(&self, level: u64) -> bool {
         self.tiled_levels() && u64::from(self.0.record.base_level) + level > 0
     }
 

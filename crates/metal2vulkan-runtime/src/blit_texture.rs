@@ -2259,11 +2259,18 @@ impl BlitCommandEncoder {
     }
 
     /// `synchronizeTexture:slice:level:`: the CPU sees the GPU's writes to a level and slice of a
-    /// `Managed` texture once the command buffer completes. Managed memory behaves as shared
-    /// memory here (and on Apple silicon), so nothing more is recorded. On a texture of another
-    /// storage mode it records nothing either, whatever the level, as plain Metal does
-    /// (`Shared` and `Private` textures, level 0 and a level past the texture;
-    /// Metal's validation stops it).
+    /// `Managed` texture once the command buffer completes. Every command buffer ends with a
+    /// barrier to the host, and a texture of an image alone copies from its image at each CPU
+    /// access, so for one nothing more is recorded. A texture over a buffer's bytes, on a device
+    /// without unified memory, where a `Managed` buffer is two copies (`managed.rs`), has those
+    /// bytes copied to the buffer's host copy, which its `get_bytes` and the buffer's `contents`
+    /// read, after the encoder's earlier commands, as
+    /// [`synchronize_resource`](Self::synchronize_resource) of the texture copies them: every
+    /// slice's, where it has more than the one asked. A level that lies in its image alone (a
+    /// tiled texture's past its first, `Buffer::new_tiled_texture`) copies nothing. On a texture
+    /// of another storage mode it records nothing, whatever the level, as plain Metal does
+    /// (`Shared` and `Private` textures, level 0 and a level past the texture; Metal's validation
+    /// stops it).
     ///
     /// Refused (`Invalid`): a managed texture's slice or level past the texture; a texture of
     /// another device.
@@ -2281,7 +2288,11 @@ impl BlitCommandEncoder {
                 if texture.storage_mode() != StorageMode::Managed {
                     return Ok(());
                 }
-                check_slice_level(CALL, texture, slice, level)
+                check_slice_level(CALL, texture, slice, level)?;
+                if texture.level_in_image(level) {
+                    return Ok(());
+                }
+                this.synchronize_texels(texture)
             },
         )
     }

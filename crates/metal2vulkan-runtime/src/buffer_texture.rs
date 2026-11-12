@@ -2378,8 +2378,9 @@ impl Texels {
     }
 
     /// `getBytes` of `region` into `bytes` laid out as `host` (checked by the texture): from the
-    /// buffer's mapped bytes, a host copy's where it has one, which `synchronize_resource` updates,
-    /// as Metal's managed texture needs `synchronizeTexture` on a device without unified memory.
+    /// buffer's mapped bytes, a host copy's where it has one, which `synchronize_resource` and
+    /// `synchronize_texture` update, as Metal's managed texture needs `synchronizeTexture` on a
+    /// device without unified memory.
     pub(super) fn read(
         &self,
         call: &'static str,

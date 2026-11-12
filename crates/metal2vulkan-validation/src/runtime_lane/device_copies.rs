@@ -19,6 +19,11 @@
 //! - [`a_gpu_write_of_the_buffer_reaches_the_surface`], under the validation layer: a blit's fill
 //!   of rows of the surface's buffer in one command buffer is what the next one's read finds, and
 //!   the pages hold it after a `synchronize_resource` of the buffer (with two copies, not before).
+//! - [`a_synchronize_texture_copies_the_texels_out`], under the validation layer: a blit's copy
+//!   into rows of a `Managed` texture over the surface's buffer, and over a `Managed` buffer the
+//!   runtime made, then a `synchronize_texture` of it: the buffer's `contents` (the pages, the
+//!   host copy) and the texture's `get_bytes` hold the rows once the command buffer completed,
+//!   the copy out counted for the pages with two copies.
 //! - [`a_surface_without_a_log_is_placed_as_one_with`], under the validation layer: the same
 //!   surface over pages without a log is two copies without unified memory, else in place or a
 //!   shadow; no device copy either way.
@@ -42,9 +47,9 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan_runtime::{
     BlitOption, Buffer, CommandQueue, CpuCacheMode, Device, DirtyPages, DirtyStamp,
-    HazardTrackingMode, HostMemory, LoadAction, Origin, RenderPassDescriptor, RenderPipelineState,
-    ResourceOptions, ScissorRect, Size, StorageMode, StoreAction, Texture, TextureDescriptor,
-    WorkCounts,
+    HazardTrackingMode, HostMemory, LoadAction, Origin, Region, RenderPassDescriptor,
+    RenderPipelineState, ResourceOptions, ScissorRect, Size, StorageMode, StoreAction, Texture,
+    TextureDescriptor, WorkCounts,
 };
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
@@ -372,6 +377,94 @@ fn a_gpu_write_of_the_buffer_reaches_the_surface() {
         "the pages hold the fill after a synchronize"
     );
     drop((texture, buffer, target));
+    drop(mapping);
+    layer_reported_nothing_at_all(&messages);
+}
+
+#[test]
+fn a_synchronize_texture_copies_the_texels_out() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let (w, h, bpr) = (256u64, 64u64, 1024u64);
+    let len = ((bpr * h) as usize).next_multiple_of(GUEST_PAGE);
+    let mapping = Mapping::anonymous(len);
+    mapping.write(0, &counting(len, 11));
+    let surface = over(&device, &mapping, len, None);
+    let own = device.new_buffer(len as u64, managed()).unwrap();
+    let two = two_copies(&device);
+    // Rows 8 to 15 of 0x5a, which a blit writes through the texture.
+    let (first, rows) = (8u64, 8u64);
+    let row = w * 4;
+    let source = device
+        .new_buffer(row * rows, ResourceOptions::shared())
+        .unwrap();
+    // SAFETY: the buffer's `row * rows` bytes, which no command uses yet.
+    unsafe {
+        std::ptr::write_bytes(
+            source.contents().unwrap().as_ptr(),
+            0x5a,
+            (row * rows) as usize,
+        )
+    };
+    for (name, buffer) in [("over pages", &surface), ("the runtime's", &own)] {
+        let texture = sampled(buffer, PixelFormat::BGRA8Unorm, (w, h, bpr));
+        let before = device.work_counts();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.copy_from_buffer_to_texture(
+            &source,
+            0,
+            row,
+            row * rows,
+            Size::new(w, rows, 1),
+            &texture,
+            0,
+            0,
+            Origin::new(0, first, 0),
+            BlitOption::None,
+        )
+        .unwrap();
+        blit.synchronize_texture(&texture, 0, 0).unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        let after = device.work_counts();
+        // A two-copy buffer over pages counts the copy out: its texels' bytes.
+        let counted = name == "over pages" && two;
+        assert_eq!(
+            after.managed_resources_synchronized - before.managed_resources_synchronized,
+            u64::from(counted),
+            "{name}: the synchronize's copy out"
+        );
+        assert_eq!(
+            after.managed_bytes_synchronized - before.managed_bytes_synchronized,
+            if counted { h * bpr } else { 0 },
+            "{name}: the bytes it copied out"
+        );
+        // The CPU's bytes: the pages, or the runtime's host copy.
+        let contents = buffer.contents().unwrap();
+        // SAFETY: the buffer's `len` bytes, which no command writes any longer.
+        let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), len) };
+        for y in first..first + rows {
+            let at = (y * bpr) as usize;
+            assert!(
+                bytes[at..at + row as usize].iter().all(|&b| b == 0x5a),
+                "{name}: row {y} of the buffer's contents after the synchronize (two copies \
+                 {two})"
+            );
+        }
+        let mut read = vec![0u8; (row * rows) as usize];
+        let region = Region::new_2d(0, first, w, rows);
+        texture.get_bytes(&mut read, row, 0, region, 0, 0).unwrap();
+        assert!(
+            read.iter().all(|&b| b == 0x5a),
+            "{name}: the texture's get_bytes after the synchronize (two copies {two})"
+        );
+    }
+    drop((surface, own, source));
     drop(mapping);
     layer_reported_nothing_at_all(&messages);
 }

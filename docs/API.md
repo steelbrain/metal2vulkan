@@ -526,7 +526,8 @@ command buffer's order, which the CPU sees once the command buffer completed. Th
 from an import of the pages where the device makes one (never a copy of them), else through
 staging buffers the runtime frees once their work completed, at most 256 MiB staged ahead
 (`WorkCounts::managed_*`). A texture over the buffer's bytes is over the GPU's copy and follows
-it, its `replace_region` copying in and its `synchronize_resource` copying out. Over pages the
+it, its `replace_region` copying in and its `synchronize_resource` or `synchronize_texture`
+copying out. Over pages the
 process maps read-only, the GPU's writes are dropped: nothing is copied out, and the pages are
 copied in again at the completion of each command buffer that used the buffer. A detach keeps
 the GPU's copy. A detached no-copy buffer's `contents`, of either kind (and a detached no-copy

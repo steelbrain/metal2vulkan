@@ -497,7 +497,8 @@ recorded here.
   pages' import, else through staging buffers of at most 32 MiB, 256 MiB staged at most before the
   call submits them and waits: the pages whole at the making and at each rebind, a
   `did_modify_range`'s range before the next submission, the buffer whole at each
-  `synchronize_resource` of it (of a texture over it, the texels' bytes)
+  `synchronize_resource` of it (of a texture over it, or its `synchronize_texture`, the texels'
+  bytes)
   (`WorkCounts::managed_bytes_copied_in`, `managed_bytes_copied_out`, `managed_staging_bytes`). A
   kernel reading one 256 MiB such buffer and writing another (`examples/managed_bandwidth.rs`,
   release) ran at 864.6-866.8 GB/s on the RX 7900 XTX (RADV), where the buffer lay in its pages
