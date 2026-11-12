@@ -2673,8 +2673,8 @@ fn samples_state(format: crate::metal::PixelFormat) -> BindState {
 /// are equal, and each thread's cells `(y * w + x) * n + s` lie below the next pixel's, `s` a
 /// counter that starts at 0 below `n` (the branch before the loop tested `n != 0`, as a `select`
 /// or an `and`) and leaves the loop on reaching it: the kernel records `RowLockstep`, and a
-/// threadgroup of one row (1, 16, 32 or 48 threads) runs its one compiled pipeline, not the
-/// emulated-simdgroups variant. Two rows of 16 still ask for the variant. Negative controls keep
+/// threadgroup of one row (1, 16, 32 or 48 threads) asks for its one-row variant, not the
+/// emulated-simdgroups variant. Two rows of 16 still ask for the latter. Negative controls keep
 /// every partial threadgroup on the variant: the row scaled by the width rather than by `n`
 /// (cells of two pixels may meet), the latch testing the counter rather than the next value (the
 /// body runs at `s == n`, the next pixel's first cell), and the loop entered without the `n != 0`
@@ -2730,11 +2730,7 @@ fn a_texel_s_samples_in_a_row_need_no_emulated_simdgroups_on_wave64() {
         let plan = pipeline(&dev, &bc, &name)
             .plan(&dev, &state.shape())
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
-        let want = if rows {
-            VariantKey::new()
-        } else {
-            emulated_key()
-        };
+        let want = if rows { one_row_key() } else { emulated_key() };
         for n in [1, 16, 32, 48] {
             assert_eq!(
                 plan.dispatch_variant(&threads(n)),
