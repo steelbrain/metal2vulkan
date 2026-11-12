@@ -311,11 +311,9 @@ fn run(case: &str, home: Home) {
             (device.new_texture(&d).unwrap(), None)
         }
     };
-    // Over host pages, the pass loads what the CPU wrote there.
+    // Over host pages, the pass loads what the CPU wrote there before each round.
     let load = home == Home::HostPages;
-    if load {
-        fill_background(backing.as_ref().unwrap());
-    }
+    let mut failures = Vec::new();
     // In place over host pages where the device's check passed for a shader's writes of its
     // texels, on a device that fetches through storage, the image takes the storage usage, and
     // the pass fetches it in place (`texture/in_place_image.rs`).
@@ -344,20 +342,24 @@ fn run(case: &str, home: Home) {
             device.name(),
             usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT),
         );
-        assert!(
-            !(in_place && writes && fetches) || storage,
-            "{case}: in place, the check passed for writes and the device fetches through \
-             storage, but the image took no storage usage: its pass fetches it through a scratch"
-        );
+        if in_place && writes && fetches && !storage {
+            failures.push(
+                "in place, the check passed for writes and the device fetches through storage, \
+                 but the image took no storage usage: its pass fetches it through a scratch"
+                    .to_owned(),
+            );
+        }
     }
     let back = device
         .new_buffer(length, ResourceOptions::shared())
         .unwrap();
-    let mut failures = Vec::new();
     // The icon's pass and the composite in one command buffer, then in a later one over a new
     // icon, the first released.
     let mut icon = None;
     for round in 0..2 {
+        if load {
+            fill_background(backing.as_ref().unwrap());
+        }
         let before = device.work_counts();
         let command_buffer = tools.queue.command_buffer().unwrap();
         let new = tools.icon(&command_buffer);
