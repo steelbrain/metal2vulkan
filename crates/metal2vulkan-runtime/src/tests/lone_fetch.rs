@@ -61,7 +61,7 @@ const SECOND: [f32; 2] = [0.375, 0.625];
 
 /// The accumulation's layers in its one draw: each halves the second color's red, so the last
 /// leaves `2^-LAYERS`, a normal half.
-const LAYERS: u64 = 12;
+const LAYERS: u32 = 12;
 
 /// A half's 1.0.
 const ONE: u16 = 0x3c00;
@@ -78,7 +78,7 @@ enum Shape {
 }
 
 /// A pass's draws: each state, its rectangle and its instances.
-type Draws<'a> = &'a [(&'a RenderPipelineState, [u64; 4], u64)];
+type Draws<'a> = &'a [(&'a RenderPipelineState, [u64; 4], u32)];
 
 /// The queue, the states, the target's size as `dcs_rect` takes it, the coverage's tint, and a
 /// read-back buffer.
