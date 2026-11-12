@@ -291,7 +291,7 @@ mod tests {
         let order = Arc::new(Mutex::new(Vec::new()));
         let (first, release_first) = holder(&limit, &order, ("first", MOST, (Urgency::Program, 0)));
         until(|| limit.census() == (MOST, 0));
-        let (waiting, held) = mpsc::channel();
+        let (held, waiting) = mpsc::channel();
         let waiter = {
             let (budget, limit) = (Arc::clone(&budget), Arc::clone(&limit));
             std::thread::spawn(move || {
