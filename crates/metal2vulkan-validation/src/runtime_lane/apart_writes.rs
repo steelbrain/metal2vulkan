@@ -151,8 +151,18 @@ mod tests {
     /// The buffer the hazards below name.
     const BUFFER: u64 = 0x7400_0000_0074;
 
-    /// The hazard as the layer reported it at a submission, between the dispatches of two
-    /// command buffers of one batch (`argument_buffers`, gem10's lavapipe).
+    /// The hazard as the layer 1.4.357 reported it at a submission, between the dispatches of two
+    /// command buffers of one batch (`argument_buffers` on lavapipe), naming no shader stage.
+    const AT_SUBMIT_357: &str = "vkQueueSubmit(): WRITE_AFTER_WRITE hazard detected. \
+        vkCmdDispatch (from VkCommandBuffer 0x7f51840071c0 submitted on the current VkQueue \
+        0x7f51b41363f0) writes to VkBuffer 0x740000000074, which was previously written by \
+        another vkCmdDispatch command (from VkCommandBuffer 0x7f5184002e10 submitted on VkQueue \
+        0x7f51b41363f0). \nNo sufficient synchronization is present to ensure that a write \
+        (VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT) at VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT does not \
+        conflict with a prior write of the same type at the same stage.";
+
+    /// The same as the layer 1.4.363 reported it, with the shader stage and the command
+    /// buffer's place in the submission.
     const AT_SUBMIT: &str = "vkQueueSubmit(): pSubmits[0].pCommandBuffers[3] WRITE_AFTER_WRITE \
         hazard detected. Shader stage VK_SHADER_STAGE_COMPUTE_BIT in vkCmdDispatch (from \
         VkCommandBuffer 0x7f5e8f3637b0 submitted on the current VkQueue 0x7f5e8c131d50) writes \
@@ -174,6 +184,9 @@ mod tests {
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT does not conflict with a prior write of the same \
         type at the same stage.";
 
+    /// Every wording above.
+    const FORMS: [&str; 3] = [AT_SUBMIT_357, AT_SUBMIT, AT_RECORD];
+
     /// Two words 4 bytes apart, and two more after them: the four ID words of `argument_buffers`.
     fn words(count: u64) -> Vec<(u64, Range<u64>)> {
         (0..count)
@@ -183,7 +196,7 @@ mod tests {
 
     #[test]
     fn dispatches_writing_words_apart_pass_in_either_form() {
-        for text in [AT_SUBMIT, AT_RECORD] {
+        for text in FORMS {
             assert!(apart(&words(2), WRITE_AFTER_WRITE, text), "{text}");
             assert!(apart(&words(4), WRITE_AFTER_WRITE, text), "{text}");
             // The noted writes of other buffers change nothing.
@@ -200,7 +213,7 @@ mod tests {
 
     #[test]
     fn writes_that_share_a_byte_fail() {
-        for text in [AT_SUBMIT, AT_RECORD] {
+        for text in FORMS {
             let one_word = vec![(BUFFER, 0..4), (BUFFER, 0..4)];
             assert!(!apart(&one_word, WRITE_AFTER_WRITE, text), "{text}");
             let overlapping = vec![(BUFFER, 0..4), (BUFFER, 8..12), (BUFFER, 2..6)];
@@ -212,7 +225,7 @@ mod tests {
 
     #[test]
     fn a_buffer_the_test_did_not_note_twice_fails() {
-        for text in [AT_SUBMIT, AT_RECORD] {
+        for text in FORMS {
             assert!(!apart(&[], WRITE_AFTER_WRITE, text), "{text}");
             assert!(!apart(&words(1), WRITE_AFTER_WRITE, text), "{text}");
             let elsewhere: Vec<_> = (words(2).into_iter())
@@ -253,8 +266,14 @@ mod tests {
             assert!(!apart(&words(2), WRITE_AFTER_WRITE, &later), "{later}");
             let later = AT_SUBMIT.replacen("in vkCmdDispatch", &format!("in {command}"), 1);
             assert!(!apart(&words(2), WRITE_AFTER_WRITE, &later), "{later}");
+            let later = AT_SUBMIT_357.replacen(
+                "detected. vkCmdDispatch",
+                &format!("detected. {command}"),
+                1,
+            );
+            assert!(!apart(&words(2), WRITE_AFTER_WRITE, &later), "{later}");
             // The earlier one.
-            for text in [AT_SUBMIT, AT_RECORD] {
+            for text in FORMS {
                 let earlier = text.replace("another vkCmdDispatch", &format!("another {command}"));
                 assert!(!apart(&words(2), WRITE_AFTER_WRITE, &earlier), "{earlier}");
             }
