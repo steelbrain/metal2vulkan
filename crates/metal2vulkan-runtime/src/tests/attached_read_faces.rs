@@ -67,7 +67,7 @@ fn image(outside: u8, inside: u8) -> Vec<u8> {
 /// The counts a test of the faces reads, between two snapshots.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Moved {
-    /// `WorkCounts::shadow_texels_copied_in`.
+    /// `WorkCounts::shadow_texels_copied_in_images`: the copies in of an image's shadow.
     copied_in: u64,
     /// `texture_faces_made`, `attached_read_swaps`, `attached_read_swap_reads`,
     /// `attached_read_swap_fixes`.
@@ -97,7 +97,7 @@ impl Moved {
                 + c.attached_read_unswapped_split
         };
         Moved {
-            copied_in: delta(|c| c.shadow_texels_copied_in),
+            copied_in: delta(|c| c.shadow_texels_copied_in_images),
             made: delta(|c| c.texture_faces_made),
             swaps: delta(|c| c.attached_read_swaps),
             reads: delta(|c| c.attached_read_swap_reads),
