@@ -1635,27 +1635,10 @@ fn a_listed_chunk_an_object_s_own_dma_bufs_hold_pages_of_is_imported_for_a_copy(
     let page = crate::host_ram::copy::PAGE;
     let before = device.work_counts();
     let delta = |now: &WorkCounts, field: fn(&WorkCounts) -> u64| field(now) - field(&before);
-    // The object, at the RAM's own addresses, over the first chunk's bytes from `AT`.
+    // The object, at the RAM's own addresses, over the first chunk's bytes from `AT`: its own
+    // import of its dma-bufs, or the chunk's (both checked once the gather ran).
     let object = sourced_buffer(&device, (start, start), &asked, AT, LENGTH);
     let made = device.work_counts();
-    match beside {
-        true => assert_eq!(
-            (
-                object.host_backing(),
-                delta(&made, |c| c.chunk_bound_buffers_made)
-            ),
-            (Some(HostBacking::ImportedAsDmaBuf), 0),
-            "the object's own import of its dma-bufs"
-        ),
-        false => assert_eq!(
-            (
-                object.host_backing(),
-                delta(&made, |c| c.chunk_bound_buffers_made)
-            ),
-            (Some(HostBacking::InHostRam), 1),
-            "the object in the chunk's import, which it made"
-        ),
-    }
     // A gather of one page every 3 MiB from the object's first, more ranges than a copy imports
     // alone, the first of them the object's.
     let pages = crate::host_ram::copy::MOST_ALONE as u64 + 1;
@@ -1682,6 +1665,24 @@ fn a_listed_chunk_an_object_s_own_dma_bufs_hold_pages_of_is_imported_for_a_copy(
         device.name(),
         object.host_backing(),
     );
+    match beside {
+        true => assert_eq!(
+            (
+                object.host_backing(),
+                delta(&made, |c| c.chunk_bound_buffers_made)
+            ),
+            (Some(HostBacking::ImportedAsDmaBuf), 0),
+            "the object's own import of its dma-bufs"
+        ),
+        false => assert_eq!(
+            (
+                object.host_backing(),
+                delta(&made, |c| c.chunk_bound_buffers_made)
+            ),
+            (Some(HostBacking::InHostRam), 1),
+            "the object in the chunk's import, which it made"
+        ),
+    }
     assert_eq!(held_back, 0, "the chunk was held back");
     assert_eq!(imported, 1, "the chunk, imported once");
     assert_eq!(
