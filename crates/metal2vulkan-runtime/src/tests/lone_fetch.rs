@@ -30,6 +30,12 @@
 //! the command buffer completed, its rows one after another or 64 bytes apart past that: the
 //! scratch's result must reach those pages by then.
 //!
+//! And a pair over one surface, as two processes each make a texture of it over a no-copy buffer
+//! of their own over its pages (`host_aliases.rs`): the CPU zeroes the pages, the reader's texture
+//! is sampled (`alv_rect`, `alv_implicit` of `alv_levels.ll`), the writer's is rendered by the
+//! lone passes in a command buffer of its own, and the reader's is sampled again in another: it
+//! must read what the passes left, as the pages hold it.
+//!
 //! The functions are `dcs_rect`, `dcs_flag` and `dcs_read` of the owned fixture
 //! `validation/fixtures/public/engine/dcs_dont_care_split.ll`, `fetch_ordered` of
 //! `fragment_fetch.ll` and `con_fetch_coverage` of `con_fetch_coverage.ll` there.
@@ -40,10 +46,11 @@
 use super::blit_holds::{device, over_host, Host, Scratch, BYTES, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::{
-    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, LoadAction, Origin,
-    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction,
-    Texture, TextureDescriptor, WorkCounts,
+    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, IoSurfacePlane,
+    LoadAction, Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState,
+    ResourceOptions, SamplerState, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
+use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::sync::atomic::AtomicUsize;
@@ -105,6 +112,8 @@ struct Tools {
     halve: RenderPipelineState,
     read: RenderPipelineState,
     coverage: RenderPipelineState,
+    copy: RenderPipelineState,
+    sampler: SamplerState,
     size: Vec<u8>,
     tint: Vec<u8>,
     back: Buffer,
@@ -116,10 +125,14 @@ impl Tools {
         let dcs = library(device, "engine/dcs_dont_care_split.ll");
         let fetch = library(device, "engine/fragment_fetch.ll");
         let con = library(device, "engine/con_fetch_coverage.ll");
+        let alv = library(device, "engine/alv_levels.ll");
         let function = |library: &crate::Library, name: &str| {
             let function = library.new_function_with_name(name).unwrap();
             StageSource::Function(function.function_descriptor())
         };
+        let mut copy = RenderPipelineDescriptor::new(function(&alv, "alv_rect"));
+        copy.fragment = Some(function(&alv, "alv_implicit"));
+        copy.color_attachments[0] = Some(ColorAttachmentDescriptor::new(format));
         let state = |fragment: StageSource, second: bool| {
             let mut descriptor = RenderPipelineDescriptor::new(function(&dcs, "dcs_rect"));
             descriptor.fragment = Some(fragment);
@@ -140,6 +153,8 @@ impl Tools {
             halve: state(function(&fetch, "fetch_ordered"), false).ok()?,
             read: state(function(&dcs, "dcs_read"), true).ok()?,
             coverage: state(function(&con, "con_fetch_coverage"), true).ok()?,
+            copy: (device.new_render_pipeline_state(&copy, &PipelineOptions::default())).unwrap(),
+            sampler: device.new_sampler_state(&SamplerDescriptor::new()).unwrap(),
             size: bytes_of(&[SIDE as f32, SIDE as f32], f32::to_le_bytes),
             tint: bytes_of(&[ONE; 4], u16::to_le_bytes),
             back: device
@@ -218,6 +233,29 @@ impl Tools {
         depth_stencil.load_action = LoadAction::DontCare;
         depth_stencil.store_action = StoreAction::DontCare;
         self.pass(command_buffer, &pass, draws);
+    }
+
+    /// `source` sampled texel for texel into a new `Private` target of `format`, in a command
+    /// buffer of its own, committed and completed; the target.
+    fn sampled(&self, source: &Texture, format: PixelFormat) -> Texture {
+        let usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+        let target = self.target(format, usage);
+        let mut pass = RenderPassDescriptor::new();
+        let color = &mut pass.color_attachments[0];
+        color.texture = Some(target.clone());
+        color.load_action = LoadAction::Clear;
+        color.store_action = StoreAction::Store;
+        let command_buffer = self.queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        encoder.set_render_pipeline_state(&self.copy).unwrap();
+        encoder.set_fragment_texture(Some(source), 0).unwrap();
+        (encoder.set_fragment_sampler_state(Some(&self.sampler), 0)).unwrap();
+        (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        target
     }
 
     /// Every target copied into the read-back buffer, `texel` bytes a pixel.
@@ -423,6 +461,89 @@ fn run(case: &str, format: PixelFormat, shape: Shape, home: Home) {
     assert!(failures.is_empty(), "{case}: {failures:?}");
 }
 
+/// The pair run: two textures of `format` over one surface's host pages through two no-copy
+/// buffers, as two processes each make one, `drawn` rendered by the lone passes and `read`
+/// sampled; each round the CPU zeroes the pages, `read` is sampled (so a shadow of it holds
+/// zeros), `drawn` is rendered in a command buffer of its own, and `read` is sampled again in
+/// another, which must find what the passes left.
+fn run_pair(case: &str, format: PixelFormat) {
+    // Declared before the device, so dropped after it.
+    let host = Host::new();
+    let scratch = Scratch::new(&format!("lone-fetch-{case}"));
+    let device = device(&scratch.0);
+    let Some(tools) = Tools::new(&device, format) else {
+        eprintln!(
+            "LONE-FETCH {case} on {}: no framebuffer fetch: nothing to check",
+            device.name()
+        );
+        return;
+    };
+    let runs = Arc::new(AtomicUsize::new(0));
+    let (Some(first), Some(second)) = (
+        over_host(&device, &host, &runs),
+        over_host(&device, &host, &runs),
+    ) else {
+        return;
+    };
+    let pitch = SIDE * texel(format);
+    let surface = |bytes: &Buffer, usage: TextureUsage| {
+        let mut d = TextureDescriptor::texture_2d(format, SIDE, SIDE, false);
+        d.usage = usage;
+        d.resource_options = bytes.resource_options();
+        let plane = IoSurfacePlane::new(0, pitch, false);
+        bytes.new_texture_with_iosurface_plane(&d, plane).unwrap()
+    };
+    let drawn = surface(
+        &first,
+        TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
+    );
+    let read = surface(&second, TextureUsage::SHADER_READ);
+    let mut failures = Vec::new();
+    let mut counts = Vec::new();
+    for round in 0..ROUNDS {
+        let before = device.work_counts();
+        let pages = first.contents().unwrap();
+        // SAFETY: the surface's bytes, which no command buffer uses now.
+        unsafe { std::ptr::write_bytes(pages.as_ptr(), 0, (pitch * SIDE) as usize) };
+        let zeros = tools.sampled(&read, format);
+        let command_buffer = tools.queue.command_buffer().unwrap();
+        tools.render(&command_buffer, &drawn);
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        let after = tools.sampled(&read, format);
+        counts.push(moved(&before, &device.work_counts()));
+        tools.read_back(&[zeros, after], texel(format));
+        let tight = (&tools.back, pitch);
+        let checks = [
+            (
+                "the pages",
+                first_wrong((&first, pitch), format, 0, expected),
+            ),
+            (
+                "the read before",
+                first_wrong(tight, format, 0, |_| [0.0; 4]),
+            ),
+            ("the read after", first_wrong(tight, format, 1, expected)),
+        ];
+        for (what, wrong) in checks {
+            if let Some(first) = wrong {
+                failures.push(format!("round {round}: {what}: first wrong {first:x?}"));
+            }
+        }
+    }
+    eprintln!(
+        "LONE-FETCH {case} on {}: {} wrong reads of {}; per round (instances, inline instances, \
+         interlocked splits, storage forms, variants made, shadowed textures, shadow copies) \
+         {counts:?}; first {:?}",
+        device.name(),
+        failures.len(),
+        ROUNDS * 3,
+        failures.first()
+    );
+    assert!(failures.is_empty(), "{case}: {failures:?}");
+}
+
 #[test]
 fn a_lone_fetched_rg16float_color_keeps_its_values() {
     run(
@@ -501,4 +622,14 @@ fn layers_fetched_over_host_pages_reach_them() {
         Shape::Layers,
         Home::HostPages(0),
     );
+}
+
+#[test]
+fn a_surface_rendered_through_one_buffer_reads_right_through_another() {
+    run_pair("surface-pair", PixelFormat::RGBA16Float);
+}
+
+#[test]
+fn a_bgra8unorm_surface_rendered_through_one_buffer_reads_right_through_another() {
+    run_pair("surface-pair-bgra8unorm", PixelFormat::BGRA8Unorm);
 }
