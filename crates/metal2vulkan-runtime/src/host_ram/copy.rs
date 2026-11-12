@@ -83,15 +83,19 @@
 //!     what was submitted before it, and copies each run's bytes from the region into the pages,
 //!     in the runs' order (a host byte two runs name keeps the later's), before the batch is
 //!     submitted. So the pages hold the bytes once the command buffer completed, as Metal's
-//!     completion says, and every command after the copy, in its command buffer or a later one,
-//!     runs after the CPU wrote them. Its uses: the buffer's read where the GPU's copy lies, and
-//!     the chunks' bytes it writes, by their keys, at the start of the part after it, where the
-//!     CPU's copy lies, so hazard tracking orders the later readers and writers of those bytes
-//!     after that write, and the RAM's log is told of them as of a copy through the imports. A
-//!     region the device has no memory for fails the command buffer at that host step. An
-//!     encoder that holds one keeps no log a rebind encodes it again from
-//!     (`command_buffer/rebound_use.rs`'s `Unlogged::Segments`). Counted:
-//!     `WorkCounts::host_ram_scatters_staged`, `host_ram_staged_drain_nanos`.
+//!     completion says, and every command after the copy, in its command buffer or a later one
+//!     that runs after it, runs after the CPU wrote them. Its uses: the buffer's read where the
+//!     GPU's copy lies, and the chunks' bytes it writes, by their keys, at the start of the part
+//!     after it, where the CPU's copy lies, so hazard tracking orders the later readers and
+//!     writers of those bytes after that write, and the RAM's log is told of them as of a copy
+//!     through the imports. Until the second step took its gate, the two batches give way to a
+//!     later commit of another queue that shares no fence with them, which goes first and reads
+//!     the bytes from before the copy, as an x86 Mac's GPU may take it first
+//!     (`scheduler/order.rs`, **Held batches give way**); one that waits for an event the copy's
+//!     command buffer signals after it runs after it. A region the device has no memory for
+//!     fails the command buffer at that host step. An encoder that holds one keeps no log a
+//!     rebind encodes it again from (`command_buffer/rebound_use.rs`'s `Unlogged::Segments`).
+//!     Counted: `WorkCounts::host_ram_scatters_staged`, `host_ram_staged_drain_nanos`.
 //!
 //!   A copy encoded again (`replay.rs`) takes the imports' path.
 //! - **Lists of runs.** Where each listed import costs every submission and the RAM's chunks are

@@ -61,11 +61,12 @@
 //!   its runs, is staged: its encoding imports nothing and waits for none, its pages hold its
 //!   bytes once it completed (the later's where a page is named twice) and no other page moved,
 //!   and a buffer over one of them reads them in a later encoder and in a command buffer of
-//!   another queue committed after it. So is one of few ranges, whose encoding imports nothing,
-//!   and the scatter after it, over the chunks the thread imported, goes through their imports.
-//!   No staged copy's encoding takes its staging of the command buffer's arena. A rebind before
-//!   the first submission of a no-copy buffer that a staged gather's encoder fills encodes that
-//!   encoder again, and the command buffer completes with both copies' bytes in place.
+//!   another queue that waits for an event signalled after it. So is one of few ranges, whose
+//!   encoding imports nothing, and the scatter after it, over the chunks the thread imported,
+//!   goes through their imports. No staged copy's encoding takes its staging of the command
+//!   buffer's arena. A rebind before the first submission of a no-copy buffer that a staged
+//!   gather's encoder fills encodes that encoder again, and the command buffer completes with
+//!   both copies' bytes in place.
 //!
 //! - **Shared RAM, whenever the copy comes**: on a device whose thread imports ahead, a gather
 //!   over a RAM of shared memory with no dma-buf source once the thread reached its chunk, a
@@ -1889,7 +1890,11 @@ fn a_first_scatter_over_chunks_the_thread_imports_is_in_its_pages_once_it_comple
         "the encoding imported the copy's ranges or a chunk, or waited for one"
     );
     // Later readers of one of its pages, through a buffer over it: a later encoder of the same
-    // command buffer, and a command buffer of another queue committed after it.
+    // command buffer, and a command buffer of another queue committed after it that waits for an
+    // event the first signals after the scatter. Commit order alone does not order the two: the
+    // first's batches give way while the scatter's host steps have not taken their gate
+    // (`scheduler/order.rs`, **Held batches give way**), as an x86 Mac's GPU may take a later
+    // commit of another queue first.
     let target = runs[7].clone();
     let over = over_ram(&device, target.start, PAGE, itself(), true);
     let read = shared(&device, PAGE, |_| 0);
@@ -1898,8 +1903,15 @@ fn a_first_scatter_over_chunks_the_thread_imports_is_in_its_pages_once_it_comple
         .copy_from_buffer_to_buffer(&over, 0, &read, 0, PAGE)
         .unwrap();
     later.end_encoding().unwrap();
+    let ordered = device.new_event().unwrap();
+    command_buffer
+        .encode_signal_event(EventRef::Event(&ordered), 1)
+        .unwrap();
     let other = device.new_command_queue().unwrap();
     let after_it = other.command_buffer().unwrap();
+    after_it
+        .encode_wait_for_event(EventRef::Event(&ordered), 1)
+        .unwrap();
     let read_apart = shared(&device, PAGE, |_| 0);
     let mut apart = after_it.blit_command_encoder().unwrap();
     apart
@@ -1928,7 +1940,7 @@ fn a_first_scatter_over_chunks_the_thread_imports_is_in_its_pages_once_it_comple
     );
     assert!(
         contents(&read_apart) == *wanted,
-        "another queue's later command buffer reads the scatter"
+        "another queue's command buffer that waits for the scatter reads it"
     );
     let after = device.work_counts();
     assert!(after.host_ram_staged_drain_nanos > encoding.host_ram_staged_drain_nanos);
