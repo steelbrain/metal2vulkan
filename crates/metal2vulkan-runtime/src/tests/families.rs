@@ -15,7 +15,7 @@ use crate::image_plan::{ImageFacts, ImagePlan};
 use crate::resource_ids::texture_arrays;
 use crate::{
     FamilyRow, FeatureRow, FormatCapabilities, FormatCapability, FormatRow, Framework, GpuFamily,
-    LimitRow, Refusal, RowAudit, RowState, RuntimeGap,
+    IndirectRule, LimitRow, Refusal, RowAudit, RowState, RuntimeGap,
 };
 use ash::vk;
 use metal2vulkan::device::{Device, DevicePolicy, OpBits, VkExtension, VkFeature, VkLimit};
@@ -885,7 +885,9 @@ fn indirect_command_buffer_rows_name_what_is_still_missing() {
         let (compute, render) = if needs.is_empty() {
             (
                 None,
-                Some(RowState::Gap(RuntimeGap::IndirectRenderCommands)),
+                Some(RowState::Gap(RuntimeGap::IndirectRenderCommands(
+                    IndirectRule::FamilyRow,
+                ))),
             )
         } else {
             refused_somewhere = true;

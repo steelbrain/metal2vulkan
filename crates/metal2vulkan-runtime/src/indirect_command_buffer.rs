@@ -68,7 +68,7 @@ use super::buffer::{Buffer, Modes};
 use super::degradation::{Degradation, NoticesFor};
 use super::depth_stencil::DepthStencilState;
 use super::device::lock;
-use super::error::{internal, invalid, Error, MemoryKind, Problem, RuntimeGap};
+use super::error::{internal, invalid, Error, IndirectRule, MemoryKind, Problem, RuntimeGap};
 use super::families::GpuFamily;
 use super::indirect_execute::Unforeseen;
 use super::kept_commands::{Kept, KeptChunk, KeptChunks, StepChunk, StepCopy};
@@ -560,7 +560,9 @@ impl Device {
         if !descriptor.inherits_render_states()
             && self.supports_family_now(GpuFamily::Apple10.raw())
         {
-            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
+            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::CommandRenderStates,
+            )));
         }
         let placed = records_placement(CALL, descriptor.placement)?;
         let max_buffer_length = self.properties().max_buffer_length;
@@ -5177,7 +5179,9 @@ impl IndirectRenderCommand {
             .device()
             .supports_family_now(GpuFamily::Apple10.raw())
         {
-            return Error::NotImplemented(RuntimeGap::IndirectRenderCommands);
+            return Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::CommandRenderStates,
+            ));
         }
         problem(call, IndirectCommandBufferProblem::RenderState)
     }

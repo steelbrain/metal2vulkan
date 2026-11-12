@@ -70,9 +70,9 @@ use metal2vulkan_runtime::{
     Attachment, Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, Degradation,
     Device, DrawPrimitiveType, DrawProblem, Error, EventRef, ExecutedPipeline, Execution, Heap,
     HeapDescriptor, HeapType, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
-    IndirectCommandBufferProblem, IndirectRenderCommand, Invalid, PipelineOptions, Problem, Region,
-    RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceOptions, RuntimeGap,
-    Size,
+    IndirectCommandBufferProblem, IndirectRenderCommand, IndirectRule, Invalid, PipelineOptions,
+    Problem, Region, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
+    ResourceOptions, RuntimeGap, Size,
 };
 use metal2vulkan_runtime::{LoadAction, StoreAction, TextureDescriptor};
 
@@ -1428,7 +1428,9 @@ fn what_metal_stops_is_refused_at_the_call() {
         );
         assert_eq!(
             encoder.execute_commands_in_buffer(&compute, 0..1).err(),
-            Some(Error::NotImplemented(RuntimeGap::IndirectRenderCommands))
+            Some(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::OtherEncoderKind
+            )))
         );
         encoder.execute_commands_in_buffer(&icb, 2..2).unwrap();
         encoder.execute_commands_in_buffer(&mixed, 0..2).unwrap();
@@ -2124,7 +2126,9 @@ fn a_render_execution_s_range_is_refused_where_metal_s_read_is_not_the_copy_s() 
             encoder
                 .execute_commands_in_buffer_indirect(&compute, &range, 8)
                 .err(),
-            Some(Error::NotImplemented(RuntimeGap::IndirectRenderCommands))
+            Some(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::OtherEncoderKind
+            )))
         );
         // A draw that writes the range's bytes: the template writes words 0 and 1 of its `out`.
         encoder.set_render_pipeline_state(&setup.state).unwrap();
@@ -2139,7 +2143,9 @@ fn a_render_execution_s_range_is_refused_where_metal_s_read_is_not_the_copy_s() 
             encoder
                 .execute_commands_in_buffer_indirect(&icb, &range, 8)
                 .err(),
-            Some(Error::NotImplemented(RuntimeGap::IndirectRenderCommands))
+            Some(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::RangeWrittenByDraw
+            )))
         );
         encoder.end_encoding().unwrap();
         complete(&command_buffer);

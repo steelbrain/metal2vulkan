@@ -1341,12 +1341,12 @@ impl FeatureRow {
             F::IcbRendering | F::IcbRenderMemoryBarriers | F::IcbRasterAndDepthStencilState => {
                 first([
                     addressed(f, Feature::GpuEncodedIndirectCommands),
-                    gap(G::IndirectRenderCommands),
+                    gap(G::IndirectRenderCommands(crate::IndirectRule::FamilyRow)),
                 ])
             }
             F::IcbTessellation => first([
                 addressed(f, Feature::GpuEncodedIndirectCommands),
-                gap(G::IndirectRenderCommands),
+                gap(G::IndirectRenderCommands(crate::IndirectRule::FamilyRow)),
             ]),
             // Imageblocks. A kernel's run (`set_imageblock_size`, step 9's first piece), and a tile
             // function's in a tile dispatch, whose refusals are the tile shaders row's. A fragment
@@ -1391,7 +1391,10 @@ impl FeatureRow {
             // writes (`render/mesh_arguments.rs`); an indirect command buffer's mesh draws are
             // render commands first.
             F::MeshShading | F::IndirectMeshDrawArguments => first([mesh_stages(f)]),
-            F::IcbMeshDraws => first([mesh_stages(f), gap(G::IndirectRenderCommands)]),
+            F::IcbMeshDraws => first([
+                mesh_stages(f),
+                gap(G::IndirectRenderCommands(crate::IndirectRule::FamilyRow)),
+            ]),
             // Ray tracing: ray queries and acceleration structures on device addresses, then the
             // runtime's acceleration structures.
             F::RayTracingCompute

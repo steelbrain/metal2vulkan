@@ -42,8 +42,8 @@ use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
     Buffer, Device, Error, GpuFamily, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
-    IndirectCommandBufferProblem, Invalid, PipelineOptions, Problem, RenderCommandEncoder,
-    ResourceOptions, RuntimeGap, ScissorRect, Viewport,
+    IndirectCommandBufferProblem, IndirectRule, Invalid, PipelineOptions, Problem,
+    RenderCommandEncoder, ResourceOptions, RuntimeGap, ScissorRect, Viewport,
 };
 
 /// The command's and the direct draw's pipe: white, at the pass's depth format.
@@ -151,7 +151,9 @@ fn commands_that_do_not_inherit_render_states_draw_with_the_encoder_s() {
                 .device
                 .new_indirect_command_buffer(&descriptor(true, false), 1, ResourceOptions::shared())
                 .err(),
-            Some(Error::NotImplemented(RuntimeGap::IndirectRenderCommands)),
+            Some(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::CommandRenderStates
+            ))),
             "{name}: a buffer that leaves its render states to its commands on Apple10"
         );
         quiet(probe, &messages);
@@ -298,7 +300,9 @@ fn a_command_s_render_states_are_refused_and_object_lengths_taken() {
     let name = probe.device.name().to_owned();
     let apple10 = probe.device.supports_family(GpuFamily::Apple10.raw());
     let refused = |call| match apple10 {
-        true => Error::NotImplemented(RuntimeGap::IndirectRenderCommands),
+        true => Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+            IndirectRule::CommandRenderStates,
+        )),
         false => Error::Invalid(Invalid::new(
             call,
             Problem::IndirectCommandBuffer(IndirectCommandBufferProblem::RenderState),
@@ -484,7 +488,11 @@ fn a_kernel_s_render_state_setters_fail_its_pipeline_s_creation() {
         match (setter, made) {
             (None, made) => assert!(made.is_ok(), "{name}: {kernel}: {:?}", made.err()),
             (Some(_), Err(Error::NotImplemented(gap))) if probe.device.supports_family(apple10) => {
-                assert_eq!(gap, RuntimeGap::IndirectRenderCommands, "{name}: {kernel}")
+                assert_eq!(
+                    gap,
+                    RuntimeGap::IndirectRenderCommands(IndirectRule::CommandRenderStates),
+                    "{name}: {kernel}"
+                )
             }
             (Some(_), Err(Error::Unsupported(unsupported))) => assert_eq!(
                 (unsupported.feature, unsupported.needs),

@@ -28,9 +28,9 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    ComputePipelineState, Device, Error, GpuFamily, IdPlacement, Invalid, PipelineOption,
-    PipelineOptions, Problem, RenderPipelineFunctionsDescriptor, RenderPipelineState, ResourceId,
-    RuntimeGap,
+    ComputePipelineState, Device, Error, GpuFamily, IdPlacement, IndirectRule, Invalid,
+    PipelineOption, PipelineOptions, Problem, RenderPipelineFunctionsDescriptor,
+    RenderPipelineState, ResourceId, RuntimeGap,
 };
 
 /// The placement at `id`.
@@ -266,7 +266,9 @@ fn a_depth_stencil_states_id_below_apple10_is_plain_metal_s_answer() {
         for descriptor in [DepthStencilDescriptor::default(), stencilled] {
             let state = device.new_depth_stencil_state(&descriptor).unwrap();
             let expected = if device.supports_family(GpuFamily::Apple10.raw()) {
-                Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands))
+                Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                    IndirectRule::CommandRenderStates,
+                )))
             } else {
                 Ok(ResourceId(0))
             };

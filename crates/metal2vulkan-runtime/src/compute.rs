@@ -54,7 +54,7 @@ use super::deferred::Deferred;
 use super::degradation::{BoundFormats, CompiledPipeline, Degradation};
 use super::device::Device;
 use super::encoder::{EncoderCore, Replayed};
-use super::error::{internal, invalid, Error, Problem, RuntimeGap};
+use super::error::{internal, invalid, Error, IndirectRule, Problem, RuntimeGap};
 use super::execution::{ExecutedPipeline, Execution};
 use super::fetch_reach;
 use super::function_table::VisibleFunctionTable;
@@ -1339,7 +1339,9 @@ impl ComputeCommandEncoder {
                 const CALL: &str = indirect_execute::CALL;
                 this.core.check_device(CALL, icb.device())?;
                 if icb.is_render() {
-                    return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
+                    return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                        IndirectRule::OtherEncoderKind,
+                    )));
                 }
                 let range = icb.command_range(CALL, range.clone())?;
                 // An empty range runs nothing before the inherited pipeline state is looked at, as
@@ -1428,7 +1430,9 @@ impl ComputeCommandEncoder {
                 this.core.check_device(CALL, icb.device())?;
                 this.core.check_device(CALL, range_buffer.device())?;
                 if icb.is_render() {
-                    return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
+                    return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                        IndirectRule::OtherEncoderKind,
+                    )));
                 }
                 indirect_execute::check_range_buffer(range_buffer.length(), offset)?;
                 let pipeline = this.inherited_pipeline(CALL, icb)?;

@@ -107,7 +107,7 @@ pub(super) use tile::TileState;
 
 use super::binary_archive;
 use super::device::{device_error, lock};
-use super::error::{internal, invalid, ArchivedPipeline, Error, Problem, RuntimeGap};
+use super::error::{internal, invalid, ArchivedPipeline, Error, IndirectRule, Problem, RuntimeGap};
 use super::families::GpuFamily;
 use super::library::Function;
 use super::values::Size;
@@ -1992,7 +1992,9 @@ fn compile_error(device: &Device, error: metal2vulkan::error::Error) -> Error {
         {
             let apple10 = GpuFamily::Apple10.raw();
             if device.supports_family_now(apple10) {
-                return Error::NotImplemented(RuntimeGap::IndirectRenderCommands);
+                return Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                    IndirectRule::CommandRenderStates,
+                ));
             }
             unsupported.needs = Needs::MetalGpuFamily(apple10);
             Error::Unsupported(unsupported)

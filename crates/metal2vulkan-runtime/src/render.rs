@@ -293,7 +293,8 @@ use super::draw_source::{CopySteps, DrawSource, IndexBind};
 use super::dynamic_state::ExtendedDynamicState;
 use super::encoder::{EncoderCore, Replayed};
 use super::error::{
-    internal, invalid, vulkan, CommandBufferError, EncoderCall, Error, Problem, RuntimeGap,
+    internal, invalid, vulkan, CommandBufferError, EncoderCall, Error, IndirectRule, Problem,
+    RuntimeGap,
 };
 use super::execution::{ExecutedPipeline, Execution};
 use super::fragment_imageblock::PassImageblock;
@@ -8233,7 +8234,9 @@ impl RenderLowering {
         // Metal's answer there is not measured.
         if !self.rerouting && self.uses_memoryless(&pipeline.base().interface) {
             if self.replaying {
-                return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
+                return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                    IndirectRule::MemorylessTextureUse,
+                )));
             }
             self.core.fail_memoryless_use();
             return Ok(());
@@ -8302,7 +8305,9 @@ impl RenderLowering {
         // execution's command, whose runs' framebuffers are the pass's.
         let reformats = self.reformats(&pipeline, &routed.settings.routing)?;
         if self.replaying && !reformats.is_empty() {
-            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
+            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::ReformattedColor,
+            )));
         }
         // The encoder's kept bind state, brought to the draw's (`live_bind.rs`), held for the
         // draw: no draw of the encoder runs inside another past here.
@@ -8975,7 +8980,9 @@ impl RenderLowering {
         // stand-in's copies (not built).
         let tests_use = graphics.shader_tests;
         if tests_use.is_some() && self.replaying {
-            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
+            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::ShaderDepthTest,
+            )));
         }
         // The stencil the draw tests in the shader, held in the pass's shadow of it: a returned
         // `[[stencil]]`'s (the shader-side stencil), or, for a function that runs the draw's
@@ -9492,7 +9499,9 @@ impl RenderLowering {
             self.core.counts().own_pixel_read();
         }
         if self.replaying && !self.gathered().covers(&draw_shadows) {
-            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
+            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::UngatheredShadow,
+            )));
         }
         // Over the last draw's, in their storage (`LiveBind::vertex_buffers`), with where their
         // spaces start (`LiveBind::vertex_starts`).
@@ -10086,7 +10095,9 @@ impl RenderLowering {
         let reads_fragments = work && earlier(&only(true), FRAGMENT_DRAW_STAGES);
         let writes_fragments = work && earlier(&only(false), FRAGMENT_DRAW_STAGES);
         if writes_fragments || (after_geometry && (reads_fragments || !self.command_barrier)) {
-            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
+            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::MeshDispatchOrder,
+            )));
         }
         // A scan reads Metal's arguments where the draw reads them, after their copy. An arguments
         // pass, which writes no Metal resource, waits only for what wrote them.

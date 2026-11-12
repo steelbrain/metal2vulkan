@@ -295,7 +295,9 @@ use crate::degradation::{Degradation, SplitCauses};
 use crate::device::functions::Vk;
 use crate::device::lock;
 use crate::encoder::{EncoderCore, RecordedSegment};
-use crate::error::{internal, invalid, vulkan, CommandBufferError, Error, Problem, RuntimeGap};
+use crate::error::{
+    internal, invalid, vulkan, CommandBufferError, Error, IndirectRule, Problem, RuntimeGap,
+};
 use crate::executed_commands::{ExecutedCommand, RecordsRead};
 use crate::fragment_imageblock::PassImageblock;
 use crate::indirect_command_buffer::{
@@ -404,7 +406,9 @@ impl RenderLowering {
         self.core.check_device(CALL, icb.device())?;
         if !icb.is_render() {
             if !icb.runs_nothing_in_a_pass() {
-                return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
+                return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                    IndirectRule::OtherEncoderKind,
+                )));
             }
             icb.command_range(CALL, range)?;
             return Ok(());
@@ -472,7 +476,9 @@ impl RenderLowering {
         self.core
             .check_device(CALL_INDIRECT, range_buffer.device())?;
         if !icb.is_render() {
-            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
+            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::OtherEncoderKind,
+            )));
         }
         indirect_execute::check_range_buffer(range_buffer.length(), offset)?;
         // Not in a pass of several color groups (`render/color_groups.rs`).
@@ -487,7 +493,9 @@ impl RenderLowering {
             offset..offset + indirect_execute::RANGE_BYTES,
         )];
         if self.core.uses().written(&read) {
-            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
+            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::RangeWrittenByDraw,
+            )));
         }
         let copy = indirect_dispatch::copy_arguments(
             &mut self.core,
@@ -1151,7 +1159,11 @@ impl Rendered {
         maker: &CommandBuffer,
         run: &mut PassLayout,
     ) -> Result<(), Error> {
-        let refused = || Error::NotImplemented(RuntimeGap::IndirectRenderCommands);
+        let refused = || {
+            Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::MemorylessReadPastPass,
+            ))
+        };
         let mut backed = Vec::new();
         for (index, color) in self.layout.colors.iter().enumerate() {
             let Some(color) = color.as_ref().filter(|color| color.stand_in.is_none()) else {
@@ -3214,7 +3226,9 @@ impl DeferredPass {
         // texture's truth is refused.
         let residency = command_buffer.residency()?;
         if self.reaches_past_its_copies(command_buffer.device(), &residency) {
-            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
+            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::ResidencyPastCopies,
+            )));
         }
         // Its tile dispatches' pipelines, waiting for those being made; a failed one fails the
         // command buffer (`render/pending_tile.rs`).

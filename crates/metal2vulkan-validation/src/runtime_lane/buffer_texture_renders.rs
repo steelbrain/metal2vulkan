@@ -45,9 +45,9 @@ use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBuffer, CommandBufferStatus, CommandQueue, Degradation, Device,
-    Error, IndirectCommandBufferDescriptor, Library, LoadAction, Origin, PipelineOptions, Region,
-    RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceOptions, RuntimeGap,
-    SamplerState, Size, StoreAction, Texture, TextureDescriptor,
+    Error, IndirectCommandBufferDescriptor, IndirectRule, Library, LoadAction, Origin,
+    PipelineOptions, Region, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
+    ResourceOptions, RuntimeGap, SamplerState, Size, StoreAction, Texture, TextureDescriptor,
 };
 use std::path::Path;
 
@@ -1185,7 +1185,9 @@ fn executed(lane: &Lane, kind: Kind, before: Before, bpr: u64) {
         assert!(
             matches!(
                 command_buffer.refusal(),
-                Some(Error::NotImplemented(RuntimeGap::IndirectRenderCommands))
+                Some(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                    IndirectRule::ResidencyPastCopies
+                )))
             ),
             "{kind:?}: {:?}",
             command_buffer.refusal()

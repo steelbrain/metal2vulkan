@@ -30,9 +30,10 @@ use metal2vulkan_runtime::{
     CpuCacheMode, Degradation, Device, DrawPrimitiveType, DrawProblem, EncodedComputeCommand,
     EncodedRenderCommand, Error, EventRef, GpuAddress, HazardTrackingMode, IndirectBufferBinding,
     IndirectCommand, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
-    IndirectCommandBufferProblem, IndirectDispatch, IndirectDraw, Invalid, LoadAction, MetalError,
-    PipelineOptions, Problem, PurgeableState, Region, RenderPassDescriptor, RenderPipelineState,
-    ResourceId, ResourceOptions, RuntimeGap, Size, StorageMode, StoreAction, TextureDescriptor,
+    IndirectCommandBufferProblem, IndirectDispatch, IndirectDraw, IndirectRule, Invalid,
+    LoadAction, MetalError, PipelineOptions, Problem, PurgeableState, Region, RenderPassDescriptor,
+    RenderPipelineState, ResourceId, ResourceOptions, RuntimeGap, Size, StorageMode, StoreAction,
+    TextureDescriptor,
 };
 use std::ops::Range;
 
@@ -2446,7 +2447,9 @@ fn render_setters_refuse_what_metal_refuses() {
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
         assert_eq!(
             encoder.execute_commands_in_buffer(&made, 0..1).unwrap_err(),
-            Error::NotImplemented(RuntimeGap::IndirectRenderCommands)
+            Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::OtherEncoderKind
+            ))
         );
         encoder.end_encoding().unwrap();
     });

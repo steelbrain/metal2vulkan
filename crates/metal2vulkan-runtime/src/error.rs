@@ -1404,6 +1404,55 @@ pub enum ArchivedPipeline {
     Tile,
 }
 
+/// The rule by which the runtime refuses an execution of indirect render commands, or a command
+/// ([`RuntimeGap::IndirectRenderCommands`]). No Metal counterpart: Metal runs each of these (the
+/// Apple10 rule's on a device that claims it), and the runtime has not built it.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IndirectRule {
+    /// A render encoder's execution of compute commands that run something in a pass, or a
+    /// compute encoder's execution of render commands (`executeCommandsInBuffer:withRange:` and
+    /// its indirect form).
+    OtherEncoderKind,
+    /// An execution whose range is read from a buffer a draw of the encoder before the call may
+    /// write: Metal's execution reads the draw's write, and the copy of the range the call makes
+    /// would not.
+    RangeWrittenByDraw,
+    /// A command's draw whose functions statically use a texture slot of the encoder that holds a
+    /// memoryless texture, where Metal's answer is not measured (an encoder's own such draw fails
+    /// the command buffer, [`CommandBufferError::InvalidResource`]).
+    MemorylessTextureUse,
+    /// A command's draw that renders a pass color through a view of another format, which needs
+    /// a render pass instance of its own; an execution's runs take the pass's framebuffers.
+    ReformattedColor,
+    /// A command's draw whose fragment function runs the depth test itself, against the pass's
+    /// stand-in of the depth, whose copies an execution's runs do not take.
+    ShaderDepthTest,
+    /// A command's draw that uses a shadowed texture its call did not gather: the copies around
+    /// the pass's instances follow what each call gathered (`render/shadows.rs`).
+    UngatheredShadow,
+    /// The command buffer made resident, past an execution's call, a resource that may touch the
+    /// truth of a shadowed texture the pass copies around its instances, which follow what each
+    /// call gathered.
+    ResidencyPastCopies,
+    /// An emulated mesh command whose dispatches write what an earlier draw's fragments touched
+    /// (unmeasured), touch what an earlier draw's other stages touched without the command's
+    /// barrier (unordered on Metal, or ordered by a barrier of the encoder the execution does not
+    /// see), or do both.
+    MeshDispatchOrder,
+    /// A memoryless attachment the pass backs, for an execution whose commands ran as several
+    /// render pass instances, and reads past its instances: a color's sample planes, a color
+    /// resolve drawn after the pass, or a depth/stencil resolve.
+    MemorylessReadPastPass,
+    /// On a device that claims Apple10, the render states the commands set themselves: a buffer
+    /// that does not inherit them, a command's setter, a function that sets them, and a
+    /// depth/stencil state's ID, which names the state such a command sets.
+    CommandRenderStates,
+    /// A GPU family's row of indirect render commands ([`Device::family_rows`](crate::Device::family_rows)):
+    /// the executions and commands the other rules refuse.
+    FamilyRow,
+}
+
 /// A runtime piece a later build step adds, or a use whose effect on Metal is not defined and the
 /// runtime holds nothing exact for. Each is refused typed: Metal itself takes these inputs, so
 /// none of them is misuse ([`Error::Invalid`]), and none is unmeasured
@@ -1469,19 +1518,9 @@ pub enum RuntimeGap {
         /// The device's `max_buffer_length`.
         max_buffer_length: u64,
     },
-    /// What indirect command buffers lack of their render commands: a command whose mesh draw's
-    /// object function has threadgroup memory arguments, whose lengths (the command's
-    /// `setObjectThreadgroupMemoryLength:atIndex:` or the encoder's) are not measured; an
-    /// execution of a range a draw of the encoder before
-    /// it may write, or of commands that need a render pass instance of their own (a fetched
-    /// attachment, the shader-side stencil, views, a fragment imageblock, a texture whose shadow
-    /// the pass does not hold, or a memoryless attachment the pass backs and reads past its
-    /// instances); an execution of render commands by a compute encoder, or of compute commands by
-    /// a render encoder; a command whose functions statically use a texture slot of the encoder
-    /// that holds a memoryless texture, at which Metal's answer is not measured (an encoder's own
-    /// draw fails the command buffer, [`CommandBufferError::InvalidResource`]); and, on a device
-    /// that claims Apple10, a depth/stencil state's ID, which names the state such a command sets.
-    IndirectRenderCommands,
+    /// What indirect command buffers lack of their render commands, naming the rule that refused
+    /// the call, the commit or the host step ([`IndirectRule`]).
+    IndirectRenderCommands(IndirectRule),
     /// An indirect compute command's imageblock side past 65535, which Metal keeps: the record
     /// holds 16 bits a side, as a kernel's `set_imageblock_size` writes it, and no dispatch runs
     /// an imageblock of more than 1024 cells.

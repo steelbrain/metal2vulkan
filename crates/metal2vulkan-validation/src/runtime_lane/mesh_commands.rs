@@ -58,9 +58,9 @@ use metal2vulkan::pipeline::{
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBuffer, ComputePipelineState, Device, Error, IndirectCommandBuffer,
-    IndirectCommandBufferDescriptor, IndirectCommandBufferProblem, Invalid, Library, LoadAction,
-    PipelineOptions, Problem, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
-    ResourceOptions, RuntimeGap, Size, StoreAction,
+    IndirectCommandBufferDescriptor, IndirectCommandBufferProblem, IndirectRule, Invalid, Library,
+    LoadAction, PipelineOptions, Problem, RenderCommandEncoder, RenderPassDescriptor,
+    RenderPipelineState, ResourceOptions, RuntimeGap, Size, StoreAction,
 };
 
 /// a Metal probe, as an M4 printed it without API validation: `PX <case> <x> <y> a=<words>
@@ -1157,7 +1157,9 @@ fn mesh_commands_read_earlier_draws_writes_as_metal_orders_them() {
             // command's barrier alone.
             let refused = emulated && writer == Writer::Vertex && !command;
             let lines = match lines {
-                Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands)) if refused => {
+                Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                    IndirectRule::MeshDispatchOrder,
+                ))) if refused => {
                     eprintln!("{name} on {device_name}: refused, emulated; Metal's read {metals}");
                     continue;
                 }

@@ -16,7 +16,7 @@
 //! three states over two runs; `metal_release.rs`). What the ID names on Apple10, a depth/stencil
 //! state an indirect render command sets, is not built.
 
-use super::error::{Error, RuntimeGap};
+use super::error::{Error, IndirectRule, RuntimeGap};
 use super::families::GpuFamily;
 use super::metal_release::DEPTH_STENCIL_RESOURCE_ID;
 use super::resource_ids::ResourceId;
@@ -89,7 +89,9 @@ impl DepthStencilState {
     /// commands that set a depth/stencil state are not built.
     pub fn gpu_resource_id(&self) -> Result<ResourceId, Error> {
         if self.0.device.supports_family_now(GpuFamily::Apple10.raw()) {
-            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
+            return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
+                IndirectRule::CommandRenderStates,
+            )));
         }
         Ok(DEPTH_STENCIL_RESOURCE_ID)
     }

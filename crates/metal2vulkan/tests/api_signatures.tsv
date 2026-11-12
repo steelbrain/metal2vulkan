@@ -1295,6 +1295,7 @@ enum	metal2vulkan-runtime::IndirectCommand	#[derive(Clone, Debug)] #[non_exhaust
 enum	metal2vulkan-runtime::IndirectCommandBufferProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum IndirectCommandBufferProblem
 enum	metal2vulkan-runtime::IndirectDispatch	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum IndirectDispatch
 enum	metal2vulkan-runtime::IndirectDraw	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum IndirectDraw
+enum	metal2vulkan-runtime::IndirectRule	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum IndirectRule
 enum	metal2vulkan-runtime::InstanceApiVersion	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum InstanceApiVersion
 enum	metal2vulkan-runtime::LayerSettingValue	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum LayerSettingValue
 enum	metal2vulkan-runtime::LimitRow	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] #[non_exhaustive] pub enum LimitRow
@@ -12300,6 +12301,17 @@ variant	metal2vulkan-runtime::IndirectDraw::MeshThreadgroups	MeshThreadgroups { 
 variant	metal2vulkan-runtime::IndirectDraw::MeshThreads	MeshThreads { threads_per_grid: Size, threads_per_object_threadgroup: Size, threads_per_mesh_threadgroup: Size }
 variant	metal2vulkan-runtime::IndirectDraw::Patches	Patches { control_points: u64, patch_start: u64, patch_count: u64, patch_index_buffer: Option<GpuAddress>, instance_count: u64, base_instance: u64, factor_buffer: GpuAddress, factor_instance_stride: u64 }
 variant	metal2vulkan-runtime::IndirectDraw::Primitives	Primitives { primitive_type: DrawPrimitiveType, vertex_start: u64, vertex_count: u64, instance_count: u64, base_instance: u64 }
+variant	metal2vulkan-runtime::IndirectRule::CommandRenderStates	CommandRenderStates
+variant	metal2vulkan-runtime::IndirectRule::FamilyRow	FamilyRow
+variant	metal2vulkan-runtime::IndirectRule::MemorylessReadPastPass	MemorylessReadPastPass
+variant	metal2vulkan-runtime::IndirectRule::MemorylessTextureUse	MemorylessTextureUse
+variant	metal2vulkan-runtime::IndirectRule::MeshDispatchOrder	MeshDispatchOrder
+variant	metal2vulkan-runtime::IndirectRule::OtherEncoderKind	OtherEncoderKind
+variant	metal2vulkan-runtime::IndirectRule::RangeWrittenByDraw	RangeWrittenByDraw
+variant	metal2vulkan-runtime::IndirectRule::ReformattedColor	ReformattedColor
+variant	metal2vulkan-runtime::IndirectRule::ResidencyPastCopies	ResidencyPastCopies
+variant	metal2vulkan-runtime::IndirectRule::ShaderDepthTest	ShaderDepthTest
+variant	metal2vulkan-runtime::IndirectRule::UngatheredShadow	UngatheredShadow
 variant	metal2vulkan-runtime::InstanceApiVersion::AboveLoader	AboveLoader { requested: ApiVersion, loader: ApiVersion }
 variant	metal2vulkan-runtime::InstanceApiVersion::BelowFloor	BelowFloor { requested: ApiVersion }
 variant	metal2vulkan-runtime::LayerSettingValue::Bool	Bool(bool)
@@ -12642,7 +12654,7 @@ variant	metal2vulkan-runtime::RuntimeGap::IndirectCommandBufferPastMaxBufferLeng
 variant	metal2vulkan-runtime::RuntimeGap::IndirectCommandPastSize	IndirectCommandPastSize { index: u64, size: u64 }
 variant	metal2vulkan-runtime::RuntimeGap::IndirectDrawArguments	IndirectDrawArguments
 variant	metal2vulkan-runtime::RuntimeGap::IndirectImageblockSize	IndirectImageblockSize { width: u64, height: u64 }
-variant	metal2vulkan-runtime::RuntimeGap::IndirectRenderCommands	IndirectRenderCommands
+variant	metal2vulkan-runtime::RuntimeGap::IndirectRenderCommands	IndirectRenderCommands(IndirectRule)
 variant	metal2vulkan-runtime::RuntimeGap::InterpolateAtSampleWithPositions	InterpolateAtSampleWithPositions
 variant	metal2vulkan-runtime::RuntimeGap::IoCommandQueues	IoCommandQueues
 variant	metal2vulkan-runtime::RuntimeGap::LayeredPass	LayeredPass
