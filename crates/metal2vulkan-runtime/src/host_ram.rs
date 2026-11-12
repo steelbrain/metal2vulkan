@@ -2193,6 +2193,21 @@ impl Device {
             .collect()
     }
 
+    /// Import now the chunk that holds host address `at`, of a RAM the device uses, as the first
+    /// object over it imports it on a plan that is not [`Plan::listed`] ([`RamOnDevice::chunk`]):
+    /// the tests' way to bind objects in a listed RAM's chunk, which no object asks for. Refused
+    /// as the chunk's import is.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn import_host_ram_chunk(&self, at: u64) -> Result<(), Error> {
+        let rams = self.shared().host_ram.used();
+        let (ram, slot) = (rams.iter())
+            .find_map(|ram| Some((ram, span_of(&ram.spans(), at)?)))
+            .expect("a chunk of a RAM the device uses");
+        let importer = (self.shared().host_import.as_ref())
+            .map_err(|_| internal("a chunk imported on a device that imports no host memory"))?;
+        ram.chunk(self, importer, slot, By::Object).map(drop)
+    }
+
     /// Run `during` with the lock of the state of the chunk that holds host address `at` held, a
     /// chunk of a RAM the device uses, as the device's thread holds it as it passes each chunk
     /// of its window ([`RamOnDevice::next_ahead`]): the tests' way to make an object over the

@@ -412,6 +412,8 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
     let [(listed, _)] = device.host_ram_chunks()[..] else {
         panic!("one RAM");
     };
+    // The chunk imported first: on a listed plan no object asks for one.
+    let _chunk = device.import_host_ram_chunk(start + AT);
     let first = buffer(&device, view, start, AT, LENGTH);
     let made = device.work_counts();
     let dma_bufs = made.host_ram_dma_buf_imports - before.host_ram_dma_buf_imports;
@@ -563,6 +565,7 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
     // again.
     let third = (refused + probe_refused == 1).then(|| {
         let (counted, requested) = (device.work_counts(), asked.lock().unwrap().requests.len());
+        let _chunk = device.import_host_ram_chunk(start + 64 * MIB + AT);
         let third = buffer(&device, view, start, 64 * MIB + AT, LENGTH);
         let after = device.work_counts();
         assert_eq!(
@@ -638,8 +641,11 @@ fn a_driver_s_refused_dma_buf_sends_the_device_s_later_chunks_to_their_pointer()
         (imported, counts.host_ram_dma_buf_imports_failed, requests)
     };
     let (before, failed_before, at_use) = counts(&device);
+    // Each chunk imported first, the object after it: on a listed plan no object asks for one.
+    let _chunk = device.import_host_ram_chunk(start + AT);
     let first = try_buffer(&device, view, start, AT, LENGTH);
     let ((chunks, dma_bufs), failed, requests) = counts(&device);
+    let _chunk = device.import_host_ram_chunk(start + 64 * MIB + AT);
     let second = try_buffer(&device, view, start, 64 * MIB + AT, LENGTH);
     let ((chunks_after, dma_bufs_after), failed_after, requests_after) = counts(&device);
     println!(
@@ -791,8 +797,11 @@ fn a_dma_buf_refused_for_want_of_memory_is_that_import_s_alone() {
     let used = device.use_host_ram(&ram).unwrap();
     let at_use = device.work_counts();
     let chunks = device.host_ram_chunks();
+    // Each chunk imported first, the object after it: on a listed plan no object asks for one.
+    let _chunk = device.import_host_ram_chunk(start + AT);
     let first = try_buffer(&device, view, start, AT, LENGTH);
     let after_first = device.work_counts();
+    let _chunk = device.import_host_ram_chunk(start + 64 * MIB + AT);
     let second = try_buffer(&device, view, start, 64 * MIB + AT, LENGTH);
     let after_second = device.work_counts();
     let requests = asked.lock().unwrap().requests.clone();
@@ -1119,6 +1128,8 @@ fn without_pointer_imports_a_ram_s_chunks_are_its_dma_bufs() {
         panic!("one RAM");
     };
     let before = device.work_counts();
+    // The chunk imported first: on a listed plan no object asks for one.
+    let _chunk = device.import_host_ram_chunk(start + AT);
     let buffer = buffer(&device, view, start, AT, LENGTH);
     let after = device.work_counts();
     let dma_bufs = after.host_ram_dma_buf_imports - before.host_ram_dma_buf_imports;
@@ -1877,7 +1888,9 @@ fn lists_kept_the_contract(asked: &Asked) -> bool {
 
 /// A guest's tile of [`TILE_PAGES`] scattered pages copied both ways over a RAM of shared pages
 /// (QEMU's `memory-backend-memfd,share=on`) with a source of dma-bufs, as a consumer's cache asks
-/// copy it: first with its chunks not imported, then with them imported by objects over them.
+/// copy it: first with its chunks not imported, then with them imported (on a listed plan an
+/// object over a chunk not imported takes its own import, so the test imports each) and held by
+/// objects over them.
 /// Each gather reads the RAM's bytes page by page, each scatter writes each page and leaves the
 /// page above it alone. Where each listed import costs every submission (the import tax forced
 /// held on the device; the RAM listed where the driver takes the dma-buf of the page the use asks
@@ -2011,7 +2024,11 @@ fn a_tile_of_scattered_pages_copies_both_ways_over_a_ram_of_shared_pages() {
                 assert_eq!(took.map(|took| took.lists), [0; 2]);
             }
         }
-        // An object over each chunk: the chunks asked for, and imported.
+        // Each chunk imported (on a listed plan no object asks for one), and an object over each,
+        // holding it.
+        for span in spans {
+            device.import_host_ram_chunk(span.start).unwrap();
+        }
         let holders: Vec<Buffer> = (spans.iter())
             .map(|span| buffer(&device, view, start, span.start - start + AT, LENGTH))
             .collect();
