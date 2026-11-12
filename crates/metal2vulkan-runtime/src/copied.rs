@@ -48,11 +48,10 @@
 //!   comparison compares bytes 16 at a time (8 off x86-64) with the bytes the pages and the copy
 //!   agreed on, and stores only those that changed and that the other side did not change since:
 //!   all 16 in one store where every one of them is to be written, else those alone in one masked
-//!   store on an x86-64 host with AVX-512BW, else on x86-64 in sixteen stores of a byte, each of
-//!   a byte not to be written aimed at the stack instead with no branch, and off x86-64 in stores
-//!   of 8 and 1 bytes (`merge_block`), so no byte one side did not change is ever written, and a
-//!   byte the other side writes meanwhile is stored over only where the first side changed it
-//!   too, in the window between the comparison's read of it and its store. So a CPU
+//!   store on an x86-64 host with AVX-512BW, and elsewhere in the fewest stores of 8, 4, 2 and 1
+//!   bytes (of 8 and 1 off x86-64; `merge_block`), so no byte one side did not change is ever
+//!   written, and a byte the other side writes meanwhile is stored over only where the first side
+//!   changed it too, in the window between the comparison's read of it and its store. So a CPU
 //!   write to the pages made before the completion reads its block is always kept; one made while
 //!   the merge runs is kept but for a byte the GPU also changed, which then keeps the CPU's or the
 //!   GPU's. Only a program that writes a byte of the buffer from the CPU that a command buffer
@@ -608,10 +607,10 @@ pub(crate) mod x86 {
     /// [`merge_block`](super::merge_block) 16 bytes at a time: the bytes that differ from `was`
     /// as a mask (`_mm_cmpeq_epi8`, `_mm_movemask_epi8`), and where `keep_to` those of `to` that
     /// still hold `was`'s; 16 in one store where every byte is to be written, else those the mask
-    /// sets in one masked store where the host has one ([`store_masked_avx512`]), else in
-    /// sixteen stores of a byte, those not set aimed at the stack ([`store_masked`]); `was` takes
-    /// all 16 of `now` (the bytes that did not change are the same). The rest past the last 16, 8
-    /// at a time ([`merge_words`](super::merge_words)). The bytes written.
+    /// sets in one masked store where the host has one ([`store_masked_avx512`]), else in the
+    /// fewest stores of 8, 4, 2 and 1 bytes ([`store_masked`]); `was` takes all 16 of `now` (the
+    /// bytes that did not change are the same). The rest past the last 16, 8 at a time
+    /// ([`merge_words`](super::merge_words)). The bytes written.
     ///
     /// # Safety
     ///
@@ -687,27 +686,68 @@ pub(crate) mod x86 {
     }
 
     /// Store the bytes of `now` (16) at `to` whose bits `stores` sets (not all 16), and no other
-    /// byte of `to`: sixteen stores of a byte, each of a byte `stores` sets at its place in `to`,
-    /// and each other into a block of the stack, the place picked with no branch
-    /// (`select_unpredictable`, a conditional move). The fewest stores of 8, 4, 2 and 1 bytes
-    /// that write the set bytes alone took a branch on each 4 bytes' pattern, which a GPU's
-    /// rewrite of floats leaves unpredictable: on a Core Ultra 9 275HX, the stores of a merge back
-    /// of 256 MiB that kept each float's top byte took 18 of its 38 ms that way.
+    /// byte of `to`: each 8 whose bytes are all set in one store, and of the others each 4 bytes
+    /// in the fewest stores of 4, 2 and 1 bytes that write those set alone.
     ///
     /// # Safety
     ///
     /// `to` is 16 bytes of mapped memory.
     #[target_feature(enable = "sse2")]
     unsafe fn store_masked(now: &[u8], to: *mut u8, stores: u32) {
-        let mut aside = [0u8; 16];
-        let aside = aside.as_mut_ptr();
-        for (at, &byte) in now[..16].iter().enumerate() {
-            let set = (stores >> at) & 1 == 1;
-            let place =
-                std::hint::select_unpredictable(set, to.wrapping_add(at), aside.wrapping_add(at));
-            // SAFETY: a byte of `to` (the caller's) or of `aside`, the stack's.
-            unsafe { place.write_volatile(byte) };
+        let byte = |at: usize| {
+            // SAFETY: a byte of `to` (the caller's).
+            unsafe { to.add(at).write_volatile(now[at]) }
+        };
+        for half in [0, 8] {
+            if (stores >> half) & 0xFF == 0xFF {
+                // SAFETY: 8 bytes of `to` from `half`.
+                unsafe { store_run::<8>(now, to, half) };
+                continue;
+            }
+            for at in [half, half + 4] {
+                // SAFETY: bytes of `to` from `at`, of the 4 there.
+                unsafe {
+                    match (stores >> at) & 0xF {
+                        0 => {}
+                        0xF => store_run::<4>(now, to, at),
+                        0x3 => store_run::<2>(now, to, at),
+                        0x6 => store_run::<2>(now, to, at + 1),
+                        0xC => store_run::<2>(now, to, at + 2),
+                        0x7 => {
+                            store_run::<2>(now, to, at);
+                            byte(at + 2);
+                        }
+                        0xB => {
+                            store_run::<2>(now, to, at);
+                            byte(at + 3);
+                        }
+                        0xD => {
+                            byte(at);
+                            store_run::<2>(now, to, at + 2);
+                        }
+                        0xE => {
+                            byte(at + 1);
+                            store_run::<2>(now, to, at + 2);
+                        }
+                        bits => (0..4)
+                            .filter(|b| (bits >> b) & 1 == 1)
+                            .for_each(|b| byte(at + b)),
+                    }
+                }
+            }
         }
+    }
+
+    /// Store `N` bytes of `now` from `at` at `to`'s `at`, in one store.
+    ///
+    /// # Safety
+    ///
+    /// `to` is mapped memory over `at..at + N`, which lies in `now`.
+    unsafe fn store_run<const N: usize>(now: &[u8], to: *mut u8, at: usize) {
+        let mut run = [0u8; N];
+        run.copy_from_slice(&now[at..at + N]);
+        // SAFETY: the caller's; an unaligned store.
+        unsafe { to.add(at).cast::<[u8; N]>().write_unaligned(run) };
     }
 }
 
