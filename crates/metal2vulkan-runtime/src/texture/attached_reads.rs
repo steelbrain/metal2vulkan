@@ -26,17 +26,33 @@
 //!   Metal defines no answer there: the copy is for Vulkan's validity, and taken before the
 //!   instance, it holds the texels from before the pass in the first, Metal's answer at the
 //!   draw's own pixel and one of its answers elsewhere.
+//! - **The x86 Macs' answer** (probe `ownread`, macOS 26.7.1: a pass that loads or clears a
+//!   `BGRA8Unorm` texture, private, over an IOSurface or over a private `MTLBuffer`, 512x512 to
+//!   3840x2400; a draw writes a rectangle, 0 or 50 draws of another color follow, then a draw
+//!   reads the texture at its own pixels over the rectangle, 3 runs each). An AMD Radeon Pro
+//!   5300M read the earlier draw's texels at 98.6% of the pixels with no draws between and at
+//!   every one after 50 draws or a memory barrier over the render targets; the rest read the
+//!   load's or the clear's texel (a private 512x512 texture's every pixel, run after run) or, at
+//!   9,600 pixels of a private 1600x1000 one from the rectangle's first, neither. An Intel UHD Graphics 630 read the earlier
+//!   draw's texels at all but 0.01% of the pixels, at every one after a barrier. An M3 Max read
+//!   the texels from before the pass at every pixel, in a clear pass too. The Macs disagree, so
+//!   the runtime takes the cheaper answer where it can, the x86 Macs': what the load and every
+//!   earlier draw of the instance wrote (`docs/API.md`'s accepted differences).
 //! - **With a feedback loop too.** On a device with `VK_EXT_attachment_feedback_loop_layout`
-//!   the read in place is valid usage, but it races the instance's own writes of the attachment
-//!   at the pixels it reads: the reading draw's other primitives' and other fragments', and
-//!   those of the draws before it, which nothing orders before a sampled read (the Rasterization
-//!   Order section orders fragment operations and color writes alone, and a barrier inside a
-//!   subpass orders one pixel's, `VUID-vkCmdPipelineBarrier-dependencyFlags-07891`). That is a
+//!   the read in place is valid usage, and a barrier inside the subpass before the reading draw
+//!   orders the earlier draws' writes and the load's before it at each pixel ("A
+//!   vkCmdPipelineBarrier inside a subpass can synchronize prior attachment writes in the
+//!   subpass with subsequent non-attachment reads if feedback loop is enabled for the
+//!   attachment", Common Render Pass Data Races): one pixel's (a barrier inside a subpass is by
+//!   region, `VUID-vkCmdPipelineBarrier-dependencyFlags-07891`), the fragment's own. A draw that
+//!   reads a color at its own pixel alone and writes no channel of it reads it in place so
+//!   (`render/snapshot.rs`, in place), with a barrier or without: the x86 Macs' answer, and after
+//!   a barrier every Mac2 GPU's. A draw that writes the color it reads would race its own writes
+//!   there: its other primitives' at the pixel it reads, which nothing orders before a sampled
+//!   read (the Rasterization Order section orders fragment operations and color writes alone), a
 //!   data race, which Vulkan forbids ("Applications must not cause a data race", the Shader
-//!   Memory Access Ordering section), and ordered by a barrier the read would take the draws'
-//!   texels where Metal's takes those from before the pass. So the copy stays on every device
-//!   for a read before a barrier, a correctness fallback; after one, a read at the fragment's
-//!   own pixel reads in place through a snapshot where the device can (below).
+//!   Memory Access Ordering section). Such a draw reads the copy before a barrier, a correctness
+//!   fallback; after one, it reads in place through a snapshot where the device can (below).
 //! - **After a memory barrier.** A barrier over the render targets orders the draws after it
 //!   behind those before it, which a Mac2 GPU runs (Apple GPUs do not support that scope, the
 //!   Metal Feature Set Tables: `fence.rs`). Inside an instance it orders one pixel alone
@@ -179,6 +195,7 @@ use crate::values::ResourceOptions;
 use crate::view_plan::ViewRecord;
 use ash::vk;
 use metal2vulkan::bind::ImageViewDesc;
+use metal2vulkan::device::VkFeature;
 use metal2vulkan::metal::format::FormatMapping;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::pipeline::SnapshotForm;
@@ -256,13 +273,14 @@ fn snapshot_pixel_format(format: Format) -> Option<PixelFormat> {
 }
 
 /// `plan` with `VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT`, where a draw may read the
-/// texture through a snapshot while its pass renders it (the module docs): a single-sampled 2D
-/// color attachment the shaders sample, not transient, on a device that enabled what the path
-/// takes (`dynamic_state::ColorWriteMasks`). `None` where the plan has it already or cannot take
-/// it. The usage is added only where it costs the image nothing (`Device::with_free_usage`).
+/// texture in place or through a snapshot while its pass renders it (the module docs): a
+/// single-sampled 2D color attachment the shaders sample, not transient, on a device that enabled
+/// `attachmentFeedbackLoopLayout`. `None` where the plan has it already or cannot take it. The
+/// usage is added only where it costs the image nothing (`Device::with_free_usage`).
 pub(crate) fn feedback_candidate(plan: &ImagePlan, device: &Device) -> Option<ImagePlan> {
     let usage = plan.usage;
-    let candidate = device.shared().color_write_masks.is_some()
+    let enabled = (device.enabled().features).contains(&VkFeature::AttachmentFeedbackLoopLayout);
+    let candidate = enabled
         && usage.contains(ImageUsageFlags::COLOR_ATTACHMENT)
         && usage.contains(ImageUsageFlags::SAMPLED)
         && !usage.contains(ImageUsageFlags::TRANSIENT_ATTACHMENT)

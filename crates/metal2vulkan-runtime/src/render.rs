@@ -8328,10 +8328,13 @@ impl RenderLowering {
         }
         // The encoder's kept bind state, brought to the draw's (`live_bind.rs`), held for the
         // draw: no draw of the encoder runs inside another past here.
-        // A draw that reads its pass's texture after a barrier inside its instance reads it
-        // through a snapshot where it can (`render/snapshot.rs`): asked of the plan, kept where
-        // the plan reads so, else `None` and the split.
-        let mut snapshot = self.snapshot_wanted(&pipeline, &reformats);
+        // A draw that reads its pass's texture at its own pixels and writes nothing of it reads
+        // it in place, with a barrier or without; else, after a barrier inside its instance, it
+        // reads it through a snapshot where it can (`render/snapshot.rs`): asked of the plan,
+        // kept where the plan reads so, else `None` and the copy or the split.
+        let mut snapshot = self
+            .in_place_wanted(&pipeline, &reformats, &routed.settings)
+            .or_else(|| self.snapshot_wanted(&pipeline, &reformats));
         // Weighed by what it covered when a pass last measured it, else by the area rule, and
         // measured where the device measures readers: its drawing commands record inside the
         // query (`render/coverage.rs`).
@@ -8562,13 +8565,14 @@ impl RenderLowering {
         }
         let commands = &live.commands;
         // The phase of a draw read through snapshots, which its two draws set
-        // (`render/snapshot.rs`).
+        // (`render/snapshot.rs`); a draw read in place has none.
+        let in_place = snapshot.as_ref().is_some_and(|w| w.in_place);
         let phase_hole = match &snapshot {
-            Some(_) => Some(
+            Some(_) if !in_place => Some(
                 snapshot::phase_hole(&commands.push_holes)
                     .ok_or_else(|| internal("a snapshot variant without its phase"))?,
             ),
-            None => None,
+            _ => None,
         };
         self.reaches_unnamed |= !commands.root_tables.is_empty() || facts.reads_handles();
         // A mesh draw the binder launches no threadgroup of (as plain Metal draws nothing).
@@ -9078,8 +9082,10 @@ impl RenderLowering {
         if after_barrier && matches!(next, Next::New { split: true, .. }) {
             device.shared().counts.attachment_read_split();
         }
-        if snapshot.is_some() {
-            device.shared().counts.reading_draw_snapshotted();
+        match &snapshot {
+            Some(wanted) if wanted.in_place => device.shared().counts.reading_draw_in_place(),
+            Some(_) => device.shared().counts.reading_draw_snapshotted(),
+            None => {}
         }
         let inline = self.current.inline;
         if snapshot_split && inline && matches!(next, Next::New { split: true, .. }) {
@@ -9205,10 +9211,15 @@ impl RenderLowering {
             .transpose()?;
         // A draw that reads through snapshots binds each slot's snapshot in the form its plan
         // names, made at the first draw that takes it so and kept with the texture
-        // (`render/snapshot.rs`).
+        // (`render/snapshot.rs`). Each slot of a draw that reads in place binds its texture in
+        // the feedback loop layout, with no snapshot.
         let mut snapshot_texels = Vec::new();
         let snapshot_views = match &snapshot {
             None => None,
+            Some(wanted) if wanted.in_place => Some(binding::SnapshotViews {
+                slots: wanted.slots.clone(),
+                views: Vec::new(),
+            }),
             Some(wanted) => {
                 let mut views = Vec::with_capacity(wanted.slots.len());
                 for &slot in &wanted.slots {
@@ -9680,23 +9691,30 @@ impl RenderLowering {
             strides,
             fixed: FixedState::without_dynamic(fixed, &graphics.dynamic_states),
             sample_positions: &self.layout.sample_positions,
+            feedback_loop: in_place,
         };
         // What each of the draw's recordings takes of its two draws where it reads through
         // snapshots (`render/snapshot.rs`): the drawing draw's masks are the ones the pipeline
-        // would have made static.
+        // would have made static. A draw read in place takes its barriers alone.
         let pair_base = match (phase_hole, device.shared().color_write_masks) {
             (Some(hole), Some(masks)) => Some(snapshot::Pair {
                 phase: snapshot::Phase::Snapshot,
                 first: true,
-                hole,
-                masks,
-                own: {
-                    let key = draw_key();
-                    super::pipeline::color_write_masks(graphics, key.pass, key.fixed.masks_color)
-                },
+                steps: Some(snapshot::PairSteps {
+                    hole,
+                    masks,
+                    own: {
+                        let key = draw_key();
+                        super::pipeline::color_write_masks(
+                            graphics,
+                            key.pass,
+                            key.fixed.masks_color,
+                        )
+                    },
+                }),
             }),
             (Some(_), None) => return Err(internal("a snapshot without its write mask command")),
-            (None, _) => None,
+            (None, _) => in_place.then(|| snapshot::Pair::in_place(true)),
         };
         // The formats the draw binds, which a specialized notice names.
         let formats = |slot| tables.bound_format(slot);
@@ -10733,8 +10751,11 @@ impl RenderLowering {
             let mut owned = Vec::new();
             let mut states_recorded = Recorded::default();
             // A draw read through snapshots records its recordings twice: every snapshot draw,
-            // then every drawing draw (`render/snapshot.rs`).
-            let phases: &[Option<snapshot::Phase>] = match pair_base {
+            // then every drawing draw (`render/snapshot.rs`); one read in place, once.
+            let phases: &[Option<snapshot::Phase>] = match &pair_base {
+                Some(base) if base.phase == snapshot::Phase::InPlace => {
+                    &[Some(snapshot::Phase::InPlace)]
+                }
                 Some(_) => &[
                     Some(snapshot::Phase::Snapshot),
                     Some(snapshot::Phase::Drawing),
@@ -11493,7 +11514,10 @@ impl RenderLowering {
             reshape.field(&mut state.mesh_last_first, provoking.mesh_last_first);
             reshape.field_from(&mut state.dropped_colors, &colors.dropped);
             reshape.field_from(&mut state.extended_shadows, shadows);
-            let snapshots = snapshot.as_ref().map_or(&NO_INDICES, |w| &w.slots);
+            // A draw that reads in place reads its slots through no snapshot.
+            let snapshots = (snapshot.as_ref())
+                .filter(|w| !w.in_place)
+                .map_or(&NO_INDICES, |w| &w.slots);
             reshape.field_from(&mut state.snapshot_textures, snapshots);
             let depth_stencil = match &settings.failing_state {
                 Some(failing) => failing.failing_depth(),
@@ -11529,7 +11553,7 @@ impl RenderLowering {
                 // A variant that reads through snapshots the compile or bind layer refuses: the
                 // draw takes the split (`render/snapshot.rs`).
                 Err(Error::Unsupported(_) | Error::Bind(BindError::Unsupported(_)))
-                    if snapshot.is_some() =>
+                    if snapshot.as_ref().is_some_and(|w| !w.in_place) =>
                 {
                     let reason = snapshot::SplitReason::VariantRefused;
                     snapshot::snapshot_fallback(self.core.device(), reason);
@@ -11564,10 +11588,13 @@ impl RenderLowering {
                 ));
             }
             // A plan that does not read through every snapshot the draw asked for: the draw
-            // takes the split, settled again without them.
+            // takes the split, settled again without them. One that does not read in place as the
+            // draw asked takes the copy, counted under no split reason.
             if let Some(wanted) = snapshot.as_ref() {
                 if let Err(reason) = self.snapshot_holds(&settled, wanted) {
-                    snapshot::snapshot_fallback(self.core.device(), reason);
+                    if !wanted.in_place {
+                        snapshot::snapshot_fallback(self.core.device(), reason);
+                    }
                     *snapshot = None;
                     continue;
                 }
@@ -12633,8 +12660,8 @@ struct Recording<'a> {
     /// The device's mesh draw commands, where it enabled `meshShader`.
     mesh: Option<&'a crate::recorder::MeshDraws>,
     draw: metal2vulkan::vk::DrawCommand,
-    /// Its part in a draw read through snapshots (`render/snapshot.rs`): the barrier, write
-    /// masks and phase it records before its draw.
+    /// Its part in a draw read through snapshots, or in place (`render/snapshot.rs`): the
+    /// barrier, write masks and phase it records before its draw, and the barrier after it.
     pair: Option<snapshot::Pair>,
 }
 
@@ -12869,6 +12896,9 @@ impl Recording<'_> {
                 pair.record(raw, cb, self.layout);
             }
             record_draw_command(raw, cb, self.draw, self.indirect, self.mesh);
+            if let Some(pair) = &self.pair {
+                pair.record_after(raw, cb);
+            }
         }
         bound.recorded();
         Recorded {

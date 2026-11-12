@@ -1,6 +1,7 @@
 //! A draw that reads a texture its own render pass instance renders, after a memory barrier,
 //! read through a snapshot inside the instance: two draws of one pipeline in the same subpass,
-//! in place of a split of the pass (`texture/attached_reads.rs`).
+//! in place of a split of the pass (`texture/attached_reads.rs`). And a draw that writes nothing
+//! of the color it reads so, read in place, with a barrier or without (in place, below).
 //!
 //! - **What it replaces.** After a barrier inside an instance, a draw that samples a color
 //!   attachment's texture records into a new instance, before which the texture's copy is taken
@@ -58,6 +59,29 @@
 //!   texture held before the pass with a barrier or without: probe `readers.m`, two readers of a
 //!   texture a draw wrote, barriers before each or not, 64 to 2048 pixels wide, 0 to 500 draws
 //!   between. Apple GPUs do not support that scope, so they are no answer for it.)
+//! - **In place.** A draw whose fragment function reads such a texture at the fragment's own
+//!   pixel alone (`StageModule::own_pixel_textures`), and that writes no channel of the color
+//!   that renders it (no color of its state placed there has a write mask, and its routing zeroes
+//!   none: `writes_color`), reads the attachment itself, drawn once, with a barrier before it or
+//!   not, where the device enabled `attachmentFeedbackLoopLayout`, the color renders the
+//!   texture's image in place with feedback loop usage, no other color renders that image, the
+//!   pipeline fetches no color, and the checks below that concern the pass and its colors hold
+//!   (`RenderLowering::in_instance`: the pass's shape, the format, the pins, one image a color);
+//!   not those of the second draw (the area rule, its features, the visibility query). The color
+//!   is in the feedback loop layout for the instance as below, the pipeline made with
+//!   `VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT` (`GraphicsKey::feedback_loop`),
+//!   and the slot bound to the texture in that layout. `B1` before the draw, from the color
+//!   writes before (the earlier draws' and the load's) to its sampled reads, and `B3` after it,
+//!   from those reads to the color output, an execution dependency ("Write-after-read hazards
+//!   can be solved with just an execution dependency"), each by region as below: "A
+//!   vkCmdPipelineBarrier inside a subpass can synchronize prior attachment writes in the subpass
+//!   with subsequent non-attachment reads if feedback loop is enabled for the attachment" (Common
+//!   Render Pass Data Races). The draw writes nothing it reads, so no fragment of it races
+//!   another's write. It reads what the load and every draw before it in the instance wrote:
+//!   after a barrier, Metal's answer on a Mac2 GPU; without one, an x86 Mac's, where an M3 Max
+//!   answers the texels from before the pass (`docs/API.md`'s accepted differences). No snapshot,
+//!   copy or split (`WorkCounts::reading_draws_in_place`). A draw that writes the color it reads
+//!   takes the checks below, after a barrier, else the copy.
 //! - **The snapshot** is a texture's storage image of its level-0 extent in the form the plan
 //!   names for the slot (`VariantKey::snapshot_textures`, `SnapshotForm::of` the bound view: the
 //!   texel's codes, whatever the device's decode, or the fetched lanes' bits), made at the first
@@ -158,7 +182,7 @@
 //!   share of their colors' pixels and texel bytes, a line at 64 of them, each power of two
 //!   after, and as the device ends (`metal2vulkan-snapshot-readers`, `reader_sizes.rs`).
 
-use super::{inline_first, PlanFacts, Reformat, RenderLowering};
+use super::{inline_first, DrawSettings, PlanFacts, Reformat, RenderLowering};
 use crate::copy_plan::block_bytes;
 use crate::dynamic_state::ColorWriteMasks;
 use crate::pipeline::{GraphicsState as DrawingState, Settled};
@@ -169,12 +193,14 @@ use crate::texture::Texture;
 use crate::work_counts::Unreadable;
 use ash::vk;
 use metal2vulkan::bind::{BindingPlan, ImageSource, PushHole, WriteSource};
+use metal2vulkan::device::VkFeature;
 use metal2vulkan::metal::TextureType;
 use metal2vulkan::pipeline::{SlotClass, SlotRef, SnapshotForm, Stage};
 use std::collections::BTreeSet;
 
-/// What a draw asks to read through snapshots, before its plan
-/// ([`RenderLowering::snapshot_wanted`]): the fragment slots, and the colors they read.
+/// What a draw asks to read through snapshots, or in place, before its plan
+/// ([`RenderLowering::snapshot_wanted`], [`RenderLowering::in_place_wanted`]): the fragment
+/// slots, and the colors they read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Wanted {
     pub(super) slots: BTreeSet<u32>,
@@ -182,6 +208,9 @@ pub(super) struct Wanted {
     /// The colors among them that no later fetch would keep in their own images, which the
     /// draw pins to them ([`RenderLowering::pins_own_attachment`]).
     pub(super) pins: u32,
+    /// The draw reads the slots' textures in place, drawn once, with no snapshot (the module
+    /// docs' in place).
+    pub(super) in_place: bool,
 }
 
 /// The form `plan` keeps fragment texture slot `slot`'s snapshot in
@@ -225,22 +254,32 @@ pub(crate) fn snapshot_within(pixels: u64, bytes: u64) -> bool {
     fixed * (fixed + pixels * u128::from(SNAPSHOT_PIXEL_COST)) <= (fixed + bytes).pow(2)
 }
 
-/// Which of a draw's two Vulkan draws one recording is (the module docs).
+/// Which of a draw's two Vulkan draws one recording is (the module docs), or that it is the one
+/// draw of a draw read in place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Phase {
     /// The snapshot draw: every color write mask 0, the phase 1.
     Snapshot,
     /// The drawing draw: the pipeline's own masks, the phase 0.
     Drawing,
+    /// The draw of a draw that reads in place, its own masks: `B1` before it and `B3` after it.
+    InPlace,
 }
 
-/// One recording's part in a draw read through snapshots (the module docs).
+/// One recording's part in a draw read through snapshots, or in place (the module docs).
 #[derive(Clone)]
 pub(super) struct Pair {
     pub(super) phase: Phase,
     /// The first recording of its phase, which records the barrier before it: `B1` before the
-    /// snapshot draws, `B2` before the drawing draws.
+    /// snapshot draws, `B2` before the drawing draws, `B1` before a draw in place.
     pub(super) first: bool,
+    /// What a snapshot's two draws set: `None` for a draw in place.
+    pub(super) steps: Option<PairSteps>,
+}
+
+/// What each of a snapshot's two draws sets (the module docs).
+#[derive(Clone)]
+pub(super) struct PairSteps {
     /// The phase's push constant: its stages and offset (`PushHole::SnapshotPhase`).
     pub(super) hole: (vk::ShaderStageFlags, u32),
     pub(super) masks: ColorWriteMasks,
@@ -250,15 +289,25 @@ pub(super) struct Pair {
 }
 
 impl Pair {
+    /// The part of a recording of a draw that reads in place, the first of the draw's where
+    /// `first` (the module docs).
+    pub(super) fn in_place(first: bool) -> Pair {
+        Pair {
+            phase: Phase::InPlace,
+            first,
+            steps: None,
+        }
+    }
+
     /// Record, before the draw of a recording whose pipeline `layout` is bound with its push
     /// constants and dynamic states (all but the write masks), the pair's steps: the barrier where
-    /// it is its phase's first, the write masks, and the phase.
+    /// it is its phase's first, and a snapshot's write masks and phase.
     ///
     /// # Safety
     ///
     /// `command_buffer` is recording inside a render pass instance of a pass `render_target`
     /// made, of no views, whose subpass the draw's pipeline was made for; the pipeline, made with
-    /// the write masks dynamic, is bound; only this thread records it.
+    /// the write masks dynamic where the pair has steps, is bound; only this thread records it.
     pub(super) unsafe fn record(
         &self,
         raw: &ash::Device,
@@ -267,22 +316,26 @@ impl Pair {
     ) {
         let flags = render_target::self_dependency_flags(0);
         let fragment = vk::PipelineStageFlags::FRAGMENT_SHADER;
-        let (src, dst, masks, phase): (_, _, Vec<vk::ColorComponentFlags>, u32) = match self.phase {
+        let color = vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
+        let (src, dst, steps) = match (self.phase, &self.steps) {
             // `B1`: the color writes before (the earlier draws' and the load's) and an earlier
             // pair's writes of the snapshot, before the snapshot draw's sampled read of the
             // texture and its write of the snapshot; an earlier pair's reads of the snapshot
             // before that write by the execution dependency alone.
-            Phase::Snapshot => (
+            (Phase::Snapshot, Some(steps)) => (
                 (
-                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | fragment,
+                    color | fragment,
                     vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::SHADER_WRITE,
                 ),
                 (
                     fragment,
                     vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
                 ),
-                vec![vk::ColorComponentFlags::empty(); self.own.len()],
-                1,
+                Some((
+                    vec![vk::ColorComponentFlags::empty(); steps.own.len()],
+                    1u32,
+                    steps,
+                )),
             ),
             // `B2`: the snapshot's writes before the drawing draw's reads of it, and the snapshot
             // draw's reads of the texture before the drawing draw's color writes of it by the
@@ -290,21 +343,26 @@ impl Pair {
             // function holds the snapshot's write, which it never runs, and a write the pipeline
             // holds is ordered as if it ran (the validation layer's synchronization checks count
             // it so).
-            Phase::Drawing => (
+            (Phase::Drawing, Some(steps)) => (
                 (fragment, vk::AccessFlags::SHADER_WRITE),
                 (
-                    fragment | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    fragment | color,
                     vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
                 ),
-                self.own.clone(),
-                0,
+                Some((steps.own.clone(), 0, steps)),
+            ),
+            // `B1` of a draw in place: the color writes before (the earlier draws' and the
+            // load's) before its sampled reads of the colors it reads.
+            _ => (
+                (color, vk::AccessFlags::COLOR_ATTACHMENT_WRITE),
+                (fragment, vk::AccessFlags::SHADER_READ),
+                None,
             ),
         };
-        let (hole_stages, offset) = self.hole;
         // SAFETY: the caller's contract; the barrier's scopes lie within the pass's dependency
-        // of its subpass on itself, by region as it is (the module docs), and the masks are one
-        // per color blend element of the bound pipeline, which makes them dynamic; the push
-        // constant lies in the range of the hole's stages.
+        // of its subpass on itself, by region as it is (the module docs), and a snapshot's masks
+        // are one per color blend element of the bound pipeline, which makes them dynamic; the
+        // push constant lies in the range of the hole's stages.
         unsafe {
             if self.first {
                 let barrier = vk::MemoryBarrier::default()
@@ -312,13 +370,46 @@ impl Pair {
                     .dst_access_mask(dst.1);
                 raw.cmd_pipeline_barrier(command_buffer, src.0, dst.0, flags, &[barrier], &[], &[]);
             }
-            (self.masks.0)(command_buffer, 0, masks.len() as u32, masks.as_ptr());
-            raw.cmd_push_constants(
+            if let Some((masks, phase, steps)) = steps {
+                let (hole_stages, offset) = steps.hole;
+                (steps.masks.0)(command_buffer, 0, masks.len() as u32, masks.as_ptr());
+                raw.cmd_push_constants(
+                    command_buffer,
+                    layout,
+                    hole_stages,
+                    offset,
+                    &phase.to_ne_bytes(),
+                );
+            }
+        }
+    }
+
+    /// Record, after the draw of a recording, the pair's step there: `B3` after a draw in place,
+    /// from its sampled reads of the colors it reads to the color writes after it, by the
+    /// execution dependency alone ("Write-after-read hazards can be solved with just an
+    /// execution dependency", Execution and Memory Dependencies): a later draw's color write of a
+    /// pixel the draw read comes after the read. A snapshot's two draws take none: the drawing
+    /// draw reads no color, and `B2` ordered the snapshot draw's reads before the color output.
+    ///
+    /// # Safety
+    ///
+    /// As [`record`](Self::record), after the recording's draw.
+    pub(super) unsafe fn record_after(&self, raw: &ash::Device, command_buffer: vk::CommandBuffer) {
+        if self.phase != Phase::InPlace {
+            return;
+        }
+        let flags = render_target::self_dependency_flags(0);
+        // SAFETY: the caller's contract; the barrier's stages lie within the pass's dependency of
+        // its subpass on itself, by region as it is (the module docs), and it names no access.
+        unsafe {
+            raw.cmd_pipeline_barrier(
                 command_buffer,
-                layout,
-                hole_stages,
-                offset,
-                &phase.to_ne_bytes(),
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                flags,
+                &[],
+                &[],
+                &[],
             );
         }
     }
@@ -400,15 +491,102 @@ impl RenderLowering {
         if self.visibility.active() {
             return self.snapshot_fallback(SplitReason::VisibilityQuery);
         }
+        if let Err(reason) = self.in_instance(pipeline, reformats, &mut wanted) {
+            return self.snapshot_fallback(reason);
+        }
+        Some(wanted)
+    }
+
+    /// What a draw of `pipeline` (its state's base) through `reformats` and `settings` reads in
+    /// place (the module docs' in place), where it can, before the plan: the fragment slots its
+    /// function reads at the fragment's own pixel alone (`StageModule::own_pixel_textures`) that
+    /// bind a texture a color of the pass renders, each read through
+    /// [`Texture::snapshot_color`], at a color the draw writes no channel of ([`writes_color`])
+    /// whose image no other color of the pass renders, by a pipeline that fetches no color as an
+    /// input attachment or a storage image, on a device that enabled
+    /// `attachmentFeedbackLoopLayout`, where the draw passes the checks of
+    /// [`in_instance`](Self::in_instance). With a barrier or without. `None` where it reads no
+    /// color so or a check fails: then the snapshot's checks follow, else the copy.
+    pub(super) fn in_place_wanted(
+        &self,
+        pipeline: &DrawingState,
+        reformats: &[Reformat],
+        settings: &DrawSettings,
+    ) -> Option<Wanted> {
+        let device = self.core.device();
+        let enabled =
+            (device.enabled().features).contains(&VkFeature::AttachmentFeedbackLoopLayout);
+        if self.replaying || self.rerouting || !enabled {
+            return None;
+        }
+        let base = pipeline.base();
+        let graphics = &base.graphics;
+        if !graphics.storage_attachments.is_empty() || !graphics.input_attachments.is_empty() {
+            return None;
+        }
+        let fragment = base
+            .stages
+            .iter()
+            .find(|m| m.stage == metal2vulkan::vk::ShaderStage::FRAGMENT)?;
+        let mut wanted = Wanted {
+            in_place: true,
+            ..Wanted::default()
+        };
+        for &slot in &fragment.own_pixel_textures {
+            let Some(texture) = self.fragment.textures.get(&slot) else {
+                continue;
+            };
+            if !texture.attached_in(&self.layout) {
+                continue;
+            }
+            let index = texture.snapshot_color(&self.layout)?;
+            if writes_color(graphics, settings, index) || self.image_shared(index) {
+                return None;
+            }
+            wanted.slots.insert(slot);
+            wanted.feedback.0 |= 1 << index;
+        }
+        if wanted.slots.is_empty() {
+            return None;
+        }
+        self.in_instance(pipeline, reformats, &mut wanted).ok()?;
+        Some(wanted)
+    }
+
+    /// Whether another color of the pass than `index` renders the image color `index` renders,
+    /// or color `index` has none.
+    fn image_shared(&self, index: usize) -> bool {
+        let image = |index: usize| {
+            let color = self.layout.colors.get(index)?.as_ref()?;
+            color.target.texture.raw_image().ok()
+        };
+        let Some(own) = image(index) else {
+            return true;
+        };
+        (0..self.layout.colors.len()).any(|other| other != index && image(other) == Some(own))
+    }
+
+    /// The checks of a draw of `pipeline` through `reformats` that reads the pass's colors
+    /// `wanted.feedback` inside its instance, through snapshots or in place (the module docs): a
+    /// pass of one sample and one layer, of no input attachment fetch or rasterization-rate map;
+    /// no such color rendered through a view of another format; each kept in its own image, or
+    /// pinned to it (into `wanted.pins`); and no two of them one image. Else the reason it takes
+    /// the split.
+    fn in_instance(
+        &self,
+        pipeline: &DrawingState,
+        reformats: &[Reformat],
+        wanted: &mut Wanted,
+    ) -> Result<(), SplitReason> {
         if self.layout.fetch_inputs
             || self.rate_map.is_some()
             || self.layout.samples != 1
             || self.layout.layers != 1
         {
-            return self.snapshot_fallback(SplitReason::PassShape);
+            return Err(SplitReason::PassShape);
         }
         if reformats.iter().any(|r| wanted.feedback.has(r.index)) {
-            return self.snapshot_fallback(SplitReason::OtherFormat);
+            return Err(SplitReason::OtherFormat);
         }
         let colors: Vec<usize> = (0..self.layout.colors.len())
             .filter(|&i| wanted.feedback.has(i))
@@ -424,7 +602,7 @@ impl RenderLowering {
                 color.target.texture.want_storage_form();
             }
             if !self.pins_own_attachment(pipeline, index) {
-                return self.snapshot_fallback(SplitReason::StandIn);
+                return Err(SplitReason::StandIn);
             }
             wanted.pins |= 1 << index;
         }
@@ -440,9 +618,9 @@ impl RenderLowering {
             .enumerate()
             .any(|(i, a)| a.is_none() || images[i + 1..].iter().any(|b| b == a));
         if shared {
-            return self.snapshot_fallback(SplitReason::OneImage);
+            return Err(SplitReason::OneImage);
         }
-        Some(wanted)
+        Ok(())
     }
 
     /// Whether the draw of `pipeline` that asks to read the pass's colors through snapshots as
@@ -457,6 +635,11 @@ impl RenderLowering {
         pipeline: &DrawingState,
         wanted: Wanted,
     ) -> Result<(Option<Wanted>, Option<(vk::QueryPool, u32)>), crate::Error> {
+        // A read in place costs a barrier before the draw and one after it, never more than the
+        // split or a copy: nothing to weigh.
+        if wanted.in_place {
+            return Ok((Some(wanted), None));
+        }
         let colors: Vec<usize> = (0..self.layout.colors.len())
             .filter(|&i| wanted.feedback.has(i))
             .collect();
@@ -631,9 +814,10 @@ impl RenderLowering {
     }
 
     /// Whether the plan `settled` for `wanted` reads through them (the module docs' checks that
-    /// come after the plan): the binder kept every slot in a variant that reads so, the draw reads
-    /// no other attachment's texture at a slot, and binds none of the slots as a storage image.
-    /// Else the reason it takes the split.
+    /// come after the plan): the binder kept every slot in a variant that reads so (for a read in
+    /// place, none in a variant that reads through no snapshot), the draw reads no other
+    /// attachment's texture at a slot, and binds none of the slots as a storage image. Else the
+    /// reason it takes the split.
     pub(super) fn snapshot_holds(
         &self,
         settled: &Settled,
@@ -647,7 +831,12 @@ impl RenderLowering {
             .filter(|slot| slot.stage == Stage::Fragment && slot.class == SlotClass::Texture)
             .map(|slot| slot.index)
             .collect();
-        if kept != wanted.slots || !settled.variant.pipeline().graphics.snapshot_reads {
+        let reads = settled.variant.pipeline().graphics.snapshot_reads;
+        let held = match wanted.in_place {
+            true => kept.is_empty() && !reads,
+            false => kept == wanted.slots && reads,
+        };
+        if !held {
             return Err(SplitReason::SlotLeftOut);
         }
         if plan.views.view_mask != 0 {
@@ -758,6 +947,23 @@ fn copy_cut(texture: &Texture) -> bool {
             texture.texture_type(),
             TextureType::Cube | TextureType::CubeArray
         )
+}
+
+/// Whether a draw of a state of `graphics` through `settings` writes a channel of the pass's
+/// color `index`: a color of the state placed there (`Routing::placed`) with a write mask, or a
+/// pass color its routing zeroes (`RoutedColors::zeroed`). A color the state has no output at
+/// counts by its mask too.
+fn writes_color(
+    graphics: &metal2vulkan::pipeline::GraphicsState,
+    settings: &DrawSettings,
+    index: usize,
+) -> bool {
+    let index = index as u32;
+    let placed = (graphics.color_attachments.iter().enumerate()).any(|(state, color)| {
+        color.as_ref().is_some_and(|c| !c.write_mask.is_empty())
+            && settings.routing.placed.get(&(state as u32)) == Some(&index)
+    });
+    placed || settings.routed_colors.zeroed.contains_key(&index)
 }
 
 /// Whether `slot` is a fragment texture slot among `slots`.

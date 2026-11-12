@@ -593,6 +593,7 @@ pub(crate) struct Counters {
     attachment_read_clears: AtomicU64,
     fetch_draw_barriers: AtomicU64,
     reading_draws_snapshotted: AtomicU64,
+    reading_draws_in_place: AtomicU64,
     snapshot_inline_splits: AtomicU64,
     reading_draws_split: [AtomicU64; 15],
     reading_draws_unreadable: [AtomicU64; 12],
@@ -4564,8 +4565,14 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A draw read through a snapshot recorded into a new instance, as its own was recorded
-    /// inline (`render/snapshot.rs`).
+    /// A draw that samples a color attachment's texture at its own pixel, writing nothing of
+    /// that color, read it in place inside its instance (`render/snapshot.rs`).
+    pub(crate) fn reading_draw_in_place(&self) {
+        self.reading_draws_in_place.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A draw read through a snapshot, or in place, recorded into a new instance, as its own was
+    /// recorded inline (`render/snapshot.rs`).
     pub(crate) fn snapshot_inline_split(&self) {
         self.snapshot_inline_splits.fetch_add(1, Ordering::Relaxed);
     }
@@ -8752,9 +8759,18 @@ pub struct WorkCounts {
     /// (`render/snapshot.rs`). They count in neither `attachment_reads_through_copies` nor
     /// `attachment_read_splits`.
     pub reading_draws_snapshotted: u64,
-    /// Of `reading_draws_snapshotted`, the draws recorded into a new instance because their own
-    /// was recorded inline, its render pass instance begun without the feedback loop layout the
-    /// snapshot needs (`render/snapshot.rs`, `render/inline_first.rs`).
+    /// Draws that sample a color attachment's texture of their render pass instance at their
+    /// own pixel alone and write no channel of that color, each reading the attachment in place,
+    /// in the feedback loop layout, with a barrier before and after it, with a memory barrier of
+    /// their render pass before them or not: no copy, snapshot or split (`render/snapshot.rs`,
+    /// in place). They count in neither `attachment_reads_through_copies` nor
+    /// `attachment_read_splits`. Without a memory barrier the draw reads what the draws before it
+    /// in the instance wrote, an x86 Mac's answer, where an M3 Max reads the texels from before
+    /// the pass (`docs/API.md`'s accepted differences).
+    pub reading_draws_in_place: u64,
+    /// Of `reading_draws_snapshotted` and `reading_draws_in_place`, the draws recorded into a new
+    /// instance because their own was recorded inline, its render pass instance begun without
+    /// the feedback loop layout they need (`render/snapshot.rs`, `render/inline_first.rs`).
     pub snapshot_inline_splits: u64,
     /// Draws that read a texture of their render pass after a memory barrier at their own pixels
     /// and took the split (`attachment_read_splits`), by why the snapshot did not serve them
@@ -10268,6 +10284,7 @@ impl Device {
             attachment_read_clears: counters.attachment_read_clears.load(Ordering::Relaxed),
             fetch_draw_barriers: counters.fetch_draw_barriers.load(Ordering::Relaxed),
             reading_draws_snapshotted: counters.reading_draws_snapshotted.load(Ordering::Relaxed),
+            reading_draws_in_place: counters.reading_draws_in_place.load(Ordering::Relaxed),
             snapshot_inline_splits: counters.snapshot_inline_splits.load(Ordering::Relaxed),
             reading_draws_split_unreadable_own_pixel: split_by(SplitReason::UnreadableOwnPixel),
             reading_draws_split_not_in_place: split_by(SplitReason::NotInPlace),

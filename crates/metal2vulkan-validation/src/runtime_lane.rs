@@ -562,6 +562,8 @@ mod host_replay_frames;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod host_step_frames;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod in_place_reads;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod in_place_rows;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod in_place_textures;

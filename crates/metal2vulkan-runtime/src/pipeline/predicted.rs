@@ -379,6 +379,7 @@ impl GraphicsState {
             strides,
             fixed: FixedState::without_dynamic(fixed, &graphics.dynamic_states),
             sample_positions: Vec::new(),
+            feedback_loop: false,
         };
         Some(key)
     }

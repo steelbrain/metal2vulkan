@@ -55,6 +55,11 @@ pub(crate) struct GraphicsKey {
     /// The pass's sample positions in sixteenths of a pixel, empty for the device's own
     /// (`sample_positions.rs`).
     pub(crate) sample_positions: Vec<[u8; 2]>,
+    /// The draw reads a texture its render pass instance renders, in place, in the feedback loop
+    /// layout (`render/snapshot.rs`, in place): the pipeline is made with
+    /// `VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT`, as a variant that reads
+    /// through snapshots is (`GraphicsState::snapshot_reads`).
+    pub(crate) feedback_loop: bool,
 }
 
 /// A [`GraphicsKey`] of a draw's own values, borrowed: what a draw compares with the key its state
@@ -70,6 +75,7 @@ pub(crate) struct DrawKey<'a> {
     pub(crate) strides: &'a [(u32, u32)],
     pub(crate) fixed: FixedState,
     pub(crate) sample_positions: &'a [[u8; 2]],
+    pub(crate) feedback_loop: bool,
 }
 
 impl DrawKey<'_> {
@@ -83,6 +89,7 @@ impl DrawKey<'_> {
             strides,
             fixed,
             sample_positions,
+            feedback_loop,
         } = key;
         self.specialization == specialization
             && self.topology == *topology
@@ -91,6 +98,7 @@ impl DrawKey<'_> {
             && self.strides == &strides[..]
             && self.fixed == *fixed
             && self.sample_positions == &sample_positions[..]
+            && self.feedback_loop == *feedback_loop
     }
 
     /// The key, owned: the pass as a key holds it (`PassShape::keyed`).
@@ -103,6 +111,7 @@ impl DrawKey<'_> {
             strides: self.strides.to_vec(),
             fixed: self.fixed,
             sample_positions: self.sample_positions.to_vec(),
+            feedback_loop: self.feedback_loop,
         }
     }
 }
@@ -354,7 +363,8 @@ pub(crate) struct GraphicsContent {
     /// A mesh pipeline: no vertex input and no input assembly.
     meshes: bool,
     /// The pipeline reads textures its pass renders through snapshots
-    /// (`GraphicsState::snapshot_reads`, `render/snapshot.rs`): made whole, with
+    /// (`GraphicsState::snapshot_reads`, `render/snapshot.rs`) or in place
+    /// ([`GraphicsKey::feedback_loop`]): made whole, with
     /// `VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT`.
     feedback_loop: bool,
     /// Its fragment stage declares an interlock execution mode (`interlocked_writes`) on a
@@ -939,7 +949,7 @@ impl GraphicsContent {
             // "The feedback loop attachment is a color attachment, and the bound pipeline was
             // created with VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT" (the Render
             // Pass chapter, feedback loops). The device enabled `attachmentFeedbackLoopLayout`
-            // wherever a draw asks for the variant (`render/snapshot.rs`).
+            // wherever a draw asks for the variant or reads in place (`render/snapshot.rs`).
             flags: match self.feedback_loop {
                 true => vk::PipelineCreateFlags::COLOR_ATTACHMENT_FEEDBACK_LOOP_EXT,
                 false => vk::PipelineCreateFlags::empty(),
@@ -1210,7 +1220,7 @@ impl VariantObjects {
                 .stages
                 .iter()
                 .any(|stage| stage.stage == metal2vulkan::vk::ShaderStage::MESH_EXT),
-            feedback_loop: graphics.snapshot_reads,
+            feedback_loop: graphics.snapshot_reads || key.feedback_loop,
             unlinked_interlock: (self.device.properties().driver_defects)
                 .contains(&RuntimeDriverDefect::FastLinkedInterlocksUnordered)
                 && pipeline.stages.iter().any(|stage| {

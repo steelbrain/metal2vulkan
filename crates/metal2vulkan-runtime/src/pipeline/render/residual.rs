@@ -150,6 +150,7 @@ impl RenderVariant {
             strides: key.strides.clone(),
             fixed: key.fixed,
             sample_positions: key.sample_positions.clone(),
+            feedback_loop: key.feedback_loop,
         })
     }
 

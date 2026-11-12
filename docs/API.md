@@ -1541,6 +1541,12 @@ leaving memory unmodified, the invariance of fragment generation under write mas
 Corollary 1), and the ordered pixel interlock. One draw alone cannot be exact: nothing orders a
 fragment shader's read of a texel before the same draw's color write of it.
 
+A draw whose pipeline writes no channel of the color it reads so needs no snapshot: the runtime
+creates its pipeline (the variant without snapshots) with the feedback-loop flag, binds the slot's
+own texture in the attachment's feedback-loop layout, and records a by-region barrier before the
+draw, from the color writes to the fragment shader's reads, and one after it, from those reads to
+the color output (section 10 says what it then reads).
+
 ### Levels a slot reads
 
 Each texture slot of a stage states the levels of its bound view its reads reach, counted from the
@@ -5003,9 +5009,23 @@ each item named states the rule in full.
   that reads the clear before any draw of the pass reads its copy cleared to the clear in the
   pass's first instance, where the copy can be so (`WorkCounts::attachment_read_clears`), else
   an instance after one of the clear alone. With no
-  barrier it reads the texels from before the pass at its own pixel, the M3 Max's answer. The
+  barrier a draw that writes the color it reads reads the texels from before the pass at its own
+  pixel, the M3 Max's answer; one that writes nothing of it, below. The
   conformance cases `pass-start-barrier-*` keep the M3 Max's texels and take the Mac2 answer as
   the one other.
+- **A draw that reads its own pass's color attachment at its own pixels, and writes nothing of
+  that color, reads what the draws before it wrote, with no barrier too.** Metal defines no answer
+  here, and the Macs disagree. On an M3 Max (macOS 27.0.1) such a draw read the texels from before
+  the pass at every pixel, in a pass that clears too. On an AMD Radeon Pro 5300M and an Intel UHD
+  Graphics 630 (macOS 26.7.1) it read the earlier draw's texels at 98.6% and 99.99% of the pixels,
+  and at all of them after a barrier over the render targets; the rest read the load's or the
+  clear's texels. The runtime answers as the x86 Macs, which costs no copy: where the device
+  enabled `attachmentFeedbackLoopLayout`, a draw whose fragment function reads the texture at the
+  fragment's own pixel alone, and that writes no channel of the color, reads the attachment
+  itself, behind a barrier inside the pass, and sees the load and every earlier draw of the pass
+  (`WorkCounts::reading_draws_in_place`, the runtime's `render/snapshot.rs`). A draw that writes
+  the color it reads still reads a copy taken before the pass, the M3 Max's answer, and so does
+  every such draw on a device without the feature.
 
 **GPU hangs and faults** (a draw of private primitive type 9, `DrawPrimitiveType::Nine`)
 

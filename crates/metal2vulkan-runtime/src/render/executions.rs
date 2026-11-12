@@ -1980,6 +1980,8 @@ impl RenderLowering {
             strides: Vec::new(),
             fixed: FixedState::without_dynamic(fixed, &graphics.dynamic_states),
             sample_positions: self.layout.sample_positions.clone(),
+            // An execution's command reads no attachment in place (`render/snapshot.rs`).
+            feedback_loop: false,
         };
         // The formats the encoder's tables bind, which are the command's own.
         let stages = [

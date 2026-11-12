@@ -278,8 +278,17 @@ recorded here.
   one's image, or a tracked `Private` buffer's bytes), only what changed since the last command
   buffer left the copy standing: nothing, or the texels inside the scissors of the draws of a
   pass that loads it (`shadow_standing.rs`, `WorkCounts::shadow_texels_unskipped_stale_within`).
-  The copy stays where the device has the feedback loop too: read in place, the draw would race
-  its own and earlier draws' writes of the attachment, a data race Vulkan forbids; none where every read
+  A draw that reads the color at its own pixels alone and writes no channel of it reads the
+  attachment in place instead, no copy, with a barrier before it or not, where the device enabled
+  `attachmentFeedbackLoopLayout` (`render/snapshot.rs`, `WorkCounts::reading_draws_in_place`):
+  a by-region barrier before it orders the load's and the earlier draws' writes before its reads,
+  and one after it its reads before the later color writes. With no barrier it then reads what the
+  earlier draws wrote, the x86 Macs' answer, where the M3 Max reads the texels from before the pass
+  (an AMD Radeon Pro 5300M and an Intel UHD Graphics 630 read the earlier draw's texels at 98.6%
+  and 99.99% of the pixels and at all of them after a barrier, the M3 Max at none: docs/API.md's
+  accepted differences). A draw that writes the color it reads keeps the copy where the device has
+  the feedback loop too: read in place, it would race its own writes of the attachment, a data
+  race Vulkan forbids; none where every read
   of the slot reaches only levels before the lowest one the instance renders, which it reads in
   the texture's own image through a view of those levels (`render/attached_levels.rs`,
   `WorkCounts::attached_read_slots_narrowed`), or only levels past the highest one, through a view
