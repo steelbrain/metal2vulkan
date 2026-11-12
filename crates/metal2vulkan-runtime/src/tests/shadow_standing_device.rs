@@ -520,10 +520,13 @@ fn a_render_target_over_host_pages_never_stands() {
 
 /// A compositor's layer pass, command buffer after command buffer, over a plane nothing else
 /// writes: it loads the texture, draws into one rectangle and reads its own target at its pixels
-/// in another (a backdrop). Each pass leaves the bytes its draws wrote, the rest as they were; the
-/// counts of every pass's copies in are printed (`LAYER-STANDING`).
+/// in another (a backdrop). Each pass leaves the bytes its draws wrote, the rest as they were.
+/// From the second command buffer on, the texture's own shadow stands (its copy in skipped, every
+/// texel), and only the read's copy moves texels: its rectangle a pixel wider each way, which
+/// holds part of the truth, so no end leaves it standing (`Missed::Partial`). The counts of every
+/// pass's copies in are printed (`LAYER-STANDING`).
 #[test]
-fn a_layer_pass_reading_its_own_target_copies_in_command_buffer_after_command_buffer() {
+fn a_layer_pass_reading_its_own_target_copies_in_its_read_alone_after_the_first() {
     let scratch = Scratch::new("shadow-standing-layer");
     let plane = Plane::new(&device(&scratch.0));
     let drawn = ScissorRect {
@@ -553,6 +556,21 @@ fn a_layer_pass_reading_its_own_target_copies_in_command_buffer_after_command_bu
             let at = y * PITCH as usize;
             let want = if y < 4 { value } else { 0x11 };
             assert!(all(&bytes[at..at + row], want), "frame {frame}: row {y}");
+        }
+        // The read's rectangle a pixel wider each way: 18 x 6 texels.
+        let read_texels = (read.width + 2) * (read.height + 2);
+        if frame > 0 {
+            assert_eq!(
+                (counts.skipped, counts.texels),
+                (1, WIDTH * HEIGHT),
+                "frame {frame}: the texture's shadow stood"
+            );
+            assert_eq!(
+                moved(&counts, LET_GO, Some(NEVER_STOOD)),
+                read_texels,
+                "frame {frame}: the read's copy alone moved texels"
+            );
+            assert_eq!(counts.never, [0, 0, 0, read_texels, 0], "held in part");
         }
     }
 }
