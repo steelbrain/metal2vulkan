@@ -175,6 +175,7 @@ pub(crate) mod host_shadow;
 mod in_place_image;
 pub(super) mod kept_image;
 pub(super) mod linear_alignment;
+mod red_held_alpha;
 pub(super) mod requirements;
 #[cfg(unix)]
 mod rotation;
@@ -2452,10 +2453,26 @@ impl Device {
         layout: &TextureLayout,
         id_use: IdUse,
     ) -> Result<Texture, Error> {
-        let record = ViewRecord::of_descriptor(layout, descriptor);
+        let mut record = ViewRecord::of_descriptor(layout, descriptor);
         let mut pending = None;
         let over = (Arc::new(texels), &mut pending);
-        let storage = self.storage_over_buffer(call, over, descriptor, layout)?;
+        // An `A8Unorm` texture that only reads, where the device's linear `A8_UNORM` image lacks
+        // what its optimal one does, is an `R8Unorm` texture's storage read through a swizzle
+        // (`texture/red_held_alpha.rs`).
+        let facts = self
+            .shared()
+            .textures
+            .facts(self.compile_device().profile());
+        let storage = match red_held_alpha::red_held_alpha(descriptor, layout, &facts) {
+            Some(held) => {
+                let storage =
+                    self.storage_over_buffer(call, over, &held.descriptor, &held.layout)?;
+                record.read_as = Some(held.read_as);
+                self.shared().counts.alpha_texture_held_in_red();
+                storage
+            }
+            None => self.storage_over_buffer(call, over, descriptor, layout)?,
+        };
         let texture = Texture::made(self, storage, record, None, id_use);
         // A shadow made before its pages' (or its pooled memory's) in-place verdict moves in
         // place once it passes.

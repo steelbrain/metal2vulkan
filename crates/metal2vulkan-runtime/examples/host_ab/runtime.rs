@@ -2090,6 +2090,7 @@ impl Gpu for Runtime {
             ("shadow_texels_kept", c.shadow_texels_kept),
             ("bounded_shadow_copies", c.bounded_shadow_copies),
             ("views_through_swizzle", c.views_through_swizzle),
+            ("alpha_textures_held_in_red", c.alpha_textures_held_in_red),
             ("view_shadows", c.view_shadows),
             (
                 "attachment_reads_through_copies",

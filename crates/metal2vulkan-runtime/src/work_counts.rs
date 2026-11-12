@@ -585,6 +585,7 @@ pub(crate) struct Counters {
     shadow_texels_kept: AtomicU64,
     bounded_shadow_copies: AtomicU64,
     views_through_swizzle: AtomicU64,
+    alpha_textures_held_in_red: AtomicU64,
     view_shadows: AtomicU64,
     attachment_read_splits: AtomicU64,
     attachment_read_clears: AtomicU64,
@@ -4463,6 +4464,13 @@ impl Counters {
     /// image's own format (`texture/view_shadow.rs`, `ViewRecord::read_as`).
     pub(crate) fn view_through_swizzle_made(&self) {
         self.views_through_swizzle.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An `A8Unorm` texture over a buffer's bytes was made as an `R8Unorm` texture's storage,
+    /// read through a swizzle (`texture/red_held_alpha.rs`).
+    pub(crate) fn alpha_texture_held_in_red(&self) {
+        self.alpha_textures_held_in_red
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A texture view's shadow image was made (`texture/view_shadow.rs`): the view's own, or
@@ -8547,6 +8555,12 @@ pub struct WorkCounts {
     /// own format: a view in other channels of its image's bits (an `A8Unorm` view of an
     /// `R8Unorm` texture), which neither copies nor announces (`texture/view_shadow.rs`).
     pub views_through_swizzle: u64,
+    /// `A8Unorm` textures over a buffer's bytes that only read, made as an `R8Unorm` texture's
+    /// storage over them (in place where that texture is) and read through
+    /// `(Zero, Zero, Zero, Red)`, where the device's linear `A8_UNORM` image lacks what its
+    /// optimal one does and its linear `R8_UNORM` image lacks nothing (NVIDIA's linear
+    /// `A8_UNORM` samples, filters and copies nothing): `texture/red_held_alpha.rs`.
+    pub alpha_textures_held_in_red: u64,
     /// Shadow images of texture views made (`texture/view_shadow.rs`, `shadowed-texture-view`):
     /// a view's own, or the render shadow of one of `views_through_swizzle`, made at the first
     /// pass that renders into it.
@@ -10077,6 +10091,8 @@ impl Device {
             new_buffer_bytes_cleared: counters.new_buffer_bytes_cleared.load(Ordering::Relaxed),
             new_buffer_zero_fills: counters.new_buffer_zero_fills.load(Ordering::Relaxed),
             views_through_swizzle: counters.views_through_swizzle.load(Ordering::Relaxed),
+            alpha_textures_held_in_red: (counters.alpha_textures_held_in_red)
+                .load(Ordering::Relaxed),
             view_shadows: counters.view_shadows.load(Ordering::Relaxed),
             attachment_read_splits: counters.attachment_read_splits.load(Ordering::Relaxed),
             attachment_read_clears: counters.attachment_read_clears.load(Ordering::Relaxed),

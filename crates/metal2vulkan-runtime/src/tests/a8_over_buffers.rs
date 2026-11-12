@@ -134,15 +134,26 @@ fn over(
     let texture = buffer.new_texture(&descriptor(), 0, WIDTH).unwrap();
     let after = device.work_counts();
     let shadows = after.shadowed_textures - before.shadowed_textures;
+    let held = after.alpha_textures_held_in_red - before.alpha_textures_held_in_red;
     let format = texture.image_plan().map(|plan| plan.format);
     println!(
-        "{TEST} on {}: over {what}: {placement:?}, {shadows} shadow(s) made, its image {format:?}",
+        "{TEST} on {}: over {what}: {placement:?}, {shadows} shadow(s) made, {held} held in red, \
+         its image {format:?}",
         device.name()
     );
     let reads = read(device, state, &texture);
     assert_eq!(
         shadows, 0,
         "{TEST}: an A8Unorm texture over {what} that only reads is no shadow ({placement:?})"
+    );
+    // A device that holds no `A8_UNORM` image at all holds every `A8Unorm` texture in red, uncounted.
+    let profile = device.compile_device().profile();
+    let everywhere = metal2vulkan::metal::format::alpha_in_red(PixelFormat::A8Unorm, profile);
+    let red = format.is_ok_and(|format| format == metal2vulkan::vk::Format::R8_UNORM);
+    assert_eq!(
+        held,
+        u64::from(red && !everywhere),
+        "{TEST}: an image of R8_UNORM is counted held in red"
     );
     reads
 }
