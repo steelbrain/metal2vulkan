@@ -28,7 +28,10 @@
 //!   `PixelFormatView` usage without a format list, and otherwise exactly the
 //!   formats its own views and its sRGB twin's need (`VkImageFormatListCreateInfo`), so drivers
 //!   that compress only listed formats keep doing so. Metal views between a format and its sRGB
-//!   twin without `PixelFormatView` (measured on an Apple M3 Max and M4).
+//!   twin without `PixelFormatView` (measured on an Apple M3 Max and M4). A texture that renders
+//!   of `RGBA8Unorm`, `BGRA8Unorm` or a twin of one also lists its channel-order sibling's views
+//!   and that sibling's twin's ([`reordered_views`]), which a pass renders into, unless their
+//!   linear tiling lacks what the texture's other formats hold ([`linear_keeping`]).
 //! - **Cubes.** Cube and cube-array textures are cube-compatible, and so is a square 2D array of
 //!   at least six single-sample layers, which Metal views as cubes (Vulkan has no cube view of an
 //!   image that is not square).
@@ -55,6 +58,7 @@
 
 use super::chroma_pairs::plan_pairs;
 use super::framebuffer_fetch;
+use super::linear_plan::linear_lack;
 use super::memory::MemoryClass;
 use super::pvrtc::plan_blocks;
 use super::sample_positions::compatible_depth;
@@ -876,8 +880,12 @@ fn plan_held(
                 .filter(|&f| compatible(format, f, true) && Some(f) != twin_word),
         );
     }
-    views.extend(reordered_formats(pf, format, usage, usage_flags, profile));
     views.insert(format);
+    let sibling: BTreeSet<Format> = reordered_formats(pf, format, usage, usage_flags, profile)
+        .into_iter()
+        .filter(|f| !views.contains(f))
+        .collect();
+    views.extend(sibling.iter().copied());
     // A usage the image's own format lacks, which a view format has (a storage alias, a sampled
     // twin, a word attachment), needs extended usage.
     let extended = [
@@ -913,7 +921,7 @@ fn plan_held(
     {
         flags |= render_3d_flags(profile);
     }
-    Ok(ImagePlan {
+    let plan = ImagePlan {
         pixel_format: pf,
         flags,
         image_type,
@@ -926,7 +934,29 @@ fn plan_held(
         view_formats,
         mapping,
         unavailable,
-    })
+    };
+    Ok(linear_keeping(plan, &sibling, facts))
+}
+
+/// `plan`, or, where the linear tiling of a format only its channel-order sibling's views list
+/// (`sibling`, [`reordered_formats`]) lacks what the plan's usages need and the plan holds every
+/// other format linear ([`linear_lack`]), the plan without them, as planned without them: a linear
+/// image of the texture (over a buffer's or host pages) keeps its route, and its sibling's views
+/// stay apart (`texture/view_shadow.rs`).
+fn linear_keeping(plan: ImagePlan, sibling: &BTreeSet<Format>, facts: &ImageFacts) -> ImagePlan {
+    if sibling.is_empty() || linear_lack(&plan, facts).is_none() {
+        return plan;
+    }
+    let mut bare = plan.clone();
+    bare.view_formats.retain(|f| !sibling.contains(f));
+    if bare.view_formats.len() == 1 && !bare.flags.contains(ImageCreateFlags::EXTENDED_USAGE) {
+        bare.view_formats.clear();
+        bare.flags.remove(ImageCreateFlags::MUTABLE_FORMAT);
+    }
+    match linear_lack(&bare, facts) {
+        None => bare,
+        Some(_) => plan,
+    }
 }
 
 /// The image of a multisampled color texture of `layout` with Metal `usage` (`memoryless` for

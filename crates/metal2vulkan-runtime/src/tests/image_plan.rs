@@ -10,6 +10,7 @@ use super::super::image_plan::{
     reordered_views, sample_count, srgb_twin, takes_views_of, view_formats, AnyViews,
     DepthImageFacts, ImageFacts, ImagePlan, ImageRefusal, VIEWED_USAGES,
 };
+use super::super::linear_plan::linear_lack;
 use super::super::memory::MemoryClass;
 use super::super::pvrtc::{holds_blocks, image_buffer_region, image_region, CARRIERS};
 use super::super::sharing::Sharing;
@@ -624,8 +625,10 @@ fn srgb_twins_share_one_mutable_image() {
 /// A texture of an 8-bit four-channel format that renders lists the views of its channel-order
 /// sibling and the sibling's twin (`BGRA8Unorm` and `BGRA8Unorm_sRGB` of an `RGBA8Unorm` texture),
 /// which Metal makes without `PixelFormatView` usage, where the device renders them directly: its
-/// image takes them, and a pass renders into such a view through a view of the image itself. One
-/// that renders nothing takes none of them, nor does a format without a sibling.
+/// image takes them, and a pass renders into such a view through a view of the image itself,
+/// unless their linear tiling lacks the texture's usages where its other formats' holds them: the
+/// plan then lists none of them, and its linear image lacks nothing. One that renders nothing
+/// takes none of them, nor does a format without a sibling.
 #[test]
 fn render_targets_take_their_channel_order_sibling_s_views() {
     use PixelFormat as P;
@@ -652,11 +655,14 @@ fn render_targets_take_their_channel_order_sibling_s_views() {
                 let listed = view_formats(view, plan.usage, profile)
                     .iter()
                     .all(|&f| compatible(plan.format, f, true));
-                assert_eq!(
-                    takes_views_of(&plan, view, profile),
-                    direct && listed,
-                    "{what}: {view:?} -> {plan:?}"
-                );
+                let what = format!("{what}: {view:?} -> {plan:?}");
+                if takes_views_of(&plan, view, profile) {
+                    assert!(direct && listed, "{what}");
+                } else if direct && listed {
+                    // Left out for the texture's linear image, which holds every other format.
+                    assert!(linear_lack(&plan, &facts).is_none(), "{what}");
+                    eprintln!("{what}: left out, its linear tiling lacks the texture's usages");
+                }
             }
             let read = plan_image(&l, TextureUsage::SHADER_READ, false, &facts).expect(&what);
             assert!(!takes_views_of(&read, sibling, profile), "{what}: {read:?}");
