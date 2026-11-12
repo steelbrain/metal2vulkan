@@ -88,10 +88,18 @@ fn other_queue(device: &Device) -> (Option<CommandQueue>, Vec<CommandQueue>) {
     (None, made)
 }
 
-/// A command buffer of `queue`'s of `fills` fills of `target`, committed.
-fn fills(queue: &CommandQueue, target: &Buffer, fills: u32) -> CommandBuffer {
+/// A command buffer of `queue`'s of a fill of `marker` where there is one, then `fills` fills of
+/// `target`, committed.
+fn fills(
+    queue: &CommandQueue,
+    (target, marker): (&Buffer, Option<&Buffer>),
+    fills: u32,
+) -> CommandBuffer {
     let command_buffer = queue.command_buffer().unwrap();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
+    if let Some(marker) = marker {
+        blit.fill_buffer(marker, 0..marker.length(), 0).unwrap();
+    }
     for value in 0..fills {
         blit.fill_buffer(target, 0..TARGET, value as u8).unwrap();
     }
@@ -183,17 +191,19 @@ fn a_hand_out_makes_its_own_first_work_without_waiting_for_another_queue_s_work(
         .new_buffer(TARGET, ResourceOptions::private())
         .unwrap();
     // The fills' GPU time, alone.
-    let timed = fills(&busy_queue, &target, TIMED);
+    let timed = fills(&busy_queue, (&target, None), TIMED);
     let start = Instant::now();
     timed.wait_until_completed_for(WAIT).unwrap();
     let each = start.elapsed() / TIMED;
     let count = (BUSY.as_secs_f64() / each.as_secs_f64().max(1e-6)).ceil() as u32;
     let count = count.clamp(TIMED, MOST_FILLS);
-    // A resource made just before the busy work: its batch takes the zeros, so a hand-out that
-    // waits for the batches on the other `VkQueue`s that did first work waits for it.
+    // A resource made just before the busy work, which the busy work fills too: its batch, whose
+    // commands reach it, takes its zeros (a batch takes the fills of memory its commands may
+    // reach alone, `device/staging.rs`), so a hand-out that waits for the batches on the other
+    // `VkQueue`s that did first work waits for it.
     let marker = device.new_buffer(4096, ResourceOptions::private()).unwrap();
     let submitted = device.work_counts().queue_submissions;
-    let busy = fills(&busy_queue, &target, count);
+    let busy = fills(&busy_queue, (&target, Some(&marker)), count);
     let started = Instant::now();
     while device.work_counts().queue_submissions == submitted {
         assert!(
