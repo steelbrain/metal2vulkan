@@ -182,6 +182,8 @@ pub(super) mod stand_in;
 pub(super) mod storage_form;
 pub(super) mod surface_depth;
 pub(super) mod surface_two_planes;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod swapped_out_book;
 pub(crate) mod twin_decode;
 mod usage_shadow;
 mod view_shadow;

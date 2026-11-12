@@ -40,10 +40,10 @@ const SIDE: u64 = 16;
 const ROW: u64 = SIDE * 4;
 
 /// A scratch directory for the device's shader cache, removed when dropped.
-struct Scratch(PathBuf);
+pub(super) struct Scratch(pub(super) PathBuf);
 
 impl Scratch {
-    fn new(case: &str) -> Scratch {
+    pub(super) fn new(case: &str) -> Scratch {
         let path = std::env::temp_dir().join(format!("m2v-{case}-{}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
         Scratch(path)
@@ -81,7 +81,7 @@ impl Drop for Host {
 
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU, its shader cache
 /// in `cache`.
-fn device(cache: &Path) -> Device {
+pub(super) fn device(cache: &Path) -> Device {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
