@@ -951,7 +951,7 @@ fn linear_keeping(plan: ImagePlan, sibling: &BTreeSet<Format>, facts: &ImageFact
     bare.view_formats.retain(|f| !sibling.contains(f));
     if bare.view_formats.len() == 1 && !bare.flags.contains(ImageCreateFlags::EXTENDED_USAGE) {
         bare.view_formats.clear();
-        bare.flags.remove(ImageCreateFlags::MUTABLE_FORMAT);
+        bare.flags = bare.flags.difference(ImageCreateFlags::MUTABLE_FORMAT);
     }
     match linear_lack(&bare, facts) {
         None => bare,
