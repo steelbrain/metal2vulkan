@@ -1183,19 +1183,29 @@ impl HostPages {
 
     /// Where they lie as dma-bufs (`dma_buf.rs`): the imports, with the caller's source; the host
     /// address where their bytes start (from which an image over them reckons its texels'); and
-    /// the imports' memory type. `None` for pages imported by their pointer. A read that keeps
-    /// the import imported for good (`host_residency.rs`).
+    /// the imports' memory type. `None` for pages imported by their pointer. Read as a blit reads
+    /// them (`HostImport::blit_pages`): imported again where the device released them while
+    /// idle, and left releasable, for an image over a dma-buf of its own pages
+    /// (`Device::dma_buf_image`), which asks their source and binds none of their memory, so
+    /// neither it nor a command that uses it holds their import (`host_residency.rs`). Refused
+    /// where the device cannot import them again.
     #[cfg(unix)]
-    pub(super) fn dma_buf(&self) -> Option<(Arc<crate::dma_buf::DmaBufPages>, u64, u32)> {
-        let pages = self.import.pages(ReadApart::Texture);
+    pub(super) fn dma_buf(
+        &self,
+    ) -> Result<Option<(Arc<crate::dma_buf::DmaBufPages>, u64, u32)>, Error> {
+        let (pages, _) = self.import.blit_pages()?;
         let placement = &pages.memory.placement;
-        let imports = Arc::clone(placement.dma_buf_pages()?);
-        let start = (placement.mapped?.as_ptr() as u64).checked_add(pages.offset)?;
-        Some((
-            imports,
-            placement.dma_buf_address(start),
-            placement.type_index(),
-        ))
+        let (Some(imports), Some(mapped)) = (placement.dma_buf_pages(), placement.mapped) else {
+            return Ok(None);
+        };
+        let start = (mapped.as_ptr() as u64).checked_add(pages.offset);
+        Ok(start.map(|start| {
+            (
+                Arc::clone(imports),
+                placement.dma_buf_address(start),
+                placement.type_index(),
+            )
+        }))
     }
 
     /// As the buffer that lies in them is released (`BufferShared`'s drop, a no-copy heap's own
@@ -4496,6 +4506,16 @@ impl Buffer {
     /// while they are detached.
     pub(super) fn host_pages(&self) -> Option<Arc<HostPages>> {
         self.pages_cell()?.current()
+    }
+
+    /// Where the buffer's byte 0 lies from the first byte of the host pages it lies in
+    /// ([`host_pages`](Self::host_pages)), read without their import: 0 for a no-copy buffer's
+    /// own pages, the buffer's offset in its heap for a no-copy heap's buffer.
+    pub(super) fn offset_in_host_pages(&self) -> u64 {
+        match &self.s().bytes {
+            Bytes::Own(_) => 0,
+            Bytes::Heap(bytes) => bytes.bytes.offset_in_host_pages() + bytes.offset,
+        }
     }
 
     /// The runtime wrote the host addresses `addresses` of the buffer's bytes through its

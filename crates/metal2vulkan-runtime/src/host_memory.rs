@@ -333,7 +333,9 @@ impl HostMemory {
     /// them). The runtime never changes the limit: a program that makes many no-copy buffers at
     /// once raises its soft limit toward the hard one at startup (`setrlimit`), as QEMU does. Only
     /// a buffer that blits alone have read is released. One whose `gpu_address` or `VkBuffer` was
-    /// handed out, or with a texture over its bytes, stays imported. Nothing of Metal's observes
+    /// handed out, or with a texture over its bytes that reads its memory (a shadow), stays
+    /// imported; a texture in place over its bytes, an image over a dma-buf of its own pages from
+    /// `source`, leaves it releasable. Nothing of Metal's observes
     /// the release: the bytes, the address and the pages stay, the CPU's writes made meanwhile are
     /// read, and the source is not called again. A blit that finds the device unable to import the
     /// chunks again (out of memory) is refused.

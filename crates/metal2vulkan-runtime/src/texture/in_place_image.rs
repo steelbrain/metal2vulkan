@@ -360,13 +360,14 @@ impl Device {
             },
         };
         // Over a no-copy buffer's pages (or its copy of them), noted for a rebind; a buffer's own
-        // fresh pages lie in no host pages of a no-copy buffer.
-        if let Some(base) = texels.buffer.host_pages().map(|pages| pages.memory().1) {
-            let (_, buffer_offset, _) = texels.buffer.memory();
+        // fresh pages lie in no host pages of a no-copy buffer. Where the texels lie from the
+        // pages' first byte is read without their import, which an image over a dma-buf of its
+        // own pages leaves releasable.
+        if texels.buffer.host_pages().is_some() {
             let image_any: Arc<dyn Any + Send + Sync> = image.clone();
             texels.buffer.watch_in_place(InPlaceWatch {
                 image: Arc::downgrade(&image_any),
-                from_base: buffer_offset + layout.offset - base,
+                from_base: texels.buffer.offset_in_host_pages() + layout.offset,
                 layout,
                 padding_owned: texels.padding_owned(),
                 texel: texels.texel_bytes(),
@@ -644,15 +645,16 @@ impl Device {
                 "the buffer's bytes lie in no pages".to_owned(),
             )));
         };
-        let Some((imports, start, type_index)) = pages.dma_buf() else {
+        // Read as a blit reads them: the image asks their source for a dma-buf of its own pages
+        // and binds none of their memory, so their import stays releasable while idle
+        // (`host_residency.rs`), and lists nothing in the device's submissions meanwhile.
+        let Some((imports, start, type_index)) = pages.dma_buf()? else {
             return Ok(Err((
                 Refusal::Image,
                 "the buffer's pages keep no dma-buf imports".to_owned(),
             )));
         };
-        let base = pages.memory().1;
-        let (_, buffer_offset, _) = texels.buffer.memory();
-        let at = start + (buffer_offset + layout.offset - base);
+        let at = start + texels.buffer.offset_in_host_pages() + layout.offset;
         let dma_texels = crate::dma_buf::DmaBufTexels {
             pages: &imports,
             type_index,

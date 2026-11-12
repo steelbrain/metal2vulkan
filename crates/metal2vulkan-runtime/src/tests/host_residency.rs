@@ -14,7 +14,8 @@
 //! - the bytes a blit reads and writes after a release, the CPU's writes made while released among
 //!   them, and that the source is never called again;
 //! - the pages a release keeps across a remap of the buffer's addresses;
-//! - that a buffer whose Metal address was handed out stays imported;
+//! - that a buffer whose Metal address was handed out stays imported, and that one with a texture
+//!   in place over its bytes (an image over a dma-buf of its own pages) does not;
 //! - that a buffer past the descriptors the device keeps (capped through
 //!   `Device::cap_kept_host_import_fds`) is made and stays imported, counted while it lives
 //!   (`host_imports_kept_for_fds`);
@@ -32,9 +33,12 @@
 //! `m2v_cpu_icd`), on Linux, on the kind of device the cfg selects.
 
 use crate::{
-    Buffer, CommandQueue, Device, DeviceKind, DeviceOptions, DmaBufChunk, DmaBufRequest,
-    DmaBufSource, HostMemory, MessageSink, ResourceOptions, ShaderCacheOptions, WorkCounts,
+    BlitOption, Buffer, CommandQueue, Device, DeviceKind, DeviceOptions, DmaBufChunk,
+    DmaBufRequest, DmaBufSource, HostMemory, MessageSink, Origin, ResourceOptions,
+    ShaderCacheOptions, Size, Texture, TextureDescriptor, WorkCounts,
 };
+use metal2vulkan::device::HostPageTexturePolicy;
+use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
@@ -204,7 +208,12 @@ pub(super) fn device(cache: &Path) -> Device {
 
 /// [`device`], its messages given to `messages`.
 pub(super) fn device_with(cache: &Path, messages: Option<MessageSink>) -> Device {
-    let options = DeviceOptions {
+    settled(Device::system_default_with(&options(cache, messages)).unwrap())
+}
+
+/// The options of [`device_with`].
+fn options(cache: &Path, messages: Option<MessageSink>) -> DeviceOptions {
+    DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
             false => vec![
@@ -219,10 +228,13 @@ pub(super) fn device_with(cache: &Path, messages: Option<MessageSink>) -> Device
         },
         messages,
         ..DeviceOptions::default()
-    };
-    let device = Device::system_default_with(&options).unwrap();
-    // A no-copy buffer's pointer import is releasable only where the device's check found a held
-    // pointer import costs every submission as the buffer was made (`submit_check.rs`).
+    }
+}
+
+/// `device`, its submission checks answered: a no-copy buffer's pointer import is releasable
+/// only where the device's check found a held pointer import costs every submission as the
+/// buffer was made (`submit_check.rs`).
+fn settled(device: Device) -> Device {
     assert!(
         device.settle_submit_checks(crate::tests::SETTLE),
         "the submission checks never answered"
@@ -612,6 +624,140 @@ fn an_idle_dma_buf_import_is_released_and_imported_again_at_its_next_blit() {
             device.name()
         );
     });
+}
+
+/// `texture`'s `width` x `height` texels of 4 bytes, read back by a blit into rows of 4 x `width`
+/// bytes.
+fn texels(queue: &CommandQueue, texture: &Texture, (width, height): (u64, u64)) -> Vec<u8> {
+    let row = 4 * width;
+    let device = queue.device();
+    let copy = device
+        .new_buffer(row * height, ResourceOptions::shared())
+        .unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    let size = Size::new(width, height, 1);
+    (blit.copy_from_texture_to_buffer(
+        texture,
+        0,
+        0,
+        Origin::new(0, 0, 0),
+        size,
+        &copy,
+        0,
+        row,
+        row * height,
+        BlitOption::None,
+    ))
+    .unwrap();
+    blit.end_encoding().unwrap();
+    run(&command_buffer);
+    let at = copy.contents().unwrap();
+    // SAFETY: the copy's own bytes, which its completed command buffer wrote.
+    unsafe { std::slice::from_raw_parts(at.as_ptr(), (row * height) as usize).to_vec() }
+}
+
+/// A no-copy buffer over 4 pages, where the device imports dma-bufs of them, with a texture in
+/// place over all its bytes (`HostPageTexturePolicy::InPlace`): a `DRM_FORMAT_MOD_LINEAR` image
+/// in an import of a dma-buf of its own pages, which asks the buffer's source and binds none of
+/// the buffer's memory (`dma_buf.rs`), so the buffer's import stays releasable while idle:
+/// - the texture's blit reads the CPU's bytes;
+/// - the buffer's import released, its chunks leave the device's live dma-buf memories, and the
+///   image's import stays (`dma_buf_image_memories_live`);
+/// - the CPU's writes made while it is released, through the file, are what the texture's next
+///   blit reads, importing nothing, and what the buffer's next blit reads, which imports it
+///   again from the descriptors kept: the source called twice in all, for the buffer's import and
+///   the image's.
+///
+/// Where the device takes the texture as a shadow (its check of the first move in place did not
+/// pass for such pages), it says so and passes.
+#[test]
+fn a_texture_in_place_over_a_dma_buf_import_leaves_it_releasable() {
+    const TEST: &str = "dma-buf residency under a texture";
+    if !udmabuf_openable(TEST) {
+        return;
+    }
+    let scratch = Scratch::new();
+    let mut in_place = options(&scratch.0, None);
+    in_place.policy.host_page_textures = HostPageTexturePolicy::InPlace;
+    let device = &settled(Device::system_default_with(&in_place).unwrap());
+    assert!(
+        device.settle_in_place_checks(SETTLE),
+        "{TEST}: the in-place checks never answered"
+    );
+    let page = host_page();
+    let len = 4 * page;
+    // `BGRA8Unorm` rows of 256 bytes, a multiple of every plane pitch RADV lays out.
+    let size = (64, (len / 256) as u64);
+    let queue = device.new_command_queue().unwrap();
+    let ram = Ram::new(len, 0, len);
+    let first = counting(len, 11);
+    ram.write_file(0, &first);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (buffer, chunks) = no_copy(TEST, device, &ram, (0, len), &calls);
+    if chunks == 0 {
+        return;
+    }
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, size.0, size.1, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    let before = device.work_counts();
+    let texture = buffer.new_texture(&descriptor, 0, 256).unwrap();
+    let made = device.work_counts();
+    if made.dma_buf_textures_in_place == before.dma_buf_textures_in_place {
+        eprintln!(
+            "{TEST}: on {}: the texture is a shadow (the check: {:?})",
+            device.name(),
+            device.in_place_check_report()
+        );
+        return;
+    }
+    assert!(texels(&queue, &texture, size) == first, "{TEST}");
+
+    let live = device.work_counts();
+    release(TEST, device, 1);
+    let released = device.work_counts();
+    assert_eq!(
+        released.dma_buf_memories_live,
+        live.dma_buf_memories_live - chunks,
+        "{TEST}: the buffer's chunks released"
+    );
+    assert_eq!(
+        released.dma_buf_image_memories_live, live.dma_buf_image_memories_live,
+        "{TEST}: the image's import kept"
+    );
+
+    let second = counting(len, 37);
+    ram.write_file(0, &second);
+    assert!(
+        texels(&queue, &texture, size) == second,
+        "{TEST}: the texture's bytes while released"
+    );
+    let read_texture = device.work_counts();
+    assert_eq!(
+        residency(&read_texture),
+        residency(&released),
+        "{TEST}: the texture's blit imports nothing"
+    );
+    assert!(
+        read(&queue, &buffer, len) == second,
+        "{TEST}: the buffer's bytes"
+    );
+    let again = device.work_counts();
+    assert_eq!(
+        again.host_imports_reimported,
+        released.host_imports_reimported + 1,
+        "{TEST}: imported again"
+    );
+    assert_eq!(
+        calls.load(Ordering::Acquire),
+        2,
+        "{TEST}: the source's calls, the buffer's and the image's"
+    );
+    eprintln!(
+        "{TEST}: on {}: {chunks} chunks released under a texture in place, imported again",
+        device.name()
+    );
 }
 
 /// A no-copy buffer over a view of the file's pages 0 and 1, where the device imports dma-bufs

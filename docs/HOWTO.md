@@ -302,8 +302,12 @@ released:
 
 A buffer stays imported for good once its Metal address is handed out (`gpu_address`, a binding, an
 argument buffer or table, an indirect command buffer, `use_resource`), its `VkBuffer` is read, a
-texture is made over its bytes, or a second buffer lies in its import; so do a heap's and a
-rebind's imports. `WorkCounts::host_imports_released`, `host_imports_reimported`,
+texture that reads its memory is made over its bytes (a shadow, or an image in place in an import
+of their pointer), or a second buffer lies in its import; so do a heap's and a rebind's imports. A
+texture in place over a dma-buf import's bytes lies in an import of a dma-buf of its own pages,
+asked of the buffer's source, and leaves the buffer's import releasable: on RADV a guest surface (a
+no-copy buffer and a texture in place over it) then lists the texture's import alone in each kernel
+submission while the buffer is idle, where it listed both before. `WorkCounts::host_imports_released`, `host_imports_reimported`,
 `host_imports_resident` and `host_import_fds_kept` count it. For imports of either kind,
 `host_imports_read_apart` counts the live ones that a read other than a blit's keeps for good (the
 `host_imports_read_apart_*` gauges by reason: the Metal address, the `VkBuffer`, a binding, a
