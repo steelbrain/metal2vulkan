@@ -105,10 +105,20 @@ fn sampler_allocation_count(stem: &str) -> u32 {
 
 /// The properties of a device created from `desc` as the runtime creates one: the recommended
 /// enables for the untrusted policy, the description restricted to them, and the compile device
-/// built from that.
+/// built from that, presenting its GPU's class of Mac.
 pub(super) fn created(
     stem: &str,
     desc: &DeviceDescription,
+) -> (DeviceDescription, DeviceProperties) {
+    created_as(stem, desc, None)
+}
+
+/// As [`created`], presenting the class of Mac `declared` declares (`None`: the GPU's, of the
+/// profile's own `vendorID`).
+fn created_as(
+    stem: &str,
+    desc: &DeviceDescription,
+    declared: Option<MacClass>,
 ) -> (DeviceDescription, DeviceProperties) {
     let policy = DevicePolicy::UNTRUSTED;
     let enables = desc.recommended_enables(&policy);
@@ -117,7 +127,12 @@ pub(super) fn created(
         .with_enabled(&enables)
         .unwrap_or_else(|e| panic!("{stem}: {e}"));
     let compile = Device::new(enabled.clone(), policy).unwrap_or_else(|e| panic!("{stem}: {e}"));
-    let properties = DeviceProperties::new(identity(stem), enabled.clone(), &compile, None);
+    let identity = DeviceIdentity {
+        vendor_id: enabled.vendor_id,
+        device_id: enabled.device_id,
+        ..identity(stem)
+    };
+    let properties = DeviceProperties::new(identity, enabled.clone(), &compile, declared);
     (enabled, properties)
 }
 
@@ -195,6 +210,51 @@ fn lossless_compression_is_the_presented_mac_class() {
     }
 }
 
+/// `maxThreadgroupMemoryLength` is the device's `maxComputeSharedMemorySize` up to what Metal
+/// answers on the class of Mac the device presents: 32 KiB on an Apple silicon Mac (an M3 Max),
+/// 64 KiB on a Mac with an Intel or AMD GPU (a Radeon Pro 5300M and a UHD 630). RADV's 65536
+/// bytes answer 65536 where the device presents its own GPU's Mac, an AMD one, and 32768 where it
+/// presents an Apple silicon Mac; the M3 Max's MoltenVK device answers its 32768 either way, as it
+/// did; no device answers past its own limit.
+#[test]
+fn threadgroup_memory_is_the_presented_mac_class_s() {
+    use MacClass::{AppleSilicon, IntelOrAmd};
+    let pinned: [(&str, Option<MacClass>, u64); 8] = [
+        ("amd-780m-radv", None, 65536),
+        ("amd-780m-radv", Some(IntelOrAmd), 65536),
+        ("amd-780m-radv", Some(AppleSilicon), 32768),
+        ("moltenvk-m3", None, 32768),
+        ("moltenvk-m3", Some(IntelOrAmd), 32768),
+        ("nvidia-rtx5080-laptop", None, 49152),
+        ("gate-lavapipe", None, 32768),
+        ("vk12-floor", None, 16384),
+    ];
+    let profiles = committed_descriptions();
+    for (stem, declared, memory) in pinned {
+        let (_, desc) = profiles.iter().find(|(s, _)| s == stem).unwrap();
+        let (_, p) = created_as(stem, desc, declared);
+        assert_eq!(
+            p.max_threadgroup_memory_length, memory,
+            "{stem} {declared:?}"
+        );
+    }
+    for (stem, desc) in &profiles {
+        for declared in [None, Some(AppleSilicon), Some(IntelOrAmd)] {
+            let (enabled, p) = created_as(stem, desc, declared);
+            let limit = u64::from(enabled.limits.max_compute_shared_memory_size);
+            let mac = match declared.unwrap_or(MacClass::of_vendor(enabled.vendor_id)) {
+                AppleSilicon => 32 * 1024,
+                IntelOrAmd => 64 * 1024,
+            };
+            assert_eq!(
+                p.max_threadgroup_memory_length,
+                limit.min(mac),
+                "{stem} {declared:?}"
+            );
+        }
+    }
+}
+
 /// Metal's rule for `maxBufferLength`, three quarters of the working set to 16 KiB, gives what
 /// Metal answered: an AMD Radeon Pro 5300M (4 GiB, macOS 26.7.1) of `recommendedMaxWorkingSetSize`
 /// 4,278,190,080 and an Apple M3 Max (64 GiB, macOS 27.0.1) of 55,662,788,608. A device's answer
@@ -235,7 +295,7 @@ fn max_buffer_length_is_three_quarters_of_the_device_local_heap_at_most() {
 
 /// Every answer equals its source on every committed profile: the Vulkan limit, feature or
 /// format the device was created with, or the compile layer's answer for it, an Apple GPU's at
-/// most.
+/// most; the threadgroup memory a Mac of its GPU's class answers at most.
 #[test]
 fn every_committed_profile_answers_from_its_sources() {
     let profiles = committed_descriptions();
@@ -251,9 +311,13 @@ fn every_committed_profile_answers_from_its_sources() {
             Size::new(axis(0), axis(1), axis(2)),
             "{stem}"
         );
+        let mac = match enabled.vendor_id {
+            0x106b => 32 * 1024,
+            _ => 64 * 1024,
+        };
         assert_eq!(
             p.max_threadgroup_memory_length,
-            u64::from(l.max_compute_shared_memory_size.min(32 * 1024)),
+            u64::from(l.max_compute_shared_memory_size.min(mac)),
             "{stem}"
         );
         let addressed = has(VkFeature::BufferDeviceAddress) && has(VkFeature::ShaderInt64);
@@ -354,9 +418,10 @@ fn raster_order_groups_agree_with_the_compile_layer() {
 #[test]
 fn the_venue_devices_answer_as_pinned() {
     // (stem, threads per threadgroup, threadgroup memory, raster order groups, sample counts,
-    // amplification count: Metal's 8 wherever multiview is). The threadgroup memory and sample
-    // counts are an Apple GPU's at most: RADV's 65536 bytes and ANV's and NVIDIA's 49152 answer
-    // 32768, and their 8 and 16 samples (lavapipe's 8) no.
+    // amplification count: Metal's 8 wherever multiview is). The threadgroup memory is what a Mac
+    // of the GPU's class answers at most: a Mac with an Intel or AMD GPU's 65536 bytes off Apple's
+    // GPUs, so RADV's 65536 and ANV's and NVIDIA's 49152 answer themselves. The sample counts are
+    // an Apple GPU's at most: their 8 and 16 samples (lavapipe's 8) answer no.
     let pinned: [(&str, [u64; 3], u64, bool, &[u64], u64); 7] = [
         (
             "moltenvk-m3",
@@ -378,7 +443,7 @@ fn the_venue_devices_answer_as_pinned() {
         (
             "amd-780m-radv",
             [1024, 1024, 1024],
-            32768,
+            65536,
             true,
             &[1, 2, 4],
             8,
@@ -386,7 +451,7 @@ fn the_venue_devices_answer_as_pinned() {
         (
             "intel-irisxe-rplp-anv",
             [1024, 1024, 1024],
-            32768,
+            49152,
             true,
             &[1, 2, 4],
             8,
@@ -394,7 +459,7 @@ fn the_venue_devices_answer_as_pinned() {
         (
             "intel-uhd770-rpls-anv",
             [1024, 1024, 1024],
-            32768,
+            49152,
             true,
             &[1, 2, 4],
             8,
@@ -402,7 +467,7 @@ fn the_venue_devices_answer_as_pinned() {
         (
             "nvidia-rtx5080-laptop",
             [1024, 1024, 64],
-            32768,
+            49152,
             true,
             &[1, 2, 4],
             8,

@@ -99,7 +99,8 @@ fn query_answers(device: &Device) -> Vec<(Query, Vec<Answer>)> {
 
 /// The runtime device answers Metal's public device queries from their sources: its identity
 /// agrees with the description it was created from, and every property equals the compile
-/// layer's answer for that description. A query whose runtime piece is not built answers its gap
+/// layer's answer for that description, but the threadgroup memory, which is the device's own
+/// limit up to its Mac class's. A query whose runtime piece is not built answers its gap
 /// (`families.rs` tests the GPU families). Every answer is printed, with the device's values
 /// behind the gaps from their sources, as the venue's record. Texture creation agrees with the
 /// texture queries' answers (`textures_are_made_as_the_texture_queries_answer`).
@@ -142,10 +143,19 @@ fn a_runtime_device_answers_its_queries_and_the_apple_only_calls() {
             p.max_threads_per_threadgroup,
             Size::new(width, height, depth)
         );
+        // The device's own limit, up to what Metal answers on the class of Mac the device
+        // presents: an Apple silicon Mac's 32 KiB (the compile layer's answer), a Mac with an
+        // Intel or AMD GPU's 64 KiB (`MacClass`).
+        let mac = if p.lossless_compression {
+            32 << 10
+        } else {
+            64 << 10
+        };
         assert_eq!(
             p.max_threadgroup_memory_length,
-            u64::from(metal.max_threadgroup_memory_length)
+            u64::from(d.limits.max_compute_shared_memory_size).min(mac)
         );
+        assert!(p.max_threadgroup_memory_length >= u64::from(metal.max_threadgroup_memory_length));
         assert_eq!(p.argument_buffers_support, metal.argument_buffers_tier);
         assert_eq!(p.read_write_texture_support, metal.read_write_texture_tier);
         assert_eq!(

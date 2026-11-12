@@ -719,6 +719,44 @@ fn the_function_pointer_rows_are_the_table_array() {
     assert!(exact_somewhere, "no committed profile has the table array");
 }
 
+/// A RADV device answers function pointers, dynamic libraries and rasterization rate maps as an
+/// AMD Mac's Metal does (yes to each, an AMD Radeon Pro 5300M on macOS 26.7.1): in Apple9's
+/// column, the function pointer rows of both pipeline kinds and the dynamic library rows are
+/// exact (the rows `supportsFunctionPointers`, `supportsFunctionPointersFromRender`,
+/// `supportsDynamicLibraries` and `supportsRenderDynamicLibraries` are answered by), and
+/// `supportsRasterizationRateMapWithLayerCount:` answers yes for 1 and 2. The Radeon 780M's is
+/// the committed RADV profile; the device test `threadgroup_memory_device` checks the same answers
+/// on the device it runs on.
+#[test]
+fn a_radv_device_answers_function_pointers_libraries_and_rate_maps() {
+    let stem = "amd-780m-radv";
+    let apple9 = &audits(stem)[&GpuFamily::Apple9];
+    for row in [
+        FeatureRow::FunctionPointersCompute,
+        FeatureRow::FunctionPointersRender,
+        FeatureRow::ComputeDynamicLibraries,
+        FeatureRow::RenderDynamicLibraries,
+    ] {
+        assert_eq!(
+            state(apple9, feature(row)),
+            Some(RowState::Exact),
+            "{stem} {row:?}"
+        );
+    }
+    let (_, desc) = committed_descriptions()
+        .into_iter()
+        .find(|(s, _)| s == stem)
+        .unwrap();
+    let (_, p) = created(stem, &desc);
+    for layers in [1, 2] {
+        assert_eq!(
+            p.supports_rasterization_rate_map_with_layer_count(layers),
+            Ok(true),
+            "{stem} {layers}"
+        );
+    }
+}
+
 /// Tile dispatches run: the tile rows are what the compile layer and the binder refuse of Metal's
 /// tile shading on every device, and a pass's tile memory is Metal's, but at 8 samples, which
 /// Apple's measured GPUs lack.

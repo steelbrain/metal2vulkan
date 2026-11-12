@@ -125,7 +125,10 @@ pub struct DeviceProperties {
     /// `maxComputeWorkGroupInvocations` and by an Apple GPU's 1024.
     pub max_threads_per_threadgroup: Size,
     /// `maxThreadgroupMemoryLength`: `maxComputeSharedMemorySize`, since a kernel's threadgroup
-    /// arenas are exactly its Metal allocations, capped by an Apple GPU's 32 KiB.
+    /// arenas are exactly its Metal allocations, capped by what Metal answers on the class of Mac
+    /// the device presents ([`MacClass`]): an Apple silicon Mac's 32 KiB, a Mac with an Intel or
+    /// AMD GPU's 64 KiB. A dispatch takes threadgroup memory up to the device's own limit, so
+    /// every length this answers runs.
     pub max_threadgroup_memory_length: u64,
     /// `argumentBuffersSupport`: `Tier2` where buffers are reached by device address and texture
     /// and sampler handles through the descriptor heap (descriptor indexing), else `Tier1`.
@@ -253,9 +256,11 @@ pub(crate) fn working_set_buffer_bound(working_set: u64) -> u64 {
 /// of its own: what a new `Private` texture reads before anything writes it, the encoding a GPU
 /// blit through a compressed texture writes, a `half` NaN clear's sign, how far a `Clear`
 /// load reaches past the render area of a pass without a draw call (docs/API.md, the accepted
-/// differences), and whether a sampler state's `lodBias` moves its samples' level
-/// (`SamplerDescriptor::lod_bias`). Every Mac's Metal answers one class's way, by the GPU it has
-/// (Apple silicon, or an Intel or AMD GPU); the runtime answers the class the consumer declares
+/// differences), whether a sampler state's `lodBias` moves its samples' level
+/// (`SamplerDescriptor::lod_bias`), and the most threadgroup memory a kernel may take
+/// ([`DeviceProperties::max_threadgroup_memory_length`]). Every Mac's Metal answers one class's
+/// way, by the GPU it has (Apple silicon, or an Intel or AMD GPU); the runtime answers the class
+/// the consumer declares
 /// ([`DeviceOptions::mac_class`](crate::DeviceOptions::mac_class)), else the one of the device's
 /// GPU ([`MacClass::of_vendor`]), and states it as
 /// [`DeviceProperties::lossless_compression`]. No Metal counterpart: a Mac's GPU is what it is.
@@ -273,7 +278,8 @@ pub enum MacClass {
     /// slices untouched (our probes and the consumer's on the M3 Max). The runtime writes the pattern and the zeros (a pattern no clear or copy writes
     /// exactly reads zero, announced as `fresh-pattern-zeroed`), and clears so. Its GPU samples
     /// every level through a sampler state as with no LOD bias, whatever the state's `lodBias`
-    /// (an Apple M3 Max, Apple9): so does the runtime.
+    /// (an Apple M3 Max, Apple9): so does the runtime. Its `maxThreadgroupMemoryLength` is 32 KiB
+    /// (an Apple M3 Max).
     AppleSilicon,
     /// A Mac with an Intel or AMD GPU, which keeps no texture compressed: a new `Private`
     /// texture holds what its memory held (zero, or a released texture's texels: an Intel UHD
@@ -289,7 +295,8 @@ pub enum MacClass {
     /// implicit one's alike, the sum clamped into the texture's levels (both GPUs, the
     /// consumer's probes): so does the runtime, through the device's `mipLodBias`, within its
     /// `maxSamplerLodBias` (`Degradation::CappedLodBias` past it, and where the device's
-    /// portability subset withholds `samplerMipLodBias`).
+    /// portability subset withholds `samplerMipLodBias`). Its `maxThreadgroupMemoryLength` is
+    /// 64 KiB (both GPUs, the consumer's probes).
     IntelOrAmd,
 }
 
@@ -306,14 +313,27 @@ impl MacClass {
             false => MacClass::IntelOrAmd,
         }
     }
+
+    /// The `maxThreadgroupMemoryLength` Metal answers on a Mac of this class: 32,768 bytes on an
+    /// Apple silicon Mac (an Apple M3 Max, macOS 27.0.1), 65,536 on a Mac with an Intel or AMD
+    /// GPU (an Intel UHD 630 and an AMD Radeon Pro 5300M, macOS 26.7.1). A device answers the
+    /// lower of it and its own `maxComputeSharedMemorySize`
+    /// (`DeviceProperties::max_threadgroup_memory_length`).
+    pub(crate) fn max_threadgroup_memory_length(self) -> u64 {
+        match self {
+            MacClass::AppleSilicon => 32 << 10,
+            MacClass::IntelOrAmd => 64 << 10,
+        }
+    }
 }
 
 /// The class of Mac a device of `identity`, its class declared as `declared`, presents: the one
 /// place the runtime decides it. Every answer that differs between an Apple silicon Mac and a Mac
 /// with an Intel or AMD GPU reads it: because the first compresses
 /// ([`DeviceProperties::lossless_compression`]: a new `Private` texture's contents, a blit's
-/// canonical encodings, a `half` NaN clear's sign), and because the second adds a sampler's LOD
-/// bias to every sample's level (`sampler.rs`).
+/// canonical encodings, a `half` NaN clear's sign), because the second adds a sampler's LOD bias
+/// to every sample's level (`sampler.rs`), and because their GPUs' threadgroup memory differs
+/// ([`DeviceProperties::max_threadgroup_memory_length`]).
 fn presented_class(identity: &DeviceIdentity, declared: Option<MacClass>) -> MacClass {
     declared.unwrap_or_else(|| MacClass::of_vendor(identity.vendor_id))
 }
@@ -356,7 +376,10 @@ impl DeviceProperties {
             api_version: identity.api_version,
             max_buffer_length,
             max_threads_per_threadgroup: Size::new(width, height, depth),
-            max_threadgroup_memory_length: u64::from(metal.max_threadgroup_memory_length),
+            max_threadgroup_memory_length: u64::from(
+                compile.profile().limits().max_compute_shared_memory_size,
+            )
+            .min(mac_class.max_threadgroup_memory_length()),
             argument_buffers_support: metal.argument_buffers_tier,
             max_argument_buffer_sampler_count: argument_buffer_sampler_count(
                 metal2vulkan::pipeline::heap_sampler_capacity(compile.profile()),

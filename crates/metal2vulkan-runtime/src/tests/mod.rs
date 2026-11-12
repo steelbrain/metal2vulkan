@@ -614,6 +614,8 @@ mod texture_placement_device;
 mod texture_resource_options;
 mod this_thread;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod threadgroup_memory_device;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod tile_pending;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod tile_rebind_making_wait;
