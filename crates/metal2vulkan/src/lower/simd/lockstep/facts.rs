@@ -104,6 +104,9 @@ pub(super) enum Spread {
     /// The threads' anchors differ by `min` to `max` bytes, either way, or, where `same`, are one
     /// anchor.
     Apart { min: u64, max: u64, same: bool },
+    /// The threads' anchors differ by a multiple of `granule` (a power of two) plus at most
+    /// `low` bytes either way ([`AddrFacts::lattice`]); they may be one anchor.
+    Lattice { low: u64, granule: u64 },
 }
 
 /// How a GEP index extends its core to the pointer's index width.
@@ -2783,7 +2786,8 @@ impl<'a> AddrFacts<'a> {
 
     /// How a GEP over `src_ty` from `base` by `indices` differs between two threads of a
     /// simdgroup: as its base when every index is uniform, and by its stride times the index
-    /// when one index is injective and the base uniform.
+    /// when one index is injective and the base uniform; else as a lattice
+    /// ([`AddrFacts::lattice`]) where one holds.
     fn gep_spread(
         &self,
         src_ty: TypeId,
@@ -2797,23 +2801,117 @@ impl<'a> AddrFacts<'a> {
             .iter()
             .enumerate()
             .filter(|&(_, &k)| !self.uniform(k));
-        match (varying.next(), varying.next()) {
-            (None, _) => self.ptr_spread(base, depth + 1, m),
+        let found = match (varying.next(), varying.next()) {
+            (None, _) => return self.ptr_spread(base, depth + 1, m),
             (Some((at, &k)), None) if self.uniform(base) => {
-                let Some(stride) = self.stride_at(src_ty, indices, at) else {
-                    return Ok(None);
-                };
-                Ok(self
-                    .index_inj(k, index_bits, depth + 1, m)?
-                    .and_then(|i| i.scaled(stride, index_bits))
-                    .map(|i| Spread::Apart {
-                        min: i.step,
-                        max: i.spread,
-                        same: i.same,
-                    }))
+                match self.stride_at(src_ty, indices, at) {
+                    Some(stride) => self
+                        .index_inj(k, index_bits, depth + 1, m)?
+                        .and_then(|i| i.scaled(stride, index_bits))
+                        .map(|i| Spread::Apart {
+                            min: i.step,
+                            max: i.spread,
+                            same: i.same,
+                        }),
+                    None => None,
+                }
             }
-            _ => Ok(None),
+            _ => None,
+        };
+        match found {
+            Some(s) => Ok(Some(s)),
+            None => self.lattice(src_ty, base, indices, index_bits, m),
         }
+    }
+
+    /// How a GEP over `src_ty` from `base` by `indices` differs between two threads of a
+    /// simdgroup as a lattice ([`Spread::Lattice`]), where the walk down its bases (through
+    /// bitcasts and GEPs, at most [`MAX_CHAIN`] steps) ends at an address uniform in the
+    /// simdgroup. Each index that is not uniform adds a term, its stride times the index, with
+    /// their low zero bits together ([`AddrFacts::low_zeros`], at most `bits`, the index width)
+    /// and, where the index's range is known and its values are not negative as a signed index,
+    /// the bytes that range spans. For the largest power of two `g` whose terms with fewer zero
+    /// bits all have spans, summing to `l` below half of `g`, the address is the uniform base,
+    /// plus a multiple of `g` (`g` divides `2^bits`, so a wrap at the index width keeps the
+    /// multiple), plus a part within `l` bytes of one value: two threads' addresses differ by a
+    /// multiple of `g` plus at most `l` either way.
+    fn lattice(
+        &self,
+        src_ty: TypeId,
+        base: Value,
+        indices: &[Value],
+        bits: u32,
+        m: &mut Meter,
+    ) -> Result<Option<Spread>, Error> {
+        // Each term's zero low bits, and the bytes its range spans (`None`: unknown).
+        let mut terms: Vec<(u32, Option<u64>)> = Vec::new();
+        let (mut ty, mut b, mut idx) = (src_ty, base, indices);
+        let mut ended = false;
+        'walk: for _ in 0..MAX_CHAIN {
+            m.tick(1)?;
+            for (at, &k) in idx.iter().enumerate() {
+                if self.uniform(k) {
+                    continue;
+                }
+                let (Some(stride), Some(w)) = (self.stride_at(ty, idx, at), self.width(k)) else {
+                    break 'walk;
+                };
+                let zeros = self
+                    .low_zeros(k, 0)
+                    .saturating_add(stride.trailing_zeros())
+                    .min(bits);
+                let span = self
+                    .range(k, 0, m)?
+                    .filter(|&(_, hi)| (1..=64).contains(&w) && hi < 1u64 << (w - 1).min(63))
+                    .and_then(|(lo, hi)| (hi - lo).checked_mul(stride));
+                m.grow(&mut terms, 1)?;
+                terms.push((zeros, span));
+            }
+            if self.uniform(b) {
+                ended = true;
+                break;
+            }
+            match self.kind(b) {
+                Some(InstKind::Cast {
+                    op: CastOp::Bitcast,
+                    v,
+                }) => {
+                    b = *v;
+                    idx = &[];
+                }
+                Some(InstKind::Gep {
+                    src_ty: t,
+                    base: next,
+                    indices: ks,
+                    ..
+                }) => {
+                    ty = *t;
+                    b = *next;
+                    idx = &ks[..];
+                }
+                _ => break,
+            }
+        }
+        let mut best: Option<(u32, u64)> = None;
+        if ended {
+            for &(z, _) in &terms {
+                if z == 0 || z >= 63 || best.is_some_and(|(bz, _)| bz >= z) {
+                    continue;
+                }
+                let low = terms
+                    .iter()
+                    .filter(|&&(z2, _)| z2 < z)
+                    .try_fold(0u64, |s, &(_, span)| span.and_then(|w| s.checked_add(w)));
+                if let Some(low) = low.filter(|&l| l < (1u64 << z) / 2) {
+                    best = Some((z, low));
+                }
+            }
+        }
+        m.release(crate::budget::vec_bytes(&terms));
+        Ok(best.map(|(z, low)| Spread::Lattice {
+            low,
+            granule: 1u64 << z,
+        }))
     }
 
     /// The injectivity of GEP index `k` in the index width `bits`: its core's

@@ -28,14 +28,16 @@
 //! two objects, two constant words, words further apart than a simdgroup spans, words a loop
 //! counter's bounds keep apart, each thread's own word of whichever row an iteration picks, a
 //! counter stepping by more than its threads' starts differ, a tree reduction's halves under
-//! its guard, a guarded word below the bytes the others touch) take nothing, and so do stores of one value every thread stores alike and accesses
-//! one thread of a simdgroup at most runs (`if (t == 0)`). No GPU is used; `llvm-as` assembles the
-//! kernels and a missing tool skips visibly.
+//! its guard, a guarded word below the bytes the others touch, a tile's rows further apart than
+//! its columns span and its blocks further apart than its rows) take nothing, and so do stores
+//! of one value every thread stores alike and accesses one thread of a simdgroup at most runs
+//! (`if (t == 0)`). No GPU is used; `llvm-as` assembles the kernels and a missing tool skips
+//! visibly.
 
 use std::collections::BTreeMap;
 
 use crate::device::requirements::VkProperty;
-use crate::device::subgroup::Tier;
+use crate::device::subgroup::{OpBits, SimdClass, Tier};
 use crate::device::DevicePolicy;
 use crate::lower::select::Plan;
 use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
@@ -53,6 +55,7 @@ target triple = "air64_v28-apple-macosx26.0.0"
 @src = internal unnamed_addr addrspace(3) global [64 x i32] undef, align 4
 @wide = internal unnamed_addr addrspace(3) global [128 x i32] undef, align 4
 @tile = internal unnamed_addr addrspace(3) global [4 x [32 x i32]] undef, align 4
+@grid = internal unnamed_addr addrspace(3) global [512 x i32] undef, align 4
 "#;
 
 /// The metadata of kernel `name(device uint *out [[buffer(0)]], uint t
@@ -656,6 +659,105 @@ done:
   %9 = add i32 %5, %8
   %10 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %3
   store i32 %9, ptr addrspace(1) %10, align 4
+  ret void
+}
+"#;
+
+/// A tile of four rows per simdgroup, in a block the simdgroups' threads all run but no barrier
+/// may stand in (`sg < 2`, which the 64 threads all pass): thread `t` stores `t + 100 k` into row
+/// `k` at its column, word `(t & 31) + 32 k` of its simdgroup's block of `@grid`, the block's
+/// first word `(t & -32) << 3` (a 16-bit position's low and high bits, through two GEPs, as a
+/// compiler spells a tile's address). After a barrier thread `t` sums the column of thread
+/// `t ^ 1`: `out[t] = 4 (t ^ 1) + 600`.
+const LATTICE_TILE: &str = r#"
+define void @lattice_tile(ptr addrspace(1) %0, i32 %1, i32 %sg) #0 {
+  %3 = zext i32 %1 to i64
+  %x = trunc i32 %1 to i16
+  %lane = and i16 %x, 31
+  %high = and i16 %x, -32
+  %l = zext i16 %lane to i64
+  %hw = zext i16 %high to i32
+  %h8 = shl nuw nsw i32 %hw, 3
+  %h = zext i32 %h8 to i64
+  %col = getelementptr inbounds i32, ptr addrspace(3) @grid, i64 %l
+  %at = getelementptr inbounds i32, ptr addrspace(3) %col, i64 %h
+  %run = icmp ult i32 %sg, 2
+  br i1 %run, label %fill, label %done
+
+fill:
+  store i32 %1, ptr addrspace(3) %at, align 4
+  %r1 = getelementptr inbounds i32, ptr addrspace(3) %at, i64 32
+  %v1 = add i32 %1, 100
+  store i32 %v1, ptr addrspace(3) %r1, align 4
+  %r2 = getelementptr inbounds i32, ptr addrspace(3) %at, i64 64
+  %v2 = add i32 %1, 200
+  store i32 %v2, ptr addrspace(3) %r2, align 4
+  %r3 = getelementptr inbounds i32, ptr addrspace(3) %at, i64 96
+  %v3 = add i32 %1, 300
+  store i32 %v3, ptr addrspace(3) %r3, align 4
+  br label %done
+
+done:
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  %o = xor i16 %lane, 1
+  %ol = zext i16 %o to i64
+  %ocol = getelementptr inbounds i32, ptr addrspace(3) @grid, i64 %ol
+  %oat = getelementptr inbounds i32, ptr addrspace(3) %ocol, i64 %h
+  %w0 = load i32, ptr addrspace(3) %oat, align 4
+  %o1 = getelementptr inbounds i32, ptr addrspace(3) %oat, i64 32
+  %w1 = load i32, ptr addrspace(3) %o1, align 4
+  %o2 = getelementptr inbounds i32, ptr addrspace(3) %oat, i64 64
+  %w2 = load i32, ptr addrspace(3) %o2, align 4
+  %o3 = getelementptr inbounds i32, ptr addrspace(3) %oat, i64 96
+  %w3 = load i32, ptr addrspace(3) %o3, align 4
+  %s1 = add i32 %w0, %w1
+  %s2 = add i32 %s1, %w2
+  %s3 = add i32 %s2, %w3
+  %4 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %3
+  store i32 %s3, ptr addrspace(1) %4, align 4
+  ret void
+}
+"#;
+
+/// [`LATTICE_TILE`]'s tile with rows 16 words apart: lane `l + 16` stores row `k` at the word
+/// lane `l` stores row `k + 1` at, one instruction later. After a barrier thread `t` reads word
+/// `(t & 31) + 16` of its simdgroup's block, which lockstep leaves holding the later row's
+/// value: lane `t & 31`'s row 1 below lane 16 (`t + 100`), lane `(t & 31) - 16`'s row 2 from it
+/// (`t + 184`).
+const LATTICE_NEAR: &str = r#"
+define void @lattice_near(ptr addrspace(1) %0, i32 %1, i32 %sg) #0 {
+  %3 = zext i32 %1 to i64
+  %x = trunc i32 %1 to i16
+  %lane = and i16 %x, 31
+  %high = and i16 %x, -32
+  %l = zext i16 %lane to i64
+  %hw = zext i16 %high to i32
+  %h8 = shl nuw nsw i32 %hw, 3
+  %h = zext i32 %h8 to i64
+  %col = getelementptr inbounds i32, ptr addrspace(3) @grid, i64 %l
+  %at = getelementptr inbounds i32, ptr addrspace(3) %col, i64 %h
+  %run = icmp ult i32 %sg, 2
+  br i1 %run, label %fill, label %done
+
+fill:
+  store i32 %1, ptr addrspace(3) %at, align 4
+  %r1 = getelementptr inbounds i32, ptr addrspace(3) %at, i64 16
+  %v1 = add i32 %1, 100
+  store i32 %v1, ptr addrspace(3) %r1, align 4
+  %r2 = getelementptr inbounds i32, ptr addrspace(3) %at, i64 32
+  %v2 = add i32 %1, 200
+  store i32 %v2, ptr addrspace(3) %r2, align 4
+  %r3 = getelementptr inbounds i32, ptr addrspace(3) %at, i64 48
+  %v3 = add i32 %1, 300
+  store i32 %v3, ptr addrspace(3) %r3, align 4
+  br label %done
+
+done:
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  %n = getelementptr inbounds i32, ptr addrspace(3) %at, i64 16
+  %w = load i32, ptr addrspace(3) %n, align 4
+  %4 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %3
+  store i32 %w, ptr addrspace(1) %4, align 4
   ret void
 }
 "#;
@@ -1605,9 +1707,10 @@ fn bounded_rowed_strided_and_guarded_accesses_take_no_barrier() {
 }
 
 /// A guarded store and the stores after it in its barrier interval, apart only by the bytes
-/// the guard leaves the guarded one ([`GUARDED_TILE`]): no barrier, so no simdgroup semantics
-/// and no pinned subgroup, on the Iris profile (whose tangle barriers would pin 32 lanes) and on
-/// lavapipe (whose simdgroups would be emulated).
+/// the guard leaves the guarded one ([`GUARDED_TILE`]): no barrier, so no cross-lane class and
+/// no pinned subgroup (the simdgroup index alone puts the kernel on the linear tier), on the
+/// Iris profile (whose tangle barriers would pin 32 lanes) and on lavapipe (whose simdgroups
+/// would be emulated).
 #[test]
 fn a_guarded_access_apart_by_its_bytes_takes_no_barrier() {
     let expect = |t: u32| 100 + t / 8 + t;
@@ -1625,9 +1728,73 @@ fn a_guarded_access_apart_by_its_bytes_takes_no_barrier() {
         let census = plan.census();
         assert!(
             !census.keys().any(|k| k.starts_with("barrier.lockstep")),
-            "{profile_name}: {census:?}"
+            "{profile_name}: {census:?} {:?}",
+            plan.simd
         );
-        assert_eq!(plan.simd.1, Tier::NoSubgroup, "{profile_name}");
+        assert_eq!(
+            plan.simd,
+            (SimdClass::LaneArithmetic, Tier::Linear),
+            "{profile_name}"
+        );
+    }
+}
+
+/// A tile's rows from the threads' columns ([`LATTICE_TILE`]): each thread's column, its lane,
+/// spans 124 bytes of a row, the rows are 128 bytes apart, and each simdgroup's block of rows
+/// starts 1024 bytes after the last one's, so two threads' stores to different rows never meet.
+/// No barrier, so no cross-lane class and no pinned subgroup, on the Iris profile (whose tangle
+/// barriers would pin 32 lanes) and on lavapipe (whose simdgroups would be emulated). The same
+/// tile with rows 64 bytes apart ([`LATTICE_NEAR`]), where lane `l + 16` of one row stores the
+/// word lane `l` stores in the next, keeps its simdgroup barriers, its cross-lane class and its
+/// pinned or emulated simdgroups, and reads the word lockstep leaves: the next row's.
+#[test]
+fn tile_rows_apart_by_more_than_their_columns_take_no_barrier() {
+    let expect = |t: u32| 4 * (t ^ 1) + 600;
+    for profile_name in ["intel-irisxe-rplp-anv", "lavapipe"] {
+        let Some(plan) = check(
+            "lattice_tile",
+            LATTICE_TILE,
+            profile_name,
+            64,
+            &CHUNKED,
+            expect,
+        ) else {
+            return;
+        };
+        let census = plan.census();
+        assert!(
+            !census.keys().any(|k| k.starts_with("barrier.lockstep")),
+            "{profile_name}: {census:?} {:?}",
+            plan.simd
+        );
+        assert_eq!(
+            plan.simd,
+            (SimdClass::LaneArithmetic, Tier::Linear),
+            "{profile_name}"
+        );
+    }
+    let near = |t: u32| if t & 31 < 16 { t + 100 } else { t + 184 };
+    for (profile_name, lanes, tier) in [
+        (
+            "intel-irisxe-rplp-anv",
+            &[SubgroupSize::W32][..],
+            Tier::Direct,
+        ),
+        ("lavapipe", &CHUNKED[..], Tier::Emulated),
+    ] {
+        let Some(plan) = check("lattice_near", LATTICE_NEAR, profile_name, 64, lanes, near) else {
+            return;
+        };
+        assert_eq!(
+            uses(&plan, "barrier.lockstep.simdgroup"),
+            3,
+            "{profile_name}"
+        );
+        assert_eq!(
+            plan.simd,
+            (SimdClass::CrossLane(OpBits::BASIC), tier),
+            "{profile_name}"
+        );
     }
 }
 

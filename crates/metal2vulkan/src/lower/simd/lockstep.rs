@@ -28,7 +28,11 @@
 //! - disjoint constant ranges off one anchor (the address up to its last non-constant step,
 //!   with a constant that step's index adds folded into the offset where it cannot wrap) that is
 //!   either the same for both threads or differs between them by an amount whose bounds keep the
-//!   ranges apart;
+//!   ranges apart, or by a multiple of a power of two `g` plus at most `l` either way (a lattice:
+//!   the anchor's GEPs down to a uniform base add terms whose low zero bits reach `g`, which
+//!   divides the index width's range so a wrap keeps the multiple, and terms whose ranges span
+//!   `l` bytes in all; a tile's `4 (t & 31) + 32 (t & -32)` is `l = 124`, `g = 1024`) that no
+//!   multiple of `g` puts the ranges together by;
 //! - disjoint ranges into one array row: when the last non-constant index steps through an
 //!   array whose earlier steps are all multiples of its size, and its bounds keep the offset
 //!   inside the array, two addresses meet only where their offsets into it do, whatever the
@@ -506,6 +510,13 @@ fn apart(
             (lo >= up || hi <= down)
                 && (-lo <= down || -hi >= up)
                 && (!same || 0 >= up || 0 <= down)
+        }
+        // A difference `n * g + e`, `|e| <= l`, lies between `down` and `up` (both excluded)
+        // only for a multiple `n * g` strictly between `down - l` and `up + l`: none where the
+        // first multiple above `down - l` is at least `up + l`.
+        (Some(Spread::Lattice { low, granule }), Some(t)) if xa == Some(t) => {
+            let (l, g) = (i128::from(low), i128::from(granule));
+            g > 0 && ((down - l).div_euclid(g) + 1) * g >= up + l
         }
         _ => false,
     }
