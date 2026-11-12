@@ -681,7 +681,14 @@ impl GraphicsContent {
     /// names it: Metal biases triangles alone, so a state's line pipeline has the bias off where
     /// its triangle sibling has it on, and the bias reaches no stage's conversion. So the two
     /// share one record and one cache, where naming it made the line pipeline convert its stages
-    /// again (120 ms and more for a 271k-word fragment module).
+    /// again (120 ms and more for a 271k-word fragment module). Where the device links its
+    /// pipelines from libraries, a pre-rasterization library is made under this record too, and a
+    /// part's record names no topology (the point class is named by a whole pipeline's record
+    /// alone, [`record`](Self::record)), so a state's points' pre-rasterization library, whose
+    /// state differs from its triangles' only in the bias, is made in its triangles' cache and
+    /// writes no record of its own: the driver reported it found there on ANV (Iris Xe), RADV
+    /// (RX 7900 XTX, Radeon 780M) and NVIDIA (RTX 3090, RTX 5080 Laptop)
+    /// (`runtime_lane::pipeline_records`).
     fn record_parts(
         &self,
         objects: &VariantObjects,
