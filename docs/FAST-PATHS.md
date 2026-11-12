@@ -558,6 +558,14 @@ driver's. Each is open work.
   command buffer submitted before that completion, read the writes, which Metal drops.
 - **A `synchronize_resource` of a two-copy buffer encoded before a rebind copies to the pages
   the buffer lay in when it was encoded** (`managed_copy.rs`), not to the new ones.
+- **On ANV, command buffers whose own recordings fill the driver's dynamic state pool crash the
+  process inside the driver** (`spares.rs`). A rate-mapped pass records each draw once per region
+  of its map, each with its own viewport and scissor, and ANV (Mesa 26.2.6, an Iris Xe) takes
+  that state from a device-wide pool of 1 GiB: one command buffer of a guest's replayed passes
+  held 97.5 MiB of it. Command buffers alive together that record about ten times that, one
+  alone included, fill it, and ANV then writes through a null state inside `vkCmdDraw*` instead
+  of failing the command buffer. What spare pools keep of such recordings is freed as they go
+  back (`RECORDED`); what command buffers alive at once record is not bounded.
 
 - **A heap texture Metal keeps uncompressed lies in its driver's layout, not Metal's tiles, where
   its image fits the heap's answer in the heap's memory** (`texture/heap.rs`,

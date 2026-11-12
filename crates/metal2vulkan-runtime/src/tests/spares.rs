@@ -648,10 +648,16 @@ mod device {
     use super::{HELD, RECENT_FOR, RECENT_USES};
     use crate::command_buffer::kept_barriers::KEPT;
     use crate::free_thread::FreeThread;
-    use crate::spares::{FREED_AT_ONCE, ONE_POOL};
+    use crate::spares::{FREED_AT_ONCE, ONE_POOL, RECORDED};
+    use crate::tests::encoder_holds::library;
     use crate::tests::freed_memory::device;
-    use crate::{Buffer, CommandBufferStatus, CommandQueue, Device, ResourceOptions};
+    use crate::{
+        Buffer, CommandBufferStatus, CommandQueue, Device, PipelineOptions, RenderPassDescriptor,
+        RenderPipelineState, ResourceOptions,
+    };
     use ash::vk;
+    use metal2vulkan::metal::PrimitiveType;
+    use metal2vulkan::pipeline::{RenderPipelineDescriptor, StageSource};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -1129,6 +1135,110 @@ mod device {
         assert_eq!(failed, 0, "command buffers did not complete: {statuses:?}");
         assert_eq!(recoveries, 0, "the device recovered from a loss");
         drop((own, shared, queue, device));
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A command buffer of `queue` of one pass without attachments of `draws` draws of
+    /// `ob3_index_buffer` (rasterization disabled), each marking `seen`, committed and waited for,
+    /// then the frees its pools' give-back posted; its status once it completed or failed.
+    fn drawn(
+        device: &Device,
+        queue: &CommandQueue,
+        state: &RenderPipelineState,
+        seen: &Buffer,
+        draws: u64,
+    ) -> CommandBufferStatus {
+        let mut pass = RenderPassDescriptor::new();
+        pass.render_target_width = 1;
+        pass.render_target_height = 1;
+        pass.default_raster_sample_count = 1;
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        encoder.set_render_pipeline_state(state).unwrap();
+        encoder.set_vertex_buffer(Some(seen), 0, 0).unwrap();
+        for _ in 0..draws {
+            (encoder.draw_primitives(PrimitiveType::Point, 0, 1, 1, 0)).unwrap();
+        }
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        device.shared().frees.drain();
+        command_buffer.status()
+    }
+
+    /// A command buffer that recorded [`RECORDED`] draws and state commands or more frees every
+    /// command buffer its pools hold as it gives them back, on the device's free thread: what
+    /// its recordings took of the driver's device-wide pools goes with them, where kept they
+    /// held it until begun again (ANV's dynamic state pool of 1 GiB, which a rate-mapped pass's
+    /// region by region draws filled: `spares.rs`). One that recorded fewer keeps them, and the
+    /// next takes them again.
+    #[test]
+    fn a_command_buffer_that_recorded_much_frees_its_pools_command_buffers() {
+        let scratch =
+            std::env::temp_dir().join(format!("m2v-spares-recorded-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let device = device(&scratch);
+        let queue = device.new_command_queue().unwrap();
+        let function = library(&device, "engine/ob3_index_buffer.ll")
+            .new_function_with_name("ob3_index_buffer")
+            .unwrap();
+        let mut descriptor =
+            RenderPipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
+        descriptor.rasterization_enabled = false;
+        let state = device
+            .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+            .unwrap();
+        let seen = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+        let freed = || {
+            device
+                .work_counts()
+                .spare_command_buffers_freed_past_recorded
+        };
+        // Every command buffer the spares freed, for whatever reason.
+        let all_freed = || {
+            let counts = device.work_counts();
+            counts.spare_command_buffers_freed_past_recent_uses
+                + counts.spare_command_buffers_freed_past_held
+                + counts.spare_command_buffers_shed
+                + counts.spare_command_buffers_freed_past_recorded
+        };
+        let light = drawn(&device, &queue, &state, &seen, 2);
+        assert_eq!(light, CommandBufferStatus::Completed);
+        assert_eq!(freed(), 0, "a command buffer of two draws keeps its pool's");
+        let (held, before) = (device.shared().spares.command_buffers_held(), all_freed());
+        let heavy = drawn(&device, &queue, &state, &seen, RECORDED);
+        assert_eq!(heavy, CommandBufferStatus::Completed);
+        let (after, churn) = (
+            device.shared().spares.command_buffers_held(),
+            device.shared().spares.churn(),
+        );
+        let freed_on = device.shared().spares.freed_on();
+        println!(
+            "SPARES {}: {held} held after two draws, {after} after {RECORDED} draws, which freed \
+             {} past their record on {freed_on:?}",
+            device.name(),
+            freed(),
+        );
+        assert!(
+            all_freed() > before,
+            "a command buffer of {RECORDED} draws freed none of its pool's command buffers"
+        );
+        assert_eq!(all_freed() - before, freed(), "each freed past its record");
+        assert_eq!(freed(), churn.past_recorded);
+        assert!(
+            freed_on.iter().all(|name| name == FREE_THREAD),
+            "freed on {freed_on:?}, not on {FREE_THREAD} alone"
+        );
+        // The pool keeps only the secondary a pool given back is stocked with, and the primary
+        // a settled one begins ahead: no more than the light command buffer's left.
+        assert!(
+            after <= held,
+            "{after} held after the heavy command buffer, {held} before"
+        );
+        let light = drawn(&device, &queue, &state, &seen, 2);
+        assert_eq!(light, CommandBufferStatus::Completed);
+        assert_eq!(freed(), churn.past_recorded, "two draws keep their pool's");
+        drop((state, seen, queue, device));
         let _ = std::fs::remove_dir_all(&scratch);
     }
 }

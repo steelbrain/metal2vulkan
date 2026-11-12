@@ -536,7 +536,10 @@ fn run_again(check: &LoopCheck, buffer: Hold<CommandBufferShared>) {
                 .into_inner()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let shared = device.shared();
-            shared.spares.give_command_pool(shared, pool, settled);
+            let recorded = buffer.recorded.load(Ordering::Relaxed);
+            shared
+                .spares
+                .give_command_pool(shared, pool, settled, recorded);
         }
     }
     *lock(&check.rounds) = Rounds::Ended;

@@ -64,9 +64,10 @@ pub(crate) struct Counters {
     spare_command_pools_taken_past_first: AtomicU64,
     spare_command_pools_reset: AtomicU64,
     /// The command buffers the spare command pools freed, by why (`spares.rs`): past a pool's
-    /// recent uses, past `HELD` of a pool given back, and shed by a spare; then the trims of
-    /// their pools.
-    spare_command_buffers_freed: [AtomicU64; 3],
+    /// recent uses, past `HELD` of a pool given back, shed by a spare, and every one of a pool
+    /// given back by a command buffer that recorded `RECORDED` commands or more; then the trims
+    /// of their pools.
+    spare_command_buffers_freed: [AtomicU64; 4],
     spare_command_pool_trims: AtomicU64,
     live_tables_uploaded: AtomicU64,
     timeline_waits: AtomicU64,
@@ -1980,14 +1981,15 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A pool given back freed `recent` command buffers past its recent uses and `held` past
-    /// `HELD`, spares shed `shed`, and their pools are trimmed `trims` times (`spares.rs`).
+    /// A pool given back freed `recent` command buffers past its recent uses, `held` past
+    /// `HELD` and `recorded` as its command buffer recorded `RECORDED` commands or more, spares
+    /// shed `shed`, and their pools are trimmed `trims` times (`spares.rs`).
     pub(crate) fn spare_command_buffers_freed(
         &self,
-        [recent, held, shed]: [usize; 3],
+        [recent, held, shed, recorded]: [usize; 4],
         trims: usize,
     ) {
-        for (count, freed) in [recent, held, shed]
+        for (count, freed) in [recent, held, shed, recorded]
             .into_iter()
             .zip(&self.spare_command_buffers_freed)
         {
@@ -5186,6 +5188,12 @@ pub struct WorkCounts {
     /// The command buffers spares freed whole: one no command buffer took for 10 s, and the
     /// oldest ones past the 4096 the spares hold at most (`spares.rs`).
     pub spare_command_buffers_shed: u64,
+    /// The command buffers a pool given back freed, every one it held, as the command buffer
+    /// that gave it back recorded 65,536 draws and state commands or more (`spares.rs`'s
+    /// `RECORDED`): a rate-mapped pass records each draw once per region of its map, and what a
+    /// recording took of its driver's device-wide pools stays taken until its command buffer is
+    /// begun again, reset or freed.
+    pub spare_command_buffers_freed_past_recorded: u64,
     /// The `vkTrimCommandPool` calls after those frees, one after each 32 command buffers freed
     /// at most, which return to the device what its driver kept of them (none on a driver whose
     /// trim fails the kept barriers, `spares.rs`).
@@ -9296,6 +9304,8 @@ impl Device {
             spare_command_buffers_freed_past_held: counters.spare_command_buffers_freed[1]
                 .load(Ordering::Relaxed),
             spare_command_buffers_shed: counters.spare_command_buffers_freed[2]
+                .load(Ordering::Relaxed),
+            spare_command_buffers_freed_past_recorded: counters.spare_command_buffers_freed[3]
                 .load(Ordering::Relaxed),
             spare_command_pool_trims: counters.spare_command_pool_trims.load(Ordering::Relaxed),
             live_tables_uploaded: counters.live_tables_uploaded.load(Ordering::Relaxed),

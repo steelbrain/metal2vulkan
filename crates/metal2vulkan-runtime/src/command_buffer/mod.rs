@@ -318,6 +318,11 @@ pub(super) struct CommandBufferShared {
     /// where they are every one the pool handed out and it completed, it gives the pool back
     /// with none recording (`spares.rs`).
     raws_ended: AtomicU64,
+    /// The draws its recordings recorded into its pools' `VkCommandBuffer`s, with the state
+    /// commands they set, its host steps' among them ([`CommandBuffer::recorded`]): where they
+    /// reach `spares::RECORDED`, its pools free every command buffer they hold as it gives them
+    /// back (`spares.rs`).
+    recorded: AtomicU64,
     /// Its kernel times, apart from the state, which the scheduler holds while it records and
     /// submits a batch: a read waits for neither (`gpu_time.rs`).
     kernel: KernelTimes,
@@ -2271,8 +2276,11 @@ impl Drop for CommandBufferShared {
         // A turn of a texture's faces its pass made whose part no submission ran: the next batch
         // that names the face turned to takes the copy (`texture/faces.rs`).
         shared.face_swaps.ran_nothing(self.address());
+        let recorded = self.recorded.load(Ordering::Relaxed);
         for pool in pool {
-            shared.spares.give_command_pool(shared, pool, false);
+            shared
+                .spares
+                .give_command_pool(shared, pool, false, recorded);
         }
     }
 }
@@ -2420,6 +2428,7 @@ impl CommandBuffer {
             at_completion: Mutex::new(Vec::new()),
             unnoted: AtomicBool::new(false),
             raws_ended: AtomicU64::new(0),
+            recorded: AtomicU64::new(0),
             kernel: KernelTimes::default(),
             status: AtomicU8::new(status_word(CommandBufferStatus::NotEnqueued)),
             error: OnceLock::new(),
@@ -2622,8 +2631,11 @@ impl CommandBuffer {
         let pools = self.state().pools();
         let shared = self.0.device.shared();
         let held = !pools.is_empty();
+        let recorded = self.0.recorded.load(Ordering::Relaxed);
         for pool in pools {
-            shared.spares.give_command_pool(shared, pool, false);
+            shared
+                .spares
+                .give_command_pool(shared, pool, false, recorded);
         }
         held
     }
@@ -2857,6 +2869,15 @@ impl CommandBuffer {
     pub(super) unsafe fn end_raw(&self, raw: vk::CommandBuffer) -> Result<(), vk::Result> {
         // SAFETY: the caller's.
         unsafe { self.0.end_raw(raw) }
+    }
+
+    /// `commands` more recorded into its pools' `VkCommandBuffer`s: draws, a rate-mapped pass's
+    /// region by region, and the state commands they set (`render.rs`). What a command buffer's
+    /// recording takes of its driver's device-wide pools stays taken until it is begun again,
+    /// reset or freed, so its pools free their command buffers as they go back where these
+    /// reach `spares::RECORDED` (`spares.rs`).
+    pub(super) fn recorded(&self, commands: u64) {
+        self.0.recorded.fetch_add(commands, Ordering::Relaxed);
     }
 
     /// Give up `raw`, a secondary command buffer recording that nothing will execute (a render
@@ -5905,8 +5926,11 @@ impl CommandBufferShared {
                     && u64::try_from(handed).is_ok_and(|handed| handed == ended);
                 settled_pool = settled.then_some(first.raw);
                 let shared = self.device.shared();
+                let recorded = self.recorded.load(Ordering::Relaxed);
                 for pool in pools {
-                    shared.spares.give_command_pool(shared, pool, settled);
+                    shared
+                        .spares
+                        .give_command_pool(shared, pool, settled, recorded);
                 }
             }
             state.unplaced();

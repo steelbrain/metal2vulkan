@@ -250,7 +250,7 @@ fn map(device: &Device) -> RasterizationRateMap {
 fn line(counts: &WorkCounts) -> String {
     format!(
         "draw_indexed {} set_viewport {} taken {} freed past recent uses {} past held {} shed {} \
-         host steps {}",
+         host steps {} freed past recorded {}",
         counts.commands_recorded.cmd_draw_indexed,
         counts.commands_recorded.cmd_set_viewport,
         counts.spare_command_pools_taken,
@@ -258,6 +258,7 @@ fn line(counts: &WorkCounts) -> String {
         counts.spare_command_buffers_freed_past_held,
         counts.spare_command_buffers_shed,
         counts.host_steps_recorded,
+        counts.spare_command_buffers_freed_past_recorded,
     )
 }
 

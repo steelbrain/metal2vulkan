@@ -10750,6 +10750,9 @@ impl RenderLowering {
             };
             let mut owned = Vec::new();
             let mut states_recorded = Recorded::default();
+            // The Vulkan draws it records, now or once its pipeline is made: its command
+            // buffer's count of what its recordings hold (`CommandBuffer::recorded`).
+            let mut draws_recorded = 0u64;
             // A draw read through snapshots records its recordings twice: every snapshot draw,
             // then every drawing draw (`render/snapshot.rs`); one read in place, once.
             let phases: &[Option<snapshot::Phase>] = match &pair_base {
@@ -10812,6 +10815,7 @@ impl RenderLowering {
                     let (push, vk_draws) = entry(a);
                     for state in draw_states.of(a) {
                         for &(index, indirect, draw) in vk_draws {
+                            draws_recorded += 1;
                             if indirect.is_some()
                                 && phase != Some(snapshot::Phase::Snapshot)
                                 && matches!(
@@ -10913,6 +10917,7 @@ impl RenderLowering {
             }
             draw_alone = states_recorded.draw_alone();
             states_recorded.count(self.core.counts());
+            (self.core.command_buffer()).recorded(draws_recorded + states_recorded.states);
             if let Some((making, state, draws, query)) = split {
                 // The record's times: the pipeline's, then those of the other `VkPipeline`s the
                 // draw records, made at the draw, set once the making made it. Every copy of the

@@ -163,7 +163,8 @@ impl Drop for KeptContext {
         let pool = lock(&self.pool).take();
         if let Some(pool) = pool {
             let shared = self.device.shared();
-            shared.spares.give_command_pool(shared, pool, false);
+            // Its chunks' draws count among those of the command buffer that recorded them.
+            shared.spares.give_command_pool(shared, pool, false, 0);
         }
         lock(&self.descriptors).give_back();
     }

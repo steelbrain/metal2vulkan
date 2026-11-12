@@ -91,6 +91,23 @@
 //!   of one dispatch each added 378 MiB, the spares holding 4,000 command buffers of about 96 KiB
 //!   each, which went as those pools sat idle past [`IDLE_FOR`], 15.1 MiB over the start left
 //!   after 17 s.
+//! - **A command buffer that recorded much frees every command buffer of its pools.** A
+//!   recording holds what its commands took of the driver's device-wide pools until its command
+//!   buffer is begun again, reset or freed, and a pool kept as a spare keeps its command buffers'
+//!   recordings for its next takers' begins. ANV (Mesa 26.2.6, an Iris Xe) takes each draw's
+//!   changed viewport and scissor state from a device-wide dynamic state pool of 1 GiB, and a
+//!   rate-mapped pass records each draw once per region of its map, each with its own viewport
+//!   and scissor (`rate_mapped_pass.rs`): a guest's passes of an indirect command buffer's draws
+//!   over a map, which its host steps replayed at about 880,000 draws a step, filled that pool
+//!   with four command buffers alive, one of them holding 97.5 MiB of it; ANV then wrote through
+//!   a null state inside `vkCmdDrawIndexed`, and the process faulted. A command buffer counts
+//!   the draws its recordings recorded, its host steps' included, with the state commands they
+//!   set (`CommandBuffer::recorded`); where they reach
+//!   [`RECORDED`], each pool it gives back frees every command buffer it holds, on the device's
+//!   free thread, as a spare left idle does, and goes back among the spares as the newest, stocked
+//!   with a secondary. Below [`RECORDED`] a pool keeps its command buffers, as above. Counted:
+//!   `WorkCounts::spare_command_buffers_freed_past_recorded`. A command buffer whose own
+//!   recordings fill the driver's pool is a known gap (docs/FAST-PATHS.md).
 //! - **Freed on the device's free thread** ([`PoolFrees`], `free_thread.rs`), not on the thread
 //!   giving the pool back, which for a command buffer that completed is its queue's completion
 //!   thread before its completed handlers run and its waiters return: [`FREED_AT_ONCE`] command
@@ -256,6 +273,11 @@ pub(super) const FREED_AT_ONCE: usize = 32;
 /// command buffers with recordings a device on ANV below Xe-HP holds at once (the module docs).
 pub(super) const HELD: usize = 4096;
 
+/// The commands (draws and the state commands they set) past which a command buffer's pools free
+/// every command buffer they hold as it gives them back, with what their recordings took of the
+/// driver's device-wide pools (the module docs).
+pub(super) const RECORDED: u64 = 1 << 16;
+
 /// The command buffers a command buffer hands out of its first pool alone, making those it lacks
 /// there; past them, its pools out of one of a level, it takes a spare holding the most of that
 /// level (the module docs).
@@ -284,6 +306,9 @@ pub(super) struct Churn {
     pub(super) past_held: u64,
     /// Freed by a spare left idle or shed past [`HELD`] ([`CommandPool::shed`]).
     pub(super) shed: u64,
+    /// Freed from a pool given back by a command buffer that recorded [`RECORDED`] commands or
+    /// more ([`Spares::give_command_pool`]).
+    pub(super) past_recorded: u64,
 }
 
 /// A command pool and the command buffers made from it, by level: those a command buffer handed
@@ -731,8 +756,10 @@ impl Spares {
     /// Keep `pool` of `device`, of a command buffer whose work ended or that was never
     /// submitted: nothing of it is pending, and nothing else holds it; `settled` where the
     /// command buffer completed and ended every command buffer of it handed out, so none is
-    /// recording (the module docs). A pool that made no secondary command buffer makes one. Where
-    /// it holds command buffers past its recent uses, those are freed; the oldest spare no
+    /// recording (the module docs); `recorded` the commands that command buffer recorded
+    /// (`CommandBuffer::recorded`). A pool that made no secondary command buffer makes one. Where
+    /// it holds command buffers past its recent uses, those are freed, and every one it holds
+    /// where `recorded` reaches [`RECORDED`]; the oldest spare no
     /// command buffer took for [`IDLE_FOR`] frees all of its own ([`take_idle`]); and past
     /// [`HELD`] command buffers in the spares and the pool together, the oldest spares free all
     /// of theirs, and the pool those past it ([`past_held`]); each pool out of the spares until
@@ -742,6 +769,7 @@ impl Spares {
         device: &DeviceShared,
         mut pool: CommandPool,
         settled: bool,
+        recorded: u64,
     ) {
         // The audit reads the device's timelines inside a section of the exit guard, on
         // whatever thread gives the pool back.
@@ -754,8 +782,16 @@ impl Spares {
         pool.recording = !settled;
         let mut past = pool.given_back(now);
         let recent = past.len();
+        // A use that recorded much frees every command buffer the pool holds, with what their
+        // recordings took of the driver's pools.
+        let heavy = match recorded >= RECORDED {
+            true => pool.shed(),
+            false => Vec::new(),
+        };
+        let weighed = heavy.len();
+        past.extend(heavy);
         pool.stock(device);
-        let mut freed = [recent, 0, 0];
+        let mut freed = [recent, 0, 0, weighed];
         let (given, shed) = {
             let mut pools = lock(&self.command_pools);
             pools.came_back(&mut pool);
@@ -768,6 +804,7 @@ impl Spares {
                 let mut churn = lock(&self.churn);
                 churn.past_recent_uses += recent as u64;
                 churn.past_held += held.len() as u64;
+                churn.past_recorded += weighed as u64;
             }
             past.extend(held);
             let given = match past.is_empty() {

@@ -3397,6 +3397,7 @@ field	metal2vulkan-runtime::WorkCounts.slot_wait_nanos	pub slot_wait_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.slot_waits	pub slot_waits: u64
 field	metal2vulkan-runtime::WorkCounts.snapshot_inline_splits	pub snapshot_inline_splits: u64
 field	metal2vulkan-runtime::WorkCounts.spare_command_buffers_freed_past_held	pub spare_command_buffers_freed_past_held: u64
+field	metal2vulkan-runtime::WorkCounts.spare_command_buffers_freed_past_recorded	pub spare_command_buffers_freed_past_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.spare_command_buffers_freed_past_recent_uses	pub spare_command_buffers_freed_past_recent_uses: u64
 field	metal2vulkan-runtime::WorkCounts.spare_command_buffers_shed	pub spare_command_buffers_shed: u64
 field	metal2vulkan-runtime::WorkCounts.spare_command_pool_trims	pub spare_command_pool_trims: u64
