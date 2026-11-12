@@ -783,16 +783,23 @@ submission, can give the device the guest's RAM once instead:
   `udmabuf` allocates the pages of the `memfd` the guest never touched, which stay allocated after
   the chunk is freed, so a longer chunk makes more of the guest's untouched RAM resident. Without the call, or where a
   kernel caps it at 64 MiB, the chunks stay 64 MiB. On such a device no chunk is imported ahead,
-  and no object asks for one: an object over a chunk not imported takes its own path (the gate,
-  then an import of its own or a copy), as over memory no RAM holds, and the objects over a chunk
-  imported lie in its import (`chunk_bound_buffers_made`). A chunk is imported for the copies
+  and no object with a source of dma-bufs of its own pages (`HostMemory::with_dma_buf`) asks for
+  one: such an object over a chunk not imported takes its own path (the gate, then an import of
+  its own or a copy), as over memory no RAM holds, and the objects over a chunk imported lie in
+  its import (`chunk_bound_buffers_made`). An object with no such source, and every object on a
+  driver whose barriers do not order blits through two imports of the same pages
+  (`RuntimeDriverDefect::AliasedImportBlitsUnordered`: ANV's), imports the chunk itself, so that
+  every object and copy over its pages lies in its one import. A chunk is imported for the copies
   over it: a copy over a chunk not imported imports its ranges alone (`run_imports_live`) and asks
   a thread of the device's for the chunk, which imports it, pinning every page of the chunk (660
   to 692 ms for 2.7 GiB on the Radeon 780M and the RX 7900 XTX); on a driver whose barriers do
   not order blits through two imports of the same pages
   (`RuntimeDriverDefect::AliasedImportBlitsUnordered`) the copy imports the chunk instead. An
-  object's own import and a chunk's may hold the same pages, as two dma-bufs of them; their uses
-  order by their host addresses, as any two no-copy buffers over shared bytes do. The first kernel submission after a chunk's import waits while
+  object's own import of dma-bufs and a chunk's may hold the same pages, as two dma-bufs of them,
+  in either order (`dma_buf_imports_beside_live` counts each chunk's made so); their uses order by
+  their host addresses, as any two no-copy buffers over shared bytes do. A live import of an
+  object's pointer at the RAM's own addresses keeps the chunk from being imported while it lives
+  (`host_ram_chunks_held_back`), and the copies over it then go through the CPU. The first kernel submission after a chunk's import waits while
   the kernel writes the chunk's page tables, and so does every other submission of the device
   (231 to 275 ms for a 3.94 GiB chunk on the Radeon 780M), so a chunk stays imported once
   imported where the whole RAM fits in half the device's memory heaps with unified memory, or in

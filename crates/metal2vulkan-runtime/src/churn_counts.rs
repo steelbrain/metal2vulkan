@@ -428,7 +428,8 @@ pub struct ObjectChurn {
     /// heap's own buffer's among them) over a live import of another no-copy buffer or heap, or
     /// over a live import of a guest RAM's chunk (`host_ram.rs`), and a chunk's import over a
     /// live import of a no-copy buffer or heap made as the chunk's was being made (a chunk such an
-    /// import held pages of before is not imported, `WorkCounts::host_ram_chunks_held_back`). A
+    /// import held pages of before is not imported, `WorkCounts::host_ram_chunks_held_back`, but
+    /// beside imports of dma-bufs, `dma_buf_imports_beside_live`). A
     /// page imported twice, which
     /// `VK_EXT_external_memory_host` leaves undefined for a host pointer; every other buffer
     /// over pages a live import holds lies inside it (`buffers_bound_in_import`, or a chunk's
@@ -441,10 +442,13 @@ pub struct ObjectChurn {
     pub imports_inside_live: u64,
     /// No-copy buffers' and heaps' own imports of dma-bufs of their pages, made where live
     /// imports of another no-copy buffer's or heap's pages, each of dma-bufs, held some of them
-    /// (`host_aliases.rs`, "One page, one import"): two dma-bufs of the same pages, which Vulkan
-    /// aliases as any two imports of external memory, on a device whose barriers order blits
-    /// through two imports of the same pages (no `RuntimeDriverDefect::AliasedImportBlitsUnordered`).
-    /// Each made where the pages were a copy before (`WorkCounts::copied_over_live_imports`).
+    /// (`host_aliases.rs`, "One page, one import"), and guest RAM chunks' imports of one dma-buf
+    /// of the RAM's source made where such imports held some of their pages (`host_ram.rs`, a
+    /// listed plan's): two dma-bufs of the same pages, which Vulkan aliases as any two imports of
+    /// external memory, on a device whose barriers order blits through two imports of the same
+    /// pages (no `RuntimeDriverDefect::AliasedImportBlitsUnordered`). Each object's made where
+    /// the pages were a copy before (`WorkCounts::copied_over_live_imports`); each chunk's where
+    /// it was held back (`WorkCounts::host_ram_chunks_held_back`).
     pub dma_buf_imports_beside_live: u64,
     /// No-copy buffers bound inside the memory of a live import that holds all their pages, at
     /// their offset, with no import of their own (`host_aliases.rs`, "One page, one import"):

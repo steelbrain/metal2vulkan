@@ -8016,10 +8016,14 @@ pub struct WorkCounts {
     pub host_ram_chunks_imported_ahead: u64,
     /// The times a chunk of guest RAM was not imported because a live import of a no-copy
     /// buffer's or heap's own pages held some of its pages: one made outside the RAM's routing
-    /// (before the device's use of the RAM began, or with no run resolver). A page a live import
-    /// holds is never imported again while it lives (`VK_EXT_external_memory_host`'s issue 6), so
-    /// the chunk waits for every such import over it to go: the objects over it meanwhile take
-    /// their own paths, as over memory no RAM holds, and the copies over it go through the CPU.
+    /// (before the device's use of the RAM began, with no run resolver, or over a chunk not
+    /// imported where each listed import costs every submission). A page a live import holds is
+    /// never imported again while it lives (`VK_EXT_external_memory_host`'s issue 6), so the chunk
+    /// waits for every such import over it to go: the objects over it meanwhile take their own
+    /// paths, as over memory no RAM holds, and the copies over it go through the CPU. Not counted
+    /// where every such import is of dma-bufs, each listed import costs every submission and the
+    /// device's barriers order blits through two imports of the same pages: the chunk is then
+    /// imported beside them, as one dma-buf (`ObjectChurn::dma_buf_imports_beside_live`).
     /// Each ask of the chunk while it waits counts once: the device's thread's, an object's, a
     /// copy's.
     pub host_ram_chunks_held_back: u64,
@@ -8048,8 +8052,9 @@ pub struct WorkCounts {
     /// The no-copy buffers (and no-copy heaps' own buffers) bound in a chunk of guest RAM, whose
     /// pages their caller resolved to one run inside one chunk (`HostMemory::with_runs`): each
     /// made with no import of its own, its import gate not asked. Where each listed import costs
-    /// every submission (RADV), only over a chunk a copy imported: an object over a chunk not
-    /// imported takes its own path, and asks for no chunk.
+    /// every submission (RADV), of an object with a source of dma-bufs of its own pages, only over
+    /// a chunk a copy imported: an object over a chunk not imported takes its own path, and asks
+    /// for no chunk.
     pub chunk_bound_buffers_made: u64,
     /// Every import of runs of guest RAM made so far for copies, those `run_imports_live` counts
     /// while they live: a copy's ranges alone, and a copy's lists (`host_ram_run_list_imports`). With `run_imports_live`, the imports of runs freed so
