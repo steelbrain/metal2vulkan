@@ -12,7 +12,8 @@
 //! (`DeviceShared::storage_costs_forced`) takes its storage form at the commit of its first pass
 //! where the device takes one (`self_read_storage.rs`'s passes: a reader through a snapshot, a
 //! fetch through the pixel interlock). Once that command buffer completed and the switch ended,
-//! the book no longer holds the first image. Then `Shared` `RGBA16Float` textures are made, each
+//! the book no longer holds the first image, which was counted as it left
+//! (`WorkCounts::object_churn.swapped_out_images_forgotten`). Then `Shared` `RGBA16Float` textures are made, each
 //! kept, until one's image takes the first image's handle where the driver gives it again
 //! (printed, not asserted: whether the driver gives it again is the driver's), which is released;
 //! a texture of the target's descriptor made after takes no parked image (`images_recycled`), and
@@ -91,6 +92,11 @@ fn a_storage_forms_first_image_leaves_the_recycler_as_it_goes() {
         std::thread::sleep(Duration::from_millis(1));
     }
     let forgotten = !in_book();
+    let left = device
+        .work_counts()
+        .object_churn
+        .swapped_out_images_forgotten
+        - before.object_churn.swapped_out_images_forgotten;
     // Kept, so the driver gives none of their handles again; the one at the first image's handle
     // goes, through the recycler.
     let mut kept = Vec::with_capacity(TRIES);
@@ -112,8 +118,8 @@ fn a_storage_forms_first_image_leaves_the_recycler_as_it_goes() {
     let took = device.work_counts().object_churn.images_recycled - recycled;
     eprintln!(
         "STORAGE-FORM-RECYCLE {}: storage forms {forms}, the first image left the book \
-         {forgotten}, its handle given again {given_again} ({} tries), parked images the next \
-         target took {took}",
+         {forgotten} (swapped-out images forgotten {left}), its handle given again {given_again} \
+         ({} tries), parked images the next target took {took}",
         device.name(),
         kept.len() + usize::from(given_again)
     );
@@ -131,6 +137,10 @@ fn a_storage_forms_first_image_leaves_the_recycler_as_it_goes() {
     assert!(
         forgotten,
         "the first image, destroyed, is still in the recycler's book of live images"
+    );
+    assert!(
+        left >= 1,
+        "the first image left the book as it was destroyed (`swapped_out_images_forgotten`)"
     );
     assert_eq!(
         took, 0,

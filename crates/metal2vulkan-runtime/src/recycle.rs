@@ -44,11 +44,12 @@
 //!   at its last holder's going (parked, or forgotten where it may not park), and an image swapped
 //!   out of its texture as the image swapped out goes (`texture.rs`'s `ImageObjects`: a texture's
 //!   first image, which its storage form replaced, `texture/storage_form.rs`). One left in the book
-//!   parked the next image the driver made at its handle, one of another kind that the book does
-//!   not note (a `Shared` texture's host-copy image of another format), as its making, and a
-//!   texture of that making took it: views and copies of the texture's format over an image of
-//!   another (the consumer's guest, a `BGRA8Unorm` view of an `RGBA16Float` image on MoltenVK,
-//!   which Metal's texture view creation aborted on).
+//!   would park the next image the driver makes at its handle, where the book does not note that
+//!   one (a `Shared` or `Managed` texture's host-copy image), as the old one's making, and a
+//!   texture of that making would take an image of another format or shape: views and copies of
+//!   its format over an image of another, which MoltenVK refuses or Metal's texture view creation
+//!   aborts on. Counted: `WorkCounts::object_churn.swapped_out_images_forgotten`, the images
+//!   swapped out that left the book as they went.
 //! - **Which.** A take hands out the latest parked object of its making, found through a map of
 //!   each making's parked objects (a hash of the making, not a search of every parked one).
 //! - **Bounded.** At most [`IMAGES`]' and [`BUFFERS`]' count and bytes parked, and none parked
@@ -308,9 +309,10 @@ impl<R: Copy + Eq + Hash, M: Clone + Eq + Hash> Recycler<R, M> {
         Ok(gone)
     }
 
-    /// `raw`, live, goes without parking (it is not recyclable as it goes).
-    pub(crate) fn forget(&mut self, raw: R) {
-        self.live.remove(&raw);
+    /// `raw`, live, goes without parking (it is not recyclable as it goes): whether the book held
+    /// it.
+    pub(crate) fn forget(&mut self, raw: R) -> bool {
+        self.live.remove(&raw).is_some()
     }
 
     /// The object that goes to keep the bounds, out of the recycler: the earliest parked trial

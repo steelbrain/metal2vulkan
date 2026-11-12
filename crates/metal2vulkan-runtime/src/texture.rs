@@ -777,7 +777,9 @@ impl Drop for ImageObjects {
                     // storage form swapped out, `texture/storage_form.rs`) leaves its book before
                     // it is destroyed: the driver may give its handle to a later image, which the
                     // book would park as this one's making (`recycle.rs`, "The book").
-                    lock(&shared.textures.recycled).forget(self.raw);
+                    if lock(&shared.textures.recycled).forget(self.raw) {
+                        shared.counts.churn.swapped_out_forgotten();
+                    }
                     release::object(raw, self.raw);
                 }
                 RawGoes::WithStandIn(stand_in) => {

@@ -165,6 +165,8 @@ pub(crate) struct ChurnCounters {
     /// By [`Recycled`]: the objects a making took from a recycler, parked there, and let go of
     /// past its bounds (`recycle.rs`).
     recycled: [[AtomicU64; 3]; 2],
+    /// Images swapped out of their textures that left the image recycler's book as they went.
+    swapped_out_forgotten: AtomicU64,
     /// Imports made over host addresses a live import holds some of.
     imports_inside_live: AtomicU64,
     /// No-copy buffers bound inside a live import's memory, with no import of their own.
@@ -212,6 +214,12 @@ impl ChurnCounters {
         self.recycled[what as usize][2].fetch_add(count as u64, Ordering::Relaxed);
     }
 
+    /// An image swapped out of its texture, which the image recycler's book held as live, left
+    /// the book as it went (`recycle.rs`, "The book").
+    pub(crate) fn swapped_out_forgotten(&self) {
+        self.swapped_out_forgotten.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// A keep planned `by`, cut to a rectangle or not, of `texels`.
     pub(crate) fn kept(&self, by: KeepBy, cut: bool, texels: u64) {
         let row = &self.keeps[by as usize];
@@ -254,6 +262,7 @@ impl ChurnCounters {
                 images_recycled: recycled(Recycled::Image, 0),
                 images_parked: recycled(Recycled::Image, 1),
                 images_evicted: recycled(Recycled::Image, 2),
+                swapped_out_images_forgotten: self.swapped_out_forgotten.load(Ordering::Relaxed),
                 buffers_recycled: recycled(Recycled::Buffer, 0),
                 buffers_parked: recycled(Recycled::Buffer, 1),
                 buffers_evicted: recycled(Recycled::Buffer, 2),
@@ -337,6 +346,11 @@ pub struct ObjectChurn {
     pub images_parked: u64,
     /// Parked images destroyed past the recycler's bounds.
     pub images_evicted: u64,
+    /// Images swapped out of their textures (a texture's first image, which its storage form
+    /// replaced, `texture/storage_form.rs`) that the recycler's book of live images held and that
+    /// left it as they were destroyed (`recycle.rs`, "The book"): each a handle that, left there,
+    /// would have named the next image the driver made at it as the old one's making.
+    pub swapped_out_images_forgotten: u64,
     /// The runtime's buffers a making took from the recycler, rather than making one.
     pub buffers_recycled: u64,
     /// Buffers that went to the recycler as their last holder went, rather than being destroyed.

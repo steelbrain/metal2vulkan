@@ -2301,6 +2301,7 @@ field	metal2vulkan-runtime::ObjectChurn.making_sites	pub making_sites: [CopySite
 field	metal2vulkan-runtime::ObjectChurn.making_sites_dropped	pub making_sites_dropped: u64
 field	metal2vulkan-runtime::ObjectChurn.release_sites	pub release_sites: [CopySite; COPY_SITES]
 field	metal2vulkan-runtime::ObjectChurn.release_sites_dropped	pub release_sites_dropped: u64
+field	metal2vulkan-runtime::ObjectChurn.swapped_out_images_forgotten	pub swapped_out_images_forgotten: u64
 field	metal2vulkan-runtime::ObjectChurn.textures_alias	pub textures_alias: u64
 field	metal2vulkan-runtime::ObjectChurn.textures_image	pub textures_image: u64
 field	metal2vulkan-runtime::ObjectChurn.textures_in_heaps	pub textures_in_heaps: u64
