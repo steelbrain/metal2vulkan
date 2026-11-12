@@ -5261,6 +5261,15 @@ each item named states the rule in full.
   specialized (section 3, "Linked functions: names and constants"). Metal makes that pipeline,
   and its read is undefined: a kernel storing `x * scale + 1` of such a function stored nothing on
   an M3 Max under macOS 27.0.1.
+- **A program-scope constant that the function constants make a division by zero reads as an
+  undefined constant reads.** A static initializer's scalar integer division or remainder by
+  zero (`udiv`, `sdiv`, `urem`, `srem`) has a result the AIR leaves undefined, and so does
+  everything computed from it: the translation reads it as zero, and a branch or `select` on it
+  takes its false way, as for a constant the request leaves undefined. Metal makes that pipeline
+  on an M3 Max under macOS 27.0.1 and stores nothing of the quotient, nor of a value chosen by it;
+  where a loop's trip count is computed from it, the kernel stores nothing at all (the probe
+  `static_init_division.m`). A vector division with a zero lane is still
+  `Unsupported{StaticInitializer}`.
 
 **Linked functions**
 
