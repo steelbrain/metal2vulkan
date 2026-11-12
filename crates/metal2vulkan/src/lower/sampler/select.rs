@@ -717,7 +717,7 @@ fn select_heap_raw(
     // sampler states what the emulation does not answer.
     let reads_neutral = match &raw {
         Some(r) if r.whole() => match r.state {
-            super::heap_raw::State::Constant { .. } => None,
+            super::heap_raw::State::Constant { .. } | super::heap_raw::State::Table { .. } => None,
             super::heap_raw::State::Slot { sampler } => Some(Some(sampler)),
         },
         _ => Some(None),
