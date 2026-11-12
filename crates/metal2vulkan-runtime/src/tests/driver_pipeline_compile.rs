@@ -332,7 +332,7 @@ fn the_runtime_s_own_kernels_found_in_their_records_write_nothing() {
 /// reports it found is the driver's: ANV finds a fragment shader library of one module made
 /// against another format's pass in the shared cache (Mesa 26.2.6, Iris Xe:
 /// `APPLICATION_PIPELINE_CACHE_HIT`, where a cache of its own compiled it again, 3.3 to 3.7 s for
-/// a 203,016-word module), so the run prints it and asserts only that a reporting device reports
+/// a module of some 200,000 words), so the run prints it and asserts only that a reporting device reports
 /// one answer per making of shaders.
 #[test]
 fn creations_over_colour_formats_take_the_first_s_records() {
