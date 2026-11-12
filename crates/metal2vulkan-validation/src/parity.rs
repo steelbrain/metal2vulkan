@@ -49,7 +49,7 @@ mod record;
 mod runtime;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod scenarios;
-mod sequences;
+pub(crate) mod sequences;
 mod tests;
 
 /// A scenario: its name, version, source, the committed cases whose AIR it loads, and its cases.

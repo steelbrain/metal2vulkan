@@ -395,7 +395,9 @@ fn a_shader_write_then_a_shader_read_of_one_untracked_buffer_in_one_concurrent_e
 }
 
 /// A layer false positive, byte by byte: a descriptor's range broader than its command's access
-/// (the lanes' `argument_buffers` and `render_executions` reports). One serial compute encoder
+/// (the lanes' `argument_buffers` and `render_executions` reports; `argument_buffers` notes its
+/// dispatches' words and lets the layer's writes after writes between them pass, `apart_writes`).
+/// One serial compute encoder
 /// of tracked buffers dispatches the copy-word kernel three times over one 16-byte `block`: the
 /// first writes its word 0, the second its word 1, the third reads its word 2. The runtime's
 /// hazard tracking orders a dispatch by the plan's windows, here 4 bytes each and disjoint, so it

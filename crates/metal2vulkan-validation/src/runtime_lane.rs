@@ -248,6 +248,8 @@ mod alpha_tests;
 mod amplified_draws;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod anisotropic_filter;
+#[cfg(test)]
+mod apart_writes;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod argument_buffers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

@@ -310,8 +310,8 @@ pub const QUEUE_LIMITS_REACHED: &str = "metal2vulkan-queue-limits-reached";
 static LAYER_VERSION: OnceLock<Option<u32>> = OnceLock::new();
 
 impl Messages {
-    /// The most messages kept of each list.
-    const MAX: usize = 64;
+    /// The most messages kept of each list: past it, a failing message is dropped unread.
+    pub(crate) const MAX: usize = 64;
 
     /// A device reporting here is about to be made asking for the instance layers `layers`: what
     /// it enables of them is the instance's answer, which it announces as it is made

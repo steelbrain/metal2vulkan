@@ -39,7 +39,7 @@ use crate::hash::sha256_bytes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod api;
 mod generate;
-mod hazards;
+pub(crate) mod hazards;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod lane;
 #[cfg(all(m2v_gpu, target_os = "macos"))]

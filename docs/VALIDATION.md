@@ -164,13 +164,16 @@ a layer the loader answers `VK_ERROR_LAYER_NOT_PRESENT` for and says so as the d
 claim of what the layer reported therefore states what it holds, against the layers the instance
 enabled and nothing else: where the layer was dropped the claim is not exercised, and the test
 prints `LANE-LAYER-ABSENT <test>: ...` and a count per message list instead of passing on an empty
-list. Three forms state it, and no lane test reads a message list for emptiness any other way:
+list. Four forms state it, and no lane test reads a message list for emptiness any other way:
 
 | Form | The claim |
 |---|---|
 | `layer_reported_nothing_at_all(&messages)` | The widest claim, and the one the lane states oftenest: whatever the layer checked of the work so far, it reported nothing of it |
 | `layer_reported_nothing(&messages, claim)` | The same, of the narrower `claim` the test names, which leads the failure and the `LANE-LAYER-ABSENT` line |
-| `nothing_reported_without_the_layer(&messages, claim)` | A device the test made without the validation layer, to time something: the claim is the driver's own messages and the runtime's, so the layer's absence takes nothing from it. It fails where such a device did ask for the layer after all | A host whose layer manifest names its library by a bare
+| `layer_reported_nothing_but_apart_writes(&messages, claim, &writes)` (`runtime_lane::apart_writes`) | The same, but a write after write the layer reports between two dispatches on a buffer passes, with a `LAYER-APART-WRITES` line, where the test noted every dispatch write of that buffer as it placed it (`DispatchWrites`), two or more, and no two share a byte. The layer takes a dispatch's storage buffer as written over its descriptor's whole range, which the runtime binds wider than the bytes the kernel provably writes (from the offset alignment down, in 16-byte granules) and orders by (`sync_coverage::disjoint_words_of_one_block_are_a_hazard_to_the_layer_alone`); no order of writes that share no byte changes one. A read after a write, a write after a read, a draw's or a copy's access, and two noted writes of one byte fail as above |
+| `nothing_reported_without_the_layer(&messages, claim)` | A device the test made without the validation layer, to time something: the claim is the driver's own messages and the runtime's, so the layer's absence takes nothing from it. It fails where such a device did ask for the layer after all |
+
+A host whose layer manifest names its library by a bare
 filename (which the loader looks for on the system library search path) provides no layer at all,
 and a lane run there is evidence for everything but the layer's checks. The executor's own Vulkan
 context refuses to open without the layer instead (`candidate::platform::device`).

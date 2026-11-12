@@ -330,19 +330,21 @@ pub(crate) enum Verdict {
     Unnamed(String),
 }
 
+/// The Vulkan commands the runtime records a Metal dispatch with, as the layer names them: a
+/// dispatch, its base or an indirect one (an indirect dispatch's flat path dispatches the kernel
+/// indirectly from arguments a dispatch of its own wrote).
+pub(crate) const DISPATCHES: &[&str] = &[
+    "vkCmdDispatch",
+    "vkCmdDispatchBase",
+    "vkCmdDispatchIndirect",
+];
+
 /// The Vulkan commands the runtime records `command` with, as the layer names them. A render
 /// pass's own accesses (`command` `None`: its target, loaded, cleared, drawn and stored) are its
 /// beginning's and end's, a clear's, a layout transition's and its draws'. A fill is a fill, an
 /// update or a copy of a pattern (`word_fill.rs`); a dispatch of either kind and a texel kernel's,
-/// a dispatch, its base or an indirect one (an indirect dispatch's flat path dispatches the kernel
-/// indirectly from arguments a dispatch of its own wrote); a draw, a direct or an indirect draw as
-/// Metal's is.
+/// [`DISPATCHES`]; a draw, a direct or an indirect draw as Metal's is.
 pub(crate) fn vulkan_commands(command: Option<&Command>) -> &'static [&'static str] {
-    const DISPATCHES: &[&str] = &[
-        "vkCmdDispatch",
-        "vkCmdDispatchBase",
-        "vkCmdDispatchIndirect",
-    ];
     const PASS: &[&str] = &[
         "vkCmdBeginRenderPass",
         "vkCmdBeginRenderPass2",
