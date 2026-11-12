@@ -33,9 +33,9 @@
 //! `m2v_cpu_icd`), on Linux, on the kind of device the cfg selects.
 
 use crate::{
-    BlitOption, Buffer, CommandQueue, Device, DeviceKind, DeviceOptions, DmaBufChunk,
-    DmaBufRequest, DmaBufSource, HostMemory, MessageSink, Origin, ResourceOptions,
-    ShaderCacheOptions, Size, Texture, TextureDescriptor, WorkCounts,
+    BlitOption, Buffer, ClearColor, CommandQueue, Device, DeviceKind, DeviceOptions, DmaBufChunk,
+    DmaBufRequest, DmaBufSource, HostMemory, LoadAction, MessageSink, Origin, RenderPassDescriptor,
+    ResourceOptions, ShaderCacheOptions, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -661,13 +661,14 @@ fn texels(queue: &CommandQueue, texture: &Texture, (width, height): (u64, u64)) 
 /// place over all its bytes (`HostPageTexturePolicy::InPlace`): a `DRM_FORMAT_MOD_LINEAR` image
 /// in an import of a dma-buf of its own pages, which asks the buffer's source and binds none of
 /// the buffer's memory (`dma_buf.rs`), so the buffer's import stays releasable while idle:
-/// - the texture's blit reads the CPU's bytes;
+/// - the texture's blit, which runs on the buffer's bytes (`blit_texture.rs`), reads the CPU's;
 /// - the buffer's import released, its chunks leave the device's live dma-buf memories, and the
 ///   image's import stays (`dma_buf_image_memories_live`);
-/// - the CPU's writes made while it is released, through the file, are what the texture's next
-///   blit reads, importing nothing, and what the buffer's next blit reads, which imports it
-///   again from the descriptors kept: the source called twice in all, for the buffer's import and
-///   the image's.
+/// - a render pass that clears the texture while the buffer's import is released writes the
+///   pages through the image's import, importing nothing;
+/// - the texture's next blit reads the clear, importing the buffer again from the descriptors
+///   kept, and leaves it releasable: released again. The source is called twice in all, for the
+///   buffer's import and the image's.
 ///
 /// Where the device takes the texture as a shadow (its check of the first move in place did not
 /// pass for such pages), it says so and passes.
@@ -700,7 +701,7 @@ fn a_texture_in_place_over_a_dma_buf_import_leaves_it_releasable() {
     }
     let mut descriptor =
         TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, size.0, size.1, false);
-    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
     let before = device.work_counts();
     let texture = buffer.new_texture(&descriptor, 0, 256).unwrap();
     let made = device.work_counts();
@@ -727,27 +728,48 @@ fn a_texture_in_place_over_a_dma_buf_import_leaves_it_releasable() {
         "{TEST}: the image's import kept"
     );
 
-    let second = counting(len, 37);
-    ram.write_file(0, &second);
+    // Blue 0x40 and alpha 1, as `BGRA8Unorm` lays them: bytes 0x40, 0, 0, 0xff.
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut pass = RenderPassDescriptor::new();
+    let color = &mut pass.color_attachments[0];
+    color.texture = Some(texture.clone());
+    color.load_action = LoadAction::Clear;
+    color.store_action = StoreAction::Store;
+    color.clear_color = ClearColor::new(0.0, 0.0, f64::from(0x40u8) / 255.0, 1.0);
+    let encoder = command_buffer.render_command_encoder(&pass).unwrap();
+    encoder.end_encoding().unwrap();
+    run(&command_buffer);
+    let cleared: Vec<u8> = [0x40, 0, 0, 0xff].repeat(len / 4);
     assert!(
-        texels(&queue, &texture, size) == second,
-        "{TEST}: the texture's bytes while released"
+        ram.read_file(0, len) == cleared,
+        "{TEST}: the pages after the clear"
     );
-    let read_texture = device.work_counts();
+    let rendered = device.work_counts();
     assert_eq!(
-        residency(&read_texture),
+        residency(&rendered),
         residency(&released),
-        "{TEST}: the texture's blit imports nothing"
+        "{TEST}: the render pass imports nothing"
     );
+    assert_eq!(
+        rendered.dma_buf_memories_live, released.dma_buf_memories_live,
+        "{TEST}: the render pass imports nothing"
+    );
+
     assert!(
-        read(&queue, &buffer, len) == second,
-        "{TEST}: the buffer's bytes"
+        texels(&queue, &texture, size) == cleared,
+        "{TEST}: the texture's blit after the clear"
     );
     let again = device.work_counts();
     assert_eq!(
         again.host_imports_reimported,
         released.host_imports_reimported + 1,
-        "{TEST}: imported again"
+        "{TEST}: the texture's blit imports the buffer again"
+    );
+    release(TEST, device, 1);
+    assert_eq!(
+        device.work_counts().dma_buf_memories_live,
+        released.dma_buf_memories_live,
+        "{TEST}: released again"
     );
     assert_eq!(
         calls.load(Ordering::Acquire),
@@ -755,7 +777,8 @@ fn a_texture_in_place_over_a_dma_buf_import_leaves_it_releasable() {
         "{TEST}: the source's calls, the buffer's and the image's"
     );
     eprintln!(
-        "{TEST}: on {}: {chunks} chunks released under a texture in place, imported again",
+        "{TEST}: on {}: {chunks} chunks released under a texture in place, rendered into, \
+         imported again by its blit and released again",
         device.name()
     );
 }
