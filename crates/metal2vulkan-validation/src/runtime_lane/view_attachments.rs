@@ -23,9 +23,10 @@
 //! which Metal renders plain and its validation stops.
 
 use super::buffer_texture_blits::{Held, Kind, OFF};
+use super::degrade_notices::counts;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
-    ScratchCache, WAIT,
+    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device,
+    validated_device_with, Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -37,11 +38,12 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
-    Attachment, BlitCommandEncoder, BlitOption, Buffer, ClearColor, CommandBufferStatus,
-    CommandQueue, CpuCacheMode, Device, Error, HazardTrackingMode, HeapDescriptor, HeapType,
-    Invalid, Library, LoadAction, Origin, PipelineOptions, Problem, Region, RenderCommandEncoder,
-    RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, Size, StorageMode,
-    StoreAction, Texture, TextureDescriptor, TextureProblem, ViewProblem,
+    Attachment, BlitCommandEncoder, BlitOption, Buffer, ClearColor, CommandBuffer,
+    CommandBufferStatus, CommandQueue, CpuCacheMode, Device, Error, HazardTrackingMode,
+    HeapDescriptor, HeapType, Invalid, Library, LoadAction, Origin, PipelineOptions, Problem,
+    Region, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
+    ScissorRect, Size, StorageMode, StoreAction, Texture, TextureDescriptor, TextureProblem,
+    ViewProblem,
 };
 use std::path::Path;
 
@@ -1493,4 +1495,75 @@ fn a_layered_pass_renders_a_line_s_slices() {
             );
         }
     });
+}
+
+/// What a 2048x2048 `RGBA8Unorm` render target made without `PixelFormatView` usage costs the
+/// GPU, without the validation layer: a pass that clears it and stores, a blit copying it into
+/// another such texture, and a pass that clears its `BGRA8Unorm` view and stores, each its own
+/// command buffer, medians and the fastest of 40 after 8 untimed; and the notices, whose
+/// `shadowed-texture-view` says the view's pass rendered through a shadow. The first two show
+/// what the formats the texture's image lists cost the driver's compression. Ignored by default:
+/// a measurement, not a check.
+#[test]
+#[ignore = "a measurement, not a check: run by name with --run-ignored all"]
+fn reordered_view_render_costs() {
+    const BIG: u64 = 2048;
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+        options.layers.clear();
+    })
+    .unwrap();
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, BIG, BIG, false);
+    descriptor.usage = RT;
+    descriptor.resource_options = ResourceOptions::private();
+    let target = device.new_texture(&descriptor).unwrap();
+    let copy = device.new_texture(&descriptor).unwrap();
+    let view = target.new_texture_view(PixelFormat::BGRA8Unorm).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let time = |encode: &dyn Fn(&CommandBuffer)| {
+        let mut gpu = Vec::new();
+        for run in 0..48 {
+            let command_buffer = queue.command_buffer().unwrap();
+            encode(&command_buffer);
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.error(), None);
+            let start = command_buffer.gpu_start_time().unwrap();
+            let end = command_buffer.gpu_end_time().unwrap();
+            if run >= 8 {
+                gpu.push((end - start) * 1e6);
+            }
+        }
+        gpu.sort_by(f64::total_cmp);
+        (gpu[gpu.len() / 2], gpu[0])
+    };
+    let cleared = |command_buffer: &CommandBuffer, texture: &Texture| {
+        let mut pass = RenderPassDescriptor::new();
+        let color = &mut pass.color_attachments[0];
+        color.texture = Some(texture.clone());
+        color.load_action = LoadAction::Clear;
+        color.store_action = StoreAction::Store;
+        let encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        encoder.end_encoding().unwrap();
+    };
+    let clear = time(&|command_buffer| cleared(command_buffer, &target));
+    let blit = time(&|command_buffer| {
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.copy_texture(&target, &copy).unwrap();
+        blit.end_encoding().unwrap();
+    });
+    let viewed = time(&|command_buffer| cleared(command_buffer, &view));
+    let notices = counts(&messages.take_notices());
+    eprintln!(
+        "REORDERED-VIEW on {}: clear median {:.1} us, fastest {:.1} us; copy median {:.1} us, \
+         fastest {:.1} us; the view's clear median {:.1} us, fastest {:.1} us; notices {notices:?}",
+        device.name(),
+        clear.0,
+        clear.1,
+        blit.0,
+        blit.1,
+        viewed.0,
+        viewed.1
+    );
 }
