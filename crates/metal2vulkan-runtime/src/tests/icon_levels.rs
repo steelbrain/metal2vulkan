@@ -174,9 +174,13 @@ impl Tools {
         target
     }
 
-    /// Copy `level` of `texture` into the read-back buffer at `offset`.
-    fn read(&self, command_buffer: &CommandBuffer, (texture, level): (&Texture, u64), offset: u64) {
-        let side = side(level);
+    /// Copy `level` of `texture`, of `side` texels a side, into the read-back buffer at `offset`.
+    fn read(
+        &self,
+        command_buffer: &CommandBuffer,
+        (texture, level, side): (&Texture, u64, u64),
+        offset: u64,
+    ) {
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         blit.copy_from_texture_to_buffer(
             texture,
@@ -264,7 +268,7 @@ fn run(case: &str, through_copy: bool) {
                 .map(|level| tools.sampled(&command_buffer, icon, side(level)))
                 .collect();
             for level in 0..LEVELS {
-                tools.read(&command_buffer, (icon, level), offset(level));
+                tools.read(&command_buffer, (icon, level, side(level)), offset(level));
             }
             command_buffer.commit().unwrap();
             command_buffer.wait_until_completed_for(WAIT).unwrap();
@@ -272,7 +276,11 @@ fn run(case: &str, through_copy: bool) {
             let levels = tools.wrong_levels();
             let command_buffer = tools.queue.command_buffer().unwrap();
             for (level, target) in targets.iter().enumerate() {
-                tools.read(&command_buffer, (target, 0), offset(level as u64));
+                tools.read(
+                    &command_buffer,
+                    (target, 0, side(level as u64)),
+                    offset(level as u64),
+                );
             }
             command_buffer.commit().unwrap();
             command_buffer.wait_until_completed_for(WAIT).unwrap();
