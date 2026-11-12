@@ -779,7 +779,8 @@ fn draws_again_and_rebound_count_as_they_record() {
 /// that changes nothing for them (`set_tessellation_factor_scale`, which no draw of their state
 /// reads), each of which takes every step; at another offset each and in another color each, as each column's
 /// count of draws and each draw's color show. Calls that changed more slots than a draw rebound
-/// takes between them (samplers 0 to 8, which the functions do not read) take every step.
+/// takes between them (texture slots 0 to 32 of the vertex and of the fragment table, 66 in all,
+/// which the functions do not read, another texture there at each draw) take every step.
 #[test]
 fn draws_after_buffer_changes_rebind_what_every_step_binds() {
     let scratch = Scratch::new("draw-again-rebound");
@@ -787,14 +788,14 @@ fn draws_after_buffer_changes_rebind_what_every_step_binds() {
     let device = device(&scratch.0, &[], &heard);
     let state = adding_state(&device);
     let rectangles = rectangles_from_columns(&device);
-    let sampler = device.new_sampler_state(&SamplerDescriptor::new()).unwrap();
+    let textures = textures(&device);
     let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
+    let flip = std::cell::Cell::new(false);
     let samplers = |encoder: &mut RenderCommandEncoder| {
-        for index in 0..9 {
-            encoder
-                .set_fragment_sampler_state(Some(&sampler), index)
-                .unwrap();
-        }
+        flip.set(!flip.get());
+        let bound = [Some(&textures[usize::from(flip.get())]); 33];
+        encoder.set_vertex_textures(&bound, 0).unwrap();
+        encoder.set_fragment_textures(&bound, 0).unwrap();
     };
     let one = |_| 1.0 / 64.0;
     let each = |at| (at + 1) as f32 / 64.0;

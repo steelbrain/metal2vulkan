@@ -7460,7 +7460,7 @@ pub struct WorkCounts {
     /// later calls pushed them out.
     pub draws_rebind_stopped_arguments_unlisted: u64,
     /// Of `draws_rebind_stopped_arguments`, those after calls that changed more buffer, texture
-    /// and sampler slots of the stages, together, than a rebind takes (8), or another kind of
+    /// and sampler slots of the stages, together, than a rebind takes (64), or another kind of
     /// slot.
     pub draws_rebind_stopped_arguments_slots: u64,
     /// Of `draws_rebind_stopped_arguments`, those whose changed texture or sampler meets a

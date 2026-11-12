@@ -167,8 +167,11 @@ use crate::texture::Texture;
 use crate::tracker::Use;
 use crate::work_counts::{ArgumentsStop, CarryStop};
 
-/// The most slots a draw rebound takes changed: a draw after more takes every step.
-const SLOTS: usize = 8;
+/// The most slots a draw rebound takes changed, together over its stages' tables: as many as a
+/// table's change log keeps of one call (`argument_table`'s `CHANGES_KEPT`), so a draw after a
+/// material's textures and samplers bound anew is rebound with them. A draw after more takes
+/// every step.
+const SLOTS: usize = 64;
 
 /// What a draw rebound takes of the kept draw (the module docs) but its variant and plan, which
 /// its bind state's kept settle holds (`LiveBind::settled`): in the storage the bind state keeps
