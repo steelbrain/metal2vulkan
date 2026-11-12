@@ -591,6 +591,7 @@ mod texture_placement;
 mod texture_placement_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod texture_resource_options;
+mod texture_spans;
 mod this_thread;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod tile_pending;

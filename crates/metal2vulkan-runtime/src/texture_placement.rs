@@ -138,7 +138,11 @@ pub enum TextureShadowReason {
     /// ([`TexturePlacement::NotHostPages`]), as such an image renders and samples slower than the
     /// shadow's own image with its copies past it, and over memory only the runtime's commands
     /// write both give the same answer. The same bound on every device. Over a `Shared` or
-    /// `Managed` buffer, and for an untracked texture, the image is taken at any size.
+    /// `Managed` buffer, and for an untracked texture, the image is taken at any size. So it is
+    /// over bytes another texture was made over (another format's, a view's, one made again):
+    /// each shadow would be an image of its own with copies of its own, so a texture over such
+    /// bytes takes the image at any size, and the shadow of the first moves to it once another
+    /// texture is made over its bytes, at a quiet commit (`WorkCounts::pooled_textures_moved_in_place`).
     LinearCost {
         /// The bytes of the texture's rows, each to its pitch.
         bytes: u64,
@@ -275,7 +279,8 @@ impl TextureShadowReason {
                 .to_owned(),
             TextureShadowReason::LinearCost { bytes } => format!(
                 "its rows take {bytes} bytes to their pitch, past the bound up to which it takes \
-                 a DRM_FORMAT_MOD_LINEAR image at Metal's pitch"
+                 a DRM_FORMAT_MOD_LINEAR image at Metal's pitch, and no other texture was made \
+                 over its bytes"
             ),
         }
     }

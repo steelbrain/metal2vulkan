@@ -39,6 +39,7 @@ use super::host_memory::{HeldBack, HostParts, KeepAlive, Release};
 use super::host_ram::RamOnDevice;
 #[cfg(unix)]
 use super::host_residency::{Again, Residency};
+use super::in_place::PendingMove;
 use super::managed_copy::{CallerCopy, SyncTarget};
 use super::memory::{
     BoundMemory, Holds, Mapped, MemoryClass, Placement, BLOCK_BYTES, FD_BLOCKS_HANDLE,
@@ -50,6 +51,7 @@ use super::recycle::{self, BufferMaking};
 use super::resource::{Identity, ObjectId, ResourceKey};
 use super::retained::HeldBy;
 use super::texture::first_move::{Filled, Mine};
+use super::texture_spans::{LoneShadow, TextureSpans};
 use super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
 use super::Device;
 use crate::release;
@@ -127,6 +129,9 @@ struct BufferShared {
     carried: AtomicBool,
     /// The calls outside a command buffer's work under way on these parts ([`Buffer::held_parts`]).
     calls: Mutex<LinkCalls>,
+    /// The bytes textures were made over, and the shadows of their linear cost that wait for
+    /// another texture over theirs (`texture_spans.rs`).
+    texture_spans: Mutex<TextureSpans>,
 }
 
 /// Where a buffer's bytes are.
@@ -3352,6 +3357,7 @@ impl Device {
             next: OnceLock::new(),
             carried: AtomicBool::new(false),
             calls: Mutex::default(),
+            texture_spans: Mutex::default(),
         }))
     }
 
@@ -3606,6 +3612,7 @@ impl Heap {
             next: OnceLock::new(),
             carried: AtomicBool::new(false),
             calls: Mutex::default(),
+            texture_spans: Mutex::default(),
         }))
     }
 }
@@ -3924,6 +3931,28 @@ impl Buffer {
             ),
             false => Ok(()),
         }
+    }
+
+    /// Whether a texture was made over any of its `bytes` (`texture_spans.rs`).
+    pub(super) fn textures_made_over(&self, bytes: &Range<u64>) -> bool {
+        lock(&self.s().texture_spans).made_over(bytes)
+    }
+
+    /// Note a texture made over its `bytes`: the shadows of their linear cost that waited for
+    /// another texture over them, which the caller moves (`texture_spans.rs`).
+    pub(super) fn note_texture_made(&self, bytes: Range<u64>) -> Vec<LoneShadow> {
+        lock(&self.s().texture_spans).note(bytes)
+    }
+
+    /// `texture`, a shadow of its linear cost over its `bytes` that no other texture was made
+    /// over, waits for one, to move in place with `pending` (`texture_spans.rs`).
+    pub(super) fn wait_for_texture_over(
+        &self,
+        bytes: Range<u64>,
+        texture: Weak<dyn Any + Send + Sync>,
+        pending: PendingMove,
+    ) {
+        lock(&self.s().texture_spans).wait(bytes, texture, pending);
     }
 
     /// Note, as it is made, that its maker declared the bytes between a texture's rows and slices
@@ -4994,6 +5023,7 @@ impl Buffer {
             next: OnceLock::new(),
             carried: AtomicBool::new(false),
             calls: Mutex::default(),
+            texture_spans: Mutex::default(),
         }));
         // A two-copy buffer's device copy takes the pages' bytes, its GPU writes not synchronized
         // lost with the `VkDevice` (`managed_copy.rs`).

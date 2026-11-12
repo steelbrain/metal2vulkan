@@ -644,8 +644,9 @@ pub(crate) enum ShadowCause {
     Refused(Refusal, String),
     /// Over the runtime's pooled memory ([`PagesClass::Pooled`]) that only the runtime's
     /// commands write (a tracked texture's over a `Private` buffer), its rows to their pitch take
-    /// this many bytes, past [`POOLED_PITCHED_BYTES`]: a `DRM_FORMAT_MOD_LINEAR` image of them
-    /// renders and samples slower than the shadow's own image with its copies.
+    /// this many bytes, past [`POOLED_PITCHED_BYTES`], and no other texture was made over its
+    /// bytes (`texture_spans.rs`): a `DRM_FORMAT_MOD_LINEAR` image of them renders and samples
+    /// slower than the shadow's own image with its copies.
     LinearCost(u64),
 }
 
@@ -683,6 +684,16 @@ pub(crate) enum ShadowCause {
 /// 237.7/216.2, 404.4/409.4 and 2028.1/2433.2. A Radeon 780M (RADV) makes no such image at a pitch
 /// off a multiple of 256 bytes, at which its own linear image lays rows, so no texture there takes
 /// one. The same bound on every device.
+///
+/// The bound weighs one texture over the bytes. Past it, each texture over the same bytes would be
+/// a shadow of its own: an image of its own, copied in whole at its first use, and copied in whole
+/// again after a write through any other texture over the bytes, which lets go of its standing,
+/// and copied back whole after a kernel's write. So a texture over bytes another texture was made
+/// over takes the image at any size (`texture_spans.rs`), and the first texture's shadow moves to
+/// its image once another texture is made over its bytes. Measured with a guest's surface, 36
+/// textures (25 `BGRA8Unorm`, 11 `R32Uint`) of 6016x6016 at rows of 24,576 bytes over one
+/// `Private` buffer, a kernel writing a 1024-texel square of two of them and reading a 256-texel
+/// square of four others each frame (`runtime_lane::aliased_surfaces::aliased_surface_costs`).
 pub(crate) const POOLED_PITCHED_BYTES: u64 = 48 << 10;
 
 /// Why the device makes no image in place over a texture's texels.
@@ -775,7 +786,8 @@ impl ShadowCause {
             ShadowCause::LinearCost(bytes) => format!(
                 "its rows take {bytes} bytes to their pitch, past the {POOLED_PITCHED_BYTES} past \
                  which a DRM_FORMAT_MOD_LINEAR image at Metal's pitch renders and samples slower \
-                 than the shadow's own image with its copies"
+                 than the shadow's own image with its copies, and no other texture was made over \
+                 its bytes"
             ),
         }
     }
