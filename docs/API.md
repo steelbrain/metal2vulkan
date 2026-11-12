@@ -5024,25 +5024,35 @@ each item named states the rule in full.
   that reads the clear before any draw of the pass reads its copy cleared to the clear in the
   pass's first instance, where the copy can be so (`WorkCounts::attachment_read_clears`), else
   an instance after one of the clear alone. With no
-  barrier a draw that writes the color it reads reads the texels from before the pass at its own
-  pixel, the M3 Max's answer; one that writes nothing of it, below. The
+  barrier a draw reads at its own pixel what the draws before it wrote where the runtime takes no
+  copy for it, else the texels from before the pass, the M3 Max's answer (below). The
   conformance cases `pass-start-barrier-*` keep the M3 Max's texels and take the Mac2 answer as
-  the one other.
-- **A draw that reads its own pass's color attachment at its own pixels, and writes nothing of
-  that color, reads what the draws before it wrote, with no barrier too.** Metal defines no answer
-  here, and the Macs disagree. On an M3 Max (macOS 27.0.1) such a draw read the texels from before
-  the pass at every pixel, in a pass that clears too. On an AMD Radeon Pro 5300M and an Intel UHD
-  Graphics 630 (macOS 26.7.1) it read the earlier draw's texels at 98.6% and 99.99% of the pixels,
-  and at all of them after a barrier over the render targets; the rest read the load's or the
-  clear's texels. The runtime answers as the x86 Macs, which costs no copy: where the device
-  enabled `attachmentFeedbackLoopLayout` and its passes fetch no color as an input attachment (it
-  has `fragmentShaderPixelInterlock` and not `rasterizationOrderColorAttachmentAccess`), a draw
-  whose fragment function reads the texture at the fragment's own pixel alone, and that writes no
-  channel of the color, reads the attachment itself, behind a barrier inside the pass, and sees
-  the load and every earlier draw of the pass (`WorkCounts::reading_draws_in_place`, the runtime's
-  `render/snapshot.rs`). A draw that writes the color it reads still reads a copy taken before the
-  pass, the M3 Max's answer, and so does every such draw on any other device (lavapipe, which has
-  rasterization-order access, and a device without the interlock, such as the Radeon RX 550).
+  the one other, and their rows that read at their own pixels with no barrier the clear (below).
+- **A draw that reads its own pass's color attachment at its own pixels reads what the draws
+  before it wrote, with no barrier too, where the runtime takes no copy for it.** Metal defines no
+  answer here, and the Macs disagree. On an M3 Max (macOS 27.0.1) such a draw read the texels from
+  before the pass at every pixel, in a pass that clears too. On an AMD Radeon Pro 5300M and an
+  Intel UHD Graphics 630 (macOS 26.7.1) it read the earlier draw's texels at 98.6% and 99.99% of
+  the pixels, and at all of them after a barrier over the render targets; the rest read the load's
+  or the clear's texels. The runtime gives the x86 Macs' answer where that costs no copy, and the
+  M3 Max's where the copy is the cheaper form, so a reader can see either, each one a Mac's:
+  - where the device enabled `attachmentFeedbackLoopLayout` and its passes fetch no color as an
+    input attachment (it has `fragmentShaderPixelInterlock` and not
+    `rasterizationOrderColorAttachmentAccess`), a draw whose fragment function reads the texture
+    at the fragment's own pixel alone, and that writes no channel of the color, reads the
+    attachment itself, behind a barrier inside the pass, and sees the load and every earlier draw
+    of the pass (`WorkCounts::reading_draws_in_place`);
+  - a draw that writes the color it reads reads it through a snapshot where the device takes the
+    snapshot route (section "Snapshot reads") and the snapshot costs no more than the copy, and
+    sees the same: always for a color that renders a texture over a buffer's bytes, as a
+    surface's does, and for a private texture by the area rule, which takes the snapshot through
+    large scissors alone (`WorkCounts::reading_draws_snapshotted`). On a Radeon 780M a
+    compositor's frame of six such readers over surfaces took 3.41 ms of GPU time against 4.07
+    with the copies;
+  - every other such draw reads a copy taken before the pass, the M3 Max's answer: a private
+    texture's reader through small scissors, and every reader on lavapipe (which has
+    rasterization-order access) or on a device without the interlock, such as the Radeon RX 550
+    (the runtime's `render/snapshot.rs`, `texture/attached_reads.rs`).
 
 **GPU hangs and faults** (a draw of private primitive type 9, `DrawPrimitiveType::Nine`)
 

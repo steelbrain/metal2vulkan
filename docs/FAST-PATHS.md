@@ -288,9 +288,15 @@ recorded here.
   earlier draws wrote, the x86 Macs' answer, where the M3 Max reads the texels from before the pass
   (an AMD Radeon Pro 5300M and an Intel UHD Graphics 630 read the earlier draw's texels at 98.6%
   and 99.99% of the pixels and at all of them after a barrier, the M3 Max at none: docs/API.md's
-  accepted differences). A draw that writes the color it reads keeps the copy where the device has
-  the feedback loop too: read in place, it would race its own writes of the attachment, a data
-  race Vulkan forbids; none where every read
+  accepted differences). A draw that writes the color it reads would race its own writes of the
+  attachment read in place, a data race Vulkan forbids: with no barrier too, it reads through a
+  snapshot where the device takes the snapshot route and the snapshot costs no more than the
+  copy (over a buffer's bytes, a surface's, always; a private texture by the area rule), seeing
+  the same as in place (on a Radeon 780M a compositor's six such readers over surfaces took 3.41 ms
+  of GPU time a frame against 4.07 with the copies, `runtime_lane::attachment_read_costs`'s
+  `backdrop_costs`), and else keeps the copy, the M3 Max's answer: a private texture's reader
+  through small scissors answers the M3 Max's texels, a surface's the x86 Macs'. No copy where
+  every read
   of the slot reaches only levels before the lowest one the instance renders, which it reads in
   the texture's own image through a view of those levels (`render/attached_levels.rs`,
   `WorkCounts::attached_read_slots_narrowed`), or only levels past the highest one, through a view

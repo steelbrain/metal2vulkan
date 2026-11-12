@@ -51,8 +51,11 @@
 //!   there: its other primitives' at the pixel it reads, which nothing orders before a sampled
 //!   read (the Rasterization Order section orders fragment operations and color writes alone), a
 //!   data race, which Vulkan forbids ("Applications must not cause a data race", the Shader
-//!   Memory Access Ordering section). Such a draw reads the copy before a barrier, a correctness
-//!   fallback; after one, it reads in place through a snapshot where the device can (below).
+//!   Memory Access Ordering section). Such a draw reads in place through a snapshot where the
+//!   device can and the snapshot costs no more than the copy (`render/snapshot.rs`; below), with
+//!   a barrier or without, seeing what the draws before it wrote; else it reads the copy, before a
+//!   barrier the texels from before the pass, the M3 Max's answer: a private texture's reader
+//!   through small scissors reads that, a surface's reads the x86 Macs'.
 //! - **After a memory barrier.** A barrier over the render targets orders the draws after it
 //!   behind those before it, which a Mac2 GPU runs (Apple GPUs do not support that scope, the
 //!   Metal Feature Set Tables: `fence.rs`). Inside an instance it orders one pixel alone
