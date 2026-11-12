@@ -553,6 +553,7 @@ impl Group {
             Ok(()) => {
                 for member in self.members.drain(..) {
                     self.spare.push(member.infos);
+                    member.submission.buffer().kernel.submitted_at(called);
                     if member.submission.schedules() && !member.submission.scheduled() {
                         member.submission.buffer().kernel.end_at(called);
                     }

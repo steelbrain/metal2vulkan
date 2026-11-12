@@ -164,9 +164,11 @@ pub struct DeviceOptions {
     /// except on a driver whose timestamps wait for every queue's
     /// (`DriverFact::TimestampsWaitForEveryQueue`: MoltenVK 1.4.1 on Apple's GPUs), which answers
     /// from the host's clock whatever this says. There, a command buffer with work answers as its
-    /// GPU start its `kernelEndTime` (or its queue's latest GPU end before it, where later) and as
-    /// its GPU end the host time the runtime saw it complete: the window its work ran in, which
-    /// keeps every rule of Metal's own times (`gpu_time.rs`), but not the GPU's own times. The
+    /// GPU start the host time the first driver's submission that carried its work was called (its
+    /// `kernelEndTime` where one submission carried it all; or its queue's latest GPU end before
+    /// it, where later) and as its GPU end the host time the runtime saw it complete: the window
+    /// its work ran in, which keeps every rule of Metal's own times (`gpu_time.rs`), but not the
+    /// GPU's own times. The
     /// device announces `Degradation::GpuTimesFromHost` once, at the first such answer. It spares
     /// each command buffer its two timestamps, which cost about 150 us of latency on MoltenVK; a
     /// device whose queue family writes no timestamps then answers GPU times instead of refusing

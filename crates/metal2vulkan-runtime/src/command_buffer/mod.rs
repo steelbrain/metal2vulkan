@@ -4221,9 +4221,11 @@ impl CommandBuffer {
     /// queue's command buffer before it where later, a zero duration, as Metal answers for one.
     /// On a device made with `gpu_times_from_host` ([`DeviceOptions`](crate::DeviceOptions),
     /// [`RawDevice`](crate::RawDevice)), and on a driver whose timestamps wait for every
-    /// queue's (MoltenVK 1.4.1 on Apple's GPUs), none writes them: the start is the kernel end
-    /// time (or the queue's latest GPU end before it, where later) and the end the host time the
-    /// runtime saw it complete, and the device announces `Degradation::GpuTimesFromHost` once.
+    /// queue's (MoltenVK 1.4.1 on Apple's GPUs), none writes them: the start is the host time the
+    /// scheduler called the first driver's submission that carried its work (the kernel end time
+    /// where one submission carried it all; or the queue's latest GPU end before it, where later)
+    /// and the end the host time the runtime saw it complete, and the device announces
+    /// `Degradation::GpuTimesFromHost` once.
     pub fn gpu_start_time(&self) -> Result<f64, Error> {
         self.gpu_times().map(|(start, _)| gpu_time::seconds(start))
     }
@@ -5369,7 +5371,8 @@ impl CommandBufferShared {
     /// Place its GPU times among its queue's, now that it completed: in the completion turn,
     /// after its timestamps were read, in its queue's order (`gpu_time.rs`). One that wrote no
     /// timestamps takes its times here: encoder-less, where its queue reached it; answered from
-    /// the host, its kernel end (or its queue's latest end) and its completion. Every one moves
+    /// the host, the first submission that carried its work (its kernel end where one carried it
+    /// all; or its queue's latest end, where later) and its completion. Every one moves
     /// its queue's latest GPU end: its own, or its completion where it has none (an upper bound
     /// of its GPU end). One whose timestamps say its GPU work ran for over
     /// `queue_share::LONG_HEAD`, or whose `VkQueue` held it for longer from the submission of a
@@ -5394,9 +5397,10 @@ impl CommandBufferShared {
                     times.placed = Some((at, at));
                     at
                 }
-                // One after another, as Metal's serial queue can run them (`gpu_time.rs`).
+                // From the first submission that carried its work, one after another, as Metal's
+                // serial queue can run them (`gpu_time.rs`).
                 Stamped::FromHost => {
-                    let start = kernel_end.max(latest_end);
+                    let start = self.kernel.first_submitted().max(latest_end);
                     let end = completed.max(start);
                     times.placed = Some((start, end));
                     end

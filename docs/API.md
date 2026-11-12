@@ -2414,10 +2414,10 @@ bound.
   times on a device told to answer them from the host (`DeviceOptions::gpu_times_from_host`,
   `RawDevice::gpu_times_from_host`), or whose driver's timestamps wait for every queue's
   (`DriverFact::TimestampsWaitForEveryQueue`: MoltenVK 1.4.1 on Apple's GPUs, 1.4.2 on the M3
-  Max), which writes no GPU timestamps. Cost: its GPU start is its kernel end time (or its queue's
-  latest GPU end before it) and its GPU end the host time the runtime saw it complete: a window its
-  work ran in, which holds the submission's and the completion's latencies, not the GPU's own start
-  and end.
+  Max), which writes no GPU timestamps. Cost: its GPU start is the call of the first submission that
+  carried its work (its kernel end time where one carried it all; or its queue's latest GPU end
+  before it) and its GPU end the host time the runtime saw it complete: a window its work ran in,
+  which holds the submission's and the completion's latencies, not the GPU's own start and end.
 - `metal2vulkan-degrade-device-rounded-resolve` (precision). `DeviceRoundedResolve`: A multisample
   color resolve averages through Vulkan's `AVERAGE` mode, which leaves the rounding of the average
   (and the sRGB encoding) to the device, on a device not measured to round as Metal does: any

@@ -1307,6 +1307,11 @@ impl CommandBufferShared {
                 return Err(error);
             }
             called = submitted.ok();
+            // The first call that carried a batch of it: the earliest its GPU work began at,
+            // where GPU times are answered from the host (`place_gpu_times`).
+            if let Some(at) = called {
+                self.kernel.submitted_at(at);
+            }
         }
         // From the first batch whose `VkQueue` waits on the GPU for another's work, its `VkQueue`
         // holds it: its long mark counts from that batch's submission (`place_gpu_times`).

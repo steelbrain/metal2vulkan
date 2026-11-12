@@ -142,9 +142,16 @@
 //!   `RawDevice::gpu_times_from_host`; off by default), **or where its driver's timestamps wait
 //!   for every queue's** (`DriverFact::TimestampsWaitForEveryQueue`: MoltenVK 1.4.1 on Apple's
 //!   GPUs, whatever the options say). No command buffer writes timestamps. One with work answers as
-//!   its GPU start its kernel end time, or its queue's latest GPU end before it where later, and as
-//!   its GPU end the host time the runtime saw it complete (never before the start): a window its
-//!   GPU work ran in. The device announces it once, at the first such answer
+//!   its GPU start the host time the scheduler called the first driver's submission that carried
+//!   its work ([`KernelTimes::first_submitted`]: its kernel end time where one submission carried
+//!   it all), or its queue's latest GPU end before it where later, and as its GPU end the host time
+//!   the runtime saw it complete (never before the start): a window its GPU work ran in. Metal's
+//!   `GPUStartTime` and `GPUEndTime` span the whole command buffer's GPU work, so one whose batches
+//!   went as several submissions (after a wait for an event the host signals, or before an
+//!   execution of commands the GPU may write, which its host step records:
+//!   `command_buffer/batches.rs`) starts at its first, where its first batch's work could begin,
+//!   not at its kernel end, the call of its last. The device announces it once, at the first such
+//!   answer
 //!   (`Degradation::GpuTimesFromHost`). A device whose queue family writes no timestamps answers so
 //!   too, instead of refusing.
 //!
@@ -155,7 +162,11 @@
 //!   2. **Inside the command buffer's life.** Its commit <= `kernelStartTime` <= `kernelEndTime`
 //!      <= `GPUStartTime` <= `GPUEndTime` <= the moment its completion is observable: the end is
 //!      read in the completion turn before the command buffer's status becomes `Completed`
-//!      and before its completed handlers run, and the start is never later than the end.
+//!      and before its completed handlers run, and the start is never later than the end. One
+//!      whose work went as several submissions starts between its `kernelStartTime` and its
+//!      `kernelEndTime`, at its first submission, before its last: a kernel end after the GPU
+//!      start, which Metal answered for plain fills on the M3 Max under macOS 27.0.1 too
+//!      (`runtime_lane::gpu_times`'s `LATE_KERNEL_END`).
 //!   3. **A serial queue.** In a queue's commit order, which is the order its command buffers
 //!      complete and are placed in (`command_buffer/completion.rs`), each one's GPU start is at
 //!      or after the GPU end of the one before it, so starts and ends only move forward and no
@@ -982,6 +993,9 @@ pub(crate) struct KernelTimes {
     start: AtomicU64,
     /// The scheduler called the driver's submission of its last batch.
     end: AtomicU64,
+    /// The scheduler called the first driver's submission that carried a batch of it (a group's,
+    /// where the batch waited in one, `command_buffer/group.rs`).
+    first: AtomicU64,
     /// Its first batch became the first of its queue's batches the scheduler had not taken,
     /// where the device notes queue times ([`Timing::queue_times`]).
     head: AtomicU64,
@@ -1000,6 +1014,24 @@ impl KernelTimes {
     /// held it for a later one (the module docs).
     pub(crate) fn end_at(&self, at: u64) {
         self.end.store(at, Ordering::Release);
+    }
+
+    /// The scheduler called a driver's submission that carried a batch at host time `at`: kept
+    /// where it is the first.
+    pub(crate) fn submitted_at(&self, at: u64) {
+        let _ = (self.first).compare_exchange(0, at, Ordering::AcqRel, Ordering::Acquire);
+    }
+
+    /// The earliest host time its GPU work can have begun at, as the scheduler saw it: the call of
+    /// the first driver's submission that carried a batch of it, where that came before its kernel
+    /// end (its work went as more than one submission), else its kernel end (one submission, or
+    /// its last batch held for a group's: the module docs); 0 before.
+    pub(crate) fn first_submitted(&self) -> u64 {
+        let end = self.end();
+        match self.first.load(Ordering::Acquire) {
+            0 => end,
+            first => first.min(end),
+        }
     }
 
     /// When the scheduler began submitting the first batch, whether or not it finished

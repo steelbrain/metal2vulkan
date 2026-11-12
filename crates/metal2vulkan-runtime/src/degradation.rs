@@ -748,14 +748,17 @@ degradations! {
         /// (`gpu_time.rs`). Every
         /// answer is one Metal could give: seconds of Metal's clock (`mach_absolute_time`'s, on
         /// macOS); its commit, kernel start, kernel end, GPU start, GPU end and the moment its
-        /// completion is observable in that order; and a queue's command buffers one after
-        /// another, none starting before the one before it ended. The start can be early by the
+        /// completion is observable in that order, but for one whose work went as several
+        /// submissions, which starts at its first, before its kernel end, the call of its last;
+        /// and a queue's command buffers one after another, none starting before the one before
+        /// it ended. The start can be early by the
         /// time from the submission's end to the GPU's start, or late by the time the runtime took
         /// to see the queue's command buffer before it complete; the end is late by the time it
         /// took to see this one complete.
         GpuTimesFromHost = "gpu-times-from-host", Precision,
-            "its GPU start is its kernel end time (or its queue's latest GPU end before it) and \
-             its GPU end the host time the runtime saw it complete: a window its work ran in, \
+            "its GPU start is the call of the first submission that carried its work (its kernel \
+             end time where one carried it all; or its queue's latest GPU end before it) and its \
+             GPU end the host time the runtime saw it complete: a window its work ran in, \
              which holds the submission's and the completion's latencies, not the GPU's own start \
              and end";
         /// A multisample color resolve averages through Vulkan's `AVERAGE` mode, which leaves
