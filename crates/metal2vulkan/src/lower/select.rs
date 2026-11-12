@@ -1312,6 +1312,21 @@ struct BodySelection {
     blocks: u64,
 }
 
+/// A texture or sampler family's refusal of an `air.*` call that names nothing names the
+/// intrinsic's declaration (diagnostics only): one family refuses many operations alike.
+fn named_image_call(cx: &SelectCx<'_>, inst: &Inst, family: LowerFamily, e: Error) -> Error {
+    let image = matches!(family, LowerFamily::Texture | LowerFamily::Sampler);
+    match (e, &inst.kind) {
+        (Error::Unsupported(u), InstKind::Call(c)) if image && u.symbol.is_none() => {
+            match c.callee {
+                crate::air::ir::Callee::Air { decl, .. } => u.naming(decl_name(cx, decl)).into(),
+                _ => u.into(),
+            }
+        }
+        (e, _) => e,
+    }
+}
+
 fn located(e: Error, cx: &SelectCx<'_>, block: u32, inst: InstId) -> Error {
     match e {
         Error::Unsupported(u) if !u.is_placed() => Error::Unsupported(u.placed_at(
@@ -1398,11 +1413,13 @@ fn select_body(
                 .ok_or_else(|| invariant("an instruction out of the value range"))?;
             let outcome = match route(cx, id, inst) {
                 Route::Refuse(e) => Err(e),
-                Route::Family(f) => select_inst(cx, id, inst, f, m).map(|s| {
-                    if let Some(slot) = strategy.get_mut(vid.index()) {
-                        *slot = Some(s);
-                    }
-                }),
+                Route::Family(f) => select_inst(cx, id, inst, f, m)
+                    .map_err(|e| named_image_call(cx, inst, f, e))
+                    .map(|s| {
+                        if let Some(slot) = strategy.get_mut(vid.index()) {
+                            *slot = Some(s);
+                        }
+                    }),
                 Route::Control => match &inst.kind {
                     InstKind::Phi { .. } => cx
                         .lowered_repr(Value::Inst(id), inst.ty)
