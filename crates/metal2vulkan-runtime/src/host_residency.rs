@@ -50,9 +50,8 @@
 //!   dma-buf of its own pages, which it asks the buffer's source for as it is made, reading the
 //!   buffer's import as a blit does (imported again where released, `dma_buf.rs`), and binds none
 //!   of the buffer's memory, so the buffer's import stays releasable beside it. Each such image is
-//!   a listed import of its own on RADV, and the buffer's a second one only while used: a guest's
-//!   surface (a no-copy buffer over its pages and a texture in place over it) listed two in every
-//!   kernel submission for its whole life before.
+//!   a listed import of its own on RADV, and the buffer's import a second one only while blits use
+//!   it.
 //! - **Released while idle** by the device's residency thread ([`Sweeper`]), every [`TICK`]: an
 //!   import no command buffer holds, even weakly (every one that read it completed) and that no
 //!   blit took for its window, [`IDLE`] at first and doubled at each import again, up to

@@ -306,10 +306,11 @@ texture that reads its memory is made over its bytes (a shadow, or an image in p
 of their pointer), or a second buffer lies in its import; so do a heap's and a rebind's imports. A
 texture in place over a dma-buf import's bytes lies in an import of a dma-buf of its own pages,
 asked of the buffer's source, and leaves the buffer's import releasable: on RADV a guest surface (a
-no-copy buffer and a texture in place over it) then lists the texture's import alone in each kernel
-submission while the buffer is idle, where it listed both before. `WorkCounts::host_imports_released`, `host_imports_reimported`,
-`host_imports_resident` and `host_import_fds_kept` count it. For imports of either kind,
-`host_imports_read_apart` counts the live ones that a read other than a blit's keeps for good (the
+no-copy buffer and a texture in place over it) lists the texture's import alone in each kernel
+submission while the buffer is idle. `WorkCounts::host_imports_released`,
+`host_imports_reimported`, `host_imports_resident` and `host_import_fds_kept` count it. For imports
+of either kind, `host_imports_read_apart` counts the live ones that a read other than a blit's keeps
+for good (the
 `host_imports_read_apart_*` gauges by reason: the Metal address, the `VkBuffer`, a binding, a
 texture, a second buffer, no releasing thread), the `host_imports_kept_*` gauges the live ones kept
 whatever reads them, by cause (a heap's, a rebind's, a pointer import on a device whose held
