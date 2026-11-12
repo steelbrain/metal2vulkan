@@ -20,7 +20,7 @@ use super::render::DeferredPass;
 use super::resource::ResourceKey;
 use super::shadow::GatedCopyIn;
 use super::sparse::emulated::Scrub;
-use super::tracker::{EncoderUses, Summary};
+use super::tracker::{EncoderUses, Summary, Use};
 use super::Device;
 use super::IndirectCommandBuffer;
 use crate::pipeline::budget::Urgency;
@@ -512,6 +512,27 @@ impl Deferred {
         match self {
             Deferred::GatherStage(gather) => gather.waits_for_the_gpu(device),
             _ => false,
+        }
+    }
+
+    /// What its host step reads on the host of what the GPU may write, where that is all the
+    /// step waits for of the work before it (`CommandBufferShared::step_reads`): an execution's
+    /// records and range (`ExecutionRange::host_reads`), outside a block of command predication,
+    /// whose counter its step reads too; a render pass's executions'. `None` for every other
+    /// work, whose step waits for all the work submitted before it.
+    pub(super) fn host_reads(&self) -> Option<Vec<Use<ResourceKey>>> {
+        match self {
+            Deferred::Execute(execute) => execute.host_reads(),
+            Deferred::RenderPass(pass) => Some(pass.host_reads()),
+            Deferred::Dispatch(_)
+            | Deferred::SparseScrub(_)
+            | Deferred::GatedCopyIn(_)
+            | Deferred::RunMerge(_)
+            | Deferred::Pending(_)
+            | Deferred::Loop(_)
+            | Deferred::GatherStage(_)
+            | Deferred::ScatterStage(_)
+            | Deferred::ScatterDrain(_) => None,
         }
     }
 

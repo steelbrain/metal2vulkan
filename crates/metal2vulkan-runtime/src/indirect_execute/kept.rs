@@ -101,7 +101,7 @@ impl Execute {
         residency: &Residency,
         keeping: Keeping,
     ) -> Result<RecordedSegment, Error> {
-        let (range, faults) = self.range()?;
+        let (range, faults) = self.range();
         let Keeping {
             mut key,
             kept,

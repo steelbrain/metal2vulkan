@@ -93,8 +93,10 @@
 //!   work in flight, whose completion turn is this thread's (`Completion::turn_owed`), is
 //!   finished before they run.
 //! - **Host steps**. A batch that executes commands the GPU may write
-//!   (`CommandBufferShared::needs_host_step`) is held, once otherwise ready, until every
-//!   `VkQueue` completed what was submitted to it by then (its gate, a snapshot of the queues'
+//!   (`CommandBufferShared::needs_host_step`) is held, once otherwise ready, until the batches
+//!   that last wrote what its step reads completed (its gate, [`gate_of`]: where every segment
+//!   whose step waits for the GPU is an execution whose records and range Metal tracks, the
+//!   values of those batches the hazard state holds; else a snapshot of the queues' submitted
 //!   values): only then are the records the work before it wrote known. The thread then hands
 //!   the batch's step to the steps' threads ([`steps`], a step a thread, up to eight at once),
 //!   one of which records its segments (`CommandBufferShared::host_step`), each step a section of
@@ -695,8 +697,9 @@ struct Held {
     binary_signals: Vec<vk::Semaphore>,
     /// It holds segments, so it may need a host step.
     segments: bool,
-    /// For its host step: each `VkQueue`'s value of the last batch submitted there once the batch
-    /// was otherwise ready, which the queue's completed value reaches before the step.
+    /// For its host step, taken once the batch was otherwise ready ([`gate_of`]): each `VkQueue`'s
+    /// value of the last batch submitted there that wrote what the step reads, or of the last
+    /// batch submitted there, which the queue's completed value reaches before the step.
     gate: Option<Vec<u64>>,
     /// Its command buffer has a submission check, so it may wait for checks to run.
     checked: bool,
@@ -736,7 +739,8 @@ impl Held {
 
 /// What a batch's host step waits for (`CommandBufferShared::step_waits`).
 pub(crate) struct StepWaits {
-    /// The work submitted before it to complete (its gate): the GPU may write what it reads.
+    /// The work submitted before it to complete (its gate, [`gate_of`]: the batches that wrote
+    /// what it reads where those are known): the GPU may write what it reads.
     pub(crate) gpu: bool,
     /// The `VkQueue` whose work alone it waits for, where the GPU writes what it reads there alone
     /// (a predicated loop's check, `command_buffer/rerun.rs`): every other queue goes on.
@@ -2422,14 +2426,16 @@ fn hasten_heads(order: &mut Order<Held>) {
 }
 
 /// Look at each line's head that is otherwise ready (not `behind` an earlier commit either,
-/// its gate then covers that commit's work) and needs a host step: its gate is taken (the queues'
-/// submitted values, the first time), and once every `VkQueue`'s completed value reached it (or the
+/// its gate then covers that commit's work) and needs a host step: its gate is taken the first
+/// time ([`gate_of`]: the values of the batches that last wrote what the step reads, or the
+/// queues' submitted values), and once every `VkQueue`'s completed value reached it (or the
 /// device is lost), its step goes to `left`, unless there already. The gate goes to `awaits`
 /// before the completed values are read, as [`Scheduler::completions`] says. Whether a head still
 /// waits at its gate.
 fn gate_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits: &Awaits) -> bool {
     let State {
         order,
+        tracker,
         values,
         binary,
         wake_by,
@@ -2463,7 +2469,10 @@ fn gate_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits: 
             left.push(Kind::Step, (held.buffer.hold(), held.index));
             continue;
         }
-        let gate = held.gate.get_or_insert_with(|| values.clone());
+        let gate = (held.gate).get_or_insert_with(|| {
+            let (buffer, index) = (&held.buffer, held.index);
+            gate_of(buffer, index, tracker, values)
+        });
         match waits.queue_alone {
             Some(queue) => awaits.gate_on(queue, gate[queue], gate.len()),
             None => awaits.gate(gate),
@@ -2488,6 +2497,40 @@ fn gate_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits: 
         }
     }
     waiting
+}
+
+/// The gate of `buffer`'s batch `index`, a line's head whose host step waits for the GPU, taken
+/// once the batch is otherwise ready ([`gate_heads`]): per `VkQueue`, the value of the last batch
+/// submitted there that wrote what the step reads (its executions' records and ranges,
+/// `CommandBufferShared::step_reads`), where `tracker` holds every such write
+/// (`Tracker::last_writes`), so the step waits for those batches alone, and a command buffer's
+/// executions behind one writer wait for it once; else every queue's last submitted value,
+/// `values`. A gate that leaves out work submitted before it is counted
+/// (`WorkCounts::host_step_gates_narrowed`).
+///
+/// Every batch that may write what the step reads was submitted by then: an earlier batch of its
+/// line went before it, a batch of an earlier commit on another line that may write those bytes
+/// holds it behind until submitted (`is_behind`, whose footprints hold the step's reads,
+/// `ExecutionRange::host_reads`), and a later commit's that may write them waits behind it.
+fn gate_of(
+    buffer: &Hold<CommandBufferShared>,
+    index: usize,
+    tracker: &Tracker<ResourceKey>,
+    values: &[u64],
+) -> Vec<u64> {
+    let writes =
+        (buffer.step_reads(index)).and_then(|reads| tracker.last_writes(&reads, values.len()));
+    let Some(writes) = writes else {
+        return values.to_vec();
+    };
+    if writes
+        .iter()
+        .zip(values)
+        .any(|(write, value)| write < value)
+    {
+        buffer.device().shared().counts.host_step_gate_narrowed();
+    }
+    writes
 }
 
 /// Whether the head of commit sequence number `sequence` waits behind a batch committed before it

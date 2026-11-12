@@ -2429,3 +2429,57 @@ fn draws_check_what_their_encoder_made_resident_against_geometry_writes_once_by_
         "merged into one that meets"
     );
 }
+
+/// A host step's gate (`scheduler/mod.rs`'s `gate_of`): per `VkQueue`, the last batch that wrote
+/// the bytes it reads. A batch that wrote other bytes or only read them adds nothing; a write on
+/// another queue that covers the older one's bytes names its own queue alone, having waited for
+/// the older; a write the host saw complete is forgotten; an untracked read, or a queue past the
+/// count, answers none.
+#[test]
+fn a_host_read_waits_for_the_last_writes_of_its_bytes_alone() {
+    let mut tracker = Tracker::default();
+    submit(
+        &mut tracker,
+        &[one(&[writes(1, bytes(0..64), shader_write())])],
+        on(0, 1),
+    );
+    submit(
+        &mut tracker,
+        &[one(&[writes(2, bytes(0..64), shader_write())])],
+        on(1, 1),
+    );
+    submit(
+        &mut tracker,
+        &[one(&[reads(1, bytes(0..64), shader_read())])],
+        on(0, 2),
+    );
+    let read = Access::new(
+        vk::PipelineStageFlags2::ALL_COMMANDS,
+        vk::AccessFlags2::MEMORY_READ,
+    );
+    let records = reads(1, bytes(0..8), read);
+    let last = |tracker: &Tracker<Key>, read: &Use<Key>| tracker.last_writes(&[read.clone()], 2);
+    assert_eq!(last(&tracker, &records), Some(vec![1, 0]), "the writer");
+    let unwritten = reads(1, bytes(64..72), read);
+    assert_eq!(last(&tracker, &unwritten), Some(vec![0, 0]), "no writer");
+    let (_, waits) = submit(
+        &mut tracker,
+        &[one(&[writes(1, bytes(0..64), shader_write())])],
+        on(1, 2),
+    );
+    assert_eq!(waits, [wait(on(0, 2), COMPUTE)], "the covering write waits");
+    assert_eq!(
+        last(&tracker, &records),
+        Some(vec![0, 2]),
+        "the covering writer"
+    );
+    let untracked = Use::reads(1, false, bytes(0..8), read);
+    assert_eq!(last(&tracker, &untracked), None, "untracked");
+    assert_eq!(
+        tracker.last_writes(&[records.clone()], 1),
+        None,
+        "a queue past the count"
+    );
+    tracker.completed(1, 2);
+    assert_eq!(last(&tracker, &records), Some(vec![0, 0]), "seen complete");
+}

@@ -10,7 +10,9 @@
 //! (`execute_commands_in_buffer_indirect`). The depth the pass stores is each visible chunk's quad
 //! at its depth, and the clear depth elsewhere: into a 2D texture, into slice 1 of a 2D array,
 //! beside a later encoder of the command buffer that makes a shadowed texture resident, and over a
-//! rasterization rate map.
+//! rasterization rate map. And a frame's two passes that execute the commands after the culling
+//! wait for the culling alone: not for another queue's unrelated work submitted before them, nor
+//! the second for the first.
 
 use super::degrade_notices::on_device;
 use super::rate_maps::descriptor as descriptor_of_rate_map;
@@ -28,9 +30,9 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    CommandBufferStatus, ComputePipelineState, DepthStencilState, Device,
-    IndirectCommandBufferDescriptor, Library, LoadAction, PipelineOptions, Region,
-    RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction, Texture,
+    Buffer, CommandBuffer, CommandBufferStatus, ComputePipelineState, DepthStencilState, Device,
+    IndirectCommandBuffer, IndirectCommandBufferDescriptor, Library, LoadAction, PipelineOptions,
+    Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction, Texture,
     TextureDescriptor,
 };
 
@@ -203,18 +205,24 @@ fn shadowed(device: &Device) -> Texture {
     truth.new_texture(&descriptor, 0, 48).unwrap()
 }
 
-/// The commands a kernel encodes run from the range it wrote, each drawing its chunk's quad with
-/// the buffers it set onto the encoder's depth-only state: the depth the pass stores is each kept
-/// chunk's, and the clear depth where the kernel kept none, in a 2D texture, in slice 1 of a 2D
-/// array, beside a later encoder's shadowed texture, and over a rate map.
-#[test]
-fn a_kernel_s_depth_only_commands_draw_through_the_range_it_wrote() {
-    on_device(|device, _| {
+/// The fixture's states, the commands, and the buffers the kernel and the records name.
+struct Workload {
+    reset: ComputePipelineState,
+    encode: ComputePipelineState,
+    state: RenderPipelineState,
+    less: DepthStencilState,
+    icb: IndirectCommandBuffer,
+    encoder_args: Buffer,
+    positions: Buffer,
+    indices: Buffer,
+    camera: Buffer,
+    visible: Buffer,
+    range: Buffer,
+}
+
+impl Workload {
+    fn new(device: &Device) -> Workload {
         let library = library(device);
-        let reset = kernel(device, &library, "dio_reset");
-        let encode = kernel(device, &library, "dio_encode");
-        let state = depth_only(device, &library);
-        let less = less(device);
         let mut descriptor = IndirectCommandBufferDescriptor::new();
         descriptor.command_types = IndirectCommandType::DRAW_INDEXED;
         descriptor.inherit_pipeline_state = true;
@@ -224,12 +232,90 @@ fn a_kernel_s_depth_only_commands_draw_through_the_range_it_wrote() {
             .new_indirect_command_buffer(&descriptor, CHUNKS, ResourceOptions::shared())
             .unwrap();
         let encoder_args = buffer_with(device, &icb.gpu_resource_id().0.to_le_bytes()).unwrap();
-        let positions = buffer_with(device, &positions()).unwrap();
-        let indices = buffer_with(device, &indices()).unwrap();
         let camera: Vec<u8> = CAMERA.iter().flat_map(|f| f.to_le_bytes()).collect();
-        let camera = buffer_with(device, &camera).unwrap();
-        let visible = buffer_with(device, &VISIBLE.to_le_bytes()).unwrap();
-        let range = buffer_with(device, &[0xFF; 8]).unwrap();
+        Workload {
+            reset: kernel(device, &library, "dio_reset"),
+            encode: kernel(device, &library, "dio_encode"),
+            state: depth_only(device, &library),
+            less: less(device),
+            icb,
+            encoder_args,
+            positions: buffer_with(device, &positions()).unwrap(),
+            indices: buffer_with(device, &indices()).unwrap(),
+            camera: buffer_with(device, &camera).unwrap(),
+            visible: buffer_with(device, &VISIBLE.to_le_bytes()).unwrap(),
+            range: buffer_with(device, &[0xFF; 8]).unwrap(),
+        }
+    }
+
+    /// The culling, into `command_buffer`: a blit resets the commands, then a kernel resets the
+    /// range and one encodes the kept chunks' commands, taking each its place in the range.
+    fn cull(&self, command_buffer: &CommandBuffer) {
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.reset_commands_in_buffer(&self.icb, 0..CHUNKS).unwrap();
+        blit.end_encoding().unwrap();
+        let mut writing = command_buffer.compute_command_encoder().unwrap();
+        writing.set_compute_pipeline_state(&self.reset).unwrap();
+        writing.set_buffer(Some(&self.range), 0, 0).unwrap();
+        let one = Size::new(1, 1, 1);
+        writing.dispatch_threads(one, one).unwrap();
+        writing.set_compute_pipeline_state(&self.encode).unwrap();
+        writing.set_buffer(Some(&self.encoder_args), 0, 0).unwrap();
+        writing.set_buffer(Some(&self.positions), 0, 1).unwrap();
+        writing.set_buffer(Some(&self.indices), 0, 2).unwrap();
+        writing.set_buffer(Some(&self.camera), 0, 3).unwrap();
+        writing.set_buffer(Some(&self.range), 4, 4).unwrap();
+        writing.set_buffer(Some(&self.visible), 0, 5).unwrap();
+        writing
+            .use_resource(self.icb.as_resource(), ResourceUsage::WRITE)
+            .unwrap();
+        let chunks = Size::new(CHUNKS, 1, 1);
+        writing.dispatch_threads(chunks, chunks).unwrap();
+        writing.end_encoding().unwrap();
+    }
+
+    /// A pass of `pass` into `command_buffer` that executes the commands through the range under
+    /// the depth-only state.
+    fn draw(&self, command_buffer: &CommandBuffer, pass: &RenderPassDescriptor) {
+        let mut encoder = command_buffer.render_command_encoder(pass).unwrap();
+        encoder.set_render_pipeline_state(&self.state).unwrap();
+        encoder.set_depth_stencil_state(&self.less).unwrap();
+        encoder.set_depth_bias(0.0, 2.0, 0.0).unwrap();
+        for buffer in [&self.positions, &self.indices, &self.camera] {
+            encoder
+                .use_resource(
+                    buffer.as_resource(),
+                    ResourceUsage::READ,
+                    RenderStages::VERTEX,
+                )
+                .unwrap();
+        }
+        encoder
+            .execute_commands_in_buffer_indirect(&self.icb, &self.range, 0)
+            .unwrap();
+        encoder.end_encoding().unwrap();
+    }
+}
+
+/// A pass that clears `target`'s depth at slice `slice` and stores it.
+fn depth_pass(target: &Texture, slice: u64) -> RenderPassDescriptor {
+    let mut pass = RenderPassDescriptor::new();
+    pass.depth_attachment.texture = Some(target.clone());
+    pass.depth_attachment.slice = slice;
+    pass.depth_attachment.load_action = LoadAction::Clear;
+    pass.depth_attachment.clear_depth = 1.0;
+    pass.depth_attachment.store_action = StoreAction::Store;
+    pass
+}
+
+/// The commands a kernel encodes run from the range it wrote, each drawing its chunk's quad with
+/// the buffers it set onto the encoder's depth-only state: the depth the pass stores is each kept
+/// chunk's, and the clear depth where the kernel kept none, in a 2D texture, in slice 1 of a 2D
+/// array, beside a later encoder's shadowed texture, and over a rate map.
+#[test]
+fn a_kernel_s_depth_only_commands_draw_through_the_range_it_wrote() {
+    on_device(|device, _| {
+        let work = Workload::new(device);
         let queue = device.new_command_queue().unwrap();
         let mut runs = Vec::new();
         for variant in [
@@ -244,55 +330,14 @@ fn a_kernel_s_depth_only_commands_draw_through_the_range_it_wrote() {
             };
             let target = target(device, slices);
             let command_buffer = queue.command_buffer().unwrap();
-            let mut blit = command_buffer.blit_command_encoder().unwrap();
-            blit.reset_commands_in_buffer(&icb, 0..CHUNKS).unwrap();
-            blit.end_encoding().unwrap();
-            let mut writing = command_buffer.compute_command_encoder().unwrap();
-            writing.set_compute_pipeline_state(&reset).unwrap();
-            writing.set_buffer(Some(&range), 0, 0).unwrap();
-            let one = Size::new(1, 1, 1);
-            writing.dispatch_threads(one, one).unwrap();
-            writing.set_compute_pipeline_state(&encode).unwrap();
-            writing.set_buffer(Some(&encoder_args), 0, 0).unwrap();
-            writing.set_buffer(Some(&positions), 0, 1).unwrap();
-            writing.set_buffer(Some(&indices), 0, 2).unwrap();
-            writing.set_buffer(Some(&camera), 0, 3).unwrap();
-            writing.set_buffer(Some(&range), 4, 4).unwrap();
-            writing.set_buffer(Some(&visible), 0, 5).unwrap();
-            writing
-                .use_resource(icb.as_resource(), ResourceUsage::WRITE)
-                .unwrap();
-            let chunks = Size::new(CHUNKS, 1, 1);
-            writing.dispatch_threads(chunks, chunks).unwrap();
-            writing.end_encoding().unwrap();
-            let mut pass = RenderPassDescriptor::new();
-            pass.depth_attachment.texture = Some(target.clone());
-            pass.depth_attachment.slice = slice;
-            pass.depth_attachment.load_action = LoadAction::Clear;
-            pass.depth_attachment.clear_depth = 1.0;
-            pass.depth_attachment.store_action = StoreAction::Store;
+            work.cull(&command_buffer);
+            let mut pass = depth_pass(&target, slice);
             if variant == Variant::RateMap {
                 let map = descriptor_of_rate_map(SIZE as u32, SIZE as u32, &[(0.5, 0.5)]);
                 pass.rasterization_rate_map =
                     Some(device.new_rasterization_rate_map(&map).unwrap());
             }
-            let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
-            encoder.set_render_pipeline_state(&state).unwrap();
-            encoder.set_depth_stencil_state(&less).unwrap();
-            encoder.set_depth_bias(0.0, 2.0, 0.0).unwrap();
-            for buffer in [&positions, &indices, &camera] {
-                encoder
-                    .use_resource(
-                        buffer.as_resource(),
-                        ResourceUsage::READ,
-                        RenderStages::VERTEX,
-                    )
-                    .unwrap();
-            }
-            encoder
-                .execute_commands_in_buffer_indirect(&icb, &range, 0)
-                .unwrap();
-            encoder.end_encoding().unwrap();
+            work.draw(&command_buffer, &pass);
             let later = (variant == Variant::LaterShadow).then(|| shadowed(device));
             if let Some(texture) = &later {
                 let mut after = command_buffer.compute_command_encoder().unwrap();
@@ -322,5 +367,55 @@ fn a_kernel_s_depth_only_commands_draw_through_the_range_it_wrote() {
                 assert_eq!(depths, expected(), "{variant:?}");
             }
         }
+    });
+}
+
+/// A frame's executions after the culling wait for the culling alone. One queue commits the
+/// culling; another commits unrelated work (a fill of a buffer of its own), submitted before the
+/// frame is committed; then the first commits the frame: two passes, each into a target of its
+/// own, that execute the commands through the range. Each pass's host step waits for the batches
+/// that wrote the records and the range, so both gates leave work submitted before them out (the
+/// unrelated fill, and for the second the first pass's batch): `host_step_gates_narrowed` counts
+/// two, against none where a gate is every queue's last submission. Both targets hold each kept
+/// chunk's depth.
+#[test]
+fn a_frame_s_executions_wait_for_the_culling_alone() {
+    on_device(|device, _| {
+        let work = Workload::new(device);
+        let queue = device.new_command_queue().unwrap();
+        let other = device.new_command_queue().unwrap();
+        let culling = queue.command_buffer().unwrap();
+        work.cull(&culling);
+        culling.commit().unwrap();
+        let filled = buffer_with(device, &[0; 1 << 16]).unwrap();
+        let unrelated = other.command_buffer().unwrap();
+        let mut fill = unrelated.blit_command_encoder().unwrap();
+        fill.fill_buffer(&filled, 0..1 << 16, 0x5A).unwrap();
+        fill.end_encoding().unwrap();
+        unrelated.commit().unwrap();
+        unrelated.wait_until_scheduled().unwrap();
+        let before = device.work_counts();
+        let targets = [target(device, None), target(device, None)];
+        let frame = queue.command_buffer().unwrap();
+        for target in &targets {
+            work.draw(&frame, &depth_pass(target, 0));
+        }
+        frame.commit().unwrap();
+        frame.wait_until_completed_for(WAIT).unwrap();
+        let after = device.work_counts();
+        unrelated.wait_until_completed_for(WAIT).unwrap();
+        let narrowed = after.host_step_gates_narrowed - before.host_step_gates_narrowed;
+        let steps = after.host_steps_recorded - before.host_steps_recorded;
+        let drawn: Vec<Vec<f32>> = targets.iter().map(|target| depths(target, 0)).collect();
+        let statuses = [culling.status(), unrelated.status(), frame.status()];
+        eprintln!(
+            "statuses {statuses:?}, refusal {:?}, steps {steps}, gates narrowed {narrowed}, \
+             depths {drawn:?}",
+            frame.refusal()
+        );
+        assert_eq!(statuses, [CommandBufferStatus::Completed; 3]);
+        assert_eq!(frame.refusal(), None);
+        assert_eq!(drawn, [expected(), expected()]);
+        assert_eq!((steps, narrowed), (2, 2), "host steps, gates narrowed");
     });
 }

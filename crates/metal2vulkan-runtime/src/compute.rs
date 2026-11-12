@@ -1371,9 +1371,11 @@ impl ComputeCommandEncoder {
     /// end. A location past the size, or a range past `2^32 - 1`, which Metal's GPU faults on, runs
     /// nothing, and the command buffer's execution report states `ReplayFaults::RANGE`. The
     /// commands run as [`execute_commands_in_buffer`](Self::execute_commands_in_buffer)'s that a
-    /// function may write do: by a host step once the work before them completed, which the device
-    /// announces once (`Degradation::HostReplayedIndirectCommands`; the encoder copies the range
-    /// where it is encoded, behind a barrier from everything before).
+    /// function may write do: by a host step once the work that wrote them and the range completed,
+    /// which the device announces once (`Degradation::HostReplayedIndirectCommands`). The step
+    /// reads the range in place where the host maps the bytes of `range_buffer` the GPU writes (a
+    /// `Shared` buffer, a `Managed` one on unified memory); else the encoder copies it where it is
+    /// encoded, behind a barrier from everything before, and the step reads the copy.
     ///
     /// A range plain Metal takes and the runtime has no exact answer for is its own gap, not
     /// misuse: 8 bytes that run past `range_buffer`, which Metal reads from whatever follows it
@@ -1441,13 +1443,8 @@ impl ComputeCommandEncoder {
                 if icb.has_no_command_types() {
                     return Ok(());
                 }
-                let copy = indirect_dispatch::copy_arguments(
-                    &mut this.core,
-                    range_buffer,
-                    offset,
-                    indirect_execute::RANGE_BYTES,
-                )?;
-                this.defer_execution(icb, ExecutionRange::Indirect(copy), pipeline, check)?;
+                let range = indirect_execute::range_from(&mut this.core, range_buffer, offset)?;
+                this.defer_execution(icb, range, pipeline, check)?;
                 this.worked();
                 this.capture(|| Event::ExecuteIndirect(icb.clone(), range_buffer.clone(), offset));
                 Ok(())

@@ -559,6 +559,26 @@ impl HostCell {
         }
     }
 
+    /// The `N` bytes at `offset` of the buffer's bytes, as the host reads them now through the
+    /// pages they lie in, which are held while they are read: a detach and a rebind meanwhile let
+    /// none of them go under the read (their deallocator waits for them, `HeldBack`). `None` while
+    /// it is detached. The caller holds `offset + N` inside the buffer's length.
+    fn read<const N: usize>(&self, offset: u64) -> Option<[u8; N]> {
+        let pages = self.current()?;
+        let shape = pages.import.shape;
+        let start = shape.mapped?.as_ptr().wrapping_add(shape.offset as usize);
+        let mut bytes = [0u8; N];
+        // SAFETY: the pages map the buffer's bytes from `start`, and the caller holds the `N`
+        // bytes at `offset` inside its length; `pages` keeps them mapped until the copy ends. A
+        // write to them meanwhile races, as a read of `contents` does on Metal.
+        unsafe {
+            let at = start.wrapping_add(offset as usize);
+            std::ptr::copy_nonoverlapping(at, bytes.as_mut_ptr(), N);
+        }
+        drop(pages);
+        Some(bytes)
+    }
+
     /// The caller's pointer of the pages the buffer was detached from, while it is detached.
     fn detached_pointer(&self) -> Option<NonNull<u8>> {
         match &*lock(&self.pages) {
@@ -4794,6 +4814,44 @@ impl Buffer {
                 NonNull::new(contents.as_ptr().wrapping_add(bytes.offset as usize))
             }),
         }
+    }
+
+    /// Whether the host maps the bytes the GPU reads and writes, through which the runtime may
+    /// read what the GPU wrote once it completed ([`read_mapped`](Buffer::read_mapped)): not a
+    /// `Private` buffer, nor a `Managed` one's host copy on a device without unified memory
+    /// ([`HostCopy`]), nor a copy of the caller's pages ([`copied`](Buffer::copied)), whose
+    /// GPU's bytes are not the pages.
+    pub(super) fn maps_gpu_bytes(&self) -> bool {
+        self.storage_mode() != StorageMode::Private && self.mirror().is_none() && !self.copied()
+    }
+
+    /// The `N` bytes at `offset`, as the host reads them now through the buffer's mapping
+    /// ([`mapped_contents`](Buffer::mapped_contents)): where they lie in host pages (a no-copy
+    /// buffer's, or for a heap's buffer its heap's), read with those pages held, so a detach and
+    /// a rebind meanwhile let none of them go under the read. `None` where nothing maps them now
+    /// (a `Private` buffer, a detached one), or `offset + N` passes the buffer's length.
+    pub(super) fn read_mapped<const N: usize>(&self, offset: u64) -> Option<[u8; N]> {
+        if offset.checked_add(N as u64)? > self.length() {
+            return None;
+        }
+        let contents = match &self.s().bytes {
+            Bytes::Heap(bytes) => return bytes.bytes.read_mapped(bytes.offset + offset),
+            Bytes::Own(OwnBytes {
+                mirror: None,
+                lie: Lie::Host(cell),
+                ..
+            }) => return cell.read(offset),
+            Bytes::Own(_) => self.mapped_contents()?,
+        };
+        let mut bytes = [0u8; N];
+        // SAFETY: the mapping holds the buffer's `length` bytes from `contents`, which its own
+        // memory keeps mapped while the buffer lives, and `offset + N` is at most that. A write
+        // to them meanwhile races, as a read of `contents` does on Metal.
+        unsafe {
+            let at = contents.as_ptr().wrapping_add(offset as usize);
+            std::ptr::copy_nonoverlapping(at, bytes.as_mut_ptr(), N);
+        }
+        Some(bytes)
     }
 
     /// The caller's pointer of the pages a detached no-copy buffer lay in last, or for a heap's

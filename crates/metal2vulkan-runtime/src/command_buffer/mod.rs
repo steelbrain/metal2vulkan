@@ -4549,6 +4549,36 @@ impl CommandBufferShared {
         }
     }
 
+    /// What the host step of batch `index` reads on the host of what the GPU may write, where its
+    /// gate may be the batches that last wrote it alone (`scheduler/mod.rs`'s `gate_heads`): each
+    /// segment whose step waits for the GPU is an execution, or a render pass of executions,
+    /// whose uses `commit` bounded (`Segment::bound`), and its reads are their records and ranges
+    /// (`Deferred::host_reads`), with the host aliases of their bytes. `None` where the step waits
+    /// for more: an indirect sparse update or a staged gather of the batch reads what the GPU may
+    /// write, or another segment's step waits for the GPU (an indirect dispatch's, a loop's check,
+    /// an execution inside a block of command predication): its gate is every queue's work.
+    pub(crate) fn step_reads(&self, index: usize) -> Option<Vec<Use<ResourceKey>>> {
+        let state = lock(&self.state);
+        let recorded = &state.recorded[state.batch_range(index)];
+        let mut sparse = recorded.iter().flat_map(|encoder| &encoder.sparse);
+        if sparse.any(SparseUpdate::needs_step) {
+            return None;
+        }
+        let mut reads = Vec::new();
+        for segment in recorded.iter().flat_map(|encoder| &encoder.segments) {
+            if segment.needs_step() && segment.work.steps_after_the_gpu_now(&self.device) {
+                return None;
+            }
+            if segment.steps_after_the_gpu() {
+                segment.bound.as_ref()?;
+                reads.extend(segment.work.host_reads()?);
+            }
+        }
+        drop(state);
+        let aliases = &self.device.shared().aliases;
+        Some(aliases.augment(&reads).unwrap_or(reads))
+    }
+
     /// Raise the makings of the pipelines batch `index`'s host step records, still being made,
     /// to a queue's first held batch's (`budget::Urgency::Head`): the scheduler found the batch
     /// first in its queue's line, every batch after it there waiting behind it. The makings are

@@ -716,7 +716,7 @@ pub fn monotone(name: &str) -> Option<&'static str> {
 /// truncated and it reran. The other read the counters behind its own movements and found every one
 /// of them process-shared. Neither symptom could be read off a single run, which is the property
 /// that makes this class worth naming rather than discovering again.
-const SHARED: [(&str, &str); 21] = [
+const SHARED: [(&str, &str); 22] = [
     // `work_counts.rs`: "every batch, by how far its queue's work ran behind its submission".
     // Four buckets of one histogram, and which bucket a batch lands in is decided by how fast the
     // GPU drained what was submitted before it, earlier cases included. The sum is the case's own
@@ -742,6 +742,11 @@ const SHARED: [(&str, &str); 21] = [
     // them is pending. Whether a registration finds a submission holding the order is a race with
     // that submission. Reads 0 on this venue, and is here on its definition.
     ("registrations_waited", QUEUE_DEPTH),
+    // Host steps whose gate "left out work submitted before it". A gate the batches that last
+    // wrote what the step reads set holds no value for a writer the host had already seen
+    // complete, so whether it falls below the queue's last submission depends on how far the GPU
+    // had got when it was taken. Here on its definition.
+    ("host_step_gates_narrowed", QUEUE_DEPTH),
     // The two halves of a transition's thread that an earlier pass left gated because nothing had
     // been seen to move them. Definition-first says otherwise, and consistency matters more than
     // the reach: `scheduled_where_submitted` is documented as running "on the scheduler's thread

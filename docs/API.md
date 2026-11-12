@@ -2335,12 +2335,14 @@ bound.
   may name past four pass 256 (the states: every live one made with `supportIndirectCommandBuffers`,
   or the encoder's where the buffer inherits it), where they run with one and its commands times the
   states past twelve pass 512, and where its commands times its states pass 32,768. Every other
-  execution runs on the GPU alone and announces nothing. Cost: one GPU-to-CPU round trip per
-  execution: its command buffer's work before it, and every batch submitted before that on any
-  queue, completes before the CPU records its commands from their records, on a thread of the
-  runtime's, and submits the rest; meanwhile the device's other batches go, but for a later one
-  that shares a resource the execution may reach (one made resident, the records), and the first
-  command of a threadgroup size or threadgroup lengths its pipeline state has not dispatched makes
+  execution runs on the GPU alone and announces nothing. Cost: a GPU-to-CPU round trip: the
+  batches that last wrote its records and its range complete before the CPU records its commands
+  from their records, on a thread of the runtime's, and submits the rest, so a command buffer's
+  executions behind one writer wait for it once (where Metal tracks neither, or the step reads
+  more, as inside a block of command predication: its command buffer's work before it, and every
+  batch submitted before that on any queue); meanwhile the device's other batches go, but for a
+  later one that shares a resource the execution may reach (one made resident, the records), and
+  the first command of a threadgroup size or threadgroup lengths its pipeline state has not dispatched makes
   that VkPipeline then, as does a render command's draw of a state the CPU set on none of the
   commands. The commands run in the large-buffer form (their range-limited buffer slots at device
   addresses, with in-shader bounds checks), whose variants the commit compiles for every pipeline
@@ -4876,7 +4878,7 @@ each item named states the rule in full.
   as `commit` records them, and `commit` returns what a command refuses; but for a buffer the
   command buffer made resident for writing, as a route met after the commit may still write the
   records before they run (another queue's command buffer the work waits for through an event,
-  whose writes Metal runs), the host step records them once the work before it completed, and the
+  whose writes Metal runs), the host step records them once the work that wrote them completed, and the
   command buffer fails at that batch's submission only where they are still refused
   (`WorkCounts::commit_refusals_held`).
 - **A render execution's range read from a buffer is read before its pass**

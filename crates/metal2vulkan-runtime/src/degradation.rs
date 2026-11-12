@@ -704,10 +704,13 @@ degradations! {
         /// commands times its states pass 32,768. Every other execution runs on the GPU alone and
         /// announces nothing.
         HostReplayedIndirectCommands = "host-replayed-indirect-commands", Performance,
-            "one GPU-to-CPU round trip per execution: its command buffer's work before it, and \
-             every batch submitted before that on any queue, completes before the CPU records \
-             its commands from their records, on a thread of the runtime's, and submits the \
-             rest; meanwhile the device's other batches go, but for a later one that shares a \
+            "a GPU-to-CPU round trip: the batches that last wrote its records and its range \
+             complete before the CPU records its commands from their records, on a thread of \
+             the runtime's, and submits the rest, so a command buffer's executions behind one \
+             writer wait for it once (where Metal tracks neither, or the step reads more, as \
+             inside a block of command predication: its command buffer's work before it, and \
+             every batch submitted before that on any queue); meanwhile the device's other \
+             batches go, but for a later one that shares a \
              resource the execution may reach (one made resident, the records), and the first \
              command of a threadgroup size or threadgroup lengths its pipeline state has not \
              dispatched makes that VkPipeline then, as does a render command's draw of a state \

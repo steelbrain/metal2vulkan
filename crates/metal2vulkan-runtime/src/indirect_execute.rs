@@ -21,8 +21,10 @@
 //!   records are known only once the work before the execution completed. Its segment starts a part
 //!   of the encoder, and a batch, of its own. Where every record it may hold is covered, `commit`
 //!   records it to run on the GPU alone (`gpu_execute.rs`); otherwise the scheduler submits the
-//!   batch once every batch submitted before it on any queue completed and its host step recorded
-//!   the segment from the records then (`scheduler`), which the device announces once
+//!   batch once the batches that last wrote its records and its range completed (every batch
+//!   submitted before it on any queue, where Metal tracks neither or the step reads more:
+//!   `scheduler`'s `gate_of`) and its host step recorded the segment from the records then, which
+//!   the device announces once
 //!   (`Degradation::HostReplayedIndirectCommands`). So is a segment `commit` recorded from the
 //!   CPU's records whose buffer such a route met after the commit ([`Unforeseen`]). The step
 //!   compiles nothing: `commit`, or for such a segment the call that met the buffer (a later
@@ -96,7 +98,7 @@ use super::compute::{
 use super::degradation::Degradation;
 use super::device::lock;
 use super::encoder::{EncoderCore, RecordedSegment};
-use super::error::{internal, invalid, Error, RuntimeGap};
+use super::error::{invalid, Error, RuntimeGap};
 use super::executed_commands::{ExecutedCommand, RecordsRead};
 use super::indirect_command_buffer::{
     IndirectCommandBuffer, IndirectCommandCheck, IndirectCommandCheckNeeds, Reader,
@@ -110,6 +112,7 @@ use super::tracker::{Access, Barrier, EncoderUses, Summary, Use};
 use super::upload::Upload;
 use super::write_routes::replay_why;
 use super::Device;
+use super::{blit, indirect_dispatch};
 use ash::vk;
 use metal2vulkan::bind::indirect_commands::{Action, BufferBinding, BufferStage, CommandRecord};
 use metal2vulkan::bind::{Dispatch, ImageblockSize, ReplayFaults, StageInRegion};
@@ -194,26 +197,54 @@ pub(super) const NOT_READ: u64 = u64::MAX;
 pub(super) enum ExecutionRange {
     /// `executeCommandsInBuffer:withRange:`'s, inside the buffer's size.
     Fixed(Range<u32>),
-    /// `executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:`'s: a copy of the
-    /// `MTLIndirectCommandBufferExecutionRange` (`location`, then `length`, each a `u32`), made
-    /// where the execution is encoded behind a barrier from everything before
-    /// (`indirect_dispatch::copy_arguments`), which the host step reads.
-    Indirect(Buffer),
+    /// `executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:`'s: the
+    /// `MTLIndirectCommandBufferExecutionRange` (`location`, then `length`, each a `u32`) at
+    /// `offset` of `buffer`, which the host step reads ([`range_from`]).
+    Indirect { buffer: Buffer, offset: u64 },
+}
+
+/// The range of an execution `core` encodes from the [`RANGE_BYTES`] at `offset` of `buffer`
+/// (`executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:`), which its host step reads
+/// ([`ExecutionRange::commands`]). Read there in place where the host maps the bytes the GPU
+/// reads and writes (`Buffer::maps_gpu_bytes`), so the step waits for the batches that wrote
+/// them alone (`CommandBufferShared::step_reads`): the read is noted where the call lies, as a
+/// command that reads them, so the encoder's order, a detach (`detach.rs`) and the hazard state
+/// see it as they saw the copy's. Else read from a copy made here behind a barrier from
+/// everything before (`indirect_dispatch::copy_arguments`), whose batch the step waits for.
+/// Refused as the copy's buffer is.
+pub(super) fn range_from(
+    core: &mut EncoderCore,
+    buffer: &Buffer,
+    offset: u64,
+) -> Result<ExecutionRange, Error> {
+    if buffer.maps_gpu_bytes() {
+        let read = blit::reads(buffer, offset..offset + RANGE_BYTES);
+        core.command(vk::PipelineStageFlags2::TRANSFER, &[read], |_, _| {});
+        core.retain(buffer.clone());
+        let buffer = buffer.clone();
+        return Ok(ExecutionRange::Indirect { buffer, offset });
+    }
+    let copy = indirect_dispatch::copy_arguments(core, buffer, offset, RANGE_BYTES)?;
+    Ok(ExecutionRange::Indirect {
+        buffer: copy,
+        offset: 0,
+    })
 }
 
 impl ExecutionRange {
     /// What a host step of an execution of `icb`'s commands over this range reads on the host of
     /// what the GPU may write, for the scheduler's order across queues
-    /// (`CommandBufferShared::footprint`): the records' buffer, and the copy a range read from a
-    /// buffer is read from, each read in every stage.
+    /// (`CommandBufferShared::footprint`) and for what the step waits for
+    /// (`CommandBufferShared::step_reads`): the records' buffer, and the bytes a range read from
+    /// a buffer is read from, each read in every stage.
     pub(super) fn host_reads(&self, icb: &IndirectCommandBuffer) -> Vec<Use<ResourceKey>> {
         let read = Access::new(
             vk::PipelineStageFlags2::ALL_COMMANDS,
             vk::AccessFlags2::MEMORY_READ,
         );
         let mut reads = vec![whole_use(icb.storage(), read, Access::NONE)];
-        if let ExecutionRange::Indirect(copy) = self {
-            reads.push(whole_use(copy, read, Access::NONE));
+        if let ExecutionRange::Indirect { buffer, offset } = self {
+            reads.push(blit::reads_by(buffer, *offset..offset + RANGE_BYTES, read));
         }
         reads
     }
@@ -222,38 +253,38 @@ impl ExecutionRange {
     /// ([`ExecutionRange::Indirect`]): a host step records its execution, whoever wrote the
     /// records.
     pub(super) fn indirect(&self) -> bool {
-        matches!(self, ExecutionRange::Indirect(_))
+        matches!(self, ExecutionRange::Indirect { .. })
     }
 
-    /// The commands it runs of a buffer of `size` commands: the range given, or the range the
-    /// copy holds now as Metal's execution takes it (an M3 Max and an M4, for a compute encoder; a
-    /// probe, the same chips, for a render encoder): from `location` to `location + length`,
+    /// The commands it runs of a buffer of `size` commands: the range given, or the range its
+    /// bytes hold now as Metal's execution takes it (an M3 Max and an M4, for a compute encoder;
+    /// a probe, the same chips, for a render encoder): from `location` to `location + length`,
     /// clamped at the buffer's size, so a location of 2 and a length of 5 in a buffer of 4 run
     /// commands 2 and 3, and a length of 0 or a location at the size runs nothing. Where the
     /// location lies past the size, or `location + length` passes `2^32 - 1` (Metal's GPU then
     /// faults the command buffer, or hangs), it runs nothing and reports `ReplayFaults::RANGE`.
-    pub(super) fn commands(&self, size: u64) -> Result<(Range<u32>, ReplayFaults), Error> {
-        let copy = match self {
-            ExecutionRange::Fixed(range) => return Ok((range.clone(), ReplayFaults::default())),
-            ExecutionRange::Indirect(copy) => copy,
+    /// Bytes no mapping holds now (a no-copy buffer detached since the call, `detach.rs`) run
+    /// nothing.
+    pub(super) fn commands(&self, size: u64) -> (Range<u32>, ReplayFaults) {
+        let (buffer, offset) = match self {
+            ExecutionRange::Fixed(range) => return (range.clone(), ReplayFaults::default()),
+            ExecutionRange::Indirect { buffer, offset } => (buffer, *offset),
         };
-        let contents = copy
-            .mapped_contents()
-            .ok_or_else(|| internal("an execution range's copy without host bytes"))?;
-        let mut bytes = [0u8; RANGE_BYTES as usize];
-        // SAFETY: the copy is a `Shared` buffer of at least `RANGE_BYTES`, mapped; the GPU's
-        // write to it completed before the host step (its batch ended with the barrier to the
-        // host), and nothing writes it after.
-        unsafe { std::ptr::copy_nonoverlapping(contents.as_ptr(), bytes.as_mut_ptr(), 8) };
+        // The GPU's writes to the bytes before the host step completed (its gate) and reached
+        // the host (each batch ends with the barrier to the host); nothing of the command buffer
+        // after the execution runs before the step.
+        let Some(bytes) = buffer.read_mapped::<{ RANGE_BYTES as usize }>(offset) else {
+            return (0..0, ReplayFaults::default());
+        };
         let [l0, l1, l2, l3, n0, n1, n2, n3] = bytes;
         let location = u64::from(u32::from_le_bytes([l0, l1, l2, l3]));
         let length = u64::from(u32::from_le_bytes([n0, n1, n2, n3]));
         if location > size || location + length > u64::from(u32::MAX) {
-            return Ok((0..0, ReplayFaults::RANGE));
+            return (0..0, ReplayFaults::RANGE);
         }
         let end = (location + length).min(size);
         // Both lie within the size, which a buffer's `u32` command count holds.
-        Ok((location as u32..end as u32, ReplayFaults::default()))
+        (location as u32..end as u32, ReplayFaults::default())
     }
 }
 
@@ -365,7 +396,7 @@ impl Execute {
             Some(_) => BufferForms::Large,
             None => BufferForms::Bound,
         };
-        let (range, mut faults) = self.range()?;
+        let (range, mut faults) = self.range();
         // The caller's check sees each command the execution will record, before it records any,
         // where it may see something; so do the command buffer's executed-commands handlers,
         // which hear of the execution once. `commit` reads the rest a chunk at a time
@@ -551,6 +582,15 @@ impl Execute {
         Some(bound.finish())
     }
 
+    /// What its host step reads on the host of what the GPU may write, where that is all the step
+    /// waits for (`Deferred::host_reads`): its records and its range
+    /// ([`ExecutionRange::host_reads`]). `None` inside a block of command predication, whose
+    /// counter the steps before it write and its step reads too (`predication.rs`).
+    pub(super) fn host_reads(&self) -> Option<Vec<Use<ResourceKey>>> {
+        let predicated = self.gate.is_some() || self.preprocess_gate.is_some();
+        (!predicated).then(|| self.range.host_reads(&self.icb))
+    }
+
     /// Whether it reads its range from a buffer, which the GPU may write
     /// ([`ExecutionRange::indirect`]): a host step records it, whoever wrote its records.
     pub(super) fn indirect(&self) -> bool {
@@ -612,7 +652,7 @@ impl Execute {
     }
 
     /// The commands it runs ([`ExecutionRange::commands`]).
-    fn range(&self) -> Result<(Range<u32>, ReplayFaults), Error> {
+    fn range(&self) -> (Range<u32>, ReplayFaults) {
         self.range.commands(self.icb.size())
     }
 

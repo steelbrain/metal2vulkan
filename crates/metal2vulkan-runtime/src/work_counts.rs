@@ -235,6 +235,7 @@ pub(crate) struct Counters {
     /// By `HeldFor`, in its order: the looks that found a line's head held for each reason.
     heads_held_for: [AtomicU64; HeldFor::COUNT],
     heads_waiting_at_their_gate: AtomicU64,
+    host_step_gates_narrowed: AtomicU64,
     heads_awaiting_check_signals: AtomicU64,
     batches_held_past_a_look: AtomicU64,
     batch_hold_nanos: AtomicU64,
@@ -2737,6 +2738,13 @@ impl Counters {
     /// to complete (`scheduler/mod.rs`'s `gate_heads`).
     pub(crate) fn head_at_its_gate(&self) {
         self.heads_waiting_at_their_gate
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A head's host step gate, as it was taken, left out work submitted before it
+    /// (`scheduler/mod.rs`'s `gate_of`).
+    pub(crate) fn host_step_gate_narrowed(&self) {
+        self.host_step_gates_narrowed
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -6068,10 +6076,19 @@ pub struct WorkCounts {
     /// behind about one batch of theirs.
     pub heads_held_for_unshared_isolation: u64,
     /// Times a look left a head that needs a host step waiting at its gate: the step reads what
-    /// the GPU may write, so it waits until every `VkQueue` completed what was submitted to it
-    /// when the batch was otherwise ready (a predicated loop's check waits for its own `VkQueue`
-    /// alone). Of `heads_held_for_host_steps`.
+    /// the GPU may write, so it waits until the batches that last wrote what it reads completed
+    /// (`host_step_gates_narrowed`), or else until every `VkQueue` completed what was submitted to
+    /// it when the batch was otherwise ready (a predicated loop's check waits for its own
+    /// `VkQueue` alone). Of `heads_held_for_host_steps`.
     pub heads_waiting_at_their_gate: u64,
+    /// Host steps whose gate, as it was taken, left out work submitted before it: each segment
+    /// whose step waits for the GPU executes indirect commands whose records and range Metal
+    /// tracks, so the step waits for the batches that last wrote those alone, not for every
+    /// `VkQueue`'s last submission (the batches after the writer on its queue, and other queues'
+    /// work that writes neither). A command buffer's executions behind one writer then cost one
+    /// GPU round trip between them, not one each. Whether a gate leaves work out depends on what
+    /// was submitted, and seen complete, when it was taken.
+    pub host_step_gates_narrowed: u64,
     /// Times a look left a head's submission checks waiting for a submitted GPU signal to land:
     /// Metal checks a submission only once the event values it waits for are reached, so a value
     /// only a submitted GPU signal reaches is waited for. Of `heads_held_for_checks`.
@@ -9138,6 +9155,7 @@ impl Device {
             heads_waiting_at_their_gate: counters
                 .heads_waiting_at_their_gate
                 .load(Ordering::Relaxed),
+            host_step_gates_narrowed: counters.host_step_gates_narrowed.load(Ordering::Relaxed),
             heads_awaiting_check_signals: counters
                 .heads_awaiting_check_signals
                 .load(Ordering::Relaxed),

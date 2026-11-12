@@ -304,7 +304,6 @@ use crate::indirect_command_buffer::{
     IndirectCommandBuffer, IndirectCommandCheck, IndirectCommandCheckNeeds, NineDraw, Reader,
     WrittenRecords,
 };
-use crate::indirect_dispatch;
 use crate::indirect_execute::{self, unstrided_stride, ExecutionRange};
 use crate::kept_commands;
 use crate::live_bind::LiveBind;
@@ -497,13 +496,8 @@ impl RenderLowering {
                 IndirectRule::RangeWrittenByDraw,
             )));
         }
-        let copy = indirect_dispatch::copy_arguments(
-            &mut self.core,
-            range_buffer,
-            offset,
-            indirect_execute::RANGE_BYTES,
-        )?;
-        self.defer_execution(icb, ExecutionRange::Indirect(copy), pipeline, check)
+        let range = indirect_execute::range_from(&mut self.core, range_buffer, offset)?;
+        self.defer_execution(icb, range, pipeline, check)
     }
 
     /// The pipeline state an execution of `icb` here runs with (`Inherited`). Where the
@@ -543,7 +537,7 @@ impl RenderLowering {
                 {
                     Some(earlier.len())
                 }
-                ExecutionRange::Fixed(_) | ExecutionRange::Indirect(_) => None,
+                ExecutionRange::Fixed(_) | ExecutionRange::Indirect { .. } => None,
             });
         if let Some(earlier) = earlier {
             degrade_repeated_start(self.core.device(), icb, range, earlier);
@@ -586,7 +580,7 @@ impl RenderLowering {
         // read from a buffer runs at most every command of the buffer.
         let commands = match &range {
             ExecutionRange::Fixed(range) => u64::from(range.end - range.start),
-            ExecutionRange::Indirect(_) => icb.size(),
+            ExecutionRange::Indirect { .. } => icb.size(),
         };
         let (depth, _) = self.layout.aspects();
         let metal_depth = depth
@@ -863,10 +857,12 @@ impl RenderCommandEncoder {
     /// location, clamped at the buffer's size, so a length of 0 or a location at the size runs
     /// nothing and a length past it runs to its end; a location past the size, or a range past
     /// `2^32 - 1`, at which Metal's GPU faults the command buffer, runs nothing, and the command
-    /// buffer's execution report states `ReplayFaults::RANGE`. The encoder copies the range where
-    /// it is encoded, behind a barrier from everything before, so the range a kernel of an earlier
-    /// encoder wrote is read; a host step records the pass once the work before it completed, which
-    /// the device announces once (`Degradation::HostReplayedIndirectCommands`).
+    /// buffer's execution report states `ReplayFaults::RANGE`. A host step records the pass once
+    /// the work that wrote its records and the range completed (a kernel of an earlier encoder, a
+    /// blit), which the device announces once (`Degradation::HostReplayedIndirectCommands`). The
+    /// step reads the range in place where the host maps the bytes of `range_buffer` the GPU
+    /// writes (a `Shared` buffer, a `Managed` one on unified memory); else the encoder copies it
+    /// where it is encoded, behind a barrier from everything before, and the step reads the copy.
     ///
     /// A range plain Metal takes and the runtime has no exact answer for is its own gap, not
     /// misuse: 8 bytes that run past `range_buffer`, which Metal reads from whatever follows it
@@ -878,8 +874,8 @@ impl RenderCommandEncoder {
     /// [`execute_commands_in_buffer`](Self::execute_commands_in_buffer) refuses but a range (an
     /// unset inherited state whatever the range), and a range buffer of another device. A range a draw of the
     /// encoder before the call may write is `NotImplemented(IndirectRenderCommands)`: Metal's
-    /// execution reads that draw's write, where the runtime's copy, made before the pass, would
-    /// not; as for the index bounds pass, an untracked buffer's writes are not seen. Under an
+    /// execution reads that draw's write, where the runtime's read, before the pass, would not; as
+    /// for the index bounds pass, an untracked buffer's writes are not seen. Under an
     /// inherited state made without `supportIndirectCommandBuffers`, whatever the range, `{0, 0}`
     /// included, the encoder faults as `execute_commands_in_buffer`'s does.
     pub fn execute_commands_in_buffer_indirect(
@@ -2077,7 +2073,7 @@ impl RenderExecution {
             }
             Keeps::Inline(reads) => reads,
         };
-        let (range, faults) = self.range.commands(self.icb.size())?;
+        let (range, faults) = self.range.commands(self.icb.size());
         if !step && self.range.indirect() {
             return Err(internal(
                 "a range read from a buffer recorded before its host step",
@@ -2633,7 +2629,7 @@ impl RenderExecution {
             None => {
                 let commands = match &self.range {
                     ExecutionRange::Fixed(range) => range.clone(),
-                    ExecutionRange::Indirect(_) => {
+                    ExecutionRange::Indirect { .. } => {
                         0..u32::try_from(self.icb.size()).unwrap_or(u32::MAX)
                     }
                 };
@@ -2922,6 +2918,14 @@ impl DeferredPass {
             .any(|execution| execution.icb.gpu_written() || execution.range.indirect())
     }
 
+    /// What its host step reads on the host of what the GPU may write (`Deferred::host_reads`):
+    /// each execution's records and range (`ExecutionRange::host_reads`).
+    pub(crate) fn host_reads(&self) -> Vec<Use<ResourceKey>> {
+        (self.executions.iter())
+            .flat_map(|execution| execution.range.host_reads(&execution.icb))
+            .collect()
+    }
+
     /// The indirect command buffers its executions run.
     pub(crate) fn executed(&self) -> impl Iterator<Item = &IndirectCommandBuffer> {
         self.executions.iter().map(|execution| &execution.icb)
@@ -3084,7 +3088,7 @@ impl DeferredPass {
         // The first length each buffer (by its resource ID) was executed with from each command.
         let mut first: BTreeMap<(u64, u32), usize> = BTreeMap::new();
         for execution in &self.executions {
-            let (range, _) = execution.range.commands(execution.icb.size())?;
+            let (range, _) = execution.range.commands(execution.icb.size());
             if range.is_empty() {
                 continue;
             }

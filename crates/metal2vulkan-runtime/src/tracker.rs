@@ -2656,6 +2656,30 @@ impl<K: Copy + Ord + Hash> Tracker<K> {
         at.value.saturating_sub(1).saturating_sub(through)
     }
 
+    /// Per `VkQueue`, of `queues`: the timeline value of the last batch there that wrote what
+    /// `reads` read, of the writes the state holds (0 where it holds none there). Once each queue
+    /// completed its value, every write a submitted batch made to those bytes completed and
+    /// reached the host (each batch ends with [`Barrier::to_host`]): the state forgets only what
+    /// completed, and a write it let an older one's entry go for waited for that one. `None`
+    /// where one of `reads` is of a resource Metal does not track, whose writes the state does not
+    /// hold, or names a queue past `queues`.
+    pub(super) fn last_writes(&self, reads: &[Use<K>], queues: usize) -> Option<Vec<u64>> {
+        let mut values = vec![0; queues];
+        for read in reads {
+            if !read.tracked {
+                return None;
+            }
+            let entries = self.resources.get(&read.key).into_iter().flatten();
+            for entry in entries.filter(|entry| entry.range.overlaps(&read.range)) {
+                for writer in entry.writers.iter() {
+                    let value = values.get_mut(writer.at.queue)?;
+                    *value = (*value).max(writer.at.value);
+                }
+            }
+        }
+        Some(values)
+    }
+
     /// The barriers before the `encoders` of the batch submitted next, at `at`, and its waits.
     /// The state is unchanged; the plan's lists come from those plans applied before gave back.
     pub(super) fn plan<'a>(
