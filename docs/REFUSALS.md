@@ -306,7 +306,7 @@ Columns:
 | `BitstreamNesting` | Bitstream block nesting | every device (a deterministic cap) | `ours` | 1: `crates/metal2vulkan-air/src/bitstream/mod.rs (enter_block)` | `none`: malformed nesting |
 | `InstructionCount` | Instructions of the decoded module | every device (a deterministic cap) | `ours` | 8: `crates/metal2vulkan-air/src/bitcode/function.rs (call)`, `crates/metal2vulkan-air/src/bitcode/function.rs (constants)` (+4) | `rare`: very large modules |
 | `LayoutNesting` | Nesting depth of `air.struct_type_info` layouts and the argument-buffer members inside them | every device (a deterministic cap) | `ours` | 3: `crates/metal2vulkan-air/src/abi/structs.rs (finish)`, `crates/metal2vulkan-air/src/abi/structs.rs (open)` (+1) | `none`: argument-buffer layouts nested past the cap |
-| `ConstructNesting` | Nesting depth of structured constructs the structurizer emits (P8 recurses once per level) | every device (a deterministic cap) | `ours` | 2: `crates/metal2vulkan/src/structurize/emit.rs (check_tree)`, `crates/metal2vulkan/src/structurize/emit/predicate.rs (facts)` | `none`: control flow nested past the cap |
+| `ConstructNesting` | Nesting depth of structured constructs the structurizer emits (P8 recurses once per level) | every device (a deterministic cap) | `ours` | 2: `crates/metal2vulkan/src/structurize/emit.rs (check_tree)`, `crates/metal2vulkan/src/structurize/emit/predicate.rs (facts_of)` | `none`: control flow nested past the cap |
 | `PrivateArenaBytes` | Bytes of a function's private arena, whose pointers are `u32` byte offsets | every device (a deterministic cap) | `ours` | 3: `crates/metal2vulkan/src/lower/access/local.rs (use_arena)`, `crates/metal2vulkan/src/memory/plan.rs (place_allocas, 2 sites)` | `none`: a private arena past 4 GiB |
 | `CallStackBytes` | Bytes of a kernel's call stack | every device (a deterministic cap) | `ours` | 1: `crates/metal2vulkan-air/src/canon/recursion.rs (metal_stack)` | `rare`: deep visible-function call stacks |
 
@@ -809,7 +809,7 @@ Each refusal's sites, with the function that builds it.
 - `limit::BitstreamNesting`: `crates/metal2vulkan-air/src/bitstream/mod.rs (enter_block)`
 - `limit::InstructionCount`: `crates/metal2vulkan-air/src/bitcode/function.rs (call)`; `crates/metal2vulkan-air/src/bitcode/function.rs (constants)`; `crates/metal2vulkan-air/src/bitcode/function.rs (count_record, 2 sites)`; `crates/metal2vulkan-air/src/bitcode/function.rs (decode)`; `crates/metal2vulkan-air/src/bitcode/function.rs (forward)`; `crates/metal2vulkan-air/src/bitcode/function.rs (push, 2 sites)`
 - `limit::LayoutNesting`: `crates/metal2vulkan-air/src/abi/structs.rs (finish)`; `crates/metal2vulkan-air/src/abi/structs.rs (open)`; `crates/metal2vulkan/src/bind/argument_buffer.rs (layout)`
-- `limit::ConstructNesting`: `crates/metal2vulkan/src/structurize/emit.rs (check_tree)`; `crates/metal2vulkan/src/structurize/emit/predicate.rs (facts)`
+- `limit::ConstructNesting`: `crates/metal2vulkan/src/structurize/emit.rs (check_tree)`; `crates/metal2vulkan/src/structurize/emit/predicate.rs (facts_of)`
 - `limit::PrivateArenaBytes`: `crates/metal2vulkan/src/lower/access/local.rs (use_arena)`; `crates/metal2vulkan/src/memory/plan.rs (place_allocas, 2 sites)`
 - `limit::CallStackBytes`: `crates/metal2vulkan-air/src/canon/recursion.rs (metal_stack)`
 - `ratemap::ScreenExtent`: `crates/metal2vulkan-runtime/src/rate_map.rs (compile_over)`; `crates/metal2vulkan/src/bind/rate_map.rs (new)`
