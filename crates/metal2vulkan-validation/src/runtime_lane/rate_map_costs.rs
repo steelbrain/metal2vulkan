@@ -17,7 +17,8 @@
 //!
 //! Ignored by default: a measurement, not a check. Run it by name with `--run-ignored all`, in a
 //! build with `--cfg m2v_system_alloc`, whose lib test binary keeps the system allocator as a
-//! consumer's process does.
+//! consumer's process does. The fixture's text is compiled in, so the binary also runs on a
+//! machine other than the one that built it.
 
 use super::draw_costs::{percentiles, thread_cpu};
 use super::{buffer_with, validated_device_with, Messages, ScratchCache, WAIT};
@@ -28,7 +29,7 @@ use metal2vulkan::metal::{
     IndexType, IndirectCommandType, PixelFormat, PrimitiveType, TextureUsage,
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
-use metal2vulkan_devtools::{engine_dir, llvm_assemble};
+use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
     Buffer, CommandBufferStatus, CommandQueue, Device, IndirectCommandBuffer,
     IndirectCommandBufferDescriptor, LoadAction, PipelineOptions, RasterizationRateMap,
@@ -66,9 +67,9 @@ struct Frame {
 
 impl Workload {
     fn new(device: Device) -> Workload {
-        let ll = engine_dir().join("tob_renders.ll");
+        let ll = include_str!("../../fixtures/public/engine/tob_renders.ll");
         let library = device
-            .new_library_with_air(&llvm_assemble(&ll).unwrap())
+            .new_library_with_air(&llvm_assemble_text(ll).unwrap())
             .unwrap();
         let function = |name| {
             StageSource::Function(
