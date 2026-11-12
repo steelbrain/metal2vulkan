@@ -278,9 +278,9 @@ impl Tools {
         self.pass(command_buffer, (icon, 0), None, &[draw]);
     }
 
-    /// Copy `level` of `texture` into the read-back buffer at `offset`.
+    /// Copy `level` of the square `texture` into the read-back buffer at `offset`.
     fn read(&self, command_buffer: &CommandBuffer, (texture, level): (&Texture, u64), offset: u64) {
-        let side = side(level);
+        let side = (texture.width() >> level).max(1);
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         blit.copy_from_texture_to_buffer(
             texture,
