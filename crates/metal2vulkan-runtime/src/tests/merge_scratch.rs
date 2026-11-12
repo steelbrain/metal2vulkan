@@ -583,8 +583,11 @@ const TWO_WAYS: usize = 64;
 
 /// One command buffer of [`TWO_WAYS`] compute encoders, each dispatching `tob_two_ways` once over
 /// a shadowed texture over a `Private` buffer whose rows hold bytes between them (200 texels in
-/// rows of 1024 bytes, a shadow copied back) and that buffer: it writes texel (0, 0) through the
-/// texture and 4 bytes of the buffer, texel `1 + i` of the first row, another way. Each encoder
+/// rows of 1024 bytes) and that buffer: it writes texel (0, 0) through the texture and 4 bytes of
+/// the buffer, texel `1 + i` of the first row, another way. The texture may render too, so it is
+/// a shadow copied back on every device: an image over its rows would hold the bytes between
+/// them, which a render pass's load and store write back (`linear_plan::holding`); one that
+/// renders nothing lies in place where the device lays those rows out. Each encoder
 /// merges the texture's write through a copy (`shadow_merge.rs`, **Two ways**), whose kernel
 /// reads bytes no copy writes (those between the rows), so its scratch is filled with zero before
 /// its keep: every merge after the first takes a scratch an earlier encoder was done with, and
@@ -606,7 +609,8 @@ fn two_ways_merges_take_few_scratches() {
         return;
     };
     let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, width, H, false);
-    descriptor.usage = TextureUsage::SHADER_WRITE | TextureUsage::SHADER_READ;
+    descriptor.usage =
+        TextureUsage::SHADER_WRITE | TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
     descriptor.resource_options = buffer.resource_options();
     let texture = buffer.new_texture(&descriptor, 0, row).unwrap();
     assert!(texture.shadow().is_some(), "the texture is a shadow");
