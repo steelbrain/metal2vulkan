@@ -3,15 +3,15 @@
 // functions that take them, and asked which space they point into (`is_device_addrspace`,
 // `is_thread_addrspace`, `is_threadgroup_addrspace`). The owned fixture
 // `engine/generic_pointers.metal` holds the same source for `generic_spaces`, `generic_mixed`,
-// `generic_null`, `generic_slots` and `generic_fields` (its header gives each word);
-// `generic_null` asks which space a null generic pointer answers, where the run decides whether a
-// pointer is null, and `generic_slots` and `generic_fields` read generic pointers a struct holds,
-// by reference and by value.
+// `generic_null`, `generic_slots`, `generic_fields` and `generic_array` (its header gives each
+// word); `generic_null` asks which space a null generic pointer answers, where the run decides
+// whether a pointer is null, and the last three read generic pointers a struct holds, by
+// reference, by value and in an array member passed as one aggregate.
 //
 // Build (no cargo target needed):
 //   clang -fobjc-arc -O1 -fmodules -o generic_pointers generic_pointers.m \
 //     -framework Foundation -framework Metal
-// Run: ./generic_pointers spaces   (or mixed, null, slots, fields), one case a process,
+// Run: ./generic_pointers spaces   (or mixed, null, slots, fields, array), one case a process,
 // MTL_DEBUG_LAYER unset.
 //
 // Each case compiles the source as MSL 4.1, runs its kernel over 8 threads in one threadgroup
@@ -144,6 +144,34 @@ static const char *SOURCE =
     "        r.n = t;\n"
     "        read_fields(r, out + 4 * t, t);\n"
     "    }\n"
+    "}\n"
+    "struct ptrs {\n"
+    "    const float *p[3];\n"
+    "    const float *q;\n"
+    "    uint n;\n"
+    "};\n"
+    "__attribute__((noinline)) void read_ptrs(ptrs r, device float *o, uint t) {\n"
+    "    o[0] = weigh(r.p[0], t);\n"
+    "    o[1] = weigh(r.q, 1);\n"
+    "    o[2] = space(r.p[2]);\n"
+    "    o[3] = float(r.n);\n"
+    "}\n"
+    "kernel void generic_array(device float *out [[buffer(0)]],\n"
+    "                          device const float *in [[buffer(1)]],\n"
+    "                          uint t [[thread_position_in_grid]]) {\n"
+    "    switch (t >> 31) {\n"
+    "        float local[2];\n"
+    "        ptrs r;\n"
+    "    default:\n"
+    "        local[0] = float(t);\n"
+    "        local[1] = float(t) + 1.0f;\n"
+    "        r.p[0] = in;\n"
+    "        r.p[1] = in + 4;\n"
+    "        r.p[2] = in[t] < 4.0f ? in + 8 : nullptr;\n"
+    "        r.q = local;\n"
+    "        r.n = t;\n"
+    "        read_ptrs(r, out + 4 * t, t);\n"
+    "    }\n"
     "}\n";
 
 enum { THREADS = 8, WORDS = 8 };
@@ -168,6 +196,7 @@ int main(int argc, char **argv) {
                      : strcmp(c, "null") == 0   ? @"generic_null"
                      : strcmp(c, "slots") == 0  ? @"generic_slots"
                      : strcmp(c, "fields") == 0 ? @"generic_fields"
+                     : strcmp(c, "array") == 0  ? @"generic_array"
                                                 : @"generic_spaces";
     id<MTLFunction> f = [lib newFunctionWithName:name];
     id<MTLComputePipelineState> ps = [D newComputePipelineStateWithFunction:f error:&e];

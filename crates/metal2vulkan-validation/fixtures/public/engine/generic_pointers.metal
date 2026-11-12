@@ -33,6 +33,11 @@
 // (`generic_fields`); each writes out[4t + j]: [0] weigh(r.a, t) = t + 100; [1] weigh(r.b, 1) =
 // t + 201; [2] space(r.c): 1 for t < 4, 4 for the rest; [3] r.n = t.
 //
+// `generic_array`: as `generic_fields`, the struct a `ptrs` whose three device pointers (in,
+// in + 4, and in + 8 or null) are an array member, which Clang passes by value as one aggregate
+// of generic pointers: out[4t + j] is [0] weigh(r.p[0], t) = t + 100; [1] weigh(r.q, 1) = t + 201
+// (r.q = local); [2] space(r.p[2]): 1 for t < 4, 4 for the rest; [3] r.n = t.
+//
 // The locals are declared ahead of the switch's only label (on t >> 31, zero for every thread),
 // so every path into the switch bypasses their declarations and Clang emits no lifetime markers
 // for them (as in ob2_sized_array.metal). Loop-free.
@@ -166,5 +171,36 @@ kernel void generic_fields(device float *out [[buffer(0)]],
         r.c = in[t] < 4.0f ? in + 8 : nullptr;
         r.n = t;
         read_fields(r, out + 4 * t, t);
+    }
+}
+
+struct ptrs {
+    const float *p[3];
+    const float *q;
+    uint n;
+};
+
+__attribute__((noinline)) void read_ptrs(ptrs r, device float *o, uint t) {
+    o[0] = weigh(r.p[0], t);
+    o[1] = weigh(r.q, 1);
+    o[2] = space(r.p[2]);
+    o[3] = float(r.n);
+}
+
+kernel void generic_array(device float *out [[buffer(0)]],
+                          device const float *in [[buffer(1)]],
+                          uint t [[thread_position_in_grid]]) {
+    switch (t >> 31) {
+        float local[2];
+        ptrs r;
+    default:
+        local[0] = float(t);
+        local[1] = float(t) + 1.0f;
+        r.p[0] = in;
+        r.p[1] = in + 4;
+        r.p[2] = in[t] < 4.0f ? in + 8 : nullptr;
+        r.q = local;
+        r.n = t;
+        read_ptrs(r, out + 4 * t, t);
     }
 }
