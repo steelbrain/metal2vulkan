@@ -498,6 +498,8 @@ mod recorder_slots;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod recycle;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod region_widths;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod relay_facts;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod released_programs;
