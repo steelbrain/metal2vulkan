@@ -1167,7 +1167,7 @@ fn regions_drawn_several_at_a_time_shade_as_region_by_region() {
                 false => assert_eq!(direct_counts, [regions, 0, 0], "indexed {indexed}"),
             }
             let (count, _, _) = shaded(&direct);
-            let expected = u64::from(physical.width) * u64::from(physical.height);
+            let expected = physical.width * physical.height;
             assert_eq!(count as u64, expected, "indexed {indexed}");
             assert!(
                 texel_bytes(&direct) == texel_bytes(&from_buffer),
