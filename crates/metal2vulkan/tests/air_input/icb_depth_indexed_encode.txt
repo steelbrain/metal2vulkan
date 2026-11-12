@@ -13,8 +13,8 @@ source_filename = "-"
 %t21 = type { ptr addrspace(1) } ; "struct.metal::command_buffer"
 %t22 = type { %t21 } ; "struct.Encoder"
 %t25 = type { float, float } ; "struct.Camera"
-c9 = %t18 [27, 2]
-c29 = <4 x i32> [0, 1, poison, poison]
+c10 = %t18 [27, 2]
+c31 = <4 x i32> [0, 1, poison, poison]
 
 define %t3 @f0 "dio_reset" memory(Mod, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) {
 bb0:
@@ -34,23 +34,49 @@ bb0:
   br %i4, bb2, bb1
 bb1:
   %i6 = getelementptr inbounds %t20, %a4, i64 0, i32 0
-  %i7 = tail call i32 @f3 [air Atomic(Atomic { space: Global, op: Add, sign: Some(Unsigned), ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: true, flags: None, stated_volatile: true })](%i6, i32 1, i32 0, i32 2, i1 1) arg0( nocapture )
+  %i7 = tail call i32 @f4 [air Atomic(Atomic { space: Global, op: Add, sign: Some(Unsigned), ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: true, flags: None, stated_volatile: true })](%i6, i32 1, i32 0, i32 2, i1 1) arg0( nocapture )
   %i8 = getelementptr inbounds %t22, %a0, i64 0, i32 0, i32 0
   %i9 = load ptr addrspace(1), %i8, align 8
   %i10 = bitcast %a1 to ptr addrspace(1)
-  tail call void @f4 [air IndirectCommand(SetBuffer { stage: Vertex, space: Device, strided: true })](%i9, %i7, %i10, i64 18446744073709551615, i32 0) arg0( nocapture )
+  tail call void @f5 [air IndirectCommand(SetBuffer { stage: Vertex, space: Device, strided: true })](%i9, %i7, %i10, i64 18446744073709551615, i32 0) arg0( nocapture )
   %i12 = bitcast %a3 to ptr addrspace(2)
-  tail call void @f5 [air IndirectCommand(SetBuffer { stage: Vertex, space: Constant, strided: true })](%i9, %i7, %i12, i64 18446744073709551615, i32 1) arg0( nocapture )
+  tail call void @f6 [air IndirectCommand(SetBuffer { stage: Vertex, space: Constant, strided: true })](%i9, %i7, %i12, i64 18446744073709551615, i32 1) arg0( nocapture )
   %i14 = mul i32 %a6, i32 6
   %i15 = zext %i14 to i64
   %i16 = getelementptr inbounds i16, %a2, %i15
-  tail call void @f6 [air IndirectCommand(DrawIndexedPrimitives { space: Device, wide: false })](%i9, %i7, i32 3, i32 6, %i16, i32 1, i32 0, i32 0) arg0( nocapture )
+  tail call void @f7 [air IndirectCommand(DrawIndexedPrimitives { space: Device, wide: false })](%i9, %i7, i32 3, i32 6, %i16, i32 1, i32 0, i32 0) arg0( nocapture )
   br bb2
 bb2:
   ret void
 }
 
-define %t10 @f2 "dio_vertex" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( align 4 dereferenceable(8) Ref nocapture "air-buffer-no-alias"="" ) {
+define %t6 @f2 "dio_encode_strided" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( align 8 dereferenceable(8) Ref nocapture "air-buffer-no-alias"="" ) %a1( "air-buffer-no-alias"="" ) %a2( "air-buffer-no-alias"="" ) %a3( align 4 dereferenceable(8) "air-buffer-no-alias"="" ) %a4( nocapture "air-buffer-no-alias"="" ) %a5( align 4 dereferenceable(4) Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = load i32, %a5, align 4
+  %i1 = and i32 %a6, i32 31
+  %i2 = shl nuw i32 i32 1, %i1
+  %i3 = and i32 %i0, %i2
+  %i4 = icmp eq %i3, i32 0
+  br %i4, bb2, bb1
+bb1:
+  %i6 = getelementptr inbounds %t20, %a4, i64 0, i32 0
+  %i7 = tail call i32 @f4 [air Atomic(Atomic { space: Global, op: Add, sign: Some(Unsigned), ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: true, flags: None, stated_volatile: true })](%i6, i32 1, i32 0, i32 2, i1 1) arg0( nocapture )
+  %i8 = getelementptr inbounds %t22, %a0, i64 0, i32 0, i32 0
+  %i9 = load ptr addrspace(1), %i8, align 8
+  %i10 = bitcast %a1 to ptr addrspace(1)
+  tail call void @f5 [air IndirectCommand(SetBuffer { stage: Vertex, space: Device, strided: true })](%i9, %i7, %i10, i64 12, i32 0) arg0( nocapture )
+  %i12 = bitcast %a3 to ptr addrspace(2)
+  tail call void @f6 [air IndirectCommand(SetBuffer { stage: Vertex, space: Constant, strided: true })](%i9, %i7, %i12, i64 18446744073709551615, i32 1) arg0( nocapture )
+  %i14 = mul i32 %a6, i32 6
+  %i15 = zext %i14 to i64
+  %i16 = getelementptr inbounds i16, %a2, %i15
+  tail call void @f7 [air IndirectCommand(DrawIndexedPrimitives { space: Device, wide: false })](%i9, %i7, i32 3, i32 6, %i16, i32 1, i32 0, i32 0) arg0( nocapture )
+  br bb2
+bb2:
+  ret void
+}
+
+define %t10 @f3 "dio_vertex" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( align 4 dereferenceable(8) Ref nocapture "air-buffer-no-alias"="" ) {
 bb0:
   %i0 = shufflevector <4 x float> %a0, <3 x float> poison, <0, 1, poison, poison>
   %i1 = extractelement %a0, i64 2
@@ -65,13 +91,13 @@ bb0:
   ret %i9
 }
 
-declare %t12 @f3 "air.atomic.global.add.u.i32" %a0( nocapture )
+declare %t12 @f4 "air.atomic.global.add.u.i32" %a0( nocapture )
 
-declare %t14 @f4 "air.set_vertex_buffer_render_command.p1i8" %a0( nocapture )
+declare %t14 @f5 "air.set_vertex_buffer_render_command.p1i8" %a0( nocapture )
 
-declare %t15 @f5 "air.set_vertex_buffer_render_command.p2i8" %a0( nocapture )
+declare %t15 @f6 "air.set_vertex_buffer_render_command.p2i8" %a0( nocapture )
 
-declare %t16 @f6 "air.draw_indexed_primitives_render_command.p1i16" %a0( nocapture )
+declare %t16 @f7 "air.draw_indexed_primitives_render_command.p1i16" %a0( nocapture )
 !md0 = !"SDK Version"
 !md1 = !"wchar_size"
 !md2 = !"frame-pointer"
@@ -129,70 +155,81 @@ declare %t16 @f6 "air.draw_indexed_primitives_render_command.p1i16" %a0( nocaptu
 !md54 = !"omnipotent char"
 !md55 = !"Simple C++ TBAA"
 !md56 = !"air-alias-scope-arg(0)"
-!md57 = !"air-alias-scope-arg(1)"
-!md58 = i32 2
-!md59 = %t18 c9
-!md60 = i32 1
-!md61 = i32 4
-!md62 = i32 7
-!md63 = i32 31
-!md64 = i32 128
-!md65 = i32 8
-!md66 = i32 16
-!md67 = ptr addrspace(0) @f0
-!md68 = i32 0
-!md69 = ptr addrspace(0) @f1
-!md70 = i32 3
-!md71 = i32 5
-!md72 = i32 6
-!md73 = ptr addrspace(0) @f2
-!md74 = i64 0
-!md75 = !{!md58, !md0, !md59}
-!md76 = !{!md60, !md1, !md61}
-!md77 = !{!md62, !md2, !md58}
-!md78 = !{!md62, !md3, !md63}
-!md79 = !{!md62, !md4, !md63}
-!md80 = !{!md62, !md5, !md63}
-!md81 = !{!md62, !md6, !md64}
-!md82 = !{!md62, !md7, !md65}
-!md83 = !{!md62, !md8, !md66}
-!md84 = !{}
-!md85 = !{!md68, !md9, !md10, !md68, !md60, !md11, !md12, !md60, !md13, !md61, !md14, !md61, !md15, !md16, !md17, !md18}
-!md86 = !{!md85}
-!md87 = !{!md67, !md84, !md86}
-!md88 = !{!md68, !md26, !md10, !md68, !md60, !md15, !md23, !md17, !md24}
-!md89 = !{!md68, !md65, !md68, !md23, !md24, !md25, !md88}
-!md90 = !{!md68, !md19, !md20, !md65, !md10, !md68, !md60, !md21, !md12, !md60, !md22, !md89, !md13, !md65, !md14, !md65, !md15, !md27, !md17, !md28}
-!md91 = !{!md60, !md9, !md10, !md60, !md60, !md21, !md12, !md60, !md13, !md61, !md14, !md61, !md15, !md29, !md17, !md30}
-!md92 = !{!md58, !md9, !md10, !md58, !md60, !md21, !md12, !md60, !md13, !md58, !md14, !md58, !md15, !md31, !md17, !md32}
-!md93 = !{!md68, !md61, !md68, !md29, !md33, !md61, !md61, !md68, !md29, !md34}
-!md94 = !{!md70, !md9, !md20, !md65, !md10, !md70, !md60, !md21, !md12, !md58, !md22, !md93, !md13, !md65, !md14, !md61, !md15, !md35, !md17, !md36}
-!md95 = !{!md68, !md61, !md68, !md16, !md37}
-!md96 = !{!md61, !md9, !md10, !md61, !md60, !md11, !md12, !md60, !md22, !md95, !md13, !md61, !md14, !md61, !md15, !md38, !md17, !md39}
-!md97 = !{!md71, !md9, !md20, !md61, !md10, !md71, !md60, !md21, !md12, !md58, !md13, !md61, !md14, !md61, !md15, !md16, !md17, !md40}
-!md98 = !{!md72, !md41, !md15, !md16, !md17, !md42}
-!md99 = !{!md90, !md91, !md92, !md94, !md96, !md97, !md98}
-!md100 = !{!md69, !md84, !md99}
-!md101 = !{!md43, !md15, !md44}
-!md102 = !{!md101}
-!md103 = !{!md68, !md45, !md10, !md68, !md60, !md15, !md46, !md17, !md47}
-!md104 = !{!md60, !md9, !md20, !md65, !md10, !md60, !md60, !md21, !md12, !md58, !md22, !md93, !md13, !md65, !md14, !md61, !md15, !md35, !md17, !md36}
-!md105 = !{!md103, !md104}
-!md106 = !{!md73, !md102, !md105}
-!md107 = !{!md48}
-!md108 = !{!md49}
-!md109 = !{!md50}
-!md110 = !{!md51}
-!md111 = !{!md58, !md65, !md68}
-!md112 = !{!md52, !md61, !md68, !md68}
-!md113 = !{!md55}
-!md114 = !{!md54, !md113, !md74}
-!md115 = !{!md53, !md114, !md74}
-!md116 = !{!md115, !md115, !md74}
-!"llvm.module.flags" = !{!md75, !md76, !md77, !md78, !md79, !md80, !md81, !md82, !md83}
-!"air.kernel" = !{!md87, !md100}
-!"air.vertex" = !{!md106}
-!"air.compile_options" = !{!md107, !md108, !md109}
-!"llvm.ident" = !{!md110}
-!"air.version" = !{!md111}
-!"air.language_version" = !{!md112}
+!md57 = !"air-alias-scope-arg(5)"
+!md58 = !"air-alias-scope-arg(4)"
+!md59 = !"air-alias-scope-arg(3)"
+!md60 = !"air-alias-scope-arg(2)"
+!md61 = !"air-alias-scope-arg(1)"
+!md62 = !"__metal_command_buffer_t"
+!md63 = i32 2
+!md64 = %t18 c10
+!md65 = i32 1
+!md66 = i32 4
+!md67 = i32 7
+!md68 = i32 31
+!md69 = i32 128
+!md70 = i32 8
+!md71 = i32 16
+!md72 = ptr addrspace(0) @f0
+!md73 = i32 0
+!md74 = ptr addrspace(0) @f1
+!md75 = i32 3
+!md76 = i32 5
+!md77 = i32 6
+!md78 = ptr addrspace(0) @f2
+!md79 = ptr addrspace(0) @f3
+!md80 = i64 0
+!md81 = i64 8
+!md82 = !{!md63, !md0, !md64}
+!md83 = !{!md65, !md1, !md66}
+!md84 = !{!md67, !md2, !md63}
+!md85 = !{!md67, !md3, !md68}
+!md86 = !{!md67, !md4, !md68}
+!md87 = !{!md67, !md5, !md68}
+!md88 = !{!md67, !md6, !md69}
+!md89 = !{!md67, !md7, !md70}
+!md90 = !{!md67, !md8, !md71}
+!md91 = !{}
+!md92 = !{!md73, !md9, !md10, !md73, !md65, !md11, !md12, !md65, !md13, !md66, !md14, !md66, !md15, !md16, !md17, !md18}
+!md93 = !{!md92}
+!md94 = !{!md72, !md91, !md93}
+!md95 = !{!md73, !md26, !md10, !md73, !md65, !md15, !md23, !md17, !md24}
+!md96 = !{!md73, !md70, !md73, !md23, !md24, !md25, !md95}
+!md97 = !{!md73, !md19, !md20, !md70, !md10, !md73, !md65, !md21, !md12, !md65, !md22, !md96, !md13, !md70, !md14, !md70, !md15, !md27, !md17, !md28}
+!md98 = !{!md65, !md9, !md10, !md65, !md65, !md21, !md12, !md65, !md13, !md66, !md14, !md66, !md15, !md29, !md17, !md30}
+!md99 = !{!md63, !md9, !md10, !md63, !md65, !md21, !md12, !md65, !md13, !md63, !md14, !md63, !md15, !md31, !md17, !md32}
+!md100 = !{!md73, !md66, !md73, !md29, !md33, !md66, !md66, !md73, !md29, !md34}
+!md101 = !{!md75, !md9, !md20, !md70, !md10, !md75, !md65, !md21, !md12, !md63, !md22, !md100, !md13, !md70, !md14, !md66, !md15, !md35, !md17, !md36}
+!md102 = !{!md73, !md66, !md73, !md16, !md37}
+!md103 = !{!md66, !md9, !md10, !md66, !md65, !md11, !md12, !md65, !md22, !md102, !md13, !md66, !md14, !md66, !md15, !md38, !md17, !md39}
+!md104 = !{!md76, !md9, !md20, !md66, !md10, !md76, !md65, !md21, !md12, !md63, !md13, !md66, !md14, !md66, !md15, !md16, !md17, !md40}
+!md105 = !{!md77, !md41, !md15, !md16, !md17, !md42}
+!md106 = !{!md97, !md98, !md99, !md101, !md103, !md104, !md105}
+!md107 = !{!md74, !md91, !md106}
+!md108 = !{!md78, !md91, !md106}
+!md109 = !{!md43, !md15, !md44}
+!md110 = !{!md109}
+!md111 = !{!md73, !md45, !md10, !md73, !md65, !md15, !md46, !md17, !md47}
+!md112 = !{!md65, !md9, !md20, !md70, !md10, !md65, !md65, !md21, !md12, !md63, !md22, !md100, !md13, !md70, !md14, !md66, !md15, !md35, !md17, !md36}
+!md113 = !{!md111, !md112}
+!md114 = !{!md79, !md110, !md113}
+!md115 = !{!md48}
+!md116 = !{!md49}
+!md117 = !{!md50}
+!md118 = !{!md51}
+!md119 = !{!md63, !md70, !md73}
+!md120 = !{!md52, !md66, !md73, !md73}
+!md121 = !{!md55}
+!md122 = !{!md54, !md121, !md80}
+!md123 = !{!md53, !md122, !md80}
+!md124 = !{!md123, !md123, !md80}
+!md125 = !{!md62, !md122, !md80}
+!md126 = !{!md125, !md125, !md80}
+!md127 = !{!md80, !md81, !md126}
+!"llvm.module.flags" = !{!md82, !md83, !md84, !md85, !md86, !md87, !md88, !md89, !md90}
+!"air.kernel" = !{!md94, !md107, !md108}
+!"air.vertex" = !{!md114}
+!"air.compile_options" = !{!md115, !md116, !md117}
+!"llvm.ident" = !{!md118}
+!"air.version" = !{!md119}
+!"air.language_version" = !{!md120}

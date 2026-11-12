@@ -239,7 +239,7 @@ bb1:
   store i32 1, %i186, align 4
   %i188 = getelementptr inbounds %t30, %i152, i64 0, i32 0, i64 1
   store %i160, %i188, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i178, i16 2, %i179, %i180, %i185, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i178, i16 2, %i179, %i180, %i185, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i191 = tail call i32 @f9 [air SimdgroupSize(SimdgroupSize { ty: I32 })]()
   call void @f10(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i154, i32 268435488, i32 268435488, i32 268435488, %i191) convergent "no-builtins"=""
   %i193 = bitcast %i147 to ptr addrspace(0)
@@ -270,7 +270,7 @@ bb3:
   store i32 1, %i215, align 4
   %i217 = getelementptr inbounds %t30, %i150, i64 0, i32 0, i64 1
   store %i205, %i217, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i207, i16 2, %i208, %i209, %i214, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i207, i16 2, %i208, %i209, %i214, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i220 = bitcast %i148 to ptr addrspace(0)
   call void @f48 [llvm Memcpy { dst: Thread, src: Thread, len: I64, volatile: false }](%i220, ptr addrspace(0) @g2, i64 20, i1 0) arg0( align 4 dereferenceable(20) ) arg1( align 4 dereferenceable(20) )
   %i222 = call ptr addrspace(0) @f14(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i154, i16 65535, i32 268435488, i32 268435488, i32 268435488) convergent "no-builtins"=""
@@ -357,7 +357,7 @@ bb12:
   store i32 1, %i293, align 4
   %i295 = getelementptr inbounds %t30, %i142, i64 0, i32 0, i64 1
   store %i267, %i295, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i285, i16 2, %i286, %i287, %i292, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i285, i16 2, %i286, %i287, %i292, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i298 = tail call i32 @f9 [air SimdgroupSize(SimdgroupSize { ty: I32 })]()
   call void @f10(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i144, i32 268435472, i32 268435472, i32 268435488, %i298) convergent "no-builtins"=""
   %i300 = bitcast %i137 to ptr addrspace(0)
@@ -388,7 +388,7 @@ bb14:
   store i32 1, %i322, align 4
   %i324 = getelementptr inbounds %t30, %i140, i64 0, i32 0, i64 1
   store %i312, %i324, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i314, i16 2, %i315, %i316, %i321, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i314, i16 2, %i315, %i316, %i321, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i327 = bitcast %i138 to ptr addrspace(0)
   call void @f48 [llvm Memcpy { dst: Thread, src: Thread, len: I64, volatile: false }](%i327, ptr addrspace(0) @g2, i64 20, i1 0) arg0( align 4 dereferenceable(20) ) arg1( align 4 dereferenceable(20) )
   %i329 = call ptr addrspace(0) @f14(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i144, i16 65535, i32 268435472, i32 268435472, i32 268435488) convergent "no-builtins"=""
@@ -475,7 +475,7 @@ bb23:
   store i32 1, %i400, align 4
   %i402 = getelementptr inbounds %t30, %i131, i64 0, i32 0, i64 1
   store %i374, %i402, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i392, i16 2, %i393, %i394, %i399, i8 2) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i392, i16 2, %i393, %i394, %i399, i8 2) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i405 = tail call i32 @f9 [air SimdgroupSize(SimdgroupSize { ty: I32 })]()
   call void @f10(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i133, i32 2415919120, i32 2415919120, i32 268435488, %i405) convergent "no-builtins"=""
   %i407 = bitcast %i126 to ptr addrspace(0)
@@ -506,7 +506,7 @@ bb25:
   store i32 1, %i429, align 4
   %i431 = getelementptr inbounds %t30, %i129, i64 0, i32 0, i64 1
   store %i419, %i431, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i421, i16 2, %i422, %i423, %i428, i8 2) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i421, i16 2, %i422, %i423, %i428, i8 2) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i434 = bitcast %i127 to ptr addrspace(0)
   call void @f48 [llvm Memcpy { dst: Thread, src: Thread, len: I64, volatile: false }](%i434, ptr addrspace(0) @g2, i64 20, i1 0) arg0( align 4 dereferenceable(20) ) arg1( align 4 dereferenceable(20) )
   %i436 = call ptr addrspace(0) @f14(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i133, i16 65535, i32 2415919120, i32 2415919120, i32 268435488) convergent "no-builtins"=""
@@ -593,7 +593,7 @@ bb34:
   store i32 1, %i507, align 4
   %i509 = getelementptr inbounds %t30, %i120, i64 0, i32 0, i64 1
   store %i481, %i509, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i499, i16 2, %i500, %i501, %i506, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i499, i16 2, %i500, %i501, %i506, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i512 = tail call i32 @f9 [air SimdgroupSize(SimdgroupSize { ty: I32 })]()
   call void @f10(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 1, i32 1, %i122, i32 268435488, i32 268435488, i32 268435488, %i512) convergent "no-builtins"=""
   %i514 = bitcast %i115 to ptr addrspace(0)
@@ -624,7 +624,7 @@ bb36:
   store i32 1, %i536, align 4
   %i538 = getelementptr inbounds %t30, %i118, i64 0, i32 0, i64 1
   store %i526, %i538, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i528, i16 2, %i529, %i530, %i535, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i528, i16 2, %i529, %i530, %i535, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i541 = bitcast %i116 to ptr addrspace(0)
   call void @f48 [llvm Memcpy { dst: Thread, src: Thread, len: I64, volatile: false }](%i541, ptr addrspace(0) @g3, i64 20, i1 0) arg0( align 4 dereferenceable(20) ) arg1( align 4 dereferenceable(20) )
   %i543 = call ptr addrspace(0) @f14(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 1, i32 1, %i122, i16 65535, i32 268435488, i32 268435488, i32 268435488) convergent "no-builtins"=""
@@ -711,7 +711,7 @@ bb45:
   store i32 1, %i614, align 4
   %i616 = getelementptr inbounds %t30, %i109, i64 0, i32 0, i64 1
   store %i588, %i616, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i606, i16 2, %i607, %i608, %i613, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i606, i16 2, %i607, %i608, %i613, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i619 = tail call i32 @f9 [air SimdgroupSize(SimdgroupSize { ty: I32 })]()
   call void @f10(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 1, i32 1, %i111, i32 268435472, i32 268435472, i32 268435488, %i619) convergent "no-builtins"=""
   %i621 = bitcast %i104 to ptr addrspace(0)
@@ -742,7 +742,7 @@ bb47:
   store i32 1, %i643, align 4
   %i645 = getelementptr inbounds %t30, %i107, i64 0, i32 0, i64 1
   store %i633, %i645, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i635, i16 2, %i636, %i637, %i642, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i635, i16 2, %i636, %i637, %i642, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i648 = bitcast %i105 to ptr addrspace(0)
   call void @f48 [llvm Memcpy { dst: Thread, src: Thread, len: I64, volatile: false }](%i648, ptr addrspace(0) @g3, i64 20, i1 0) arg0( align 4 dereferenceable(20) ) arg1( align 4 dereferenceable(20) )
   %i650 = call ptr addrspace(0) @f14(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 1, i32 1, %i111, i16 65535, i32 268435472, i32 268435472, i32 268435488) convergent "no-builtins"=""
@@ -829,7 +829,7 @@ bb56:
   store i32 1, %i721, align 4
   %i723 = getelementptr inbounds %t30, %i98, i64 0, i32 0, i64 1
   store %i695, %i723, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i713, i16 2, %i714, %i715, %i720, i8 2) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i713, i16 2, %i714, %i715, %i720, i8 2) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i726 = tail call i32 @f9 [air SimdgroupSize(SimdgroupSize { ty: I32 })]()
   call void @f10(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 1, i32 1, %i100, i32 2415919120, i32 2415919120, i32 268435488, %i726) convergent "no-builtins"=""
   %i728 = bitcast %i93 to ptr addrspace(0)
@@ -860,7 +860,7 @@ bb58:
   store i32 1, %i750, align 4
   %i752 = getelementptr inbounds %t30, %i96, i64 0, i32 0, i64 1
   store %i740, %i752, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i742, i16 2, %i743, %i744, %i749, i8 2) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i742, i16 2, %i743, %i744, %i749, i8 2) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i755 = bitcast %i94 to ptr addrspace(0)
   call void @f48 [llvm Memcpy { dst: Thread, src: Thread, len: I64, volatile: false }](%i755, ptr addrspace(0) @g3, i64 20, i1 0) arg0( align 4 dereferenceable(20) ) arg1( align 4 dereferenceable(20) )
   %i757 = call ptr addrspace(0) @f14(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 1, i32 1, %i100, i16 65535, i32 2415919120, i32 2415919120, i32 268435488) convergent "no-builtins"=""
@@ -947,7 +947,7 @@ bb67:
   store i32 1, %i828, align 4
   %i830 = getelementptr inbounds %t30, %i87, i64 0, i32 0, i64 1
   store %i802, %i830, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i820, i16 2, %i821, %i822, %i827, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i820, i16 2, %i821, %i822, %i827, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i833 = tail call i32 @f9 [air SimdgroupSize(SimdgroupSize { ty: I32 })]()
   call void @f10(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 0, %i89, i32 268435488, i32 268435488, i32 268435488, %i833) convergent "no-builtins"=""
   %i835 = bitcast %i82 to ptr addrspace(0)
@@ -978,7 +978,7 @@ bb69:
   store i32 1, %i857, align 4
   %i859 = getelementptr inbounds %t30, %i85, i64 0, i32 0, i64 1
   store %i847, %i859, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i849, i16 2, %i850, %i851, %i856, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i849, i16 2, %i850, %i851, %i856, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i862 = bitcast %i83 to ptr addrspace(0)
   call void @f48 [llvm Memcpy { dst: Thread, src: Thread, len: I64, volatile: false }](%i862, ptr addrspace(0) @g4, i64 20, i1 0) arg0( align 4 dereferenceable(20) ) arg1( align 4 dereferenceable(20) )
   %i864 = call ptr addrspace(0) @f14(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 0, %i89, i16 65535, i32 268435488, i32 268435488, i32 268435488) convergent "no-builtins"=""
@@ -1065,7 +1065,7 @@ bb78:
   store i32 1, %i935, align 4
   %i937 = getelementptr inbounds %t30, %i76, i64 0, i32 0, i64 1
   store %i909, %i937, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i927, i16 2, %i928, %i929, %i934, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i927, i16 2, %i928, %i929, %i934, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i940 = tail call i32 @f9 [air SimdgroupSize(SimdgroupSize { ty: I32 })]()
   call void @f10(i32 2, i32 16, i32 16, i32 32, i8 0, i8 1, i8 0, i32 1, %i78, i32 268435488, i32 268435488, i32 268435488, %i940) convergent "no-builtins"=""
   %i942 = bitcast %i71 to ptr addrspace(0)
@@ -1096,7 +1096,7 @@ bb80:
   store i32 1, %i964, align 4
   %i966 = getelementptr inbounds %t30, %i74, i64 0, i32 0, i64 1
   store %i954, %i966, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i956, i16 2, %i957, %i958, %i963, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i956, i16 2, %i957, %i958, %i963, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i969 = bitcast %i72 to ptr addrspace(0)
   call void @f48 [llvm Memcpy { dst: Thread, src: Thread, len: I64, volatile: false }](%i969, ptr addrspace(0) @g5, i64 20, i1 0) arg0( align 4 dereferenceable(20) ) arg1( align 4 dereferenceable(20) )
   %i971 = call ptr addrspace(0) @f14(i32 2, i32 16, i32 16, i32 32, i8 0, i8 1, i8 0, i32 1, %i78, i16 65535, i32 268435488, i32 268435488, i32 268435488) convergent "no-builtins"=""
@@ -1183,7 +1183,7 @@ bb89:
   store i32 1, %i1042, align 4
   %i1044 = getelementptr inbounds %t30, %i65, i64 0, i32 0, i64 1
   store %i1016, %i1044, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i1034, i16 2, %i1035, %i1036, %i1041, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i1034, i16 2, %i1035, %i1036, %i1041, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i1047 = tail call i32 @f9 [air SimdgroupSize(SimdgroupSize { ty: I32 })]()
   call void @f10(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i67, i32 268435488, i32 268435488, i32 268435488, %i1047) convergent "no-builtins"=""
   %i1049 = bitcast %i63 to ptr addrspace(0)
@@ -1327,7 +1327,7 @@ bb107:
   store i32 1, %i1168, align 4
   %i1170 = getelementptr inbounds %t30, %i54, i64 0, i32 0, i64 1
   store %i1142, %i1170, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i1160, i16 2, %i1161, %i1162, %i1167, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i1160, i16 2, %i1161, %i1162, %i1167, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i1173 = tail call i32 @f9 [air SimdgroupSize(SimdgroupSize { ty: I32 })]()
   %i1174 = shl i32 %i1173, i32 1
   call void @f10(i32 2, i32 16, i32 64, i32 16, i8 0, i8 0, i8 0, i32 1, %i56, i32 268435488, i32 268435488, i32 268435488, %i1174) convergent "no-builtins"=""
@@ -1359,7 +1359,7 @@ bb109:
   store i32 1, %i1198, align 4
   %i1200 = getelementptr inbounds %t30, %i52, i64 0, i32 0, i64 1
   store %i1188, %i1200, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i1190, i16 2, %i1191, %i1192, %i1197, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i1190, i16 2, %i1191, %i1192, %i1197, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i1203 = bitcast %i50 to ptr addrspace(0)
   call void @f48 [llvm Memcpy { dst: Thread, src: Thread, len: I64, volatile: false }](%i1203, ptr addrspace(0) @g6, i64 20, i1 0) arg0( align 4 dereferenceable(20) ) arg1( align 4 dereferenceable(20) )
   %i1205 = call ptr addrspace(0) @f14(i32 2, i32 16, i32 64, i32 16, i8 0, i8 0, i8 0, i32 1, %i56, i16 65535, i32 268435488, i32 268435488, i32 268435488) convergent "no-builtins"=""
@@ -1446,7 +1446,7 @@ bb118:
   store i32 1, %i1276, align 4
   %i1278 = getelementptr inbounds %t30, %i43, i64 0, i32 0, i64 1
   store %i1250, %i1278, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i1268, i16 2, %i1269, %i1270, %i1275, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i1268, i16 2, %i1269, %i1270, %i1275, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i1281 = tail call i32 @f9 [air SimdgroupSize(SimdgroupSize { ty: I32 })]()
   %i1282 = shl i32 %i1281, i32 2
   call void @f10(i32 2, i32 64, i32 64, i32 32, i8 0, i8 0, i8 0, i32 1, %i45, i32 268435472, i32 268435472, i32 268435488, %i1282) convergent "no-builtins"=""
@@ -1478,7 +1478,7 @@ bb120:
   store i32 1, %i1306, align 4
   %i1308 = getelementptr inbounds %t30, %i41, i64 0, i32 0, i64 1
   store %i1296, %i1308, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i1298, i16 2, %i1299, %i1300, %i1305, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i1298, i16 2, %i1299, %i1300, %i1305, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i1311 = bitcast %i39 to ptr addrspace(0)
   call void @f48 [llvm Memcpy { dst: Thread, src: Thread, len: I64, volatile: false }](%i1311, ptr addrspace(0) @g7, i64 20, i1 0) arg0( align 4 dereferenceable(20) ) arg1( align 4 dereferenceable(20) )
   %i1313 = call ptr addrspace(0) @f14(i32 2, i32 64, i32 64, i32 32, i8 0, i8 0, i8 0, i32 1, %i45, i16 65535, i32 268435472, i32 268435472, i32 268435488) convergent "no-builtins"=""
@@ -1565,7 +1565,7 @@ bb129:
   store i32 1, %i1384, align 4
   %i1386 = getelementptr inbounds %t30, %i32, i64 0, i32 0, i64 1
   store %i1358, %i1386, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i1376, i16 2, %i1377, %i1378, %i1383, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i1376, i16 2, %i1377, %i1378, %i1383, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i1389 = tail call i32 @f9 [air SimdgroupSize(SimdgroupSize { ty: I32 })]()
   %i1390 = shl i32 %i1389, i32 2
   call void @f10(i32 2, i32 64, i32 64, i32 32, i8 0, i8 0, i8 0, i32 1, %i34, i32 268435488, i32 268435488, i32 268435488, %i1390) convergent "no-builtins"=""
@@ -1597,7 +1597,7 @@ bb131:
   store i32 1, %i1414, align 4
   %i1416 = getelementptr inbounds %t30, %i30, i64 0, i32 0, i64 1
   store %i1404, %i1416, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i1406, i16 2, %i1407, %i1408, %i1413, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i1406, i16 2, %i1407, %i1408, %i1413, i8 0) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i1419 = bitcast %i28 to ptr addrspace(0)
   call void @f48 [llvm Memcpy { dst: Thread, src: Thread, len: I64, volatile: false }](%i1419, ptr addrspace(0) @g7, i64 20, i1 0) arg0( align 4 dereferenceable(20) ) arg1( align 4 dereferenceable(20) )
   %i1421 = call ptr addrspace(0) @f14(i32 2, i32 64, i32 64, i32 32, i8 0, i8 0, i8 0, i32 1, %i34, i16 65535, i32 268435488, i32 268435488, i32 268435488) convergent "no-builtins"=""
@@ -1684,7 +1684,7 @@ bb140:
   store i32 1, %i1492, align 4
   %i1494 = getelementptr inbounds %t30, %i20, i64 0, i32 0, i64 1
   store %i1466, %i1494, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i1484, i16 2, %i1485, %i1486, %i1491, i8 2) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i1484, i16 2, %i1485, %i1486, %i1491, i8 2) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i1497 = tail call i32 @f9 [air SimdgroupSize(SimdgroupSize { ty: I32 })]()
   call void @f10(i32 2, i32 32, i32 32, i32 32, i8 0, i8 1, i8 0, i32 1, %i22, i32 2415919120, i32 2415919120, i32 268435488, %i1497) convergent "no-builtins"=""
   %i1499 = bitcast %i15 to ptr addrspace(0)
@@ -1715,7 +1715,7 @@ bb142:
   store i32 1, %i1521, align 4
   %i1523 = getelementptr inbounds %t30, %i18, i64 0, i32 0, i64 1
   store %i1511, %i1523, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i1513, i16 2, %i1514, %i1515, %i1520, i8 2) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i1513, i16 2, %i1514, %i1515, %i1520, i8 2) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i1526 = bitcast %i16 to ptr addrspace(0)
   call void @f48 [llvm Memcpy { dst: Thread, src: Thread, len: I64, volatile: false }](%i1526, ptr addrspace(0) @g8, i64 20, i1 0) arg0( align 4 dereferenceable(20) ) arg1( align 4 dereferenceable(20) )
   %i1528 = call ptr addrspace(0) @f14(i32 2, i32 32, i32 32, i32 32, i8 0, i8 1, i8 0, i32 1, %i22, i16 65535, i32 2415919120, i32 2415919120, i32 268435488) convergent "no-builtins"=""
@@ -1802,7 +1802,7 @@ bb151:
   store i32 1, %i1599, align 4
   %i1601 = getelementptr inbounds %t30, %i8, i64 0, i32 0, i64 1
   store %i1573, %i1601, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i1591, i16 2, %i1592, %i1593, %i1598, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i1591, i16 2, %i1592, %i1593, %i1598, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i1604 = tail call i32 @f9 [air SimdgroupSize(SimdgroupSize { ty: I32 })]()
   %i1605 = shl i32 %i1604, i32 2
   call void @f10(i32 2, i32 64, i32 64, i32 32, i8 0, i8 1, i8 0, i32 1, %i10, i32 268435472, i32 268435472, i32 268435488, %i1605) convergent "no-builtins"=""
@@ -1834,7 +1834,7 @@ bb153:
   store i32 1, %i1629, align 4
   %i1631 = getelementptr inbounds %t30, %i6, i64 0, i32 0, i64 1
   store %i1619, %i1631, align 4
-  call void @f7 [air Tensor(InitStrided { data: Device })](%i1621, i16 2, %i1622, %i1623, %i1628, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
+  call void @f7 [air Tensor(InitStrided { data: Device, trailing: false })](%i1621, i16 2, %i1622, %i1623, %i1628, i8 1) arg0( Mod nocapture ) arg2( NoModRef ) arg3( Ref nocapture ) arg4( Ref nocapture )
   %i1634 = bitcast %i4 to ptr addrspace(0)
   call void @f48 [llvm Memcpy { dst: Thread, src: Thread, len: I64, volatile: false }](%i1634, ptr addrspace(0) @g9, i64 20, i1 0) arg0( align 4 dereferenceable(20) ) arg1( align 4 dereferenceable(20) )
   %i1636 = call ptr addrspace(0) @f14(i32 2, i32 64, i32 64, i32 32, i8 0, i8 1, i8 0, i32 1, %i10, i16 65535, i32 268435472, i32 268435472, i32 268435488) convergent "no-builtins"=""
