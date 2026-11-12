@@ -74,8 +74,8 @@ fn the_unit_a_switch_picks_samples_its_texture_as_a_2d_array() {
         let command_buffer = queue.command_buffer().unwrap();
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
         encoder.set_compute_pipeline_state(&pipeline).unwrap();
-        for (k, texture) in textures.iter().enumerate() {
-            encoder.set_texture(Some(texture), k as u64).unwrap();
+        for (texture, k) in textures.iter().zip(0u32..) {
+            encoder.set_texture(Some(texture), k).unwrap();
         }
         encoder.set_sampler_state(Some(&sampler), 0).unwrap();
         encoder.set_buffer(Some(&which), 0, 0).unwrap();
