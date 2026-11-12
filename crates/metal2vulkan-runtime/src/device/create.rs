@@ -1368,9 +1368,12 @@ pub(crate) struct LeastPlanTaken {
 
 /// Whether `result` is a driver's refusal of a device for want of its resources, of which a
 /// device of fewer `VkQueue`s needs less: `VK_ERROR_TOO_MANY_OBJECTS` (Vulkan's answer where the
-/// device-specific resources a logical device needs run out), `VK_ERROR_INITIALIZATION_FAILED`
-/// (NVIDIA's driver, what it needs, such as its GPU's channels, held by other devices),
-/// `VK_ERROR_OUT_OF_DEVICE_MEMORY` or `VK_ERROR_OUT_OF_HOST_MEMORY`.
+/// device-specific resources a logical device needs run out), `VK_ERROR_INITIALIZATION_FAILED`,
+/// `VK_ERROR_OUT_OF_DEVICE_MEMORY` or `VK_ERROR_OUT_OF_HOST_MEMORY`. NVIDIA's driver answers the
+/// second or the last where other devices hold its GPU's channels: on an RTX 2080
+/// (NVIDIA 620.70.06), beside 60 devices of 3 `VkQueue`s, a device of 18 was refused with
+/// `VK_ERROR_OUT_OF_HOST_MEMORY`, and beside 62 or 64 with `VK_ERROR_INITIALIZATION_FAILED`; a
+/// device of 3 was made beside each (`examples/queue_plan_cost.rs`, `--fills`).
 fn for_want_of_resources(result: vk::Result) -> bool {
     matches!(
         result,
