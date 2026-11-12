@@ -33,7 +33,7 @@ define float @_Z5spacePKf(ptr addrspace(8) noundef %0) local_unnamed_addr #0 {
 define float @_Z5weighPKfj(ptr addrspace(8) noundef %0, i32 noundef %1) local_unnamed_addr #1 {
   %3 = zext i32 %1 to i64
   %4 = getelementptr inbounds float, ptr addrspace(8) %0, i64 %3
-  %5 = load float, ptr addrspace(8) %4, align 4, !tbaa !27
+  %5 = load float, ptr addrspace(8) %4, align 4, !tbaa !28
   %6 = tail call fast float @_Z5spacePKf(ptr addrspace(8) noundef %0) #10
   %7 = fmul fast float %6, 1.000000e+02
   %8 = fadd fast float %7, %5
@@ -44,9 +44,9 @@ define float @_Z5weighPKfj(ptr addrspace(8) noundef %0, i32 noundef %1) local_un
 define void @_Z4bumpPfjf(ptr addrspace(8) noundef captures(none) %0, i32 noundef %1, float noundef %2) local_unnamed_addr #2 {
   %4 = zext i32 %1 to i64
   %5 = getelementptr inbounds float, ptr addrspace(8) %0, i64 %4
-  %6 = load float, ptr addrspace(8) %5, align 4, !tbaa !27
+  %6 = load float, ptr addrspace(8) %5, align 4, !tbaa !28
   %7 = fadd fast float %6, %2
-  store float %7, ptr addrspace(8) %5, align 4, !tbaa !27
+  store float %7, ptr addrspace(8) %5, align 4, !tbaa !28
   ret void
 }
 
@@ -55,22 +55,22 @@ define void @generic_spaces(ptr addrspace(1) noundef captures(none) "air-buffer-
   %5 = alloca [4 x float], align 4
   %6 = zext i32 %3 to i64
   %7 = getelementptr inbounds float, ptr addrspace(1) %1, i64 %6
-  %8 = load float, ptr addrspace(1) %7, align 4, !tbaa !27, !alias.scope !31, !noalias !34
+  %8 = load float, ptr addrspace(1) %7, align 4, !tbaa !28, !alias.scope !32, !noalias !35
   %9 = fmul fast float %8, 2.000000e+00
   %10 = getelementptr inbounds [8 x float], ptr addrspace(3) @_ZZ14generic_spacesPU9MTLdevicefPU9MTLdeviceKfjjE6shared, i64 0, i64 %6
-  store float %9, ptr addrspace(3) %10, align 4, !tbaa !27
+  store float %9, ptr addrspace(3) %10, align 4, !tbaa !28
   %11 = tail call fast float @air.convert.f.f32.u.i32(i32 %2) #11
   %12 = getelementptr inbounds [4 x float], ptr %5, i64 0, i64 0
-  store float %11, ptr %12, align 4, !tbaa !27
+  store float %11, ptr %12, align 4, !tbaa !28
   %13 = fadd fast float %11, 1.000000e+00
   %14 = getelementptr inbounds [4 x float], ptr %5, i64 0, i64 1
-  store float %13, ptr %14, align 4, !tbaa !27
+  store float %13, ptr %14, align 4, !tbaa !28
   %15 = fadd fast float %11, 2.000000e+00
   %16 = getelementptr inbounds [4 x float], ptr %5, i64 0, i64 2
-  store float %15, ptr %16, align 4, !tbaa !27
+  store float %15, ptr %16, align 4, !tbaa !28
   %17 = fadd fast float %11, 3.000000e+00
   %18 = getelementptr inbounds [4 x float], ptr %5, i64 0, i64 3
-  store float %17, ptr %18, align 4, !tbaa !27
+  store float %17, ptr %18, align 4, !tbaa !28
   %19 = addrspacecast ptr %12 to ptr addrspace(8)
   %20 = and i32 %2, 3
   call void @_Z4bumpPfjf(ptr addrspace(8) noundef %19, i32 noundef %20, float noundef 5.000000e-01) #10
@@ -82,33 +82,33 @@ define void @generic_spaces(ptr addrspace(1) noundef captures(none) "air-buffer-
   %25 = zext i32 %21 to i64
   %26 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %25
   %27 = addrspacecast ptr addrspace(1) %1 to ptr addrspace(8)
-  %28 = tail call fast float @_Z5weighPKfj(ptr addrspace(8) noundef %27, i32 noundef %2) #13, !alias.scope !31, !noalias !34
-  store float %28, ptr addrspace(1) %26, align 4, !tbaa !27, !alias.scope !34, !noalias !31
+  %28 = tail call fast float @_Z5weighPKfj(ptr addrspace(8) noundef %27, i32 noundef %2) #13, !alias.scope !32, !noalias !35
+  store float %28, ptr addrspace(1) %26, align 4, !tbaa !28, !alias.scope !35, !noalias !32
   %29 = call fast float @_Z5weighPKfj(ptr addrspace(8) noundef %19, i32 noundef %20) #13
   %30 = getelementptr inbounds float, ptr addrspace(1) %26, i64 1
-  store float %29, ptr addrspace(1) %30, align 4, !tbaa !27, !alias.scope !34, !noalias !31
+  store float %29, ptr addrspace(1) %30, align 4, !tbaa !28, !alias.scope !35, !noalias !32
   %31 = add i32 %2, 1
   %32 = and i32 %31, 7
   %33 = call fast float @_Z5weighPKfj(ptr addrspace(8) noundef addrspacecast (ptr addrspace(3) @_ZZ14generic_spacesPU9MTLdevicefPU9MTLdeviceKfjjE6shared to ptr addrspace(8)), i32 noundef %32) #13
   %34 = getelementptr inbounds float, ptr addrspace(1) %26, i64 2
-  store float %33, ptr addrspace(1) %34, align 4, !tbaa !27, !alias.scope !34, !noalias !31
+  store float %33, ptr addrspace(1) %34, align 4, !tbaa !28, !alias.scope !35, !noalias !32
   %35 = addrspacecast ptr addrspace(1) %24 to ptr addrspace(8)
-  %36 = call fast float @_Z5weighPKfj(ptr addrspace(8) noundef %35, i32 noundef %2) #13, !alias.scope !31, !noalias !34
+  %36 = call fast float @_Z5weighPKfj(ptr addrspace(8) noundef %35, i32 noundef %2) #13, !alias.scope !32, !noalias !35
   %37 = getelementptr inbounds float, ptr addrspace(1) %26, i64 3
-  store float %36, ptr addrspace(1) %37, align 4, !tbaa !27, !alias.scope !34, !noalias !31
+  store float %36, ptr addrspace(1) %37, align 4, !tbaa !28, !alias.scope !35, !noalias !32
   %38 = getelementptr inbounds float, ptr addrspace(1) %26, i64 4
-  store float 2.000000e+00, ptr addrspace(1) %38, align 4, !tbaa !27, !alias.scope !34, !noalias !31
+  store float 2.000000e+00, ptr addrspace(1) %38, align 4, !tbaa !28, !alias.scope !35, !noalias !32
   %39 = addrspacecast ptr addrspace(1) %26 to ptr addrspace(8)
-  call void @_Z4bumpPfjf(ptr addrspace(8) noundef %39, i32 noundef 4, float noundef 1.500000e+00) #10, !alias.scope !34, !noalias !31
+  call void @_Z4bumpPfjf(ptr addrspace(8) noundef %39, i32 noundef 4, float noundef 1.500000e+00) #10, !alias.scope !35, !noalias !32
   %40 = call fast float @_Z5spacePKf(ptr addrspace(8) noundef addrspacecast (ptr addrspace(3) @_ZZ14generic_spacesPU9MTLdevicefPU9MTLdeviceKfjjE6shared to ptr addrspace(8))) #10
   %41 = getelementptr inbounds float, ptr addrspace(1) %26, i64 5
-  store float %40, ptr addrspace(1) %41, align 4, !tbaa !27, !alias.scope !34, !noalias !31
+  store float %40, ptr addrspace(1) %41, align 4, !tbaa !28, !alias.scope !35, !noalias !32
   %42 = call fast float @_Z5spacePKf(ptr addrspace(8) noundef %19) #10
   %43 = getelementptr inbounds float, ptr addrspace(1) %26, i64 6
-  store float %42, ptr addrspace(1) %43, align 4, !tbaa !27, !alias.scope !34, !noalias !31
+  store float %42, ptr addrspace(1) %43, align 4, !tbaa !28, !alias.scope !35, !noalias !32
   %44 = call fast float @_Z5spacePKf(ptr addrspace(8) noundef %27) #10
   %45 = getelementptr inbounds float, ptr addrspace(1) %26, i64 7
-  store float %44, ptr addrspace(1) %45, align 4, !tbaa !27, !alias.scope !34, !noalias !31
+  store float %44, ptr addrspace(1) %45, align 4, !tbaa !28, !alias.scope !35, !noalias !32
   ret void
 }
 
@@ -119,12 +119,12 @@ declare float @air.convert.f.f32.u.i32(i32) local_unnamed_addr #4
 define void @generic_mixed(ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1, i32 noundef %2) local_unnamed_addr #5 {
   %4 = alloca [2 x float], align 4
   %5 = getelementptr inbounds [2 x float], ptr %4, i64 0, i64 0
-  store float 1.000000e+01, ptr %5, align 4, !tbaa !27
+  store float 1.000000e+01, ptr %5, align 4, !tbaa !28
   %6 = getelementptr inbounds [2 x float], ptr %4, i64 0, i64 1
-  store float 1.100000e+01, ptr %6, align 4, !tbaa !27
+  store float 1.100000e+01, ptr %6, align 4, !tbaa !28
   %7 = zext i32 %2 to i64
   %8 = getelementptr inbounds float, ptr addrspace(1) %1, i64 %7
-  %9 = load float, ptr addrspace(1) %8, align 4, !tbaa !27, !alias.scope !36, !noalias !39
+  %9 = load float, ptr addrspace(1) %8, align 4, !tbaa !28, !alias.scope !37, !noalias !40
   %10 = fcmp fast olt float %9, 4.000000e+00
   %11 = addrspacecast ptr %5 to ptr addrspace(8)
   %12 = addrspacecast ptr addrspace(1) %1 to ptr addrspace(8)
@@ -132,7 +132,7 @@ define void @generic_mixed(ptr addrspace(1) noundef writeonly captures(none) "ai
   %14 = and i32 %2, 1
   %15 = call fast float @_Z5weighPKfj(ptr addrspace(8) noundef %13, i32 noundef %14) #13
   %16 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %7
-  store float %15, ptr addrspace(1) %16, align 4, !tbaa !27, !alias.scope !39, !noalias !36
+  store float %15, ptr addrspace(1) %16, align 4, !tbaa !28, !alias.scope !40, !noalias !37
   ret void
 }
 
@@ -142,10 +142,10 @@ define void @generic_null(ptr addrspace(1) noundef writeonly captures(none) "air
   %6 = getelementptr inbounds [2 x float], ptr %5, i64 0, i64 0
   %7 = zext i32 %3 to i64
   %8 = getelementptr inbounds [8 x float], ptr addrspace(3) @_ZZ12generic_nullPU9MTLdevicefPU9MTLdeviceKfjjE6shared, i64 0, i64 %7
-  store float 1.000000e+00, ptr addrspace(3) %8, align 4, !tbaa !27
+  store float 1.000000e+00, ptr addrspace(3) %8, align 4, !tbaa !28
   %9 = zext i32 %2 to i64
   %10 = getelementptr inbounds float, ptr addrspace(1) %1, i64 %9
-  %11 = load float, ptr addrspace(1) %10, align 4, !tbaa !27, !alias.scope !41, !noalias !44
+  %11 = load float, ptr addrspace(1) %10, align 4, !tbaa !28, !alias.scope !42, !noalias !45
   %12 = fcmp fast olt float %11, 4.000000e+00
   %13 = addrspacecast ptr addrspace(1) %1 to ptr addrspace(8)
   %14 = select i1 %12, ptr addrspace(8) %13, ptr addrspace(8) null
@@ -153,65 +153,65 @@ define void @generic_null(ptr addrspace(1) noundef writeonly captures(none) "air
   %16 = shl i32 %2, 2
   %17 = zext i32 %16 to i64
   %18 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %17
-  store float %15, ptr addrspace(1) %18, align 4, !tbaa !27, !alias.scope !44, !noalias !41
+  store float %15, ptr addrspace(1) %18, align 4, !tbaa !28, !alias.scope !45, !noalias !42
   %19 = addrspacecast ptr %6 to ptr addrspace(8)
   %20 = select i1 %12, ptr addrspace(8) %19, ptr addrspace(8) null
   %21 = call fast float @_Z5spacePKf(ptr addrspace(8) noundef %20) #10
   %22 = or i32 %16, 1
   %23 = zext i32 %22 to i64
   %24 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %23
-  store float %21, ptr addrspace(1) %24, align 4, !tbaa !27, !alias.scope !44, !noalias !41
+  store float %21, ptr addrspace(1) %24, align 4, !tbaa !28, !alias.scope !45, !noalias !42
   %25 = select i1 %12, ptr addrspace(8) addrspacecast (ptr addrspace(3) @_ZZ12generic_nullPU9MTLdevicefPU9MTLdeviceKfjjE6shared to ptr addrspace(8)), ptr addrspace(8) null
   %26 = call fast float @_Z5spacePKf(ptr addrspace(8) noundef %25) #10
   %27 = or i32 %16, 2
   %28 = zext i32 %27 to i64
   %29 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %28
-  store float %26, ptr addrspace(1) %29, align 4, !tbaa !27, !alias.scope !44, !noalias !41
+  store float %26, ptr addrspace(1) %29, align 4, !tbaa !28, !alias.scope !45, !noalias !42
   %30 = call fast float @_Z5spacePKf(ptr addrspace(8) noundef null) #10
   %31 = or i32 %16, 3
   %32 = zext i32 %31 to i64
   %33 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %32
-  store float %30, ptr addrspace(1) %33, align 4, !tbaa !27, !alias.scope !44, !noalias !41
+  store float %30, ptr addrspace(1) %33, align 4, !tbaa !28, !alias.scope !45, !noalias !42
   ret void
 }
 
 ; Function Attrs: convergent mustprogress nofree noinline nosync nounwind willreturn
 define void @_Z9read_refsRU9MTLthreadK4refsPU9MTLdevicefj(ptr noundef nonnull readonly align 8 captures(none) dereferenceable(32) %0, ptr addrspace(1) noundef writeonly captures(none) %1, i32 noundef %2) local_unnamed_addr #6 {
   %4 = getelementptr inbounds %struct.refs, ptr %0, i64 0, i32 0
-  %5 = load ptr addrspace(8), ptr %4, align 8, !tbaa !46
+  %5 = load ptr addrspace(8), ptr %4, align 8, !tbaa !47
   %6 = tail call fast float @_Z5weighPKfj(ptr addrspace(8) noundef %5, i32 noundef %2) #13
-  store float %6, ptr addrspace(1) %1, align 4, !tbaa !27
+  store float %6, ptr addrspace(1) %1, align 4, !tbaa !28
   %7 = getelementptr inbounds %struct.refs, ptr %0, i64 0, i32 1
-  %8 = load ptr addrspace(8), ptr %7, align 8, !tbaa !50
+  %8 = load ptr addrspace(8), ptr %7, align 8, !tbaa !51
   %9 = tail call fast float @_Z5weighPKfj(ptr addrspace(8) noundef %8, i32 noundef 1) #13
   %10 = getelementptr inbounds float, ptr addrspace(1) %1, i64 1
-  store float %9, ptr addrspace(1) %10, align 4, !tbaa !27
+  store float %9, ptr addrspace(1) %10, align 4, !tbaa !28
   %11 = getelementptr inbounds %struct.refs, ptr %0, i64 0, i32 2
-  %12 = load ptr addrspace(8), ptr %11, align 8, !tbaa !51
+  %12 = load ptr addrspace(8), ptr %11, align 8, !tbaa !52
   %13 = tail call fast float @_Z5spacePKf(ptr addrspace(8) noundef %12) #10
   %14 = getelementptr inbounds float, ptr addrspace(1) %1, i64 2
-  store float %13, ptr addrspace(1) %14, align 4, !tbaa !27
+  store float %13, ptr addrspace(1) %14, align 4, !tbaa !28
   %15 = getelementptr inbounds %struct.refs, ptr %0, i64 0, i32 3
-  %16 = load i32, ptr %15, align 8, !tbaa !52
+  %16 = load i32, ptr %15, align 8, !tbaa !53
   %17 = tail call fast float @air.convert.f.f32.u.i32(i32 %16) #11
   %18 = getelementptr inbounds float, ptr addrspace(1) %1, i64 3
-  store float %17, ptr addrspace(1) %18, align 4, !tbaa !27
+  store float %17, ptr addrspace(1) %18, align 4, !tbaa !28
   ret void
 }
 
 ; Function Attrs: convergent mustprogress nofree noinline nosync nounwind willreturn memory(argmem: readwrite)
 define void @_Z11read_fields4refsPU9MTLdevicefj(ptr addrspace(8) %0, ptr addrspace(8) %1, ptr addrspace(8) %2, i32 %3, ptr addrspace(1) noundef writeonly captures(none) %4, i32 noundef %5) local_unnamed_addr #7 {
   %7 = tail call fast float @_Z5weighPKfj(ptr addrspace(8) noundef %0, i32 noundef %5) #13
-  store float %7, ptr addrspace(1) %4, align 4, !tbaa !27
+  store float %7, ptr addrspace(1) %4, align 4, !tbaa !28
   %8 = tail call fast float @_Z5weighPKfj(ptr addrspace(8) noundef %1, i32 noundef 1) #13
   %9 = getelementptr inbounds float, ptr addrspace(1) %4, i64 1
-  store float %8, ptr addrspace(1) %9, align 4, !tbaa !27
+  store float %8, ptr addrspace(1) %9, align 4, !tbaa !28
   %10 = tail call fast float @_Z5spacePKf(ptr addrspace(8) noundef %2) #10
   %11 = getelementptr inbounds float, ptr addrspace(1) %4, i64 2
-  store float %10, ptr addrspace(1) %11, align 4, !tbaa !27
+  store float %10, ptr addrspace(1) %11, align 4, !tbaa !28
   %12 = tail call fast float @air.convert.f.f32.u.i32(i32 %3) #11
   %13 = getelementptr inbounds float, ptr addrspace(1) %4, i64 3
-  store float %12, ptr addrspace(1) %13, align 4, !tbaa !27
+  store float %12, ptr addrspace(1) %13, align 4, !tbaa !28
   ret void
 }
 
@@ -221,27 +221,27 @@ define void @generic_slots(ptr addrspace(1) noundef writeonly captures(none) "ai
   %5 = alloca %struct.refs, align 8
   %6 = tail call fast float @air.convert.f.f32.u.i32(i32 %2) #11
   %7 = getelementptr inbounds [2 x float], ptr %4, i64 0, i64 0
-  store float %6, ptr %7, align 4, !tbaa !27
+  store float %6, ptr %7, align 4, !tbaa !28
   %8 = fadd fast float %6, 1.000000e+00
   %9 = getelementptr inbounds [2 x float], ptr %4, i64 0, i64 1
-  store float %8, ptr %9, align 4, !tbaa !27
+  store float %8, ptr %9, align 4, !tbaa !28
   %10 = addrspacecast ptr addrspace(1) %1 to ptr addrspace(8)
   %11 = getelementptr inbounds %struct.refs, ptr %5, i64 0, i32 0
-  store ptr addrspace(8) %10, ptr %11, align 8, !tbaa !46
+  store ptr addrspace(8) %10, ptr %11, align 8, !tbaa !47
   %12 = addrspacecast ptr %7 to ptr addrspace(8)
   %13 = getelementptr inbounds %struct.refs, ptr %5, i64 0, i32 1
-  store ptr addrspace(8) %12, ptr %13, align 8, !tbaa !50
+  store ptr addrspace(8) %12, ptr %13, align 8, !tbaa !51
   %14 = zext i32 %2 to i64
   %15 = getelementptr inbounds float, ptr addrspace(1) %1, i64 %14
-  %16 = load float, ptr addrspace(1) %15, align 4, !tbaa !27, !alias.scope !53, !noalias !56
+  %16 = load float, ptr addrspace(1) %15, align 4, !tbaa !28, !alias.scope !54, !noalias !57
   %17 = fcmp fast olt float %16, 4.000000e+00
   %18 = getelementptr inbounds float, ptr addrspace(1) %1, i64 8
   %19 = addrspacecast ptr addrspace(1) %18 to ptr addrspace(8)
   %20 = select i1 %17, ptr addrspace(8) %19, ptr addrspace(8) null
   %21 = getelementptr inbounds %struct.refs, ptr %5, i64 0, i32 2
-  store ptr addrspace(8) %20, ptr %21, align 8, !tbaa !51
+  store ptr addrspace(8) %20, ptr %21, align 8, !tbaa !52
   %22 = getelementptr inbounds %struct.refs, ptr %5, i64 0, i32 3
-  store i32 %2, ptr %22, align 8, !tbaa !52
+  store i32 %2, ptr %22, align 8, !tbaa !53
   %23 = shl i32 %2, 2
   %24 = zext i32 %23 to i64
   %25 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %24
@@ -254,15 +254,15 @@ define void @generic_fields(ptr addrspace(1) noundef writeonly captures(none) "a
   %4 = alloca [2 x float], align 4
   %5 = tail call fast float @air.convert.f.f32.u.i32(i32 %2) #11
   %6 = getelementptr inbounds [2 x float], ptr %4, i64 0, i64 0
-  store float %5, ptr %6, align 4, !tbaa !27
+  store float %5, ptr %6, align 4, !tbaa !28
   %7 = fadd fast float %5, 1.000000e+00
   %8 = getelementptr inbounds [2 x float], ptr %4, i64 0, i64 1
-  store float %7, ptr %8, align 4, !tbaa !27
+  store float %7, ptr %8, align 4, !tbaa !28
   %9 = addrspacecast ptr addrspace(1) %1 to ptr addrspace(8)
   %10 = addrspacecast ptr %6 to ptr addrspace(8)
   %11 = zext i32 %2 to i64
   %12 = getelementptr inbounds float, ptr addrspace(1) %1, i64 %11
-  %13 = load float, ptr addrspace(1) %12, align 4, !tbaa !27, !alias.scope !58, !noalias !61
+  %13 = load float, ptr addrspace(1) %12, align 4, !tbaa !28, !alias.scope !59, !noalias !62
   %14 = fcmp fast olt float %13, 4.000000e+00
   %15 = getelementptr inbounds float, ptr addrspace(1) %1, i64 8
   %16 = addrspacecast ptr addrspace(1) %15 to ptr addrspace(8)
@@ -271,6 +271,54 @@ define void @generic_fields(ptr addrspace(1) noundef writeonly captures(none) "a
   %19 = zext i32 %18 to i64
   %20 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %19
   call void @_Z11read_fields4refsPU9MTLdevicefj(ptr addrspace(8) %9, ptr addrspace(8) %10, ptr addrspace(8) %17, i32 %2, ptr addrspace(1) noundef %20, i32 noundef %2) #13
+  ret void
+}
+
+; Function Attrs: convergent mustprogress nofree noinline nosync nounwind willreturn
+define void @_Z9read_ptrs4ptrsPU9MTLdevicefj([3 x ptr addrspace(8)] %0, ptr addrspace(8) %1, i32 %2, ptr addrspace(1) noundef writeonly captures(none) %3, i32 noundef %4) local_unnamed_addr #6 {
+  %6 = extractvalue [3 x ptr addrspace(8)] %0, 0
+  %7 = extractvalue [3 x ptr addrspace(8)] %0, 2
+  %8 = tail call fast float @_Z5weighPKfj(ptr addrspace(8) noundef %6, i32 noundef %4) #13
+  store float %8, ptr addrspace(1) %3, align 4, !tbaa !28
+  %9 = tail call fast float @_Z5weighPKfj(ptr addrspace(8) noundef %1, i32 noundef 1) #13
+  %10 = getelementptr inbounds float, ptr addrspace(1) %3, i64 1
+  store float %9, ptr addrspace(1) %10, align 4, !tbaa !28
+  %11 = tail call fast float @_Z5spacePKf(ptr addrspace(8) noundef %7) #10
+  %12 = getelementptr inbounds float, ptr addrspace(1) %3, i64 2
+  store float %11, ptr addrspace(1) %12, align 4, !tbaa !28
+  %13 = tail call fast float @air.convert.f.f32.u.i32(i32 %2) #11
+  %14 = getelementptr inbounds float, ptr addrspace(1) %3, i64 3
+  store float %13, ptr addrspace(1) %14, align 4, !tbaa !28
+  ret void
+}
+
+; Function Attrs: convergent mustprogress nofree nosync nounwind willreturn
+define void @generic_array(ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1, i32 noundef %2) local_unnamed_addr #5 {
+  %4 = alloca [2 x float], align 4
+  %5 = tail call fast float @air.convert.f.f32.u.i32(i32 %2) #11
+  %6 = getelementptr inbounds [2 x float], ptr %4, i64 0, i64 0
+  store float %5, ptr %6, align 4, !tbaa !28
+  %7 = fadd fast float %5, 1.000000e+00
+  %8 = getelementptr inbounds [2 x float], ptr %4, i64 0, i64 1
+  store float %7, ptr %8, align 4, !tbaa !28
+  %9 = addrspacecast ptr addrspace(1) %1 to ptr addrspace(8)
+  %10 = getelementptr inbounds float, ptr addrspace(1) %1, i64 4
+  %11 = addrspacecast ptr addrspace(1) %10 to ptr addrspace(8)
+  %12 = zext i32 %2 to i64
+  %13 = getelementptr inbounds float, ptr addrspace(1) %1, i64 %12
+  %14 = load float, ptr addrspace(1) %13, align 4, !tbaa !28, !alias.scope !64, !noalias !67
+  %15 = fcmp fast olt float %14, 4.000000e+00
+  %16 = getelementptr inbounds float, ptr addrspace(1) %1, i64 8
+  %17 = addrspacecast ptr addrspace(1) %16 to ptr addrspace(8)
+  %18 = select i1 %15, ptr addrspace(8) %17, ptr addrspace(8) null
+  %19 = addrspacecast ptr %6 to ptr addrspace(8)
+  %20 = shl i32 %2, 2
+  %21 = zext i32 %20 to i64
+  %22 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %21
+  %23 = insertvalue [3 x ptr addrspace(8)] poison, ptr addrspace(8) %9, 0
+  %24 = insertvalue [3 x ptr addrspace(8)] %23, ptr addrspace(8) %11, 1
+  %25 = insertvalue [3 x ptr addrspace(8)] %24, ptr addrspace(8) %18, 2
+  call void @_Z9read_ptrs4ptrsPU9MTLdevicefj([3 x ptr addrspace(8)] %25, ptr addrspace(8) %19, i32 %2, ptr addrspace(1) noundef %22, i32 noundef %2) #13
   ret void
 }
 
@@ -302,11 +350,11 @@ attributes #12 = { convergent nounwind willreturn }
 attributes #13 = { convergent nobuiltin "no-builtins" }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
-!air.kernel = !{!9, !16, !18, !19, !20}
-!air.compile_options = !{!21, !22, !23}
-!llvm.ident = !{!24}
-!air.version = !{!25}
-!air.language_version = !{!26}
+!air.kernel = !{!9, !16, !18, !19, !20, !21}
+!air.compile_options = !{!22, !23, !24}
+!llvm.ident = !{!25}
+!air.version = !{!26}
+!air.language_version = !{!27}
 
 !0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
@@ -329,45 +377,51 @@ attributes #13 = { convergent nobuiltin "no-builtins" }
 !18 = !{ptr @generic_null, !10, !11}
 !19 = !{ptr @generic_slots, !10, !17}
 !20 = !{ptr @generic_fields, !10, !17}
-!21 = !{!"air.compile.denorms_disable"}
-!22 = !{!"air.compile.fast_math_enable"}
-!23 = !{!"air.compile.framebuffer_fetch_enable"}
-!24 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
-!25 = !{i32 2, i32 9, i32 0}
-!26 = !{!"Metal", i32 4, i32 1, i32 0}
-!27 = !{!28, !28, i64 0}
-!28 = !{!"float", !29, i64 0}
-!29 = !{!"omnipotent char", !30, i64 0}
-!30 = !{!"Simple C++ TBAA"}
-!31 = !{!32}
-!32 = distinct !{!32, !33, !"air-alias-scope-arg(1)"}
-!33 = distinct !{!33, !"air-alias-scopes(generic_spaces)"}
-!34 = !{!35}
-!35 = distinct !{!35, !33, !"air-alias-scope-arg(0)"}
-!36 = !{!37}
-!37 = distinct !{!37, !38, !"air-alias-scope-arg(1)"}
-!38 = distinct !{!38, !"air-alias-scopes(generic_mixed)"}
-!39 = !{!40}
-!40 = distinct !{!40, !38, !"air-alias-scope-arg(0)"}
-!41 = !{!42}
-!42 = distinct !{!42, !43, !"air-alias-scope-arg(1)"}
-!43 = distinct !{!43, !"air-alias-scopes(generic_null)"}
-!44 = !{!45}
-!45 = distinct !{!45, !43, !"air-alias-scope-arg(0)"}
-!46 = !{!47, !48, i64 0}
-!47 = !{!"_ZTS4refs", !48, i64 0, !48, i64 8, !48, i64 16, !49, i64 24}
-!48 = !{!"any pointer", !29, i64 0}
-!49 = !{!"int", !29, i64 0}
-!50 = !{!47, !48, i64 8}
-!51 = !{!47, !48, i64 16}
-!52 = !{!47, !49, i64 24}
-!53 = !{!54}
-!54 = distinct !{!54, !55, !"air-alias-scope-arg(1)"}
-!55 = distinct !{!55, !"air-alias-scopes(generic_slots)"}
-!56 = !{!57}
-!57 = distinct !{!57, !55, !"air-alias-scope-arg(0)"}
-!58 = !{!59}
-!59 = distinct !{!59, !60, !"air-alias-scope-arg(1)"}
-!60 = distinct !{!60, !"air-alias-scopes(generic_fields)"}
-!61 = !{!62}
-!62 = distinct !{!62, !60, !"air-alias-scope-arg(0)"}
+!21 = !{ptr @generic_array, !10, !17}
+!22 = !{!"air.compile.denorms_disable"}
+!23 = !{!"air.compile.fast_math_enable"}
+!24 = !{!"air.compile.framebuffer_fetch_enable"}
+!25 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!26 = !{i32 2, i32 9, i32 0}
+!27 = !{!"Metal", i32 4, i32 1, i32 0}
+!28 = !{!29, !29, i64 0}
+!29 = !{!"float", !30, i64 0}
+!30 = !{!"omnipotent char", !31, i64 0}
+!31 = !{!"Simple C++ TBAA"}
+!32 = !{!33}
+!33 = distinct !{!33, !34, !"air-alias-scope-arg(1)"}
+!34 = distinct !{!34, !"air-alias-scopes(generic_spaces)"}
+!35 = !{!36}
+!36 = distinct !{!36, !34, !"air-alias-scope-arg(0)"}
+!37 = !{!38}
+!38 = distinct !{!38, !39, !"air-alias-scope-arg(1)"}
+!39 = distinct !{!39, !"air-alias-scopes(generic_mixed)"}
+!40 = !{!41}
+!41 = distinct !{!41, !39, !"air-alias-scope-arg(0)"}
+!42 = !{!43}
+!43 = distinct !{!43, !44, !"air-alias-scope-arg(1)"}
+!44 = distinct !{!44, !"air-alias-scopes(generic_null)"}
+!45 = !{!46}
+!46 = distinct !{!46, !44, !"air-alias-scope-arg(0)"}
+!47 = !{!48, !49, i64 0}
+!48 = !{!"_ZTS4refs", !49, i64 0, !49, i64 8, !49, i64 16, !50, i64 24}
+!49 = !{!"any pointer", !30, i64 0}
+!50 = !{!"int", !30, i64 0}
+!51 = !{!48, !49, i64 8}
+!52 = !{!48, !49, i64 16}
+!53 = !{!48, !50, i64 24}
+!54 = !{!55}
+!55 = distinct !{!55, !56, !"air-alias-scope-arg(1)"}
+!56 = distinct !{!56, !"air-alias-scopes(generic_slots)"}
+!57 = !{!58}
+!58 = distinct !{!58, !56, !"air-alias-scope-arg(0)"}
+!59 = !{!60}
+!60 = distinct !{!60, !61, !"air-alias-scope-arg(1)"}
+!61 = distinct !{!61, !"air-alias-scopes(generic_fields)"}
+!62 = !{!63}
+!63 = distinct !{!63, !61, !"air-alias-scope-arg(0)"}
+!64 = !{!65}
+!65 = distinct !{!65, !66, !"air-alias-scope-arg(1)"}
+!66 = distinct !{!66, !"air-alias-scopes(generic_array)"}
+!67 = !{!68}
+!68 = distinct !{!68, !66, !"air-alias-scope-arg(0)"}
