@@ -20,11 +20,11 @@
 //!   device lays its linear rows at: in place, as over a `Private` buffer. The CPU writes one row
 //!   of the caller's pages and `did_modify_range` names it
 //!   (`WorkCounts::managed_ranges_modified`, `managed_bytes_modified`); the next blit of the
-//!   texture reads that row, with no shadow texel copied in. A blit writes another row into the
-//!   texture and `synchronize_resource` copies its span out (`managed_resources_synchronized`,
+//!   texture reads that row. A blit writes another row into the texture, with no shadow texel
+//!   copied in, and `synchronize_resource` copies its span out (`managed_resources_synchronized`,
 //!   `managed_bytes_synchronized`): the caller's pages hold both rows, and every byte between the
 //!   rows as given. The same texture over a `Shared` buffer, which the CPU writes at any time, is
-//!   a shadow (`BytesBetweenRows`), whose copy of the texels in at that blit is counted
+//!   a shadow (`BytesBetweenRows`), whose copy of the texels in before the same blit is counted
 //!   (`shadow_texels_copied_in`): what the `Managed` texture paid before its route.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
@@ -386,6 +386,11 @@ fn a_managed_texture_changed_in_one_row_reads_it_in_place_where_a_shared_one_cop
     let span = (HEIGHT - 1) * pitch + ROW;
     assert_eq!(synchronized, (1, span), "the span asked");
     let copied_out = done.managed_bytes_copied_out - synced.managed_bytes_copied_out;
+    let written_in = done.shadow_texels_copied_in - synced.shadow_texels_copied_in;
+    assert_eq!(
+        written_in, 0,
+        "no shadow texel copied in for the blit's row"
+    );
     drop((texture, buffer));
 
     // The same over a `Shared` buffer: a shadow, which copies its texels in at the blit; but one
@@ -413,12 +418,30 @@ fn a_managed_texture_changed_in_one_row_reads_it_in_place_where_a_shared_one_cop
     let shadowed = shared.new_texture(&d, 0, pitch).unwrap();
     assert!(shadowed.shadow().is_some());
     write(&shared, row.start as u64, &expected[row]);
+    // A blit reads a texture over a buffer from the buffer's bytes; one that writes a row of it
+    // writes its shadow, which takes the texels in first, as `blit_cover.rs`'s partial copy does.
     let before = device.work_counts();
-    let read = blitted(&device, &queue, &shadowed);
+    run(&queue, |blit| {
+        blit.copy_from_buffer_to_texture(
+            &source,
+            0,
+            ROW,
+            ROW,
+            Size::new(WIDTH, 1, 1),
+            &shadowed,
+            0,
+            0,
+            Origin::new(0, 20, 0),
+            BlitOption::None,
+        )
+        .unwrap();
+    });
     let after = device.work_counts();
-    assert!(read[7 * ROW as usize..8 * ROW as usize] == named(ROW, 99));
     let shared_in = after.shadow_texels_copied_in - before.shadow_texels_copied_in;
     assert!(shared_in > 0, "the shadow copies its texels in");
+    let read = blitted(&device, &queue, &shadowed);
+    assert!(read[7 * ROW as usize..8 * ROW as usize] == named(ROW, 99));
+    assert!(read[20 * ROW as usize..21 * ROW as usize] == row20);
     eprintln!(
         "KEPT-PADDING on {}: Managed at {pitch} in place: row 7 asked {asked:?}, copied in \
          {copied_in} bytes, shadow texels copied in {shadow_in}; synchronize_resource asked \
