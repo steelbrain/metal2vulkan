@@ -494,8 +494,8 @@ fn a_device_below_the_timeline_semaphore_minimum_is_refused() {
 /// The round robin takes those queues less the two reserved for presenting queues, at least four
 /// and at most sixteen, so a family with queues to spare lends them rather than leaving them
 /// idle; the next queues in the same order, at most two, are reserved for presenting queues, and
-/// the first queue of a family of transfers alone whose copies take any texel for staging copies;
-/// where there is none, a family of graphics or compute work the plan takes none of is reserved
+/// the first queue of a family of transfers alone whose copies take any texel for staging copies,
+/// and its second, where it has one, for fills (`device/staging.rs`); where there is none, a family of graphics or compute work the plan takes none of is reserved
 /// for them only where a texture's image has no memory the host caches (`cached` false: an RX 7900
 /// XTX), never a video family's or one whose copies take whole blocks.
 #[test]
@@ -514,17 +514,18 @@ fn equivalent_queue_families_are_all_taken_in_turn() {
             depth: 1,
         },
     };
-    let staged = |primary, queues: &[(u32, u32)], present: &[(u32, u32)], staging| {
+    let staged = |primary, queues: &[(u32, u32)], present: &[(u32, u32)], staging, fill| {
         Some(QueuePlan {
             primary,
             queues: queues.to_vec(),
             present: present.to_vec(),
             reserved: Vec::new(),
             staging,
+            fill,
         })
     };
     let plan = |primary, queues: &[(u32, u32)], present: &[(u32, u32)]| {
-        staged(primary, queues, present, None)
+        staged(primary, queues, present, None, None)
     };
     assert_eq!(
         queue_plan(&[family(all, 1); 4], 0, true),
@@ -549,7 +550,7 @@ fn equivalent_queue_families_are_all_taken_in_turn() {
     let transfer = family(vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING, 2);
     assert_eq!(
         queue_plan(&[family(all, 2), transfer], 0, true),
-        staged(0, &[(0, 0), (0, 1)], &[], Some((1, 0)))
+        staged(0, &[(0, 0), (0, 1)], &[], Some((1, 0)), Some((1, 1)))
     );
     // NVIDIA's shape (an RTX 3090 with 615.71.09): a graphics family of 16, a
     // copy engine of 2, a compute family of 8, then video and optical flow families that also
@@ -567,7 +568,13 @@ fn equivalent_queue_families_are_all_taken_in_turn() {
             0,
             true
         ),
-        staged(0, &fourteen, &[(0, 14), (0, 15)], Some((1, 0)))
+        staged(
+            0,
+            &fourteen,
+            &[(0, 14), (0, 15)],
+            Some((1, 0)),
+            Some((1, 1))
+        )
     );
     assert_eq!(
         queue_plan(&[family(all, 16), compute, decode, encode, flow], 0, true),
@@ -580,14 +587,20 @@ fn equivalent_queue_families_are_all_taken_in_turn() {
             0,
             false
         ),
-        staged(0, &fourteen, &[(0, 14), (0, 15)], Some((1, 0))),
-        "a copy engine stages whatever memory a texture's image has"
+        staged(
+            0,
+            &fourteen,
+            &[(0, 14), (0, 15)],
+            Some((1, 0)),
+            Some((1, 1))
+        ),
+        "a copy engine stages whatever memory a texture's image has, and its second queue fills"
     );
     assert_eq!(
         queue_plan(&[family(all, 16), compute, decode, encode, flow], 0, false),
-        staged(0, &fourteen, &[(0, 14), (0, 15)], Some((1, 0))),
+        staged(0, &fourteen, &[(0, 14), (0, 15)], Some((1, 0)), None),
         "no copy engine and no memory the host caches for a texture's image: the compute family's \
-         first queue"
+         first queue, and no fill queue"
     );
     assert_eq!(
         queue_plan(&[family(all, 16), decode, encode, flow], 0, false),
@@ -628,7 +641,7 @@ fn equivalent_queue_families_are_all_taken_in_turn() {
     assert_eq!(queue_plan(&radv, 0, true), plan(0, &[(0, 0)], &[]));
     assert_eq!(
         queue_plan(&radv, 0, false),
-        staged(0, &[(0, 0)], &[], Some((1, 0)))
+        staged(0, &[(0, 0)], &[], Some((1, 0)), None)
     );
     let mut coarse_compute = radv[1];
     coarse_compute.min_image_transfer_granularity.width = 8;
@@ -651,7 +664,7 @@ fn equivalent_queue_families_are_all_taken_in_turn() {
     );
     assert_eq!(
         queue_plan(&[transfer, family(all, 1), family(all, 1)], 0, true),
-        staged(1, &[(1, 0)], &[], Some((0, 0)))
+        staged(1, &[(1, 0)], &[], Some((0, 0)), Some((0, 1)))
     );
     let mut coarse = family(all, 1);
     coarse.timestamp_valid_bits = 36;
@@ -668,7 +681,7 @@ fn equivalent_queue_families_are_all_taken_in_turn() {
 /// leaves free, of the first family whose flags contain the asked ones and that has one; where
 /// none is free, the last such queue the plan took (presenting's, then the round robin's but its
 /// first, then staging's), which the plan gives up; none for flags no family has, empty flags, or
-/// a device of one queue.
+/// a device of one queue. The fill queue is free to them: one that takes it, the plan gives up.
 #[test]
 fn extra_queues_take_a_free_queue_else_one_the_device_gives_up() {
     let all = vk::QueueFlags::GRAPHICS
@@ -712,8 +725,13 @@ fn extra_queues_take_a_free_queue_else_one_the_device_gives_up() {
         "the second decode queue: the family has one, and the graphics family none to give"
     );
     assert_eq!(
-        plan, before,
-        "every one was free: the device keeps all its own"
+        plan,
+        QueuePlan {
+            fill: None,
+            ..before
+        },
+        "every one was free: the device keeps all its own but the fill queue, the copy engine's \
+         second queue, which the transfer queue took"
     );
     // MoltenVK's shape: four families of one queue each, every one the device's own. The round
     // robin gives up its last queues, never its first.
@@ -824,6 +842,7 @@ fn reserved_queues_leave_the_round_robin_after_presenting() {
             present: of(0, 13..15),
             reserved: of(0, 15..16),
             staging: Some((1, 0)),
+            fill: Some((1, 1)),
         }
     );
     // As many as the family spares: the round robin keeps four, presenting two, so ten.

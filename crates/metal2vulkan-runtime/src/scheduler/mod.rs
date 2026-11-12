@@ -583,7 +583,7 @@ pub(crate) struct State {
     /// Per `VkQueue`: the timeline value of the last batch submitted there.
     pub(crate) values: Vec<u64>,
     /// Per `VkQueue`, per timeline whose completed writes its batches wait for (each `VkQueue`'s,
-    /// then the device's two own, `device/submit.rs`): the value a batch there last waited for,
+    /// then the device's own, `device/submit.rs`): the value a batch there last waited for,
     /// which made what completed through it visible to every later command there
     /// (`command_buffer/submit.rs`).
     pub(crate) waited: Vec<Vec<u64>>,
@@ -776,7 +776,7 @@ impl Scheduler {
                     false => Tracker::default(),
                 },
                 values: vec![0; queues],
-                waited: vec![vec![0; queues + 2]; queues],
+                waited: vec![vec![0; queues + crate::device::OWN_TIMELINES]; queues],
                 binary: BinarySignals::default(),
                 dirty: false,
                 stopping: false,

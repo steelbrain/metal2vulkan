@@ -1608,7 +1608,7 @@ pub(crate) struct Taken<'a> {
     _order: MutexGuard<'a, ()>,
 }
 
-impl Taken<'_> {
+impl<'a> Taken<'a> {
     /// Whether it took first work ([`record`](Self::record)'s): a move or a fill.
     pub(crate) fn has_first(&self) -> bool {
         (self.held.iter()).any(|held| matches!(held, Held::Moves(..) | Held::Fill(..)))
@@ -1617,6 +1617,25 @@ impl Taken<'_> {
     /// Whether it took host calls' staged copies ([`record_staged`](Self::record_staged)'s).
     pub(crate) fn has_staged(&self) -> bool {
         (self.held.iter()).any(|held| matches!(held, Held::Texels(..)))
+    }
+
+    /// Its buffers' fills, taken out for the fill queue (`device/staging.rs`), in the order they
+    /// were noted; the moves and staged copies stay, recorded after them in submission order.
+    /// `None` where it took no fill, or took an acquire from an external agent, whose barrier
+    /// names the device's family as its target and leads every fill (all stay then).
+    pub(crate) fn take_fills(&mut self) -> Option<Fills<'a>> {
+        let fill = |held: &Held| matches!(held, Held::Fill(..));
+        let acquire =
+            |held: &Held| matches!(held, Held::Fill(_, _, fill) if fill.acquire.is_some());
+        if !self.held.iter().any(fill) || self.held.iter().any(acquire) {
+            return None;
+        }
+        let (fills, rest): (Vec<Held>, Vec<Held>) = self.held.drain(..).partition(fill);
+        self.held = rest;
+        Some(Fills {
+            moves: self.moves,
+            held: fills,
+        })
     }
 
     /// Record the host calls' staged copies it took into `command_buffer`, each after every
@@ -1705,90 +1724,8 @@ impl Taken<'_> {
                 Held::Fill(..) | Held::Texels(..) => &[],
             })
         };
-        if !fills.is_empty() {
-            let acquires: Vec<vk::BufferMemoryBarrier<'_>> = fills
-                .iter()
-                .filter_map(|fill| fill.acquire_barrier())
-                .collect();
-            // SAFETY: the caller's contract; each acquired buffer is live (held), and its acquire
-            // names the device's family for it (`Device::external_acquirer`).
-            unsafe {
-                let flags = vk::DependencyFlags::empty();
-                let (memory, buffers) = (&written(), &acquires);
-                device.cmd_pipeline_barrier(command_buffer, all, all, flags, memory, buffers, &[]);
-            }
-            exit_guard::called(Call::CmdPipelineBarrier);
-        }
-        let (zeros, staged): (Vec<&FirstFill>, Vec<&FirstFill>) = fills
-            .iter()
-            .copied()
-            .partition(|fill| fill.staging.is_none());
-        // Copies into bytes a copy before them wrote land after it, in the order they were noted:
-        // a barrier before each that meets one since the last barrier. A `Managed` no-copy
-        // buffer's copies in (`managed_copy.rs`: its making's, a rebind's, each
-        // `did_modify_range`'s) read its pages at different times.
-        let mut landed: Vec<(vk::Buffer, std::ops::Range<u64>)> = Vec::new();
-        for (at, fill) in zeros.iter().chain(&staged).enumerate() {
-            if at == zeros.len() && at > 0 {
-                // SAFETY: the caller's contract.
-                unsafe {
-                    let flags = vk::DependencyFlags::empty();
-                    device.cmd_pipeline_barrier(
-                        command_buffer,
-                        all,
-                        all,
-                        flags,
-                        &written(),
-                        &[],
-                        &[],
-                    );
-                }
-                exit_guard::called(Call::CmdPipelineBarrier);
-            }
-            if let Some(words) = &fill.filled {
-                // SAFETY: as above; the words lie in the buffer, held, which has `TRANSFER_DST`
-                // usage as every buffer of the runtime's, their ends multiples of 4
-                // (`FirstFill::zeros`).
-                unsafe {
-                    let (buffer, words) = (fill.buffer, words.clone());
-                    crate::word_fill::record_command(device, command_buffer, buffer, words, 0);
-                }
-                exit_guard::called(Call::CmdFillBuffer);
-                counts.new_buffer_zero_filled();
-                continue;
-            }
-            // An acquire copies nothing: its barrier led the fills.
-            if fill.copies.is_empty() {
-                continue;
-            }
-            let ranges = fill
-                .copies
-                .iter()
-                .map(|copy| copy.dst_offset..copy.dst_offset + copy.size);
-            let meets = ranges.clone().any(|range| {
-                (landed.iter()).any(|(buffer, before)| {
-                    *buffer == fill.buffer && range.start < before.end && before.start < range.end
-                })
-            });
-            if meets {
-                // SAFETY: the caller's contract.
-                unsafe {
-                    let flags = vk::DependencyFlags::empty();
-                    let memory = &written();
-                    device.cmd_pipeline_barrier(command_buffer, all, all, flags, memory, &[], &[]);
-                }
-                exit_guard::called(Call::CmdPipelineBarrier);
-                landed.clear();
-            }
-            landed.extend(ranges.map(|range| (fill.buffer, range)));
-            // SAFETY: as above; every copy lies within its source, the device's zeros (live and
-            // `ZERO_BYTES` long) or a staging buffer the fill keeps, and within the buffer,
-            // held, which has `TRANSFER_DST` usage as every buffer of the runtime's.
-            unsafe {
-                device.cmd_copy_buffer(command_buffer, fill.source, fill.buffer, &fill.copies);
-            }
-            exit_guard::called(Call::CmdCopyBuffer);
-        }
+        // SAFETY: the caller's contract.
+        unsafe { record_fills((device, counts), command_buffer, &fills) };
         let images: Vec<vk::ImageMemoryBarrier<'_>> =
             moves().map(|first| first.barrier(family)).collect();
         if !images.is_empty() {
@@ -1849,27 +1786,182 @@ impl Taken<'_> {
     }
 }
 
-impl Drop for Taken<'_> {
-    fn drop(&mut self) {
-        if self.held.is_empty() {
-            return;
+/// Record `fills` into `command_buffer`: a barrier after every command before (memory other
+/// commands wrote, a heap's included), carrying the acquires among them, then the fills with zeros,
+/// then, after a barrier, their copies of staged bytes, each copy into bytes a copy before it
+/// wrote after a barrier.
+///
+/// # Safety
+///
+/// As [`Taken::record`]'s; each buffer is live (held) and shared with the command buffer's family
+/// (`sharing.rs`), and each acquire names that family as its target.
+unsafe fn record_fills(
+    (device, counts): (&Vk, &Counters),
+    command_buffer: vk::CommandBuffer,
+    fills: &[&FirstFill],
+) {
+    let all = vk::PipelineStageFlags::ALL_COMMANDS;
+    let written = || {
+        [vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+            .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)]
+    };
+    if !fills.is_empty() {
+        let acquires: Vec<vk::BufferMemoryBarrier<'_>> = fills
+            .iter()
+            .filter_map(|fill| fill.acquire_barrier())
+            .collect();
+        // SAFETY: the caller's contract; each acquired buffer is live (held), and its acquire
+        // names the device's family for it (`Device::external_acquirer`).
+        unsafe {
+            let flags = vk::DependencyFlags::empty();
+            let (memory, buffers) = (&written(), &acquires);
+            device.cmd_pipeline_barrier(command_buffer, all, all, flags, memory, buffers, &[]);
         }
-        let mut given = Vec::new();
-        for held in self.held.drain(..) {
-            match held {
-                Held::Moves(fresh, moves) => {
-                    fresh.give_back(moves.into_iter().map(FirstMove::unheld).collect());
-                    given.push(Waiting::Moves(Arc::downgrade(&fresh)));
-                }
-                Held::Fill(buffer, _, fill) => {
-                    given.push(Waiting::Fill(buffer, fill));
-                }
-                Held::Texels(image, copy) => {
-                    given.push(Waiting::Texels(Arc::downgrade(&image), copy));
-                }
+        exit_guard::called(Call::CmdPipelineBarrier);
+    }
+    let (zeros, staged): (Vec<&FirstFill>, Vec<&FirstFill>) = fills
+        .iter()
+        .copied()
+        .partition(|fill| fill.staging.is_none());
+    // Copies into bytes a copy before them wrote land after it, in the order they were noted:
+    // a barrier before each that meets one since the last barrier. A `Managed` no-copy
+    // buffer's copies in (`managed_copy.rs`: its making's, a rebind's, each
+    // `did_modify_range`'s) read its pages at different times.
+    let mut landed: Vec<(vk::Buffer, std::ops::Range<u64>)> = Vec::new();
+    for (at, fill) in zeros.iter().chain(&staged).enumerate() {
+        if at == zeros.len() && at > 0 {
+            // SAFETY: the caller's contract.
+            unsafe {
+                let flags = vk::DependencyFlags::empty();
+                device.cmd_pipeline_barrier(command_buffer, all, all, flags, &written(), &[], &[]);
+            }
+            exit_guard::called(Call::CmdPipelineBarrier);
+        }
+        if let Some(words) = &fill.filled {
+            // SAFETY: as above; the words lie in the buffer, held, which has `TRANSFER_DST`
+            // usage as every buffer of the runtime's, their ends multiples of 4
+            // (`FirstFill::zeros`).
+            unsafe {
+                let (buffer, words) = (fill.buffer, words.clone());
+                crate::word_fill::record_command(device, command_buffer, buffer, words, 0);
+            }
+            exit_guard::called(Call::CmdFillBuffer);
+            counts.new_buffer_zero_filled();
+            continue;
+        }
+        // An acquire copies nothing: its barrier led the fills.
+        if fill.copies.is_empty() {
+            continue;
+        }
+        let ranges = fill
+            .copies
+            .iter()
+            .map(|copy| copy.dst_offset..copy.dst_offset + copy.size);
+        let meets = ranges.clone().any(|range| {
+            (landed.iter()).any(|(buffer, before)| {
+                *buffer == fill.buffer && range.start < before.end && before.start < range.end
+            })
+        });
+        if meets {
+            // SAFETY: the caller's contract.
+            unsafe {
+                let flags = vk::DependencyFlags::empty();
+                let memory = &written();
+                device.cmd_pipeline_barrier(command_buffer, all, all, flags, memory, &[], &[]);
+            }
+            exit_guard::called(Call::CmdPipelineBarrier);
+            landed.clear();
+        }
+        landed.extend(ranges.map(|range| (fill.buffer, range)));
+        // SAFETY: as above; every copy lies within its source, the device's zeros (live and
+        // `ZERO_BYTES` long) or a staging buffer the fill keeps, and within the buffer,
+        // held, which has `TRANSFER_DST` usage as every buffer of the runtime's.
+        unsafe {
+            device.cmd_copy_buffer(command_buffer, fill.source, fill.buffer, &fill.copies);
+        }
+        exit_guard::called(Call::CmdCopyBuffer);
+    }
+}
+
+/// `held`, which no submission made, given back to `moves`, still to be done.
+fn give_back(moves: &FirstMoves, held: Vec<Held>) {
+    if held.is_empty() {
+        return;
+    }
+    let mut given = Vec::new();
+    for held in held {
+        match held {
+            Held::Moves(fresh, moves) => {
+                fresh.give_back(moves.into_iter().map(FirstMove::unheld).collect());
+                given.push(Waiting::Moves(Arc::downgrade(&fresh)));
+            }
+            Held::Fill(buffer, _, fill) => {
+                given.push(Waiting::Fill(buffer, fill));
+            }
+            Held::Texels(image, copy) => {
+                given.push(Waiting::Texels(Arc::downgrade(&image), copy));
             }
         }
-        lock(&self.moves.waiting).extend(given);
+    }
+    lock(&moves.waiting).extend(given);
+}
+
+impl Drop for Taken<'_> {
+    fn drop(&mut self) {
+        let held: Vec<Held> = self.held.drain(..).collect();
+        give_back(self.moves, held);
+    }
+}
+
+/// A batch's buffers' fills, taken out of its first work for the fill queue
+/// ([`Taken::take_fills`]): given back as this drops unless the submission that records them was
+/// made ([`submitted`](Fills::submitted)).
+pub(crate) struct Fills<'a> {
+    moves: &'a FirstMoves,
+    held: Vec<Held>,
+}
+
+impl Fills<'_> {
+    /// Record the fills into `command_buffer`, as [`Taken::record`] records them: every write
+    /// before them on the queue the command buffer goes to waited for by a barrier, the zeros,
+    /// then the copies of staged bytes, in the order they were noted. No barrier follows them:
+    /// the submission's signal makes their writes available ("The first access scope includes all
+    /// memory access performed by the device", the Vulkan specification, 7.4.1 Semaphore
+    /// Signaling), and the batch's wait for it makes them visible to its commands.
+    ///
+    /// # Safety
+    ///
+    /// `command_buffer` is recording, outside a render pass, for a family every buffer of the
+    /// device's is shared with (`sharing.rs`: the staging queue's, which the fill queue's is); the
+    /// submission that runs it is made before any that uses one of the buffers, which waits for
+    /// it.
+    pub(crate) unsafe fn record(
+        &self,
+        counted: (&Vk, &Counters),
+        command_buffer: vk::CommandBuffer,
+    ) {
+        let fills: Vec<&FirstFill> = (self.held.iter())
+            .filter_map(|held| match held {
+                Held::Fill(_, _, fill) => Some(fill),
+                Held::Moves(..) | Held::Texels(..) => None,
+            })
+            .collect();
+        // SAFETY: the caller's contract; none is an acquire ([`Taken::take_fills`]).
+        unsafe { record_fills(counted, command_buffer, &fills) };
+    }
+
+    /// The submission that records the fills was made: what it holds until it completes (each
+    /// buffer's memory, and a fill's staging buffer).
+    pub(crate) fn submitted(mut self) -> Vec<Box<dyn Any + Send + Sync>> {
+        self.held.drain(..).map(Held::keeper).collect()
+    }
+}
+
+impl Drop for Fills<'_> {
+    fn drop(&mut self) {
+        let held: Vec<Held> = self.held.drain(..).collect();
+        give_back(self.moves, held);
     }
 }
 

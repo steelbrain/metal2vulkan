@@ -58,14 +58,17 @@
 //!   in a submission of their own the call waits for (`Device::settle_mine`): every buffer of the
 //!   device's is shared with this queue's family (`sharing.rs`).
 
+use super::submit::OwnTimeline;
 use super::{lock, Device, LoaderWord};
 use crate::error::{internal, vulkan, Error};
 use crate::exit_guard::{self, Call};
 use crate::release;
 use crate::sharing::Sharing;
+use crate::texture::first_move::Fills;
 use crate::work_counts::Begun;
 use ash::vk;
 use ash::vk::Handle;
+use std::any::Any;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
@@ -77,8 +80,18 @@ const WAIT_SLICE: Duration = Duration::from_millis(100);
 /// host for the oldest one's before it records (the module docs).
 pub(crate) const BUFFERS: usize = 8;
 
-/// The staging queue and its objects.
+/// What a queue of this module's is for (the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Role {
+    /// The staging queue: copies that wait for no work in flight.
+    Staging,
+    /// The fill queue: a batch's fills, after the work before it on its `VkQueue`.
+    Fills,
+}
+
+/// The staging queue, or the fill queue, and its objects.
 pub(super) struct StagingQueue {
+    role: Role,
     /// The queue's family: one of transfers alone, or of graphics or compute work none of the
     /// device's own queues are of (the module docs).
     family: u32,
@@ -97,6 +110,8 @@ pub(super) struct StagingQueue {
     timeline: OnceLock<vk::Semaphore>,
     /// The value the last submission made signals, stored under `objects`' lock once it was made.
     submitted: AtomicU64,
+    /// The timeline as the host saw it complete.
+    pub(super) done: OwnTimeline,
     /// The tests' hold on the submissions ([`Device::hold_staging_submissions`]): a timeline and
     /// a value each waits for on the GPU besides.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -120,19 +135,21 @@ struct Made {
 }
 
 impl StagingQueue {
-    /// The staging queue `queue` of `family`, whose queue flags are `flags`, on a device that
+    /// The queue of `role`, `queue` of `family`, whose queue flags are `flags`, on a device that
     /// submits to `families`.
     ///
     /// # Safety
     ///
     /// `queue` was just returned by the device: its word is the loader's.
     pub(super) unsafe fn new(
+        role: Role,
         family: u32,
         flags: vk::QueueFlags,
         queue: vk::Queue,
         families: &[u32],
     ) -> StagingQueue {
         StagingQueue {
+            role,
             family,
             flags,
             families: families.iter().copied().chain([family]).collect(),
@@ -141,6 +158,7 @@ impl StagingQueue {
             objects: Mutex::new(Objects { queue, made: None }),
             timeline: OnceLock::new(),
             submitted: AtomicU64::new(0),
+            done: OwnTimeline::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             held: Mutex::new(None),
         }
@@ -190,7 +208,8 @@ impl Made {
     }
 }
 
-/// The staging queue's lock, held to record and make a submission (the module docs).
+/// The staging queue's lock, or the fill queue's, held to record and make a submission (the
+/// module docs).
 pub(crate) struct StagingLock<'a> {
     device: &'a Device,
     staging: &'a StagingQueue,
@@ -208,6 +227,17 @@ impl StagingLock<'_> {
         &mut self,
         record: impl FnOnce(&ash::Device, vk::CommandBuffer, vk::QueueFlags),
     ) -> Result<u64, Error> {
+        self.submit_after(&[], record)
+    }
+
+    /// As [`submit`](Self::submit), waiting on the GPU besides for each of `after`, timelines and
+    /// values whose signals were submitted: the fill queue's submission, after the work before
+    /// a batch on its `VkQueue` and what the batch waits for (the module docs).
+    pub(crate) fn submit_after(
+        &mut self,
+        after: &[(vk::Semaphore, u64)],
+        record: impl FnOnce(&ash::Device, vk::CommandBuffer, vk::QueueFlags),
+    ) -> Result<u64, Error> {
         let device = self.device;
         if device.is_lost() {
             return Err(device.lost_refusal());
@@ -219,14 +249,14 @@ impl StagingLock<'_> {
         if objects.made.is_none() {
             let made = Made::new(device, staging.family)?;
             let _ = staging.timeline.set(made.timeline);
-            shared.staging_done.made(made.timeline);
+            staging.done.made(made.timeline);
             objects.made = Some(made);
         }
         let queue = objects.queue;
         let Some(made) = objects.made.as_mut() else {
             unreachable!("made above");
         };
-        let at = free_buffer(device, made)?;
+        let at = free_buffer(device, staging, made)?;
         let buffer = made.buffers[at].0;
         let begin = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -238,11 +268,19 @@ impl StagingLock<'_> {
         record(raw, buffer, staging.flags);
         // SAFETY: as above.
         unsafe { raw.end_command_buffer(buffer) }.map_err(vulkan)?;
-        // The completed work of every other queue: a wait that costs nothing, for visibility.
-        let completed: Vec<(vk::Semaphore, u64)> = (shared.queues.iter())
+        // The completed work of every other queue: a wait that costs nothing, for visibility;
+        // then `after`, one wait a timeline, at the highest value asked.
+        let mut completed: Vec<(vk::Semaphore, u64)> = Vec::new();
+        let asked = (shared.queues.iter())
             .map(|slot| (slot.timeline, slot.completed_value()))
-            .filter(|&(_, value)| value > 0)
-            .collect();
+            .chain(after.iter().copied())
+            .filter(|&(semaphore, value)| value > 0 && semaphore != made.timeline);
+        for (semaphore, value) in asked {
+            match completed.iter_mut().find(|(at, _)| *at == semaphore) {
+                Some(wait) => wait.1 = wait.1.max(value),
+                None => completed.push((semaphore, value)),
+            }
+        }
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         let completed: Vec<(vk::Semaphore, u64)> =
             completed.into_iter().chain(*lock(&staging.held)).collect();
@@ -288,22 +326,24 @@ impl StagingLock<'_> {
         made.signalled = value;
         made.buffers[at].1 = value;
         staging.submitted.store(value, Ordering::Release);
-        shared.counts.staging_submission();
+        match staging.role {
+            Role::Staging => shared.counts.staging_submission(),
+            Role::Fills => shared.counts.fill_queue_submission(),
+        }
         Ok(value)
     }
 }
 
-/// The index of a command buffer of `made` no submission holds: one whose last submission the
-/// host saw complete, else a new one while there are fewer than [`BUFFERS`], else the oldest,
-/// once a wait on the host saw its value reached.
-fn free_buffer(device: &Device, made: &mut Made) -> Result<usize, Error> {
-    let shared = device.shared();
-    let seen = shared.staging_done.value();
+/// The index of a command buffer of `made`, `staging`'s, no submission holds: one whose last
+/// submission the host saw complete, else a new one while there are fewer than [`BUFFERS`], else
+/// the oldest, once a wait on the host saw its value reached.
+fn free_buffer(device: &Device, staging: &StagingQueue, made: &mut Made) -> Result<usize, Error> {
+    let seen = staging.done.value();
     let oldest = (made.buffers.iter().enumerate())
         .min_by_key(|(_, &(_, value))| value)
         .map(|(at, &(_, value))| (at, value));
     if let Some((at, value)) = oldest {
-        if value <= seen || reached(device, made.timeline, value, 0)? {
+        if value <= seen || reached(device, staging, value, 0)? {
             return Ok(at);
         }
     }
@@ -319,21 +359,23 @@ fn free_buffer(device: &Device, made: &mut Made) -> Result<usize, Error> {
     let Some((at, value)) = oldest else {
         unreachable!("BUFFERS command buffers are made");
     };
-    wait_for(device, made.timeline, value)?;
+    wait_for(device, staging, value)?;
     Ok(at)
 }
 
-/// Whether the host saw `timeline` reach `value` within `timeout` nanoseconds (0: at once, "If
-/// timeout is zero, then vkWaitSemaphores does not wait"); the staging timeline's completion
-/// noted where it did. A wait, not a read: Vulkan orders host operations after a signal only
-/// through a wait (`device/submit.rs`, `binding_seen`).
+/// Whether the host saw `staging`'s timeline, made, reach `value` within `timeout` nanoseconds
+/// (0: at once, "If timeout is zero, then vkWaitSemaphores does not wait"); its completion noted
+/// where it did. A wait, not a read: Vulkan orders host operations after a signal only through a
+/// wait (`device/submit.rs`, `binding_seen`).
 fn reached(
     device: &Device,
-    timeline: vk::Semaphore,
+    staging: &StagingQueue,
     value: u64,
     timeout: u64,
 ) -> Result<bool, Error> {
     let shared = device.shared();
+    let timeline = *(staging.timeline.get())
+        .ok_or_else(|| internal("a wait for a staging or fill-queue submission before any"))?;
     let semaphores = [timeline];
     let values = [value];
     let info = vk::SemaphoreWaitInfo::default()
@@ -344,7 +386,7 @@ fn reached(
     exit_guard::called(Call::WaitSemaphores);
     match waited {
         Ok(()) => {
-            shared.staging_done.reached(value);
+            staging.done.reached(value);
             Ok(true)
         }
         Err(vk::Result::TIMEOUT) => Ok(false),
@@ -352,10 +394,10 @@ fn reached(
     }
 }
 
-/// Wait on the host until `timeline` reached `value`, a slice at a time.
-fn wait_for(device: &Device, timeline: vk::Semaphore, value: u64) -> Result<(), Error> {
+/// Wait on the host until `staging`'s timeline reached `value`, a slice at a time.
+fn wait_for(device: &Device, staging: &StagingQueue, value: u64) -> Result<(), Error> {
     let slice = WAIT_SLICE.as_nanos() as u64;
-    while !reached(device, timeline, value, slice)? {
+    while !reached(device, staging, value, slice)? {
         if device.is_lost() {
             return Err(device.lost_refusal());
         }
@@ -374,6 +416,11 @@ impl Device {
             *lock(&staging.held) = hold;
         }
     }
+
+    /// The fill queue's family and that family's queue flags, where the device has one.
+    pub(crate) fn fill_queue_family(&self) -> Option<(u32, vk::QueueFlags)> {
+        (self.shared().fill_queue.as_ref()).map(|queue| (queue.family, queue.flags))
+    }
 }
 
 impl Device {
@@ -382,6 +429,12 @@ impl Device {
     /// holds a texture's image, with such a family of graphics or compute work beside its own.
     pub(crate) fn has_staging_queue(&self) -> bool {
         self.shared().staging.is_some()
+    }
+
+    /// Whether the device reserved a fill queue (the module docs): a second queue of a staging
+    /// queue's family of transfers alone.
+    pub(crate) fn has_fill_queue(&self) -> bool {
+        self.shared().fill_queue.is_some()
     }
 
     /// The sharing of an image that copies on the staging queue: concurrent among the device's
@@ -401,16 +454,29 @@ impl Device {
         })
     }
 
+    /// The fill queue's lock, for a submission there ([`StagingLock::submit_after`]); `None`
+    /// where the device has no fill queue (the module docs).
+    pub(crate) fn fill_queue_lock(&self) -> Option<StagingLock<'_>> {
+        let fill_queue = self.shared().fill_queue.as_ref()?;
+        Some(StagingLock {
+            device: self,
+            staging: fill_queue,
+            objects: lock(&fill_queue.objects),
+        })
+    }
+
     /// Wait on the host for the staging submission that signals `value`.
     pub(crate) fn wait_staging(&self, value: u64) -> Result<(), Error> {
-        if self.shared().staging_done.value() >= value {
-            return Ok(());
-        }
         let staging = (self.shared().staging.as_ref())
             .ok_or_else(|| internal("a staging wait on a device without a staging queue"))?;
-        let timeline = *(staging.timeline.get())
-            .ok_or_else(|| internal("a staging wait before any staging submission"))?;
-        wait_for(self, timeline, value)
+        wait_on(self, staging, value)
+    }
+
+    /// Wait on the host for the fill-queue submission that signals `value`.
+    pub(crate) fn wait_fill_queue(&self, value: u64) -> Result<(), Error> {
+        let fill_queue = (self.shared().fill_queue.as_ref())
+            .ok_or_else(|| internal("a fill-queue wait on a device without a fill queue"))?;
+        wait_on(self, fill_queue, value)
     }
 
     /// The staging queue's last submission while the host has not seen it complete: what every
@@ -418,17 +484,88 @@ impl Device {
     /// for (the module docs), as what it copied may be among what it uses. The host sees it
     /// complete once a wait of no time returned for it.
     pub(crate) fn staging_wait(&self) -> Option<(vk::Semaphore, u64)> {
+        pending(self, self.shared().staging.as_ref()?)
+    }
+
+    /// The fill queue's last submission while the host has not seen it complete, as
+    /// [`staging_wait`](Self::staging_wait)'s: what it filled may be among what a submission uses.
+    pub(crate) fn fill_queue_wait(&self) -> Option<(vk::Semaphore, u64)> {
+        pending(self, self.shared().fill_queue.as_ref()?)
+    }
+}
+
+/// A batch's fills submitted on the fill queue ([`Device::submit_fills`]): the timeline and value
+/// the batch waits for, and what the submission holds until it completed (each buffer's memory,
+/// a fill's staging buffer). A batch holds it until it completed; its drop waits on the host for
+/// the submission where the host has not seen it complete (a batch that held it completed after
+/// it, so that wait returns at once; one whose own submission failed did not).
+pub(crate) struct FillSubmission {
+    device: Device,
+    pub(crate) timeline: vk::Semaphore,
+    pub(crate) value: u64,
+    _held: Vec<Box<dyn Any + Send + Sync>>,
+}
+
+impl Drop for FillSubmission {
+    fn drop(&mut self) {
+        // A section of the exit guard, wherever the last holder lets go: while the process exits,
+        // nothing is waited for (`exit_guard`).
+        let Some(_busy) = exit_guard::enter() else {
+            return;
+        };
+        // A failed wait (a lost device) leaves nothing running that uses what it holds.
+        let _ = self.device.wait_fill_queue(self.value);
+    }
+}
+
+impl Device {
+    /// Submit `fills`, a batch's, on the fill queue, waiting on the GPU for each of `after` (the
+    /// module docs); `None` where the device has no fill queue, the fills given back.
+    pub(crate) fn submit_fills(
+        &self,
+        fills: Fills<'_>,
+        after: &[(vk::Semaphore, u64)],
+    ) -> Result<Option<FillSubmission>, Error> {
+        let Some(mut fill_queue) = self.fill_queue_lock() else {
+            return Ok(None);
+        };
         let shared = self.shared();
-        let staging = shared.staging.as_ref()?;
-        let submitted = staging.submitted.load(Ordering::Acquire);
-        if submitted <= shared.staging_done.value() {
-            return None;
-        }
-        let timeline = *staging.timeline.get()?;
-        // A failed wait (a lost device) leaves the submission waited for.
-        match reached(self, timeline, submitted, 0) {
-            Ok(true) => None,
-            _ => Some((timeline, submitted)),
-        }
+        let value = fill_queue.submit_after(after, |raw, command_buffer, _| {
+            // SAFETY: recording for the fill queue's family, outside a render pass: fills of
+            // buffers alone, each shared with that family, as their sources are (`sharing.rs`);
+            // the batch that uses them waits for the submission.
+            unsafe { fills.record((raw, &shared.counts), command_buffer) }
+        })?;
+        let timeline = *(fill_queue.staging.timeline.get())
+            .ok_or_else(|| internal("a fill-queue submission made no timeline"))?;
+        drop(fill_queue);
+        Ok(Some(FillSubmission {
+            device: self.clone(),
+            timeline,
+            value,
+            _held: fills.submitted(),
+        }))
+    }
+}
+
+/// Wait on the host for `staging`'s submission that signals `value`.
+fn wait_on(device: &Device, staging: &StagingQueue, value: u64) -> Result<(), Error> {
+    if staging.done.value() >= value {
+        return Ok(());
+    }
+    wait_for(device, staging, value)
+}
+
+/// `staging`'s last submission, its timeline and value, while the host has not seen it complete.
+fn pending(device: &Device, staging: &StagingQueue) -> Option<(vk::Semaphore, u64)> {
+    let submitted = staging.submitted.load(Ordering::Acquire);
+    if submitted <= staging.done.value() {
+        return None;
+    }
+    let timeline = *staging.timeline.get()?;
+    // A failed wait (a lost device) leaves the submission waited for.
+    match reached(device, staging, submitted, 0) {
+        Ok(true) => None,
+        _ => Some((timeline, submitted)),
     }
 }

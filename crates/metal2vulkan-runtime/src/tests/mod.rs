@@ -191,6 +191,8 @@ mod exported_semaphore;
 mod exported_textures;
 mod families;
 mod fences;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod fill_queue;
 mod fill_value;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod first_host_texture;

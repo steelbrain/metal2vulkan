@@ -2813,6 +2813,7 @@ field	metal2vulkan-runtime::WorkCounts.feedback_loop_shadow_images	pub feedback_
 field	metal2vulkan-runtime::WorkCounts.fence_waits	pub fence_waits: u64
 field	metal2vulkan-runtime::WorkCounts.fences_made	pub fences_made: u64
 field	metal2vulkan-runtime::WorkCounts.fetch_draw_barriers	pub fetch_draw_barriers: u64
+field	metal2vulkan-runtime::WorkCounts.fill_queue_submissions	pub fill_queue_submissions: u64
 field	metal2vulkan-runtime::WorkCounts.fills_recorded	pub fills_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.finales_apart	pub finales_apart: u64
 field	metal2vulkan-runtime::WorkCounts.finales_folded	pub finales_folded: u64

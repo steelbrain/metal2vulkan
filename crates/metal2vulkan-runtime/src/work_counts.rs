@@ -308,6 +308,7 @@ pub(crate) struct Counters {
     staging_moves_queued: AtomicU64,
     staging_flushes: AtomicU64,
     staging_gpu_waits: AtomicU64,
+    fill_queue_submissions: AtomicU64,
     uncached_host_images: AtomicU64,
     cpu_block_decodes: AtomicU64,
     block_decode_passes: AtomicU64,
@@ -3010,6 +3011,11 @@ impl Counters {
     /// seen complete (`device/staging.rs`).
     pub(crate) fn staging_gpu_wait(&self) {
         self.staging_gpu_waits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A submission on the fill queue was made (`device/staging.rs`).
+    pub(crate) fn fill_queue_submission(&self) {
+        self.fill_queue_submissions.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A texture's host-transfer image was placed in memory the host does not cache
@@ -6453,6 +6459,12 @@ pub struct WorkCounts {
     /// the host: of the batches, at most one per `VkQueue` per staging submission, as every later
     /// batch there follows its wait (`command_buffer/submit.rs`).
     pub staging_gpu_waits: u64,
+    /// Submissions on the device's fill queue, a copy engine's (`device/staging.rs`): each a
+    /// batch's new buffers' fills (zeros, staged bytes, `Managed` buffers' copies in after
+    /// `did_modify_range`), made there before the batch, which waits for it, rather than at the
+    /// start of the batch's own work on its `VkQueue`. None on a device without a family of
+    /// transfers alone with a second queue (lavapipe, RADV, MoltenVK).
+    pub fill_queue_submissions: u64,
     /// New `Shared` and `Managed` textures' images with host-transfer usage placed in memory the
     /// host does not cache, where the device has none the image may take
     /// (`texture/host_copy.rs`): their host copies read at uncached memory's speed (a 1080p
@@ -9025,6 +9037,7 @@ impl Device {
             staging_moves_queued: counters.staging_moves_queued.load(Ordering::Relaxed),
             staging_flushes: counters.staging_flushes.load(Ordering::Relaxed),
             staging_gpu_waits: counters.staging_gpu_waits.load(Ordering::Relaxed),
+            fill_queue_submissions: counters.fill_queue_submissions.load(Ordering::Relaxed),
             uncached_host_images: counters.uncached_host_images.load(Ordering::Relaxed),
             cpu_block_decodes: counters.cpu_block_decodes.load(Ordering::Relaxed),
             block_decode_passes: counters.block_decode_passes.load(Ordering::Relaxed),

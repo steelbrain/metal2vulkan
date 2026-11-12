@@ -1119,6 +1119,12 @@ pub(crate) struct QueuePlan {
     /// image has no memory the host caches, of the first family of graphics or compute work;
     /// `None` where there is none ([`queue_plan`]).
     pub(crate) staging: Option<(u32, u32)>,
+    /// The queue reserved for the runtime's own copies from host memory into a resource's device
+    /// memory that follow the work before them (`device/staging.rs`, the fill queue): the
+    /// staging queue's family's second queue, where that family is of transfers alone and has
+    /// one; `None` otherwise. An extra queue the caller asks for takes it as a queue the plan
+    /// leaves free ([`extra_queue_places`]).
+    pub(crate) fill: Option<(u32, u32)>,
 }
 
 /// The queues a device of `families` takes: where every family is equivalent to the first that
@@ -1148,7 +1154,12 @@ pub(crate) struct QueuePlan {
 /// the XTX, and 2.0 to 2.2 ms on its compute family's queue (`device/staging.rs`). Such
 /// an asynchronous compute queue's work may wait behind a kernel that fills the GPU (up to 1.05 s
 /// on a Radeon 780M and 1.19 s on an RTX 3090), so where a texture's image has memory the host
-/// caches its copies stay on the host, and no such queue stages. `None` where no family does
+/// caches its copies stay on the host, and no such queue stages. Such a copy engine's second
+/// queue, where it has one, is reserved for the runtime's own copies from host memory into a
+/// resource's device memory that follow the work before them (`device/staging.rs`, the fill
+/// queue): on an RTX 3090 a `Managed` buffer's 64 MiB copy in through the graphics family's queue
+/// left another queue's kernels 20% of their rate alone, where a copy engine left them 82%
+/// (`tests::managed_copies_bench`, `examples/copy_engine.rs`). `None` where no family does
 /// graphics and compute work.
 pub(crate) fn queue_plan(
     families: &[vk::QueueFamilyProperties],
@@ -1230,6 +1241,10 @@ pub(crate) fn queue_plan_within(
         false => (families.iter().enumerate())
             .find(|&(index, family)| stages(index, family) && family.queue_flags.intersects(work)),
     };
+    // The fill queue: a copy engine's second queue.
+    let fill = copy_engine
+        .filter(|(_, family)| family.queue_count > 1)
+        .map(|(index, _)| (index as u32, 1));
     let staging = copy_engine
         .or_else(beside)
         .map(|(index, _)| (index as u32, 0));
@@ -1241,6 +1256,7 @@ pub(crate) fn queue_plan_within(
         present,
         reserved,
         staging,
+        fill,
     })
 }
 
@@ -1309,12 +1325,13 @@ pub(crate) fn least_queue_plan(
 }
 
 /// The `VkQueue`s a device of `placed` makes: its round robin's, those reserved for presenting
-/// and for the caller, its staging queue and its extra queues.
+/// and for the caller, its staging and fill queues and its extra queues.
 pub(crate) fn vk_queues((plan, extra): &PlacedQueues) -> usize {
     plan.queues.len()
         + plan.present.len()
         + plan.reserved.len()
         + usize::from(plan.staging.is_some())
+        + usize::from(plan.fill.is_some())
         + extra.iter().flatten().count()
 }
 
@@ -1325,6 +1342,7 @@ fn families_taken(plan: &QueuePlan, extra_places: &[Option<(u32, u32)>]) -> Vec<
     let all = (plan.queues.iter().chain(&plan.present))
         .chain(&plan.reserved)
         .chain(&plan.staging)
+        .chain(&plan.fill)
         .chain(extra_places.iter().flatten());
     for &(family, _) in all {
         match taken.iter_mut().find(|(at, _)| *at == family) {
@@ -1462,8 +1480,9 @@ pub(crate) const QUEUE_LIMITS_REACHED: &str = "metal2vulkan-queue-limits-reached
 /// plan leaves free, of the first family whose flags contain the asked flags and that has one,
 /// at its lowest free index; else the last queue the plan reserved for presenting, then the last
 /// of the round robin's but its first (internal submissions go there), then the staging queue, of
-/// such a family, which `plan` then gives up; never a queue reserved for the caller. Flags that
-/// are empty, or that no family's contain, take none.
+/// such a family, which `plan` then gives up; never a queue reserved for the caller. The fill
+/// queue is one the plan leaves free: an extra queue may take it, and the plan then gives it up.
+/// Flags that are empty, or that no family's contain, take none.
 pub(crate) fn extra_queue_places(
     families: &[vk::QueueFamilyProperties],
     plan: &mut QueuePlan,
@@ -1504,6 +1523,10 @@ pub(crate) fn extra_queue_places(
         });
         if let Some(place) = place {
             extra.push(place);
+            // The fill queue is a queue the plan leaves free to the caller's extra queues.
+            if plan.fill == Some(place) {
+                plan.fill = None;
+            }
         }
         places.push(place);
     }
@@ -2319,6 +2342,7 @@ pub(super) fn create_on(
         least_plan: took_least.is_some(),
         queues: plan.queues.into_iter().chain(plan.present).collect(),
         staging: plan.staging,
+        fill: plan.fill,
         reserved_queues: plan.reserved,
         extra_queues: (options.extra_queues.iter().zip(&extra_places))
             .filter_map(|(&flags, place)| place.map(|(family, index)| (flags, family, index)))

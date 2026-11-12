@@ -195,8 +195,9 @@ fn frames(
 /// Where the copies ran, from the work counts' difference over a phase.
 fn counted(before: &WorkCounts, after: &WorkCounts) -> String {
     format!(
-        "staging_submissions {}",
+        "staging_submissions {}, fill_queue_submissions {}",
         after.staging_submissions - before.staging_submissions,
+        after.fill_queue_submissions - before.fill_queue_submissions,
     )
 }
 

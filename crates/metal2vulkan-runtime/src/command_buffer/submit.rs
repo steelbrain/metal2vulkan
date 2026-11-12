@@ -651,7 +651,16 @@ impl CommandBufferShared {
         // pages it then holds. Its commands bind the heap sets, so it holds the texture slots'
         // writes until its submission was made (`heap_sets::hold`).
         let firsts = &shared.textures.first_moves;
-        let first_work = firsts.take_holding(|_| true, || crate::heap_sets::hold(device));
+        let mut first_work = firsts.take_holding(|_| true, || crate::heap_sets::hold(device));
+        // Its buffers' fills go to the device's fill queue where it has one, in a submission of
+        // their own that the batch waits for (below, `device/staging.rs`): not where a group holds
+        // batches of this `VkQueue`, whose values that submission would wait for before their
+        // signals were submitted, nor where the batch waits for a binary semaphore, which its one
+        // wait consumes.
+        let fills =
+            (device.has_fill_queue() && !scheduler.group.holds() && binary_waits.is_empty())
+                .then(|| first_work.take_fills())
+                .flatten();
         // The copies queued for the staging queue, submitted there first, which the batch waits
         // for on the GPU (below), holding what they copied until it completed
         // (`texture/staging_copy.rs`).
@@ -919,6 +928,37 @@ impl CommandBufferShared {
             wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
             shared.counts.staging_gpu_wait();
         }
+        // And the fill queue's last submission, as the staging queue's, its place after the
+        // staging queue's (`device/staging.rs`): what it filled may be among what the work reads.
+        let fill_place = shared.queues.len() + 2;
+        let fill_wait = (device.fill_queue_wait())
+            .filter(|&(_, value)| value > scheduler.waited[queue][fill_place]);
+        if let Some((timeline, value)) = fill_wait {
+            wait_semaphores.push(timeline);
+            wait_values.push(value);
+            wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
+        }
+        // Its own fills, there: after the batches before it on its `VkQueue` (through the value
+        // before its own), what it waits for and what completed, as at the start of its work
+        // (`device/staging.rs`); its work waits for them.
+        let filled = match fills {
+            None => None,
+            Some(fills) => {
+                let before = (shared.queues[queue].timeline, at.value - 1);
+                let after: Vec<(vk::Semaphore, u64)> = (wait_semaphores.iter().copied())
+                    .zip(wait_values.iter().copied())
+                    .chain(reached.iter().flatten().copied())
+                    .chain([before])
+                    .collect();
+                (device.submit_fills(fills, &after))
+                    .map_err(|error| recording_error(device, error))?
+            }
+        };
+        if let Some(filled) = &filled {
+            wait_semaphores.push(filled.timeline);
+            wait_values.push(filled.value);
+            wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
+        }
         let mut order_semaphores: Vec<vk::Semaphore> =
             order_waits.iter().map(|&(s, _)| s).collect();
         let mut order_values: Vec<u64> = order_waits.iter().map(|&(_, value)| value).collect();
@@ -1088,6 +1128,7 @@ impl CommandBufferShared {
             && leads
             && !first_work.has_first()
             && !first_work.has_staged()
+            && filled.is_none()
             && images.is_empty();
         // What the batch's submission carries, to its value, from here: the device's pending
         // audit's (`pending_audit.rs`), where it is on.
@@ -1186,6 +1227,15 @@ impl CommandBufferShared {
         // batch there, and one whose submission fails puts the values back.
         if let Some((_, value)) = staging_wait {
             scheduler.waited[queue][staging_place] = value;
+        }
+        let fill_waited = fill_wait.map(|(_, value)| value);
+        let fill_waited = fill_waited.max(filled.as_ref().map(|filled| filled.value));
+        if let Some(value) = fill_waited {
+            scheduler.waited[queue][fill_place] = value;
+        }
+        // What its fills hold, until it completed.
+        if let Some(filled) = filled {
+            state.retained.push(Box::new(filled));
         }
         shared.counts.completed_waited(waited.len());
         if !single && !started {

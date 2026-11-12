@@ -44,6 +44,7 @@ pub use create::{
 };
 pub use handles::{DeviceHandles, ExtraQueue, ReservedQueue};
 pub use properties::{DeviceKind, PhysicalDeviceIdentity};
+pub(crate) use submit::OWN_TIMELINES;
 
 use super::address::AddressSpace;
 use super::attachmentless::KeptPasses;
@@ -98,6 +99,7 @@ use metal2vulkan::bind::RegionLimits;
 use metal2vulkan::device::{DeviceDescription, EnableSet};
 use metal2vulkan::error::RuntimeDriverDefect;
 use relay::Flights;
+use staging::Role;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
@@ -362,8 +364,6 @@ pub(super) struct DeviceShared {
     internal: Mutex<Option<Internal>>,
     /// The internal submissions' timeline as the host saw it complete (`submit.rs`).
     internal_done: OwnTimeline,
-    /// The staging copies' timeline as the host saw it complete (`staging.rs`).
-    staging_done: OwnTimeline,
     /// Each batch with work makes what completed work wrote visible by a command buffer of
     /// barriers that starts it, and waits for no timeline the host saw complete: the driver's
     /// submissions stall on semaphore operations (`DriverFact::SemaphoreOperationsStallSubmits`,
@@ -379,6 +379,8 @@ pub(super) struct DeviceShared {
     bound_at: Mutex<Option<(vk::Semaphore, u64)>>,
     /// The queue reserved for staging copies, where the device has one (`staging.rs`).
     staging: Option<staging::StagingQueue>,
+    /// The queue reserved for fills, where the device has one (`staging.rs`).
+    fill_queue: Option<staging::StagingQueue>,
     /// The caller's extra queues (`DeviceOptions::extra_queues`), to which the runtime never
     /// submits (`handles.rs`).
     pub(super) extra_queues: Vec<handles::ExtraQueue>,
@@ -1098,7 +1100,7 @@ impl Drop for DeviceShared {
         if let Some(internal) = lock(&self.internal).take() {
             internal.destroy(self.vk());
         }
-        if let Some(staging) = &self.staging {
+        for staging in self.staging.iter().chain(&self.fill_queue) {
             staging.destroy(self.vk());
         }
         lock(&self.textures.neutrals).destroy(self.vk(), &mut lock(&self.memory));
@@ -1744,6 +1746,10 @@ pub(super) struct Parts {
     /// The queue reserved for staging copies, its family and index there, outside `queues`
     /// (`staging.rs`): `None` for an adopted device, or where the families have no more.
     pub(super) staging: Option<(u32, u32)>,
+    /// The queue reserved for fills, its family (the staging queue's) and index there, outside
+    /// `queues` (`staging.rs`): `None` for an adopted device, or where the staging queue's family
+    /// is not of transfers alone or has no second queue.
+    pub(super) fill: Option<(u32, u32)>,
     /// The queues reserved for the caller (`DeviceOptions::reserved_queues`), each its family and
     /// index there, of `queues`' families, outside `queues` and `staging`: none for an adopted
     /// device.
@@ -1870,6 +1876,7 @@ impl Device {
             planned,
             least_plan,
             staging: staging_place,
+            fill: fill_place,
             reserved_queues: reserved_places,
             extra_queues: extra_places,
             compile,
@@ -2043,7 +2050,18 @@ impl Device {
             unsafe {
                 loader_word.restored(|| {
                     let queue = raw.get_device_queue(family, index);
-                    staging::StagingQueue::new(family, flags_of(family), queue, &queue_families)
+                    let flags = flags_of(family);
+                    staging::StagingQueue::new(Role::Staging, family, flags, queue, &queue_families)
+                })
+            }
+        });
+        // The fill queue, of the staging queue's family, whose sharing every buffer has.
+        let fill_queue = fill_place.map(|(family, index)| {
+            // SAFETY: as the staging queue's.
+            unsafe {
+                loader_word.restored(|| {
+                    let queue = raw.get_device_queue(family, index);
+                    staging::StagingQueue::new(Role::Fills, family, flags_of(family), queue, &[])
                 })
             }
         });
@@ -2703,11 +2721,11 @@ impl Device {
             function_tables: Mutex::default(),
             internal: Mutex::new(None),
             internal_done: OwnTimeline::default(),
-            staging_done: OwnTimeline::default(),
             completed_by_barrier,
             by_ends,
             bound_at: Mutex::new(None),
             staging,
+            fill_queue,
             extra_queues,
             reserved_queues,
             scheduler,

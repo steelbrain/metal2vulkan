@@ -46,11 +46,14 @@ enum Reach {
     Mine { after_other_queues: bool },
 }
 
+/// The device's own timelines outside the batches ([`Device::own_completed`]).
+pub(crate) const OWN_TIMELINES: usize = 3;
+
 /// How long one wait for an internal submission lasts before it is repeated.
 const WAIT_SLICE: Duration = Duration::from_millis(100);
 
 /// A timeline the device's own submissions signal outside the batches (the internal ones here,
-/// the staging queue's copies, `staging.rs`), and the value through which the host saw them
+/// the staging queue's copies and the fill queue's fills, `staging.rs`), and the value through which the host saw them
 /// complete. What they wrote through that value is visible to every submission made after the
 /// host saw it, a batch or an internal one, with no wait or barrier of its own: the signal's
 /// "first access scope includes all memory access performed by the device" (semaphore
@@ -79,7 +82,7 @@ impl OwnTimeline {
 
     /// The timeline was made: `semaphore`.
     pub(super) fn made(&self, semaphore: vk::Semaphore) {
-        // A device makes each of its two own timelines once.
+        // A device makes each of its own timelines once.
         let _ = self.semaphore.set(semaphore);
     }
 
@@ -310,11 +313,15 @@ impl Device {
         // SAFETY: the fence is unsignaled or signaled and not pending.
         unsafe { raw.reset_fences(&[objects.fence]) }.map_err(vulkan)?;
         let buffers = [objects.buffer];
-        // And the last binding of a no-copy buffer's dma-bufs, and the staging queue's last
-        // submission, until each completed: a handle's own work uses neither.
-        let (binding, staging) = match reach {
-            Reach::Device => (self.binding_wait(), self.staging_wait()),
-            Reach::Mine { .. } => (None, None),
+        // And the last binding of a no-copy buffer's dma-bufs, and the staging and fill queues'
+        // last submissions, until each completed: a handle's own work uses none.
+        let (binding, staging, filled) = match reach {
+            Reach::Device => (
+                self.binding_wait(),
+                self.staging_wait(),
+                self.fill_queue_wait(),
+            ),
+            Reach::Mine { .. } => (None, None, None),
         };
         if staging.is_some() {
             shared.counts.staging_gpu_wait();
@@ -323,6 +330,7 @@ impl Device {
             .map(|point| (shared.queues[point.queue].timeline, point.value))
             .chain(binding)
             .chain(staging)
+            .chain(filled)
             .collect();
         let wait_semaphores: Vec<vk::Semaphore> = waits.iter().map(|wait| wait.0).collect();
         let wait_values: Vec<u64> = waits.iter().map(|wait| wait.1).collect();
@@ -459,12 +467,16 @@ impl Device {
 
     /// The device's own timelines outside the batches, each at the value through which the host
     /// saw its submissions complete ([`OwnTimeline`]): the internal one, then the staging
-    /// queue's.
-    pub(crate) fn own_completed(&self) -> [Option<(vk::Semaphore, u64)>; 2] {
+    /// queue's, then the fill queue's ([`OWN_TIMELINES`]).
+    pub(crate) fn own_completed(&self) -> [Option<(vk::Semaphore, u64)>; OWN_TIMELINES] {
         let shared = self.shared();
+        let done = |queue: &Option<super::staging::StagingQueue>| {
+            queue.as_ref().and_then(|queue| queue.done.completed())
+        };
         [
             shared.internal_done.completed(),
-            shared.staging_done.completed(),
+            done(&shared.staging),
+            done(&shared.fill_queue),
         ]
     }
 

@@ -332,6 +332,7 @@ impl Device {
             planned: None,
             least_plan: false,
             staging: None,
+            fill: None,
             reserved_queues: Vec::new(),
             extra_queues: Vec::new(),
             compile,
