@@ -7,9 +7,9 @@
 //! - A null pointer or a guest address outside the resident set is root 0: every access through
 //!   it is contained and, under `GuestIsolation::On`, counted in the `ExecutionStatus` miss word
 //!   and bit; with isolation off nothing is counted and no status address is read.
-//! - `inttoptr` resolves every address of resident sets of 0 to 33 entries exactly (the unrolled
-//!   binary search), including a pointer one past an allocation's end, and the probed addresses
-//!   of sets past the unrolled steps' reach (their loop).
+//! - `inttoptr` resolves every address of resident sets of 0 to 33 entries exactly (the binary
+//!   search's loop), including a pointer one past an allocation's end, and the probed addresses
+//!   of sets of 2^16 to about 3 * 2^16 entries.
 //! - A buffer parameter merged with a loaded pointer (a linked-list walk in a loop) is a wide
 //!   pointer reached through its root entry (`BufferForm::Psb`, `DeviceAddresses`).
 //! - `icmp` of loaded pointers with null and with a parameter compares Metal addresses across
@@ -499,8 +499,8 @@ fn without_isolation_misses_are_not_counted() {
     }
 }
 
-/// The resident-set search (16 unrolled steps) finds every address of every entry of sets of 0 to
-/// 33 entries, a pointer one past an entry's end included (its accesses are out of bounds, not
+/// The resident-set search (its loop of ⌈log₂ N⌉ steps) finds every address of every entry of sets
+/// of 0 to 33 entries, a pointer one past an entry's end included (its accesses are out of bounds, not
 /// misses), and misses addresses in the gaps, below the first entry, and above the last.
 #[test]
 fn inttoptr_resolves_every_resident_address() {
@@ -560,12 +560,11 @@ fn inttoptr_resolves_every_resident_address() {
     }
 }
 
-/// The search's loop past its 16 unrolled steps finds the addresses of sets of 2^16 to about 3 *
-/// 2^16 entries (2^16 was the search's cap before): every entry probed, at its start, inside it,
-/// and one past its end, those around the unrolled steps' reach among them; the gaps, the address
-/// below the first entry and the one above the last miss.
+/// The search finds the addresses of sets of 2^16 to about 3 * 2^16 entries (16 to 18 steps):
+/// every entry probed, at its start, inside it, and one past its end, those around 2^16 among
+/// them; the gaps, the address below the first entry and the one above the last miss.
 #[test]
-fn inttoptr_resolves_addresses_past_the_unrolled_search() {
+fn inttoptr_resolves_addresses_of_large_sets() {
     let body = "  %g = load i64, ptr addrspace(1) %2, align 8\n\
   %p = inttoptr i64 %g to ptr addrspace(1)\n\
   %v = load i32, ptr addrspace(1) %p, align 4\n\
@@ -577,7 +576,7 @@ fn inttoptr_resolves_addresses_past_the_unrolled_search() {
     let a = compile(&bc, "from_int", &p).expect("compile");
     link_and_validate(&a, &p).expect("L3");
     let (plan, m) = typed_module(&bc, "from_int", &p).expect("module");
-    let reach = 1u64 << crate::memory::roots::SEARCH_STEPS;
+    let reach = 1u64 << 16;
     for n in [reach, reach + 1, 3 * reach - 7] {
         let resident: Vec<(u64, u64, u64)> = (0..n).map(|k| (host(k), guest(k), ALLOC)).collect();
         let table = root_table(&[(0, 0, 0, 0); 3], &resident);

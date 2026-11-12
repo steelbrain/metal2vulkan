@@ -113,11 +113,10 @@ fn the_outermost_allocation_wins_and_overlaps_are_trimmed() {
 }
 
 /// Coalescing counts entries after merging, duplicates of one allocation once; a set of more
-/// than 2¹⁶ disjoint allocations, the search's unrolled reach, is made whole (2¹⁶ was its cap
-/// before).
+/// than 2¹⁷ disjoint allocations is made whole.
 #[test]
-fn a_set_past_the_unrolled_search_is_made_whole() {
-    let past = (1u64 << crate::memory::roots::SEARCH_STEPS) * 2 + 3;
+fn a_large_set_is_made_whole() {
+    let past = (1u64 << 17) + 3;
     let e = |i: u64| RootEntry {
         host: i * 32,
         guest: i * 32,

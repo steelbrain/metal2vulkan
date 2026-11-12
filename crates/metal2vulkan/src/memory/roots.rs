@@ -27,12 +27,12 @@
 //! the set may lie apart from the table, below it too (a consumer's set shared by many tables,
 //! `RootTable::resident_fields`).
 //!
-//! **The search** ([`resolve`]) turns a guest address `i` into a wide pointer: a branch-free
-//! binary search of [`SEARCH_STEPS`] unrolled steps for the last resident entry whose `guest ≤ i`,
-//! then a loop of the same step while more than one candidate is left, which only a set of more
-//! than 2^[`SEARCH_STEPS`] entries enters (one uniform test where every invocation searches one
-//! table, no further load), then `i − guest ≤ size` (a one-past-the-end pointer stays in its
-//! allocation). A hit is `(root, i − guest)`, with the entry's `host` and `size` for a wide pointer
+//! **The search** ([`resolve`]) turns a guest address `i` into a wide pointer: a binary search for
+//! the last resident entry whose `guest ≤ i`, one loop whose step halves the candidates whatever
+//! its compare gives (one entry load and a select, no branch on the address), so its trip count,
+//! ⌈log₂ N⌉, follows `N` alone and every invocation that searches one table takes the same
+//! branches; then `i − guest ≤ size` (a one-past-the-end pointer stays in its allocation). A hit
+//! is `(root, i − guest)`, with the entry's `host` and `size` for a wide pointer
 //! ([`resolve_wide`]); a miss, or an empty set, is `(0, i)` (`(0, i, 0, 0)`). A module with
 //! more than one search defines it once ([`define_resolve`]), as it does the handle-table search,
 //! and every search is a call of it; a single search is emitted in place. It reads the set as an
@@ -73,10 +73,6 @@ pub const BIND_OFFSET: u64 = 24;
 pub const RESIDENT_FIRST: u64 = GUEST;
 /// The field of the sink entry that holds the resident set's entry count `N`.
 pub const RESIDENT_COUNT: u64 = SIZE;
-/// Unrolled steps of the resident-set search: a set of up to 2^`SEARCH_STEPS` entries is
-/// searched by them alone; a larger one, by the loop after them too (the module docs).
-pub const SEARCH_STEPS: u32 = 16;
-
 /// The wide roots (the module docs' rule): every root of a component, over the given buffer
 /// pointer root sets, that holds `Dynamic`.
 ///
@@ -329,8 +325,8 @@ pub fn resolve_wide(
 /// The wide pointer `(root, offset)` (two `u64`s) of guest address `guest` (a `u64`) through the
 /// resident set of the root table at `table` (the module docs' search). The search walks the
 /// set's entries from its first, `R0` entries from the table; an empty set starts at the null
-/// root, whose entry every step then reads (the length stays 0) and whose fields `(guest 0,
-/// size 0)` give the miss `(0, i)` whether or not the final test hits.
+/// root, whose entry the final test reads (no step runs) and whose fields `(guest 0, size 0)`
+/// give the miss `(0, i)` whether or not that test hits.
 pub fn resolve(
     fb: &mut FunctionBuilder<'_>,
     table: Value,
@@ -367,12 +363,7 @@ fn search(fb: &mut FunctionBuilder<'_>, table: Value, guest: Value) -> BResult<F
     let skip = fb.binary(BinOp::IMul, start, stride)?;
     let at = fb.binary(BinOp::IAdd, table, skip)?;
     let set = entries(fb, at)?;
-    let mut base = zero;
-    let mut len = count;
-    for _ in 0..SEARCH_STEPS {
-        (base, len) = search_step(fb, set, guest, base, len)?;
-    }
-    let base = search_rest(fb, set, guest, base, len)?;
+    let base = bisect(fb, set, guest, zero, count)?;
     let g = field_of(fb, set, base, GUEST)?;
     let size = field_of(fb, set, base, SIZE)?;
     let rel = fb.binary(BinOp::ISub, guest, g)?;
@@ -412,10 +403,10 @@ fn search_step(
     Ok((base, len))
 }
 
-/// The search's end past its unrolled steps: [`search_step`] while more than one of the `len`
-/// candidates from `base` is left, which only a set of more than 2^[`SEARCH_STEPS`] entries
-/// leaves; the last candidate. The loop carries both in `Function` variables.
-fn search_rest(
+/// The search's loop: [`search_step`] while more than one of the `len` candidates from `base` is
+/// left; the last candidate. Each step keeps `len − ⌊len/2⌋` of them whatever its compare gives,
+/// so the trip count follows `len` alone. The loop carries both in `Function` variables.
+fn bisect(
     fb: &mut FunctionBuilder<'_>,
     set: Value,
     guest: Value,

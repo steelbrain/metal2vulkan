@@ -704,8 +704,8 @@ assert!(stats.reachable_blocks <= stats.blocks);
   for that program. A driver inlines before it charges, so a module of few functions is one whose
   blocks are the program's, while a module that calls a many-block function from many sites holds
   a program far larger than its own blocks; the two read alike in `blocks` alone. Lowering emits
-  such functions itself: the handle-table and root-table searches are unrolled branch-free steps,
-  emitted once and called at every access.
+  such functions itself: the handle-table search (unrolled branch-free steps) and the root-table
+  search (a loop), each emitted once and called at every access.
 - Compare one module against the next of the same shader, not one shader against another. Measured
   cost per block differed several-fold between a synthetic module and a real workload, so a
   per-block figure taken from one shader predicts nothing for the next; `instructions` is the

@@ -1607,13 +1607,13 @@ fn a_rebind_of_one_of_two_buffers_over_a_memory_ends_only_its_use() {
     });
 }
 
-/// The entries the root tables' search covered before, its unrolled steps' reach since.
+/// The entries the root tables' search covered before.
 const OLD_SEARCH_CAPACITY: usize = 1 << 16;
 
 /// Buffers of their own past what the root tables' search covered, 2^16 entries after
 /// coalescing, none inside another: a pointer into a buffer of its own that no encoder made
-/// resident reaches it as Metal's does (the search's loop past its unrolled steps), and nothing is
-/// announced. Before, it read zero there, announced (`unnamed-buffers-past-capacity`).
+/// resident reaches it as Metal's does (the search's loop), and nothing is announced. Before, it
+/// read zero there, announced (`unnamed-buffers-past-capacity`).
 #[test]
 fn a_resident_set_past_the_old_search_reaches_every_live_buffer() {
     let cache = ScratchCache::new().unwrap();
