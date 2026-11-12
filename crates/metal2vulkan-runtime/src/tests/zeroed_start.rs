@@ -93,10 +93,27 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
     let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
     descriptor.usage = TextureUsage::SHADER_READ;
     descriptor.resource_options = ResourceOptions::shared();
+    // Where the making's time went, on this thread: on a CPU, waiting for one, or neither
+    // (blocked: on a lock, the GPU or the kernel); and what it made.
+    let scheduled_before = scheduled();
+    let makings_before = crate::churn_counts::this_thread_makings();
     let made = Instant::now();
     let texture = device.new_texture(&descriptor).unwrap();
     let took = made.elapsed();
     let status = busy.status();
+    let split = match (scheduled_before, scheduled()) {
+        (Some([cpu, queued]), Some([cpu_after, queued_after])) => {
+            let cpu = Duration::from_nanos(cpu_after - cpu);
+            let queued = Duration::from_nanos(queued_after - queued);
+            let blocked = took.saturating_sub(cpu + queued);
+            format!("on a CPU {cpu:?}, waiting for one {queued:?}, blocked {blocked:?}")
+        }
+        _ => "its thread's times unread".to_owned(),
+    };
+    let makings = crate::churn_counts::this_thread_makings();
+    let makings: Vec<u64> = (makings.iter().zip(makings_before))
+        .map(|(after, before)| after - before)
+        .collect();
     let after = device.work_counts();
     // A second one, and the CPU's first write into it (one texel), while the busy work may still
     // run: where that write waits, the wait moved from the making to the first copy.
@@ -109,11 +126,12 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
     let shared = device.shared();
     let zeroed = shared.zero_initialize_device_memory && shared.host_copies.is_some();
     println!(
-        "ZEROED-START {}: new_texture (Shared, {SIDE} x {SIDE}) took {took:?} with {count} fills \
-         queued ({each:?} each), the busy work {status:?} as it returned; started on the host \
-         {}, zeroed {}; zeroInitializeDeviceMemory {zeroed}; a second one's first replace_region \
-         took {wrote:?}, the busy work {status_after_write:?} after it; host-copy blocks readied \
-         {}, made in place {}",
+        "ZEROED-START {}: new_texture (Shared, {SIDE} x {SIDE}) took {took:?} ({split}; made \
+         images, buffers, views, memories, image and buffer bindings {makings:?}) with {count} \
+         fills queued ({each:?} each), the busy work {status:?} as it returned; started on the \
+         host {}, zeroed {}; zeroInitializeDeviceMemory {zeroed}; a second one's first \
+         replace_region took {wrote:?}, the busy work {status_after_write:?} after it; host-copy \
+         blocks readied {}, made in place {}",
         device.name(),
         after.images_started_on_the_host - before.images_started_on_the_host,
         after.images_started_zeroed - before.images_started_zeroed,
@@ -154,6 +172,16 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
     texture.get_bytes(&mut read, row, 0, whole, 0, 0).unwrap();
     assert!(read.iter().all(|&byte| byte == 0), "a texel read nonzero");
     busy.wait_until_completed().unwrap();
+}
+
+/// This thread's time so far on a CPU and waiting on a run queue for one, in nanoseconds (Linux's
+/// `/proc/thread-self/schedstat`); `None` where it is unread.
+fn scheduled() -> Option<[u64; 2]> {
+    let text = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+    let mut fields = text
+        .split_whitespace()
+        .map(|field| field.parse::<u64>().ok());
+    Some([fields.next()??, fields.next()??])
 }
 
 /// The side of each texture [`many_shared_textures_made_in_turn_take_pooled_blocks`] makes.
