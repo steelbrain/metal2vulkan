@@ -15,17 +15,23 @@
 //! it) and shows both sides of the question: a command buffer of another queue that shares
 //! nothing with it goes and is counted as waiting for nothing, and one that writes the buffer its
 //! dispatch writes waits behind it and is counted.
+//! `a_head_over_the_same_host_bytes_through_another_buffer_goes_while_a_batch_is_held` shows the
+//! line the hold stops at: two no-copy buffers over the same host bytes are two resources, which
+//! Metal orders across queues only as the program orders them (`host_aliases.rs`), so a command
+//! buffer of another queue that writes those bytes through the other buffer goes while the
+//! dispatch's making holds it.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The kernel is `scale_and_offset` of the
 //! owned fixture `validation/fixtures/public/examples/runtime_examples.ll`, as
 //! `dispatch_pending.rs` runs it.
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{device, exact_waits_device, Host, Scratch, BYTES, WAIT};
 use super::dispatch_pending::{dispatch, state, Buffers, Grid};
 use crate::pipeline::pool::held;
 use crate::{
-    Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, EventRef, ResourceOptions, Size,
+    Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, EventRef, ResourceOptions,
+    Size,
 };
 use std::time::{Duration, Instant};
 
@@ -131,6 +137,79 @@ fn a_head_that_shares_a_buffer_with_a_held_batch_waits_behind_it() {
     assert!(
         after.batch_hold_nanos > before.batch_hold_nanos,
         "the holds were counted as taking no time"
+    );
+}
+
+/// A `Shared` no-copy buffer of `device` over all of `host`'s pages.
+fn over(device: &Device, host: &Host) -> Buffer {
+    // SAFETY: `host` is declared before the device in each leg, so its pages outlive every buffer
+    // over them, and only those buffers use them while they live.
+    let memory = unsafe { host.memory() };
+    // SAFETY: `memory` is `BYTES` bytes of whole pages (`Host`).
+    unsafe {
+        device.new_buffer_with_bytes_no_copy(memory, BYTES as u64, ResourceOptions::shared(), None)
+    }
+    .unwrap()
+}
+
+/// A dispatch whose pipeline's making the pool is held from finishing writes host pages through
+/// one no-copy buffer, and a command buffer committed after it on another queue fills the same
+/// bytes through a second no-copy buffer over exactly those pages, which joins the first's memory
+/// (`host_aliases.rs`). The two are two resources: Metal orders two resources over one memory
+/// across queues only as the program orders them (an M4 under macOS 27.0.1, `host_aliases.rs`),
+/// so the fill goes while the dispatch's making holds it, and no look counts it as waiting behind
+/// an earlier commit. It had waited for the making (a guest's compositor frames behind another
+/// process's command buffer over a shared surface's pages, frozen for a cold compile's 3 s).
+/// Released, the dispatch runs after the fill, which went to the GPU first, so its words are what
+/// Metal's dispatch writes.
+#[test]
+fn a_head_over_the_same_host_bytes_through_another_buffer_goes_while_a_batch_is_held() {
+    let host = Host::new();
+    let scratch = Scratch::new("aliased");
+    // Its recordings wait for the making until it is made: a bound passed would drop the dispatch
+    // and let the fill go whatever the order says.
+    let device = exact_waits_device(&scratch.0);
+    let state = state(&device);
+    let (first, second) = (over(&device, &host), over(&device, &host));
+    let buffers = Buffers::writing(&device, first);
+    let (a, b) = (
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
+    );
+    let hold = held::hold();
+    let pending = dispatch(&a, &state, &buffers, Grid::One(Size::new(THREADS, 1, 1)));
+    let before = device.work_counts();
+    pending.commit().unwrap();
+
+    let aliased = fill(&b, &second, None);
+    aliased.commit().unwrap();
+    aliased
+        .wait_until_completed_for(WAIT)
+        .expect("a batch writing the held batch's bytes through another buffer waited behind it");
+    assert_eq!(aliased.status(), CommandBufferStatus::Completed);
+    assert_eq!(
+        device.work_counts().heads_held_for_earlier_commits,
+        before.heads_held_for_earlier_commits,
+        "a batch over the held one's bytes through another buffer was counted as waiting behind it"
+    );
+    assert_ne!(pending.status(), CommandBufferStatus::Completed);
+    assert!(
+        host.words()[..16].iter().all(|&word| word == 0x0707_0707),
+        "the fill through the second buffer did not land in the pages"
+    );
+
+    drop(hold);
+    pending.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(
+        pending.status(),
+        CommandBufferStatus::Completed,
+        "{:?} {:?}",
+        pending.error(),
+        pending.failed_pipeline()
+    );
+    assert!(
+        buffers.written(THREADS),
+        "the dispatch, after the fill, did not write what Metal's writes"
     );
 }
 

@@ -92,14 +92,21 @@ pub(super) struct Buffers {
 
 impl Buffers {
     pub(super) fn new(device: &Device) -> Buffers {
+        let output = device
+            .new_buffer(COUNT * 4, ResourceOptions::shared())
+            .unwrap();
+        Buffers::writing(device, output)
+    }
+
+    /// The kernel's buffers, its output `output`, a `Shared` buffer of `COUNT * 4` bytes at least
+    /// (a no-copy buffer over host pages, for a leg of `hold_sites.rs`).
+    pub(super) fn writing(device: &Device, output: Buffer) -> Buffers {
         let input: Vec<u8> = (0..COUNT).flat_map(|i| (i as f32).to_le_bytes()).collect();
         Buffers {
             input: device
                 .new_buffer_with_bytes(&input, ResourceOptions::shared())
                 .unwrap(),
-            output: device
-                .new_buffer(COUNT * 4, ResourceOptions::shared())
-                .unwrap(),
+            output,
             scale: device
                 .new_buffer_with_bytes(&SCALE.to_le_bytes(), ResourceOptions::shared())
                 .unwrap(),
