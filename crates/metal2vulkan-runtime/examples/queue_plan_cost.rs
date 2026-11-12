@@ -745,7 +745,8 @@ fn runtime_child() {
     let _ = std::fs::remove_dir_all(&cache);
 }
 
-/// The overlap phase (`--overlap K,...`, the module docs): for each of its shapes and each count, `rounds` rounds of that many processes making one device each at once.
+/// The overlap phase (`--overlap K,...`, the module docs): for each of its shapes and each count,
+/// `rounds` rounds of that many processes making one device each at once.
 fn overlap_phase(gpu: &Gpu, counts: &[usize], rounds: usize) {
     let exe = std::env::current_exe().expect("this program");
     let [(_, copies), (most, _)] = gpu.least_and_plan();
