@@ -36,6 +36,17 @@
 //! - **fills** (`--fills N,M,...`): for each count, that many devices of the least plan's shape
 //!   held at once, then the runtime's device made beside them, as above: what the runtime's
 //!   device making answers where the plan's `vkCreateDevice` still fits but little more does.
+//! - **rooms** (`--rooms SPEC,...`, opt-in as the exhaust phase is): for each `SPEC`, `K+N` (or
+//!   `N`, K of 0), K devices of the plan's shape and N of the least plan's held at once, then one
+//!   more process asks for a device of every graphics-family count from the plan's down to one
+//!   (the copy family's queues kept), each made and destroyed at once where the driver makes it:
+//!   which counts the driver accepts beside what is held, and how long each `vkCreateDevice`
+//!   took, refused or made.
+//! - **runtime fill** (`--runtime-fill P`, opt-in as the exhaust phase is): up to `P` processes,
+//!   started one after another, each making the runtime's own devices (the plan) until one is
+//!   refused or it holds 6, all held until the last is done: each device's make time and the
+//!   `VkQueue`s it took (the plan's, or what its `least-queue-plan` notice says), as the GPU
+//!   fills.
 
 use ash::vk;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -442,24 +453,146 @@ fn fill_phase(gpu: &Gpu, fills: &[usize]) {
     }
 }
 
-/// Up to `processes` processes, started one after another, each making devices of `shape` until
-/// refused or 6, `most` in all, held while one more makes the runtime's own device; printed.
-fn held_beside_runtime(shape: Shape, processes: usize, most: usize) {
+/// Devices held by child processes: the children, holding theirs until their stdin closes; how
+/// many devices; and each child's count, `r(...)` naming a refusal.
+struct Held {
+    children: Vec<Child>,
+    devices: usize,
+    counts: Vec<String>,
+}
+
+impl Held {
+    /// Up to `processes` processes, started one after another, each making devices of `shape`
+    /// until refused or 6, `most` in all.
+    fn of(shape: Shape, processes: usize, most: usize) -> Held {
+        let exe = std::env::current_exe().expect("this program");
+        let mut held = Held {
+            children: Vec::new(),
+            devices: 0,
+            counts: Vec::new(),
+        };
+        for _ in 0..processes {
+            if held.devices >= most {
+                break;
+            }
+            let mut child = Command::new(&exe)
+                .args([
+                    "--child",
+                    &shape.0.to_string(),
+                    &shape.1.to_string(),
+                    &(most - held.devices).to_string(),
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("a child");
+            let stdout = child.stdout.take().expect("its stdout");
+            let mut line = String::new();
+            BufReader::new(stdout).read_line(&mut line).ok();
+            let made: usize = (line.split_whitespace().nth(1))
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0);
+            // The refusal's `VkResult`, where the child's line names one (`Some(ERROR_...)`).
+            let refusal = (line.split_once("Some("))
+                .and_then(|(_, rest)| rest.split_once(')'))
+                .map(|(code, _)| code.to_owned());
+            held.counts.push(match refusal {
+                Some(code) => format!("{made}r({code})"),
+                None => made.to_string(),
+            });
+            held.devices += made;
+            held.children.push(child);
+            if made == 0 {
+                break;
+            }
+        }
+        held
+    }
+
+    /// Close each child's stdin and wait for it: its devices destroyed.
+    fn release(self) {
+        for mut child in self.children {
+            drop(child.stdin.take());
+            child.wait().ok();
+        }
+    }
+}
+
+/// The rooms phase (`--rooms SPEC,...`, the module docs).
+fn rooms_phase(gpu: &Gpu, specs: &[(usize, usize)]) {
+    let [least, plan] = gpu.least_and_plan();
+    let exe = std::env::current_exe().expect("this program");
+    for &(plans, leasts) in specs {
+        let first = Held::of(plan, plans.div_ceil(PER_PROCESS) + 1, plans);
+        let second = Held::of(least, leasts.div_ceil(PER_PROCESS) + 1, leasts);
+        let vk_queues =
+            first.devices * queues(plan) as usize + second.devices * queues(least) as usize;
+        let probe = Command::new(&exe)
+            .arg("--probe-child")
+            .output()
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+            .unwrap_or_else(|error| format!("not run: {error}"));
+        println!(
+            "QUEUE-PLAN-COST room beside {} of {}+{} [{}] and {} of {}+{} [{}] ({vk_queues} \
+             VkQueues held): {probe}",
+            first.devices,
+            plan.0,
+            plan.1,
+            first.counts.join(" "),
+            second.devices,
+            least.0,
+            least.1,
+            second.counts.join(" ")
+        );
+        second.release();
+        first.release();
+        std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
+/// The rooms phase's probe: a device of each graphics-family count from the plan's down to one,
+/// the copy family's queues kept, each destroyed at once where made; one line, the most queues
+/// the driver made, each attempt (`g+c:ok|ERROR_...:ms`), and the made attempts' create time a
+/// queue.
+fn probe_child(gpu: &Gpu) {
+    let [(_, copies), (most, _)] = gpu.least_and_plan();
+    let mut attempts = Vec::new();
+    let mut made = Vec::new();
+    let mut largest = None;
+    for graphics in (1..=most).rev() {
+        let shape = (graphics, copies);
+        let start = Instant::now();
+        let answer = gpu.make(shape);
+        let took = ms(start.elapsed());
+        let what = match answer {
+            Ok((device, _)) => {
+                destroy(device);
+                made.push((queues(shape) as f64, took));
+                largest.get_or_insert(queues(shape));
+                "ok".to_owned()
+            }
+            Err(result) => format!("{result:?}"),
+        };
+        attempts.push(format!("{graphics}+{copies}:{what}:{took:.1}"));
+    }
+    let per = match made.len() > 1 {
+        true => format!("{:.2}", slope(&made)),
+        false => "-".to_owned(),
+    };
+    println!(
+        "most made {largest:?} queues; attempts {}; made create {per} ms a queue",
+        attempts.join(" ")
+    );
+}
+
+/// The runtime fill phase (`--runtime-fill P`, the module docs).
+fn runtime_fill_phase(processes: usize) {
     let exe = std::env::current_exe().expect("this program");
     let mut children: Vec<Child> = Vec::new();
-    let mut held = 0;
-    let mut counts = Vec::new();
-    for _ in 0..processes {
-        if held >= most {
-            break;
-        }
+    let mut devices = 0;
+    for at in 0..processes {
         let mut child = Command::new(&exe)
-            .args([
-                "--child",
-                &shape.0.to_string(),
-                &shape.1.to_string(),
-                &(most - held).to_string(),
-            ])
+            .arg("--runtime-fill-child")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -470,20 +603,79 @@ fn held_beside_runtime(shape: Shape, processes: usize, most: usize) {
         let made: usize = (line.split_whitespace().nth(1))
             .and_then(|n| n.parse().ok())
             .unwrap_or(0);
-        // The refusal's `VkResult`, where the child's line names one (`Some(ERROR_...)`).
-        let refusal = (line.split_once("Some("))
-            .and_then(|(_, rest)| rest.split_once(')'))
-            .map(|(code, _)| code.to_owned());
-        counts.push(match refusal {
-            Some(code) => format!("{made}r({code})"),
-            None => made.to_string(),
-        });
-        held += made;
+        devices += made;
+        println!(
+            "QUEUE-PLAN-COST runtime fill process {at} ({devices} devices held): {}",
+            line.trim()
+        );
         children.push(child);
         if made == 0 {
             break;
         }
     }
+    for mut child in children {
+        drop(child.stdin.take());
+        child.wait().ok();
+    }
+}
+
+/// The runtime fill phase's child: the runtime's own devices (the plan) until one is refused or
+/// it holds [`PER_PROCESS`], held until stdin closes; one line, `RTFILL n`, then each device's
+/// make time and what it took (`plan`, or its `least-queue-plan` notice's reason), and the
+/// refusal.
+fn runtime_fill_child() {
+    use metal2vulkan_runtime::{Degradation, Device, DeviceKind, DeviceOptions, MessageSink};
+    use std::sync::{Arc, Mutex};
+    let cache = std::env::temp_dir().join(format!("queue-plan-cost-{}", std::process::id()));
+    let heard: Arc<Mutex<Option<String>>> = Arc::default();
+    let mut options = DeviceOptions::default();
+    options.kinds = vec![DeviceKind::Discrete, DeviceKind::Integrated];
+    options.shader_cache = metal2vulkan_runtime::ShaderCacheOptions::in_directory(cache.clone());
+    let sink = Arc::clone(&heard);
+    options.messages = Some(MessageSink::new(move |message| {
+        if let Some(notice) = &message.degradation {
+            if notice.degradation == Degradation::LeastQueuePlan {
+                *sink.lock().unwrap() = Some(notice.reason.clone());
+            }
+        }
+    }));
+    let mut devices = Vec::new();
+    let mut each = Vec::new();
+    let mut refusal = None;
+    while devices.len() < PER_PROCESS {
+        *heard.lock().unwrap() = None;
+        let start = Instant::now();
+        let made = Device::system_default_with(&options);
+        let took = ms(start.elapsed());
+        match made {
+            Ok(device) => {
+                let what = heard.lock().unwrap().take();
+                each.push(format!("{took:.0}ms:{}", what.as_deref().unwrap_or("plan")));
+                devices.push(device);
+            }
+            Err(error) => {
+                refusal = Some(format!("{took:.0}ms:{error}"));
+                break;
+            }
+        }
+    }
+    println!(
+        "RTFILL {} [{}] refused {refusal:?}",
+        devices.len(),
+        each.join(" | ")
+    );
+    std::io::stdout().flush().ok();
+    let mut rest = Vec::new();
+    std::io::stdin().read_to_end(&mut rest).ok();
+    drop(devices);
+    let _ = std::fs::remove_dir_all(&cache);
+}
+
+/// Up to `processes` processes, started one after another, each making devices of `shape` until
+/// refused or 6, `most` in all, held while one more makes the runtime's own device; printed.
+fn held_beside_runtime(shape: Shape, processes: usize, most: usize) {
+    let exe = std::env::current_exe().expect("this program");
+    let held = Held::of(shape, processes, most);
     let memory = smi_memory();
     let runtime = Command::new(&exe)
         .arg("--runtime-child")
@@ -492,20 +684,17 @@ fn held_beside_runtime(shape: Shape, processes: usize, most: usize) {
         .output()
         .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
         .unwrap_or_else(|error| format!("not run: {error}"));
-    for mut child in children {
-        drop(child.stdin.take());
-        child.wait().ok();
-    }
+    let (devices, counts) = (held.devices, held.counts.join(" "));
+    let processes = held.children.len();
+    held.release();
     println!(
-        "QUEUE-PLAN-COST exhaust {}+{} = {} queues: {held} devices ({} VkQueues) held at once \
-         by {} processes [{}] (r: refused), memory then {memory:?}; then the runtime's \
-         device: {runtime}",
+        "QUEUE-PLAN-COST exhaust {}+{} = {} queues: {devices} devices ({} VkQueues) held at \
+         once by {processes} processes [{counts}] (r: refused), memory then {memory:?}; then \
+         the runtime's device: {runtime}",
         shape.0,
         shape.1,
         queues(shape),
-        held * queues(shape) as usize,
-        counts.len(),
-        counts.join(" ")
+        devices * queues(shape) as usize,
     );
     std::thread::sleep(Duration::from_secs(2));
 }
@@ -535,11 +724,19 @@ fn main() {
         runtime_child();
         return;
     }
+    if args.first().map(String::as_str) == Some("--runtime-fill-child") {
+        runtime_fill_child();
+        return;
+    }
     let gpu = Gpu::new();
     if args.first().map(String::as_str) == Some("--child") {
         let shape = (args[1].parse().unwrap(), args[2].parse().unwrap());
         let most = (args.get(3)).map_or(PER_PROCESS, |most| most.parse().unwrap());
         child(&gpu, shape, most);
+        return;
+    }
+    if args.first().map(String::as_str) == Some("--probe-child") {
+        probe_child(&gpu);
         return;
     }
     let value = |flag: &str| {
@@ -570,5 +767,22 @@ fn main() {
         });
     if let Some(fills) = fills {
         fill_phase(&gpu, &fills);
+    }
+    // Each `K+N` or `N`: K devices of the plan's shape and N of the least plan's.
+    let rooms = (args.iter().position(|arg| arg == "--rooms"))
+        .and_then(|at| args.get(at + 1))
+        .map(|list| {
+            (list.split(','))
+                .filter_map(|spec| match spec.split_once('+') {
+                    Some((plans, leasts)) => Some((plans.parse().ok()?, leasts.parse().ok()?)),
+                    None => Some((0, spec.parse().ok()?)),
+                })
+                .collect::<Vec<(usize, usize)>>()
+        });
+    if let Some(rooms) = rooms {
+        rooms_phase(&gpu, &rooms);
+    }
+    if let Some(processes) = value("--runtime-fill") {
+        runtime_fill_phase(processes);
     }
 }
