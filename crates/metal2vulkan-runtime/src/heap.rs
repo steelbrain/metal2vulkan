@@ -63,7 +63,7 @@ use super::resource::{ObjectId, ResourceKey};
 use super::sparse::heap::SparseHeap;
 use super::sparse::texture::sparse_refusal;
 use super::sparse::SparsePageSize;
-use super::texture::{Texture, TextureShared};
+use super::texture::{Retain, Texture};
 use super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
 use super::Device;
 use metal2vulkan::device::AllocationLimits;
@@ -305,7 +305,7 @@ struct HeapShared {
     /// The textures made in the heap, while they live: those a handle other than a heap use's
     /// holds are what `use_heap` makes resident, and an encoder that used the heap makes resident
     /// as it encodes each later command (`residency.rs`, [`Heap::textures_from`]).
-    textures: Mutex<Numbered<TextureShared>>,
+    textures: Mutex<Numbered<Retain>>,
     /// How many textures `textures` numbered, stored under its lock as each is held: what an
     /// encoder that used the heap reads at each command to see whether it made one since, at one
     /// load.
@@ -1215,7 +1215,7 @@ impl Heap {
     /// every texture the heap made before it.
     pub(super) fn hold_texture(&self, texture: &Texture) {
         let mut textures = lock(&self.0.textures);
-        textures.hold(texture.downgrade());
+        textures.hold(texture.retained());
         // Stored while the texture is held: a load that reads it, then takes the lock, finds the
         // texture there.
         (self.0.textures_made).store(textures.made(), Ordering::Release);
@@ -1228,20 +1228,25 @@ impl Heap {
     }
 
     /// The heap's textures numbered `from` or later that a handle other than a heap use's holds,
-    /// in the order they were made, each as a heap use holds it (`Texture::for_heap_use`), and
-    /// the number the next texture it makes takes. Metal's `useHeap:` holds the heap, not its
+    /// in the order they were made, each as a heap use holds it (`Texture::heap_use`), and the
+    /// number the next texture it makes takes. Metal's `useHeap:` holds the heap, not its
     /// textures: one the program released, which only command buffers that used the heap hold,
     /// is not among them, so a later use does not hold it again and it goes as they complete.
+    /// Each is reached through its retain (`texture::Retain`), which the program's handles hold:
+    /// a texture none of them holds is never taken, so none is let go here.
     pub(super) fn textures_from(&self, from: u64) -> (Vec<Texture>, u64) {
-        let (found, made) = {
+        let (retains, made) = {
             let textures = lock(&self.0.textures);
-            let found: Vec<Texture> = textures.since(from).filter_map(Texture::upgrade).collect();
-            (found, textures.made())
+            let retains: Vec<Arc<Retain>> =
+                textures.since(from).filter_map(Weak::upgrade).collect();
+            (retains, textures.made())
         };
-        // With the lock free: a texture only heap uses hold may go here.
-        let live = found
-            .into_iter()
-            .filter_map(Texture::for_heap_use)
+        // With the lock free. A retain whose texture's last handle of the program's went
+        // meanwhile goes here, holding the texture weakly: the texture goes with that handle,
+        // or with the use, never here.
+        let live = retains
+            .iter()
+            .filter_map(|retain| Texture::heap_use(retain))
             .collect();
         (live, made)
     }
