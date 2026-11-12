@@ -336,6 +336,13 @@ impl Owners {
     }
 }
 
+/// What owns the memory under `key`, by its identity, while it lives: the program's buffer, or
+/// what owns a texture's memory (`Owners`); else the heap whose own buffer's key it is
+/// (`HeapKeys`). `None` for a key of the runtime's own resources.
+pub(super) fn owner_of(shared: &super::device::DeviceShared, key: ResourceKey) -> Option<ObjectId> {
+    (shared.owners.id_of(key)).or_else(|| shared.heap_keys.id_of(key))
+}
+
 /// Whether what `keys` name, or `residency` made resident, has an owner among `objects`, as
 /// [`CommandBuffer::used_resources`] would list it: the device's owners of the keys (`shared`), the
 /// heaps among them, and the residency's resources and heaps, each by its identity, with no

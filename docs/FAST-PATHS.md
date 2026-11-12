@@ -495,8 +495,10 @@ recorded here.
   batch's start's, where two devices that both copied at the batch's start differed by 0.31 to 1.85
   times (`tests::managed_copies_bench`): no gain past that spread, so smaller fills keep the batch's
   start. From 1 MiB up the other queue's kernels' share of their rate moved by -11 to +8 points on
-  the RTX 3090 and RTX 2080 and by +1 to +21 on the RTX 5080 Laptop GPU; every other submission of
-  the device's waits on the GPU for the fill queue's last until the host saw it complete.
+  the RTX 3090 and RTX 2080 and by +1 to +21 on the RTX 5080 Laptop GPU. A batch takes and waits
+  on the GPU for the fills of memory its commands may reach alone (every one where a command may
+  reach memory no use names), and internal submissions for the fill queue's last, until the host
+  saw it complete (`WorkCounts::fill_queue_waits_unused`).
 - **A no-copy buffer's deallocator runs in its release.** On an M3 Max under macOS 27.0.1 an unused
   no-copy buffer's deallocator ran inside its final release, on the releasing thread, every time.
   So a release that frees the buffer's import while a deallocator waits for the free frees it

@@ -2275,15 +2275,13 @@ impl Filled for BufferShared {
             .map(|memory| Box::new(memory) as Box<dyn Any + Send + Sync>)
     }
 
-    /// A buffer placed in a heap: the heap. Else the buffer, kept among the program's resources
-    /// by its key (`Device::visible`), or the heap whose own buffer it is (`HeapKeys`).
-    fn owner(&self) -> Option<ObjectId> {
-        let key = match &self.bytes {
+    /// Its identity's key (`Buffer::identity`): a buffer placed in a heap has the heap's own
+    /// buffer's.
+    fn key(&self) -> Option<ResourceKey> {
+        Some(match &self.bytes {
             Bytes::Own(own) => own.identity.key,
-            Bytes::Heap(placed) => return Some(placed.heap.object_id()),
-        };
-        let shared = self.device.shared();
-        (shared.owners.id_of(key)).or_else(|| shared.heap_keys.id_of(key))
+            Bytes::Heap(placed) => placed.bytes.identity().key,
+        })
     }
 }
 

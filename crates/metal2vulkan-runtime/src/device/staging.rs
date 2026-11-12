@@ -93,10 +93,22 @@
 //!   took an acquire from an external agent keeps its fills at its start; so does one that finds
 //!   every command buffer of the fill queue's pending ([`Device::fill_queue_has_room`]), as a wait
 //!   on the host for one may wait for work that waits for the caller.
-//! - **What waits for it.** The batch, before any of its commands; and every other submission of
-//!   the device's, a batch or an internal one on any `VkQueue`, on the GPU until the host saw it
-//!   complete, as for the staging queue ([`Device::fill_queue_wait`]): any of their commands may
-//!   reach the buffers unnamed. The fills' writes are available once the submission's signal is
+//! - **Which fills a batch takes.** Those of memory its commands may reach: memory a resource its
+//!   encoders' uses name owns (`used_resources::owner_of`: the buffer, or the heap it lies in);
+//!   every one where a command of it may reach memory no use names (a pointer loaded from memory,
+//!   a texture's handle, work recorded on the GPU alone: `State::reaches_unnamed`), or where it
+//!   takes a move of an image in memory another resource owns or a staged copy, which come after
+//!   every fill of that memory; and those of the device's own buffers, which no use names
+//!   (`texture/first_move.rs`, `FillTake::Reached`). The rest wait for a batch that may reach
+//!   them, or for an internal submission, which takes every one. A batch over no new memory makes
+//!   no fills and waits for none.
+//! - **What waits for it.** The batch, before any of its commands; and every later batch whose
+//!   commands may reach what it filled, as above, on the GPU until the host saw it complete
+//!   ([`Device::fill_queue_wait_for`]); and every internal submission, on any `VkQueue`
+//!   ([`Device::fill_queue_wait`]). Each submission keeps what owns the memory its fills write
+//!   (`Fills::owners`) until the host saw it complete. A batch that waits for none of them waits
+//!   for no fill-queue work (`WorkCounts::fill_queue_waits_unused` counts the batches that waited
+//!   for fills they reach none of). The fills' writes are available once the submission's signal is
 //!   ("The first access scope includes all memory access performed by the device", the Vulkan
 //!   specification, 7.4.1 Semaphore Signaling) and visible to the commands after the wait. Every
 //!   buffer is concurrent among the device's families and this one (`sharing.rs`), so none
@@ -493,6 +505,11 @@ impl Device {
         self.shared().staging.is_some()
     }
 
+    /// Whether the device has a fill queue (the module docs).
+    pub(crate) fn has_fill_queue(&self) -> bool {
+        self.shared().fill_queue.is_some()
+    }
+
     /// Whether the device has a fill queue (the module docs) with a command buffer a submission
     /// may record into now, with no wait on the host: one whose last submission the host saw
     /// complete, or room for another of [`BUFFERS`]. A submission there may wait for work that
@@ -564,9 +581,30 @@ impl Device {
     }
 
     /// The fill queue's last submission while the host has not seen it complete, as
-    /// [`staging_wait`](Self::staging_wait)'s: what it filled may be among what a submission uses.
+    /// [`staging_wait`](Self::staging_wait)'s: what an internal submission waits for, as what it
+    /// filled may be among what the submission uses (a batch waits for those it may reach alone,
+    /// [`fill_queue_wait_for`](Self::fill_queue_wait_for)).
     pub(crate) fn fill_queue_wait(&self) -> Option<(vk::Semaphore, u64)> {
         pending(self, self.shared().fill_queue.as_ref()?)
+    }
+
+    /// The last of the fill queue's submissions after `after` that the host may not have seen
+    /// complete and whose fills a batch's commands may reach, as `reaches` answers
+    /// ([`fill_queue_reached`](Self::fill_queue_reached)): what the batch waits for on the GPU
+    /// (the module docs). One the host sees complete with a wait of no time is none.
+    pub(crate) fn fill_queue_wait_for(
+        &self,
+        after: u64,
+        reaches: impl Fn(Option<&[ObjectId]>) -> bool,
+    ) -> Option<(vk::Semaphore, u64)> {
+        let fill_queue = self.shared().fill_queue.as_ref()?;
+        let value = self.fill_queue_reached((after, u64::MAX), reaches)?;
+        let timeline = *fill_queue.timeline.get()?;
+        // A failed wait (a lost device) leaves the submission waited for.
+        match reached(self, fill_queue, value, 0) {
+            Ok(true) => None,
+            _ => Some((timeline, value)),
+        }
     }
 
     /// The value of the last of the fill queue's submissions after `after` through `upto` that

@@ -91,7 +91,7 @@ fn a_hand_out_takes_its_own_first_work_alone() {
     assert!(firsts.fills_wait(other));
     // The device's next submission takes the rest.
     assert_eq!(firsts.take(|_| true).submitted(None).len(), 2);
-    assert!(firsts.none_waiting());
+    assert!(firsts.none_waiting_but(|_| false));
 }
 
 /// A resource's staged work goes as the resource goes (`FirstMoves::forget`), not at the device's
@@ -144,7 +144,7 @@ fn a_resource_s_staged_work_goes_with_it() {
     // The device's next submission takes the rest, and holds it until it completed.
     let held = firsts.take(|_| true).submitted(None);
     assert_eq!(held.len(), 2);
-    assert!(firsts.none_waiting());
+    assert!(firsts.none_waiting_but(|_| false));
     drop(held);
     assert_eq!(Arc::strong_count(&device), 1);
 }

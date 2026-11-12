@@ -222,6 +222,7 @@ use crate::shadow_standing::{LetGo, Missed, Unskipped};
 use crate::sparse::bind::{bind_batch, BindFailure, Bound};
 use crate::sparse::encoder::SparseUpdate;
 use crate::texture::decoded_twin::{SecondDecode, TwinWrite};
+use crate::texture::first_move::FillTake;
 use crate::texture::wrapped::Transition;
 use crate::texture::Texture;
 use crate::tracker::{Barrier, Point, Summary};
@@ -485,11 +486,16 @@ impl CommandBufferShared {
         let rebound = state.failing_at(device, index);
         // One that needs no GPU work goes with no submission, in its queue's order (the module
         // docs); behind a group held, it goes with the group as any batch that joins does, and
-        // where the device's first work waits, it carries it as any batch does.
+        // where the device's first work waits, it carries it as any batch does: on a device with
+        // a fill queue, first work but the fills of the program's memory, which a batch whose
+        // commands name nothing leaves waiting (`texture/first_move.rs`, `FillTake::Reached`).
+        let fills_named_only = |key: ResourceKey| {
+            device.has_fill_queue() && crate::used_resources::owner_of(shared, key).is_some()
+        };
         if !rebound
             && !scheduler.group.holds()
             && state.needs_no_gpu()
-            && shared.textures.first_moves.none_waiting()
+            && (shared.textures.first_moves).none_waiting_but(fills_named_only)
         {
             let taken = self.take_unsubmitted(&mut state, index, last, scheduler);
             return Ok(Submitting::Submitted(taken));
@@ -654,7 +660,21 @@ impl CommandBufferShared {
         // pages it then holds. Its commands bind the heap sets, so it holds the texture slots'
         // writes until its submission was made (`heap_sets::hold`).
         let firsts = &shared.textures.first_moves;
-        let mut first_work = firsts.take_holding(|_| true, || crate::heap_sets::hold(device));
+        // On a device with a fill queue it takes the fills of memory its commands may reach
+        // alone, and of memory no use of the program's names (`FillTake::Reached`): the rest wait
+        // for a batch that may reach them, so this one neither makes them nor waits for them.
+        let owner_of = |key: ResourceKey| crate::used_resources::owner_of(shared, key);
+        let reaches = |owner: ObjectId| state.parts_reach(shared, start..end, &[owner]);
+        let fill_take = match device.has_fill_queue() {
+            true => FillTake::Reached {
+                owner_of: &owner_of,
+                reaches: &reaches,
+            },
+            false => FillTake::All,
+        };
+        let hold = || crate::heap_sets::hold(device);
+        let mut first_work = firsts.take_holding(|_| true, fill_take, hold);
+        let every_fill = first_work.every_fill();
         // Its buffers' fills go to the device's fill queue where it has one with a command buffer
         // free, in a submission of their own that the batch waits for (below,
         // `device/staging.rs`), where they write at least `FILL_QUEUE_LEAST` bytes in all: not
@@ -934,11 +954,17 @@ impl CommandBufferShared {
             wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
             shared.counts.staging_gpu_wait();
         }
-        // And the fill queue's last submission, as the staging queue's, its place after the
-        // staging queue's (`device/staging.rs`): what it filled may be among what the work reads.
+        // And the last of the fill queue's submissions that the host may not have seen complete
+        // and whose fills its commands may reach, as the staging queue's, its place after the
+        // staging queue's (`device/staging.rs`): what it filled may be among what the work
+        // reads. Each of them where a command may reach memory no use names, or where it took
+        // every fill waiting; else those of memory its encoders' uses name.
         let fill_place = shared.queues.len() + 2;
-        let fill_wait = (device.fill_queue_wait())
-            .filter(|&(_, value)| value > scheduler.waited[queue][fill_place]);
+        let fill_reaches = |owners: Option<&[ObjectId]>| {
+            every_fill || owners.is_none_or(|owners| state.parts_reach(shared, start..end, owners))
+        };
+        let fill_wait =
+            device.fill_queue_wait_for(scheduler.waited[queue][fill_place], fill_reaches);
         if let Some((timeline, value)) = fill_wait {
             wait_semaphores.push(timeline);
             wait_values.push(value);
@@ -969,13 +995,13 @@ impl CommandBufferShared {
         // counted (`WorkCounts::fill_queue_waits`): its own, and those of the others' it waits
         // for that the host may not have seen complete.
         if fill_wait.is_some() || filled.is_some() {
-            let reaches = |owners: Option<&[ObjectId]>| {
-                owners.is_none_or(|owners| state.parts_reach(shared, start..end, owners))
-            };
-            let own = (filled.as_ref()).is_some_and(|filled| reaches(filled.owners.as_deref()));
+            let own =
+                (filled.as_ref()).is_some_and(|filled| fill_reaches(filled.owners.as_deref()));
             let after = scheduler.waited[queue][fill_place];
             let others = fill_wait.is_some_and(|(_, value)| {
-                device.fill_queue_reached((after, value), reaches).is_some()
+                device
+                    .fill_queue_reached((after, value), fill_reaches)
+                    .is_some()
             });
             shared.counts.fill_queue_waited(own || others);
         }

@@ -1576,6 +1576,11 @@ impl Fresh for Image {
             .is_some_and(|first| first.rebindable())
             .then_some(self.identity.key)
     }
+
+    /// An image in a buffer's memory, or an automatic or placement heap's.
+    fn in_other_memory(&self) -> bool {
+        self.owner.memory().is_some()
+    }
 }
 
 /// Who owns an image and its memory.

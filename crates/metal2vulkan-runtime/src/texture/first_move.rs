@@ -56,7 +56,10 @@
 //!   at least `FILL_QUEUE_LEAST` bytes in all go there instead ([`Taken::take_fills`]), in a
 //!   submission of their own after the batches before it on its `VkQueue` and what it waits for,
 //!   which the batch waits for before any of its commands; its moves and staged copies stay at
-//!   its start, after them.
+//!   its start, after them. There a batch takes only the fills of memory its commands may reach,
+//!   of the device's own buffers, and every fill where it takes a move of an image in memory
+//!   another resource owns, or a staged copy ([`FillTake::Reached`]); the rest wait for a batch
+//!   that may reach them (`device/staging.rs`).
 //! - **Staged copies**. `replace_region` of a texture whose `VkImage` is its own for good (in
 //!   memory of its own, or a heap's own pages) and takes no host or staging-queue copies (those
 //!   are queued for the staging queue instead, whose submission of them every submission of the
@@ -88,7 +91,9 @@
 //!   in `GENERAL` and each fill done. On a device of several `VkQueue`s a submission on another
 //!   one waits for the batch that did it until that batch completed ([`FirstMoves::waits`]): any
 //!   of its commands may reach the resource unnamed. Fills made on the fill queue are waited for
-//!   by every later submission until the host saw them complete (`Device::fill_queue_wait`).
+//!   by every later batch whose commands may reach what they filled, and every internal
+//!   submission, until the host saw them complete (`Device::fill_queue_wait_for`,
+//!   `Device::fill_queue_wait`).
 //! - **Order**. Each submission holds its place in the order from its take until its submission was
 //!   made, whether or not it took anything: so no submission is made between another's take and its
 //!   submission (one that found nothing to take would otherwise run before the moves another took,
@@ -658,12 +663,21 @@ pub(crate) struct FirstFill {
     /// external memory; target), recorded in the barrier before every fill, in place of copies
     /// (none then).
     acquire: Option<(u32, u32)>,
-    /// What owns the memory it writes ([`Filled::owner`]), as the submission that took it last
-    /// found it.
+    /// The key the program's uses of the memory it writes name ([`Filled::key`]), as it was
+    /// registered.
+    key: Option<ResourceKey>,
+    /// What owns that memory (`used_resources::owner_of`), as the batch that took it last found
+    /// it ([`FillTake::Reached`]); `None` where none did, or none owns it.
     owner: Option<ObjectId>,
 }
 
 impl FirstFill {
+    /// The fill, with the key of `keeper`'s memory ([`Filled::key`]).
+    fn keyed(mut self, keeper: &Weak<dyn Filled>) -> FirstFill {
+        self.key = keeper.upgrade().and_then(|filled| filled.key());
+        self
+    }
+
     /// The fill of `length` bytes of `buffer` from byte `start`, from `zeros`, the device's.
     fn new(buffer: vk::Buffer, start: u64, length: u64, zeros: vk::Buffer) -> FirstFill {
         let copies = (0..length.div_ceil(ZERO_BYTES))
@@ -683,6 +697,7 @@ impl FirstFill {
             filled: None,
             staging: None,
             acquire: None,
+            key: None,
             owner: None,
         }
     }
@@ -710,6 +725,7 @@ impl FirstFill {
                 filled: Some(range),
                 staging: None,
                 acquire: None,
+                key: None,
                 owner: None,
             });
         }
@@ -742,6 +758,7 @@ impl FirstFill {
             filled: None,
             staging: Some(staging),
             acquire: None,
+            key: None,
             owner: None,
         }
     }
@@ -757,6 +774,7 @@ impl FirstFill {
             filled: None,
             staging: None,
             acquire: Some((source, target)),
+            key: None,
             owner: None,
         }
     }
@@ -841,6 +859,12 @@ pub(crate) trait Fresh: Send + Sync {
     /// host pages (the module docs): an internal submission takes that only where it names the
     /// key. `None` for every other.
     fn rebindable(&self) -> Option<ResourceKey>;
+    /// Whether its image lies in memory another resource owns (a buffer's, a heap's), which that
+    /// resource's fills write: a batch that takes its move takes every fill waiting (the module
+    /// docs).
+    fn in_other_memory(&self) -> bool {
+        false
+    }
 }
 
 /// A new buffer whose fill waits: what a submission that takes the fill holds until it completes
@@ -851,11 +875,10 @@ pub(crate) trait Filled: Send + Sync {
     /// none.
     fn memory(&self) -> Option<Box<dyn Any + Send + Sync>>;
 
-    /// The identity of what owns the memory the fill writes as the program's uses name it
-    /// (`used_resources.rs`): a buffer of the program's, or the heap whose bytes it is. `None`
-    /// for memory no use of the program's names (the runtime's own buffers, which its own
-    /// bindings reach), or one not yet kept among the program's resources.
-    fn owner(&self) -> Option<ObjectId> {
+    /// The hazard-tracking key the program's uses of the memory the fill writes name: the
+    /// buffer's, or for a buffer placed in a heap the heap's own buffer's. `None` for a buffer
+    /// of the device's own (a neutral), which no use of the program's names.
+    fn key(&self) -> Option<ResourceKey> {
         None
     }
 }
@@ -868,6 +891,31 @@ enum Waiting {
     Fill(Weak<dyn Filled>, FirstFill),
     /// An image, which a submission holds while it copies, and a host call's copy into it.
     Texels(Weak<dyn Any + Send + Sync>, TexelCopy),
+}
+
+/// The fills waiting that a submission takes ([`FirstMoves::take_holding`]).
+pub(crate) enum FillTake<'r> {
+    /// Every one: an internal submission's, a handle's, and a batch's on a device without a fill
+    /// queue.
+    All,
+    /// A batch's on a device with a fill queue (the module docs): the fills of memory its commands
+    /// may reach, as `reaches` answers for what owns it (`owner_of` naming the owner under a
+    /// key, `used_resources::owner_of`); every fill of memory no use of the program's names; and
+    /// every fill where it takes a move of an image in memory another resource owns, or a staged
+    /// copy ([`Taken::every_fill`]).
+    Reached {
+        owner_of: &'r dyn Fn(ResourceKey) -> Option<ObjectId>,
+        reaches: &'r dyn Fn(ObjectId) -> bool,
+    },
+}
+
+/// An entry of a take, in its order ([`FirstMoves::take_with`]).
+enum Sorted {
+    Kept(Waiting),
+    Taken(Held),
+    /// A fill whose turn waits until every move taken is known, and its buffer, held until the
+    /// lock is free.
+    Fill(Weak<dyn Filled>, FirstFill, Arc<dyn Filled>),
 }
 
 /// A resource whose first work a submission took, held.
@@ -1060,7 +1108,7 @@ impl FirstMoves {
         buffer: vk::Buffer,
         range: std::ops::Range<u64>,
     ) -> Result<(), Error> {
-        let fill = FirstFill::zeros(device, self, buffer, range)?;
+        let fill = FirstFill::zeros(device, self, buffer, range)?.keyed(&keeper);
         let _order = self.registration_place();
         lock(&self.waiting).push(Waiting::Fill(keeper, fill));
         Ok(())
@@ -1078,7 +1126,7 @@ impl FirstMoves {
         buffer: vk::Buffer,
         families: (u32, u32),
     ) {
-        let fill = FirstFill::acquired(buffer, families);
+        let fill = FirstFill::acquired(buffer, families).keyed(&keeper);
         let _order = self.registration_place();
         lock(&self.waiting).push(Waiting::Fill(keeper, fill));
     }
@@ -1096,7 +1144,7 @@ impl FirstMoves {
         length: u64,
         staging: Box<dyn Any + Send + Sync>,
     ) -> bool {
-        let fill = FirstFill::bytes(buffer, start, source, length, staging);
+        let fill = FirstFill::bytes(buffer, start, source, length, staging).keyed(&keeper);
         let _order = self.registration_place();
         let mut waiting = lock(&self.waiting);
         waiting.push(Waiting::Fill(keeper, fill));
@@ -1124,7 +1172,7 @@ impl FirstMoves {
     /// The submission's place in the order is held until it was made or the work given back
     /// ([`Taken`]): every submission takes, whether or not anything waits.
     pub(crate) fn take(&self, named: impl Fn(ResourceKey) -> bool) -> Taken<'_> {
-        self.take_with(named, || None, |_| true)
+        self.take_with(named, FillTake::All, || None, |_| true)
     }
 
     /// As [`take`](Self::take), for a handle handed out (`Buffer::vk_buffer`,
@@ -1132,19 +1180,21 @@ impl FirstMoves {
     /// it was registered, the rest left waiting for the device's next submission. A move of an
     /// image bound to host pages is taken where `Mine` names its image, whatever its key.
     pub(crate) fn take_mine(&self, mine: Mine) -> Taken<'_> {
-        self.take_with(|_| true, || None, |entry| mine.names(entry))
+        self.take_with(|_| true, FillTake::All, || None, |entry| mine.names(entry))
     }
 
     /// As [`take`](Self::take), for a submission whose commands may bind the heap sets (a
-    /// batch's): where registrations do not wait for their place ([`FirstMoves::ordered`]), it
-    /// also holds the texture slots' writes (`heap_sets::hold`, which `hold` makes) from before it
-    /// takes until its submission was made or the work given back (the module docs).
+    /// batch's), taking the fills `fills` says: where registrations do not wait for their place
+    /// ([`FirstMoves::ordered`]), it also holds the texture slots' writes (`heap_sets::hold`,
+    /// which `hold` makes) from before it takes until its submission was made or the work given
+    /// back (the module docs).
     pub(crate) fn take_holding(
         &self,
         named: impl Fn(ResourceKey) -> bool,
+        fills: FillTake<'_>,
         hold: impl FnOnce() -> HeldSlots,
     ) -> Taken<'_> {
-        self.take_with(named, || (!self.ordered).then(hold), |_| true)
+        self.take_with(named, fills, || (!self.ordered).then(hold), |_| true)
     }
 
     /// The submissions' order, for a submission: taken, and the wait counted where another
@@ -1175,11 +1225,15 @@ impl FirstMoves {
         )
     }
 
-    /// As [`take`](Self::take), holding the slots `hold` gives once its place is taken, and
-    /// taking only the entries `wanted` says: the rest stay waiting, in their order.
+    /// As [`take`](Self::take), holding the slots `hold` gives once its place is taken, taking
+    /// only the entries `wanted` says, and of the fills those `fills` says: the rest stay waiting,
+    /// in their order. A fill's turn is settled once every move taken is known: a move of an
+    /// image in memory another resource owns, or a staged copy, takes every fill (the module
+    /// docs).
     fn take_with(
         &self,
         named: impl Fn(ResourceKey) -> bool,
+        fills: FillTake<'_>,
         hold: impl FnOnce() -> Option<HeldSlots>,
         wanted: impl Fn(&Waiting) -> bool,
     ) -> Taken<'_> {
@@ -1187,20 +1241,23 @@ impl FirstMoves {
         let slots = hold();
         let mut held = Vec::new();
         let mut left: Vec<Box<dyn Any + Send + Sync>> = Vec::new();
+        let mut every_fill = matches!(fills, FillTake::All);
         {
             let mut waiting = lock(&self.waiting);
             if waiting.is_empty() {
                 return Taken {
                     moves: self,
                     held,
+                    every_fill,
                     _slots: slots,
                     _order: order,
                 };
             }
-            let mut kept = Vec::new();
+            // Each entry in its order: kept, taken, or a fill whose turn waits for the moves.
+            let mut sorted = Vec::with_capacity(waiting.len());
             for entry in waiting.drain(..) {
                 if !wanted(&entry) {
-                    kept.push(entry);
+                    sorted.push(Sorted::Kept(entry));
                     continue;
                 }
                 match entry {
@@ -1209,7 +1266,7 @@ impl FirstMoves {
                             continue;
                         };
                         if fresh.rebindable().is_some_and(|key| !named(key)) {
-                            kept.push(Waiting::Moves(weak));
+                            sorted.push(Sorted::Kept(Waiting::Moves(weak)));
                             left.push(Box::new(fresh));
                             continue;
                         }
@@ -1221,26 +1278,51 @@ impl FirstMoves {
                         if moves.is_empty() {
                             left.push(Box::new(fresh));
                         } else {
-                            held.push(Held::Moves(fresh, moves));
+                            every_fill |= fresh.in_other_memory();
+                            sorted.push(Sorted::Taken(Held::Moves(fresh, moves)));
                         }
                     }
-                    Waiting::Fill(weak, mut fill) => {
+                    Waiting::Fill(weak, fill) => {
                         let Some(buffer) = weak.upgrade() else {
                             continue;
                         };
-                        fill.owner = buffer.owner();
-                        // The submission holds the buffer's memory; the buffer goes as the
-                        // program lets go of it, once the lock is free.
-                        if let Some(memory) = buffer.memory() {
-                            held.push(Held::Fill(weak, memory, fill));
-                        }
-                        left.push(Box::new(buffer));
+                        sorted.push(Sorted::Fill(weak, fill, buffer));
                     }
                     // An image gone takes its copy and staging buffer with it.
                     Waiting::Texels(weak, copy) => {
                         if let Some(image) = weak.upgrade() {
-                            held.push(Held::Texels(image, copy));
+                            every_fill = true;
+                            sorted.push(Sorted::Taken(Held::Texels(image, copy)));
                         }
+                    }
+                }
+            }
+            let mut kept = Vec::new();
+            for entry in sorted {
+                match entry {
+                    Sorted::Kept(entry) => kept.push(entry),
+                    Sorted::Taken(entry) => held.push(entry),
+                    Sorted::Fill(weak, mut fill, buffer) => {
+                        fill.owner = match &fills {
+                            FillTake::All => None,
+                            FillTake::Reached { owner_of, .. } => fill.key.and_then(owner_of),
+                        };
+                        let taken = every_fill
+                            || match (&fills, fill.owner) {
+                                (FillTake::Reached { reaches, .. }, Some(owner)) => reaches(owner),
+                                _ => true,
+                            };
+                        match taken {
+                            // The submission holds the buffer's memory; the buffer goes as the
+                            // program lets go of it, once the lock is free.
+                            true => {
+                                if let Some(memory) = buffer.memory() {
+                                    held.push(Held::Fill(weak, memory, fill));
+                                }
+                            }
+                            false => kept.push(Waiting::Fill(weak, fill)),
+                        }
+                        left.push(Box::new(buffer));
                     }
                 }
             }
@@ -1250,16 +1332,21 @@ impl FirstMoves {
         Taken {
             moves: self,
             held,
+            every_fill,
             _slots: slots,
             _order: order,
         }
     }
 
-    /// Whether no work waits for the device's next submission: a command buffer that needs no GPU
-    /// work then goes with no submission, and one that finds work waiting carries it as before
+    /// Whether a batch whose commands name nothing takes no work waiting: none waits but fills
+    /// of memory whose key `named_only` says only a batch that may reach it takes
+    /// ([`FillTake::Reached`]). A command buffer that needs no GPU work then goes with no
+    /// submission, and one that finds work waiting carries it as before
     /// (`command_buffer/submit.rs`).
-    pub(crate) fn none_waiting(&self) -> bool {
-        lock(&self.waiting).is_empty()
+    pub(crate) fn none_waiting_but(&self, named_only: impl Fn(ResourceKey) -> bool) -> bool {
+        lock(&self.waiting).iter().all(
+            |entry| matches!(entry, Waiting::Fill(_, fill) if fill.key.is_some_and(&named_only)),
+        )
     }
 
     /// Let go of the fills and copies that wait for what is at `keeper` (the address of what
@@ -1629,6 +1716,8 @@ impl Zeros {
 pub(crate) struct Taken<'a> {
     moves: &'a FirstMoves,
     held: Vec<Held>,
+    /// It took every fill waiting ([`every_fill`](Self::every_fill)).
+    every_fill: bool,
     /// The texture slots' writes it holds ([`FirstMoves::take_holding`]), made as this drops,
     /// before its place goes: the field before `_order`, which drops after it.
     _slots: Option<HeldSlots>,
@@ -1637,6 +1726,14 @@ pub(crate) struct Taken<'a> {
 }
 
 impl<'a> Taken<'a> {
+    /// Whether it took every fill waiting: it took them all ([`FillTake::All`]), or took a move of
+    /// an image in memory another resource owns, or a staged copy, each of which comes after every
+    /// fill of that memory. Its commands then may reach what any fill-queue submission not yet
+    /// complete filled too (`command_buffer/submit.rs`).
+    pub(crate) fn every_fill(&self) -> bool {
+        self.every_fill
+    }
+
     /// Whether it took first work ([`record`](Self::record)'s): a move or a fill.
     pub(crate) fn has_first(&self) -> bool {
         (self.held.iter()).any(|held| matches!(held, Held::Moves(..) | Held::Fill(..)))
@@ -1984,8 +2081,9 @@ impl Fills<'_> {
         unsafe { record_fills(counted, command_buffer, &fills) };
     }
 
-    /// What owns the memory the fills write ([`Filled::owner`]), each once; `None` where one
-    /// writes memory no use of the program's names, which any command may reach.
+    /// What owns the memory the fills write, as the batch that took them found it
+    /// ([`FillTake::Reached`]), each once; `None` where one writes memory no use of the
+    /// program's names, or the take found no owner, which any command may reach.
     pub(crate) fn owners(&self) -> Option<Vec<ObjectId>> {
         let mut owners = Vec::new();
         for held in &self.held {
@@ -2112,6 +2210,110 @@ mod tests {
         let fill = FirstFill::new(vk::Buffer::from_raw(raw), 16, length, vk::Buffer::null());
         lock(&moves.waiting).push(Waiting::Fill(weak, fill));
         buffer
+    }
+
+    /// As [`fill`], of memory whose uses name `key`.
+    fn keyed_fill(moves: &FirstMoves, raw: u64, key: Option<ResourceKey>) -> Arc<Unit> {
+        let buffer = fill(moves, raw, 16);
+        if let Some(Waiting::Fill(_, fill)) = lock(&moves.waiting).last_mut() {
+            fill.key = key;
+        }
+        buffer
+    }
+
+    /// An image in memory another resource owns, holding its move.
+    struct Placed(Mutex<Vec<FirstMove>>);
+
+    impl Fresh for Placed {
+        fn take(&self) -> Vec<FirstMove> {
+            lock(&self.0).drain(..).collect()
+        }
+
+        fn give_back(&self, moves: Vec<FirstMove>) {
+            lock(&self.0).extend(moves);
+        }
+
+        fn rebindable(&self) -> Option<ResourceKey> {
+            None
+        }
+
+        fn in_other_memory(&self) -> bool {
+            true
+        }
+    }
+
+    /// The `VkBuffer`s of the fills `taken` holds, in order.
+    fn filled(taken: &Taken<'_>) -> Vec<u64> {
+        (taken.held.iter())
+            .filter_map(|held| match held {
+                Held::Fill(_, _, fill) => Some(fill.buffer.as_raw()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A batch on a device with a fill queue (`FillTake::Reached`) takes the fills of memory its
+    /// commands reach and of memory no use names, in their order, and leaves the rest waiting,
+    /// which a batch whose commands name nothing leaves too; one that takes a move of an image in
+    /// memory another resource owns, or a staged copy, takes every fill.
+    #[test]
+    fn a_batch_takes_the_fills_of_memory_it_reaches() {
+        let moves = FirstMoves::default();
+        let (reached, unreached) = (ResourceKey::new(), ResourceKey::new());
+        let (owner, other) = (ObjectId::new(), ObjectId::new());
+        let owner_of = |key: ResourceKey| match key == reached {
+            true => Some(owner),
+            false => Some(other),
+        };
+        let reaches = |of: ObjectId| of == owner;
+        let none = |_: ObjectId| false;
+        let _buffers = [
+            keyed_fill(&moves, 1, Some(reached)),
+            keyed_fill(&moves, 2, Some(unreached)),
+            keyed_fill(&moves, 3, None),
+            keyed_fill(&moves, 4, Some(reached)),
+        ];
+        let named_only = |key: ResourceKey| owner_of(key).is_some();
+        assert!(!moves.none_waiting_but(named_only));
+        let fills = FillTake::Reached {
+            owner_of: &owner_of,
+            reaches: &reaches,
+        };
+        let taken = moves.take_with(|_| true, fills, || None, |_| true);
+        assert!(!taken.every_fill());
+        assert_eq!(filled(&taken), [1, 3, 4]);
+        drop(taken.submitted(None));
+        assert!(moves.none_waiting_but(named_only));
+        assert!(!moves.none_waiting_but(|_| false));
+        // A move of an image in another resource's memory takes the fill no use reaches.
+        let placed = Arc::new(Placed(Mutex::new(vec![first(5, false)])));
+        let weak: Weak<Placed> = Arc::downgrade(&placed);
+        moves.register(weak);
+        let fills = FillTake::Reached {
+            owner_of: &owner_of,
+            reaches: &none,
+        };
+        let taken = moves.take_with(|_| true, fills, || None, |_| true);
+        assert!(taken.every_fill());
+        assert_eq!(filled(&taken), [2]);
+        drop(taken.submitted(None));
+        assert!(moves.none_waiting_but(|_| false));
+        // So does a staged copy.
+        let _later = keyed_fill(&moves, 6, Some(unreached));
+        let image: Arc<u32> = Arc::new(0);
+        let image_weak: Weak<u32> = Arc::downgrade(&image);
+        let copy = (vk::Image::null(), vk::BufferImageCopy::default());
+        let staged = TexelCopy::new(vk::Buffer::null(), 16, vec![copy], Box::new(()));
+        assert!(!moves.register_texels(image_weak, staged));
+        let fills = FillTake::Reached {
+            owner_of: &owner_of,
+            reaches: &none,
+        };
+        let taken = moves.take_with(|_| true, fills, || None, |_| true);
+        assert!(taken.every_fill());
+        assert_eq!(filled(&taken), [6]);
+        drop(taken.submitted(None));
+        assert!(moves.none_waiting_but(|_| false));
     }
 
     #[test]
