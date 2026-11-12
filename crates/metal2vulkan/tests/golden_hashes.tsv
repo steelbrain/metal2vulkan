@@ -4,22 +4,22 @@
 # A cell is the first 64 bits of SHA-256 over the final SPIR-V of its subject, or its
 # refusal class. A cell that changes under an unchanged fixture source and profile
 # fingerprint needs cache::SEMANTICS_VERSION above its value at the last bless.
-profile	amd-780m-hawkpoint-radv	881295bf66be02c8
-profile	amd-780m-radv	881295bf66be02c8
-profile	amd-rdna2-apu-radv	c23384041377e863
-profile	amd-rdna3-radv	1c71c870a4fa2ccd
-profile	gate-lavapipe	0af36b308746384f
-profile	gate-lavapipe-x86_64	fd583da10a777946
-profile	intel-arl-anv	2e4c55104dc72350
-profile	intel-irisxe-anv	3e5566ea1171484c
-profile	intel-irisxe-rplp-anv	1e92cdd23a93e0f4
-profile	intel-uhd770-rpls-anv	1e92cdd23a93e0f4
-profile	lavapipe	dcf424aa215e49f4
+profile	amd-780m-hawkpoint-radv	c436df5a448f0d50
+profile	amd-780m-radv	c436df5a448f0d50
+profile	amd-rdna2-apu-radv	46c4afecfa1162a0
+profile	amd-rdna3-radv	97d2756f22637508
+profile	gate-lavapipe	556d8ac52dd8191d
+profile	gate-lavapipe-x86_64	fc547922b1773cea
+profile	intel-arl-anv	1005bda90389229a
+profile	intel-irisxe-anv	07b0d9dab09eec19
+profile	intel-irisxe-rplp-anv	8a623da7b2a1e394
+profile	intel-uhd770-rpls-anv	8a623da7b2a1e394
+profile	lavapipe	5801af7f55635e9a
 profile	lunarg-desktop-baseline-2023	3cb56319a7459b3a
 profile	moltenvk-m3	a6fc9f1682f2c86d
-profile	nvidia-pascal-linux	9a85c95e82c9f29e
-profile	nvidia-rtx50-linux	9656292fbb2dfd1b
-profile	nvidia-rtx5080-laptop	8c71b919efe9b1a1
+profile	nvidia-pascal-linux	68731018d2796c7f
+profile	nvidia-rtx50-linux	2f8176f8176d71a5
+profile	nvidia-rtx5080-laptop	64fd96c96443a70d
 profile	roadmap-2022	726e5822e9b32bac
 profile	swiftshader	97de0ee90616f119
 profile	vk12-floor	f3135fc374964fa4
@@ -1893,6 +1893,8 @@ engine/ob3_texture_array.air.ll	0bb28b2b8fe36b5b	ob3_texture_array	a2eff87dec93d
 engine/ob3_texture_array.ll	7c006319357bd319	ob3_texture_array	a2eff87dec93de0c	a2eff87dec93de0c	a2eff87dec93de0c	a2eff87dec93de0c	a2eff87dec93de0c	a2eff87dec93de0c	a2eff87dec93de0c	a2eff87dec93de0c	a2eff87dec93de0c	a2eff87dec93de0c	a2eff87dec93de0c	41dc9506bb2a64dc	41dc9506bb2a64dc	a2eff87dec93de0c	a2eff87dec93de0c	a2eff87dec93de0c	fdc3796dff26d57f	fdc3796dff26d57f	fdc3796dff26d57f
 engine/ob3_vertex_input.air.ll	50f342eae6a89f6a	ob3_vertex_input	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}	3017862a53aa7dee	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}
 engine/ob3_vertex_input.ll	0da28d3895817b16	ob3_vertex_input	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	3017862a53aa7dee	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}	3017862a53aa7dee	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}
+engine/overlapping_slots.air.ll	d052fe34623d1e16	overlapping_slots	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	53a7d45f149bdaab	53a7d45f149bdaab	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}	53a7d45f149bdaab	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}
+engine/overlapping_slots.ll	fa757ffeceee13ae	overlapping_slots	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	53a7d45f149bdaab	53a7d45f149bdaab	a550a3ff698430ea	a550a3ff698430ea	a550a3ff698430ea	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}	53a7d45f149bdaab	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}
 engine/pdc_compare_clamp.air.ll	6ce06b60b694604a	pdc_argument	f13811832ec0aabd	f13811832ec0aabd	f13811832ec0aabd	f13811832ec0aabd	f13811832ec0aabd	f13811832ec0aabd	b5fb815dcdef507f	b5fb815dcdef507f	b5fb815dcdef507f	b5fb815dcdef507f	f13811832ec0aabd	fd6065718de4ce72	f13811832ec0aabd	b0aa03e9f8aa5f91	b5fb815dcdef507f	b5fb815dcdef507f	fd6065718de4ce72	fd6065718de4ce72	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
 engine/pdc_compare_clamp.air.ll	6ce06b60b694604a	pdc_constexpr	c1654b675b3f47b3	c1654b675b3f47b3	c1654b675b3f47b3	c1654b675b3f47b3	c1654b675b3f47b3	c1654b675b3f47b3	44ac2fa16a8c6c75	44ac2fa16a8c6c75	44ac2fa16a8c6c75	44ac2fa16a8c6c75	c1654b675b3f47b3	15718676904b605b	c1654b675b3f47b3	15718676904b605b	44ac2fa16a8c6c75	44ac2fa16a8c6c75	15718676904b605b	15718676904b605b	15718676904b605b
 engine/pdc_compare_clamp.air.ll	6ce06b60b694604a	pdc_slot	3792cc8659124a25	3792cc8659124a25	3792cc8659124a25	3792cc8659124a25	3792cc8659124a25	3792cc8659124a25	e0810d6759e83d6f	e0810d6759e83d6f	e0810d6759e83d6f	e0810d6759e83d6f	3792cc8659124a25	e75a6648f5eb470d	3792cc8659124a25	e75a6648f5eb470d	e0810d6759e83d6f	e0810d6759e83d6f	e75a6648f5eb470d	e75a6648f5eb470d	e75a6648f5eb470d
