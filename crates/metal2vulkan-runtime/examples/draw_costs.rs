@@ -3,7 +3,7 @@
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--threads N] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|scene|rebinds]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--threads N] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -40,6 +40,19 @@
 //!   (its own pass's color attachment, read at the fragment's pixel), a sampler and a scissor
 //!   rectangle, then draws 6 vertices, three draws of five indexed (`UInt16`). One draw in each
 //!   pass is a backdrop.
+//! - **scene**, a 3D engine's frame as a layer over another graphics API issues it: 8 command
+//!   buffers of 10 passes and 24 draws each, every pass over the same four 512x512 color
+//!   targets (`BGRA8Unorm`, `RGBA8Unorm` and two `RGBA16Float`), the first cleared, the rest
+//!   loaded, all stored. Each pass binds vertex buffer 0 (a mesh's vertices, read through the
+//!   pipeline's vertex descriptor), vertex buffer 1 (transforms) and fragment buffer 0 (material
+//!   scales), all in one no-copy buffer over host pages. Every 4 draws a material of 6 takes
+//!   its turn: the pipeline state (one of 2), `set_fragment_textures` (its 8 of 48 64x64
+//!   textures) and `set_fragment_sampler_states` (8 samplers of their own filters and address
+//!   modes). Each draw moves buffer 1's and fragment buffer 0's offsets to its own slots
+//!   (`set_vertex_buffer_offset`, `set_fragment_buffer_offset`), then draws one of 64 pieces of
+//!   the mesh by 6 indices (`UInt16`) at the piece's offset.
+//! - **rebinds**: as **scene**, but each draw first binds its material's 8 textures and 8
+//!   samplers again, the same objects within a material's run.
 //!
 //! The slots lie in 64 KiB no-copy buffers over host pages (`new_buffer_with_bytes_no_copy`), as
 //! a guest's upload chunks do, each command buffer's in chunks of its own. With `--heap`, the
@@ -101,9 +114,13 @@
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{
-    BlendFactor, IndexType, PixelFormat, PrimitiveType, SamplerMinMagFilter, TextureUsage,
+    BlendFactor, IndexType, PixelFormat, PrimitiveType, SamplerAddressMode, SamplerMinMagFilter,
+    TextureUsage, VertexFormat,
 };
-use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use metal2vulkan::pipeline::{
+    ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource, VertexAttributeDescriptor,
+    VertexBufferLayoutDescriptor, VertexDescriptor,
+};
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceOptions,
     Heap, HeapDescriptor, HeapType, HostMemory, IoSurfacePlane, Library, LoadAction, MessageSink,
@@ -161,6 +178,9 @@ enum Stream {
     Damaged,
     /// A window compositor's frame of passes over surfaces ([`Compositor`]).
     Composited,
+    /// A 3D engine's frame of passes over four color targets ([`Scene`]), each draw binding its
+    /// material's textures and samplers again where `rebinds`.
+    Scene { rebinds: bool },
 }
 
 /// The columns of the grid of damaged rectangles a [`Stream::Damaged`] pass's draws take in turn,
@@ -206,7 +226,7 @@ struct Shape {
 }
 
 /// The shapes, in the order they run.
-const SHAPES: [Shape; 6] = [
+const SHAPES: [Shape; 8] = [
     Shape {
         name: "ws",
         buffers: 8,
@@ -243,6 +263,18 @@ const SHAPES: [Shape; 6] = [
         draws: COMPOSITOR_DRAWS,
         stream: Stream::Composited,
     },
+    Shape {
+        name: "scene",
+        buffers: 8,
+        draws: SCENE_DRAWS,
+        stream: Stream::Scene { rebinds: false },
+    },
+    Shape {
+        name: "rebinds",
+        buffers: 8,
+        draws: SCENE_DRAWS,
+        stream: Stream::Scene { rebinds: true },
+    },
 ];
 
 impl Shape {
@@ -251,8 +283,8 @@ impl Shape {
         match self.stream {
             Stream::Bytes | Stream::Clipped | Stream::Damaged => 1,
             Stream::Layers => 2,
-            // Its slots lie in the compositor's own buffer.
-            Stream::Composited => 0,
+            // Its slots lie in the compositor's or the scene's own buffer.
+            Stream::Composited | Stream::Scene { .. } => 0,
         }
     }
 
@@ -270,7 +302,7 @@ impl Shape {
 }
 
 /// The calls `--calls` counts apart, by their index in a [`Tally`].
-const CALLS: [&str; 14] = [
+const CALLS: [&str; 17] = [
     "command_buffer",
     "render_command_encoder",
     "set_render_pipeline_state",
@@ -285,6 +317,9 @@ const CALLS: [&str; 14] = [
     "set_scissor_rect",
     "set_viewport",
     "draw_indexed_primitives",
+    "set_vertex_buffer_offset",
+    "set_fragment_buffer_offset",
+    "set_fragment_textures",
 ];
 
 /// Each call's count and instructions, over a run's counted repetitions.
@@ -325,6 +360,14 @@ enum Step<'a> {
     /// End the open encoder, if any, and open the compositor's pass of this index, its viewport
     /// set; a command buffer whose steps start otherwise opens the bench's one pass first.
     Pass(usize),
+    /// End the open encoder, if any, and open a pass of this descriptor.
+    Begin(&'a RenderPassDescriptor),
+    VertexOffset(u64, u32),
+    FragmentOffset(u64, u32),
+    /// Fragment textures from index 0, at most [`SCENE_UNITS`].
+    FragmentTextures(&'a [Texture]),
+    /// Fragment sampler states from index 0, at most [`SCENE_UNITS`].
+    FragmentSamplers(&'a [SamplerState]),
     Pipeline(&'a RenderPipelineState),
     VertexBuffer(&'a Buffer, u64, u32),
     FragmentBuffer(&'a Buffer, u64, u32),
@@ -349,6 +392,8 @@ struct Bench {
     _target_pages: Option<Buffer>,
     /// The compositor shape's objects, where it runs.
     compositor: Option<Compositor>,
+    /// The scene shapes' objects, where one runs.
+    scene: Option<Scene>,
 }
 
 /// A shape's chunks, and with `--heap` the heap they are placed in and the buffer over the guest
@@ -364,7 +409,7 @@ impl Bench {
         device: Device,
         library: &Library,
         shadowed: bool,
-        compositor: Option<bool>,
+        (compositor, scene): (Option<bool>, bool),
     ) -> Result<Bench> {
         let function = |name: &str| -> Result<StageSource> {
             let function = library.new_function_with_name(name)?;
@@ -435,6 +480,10 @@ impl Bench {
             Some(pages) => Some(Compositor::new(&device, library, pages)?),
             None => None,
         };
+        let scene = match scene {
+            true => Some(Scene::new(&device, library)?),
+            false => None,
+        };
         Ok(Bench {
             queue: device.new_command_queue()?,
             sampler: device.new_sampler_state(&SamplerDescriptor::new())?,
@@ -445,6 +494,7 @@ impl Bench {
             textures,
             _target_pages: target_pages,
             compositor,
+            scene,
         })
     }
 
@@ -530,6 +580,9 @@ impl Bench {
         if let (Stream::Composited, Some(compositor)) = (shape.stream, &self.compositor) {
             return compositor.steps(buffer);
         }
+        if let (Stream::Scene { rebinds }, Some(scene)) = (shape.stream, &self.scene) {
+            return scene.steps(buffer, rebinds);
+        }
         let mut steps = vec![
             Step::Pipeline(&self.pipelines[0]),
             Step::VertexBuffer(&self.constants, 0, 1),
@@ -555,7 +608,7 @@ impl Bench {
                     steps.push(Step::VertexBuffer(&chunks[chunk], offset, 0));
                     steps.push(Step::Draw(PrimitiveType::TriangleStrip, 4));
                 }
-                Stream::Composited => {}
+                Stream::Composited | Stream::Scene { .. } => {}
                 Stream::Clipped | Stream::Damaged => {
                     if draw % RUN == 0 {
                         steps.push(Step::Pipeline(&self.pipelines[draw / RUN % PIPELINES]));
@@ -592,12 +645,21 @@ impl Bench {
         for steps in buffers {
             let command_buffer = call(&mut tally, 0, || self.queue.command_buffer())?;
             let mut open = match steps.first() {
-                Some(Step::Pass(_)) => None,
+                Some(Step::Pass(_) | Step::Begin(_)) => None,
                 _ => Some(call(&mut tally, 1, || {
                     command_buffer.render_command_encoder(&self.pass)
                 })?),
             };
             for &step in steps {
+                if let Step::Begin(descriptor) = step {
+                    if let Some(encoder) = open.take() {
+                        call(&mut tally, 8, || encoder.end_encoding())?;
+                    }
+                    open = Some(call(&mut tally, 1, || {
+                        command_buffer.render_command_encoder(descriptor)
+                    })?);
+                    continue;
+                }
                 if let Step::Pass(at) = step {
                     if let Some(encoder) = open.take() {
                         call(&mut tally, 8, || encoder.end_encoding())?;
@@ -616,7 +678,23 @@ impl Bench {
                 }
                 let encoder = open.as_mut().ok_or("a step before its pass")?;
                 match step {
-                    Step::Pass(_) => Ok(()),
+                    Step::Pass(_) | Step::Begin(_) => Ok(()),
+                    Step::VertexOffset(offset, index) => call(&mut tally, 14, || {
+                        encoder.set_vertex_buffer_offset(offset, index)
+                    }),
+                    Step::FragmentOffset(offset, index) => call(&mut tally, 15, || {
+                        encoder.set_fragment_buffer_offset(offset, index)
+                    }),
+                    Step::FragmentTextures(textures) => call(&mut tally, 16, || {
+                        let units: [Option<&Texture>; SCENE_UNITS] =
+                            std::array::from_fn(|at| textures.get(at));
+                        encoder.set_fragment_textures(&units[..textures.len()], 0)
+                    }),
+                    Step::FragmentSamplers(samplers) => call(&mut tally, 6, || {
+                        let units: [Option<&SamplerState>; SCENE_UNITS] =
+                            std::array::from_fn(|at| samplers.get(at));
+                        encoder.set_fragment_sampler_states(&units[..samplers.len()], None, 0)
+                    }),
                     Step::Pipeline(state) => {
                         call(&mut tally, 2, || encoder.set_render_pipeline_state(state))
                     }
@@ -981,6 +1059,232 @@ impl Compositor {
                 true => Step::DrawIndexed(&self.data, INDICES + slot * 64),
                 false => Step::Draw(PrimitiveType::Triangle, 6),
             });
+        }
+        steps
+    }
+}
+
+/// The scene shapes' passes of a command buffer, a pass's draws, and theirs together.
+const SCENE_PASSES: usize = 10;
+const SCENE_PASS_DRAWS: usize = 24;
+const SCENE_DRAWS: usize = SCENE_PASSES * SCENE_PASS_DRAWS;
+
+/// The scene's materials, the textures and samplers a material binds, the draws a material runs
+/// for (a pass's draws are a multiple of them), and its pipeline states.
+const SCENE_MATERIALS: usize = 6;
+const SCENE_UNITS: usize = 8;
+const SCENE_RUN: usize = 4;
+const SCENE_PIPELINES: usize = 2;
+
+/// The scene's color targets' formats.
+const SCENE_COLORS: [PixelFormat; 4] = [
+    PixelFormat::BGRA8Unorm,
+    PixelFormat::RGBA8Unorm,
+    PixelFormat::RGBA16Float,
+    PixelFormat::RGBA16Float,
+];
+
+/// The scene's data in its buffer over host pages: its mesh's `SCENE_PIECES` pieces, a quad each
+/// (4 vertices of a position and a texture coordinate, `SCENE_VERTEX` bytes each; 6 `UInt16`
+/// indices, 16 bytes a piece), then `SCENE_SLOTS` slots of 256 bytes of transforms (a
+/// `float4x4`) and of material scales (a `float4`), a draw taking the next.
+const SCENE_PIECES: u64 = 64;
+const SCENE_SLOTS: u64 = 1024;
+const SCENE_VERTEX: u64 = 20;
+const SCENE_VERTICES: u64 = 0;
+const SCENE_INDICES: u64 = 64 << 10;
+const SCENE_TRANSFORMS: u64 = 128 << 10;
+const SCENE_SCALES: u64 = 512 << 10;
+const SCENE_BYTES: u64 = 1 << 20;
+
+/// The scene shapes' objects (the module docs): a command buffer's first pass and its later
+/// ones, over the same targets, its pipeline states, each material's textures, the samplers, and
+/// the buffer of its data.
+struct Scene {
+    passes: [RenderPassDescriptor; 2],
+    pipelines: Vec<RenderPipelineState>,
+    materials: Vec<Vec<Texture>>,
+    samplers: Vec<SamplerState>,
+    data: Buffer,
+}
+
+impl Scene {
+    fn new(device: &Device, library: &Library) -> Result<Scene> {
+        let function = |name: &str| -> Result<StageSource> {
+            let function = library.new_function_with_name(name)?;
+            Ok(StageSource::Function(function.function_descriptor()))
+        };
+        let mut vertices = VertexDescriptor::new();
+        let attributes = [(VertexFormat::Float3, 0), (VertexFormat::Float2, 12)];
+        for (at, (format, offset)) in (0..).zip(attributes) {
+            let attribute = VertexAttributeDescriptor::new(format, offset, 0);
+            vertices.attributes.insert(at, attribute);
+        }
+        let layout = VertexBufferLayoutDescriptor::new(Some(SCENE_VERTEX as u32));
+        vertices.layouts.insert(0, layout);
+        let pipelines = (0..SCENE_PIPELINES)
+            .map(|n| {
+                let vertex = function("draw_costs_scene_vertex")?;
+                let mut descriptor = RenderPipelineDescriptor::new(vertex);
+                descriptor.fragment = Some(function("draw_costs_scene")?);
+                descriptor.vertex_descriptor = Some(vertices.clone());
+                for (at, format) in SCENE_COLORS.into_iter().enumerate() {
+                    let mut color = ColorAttachmentDescriptor::new(format);
+                    // The second state blends its first color over what is there.
+                    if n == 1 && at == 0 {
+                        color.blending_enabled = true;
+                        color.source_rgb_blend_factor = BlendFactor::One;
+                        color.source_alpha_blend_factor = BlendFactor::One;
+                        color.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
+                        color.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
+                    }
+                    descriptor.color_attachments[at] = Some(color);
+                }
+                Ok(device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut sampled = TextureDescriptor::texture_2d(
+            PixelFormat::RGBA8Unorm,
+            TEXTURE_SIDE,
+            TEXTURE_SIDE,
+            false,
+        );
+        sampled.usage = TextureUsage::SHADER_READ;
+        let materials = (0..SCENE_MATERIALS)
+            .map(|_| {
+                (0..SCENE_UNITS)
+                    .map(|_| Ok(device.new_texture(&sampled)?))
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let addresses = [
+            SamplerAddressMode::Repeat,
+            SamplerAddressMode::ClampToEdge,
+            SamplerAddressMode::MirrorRepeat,
+            SamplerAddressMode::ClampToEdge,
+        ];
+        let samplers = (0..SCENE_UNITS)
+            .map(|unit| {
+                let mut sampler = SamplerDescriptor::new();
+                let filter = match unit % 2 {
+                    0 => SamplerMinMagFilter::Linear,
+                    _ => SamplerMinMagFilter::Nearest,
+                };
+                (sampler.min_filter, sampler.mag_filter) = (filter, filter);
+                let address = addresses[unit / 2 % addresses.len()];
+                (sampler.s_address_mode, sampler.t_address_mode) = (address, address);
+                Ok(device.new_sampler_state(&sampler)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut target = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, SIDE, SIDE, false);
+        target.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+        let targets = (SCENE_COLORS.iter())
+            .map(|&format| {
+                target.pixel_format = format;
+                Ok(device.new_texture(&target)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let passes = [LoadAction::Clear, LoadAction::Load].map(|load| {
+            let mut descriptor = RenderPassDescriptor::new();
+            for (color, target) in descriptor.color_attachments.iter_mut().zip(&targets) {
+                color.texture = Some(target.clone());
+                color.load_action = load;
+                color.store_action = StoreAction::Store;
+                color.clear_color = ClearColor::new(0.0, 0.0, 0.0, 1.0);
+            }
+            descriptor
+        });
+        let memory = host_pages(SCENE_BYTES as usize)?;
+        // SAFETY: page-aligned read-write memory of its length, never unmapped, which outlives
+        // the buffer.
+        let data = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                HostMemory::new(memory),
+                SCENE_BYTES,
+                ResourceOptions::shared(),
+                None,
+            )?
+        };
+        let write = |at: u64, bytes: &[u8]| {
+            // SAFETY: inside the mapping, which nothing reads yet.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    memory.as_ptr().add(at as usize),
+                    bytes.len(),
+                )
+            }
+        };
+        let floats = |values: &[f32]| -> Vec<u8> {
+            values
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect()
+        };
+        // Piece `p` is the quad of cell `p` of an 8 by 8 grid over the target.
+        for piece in 0..SCENE_PIECES {
+            let (x, y) = (
+                (piece % 8) as f32 / 4.0 - 1.0,
+                (piece / 8) as f32 / 4.0 - 1.0,
+            );
+            for (corner, [u, v]) in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0f32]]
+                .into_iter()
+                .enumerate()
+            {
+                let vertex = floats(&[x + u / 4.0, y + v / 4.0, 0.5, u, v]);
+                write(
+                    SCENE_VERTICES + (piece * 4 + corner as u64) * SCENE_VERTEX,
+                    &vertex,
+                );
+            }
+            let first = (piece * 4) as u16;
+            let indices: Vec<u8> = [0u16, 1, 2, 2, 1, 3]
+                .iter()
+                .flat_map(|index| (first + index).to_le_bytes())
+                .collect();
+            write(SCENE_INDICES + piece * 16, &indices);
+        }
+        let identity = floats(&[
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]);
+        for slot in 0..SCENE_SLOTS {
+            write(SCENE_TRANSFORMS + slot * 256, &identity);
+            write(SCENE_SCALES + slot * 256, &floats(&[1.0, 1.0, 1.0, 0.5]));
+        }
+        Ok(Scene {
+            passes,
+            pipelines,
+            materials,
+            samplers,
+            data,
+        })
+    }
+
+    /// Command buffer `buffer`'s steps: its passes and their draws, each draw's slots the next
+    /// of the buffer's; each draw binding its material's textures and samplers again where
+    /// `rebinds`.
+    fn steps(&self, buffer: usize, rebinds: bool) -> Vec<Step<'_>> {
+        let mut steps = Vec::new();
+        for d in 0..SCENE_DRAWS {
+            if d % SCENE_PASS_DRAWS == 0 {
+                steps.push(Step::Begin(&self.passes[usize::from(d > 0)]));
+                steps.push(Step::VertexBuffer(&self.data, SCENE_VERTICES, 0));
+                steps.push(Step::VertexBuffer(&self.data, SCENE_TRANSFORMS, 1));
+                steps.push(Step::FragmentBuffer(&self.data, SCENE_SCALES, 0));
+            }
+            let material = (buffer * SCENE_DRAWS + d) / SCENE_RUN % SCENE_MATERIALS;
+            if d % SCENE_RUN == 0 {
+                steps.push(Step::Pipeline(&self.pipelines[material % SCENE_PIPELINES]));
+            }
+            if rebinds || d % SCENE_RUN == 0 {
+                steps.push(Step::FragmentTextures(&self.materials[material]));
+                steps.push(Step::FragmentSamplers(&self.samplers));
+            }
+            let slot = (buffer * SCENE_DRAWS + d) as u64 % SCENE_SLOTS;
+            steps.push(Step::VertexOffset(SCENE_TRANSFORMS + slot * 256, 1));
+            steps.push(Step::FragmentOffset(SCENE_SCALES + slot * 256, 0));
+            let piece = (d as u64 * 7 + buffer as u64) % SCENE_PIECES;
+            steps.push(Step::DrawIndexed(&self.data, SCENE_INDICES + piece * 16));
         }
         steps
     }
@@ -1468,7 +1772,12 @@ fn main() -> Result<()> {
             }
             "--metallib" => metallib = Some(PathBuf::from(args.next().ok_or("--metallib PATH")?)),
             name => shapes.push(*SHAPES.iter().find(|shape| shape.name == name).ok_or_else(
-                || format!("no shape {name}: ws, many, 10k, clips, damage or compositor"),
+                || {
+                    format!(
+                        "no shape {name}: ws, many, 10k, clips, damage, compositor, scene or \
+                         rebinds"
+                    )
+                },
             )?),
         }
     }
@@ -1503,7 +1812,8 @@ fn main() -> Result<()> {
     let compositor = (shapes.iter())
         .any(|shape| shape.stream == Stream::Composited)
         .then_some(pages);
-    let bench = Bench::new(device, &library, shadowed, compositor)?;
+    let scene = (shapes.iter()).any(|shape| matches!(shape.stream, Stream::Scene { .. }));
+    let bench = Bench::new(device, &library, shadowed, (compositor, scene))?;
     for shape in shapes {
         measure(&bench, shape, runs, options)?;
     }
