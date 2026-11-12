@@ -34,7 +34,14 @@
 //! of their own over its pages (`host_aliases.rs`): the CPU zeroes the pages, the reader's texture
 //! is sampled (`alv_rect`, `alv_implicit` of `alv_levels.ll`), the writer's is rendered by the
 //! lone passes in a command buffer of its own, and the reader's is sampled again in another: it
-//! must read what the passes left, as the pages hold it.
+//! must read what the passes left, as the pages hold it. The two buffers lie over the same bytes
+//! (one memory, one key) or the reader's over more pages, made first (two keys, ordered by the
+//! bytes they lie over); the reader's command buffer is committed once the writer's completed, or
+//! on a second queue while the writer's is in flight, its passes behind fills and its end held by
+//! a wait for an event the host signals once the reader's is committed. In flight, the runtime
+//! orders the read after the write as it orders tracked work across queues, in commit order
+//! (`tracker.rs`), which is more than Metal promises for two buffers over one allocation
+//! (`host_aliases.rs`): the leg holds the runtime to its own order.
 //!
 //! The functions are `dcs_rect`, `dcs_flag` and `dcs_read` of the owned fixture
 //! `validation/fixtures/public/engine/dcs_dont_care_split.ll`, `fetch_ordered` of
@@ -43,12 +50,13 @@
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
-use super::blit_holds::{device, over_host, Host, Scratch, BYTES, WAIT};
+use super::blit_holds::{device, over_host, Host, Scratch, BYTES, FILLED, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::{
-    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, IoSurfacePlane,
-    LoadAction, Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState,
-    ResourceOptions, SamplerState, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
+    BlitOption, Buffer, ClearColor, CommandBuffer, CommandBufferStatus, CommandQueue, Device,
+    EventRef, HostMemory, IoSurfacePlane, LoadAction, Origin, PipelineOptions,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, SamplerState, Size, StoreAction,
+    Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
@@ -100,6 +108,33 @@ enum Home {
     /// which shadows the texture).
     HostPages(u64),
 }
+
+/// Where a pair's two buffers lie over the surface's pages.
+#[derive(Clone, Copy, PartialEq)]
+enum Span {
+    /// Both over the same bytes: the reader's joins the writer's memory (`host_aliases.rs`).
+    Same,
+    /// The reader's over every page, made first; the writer's over those from [`INSET`] on, lying
+    /// in the reader's import: two keys, ordered by the bytes they lie over (`Placements`).
+    Wider,
+}
+
+/// The bytes before the surface in a [`Span::Wider`] pair's reader's buffer.
+const INSET: u64 = 64 << 10;
+
+/// When a pair's reader's command buffer is committed.
+#[derive(Clone, Copy, PartialEq)]
+enum Follow {
+    /// On the writer's queue, once the writer's command buffer completed.
+    Completed,
+    /// On a second queue, while the writer's command buffer is in flight: its passes behind
+    /// [`FILLS`] fills of a `Private` buffer, and its end held by a wait for an event the host
+    /// signals only once the reader's is committed.
+    InFlight,
+}
+
+/// The fills ahead of an in-flight writer's passes, of [`FILLED`] bytes each.
+const FILLS: u32 = 16;
 
 /// A pass's draws: each state, its rectangle and its instances.
 type Draws<'a> = &'a [(&'a RenderPipelineState, [u64; 4], u32)];
@@ -238,6 +273,22 @@ impl Tools {
     /// `source` sampled texel for texel into a new `Private` target of `format`, in a command
     /// buffer of its own, committed and completed; the target.
     fn sampled(&self, source: &Texture, format: PixelFormat) -> Texture {
+        let command_buffer = self.queue.command_buffer().unwrap();
+        let target = self.sample(&command_buffer, source, format);
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        target
+    }
+
+    /// A pass of `command_buffer` sampling every texel of `source` into a new `Private` target of
+    /// `format`, the target returned.
+    fn sample(
+        &self,
+        command_buffer: &CommandBuffer,
+        source: &Texture,
+        format: PixelFormat,
+    ) -> Texture {
         let usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
         let target = self.target(format, usage);
         let mut pass = RenderPassDescriptor::new();
@@ -245,16 +296,12 @@ impl Tools {
         color.texture = Some(target.clone());
         color.load_action = LoadAction::Clear;
         color.store_action = StoreAction::Store;
-        let command_buffer = self.queue.command_buffer().unwrap();
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
         encoder.set_render_pipeline_state(&self.copy).unwrap();
         encoder.set_fragment_texture(Some(source), 0).unwrap();
         (encoder.set_fragment_sampler_state(Some(&self.sampler), 0)).unwrap();
         (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
         encoder.end_encoding().unwrap();
-        command_buffer.commit().unwrap();
-        command_buffer.wait_until_completed_for(WAIT).unwrap();
-        assert_eq!(command_buffer.error(), None);
         target
     }
 
@@ -462,11 +509,11 @@ fn run(case: &str, format: PixelFormat, shape: Shape, home: Home) {
 }
 
 /// The pair run: two textures of `format` over one surface's host pages through two no-copy
-/// buffers, as two processes each make one, `drawn` rendered by the lone passes and `read`
-/// sampled; each round the CPU zeroes the pages, `read` is sampled (so a shadow of it holds
-/// zeros), `drawn` is rendered in a command buffer of its own, and `read` is sampled again in
-/// another, which must find what the passes left.
-fn run_pair(case: &str, format: PixelFormat) {
+/// buffers lying at `span`, as two processes each make one, `drawn` rendered by the lone passes
+/// and `read` sampled; each round the CPU zeroes the pages, `read` is sampled (so a shadow of it
+/// holds zeros), `drawn` is rendered in a command buffer of its own, and `read` is sampled again
+/// in another, committed as `follow` says, which must find what the passes left.
+fn run_pair(case: &str, format: PixelFormat, span: Span, follow: Follow) {
     // Declared before the device, so dropped after it.
     let host = Host::new();
     let scratch = Scratch::new(&format!("lone-fetch-{case}"));
@@ -479,46 +526,99 @@ fn run_pair(case: &str, format: PixelFormat) {
         return;
     };
     let runs = Arc::new(AtomicUsize::new(0));
-    let (Some(first), Some(second)) = (
-        over_host(&device, &host, &runs),
-        over_host(&device, &host, &runs),
-    ) else {
-        return;
+    let start = device.work_counts();
+    let (writer, reader, offset) = match span {
+        Span::Same => {
+            let (Some(writer), Some(reader)) = (
+                over_host(&device, &host, &runs),
+                over_host(&device, &host, &runs),
+            ) else {
+                return;
+            };
+            (writer, reader, 0)
+        }
+        Span::Wider => {
+            let Some(reader) = over_host(&device, &host, &runs) else {
+                return;
+            };
+            (inset(&device, &reader), reader, INSET)
+        }
     };
+    let placed = moved_placing(&start, &device.work_counts());
     let pitch = SIDE * texel(format);
-    let surface = |bytes: &Buffer, usage: TextureUsage| {
+    let surface = |bytes: &Buffer, offset: u64, usage: TextureUsage| {
         let mut d = TextureDescriptor::texture_2d(format, SIDE, SIDE, false);
         d.usage = usage;
         d.resource_options = bytes.resource_options();
-        let plane = IoSurfacePlane::new(0, pitch, false);
+        let plane = IoSurfacePlane::new(offset, pitch, false);
         bytes.new_texture_with_iosurface_plane(&d, plane).unwrap()
     };
     let drawn = surface(
-        &first,
+        &writer,
+        0,
         TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
     );
-    let read = surface(&second, TextureUsage::SHADER_READ);
+    let read = surface(&reader, offset, TextureUsage::SHADER_READ);
+    let second = device.new_command_queue().unwrap();
+    let filler = (device.new_buffer(FILLED, ResourceOptions::private())).unwrap();
+    let event = device.new_shared_event().unwrap();
+    let pages = writer.contents().unwrap();
     let mut failures = Vec::new();
     let mut counts = Vec::new();
+    // The rounds whose reader's command buffer was committed while the pages' first texel still
+    // held the zeros: the passes' write was still ahead of it then.
+    let mut ahead = 0;
     for round in 0..ROUNDS {
         let before = device.work_counts();
-        let pages = first.contents().unwrap();
         // SAFETY: the surface's bytes, which no command buffer uses now.
         unsafe { std::ptr::write_bytes(pages.as_ptr(), 0, (pitch * SIDE) as usize) };
         let zeros = tools.sampled(&read, format);
-        let command_buffer = tools.queue.command_buffer().unwrap();
-        tools.render(&command_buffer, &drawn);
-        command_buffer.commit().unwrap();
-        command_buffer.wait_until_completed_for(WAIT).unwrap();
-        assert_eq!(command_buffer.error(), None);
-        let after = tools.sampled(&read, format);
+        let writing = tools.queue.command_buffer().unwrap();
+        let after = match follow {
+            Follow::Completed => {
+                tools.render(&writing, &drawn);
+                writing.commit().unwrap();
+                writing.wait_until_completed_for(WAIT).unwrap();
+                assert_eq!(writing.error(), None);
+                tools.sampled(&read, format)
+            }
+            Follow::InFlight => {
+                let value = round as u64 + 1;
+                let mut blit = writing.blit_command_encoder().unwrap();
+                for fill in 0..FILLS {
+                    blit.fill_buffer(&filler, 0..FILLED, fill as u8).unwrap();
+                }
+                blit.end_encoding().unwrap();
+                tools.render(&writing, &drawn);
+                (writing.encode_wait_for_event(EventRef::from(&event), value)).unwrap();
+                writing.commit().unwrap();
+                let reading = second.command_buffer().unwrap();
+                let after = tools.sample(&reading, &read, format);
+                reading.commit().unwrap();
+                let zero = |at: usize| {
+                    // SAFETY: a byte of the surface's, which the passes may be writing, read whole.
+                    unsafe { std::ptr::read_volatile(pages.as_ptr().add(at)) == 0 }
+                };
+                if (0..texel(format) as usize).all(zero) {
+                    ahead += 1;
+                }
+                // The writer's command buffer cannot complete before the host's signal.
+                assert_ne!(writing.status(), CommandBufferStatus::Completed);
+                event.set_signaled_value(value);
+                for command_buffer in [&writing, &reading] {
+                    command_buffer.wait_until_completed_for(WAIT).unwrap();
+                    assert_eq!(command_buffer.error(), None);
+                }
+                after
+            }
+        };
         counts.push(moved(&before, &device.work_counts()));
         tools.read_back(&[zeros, after], texel(format));
         let tight = (&tools.back, pitch);
         let checks = [
             (
                 "the pages",
-                first_wrong((&first, pitch), format, 0, expected),
+                first_wrong((&writer, pitch), format, 0, expected),
             ),
             (
                 "the read before",
@@ -533,15 +633,41 @@ fn run_pair(case: &str, format: PixelFormat) {
         }
     }
     eprintln!(
-        "LONE-FETCH {case} on {}: {} wrong reads of {}; per round (instances, inline instances, \
-         interlocked splits, storage forms, variants made, shadowed textures, shadow copies) \
-         {counts:?}; first {:?}",
+        "LONE-FETCH {case} on {}: {} wrong reads of {}; reads committed ahead of the write {ahead} \
+         of {ROUNDS}; buffers (bound in an import, copied) {placed:?}; per round (instances, \
+         inline instances, interlocked splits, storage forms, variants made, shadowed textures, \
+         shadow copies) {counts:?}; first {:?}",
         device.name(),
         failures.len(),
         ROUNDS * 3,
         failures.first()
     );
     assert!(failures.is_empty(), "{case}: {failures:?}");
+}
+
+/// A no-copy buffer over `whole`'s pages from [`INSET`] on, which lies in `whole`'s import.
+fn inset(device: &Device, whole: &Buffer) -> Buffer {
+    // SAFETY: inside `whole`'s bytes.
+    let start = unsafe { whole.contents().unwrap().add(INSET as usize) };
+    // SAFETY: the memory outlives the buffer (dropped after the device), and only the buffers'
+    // commands use it while they live.
+    let made = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            HostMemory::new(start),
+            BYTES as u64 - INSET,
+            ResourceOptions::default(),
+            None,
+        )
+    };
+    made.unwrap()
+}
+
+/// How the buffers made between `before` and `after` lie: bound in a live import, and copied.
+fn moved_placing(before: &WorkCounts, after: &WorkCounts) -> [u64; 2] {
+    [
+        after.object_churn.buffers_bound_in_import - before.object_churn.buffers_bound_in_import,
+        after.copied_host_buffers_made - before.copied_host_buffers_made,
+    ]
 }
 
 #[test]
@@ -626,10 +752,50 @@ fn layers_fetched_over_host_pages_reach_them() {
 
 #[test]
 fn a_surface_rendered_through_one_buffer_reads_right_through_another() {
-    run_pair("surface-pair", PixelFormat::RGBA16Float);
+    run_pair(
+        "surface-pair",
+        PixelFormat::RGBA16Float,
+        Span::Same,
+        Follow::Completed,
+    );
 }
 
 #[test]
 fn a_bgra8unorm_surface_rendered_through_one_buffer_reads_right_through_another() {
-    run_pair("surface-pair-bgra8unorm", PixelFormat::BGRA8Unorm);
+    run_pair(
+        "surface-pair-bgra8unorm",
+        PixelFormat::BGRA8Unorm,
+        Span::Same,
+        Follow::Completed,
+    );
+}
+
+#[test]
+fn a_surface_read_on_another_queue_while_its_write_is_in_flight_reads_the_write() {
+    run_pair(
+        "surface-pair-in-flight",
+        PixelFormat::RGBA16Float,
+        Span::Same,
+        Follow::InFlight,
+    );
+}
+
+#[test]
+fn a_surface_rendered_through_one_buffer_reads_right_through_a_wider_one() {
+    run_pair(
+        "surface-pair-wider",
+        PixelFormat::RGBA16Float,
+        Span::Wider,
+        Follow::Completed,
+    );
+}
+
+#[test]
+fn a_wider_buffer_read_on_another_queue_while_the_write_is_in_flight_reads_the_write() {
+    run_pair(
+        "surface-pair-wider-in-flight",
+        PixelFormat::RGBA16Float,
+        Span::Wider,
+        Follow::InFlight,
+    );
 }
