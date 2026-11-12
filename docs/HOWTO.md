@@ -752,9 +752,15 @@ submission, can give the device the guest's RAM once instead:
   every page of the chunk (all of it resident, where 64 MiB chunks pinned only those the objects
   and the window reached; 660 to 692 ms for 2.7 GiB on the Radeon 780M and the RX 7900 XTX). That
   object, and every object over the chunk until the import is done, is bound in an import of its
-  own run alone, as above, so no making waits for the chunk; each is one more listed import, a
-  buffer's released after its idle window and a heap's, or a buffer's whose address was handed
-  out, kept while the object lives. The first kernel submission after a chunk's import waits while
+  own run alone, one dma-buf of the run's pages from the same source, made on the object's thread
+  (`run_bound_buffers_made`), so no making waits for the chunk; each is one more listed import
+  (`run_imports_live`), a buffer's released after its idle window, as a no-copy buffer's own
+  import is, and the buffer bound in the chunk at its next blit, and a heap's, or a buffer's whose
+  address was handed out, kept while the object lives. Its uses order against those of the
+  objects over the same bytes in the chunk, and of the copies of them, by their host addresses, as
+  any two no-copy buffers over shared bytes do; on a driver whose barriers do not order blits
+  through two imports of the same pages (`RuntimeDriverDefect::AliasedImportBlitsUnordered`) the
+  object imports the chunk instead. The first kernel submission after a chunk's import waits while
   the kernel writes the chunk's page tables, and so does every other submission of the device
   (231 to 275 ms for a 3.94 GiB chunk on the Radeon 780M), so a chunk stays imported once
   imported where the whole RAM fits in half the device's memory heaps with unified memory, or in

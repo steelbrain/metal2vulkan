@@ -3352,14 +3352,19 @@ bound.
   of them served; or, on Linux, the process maps some of the pages read-only (a VMM's alias of a
   read-only replace), whose pointer drivers pin for writing and whose dma-bufs would take the
   GPU's writes (`copied_unwritable_pages`), with or without a dma-buf source, which is never
-  called for them. The gate is asked before the pages' write permission, where the pointer would
-  be imported. A copy of pages the process maps read-only drops the GPU's writes, as Metal drops
+  called for them; or a live import of another no-copy buffer's or heap's pages holds some of the
+  pages and not all (across its edge, or around it), or a heap's pages and more, so that importing
+  them would import a page twice, which `VK_EXT_external_memory_host` leaves undefined
+  (`copied_over_live_imports`, the gate not asked; a buffer whose pages a live import holds all of
+  lies inside that import instead, `ObjectChurn::buffers_bound_in_import`). The gate is asked
+  before the pages' write permission, where the pointer would be imported. A copy of pages the process maps read-only drops the GPU's writes, as Metal drops
   them: each batch's completion takes them back out of the copy and writes nothing to the pages
   (`copied_dropped_bytes`; the detail says so). The detail names which cause it was; for a failed
   import, the import's error, or that the runtime kept the pages from the driver as the kernel
   cannot pin them, and whether a dma-buf source of them was asked. Announced once per device for
   each cause (the gate's refusal, the device's, a failed import, bytes moved in their page, bit-24
-  memory, pages mapped read-only, and a buffer lying in another's live copy), so a refusal and a
+  memory, pages mapped read-only, pages a live import holds some of, and a buffer lying in
+  another's live copy), so a refusal and a
   later failed import are both heard. The copy reads the pages through the kernel, and
   where the kernel cannot (on Linux it pins each page, which a dma-buf's mapping does not allow),
   with plain loads where the process maps every page readable. Pages not mapped, or mapped
