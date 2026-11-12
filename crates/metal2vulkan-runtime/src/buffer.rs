@@ -1843,10 +1843,11 @@ impl Drop for HostImport {
         };
         if posts {
             shared.counts.host_import_release_posted();
-            // A tuple drops in order: the release, then its count. Every handle of the device it
-            // holds but the keep-alive's own is a holder's, which the program's last drop waits
-            // for (`device/holds.rs`): so a program that let go of such a buffer, then of the
-            // device, finds the device gone as that drop returns.
+            // A tuple drops in order: the release, then its count. The release's own handles of
+            // the device are holders' (the count's, the import's, and its dma-buf imports' where
+            // it alone holds them), which the program's last drop waits for
+            // (`device/holds.rs`): so a program that let go of such a buffer, then of the device,
+            // finds the device gone as that drop returns.
             let posted = (going, PostedDone(self.device.held_for_release()));
             self.device.let_go_elsewhere(Box::new(posted));
         } else {

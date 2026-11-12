@@ -5,14 +5,14 @@
 //!
 //! - **Two counts.** Every handle of the device is counted here, as the program's or as a
 //!   holder's. A handle a holder takes ([`WeakDevice::hold`]) is a holder's, and so is each handle
-//!   cloned from one (the device of every object the holder makes), and each handle a posted
-//!   release holds ([`Device::held_for_release`]); every other is the program's (the device's
-//!   own, its objects', and a runtime thread's upgrade of a weak handle). Measured: with the
-//!   program's handles in such a release, a test's drop of its device right after its no-copy
-//!   buffers with keep-alives returned with the `VkDevice` live in 31 of 32 runs on lavapipe and
-//!   12 of 12 on the Radeon 780M: the last handle went on the handler thread, and the process's
-//!   exit then left its teardown (`exit_guard.rs`), which on NVIDIA's driver can fault in the
-//!   driver's own exit handler (docs/FAST-PATHS.md, known gaps).
+//!   cloned from one (the device of every object the holder makes), and each handle of its own a
+//!   posted release holds ([`Device::held_for_release`]); every other is the program's (the
+//!   device's own, its objects', and a runtime thread's upgrade of a weak handle). Measured: with
+//!   the program's handles in such a release, a test's drop of its device right after its no-copy
+//!   buffers with keep-alives returned with the `VkDevice` live in 31 of 32 runs on lavapipe, 12
+//!   of 12 on the Radeon 780M and 80 of 80 on the RTX 3090: the last handle went on the handler
+//!   thread, and the process's exit then left its teardown (`exit_guard.rs`), which on NVIDIA's
+//!   driver can fault in the driver's own exit handler (docs/FAST-PATHS.md, known gaps).
 //! - **The program's last drop tears the device down.** The drop that leaves the program no
 //!   handle stops the holds, and on a thread of the program's waits until the holders' handles
 //!   went, so the device goes with it, on that thread, before it returns. A consumer that adopted
