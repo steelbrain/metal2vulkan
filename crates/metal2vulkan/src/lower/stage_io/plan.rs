@@ -1270,16 +1270,15 @@ fn region_viewport(
         return Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into());
     }
     let f = cx.profile.fields();
-    let features = [
-        VkFeature::ShaderOutputViewportIndex,
-        VkFeature::ShaderDrawParameters,
-        VkFeature::MultiViewport,
-    ];
     let multi_viewport = f.enabled.features.contains(&VkFeature::MultiViewport);
     if !(f.fragment.output_viewport_index && f.draw_parameters && multi_viewport) {
         return Err(Unsupported::needs_any_of(
             Feature::RasterizationRateMap,
-            vec![features.map(Capability::Feature).to_vec()],
+            vec![vec![
+                Capability::Feature(VkFeature::ShaderOutputViewportIndex),
+                Capability::Feature(VkFeature::ShaderDrawParameters),
+                Capability::Feature(VkFeature::MultiViewport),
+            ]],
         )
         .into());
     }

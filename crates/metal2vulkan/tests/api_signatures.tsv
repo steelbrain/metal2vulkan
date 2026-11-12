@@ -3547,6 +3547,7 @@ field	metal2vulkan::bind::BindShape.mesh_last_first	pub mesh_last_first: bool
 field	metal2vulkan::bind::BindShape.primitive_id_indices	pub primitive_id_indices: Option<metal::IndexType>
 field	metal2vulkan::bind::BindShape.private_list	pub private_list: bool
 field	metal2vulkan::bind::BindShape.quad_primitive_ids	pub quad_primitive_ids: bool
+field	metal2vulkan::bind::BindShape.region_viewports	pub region_viewports: bool
 field	metal2vulkan::bind::BindShape.render_area	pub render_area: [u32; 2]
 field	metal2vulkan::bind::BindShape.render_target_array_length	pub render_target_array_length: u32
 field	metal2vulkan::bind::BindShape.rotated_weights	pub rotated_weights: bool
@@ -3580,6 +3581,7 @@ field	metal2vulkan::bind::BindState.primitive_id_indices	pub primitive_id_indice
 field	metal2vulkan::bind::BindState.primitive_type	pub primitive_type: Option<metal::PrimitiveType>
 field	metal2vulkan::bind::BindState.private_list	pub private_list: bool
 field	metal2vulkan::bind::BindState.quad_primitive_ids	pub quad_primitive_ids: bool
+field	metal2vulkan::bind::BindState.region_viewports	pub region_viewports: bool
 field	metal2vulkan::bind::BindState.render_area	pub render_area: [u32; 2]
 field	metal2vulkan::bind::BindState.render_target_array_length	pub render_target_array_length: u32
 field	metal2vulkan::bind::BindState.resident_apart	pub resident_apart: bool
@@ -4193,6 +4195,7 @@ field	metal2vulkan::cache::VariantKey.psb_slots	pub psb_slots: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.pulled_vertex_buffers	pub pulled_vertex_buffers: BTreeSet<u32>
 field	metal2vulkan::cache::VariantKey.quad_primitive_ids	pub quad_primitive_ids: bool
 field	metal2vulkan::cache::VariantKey.read_only_tests	pub read_only_tests: bool
+field	metal2vulkan::cache::VariantKey.region_viewports	pub region_viewports: bool
 field	metal2vulkan::cache::VariantKey.replay_bindings	pub replay_bindings: bool
 field	metal2vulkan::cache::VariantKey.rotated_weights	pub rotated_weights: bool
 field	metal2vulkan::cache::VariantKey.shader_stencil	pub shader_stencil: bool
@@ -4791,6 +4794,7 @@ field	metal2vulkan::pipeline::LoweringInputs.private_list	pub private_list: bool
 field	metal2vulkan::pipeline::LoweringInputs.psb_slots	pub psb_slots: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.quad_primitive_ids	pub quad_primitive_ids: bool
 field	metal2vulkan::pipeline::LoweringInputs.read_only_tests	pub read_only_tests: bool
+field	metal2vulkan::pipeline::LoweringInputs.region_viewports	pub region_viewports: bool
 field	metal2vulkan::pipeline::LoweringInputs.render_target_array_index_varying	pub render_target_array_index_varying: bool
 field	metal2vulkan::pipeline::LoweringInputs.replay_bindings	pub replay_bindings: bool
 field	metal2vulkan::pipeline::LoweringInputs.rotated_blends	pub rotated_blends: BTreeMap<u32, RotatedBlendForm>
@@ -13514,6 +13518,7 @@ variant	metal2vulkan::device::VkExtension::ExtFragmentShaderInterlock	ExtFragmen
 variant	metal2vulkan::device::VkExtension::ExtImageRobustness	ExtImageRobustness
 variant	metal2vulkan::device::VkExtension::ExtLineRasterization	ExtLineRasterization
 variant	metal2vulkan::device::VkExtension::ExtMeshShader	ExtMeshShader
+variant	metal2vulkan::device::VkExtension::ExtMultiDraw	ExtMultiDraw
 variant	metal2vulkan::device::VkExtension::ExtMutableDescriptorType	ExtMutableDescriptorType
 variant	metal2vulkan::device::VkExtension::ExtPostDepthCoverage	ExtPostDepthCoverage
 variant	metal2vulkan::device::VkExtension::ExtPrimitiveTopologyListRestart	ExtPrimitiveTopologyListRestart
@@ -13607,6 +13612,7 @@ variant	metal2vulkan::device::VkFeature::Maintenance4	Maintenance4
 variant	metal2vulkan::device::VkFeature::Maintenance5	Maintenance5
 variant	metal2vulkan::device::VkFeature::Maintenance8	Maintenance8
 variant	metal2vulkan::device::VkFeature::MeshShader	MeshShader
+variant	metal2vulkan::device::VkFeature::MultiDraw	MultiDraw
 variant	metal2vulkan::device::VkFeature::MultiDrawIndirect	MultiDrawIndirect
 variant	metal2vulkan::device::VkFeature::MultiViewport	MultiViewport
 variant	metal2vulkan::device::VkFeature::MultisampleArrayImage	MultisampleArrayImage
@@ -14719,6 +14725,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::PartialObjectThreadgroups	PartialOb
 variant	metal2vulkan::pipeline::RuntimeFact::PredicationVote	PredicationVote
 variant	metal2vulkan::pipeline::RuntimeFact::PrivateList	PrivateList
 variant	metal2vulkan::pipeline::RuntimeFact::QuadPrimitiveIds	QuadPrimitiveIds
+variant	metal2vulkan::pipeline::RuntimeFact::RegionViewports	RegionViewports
 variant	metal2vulkan::pipeline::RuntimeFact::RenderTargetArrayLength	RenderTargetArrayLength { layer_dropped: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::ReplayBindings	ReplayBindings
 variant	metal2vulkan::pipeline::RuntimeFact::ResourcePresence	ResourcePresence { slot: SlotRef }
