@@ -9,7 +9,8 @@
 //! remap counts the live imports it touches (`host_remaps_over_imports`, `host_imports_remapped`).
 //! A rebind's import counts as made, as covered where bytes a buffer lay over already held its
 //! pages (`host_rebind_imports_made`, `host_rebind_imports_covered`), and as unlisted until a
-//! command buffer that uses it commits (`host_imports_rebound_unlisted`).
+//! command buffer that uses it commits (`host_imports_rebound_unlisted`); a rebind onto bytes a
+//! rebound buffer's import is noted over lies in that import, making none.
 //!
 //! A test that makes a texture over a buffer's host pages first settles the device's check of the
 //! first move in place (`in_place_check.rs`), where its policy takes such textures in place
@@ -392,7 +393,7 @@ fn added(base: [u64; 3], by: [u64; 3]) -> [u64; 3] {
 }
 
 #[test]
-fn a_rebind_s_import_is_unlisted_until_a_command_buffer_uses_it_and_covered_over_bytes_lain_over() {
+fn a_rebind_s_import_is_unlisted_until_a_command_buffer_uses_it_and_shared_over_bytes_it_holds() {
     let scratch = Scratch::new("import-rebinds");
     let hosts = [Host::new(), Host::new(), Host::new()];
     let device = device(&scratch.0);
@@ -407,19 +408,19 @@ fn a_rebind_s_import_is_unlisted_until_a_command_buffer_uses_it_and_covered_over
     // SAFETY: the pages outlive the device, and only the buffers' commands use them.
     unsafe { first.rebind_bytes_no_copy(hosts[2].memory(), None, None) }.unwrap();
     assert_eq!(rebinds(&device), added(before, [1, 0, 1]));
-    // A second buffer rebound onto the same bytes imports them again (only bytes a live buffer
-    // was made over are shared, `host_aliases.rs`): the first one's import covers them.
+    // A second buffer rebound onto the same bytes lies in the first one's import, noted over
+    // them (one page, one import, `host_aliases.rs`): no import is made.
     // SAFETY: as above.
     unsafe { second.rebind_bytes_no_copy(hosts[2].memory(), None, None) }.unwrap();
-    assert_eq!(rebinds(&device), added(before, [2, 1, 2]));
+    assert_eq!(rebinds(&device), added(before, [1, 0, 1]));
     // A command buffer using the first lists its import from its commit on.
     blits(&queue, |blit| blit.fill_buffer(&first, 0..4096, 1).unwrap());
-    assert_eq!(rebinds(&device), added(before, [2, 1, 1]));
-    // Rebound again onto the bytes it lies over: covered by its own import, the new one
-    // unlisted, the old one listed no more but counted as listed.
+    assert_eq!(rebinds(&device), added(before, [1, 0, 0]));
+    // Rebound again onto the bytes it lies over: it lies in the import the second still lies
+    // in, no import made.
     // SAFETY: as above.
     unsafe { first.rebind_bytes_no_copy(hosts[2].memory(), None, None) }.unwrap();
-    assert_eq!(rebinds(&device), added(before, [3, 2, 2]));
+    assert_eq!(rebinds(&device), added(before, [1, 0, 0]));
     // The imports that go leave the gauge.
     drop((first, second));
     until("the rebinds' imports went", || {

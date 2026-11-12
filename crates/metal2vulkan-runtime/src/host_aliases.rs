@@ -37,7 +37,8 @@
 //!   and its keep-alive goes then too, since those buffers keep the same bytes mapped
 //!   (`buffer.rs`'s `HostPages`). Copies between two such buffers are copies within one `VkBuffer`,
 //!   moved as within one buffer (`blit.rs`, `blit_texture.rs`). A buffer rebound onto the bytes a
-//!   live buffer was made over, of the class of its import, lies in that import too, joining no key
+//!   live buffer was made over or rebound onto, of the class of its import, lies in that import
+//!   too, joining no key
 //!   (`Device::rebind_host_pages`; a heap's own buffer, and bytes with a texture's aliasing image
 //!   over them, import their own), and in a live copy of them where its textures were planned at
 //!   the offset the copy lays the bytes at (its first byte) and no image in place rides on it.
@@ -45,10 +46,12 @@
 //!   imported twice into one device ("Some platforms do not allow locking the same physical pages
 //!   for device access multiple times, so attempting to do it may result in undefined behavior"),
 //!   so a page a live import holds is never imported again while it lives
-//!   ([`HostAliases::within`], looked up by the bytes the live buffers and heaps were made over,
-//!   rounded out to the import's unit). A heap's own import is noted as a buffer's is, joining no
-//!   key ([`HostAliases::hold`]): a buffer over exactly a heap's bytes lies in its import, and a
-//!   heap over exactly a live import's bytes lies in that import. A buffer whose pages a live
+//!   ([`HostAliases::within`], looked up by the bytes the live buffers and heaps were made over
+//!   or rebound onto, rounded out to the import's unit). A heap's own import is noted as a
+//!   buffer's is, joining no key ([`HostAliases::hold`]): a buffer over exactly a heap's bytes
+//!   lies in its import, and a heap over exactly a live import's bytes lies in that import. So is
+//!   the import a rebound buffer's new pages are, its own or the one it lies in
+//!   (`Device::rebind_host_pages`): a buffer made or rebound over exactly those bytes lies in it. A buffer whose pages a live
 //!   import holds all of is bound inside that import's memory at their offset, with a `VkBuffer`
 //!   of its own and no import (`Device::bind_in_import`, `WorkCounts::object_churn
 //!   .buffers_bound_in_import`), which keeps the import imported for good while it lives (no

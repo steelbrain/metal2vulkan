@@ -1284,16 +1284,17 @@ impl Device {
                     in_place.is_empty() && (texels.is_empty() || import.offset() == cell.offset())
                 }
             });
-        // The new pages, what was made again over them, whether they are an import of the
-        // buffer's own, and its claim of them where they are a guest RAM's (`host_ram.rs`), held
-        // until that import is noted below.
-        let (pages, remade, own, claim) = match shares {
+        // The new pages, what was made again over them, whether they are an import to note over
+        // the bytes (one of its own, or the live one it lies in), and its claim of them where
+        // they are a guest RAM's (`host_ram.rs`), held until that import is noted below.
+        let (pages, remade, noted, claim) = match shares {
             Some(import) => {
+                let noted = !import.copied();
                 if import.copied() {
                     shared.counts.copied_host_buffer_shared();
                     self.degrade_copied_shared(call, pointer, length, import.copy_drops_writes());
                 }
-                (self.pages_in_import(import), Remade::default(), false, None)
+                (self.pages_in_import(import), Remade::default(), noted, None)
             }
             None => {
                 // Pages the caller resolves to runs of a guest RAM the device uses
@@ -1564,8 +1565,8 @@ impl Device {
                     host.base,
                     host.size - host.base,
                 );
-                // An import of the new pages of its own, noted below as a making notes one.
-                let own = copied.is_none() && !chunk_bound && !drops_writes;
+                // An import of the new pages of its own, noted below.
+                let noted = copied.is_none() && !chunk_bound && !drops_writes;
                 match copied {
                     Some((copied, cause, failed)) => {
                         let drops = copied.drops_writes();
@@ -1592,7 +1593,7 @@ impl Device {
                 if let Some(runs) = kept_runs {
                     pages.keep_runs(runs);
                 }
-                (pages, remade, own, claim)
+                (pages, remade, noted, claim)
             }
         };
         // The heap's images bound to its bytes, made again over the new pages. A refusal drops
@@ -1624,18 +1625,13 @@ impl Device {
         shared.live_buffers.rebound(buffer, heap);
         // Later buffers over the memory it was made over no longer join it.
         shared.aliases.leave(key);
-        // An import of its new pages of its own is noted, as a making notes one
-        // (`host_aliases.rs`): a later buffer over the bytes lies in it, and a guest RAM's chunk
-        // holding some of them is not imported while it lives (`host_ram.rs`, "One page, one
-        // import"). Its claim of them goes once it is noted.
-        if own {
-            let kind = Kind::Import(class);
-            match heap {
-                Some(_) => (shared.aliases).hold(key, made_over, kind, pages.import()),
-                None => {
-                    (shared.aliases).join(key, made_over, kind, pages.import());
-                }
-            }
+        // The import its new pages are, its own or the live one it lies in, is noted over them
+        // as a heap's own import is, joining no key (`host_aliases.rs`, "Not joined"): a page it
+        // holds is not imported again while it lives (a later buffer over exactly the bytes lies
+        // in it, and a guest RAM's chunk holding some of them waits, `host_ram.rs`). Its claim
+        // of them goes once it is noted.
+        if noted {
+            (shared.aliases).hold(key, made_over, Kind::Import(class), pages.import());
         }
         drop(claim);
         // Its uses from now on order against the keys over the new bytes.
