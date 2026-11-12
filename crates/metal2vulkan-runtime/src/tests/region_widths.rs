@@ -65,9 +65,10 @@ entry:\n\
 !8 = !{i32 2, i32 8, i32 0}\n!9 = !{!\"Metal\", i32 4, i32 0, i32 0}\n";
 
 /// [`KERNEL`]'s store, and the store of a kernel otherwise alike that writes `index + 1`.
-const STORE: &str = "  store i32 %index, ptr addrspace(1) %p, align 4\n";
+/// The text's lines start unindented: a string continuation drops each line's leading spaces.
+const STORE: &str = "store i32 %index, ptr addrspace(1) %p, align 4\n";
 const STORE_PLUS_ONE: &str =
-    "  %plus = add i32 %index, 1\n  store i32 %plus, ptr addrspace(1) %p, align 4\n";
+    "%plus = add i32 %index, 1\nstore i32 %plus, ptr addrspace(1) %p, align 4\n";
 
 /// The state of `widths`, [`KERNEL`] or the kernel of `kernel`'s text.
 fn state(device: &Device, kernel: &str) -> ComputePipelineState {
