@@ -237,6 +237,8 @@ mod absent_reads;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod address_maps;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod aliased_surfaces;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod alpha_coverage;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod alpha_in_red;
