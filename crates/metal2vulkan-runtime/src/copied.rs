@@ -411,7 +411,7 @@ pub(crate) mod clock {
             Lap {
                 of,
                 phase: 0,
-                at: (index % SAMPLE == 0).then(Instant::now),
+                at: index.is_multiple_of(SAMPLE).then(Instant::now),
             }
         }
 
