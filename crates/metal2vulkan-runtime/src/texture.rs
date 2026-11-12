@@ -1069,8 +1069,9 @@ impl Image {
         self.form.plan().unwrap_or(&self.plan)
     }
 
-    /// Count, under the views lock, that the image lets its views go: the views a bind kept by
-    /// what they were made of are then stale (`DeviceShared::views_epoch`).
+    /// Count, under the views lock, that the image lets its views go, or that its texture, a
+    /// shadow, moved in place (`texture/storage_form.rs`): the views a bind kept by what they
+    /// were made of are then stale (`DeviceShared::views_epoch`).
     pub(super) fn views_go(&self) {
         self.device
             .shared()

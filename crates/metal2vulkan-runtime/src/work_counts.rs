@@ -6672,7 +6672,8 @@ pub struct WorkCounts {
     pub argument_samplers_taken: u64,
     /// Texture slot views render encoders' binds worked out: none for a bind of a texture, as a
     /// view, that a bind of the same or an earlier encoder of the device bound, while no image of
-    /// the device let its views go (`binding::BindMemo`).
+    /// the device let its views go and no shadow over host pages moved in place
+    /// (`binding::BindMemo`).
     pub bind_views_worked_out: u64,
     /// Stage tables (vertex, fragment, object, mesh) that draws, and commands of other encoders
     /// that settle as draws do, read into their encoder's kept bind state: four a draw at most,

@@ -1747,10 +1747,12 @@ const KEPT_VIEWS: usize = 256;
 /// weakly, so it keeps none alive:
 ///
 /// - **A view** of a texture slot is a function of the texture (its storage, image, decoded and
-///   twin and record are fixed as it is made; its usage shadow is made once and kept), the
+///   twin and record are fixed as it is made, but for a shadow over host pages that moves in
+///   place once, `texture/storage_form.rs`; its usage shadow is made once and kept), the
 ///   view's description, whether the binding is a storage one, and its images' views, which an
 ///   image keeps once made until it lets them all go under its views lock (a rebind's or a
-///   storage form's new `VkImage`, a detach's stand-in, a reattach). Each letting go counts in
+///   storage form's new `VkImage`, a detach's stand-in, a reattach, a shadow's move in place,
+///   after which its views go with it). Each letting go counts in
 ///   `DeviceShared::views_epoch`: the views are kept while it holds, and all dropped once it
 ///   moves. A view is kept by its texture's address ([`KeptView`]), which stays the texture's
 ///   while the memo keeps the view: a texture found there is the one the view is of.

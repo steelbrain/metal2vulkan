@@ -45,7 +45,10 @@
 //!   (`Image::let_go_unused`), and its merges' kept scratch buffers, counted
 //!   (`WorkCounts::host_texture_shadows_freed_after_move`, over the pooled memory
 //!   `WorkCounts::pooled_texture_shadows_freed_after_move`). Nothing names the shadow by then:
-//!   every later command presents the image in place, and the commit bound no heap set. A view
+//!   every later command presents the image in place, and the commit bound no heap set. The
+//!   views render encoders' binds kept of the texture are the shadow's: the move counts in the
+//!   device's views epoch as the shadow letting its views go (`DeviceShared::views_epoch`), so
+//!   every kept view is dropped before a later bind could name one (`binding::BindMemo`). A view
 //!   of the texture made before the move, or a shadow made over the shadow's image (a slot
 //!   binding's usage shadow, a view's, which holds it as its truth, `shadow::ImageTruth`), keeps
 //!   it until that and the texture went, as does an untracked texture, whose uses on other queues
@@ -911,8 +914,16 @@ impl Prepared {
     /// place over its texels (`TextureShared::moved`). Whether it moved: not where a binding or
     /// a pass took another image of it meanwhile, the image made then going with the command
     /// buffer.
+    ///
+    /// Under the shadow's views lock, the move counts as the shadow letting its views go
+    /// (`DeviceShared::views_epoch`): the views binds kept of the texture are the shadow's, which
+    /// go once the committing command buffer completed ([`ShadowAfterMove`]), so a later bind of
+    /// the texture works out its view of the image in place (`binding::BindMemo`).
     fn move_in(&self, texture: &Texture) -> bool {
         let Kind::Move { storage, moved, .. } = &self.kind else {
+            return false;
+        };
+        let Storage::Shadow { image: shadow, .. } = &texture.0.storage else {
             return false;
         };
         if texture.shadowed_again() {
@@ -922,7 +933,12 @@ impl Prepared {
             return false;
         };
         *lock(&texture.0.pending_move) = None;
+        let views = lock(&shadow.views);
         let swapped = texture.0.moved.set(storage).is_ok();
+        if swapped {
+            shadow.views_go();
+        }
+        drop(views);
         moved.store(swapped, Ordering::Release);
         swapped
     }

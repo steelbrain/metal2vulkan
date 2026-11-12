@@ -702,8 +702,9 @@ pub(super) struct DeviceShared {
     /// not, its encoders build none (`EncoderCore::executed`).
     pub(crate) record_executions: bool,
     /// Counts the times an image of the device let its views go, under its views lock (a
-    /// rebind's or a storage form's new `VkImage`, a detach's stand-in, a reattach): a view kept
-    /// by what it was made of (`binding::BindMemo`) is current while this holds.
+    /// rebind's or a storage form's new `VkImage`, a detach's stand-in, a reattach, a shadow's
+    /// move in place, whose views go after it): a view kept by what it was made of
+    /// (`binding::BindMemo`) is current while this holds.
     pub(crate) views_epoch: AtomicU64,
     /// Its pipeline records: the hook they go to, and the counts (`warm/record.rs`).
     pub(crate) pipeline_recording: crate::warm::Recording,
