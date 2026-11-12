@@ -13,10 +13,14 @@
 //
 //   surface-two   A writes texture 1 of an IOSurface, B copies texture 2 of the same surface.
 //   surface-one   control: B copies texture 1.
+//   surface-apart control: B copies a texture of another IOSurface (a texture blit beside the
+//                 compute write, sharing nothing).
+//   surface-two-untracked  as surface-two, both textures `MTLHazardTrackingModeUntracked`.
 //   nocopy-two    A writes no-copy buffer 1, B copies no-copy buffer 2 over the same pages.
 //   nocopy-one    control: B copies buffer 1.
 //
-// Every resource is tracked (`MTLHazardTrackingModeTracked`), its bytes 0 before A. A's kernel
+// Every resource but surface-two-untracked's is tracked (`MTLHazardTrackingModeTracked`), its
+// bytes 0 before A. A's kernel
 // spins about 200 ms per thread (calibrated first, alone), then writes all ones. Each run reports
 // A's and B's GPU start and end from A's start, whether B ended before A did, and the first word B
 // read (0 = before A's write).
@@ -92,7 +96,7 @@ static IOSurfaceRef new_surface(void) {
   return surface;
 }
 
-static id<MTLTexture> over_surface(Probe *p, IOSurfaceRef surface) {
+static id<MTLTexture> over_surface(Probe *p, IOSurfaceRef surface, BOOL tracked) {
   MTLTextureDescriptor *desc =
       [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                                          width:kSize
@@ -100,7 +104,8 @@ static id<MTLTexture> over_surface(Probe *p, IOSurfaceRef surface) {
                                                      mipmapped:NO];
   desc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
   desc.storageMode = MTLStorageModeShared;
-  desc.hazardTrackingMode = MTLHazardTrackingModeTracked;
+  desc.hazardTrackingMode =
+      tracked ? MTLHazardTrackingModeTracked : MTLHazardTrackingModeUntracked;
   return [p->device newTextureWithDescriptor:desc iosurface:surface plane:0];
 }
 
@@ -135,7 +140,7 @@ static id<MTLCommandBuffer> long_write(Probe *p, id<MTLCommandQueue> queue, id<M
 // A alone, through a fresh texture: its GPU time in ms for `iters`.
 static double time_alone(Probe *p, id<MTLCommandQueue> queue, uint32_t iters) {
   IOSurfaceRef surface = new_surface();
-  id<MTLTexture> texture = over_surface(p, surface);
+  id<MTLTexture> texture = over_surface(p, surface, YES);
   id<MTLCommandBuffer> cb = long_write(p, queue, texture, nil, iters);
   [cb commit];
   [cb waitUntilCompleted];
@@ -146,18 +151,25 @@ static double time_alone(Probe *p, id<MTLCommandQueue> queue, uint32_t iters) {
 static void run_case(Probe *p, const char *name, uint32_t iters, int run) {
   BOOL surface_case = strncmp(name, "surface", 7) == 0;
   BOOL two = strstr(name, "-two") != NULL;
+  BOOL apart = strstr(name, "-apart") != NULL;
+  BOOL tracked = strstr(name, "-untracked") == NULL;
   id<MTLCommandQueue> queue_a = [p->device newCommandQueue];
   id<MTLCommandQueue> queue_b = [p->device newCommandQueue];
   id<MTLBuffer> out = [p->device newBufferWithLength:kBytes options:MTLResourceStorageModeShared];
   memset(out.contents, 0xEE, kBytes);
-  IOSurfaceRef surface = NULL;
+  IOSurfaceRef surface = NULL, other = NULL;
   void *pages = NULL;
   id<MTLTexture> written_t = nil, read_t = nil;
   id<MTLBuffer> written_b = nil, read_b = nil;
   if (surface_case) {
     surface = new_surface();
-    written_t = over_surface(p, surface);
-    read_t = two ? over_surface(p, surface) : written_t;
+    written_t = over_surface(p, surface, tracked);
+    if (apart) {
+      other = new_surface();
+      read_t = over_surface(p, other, tracked);
+    } else {
+      read_t = two ? over_surface(p, surface, tracked) : written_t;
+    }
   } else {
     if (posix_memalign(&pages, 16384, kBytes) != 0) {
       P("%s: posix_memalign failed", name);
@@ -203,6 +215,9 @@ static void run_case(Probe *p, const char *name, uint32_t iters, int run) {
   if (surface) {
     CFRelease(surface);
   }
+  if (other) {
+    CFRelease(other);
+  }
   written_b = nil;
   read_b = nil;
   free(pages);
@@ -240,8 +255,9 @@ int main(void) {
       ms = time_alone(&p, calibration, iters);
     }
     P("A alone: %u iterations, %.1f ms", iters, ms);
-    const char *cases[] = {"surface-two", "surface-one", "nocopy-two", "nocopy-one"};
-    for (int c = 0; c < 4; c++) {
+    const char *cases[] = {"surface-two",  "surface-one", "surface-apart",
+                           "surface-two-untracked", "nocopy-two", "nocopy-one"};
+    for (int c = 0; c < 6; c++) {
       for (int run = 0; run < 3; run++) {
         run_case(&p, cases[c], iters, run);
       }
