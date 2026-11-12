@@ -463,8 +463,8 @@ pub(crate) struct FaceSwaps {
 /// face that holds the truth into the one the batch names before it, and back after it where
 /// `back`.
 pub(crate) struct FaceFix {
-    pub(crate) from: Arc<Image>,
-    pub(crate) to: Arc<Image>,
+    from: Arc<Image>,
+    to: Arc<Image>,
     pub(crate) back: bool,
 }
 
