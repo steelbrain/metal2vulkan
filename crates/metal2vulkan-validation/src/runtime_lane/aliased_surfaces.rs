@@ -2,7 +2,9 @@
 //! window server, at its login, makes dozens of textures over each of its large surfaces
 //! (`new_texture_with_iosurface_plane` over the `Private` buffer that stands for the surface),
 //! `BGRA8Unorm` and `R32Uint` views of the same bytes with shader read and write usage, and writes
-//! and reads a few of them each frame. Each texture over a `Private` buffer whose rows the device's
+//! and reads a few of them each frame. Each surface's maker declares the bytes between its rows
+//! unobserved (`BufferDescriptor::padding_unobserved`), as the guest's do. Each texture over a
+//! `Private` buffer whose rows the device's
 //! own linear image lays out otherwise is a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch inside
 //! the pooled bound (`in_place::POOLED_PITCHED_BYTES`), else a shadow
 //! (`TextureShadowReason::LinearCost`); a shadow is an image of its own, copied in and back apart
@@ -254,15 +256,19 @@ fn words_read(texture: &Texture, out: &Buffer, side: u64) -> Vec<u32> {
 /// pitch of 1280 bytes, 64 rows (81,920 bytes, past the pooled bound).
 const SMALL: (u64, u64, u64) = (256, 64, 1280);
 
-/// A `Private` surface of `SMALL`'s rows, zeros.
+/// A surface of `length` bytes of `options`, zeros, made as the guest's: its maker declares the
+/// bytes between a texture's rows unobserved (`BufferDescriptor::padding_unobserved`), without
+/// which no image over the buffer's memory holds rows that lie apart.
+fn made_surface(device: &Device, length: u64, options: ResourceOptions) -> Buffer {
+    let descriptor =
+        BufferDescriptor::new(length, options, BufferContents::Zero).with_padding_unobserved();
+    device.new_buffer_with_descriptor(descriptor).unwrap()
+}
+
+/// A `Private` surface of `SMALL`'s rows.
 fn small_surface(device: &Device) -> Buffer {
     let (_, height, pitch) = SMALL;
-    let descriptor = BufferDescriptor::new(
-        pitch * height,
-        ResourceOptions::private(),
-        BufferContents::Zero,
-    );
-    device.new_buffer_with_descriptor(descriptor).unwrap()
+    made_surface(device, pitch * height, ResourceOptions::private())
 }
 
 /// Whether the device takes a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch for a texture of
@@ -270,12 +276,7 @@ fn small_surface(device: &Device) -> Buffer {
 /// buffer, whose textures take it at any size where the device's check passed.
 fn takes_pitched(device: &Device) -> bool {
     let (_, height, pitch) = SMALL;
-    let descriptor = BufferDescriptor::new(
-        pitch * height,
-        ResourceOptions::shared(),
-        BufferContents::Zero,
-    );
-    let shared = device.new_buffer_with_descriptor(descriptor).unwrap();
+    let shared = made_surface(device, pitch * height, ResourceOptions::shared());
     let before = device.work_counts().pooled_pitched_images;
     let (_texture, _) = surface_texture(&shared, PixelFormat::BGRA8Unorm, SMALL);
     device.work_counts().pooled_pitched_images > before
@@ -606,8 +607,7 @@ fn aliased_surface_costs() {
         let storage = format!("{:?}", options.storage_mode());
         // Live: the textures made once, a frame writing two and reading four.
         {
-            let descriptor = BufferDescriptor::new(GUEST_BYTES, options, BufferContents::Zero);
-            let surface = device.new_buffer_with_descriptor(descriptor).unwrap();
+            let surface = made_surface(&device, GUEST_BYTES, options);
             let before = device.work_counts();
             let made: Vec<(Texture, TexturePlacement)> = (0..LIVE)
                 .map(|i| surface_texture(&surface, live_format(i), GUEST))
@@ -644,8 +644,7 @@ fn aliased_surface_costs() {
         }
         // Transient: four textures made each frame and dropped after it, two written, two read.
         {
-            let descriptor = BufferDescriptor::new(GUEST_BYTES, options, BufferContents::Zero);
-            let surface = device.new_buffer_with_descriptor(descriptor).unwrap();
+            let surface = made_surface(&device, GUEST_BYTES, options);
             let mut answers = Vec::new();
             let tally = tally(&device, |n| {
                 let made: Vec<(Texture, TexturePlacement)> = (0..TRANSIENT)
