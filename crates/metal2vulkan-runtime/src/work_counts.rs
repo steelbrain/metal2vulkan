@@ -472,7 +472,7 @@ pub(crate) struct Counters {
     shadow_copies_in_against_standing: AtomicU64,
     shadow_copies_in_skipped_by_standing: AtomicU64,
     shadow_texels_skipped_by_standing: AtomicU64,
-    shadow_texels_unskipped: [AtomicU64; 6],
+    shadow_texels_unskipped: [AtomicU64; 7],
     shadow_texels_unskipped_standing: [AtomicU64; 5],
     shadow_texels_never_stood: [AtomicU64; 5],
     shadow_texels_copied_in: AtomicU64,
@@ -485,6 +485,7 @@ pub(crate) struct Counters {
     shadow_texels_first_copied_in_surfaces: AtomicU64,
     shadow_texels_first_copied_in_large_surfaces: AtomicU64,
     shadow_texels_first_copied_in_private_surfaces: AtomicU64,
+    shadow_texels_first_copied_in_private_images: AtomicU64,
     shadow_texels_first_copy_in_carried: AtomicU64,
     shadow_texels_first_copy_in_carried_large_surfaces: AtomicU64,
     shadow_texels_first_copied_in_large_surfaces_stood_earlier: AtomicU64,
@@ -4005,7 +4006,9 @@ impl Counters {
             CopyCause::Bounded => add(&self.shadow_texels_bounded_copied_in),
         }
         add(match (first, copies.backing) {
-            (true, Backing::Image) => &self.shadow_texels_first_copied_in_images,
+            (true, Backing::Image | Backing::PrivateImage) => {
+                &self.shadow_texels_first_copied_in_images
+            }
             (true, Backing::PrivateBuffer) => &self.shadow_texels_first_copied_in_private_buffers,
             (true, Backing::MappedBuffer) => &self.shadow_texels_first_copied_in_mapped_buffers,
             (true, Backing::HostPages) => &self.shadow_texels_first_copied_in_host_pages,
@@ -4015,7 +4018,9 @@ impl Counters {
             (true, Backing::Surface | Backing::PrivateSurface) => {
                 &self.shadow_texels_first_copied_in_surfaces
             }
-            (false, Backing::Image) => &self.shadow_texels_recopied_in_images,
+            (false, Backing::Image | Backing::PrivateImage) => {
+                &self.shadow_texels_recopied_in_images
+            }
             (false, Backing::PrivateBuffer) => &self.shadow_texels_recopied_in_private_buffers,
             (false, Backing::MappedBuffer) => &self.shadow_texels_recopied_in_mapped_buffers,
             (false, Backing::HostPages) => &self.shadow_texels_recopied_in_host_pages,
@@ -4028,6 +4033,9 @@ impl Counters {
         });
         if first && copies.backing == Backing::PrivateSurface {
             add(&self.shadow_texels_first_copied_in_private_surfaces);
+        }
+        if first && copies.backing == Backing::PrivateImage {
+            add(&self.shadow_texels_first_copied_in_private_images);
         }
         match (large, first) {
             (true, true) => add(&self.shadow_texels_first_copied_in_large_surfaces),
@@ -7739,11 +7747,13 @@ pub struct WorkCounts {
     /// split, which count every copy in as it is planned.
     pub shadow_texels_skipped_by_standing: u64,
     /// The texels of a command buffer's first copies in of a shadow whose truth only the runtime's
-    /// commands write (`shadow_texels_first_copied_in_private_buffers` and
-    /// `shadow_texels_first_copied_in_private_surfaces`) that moved them, by where each was
-    /// decided (`shadow_standing.rs`): with `shadow_texels_skipped_by_standing`, the six sum to
+    /// commands write (`shadow_texels_first_copied_in_private_buffers`,
+    /// `shadow_texels_first_copied_in_private_surfaces` and
+    /// `shadow_texels_first_copied_in_private_images`) that moved them, by where each was
+    /// decided (`shadow_standing.rs`): with `shadow_texels_skipped_by_standing`, the seven sum to
     /// those first copies in. This one: of a shadow that never stands (its buffer untracked, a
-    /// heap's or over the caller's memory, its `VkBuffer` handed out, or its writes dropped).
+    /// heap's or over the caller's memory, its `VkBuffer` or its image's `VkImage` handed out, or
+    /// its writes dropped).
     pub shadow_texels_unskipped_unstanding: u64,
     /// Recorded between two render pass instances of a pass its encoder holds, which no batch's
     /// submission decides.
@@ -7758,10 +7768,15 @@ pub struct WorkCounts {
     pub shadow_texels_unskipped_command_buffer: u64,
     /// At its batch's submission, where its standing was let go of.
     pub shadow_texels_unskipped_let_go: u64,
+    /// At its batch's submission, where its image stood holding every texel of the truth but
+    /// those inside a rectangle that writes within it changed since its copy in (a render pass's
+    /// draws over a color attachment it loads, `shadow::Within`): the texels inside it alone.
+    pub shadow_texels_unskipped_stale_within: u64,
     /// The same texels but `shadow_texels_unskipped_unstanding`'s, by what the shadow's standing
     /// held as each copy was decided (as its encoder recorded it, by the batches submitted
     /// then, for the first three of where): the five sum to them. This one: it stood, so where
-    /// it was decided alone moved them.
+    /// it was decided alone moved them, or it stood stale inside a rectangle alone, whose texels
+    /// moved (`shadow_texels_unskipped_stale_within`).
     pub shadow_texels_unskipped_stood: u64,
     /// No command buffer's end left its image standing since it was made.
     pub shadow_texels_unskipped_never_stood: u64,
@@ -7778,7 +7793,7 @@ pub struct WorkCounts {
     /// truth another way, another shadow's copy back or merge wrote the bytes, work recorded
     /// apart stood between, or an encoder started after a wait, a signal or a host step.
     pub shadow_texels_never_stood_dropped: u64,
-    /// The command buffer's end carried its image holding part of the truth, or some of it stale.
+    /// The command buffer's end carried its image holding part of the truth.
     pub shadow_texels_never_stood_partial: u64,
     /// The command buffer's end records no standing: a failure, a rebind, memory no use names,
     /// or a last batch without its last encoder.
@@ -7832,6 +7847,10 @@ pub struct WorkCounts {
     /// memoryless storage the device made, which the CPU never writes; the rest are a plane's in
     /// host pages or in a buffer the CPU maps.
     pub shadow_texels_first_copied_in_private_surfaces: u64,
+    /// Of `shadow_texels_first_copied_in_images`, those of a tracked image of private or
+    /// memoryless storage the device made in memory of its own, which only its commands write:
+    /// a shadow of one may stand across command buffers (`shadow_standing.rs`).
+    pub shadow_texels_first_copied_in_private_images: u64,
     /// The texels no copy in moved because the encoder's first use of a shadowed texture found
     /// its command buffer already holding that image's truth (`shadow::ShadowCarry`): exactly
     /// what carrying the image across the command buffer's encoders takes off the run. 0 means
@@ -9518,6 +9537,7 @@ impl Device {
             shadow_texels_unskipped_recorded_whole: unskipped(Unskipped::RecordedWhole),
             shadow_texels_unskipped_command_buffer: unskipped(Unskipped::CommandBuffer),
             shadow_texels_unskipped_let_go: unskipped(Unskipped::LetGo),
+            shadow_texels_unskipped_stale_within: unskipped(Unskipped::StaleWithin),
             shadow_texels_unskipped_stood: standing(None),
             shadow_texels_unskipped_never_stood: standing(Some(LetGo::NeverStood)),
             shadow_texels_never_stood_unmet: never_stood(Missed::Unmet),
@@ -9555,6 +9575,9 @@ impl Device {
                 .load(Ordering::Relaxed),
             shadow_texels_first_copied_in_private_surfaces: counters
                 .shadow_texels_first_copied_in_private_surfaces
+                .load(Ordering::Relaxed),
+            shadow_texels_first_copied_in_private_images: counters
+                .shadow_texels_first_copied_in_private_images
                 .load(Ordering::Relaxed),
             shadow_texels_first_copy_in_carried: counters
                 .shadow_texels_first_copy_in_carried

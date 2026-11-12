@@ -207,7 +207,7 @@ pub(super) struct Stood {
     against: u64,
     pub(super) skipped: u64,
     texels: u64,
-    at: [u64; 6],
+    at: [u64; 7],
     standing: [u64; 5],
     never: [u64; 5],
 }
@@ -225,7 +225,7 @@ const TRUTH_WRITTEN: usize = 3;
 /// held `standing` alone: every other count zero.
 fn moved(stood: &Stood, at: usize, standing: Option<usize>) -> u64 {
     let texels = stood.at[at];
-    let mut at_only = [0; 6];
+    let mut at_only = [0; 7];
     at_only[at] = texels;
     assert_eq!(stood.at, at_only, "where the copies in were decided");
     let mut standing_only = [0; 5];
@@ -245,6 +245,7 @@ fn stood(before: &WorkCounts, after: &WorkCounts) -> Stood {
         delta(|c| c.shadow_texels_unskipped_recorded_whole),
         delta(|c| c.shadow_texels_unskipped_command_buffer),
         delta(|c| c.shadow_texels_unskipped_let_go),
+        delta(|c| c.shadow_texels_unskipped_stale_within),
     ];
     let standing = [
         delta(|c| c.shadow_texels_unskipped_stood),

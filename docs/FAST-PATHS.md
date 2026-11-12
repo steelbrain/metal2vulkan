@@ -271,7 +271,13 @@ recorded here.
 - **A draw that reads its own pass's attachment reads a copy, a snapshot or a split.** A sampled
   slot binding of a texture the render pass instance renders reads a copy taken before the
   instance (`texture/attached_reads.rs`): the texels around the draw's scissors where it reads at
-  its own pixels alone, else every texel or what the instances since drew; none where every read
+  its own pixels alone, else every texel or what the instances since drew; at a later command
+  buffer's first copy, where only the runtime's commands write the texture (a tracked `Private`
+  one's image, or a tracked `Private` buffer's bytes), only what changed since the last command
+  buffer left the copy standing: nothing, or the texels inside the scissors of the draws of a
+  pass that loads it (`shadow_standing.rs`, `WorkCounts::shadow_texels_unskipped_stale_within`).
+  The copy stays where the device has the feedback loop too: read in place, the draw would race
+  its own and earlier draws' writes of the attachment, a data race Vulkan forbids; none where every read
   of the slot reaches only levels before the lowest one the instance renders, which it reads in
   the texture's own image through a view of those levels (`render/attached_levels.rs`,
   `WorkCounts::attached_read_slots_narrowed`). After a barrier inside
@@ -1033,7 +1039,8 @@ driver's. Each is open work.
   shape whose arms hold a quad or simdgroup operation keeps the AIR's lanes, where Metal's may be
   the block's, announced as `UnmeasuredGroupSpeculation`.
 - **A render pass's attachment read another way than a sampled slot binding.** Vulkan forbids
-  reading an attachment in its own render pass instance (`VUID-vkCmdDraw-None-10795`); a sampled
+  reading an attachment in its own render pass instance (`VUID-vkCmdDraw-None-10795`), and with a
+  feedback loop, reading the pixels the instance writes unordered (a data race); a sampled
   slot binding reads a copy or a snapshot (Costs above). Every other such read still reads the
   attachment in its instance, announced as `AttachmentReadInPlace`: a texture reached through the
   heap set (a handle, or an argument buffer's texture), a storage binding, a depth or stencil

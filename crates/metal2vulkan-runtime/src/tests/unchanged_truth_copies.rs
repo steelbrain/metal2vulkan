@@ -9,7 +9,8 @@
 //! Each frame counts its copies in (`WorkCounts::shadow_copies`), the texels they moved
 //! (`shadow_texels_copied_in` and `shadow_texels_copied_in_images`), those a standing took off
 //! (`shadow_texels_skipped_by_standing`) and its GPU time, and checks the texel the frame's draw
-//! wrote: the last change's color.
+//! wrote, the last change's color, and that a frame that changed nothing moved no texel its
+//! shadow held already.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_rect` and
@@ -217,7 +218,6 @@ struct Frame {
     texels: u64,
     skipped: u64,
     through_copies: u64,
-    own_pixel: u64,
     snapshotted: u64,
     gpu_us: f64,
 }
@@ -231,7 +231,6 @@ impl Frame {
                 + delta(|c| c.shadow_texels_copied_in_images),
             skipped: delta(|c| c.shadow_texels_skipped_by_standing),
             through_copies: delta(|c| c.attachment_reads_through_copies),
-            own_pixel: delta(|c| c.own_pixel_reads),
             snapshotted: delta(|c| c.reading_draws_snapshotted),
             gpu_us,
         }
@@ -278,6 +277,15 @@ fn frames(device: &Device, tools: &Tools, truth: Truth, need: Need) -> (Vec<Fram
             red_of(frame),
             "frame {frame}'s draw read the last change"
         );
+        // A draw that samples the texture its pass renders, before any barrier, reads its copy,
+        // with the feedback loop's usage too: read in place, it would race the pass's own writes
+        // (`texture/attached_reads.rs`).
+        let attached = !matches!(need, Need::BeyondUsage);
+        assert_eq!(
+            (counts.through_copies, counts.snapshotted),
+            (u64::from(attached), 0),
+            "frame {frame}: the draws that read through a copy, and through a snapshot"
+        );
         match change {
             true => changed.push(counts),
             false => unchanged.push(counts),
@@ -286,8 +294,22 @@ fn frames(device: &Device, tools: &Tools, truth: Truth, need: Need) -> (Vec<Fram
     (changed, unchanged)
 }
 
+/// The most texels a frame that changed nothing may move: none where no draw reads the texture
+/// in the pass that renders it (the shadow holds every texel since the last change); those inside
+/// [`SMALL`], which the frame before wrote, where its draw reads it through the scissor; every
+/// texel where it reads it over every pixel.
+fn most_moved_unchanged(need: Need) -> u64 {
+    match need {
+        Need::BeyondUsage => 0,
+        Need::AttachedSmall => SMALL.width * SMALL.height,
+        Need::AttachedWhole => WIDTH * HEIGHT,
+    }
+}
+
 /// Every pair of truth and need: the copies in of frames that changed the texture and of those
-/// that did not, summed.
+/// that did not, summed. A frame that changed nothing moves no texel the shadow holds already
+/// ([`most_moved_unchanged`]): its copy stands across command buffers, inside the rectangle the
+/// frame before wrote alone (`shadow_standing.rs`).
 #[test]
 fn shadows_of_an_unchanged_truth_copy_in_per_frame() {
     let scratch = Scratch::new("unchanged-truth");
@@ -318,6 +340,15 @@ fn shadows_of_an_unchanged_truth_copy_in_per_frame() {
                 unchanged.len(),
                 sum(&unchanged),
             );
+            for (at, frame) in unchanged.iter().enumerate() {
+                assert!(
+                    frame.texels - frame.skipped <= most_moved_unchanged(need),
+                    "{truth:?} {need:?}: unchanged frame {at} moved {} texels of {}, at most {}",
+                    frame.texels - frame.skipped,
+                    frame.texels,
+                    most_moved_unchanged(need),
+                );
+            }
         }
     }
 }

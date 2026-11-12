@@ -15,7 +15,10 @@
 //!   (`ShadowSource::Image`, as a shadowed view's, `texture/view_shadow.rs`), or, for a texture
 //!   over a buffer (an aliasing or a shadow image), the buffer's bytes (`ShadowSource::Bytes`,
 //!   a second shadow of them, `shadow.rs`). The encoders copy the truth in before a command that
-//!   binds the shadow and back after it writes through it, by `shadow.rs`'s rules.
+//!   binds the shadow and back after it writes through it, by `shadow.rs`'s rules. Where only the
+//!   runtime's commands write the truth (a tracked `Private` texture's image of its own, or a
+//!   tracked `Private` buffer's bytes the device made), the shadow stands across command buffers
+//!   (`shadow_standing.rs`): a later command buffer copies in only what a command wrote since.
 //! - **Bindings.** A slot binding (a compute dispatch's, a draw's, a tile dispatch's) whose
 //!   descriptor needs the storage or sampled usage the texture's image and its usage both lack
 //!   writes the shadow's view and names the shadow in its uses; every other binding of the

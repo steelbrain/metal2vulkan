@@ -548,6 +548,11 @@ pub(super) enum Backing {
     /// An image (a texture's own, or the image a view presents): only the runtime's commands and
     /// calls write it.
     Image,
+    /// A tracked image of private or memoryless storage the runtime made in memory of its own,
+    /// not shareable (a texture's, or the one a view presents): only the runtime's commands of
+    /// this process write it, as the CPU
+    /// reaches none of a `Private` texture's texels (`Texture::replace_region` refuses them).
+    PrivateImage,
     /// A buffer of private or memoryless storage the runtime allocated: likewise.
     PrivateBuffer,
     /// A buffer of shared or managed storage the runtime allocated, which the CPU maps.
@@ -598,6 +603,11 @@ impl Backing {
 pub(super) trait ImageTruth: Send + Sync {
     /// The image's `VkImage` now.
     fn raw(&self) -> vk::Image;
+
+    /// Whether its `VkImage` was handed out (`Texture::vk_image`): the caller's own work may
+    /// write it from then on, unseen, so no shadow of it stands across command buffers
+    /// (`shadow_standing.rs`).
+    fn handed_out(&self) -> bool;
 }
 
 /// A shadow's truth: what the shadow holds a copy of between an encoder's copies (the module's
@@ -898,12 +908,14 @@ impl ShadowCopies {
 
     /// Whether only the runtime's commands write the shadow's truth, which the tracker orders
     /// against the commands of every queue: the bytes of a tracked buffer of private or
-    /// memoryless storage the runtime allocated, an IOSurface plane's among them. The CPU reaches
-    /// none of them (`buffer_texture.rs` refuses its access to a `Private` buffer's bytes).
+    /// memoryless storage the runtime allocated, an IOSurface plane's among them, and a tracked
+    /// image of such storage the runtime made in memory of its own ([`Backing::PrivateImage`]).
+    /// The CPU reaches none of them (`buffer_texture.rs` refuses its access to a `Private`
+    /// buffer's bytes, `Texture::replace_region` a `Private` texture's texels).
     pub(super) fn only_commands_write(&self) -> bool {
         let private = matches!(
             self.backing,
-            Backing::PrivateBuffer | Backing::PrivateSurface
+            Backing::PrivateBuffer | Backing::PrivateSurface | Backing::PrivateImage
         );
         self.tracked && private
     }
@@ -1220,12 +1232,16 @@ impl ShadowCopies {
     }
 
     /// Whether the image may keep a standing across command buffers (`shadow_standing.rs`): a
-    /// shadow of a buffer's bytes that only the runtime's commands write
+    /// shadow of a buffer's bytes or of another image that only the runtime's commands write
     /// ([`only_commands_write`](Self::only_commands_write)), whose writes reach them, over a
-    /// buffer of the runtime's own whose `VkBuffer` was never handed out.
+    /// buffer of the runtime's own whose `VkBuffer` was never handed out, or an image of its own
+    /// whose `VkImage` was not.
     pub(super) fn stands_across(&self) -> bool {
-        let bytes = matches!(self.source, ShadowSource::Bytes { .. });
-        bytes
+        let truth = matches!(
+            self.source,
+            ShadowSource::Bytes { .. } | ShadowSource::Image { .. }
+        );
+        truth
             && self.only_commands_write()
             && self.writes_reach_truth()
             && self.standing.may_stand()
@@ -1539,13 +1555,43 @@ impl GatedCopyIn {
         matches!(self.gate, CopyGate::Standing).then_some(&self.copy.copies)
     }
 
-    /// The texels it moves where it moves any.
+    /// The texels it moves where it moves every one it was planned to.
     pub(super) fn texels(&self) -> u64 {
         self.copy.texels_copied_in()
     }
 
-    /// Record it into `command_buffer`, decided now: nothing of a copy its standing decides
-    /// where the image `stands`.
+    /// The copy it records where its standing decides it, as `stands` says
+    /// ([`record`](Self::record)): none where the image stands holding every texel the copy
+    /// moves (`Some(None)`, or a stale rectangle outside them), the copy cut to the stale
+    /// rectangle where it stands but for the texels writes within that changed since
+    /// (`Some(Some(stale))`), and the copy as planned where it does not stand (`None`).
+    fn standing_copy(&self, stands: Option<Option<[u32; 4]>>) -> Option<ShadowCopy> {
+        match stands {
+            None => Some(self.copy.clone()),
+            Some(None) => None,
+            Some(Some(stale)) => {
+                let area = match self.copy.area {
+                    Some(needs) => meet(needs, stale)?,
+                    None => stale,
+                };
+                Some(ShadowCopy {
+                    area: Some(area),
+                    ..self.copy.clone()
+                })
+            }
+        }
+    }
+
+    /// The texels it moves where its standing decides it as `stands` says
+    /// ([`record`](Self::record)).
+    pub(super) fn texels_moved(&self, stands: Option<Option<[u32; 4]>>) -> u64 {
+        (self.standing_copy(stands)).map_or(0, |copy| copy.texels_copied_in())
+    }
+
+    /// Record it into `command_buffer`, decided now. A copy its standing decides moves nothing
+    /// where the image stands (`stands` is `Some(None)`), only the texels inside the rectangle
+    /// writes within it changed since it stood where it stands but for those (`Some(Some(_))`,
+    /// `shadow_standing.rs`), and every texel it was planned to where it does not (`None`).
     ///
     /// # Safety
     ///
@@ -1555,17 +1601,19 @@ impl GatedCopyIn {
         &self,
         device: &Vk,
         command_buffer: vk::CommandBuffer,
-        stands: bool,
+        stands: Option<Option<[u32; 4]>>,
     ) {
-        let gate = match &self.gate {
-            CopyGate::Log(gate) => Some(Arc::clone(gate)),
-            CopyGate::Standing if stands => return,
-            CopyGate::Standing => None,
+        let (copy, gate) = match &self.gate {
+            CopyGate::Log(gate) => (self.copy.clone(), Some(Arc::clone(gate))),
+            CopyGate::Standing => match self.standing_copy(stands) {
+                Some(copy) => (copy, None),
+                None => return,
+            },
         };
         // SAFETY: the caller's.
         unsafe {
             Barrier::everything().record(device, command_buffer);
-            self.copy.record_gated(device, command_buffer, None, gate);
+            copy.record_gated(device, command_buffer, None, gate);
             Barrier::everything().record(device, command_buffer);
         }
     }
@@ -1758,15 +1806,17 @@ impl ShadowCopy {
     }
 
     /// Whether the copy is an encoder's first copy in of the bytes of a buffer of private or
-    /// memoryless storage the device made (an IOSurface plane's among them), moving texels (no
-    /// clear): as `WorkCounts::shadow_texels_first_copied_in_private_buffers` and
-    /// `shadow_texels_first_copied_in_private_surfaces` count it, and where it moves them, as
+    /// memoryless storage the device made (an IOSurface plane's among them), or of the texels of
+    /// a tracked image of such storage the device made ([`Backing::PrivateImage`]), moving texels
+    /// (no clear): as `WorkCounts::shadow_texels_first_copied_in_private_buffers`,
+    /// `shadow_texels_first_copied_in_private_surfaces` and
+    /// `shadow_texels_first_copied_in_private_images` count it, and where it moves them, as
     /// `shadow_texels_unskipped_*` count why (`shadow_standing::Unskipped`).
     pub(super) fn first_from_private_truth(&self) -> bool {
         let first = matches!(self.cause, Some(CopyCause::First));
         let private = matches!(
             self.copies.backing,
-            Backing::PrivateBuffer | Backing::PrivateSurface
+            Backing::PrivateBuffer | Backing::PrivateSurface | Backing::PrivateImage
         );
         matches!(self.step, Step::Into) && first && self.clear.is_none() && private
     }
@@ -3498,17 +3548,17 @@ impl ShadowCarry {
     }
 
     /// At the command buffer's last batch: where its end may leave shadows standing (`ends`),
-    /// those it carries holding every texel of the truth, none stale ([`held_whole`]), each other
-    /// one noted as held in part; else none, each noted as met by an end that records no standing
+    /// those it carries holding every texel of the truth, each with the rectangle bounding the
+    /// texels writes within it changed since (`None` where none did, [`Entry::stale`]), which
+    /// the next copy in that the standing serves moves alone; each other one noted as held in
+    /// part; else none, each noted as met by an end that records no standing
     /// (`shadow_standing::Missed`).
-    ///
-    /// [`held_whole`]: Self::held_whole
-    pub(super) fn standing_at_end(&self, ends: bool) -> Vec<Arc<ShadowCopies>> {
+    pub(super) fn standing_at_end(&self, ends: bool) -> Vec<(Arc<ShadowCopies>, Option<[u32; 4]>)> {
         let mut held = Vec::new();
         for carried in &self.entries {
-            let whole = carried.stale.is_none() && carried.copies.covers(carried.held);
+            let whole = carried.copies.covers(carried.held);
             match (ends, whole) {
-                (true, true) => held.push(Arc::clone(&carried.copies)),
+                (true, true) => held.push((Arc::clone(&carried.copies), carried.stale)),
                 (true, false) => carried.copies.standing.missed(Missed::Partial),
                 (false, _) => carried.copies.standing.missed(Missed::End),
             }

@@ -5692,12 +5692,12 @@ impl RenderLowering {
                 // Nor does one recorded inline after a split, or the first instance before
                 // one: its copies were planned and recorded as its group ended.
                 if !instance.planned {
-                    // The rectangle bounding the pixels an instance of draws alone writes,
-                    // after the first, whose copies the steps before the pass's instances
-                    // follow; none for an instance through views of another format, whose
-                    // stand-ins' copies write its colors' every texel.
-                    let alone =
-                        index > 0 && instance.reformats.is_empty() && instance.pieces.is_empty();
+                    // The rectangle bounding the pixels an instance of draws alone writes: the
+                    // first's too, whose copies the steps before the pass's instances follow,
+                    // as those write no color the encoder set to load but through a stand-in
+                    // (`render/shadows.rs`, `plan`); none for an instance through views of
+                    // another format, whose stand-ins' copies write its colors' every texel.
+                    let alone = instance.reformats.is_empty() && instance.pieces.is_empty();
                     let bound = alone.then(|| instance.drawn.bounds()).flatten();
                     order.push((&instance.shadows, bound, false));
                 }

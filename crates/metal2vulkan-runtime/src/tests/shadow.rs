@@ -1441,6 +1441,10 @@ impl ImageTruth for NoImage {
     fn raw(&self) -> vk::Image {
         vk::Image::null()
     }
+
+    fn handed_out(&self) -> bool {
+        false
+    }
 }
 
 /// A shadow of `levels` and `layers` of the image `image`: a texture view of another component

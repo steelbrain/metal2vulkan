@@ -63,10 +63,11 @@ use crate::memory::Placement;
 use crate::resource::{Identity, ResourceKey};
 use crate::shadow::{Backing, ImageThrough, ImageTruth, ShadowCopies, ShadowSource};
 use crate::shadow_merge::ScratchSpares;
+use crate::shadow_standing::StandingAcross;
 use crate::texture::{copy_units, image_error, texture_aspects};
 use crate::texture_descriptor::{TextureDescriptor, TextureLayout};
 use crate::tracker::UseRange;
-use crate::values::ResourceOptions;
+use crate::values::{ResourceOptions, StorageMode};
 use crate::view_plan::{keeps_components, reinterpretation_refused, ViewRecord};
 use crate::Device;
 use ash::vk;
@@ -370,7 +371,10 @@ impl Device {
     /// An image presenting `view` of `base` in memory of its own, a shadow of `base`'s texels
     /// (the module docs): an image of the view's format and usage and the shape of `texture`, the
     /// record of the texture `base` was made for, whose copies move the levels and layers `view`
-    /// presents (`ShadowSource::Image`). Refused `refused()` where the copies cannot serve the pair
+    /// presents (`ShadowSource::Image`). Its truth is a [`Backing::PrivateImage`] where only the
+    /// runtime's commands write `base` (a tracked `Private` or `Memoryless` image in memory of its
+    /// own), and then it may stand across command buffers until `base`'s `VkImage` is handed out
+    /// (`shadow_standing.rs`). Refused `refused()` where the copies cannot serve the pair
     /// (no transfer usage, formats whose copy units differ), and as `new_texture` refuses the
     /// image.
     pub(super) fn image_shadow(
@@ -478,6 +482,26 @@ impl Device {
             base.identity.key,
             range(texture_aspects(base.plan())),
         );
+        // Only the runtime's commands write a tracked private image in memory of its own that no
+        // other process opens: the CPU reaches none of its texels, and no other resource lies in
+        // its memory.
+        let private = matches!(
+            base.options.storage_mode(),
+            Ok(StorageMode::Private | StorageMode::Memoryless)
+        );
+        let own = matches!(
+            base.owner,
+            Owner::Runtime {
+                shareable: false,
+                ..
+            }
+        );
+        let backing = match private && own && base.identity.tracked {
+            true => Backing::PrivateImage,
+            false => Backing::Image,
+        };
+        let standing =
+            StandingAcross::over_image(Arc::clone(&truth), backing == Backing::PrivateImage);
         let shadow_range = range(aspects);
         let mut descriptor = TextureDescriptor::texture_2d(view.pixel_format, 1, 1, false);
         descriptor.resource_options = base.options;
@@ -498,10 +522,10 @@ impl Device {
                     tracked: identity.tracked,
                     drops_writes: false,
                     levels: None,
-                    backing: Backing::Image,
+                    backing,
                     merge_scratch: ScratchSpares::default(),
                     stood: AtomicU64::new(0),
-                    standing: Default::default(),
+                    standing,
                 };
                 Owner::ViewShadow(Box::new(ViewShadow {
                     placement,

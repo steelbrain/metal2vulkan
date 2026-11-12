@@ -277,6 +277,8 @@ mod host_shadow;
 mod host_step_neutrals;
 mod image_barriers;
 mod image_plan;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod image_standing;
 #[cfg(all(m2v_gpu, target_os = "linux"))]
 mod import_free_hold_bench;
 #[cfg(all(m2v_gpu, m2v_gpu_hazards, target_os = "linux"))]

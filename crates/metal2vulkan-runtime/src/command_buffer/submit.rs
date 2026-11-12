@@ -1543,14 +1543,15 @@ impl CommandBufferShared {
                     continue;
                 }
             }
-            // A copy in its shadow's standing decides moves nothing where the image stands now
+            // A copy in its shadow's standing decides moves nothing where the image stands now,
+            // or the texels inside the rectangle it stands stale in alone
             // (`shadow_standing.rs`).
             let standing = match &work {
                 Deferred::GatedCopyIn(copy) => copy.standing(),
                 _ => None,
             };
             let decided = standing.map(|copies| self.stands(state, encoder, copies));
-            let stands = decided.is_some_and(|decided| decided.is_ok());
+            let stands = decided.and_then(Result::ok);
             let raw = self.record_raw(state, |state, buffer| {
                 match &work {
                     // SAFETY: the command buffer is recording; the texture is live (its encoder's
@@ -1587,9 +1588,23 @@ impl CommandBufferShared {
                 Some(RecordedSegment::submitted(vec![raw]));
             if let (Some(decided), Deferred::GatedCopyIn(copy)) = (decided, &work) {
                 let counts = &device.shared().counts;
-                counts.shadow_copy_in_against_standing(stands, copy.texels());
-                if let Err((at, let_go, missed)) = decided {
-                    counts.shadow_copy_in_unskipped(at, let_go, missed, copy.texels());
+                let (texels, moved) = (copy.texels(), copy.texels_moved(stands));
+                counts.shadow_copy_in_against_standing(stands.is_some(), texels - moved);
+                match decided {
+                    Err((at, let_go, missed)) => {
+                        counts.shadow_copy_in_unskipped(at, let_go, missed, texels);
+                    }
+                    Ok(Some(_)) if moved > 0 => {
+                        let missed =
+                            standing.map_or(Missed::Unmet, |copies| copies.standing.last_missed());
+                        counts.shadow_copy_in_unskipped(
+                            Unskipped::StaleWithin,
+                            None,
+                            missed,
+                            moved,
+                        );
+                    }
+                    Ok(_) => {}
                 }
             }
         }
@@ -1599,7 +1614,8 @@ impl CommandBufferShared {
     /// Whether `copies`' image stands across command buffers (`shadow_standing.rs`) for a copy
     /// in of encoder `encoder`, submitted now: it stands, no earlier encoder of the command
     /// buffer wrote the truth or the image, and none of its commands may reach memory no use
-    /// names. Where not, where that was decided, what its standing held
+    /// names; and the rectangle it stands stale inside alone, where it does
+    /// (`Standings::standing`). Where not, where that was decided, what its standing held
     /// (`shadow_standing::Unskipped`, `LetGo`; none where it stood) and what last kept a command
     /// buffer's end from leaving it standing (`Missed`).
     fn stands(
@@ -1607,7 +1623,7 @@ impl CommandBufferShared {
         state: &State,
         encoder: usize,
         copies: &ShadowCopies,
-    ) -> Result<(), (Unskipped, Option<LetGo>, Missed)> {
+    ) -> Result<Option<[u32; 4]>, (Unskipped, Option<LetGo>, Missed)> {
         let missed = copies.standing.last_missed();
         if !copies.stands_across() {
             return Err((Unskipped::Unstanding, None, missed));
@@ -1615,11 +1631,11 @@ impl CommandBufferShared {
         let keys = copies.standing_keys();
         let wrote =
             (state.recorded[..encoder].iter()).any(|recorded| recorded.summary.writes_any(&keys));
-        let let_go = self.device.shared().standings.let_go(copies);
-        match (state.reaches_unnamed || wrote, let_go) {
-            (false, None) => Ok(()),
-            (true, let_go) => Err((Unskipped::CommandBuffer, let_go, missed)),
-            (false, let_go) => Err((Unskipped::LetGo, let_go, missed)),
+        let standing = self.device.shared().standings.standing(copies);
+        match (state.reaches_unnamed || wrote, standing) {
+            (false, Ok(stale)) => Ok(stale),
+            (true, standing) => Err((Unskipped::CommandBuffer, standing.err(), missed)),
+            (false, Err(let_go)) => Err((Unskipped::LetGo, Some(let_go), missed)),
         }
     }
 

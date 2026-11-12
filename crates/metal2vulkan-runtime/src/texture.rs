@@ -1390,6 +1390,10 @@ impl crate::shadow::ImageTruth for Image {
     fn raw(&self) -> vk::Image {
         self.own_raw()
     }
+
+    fn handed_out(&self) -> bool {
+        Image::handed_out(self)
+    }
 }
 
 impl Drop for Image {

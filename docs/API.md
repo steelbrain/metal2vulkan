@@ -2785,7 +2785,11 @@ bound.
   shader usages, a shadow of the texture's texels. Also a texture without `RenderTarget` usage that
   a render pass renders into, through a scratch image that has it, except a texture in place whose
   image took that usage where the check passed for renders over its pages. Cost: its texels are copied into an image of its own before each command
-  that binds it beyond its declared usage, and back after each write through it.
+  that binds it beyond its declared usage, and back after each write through it; but a tracked
+  `Private` texture's (or one's over a tracked `Private` buffer the runtime made), whose texels
+  only the runtime's commands write, is copied in again only once a command wrote them since, and
+  then only the texels inside the scissors of a pass that loads it and draws into it alone
+  (`WorkCounts::shadow_texels_skipped_by_standing`, `shadow_texels_unskipped_stale_within`).
 - `metal2vulkan-degrade-heap-two-plane-texture` (precision). `HeapTwoPlaneTexture`: A texture of
   `RGB10A8_2P_XR10` or its sRGB twin made in a heap whose planes no shadow of the heap's bytes
   holds: one whose moves pass the device's limits. Its one image holds each texel's colour

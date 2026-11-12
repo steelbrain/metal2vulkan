@@ -497,9 +497,13 @@ pub(super) fn meets_truths(device: &Device, shadows: &[Arc<ShadowCopies>], used:
 /// them (`clear_reach::DrawnArea::bounds`) and nothing but they write the color attachments it
 /// names as loaded by index (their loads as the encoder set them). Each of `instances` comes
 /// with the rectangle bounding its own draws' scissors, where `drawn` holds and it bounds them
-/// (an instance of draws alone, after the pass's first, which the steps before the pass's
-/// instances do not precede): its writes of those colors change their bytes inside it alone
-/// ([`bounded_color`], `shadow::Within`), and an attachment's shadow is copied back there.
+/// (an instance of draws alone; the pass's first among them, as the steps before the pass's
+/// instances write no color the encoder set to load but through a stand-in, which
+/// [`bounded_color`] leaves out, and a clear before the pass clears none of them): its writes of
+/// those colors change their bytes inside it alone ([`bounded_color`], `shadow::Within`), so
+/// another shadow of the texture (a draw's read of the attachment through a copy,
+/// `texture/attached_reads.rs`) is stale there alone, and an attachment's shadow is copied back
+/// there.
 /// `area` is the draws' scissor rectangles `drawn` bounds, which the first instance's colors
 /// are counted against (`WorkCounts::shadow_attachment_tiles_covered`).
 pub(super) fn plan<'a>(
@@ -509,8 +513,7 @@ pub(super) fn plan<'a>(
     (reached, drawn): (bool, Option<([u32; 4], &[bool])>),
     area: Option<&DrawnArea>,
 ) -> Result<Vec<Vec<ShadowCopy>>, Error> {
-    // The writes an instance bounds, made at the first that bounds its own: none in a pass of one
-    // instance, which no step before the pass's instances leaves alone.
+    // The writes an instance bounds, made at the first that bounds its own.
     let mut bounded: Option<BoundedWrites> = None;
     let mut copies = Vec::new();
     for (index, (instance, bound)) in instances.enumerate() {

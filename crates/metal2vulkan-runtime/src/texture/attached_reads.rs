@@ -26,6 +26,17 @@
 //!   Metal defines no answer there: the copy is for Vulkan's validity, and taken before the
 //!   instance, it holds the texels from before the pass in the first, Metal's answer at the
 //!   draw's own pixel and one of its answers elsewhere.
+//! - **With a feedback loop too.** On a device with `VK_EXT_attachment_feedback_loop_layout`
+//!   the read in place is valid usage, but it races the instance's own writes of the attachment
+//!   at the pixels it reads: the reading draw's other primitives' and other fragments', and
+//!   those of the draws before it, which nothing orders before a sampled read (the Rasterization
+//!   Order section orders fragment operations and color writes alone, and a barrier inside a
+//!   subpass orders one pixel's, `VUID-vkCmdPipelineBarrier-dependencyFlags-07891`). That is a
+//!   data race, which Vulkan forbids ("Applications must not cause a data race", the Shader
+//!   Memory Access Ordering section), and ordered by a barrier the read would take the draws'
+//!   texels where Metal's takes those from before the pass. So the copy stays on every device
+//!   for a read before a barrier, a correctness fallback; after one, a read at the fragment's
+//!   own pixel reads in place through a snapshot where the device can (below).
 //! - **After a memory barrier.** A barrier over the render targets orders the draws after it
 //!   behind those before it, which a Mac2 GPU runs (Apple GPUs do not support that scope, the
 //!   Metal Feature Set Tables: `fence.rs`). Inside an instance it orders one pixel alone
@@ -78,7 +89,17 @@
 //!   the last copy (`shadow.rs`, `WorkCounts::bounded_shadow_copies`). Any other write of the
 //!   truth (a clear, a `DontCare` load, a resolve, a stand-in, a storage write, a tile dispatch,
 //!   an execution, a rasterization-rate map), an image's several levels or slices as the truth,
-//!   and the first copy of each encoder copy every texel.
+//!   and the first copy of each encoder copy every texel, but where the copy stands across
+//!   command buffers (below).
+//! - **Across command buffers.** Where only the runtime's commands write the copy's truth (a
+//!   tracked `Private` texture's own image, or the bytes of a tracked `Private` buffer the device
+//!   made, a surface plane's among them), the copy may stand across command buffers
+//!   (`shadow_standing.rs`): a command buffer's end that left it holding the truth leaves it to the
+//!   next command buffer's first copy, which moves nothing where nothing wrote the truth or the
+//!   copy since. A pass's draws over a color attachment it loads (as above, its first instance's
+//!   too) change the truth inside their scissors alone, so the copy stands stale inside the
+//!   rectangle bounding them alone, and that next copy moves those texels alone
+//!   (`WorkCounts::shadow_texels_unskipped_stale_within`).
 //! - **Only what a draw reads at its own pixels.** A draw every binding of whose texture is a
 //!   fragment slot its function reads at the fragment's own pixel alone
 //!   (`StageModule::own_pixel_textures`: an `OpImageFetch` at level 0 of Metal's saturating
