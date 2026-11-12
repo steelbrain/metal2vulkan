@@ -13,10 +13,10 @@
 //! by a blit into a `Private` buffer; then [`COMMITS`] command buffers of one 4-KiB fill, each
 //! committed alone and waited for, after [`WARM`] untimed: at once, and again once the surfaces sat
 //! idle past the device's first idle window ([`IDLE`]), as a desktop's windows do between frames
-//! that touch them. Printed as `SUBMIT-PER-SURFACE` lines, per `n` and residency: the textures in
-//! place over a dma-buf of their own (`WorkCounts::dma_buf_textures_in_place`), the device's
-//! dma-buf memories live (`dma_buf_memories_live`: the buffers' own imports;
-//! `dma_buf_image_memories_live`: the images'), the buffer imports released while idle
+//! that touch them. Printed as `SUBMIT-PER-SURFACE` lines, per `n` and residency: the textures the
+//! phase made in place over a dma-buf of their own (`WorkCounts::dma_buf_textures_in_place`), the
+//! device's dma-buf memories live (`dma_buf_memories_live`: the buffers' own imports;
+//! `dma_buf_image_memories_live`: the images'), the buffer imports the phase released while idle
 //! (`host_imports_released`) and those a texture keeps imported for good
 //! (`host_imports_read_apart_texture`), a command buffer's time from its kernelStartTime to its
 //! kernelEndTime (50th percentile), and, where the kernel-submission counter
@@ -89,8 +89,22 @@ fn read_once(queue: &CommandQueue, textures: &[Texture], sink: &Buffer) {
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
 }
 
-/// Commit and time command buffers beside `n` surfaces in `residency`, and print what they took.
-fn measure(device: &Device, queue: &CommandQueue, target: &Buffer, n: usize, residency: &str) {
+/// The device's running totals as a phase began: the textures it made in place over a dma-buf of
+/// their own and the buffer imports it released while idle.
+struct Before {
+    in_place: u64,
+    released: u64,
+}
+
+/// Commit and time command buffers beside `n` surfaces in `residency`, and print what they took,
+/// with the textures made in place and the imports released since the phase began (`before`).
+fn measure(
+    device: &Device,
+    queue: &CommandQueue,
+    target: &Buffer,
+    (n, before): (usize, &Before),
+    residency: &str,
+) {
     for value in 0..WARM {
         filled(queue, target, value as u8);
     }
@@ -120,16 +134,21 @@ fn measure(device: &Device, queue: &CommandQueue, target: &Buffer, n: usize, res
          dma-buf memories live {} of buffers, {} of images; {} buffer imports released while \
          idle, {} kept for a texture; submit p50 {p50:.1} us, p90 {p90:.1} us{kernel}",
         device.name(),
-        counts.dma_buf_textures_in_place,
+        counts.dma_buf_textures_in_place - before.in_place,
         counts.dma_buf_memories_live,
         counts.dma_buf_image_memories_live,
-        counts.host_imports_released,
+        counts.host_imports_released - before.released,
         counts.host_imports_read_apart_texture,
     );
 }
 
 /// The phase of `n` surfaces: made, read once, measured at once and after their idle window.
 fn phase(device: &Device, queue: &CommandQueue, target: &Buffer, n: usize) {
+    let counts = device.work_counts();
+    let before = Before {
+        in_place: counts.dma_buf_textures_in_place,
+        released: counts.host_imports_released,
+    };
     let bytes = (ROW * SIDE) as usize;
     let ram = Memfd::new(n.max(1) * bytes);
     let calls = Calls::default();
@@ -148,9 +167,15 @@ fn phase(device: &Device, queue: &CommandQueue, target: &Buffer, n: usize) {
         .new_buffer(bytes as u64, ResourceOptions::private())
         .unwrap();
     read_once(queue, &textures, &sink);
-    measure(device, queue, target, n, "at once");
+    measure(device, queue, target, (n, &before), "at once");
     std::thread::sleep(IDLE);
-    measure(device, queue, target, n, "after their idle window");
+    measure(
+        device,
+        queue,
+        target,
+        (n, &before),
+        "after their idle window",
+    );
     drop(textures);
     drop(surfaces);
 }
