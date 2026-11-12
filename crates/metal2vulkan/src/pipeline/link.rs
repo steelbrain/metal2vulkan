@@ -158,6 +158,7 @@ impl LinkInputs {
     ) -> LinkInputs {
         let mut r = RenderLinkInputs::from(desc);
         r.pulled_vertex_buffers = variant.pulled_vertex_buffers.clone();
+        r.pull_every = variant.primitive_id_indices.is_some() || variant.private_list;
         r.color_group = group;
         r.line_band = variant.line_band;
         LinkInputs::Render(Box::new(r))
@@ -186,6 +187,10 @@ pub struct RenderLinkInputs {
     /// The layouts a pulled-vertex-buffer variant pulls (`VariantKey::pulled_vertex_buffers`);
     /// empty on the common path.
     pub pulled_vertex_buffers: BTreeSet<u32>,
+    /// The variant pulls every attribute (`vertex::vertex_fetch_projection_for`'s `pull_every`):
+    /// the de-indexed and private list forms (`VariantKey::primitive_id_indices`,
+    /// `VariantKey::private_list`), whose vertex stage is compiled so.
+    pub pull_every: bool,
     /// `maxVertexAmplificationCount`.
     pub max_vertex_amplification_count: u32,
     /// The descriptor's tessellation state: read when the vertex stage is a post-tessellation
@@ -217,6 +222,7 @@ impl RenderLinkInputs {
             rasterization_enabled: true,
             input_primitive_topology: metal::PrimitiveTopologyClass::Unspecified,
             pulled_vertex_buffers: BTreeSet::new(),
+            pull_every: false,
             max_vertex_amplification_count: 1,
             tessellation: None,
             texture_write_rounding_mode: metal::TextureWriteRoundingMode::TowardZero,
@@ -245,6 +251,7 @@ impl From<&RenderPipelineDescriptor> for RenderLinkInputs {
             rasterization_enabled: d.rasterization_enabled,
             input_primitive_topology: d.input_primitive_topology,
             pulled_vertex_buffers: BTreeSet::new(),
+            pull_every: false,
             max_vertex_amplification_count: d.max_vertex_amplification_count,
             tessellation: d.tessellation,
             texture_write_rounding_mode: d.texture_write_rounding_mode,
@@ -464,7 +471,7 @@ pub fn link(
                     let vi = vertex::vertex_input_state(
                         vs,
                         r.vertex_descriptor.as_ref(),
-                        &r.pulled_vertex_buffers,
+                        (&r.pulled_vertex_buffers, r.pull_every),
                         &table.locations,
                         p,
                     )?;

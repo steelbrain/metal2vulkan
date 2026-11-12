@@ -55,9 +55,10 @@
 //!    exactly the projection's others, attribute for attribute;
 //! 8. the **de-indexed and private list forms** (`VariantKey::primitive_id_indices`,
 //!    `VariantKey::private_list`) pull every remaining fixed-function attribute in the projection
-//!    their compile takes: their draw runs without indices, so fixed-function input would fetch at
-//!    the stream position, where the function reads the vertex its index names. The layouts they
-//!    pull are not a pulled-vertex-buffer variant's (`variant_pulled` keeps item 7's).
+//!    their compile takes, and link resolves their vertex input the same way
+//!    (`RenderLinkInputs::pull_every`): their draw runs without indices, so fixed-function input
+//!    would fetch at the stream position, where the function reads the vertex its index names. The
+//!    layouts they pull are not a pulled-vertex-buffer variant's (`variant_pulled` keeps item 7's).
 //!
 //! A fixed-function entry keeps nothing of the format (`VertexFetch::FixedFunction`): no
 //! instruction of the module names it, so every format the device fetches in fixed function
@@ -429,19 +430,20 @@ fn rounds_twice_to_half(e: Encoding) -> bool {
 }
 
 /// The vertex input state of vertex stage `vs` for descriptor `desc` under the
-/// pulled-vertex-buffer variant `pulled_vertex_buffers` (see the module docs), with each
-/// fixed-function attribute at the location link assigned its key. Fixed-function bindings are numbered densely in Metal buffer-index order;
-/// `variant_pulled` records the layouts the variant moved.
+/// pulled-vertex-buffer variant `pulled_vertex_buffers`, every attribute pulled where `pull_every`
+/// (the de-indexed and private list forms; see the module docs), with each fixed-function
+/// attribute at the location link assigned its key. Fixed-function bindings are numbered densely
+/// in Metal buffer-index order; `variant_pulled` records the layouts the variant moved.
 pub fn vertex_input_state(
     vs: &StageInterface,
     desc: Option<&VertexDescriptor>,
-    pulled_vertex_buffers: &BTreeSet<u32>,
+    (pulled_vertex_buffers, pull_every): (&BTreeSet<u32>, bool),
     locations: &Locations,
     p: &DeviceProfile,
 ) -> Result<VertexInputState, Error> {
     let used = vs.io.attributes();
     let numeric: BTreeMap<u32, IoNumeric> = used.iter().map(|(a, (n, _))| (*a, *n)).collect();
-    let (resolved, moved) = resolve(desc, &numeric, p, pulled_vertex_buffers, false)?;
+    let (resolved, moved) = resolve(desc, &numeric, p, pulled_vertex_buffers, pull_every)?;
     for (a, (_, fetch)) in &used {
         // The stage was compiled under another projection (a `Compiled` stage source whose
         // `LowerInputs` do not fit this descriptor).
