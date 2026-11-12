@@ -1,7 +1,7 @@
 //! What a device's recovery leaves of the objects that hold no Vulkan object: a depth/stencil
-//! state, a library, a function and an address pool made before it serve after it, as Metal's
-//! objects go on, and hold nothing of the lost generation; their devices are generation handles,
-//! which keep meaning their generation.
+//! state, a library, a function, an address pool, a binary archive and a dynamic library made
+//! before it serve after it, as Metal's objects go on, and hold nothing of the lost generation;
+//! their devices are generation handles, which keep meaning their generation.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). No GPU fault: the loss is marked (`Device::recover_for_test`).
@@ -10,12 +10,17 @@ use super::device_recovery::{device, outcome, Scratch};
 use super::device_recovery_carry::{fill, live_vk_devices, read, BYTES};
 use super::encoder_holds::library;
 use crate::{
-    AddressPlacement, BufferContents, BufferDescriptor, CommandBufferStatus, CpuCacheMode, Device,
-    HazardTrackingMode, LoadAction, PipelineOptions, RenderPassDescriptor, ResourceOptions,
-    StorageMode, StoreAction, TextureDescriptor,
+    AddressPlacement, BinaryArchiveDescriptor, BufferContents, BufferDescriptor,
+    CommandBufferStatus, CpuCacheMode, Device, DynamicLibrary, HazardTrackingMode, LoadAction,
+    PipelineOptions, RenderPassDescriptor, ResourceOptions, StorageMode, StoreAction,
+    TextureDescriptor,
 };
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, TextureUsage};
+use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
+use metal2vulkan_devtools::llvm_assemble_text;
+use metal2vulkan_devtools::metallib::{metallib_linked, wrap, MtlbFunction, MtlbLinkage};
+use std::path::Path;
 
 /// A depth/stencil state made before a recovery is set in a render encoder of the next
 /// generation, whose command buffer completes, and the lost generation goes while the state
@@ -211,5 +216,78 @@ fn an_objects_device_keeps_meaning_its_generation_past_a_recovery() {
     }
     assert_eq!(live_vk_devices(&device, 2), 2);
     drop(taken);
+    assert_eq!(live_vk_devices(&device, 1), 1);
+}
+
+/// The module of [`dynamic_library`]'s one function, with the data layout and target of the
+/// AIR the tests' fixtures hold.
+const DYLIB_MODULE: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-\
+i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-\
+v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"
+target triple = \"air64_v28-apple-macosx26.0.0\"
+
+define float @_Z9dyl_scalef(float %x) {
+  %r = fmul float %x, 3.000000e+00
+  ret float %r
+}
+
+!air.version = !{!90}
+!air.language_version = !{!91}
+!90 = !{i32 2, i32 8, i32 0}
+!91 = !{!\"Metal\", i32 4, i32 0, i32 0}
+";
+
+/// A dynamic library exporting one function, made on `device`, its install name a file in `dir`.
+fn dynamic_library(device: &Device, dir: &Path) -> DynamicLibrary {
+    let module = llvm_assemble_text(DYLIB_MODULE).unwrap();
+    let name = dir.join("libdyl.metallib").to_string_lossy().into_owned();
+    let function = MtlbFunction {
+        name: "_Z9dyl_scalef",
+        type_code: 3,
+        bitcode: wrap(&module),
+        constants: Vec::new(),
+        public: Vec::new(),
+        tags: Vec::new(),
+    };
+    let linkage = MtlbLinkage {
+        dynamic: true,
+        install_name: Some(&name),
+        dependencies: Vec::new(),
+        imports: Vec::new(),
+    };
+    let library = device
+        .new_library_with_data(&metallib_linked(&[function], &linkage))
+        .unwrap();
+    device.new_dynamic_library(&library).unwrap()
+}
+
+/// A binary archive and a dynamic library made before a recovery serve after it: the archive
+/// takes an add on the next generation, and a creation there that lists it makes its state; the
+/// dynamic library keeps its label. Neither holds the lost generation, which goes while they
+/// live.
+#[test]
+fn an_archive_and_a_dynamic_library_go_on_past_a_recovery() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let function = library(&device, "examples/runtime_examples.ll")
+        .new_function_with_name("scale_and_offset")
+        .unwrap();
+    let descriptor =
+        ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
+    let archive = device
+        .new_binary_archive(&BinaryArchiveDescriptor::new(None))
+        .unwrap();
+    archive.add_compute_pipeline_functions(&descriptor).unwrap();
+    let dynamic = dynamic_library(&device, &scratch.0);
+    dynamic.set_label("dynamic");
+    device.recover_for_test().unwrap();
+    archive.add_compute_pipeline_functions(&descriptor).unwrap();
+    let mut options = PipelineOptions::default();
+    options.binary_archives = vec![archive.clone()];
+    let state = device
+        .new_compute_pipeline_state(&descriptor, &options)
+        .unwrap();
+    assert!(state.device().generation_serves());
+    assert_eq!(dynamic.label().as_deref(), Some("dynamic"));
     assert_eq!(live_vk_devices(&device, 1), 1);
 }
