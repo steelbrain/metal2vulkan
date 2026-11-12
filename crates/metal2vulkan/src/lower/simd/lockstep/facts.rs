@@ -888,7 +888,7 @@ impl<'a> AddrFacts<'a> {
         else {
             return Ok([None; 2]);
         };
-        if *op == BinOp::Or && !flags.contains(IntFlags::DISJOINT) {
+        if *op == BinOp::Or && !(flags.contains(IntFlags::DISJOINT) || self.disjoint_or(core)) {
             return Ok([None; 2]);
         }
         let Some(w) = self.width(core).filter(|&w| (1..=64).contains(&w)) else {
@@ -1472,8 +1472,79 @@ impl<'a> AddrFacts<'a> {
         Ok((v, Ext::None, c))
     }
 
+    /// The low bits integer `v` has zero wherever it runs, as the IR shows them: a constant's, a
+    /// left shift's or a scaling's by a constant added to its operand's, a mask's larger of its
+    /// operands', a sum's smaller, and an extension's or truncation's operand's (at most its
+    /// width), at most [`MAX_FIXED`] operations deep.
+    fn low_zeros(&self, v: Value, depth: u32) -> u32 {
+        let Some(w) = self.width(v).filter(|&w| (1..=64).contains(&w)) else {
+            return 0;
+        };
+        if depth >= MAX_FIXED {
+            return 0;
+        }
+        let konst = |x: Value| match x {
+            Value::Const(c) => const_int(self.e, c),
+            _ => None,
+        };
+        let zeros = match v {
+            Value::Const(_) => konst(v).map_or(0, |c| c.trailing_zeros()),
+            _ => match self.kind(v) {
+                Some(InstKind::BinOp { op, a, b, .. }) => match (op, konst(*b)) {
+                    (BinOp::Shl, Some(k)) => u32::try_from(k)
+                        .map_or(0, |k| self.low_zeros(*a, depth + 1).saturating_add(k)),
+                    (BinOp::Mul, _) | (BinOp::And, _) | (BinOp::Add, _) => {
+                        let (za, zb) =
+                            (self.low_zeros(*a, depth + 1), self.low_zeros(*b, depth + 1));
+                        match op {
+                            BinOp::Mul => za.saturating_add(zb),
+                            BinOp::And => za.max(zb),
+                            _ => za.min(zb),
+                        }
+                    }
+                    _ => 0,
+                },
+                Some(InstKind::Cast {
+                    op: CastOp::ZExt | CastOp::SExt | CastOp::Trunc,
+                    v: x,
+                }) => self.low_zeros(*x, depth + 1),
+                _ => 0,
+            },
+        };
+        zeros.min(w)
+    }
+
+    /// Whether `v` is an `or` that adds without a carry: stated `disjoint`, or of a constant `k`
+    /// not negative and an operand whose low zero bits ([`AddrFacts::low_zeros`]) cover `k`'s.
+    fn disjoint_or(&self, v: Value) -> bool {
+        let Some(InstKind::BinOp {
+            op: BinOp::Or,
+            flags,
+            a,
+            b,
+            ..
+        }) = self.kind(v)
+        else {
+            return false;
+        };
+        if flags.contains(IntFlags::DISJOINT) {
+            return true;
+        }
+        let konst = |x: Value| match x {
+            Value::Const(c) => const_int(self.e, c),
+            _ => None,
+        };
+        let covered =
+            |k: i64, x: Value| k >= 0 && (k == 0 || 64 - k.leading_zeros() <= self.low_zeros(x, 0));
+        match (konst(*a), konst(*b)) {
+            (_, Some(k)) => covered(k, *a),
+            (Some(k), None) => covered(k, *b),
+            _ => false,
+        }
+    }
+
     /// `v` as `x + d` for a constant `d`, with the operation's flags: an addition, a subtraction
-    /// of a constant, or a disjoint `or`.
+    /// of a constant, or a disjoint `or` ([`AddrFacts::disjoint_or`], whose flags then state it).
     fn plus_const(&self, v: Value) -> Option<(Value, i64, IntFlags)> {
         let konst = |x: Value| match x {
             Value::Const(c) => const_int(self.e, c),
@@ -1486,10 +1557,15 @@ impl<'a> AddrFacts<'a> {
                 a,
                 b,
                 ..
-            } if *op == BinOp::Add || flags.contains(IntFlags::DISJOINT) => {
+            } if *op == BinOp::Add || self.disjoint_or(v) => {
+                let flags = if *op == BinOp::Or {
+                    flags.union(IntFlags::DISJOINT)
+                } else {
+                    *flags
+                };
                 match (konst(*a), konst(*b)) {
-                    (_, Some(d)) => Some((*a, d, *flags)),
-                    (Some(d), None) => Some((*b, d, *flags)),
+                    (_, Some(d)) => Some((*a, d, flags)),
+                    (Some(d), None) => Some((*b, d, flags)),
                     _ => None,
                 }
             }
@@ -1685,10 +1761,11 @@ impl<'a> AddrFacts<'a> {
                             .range_under(x, held, depth + 1, m)?
                             .and_then(|r| Some((r.0.checked_add(k)?, r.1.checked_add(k)?)))
                             .and_then(fit),
-                        BinOp::Or if flags.contains(IntFlags::DISJOINT) => self
-                            .range_under(x, held, depth + 1, m)?
-                            .and_then(|r| Some((r.0.checked_add(k)?, r.1.checked_add(k)?)))
-                            .and_then(fit),
+                        BinOp::Or if flags.contains(IntFlags::DISJOINT) || self.disjoint_or(v) => {
+                            self.range_under(x, held, depth + 1, m)?
+                                .and_then(|r| Some((r.0.checked_add(k)?, r.1.checked_add(k)?)))
+                                .and_then(fit)
+                        }
                         // `x | k` is at least `x` and `k` and at most `x + k`.
                         BinOp::Or => self
                             .range_under(x, held, depth + 1, m)?
@@ -2403,11 +2480,10 @@ impl<'a> AddrFacts<'a> {
                     .and_then(|i| i.truncated(w)),
                 Some(InstKind::BinOp {
                     op: op @ (BinOp::Add | BinOp::Sub | BinOp::Or),
-                    flags,
                     a,
                     b,
                     ..
-                }) if *op != BinOp::Or || flags.contains(IntFlags::DISJOINT) => {
+                }) if *op != BinOp::Or || self.disjoint_or(v) => {
                     if self.fixed(*b, 0, m)? {
                         self.inj_int(*a, depth + 1, m)?
                     } else if self.fixed(*a, 0, m)? {

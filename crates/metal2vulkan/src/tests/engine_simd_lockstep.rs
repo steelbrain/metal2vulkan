@@ -608,7 +608,8 @@ done:
 /// bytes of `@wide` (vector words `2t` and `2t | 1`); then every thread of the simdgroup stores
 /// its own word at byte `128 + 4 lane` and again 128 bytes on, in the same barrier interval and
 /// through other address shapes. Only the guard keeps the vector words below byte 128, so the
-/// pairs are apart by the bytes each access may touch where it runs. After a barrier thread `t`
+/// pairs are apart by the bytes each access may touch where it runs; and `2t | 1` sets a bit
+/// `2t` has clear, so two threads' vector words never meet either. After a barrier thread `t`
 /// adds word `t` (its group of eight's `100 + t / 8`) to word `32 + t` (`t`): `out[t] = 100 +
 /// t / 8 + t`.
 const GUARDED_TILE: &str = r#"
