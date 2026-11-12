@@ -768,6 +768,8 @@ mod raster_orders;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod raster_sample_counts;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod rate_map_costs;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod rate_mapped_layers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod rate_mapped_passes;
