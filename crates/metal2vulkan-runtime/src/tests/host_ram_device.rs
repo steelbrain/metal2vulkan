@@ -44,10 +44,9 @@
 //!   which the heaps over it after that are bound, and its bytes go from the CPU to the GPU and
 //!   back; a heap next to it below imports its chunk and opens the window below, so a run of heaps
 //!   down the RAM finds its chunks imported, and no later making imports a chunk.
-//! - **One import of the pages.** No run of these RAMs (none with a source of dma-bufs, so each
-//!   chunk is an import of its host pointer) is imported alone beside its chunk's import
-//!   (`RamOnDevice::runs_alone`): an object over a chunk not imported imports the chunk, and the
-//!   tests hold it to that. Two buffers over the same pages in the chunk's import order by their
+//! - **One import of the pages.** An object over a chunk not imported of these RAMs (none with a
+//!   source of dma-bufs, so each chunk is an import of its host pointer) imports the chunk. Two
+//!   buffers over the same pages in the chunk's import order by their
 //!   host bytes, a write through either before a read through the other, in one blit encoder, in
 //!   two encoders of one command buffer and across queues; so do a buffer in the chunk's import
 //!   and a copy of its pages (`copy_from_host_ram` after a fill through the buffer,
@@ -882,8 +881,6 @@ fn the_window_ahead_moves_with_the_objects_and_imports_no_more() {
     };
     let live =
         |counts: &crate::WorkCounts| counts.host_ram_chunks_live - before.host_ram_chunks_live;
-    let alone =
-        |counts: &crate::WorkCounts| counts.run_bound_buffers_made - before.run_bound_buffers_made;
     // The consumer's heaps: 2 MiB each over consecutive runs.
     const HEAP: u64 = 2 * MIB;
     const PER_CHUNK: u64 = 64 * MIB / HEAP;
@@ -922,16 +919,15 @@ fn the_window_ahead_moves_with_the_objects_and_imports_no_more() {
     let moved = settled(&device, |counts| ahead(counts) == 1 + 2 * WINDOW);
     assert_eq!(ahead(&moved), 1 + 2 * WINDOW, "the window past the run");
     assert_eq!(live(&moved), 1 + 2 * WINDOW, "no chunk past it");
-    // A jump over one chunk, outside the window: the heap imports its chunk (never an import
-    // of its own run by its pointer beside the chunk's, `RamOnDevice::runs_alone`), and the
-    // thread the one past it.
+    // A jump over one chunk, outside the window: the heap imports its chunk, and the thread the
+    // one past it.
     let jump = 2 * WINDOW + 2;
     heaps.push(heap_over(chunk(jump)));
     let jumped = settled(&device, |counts| ahead(counts) == 2 + 2 * WINDOW);
     assert_eq!(
-        (by_objects(&jumped), alone(&jumped)),
-        (1, 0),
-        "the heap outside the window imported its chunk, and no run of its own"
+        by_objects(&jumped),
+        1,
+        "the heap outside the window imported its chunk"
     );
     assert_eq!(
         ahead(&jumped),
@@ -943,24 +939,23 @@ fn the_window_ahead_moves_with_the_objects_and_imports_no_more() {
     heaps.push(heap_over(chunk(jump + 1)));
     let again = settled(&device, |counts| ahead(counts) == 2 + 3 * WINDOW);
     assert_eq!(ahead(&again), 2 + 3 * WINDOW, "a full window past the take");
-    assert_eq!((by_objects(&again), alone(&again)), (1, 0));
+    assert_eq!(by_objects(&again), 1);
     // The run to the RAM's last chunk: nothing past the end, and nothing back for the chunk the
     // jump skipped.
     heaps.extend(run(jump + 2..CHUNKS));
     let end = settled(&device, |counts| ahead(counts) == 2 + 3 * WINDOW);
     assert_eq!(
-        (by_objects(&end), alone(&end)),
-        (1, 0),
+        by_objects(&end),
+        1,
         "the run to the end imported nothing itself"
     );
     assert_eq!(live(&end), CHUNKS - 1, "the skipped chunk is not imported");
     assert!(gates.lock().unwrap().is_empty(), "the gate was not asked");
     eprintln!(
         "HOST-RAM: a window of up to {WINDOW} chunks over {CHUNKS}: {} imported ahead, {} by the \
-         objects, {} heaps in their own run's import, after {} heap makings",
+         objects, after {} heap makings",
         ahead(&end),
         by_objects(&end),
-        alone(&end),
         heaps.len()
     );
     drop((heaps, used, ram));
@@ -1242,12 +1237,9 @@ fn an_object_made_while_its_imported_chunk_is_looked_at_is_bound_in_the_chunk() 
     let object = made.expect("the buffer over the chunk is made");
     let after = device.work_counts();
     assert_eq!(
-        (
-            after.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
-            after.run_bound_buffers_made - before.run_bound_buffers_made,
-        ),
-        (1, 0),
-        "the object made while its chunk was looked at is bound in the chunk, in no run's import"
+        after.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
+        1,
+        "the object made while its chunk was looked at is bound in the chunk"
     );
     assert!(gates.lock().unwrap().is_empty(), "the gate was not asked");
     drop((object, used, ram));
@@ -1274,8 +1266,6 @@ fn a_run_of_heaps_down_the_ram_finds_its_chunks_imported_past_its_first_two() {
     let by_objects = |counts: &crate::WorkCounts| {
         counts.host_ram_chunks_imported - before.host_ram_chunks_imported - ahead(counts)
     };
-    let alone =
-        |counts: &crate::WorkCounts| counts.run_bound_buffers_made - before.run_bound_buffers_made;
     let bound = |counts: &crate::WorkCounts| {
         counts.chunk_bound_buffers_made - before.chunk_bound_buffers_made
     };
@@ -1297,14 +1287,13 @@ fn a_run_of_heaps_down_the_ram_finds_its_chunks_imported_past_its_first_two() {
     let first = settled(&device, |counts| ahead(counts) == 1);
     assert_eq!(ahead(&first), 1, "one chunk from the RAM's start");
     // The top's heap, over a chunk outside the window: it imports the chunk itself, and waits
-    // for it (never an import of its own run by its pointer beside the chunk's,
-    // `RamOnDevice::runs_alone`); nothing past the RAM's end.
+    // for it; nothing past the RAM's end.
     let mut heaps = vec![heap_over(top)];
     let topped = settled(&device, |counts| ahead(counts) == 1);
     assert_eq!(
-        (by_objects(&topped), alone(&topped), bound(&topped)),
-        (1, 0, 1),
-        "the heap over a chunk not imported imported it, and no run of its own"
+        (by_objects(&topped), bound(&topped)),
+        (1, 1),
+        "the heap over a chunk not imported imported it"
     );
     assert_eq!(ahead(&topped), 1, "the thread imported the chunk it took");
     // Its bytes: the CPU's reach the GPU, and the GPU's fill the CPU's.
@@ -1334,10 +1323,7 @@ fn a_run_of_heaps_down_the_ram_finds_its_chunks_imported_past_its_first_two() {
     drop(placed);
     // The rest of the top chunk's heaps: bound in its import.
     heaps.extend((1..PER_CHUNK).map(|below| heap_over(top - below)));
-    assert_eq!(
-        (alone(&device.work_counts()), bound(&device.work_counts())),
-        (0, PER_CHUNK)
-    );
+    assert_eq!(bound(&device.work_counts()), PER_CHUNK);
     // The next heap down, next to the chunk last taken: it imports its chunk, and the thread
     // the full window below.
     heaps.push(heap_over(top - PER_CHUNK));
@@ -1347,7 +1333,6 @@ fn a_run_of_heaps_down_the_ram_finds_its_chunks_imported_past_its_first_two() {
         1 + WINDOW,
         "the chunk taken and the full window below it"
     );
-    assert_eq!(alone(&opened), 0);
     // The run down the window's chunks: every heap bound in a chunk imported ahead of it, and
     // the window below its last, down to the RAM's start.
     heaps.extend((PER_CHUNK + 1..(1 + WINDOW) * PER_CHUNK).map(|below| heap_over(top - below)));
@@ -1358,8 +1343,8 @@ fn a_run_of_heaps_down_the_ram_finds_its_chunks_imported_past_its_first_two() {
         "the window went down with the heaps"
     );
     assert_eq!(
-        (by_objects(&end), alone(&end)),
-        (2, 0),
+        by_objects(&end),
+        2,
         "the run down imported nothing itself past the two chunks its first heaps took"
     );
     assert_eq!(bound(&end), heaps.len() as u64);
@@ -1368,10 +1353,8 @@ fn a_run_of_heaps_down_the_ram_finds_its_chunks_imported_past_its_first_two() {
     let runs_live = |counts: &crate::WorkCounts| counts.run_imports_live - before.run_imports_live;
     assert_eq!(runs_live(&end), 0, "no heap holds an import of its own run");
     eprintln!(
-        "HOST-RAM: down the RAM: {} chunks imported ahead, {} heaps in their own run's import, {} \
-         in a chunk",
+        "HOST-RAM: down the RAM: {} chunks imported ahead, {} heaps in a chunk",
         ahead(&end),
-        alone(&end),
         bound(&end)
     );
     drop(heaps);
@@ -1409,8 +1392,7 @@ fn an_object_within_the_allocation_margin_imports_its_chunk_and_no_run() {
     let limit = live + 1 + room.unwrap();
     allocations.limit_to(limit);
     assert!(!allocations.room_ahead(), "within the margin");
-    // An object over a chunk not imported: it imports the chunk, and is made (no run of a RAM
-    // whose chunks are imports of their pointer is imported alone, within the margin or not).
+    // An object over a chunk not imported: it imports the chunk, and is made.
     let page = device.shared().host_import.as_ref().unwrap().page;
     let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
     let object = buffer(
@@ -1423,10 +1405,8 @@ fn an_object_within_the_allocation_margin_imports_its_chunk_and_no_run() {
     .expect("an object within the margin is made");
     let made = device.work_counts();
     let by_objects = made.host_ram_chunks_imported - before.host_ram_chunks_imported - ahead(&made);
-    let alone = made.run_bound_buffers_made - before.run_bound_buffers_made;
     assert_eq!(
-        (by_objects, alone),
-        (1, 0),
+        by_objects, 1,
         "within the margin the object imports its chunk"
     );
     assert_eq!(
@@ -1477,8 +1457,7 @@ fn two_buffers_over_the_same_pages_of_a_chunk_order_by_their_host_bytes() {
         )
         .unwrap()
     };
-    // Four pages over a chunk not imported: they import the chunk (never an import of their
-    // own run by its pointer beside the chunk's, `RamOnDevice::runs_alone`); then, the thread
+    // Four pages over a chunk not imported: they import the chunk; then, the thread
     // having imported the one past it, eight from the same page: bound in the same chunk.
     let first = over(4 * page);
     settled(&device, |counts| ahead(counts) == 2);
@@ -1487,11 +1466,10 @@ fn two_buffers_over_the_same_pages_of_a_chunk_order_by_their_host_bytes() {
     let by_objects = made.host_ram_chunks_imported - before.host_ram_chunks_imported - ahead(&made);
     assert_eq!(
         (
-            made.run_bound_buffers_made - before.run_bound_buffers_made,
             made.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
             by_objects
         ),
-        (0, 2, 1),
+        (2, 1),
         "both buffers in the chunk the first imported"
     );
     let out = device.new_buffer(page, ResourceOptions::shared()).unwrap();
@@ -1601,9 +1579,8 @@ fn a_chunk_bound_buffer_and_a_copy_of_its_pages_order_by_their_host_bytes() {
     settled(&device, |counts| ahead(counts) == 1);
     let page = device.shared().host_import.as_ref().unwrap().page;
     let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
-    // Four pages over a chunk not imported: they import the chunk (never an import of their
-    // own run by its pointer beside the chunk's, `RamOnDevice::runs_alone`), and lie in the
-    // copies' import; the thread imports the one past it.
+    // Four pages over a chunk not imported: they import the chunk, and lie in the copies'
+    // import; the thread imports the one past it.
     let at = start + 2 * 64 * MIB + 8 * page;
     let in_chunk = buffer(
         &device,
@@ -1616,12 +1593,11 @@ fn a_chunk_bound_buffer_and_a_copy_of_its_pages_order_by_their_host_bytes() {
     let made = settled(&device, |counts| ahead(counts) == 2);
     assert_eq!(
         (
-            made.run_bound_buffers_made - before.run_bound_buffers_made,
             made.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
             by_objects(&made),
             made.run_imports_live - before.run_imports_live,
         ),
-        (0, 1, 1, 0),
+        (1, 1, 0),
         "the buffer in the chunk it imported"
     );
     // The copies' run: the buffer's second page.
@@ -2104,11 +2080,10 @@ fn a_chunk_a_live_import_made_before_the_use_holds_waits_for_it_to_go() {
     assert_eq!(
         (
             made.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
-            made.run_bound_buffers_made - before.run_bound_buffers_made,
             own.host_backing(),
             inside(&made),
         ),
-        (0, 0, Some(HostBacking::ImportedByPointer), 0),
+        (0, Some(HostBacking::ImportedByPointer), 0),
         "the buffer imported its own pages"
     );
     assert!(

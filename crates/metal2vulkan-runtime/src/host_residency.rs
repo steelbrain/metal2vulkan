@@ -28,13 +28,9 @@
 //!     pointer reads the pages the kept import read, on every driver, and releasing it changes
 //!     nothing a command reads. Elsewhere, and in a buffer made before the check answered, a
 //!     pointer import stays imported: a release would spare no submission any cost, and the
-//!     import again would cost the next blit;
-//!   - of a run of a guest RAM alone (`host_ram.rs`), which a buffer over one run inside a chunk
-//!     not imported yet was bound in while the device's thread imports the chunk: made again in
-//!     the chunk's import where that is made by then (and lays the bytes as the run's did), else
-//!     in an import of the run alone again, never the chunk's own import nor a wait for one. The
-//!     RAM's pages stay mapped at their addresses while it lives (`HostRam::new`), so either reads
-//!     the pages the run's import read.
+//!     import again would cost the next blit.
+//!
+//!   A buffer bound in a guest RAM's chunk (`host_ram.rs`) has no import of its own to release.
 //! - **Blits alone.** It stays releasable while every read of its `VkBuffer` and memory was a
 //!   blit's (`Buffer::blit_at`: a copy or fill naming the buffer, a copy between it and a
 //!   texture, `synchronize_resource`), which holds what it read until its command buffer
@@ -83,8 +79,7 @@
 //!   they were replaced since, as a buffer made before that call keeps its pages; a dma-buf holds
 //!   its pages for as long as it is open, and adds nothing to a submission's list until it is
 //!   imported. A pointer import at its pointer, over the pages the kept import read, which
-//!   `HostMemory::new`'s contract keeps mapped there while the buffer lives. A guest RAM run's in
-//!   its chunk's import, or the run's alone. The new `VkBuffer` lies at the same offsets in the
+//!   `HostMemory::new`'s contract keeps mapped there while the buffer lives. The new `VkBuffer` lies at the same offsets in the
 //!   same memory type; its device address may differ, which no shader saw. Bytes the CPU wrote
 //!   through `contents` meanwhile are in those pages, and so read. Counted
 //!   (`WorkCounts::host_imports_reimported`); refused where the device cannot import them again (a
@@ -107,7 +102,6 @@ use super::dma_buf::{DmaBufRequest, DmaBufSource};
 use super::error::{internal, Error};
 use super::exit_guard;
 use super::host_memory::ImportWindow;
-use super::host_ram::RunAgain;
 use super::memory::MemoryClass;
 use super::Device;
 use std::os::fd::OwnedFd;
@@ -189,10 +183,6 @@ pub(super) enum AgainFrom {
     /// The pointer its pages were imported at, on a device whose held pointer imports cost every
     /// submission.
     Pointer(ImportedAt),
-    /// The run of a guest RAM it was an import of alone, made while the run's chunk was not
-    /// imported (`host_ram.rs`): bound again in the chunk's import where it is made by then,
-    /// else in an import of the run alone again.
-    RamRun(RunAgain),
 }
 
 /// The pointer a pointer import was made at.
@@ -253,25 +243,6 @@ impl Again {
             window,
             class,
         })
-    }
-}
-
-impl Again {
-    /// The import of `run` alone, a guest RAM's pages a buffer was bound in while their chunk
-    /// was not imported (`host_ram.rs`): made again in the chunk's import, or the run's alone,
-    /// from the RAM, which stays mapped while the buffer lives (`HostRam::new`).
-    pub(super) fn ram_run(
-        device: &Device,
-        run: RunAgain,
-        (length, window, class): (u64, ImportWindow, MemoryClass),
-    ) -> Again {
-        Again {
-            device: device.clone(),
-            from: AgainFrom::RamRun(run),
-            length,
-            window,
-            class,
-        }
     }
 }
 
@@ -444,17 +415,6 @@ impl Residency {
             ),
             AgainFrom::Pointer(at) => {
                 Imported::new(device, device.import_pointer_again(at.0, again)?)
-            }
-            // The chunk's import where it lays the bytes as the run's did (a bound buffer that
-            // does not is freed at once: nothing read it), else the run's alone again.
-            AgainFrom::RamRun(run) => {
-                let in_chunk = (device.ram_run_in_chunk(run, again))
-                    .map(|pages| Imported::new(device, pages))
-                    .filter(|held| Shape::of(&held.pages).same(&self.shape));
-                match in_chunk {
-                    Some(held) => held,
-                    None => Imported::new(device, device.ram_run_alone_again(run, again)?),
-                }
             }
         };
         let laid = Shape::of(&held.pages);

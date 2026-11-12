@@ -841,7 +841,7 @@ fn ram_chunks(pages: Pages) {
         let counts = device.work_counts();
         eprintln!(
             "SUBMIT-PER-RAM-CHUNK {}: {phase}: {} chunks imported ({} MiB, {} ahead), {} live, {} \
-             released; buffers made {} in a run's import, {} in a chunk's; {} run imports live; \
+             released; buffers made {} in a chunk's import; {} run imports live; \
              {} imports released while idle, {} imported again; {} dma-buf memories live; the \
              udmabuf limit {} MiB",
             device.name(),
@@ -850,7 +850,6 @@ fn ram_chunks(pages: Pages) {
             counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead,
             counts.host_ram_chunks_live,
             counts.host_ram_chunks_released - before.host_ram_chunks_released,
-            counts.run_bound_buffers_made - before.run_bound_buffers_made,
             counts.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
             counts.run_imports_live,
             counts.host_imports_released - before.host_imports_released,

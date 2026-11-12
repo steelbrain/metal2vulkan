@@ -16,9 +16,9 @@
 //!   ([`merged`]); a run that starts before (a descending neighbour) stays apart. Hazard tracking
 //!   takes the buffer's bytes from the lowest run's first to the highest's last as the copy's; the
 //!   bytes between the runs (a row's padding) are neither read nor written. Each run is cut where a
-//!   chunk ends ([`pieces`]), and each chunk the pieces touch is taken as an object over it takes
-//!   it (`RamOnDevice::for_copy`): its import where it is made; else, where an object over it would
-//!   be bound in its own run's import (`RamOnDevice::for_object`), an import of each of the copy's
+//!   chunk ends ([`pieces`]), and each chunk the pieces touch is taken (`RamOnDevice::for_copy`):
+//!   its import where it is made; else, where runs are imported alone (each listed import costing
+//!   every submission, `RamOnDevice::runs_alone`), an import of each of the copy's
 //!   ranges of it alone (those less than 2 MiB apart one, at most [`MOST_ALONE`]:
 //!   [`alone_ranges`]), made on the encoding thread, which faults in and pins those pages and no
 //!   more, while the device's thread imports the chunk (the thread's window moved past it, or,
@@ -876,7 +876,7 @@ impl BlitCommandEncoder {
     /// imports the chunk next (the module docs' "First touch": a gather's pages read by the CPU
     /// before its batch is submitted, a scatter's written by the CPU once its GPU copy
     /// completed, before its command buffer completes); elsewhere, for up to 16 ranges of the
-    /// chunk, each range alone, as an object over it is bound in its own run's import. Where
+    /// chunk, each range alone, the device's thread asked for the chunk. Where
     /// that cannot be, the chunk is imported first, or its import waited for.
     ///
     /// No runs copy nothing.

@@ -295,8 +295,7 @@ fn a_recovery_carries_a_use_of_guest_ram_and_the_buffers_over_it() {
     host_fill(at, 3);
     assert_eq!(read(&device, &queue, &buffer), vec![3; BYTES as usize]);
     // The counts are the device's, across its generations.
-    let bound =
-        |counts: &WorkCounts| counts.chunk_bound_buffers_made + counts.run_bound_buffers_made;
+    let bound = |counts: &WorkCounts| counts.chunk_bound_buffers_made;
     let bound_before = bound(&device.work_counts());
     let from = heard.lock().unwrap().len();
     device.recover_for_test().unwrap();

@@ -362,14 +362,13 @@ fn run(device: &Device, order: &Order, pages: RamPages, heard: Option<&Heard>) {
             let delta = |field: fn(&crate::WorkCounts) -> u64| field(&now) - field(&counts);
             let ahead = delta(|counts| counts.host_ram_chunks_imported_ahead);
             slow_lines.push(format!(
-                "take {take} (chunk {}, heap {} in it): {:.2} ms, the heap {:.2} ms; bound in its \
-                 run's import {}, in the chunk's {}; chunks imported by the making {}, ahead by \
+                "take {take} (chunk {}, heap {} in it): {:.2} ms, the heap {:.2} ms; bound in the \
+                 chunk's import {}; chunks imported by the making {}, ahead by \
                  the thread meanwhile {ahead}; run imports live {}; meanwhile {}{}",
                 offset / CHUNK,
                 offset % CHUNK / HEAP,
                 took.as_secs_f64() * 1e3,
                 heap_took.as_secs_f64() * 1e3,
-                delta(|counts| counts.run_bound_buffers_made),
                 delta(|counts| counts.chunk_bound_buffers_made),
                 delta(|counts| counts.host_ram_chunks_imported) - ahead,
                 now.run_imports_live,
@@ -392,11 +391,10 @@ fn run(device: &Device, order: &Order, pages: RamPages, heard: Option<&Heard>) {
     let ahead = after.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead;
     let imported = after.host_ram_chunks_imported - before.host_ram_chunks_imported;
     let bound = after.chunk_bound_buffers_made - before.chunk_bound_buffers_made;
-    let run_bound = after.run_bound_buffers_made - before.run_bound_buffers_made;
     eprintln!(
         "HOST-RAM-WINDOW {} in {pages:?} pages on {}: {} makings, {slow} of 5 ms or more, \
          slowest {:.2} ms, median {:.3} ms, all {:.1} ms; chunks imported ahead {ahead}, by the \
-         makings {}; heaps bound in a chunk {bound}, in their run's import {run_bound}; the gate \
+         makings {}; heaps bound in a chunk {bound}; the gate \
          asked {} times; the CPU's writes before them {:.1} ms; shared memory in huge pages {:?} \
          kB; while it ran {}",
         order.name,

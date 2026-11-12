@@ -41,12 +41,11 @@ const WAIT: Duration = Duration::from_secs(20);
 
 /// The counts that say which path the objects took, all present before and after the runtime
 /// stopped making these shapes.
-fn counts(device: &Device) -> [u64; 6] {
+fn counts(device: &Device) -> [u64; 5] {
     let counts = device.work_counts();
     [
         counts.host_pointer_imports_made,
         counts.run_imports_made,
-        counts.run_bound_buffers_made,
         counts.chunk_bound_buffers_made,
         counts.copied_host_buffers_made,
         counts.object_churn.imports_inside_live,
@@ -54,7 +53,7 @@ fn counts(device: &Device) -> [u64; 6] {
 }
 
 /// `now` less `before`, by count.
-fn since(now: [u64; 6], before: [u64; 6]) -> [u64; 6] {
+fn since(now: [u64; 5], before: [u64; 5]) -> [u64; 5] {
     std::array::from_fn(|at| now[at] - before[at])
 }
 
@@ -144,8 +143,8 @@ fn runs_under_a_live_chunk_import_at_volume() {
         let made = since(counts(&device), start_counts);
         eprintln!(
             "IMPORT-HAZARD runs: round {round}: {objects} objects; pointer imports {}, run imports \
-             {}, run-bound {}, chunk-bound {}, copies {}, imports inside live {}",
-            made[0], made[1], made[2], made[3], made[4], made[5]
+             {}, chunk-bound {}, copies {}, imports inside live {}",
+            made[0], made[1], made[2], made[3], made[4]
         );
     }
 }
@@ -253,8 +252,8 @@ fn buffers_under_a_live_heap_import_at_volume() {
                 view + 1,
                 (view + 1) * (PER_VIEW + 1),
                 made[0],
-                made[4],
-                made[5]
+                made[3],
+                made[4]
             );
         }
         drop(heap);

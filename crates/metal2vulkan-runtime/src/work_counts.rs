@@ -460,7 +460,6 @@ pub(crate) struct Counters {
     host_ram_chunk_bytes: AtomicU64,
     host_ram_chunks_live: AtomicU64,
     chunk_bound_buffers_made: AtomicU64,
-    run_bound_buffers_made: AtomicU64,
     run_imports_made: AtomicU64,
     run_imports_live: AtomicU64,
     dma_buf_sparse_buffers: AtomicU64,
@@ -3775,13 +3774,7 @@ impl Counters {
         (self.chunk_bound_buffers_made).fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A no-copy buffer (or heap's own buffer) was bound in an import of its own run of a guest
-    /// RAM, its chunk not imported yet (`host_ram.rs`).
-    pub(crate) fn run_bound_buffer_made(&self) {
-        (self.run_bound_buffers_made).fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// An import of runs of a guest RAM was made, an object's run alone or a copy's (`host_ram.rs`).
+    /// An import of runs of a guest RAM was made for a copy (`host_ram.rs`).
     pub(crate) fn run_import_made(&self) {
         (self.run_imports_made).fetch_add(1, Ordering::Relaxed);
         (self.run_imports_live).fetch_add(1, Ordering::Relaxed);
@@ -8042,31 +8035,20 @@ pub struct WorkCounts {
     pub host_ram_chunks_live: u64,
     /// The no-copy buffers (and no-copy heaps' own buffers) bound in a chunk of guest RAM, whose
     /// pages their caller resolved to one run inside one chunk (`HostMemory::with_runs`): each
-    /// made with no import of its own, its import gate not asked.
+    /// made with no import of its own, its import gate not asked. Where each listed import costs
+    /// every submission (RADV), only over a chunk a copy imported: an object over a chunk not
+    /// imported takes its own path, and asks for no chunk.
     pub chunk_bound_buffers_made: u64,
-    /// The no-copy buffers (and no-copy heaps' own buffers) over one run inside one chunk of guest
-    /// RAM that was not imported yet as they were made, while the device's own thread imports
-    /// the RAM's chunks, on a driver whose barriers order blits through two imports of the same
-    /// pages (not one with `RuntimeDriverDefect::AliasedImportBlitsUnordered`): each bound in an
-    /// import of its own run alone (its pages faulted in and
-    /// pinned, no more), its import gate not asked, while that thread imports the chunk, so that
-    /// no making waits for a chunk's import. The objects over the chunk after that are bound in
-    /// it (`chunk_bound_buffers_made`).
-    pub run_bound_buffers_made: u64,
-    /// Every import of runs of guest RAM made so far, those `run_imports_live` counts while they
-    /// live: an object's run alone (`run_bound_buffers_made`, and each import of it again after
-    /// a release while idle, `host_imports_reimported`), a copy's ranges alone, and a copy's
-    /// lists (`host_ram_run_list_imports`). With `run_imports_live`, the imports of runs freed so
+    /// Every import of runs of guest RAM made so far for copies, those `run_imports_live` counts
+    /// while they live: a copy's ranges alone, and a copy's lists (`host_ram_run_list_imports`). With `run_imports_live`, the imports of runs freed so
     /// far; with `host_ram_chunks_imported` and `host_ram_chunks_live`, those of chunks; the
     /// rest of `memory_frees.host_import` are imports of objects' own pages.
     pub run_imports_made: u64,
-    /// The imports of runs of guest RAM those buffers were bound in, and of a copy's own runs
-    /// (`BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`: alone, or as a list,
-    /// `host_ram_run_list_imports`), that are not yet let go of (a gauge): each goes with its last
-    /// holder, the buffer or a command buffer that used it, whatever became of the chunk, or, a
-    /// buffer's (not a heap's) whose address was never handed out, once released while idle, the
-    /// buffer bound in the chunk's import at its next use where that is made by then; a list, once
-    /// the RAM let it go of too (released while idle, or past the lists it keeps).
+    /// The imports of a copy's own runs of guest RAM (`BlitCommandEncoder::copy_from_host_ram`,
+    /// `copy_to_host_ram`: alone, or as a list, `host_ram_run_list_imports`) that are not yet let
+    /// go of (a gauge): each goes with the last command buffer that used it, whatever became of
+    /// the chunk; a list, once the RAM let it go of too (released while idle, or past the lists it
+    /// keeps).
     pub run_imports_live: u64,
     /// The live host imports the device never releases while idle as a heap's own import (a
     /// no-copy heap's). With the next three and `host_imports_kept_for_fds`, they are every live
@@ -10203,7 +10185,6 @@ impl Device {
             host_ram_chunk_bytes: counters.host_ram_chunk_bytes.load(Ordering::Relaxed),
             host_ram_chunks_live: counters.host_ram_chunks_live.load(Ordering::Relaxed),
             chunk_bound_buffers_made: counters.chunk_bound_buffers_made.load(Ordering::Relaxed),
-            run_bound_buffers_made: counters.run_bound_buffers_made.load(Ordering::Relaxed),
             run_imports_made: counters.run_imports_made.load(Ordering::Relaxed),
             run_imports_live: counters.run_imports_live.load(Ordering::Relaxed),
             host_imports_lost: counters.host_imports_lost.load(Ordering::Relaxed),

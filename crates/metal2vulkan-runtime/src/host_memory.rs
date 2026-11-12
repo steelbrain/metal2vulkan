@@ -466,16 +466,14 @@ impl HostMemory {
     /// `VkBuffer` bound in that chunk's import, at the run, sized and bound against the object's
     /// own pages as an import of them would be, so no access through the buffer reaches the rest
     /// of the chunk: no import of its own, no kernel mapping of the pages, and the import gate
-    /// ([`HostMemory::with_import_gate`]) is not asked. Where the chunk is not imported yet and
-    /// the device's thread imports it, the buffer is bound in an import of the run alone, the
-    /// gate not asked either, so that its making waits for no chunk's import (but on a driver
-    /// whose barriers do not order blits through two imports of the same pages,
-    /// `RuntimeDriverDefect::AliasedImportBlitsUnordered`); a buffer's (not a heap's) is
-    /// released while idle, and the buffer bound in the chunk at its next use
-    /// ([`Device::use_host_ram`](crate::Device::use_host_ram)). Pages of more than
-    /// one run, or of a run crossing a chunk's end, take the runtime's other paths (the gate,
+    /// ([`HostMemory::with_import_gate`]) is not asked. Where the chunk is not imported yet, the
+    /// object imports it, or waits for its import under way; but where each import the device
+    /// holds costs every submission and the RAM's chunks are its dma-bufs (RADV), it takes the
+    /// runtime's other paths, as over memory no RAM holds, and the chunk is imported only for
+    /// the copies over it ([`Device::use_host_ram`](crate::Device::use_host_ram)). Pages of more
+    /// than one run, or of a run crossing a chunk's end, take the runtime's other paths (the gate,
     /// then an import or a copy), the runs kept with the object. Counted:
-    /// `WorkCounts::chunk_bound_buffers_made`, `run_bound_buffers_made`. No Metal counterpart.
+    /// `WorkCounts::chunk_bound_buffers_made`. No Metal counterpart.
     pub fn with_runs(self, resolver: RunResolver) -> HostMemory {
         HostMemory {
             runs: Some(resolver),

@@ -980,9 +980,8 @@ fn ram_planes(device: &Device) {
         .unwrap();
         let after = device.work_counts();
         println!(
-            "VIDEO-PLACEMENT on {}: {what}: buffers made in a run's import {}, in a chunk's {}",
+            "VIDEO-PLACEMENT on {}: {what}: buffers made in a chunk's import {}",
             device.name(),
-            after.run_bound_buffers_made - before.run_bound_buffers_made,
             after.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
         );
         probe_planes(device, what, &buffer);

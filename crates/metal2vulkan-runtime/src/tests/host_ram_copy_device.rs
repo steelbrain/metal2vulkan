@@ -1238,8 +1238,7 @@ fn a_private_bit_copy_over_the_pages_copies_in_only_the_pages_the_log_reports() 
         "a copy for the private bit"
     );
     assert_eq!(
-        after.chunk_bound_buffers_made + after.run_bound_buffers_made,
-        before.chunk_bound_buffers_made + before.run_bound_buffers_made,
+        after.chunk_bound_buffers_made, before.chunk_bound_buffers_made,
         "never bound in the RAM's chunk"
     );
     let read = || {

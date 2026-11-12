@@ -934,20 +934,9 @@ impl Device {
             .then(|| self.claim_ram_pages(window.start..window.start + window.size));
         let over_chunk = matches!(claim, Some(None));
         let (buffer, memory, again) = match (in_chunk, inside) {
-            // A buffer (not a heap) bound in an import of its own run alone, its chunk not
-            // imported yet, is released while idle and bound in the chunk's import at its next
-            // use where that is made by then (`host_residency.rs`).
-            (Some((buffer, memory)), _) => {
-                #[cfg(unix)]
-                let again = (routed.as_ref().filter(|_| !of_heap))
-                    .and_then(|routed| routed.run_again(&memory))
-                    .map(|run| Again::ram_run(self, run, (length, window, class)));
-                #[cfg(not(unix))]
-                let again = None;
-                (buffer, memory, again)
-            }
-            // Bound inside a live import, which is never released while it lies there.
-            (None, Some((buffer, memory))) => (buffer, memory, None),
+            // Bound in a chunk's import, or inside a live import: neither is released while the
+            // buffer lies there.
+            (Some((buffer, memory)), _) | (None, Some((buffer, memory))) => (buffer, memory, None),
             (None, None) => {
                 if let Some(refusal) = no_route {
                     return Err(refusal);

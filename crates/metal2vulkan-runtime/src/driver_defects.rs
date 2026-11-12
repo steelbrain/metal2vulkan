@@ -572,9 +572,9 @@ pub(super) struct Affected {
 ///   run of a guest RAM's chunk, a barrier, then a copy of the same bytes through a buffer bound
 ///   in the chunk's import read the bytes from before the fill (measured on the M3 Max under
 ///   macOS 27.0.1, MoltenVK 1.4.2, driverVersion 10402: known broken through 1.4.2). NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU orders them, in one encoder, two
-///   encoders and across queues. Nothing is refused: an object over a chunk not yet imported is
-///   bound in the chunk's import, which it waits for, never in an import of its own run
-///   (`host_ram.rs`'s `RamOnDevice::for_object`).
+///   encoders and across queues. Nothing is refused: a copy over a chunk not yet imported takes
+///   the chunk's import, which it makes or waits for, never an import of its ranges alone
+///   (`host_ram.rs`'s `RamOnDevice::for_copy`).
 /// - Mesa's ANV (`INTEL_OPEN_SOURCE_MESA`): in one command buffer, a fill through a buffer bound in
 ///   one import of a guest RAM's pages, a global memory barrier from the transfer write to the
 ///   transfer read, then a copy of the same bytes through a buffer bound in another import of them
