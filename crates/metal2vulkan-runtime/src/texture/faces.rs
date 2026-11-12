@@ -16,17 +16,22 @@
 //!   decoded twin and no conversion. A texture of several levels keeps its copy: a pass that
 //!   renders one level would leave the other face's other levels stale, and one view cannot present
 //!   levels of two images.
-//! - **The turn** (`render/face_swap.rs`): at the open of a render pass whose one color attachment
-//!   renders the whole texture (level 0, slice 0, the pass's extent the texture's), loaded `Clear`
-//!   or `DontCare`, no resolve or depth or stencil attachment of it, the texture presents its other
+//! - **The turn** (`render/face_swap.rs`): at the open of a render pass, once its encoder is open,
+//!   where the pass runs once (no replay, one group, no rate map or log, no ended encoder of its
+//!   command buffer keeping a replay log) and a color attachment renders the whole texture (level
+//!   0, slice 0, the pass's extent the texture's), loaded `Clear` or `DontCare`, with no resolve,
+//!   no depth or stencil attachment and no other attachment of it, the texture presents its other
 //!   face from then on ([`Texture::turn_face`]). The pass renders into it; its draws read the face
 //!   presented until then, which holds the texels from before the pass, exactly what the copy in
-//!   ahead of the pass's load actions holds: the pass's first instance takes no copy
-//!   (`InstanceShadows::ahead`, `shadow::ShadowSync::hold_ahead`), counted
-//!   (`WorkCounts::attached_read_swaps`, `attached_read_swap_reads`). A draw after a barrier splits
-//!   the pass as before (`render.rs`), and its copy in moves the new face's texels into the old,
-//!   which the first instance no longer reads. Every command after the turn names the new face, so
-//!   no copy follows the pass either.
+//!   ahead of the pass's load actions holds: at the pass's first shadow plan the turned shadows are
+//!   held current (`EncoderCore::hold_turned`, `shadow::ShadowSync::hold_ahead`), so the first
+//!   instance takes no copy, counted (`WorkCounts::attached_read_swaps`, `attached_read_swap_reads`).
+//!   A first instance that reads the cleared color, after a barrier before its first draw, clears
+//!   the shadow as before (`render/shadows.rs`, `clears`). A draw after a barrier splits the
+//!   pass as before (`render.rs`), and its copy in moves the new face's texels into the old, which
+//!   the first instance no longer reads. Every command after the turn names the new face, so no copy
+//!   follows the pass either. Each copy in of a color texture's attached reads that no turn took
+//!   off counts by why (`WorkCounts::attached_read_unswapped_*`, [`Unturned`]).
 //! - **When.** Only where nothing else can name the face presented until then: the opening command
 //!   buffer is the device's only uncommitted one, the scheduler holds no batch, no command buffer
 //!   that may read the heap sets is incomplete and this one bound none (as a storage form's switch,
@@ -47,10 +52,11 @@
 //!   its work ([`FaceSwaps::ran_nothing`]), the next batch to name the new face takes the same
 //!   copies, once. Where its pass is submitted, every later batch is after it.
 //! - **Frozen** ([`Texture::freeze_faces`]): a view of the texture, its `VkImage` handed out, a
-//!   binding beyond its usage (whose shadow names one face as its truth for good), a storage form,
-//!   or a purgeable state end its turns: it presents the face it presents then from then on, the
-//!   other kept as its attached reads' shadow. A kept recording of indirect commands that named the
-//!   face no longer presented runs no more ([`Device::names_old_face`], `kept_commands.rs`).
+//!   binding beyond its usage (whose shadow names one face as its truth for good) or a storage form
+//!   end its turns: it presents the face it presents then from then on, the other kept as its
+//!   attached reads' shadow. Its purgeable state stays with its own image, whichever face it
+//!   presents (`texture/attributes.rs`). A kept recording of indirect commands that named the face
+//!   no longer presented runs no more ([`Device::names_old_face`], `kept_commands.rs`).
 //! - **Exact** in every case: a pass's read sees the texels from before it, a later command the
 //!   pass's, as with the copy. Nothing is announced.
 

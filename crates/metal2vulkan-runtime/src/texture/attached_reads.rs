@@ -72,6 +72,17 @@
 //!   the attachment; before the first, ahead of the pass's load actions. Each such draw counts
 //!   (`WorkCounts::attachment_reads_through_copies`, the shadow served or not), and so does each
 //!   copy (`WorkCounts::shadow_copies`). It is exact and announces nothing.
+//! - **Two faces instead of the first copy** (`texture/faces.rs`). A `Private`, tracked texture
+//!   of the runtime's own memory, of one level, slice and sample and no view, takes a second
+//!   image of its plan at its first attached read, as the copy's image would have been. A later
+//!   pass that renders the whole texture from one color loaded `Clear` or `DontCare` turns it at
+//!   its open, where nothing else may name the image it presented (its command buffer the
+//!   device's only uncommitted one, no batch held, no heap set read meanwhile:
+//!   `render/face_swap.rs`): the pass renders the other image, and its first instance's reads
+//!   take the one presented until then, which holds the texels from before the pass as the copy
+//!   ahead of the load actions would, with no copy (`WorkCounts::attached_read_swaps`,
+//!   `attached_read_swap_reads`). A read after a barrier copies in what the draws wrote, as
+//!   above. Every copy in no turn took off is counted by why (`attached_read_unswapped_*`).
 //! - **Levels apart from the attached ones.** A slot every read of which reaches only levels of
 //!   the texture before the lowest one an attachment of the instance renders, or only levels past
 //!   the highest, through the samplers the draw binds (`StageModule::level_reads`), reads the

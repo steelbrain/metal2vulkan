@@ -34,7 +34,11 @@
 //! - **Attachment reads.** A draw's sampled slot binding of a texture that presents a color
 //!   attachment its render pass instance renders takes the shadow too, whatever its usage
 //!   (`texture/attached_reads.rs`), and announces nothing: a texture whose shadow is not served
-//!   binds its own image there, as before.
+//!   binds its own image there, as before. A texture that may take two faces
+//!   (`texture/faces.rs`: one level, slice and sample, `Private` and tracked, of the runtime's own
+//!   memory, no view) takes them at its first such binding in the shadow's place: the face it
+//!   does not present is its attached reads' shadow. A binding beyond its usage after that ends
+//!   its turns and takes a shadow of its own of the face it presents.
 //! - **YCbCr writes**. A 4:4:4 two-plane YCbCr texture whose writes Metal stores into its planes
 //!   (`metal::format::ycbcr_writes_stored`), whose image has both shader usages, holds its write
 //!   shadow here instead (`texture/ycbcr_image.rs`, `shadow.rs`): every storage binding of it
