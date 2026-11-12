@@ -96,8 +96,13 @@
 //!   loaded from memory, work recorded on the GPU alone) or where that work's owner is unknown
 //!   (the device's own resources), and the memory of its own first work, which comes after that
 //!   work's (`command_buffer/submit.rs`, `WorkCounts::first_work_waits_unused` counting the
-//!   batches that waited for such work they reach none of). An internal submission waits for
-//!   every one. Fills made on the fill queue are waited for
+//!   batches that waited for such work they reach none of). On the RTX 3090 a compositor's
+//!   frame of one dispatch, beside an app on another queue that makes two 1024 by 1024 `Private`
+//!   textures before each of its command buffers, takes 2.06 ms (p50), as when the app makes
+//!   nothing (2.10 ms); where every batch waited for all such work it took 17.1 ms, and so on a
+//!   device without a fill queue beside an app making buffers, 2.12 against 16.5 ms
+//!   (`tests::fill_waits_bench`). An internal submission waits for every one. Fills made on the
+//!   fill queue are waited for
 //!   by every later batch whose commands may reach what they filled, and every internal
 //!   submission, until the host saw them complete (`Device::fill_queue_wait_for`,
 //!   `Device::fill_queue_wait`).
