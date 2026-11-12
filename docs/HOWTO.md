@@ -1032,6 +1032,17 @@ A host note: RADV under Ubuntu 26.04's stock kernel 7.0.0-38 with linux-firmware
 sometimes loses a GPU write into a newly made buffer under heavy multi-process GPU memory churn
 (about 1 in 10^4 to 10^5, with no error); kernel 7.2.6 with linux-firmware 20260916 loses none.
 
+A host note: on an RTX 3090 behind a Thunderbolt 3 bridge (NVIDIA 620.70.06, Linux 7.3), several
+processes making devices at once now and then meet a pushbuffer error the kernel logs on one or two
+of their channels: Xid 69 (a 3D class error at `SET_REPORT_SEMAPHORE_D`, offset `0x1b0c`, whose
+data word is a method header, so the GPU read the stream one word short) and Xid 32 (an invalid
+pushbuffer entry). Those processes' devices are lost, and a submission of another process's may
+never complete. The runtime uses each `VkQueue` under that queue's lock. A submission of its own
+start-up checks that has not completed in 10 seconds stops them
+(`metal2vulkan-submit-check-stalled`, [API.md](API.md)); where it still has not completed 10
+seconds into the device's teardown, the teardown leaves the device to the process's end rather
+than wait for it.
+
 A host note: on a laptop whose NVIDIA GPU powers down when idle (the driver's runtime D3, shown in
 `/proc/driver/nvidia/gpus/*/power`), the first GPU work after about 15 seconds idle waits about
 1 second while the GPU wakes (970 to 980 ms on an RTX 5080 Laptop GPU, driver 615.71.09). A host

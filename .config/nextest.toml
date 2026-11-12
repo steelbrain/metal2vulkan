@@ -95,6 +95,15 @@ threads-required = 'num-test-threads'
 filter = 'package(metal2vulkan-runtime) & test(/^tests::teardown_threads::a_running_queue_switch_check_leaves_the_device_to_the_program_s_thread$/)'
 threads-required = 'num-test-threads'
 
+# The runtime's video interop tests run alone on Linux. Each makes a device with extra compute and
+# video decode queues; on an RTX 3090 (NVIDIA 620.70.06) several such devices made at once by
+# processes of these tests now and then met a pushbuffer error the kernel logged (Xid 69 and 32),
+# their devices lost, and another process's submission never completed (HOWTO.md, section 8).
+[[profile.default.overrides]]
+platform = 'cfg(target_os = "linux")'
+filter = 'package(metal2vulkan-runtime) & test(/^tests::video_interop::/)'
+threads-required = 'num-test-threads'
+
 # A GPU whose driver has few channels runs its device tests three at a time
 # (`cargo nextest run --profile few-channels`). On NVIDIA's driver each `VkQueue` is a channel,
 # and a device of the runtime's queue plan takes 18 (14 for the round robin, 2 presenting, the
