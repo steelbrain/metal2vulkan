@@ -1293,7 +1293,7 @@ fn a_pointer_function_constants_choose_is_decided_before_its_switch() {
         let fcs = std::collections::HashMap::from([(
             mode,
             sccp::FcState {
-                index: 3,
+                index: sccp::Undefined::Constant(3),
                 supplied,
                 decl: true,
             },

@@ -15,7 +15,7 @@ use crate::ir::{Arena, Const, ConstId, ConstTable, Constant, Global, GlobalId, M
 use crate::ir::{Type, TypeId, TypeTable};
 use crate::metal::DataType;
 
-use super::sccp::FcState;
+use super::sccp::{FcState, Undefined};
 use super::ConstValue;
 
 /// A supplied value checked against its declaration, not yet interned.
@@ -46,7 +46,7 @@ pub(super) fn check<'r>(
         states.insert(
             d.global,
             FcState {
-                index: d.index,
+                index: Undefined::Constant(d.index),
                 supplied: values.contains_key(&d.index),
                 decl: true,
             },

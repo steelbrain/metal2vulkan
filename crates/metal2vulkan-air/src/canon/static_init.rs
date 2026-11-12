@@ -30,7 +30,11 @@
 //! unsupplied constant takes its false way, a `select` on one is its false arm, and an `and` with
 //! zero, an `or` with all ones and a `mul` by zero are that constant whatever the other operand
 //! holds, as SCCP's are; a branch on `undef` is `UndefCondition`, and a call cycle is
-//! `Unsupported{Recursion}`.
+//! `Unsupported{Recursion}`. A scalar integer division or remainder by zero, whose result the IR
+//! leaves undefined, is undefined the same way ([`Undefined::Ir`]), naming no constant. Metal makes
+//! the pipeline and drops its kernel's stores of the quotient and of a value computed from it,
+//! and every store of a kernel whose loop a quotient computed from it bounds (an Apple M3 Max
+//! under macOS 27.0.1, `static_init_division.m`).
 //!
 //! [`super::static_values`] evaluates under [`Unevaluable::Opaque`]: a pure operation the
 //! interpreter does not evaluate (float arithmetic outside the agreement, a conversion from a
@@ -58,21 +62,23 @@ use crate::intrinsics::{
     AirIntrinsic, Convert, FunctionConstant, LlvmIntrinsic, NumKind, Rounding,
 };
 use crate::ir::layout::Endian;
-use crate::ir::{AddrSpace, Arena, BlockId, Body, Callee, CastOp, Const, ConstExpr, ConstId};
+use crate::ir::ConstId;
+use crate::ir::{AddrSpace, Arena, BinOp, BlockId, Body, Callee, CastOp, Const, ConstExpr};
 use crate::ir::{Constant, FuncId, Function, Global, GlobalId, Idx, InstId, InstKind};
 use crate::ir::{Linkage, ModuleParts, Section, Type, TypeId, TypeLayouts, TypeTable, Value};
 
 use super::fold::Folder;
 use super::rewrite::invariant;
-use super::sccp::FcState;
+use super::sccp::{FcState, Undefined};
 
 /// The most leaves one global may flatten into. A larger global touched by a static initializer
 /// is refused as not evaluable (a precision limit, never a semantic one); the ledger bounds the
 /// total.
 const LEAF_LIMIT: u64 = 1 << 16;
 
-/// Globals whose value now depends on an unsupplied function constant, with its index.
-pub(super) type Derived = Vec<(GlobalId, u32)>;
+/// Globals whose value is now undefined, with what leaves it so: an unsupplied function constant
+/// (the lowest index), or an operation the IR leaves undefined.
+pub(super) type Derived = Vec<(GlobalId, Undefined)>;
 
 /// The new initializer of each written global.
 type Inits = Vec<(GlobalId, ConstId)>;
@@ -81,8 +87,9 @@ type Inits = Vec<(GlobalId, ConstId)>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SVal {
     C(ConstId),
-    /// Undefined: computed from the unsupplied constant with this index.
-    Fc(u32),
+    /// Undefined: computed from the unsupplied constant with this index, or by an operation the
+    /// IR leaves undefined.
+    Fc(Undefined),
     /// The address `global + offset` (bytes).
     Ptr(GlobalId, u64),
     /// Not evaluated: computed by a pure operation the interpreter does not evaluate (float
@@ -104,7 +111,7 @@ pub(super) enum Unevaluable {
 
 /// The outcome of evaluating the static initializers.
 pub(super) struct Evaluated {
-    /// Globals whose value now depends on an unsupplied function constant, with its index.
+    /// Globals whose value is now undefined, with what leaves it so.
     pub derived: Derived,
     /// Globals holding an opaque value: stored from an operation the interpreter does not
     /// evaluate. Their initializers are left as they were. Always empty under
@@ -585,6 +592,12 @@ impl<'a> Eval<'a> {
                         if self.folder.absorbs(op, k) =>
                     {
                         SVal::C(k)
+                    }
+                    (SVal::C(_), SVal::C(d))
+                        if matches!(op, BinOp::UDiv | BinOp::SDiv | BinOp::URem | BinOp::SRem)
+                            && self.folder.int(d) == Some(0) =>
+                    {
+                        SVal::Fc(Undefined::Ir)
                     }
                     _ => self.pure2(a, b, &at, m, |f, x, y, m| f.binop(op, ty, x, y, m))?,
                 }

@@ -18,7 +18,9 @@
 //!   computes, with that zero for the undefined operand.
 //!   Plain Metal makes such a function's pipeline, and its own
 //!   reads of an undefined constant vary from read to read, zero and the false way among them; its
-//!   predicate gates nothing, whether negated or not (Metal probes).
+//!   predicate gates nothing, whether negated or not (Metal probes). A global that a static
+//!   initializer computed by an integer division or remainder by zero, which the IR leaves
+//!   undefined, is undefined the same way ([`Undefined::Ir`]), but names no constant.
 //! - A float operation a constant operand decides, whatever the run computes for the others, is
 //!   that constant, as Metal's compiler decides it once the constants are bound
 //!   ([`Solver::float_fold`]): an `fadd`, `fsub`, `fmul`, `fdiv` or `air.fma` with a NaN operand
@@ -58,10 +60,20 @@ use super::const_loads;
 use super::fold::{FloatClass, Folder};
 use super::rewrite::{apply, filled, invariant, scoped, BodyEdit};
 
+/// What an undefined value is undefined by: the unsupplied function constant of this index, or
+/// an operation the IR leaves undefined (a static initializer's integer division or remainder by
+/// zero), which no constant names. A value undefined by both is the constant's: the lowest
+/// constant orders first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Undefined {
+    Constant(u32),
+    Ir,
+}
+
 /// A function constant as SCCP sees it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct FcState {
-    pub index: u32,
+    pub index: Undefined,
     pub supplied: bool,
     /// A declared function constant (its `air.fc_initializer` global), as opposed to a global a
     /// static initializer derived from an unsupplied one, whose reads are tainted the same way but
@@ -69,13 +81,14 @@ pub(super) struct FcState {
     pub decl: bool,
 }
 
-/// The SCCP lattice, flat: `Top`, then each constant and the undefined value of an unsupplied
-/// constant (`Fc`, one more value), then `Bottom`. Two different values meet as `Bottom`.
+/// The SCCP lattice, flat: `Top`, then each constant and the undefined value (`Fc`, one more
+/// value, of an unsupplied constant or of the IR), then `Bottom`. Two different values meet as
+/// `Bottom`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Lat {
     Top,
     Const(ConstId),
-    Fc(u32),
+    Fc(Undefined),
     Bottom,
 }
 
@@ -97,10 +110,13 @@ fn meet(a: Lat, b: Lat) -> Lat {
     }
 }
 
-/// Record that the body reads the unsupplied constant `k`.
-fn read(reads: &mut BTreeSet<u32>, k: u32, m: &mut Meter) -> Result<(), Error> {
-    if reads.insert(k) {
-        m.charge(std::mem::size_of::<u32>() * 4)?;
+/// Record that the body reads the value `k` leaves undefined: an unsupplied constant's index. A
+/// value the IR leaves undefined names no constant.
+fn read(reads: &mut BTreeSet<u32>, k: Undefined, m: &mut Meter) -> Result<(), Error> {
+    if let Undefined::Constant(k) = k {
+        if reads.insert(k) {
+            m.charge(std::mem::size_of::<u32>() * 4)?;
+        }
     }
     Ok(())
 }
@@ -283,14 +299,14 @@ fn is_defined_arg(
     Some(g)
 }
 
-/// The unsupplied function constant a constant with `value` depends on: its global's own when it
-/// is a global's address, otherwise the lowest among its operands' (`operand` gives an
-/// operand's). [`Solver`]'s rule.
+/// What leaves a constant with `value` undefined: its global's state when it is the address of
+/// an unsupplied constant or of a global derived from one, otherwise the lowest among its
+/// operands' (`operand` gives an operand's). [`Solver`]'s rule.
 fn const_taint(
     value: &Const,
     fcs: &HashMap<GlobalId, FcState>,
-    operand: impl Fn(ConstId) -> Option<u32>,
-) -> Option<u32> {
+    operand: impl Fn(ConstId) -> Option<Undefined>,
+) -> Option<Undefined> {
     match value {
         Const::GlobalAddr(g) => fcs.get(g).and_then(|f| (!f.supplied).then_some(f.index)),
         v => v.children().iter().filter_map(|&ch| operand(ch)).min(),
@@ -361,7 +377,7 @@ enum Decision {
 }
 
 /// The lattice value of `v` given the instructions' values `val` and the constants' `taint`.
-fn lat_of(val: &[Lat], taint: &[Option<u32>], v: Value) -> Lat {
+fn lat_of(val: &[Lat], taint: &[Option<Undefined>], v: Value) -> Lat {
     match v {
         Value::Arg(_) => Lat::Bottom,
         Value::Inst(i) => val.get(i.index()).copied().unwrap_or(Lat::Bottom),
@@ -546,7 +562,7 @@ impl Phis {
         from: BlockId,
         to: BlockId,
         val: &[Lat],
-        taint: &[Option<u32>],
+        taint: &[Option<Undefined>],
         m: &mut Meter,
     ) -> Result<(), Error> {
         let Some(&e) = self.edge_of.get(&(from, to)) else {
@@ -597,7 +613,7 @@ struct Solver<'b> {
     user_start: Vec<u32>,
     users: Vec<InstId>,
     /// Per constant present when SCCP started: the unsupplied function constant it depends on.
-    taint: Vec<Option<u32>>,
+    taint: Vec<Option<Undefined>>,
     val: Vec<Lat>,
     exec: Vec<bool>,
     edges: HashSet<(BlockId, BlockId)>,
@@ -857,7 +873,7 @@ impl<'b> Solver<'b> {
         let mut consts = Vec::with_capacity(ops.len());
         let mut any_top = false;
         let mut any_bottom = false;
-        let mut fc: Option<u32> = None;
+        let mut fc: Option<Undefined> = None;
         for &v in ops {
             match self.lat(v) {
                 Lat::Fc(i) => fc = Some(fc.map_or(i, |j| j.min(i))),

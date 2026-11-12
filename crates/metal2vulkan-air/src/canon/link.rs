@@ -73,7 +73,7 @@ use super::fc;
 use super::fold::Folder;
 use super::renumber::{bodies, inst_refs, isomorphism, Bodies, Renumber, Syms};
 use super::rewrite::{filled, invariant, scoped};
-use super::sccp::{self, FcState};
+use super::sccp::{self, FcState, Undefined};
 use super::static_init::{self, Unevaluable};
 use super::ConstValue;
 
@@ -1069,7 +1069,10 @@ fn specialized_copy(
             .filter(|&(_, &kept)| kept)
             .filter_map(|(k, _)| GlobalId::from_index(k).and_then(|g| fcs.get(&g)))
             .filter(|state| !state.supplied)
-            .map(|state| state.index)
+            .filter_map(|state| match state.index {
+                Undefined::Constant(index) => Some(index),
+                Undefined::Ir => None,
+            })
             .min();
         if let Some(index) = unresolved {
             return Ok(Err(link_problem(

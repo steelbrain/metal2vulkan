@@ -198,7 +198,7 @@ impl Fixture {
             fcs.insert(
                 g,
                 FcState {
-                    index,
+                    index: Undefined::Constant(index),
                     supplied: false,
                     decl: true,
                 },
