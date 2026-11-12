@@ -45,7 +45,7 @@ use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor
 use metal2vulkan_runtime::{
     Buffer, BufferContents, BufferDescriptor, ClearColor, Device, LoadAction, PipelineOptions,
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, StoreAction, Texture,
-    TextureDescriptor,
+    TextureDescriptor, TexturePlacement, TextureShadowReason,
 };
 
 /// The caches' shapes, (width, rows, row bytes): the consumer's three most common device caches
@@ -671,6 +671,112 @@ fn pooled_crossover_costs() {
             }
             drop(first);
         }
+    }
+    messages.take_notices();
+}
+
+/// A guest's textures that its boot on an RTX 2080 made shadows of their linear cost, over
+/// `Private` buffers that declare their padding unobserved: (format, width, rows, row bytes,
+/// usage, how many it made).
+const GUEST_SET: [(PixelFormat, u64, u64, u64, TextureUsage, u64); 15] = [
+    (
+        PixelFormat::BGRA8Unorm,
+        723,
+        625,
+        3072,
+        SAMPLES_RENDERS,
+        661,
+    ),
+    (PixelFormat::BGRA8Unorm, 6016, 6016, 24576, WRITES, 150),
+    (PixelFormat::R32Uint, 6016, 6016, 24576, WRITES, 66),
+    (
+        PixelFormat::RGBA16Float,
+        82,
+        82,
+        704,
+        TextureUsage::SHADER_READ,
+        13,
+    ),
+    (
+        PixelFormat::RGBA16Float,
+        84,
+        81,
+        704,
+        TextureUsage::SHADER_READ,
+        10,
+    ),
+    (PixelFormat::RGBA16Float, 82, 82, 704, SAMPLES_RENDERS, 9),
+    (PixelFormat::RGBA16Float, 84, 81, 704, SAMPLES_RENDERS, 8),
+    (PixelFormat::RGBA16Float, 84, 70, 704, SAMPLES_RENDERS, 6),
+    (PixelFormat::RGBA16Float, 116, 116, 960, SAMPLES_RENDERS, 4),
+    (
+        PixelFormat::RGBA16Float,
+        98,
+        64,
+        832,
+        TextureUsage::SHADER_READ,
+        4,
+    ),
+    (PixelFormat::RGBA16Float, 74, 74, 1024, ALL_THREE, 4),
+    (PixelFormat::RGBA16Float, 70, 70, 1024, ALL_THREE, 3),
+    (PixelFormat::RGBA16Float, 70, 54, 1024, ALL_THREE, 3),
+    (PixelFormat::R32Uint, 299, 299, 1216, WRITES, 1),
+    (PixelFormat::BGRA8Unorm, 299, 299, 1216, READS_WRITES, 1),
+];
+const SAMPLES_RENDERS: TextureUsage = TextureUsage::SHADER_READ.union(TextureUsage::RENDER_TARGET);
+const WRITES: TextureUsage = TextureUsage::SHADER_WRITE;
+const READS_WRITES: TextureUsage = TextureUsage::SHADER_READ.union(TextureUsage::SHADER_WRITE);
+const ALL_THREE: TextureUsage = SAMPLES_RENDERS.union(TextureUsage::SHADER_WRITE);
+
+/// Where each of [`GUEST_SET`]'s textures lies on the device, as the placement query answers it
+/// over a buffer of its own: alone over its bytes (the pooled bound read), and beside a one-row
+/// texture made over them first (the image at Metal's pitch at any size, where the device makes
+/// it). Printed per shape (`POOLED-GUEST-SET`) and summed, each weighed by how many the guest
+/// made: textures in place, shadows of their linear cost, and other shadows.
+#[test]
+#[ignore = "a measurement: run by name"]
+fn pooled_guest_set() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = settled_device(&cache, &messages);
+    let private = ResourceOptions::private();
+    let kind = |placement: &TexturePlacement| match placement {
+        TexturePlacement::NotHostPages => 0,
+        TexturePlacement::Shadow(TextureShadowReason::LinearCost { .. }) => 1,
+        _ => 2,
+    };
+    let mut sums = [[0u64; 3]; 2];
+    for (pf, w, h, bpr, usage, made) in GUEST_SET {
+        let mut d = TextureDescriptor::texture_2d(pf, w, h, false);
+        d.usage = usage;
+        d.resource_options = private;
+        let descriptor =
+            BufferDescriptor::new(bpr * h, private, BufferContents::Zero).with_padding_unobserved();
+        let buffer = device.new_buffer_with_descriptor(descriptor).unwrap();
+        let alone = buffer.texture_placement(&d, 0, bpr).unwrap();
+        let mut row = d;
+        row.height = 1;
+        let first = buffer.new_texture(&row, 0, bpr).unwrap();
+        let beside = buffer.texture_placement(&d, 0, bpr).unwrap();
+        sums[0][kind(&alone)] += made;
+        sums[1][kind(&beside)] += made;
+        println!(
+            "POOLED-GUEST-SET {} {made} x {pf:?} {w}x{h} at {bpr} ({} bytes) {usage:?}: alone \
+             {alone:?}; beside another {beside:?}",
+            device.name(),
+            bpr * h,
+        );
+        drop(first);
+    }
+    for (sum, how) in sums.iter().zip(["alone", "beside another"]) {
+        println!(
+            "POOLED-GUEST-SET {} {how}: {} in place, {} shadows of their linear cost, {} other \
+             shadows",
+            device.name(),
+            sum[0],
+            sum[1],
+            sum[2],
+        );
     }
     messages.take_notices();
 }
