@@ -859,7 +859,10 @@ impl ComputePipelineState {
         let ((found, compiled), key) = stand_in::compile_with_stand_ins(profile, |key| {
             Variant::compiled(&sources, function, &kernel, key)
         })
-        .map_err(|error| compile_error(device, error))?;
+        .map_err(|error| {
+            creation_log::compute_refused(device, function, &error);
+            compile_error(device, error)
+        })?;
         additions::check_kernel_maximum(&compiled, call)?;
         // Metal fails the creation over a binary function not compiled to a binary once the
         // stage links, after a reference it leaves unresolved (`additions.rs`).
@@ -1819,7 +1822,10 @@ impl Variant {
     ) -> Result<Arc<Variant>, Error> {
         let _noted = NoteEntries(device);
         let (found, _) = Variant::compiled(&Sources::later(device), function, descriptor, &key)
-            .map_err(|error| compile_error(device, error))?;
+            .map_err(|error| {
+                creation_log::compute_refused(device, function, &error);
+                compile_error(device, error)
+            })?;
         Variant::of(device, key, found, function)
     }
 

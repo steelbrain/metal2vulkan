@@ -9,8 +9,10 @@
 //!   what the kernel was made from (`descriptor:`, as a render state's first line names each
 //!   function: its name, its bitcode's SHA-256 and the constant values it was made with). A
 //!   compute state's pipelines differ by their specialization alone (the threadgroup size, an
-//!   edge region), so each line prints it whole: no numbering, no diff and no split. The rest of
-//!   this log is the render pipelines'.
+//!   edge region), so each line prints it whole: no numbering, no diff and no split. A kernel
+//!   whose compile is refused, at its state's creation or at a dispatch's variant, takes a line of
+//!   its own ([`compute_refused`]): its function name, the refusal, and its `descriptor:`. The
+//!   rest of this log is the render pipelines'.
 //!
 //! - **What it prints.** One line per render `VkPipeline` a device makes for a draw (or a host
 //!   step's draw), through the device's message sink at `Info` severity (id name
@@ -745,6 +747,29 @@ pub(crate) fn compute(
             stage.spirv.len(),
             constants.join(", "),
             kernel.function,
+        ),
+    );
+}
+
+/// Deliver the line of a compute pipeline of `function` whose compile `device` refused with
+/// `error`, at its creation or at a dispatch's variant (the module's documentation, "Compute
+/// pipelines"): the kernel's function name, the refusal, and what the kernel was made from, where
+/// the log is on.
+pub(crate) fn compute_refused(
+    device: &Device,
+    function: &FunctionDescriptor,
+    error: &metal2vulkan::error::Error,
+) {
+    if !enabled() {
+        return;
+    }
+    deliver(
+        device,
+        format!(
+            "metal2vulkan: pipeline creation: compute pipeline `{}`: refused: {error:?}; \
+             descriptor: {}",
+            function.function.info().name,
+            super::render::logged_function(function),
         ),
     );
 }
