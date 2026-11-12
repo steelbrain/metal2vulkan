@@ -363,6 +363,15 @@ pub struct AmplifiedOutput {
     pub below: PushField,
 }
 
+/// The `ViewportIndex` a vertex function compiled under `LoweringInputs::region_viewports` stores:
+/// interface objects `draw_index`, the `DrawIndex` input, and `viewport`, the `ViewportIndex`
+/// output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RegionViewport {
+    pub draw_index: usize,
+    pub viewport: usize,
+}
+
 /// The private alpha test a fragment function compiled under `LoweringInputs::alpha_test` runs
 /// at each return ([`alpha_test`]): the returned field of its color 0, four `float` lanes (a
 /// `half` output held widened), and the comparison.
@@ -389,6 +398,9 @@ pub struct StageIoPlan {
     /// beyond its own: `Layer` and `ViewportIndex` from the amplification's offsets where it
     /// writes no such index.
     pub amplified: Vec<AmplifiedOutput>,
+    /// A vertex function compiled under `LoweringInputs::region_viewports` that returns outputs:
+    /// its `DrawIndex` input, which it stores to its `ViewportIndex` output at every return.
+    pub region_viewport: Option<RegionViewport>,
     /// The color outputs a fragment function compiled under `LoweringInputs::zeroed_colors`
     /// stores zero to at every return, one per such color.
     pub zeroed: Vec<Link>,
@@ -1936,6 +1948,22 @@ pub fn emit_return(
         let part = cx.push_field(fb, o.offset)?;
         let part = below_count(cx, fb, part, o.below)?;
         store(cx, fb, &o.link, part)?;
+    }
+    // A rate-mapped pass's region drawn among others: its draw's index selects its viewport.
+    if let (Some(_), Some(r)) = (v, cx.plan.families.stage_io.region_viewport) {
+        let index = fetch::load_builtin(cx, fb, r.draw_index)?;
+        let link = Link {
+            object: r.viewport,
+            place: Place::Whole,
+            form: Form {
+                held: Held::Int {
+                    bits: 32,
+                    container: 32,
+                },
+                lanes: 1,
+            },
+        };
+        store(cx, fb, &link, index)?;
     }
     // The pass's colors the pipeline lacks, which plain Metal zeroes where the draw covers them.
     let zeroed = cx.plan.families.stage_io.zeroed.clone();

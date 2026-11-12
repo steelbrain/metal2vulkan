@@ -321,6 +321,7 @@ struct FeatureChain {
     list_restart: avk::PhysicalDevicePrimitiveTopologyListRestartFeaturesEXT<'static>,
     provoking_vertex: avk::PhysicalDeviceProvokingVertexFeaturesEXT<'static>,
     line_rasterization: avk::PhysicalDeviceLineRasterizationFeaturesEXT<'static>,
+    multi_draw: avk::PhysicalDeviceMultiDrawFeaturesEXT<'static>,
     ray_query: avk::PhysicalDeviceRayQueryFeaturesKHR<'static>,
     acceleration_structure: avk::PhysicalDeviceAccelerationStructureFeaturesKHR<'static>,
     portability_subset: avk::PhysicalDevicePortabilitySubsetFeaturesKHR<'static>,
@@ -373,6 +374,7 @@ const EXT_DEPTH_CLAMP_CONTROL: &[&str] = &["VK_EXT_depth_clamp_control"];
 const EXT_LIST_RESTART: &[&str] = &["VK_EXT_primitive_topology_list_restart"];
 const EXT_PROVOKING_VERTEX: &[&str] = &["VK_EXT_provoking_vertex"];
 const EXT_LINE_RASTERIZATION: &[&str] = &["VK_EXT_line_rasterization", "VK_KHR_line_rasterization"];
+const EXT_MULTI_DRAW: &[&str] = &["VK_EXT_multi_draw"];
 const EXT_SAMPLE_LOCATIONS: &[&str] = &["VK_EXT_sample_locations"];
 const EXT_RAY_QUERY: &[&str] = &["VK_KHR_ray_query"];
 const EXT_ACCELERATION_STRUCTURE: &[&str] = &["VK_KHR_acceleration_structure"];
@@ -420,6 +422,7 @@ pub(crate) struct Chained {
     list_restart: bool,
     provoking_vertex: bool,
     line_rasterization: bool,
+    multi_draw: bool,
     ray_query: bool,
     acceleration_structure: bool,
     portability_subset: bool,
@@ -470,6 +473,7 @@ impl Chained {
             list_restart: x.ext(EXT_LIST_RESTART),
             provoking_vertex: x.ext(EXT_PROVOKING_VERTEX),
             line_rasterization: x.ext(EXT_LINE_RASTERIZATION),
+            multi_draw: x.ext(EXT_MULTI_DRAW),
             ray_query: x.ext(EXT_RAY_QUERY),
             acceleration_structure: x.ext(EXT_ACCELERATION_STRUCTURE),
             portability_subset: x.ext(EXT_PORTABILITY_SUBSET),
@@ -540,6 +544,7 @@ impl FeatureChain {
                 list_restart,
                 provoking_vertex,
                 line_rasterization,
+                multi_draw,
                 ray_query,
                 acceleration_structure,
                 portability_subset,
@@ -773,6 +778,7 @@ feature_sources! { c, x;
         on(c.list_restart.primitive_topology_patch_list_restart);
     ProvokingVertexLast => on(c.provoking_vertex.provoking_vertex_last);
     BresenhamLines => on(c.line_rasterization.bresenham_lines);
+    MultiDraw => on(c.multi_draw.multi_draw);
     RayQuery => on(c.ray_query.ray_query);
     AccelerationStructure => on(c.acceleration_structure.acceleration_structure);
     ConstantAlphaColorBlendFactors =>

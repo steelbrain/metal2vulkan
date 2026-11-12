@@ -357,6 +357,14 @@ pub enum VkFeature {
     /// runtime draws Apple's `setLineWidth:` widths through it where the device's own lines are
     /// its route (`render/line_width.rs`).
     WideLines,
+    // Appended.
+    /// `VK_EXT_multi_draw`'s `multiDraw`: `vkCmdDrawMultiEXT` and `vkCmdDrawMultiIndexedEXT`, one
+    /// command of several draws, each draw's `DrawIndex` its index in the command ("if
+    /// vkCmdDrawMultiEXT or vkCmdDrawMultiIndexedEXT is used, this variable contains the integer
+    /// value corresponding to the zero-based index of the draw", the specification's `DrawIndex`).
+    /// The runtime draws a rate-mapped pass's regions through it, several in one command, each
+    /// region's viewport selected by its draw's index (`LoweringInputs::region_viewports`).
+    MultiDraw,
 }
 
 /// A Vulkan device extension the new core can require.
@@ -484,6 +492,9 @@ pub enum VkExtension {
     /// `VK_FORMAT_A4R4G4B4_UNORM_PACK16` and `VK_FORMAT_A4B4G4R4_UNORM_PACK16`, which hold
     /// `MTLPixelFormatBGRA4Unorm`'s word.
     Ext4444Formats,
+    // Appended.
+    /// `VK_EXT_multi_draw` (never promoted): [`VkFeature::MultiDraw`].
+    ExtMultiDraw,
 }
 
 /// One subgroup operation class (`VkSubgroupFeatureFlagBits`).

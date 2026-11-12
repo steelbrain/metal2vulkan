@@ -886,6 +886,21 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
                 form: f,
             }
         }
+        // Drawn a rate-mapped pass's regions at a time, the vertex function's `ViewportIndex` holds
+        // its region's draw index, where Metal's, which writes no index, renders through viewport
+        // 0: a fragment function reads 0, which Metal's reads there.
+        (ParamRole::Builtin(Builtin::ViewportArrayIndex), Stage::Fragment)
+            if cx.inputs.region_viewports =>
+        {
+            refuse_int64_interface(cx.entry, ty)?;
+            let f = form_on(cx.entry, cx.profile, ty)?;
+            int_scalar(f)?;
+            cx.families.stage_io.params.push(PlannedParam {
+                param: b.param,
+                source: Source::Absent(f),
+            });
+            return Ok(());
+        }
         // Drawn one amplification at a time beside a vertex function that writes no such index, a
         // fragment function reads the amplification's offset as the index, as Metal adds it to the
         // index the vertex function writes, 0 (a Metal probe on the M3 Max and an M4).
@@ -1216,6 +1231,80 @@ fn amplified_output(cx: &mut SelectCx<'_>, index: AmplifiedIndex) -> Result<(), 
         },
         offset,
         below,
+    });
+    Ok(())
+}
+
+/// Plan the `ViewportIndex` of a vertex function with outputs `outputs`, returning `returned`,
+/// compiled under `LoweringInputs::region_viewports`: its `DrawIndex`, "the zero-based index of
+/// the draw" of a `vkCmdDrawMultiEXT` or `vkCmdDrawMultiIndexedEXT` (the specification's
+/// `DrawIndex`), and so its region's among the command's ([`super::RegionViewport`]). `DrawIndex`
+/// is dynamically uniform, so every vertex of a primitive stores the same index, as Vulkan's
+/// `ViewportIndex` asks. A function that writes its own viewport or slice index, and one under
+/// another field that moves its indices or position (`amplification_draws`,
+/// `viewport_compensation`), reads its draw from a replay (`replay_bindings`, `merged_draws`) or
+/// runs behind the tessellator, is `NotImplemented(RasterizationRateMap)`: the runtime draws
+/// those region by region. A device that cannot store `ViewportIndex` from a vertex function,
+/// read `DrawIndex` or take several viewports refuses it, naming the three features. A function
+/// without outputs rasterizes nothing and stores no index.
+fn region_viewport(
+    cx: &mut SelectCx<'_>,
+    outputs: &[OutputBinding],
+    returned: Returned,
+) -> Result<(), Error> {
+    let i = &cx.inputs;
+    let indexed = outputs.iter().any(|o| {
+        matches!(
+            o.role,
+            OutputRole::ViewportArrayIndex | OutputRole::RenderTargetArrayIndex
+        )
+    });
+    let tessellated = matches!(cx.entry.ep.stage, AirStage::Vertex { patch: Some(_) });
+    if indexed
+        || tessellated
+        || i.amplification_draws.is_some()
+        || i.viewport_compensation.is_some()
+        || i.replay_bindings
+        || i.merged_draws
+    {
+        return Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into());
+    }
+    let f = cx.profile.fields();
+    let features = [
+        VkFeature::ShaderOutputViewportIndex,
+        VkFeature::ShaderDrawParameters,
+        VkFeature::MultiViewport,
+    ];
+    let multi_viewport = f.enabled.features.contains(&VkFeature::MultiViewport);
+    if !(f.fragment.output_viewport_index && f.draw_parameters && multi_viewport) {
+        return Err(Unsupported::needs_any_of(
+            Feature::RasterizationRateMap,
+            vec![features.map(Capability::Feature).to_vec()],
+        )
+        .into());
+    }
+    cx.facts.insert(RuntimeFact::RegionViewports);
+    if returned == Returned::Void {
+        return Ok(());
+    }
+    let sp = &mut cx.families.stage_io;
+    let draw_index = builtin(
+        sp,
+        B::DrawIndex,
+        IoDir::Input,
+        Shape::U32,
+        StageBuiltin::DrawIndex,
+    );
+    let viewport = builtin(
+        sp,
+        B::ViewportIndex,
+        IoDir::Output,
+        Shape::U32,
+        StageBuiltin::ViewportIndex,
+    );
+    sp.region_viewport = Some(super::RegionViewport {
+        draw_index,
+        viewport,
     });
     Ok(())
 }
@@ -2629,6 +2718,9 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             amplified_output(cx, AmplifiedIndex::Viewport)?;
         }
     }
+    if cx.inputs.region_viewports && cx.stage == Stage::Vertex {
+        region_viewport(cx, &outputs, returned)?;
+    }
     // A viewport Vulkan's cannot be: the position compensated for it.
     if let Some(c) = cx
         .inputs
@@ -3450,7 +3542,8 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     }
     // Size: every object, the parameters' words, and a store per output element; a count's
     // compare and select (and its constant 0) are a store's words more, and so is an
-    // amplification's offset added; an amplified output is a store, an add and a count's.
+    // amplification's offset added; an amplified output is a store, an add and a count's, and a
+    // region's viewport a load and a store.
     let params = param_words(cx);
     let sp = &mut cx.families.stage_io;
     let stores: u64 = sp
@@ -3475,6 +3568,8 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         // A rotation's second output: its field, two shuffles and a store.
         + 4 * sp.rotated_seconds.len() as u64
         + 3 * sp.amplified.len() as u64
+        // The region's draw index loaded and stored.
+        + 2 * u64::from(sp.region_viewport.is_some())
         + u64::from(sp.point_size_default.is_some())
         // The private sample mask's AND and store.
         + 2 * u64::from(sp.private_mask.is_some())

@@ -469,6 +469,13 @@ pub struct VariantKey {
     /// from it, the descriptor and the profile.
     #[cfg_attr(feature = "serde", serde(default))]
     pub color_group: u32,
+    /// The render pipeline draws a rasterization-rate-mapped pass's regions several at a time,
+    /// each one draw of a multi-draw whose index selects its viewport and scissor
+    /// (`BindShape::region_viewports`): its vertex function stores `ViewportIndex` as `DrawIndex`
+    /// (`LoweringInputs::region_viewports`). The plan of a pipeline compiled under it states it
+    /// (`RuntimeFact::RegionViewports`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub region_viewports: bool,
 }
 
 impl VariantKey {
@@ -578,6 +585,7 @@ impl VariantKey {
             && self.cross_class.is_empty()
             && self.anisotropic_samplers.is_empty()
             && self.color_group == 0
+            && !self.region_viewports
     }
 
     /// The lowering inputs of the function of `stage` under this key: its storage-image choices,
@@ -637,6 +645,8 @@ impl VariantKey {
         out.viewport_compensation = self
             .viewport_compensation
             .filter(|_| stage == crate::pipeline::sym::Stage::Vertex);
+        out.region_viewports =
+            self.region_viewports && stage == crate::pipeline::sym::Stage::Vertex;
         out.storage_view_slots = self
             .storage_view_slots
             .iter()

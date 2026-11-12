@@ -803,6 +803,12 @@ pub enum RuntimeFact {
     /// the bound pixel format's channels, through the texture's swizzle, which the shader takes from
     /// `SpecKey::BorderTexels`, which the binder sets from the bound texture.
     BorderTexels { slot: SlotRef },
+    /// The render pipeline was compiled under `VariantKey::region_viewports`, and its vertex
+    /// function stores `ViewportIndex` as `DrawIndex` (`LoweringInputs::region_viewports`): each
+    /// draw of a multi-draw renders through the viewport and scissor at its index, the runtime's
+    /// draw of a rasterization-rate-mapped pass's regions several at a time. Its plans state the
+    /// variant the shape asks for (`BindShape::region_viewports`).
+    RegionViewports,
 }
 
 /// What one compile made of a slot of a `RuntimeFact::UniformViewRange`.

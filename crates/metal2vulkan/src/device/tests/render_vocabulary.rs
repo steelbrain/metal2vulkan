@@ -119,6 +119,12 @@ const FEATURES: [(&str, &str, VkFeature, Option<VkExtension>); 10] = [
         VkFeature::ProvokingVertexLast,
         Some(VkExtension::ExtProvokingVertex),
     ),
+    (
+        "VkPhysicalDeviceMultiDrawFeaturesEXT",
+        "multiDraw",
+        VkFeature::MultiDraw,
+        Some(VkExtension::ExtMultiDraw),
+    ),
 ];
 
 /// Each feature is read, and enabled, exactly where the profile's source states it true in an
@@ -160,6 +166,7 @@ fn render_features_follow_each_source() {
             VkExtension::ExtPrimitiveTopologyListRestart,
             VkExtension::ExtProvokingVertex,
             VkExtension::ExtSampleLocations,
+            VkExtension::ExtMultiDraw,
         ] {
             let has = desc.extensions.contains(&extension);
             assert_eq!(
@@ -172,13 +179,15 @@ fn render_features_follow_each_source() {
     }
     // RADV, ANV, NVIDIA and lavapipe list depth clipping and list restart; RADV, ANV and NVIDIA
     // the clamp control; every Linux venue and MoltenVK the sample locations; every native
-    // profile (RADV, ANV, NVIDIA, lavapipe, SwiftShader) the provoking vertex.
+    // profile (RADV, ANV, NVIDIA, lavapipe, SwiftShader) the provoking vertex; RADV, ANV, NVIDIA
+    // and lavapipe the multi-draw.
     for (extension, at_least) in [
         (VkExtension::ExtDepthClipEnable, 10),
         (VkExtension::ExtDepthClampControl, 5),
         (VkExtension::ExtPrimitiveTopologyListRestart, 10),
         (VkExtension::ExtProvokingVertex, 15),
         (VkExtension::ExtSampleLocations, 10),
+        (VkExtension::ExtMultiDraw, 10),
     ] {
         let count = listed.get(&extension).copied().unwrap_or(0);
         assert!(count >= at_least, "{count} profiles list {extension:?}");

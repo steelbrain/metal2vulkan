@@ -982,6 +982,7 @@ codec_enum! {
         AlphaToOne,
         BresenhamLines,
         WideLines,
+        MultiDraw,
     }
     VkExtension {
         ExtRobustness2, ExtImageRobustness, ExtShaderAtomicFloat, ExtShaderAtomicFloat2,
@@ -1009,6 +1010,7 @@ codec_enum! {
         ExtProvokingVertex, ExtPostDepthCoverage,
         ExtLineRasterization,
         Ext4444Formats,
+        ExtMultiDraw,
     }
     SubgroupOp { Basic, Vote, Arithmetic, Ballot, Shuffle, ShuffleRelative, Clustered, Quad }
     FloatWidth { F16, F32, F64 }
@@ -1204,7 +1206,7 @@ codec_enum! {
         VertexIndex, InstanceIndex, Position { invariant }, PointSize { default },
         ClipDistance { count }, Layer, ViewportIndex, FragCoord, FrontFacing, PointCoord,
         SampleId, SampleMaskIn, PrimitiveId, FragDepth(f0), StencilRef, SampleMaskOut,
-        BaseInstance, BaryCoord { perspective }, ViewIndex, BaseVertex,
+        BaseInstance, BaryCoord { perspective }, ViewIndex, BaseVertex, DrawIndex,
     }
     DepthMode { Any, Greater, Less }
     VertexFetch {
@@ -1288,6 +1290,7 @@ codec_enum! {
         PartialObjectThreadgroups,
         RotatedInputBlend { color, blend, kept },
         BorderTexels { slot },
+        RegionViewports,
     }
     UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {

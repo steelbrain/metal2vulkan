@@ -141,6 +141,14 @@ pub struct BindState {
     /// Part of the shape (`BindShape::far_vertex_buffers`); empty for every other draw.
     #[cfg_attr(feature = "serde", serde(default))]
     pub far_vertex_buffers: BTreeSet<u32>,
+    /// The draw records a rasterization-rate-mapped pass's regions several at a time, each one
+    /// draw of a `vkCmdDrawMultiEXT` or `vkCmdDrawMultiIndexedEXT` whose index selects its
+    /// viewport and scissor: the pipeline runs the variant whose vertex function stores
+    /// `ViewportIndex` as `DrawIndex` (`VariantKey::region_viewports`), and its `VkPipeline` takes
+    /// as many viewports as a command draws regions. Part of the shape
+    /// (`BindShape::region_viewports`); `false` for every other draw.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub region_viewports: bool,
     /// Where the heap arrays (set 1) hold the command's heap members and argument samplers
     /// ([`HeapPlacement`]). Only the instantiated tables and the elements the consumer writes
     /// ([`BindingPlan::heap_elements`]) depend on it, so it is not part of the shape.
@@ -744,6 +752,7 @@ impl BindState {
             quad_primitive_ids: self.quad_primitive_ids,
             private_list: self.private_list,
             far_vertex_buffers: self.far_vertex_buffers.clone(),
+            region_viewports: self.region_viewports,
         }
     }
 
@@ -846,6 +855,7 @@ impl BindState {
             quad_primitive_ids,
             private_list,
             far_vertex_buffers,
+            region_viewports,
         } = shape;
         let tables = self.stages.iter().filter(|(_, t)| !t.has_empty_shape());
         tables.clone().count() == stages.len()
@@ -876,6 +886,7 @@ impl BindState {
             && self.quad_primitive_ids == *quad_primitive_ids
             && self.private_list == *private_list
             && self.far_vertex_buffers == *far_vertex_buffers
+            && self.region_viewports == *region_viewports
     }
 
     /// `used_resources` by token ([`BindShape::used`]): one token names one resource, and listing
@@ -1784,6 +1795,11 @@ pub struct BindShape {
     /// replay's), in the pulled-vertex-buffer variant (`VariantKey::pulled_vertex_buffers`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub far_vertex_buffers: BTreeSet<u32>,
+    /// `BindState.region_viewports`: a draw of a rate-mapped pass's regions several at a time
+    /// runs the variant whose vertex function stores `ViewportIndex` as `DrawIndex`
+    /// (`VariantKey::region_viewports`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub region_viewports: bool,
 }
 
 impl BindShape {

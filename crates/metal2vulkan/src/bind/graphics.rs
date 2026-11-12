@@ -185,7 +185,11 @@
 //!   vertex). A direct
 //!   draw of a multiview plan whose last instance index exceeds `maxMultiviewInstanceIndex` is
 //!   `Unsupported{VertexAmplification; Limit}`. `DrawCommands.uses` lists the draw's index buffer
-//!   and indirect arguments.
+//!   and indirect arguments. A draw of a rate-mapped pass's regions several at a time
+//!   (`BindShape::region_viewports`) runs the variant whose vertex function stores its draw's
+//!   index among a multi-draw's as `ViewportIndex` (`VariantKey::region_viewports`); a mesh or
+//!   amplified draw asking for it is an internal error, the runtime drawing those region by
+//!   region.
 //! - **Index buffer bounds**. A direct indexed draw whose indices run past where Metal's fetch
 //!   stops reading its index buffer (`IndexBufferRef::fetch_end`: the length rounded up to 4 bytes;
 //!   Metal's API validation rejects the draw, and Apple's GPUs read index 0 past there) is drawn
@@ -1148,6 +1152,13 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .dependencies
         .iter()
         .any(|d| d.fact == RuntimeFact::PrivateList);
+    // A draw of a rate-mapped pass's regions several at a time, one a draw of a multi-draw: the
+    // variant whose vertex function stores its draw's index as `ViewportIndex`.
+    let region_viewports = shape.region_viewports;
+    let compiled_regions = p
+        .dependencies
+        .iter()
+        .any(|d| d.fact == RuntimeFact::RegionViewports);
     let route = route(
         &shape.vertex_amplification,
         p.graphics.max_vertex_amplification_count,
@@ -2565,6 +2576,14 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     variant.primitive_id_indices = primitive_id_indices;
     variant.quad_primitive_ids = quad_primitive_ids;
     variant.private_list = private_list;
+    // Only a vertex pipeline's draw of one pass of views draws regions so: a mesh draw's and an
+    // amplified draw's are drawn region by region.
+    if region_viewports && (mesh || amplification_draws.is_some() || views.view_mask != 0) {
+        return Err(internal(
+            "regions drawn several at a time by a mesh or amplified draw",
+        ));
+    }
+    variant.region_viewports = region_viewports;
     // Tables that may pass `maxStorageBufferRange`: the variant that reads them at their
     // addresses (and a pipeline compiled so states it).
     variant.addressed_function_tables = crate::bind::heap::addressed_function_tables(
@@ -2603,7 +2622,8 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 || compiled_shader_tests != shader_tests
                 || compiled_shader_stencil != shader_stencil
                 || compiled_quads != quad_primitive_ids
-                || compiled_list != private_list,
+                || compiled_list != private_list
+                || compiled_regions != region_viewports,
             amplifications,
             indirect_first_instance_missing: !profile
                 .fields()

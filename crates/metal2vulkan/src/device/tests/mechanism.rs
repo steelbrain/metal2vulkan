@@ -161,6 +161,7 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::QuadPrimitiveIds,
         RuntimeFact::RotatedWeights,
         RuntimeFact::PrivateList,
+        RuntimeFact::RegionViewports,
         RuntimeFact::YCbCrInPlace {
             slot,
             samplers: 1,
@@ -382,6 +383,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::BorderTexels { .. } => 93,
         RuntimeFact::HeapResidency { .. } => 94,
         RuntimeFact::OneRow => 95,
+        RuntimeFact::RegionViewports => 96,
     }
 }
 
@@ -389,7 +391,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..96).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..97).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -466,6 +468,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::MergedDraws
                 | RuntimeFact::QuadPrimitiveIds
                 | RuntimeFact::PrivateList
+                | RuntimeFact::RegionViewports
                 | RuntimeFact::YCbCrInPlace { .. }
                 | RuntimeFact::ZeroedColor { .. }
                 | RuntimeFact::DroppedColor { .. }

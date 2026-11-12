@@ -960,6 +960,9 @@ pub enum StageBuiltin {
     /// `BaseVertex` (`shaderDrawParameters`): a vertex function's `[[base_vertex]]`, the draw's
     /// first vertex without an index buffer and its vertex offset with one.
     BaseVertex,
+    /// `DrawIndex` (`shaderDrawParameters`): the draw's index among a multi-draw's, which a vertex
+    /// function compiled under `LoweringInputs::region_viewports` stores as its `ViewportIndex`.
+    DrawIndex,
 }
 
 /// How a fragment function replaces depth.

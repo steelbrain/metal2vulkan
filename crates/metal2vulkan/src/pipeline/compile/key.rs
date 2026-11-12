@@ -519,6 +519,10 @@ pub fn function_key(
     if let Some(bytes) = inputs.object_payload {
         h.bytes(b"object-payload").u64(u64::from(bytes));
     }
+    // Appended only when set.
+    if inputs.region_viewports {
+        h.bytes(b"region-viewports");
+    }
     // Appended only when present, so a stage that links nothing keeps its key: the tag's length
     // prefix keeps the encoding unambiguous.
     if !linked.is_empty() {

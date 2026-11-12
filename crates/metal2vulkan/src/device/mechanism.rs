@@ -188,6 +188,7 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::MergedDraws => Mechanism::Variant,
         RuntimeFact::QuadPrimitiveIds => Mechanism::Variant,
         RuntimeFact::PrivateList => Mechanism::Variant,
+        RuntimeFact::RegionViewports => Mechanism::Variant,
         // Keyed by the slots bound to a texture whose planes are read in place, on a profile that
         // reads them so (`ProfileFields::ycbcr_in_place`).
         RuntimeFact::YCbCrInPlace { .. } => Mechanism::Variant,

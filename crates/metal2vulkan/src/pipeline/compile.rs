@@ -2525,6 +2525,9 @@ fn lower_inputs(
             let read = raw_indices_read(spec);
             out.viewport_index_varying = written.viewport && read.viewport;
             out.render_target_array_index_varying = written.layer && read.layer;
+            // Behind a vertex function that stores its region's draw index as `ViewportIndex`,
+            // a fragment function that reads `[[viewport_array_index]]` reads 0 in its place.
+            out.region_viewports = variant.region_viewports && read.viewport;
             // Behind a vertex function that writes the primitive ID's varying, on a device that
             // declares a fragment `PrimitiveId` (behind an emulated post-tessellation vertex
             // function): elsewhere the fragment function reads the varying without the field.
