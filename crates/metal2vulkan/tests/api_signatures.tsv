@@ -2831,6 +2831,8 @@ field	metal2vulkan-runtime::WorkCounts.finales_apart	pub finales_apart: u64
 field	metal2vulkan-runtime::WorkCounts.finales_folded	pub finales_folded: u64
 field	metal2vulkan-runtime::WorkCounts.first_work_order_wait_nanos	pub first_work_order_wait_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.first_work_order_waits	pub first_work_order_waits: u64
+field	metal2vulkan-runtime::WorkCounts.first_work_waits	pub first_work_waits: u64
+field	metal2vulkan-runtime::WorkCounts.first_work_waits_unused	pub first_work_waits_unused: u64
 field	metal2vulkan-runtime::WorkCounts.flights_followed	pub flights_followed: u64
 field	metal2vulkan-runtime::WorkCounts.footprint_lock_waits	pub footprint_lock_waits: u64
 field	metal2vulkan-runtime::WorkCounts.footprints_built	pub footprints_built: u64

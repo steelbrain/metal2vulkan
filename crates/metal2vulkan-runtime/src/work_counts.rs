@@ -313,6 +313,8 @@ pub(crate) struct Counters {
     fill_queue_submissions: AtomicU64,
     fill_queue_waits: AtomicU64,
     fill_queue_waits_unused: AtomicU64,
+    first_work_waits: AtomicU64,
+    first_work_waits_unused: AtomicU64,
     uncached_host_images: AtomicU64,
     cpu_block_decodes: AtomicU64,
     block_decode_passes: AtomicU64,
@@ -3043,6 +3045,16 @@ impl Counters {
         self.fill_queue_waits.fetch_add(1, Ordering::Relaxed);
         if !reached {
             self.fill_queue_waits_unused.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// A batch waited on the GPU for batches on other `VkQueue`s that did new resources' first
+    /// work, whose memory its commands or its own first work may reach where `reached`
+    /// (`command_buffer/submit.rs`).
+    pub(crate) fn first_work_waited(&self, reached: bool) {
+        self.first_work_waits.fetch_add(1, Ordering::Relaxed);
+        if !reached {
+            self.first_work_waits_unused.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -6546,6 +6558,15 @@ pub struct WorkCounts {
     /// (a pointer loaded from memory, work recorded on the GPU alone). Each waited for work it
     /// does not use.
     pub fill_queue_waits_unused: u64,
+    /// Batches that waited on the GPU for batches on other `VkQueue`s that did new resources'
+    /// first work (`texture/first_move.rs`: images' first moves, staged copies into them, and
+    /// fills at a batch's start), until the host saw those complete.
+    pub first_work_waits: u64,
+    /// Of [`first_work_waits`](Self::first_work_waits), the batches whose commands and own first
+    /// work reach none of the memory the work they waited for wrote, as
+    /// [`fill_queue_waits_unused`](Self::fill_queue_waits_unused) counts for fills. Each waited
+    /// for work it does not use.
+    pub first_work_waits_unused: u64,
     /// New `Shared` and `Managed` textures' images with host-transfer usage placed in memory the
     /// host does not cache, where the device has none the image may take
     /// (`texture/host_copy.rs`): their host copies read at uncached memory's speed (a 1080p
@@ -9169,6 +9190,8 @@ impl Device {
             fill_queue_submissions: counters.fill_queue_submissions.load(Ordering::Relaxed),
             fill_queue_waits: counters.fill_queue_waits.load(Ordering::Relaxed),
             fill_queue_waits_unused: counters.fill_queue_waits_unused.load(Ordering::Relaxed),
+            first_work_waits: counters.first_work_waits.load(Ordering::Relaxed),
+            first_work_waits_unused: counters.first_work_waits_unused.load(Ordering::Relaxed),
             uncached_host_images: counters.uncached_host_images.load(Ordering::Relaxed),
             cpu_block_decodes: counters.cpu_block_decodes.load(Ordering::Relaxed),
             block_decode_passes: counters.block_decode_passes.load(Ordering::Relaxed),

@@ -1581,6 +1581,13 @@ impl Fresh for Image {
     fn in_other_memory(&self) -> bool {
         self.owner.memory().is_some()
     }
+
+    /// The image's own key, which a texture's uses of it name (`Texture::bound_use`), kept with
+    /// what owns its memory (`used_resources::Owners::texture`). Where no owner is kept under it,
+    /// what owns its moves' memory is unknown, which any command may reach.
+    fn key(&self) -> Option<ResourceKey> {
+        Some(self.identity.key)
+    }
 }
 
 /// Who owns an image and its memory.
@@ -6813,7 +6820,8 @@ impl Texture {
                 ..copy
             };
             let copies = vec![(truth.raw.get(), copy)];
-            let staged = TexelCopy::new(source, host.packed_len(), copies, Box::new(staging));
+            let staged = TexelCopy::new(source, host.packed_len(), copies, Box::new(staging))
+                .keyed(truth.identity.key);
             // The decoded twin's texels of the region, after the copy.
             let regions = std::slice::from_ref(&image_region);
             let staged = match truth.decode_pass(regions, PassScratch::Device)? {

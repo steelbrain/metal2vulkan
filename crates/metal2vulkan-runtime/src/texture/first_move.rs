@@ -815,6 +815,8 @@ pub(crate) struct TexelCopy {
     /// The decode of what the copies wrote into the image's decoded twin, after them
     /// (`texture/decoded_twin.rs`).
     decode: Option<DecodePass>,
+    /// The hazard-tracking key the program's uses of the image name ([`Fresh::key`]).
+    key: Option<ResourceKey>,
 }
 
 impl TexelCopy {
@@ -831,7 +833,14 @@ impl TexelCopy {
             staging,
             bytes,
             decode: None,
+            key: None,
         }
+    }
+
+    /// The copies, into an image whose uses name `key` ([`Fresh::key`]).
+    pub(crate) fn keyed(mut self, key: ResourceKey) -> TexelCopy {
+        self.key = Some(key);
+        self
     }
 
     /// The copies, then `pass`, their decode into the image's decoded twin (its scratch counted
@@ -865,6 +874,12 @@ pub(crate) trait Fresh: Send + Sync {
     fn in_other_memory(&self) -> bool {
         false
     }
+    /// The hazard-tracking key the program's uses of its image name, whose owner
+    /// (`used_resources::owner_of`) owns the memory its moves write. `None` for an image of the
+    /// device's own, which no use of the program's names.
+    fn key(&self) -> Option<ResourceKey> {
+        None
+    }
 }
 
 /// A new buffer whose fill waits: what a submission that takes the fill holds until it completes
@@ -895,9 +910,14 @@ enum Waiting {
 
 /// The fills waiting that a submission takes ([`FirstMoves::take_holding`]).
 pub(crate) enum FillTake<'r> {
-    /// Every one: an internal submission's, a handle's, and a batch's on a device without a fill
-    /// queue.
+    /// Every one, what owns the memory of what it takes unknown: an internal submission's, a
+    /// handle's.
     All,
+    /// Every one, knowing what owns the memory of what it takes by `owner_of` (the owner under a
+    /// key, `used_resources::owner_of`): a batch's on a device without a fill queue.
+    Owned {
+        owner_of: &'r dyn Fn(ResourceKey) -> Option<ObjectId>,
+    },
     /// A batch's on a device with a fill queue (the module docs): the fills of memory its commands
     /// may reach, as `reaches` answers for what owns it (`owner_of` naming the owner under a
     /// key, `used_resources::owner_of`); every fill of memory no use of the program's names; and
@@ -909,6 +929,16 @@ pub(crate) enum FillTake<'r> {
     },
 }
 
+impl FillTake<'_> {
+    /// What names the owner of the memory under a key, where the take knows it.
+    fn owner_of(&self) -> Option<&dyn Fn(ResourceKey) -> Option<ObjectId>> {
+        match self {
+            FillTake::All => None,
+            FillTake::Owned { owner_of } | FillTake::Reached { owner_of, .. } => Some(*owner_of),
+        }
+    }
+}
+
 /// An entry of a take, in its order ([`FirstMoves::take_with`]).
 enum Sorted {
     Kept(Waiting),
@@ -918,12 +948,13 @@ enum Sorted {
     Fill(Weak<dyn Filled>, FirstFill, Arc<dyn Filled>),
 }
 
-/// A resource whose first work a submission took, held.
+/// A resource whose first work a submission took, held; a move's and a staged copy's with what
+/// owns the memory they write, as the take found it ([`Held::owner`]).
 enum Held {
-    Moves(Arc<dyn Fresh>, Vec<FirstMove>),
+    Moves(Arc<dyn Fresh>, Vec<FirstMove>, Option<ObjectId>),
     /// The buffer, not kept, the hold on its memory, and its fill.
     Fill(Weak<dyn Filled>, Box<dyn Any + Send + Sync>, FirstFill),
-    Texels(Arc<dyn Any + Send + Sync>, TexelCopy),
+    Texels(Arc<dyn Any + Send + Sync>, TexelCopy, Option<ObjectId>),
 }
 
 impl Held {
@@ -931,14 +962,50 @@ impl Held {
     fn keeper(self) -> Box<dyn Any + Send + Sync> {
         match self {
             // The moves keep the pages their images are bound to.
-            Held::Moves(fresh, moves) => Box::new((fresh, moves)),
+            Held::Moves(fresh, moves, _) => Box::new((fresh, moves)),
             Held::Fill(_, memory, fill) => match fill.staging {
                 Some(staging) => Box::new((memory, staging)),
                 None => memory,
             },
-            Held::Texels(image, copy) => Box::new((image, copy.staging, copy.decode)),
+            Held::Texels(image, copy, _) => Box::new((image, copy.staging, copy.decode)),
         }
     }
+
+    /// What owns the memory its work writes, by its identity, as the program's uses name it
+    /// (`used_resources::owner_of`): `None` where the take did not know it, or where no use of
+    /// the program's names that memory (the device's own resources).
+    fn owner(&self) -> Option<ObjectId> {
+        match self {
+            Held::Moves(_, _, owner) | Held::Texels(_, _, owner) => *owner,
+            Held::Fill(_, _, fill) => fill.owner,
+        }
+    }
+}
+
+/// What owns the memory the work of `held` writes, each once; `None` where one's owner is
+/// unknown, or memory no use of the program's names, which any command may reach.
+fn owners_of<'h>(held: impl IntoIterator<Item = &'h Held>) -> Option<Vec<ObjectId>> {
+    let mut owners = Vec::new();
+    for held in held {
+        let owner = held.owner()?;
+        if !owners.contains(&owner) {
+            owners.push(owner);
+        }
+    }
+    Some(owners)
+}
+
+/// Of `points`, the last on each `VkQueue`, in the order each queue first came: a wait for it
+/// orders every one before it there.
+pub(crate) fn last_of_each(points: impl IntoIterator<Item = Point>) -> Vec<Point> {
+    let mut last: Vec<Point> = Vec::new();
+    for at in points {
+        match last.iter_mut().find(|point| point.queue == at.queue) {
+            Some(point) => point.value = point.value.max(at.value),
+            None => last.push(at),
+        }
+    }
+    last
 }
 
 /// The device's buffer of [`ZERO_BYTES`] zero bytes, host-visible and written by the host once,
@@ -974,8 +1041,9 @@ pub(crate) struct FirstMoves {
     submissions_waited: AtomicU64,
     submission_wait_nanos: AtomicU64,
     waiting: Mutex<Vec<Waiting>>,
-    /// The point of the last batch on each `VkQueue` that did some, by queue.
-    done_at: Mutex<Vec<Point>>,
+    /// The batches that did some and may not have completed, each at its point, with what owns
+    /// the memory its work wrote ([`Taken::owners`]; `None`: memory any command may reach).
+    done_at: Mutex<Vec<(Point, Option<Vec<ObjectId>>)>>,
     /// The internal submission that did some and may not have completed: the timeline it
     /// signals and the value (`device/submit.rs`).
     internal_at: Mutex<Option<(vk::Semaphore, u64)>>,
@@ -1241,7 +1309,7 @@ impl FirstMoves {
         let slots = hold();
         let mut held = Vec::new();
         let mut left: Vec<Box<dyn Any + Send + Sync>> = Vec::new();
-        let mut every_fill = matches!(fills, FillTake::All);
+        let mut every_fill = matches!(fills, FillTake::All | FillTake::Owned { .. });
         {
             let mut waiting = lock(&self.waiting);
             if waiting.is_empty() {
@@ -1279,7 +1347,9 @@ impl FirstMoves {
                             left.push(Box::new(fresh));
                         } else {
                             every_fill |= fresh.in_other_memory();
-                            sorted.push(Sorted::Taken(Held::Moves(fresh, moves)));
+                            let owner = (fills.owner_of())
+                                .and_then(|owner_of| fresh.key().and_then(owner_of));
+                            sorted.push(Sorted::Taken(Held::Moves(fresh, moves, owner)));
                         }
                     }
                     Waiting::Fill(weak, fill) => {
@@ -1292,7 +1362,9 @@ impl FirstMoves {
                     Waiting::Texels(weak, copy) => {
                         if let Some(image) = weak.upgrade() {
                             every_fill = true;
-                            sorted.push(Sorted::Taken(Held::Texels(image, copy)));
+                            let owner =
+                                (fills.owner_of()).and_then(|owner_of| copy.key.and_then(owner_of));
+                            sorted.push(Sorted::Taken(Held::Texels(image, copy, owner)));
                         }
                     }
                 }
@@ -1303,10 +1375,8 @@ impl FirstMoves {
                     Sorted::Kept(entry) => kept.push(entry),
                     Sorted::Taken(entry) => held.push(entry),
                     Sorted::Fill(weak, mut fill, buffer) => {
-                        fill.owner = match &fills {
-                            FillTake::All => None,
-                            FillTake::Reached { owner_of, .. } => fill.key.and_then(owner_of),
-                        };
+                        fill.owner =
+                            (fills.owner_of()).and_then(|owner_of| fill.key.and_then(owner_of));
                         let taken = every_fill
                             || match (&fills, fill.owner) {
                                 (FillTake::Reached { reaches, .. }, Some(owner)) => reaches(owner),
@@ -1391,15 +1461,20 @@ impl FirstMoves {
             .any(|entry| matches!(entry, Waiting::Fill(_, fill) if fill.buffer == buffer))
     }
 
-    /// The points a submission on `VkQueue` `queue` waits for: of the last batch on each other
-    /// one that did first work, where `completed` says it may not have completed.
-    pub(crate) fn waits(&self, queue: usize, completed: impl Fn(Point) -> bool) -> Vec<Point> {
+    /// The batches on `VkQueue`s other than `queue` that did first work, where `completed` says
+    /// they may not have completed, each at its point with what owns the memory its work wrote
+    /// (`None`: memory any command may reach): what a submission on `queue` may wait for
+    /// ([`last_of_each`] of their points).
+    pub(crate) fn waits(
+        &self,
+        queue: usize,
+        completed: impl Fn(Point) -> bool,
+    ) -> Vec<(Point, Option<Vec<ObjectId>>)> {
         let mut done_at = lock(&self.done_at);
-        done_at.retain(|&point| !completed(point));
-        done_at
-            .iter()
-            .copied()
-            .filter(|point| point.queue != queue)
+        done_at.retain(|&(point, _)| !completed(point));
+        (done_at.iter())
+            .filter(|(point, _)| point.queue != queue)
+            .cloned()
             .collect()
     }
 
@@ -1781,7 +1856,7 @@ impl<'a> Taken<'a> {
     /// submission order -- earlier in this command buffer, or in a submission before.
     pub(crate) unsafe fn record_staged(&self, device: &Vk, command_buffer: vk::CommandBuffer) {
         let staged = self.held.iter().filter_map(|held| match held {
-            Held::Texels(_, copy) => Some(copy),
+            Held::Texels(_, copy, _) => Some(copy),
             Held::Moves(..) | Held::Fill(..) => None,
         });
         let mut copied = false;
@@ -1852,7 +1927,7 @@ impl<'a> Taken<'a> {
             .collect();
         let moves = || {
             self.held.iter().flat_map(|held| match held {
-                Held::Moves(_, moves) => moves.as_slice(),
+                Held::Moves(_, moves, _) => moves.as_slice(),
                 Held::Fill(..) | Held::Texels(..) => &[],
             })
         };
@@ -1889,16 +1964,26 @@ impl<'a> Taken<'a> {
         }
     }
 
+    /// What owns the memory its work writes ([`Held::owner`]), each once; `None` where one's
+    /// owner is unknown, or memory no use of the program's names.
+    pub(crate) fn owners(&self) -> Option<Vec<ObjectId>> {
+        owners_of(&self.held)
+    }
+
     /// The submission that records the work was made; on a device of several `VkQueue`s by a
-    /// batch at `at` (`None` for a submission waited for, or a device of one). What the
-    /// submission holds until it completes.
+    /// batch at `at` (`None` for a submission waited for, or a device of one), kept with what
+    /// owns the memory its work writes ([`owners`](Self::owners)) until it completed
+    /// ([`FirstMoves::waits`]). What the submission holds until it completes.
     pub(crate) fn submitted(mut self, at: Option<Point>) -> Vec<Box<dyn Any + Send + Sync>> {
         if let (Some(at), false) = (at, self.held.is_empty()) {
+            let owners = self.owners();
             let mut done_at = lock(&self.moves.done_at);
-            match done_at.iter_mut().find(|point| point.queue == at.queue) {
-                Some(point) => point.value = point.value.max(at.value),
-                None => done_at.push(at),
+            // One whose work any command may reach covers those before it on its `VkQueue`: a
+            // wait for it orders them too.
+            if owners.is_none() {
+                done_at.retain(|(point, _)| point.queue != at.queue);
             }
+            done_at.push((at, owners));
         }
         self.held.drain(..).map(Held::keeper).collect()
     }
@@ -2021,14 +2106,14 @@ fn give_back(moves: &FirstMoves, held: impl Iterator<Item = Held>) {
     let mut given = Vec::new();
     for held in held {
         match held {
-            Held::Moves(fresh, moves) => {
+            Held::Moves(fresh, moves, _) => {
                 fresh.give_back(moves.into_iter().map(FirstMove::unheld).collect());
                 given.push(Waiting::Moves(Arc::downgrade(&fresh)));
             }
             Held::Fill(buffer, _, fill) => {
                 given.push(Waiting::Fill(buffer, fill));
             }
-            Held::Texels(image, copy) => {
+            Held::Texels(image, copy, _) => {
                 given.push(Waiting::Texels(Arc::downgrade(&image), copy));
             }
         }
@@ -2085,16 +2170,7 @@ impl Fills<'_> {
     /// ([`FillTake::Reached`]), each once; `None` where one writes memory no use of the
     /// program's names, or the take found no owner, which any command may reach.
     pub(crate) fn owners(&self) -> Option<Vec<ObjectId>> {
-        let mut owners = Vec::new();
-        for held in &self.held {
-            if let Held::Fill(_, _, fill) = held {
-                let owner = fill.owner?;
-                if !owners.contains(&owner) {
-                    owners.push(owner);
-                }
-            }
-        }
-        Some(owners)
+        owners_of(&self.held)
     }
 
     /// The submission that records the fills was made: what it holds until it completes (each
@@ -2314,6 +2390,74 @@ mod tests {
         assert_eq!(filled(&taken), [6]);
         drop(taken.submitted(None));
         assert!(moves.none_waiting_but(|_| false));
+    }
+
+    /// An image of the program's whose uses name its key, holding its move.
+    struct Owned(Mutex<Vec<FirstMove>>, ResourceKey);
+
+    impl Fresh for Owned {
+        fn take(&self) -> Vec<FirstMove> {
+            lock(&self.0).drain(..).collect()
+        }
+
+        fn give_back(&self, moves: Vec<FirstMove>) {
+            lock(&self.0).extend(moves);
+        }
+
+        fn rebindable(&self) -> Option<ResourceKey> {
+            None
+        }
+
+        fn key(&self) -> Option<ResourceKey> {
+            Some(self.1)
+        }
+    }
+
+    /// A batch that knows what owns the memory of the first work it takes keeps that with its
+    /// point: two batches of one `VkQueue` over different owners both stay, and one whose work's
+    /// owner no use keeps, which any command may reach, covers those before it there.
+    #[test]
+    fn a_batch_keeps_what_owns_its_first_work_s_memory() {
+        let moves = FirstMoves::default();
+        let [texture, buffer, unkept] = [(); 3].map(|()| ResourceKey::new());
+        let (texture_id, buffer_id) = (ObjectId::new(), ObjectId::new());
+        let owner_of = |key: ResourceKey| {
+            (key == texture)
+                .then_some(texture_id)
+                .or((key == buffer).then_some(buffer_id))
+        };
+        let owned = |raw: u64, key: ResourceKey| {
+            let image = Arc::new(Owned(Mutex::new(vec![first(raw, false)]), key));
+            let weak: Weak<Owned> = Arc::downgrade(&image);
+            moves.register(weak);
+            image
+        };
+        let take = || {
+            let fills = FillTake::Owned {
+                owner_of: &owner_of,
+            };
+            moves.take_with(|_| true, fills, || None, |_| true)
+        };
+        let image = owned(1, texture);
+        let at = Point { queue: 1, value: 3 };
+        let taken = take();
+        assert_eq!(taken.owners(), Some(vec![texture_id]));
+        drop(taken.submitted(Some(at)));
+        let _buffer = keyed_fill(&moves, 2, Some(buffer));
+        let later = Point { queue: 1, value: 4 };
+        drop(take().submitted(Some(later)));
+        assert_eq!(
+            moves.waits(0, |_| false),
+            [(at, Some(vec![texture_id])), (later, Some(vec![buffer_id]))]
+        );
+        assert_eq!(last_of_each([at, later]), [later]);
+        let unknown = owned(3, unkept);
+        let last = Point { queue: 1, value: 5 };
+        let taken = take();
+        assert_eq!(taken.owners(), None);
+        drop(taken.submitted(Some(last)));
+        assert_eq!(moves.waits(0, |_| false), [(last, None)]);
+        drop((image, unknown));
     }
 
     #[test]
@@ -2624,7 +2768,7 @@ mod tests {
         let taken = moves.take(|_| false);
         let images: Vec<vk::Image> = (taken.held.iter())
             .flat_map(|held| match held {
-                Held::Moves(_, moves) => moves.iter().map(|m| m.image).collect(),
+                Held::Moves(_, moves, _) => moves.iter().map(|m| m.image).collect(),
                 Held::Fill(..) | Held::Texels(..) => Vec::new(),
             })
             .collect();
@@ -2648,7 +2792,11 @@ mod tests {
         let image = registered(&moves, 1, None);
         let at = Point { queue: 1, value: 5 };
         drop(moves.take(|_| false).submitted(Some(at)));
-        assert_eq!(moves.waits(0, |_| false), [at]);
+        assert_eq!(
+            moves.waits(0, |_| false),
+            [(at, None)],
+            "what owns its memory unknown"
+        );
         assert!(
             moves.waits(1, |_| false).is_empty(),
             "its own queue orders it"
@@ -2658,8 +2806,8 @@ mod tests {
         drop(moves.take(|_| false).submitted(Some(later)));
         assert_eq!(
             moves.waits(2, |_| false),
-            [later],
-            "the last batch of the queue"
+            [(later, None)],
+            "the last batch of the queue, whose work any command may reach"
         );
         assert!(moves.waits(0, |point| point.value <= 7).is_empty());
         assert!(

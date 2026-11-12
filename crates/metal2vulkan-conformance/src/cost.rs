@@ -891,7 +891,7 @@ const TRANSLATION: [&str; 20] = [
 
 /// The name prefixes that put a count in [`Region::Submission`]: the commit path, our own other
 /// threads and the GPU.
-const SUBMISSION: [&str; 56] = [
+const SUBMISSION: [&str; 57] = [
     "commands_recorded.",
     "command_buffers_",
     "command_pools_made",
@@ -911,6 +911,8 @@ const SUBMISSION: [&str; 56] = [
     // and the batches' GPU waits for them.
     "fill_queue_submissions",
     "fill_queue_waits",
+    // The batches' GPU waits for other queues' batches that did new resources' first work.
+    "first_work_waits",
     "grouped_submissions",
     "batches_",
     "group_ends_",

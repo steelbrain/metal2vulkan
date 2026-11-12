@@ -27,7 +27,8 @@ use crate::error::{vulkan, Error};
 use crate::exit_guard::{self, Call};
 use crate::release;
 use crate::resource::ResourceKey;
-use crate::texture::first_move::{FirstMoves, Mine, Taken};
+use crate::texture::first_move::{last_of_each, FirstMoves, Mine, Taken};
+use crate::tracker::Point;
 use crate::work_counts::Begun;
 use ash::vk;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -275,10 +276,13 @@ impl Device {
             Reach::Device => true,
             Reach::Mine { after_other_queues } => after_other_queues,
         };
+        // Every one: its work may reach any resource.
         let waits = match after_other_queues {
-            true => firsts.waits(0, |point| {
-                shared.queues[point.queue].completed_value() >= point.value
-            }),
+            true => {
+                let completed =
+                    |point: Point| shared.queues[point.queue].completed_value() >= point.value;
+                last_of_each(firsts.waits(0, completed).into_iter().map(|(at, _)| at))
+            }
             false => Vec::new(),
         };
         // SAFETY: the command buffer is not pending (every submission is waited for below) and

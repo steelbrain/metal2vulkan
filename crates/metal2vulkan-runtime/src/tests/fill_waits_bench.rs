@@ -13,8 +13,8 @@
 //!
 //! Printed as `FILL-WAITS-BENCH` lines: the compositor's frames (wall time from commit to the
 //! wait's return, and GPU time, p50, p90, p99 and the most), the app's command buffers a second,
-//! the work counts (`fill_queue_submissions`, `fill_queue_waits`, `fill_queue_waits_unused`),
-//! and the host time of [`SHARED_MAKINGS`] `Shared` textures' makings at the phase's end, the
+//! the work counts (`fill_queue_submissions`, `fill_queue_waits`, `fill_queue_waits_unused`,
+//! `first_work_waits`, `first_work_waits_unused`), and the host time of [`SHARED_MAKINGS`] `Shared` textures' makings at the phase's end, the
 //! app's work still queued. Ignored: run it in release, under the GPU safety cfg.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
@@ -286,11 +286,14 @@ fn fill_waits_bench() {
                 "FILL-WAITS-BENCH {name} ({variant}): app making {making:?}: frames {frames}, \
                  frame_ms p50 {w50:.3} p90 {w90:.3} p99 {w99:.3} max {wmax:.3}, gpu_ms p50 \
                  {g50:.3} p90 {g90:.3} p99 {g99:.3} max {gmax:.3}, app {app_rate:.1}/s, \
-                 fill_queue_submissions {}, fill_queue_waits {}, fill_queue_waits_unused {}; \
-                 {SHARED_MAKINGS} Shared textures made, ms p50 {m50:.3} max {mmax:.3}",
+                 fill_queue_submissions {}, fill_queue_waits {}, fill_queue_waits_unused {}, \
+                 first_work_waits {}, first_work_waits_unused {}; {SHARED_MAKINGS} Shared \
+                 textures made, ms p50 {m50:.3} max {mmax:.3}",
                 after.fill_queue_submissions - before.fill_queue_submissions,
                 after.fill_queue_waits - before.fill_queue_waits,
                 after.fill_queue_waits_unused - before.fill_queue_waits_unused,
+                after.first_work_waits - before.first_work_waits,
+                after.first_work_waits_unused - before.first_work_waits_unused,
             );
         }
     }

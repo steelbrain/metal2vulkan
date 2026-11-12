@@ -222,7 +222,7 @@ use crate::shadow_standing::{LetGo, Missed, Unskipped};
 use crate::sparse::bind::{bind_batch, BindFailure, Bound};
 use crate::sparse::encoder::SparseUpdate;
 use crate::texture::decoded_twin::{SecondDecode, TwinWrite};
-use crate::texture::first_move::FillTake;
+use crate::texture::first_move::{last_of_each, FillTake};
 use crate::texture::wrapped::Transition;
 use crate::texture::Texture;
 use crate::tracker::{Barrier, Point, Summary};
@@ -663,6 +663,7 @@ impl CommandBufferShared {
         // On a device with a fill queue it takes the fills of memory its commands may reach
         // alone, and of memory no use of the program's names (`FillTake::Reached`): the rest wait
         // for a batch that may reach them, so this one neither makes them nor waits for them.
+        // Either way it learns what owns the memory of the work it takes.
         let owner_of = |key: ResourceKey| crate::used_resources::owner_of(shared, key);
         let reaches = |owner: ObjectId| state.parts_reach(shared, start..end, &[owner]);
         let fill_take = match device.has_fill_queue() {
@@ -670,11 +671,15 @@ impl CommandBufferShared {
                 owner_of: &owner_of,
                 reaches: &reaches,
             },
-            false => FillTake::All,
+            false => FillTake::Owned {
+                owner_of: &owner_of,
+            },
         };
         let hold = || crate::heap_sets::hold(device);
         let mut first_work = firsts.take_holding(|_| true, fill_take, hold);
         let every_fill = first_work.every_fill();
+        // What owns the memory of the first work it took, its fills for the fill queue among it.
+        let taken_owners = first_work.owners();
         // Its buffers' fills go to the device's fill queue where it has one with a command buffer
         // free, in a submission of their own that the batch waits for (below,
         // `device/staging.rs`), where they write at least `FILL_QUEUE_LEAST` bytes in all: not
@@ -920,11 +925,28 @@ impl CommandBufferShared {
         // Every batch on another `VkQueue` that did new resources' first work, until it
         // completed: any command may reach those resources unnamed.
         let completed = |point: Point| shared.queues[point.queue].completed_value() >= point.value;
-        for point in firsts.waits(queue, completed) {
+        let first_waits = firsts.waits(queue, completed);
+        for point in last_of_each(first_waits.iter().map(|&(point, _)| point)) {
             across |= point.queue != queue;
             wait_semaphores.push(shared.queues[point.queue].timeline);
             wait_values.push(point.value);
             wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
+        }
+        // Whether its commands, or the first work it took, may reach what the work it waits for
+        // wrote, counted (`WorkCounts::first_work_waits`): memory a resource its encoders' uses
+        // name owns, every memory where a command may reach memory no use names, and the memory
+        // of the first work it took, which comes after that work's.
+        if !first_waits.is_empty() {
+            let first_reaches =
+                |owners: Option<&[ObjectId]>| match (owners, taken_owners.as_deref()) {
+                    (Some(owners), Some(taken)) => {
+                        owners.iter().any(|owner| taken.contains(owner))
+                            || state.parts_reach(shared, start..end, owners)
+                    }
+                    _ => true,
+                };
+            let reached = (first_waits.iter()).any(|(_, owners)| first_reaches(owners.as_deref()));
+            shared.counts.first_work_waited(reached);
         }
         // And the internal submission on the first `VkQueue` that did some, until it completed.
         if let Some((timeline, value)) = firsts.internal_wait().filter(|_| queue != 0) {

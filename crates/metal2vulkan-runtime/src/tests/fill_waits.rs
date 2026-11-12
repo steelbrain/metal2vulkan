@@ -11,8 +11,15 @@
 //!   `0xab` may have left, first used by a batch behind a long run of kernels on its queue, reads
 //!   zero from another queue through its name and through a pointer loaded from memory (the
 //!   owned fixture `engine/ob2_loaded_pointer.ll`), each committed while that first batch may
-//!   still wait. A texture placed in a new heap, whose move a batch that names nothing of the
-//!   heap takes, reads back what a blit then wrote into it.
+//!   still wait. Two textures, one placed in a new heap and one of its own, whose moves a batch
+//!   that names neither takes on another queue behind a long run of kernels there, read back
+//!   what a blit then wrote into each.
+//! - **Other queues' first work alike.** An app's queue, kept busy by kernels, makes a new
+//!   `Private` texture each round, which its command buffer moves and writes, and one that the
+//!   compositor's next frame on its own queue moves and the app's next command buffer writes.
+//!   No batch waits on the GPU for another queue's first work that its commands and its own
+//!   first work reach none of (`WorkCounts::first_work_waits_unused`); every texture reads back
+//!   what was written into it.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects.
@@ -20,7 +27,7 @@
 use super::blit_holds::{device, Scratch, WAIT};
 use crate::{
     BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputePipelineState,
-    Device, HeapDescriptor, HeapType, Origin, PipelineOptions, ResourceOptions, Size,
+    Device, HeapDescriptor, HeapType, Origin, PipelineOptions, ResourceOptions, Size, Texture,
     TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -326,8 +333,18 @@ fn new_memory_reads_zero_through_every_reach() {
         "{name}: the new buffer read other bytes than zero: {}",
         not_zero.join("; ")
     );
-    // A heap's texture whose move a batch that names nothing of the heap takes: what a blit then
-    // writes into it reads back.
+    // Two textures, one placed in a new heap and one of its own, whose moves a batch that names
+    // neither takes on another queue, behind a long run of kernels there: what a blit then writes
+    // into each reads back.
+    let held = other.command_buffer().unwrap();
+    scale(
+        &held,
+        &scale_state,
+        (&load_in, &load_out),
+        LOAD_BYTES / 4,
+        LOAD_DISPATCHES,
+    );
+    held.commit().unwrap();
     let heap = device
         .new_heap(&HeapDescriptor::new(
             HeapType::Automatic,
@@ -335,11 +352,8 @@ fn new_memory_reads_zero_through_every_reach() {
             ResourceOptions::private(),
         ))
         .unwrap();
-    const SIDE: u64 = 256;
-    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
-    descriptor.usage = TextureUsage::SHADER_READ;
-    descriptor.resource_options = ResourceOptions::private();
-    let texture = heap.new_texture(&descriptor).unwrap();
+    let placed = heap.new_texture(&private_texture()).unwrap();
+    let own = device.new_texture(&private_texture()).unwrap();
     let unrelated = other.command_buffer().unwrap();
     let (frame_in, frame_out) = (shared(1 << 12), shared(1 << 12));
     scale(
@@ -350,27 +364,150 @@ fn new_memory_reads_zero_through_every_reach() {
         1,
     );
     unrelated.commit().unwrap();
-    let pattern: Vec<u8> = (0..SIDE * SIDE * 4).map(|at| (at % 251) as u8).collect();
     let source = device
-        .new_buffer_with_bytes(&pattern, ResourceOptions::shared())
+        .new_buffer_with_bytes(&pattern(), ResourceOptions::shared())
         .unwrap();
-    let back = shared(SIDE * SIDE * 4);
+    let (placed_back, own_back) = (shared(TEXTURE_BYTES), shared(TEXTURE_BYTES));
     let written = named.command_buffer().unwrap();
-    let mut blit = written.blit_command_encoder().unwrap();
+    through(&written, &source, &placed, &placed_back);
+    through(&written, &source, &own, &own_back);
+    written.commit().unwrap();
+    for command_buffer in [&held, &unrelated, &written] {
+        completed(&name, command_buffer);
+    }
+    for (what, back) in [("the heap's", &placed_back), ("its own", &own_back)] {
+        assert!(
+            read(back) == pattern(),
+            "{name}: a texture {what} read back other texels than were written"
+        );
+    }
+    eprintln!("FILL-REACH {name}: new memory read zero by name and through a pointer");
+}
+
+/// The side of the tests' textures.
+const SIDE: u64 = 256;
+
+/// The bytes of a texture of [`private_texture`]'s.
+const TEXTURE_BYTES: u64 = SIDE * SIDE * 4;
+
+/// A `Private` `RGBA8Unorm` texture of [`SIDE`] by [`SIDE`].
+fn private_texture() -> TextureDescriptor {
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::private();
+    descriptor
+}
+
+/// The texels the tests write into their textures.
+fn pattern() -> Vec<u8> {
+    (0..TEXTURE_BYTES).map(|at| (at % 251) as u8).collect()
+}
+
+/// A blit of `source` into `texture`, whole, then of `texture` into `back`.
+fn through(command_buffer: &CommandBuffer, source: &Buffer, texture: &Texture, back: &Buffer) {
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
     let (size, origin) = (Size::new(SIDE, SIDE, 1), Origin::new(0, 0, 0));
-    let (row, image) = (SIDE * 4, SIDE * SIDE * 4);
+    let (row, image) = (SIDE * 4, TEXTURE_BYTES);
     let none = BlitOption::None;
-    (blit.copy_from_buffer_to_texture(&source, 0, row, image, size, &texture, 0, 0, origin, none))
+    (blit.copy_from_buffer_to_texture(source, 0, row, image, size, texture, 0, 0, origin, none))
         .unwrap();
-    (blit.copy_from_texture_to_buffer(&texture, 0, 0, origin, size, &back, 0, row, image, none))
+    (blit.copy_from_texture_to_buffer(texture, 0, 0, origin, size, back, 0, row, image, none))
         .unwrap();
     blit.end_encoding().unwrap();
-    written.commit().unwrap();
-    completed(&name, &unrelated);
-    completed(&name, &written);
-    assert!(
-        read(&back) == pattern,
-        "{name}: the heap's texture read back other texels than were written"
+}
+
+/// The module docs: no batch waits for another queue's first work that its commands and its own
+/// first work reach none of.
+#[test]
+fn a_batch_that_reaches_no_new_texture_waits_for_none_of_its_first_work() {
+    let scratch = Scratch::new("first-work-waits");
+    let device = settled(&scratch);
+    let name = device.name().to_owned();
+    let scale_state = state(&device, "examples/runtime_examples.ll", "scale_and_offset");
+    let (app, compositor) = (
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
     );
-    eprintln!("FILL-REACH {name}: new memory read zero by name and through a pointer");
+    let private = |bytes| {
+        device
+            .new_buffer(bytes, ResourceOptions::private())
+            .unwrap()
+    };
+    let shared = |bytes| device.new_buffer(bytes, ResourceOptions::shared()).unwrap();
+    let (load_in, load_out) = (private(LOAD_BYTES), private(LOAD_BYTES));
+    let (frame_in, frame_out) = (shared(FRAME_FLOATS * 4), shared(FRAME_FLOATS * 4));
+    let source = device
+        .new_buffer_with_bytes(&pattern(), ResourceOptions::shared())
+        .unwrap();
+    // The resources made so far take their first work in a command buffer of their own.
+    let priming = app.command_buffer().unwrap();
+    scale(&priming, &scale_state, (&load_in, &load_out), 256, 1);
+    scale(&priming, &scale_state, (&frame_in, &frame_out), 256, 1);
+    priming.commit().unwrap();
+    completed(&name, &priming);
+    let frame = || {
+        let frame = compositor.command_buffer().unwrap();
+        scale(
+            &frame,
+            &scale_state,
+            (&frame_in, &frame_out),
+            FRAME_FLOATS,
+            1,
+        );
+        frame.commit().unwrap();
+        frame
+    };
+    let before = device.work_counts();
+    let mut rounds = Vec::new();
+    for _ in 0..ROUNDS {
+        // The app's new texture, moved by its command buffer behind its kernels, then the
+        // compositor's frame over what it made before.
+        let work = app.command_buffer().unwrap();
+        scale(
+            &work,
+            &scale_state,
+            (&load_in, &load_out),
+            LOAD_BYTES / 4,
+            LOAD_DISPATCHES,
+        );
+        let texture = device.new_texture(&private_texture()).unwrap();
+        let back = shared(TEXTURE_BYTES);
+        through(&work, &source, &texture, &back);
+        work.commit().unwrap();
+        let first = frame();
+        // A texture the compositor's next frame moves, which the app's next command buffer
+        // writes and reads.
+        let moved = device.new_texture(&private_texture()).unwrap();
+        let second = frame();
+        let next = app.command_buffer().unwrap();
+        let moved_back = shared(TEXTURE_BYTES);
+        through(&next, &source, &moved, &moved_back);
+        next.commit().unwrap();
+        completed(&name, &first);
+        completed(&name, &second);
+        rounds.push((work, next, (texture, moved), (back, moved_back)));
+    }
+    for (work, next, ..) in &rounds {
+        completed(&name, work);
+        completed(&name, next);
+    }
+    let counts = device.work_counts();
+    let waits = counts.first_work_waits - before.first_work_waits;
+    let unused = counts.first_work_waits_unused - before.first_work_waits_unused;
+    eprintln!(
+        "FIRST-WORK-WAITS {name}: {ROUNDS} rounds: batches that waited for other queues' first \
+         work {waits}, of them for work they reach none of {unused}"
+    );
+    for (at, (.., (back, moved_back))) in rounds.iter().enumerate() {
+        for (what, back) in [("its own", back), ("the compositor's", moved_back)] {
+            assert!(
+                read(back) == pattern(),
+                "{name}: round {at}'s texture moved by {what} batch read back other texels"
+            );
+        }
+    }
+    assert_eq!(
+        unused, 0,
+        "{name}: batches waited for other queues' first work they reach none of"
+    );
 }

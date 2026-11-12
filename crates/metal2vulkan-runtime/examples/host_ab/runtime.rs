@@ -1769,6 +1769,8 @@ impl Gpu for Runtime {
             ("fill_queue_submissions", c.fill_queue_submissions),
             ("fill_queue_waits", c.fill_queue_waits),
             ("fill_queue_waits_unused", c.fill_queue_waits_unused),
+            ("first_work_waits", c.first_work_waits),
+            ("first_work_waits_unused", c.first_work_waits_unused),
             ("uncached_host_images", c.uncached_host_images),
             ("cpu_block_decodes", c.cpu_block_decodes),
             ("block_decode_passes", c.block_decode_passes),
