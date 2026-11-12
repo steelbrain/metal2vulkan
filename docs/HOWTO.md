@@ -784,9 +784,10 @@ submission, can give the device the guest's RAM once instead:
   the chunk is freed, so a longer chunk makes more of the guest's untouched RAM resident. Without the call, or where a
   kernel caps it at 64 MiB, the chunks stay 64 MiB. On such a device no chunk is imported ahead,
   and no object with a source of dma-bufs of its own pages (`HostMemory::with_dma_buf`) asks for
-  one: such an object over a chunk not imported takes its own path (the gate, then an import of
-  its own or a copy), as over memory no RAM holds, and the objects over a chunk imported lie in
-  its import (`chunk_bound_buffers_made`). An object with no such source, and every object on a
+  one: such an object over a chunk not imported takes its own path, as over memory no RAM holds:
+  an import of the source's dma-bufs alone (never its pointer, and the gate not asked), or a copy
+  where that fails; the objects over a chunk imported lie in its import
+  (`chunk_bound_buffers_made`). An object with no such source, and every object on a
   driver whose barriers do not order blits through two imports of the same pages
   (`RuntimeDriverDefect::AliasedImportBlitsUnordered`: ANV's), imports the chunk itself, so that
   every object and copy over its pages lies in its one import. A chunk is imported for the copies

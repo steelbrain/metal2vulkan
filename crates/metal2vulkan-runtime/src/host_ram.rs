@@ -87,12 +87,14 @@
 //!   dma-buf of the RAM's source, its barriers order blits through two imports of the same pages
 //!   (no `RuntimeDriverDefect::AliasedImportBlitsUnordered`) and the object comes with a source
 //!   of dma-bufs of its own pages (`HostMemory::with_dma_buf`), the object is not bound in the
-//!   RAM: it takes its own path (its gate, then an import of its own or a copy), as over memory no
-//!   RAM holds, imports no run of the RAM and asks for no chunk ([`RamOnDevice::for_object`]),
-//!   since a listed chunk's import pins every page of it and udmabuf keeps them allocated after
-//!   it (above). Its own import of dma-bufs and a chunk's later one, a copy's, may hold the same
-//!   pages, as two dma-bufs of them (below); its uses order against those of every other object
-//!   over its bytes, and of every copy of them, by their host addresses (`host_aliases.rs`).
+//!   RAM: it takes its own path, as over memory no RAM holds, imports no run of the RAM and asks
+//!   for no chunk ([`RamOnDevice::for_object`]), since a listed chunk's import pins every page of
+//!   it and udmabuf keeps them allocated after it (above). Its own import is of the source's
+//!   dma-bufs alone, never of its pointer, nor its gate asked (`Routed::own_dma_bufs`; a copy
+//!   where that import fails), and it and a chunk's later one, a copy's, may hold the same pages,
+//!   as two dma-bufs of them (below); its uses order against those of every other object over its
+//!   bytes, and of every copy of them, by their host addresses (`host_aliases.rs`). So is an
+//!   object whose pages the RAM routes over several runs, or across a chunk's end.
 //!   Elsewhere (a plan that is not listed, an object whose own import would be of its pointer, a
 //!   device whose barriers do not order two imports of the same pages: ANV's among the listed)
 //!   the object imports the chunk on its own thread, or waits for the import of it under way:
@@ -2134,6 +2136,18 @@ impl Routed {
                 ram.chunks_hold_any(std::slice::from_ref(&(*start..*start + size)))
             }
             Routed::Runs { ram, runs } => ram.chunks_hold_any(runs),
+        }
+    }
+
+    /// Whether an object routed so that no chunk binds it in takes its own import of the caller's
+    /// dma-bufs alone, never of its pointer, where the caller gave a source of them: on a device
+    /// whose plan for the RAM is [`Plan::listed`] and whose barriers order blits through two
+    /// imports of the same pages ([`RamOnDevice::orders_aliases`]), so that a chunk's later import,
+    /// a copy's, lies beside it as two dma-bufs of the same pages ([`RamOnDevice::held_back`]),
+    /// where an import of its pointer at the RAM's own addresses would hold the chunk back.
+    pub(crate) fn own_dma_bufs(&self, device: &Device) -> bool {
+        match self {
+            Routed::InChunk { ram, .. } | Routed::Runs { ram, .. } => ram.orders_aliases(device),
         }
     }
 }

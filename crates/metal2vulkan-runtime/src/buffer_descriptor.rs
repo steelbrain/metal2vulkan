@@ -923,9 +923,15 @@ impl Device {
         let held = inside.is_none() && !matches!(within, Within::Free);
         let beside = held && self.imports_beside(&within, &host);
         let over_import = held && !beside;
-        // Imported beside dma-bufs as dma-bufs alone: never by the pointer, nor the gate asked.
+        // Imported beside dma-bufs as dma-bufs alone: never by the pointer, nor the gate asked. So
+        // are pages a guest RAM routes that no chunk binds the buffer in, where the RAM's chunks
+        // may be imported beside them (`Routed::own_dma_bufs`).
+        let ram_beside = in_chunk.is_none()
+            && inside.is_none()
+            && (routed.as_ref()).is_some_and(|routed| routed.own_dma_bufs(self));
+        let dma_bufs_alone = beside || (ram_beside && host.source.is_some());
         let host = HostWindow {
-            by_pointer: host.by_pointer && !beside,
+            by_pointer: host.by_pointer && !dma_bufs_alone,
             ..host
         };
         // Pages a guest RAM's chunk import, made or in flight, holds some of, at the RAM's own
@@ -1073,9 +1079,11 @@ impl Device {
                     }
                     // An import the device and the gate admitted that then failed, or pages the
                     // runtime refused for the driver that no dma-buf of them served, or any failed
-                    // import of dma-bufs beside live ones (pages a copy where none is tried): a
-                    // copy, announced with the failure.
-                    Err((failed, _)) if copyable && (beside || copies_after(&failed.error)) => {
+                    // import of dma-bufs alone (beside live ones, or a RAM's chunks: pages a copy
+                    // where none is tried): a copy, announced with the failure.
+                    Err((failed, _))
+                        if copyable && (dma_bufs_alone || copies_after(&failed.error)) =>
+                    {
                         // SAFETY: the caller's contract.
                         let copied = unsafe {
                             self.copied_buffer(
@@ -1356,9 +1364,15 @@ impl Device {
                 let held = inside.is_none() && !matches!(within, Within::Free);
                 let beside = held && self.imports_beside(&within, &host);
                 let over_import = held && !beside;
-                // Imported beside dma-bufs as dma-bufs alone, as at a buffer's making.
+                // Imported beside dma-bufs as dma-bufs alone, as at a buffer's making; so are
+                // pages a guest RAM routes that no chunk binds them in, where its chunks may be
+                // imported beside them (`Routed::own_dma_bufs`).
+                let ram_beside = in_chunk.is_none()
+                    && inside.is_none()
+                    && (routed.as_ref()).is_some_and(|routed| routed.own_dma_bufs(self));
+                let dma_bufs_alone = beside || (ram_beside && host.source.is_some());
                 let host = HostWindow {
-                    by_pointer: host.by_pointer && !beside,
+                    by_pointer: host.by_pointer && !dma_bufs_alone,
                     ..host
                 };
                 let in_chunk = in_chunk.or(inside);
@@ -1524,9 +1538,9 @@ impl Device {
                             }
                             // An import of the caller's dma-bufs the gate admitted that then
                             // failed, or that served pages the runtime refused for the driver, or
-                            // any failed import of dma-bufs beside live ones: a copy, as where the
-                            // pointer's fails.
-                            Err(error) if copyable && (beside || copies_after(&error)) => {
+                            // any failed import of dma-bufs alone (beside live ones, or a RAM's
+                            // chunks): a copy, as where the pointer's fails.
+                            Err(error) if copyable && (dma_bufs_alone || copies_after(&error)) => {
                                 Err(Some(FailedImport {
                                     error,
                                     sourced: true,
