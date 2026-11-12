@@ -1828,10 +1828,15 @@ fn heap_offset(
 impl Device {
     /// `heapTextureSizeAndAlignWithDescriptor:`: the bytes and alignment a texture of
     /// `descriptor` takes of a heap on this device (the module docs). Metal's answer wherever the
-    /// runtime models it, so a program may size a heap and place its resources by Metal's
-    /// numbers; the device's image's own footprint, with whole chunks of compression data where
-    /// the driver writes them past an image's size, where the model has none or no shadow holds the
-    /// texture to Metal's answer (then announced `heap-texture-larger-than-metal`). The image of a
+    /// runtime models it and the device's image fits it; the device's image's own footprint, with
+    /// whole chunks of compression data where the driver writes them past an image's size, where
+    /// the model has none. Where the image needs more than Metal's answer, the policy decides
+    /// (`DevicePolicy::heap_answers`): under the default `HeapAnswerPolicy::Device` a
+    /// single-sample texture whose image binds into the heap's memory answers the larger of the
+    /// two (its alignment at most 64 KiB, and at most 4 KiB or its size, else its image that a
+    /// 4 KiB alignment holds answers); under `HeapAnswerPolicy::Metal`, Metal's answer, which an
+    /// image that fits or a shadow of the heap's bytes holds, and the larger of the two only where
+    /// neither does. A larger answer is announced `heap-texture-larger-than-metal`. The image of a
     /// descriptor with `allow_gpu_optimized_contents` off is one of `PixelFormatView` usage, as
     /// Metal lays out a color texture with it off (the module docs). A texture of the descriptor
     /// fits at any multiple of the alignment in any heap with room. A texture buffer takes Metal's
