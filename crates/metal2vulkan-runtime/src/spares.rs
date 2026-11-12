@@ -97,20 +97,18 @@
 //!   recordings for its next takers' begins. ANV (Mesa 26.2.6, an Iris Xe) takes each draw's
 //!   changed viewport and scissor state from a device-wide dynamic state pool of 1 GiB, and a
 //!   rate-mapped pass records each draw once per region of its map, each with its own viewport
-//!   and scissor (`rate_mapped_pass.rs`): a guest's passes of an indirect command buffer's draws
-//!   over a map, which its host steps replayed at about 880,000 draws a step, filled that pool
-//!   with four command buffers alive, one of them holding 97.5 MiB of it; ANV then wrote through
-//!   a null state inside `vkCmdDrawIndexed`, and the process faulted. A command buffer counts
-//!   the draws its recordings recorded, its host steps' included, with the state commands they
-//!   set (`CommandBuffer::recorded`); where they reach
-//!   [`RECORDED`], each pool it gives back frees every command buffer it holds, on the device's
-//!   free thread, as a spare left idle does, and goes back among the spares as the newest, stocked
-//!   with a secondary. Below [`RECORDED`] a pool keeps its command buffers, as above. Counted:
-//!   `WorkCounts::spare_command_buffers_freed_past_recorded`. A guest's host step recorded about
-//!   880,000 region draws, and a command buffer of such steps held 97.5 MiB of the pool: about
-//!   110 bytes a region draw, each three commands counted; so a pool kept below [`RECORDED`]
-//!   holds at most about 0.6 MiB of it. A command buffer whose own recordings fill the driver's
-//!   pool is a known gap (docs/FAST-PATHS.md).
+//!   and scissor (`rate_mapped_pass.rs`). A guest's host steps replayed an indirect command
+//!   buffer's draws over a map at about 880,000 region draws a step; with four command buffers
+//!   alive the pool was full, one command buffer holding 97.5 MiB of it (about 110 bytes a region
+//!   draw, three commands counted), and ANV wrote through a null state inside
+//!   `vkCmdDrawIndexed`: the process faulted. A command buffer counts the draws its recordings
+//!   recorded, its host steps' included, with the state commands they set
+//!   (`CommandBuffer::recorded`); where they reach [`RECORDED`], each pool it gives back frees
+//!   every command buffer it holds, on the device's free thread, as a spare left idle does, and
+//!   goes back among the spares as the newest, stocked with a secondary. A pool kept so holds at
+//!   most about 0.6 MiB of ANV's pool. Counted:
+//!   `WorkCounts::spare_command_buffers_freed_past_recorded`. A command buffer whose own
+//!   recordings fill the driver's pool is a known gap (docs/FAST-PATHS.md).
 //! - **Freed on the device's free thread** ([`PoolFrees`], `free_thread.rs`), not on the thread
 //!   giving the pool back, which for a command buffer that completed is its queue's completion
 //!   thread before its completed handlers run and its waiters return: [`FREED_AT_ONCE`] command
