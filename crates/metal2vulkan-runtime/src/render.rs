@@ -5915,16 +5915,24 @@ impl RenderLowering {
         }
         // What the merged colors hold once copied in, before any step writes them: kept by a
         // run's first pass alone; where a draw pinned the colors, after their copies in after the
-        // last pinned instance.
+        // last pinned instance; where the first instance recorded inline, after their copies in
+        // after it (`render/inline_first.rs`), which rendered the attachments themselves. A keep
+        // before those copies would hold what the stand-in held before them, and the merge would
+        // drop every word the later instances wrote that equals it.
         let mut kept_after_pins = Vec::new();
+        let mut kept_after_first = Vec::new();
         for (index, merge) in &merged {
-            match (goes_on(*index), pinned) {
-                (true, _) => {}
-                (false, Some(_)) => {
+            match (goes_on(*index), pinned, inline) {
+                (true, _, _) => {}
+                (false, Some(_), _) => {
                     uses.extend(merge.keep_uses().iter().cloned());
                     kept_after_pins.push(Arc::clone(merge));
                 }
-                (false, None) => merge.record_keep(&mut core),
+                (false, None, true) => {
+                    uses.extend(merge.keep_uses().iter().cloned());
+                    kept_after_first.push(Arc::clone(merge));
+                }
+                (false, None, false) => merge.record_keep(&mut core),
             }
         }
         if let Some(clears) = reach_clears {
@@ -6213,6 +6221,9 @@ impl RenderLowering {
                             if let Some(copies) = &stand_ins_after_first {
                                 copies.record_in(raw, command_buffer);
                             }
+                            for merge in &kept_after_first {
+                                merge.keep_in_pass(raw, command_buffer);
+                            }
                             if let Some(clears) = &backings_after_first {
                                 clears.record_in(raw, command_buffer);
                             }
@@ -6272,6 +6283,9 @@ impl RenderLowering {
                         unsafe {
                             if let Some(copies) = &stand_ins_after_first {
                                 copies.record_in(raw, command_buffer);
+                            }
+                            for merge in &kept_after_first {
+                                merge.keep_in_pass(raw, command_buffer);
                             }
                             if let Some(clears) = &backings_after_first {
                                 clears.record_in(raw, command_buffer);

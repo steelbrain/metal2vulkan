@@ -463,7 +463,8 @@ impl LinearMerge {
 
     /// Record into `command_buffer`, between two render pass instances of the pass, the keep
     /// that follows its stand-in's copy in there, where the instances before rendered the
-    /// attachment itself (`render/snapshot.rs`'s pins), as [`record_keep`](Self::record_keep)
+    /// attachment itself (`render/snapshot.rs`'s pins, `render/inline_first.rs`'s instances
+    /// recorded inline), as [`record_keep`](Self::record_keep)
     /// records it before the pass: first, where it has one, the scratch's fill with zero; each
     /// between barriers. The pass's uses hold the keep's ([`keep_uses`](Self::keep_uses)).
     ///

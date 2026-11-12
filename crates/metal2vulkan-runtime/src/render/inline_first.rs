@@ -126,7 +126,11 @@
 //!   fetch needs) stands in from the next instance on: the end copies each attachment into its
 //!   stand-in right after the inline instance, which rendered the attachment itself, not before
 //!   the pass, and back after the last as before; after the last instance a draw pinned to the
-//!   attachments' own images, where one did (`render/snapshot.rs`).
+//!   attachments' own images, where one did (`render/snapshot.rs`). The stand-in of a texture
+//!   over a buffer's bytes, whose changed words are merged back rather than copied
+//!   (`linear_merge.rs`), is kept right after that copy too: a keep before the pass would hold
+//!   what the stand-in held before the copy, and the merge would drop every word the later
+//!   instances wrote that equals it.
 //! - **Counted**: `WorkCounts::inline_passes` (passes whose first instance recorded inline) and
 //!   `WorkCounts::inline_passes_split` (those of more than one instance), and
 //!   `WorkCounts::inline_split_instances` (`render/inline_splits.rs`); the passes whose first
