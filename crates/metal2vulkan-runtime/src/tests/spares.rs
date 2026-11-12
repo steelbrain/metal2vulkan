@@ -648,9 +648,10 @@ mod device {
     use super::{HELD, RECENT_FOR, RECENT_USES};
     use crate::command_buffer::kept_barriers::KEPT;
     use crate::free_thread::FreeThread;
-    use crate::spares::FREED_AT_ONCE;
+    use crate::spares::{FREED_AT_ONCE, ONE_POOL};
     use crate::tests::freed_memory::device;
     use crate::{Buffer, CommandBufferStatus, CommandQueue, Device, ResourceOptions};
+    use ash::vk;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -863,7 +864,8 @@ mod device {
 
     /// A command buffer of [`SMALL`] blit encoders takes a spare holding few command buffers, not
     /// one a command buffer of [`LARGE`] left holding its own, and a large one past its first pool
-    /// takes the spare holding the most, making none (`spares.rs`). [`KINDS_EACH`] small command
+    /// takes the spare holding the most, making none past those its first pool hands out alone
+    /// ([`ONE_POOL`], `spares.rs`). [`KINDS_EACH`] small command
     /// buffers and as many large ones are encoded, each holding a pool, then committed and waited
     /// for: the spares then hold that many pools of each kind, each holding what its command
     /// buffer handed out, the large ones' given back last. Where a taker took the newest spare,
@@ -941,7 +943,10 @@ mod device {
             past_first > 0,
             "the large command buffer took no spare past its first pool"
         );
-        assert_eq!(made, 0, "the large command buffer made command buffers");
+        assert!(
+            made <= ONE_POOL as u64,
+            "the large command buffer made {made} command buffers"
+        );
         run(vec![small, big]);
         drop((target, queue, device));
         let _ = std::fs::remove_dir_all(&scratch);
