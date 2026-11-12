@@ -827,7 +827,9 @@ pub enum GenericPointer {
     /// Pointers of two address spaces reach it: a `select` or `phi` of a device and a thread
     /// pointer, as the run picks.
     TwoSpaces,
-    /// It is loaded from memory, or is an atomic operation's old value.
+    /// It is loaded from memory other than a thread allocation whose every use the translation
+    /// sees and whose generic pointers no other write may overlap, or is an atomic operation's
+    /// old value.
     Memory,
     /// It is held in, or taken from, an aggregate or a vector value.
     Aggregate,
