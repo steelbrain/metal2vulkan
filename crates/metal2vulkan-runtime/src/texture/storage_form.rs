@@ -25,8 +25,12 @@
 //!   move; over the pooled memory `Device::pooled_move_image`: the first of the plans with the
 //!   feedback loop usage and the usage the texture lacks the device makes it of, noted for its
 //!   first move); where the device makes none (a refused pitch, its placement), or the buffer's
-//!   bytes were detached or copied meanwhile, or a binding or a pass took a usage or render
-//!   shadow of it, it stays a shadow for good. Where every encoder of the switch's command buffer
+//!   bytes were detached or copied meanwhile, or a binding or a pass took a render shadow of it
+//!   or a usage shadow of another truth than its buffer's bytes, it stays a shadow for good. A
+//!   usage shadow of those bytes (an attached read's, `texture/attached_reads.rs`, or a
+//!   binding's beyond the usage) stays the texture's: its truth is what the image in place is,
+//!   and an aliasing image's uses are uses of those bytes, so it serves the moved texture as it
+//!   serves one made in place. Where every encoder of the switch's command buffer
 //!   ran, the texture presents the image in place from then on (`TextureShared::moved`), counted
 //!   as a texture made with it is (over host pages as one in place over its class, and in
 //!   `WorkCounts::host_textures_moved_in_place`; over the pooled memory as an image at Metal's
@@ -809,10 +813,12 @@ impl Texture {
     }
 
     /// Whether a binding or a pass took an image of the texture's other than its shadow, made
-    /// from it, which a move would leave behind: a usage shadow (`texture/usage_shadow.rs`) or a
-    /// render shadow (`texture/ycbcr_image.rs`).
+    /// from it, which a move would leave behind: a render shadow (`texture/ycbcr_image.rs`), or a
+    /// usage shadow (`texture/usage_shadow.rs`) whose truth is not the buffer's bytes (the module
+    /// docs).
     fn shadowed_again(&self) -> bool {
-        self.0.usage_shadow.get().is_some() || lock(&self.0.render_shadow).is_some()
+        let usage = (self.usage_shadow_copies()).is_some_and(|copies| !copies.copies_bytes());
+        usage || lock(&self.0.render_shadow).is_some()
     }
 
     /// Wait, a shadow over host pages (or the device's pooled memory) made before its class's

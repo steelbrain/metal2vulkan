@@ -1247,6 +1247,12 @@ impl ShadowCopies {
             && self.standing.may_stand()
     }
 
+    /// Whether the shadow's truth is a buffer's bytes as they lie (`ShadowSource::Bytes`): what an
+    /// image in place over them is too (`texture/storage_form.rs`).
+    pub(super) fn copies_bytes(&self) -> bool {
+        matches!(self.source, ShadowSource::Bytes { .. })
+    }
+
     /// The keys a write of which lets go of the image's standing across command buffers: the
     /// truth's, the host memory it joined, and the image's own.
     pub(super) fn standing_keys(&self) -> Vec<ResourceKey> {

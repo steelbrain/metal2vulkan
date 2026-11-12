@@ -75,6 +75,15 @@
 //!   its commit and before it runs with no shadow copy (`shadow_copies`), and a pass that clears
 //!   and stores it writes the clear into the pages, every byte past its texels kept; else it stays
 //!   a shadow, no move counted. Printed (`IN-PLACE-MOVE`): each texture's path and the counts.
+//! - [`a_texture_an_attached_read_copied_before_its_verdict_moves_in_place_too`], under the
+//!   validation layer: the same with a 64x64 `RGBA8Unorm` texture that a pass renders and a draw
+//!   of it reads at its own pixel (`tob_read`, no barrier) before its verdict, which takes the
+//!   texture's usage shadow of the pages' bytes (`attachment_reads_through_copies`). Once the
+//!   check answered, the next such pass's commit moves it where a texture of the same shape made
+//!   then is in place (`host_textures_moved_in_place`, its shadow's image freed); a pass after it
+//!   copies back and keeps no texel (`shadow_texels_copied_back`, `shadow_texels_kept`), and its
+//!   read still draws the texels from before the pass, through its copy, each pass's pages then
+//!   all the red the CPU wrote before it. Printed (`IN-PLACE-ATTACHED-MOVE`): the paths and counts.
 //! - [`the_guests_surface_lies_in_place_where_its_checks_passed`], under the validation layer: the
 //!   guest's 3664x2039 `BGRA8Unorm` surface over a no-copy buffer of anonymous pages, at a 14848-byte
 //!   pitch (the next multiple of 256, at which RADV lays linear rows) and at 14656 bytes, of
@@ -695,6 +704,181 @@ fn a_texture_made_before_its_verdict_moves_in_place_once_it_passes() {
         drop(mappings);
         for notice in messages.take_notices() {
             eprintln!("IN-PLACE-MOVE notice: {}", notice.text);
+        }
+    }
+    layer_reported_nothing_at_all(&messages);
+    assert!(lapses.is_empty(), "{}", lapses.join("\n"));
+}
+
+/// One pass over `target`, loaded and stored: `fill` draws [`DRAWN_RED`] over the block
+/// `[w/4, w/2) x [h/4, h/2)`, then `read` (`tob_read`, at its own pixel, with no barrier) draws
+/// the target's texels there, an attached read; committed and waited for.
+fn fill_then_read_own(
+    queue: &CommandQueue,
+    target: &Texture,
+    (fill, read): (&RenderPipelineState, &RenderPipelineState),
+) {
+    let mut d = RenderPassDescriptor::new();
+    let color = &mut d.color_attachments[0];
+    color.texture = Some(target.clone());
+    color.load_action = LoadAction::Load;
+    color.store_action = StoreAction::Store;
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.render_command_encoder(&d).unwrap();
+    // The block's corners in normalized device coordinates: x0, y1, x1, y0.
+    let block = floats([-0.5, 0.0, 0.0, 0.5]);
+    encoder.set_render_pipeline_state(fill).unwrap();
+    encoder.set_vertex_bytes(&block, 0).unwrap();
+    let red = f32::from(DRAWN_RED) / 255.0;
+    encoder
+        .set_fragment_bytes(&floats([red, 0.0, 0.0, 1.0]), 0)
+        .unwrap();
+    encoder
+        .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+        .unwrap();
+    encoder.set_render_pipeline_state(read).unwrap();
+    encoder.set_vertex_bytes(&block, 0).unwrap();
+    encoder.set_fragment_texture(Some(target), 0).unwrap();
+    encoder
+        .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+}
+
+/// The red [`fill_then_read_own`]'s fill draws.
+const DRAWN_RED: u8 = 128;
+
+#[test]
+fn a_texture_an_attached_read_copied_before_its_verdict_moves_in_place_too() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let mut lapses = Vec::new();
+    {
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
+        let queue = device.new_command_queue().unwrap();
+        let (format, w, h) = (PixelFormat::RGBA8Unorm, 64u64, 64u64);
+        let bpr = w * 4;
+        let texels = (bpr * h) as usize;
+        let len = texels.next_multiple_of(GUEST_PAGE);
+        let mappings = [Mapping::anonymous(len), Mapping::anonymous(len)];
+        let mut buffers = Vec::new();
+        for mapping in &mappings {
+            // SAFETY: the mappings outlive the buffers and the textures (dropped first).
+            match unsafe {
+                no_copy(
+                    &device,
+                    mapping.pointer(),
+                    len,
+                    ResourceOptions::default(),
+                    None,
+                )
+            } {
+                Ok(buffer) => buffers.push(buffer),
+                Err(error) if not_importable(&error) => {
+                    eprintln!(
+                        "IN-PLACE-ATTACHED-MOVE: the device imports no host memory: {error:?}"
+                    );
+                    return;
+                }
+                Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+            }
+        }
+        // Every texel of the pages red `red`, opaque, as the CPU writes it.
+        let paint = |red: u8| {
+            let contents = buffers[0].contents().unwrap();
+            let bytes = [red, 0, 0, 255].repeat(texels / 4);
+            // SAFETY: the texels, which no command uses meanwhile.
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents.as_ptr(), texels) }
+        };
+        // Whether every texel of the pages is red `red`: the fill's block too, which the read
+        // drew over with the texels from before the pass, Metal's answer at a draw's own pixel.
+        let all_red = |red: u8| {
+            let contents = buffers[0].contents().unwrap();
+            // SAFETY: the texels, which no command writes any longer.
+            let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), texels) };
+            bytes.chunks(4).all(|texel| texel == [red, 0, 0, 255])
+        };
+        let (fill, read) = (
+            reading(&device, format, "tob_solid"),
+            reading(&device, format, "tob_read"),
+        );
+        let before = device.work_counts();
+        let early = rendered(&buffers[0], format, (w, h, bpr));
+        let made = device.work_counts();
+        let pending =
+            made.host_texture_shadows_check_pending - before.host_texture_shadows_check_pending;
+        let early_path = path_of(&early);
+        if (early_path, pending) != ("shadow", 1) {
+            lapses.push(format!(
+                "made before its verdict: {early_path}, counted pending {pending}"
+            ));
+        }
+        // Before the verdict: the attached read takes the texture's usage shadow of its bytes.
+        paint(64);
+        let counted = device.work_counts();
+        fill_then_read_own(&queue, &early, (&fill, &read));
+        let through = device.work_counts().attachment_reads_through_copies
+            - counted.attachment_reads_through_copies;
+        if through != 1 || !all_red(64) {
+            lapses.push(format!(
+                "before the verdict: {through} reads through copies, the pages all red 64 {}",
+                all_red(64)
+            ));
+        }
+        let before = device.work_counts();
+        settled(&device);
+        let late = rendered(&buffers[1], format, (w, h, bpr));
+        let late_path = path_of(&late);
+        // The next quiet commit moves it where a texture made now is in place.
+        paint(32);
+        fill_then_read_own(&queue, &early, (&fill, &read));
+        let after = device.work_counts();
+        let moved = after.host_textures_moved_in_place - before.host_textures_moved_in_place;
+        let path = path_of(&early);
+        let freed = freed_shadows(&device, &before, moved);
+        if !all_red(32) {
+            lapses.push("at the move: the pages are not all red 32".to_owned());
+        }
+        // In place, a pass writes the pages: no texel copied back or kept, the attached read
+        // still through its copy, the texels from before the pass at its own pixels.
+        paint(16);
+        let counted = device.work_counts();
+        fill_then_read_own(&queue, &early, (&fill, &read));
+        let after = device.work_counts();
+        let back = (after.shadow_texels_copied_back - counted.shadow_texels_copied_back)
+            + (after.shadow_texels_kept - counted.shadow_texels_kept);
+        let through =
+            after.attachment_reads_through_copies - counted.attachment_reads_through_copies;
+        eprintln!(
+            "IN-PLACE-ATTACHED-MOVE on {}: made before its verdict: {early_path} (pending \
+             {pending}); one made after it: {late_path}; the first after the next commit: {path} \
+             (moved {moved}, shadows freed {freed}); a pass after it: {back} texels copied back \
+             or kept, {through} reads through copies",
+            device.name()
+        );
+        if !all_red(16) || through != 1 {
+            lapses.push(format!(
+                "after the move: the pages all red 16 {}, {through} reads through copies",
+                all_red(16)
+            ));
+        }
+        let expected = match late_path {
+            "in place" => ("in place", 1, 0),
+            _ => ("shadow", 0, back),
+        };
+        if (path, moved, back) != expected || freed != moved {
+            lapses.push(format!(
+                "after the next commit: {path} (moved {moved}, freed {freed}, {back} texels \
+                 copied back or kept), where one made after the verdict is {late_path}"
+            ));
+        }
+        drop((early, late, buffers));
+        drop(mappings);
+        for notice in messages.take_notices() {
+            eprintln!("IN-PLACE-ATTACHED-MOVE notice: {}", notice.text);
         }
     }
     layer_reported_nothing_at_all(&messages);

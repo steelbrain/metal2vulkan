@@ -884,6 +884,12 @@ impl Compositor {
                 )
             }
         }
+        // A guest's first session makes its surfaces before the device's in-place check answered
+        // (a shader cache that holds no record of it): shadows, which move in place at a quiet
+        // commit once it answers. The shape's draws are measured after it answered.
+        if !device.settle_in_place_checks(Duration::from_secs(60)) {
+            eprintln!("the device's in-place check did not answer in 60 s");
+        }
         Ok(Compositor {
             passes,
             targets,
