@@ -1,15 +1,16 @@
-//! What a device's recovery leaves of the objects that hold no Vulkan object: a depth/stencil state
-//! made before it serves after it, as Metal's object goes on, and holds nothing of the lost
-//! generation.
+//! What a device's recovery leaves of the objects that hold no Vulkan object: a depth/stencil
+//! state, a library and a function made before it serve after it, as Metal's objects go on, and
+//! hold nothing of the lost generation.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). No GPU fault: the loss is marked (`Device::recover_for_test`).
 
 use super::device_recovery::{device, outcome, Scratch};
 use super::device_recovery_carry::live_vk_devices;
+use super::encoder_holds::library;
 use crate::{
-    CommandBufferStatus, LoadAction, RenderPassDescriptor, ResourceOptions, StoreAction,
-    TextureDescriptor,
+    CommandBufferStatus, LoadAction, PipelineOptions, RenderPassDescriptor, ResourceOptions,
+    StoreAction, TextureDescriptor,
 };
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, TextureUsage};
@@ -52,5 +53,35 @@ fn a_depth_stencil_state_goes_on_past_a_recovery() {
         (CommandBufferStatus::Completed, None)
     );
     assert_eq!(state.descriptor(), &descriptor);
+    assert_eq!(live_vk_devices(&device, 1), 1);
+}
+
+/// A library and a function made before a recovery serve after it: the function made before
+/// and one made from the library after each make a compute pipeline state of the next
+/// generation, set in a compute encoder whose command buffer completes, and the lost generation
+/// goes while they live.
+#[test]
+fn a_library_and_its_functions_go_on_past_a_recovery() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    let library = library(&device, "examples/runtime_examples.ll");
+    let before = library.new_function_with_name("scale_and_offset").unwrap();
+    device.recover_for_test().unwrap();
+    let after = library.new_function_with_name("invert_texels").unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut compute = command_buffer.compute_command_encoder().unwrap();
+    for function in [&before, &after] {
+        let state = device
+            .new_compute_pipeline_state_with_function(function, &PipelineOptions::default())
+            .unwrap();
+        compute.set_compute_pipeline_state(&state).unwrap();
+    }
+    compute.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    assert_eq!(
+        outcome(&command_buffer),
+        (CommandBufferStatus::Completed, None)
+    );
     assert_eq!(live_vk_devices(&device, 1), 1);
 }
