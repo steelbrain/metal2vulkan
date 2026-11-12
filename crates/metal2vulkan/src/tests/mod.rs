@@ -74,6 +74,7 @@ mod engine_half_moves;
 mod engine_half_storage_notes;
 mod engine_handles;
 mod engine_heap_binder;
+mod engine_heap_residency;
 mod engine_helper_picks;
 mod engine_helper_threads;
 mod engine_image_shapes;

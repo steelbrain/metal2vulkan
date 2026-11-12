@@ -1034,6 +1034,24 @@ impl<'a> HeapPlanner<'a> {
         };
         let stages: Vec<Stage> = tables.iter().map(|t| t.0).collect();
         let members = members(shape, &stages, reach);
+        // A sparse texture a stage's handle tables reach where the stage observes the residency
+        // of its heap accesses, which answer the word of a texture that is not sparse
+        // (`RuntimeFact::HeapResidency`).
+        let residency: BTreeSet<Stage> = dependencies
+            .iter()
+            .filter_map(|d| match d.fact {
+                RuntimeFact::HeapResidency { stage } => Some(stage),
+                _ => None,
+            })
+            .collect();
+        if members
+            .iter()
+            .any(|m| m.shape.sparse() && m.stages.iter().any(|s| residency.contains(s)))
+        {
+            return Err(BindError::Unsupported(Unsupported::not_implemented(
+                Feature::ArgumentBufferTextures,
+            )));
+        }
         let count = members.len() as u64 + 1;
         if count > u64::from(capacity) {
             return Err(BindError::HeapTooLarge {

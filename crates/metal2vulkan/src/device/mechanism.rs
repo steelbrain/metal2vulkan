@@ -253,6 +253,8 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         }
         // The planner reports a member of another numeric class the stage reaches in the class.
         RuntimeFact::HeapCrossClassNeutral { .. } => Mechanism::PlanTimeCheck,
+        // The planner refuses a sparse texture the stage's handle tables reach.
+        RuntimeFact::HeapResidency { .. } => Mechanism::PlanTimeCheck,
         // Keyed by the slots bound to a sampler whose word states anisotropy, where the
         // function's samples take Metal's anisotropic filter, emulated.
         RuntimeFact::AnisotropicSampler { .. } => Mechanism::Variant,

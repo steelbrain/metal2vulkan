@@ -1274,6 +1274,7 @@ codec_enum! {
         StorageTextureWriteRounding { slot, halves },
         HeapWriteRounding { stage, halves },
         HeapCrossClassNeutral { stage, class, every_member },
+        HeapResidency { stage },
         AnisotropicSampler { slot },
         StorageTextureIntegerChannels { slot },
         MovableStorageWrites { early_variant },

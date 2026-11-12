@@ -14568,6 +14568,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::FunctionTableRange	FunctionTableRan
 variant	metal2vulkan::pipeline::RuntimeFact::HeapCrossClassNeutral	HeapCrossClassNeutral { stage: Stage, class: ImageHandleClass, every_member: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::HeapNumericType	HeapNumericType { class: ImageHandleClass }
 variant	metal2vulkan::pipeline::RuntimeFact::HeapRawSamples	HeapRawSamples { stage: Stage, sampler: Option<u32> }
+variant	metal2vulkan::pipeline::RuntimeFact::HeapResidency	HeapResidency { stage: Stage }
 variant	metal2vulkan::pipeline::RuntimeFact::HeapWriteRounding	HeapWriteRounding { stage: Stage, halves: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::ImageViewShape	ImageViewShape { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::ImageblockSize	ImageblockSize { cell_bytes: u32 }

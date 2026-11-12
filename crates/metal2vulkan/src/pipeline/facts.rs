@@ -697,6 +697,16 @@ pub enum RuntimeFact {
         class: ImageHandleClass,
         every_member: bool,
     },
+    /// The `stage` function observes the residency of a read, sample, or gather of a texture it
+    /// reaches through an argument buffer (a heap element): bit 0 of the `{T, i8}` status word,
+    /// MSL's `sparse_color::resident()`. A texture that is not sparse is resident everywhere, and
+    /// the module compiles in the word Metal returns for it (0), exact on every device. It has no
+    /// form for a sparse texture, whose residency would need the member's tile map or sparse image
+    /// per handle-table entry: the planner refuses a sparse texture (`MTLTexture.isSparse`,
+    /// `bind::TextureFacts::sparse`) that the stage's handle tables reach (a member the plan
+    /// names, or one resident for the command), `Unsupported { feature: ArgumentBufferTextures,
+    /// needs: NotImplemented }`.
+    HeapResidency { stage: Stage },
     /// The function samples a texture through the runtime sampler bound to the slot where Metal's
     /// anisotropic filter, emulated (`lower::sampler::anisotropic`), reaches the sample: bound to a
     /// sampler whose word states anisotropy (`SamplerWord::ANISOTROPIC`, `maxAnisotropy` above 1),

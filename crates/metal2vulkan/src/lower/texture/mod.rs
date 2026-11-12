@@ -144,8 +144,12 @@
 //! specialization never runs it. The census counts its words under [`ABSENT_ARM`], so the
 //! output-size gate can except exactly them; nothing emitted changes.
 //!
-//! Not lowered yet (`Unsupported{Lowering(Texture), NotImplemented}`): an observed status word of
-//! a heap element (its residency needs a word per handle-table entry), reads, writes, and level
+//! A heap element's observed residency is 0 in its word, Metal's for a texture that is not sparse:
+//! the stage states `RuntimeFact::HeapResidency`, and the binder refuses a sparse texture its
+//! handle tables reach (answering one would need its tile map or sparse image per handle-table
+//! entry).
+//!
+//! Not lowered yet (`Unsupported{Lowering(Texture), NotImplemented}`): reads, writes, and level
 //! counts of a heap storage image at a level other than the constant 0, and read offsets.
 
 mod absent;
@@ -1579,20 +1583,26 @@ pub(crate) fn status_observed(cx: &mut SelectCx<'_>, at: InstId) -> bool {
     status_use(cx, at).is_some()
 }
 
-/// Whether the function observes the residency of texture call `at` on `image`: bit 0 of its status
-/// word alone, on a slot. A heap element's word (its residency needs a word per handle-table
-/// entry), and a word with another bit observed, are refused. A read's and a fetch's residency and
-/// value are exact on both arms, as are a nearest sample's and a gather's of Metal's footprint; a
-/// filtered sample's, and an access's outside the footprint, records
-/// `PrecisionNote::SparseResidency` where it is not (`lower::sampler`).
+/// Whether texture call `at` on `image` takes a residency form: the function observes bit 0 of its
+/// status word alone, on a slot. A read's and a fetch's residency and value are exact on both arms,
+/// as are a nearest sample's and a gather's of Metal's footprint; a filtered sample's, and an
+/// access's outside the footprint, records `PrecisionNote::SparseResidency` where it is not
+/// (`lower::sampler`). A heap element's residency takes none: its word is 0, Metal's for a texture
+/// that is not sparse, and the stage states `RuntimeFact::HeapResidency`, by which the binder
+/// refuses a sparse texture its handle tables reach. A word with another bit observed is refused.
 pub(crate) fn residency(cx: &mut SelectCx<'_>, at: InstId, image: ImageRef) -> Result<bool, Error> {
     match status_use(cx, at) {
         None => Ok(false),
-        Some(StatusUse::Residency) if !image.heap() => {
+        Some(StatusUse::Residency) if image.heap() => {
+            cx.facts
+                .insert(crate::pipeline::facts::RuntimeFact::HeapResidency { stage: cx.stage });
+            Ok(false)
+        }
+        Some(StatusUse::Residency) => {
             mark(cx, image, |u| u.residency = true);
             Ok(true)
         }
-        Some(_) => Err(refuse()),
+        Some(StatusUse::Other) => Err(refuse()),
     }
 }
 
@@ -2004,8 +2014,8 @@ pub fn select(
             return slice::select(cx, (at, t), &ops, ImageRef::Heap { group, handle }, m);
         }
         if sampling {
-            // The heap element through a separate heap sampler; its residency is refused (an LOD
-            // query returns a plain float).
+            // The heap element through a separate heap sampler; its residency is the stage's
+            // `HeapResidency` (an LOD query returns a plain float).
             if !matches!(t.op, TexOp::CalculateLod { .. }) {
                 residency(cx, at, ImageRef::Heap { group, handle })?;
             }

@@ -843,6 +843,15 @@ driver's. Each is open work.
   `sparse-mapping-a-slice-past-the-textures` holds every side of the difference visible, with its
   four rows of `crates/metal2vulkan-conformance/known-gaps.tsv`.
 
+- **A sparse texture an argument buffer holds, under a function that reads its residency.** A
+  read, sample or gather of a texture the function reaches through an argument buffer answers
+  `sparse_color::resident()` as Metal does for a texture that is not sparse (resident
+  everywhere), and the stage states `RuntimeFact::HeapResidency`, so a plan whose stage's handle
+  tables reach a sparse texture is refused (`ArgumentBufferTextures`, `NotImplemented`).
+  Answering one would take the member's tile map, or its sparse image's `OpImageSparse*` word,
+  per handle-table entry, which is not built; a sparse texture bound to a slot is answered
+  (`RuntimeFact::SparseTexture`).
+
 - **A linear sample of a converted two-plane YCbCr texture over a P3 surface** (`DCI_P3`,
   `P3_D65`, each code read alone): the runtime filters the codes as the code-reading format's
   (`RGB8_420_2P` and its kin), unannounced; Metal's filter of such a texture is not measured.
