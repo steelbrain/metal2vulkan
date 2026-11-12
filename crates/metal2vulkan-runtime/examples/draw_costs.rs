@@ -904,11 +904,9 @@ impl Compositor {
     /// A frame's draws in order.
     fn plan() -> Vec<FrameDraw> {
         let mut draws = Vec::with_capacity(COMPOSITOR_DRAWS);
-        for pass in 0..=LAYERS.len() {
-            let (count, (width, height)) = match pass < LAYERS.len() {
-                true => (LAYER_DRAWS, LAYERS[pass]),
-                false => (FRAMEBUFFER_DRAWS, FRAMEBUFFER),
-            };
+        let passes = (LAYERS.iter().map(|&size| (LAYER_DRAWS, size)))
+            .chain([(FRAMEBUFFER_DRAWS, FRAMEBUFFER)]);
+        for (pass, (count, (width, height))) in passes.enumerate() {
             for k in 0..count {
                 let d = draws.len();
                 let backdrop = (pass < LAYERS.len() && k == 1) || (pass == LAYERS.len() && k == 7);
