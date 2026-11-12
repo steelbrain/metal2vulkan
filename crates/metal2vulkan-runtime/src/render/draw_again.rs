@@ -666,7 +666,7 @@ impl RenderLowering {
                 }
                 false => {
                     if reargued {
-                        let why = ArgumentsStop::Other;
+                        let why = ArgumentsStop::Unkept;
                         self.core.counts().draw_rebind_stopped_arguments(why);
                     }
                     self.rebind_stopped()
