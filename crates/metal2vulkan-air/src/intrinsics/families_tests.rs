@@ -536,6 +536,15 @@ const OBSERVED: &[(&str, &str)] = &[
     // AIR 2.9 (`xcrun metal` 32023.921 at deployment target macOS 27): a barrier takes its order,
     // and a memory atomic its `mem_flags` before the volatile flag.
     ("air.wg.barrier", "void (i32, i32, i32)"),
+    // AIR 2.9: a strided tensor's initialization takes three more operands.
+    (
+        "air.init_strided_private_tensor.i32.global",
+        "void (p0, i16, p1, p0, p0, i8, p1, i32, i8)",
+    ),
+    (
+        "air.init_strided_private_tensor.i32.local",
+        "void (p0, i16, p3, p0, p0, i8, p3, i32, i8)",
+    ),
     ("air.simdgroup.barrier", "void (i32, i32, i32)"),
     (
         "air.atomic.global.add.u.i32",
@@ -3725,5 +3734,51 @@ fn interpolation_functions_read_their_location_and_interpolant() {
         "air.interpolate_centerperspective.f32",
     ] {
         assert_eq!(AirIntrinsic::parse(name), None, "{name}");
+    }
+}
+
+/// A strided tensor's initialization has two declarations: AIR 2.8's six operands and AIR 2.9's
+/// nine (`xcrun metal` 32023.922 at deployment target macOS 27), whose added pointer is in the
+/// data's space. Another added operand list is a mismatch.
+#[test]
+fn a_strided_tensor_initialization_has_its_air_2_9_form() {
+    for (name, data, p) in [
+        (
+            "air.init_strided_private_tensor.i32.global",
+            AddrSpace::Device,
+            "p1",
+        ),
+        (
+            "air.init_strided_private_tensor.i32.local",
+            AddrSpace::Threadgroup,
+            "p3",
+        ),
+    ] {
+        let air28 = format!("void (p0, i16, {p}, p0, p0, i8)");
+        let air29 = format!("void (p0, i16, {p}, p0, p0, i8, {p}, i32, i8)");
+        assert_eq!(
+            declared_air(name, &air28),
+            AirIntrinsic::Tensor(Tensor::InitStrided {
+                data,
+                trailing: false
+            }),
+            "{name}"
+        );
+        assert_eq!(
+            declared_air(name, &air29),
+            AirIntrinsic::Tensor(Tensor::InitStrided {
+                data,
+                trailing: true
+            }),
+            "{name}"
+        );
+        let other = if p == "p1" { "p3" } else { "p1" };
+        for decl in [
+            format!("void (p0, i16, {p}, p0, p0, i8, {other}, i32, i8)"),
+            format!("void (p0, i16, {p}, p0, p0, i8, {p}, i32)"),
+            format!("void (p0, i16, {p}, p0, p0, i8, {p}, i32, i8, i8)"),
+        ] {
+            assert_eq!(declared(name, &decl), DeclClass::Mismatch, "{name} {decl}");
+        }
     }
 }

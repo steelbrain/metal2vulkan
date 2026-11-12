@@ -207,10 +207,15 @@ pub enum Tensor {
     /// `air.get_extent_private_tensor.i32`: `i32 (ptr, i16, i16)`.
     Extent,
     /// `air.init_strided_private_tensor.i32.{global,local}`: `void (ptr, i16, ptr data, ptr,
-    /// ptr, i8)`, `data` in device or threadgroup memory.
+    /// ptr, i8)`, `data` in device or threadgroup memory; in AIR 2.9 (deployment target macOS
+    /// 27) `void (ptr, i16, ptr data, ptr, ptr, i8, ptr, i32, i8)`, the added pointer in
+    /// `data`'s space.
     InitStrided {
         /// The data pointer's address space: device (`global`) or threadgroup (`local`).
         data: AddrSpace,
+        /// The AIR 2.9 form: three more operands, a pointer in `data`'s space, an `i32` and
+        /// an `i8`. Metal's header passes null, 0 and -1 for a strided tensor's.
+        trailing: bool,
     },
     /// `air.slice_private_tensor_private_tensor.s.i32`: `void (ptr, ptr, i16, ptr, ptr)`.
     Slice,
@@ -223,13 +228,30 @@ impl Tensor {
             "get_extent_private_tensor.i32" => Tensor::Extent,
             "init_strided_private_tensor.i32.global" => Tensor::InitStrided {
                 data: AddrSpace::Device,
+                trailing: false,
             },
             "init_strided_private_tensor.i32.local" => Tensor::InitStrided {
                 data: AddrSpace::Threadgroup,
+                trailing: false,
             },
             "slice_private_tensor_private_tensor.s.i32" => Tensor::Slice,
             _ => return None,
         })
+    }
+
+    /// The AIR 2.9 form of an AIR 2.8 strided initialization, the other declaration its name
+    /// may have.
+    pub(super) fn alternative(self) -> Option<Tensor> {
+        match self {
+            Tensor::InitStrided {
+                data,
+                trailing: false,
+            } => Some(Tensor::InitStrided {
+                data,
+                trailing: true,
+            }),
+            _ => None,
+        }
     }
 
     /// The typed signature.
@@ -239,9 +261,29 @@ impl Tensor {
         match *self {
             Tensor::DescriptorSize => Signature::new(i16s, &[i16s, i16s]),
             Tensor::Extent => Signature::new(num(Elem::I32, 1), &[p, i16s, i16s]),
-            Tensor::InitStrided { data } => Signature::new(
+            Tensor::InitStrided {
+                data,
+                trailing: false,
+            } => Signature::new(
                 Operand::Void,
                 &[p, i16s, Operand::Ptr(data), p, p, num(Elem::I8, 1)],
+            ),
+            Tensor::InitStrided {
+                data,
+                trailing: true,
+            } => Signature::new(
+                Operand::Void,
+                &[
+                    p,
+                    i16s,
+                    Operand::Ptr(data),
+                    p,
+                    p,
+                    num(Elem::I8, 1),
+                    Operand::Ptr(data),
+                    num(Elem::I32, 1),
+                    num(Elem::I8, 1),
+                ],
             ),
             Tensor::Slice => Signature::new(Operand::Void, &[p, p, i16s, p, p]),
         }
