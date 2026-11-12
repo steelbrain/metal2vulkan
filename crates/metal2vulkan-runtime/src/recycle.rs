@@ -37,6 +37,18 @@
 //!   completed (they hold it), so no GPU work reaches it. Not an image of a shareable texture, one
 //!   that took its storage form, one presenting a stand-in, or one whose memory is not its
 //!   placement alone; not a heap's buffer, nor a buffer of the caller's or over host pages.
+//! - **The book.** The recycler keeps the making of each live object it made or handed out, by its
+//!   handle, and parks an object as its last holder goes only where the book holds its handle.
+//!   A driver gives a destroyed object's handle to a later object (MoltenVK's handle is the
+//!   object's address), so every live object the book holds leaves it before it is destroyed:
+//!   at its last holder's going (parked, or forgotten where it may not park), and an image swapped
+//!   out of its texture as the image swapped out goes (`texture.rs`'s `ImageObjects`: a texture's
+//!   first image, which its storage form replaced, `texture/storage_form.rs`). One left in the book
+//!   parked the next image the driver made at its handle, one of another kind that the book does
+//!   not note (a `Shared` texture's host-copy image of another format), as its making, and a
+//!   texture of that making took it: views and copies of the texture's format over an image of
+//!   another (the consumer's guest, a `BGRA8Unorm` view of an `RGBA16Float` image on MoltenVK,
+//!   which Metal's texture view creation aborted on).
 //! - **Which.** A take hands out the latest parked object of its making, found through a map of
 //!   each making's parked objects (a hash of the making, not a search of every parked one).
 //! - **Bounded.** At most [`IMAGES`]' and [`BUFFERS`]' count and bytes parked, and none parked

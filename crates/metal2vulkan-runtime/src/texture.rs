@@ -760,7 +760,8 @@ impl Drop for ImageObjects {
         let Some(_busy) = exit_guard::enter() else {
             return;
         };
-        let raw = self.device.shared().vk();
+        let shared = self.device.shared();
+        let raw = shared.vk();
         // SAFETY: no pending command buffer uses them: one that used the image before it was
         // swapped out holds the pages that keep them until it completed, and a new image no
         // command has used yet.
@@ -772,6 +773,11 @@ impl Drop for ImageObjects {
             // one's after the views above).
             match &self.raw_goes {
                 RawGoes::Destroyed => {
+                    // A `VkImage` the recycler holds as live (a texture's first image, which its
+                    // storage form swapped out, `texture/storage_form.rs`) leaves its book before
+                    // it is destroyed: the driver may give its handle to a later image, which the
+                    // book would park as this one's making (`recycle.rs`, "The book").
+                    lock(&shared.textures.recycled).forget(self.raw);
                     release::object(raw, self.raw);
                 }
                 RawGoes::WithStandIn(stand_in) => {

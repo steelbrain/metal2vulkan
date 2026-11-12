@@ -90,7 +90,9 @@
 //!   takes to hand the image out) the new `VkImage` swaps in and the plan with `STORAGE` is the
 //!   image's from then on; the old image's views are emptied. The old image, its views and its
 //!   memory go as the committing command buffer completes, after every earlier use of them: its
-//!   copy waits for those. The texture and its views keep their resource IDs: each texture
+//!   copy waits for those. The old image leaves the image recycler's book of live images first
+//!   (`recycle.rs`, "The book"), as its handle may name a later image. The texture and its views
+//!   keep their resource IDs: each texture
 //!   slot's generation changes, so the device's texture table and heap sets write their
 //!   elements again ([`heap_sets::renew`]) while no command buffer that may read them is
 //!   pending. `allocatedSize` keeps the bytes the texture was made with. Where a check failed a
