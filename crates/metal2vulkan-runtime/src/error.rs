@@ -2132,8 +2132,8 @@ pub enum RuntimeGap {
     /// recovery did not carry to the new one (the runtime made a new `VkDevice` behind the device,
     /// announced as `Degradation::DeviceRecovered`; `Device::recover_for_test` runs the same
     /// recovery). The recovery carries the events, the fences, the depth/stencil states, the
-    /// libraries and their functions (no generation's: they hold no Vulkan object), the uses of
-    /// guest RAM, the no-copy buffers (made again over the same pages), the `Private` buffers
+    /// libraries and their functions and the address pools (no generation's: they hold no Vulkan
+    /// object), the uses of guest RAM, the no-copy buffers (made again over the same pages), the `Private` buffers
     /// (their contents lost: they read zero), the buffers in the runtime's own pages (their
     /// contents and `contents` pointer kept): a long host-visible buffer's fresh pages, and the
     /// blocks of pages the `Shared` and `Managed` buffers lie in where the device's checks found a

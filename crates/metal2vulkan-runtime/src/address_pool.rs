@@ -7,18 +7,28 @@
 //! pools reserves each ([`Device::reserve_address_pool`]) and places each small buffer at the slot
 //! its model gives (`BufferDescriptor::with_pool_slot`): the buffer answers Metal's address.
 
-use super::address::{AddressPlacement, GpuAddress};
+use super::address::{AddressPlacement, AddressSpace, GpuAddress};
 use super::device::lock;
 use super::error::Error;
 use super::Device;
+use std::sync::{Arc, Mutex};
 
 /// A reserved range of the Metal address space whose slots buffers are placed in
 /// (`BufferDescriptor::with_pool_slot`; a runtime extension, no Metal counterpart: Metal's own
 /// buffer pools, which hold every buffer shorter than a page, are not objects of its API). While
 /// it lives, no other buffer or heap, pinned or not, lands in its span. Dropping it lets the span
 /// go, at once where no buffer lies in a slot of it, else once the last such buffer is gone.
+///
+/// Where the device's recovery makes it a new `VkDevice` (`Degradation::DeviceRecovered`), the
+/// pool goes on there: it is a span of the device's address space, which every `VkDevice` of the
+/// device shares, and holds no Vulkan object, so buffers made after the recovery take its slots
+/// as before.
 pub struct AddressPool {
+    /// A root handle (`device/line.rs`): of the device, never of the `VkDevice` it was reserved
+    /// on.
     device: Device,
+    /// The device's address space, which its span is of.
+    addresses: Arc<Mutex<AddressSpace>>,
     address: GpuAddress,
     length: u64,
 }
@@ -34,7 +44,8 @@ impl AddressPool {
         self.length
     }
 
-    /// The device whose address space the pool is of.
+    /// The device whose address space the pool is of: a handle of the device whose calls go to
+    /// the `VkDevice` that serves it, across its recoveries.
     pub fn device(&self) -> &Device {
         &self.device
     }
@@ -51,7 +62,7 @@ impl std::fmt::Debug for AddressPool {
 
 impl Drop for AddressPool {
     fn drop(&mut self) {
-        lock(&self.device.shared().addresses).release_pool(self.address);
+        lock(&self.addresses).release_pool(self.address);
     }
 }
 
@@ -81,7 +92,8 @@ impl Device {
     ) -> Result<AddressPool, Error> {
         let address = (self.address_space_for(placement)).reserve_pool(placement, length)?;
         Ok(AddressPool {
-            device: self.clone(),
+            device: self.root(),
+            addresses: Arc::clone(&self.shared().addresses),
             address,
             length,
         })

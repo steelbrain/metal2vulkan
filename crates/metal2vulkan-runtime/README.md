@@ -833,9 +833,10 @@ meanwhile wait for it.
   and completes on the lost one where the loss came after, its object then one made before the
   recovery.
 - The recovery carries the events, the fences, the depth/stencil states, the libraries and their
-  functions, the uses of guest RAM (`HostRamUse`), the no-copy buffers, the `Private` buffers, the
-  buffers in the runtime's own pages and the `Private` heaps with the buffers placed in them to the
-  new `VkDevice`: the same objects, at the same addresses.
+  functions, the address pools (`AddressPool`, whose slots take buffers after it as before), the
+  uses of guest RAM (`HostRamUse`), the no-copy buffers, the `Private` buffers, the buffers in the
+  runtime's own pages and the `Private` heaps with the buffers placed in them to the new
+  `VkDevice`: the same objects, at the same addresses.
   An event keeps the value the host saw and its listeners' notifications. A buffer in the
   runtime's own pages keeps its bytes and its `contents` pointer: a long host-visible buffer's
   fresh pages, and, on a device whose checks found that a held import of host pages costs its
