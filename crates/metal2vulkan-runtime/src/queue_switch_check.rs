@@ -60,8 +60,10 @@
 //!   `VkQueue`s, in index order, before its opening, and lets them go once its last batch was
 //!   submitted (`QueueUses::use_queues_kept`), so its three submissions go in their order with no
 //!   other thread's between them. Every batch there completes with no more work of the host's, so
-//!   a wait for a queue to idle under its lock (`Device::drain_queues`, after a failed wait; a
-//!   submission check's after a refused call) waits for work that completes.
+//!   a wait for a queue to idle under its lock (`Device::drain_queues`, after a failed wait) waits
+//!   for work that completes, and so does a submission check's wait for its fence submitted alone
+//!   after a refused call (`submit_check.rs`), which signals once the queue's earlier work
+//!   completed.
 //! - **Holding nothing of the device.** The check holds only the parts of the device it works
 //!   with ([`Parts`]), never a handle: a check that held one for its run would hold the device's
 //!   last once the program dropped its own while the check ran (the first moments of a device
