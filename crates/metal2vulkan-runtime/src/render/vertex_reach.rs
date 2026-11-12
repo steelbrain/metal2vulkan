@@ -42,11 +42,18 @@
 //!   (`vertex-fetch-may-wrap`, once per device). A draw that pulls every attribute anyway (the
 //!   private list and de-indexed forms) names none. On every other driver no draw names one, and
 //!   the check is one lookup of the device's defects.
+//!
+//! A draw replay's draw (`BufferForms::Replay`, `BufferForms::Merged`,
+//! `render/executions/gpu.rs`) names every fixed-function layout of its state
+//! (`bind::draw_replay_vertex_layouts`), on every driver: its commands bind their own buffers,
+//! which fixed-function input cannot fetch and a pulled attribute reads from its command's slot
+//! table.
 
+use super::super::pipeline::BufferForms;
 use super::RenderLowering;
 use crate::error::{Error, RuntimeGap};
 use crate::fetch_reach::{format_bytes, reach, REACHED};
-use metal2vulkan::bind::DrawCall;
+use metal2vulkan::bind::{draw_replay_vertex_layouts, DrawCall};
 use metal2vulkan::device::VertexReachPolicy;
 use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::metal::VertexStepFunction;
@@ -104,13 +111,21 @@ impl RenderLowering {
     }
 
     /// The fixed-function layouts of `pipeline` (its base: every fixed-function layout of its
-    /// descriptor) that `draw` pulls on this device ([`far_layouts`], the module docs): none on a
-    /// driver without `RuntimeDriverDefect::VertexFetchWrapsPast4GiB`.
+    /// descriptor) that `draw` pulls on this device ([`far_layouts`], the module docs): every one
+    /// in a draw replay's forms (none where one has a stride set per bind, which keeps the
+    /// execution from the replay: `bind::draw_replay_vertex_layouts`), else none on a driver
+    /// without `RuntimeDriverDefect::VertexFetchWrapsPast4GiB`.
     pub(super) fn far_vertex_buffers(
         &self,
         pipeline: &RenderPipeline,
         draw: &DrawCall,
     ) -> FarLayouts {
+        if matches!(self.forms, BufferForms::Replay | BufferForms::Merged) {
+            return FarLayouts {
+                pulled: draw_replay_vertex_layouts(&pipeline.vertex_input).unwrap_or_default(),
+                unchecked: None,
+            };
+        }
         let device = self.core.device();
         let defect = RuntimeDriverDefect::VertexFetchWrapsPast4GiB;
         if !device.properties().driver_defects.contains(&defect) {

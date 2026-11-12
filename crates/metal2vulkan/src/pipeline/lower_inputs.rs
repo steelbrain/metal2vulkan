@@ -108,9 +108,11 @@ pub struct LoweringInputs {
     /// command's, in the slot table at its own stage's `RootTableAddress`. It needs device
     /// addresses (`bufferDeviceAddress` and `shaderInt64`: `GpuEncodedIndirectCommands` names
     /// them otherwise); a tile, object or mesh function, a kernel with a stage-input descriptor,
-    /// and a vertex function that fetches attributes of a vertex descriptor are
+    /// and a vertex function that fetches an attribute in fixed function are
     /// `Unsupported{GpuEncodedIndirectCommands, NotImplemented}` under it (a replayed command is a
-    /// compute dispatch with no stage-in region, or a draw whose buffers no fetch reads).
+    /// compute dispatch with no stage-in region, or a draw whose buffers no fixed-function input
+    /// reads: a pulled attribute reads its slot table, and the replay pulls every layout through
+    /// the pulled-vertex-buffer variant, `bind::draw_replay_vertex_layouts`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub replay_bindings: bool,
     /// With `replay_bindings`, the vertex function of a draw replay merged into one draw
@@ -118,7 +120,8 @@ pub struct LoweringInputs {
     /// at `PushField::MergedDrawAddress` in place of `RootTableAddress`, finds the command its
     /// corner (`InstanceIndex` and `VertexIndex`) falls in, and runs that command's vertex: its
     /// `[[vertex_id]]`, `[[instance_id]]`, `[[base_vertex]]` and `[[base_instance]]` are the
-    /// command's draw's, and its buffers are in the command's vertex slot table. A fragment
+    /// command's draw's, its pulled attributes step by the command's vertex and instance, and its
+    /// buffers are in the command's vertex slot table. A fragment
     /// function under it reads no buffer and no `[[primitive_id]]`, which a merged draw does not
     /// keep per command: one that does is `Unsupported{GpuEncodedIndirectCommands,
     /// NotImplemented}`, and so is a vertex function that writes the primitive ID's varying or

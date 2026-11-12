@@ -133,11 +133,12 @@ pub struct BindState {
     /// The Metal vertex buffer indices of the layouts the draw fetches in fixed function that the
     /// device's fixed-function input cannot fetch for it: the runtime names those a draw may fetch
     /// past `2^32` bytes of their bind offset, on a driver whose fixed-function vertex input takes
-    /// that displacement modulo `2^32`. The plan pulls them in the pulled-vertex-buffer variant
-    /// (`VariantKey::pulled_vertex_buffers`), as it pulls a layout bound at an offset or stride
-    /// fixed-function input cannot fetch; a layout the pipeline does not fetch in fixed function
-    /// is left as it is. Part of the shape (`BindShape::far_vertex_buffers`); empty for every
-    /// other draw.
+    /// that displacement modulo `2^32`, and every one of a draw replay's state
+    /// (`draw_replay_vertex_layouts`), whose commands bind their own buffers. The plan pulls them
+    /// in the pulled-vertex-buffer variant (`VariantKey::pulled_vertex_buffers`), as it pulls a
+    /// layout bound at an offset or stride fixed-function input cannot fetch, and needs no buffer
+    /// bound at them; a layout the pipeline does not fetch in fixed function is left as it is.
+    /// Part of the shape (`BindShape::far_vertex_buffers`); empty for every other draw.
     #[cfg_attr(feature = "serde", serde(default))]
     pub far_vertex_buffers: BTreeSet<u32>,
     /// Where the heap arrays (set 1) hold the command's heap members and argument samplers
@@ -1779,8 +1780,8 @@ pub struct BindShape {
     #[cfg_attr(feature = "serde", serde(default))]
     pub private_list: bool,
     /// `BindState.far_vertex_buffers`: the layouts a draw pulls where the device's fixed-function
-    /// input cannot fetch them for it, in the pulled-vertex-buffer variant
-    /// (`VariantKey::pulled_vertex_buffers`).
+    /// input cannot fetch them for it (past 4 GiB on a wrapping driver, or every one of a draw
+    /// replay's), in the pulled-vertex-buffer variant (`VariantKey::pulled_vertex_buffers`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub far_vertex_buffers: BTreeSet<u32>,
 }

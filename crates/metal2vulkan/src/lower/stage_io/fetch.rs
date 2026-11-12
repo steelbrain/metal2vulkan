@@ -38,7 +38,12 @@
 //!   unchanged while advertising `supportsNonZeroFirstInstance` (not observed on Metal here);
 //! - `Constant`: no element, the attribute's offset alone. Metal fetches the first element
 //!   whatever the base instance: MoltenVK emulates Vulkan's zero divisor with Metal's constant
-//!   step by offsetting the bound buffer by `firstInstance · stride`.
+//!   step by offsetting the bound buffer by `firstInstance · stride`;
+//! - in a merged draw's vertex function (`LoweringInputs::merged_draws`), whose `VertexIndex` and
+//!   `InstanceIndex` count the merged draw's corners, `PerVertex` and `PerInstance` read its
+//!   corner's command's vertex and instance instead ([`Step::MergedVertex`],
+//!   [`Step::MergedInstance`], `super::MergedRead`), as its `[[vertex_id]]` and `[[instance_id]]`
+//!   read them: rate `n > 1` divides from the command's base instance.
 //!
 //! The bytes are the format's store size, read through the access family's leaf composition
 //! (`memory::leaf`) on the byte path, because neither the stride nor the bind residual has an
@@ -361,6 +366,12 @@ pub enum Step {
     /// A per-vertex step in the de-indexed or private list form: the vertex the draw's index names
     /// (`super::CapturedIndex`), read once at entry.
     CapturedVertex,
+    /// A per-vertex step of a merged draw's vertex function: its corner's command's vertex
+    /// (`super::MergedRead`), which the entry finds before the fetch.
+    MergedVertex,
+    /// A per-instance step of a merged draw's vertex function: its corner's command's instance,
+    /// divided by `rate` from the command's base instance where `rate > 1`.
+    MergedInstance { rate: u32 },
 }
 
 /// The index read of an indexed kernel stage-in step: `bytes` (2 or 4) at the clamped thread
@@ -452,7 +463,11 @@ impl PulledRead {
                 GRID_POSITION_WORDS + REGION_AXIS_WORDS + REACH_WORDS + index.leaf().cost() + 176
             }
             // The index read is the plan's, counted once (`super::CAPTURED_INDEX_WORDS`).
-            Step::PerVertex { .. } | Step::PerInstance { .. } | Step::CapturedVertex => REACH_WORDS,
+            Step::PerVertex { .. }
+            | Step::PerInstance { .. }
+            | Step::CapturedVertex
+            | Step::MergedVertex
+            | Step::MergedInstance { .. } => REACH_WORDS,
             Step::Constant => 0,
         };
         self.encoding.leaf().cost() + 4 * lane + 160 + element
@@ -520,9 +535,12 @@ pub(super) fn select(
     if let (VertexStepFunction::PerVertex, Some(ty)) = (step_function, captured) {
         super::plan::captured_index(cx, ty)?;
     }
+    // A merged draw's vertex reads its corner's command's vertex and instance (`super::MergedRead`).
+    let merged = cx.inputs.merged_draws;
     let sp = &mut cx.families.stage_io;
     let step = match step_function {
         VertexStepFunction::PerVertex if captured.is_some() => Step::CapturedVertex,
+        VertexStepFunction::PerVertex if merged => Step::MergedVertex,
         VertexStepFunction::PerVertex => Step::PerVertex {
             index: builtin(
                 sp,
@@ -532,6 +550,10 @@ pub(super) fn select(
                 StageBuiltin::VertexIndex,
             ),
         },
+        // A rate of 0 is the arm below's refusal.
+        VertexStepFunction::PerInstance if merged && step_rate > 0 => {
+            Step::MergedInstance { rate: step_rate }
+        }
         VertexStepFunction::PerInstance => {
             if step_rate == 0 {
                 return Err(Error::InvalidDescriptor(DescriptorError::VertexStepRate {
@@ -1010,6 +1032,16 @@ pub(super) fn emit(
         }
         Step::Constant => None,
         Step::CapturedVertex => Some(super::captured_vertex(cx, fb)?),
+        Step::MergedVertex | Step::MergedInstance { .. } => {
+            let Some(m) = cx.merged_draw else {
+                return Err(cx.fail("a merged draw's attribute fetched before its entry"));
+            };
+            Some(match r.step {
+                Step::MergedInstance { rate: 1 } => m.instance,
+                Step::MergedInstance { rate } => divided(fb, m.instance, m.base_instance, rate)?,
+                _ => m.vertex,
+            })
+        }
     };
     let element = match (element, r.stride) {
         (Some(e), Stride::Push(field)) => Some((e, cx.push_field(fb, field)?)),

@@ -25,7 +25,7 @@
 //! shape): the whole loop runs under the worker's one deadline and memory limit, and the device
 //! process only plans the returned pipeline for the same shape. Everything here is device-free.
 
-use metal2vulkan::bind::{BindShape, Dispatch, TextureShape};
+use metal2vulkan::bind::{draw_replay_vertex_layouts, BindShape, Dispatch, TextureShape};
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{Device, DeviceProfile};
 use metal2vulkan::error::{
@@ -247,7 +247,10 @@ impl DrawForm {
 /// executed render command's draw (`VariantKey::large_buffer_form` of the first pipeline's plan,
 /// from its dependencies), the plan of the pipeline compiled under it settles on it where that key
 /// covers the plan's. In a draw replay's forms the key is the plan's with `replay_bindings` (and
-/// `merged_draws` for the merged one) set, as the runtime's state settles a replayed draw.
+/// `merged_draws` for the merged one) set, as the runtime's state settles a replayed draw, the
+/// plan's for `shape` with every fixed-function layout of the first pipeline compiled (the base)
+/// named among those the draw pulls (`bind::draw_replay_vertex_layouts`); a layout of a stride set
+/// per bind stays in fixed function, whose replay variant the product refuses.
 pub fn compile_render_for_shape(
     device: &Device,
     descriptor: &RenderPipelineDescriptor,
@@ -256,11 +259,22 @@ pub fn compile_render_for_shape(
     budget: &Budget,
 ) -> Result<(RenderPipeline, VariantKey), Error> {
     let mut large_key: Option<VariantKey> = None;
+    let mut replayed: Option<BindShape> = None;
     compile_for_bind_state(
         |slot| bound_format(shape, slot),
         device.profile(),
         |key| device.compile_render_variant(descriptor, key, budget),
         |pipeline| {
+            // A draw replay pulls the base's fixed-function layouts (the first pipeline's).
+            let shape = match form {
+                DrawForm::Replay | DrawForm::Merged => &*replayed.get_or_insert_with(|| {
+                    let mut replayed = shape.clone();
+                    replayed.far_vertex_buffers =
+                        draw_replay_vertex_layouts(&pipeline.vertex_input).unwrap_or_default();
+                    replayed
+                }),
+                DrawForm::Bound | DrawForm::Large => shape,
+            };
             let plan = pipeline.plan(device, shape).ok()?;
             match form {
                 DrawForm::Bound => Some(plan.variant),

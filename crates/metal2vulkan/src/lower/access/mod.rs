@@ -1536,7 +1536,7 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
 /// flat variant (`LoweringInputs::flat_grid`) or a folded variant
 /// (`LoweringInputs::folded_groups`), before its slots' forms are chosen: a kernel with neither a
 /// stage-input descriptor or fetch (`sources`) nor a tile function's attachments, or for a replay
-/// variant also a vertex function with no fetch or a fragment function, or for a folded variant
+/// variant also a vertex function whose fetch is all pulled or a fragment function, or for a folded variant
 /// also an object function (whose draw's pieces fold its grid, `bind::mesh_arguments`), on a
 /// profile with device addresses. A replay variant reads every `SlotGuestBase` the selection asked for from its
 /// slot's root entry instead ([`replay_guest_base`]), so the push block holds the root table's
@@ -1560,18 +1560,19 @@ fn plan_replay(cx: &mut SelectCx<'_>, sources: &[SlotRef]) -> Result<(), Error> 
         .into());
     }
     // A replayed command is a compute dispatch with no stage-in region and no tile pass, or a
-    // draw whose vertex function fetches no attribute: its buffers are the record's, read through
-    // the slot table, which no fetch of a vertex descriptor reads.
+    // draw whose vertex function fetches no attribute in fixed function: its buffers are the
+    // record's, read through the slot table, which a pulled attribute's read reaches and
+    // fixed-function input does not (the replay pulls every layout,
+    // `bind::draw_replay_vertex_layouts`).
     use crate::pipeline::sym::Stage;
     let drawn = cx.inputs.replay_bindings && matches!(cx.stage, Stage::Vertex | Stage::Fragment);
     // A folded object function: its draw's pieces fold Metal's object grid
     // (`bind::mesh_arguments`).
     let pieces = cx.inputs.folded_groups && cx.stage == Stage::Object;
-    let fetches = cx
-        .inputs
-        .vertex_fetch
-        .as_ref()
-        .is_some_and(|f| !f.attributes.is_empty());
+    let fetches = (cx.inputs.vertex_fetch.as_ref()).is_some_and(|f| {
+        (f.attributes.values())
+            .any(|a| *a == crate::pipeline::lower_inputs::VertexFetch::FixedFunction)
+    });
     if (cx.stage != Stage::Kernel && !drawn && !pieces)
         || fetches
         || !sources.is_empty()

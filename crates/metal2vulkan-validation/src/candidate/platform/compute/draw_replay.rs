@@ -9,9 +9,10 @@
 //!   may hold: the host's setters' (`CommandBufferResource::host_writes`) and what the functions of
 //!   the case's own dispatch or draw may write (`PipelineInterface::command_writes`; its encoder
 //!   makes every command buffer resident for writing, as the case runner's does); the inherited
-//!   state's functions (`draw_replay_state`), and its draw instantiated in the variant's form
-//!   (`draw_replay_draw`); and a device with device addresses (`draw_replay_module`,
-//!   `draw_replay_preprocess`). The runtime's rules of its own hold of every case the runner
+//!   state's functions (`draw_replay_state`) and attributes (`draw_replay_vertex_layouts`: the
+//!   variant pulls every fixed-function layout, `variants::compile_render_for_shape`), and its
+//!   draw instantiated in the variant's form (`draw_replay_draw`); and a device with device
+//!   addresses (`draw_replay_module`, `draw_replay_preprocess`). The runtime's rules of its own hold of every case the runner
 //!   makes: it passes no check, counts no visibility result, and its pass (the template's
 //!   scaffolding) reaches no tile memory and draws nothing before the execution. An execution a
 //!   rule keeps from the device, or whose variant, plan, draw or preprocess the product refuses,
@@ -49,8 +50,8 @@ use metal2vulkan::bind::indirect_commands::{
 use metal2vulkan::bind::{
     draw_merge_module, draw_replay_draw, draw_replay_merges, draw_replay_module,
     draw_replay_preprocess, draw_replay_primitive_type, draw_replay_slots, draw_replay_state,
-    BindState, DrawCall, DrawCommands, DrawMergeModule, DrawReplay, DrawReplayPreprocess,
-    IndirectRef, MergePhase,
+    draw_replay_vertex_layouts, BindState, DrawCall, DrawCommands, DrawMergeModule, DrawReplay,
+    DrawReplayPreprocess, IndirectRef, MergePhase,
 };
 use metal2vulkan::error::Error;
 use metal2vulkan::metal::RenderStages;
@@ -424,7 +425,10 @@ fn drawn(
     replay: &DrawReplay,
     merged: bool,
 ) -> Result<Option<Variant>, ExecutorError> {
-    if draw_replay_state(&pipeline.graphics, merged).is_err() {
+    // Its attributes: none whose layout's stride is set per bind (the variant pulls the rest).
+    if draw_replay_state(&pipeline.graphics, merged).is_err()
+        || draw_replay_vertex_layouts(&pipeline.vertex_input).is_err()
+    {
         return Ok(None);
     }
     require_enabled(context, &pipeline.requirements)?;

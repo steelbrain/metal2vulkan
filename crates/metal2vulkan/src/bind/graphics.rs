@@ -31,7 +31,8 @@
 //!   the plan's pulled-vertex-buffer variant, which pulls the layout's attributes, and so does a
 //!   binding whose layout the shape names among those the device cannot fetch for the draw
 //!   (`BindShape::far_vertex_buffers`: one a draw may fetch past `2^32` bytes of its bind offset
-//!   on a driver whose fixed-function input wraps there); a pipeline
+//!   on a driver whose fixed-function input wraps there, or every one of a draw replay's, whose
+//!   commands bind their own buffers), which needs no bound buffer; a pipeline
 //!   compiled under such a variant keeps naming its layouts, so the key is a fixed point. Per draw,
 //!   a binding's extent is the bytes its vertex or instance range fetches, and with dynamic strides
 //!   every binding's stride is listed.
@@ -2202,7 +2203,12 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             alignment,
             reads,
         };
+        // A layout the shape names among those the device cannot fetch for the draw
+        // (`BindShape::far_vertex_buffers`) is pulled whatever the encoder binds there: a draw
+        // replay's commands bind their own, which the encoder usually has none of.
+        let far = shape.far_vertex_buffers.contains(&vb.buffer_index);
         let fetchable = match (vs.and_then(|s| s.buffers.get(&vb.buffer_index)), vb.stride) {
+            _ if far => false,
             (None, _) => return Err(BindError::UnboundVertexBuffer { slot }),
             // The consumer places inline bytes at an offset of its own (aligned); a per-bind
             // layout reads them at their bind's stride, 0 without one, as a buffer's.
@@ -2234,9 +2240,8 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 fetchable(&planned, &vertex_strides, offset_alignment, per_bind)
             }
         };
-        // A layout the device cannot fetch for the draw (`BindShape::far_vertex_buffers`) is
-        // pulled as an unfetchable bind's is.
-        if !fetchable || shape.far_vertex_buffers.contains(&vb.buffer_index) {
+        // A layout the device cannot fetch for the draw is pulled as an unfetchable bind's is.
+        if !fetchable {
             pulled_vertex_buffers.insert(vb.buffer_index);
         }
         vertex_buffers.push(VertexBufferBind {

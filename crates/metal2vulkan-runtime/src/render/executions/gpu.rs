@@ -24,7 +24,10 @@
 //!   The state is one the pass takes (`check_pipeline`), neither a tessellation nor a mesh one,
 //!   whose fragment function writes no memory, nor its vertex function where it rasterizes (no
 //!   command's draw waits on another's, `render_target::after_geometry_writes`), and whose vertex
-//!   function fetches no attribute; its replay variant (`VariantKey::replay_bindings`) compiles
+//!   function fetches no attribute of a layout whose stride is set per bind (each command binds
+//!   its own: `bind::draw_replay_vertex_layouts`); its replay variant
+//!   (`VariantKey::replay_bindings`) pulls every fixed-function layout (the pulled-vertex-buffer
+//!   variant, `render/vertex_reach.rs`), whose attributes read the command's buffers, and compiles
 //!   and draws in the execution's instance as one indirect draw whose arguments the
 //!   device reads (`DrawCommands::indirect_needs_arguments` clear): no amplification drawn apart,
 //!   view, rate map, fragment imageblock, fetched or storage attachment, shader-side stencil or
@@ -40,7 +43,7 @@
 //!   binds the pipeline, the sets, the dynamic state and the push constants with its slot tables,
 //!   and each later command's pushes its own slot tables and draws (`vkCmdDrawIndirect` of one
 //!   draw at its arguments). Its `vertex_id`, `instance_id` and `base_instance` are the command's
-//!   own, as Metal's.
+//!   own, as Metal's, and so are the vertex and instance its attributes step by.
 //! - **Shadowed textures.** In a pass with one, the pass's copies go around its instances as for
 //!   the host step and any draw (`render/shadows.rs`): a shadow is copied in before the instance
 //!   that reads it and copied back, or merged, after the pass where it writes it; the commands'
@@ -54,7 +57,8 @@
 //!   owned kernels), each after a barrier from everything before, write each command's first
 //!   vertex in one merged draw and its two `VkDrawIndirectCommand`s; the pass draws them, the
 //!   first through the encoder's draw (`BufferForms::Merged`), and the vertex function finds its
-//!   command, vertex and instance (`bind::replay`'s merged docs), in the commands' order. An
+//!   command, vertex and instance (`bind::replay`'s merged docs), in the commands' order, which
+//!   its attributes step by. An
 //!   indexed command's vertex function reads its vertex from the command's indices, which the
 //!   preprocess resolved in the resident set, and a fragment function that reads a command's
 //!   buffers finds its command's fragment slot table at the command its vertex wrote to a flat
@@ -113,9 +117,9 @@ use crate::RenderPipelineState;
 use ash::vk;
 use metal2vulkan::bind::{
     draw_replay_draw, draw_replay_indexed, draw_replay_merges, draw_replay_preprocess,
-    draw_replay_primitive_type, draw_replay_slots, draw_replay_state, BindState, DrawCall,
-    DrawMergeModule, DrawReplay, DrawReplayLayout, DrawReplayPreprocess, IndirectRef, MergePhase,
-    NeutralResource, PushHole, DRAW_ARGUMENT_BYTES,
+    draw_replay_primitive_type, draw_replay_slots, draw_replay_state, draw_replay_vertex_layouts,
+    BindState, DrawCall, DrawMergeModule, DrawReplay, DrawReplayLayout, DrawReplayPreprocess,
+    IndirectRef, MergePhase, NeutralResource, PushHole, DRAW_ARGUMENT_BYTES,
 };
 use metal2vulkan::metal::PrimitiveType;
 use metal2vulkan::pipeline::CommandWrites;
@@ -793,6 +797,11 @@ impl RenderLowering {
             let rule = "the inherited state writes an attachment as storage";
             return Ok(Err(HostStepCause::Rule(rule)));
         }
+        // The replay pulls every fixed-function layout (`render/vertex_reach.rs`), none whose
+        // stride is set per bind.
+        if let Err(rule) = draw_replay_vertex_layouts(&state.base().vertex_input) {
+            return Ok(Err(HostStepCause::Replay(rule)));
+        }
         let settings =
             self.draw_settings(CALL, state, Assembly::Primitives(primitive_type), false)?;
         // Lines at a width other than 1 are the host replay's to draw, which announces their width
@@ -814,8 +823,8 @@ impl RenderLowering {
         let function_tables = state.function_tables();
         let pass_start = PassStartTables::default();
         let sampler_maps = self.sampler_maps(state, &pass_start)?;
-        // The GPU form's draw, whose arguments GPU memory states: the layouts it pulls past
-        // 4 GiB are those the draw pulls (`render/vertex_reach.rs`).
+        // The GPU form's draw, whose arguments GPU memory states: it pulls every fixed-function
+        // layout, as the recording draw does (`render/vertex_reach.rs`).
         let draw = DrawCall::Indirect {
             indirect: IndirectRef::new(0, 0),
             indexed: None,
