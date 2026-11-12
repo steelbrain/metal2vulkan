@@ -2150,7 +2150,8 @@ fn a_heap_across_two_imported_chunks_is_a_copy_and_imports_nothing() {
             .with_import_gate(gate(&gates, true))
     };
     let start_counts = device.work_counts();
-    // A buffer in each chunk imports it.
+    // A buffer in each chunk imports it, far from the heap's pages (one inside them would be a live
+    // import of some of them, and the heap a copy for that, `CopiedFor::OverImport`).
     let in_chunk = |at: u64| {
         // SAFETY: as above.
         unsafe {
@@ -2163,10 +2164,7 @@ fn a_heap_across_two_imported_chunks_is_a_copy_and_imports_nothing() {
         }
         .unwrap()
     };
-    let chunks = (
-        in_chunk(start + 16 * page),
-        in_chunk(start + 64 * MIB + 16 * page),
-    );
+    let chunks = (in_chunk(start + 16 * page), in_chunk(start + 96 * MIB));
     let before = device.work_counts();
     assert_eq!(
         before.chunk_bound_buffers_made - start_counts.chunk_bound_buffers_made,
