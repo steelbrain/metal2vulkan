@@ -333,8 +333,8 @@ fn blit_out(queue: &CommandQueue, texture: &Texture) -> Vec<u8> {
 
 /// One render pass, of no draws, over `attachments` (each its texture, load action and resolve
 /// texture), storing each (resolving where it has a resolve texture), clearing to [`CLEAR`], in a
-/// command buffer that completes.
-fn pass(queue: &CommandQueue, attachments: &[(&Texture, LoadAction, Option<&Texture>)]) {
+/// command buffer that completes: its GPU time, in seconds.
+fn pass(queue: &CommandQueue, attachments: &[(&Texture, LoadAction, Option<&Texture>)]) -> f64 {
     let mut descriptor = RenderPassDescriptor::new();
     for (index, &(texture, load, resolve)) in attachments.iter().enumerate() {
         let attachment = &mut descriptor.color_attachments[index];
@@ -356,6 +356,7 @@ fn pass(queue: &CommandQueue, attachments: &[(&Texture, LoadAction, Option<&Text
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
+    command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap()
 }
 
 /// The texture's bytes cleared to [`CLEAR`].
@@ -1523,7 +1524,45 @@ fn a_cleared_render_target_over_a_shared_buffer_renders_through_copies() {
         );
         drop((texture, buffer));
         drop(contents);
+        cleared_1080p(device, &queue);
     });
+}
+
+/// Passes clearing a 1920x1080 `BGRA8Unorm` render target over a `Shared` buffer, printed for the
+/// record: their ways, and the median GPU time of [`TIMED`] after one; the buffer holds the clear.
+fn cleared_1080p(device: &Device, queue: &CommandQueue) {
+    /// The passes timed.
+    const TIMED: usize = 7;
+    let (width, height) = (1920, 1080);
+    let n = (width * height * TEXEL) as usize;
+    let (contents, buffer, texture) = surface_of(device, 7, width, height);
+    let before = device.work_counts();
+    pass(queue, &[(&texture, LoadAction::Clear, None)]);
+    let mut times: Vec<f64> = (0..TIMED)
+        .map(|_| pass(queue, &[(&texture, LoadAction::Clear, None)]))
+        .collect();
+    times.sort_by(f64::total_cmp);
+    let (in_place, through) = ways(device, &before);
+    println!(
+        "LINEAR-ATTACHMENT clear of {width}x{height} over a Shared buffer on {}: by the rule {}, \
+         aliased {}; {in_place} passes in place, {through} through copies; GPU {:.3} ms (median \
+         of {TIMED}, {:.3} to {:.3})",
+        device.name(),
+        by_the_rule(device),
+        aliased(&texture),
+        times[TIMED / 2] * 1e3,
+        times[0] * 1e3,
+        times[TIMED - 1] * 1e3,
+    );
+    assert!(
+        contents
+            .read(0..n)
+            .chunks_exact(TEXEL as usize)
+            .all(|texel| texel == CLEAR_BYTES),
+        "a clear did not reach the buffer"
+    );
+    drop((texture, buffer));
+    drop(contents);
 }
 
 /// A render target over host pages is an image bound to them exactly where the device's check
