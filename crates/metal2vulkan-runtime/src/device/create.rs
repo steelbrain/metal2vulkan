@@ -165,7 +165,8 @@ pub struct DeviceOptions {
     /// answers it gives where a Mac's GPU decides them: what a new `Private` texture reads before
     /// anything writes it, the encoding a GPU blit through a compressed texture writes, and a
     /// `half` NaN clear's sign ([`DeviceProperties::lossless_compression`](crate::DeviceProperties::lossless_compression)
-    /// states it). `None` by default: the class of the device's GPU
+    /// states it), and whether a sampler state's `lodBias` moves its samples' level. `None` by
+    /// default: the class of the device's GPU
     /// ([`MacClass::of_vendor`](crate::MacClass::of_vendor): an Apple GPU presents an Apple
     /// silicon Mac, every other GPU a Mac with an Intel or AMD GPU). A consumer that presents
     /// another Mac than its GPU's (an x86-64 macOS guest, an Intel or AMD Mac, on an Apple GPU)

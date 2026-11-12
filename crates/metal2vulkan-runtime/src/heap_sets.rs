@@ -1544,7 +1544,7 @@ fn sampler_writes(
         let made = metal2vulkan::bind::sampler_desc(
             device.compile_device(),
             state.descriptor(),
-            array.use_,
+            state.bound_use(array.use_),
             OpaqueBlackBorder::Stated,
             None,
         )

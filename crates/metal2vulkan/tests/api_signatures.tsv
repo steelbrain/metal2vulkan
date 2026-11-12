@@ -1511,6 +1511,7 @@ enum	metal2vulkan::metal::format::Footprint	#[cfg_attr(feature = "serde", derive
 enum	metal2vulkan::metal::format::FormatEmulation	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FormatEmulation
 enum	metal2vulkan::metal::format::WordAttachment	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum WordAttachment
 enum	metal2vulkan::metal::format::YCbCrReads	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum YCbCrReads
+enum	metal2vulkan::metal::sampler::DeviceLodBias	#[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub enum DeviceLodBias
 enum	metal2vulkan::metal::sampler::OpaqueBlackBorder	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum OpaqueBlackBorder
 enum	metal2vulkan::metal::vertex::AttributeFetch	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AttributeFetch
 enum	metal2vulkan::pipeline::AccelerationStructureLevel	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum AccelerationStructureLevel
@@ -4458,6 +4459,7 @@ field	metal2vulkan::metal::format::YCbCrFormat.reads	pub reads: YCbCrReads
 field	metal2vulkan::metal::format::YCbCrFormat.subsampling	pub subsampling: ChromaSubsampling
 field	metal2vulkan::metal::sampler::SamplerUse.compare	pub compare: bool
 field	metal2vulkan::metal::sampler::SamplerUse.integer_texture	pub integer_texture: bool
+field	metal2vulkan::metal::sampler::SamplerUse.lod_bias	pub lod_bias: bool
 field	metal2vulkan::metal::sampler::SamplerUse.unnormalized	pub unnormalized: bool
 field	metal2vulkan::metal::state::DepthBias.clamp	pub clamp: f32
 field	metal2vulkan::metal::state::DepthBias.constant_factor	pub constant_factor: f32
@@ -5203,6 +5205,7 @@ fn	metal2vulkan::metal::sampler::check_border_swizzle	pub fn check_border_swizzl
 fn	metal2vulkan::metal::sampler::check_border_view	pub fn check_border_view(opaque_black: bool, pf: PixelFormat, mapping: &FormatMapping, swizzle: TextureSwizzleChannels, profile: &DeviceProfile) -> Result<(), Error>
 fn	metal2vulkan::metal::sampler::check_sampler	pub fn check_sampler(shape: &SamplerShape, use_: SamplerUse, profile: &DeviceProfile) -> Result<(), Error>
 fn	metal2vulkan::metal::sampler::compare_op	pub fn compare_op(f: CompareFunction) -> vk::CompareOp
+fn	metal2vulkan::metal::sampler::device_lod_bias	pub fn device_lod_bias(lod_bias: f32, profile: &DeviceProfile) -> DeviceLodBias
 fn	metal2vulkan::metal::sampler::opaque_black_border	pub fn opaque_black_border(pf: PixelFormat, mapping: &FormatMapping, swizzle: TextureSwizzleChannels, profile: &DeviceProfile) -> Result<OpaqueBlackBorder, Error>
 fn	metal2vulkan::metal::sampler::opaque_black_reads_transparent	pub fn opaque_black_reads_transparent(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> bool
 fn	metal2vulkan::metal::sampler::vk_sampler	pub fn vk_sampler(desc: &SamplerDescriptor, use_: SamplerUse, profile: &DeviceProfile) -> Result<vk::SamplerDesc, Error>
@@ -5467,6 +5470,7 @@ macro-member	metal2vulkan-runtime::Degradation::BiasedDepthPastUnitRange	BiasedD
 macro-member	metal2vulkan-runtime::Degradation::BicubicFilterArithmetic	BicubicFilterArithmetic = "bicubic-filter-arithmetic";
 macro-member	metal2vulkan-runtime::Degradation::BlendedWriteRounding	BlendedWriteRounding = "blended-write-rounding";
 macro-member	metal2vulkan-runtime::Degradation::CappedAnisotropy	CappedAnisotropy = "capped-anisotropy", Precision,
+macro-member	metal2vulkan-runtime::Degradation::CappedLodBias	CappedLodBias = "capped-lod-bias", Precision,
 macro-member	metal2vulkan-runtime::Degradation::CarriedDecodedTwin	CarriedDecodedTwin = "carried-decoded-twin", Performance,
 macro-member	metal2vulkan-runtime::Degradation::ClippedCoverageSplit	ClippedCoverageSplit = "clipped-coverage-split";
 macro-member	metal2vulkan-runtime::Degradation::ClippedDepthPieces	ClippedDepthPieces = "clipped-depth-pieces", Precision,
@@ -9566,7 +9570,9 @@ method	metal2vulkan::metal::sampler::AddressModeMap::is_identity	pub fn is_ident
 method	metal2vulkan::metal::sampler::AddressModeMap::mode	pub fn mode(&self, from: SamplerAddressMode) -> SamplerAddressMode
 method	metal2vulkan::metal::sampler::AddressModeMap::sampler	pub fn sampler(&self, mut desc: SamplerDescriptor) -> SamplerDescriptor
 method	metal2vulkan::metal::sampler::AddressModeMap::with	pub fn with(mut self, from: SamplerAddressMode, to: SamplerAddressMode) -> AddressModeMap
+method	metal2vulkan::metal::sampler::DeviceLodBias::bias	pub fn bias(self) -> f32
 method	metal2vulkan::metal::sampler::SamplerUse::new	pub fn new(compare: bool, integer_texture: bool) -> SamplerUse
+method	metal2vulkan::metal::sampler::SamplerUse::with_lod_bias	pub fn with_lod_bias(self, lod_bias: bool) -> SamplerUse
 method	metal2vulkan::metal::sampler::SamplerUse::with_unnormalized	pub fn with_unnormalized(self, unnormalized: bool) -> SamplerUse
 method	metal2vulkan::metal::sampler::SamplerWord::nearest_pixel	pub fn nearest_pixel(integer: bool) -> u32
 method	metal2vulkan::metal::sampler::SamplerWord::of	pub fn of(desc: &SamplerDescriptor) -> SamplerWord
@@ -14284,6 +14290,10 @@ variant	metal2vulkan::metal::format::YCbCrReads::ExtendedRange	ExtendedRange
 variant	metal2vulkan::metal::format::YCbCrReads::Hlg	Hlg
 variant	metal2vulkan::metal::format::YCbCrReads::Pq	Pq
 variant	metal2vulkan::metal::format::YCbCrReads::Srgb	Srgb
+variant	metal2vulkan::metal::sampler::DeviceLodBias::Capped	Capped(f32)
+variant	metal2vulkan::metal::sampler::DeviceLodBias::Exact	Exact(f32)
+variant	metal2vulkan::metal::sampler::DeviceLodBias::NotANumber	NotANumber
+variant	metal2vulkan::metal::sampler::DeviceLodBias::Withheld	Withheld
 variant	metal2vulkan::metal::sampler::OpaqueBlackBorder::Mapped	Mapped(vk::ComponentMapping)
 variant	metal2vulkan::metal::sampler::OpaqueBlackBorder::Stated	Stated
 variant	metal2vulkan::metal::sampler::OpaqueBlackBorder::Transparent	Transparent

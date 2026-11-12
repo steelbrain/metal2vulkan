@@ -1954,7 +1954,7 @@ fn image_descriptor(
                 let desc = metal2vulkan::bind::sampler_desc(
                     device.compile_device(),
                     &descriptor,
-                    use_,
+                    state.bound_use(use_),
                     opaque_black,
                     format,
                 )
@@ -2158,7 +2158,7 @@ fn image_descriptor(
                 let desc = metal2vulkan::bind::sampler_desc(
                     device.compile_device(),
                     state.descriptor(),
-                    SamplerUse::new(*compare, *integer),
+                    state.bound_use(SamplerUse::new(*compare, *integer)),
                     OpaqueBlackBorder::Stated,
                     None,
                 )

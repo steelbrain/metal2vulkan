@@ -1556,13 +1556,17 @@ pub struct SamplerDescriptor {
     pub compare_function: metal::CompareFunction,
     pub reduction_mode: metal::SamplerReductionMode,
     /// `lodBias`: any value, NaN and the infinities included, as Metal takes it, its validation
-    /// layer too. It changes no sample: an Apple GPU of the families the runtime claims, which
-    /// lists the bias under Apple10 alone, samples every level as with a bias of 0 (an Apple M3
-    /// Max on macOS 27.0.1, Apple9: implicit, biased, explicit-level, gradient and clamped samples
-    /// in fragment functions and kernels, float and integer textures, every mip filter, biases
-    /// from -1000 to 1000), so the Vulkan sampler's `mipLodBias` is 0 whatever it holds
-    /// ([`vk_sampler`](crate::metal::sampler::vk_sampler)). Metal makes another sampler state for
-    /// another bias.
+    /// layer too. What it changes is the GPU's (`metal::sampler::SamplerUse::lod_bias`). An Apple
+    /// GPU of the families the runtime claims, which lists the bias under Apple10 alone, samples
+    /// every level as with a bias of 0 (an Apple M3 Max on macOS 27.0.1, Apple9: implicit,
+    /// biased, explicit-level, gradient and clamped samples in fragment functions and kernels,
+    /// float and integer textures, every mip filter, biases from -1000 to 1000): there the Vulkan
+    /// sampler's `mipLodBias` is 0 whatever it holds. A Mac with an Intel or AMD GPU adds it to
+    /// every sample's level and clamps the sum into the texture's levels (an AMD Radeon Pro 5300M
+    /// and an Intel UHD 630: explicit-level, gradient and implicit samples): there it is the
+    /// device's `mipLodBias`, within the device's limit
+    /// ([`device_lod_bias`](crate::metal::sampler::device_lod_bias)). Metal makes another sampler
+    /// state for another bias.
     #[cfg_attr(feature = "serde", serde(default))]
     pub lod_bias: f32,
 }

@@ -2717,6 +2717,18 @@ bound.
   samples with 32. Cost: it filters with the device's largest anisotropy (16 on every venue
   measured), where Metal filters with 32: a footprint more than 16 times as long as it is wide reads
   a coarser level than Metal's (one level coarser at 32 to 1 and beyond).
+- `metal2vulkan-degrade-capped-lod-bias` (precision). `CappedLodBias`: A sampler state whose
+  `lodBias` the GPU of the Mac the device presents adds to every sample's level
+  (`MacClass::IntelOrAmd`), where the device's samplers cannot add it as it is
+  (`metal::sampler::DeviceLodBias`): past the device's `maxSamplerLodBias` (an infinity included),
+  a NaN, or a bias other than 0 where the device's portability subset withholds
+  `samplerMipLodBias` (MoltenVK). Announced once, where the device makes the state; the payload
+  names the bias and what the device's samplers add for it. Cost: its samples add the device's
+  limit of the bias's sign where the bias is past it, and no bias where the device withholds it or
+  the bias is NaN: a sample whose level with what the device adds has not reached the last level
+  the sampler reads (a positive bias) or level 0 (a negative one) reads another level than Metal's,
+  which adds the whole bias and then clamps the level into the texture's levels; what Metal samples
+  for a NaN bias is not measured.
 - `metal2vulkan-degrade-not-mipmapped-anisotropic-sampler` (precision).
   `NotMipmappedAnisotropicSampler`: A sampler state with anisotropy, no mip filter (`NotMipmapped`)
   and different minification and magnification filters, on a device that samples through Metal's
@@ -5006,6 +5018,14 @@ each item named states the rule in full.
     anything from the render area alone (a level past the first, a slice past the first, 4x
     multisampled) to the whole texture (plain 4-, 8- and 16-byte color formats). Metal guarantees
     nothing past the render area, and the runtime gives the 5300M's answer.
+  - a sampler state's `lodBias` is added to every sample's level, an explicit level's, a
+    gradient's and an implicit one's alike, the sum clamped into the texture's levels, as an AMD
+    Radeon Pro 5300M and an Intel UHD 630 sample it (the consumer's probe): the state's binds
+    hand the device its bias as `mipLodBias` (`SamplerUse::lod_bias`), which Vulkan adds to an
+    explicit level too. A bias past the device's `maxSamplerLodBias` adds that limit, and a NaN,
+    or any bias where the device's portability subset withholds `samplerMipLodBias` (MoltenVK),
+    none, announced (`capped-lod-bias`). A device that presents an Apple silicon Mac samples
+    every level as with no bias, as an Apple M3 Max (Apple9) does.
 
   Metal leaves a new texture's contents undefined, and zero and a released texture's texels are
   both what such a Mac reads, so this trades no accuracy and no `DevicePolicy` switch fills the

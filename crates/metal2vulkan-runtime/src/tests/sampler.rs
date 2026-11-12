@@ -4,9 +4,10 @@
 //! (`SamplerCount`).
 
 use super::super::sampler::{
-    metal_anisotropy, metal_lod_clamps, sampler_border_color, taken_descriptor, SamplerCount,
+    metal_anisotropy, metal_lod_clamps, sampler_border_color, taken_descriptor, taken_lod_bias,
+    SamplerCount,
 };
-use super::super::{Error, SamplerLimit};
+use super::super::{Error, MacClass, SamplerLimit};
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{
     CompareFunction, SamplerAddressMode as A, SamplerBorderColor, SamplerMinMagFilter as F,
@@ -102,7 +103,7 @@ fn metal_takes_what_probe_7_saw_it_take() {
     ];
     // Each is taken as it is: Metal samples it as its descriptor states.
     for (name, d) in taken {
-        assert_eq!(taken_descriptor(&d), d, "{name}");
+        assert_eq!(taken_descriptor(&d, MacClass::AppleSilicon), d, "{name}");
     }
     // Both border modes, which plain Metal makes and reads the border color on every border axis
     // of, whatever the color.
@@ -116,7 +117,11 @@ fn metal_takes_what_probe_7_saw_it_take() {
             d.r_address_mode = A::ClampToBorderColor;
             d.border_color = color;
         });
-        assert_eq!(taken_descriptor(&mixed), mixed, "{color:?}");
+        assert_eq!(
+            taken_descriptor(&mixed, MacClass::AppleSilicon),
+            mixed,
+            "{color:?}"
+        );
     }
     // Any LOD clamps, at creation (inverted ones as the upper clamp alone,
     // `inverted_lod_clamps_read_the_upper_clamps_level`).
@@ -135,7 +140,7 @@ fn metal_takes_what_probe_7_saw_it_take() {
             d.lod_min_clamp = min;
             d.lod_max_clamp = max;
         });
-        let taken = taken_descriptor(&d);
+        let taken = taken_descriptor(&d, MacClass::AppleSilicon);
         let [a, b] = metal_lod_clamps([min, max]);
         assert_eq!(
             [taken.lod_min_clamp.to_bits(), taken.lod_max_clamp.to_bits()],
@@ -143,8 +148,10 @@ fn metal_takes_what_probe_7_saw_it_take() {
             "clamps {min}..{max}"
         );
     }
-    // Any LOD bias, taken as none: Metal samples every level as with no bias (an M3 Max on macOS
-    // 27.0.1, `runtime_lane::lod_bias` in the validation crate).
+    // Any LOD bias, taken as none on an Apple silicon Mac: Metal samples every level as with no
+    // bias (an M3 Max on macOS 27.0.1, `runtime_lane::lod_bias` in the validation crate). On a
+    // Mac with an Intel or AMD GPU, which adds it to every level, taken as it is, `-0` as `0`,
+    // and a NaN as none (`taken_lod_bias`); the rest of the descriptor alike.
     for bias in [
         1.0,
         -1.0,
@@ -157,12 +164,35 @@ fn metal_takes_what_probe_7_saw_it_take() {
         f32::INFINITY,
         f32::NEG_INFINITY,
     ] {
+        let intel_or_amd = match bias.is_nan() {
+            true => 0.0,
+            false => bias + 0.0,
+        };
         for d in [descriptor(|_| {}), pixel(|_| {})] {
             let mut biased = d;
             biased.lod_bias = bias;
-            let taken = taken_descriptor(&biased);
+            let taken = taken_descriptor(&biased, MacClass::AppleSilicon);
             assert_eq!(taken.lod_bias.to_bits(), 0, "bias {bias}");
-            assert_eq!(taken, taken_descriptor(&d), "bias {bias}");
+            assert_eq!(
+                taken,
+                taken_descriptor(&d, MacClass::AppleSilicon),
+                "bias {bias}"
+            );
+            assert_eq!(taken_lod_bias(bias, MacClass::AppleSilicon).to_bits(), 0);
+            let mut taken = taken_descriptor(&biased, MacClass::IntelOrAmd);
+            assert_eq!(
+                taken.lod_bias.to_bits(),
+                intel_or_amd.to_bits(),
+                "bias {bias}"
+            );
+            let got = taken_lod_bias(bias, MacClass::IntelOrAmd);
+            assert_eq!(got.to_bits(), intel_or_amd.to_bits(), "bias {bias}");
+            taken.lod_bias = 0.0;
+            assert_eq!(
+                taken,
+                taken_descriptor(&d, MacClass::IntelOrAmd),
+                "bias {bias}"
+            );
         }
     }
 }
@@ -225,7 +255,7 @@ fn an_anisotropy_metal_stops_samples_as_plain_metal_samples_it() {
     ] {
         assert_eq!(metal_anisotropy(value), sampled, "{value}");
         let d = descriptor(|d| d.max_anisotropy = value);
-        let taken = taken_descriptor(&d);
+        let taken = taken_descriptor(&d, MacClass::AppleSilicon);
         assert_eq!(taken.max_anisotropy, sampled, "{value}");
         let mut want = d;
         want.max_anisotropy = sampled;
@@ -255,7 +285,7 @@ fn inverted_lod_clamps_read_the_upper_clamps_level() {
             d.lod_min_clamp = min;
             d.lod_max_clamp = max;
         });
-        let got = taken_descriptor(&d);
+        let got = taken_descriptor(&d, MacClass::AppleSilicon);
         assert_eq!(
             [got.lod_min_clamp, got.lod_max_clamp],
             taken,
@@ -338,10 +368,18 @@ fn a_pixel_sampler_samples_as_plain_metal_samples_it() {
     ];
     for (name, mut d) in taken {
         let pixel_default = pixel(|_| {});
-        assert_eq!(taken_descriptor(&d), pixel_default, "{name}");
+        assert_eq!(
+            taken_descriptor(&d, MacClass::AppleSilicon),
+            pixel_default,
+            "{name}"
+        );
         d.min_filter = F::Linear;
         d.mag_filter = F::Linear;
-        assert_eq!(taken_descriptor(&d), clamped, "{name}, linear");
+        assert_eq!(
+            taken_descriptor(&d, MacClass::AppleSilicon),
+            clamped,
+            "{name}, linear"
+        );
     }
     // Clamping axes, and a normalized descriptor, are taken as they are.
     let border = pixel(|d| {
@@ -349,13 +387,16 @@ fn a_pixel_sampler_samples_as_plain_metal_samples_it() {
         d.t_address_mode = A::ClampToBorderColor;
         d.border_color = SamplerBorderColor::OpaqueWhite;
     });
-    assert_eq!(taken_descriptor(&border), border);
+    assert_eq!(taken_descriptor(&border, MacClass::AppleSilicon), border);
     let normalized = descriptor(|d| {
         d.max_anisotropy = 8;
         d.mip_filter = M::Linear;
         d.s_address_mode = A::Repeat;
     });
-    assert_eq!(taken_descriptor(&normalized), normalized);
+    assert_eq!(
+        taken_descriptor(&normalized, MacClass::AppleSilicon),
+        normalized
+    );
     for d in [
         pixel(|d| d.s_address_mode = A::MirrorClampToEdge),
         pixel(|d| d.t_address_mode = A::MirrorClampToEdge),
@@ -366,7 +407,7 @@ fn a_pixel_sampler_samples_as_plain_metal_samples_it() {
             d.mag_filter = F::Linear;
         }),
     ] {
-        assert_eq!(taken_descriptor(&d), d, "{d:?}");
+        assert_eq!(taken_descriptor(&d, MacClass::AppleSilicon), d, "{d:?}");
     }
     // Its `r` axis's, which addresses nothing it samples, clamps as a repeating one's.
     let r = pixel(|d| {
@@ -374,7 +415,7 @@ fn a_pixel_sampler_samples_as_plain_metal_samples_it() {
         d.r_address_mode = A::MirrorClampToEdge;
     });
     let r_taken = pixel(|d| d.s_address_mode = A::MirrorClampToEdge);
-    assert_eq!(taken_descriptor(&r), r_taken);
+    assert_eq!(taken_descriptor(&r, MacClass::AppleSilicon), r_taken);
 }
 
 #[test]

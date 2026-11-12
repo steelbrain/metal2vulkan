@@ -1227,6 +1227,20 @@ degradations! {
             "it filters with the device's largest anisotropy (16 on every venue measured), where \
              Metal filters with 32: a footprint more than 16 times as long as it is wide reads a \
              coarser level than Metal's (one level coarser at 32 to 1 and beyond)";
+        /// A sampler state whose `lodBias` the GPU of the Mac the device presents adds to every
+        /// sample's level (`MacClass::IntelOrAmd`), where the device's samplers cannot add it as
+        /// it is (`metal2vulkan::metal::sampler::DeviceLodBias`): past the device's
+        /// `maxSamplerLodBias` (an infinity included), a NaN, or a bias other than 0 where the
+        /// device's portability subset withholds `samplerMipLodBias` (MoltenVK). Announced once,
+        /// where the device makes the state; the payload names the bias and what the device's
+        /// samplers add for it.
+        CappedLodBias = "capped-lod-bias", Precision,
+            "its samples add the device's limit of the bias's sign where the bias is past it, and \
+             no bias where the device withholds it or the bias is NaN: a sample whose level with \
+             what the device adds has not reached the last level the sampler reads (a positive \
+             bias) or level 0 (a negative one) reads another level than Metal's, which adds the \
+             whole bias and then clamps the level into the texture's levels; what Metal samples \
+             for a NaN bias is not measured";
         /// A sampler state with anisotropy, no mip filter (`NotMipmapped`) and different
         /// minification and magnification filters, on a device that samples through Metal's own
         /// sampler (MoltenVK on Apple's GPU, `DriverDeviation::MetalSampler`): Vulkan has no

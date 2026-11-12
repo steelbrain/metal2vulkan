@@ -111,15 +111,24 @@ pub struct SamplerUse {
     /// coordinates, one minification and magnification filter, no mip filter or anisotropy, and
     /// `s` and `t` clamped to the edge, to zero or to the border.
     pub unnormalized: bool,
+    /// The GPU the device presents adds a sampler descriptor's `lodBias` to every sample's level,
+    /// as a Mac with an Intel or AMD GPU does: [`vk_sampler`] makes the device's `mipLodBias`
+    /// of it ([`device_lod_bias`]). Without it (the default) the sampler samples as an Apple GPU
+    /// of the families the runtime claims does, every level as with no bias. Not a fact of the
+    /// function: the consumer states it per bind, from the Mac it presents (the runtime's
+    /// `MacClass`), and a plan's uses leave it unset.
+    pub lod_bias: bool,
 }
 
 impl SamplerUse {
-    /// A use with the given comparison and texture numeric type, in normalized coordinates.
+    /// A use with the given comparison and texture numeric type, in normalized coordinates, of
+    /// no LOD bias.
     pub fn new(compare: bool, integer_texture: bool) -> SamplerUse {
         SamplerUse {
             compare,
             integer_texture,
             unnormalized: false,
+            lod_bias: false,
         }
     }
 
@@ -130,6 +139,71 @@ impl SamplerUse {
             unnormalized,
             ..self
         }
+    }
+
+    /// This use, adding the descriptor's `lodBias` to every sample's level where `lod_bias`
+    /// holds ([`SamplerUse::lod_bias`]).
+    pub fn with_lod_bias(self, lod_bias: bool) -> SamplerUse {
+        SamplerUse { lod_bias, ..self }
+    }
+}
+
+/// The LOD bias a device's sampler adds to every sample's level for a sampler descriptor's
+/// `lodBias`, on a GPU that adds it ([`SamplerUse::lod_bias`]; [`device_lod_bias`]). Vulkan adds
+/// a sampler's `mipLodBias` to every sample's level, an explicit level's included, and takes one
+/// of at most `maxSamplerLodBias` (`VUID-VkSamplerCreateInfo-mipLodBias-01069`), and a
+/// portability subset without `samplerMipLodBias` none but 0. Each variant but `Exact` is a
+/// near-equivalent, which the runtime announces as it makes the state
+/// (`Degradation::CappedLodBias`).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DeviceLodBias {
+    /// The descriptor's bias, which the device's sampler takes as it is (0 included).
+    Exact(f32),
+    /// A bias past the device's `maxSamplerLodBias`, an infinity included: the device's sampler
+    /// adds that limit, of the bias's sign. Metal's GPU clamps the biased level into the
+    /// texture's levels (an AMD Radeon Pro 5300M and an Intel UHD 630), so this reads Metal's
+    /// level wherever the level with the limit added already reaches the last level the sampler
+    /// reads (a positive bias) or level 0 (a negative one).
+    Capped(f32),
+    /// A bias other than 0 on a device whose portability subset withholds `samplerMipLodBias`
+    /// (MoltenVK): the device's sampler adds none.
+    Withheld,
+    /// A NaN bias: the device's sampler adds none. What a Mac's GPU samples for it is not
+    /// measured.
+    NotANumber,
+}
+
+impl DeviceLodBias {
+    /// The bias the device's sampler adds: its `mipLodBias`.
+    pub fn bias(self) -> f32 {
+        match self {
+            DeviceLodBias::Exact(bias) | DeviceLodBias::Capped(bias) => bias,
+            DeviceLodBias::Withheld | DeviceLodBias::NotANumber => 0.0,
+        }
+    }
+}
+
+/// The LOD bias the device of `profile` adds to every sample's level for a sampler descriptor's
+/// `lod_bias`, on a GPU that adds it ([`DeviceLodBias`]): the bias where the device takes it,
+/// `-0.0` as `0.0`; else the nearest it takes.
+pub fn device_lod_bias(lod_bias: f32, profile: &DeviceProfile) -> DeviceLodBias {
+    if lod_bias.is_nan() {
+        return DeviceLodBias::NotANumber;
+    }
+    // Adding `0.0` takes `-0.0` to `0.0`.
+    let bias = lod_bias + 0.0;
+    if bias == 0.0 {
+        return DeviceLodBias::Exact(bias);
+    }
+    if (profile.fields().enabled).portability_withholds(VkFeature::SamplerMipLodBias) {
+        return DeviceLodBias::Withheld;
+    }
+    let limit = f32::from_bits(profile.fields().limits.max_sampler_lod_bias_bits).max(0.0);
+    if bias.abs() > limit {
+        DeviceLodBias::Capped(limit.copysign(bias))
+    } else {
+        DeviceLodBias::Exact(bias)
     }
 }
 
@@ -354,11 +428,18 @@ pub(crate) fn vk_filtering(
 /// a nearest mip filter's next level past one half; MoltenVK hands the clamp to Metal's sampler,
 /// which does so itself.
 ///
-/// Its `mipLodBias` is 0 whatever the descriptor's `lod_bias`: an Apple GPU of the families the
-/// runtime claims samples every level as with no bias ([`SamplerDescriptor::lod_bias`]), and
-/// Vulkan adds `mipLodBias` to every sample's level, an explicit one's included. So no bias is
-/// past the device's `maxSamplerLodBias`, and none needs `samplerMipLodBias` of a portability
-/// subset.
+/// Its `mipLodBias` follows the GPU the device presents ([`SamplerUse::lod_bias`]). Vulkan adds
+/// `mipLodBias` to every sample's level, an explicit one's included (the specification's
+/// "Level-of-Detail Operation"). An Apple GPU of the families the runtime claims samples every
+/// level as with no bias ([`SamplerDescriptor::lod_bias`]): without `lod_bias` it is 0, whatever
+/// the descriptor's. A Mac with an Intel or AMD GPU adds the bias to every sample's level, an
+/// explicit level's, a gradient's and an implicit one's alike, and clamps the sum into the
+/// texture's levels (an AMD Radeon Pro 5300M and an Intel UHD 630, as the consumer's probe
+/// measured them): with `lod_bias` it is [`device_lod_bias`]'s, the descriptor's bias within the
+/// device's `maxSamplerLodBias` and where a portability subset withholds `samplerMipLodBias`
+/// none, never a refusal; the device clamps its sum with a sample's own `Bias` into that limit, as
+/// it clamps the sample's bias alone. A use that reads texel coordinates takes none: such a
+/// sampler reads level 0 by one filter, so a bias selects nothing.
 ///
 /// A use that reads texel coordinates ([`SamplerUse::unnormalized`]) takes the device's
 /// unnormalized sampler: its filters, address modes and border as above, the nearest mip mode at
@@ -456,7 +537,10 @@ pub fn vk_sampler(
         address_mode_u: address[0],
         address_mode_v: address[1],
         address_mode_w: address[2],
-        mip_lod_bias: 0.0,
+        mip_lod_bias: match use_.lod_bias && !use_.unnormalized {
+            true => device_lod_bias(desc.lod_bias, profile).bias(),
+            false => 0.0,
+        },
         max_anisotropy,
         compare: use_.compare.then(|| compare_op(desc.compare_function)),
         min_lod,
@@ -1275,14 +1359,15 @@ mod tests {
         assert_eq!(s.reduction, vk::SamplerReductionMode::WEIGHTED_AVERAGE);
     }
 
-    /// A descriptor's LOD bias makes, on every committed device and for every use, the Vulkan
-    /// sampler and the binding shape its zero bias makes: an Apple GPU of the families the runtime
-    /// claims samples every level as with no bias (`SamplerDescriptor::lod_bias`). So a bias is
-    /// never the device's `mipLodBias` and is refused nowhere: past the device's
-    /// `maxSamplerLodBias`, NaN or infinite, and through a portability subset that withholds
-    /// `samplerMipLodBias`.
+    /// A descriptor's LOD bias makes, on every committed device and for every use, the binding
+    /// shape its zero bias makes, and the Vulkan sampler its zero bias makes but for its
+    /// `mipLodBias`: without `SamplerUse::lod_bias` (an Apple GPU of the families the runtime
+    /// claims, which samples every level as with no bias) 0; with it (a Mac with an Intel or AMD
+    /// GPU) `device_lod_bias`'s, the bias within the device's `maxSamplerLodBias` and none through
+    /// a portability subset that withholds `samplerMipLodBias`, and 0 for a use of texel
+    /// coordinates. Refused nowhere: past the limit, NaN or infinite, and withheld.
     #[test]
-    fn a_lod_bias_makes_the_unbiased_sampler() {
+    fn a_lod_bias_is_the_device_s_where_the_use_adds_it() {
         use crate::bind::state::BoundSampler;
         use SamplerMinMagFilter::{Linear, Nearest};
         let biases = [
@@ -1336,20 +1421,32 @@ mod tests {
             pixel.mag_filter = Linear;
             pixel.min_filter = Linear;
             descs.push((pixel, SamplerUse::default().with_unnormalized(true)));
-            for (unbiased, use_) in descs {
-                let want = vk_sampler(&unbiased, use_, p);
+            for (unbiased, plain) in descs {
+                let want = vk_sampler(&unbiased, plain, p);
                 let shape = BoundSampler::new(unbiased).shape();
                 for bias in biases {
                     let mut d = unbiased;
                     d.lod_bias = bias;
-                    let got = vk_sampler(&d, use_, p);
-                    assert_eq!(got, want, "{stem}: bias {bias}, {d:?} {use_:?}");
-                    if let Ok(s) = got {
-                        assert_eq!(s.mip_lod_bias.to_bits(), 0, "{stem}: bias {bias}");
+                    for use_ in [plain, plain.with_lod_bias(true)] {
+                        let added = match use_.lod_bias && !use_.unnormalized {
+                            true => device_lod_bias(bias, p).bias(),
+                            false => 0.0,
+                        };
+                        assert!(added.abs() <= limit, "{stem}: bias {bias}");
+                        let got = vk_sampler(&d, use_, p).map(|mut s| {
+                            assert_eq!(
+                                s.mip_lod_bias.to_bits(),
+                                added.to_bits(),
+                                "{stem}: bias {bias}, {use_:?}"
+                            );
+                            s.mip_lod_bias = 0.0;
+                            s
+                        });
+                        assert_eq!(got, want, "{stem}: bias {bias}, {d:?} {use_:?}");
+                        checked += 1;
                     }
                     assert_eq!(BoundSampler::new(d).shape(), shape, "{stem}: bias {bias}");
                     past_limit += usize::from(bias.abs() > limit);
-                    checked += 1;
                 }
             }
         }
@@ -1357,6 +1454,62 @@ mod tests {
         // past every device's limit.
         assert!(withheld > 0 && past_limit > 0, "{withheld} {past_limit}");
         assert!(checked > 0);
+    }
+
+    /// The bias a device adds for a descriptor's `lod_bias` where the GPU it presents adds it: the
+    /// bias, `-0` as `0`, within `maxSamplerLodBias`; the limit of its sign past it, an infinity
+    /// included; none for a NaN; and none for a bias other than 0 through a portability subset
+    /// that withholds `samplerMipLodBias`, whose 0 is exact.
+    #[test]
+    fn the_device_lod_bias_is_the_bias_within_what_the_device_takes() {
+        use DeviceLodBias::{Capped, Exact, NotANumber, Withheld};
+        let mut floor = committed_descriptions()
+            .into_iter()
+            .find(|(s, _)| s == "vk12-floor")
+            .unwrap()
+            .1;
+        floor.limits.max_sampler_lod_bias_bits = 15.5f32.to_bits();
+        let floor = Device::new(floor, DevicePolicy::default()).unwrap();
+        let p = floor.profile();
+        assert!(!(p.fields().enabled).portability_withholds(VkFeature::SamplerMipLodBias));
+        let exact = |b: f32| match device_lod_bias(b, p) {
+            Exact(got) => got.to_bits(),
+            other => panic!("bias {b}: {other:?}"),
+        };
+        for b in [0.0, 1.0, -1.0, 0.25, 15.5, -15.5] {
+            assert_eq!(exact(b), b.to_bits(), "bias {b}");
+        }
+        assert_eq!(exact(-0.0), 0f32.to_bits());
+        for (b, want) in [
+            (15.75, 15.5),
+            (16.0, 15.5),
+            (-100.0, -15.5),
+            (f32::MAX, 15.5),
+            (f32::INFINITY, 15.5),
+            (f32::NEG_INFINITY, -15.5),
+        ] {
+            assert_eq!(device_lod_bias(b, p), Capped(want), "bias {b}");
+        }
+        assert_eq!(device_lod_bias(f32::NAN, p), NotANumber);
+        assert_eq!(device_lod_bias(-f32::NAN, p).bias().to_bits(), 0);
+        let (stem, mvk) = committed_descriptions()
+            .into_iter()
+            .map(|(stem, d)| (stem, Device::new(d, DevicePolicy::default()).unwrap()))
+            .find(|(_, dev)| {
+                (dev.profile().fields().enabled).portability_withholds(VkFeature::SamplerMipLodBias)
+            })
+            .expect("a committed device withholds samplerMipLodBias");
+        let p = mvk.profile();
+        for b in [1.0, -1.0, 0.25, 100.0, f32::INFINITY] {
+            assert_eq!(device_lod_bias(b, p), Withheld, "{stem}: bias {b}");
+            assert_eq!(
+                device_lod_bias(b, p).bias().to_bits(),
+                0,
+                "{stem}: bias {b}"
+            );
+        }
+        assert_eq!(device_lod_bias(0.0, p), Exact(0.0), "{stem}");
+        assert_eq!(device_lod_bias(f32::NAN, p), NotANumber, "{stem}");
     }
 
     /// A sampler without a mip filter reads the base level, its minification filter exactly where

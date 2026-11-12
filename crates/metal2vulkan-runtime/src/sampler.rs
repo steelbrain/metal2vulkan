@@ -64,9 +64,18 @@
 //! on an Apple M4 without Metal's validation layer (which refuses one), and
 //! `DeviceProperties::supports_sampler_reduction_mode` answers no. Metal takes any `lodBias`, its
 //! validation layer too (an M3 Max on macOS 27.0.1: -100 to 100, ±16 and past them, NaN and the
-//! infinities), and samples nothing differently for it there: every sample reads the level a bias
-//! of 0 reads (`SamplerDescriptor::lod_bias`). So does the runtime: a state samples with a bias of
-//! 0 ([`taken_descriptor`]), and a state of another bias is another state ([`SamplerKey`]).
+//! infinities), and a state of another bias is another state ([`SamplerKey`]). What the bias
+//! changes is the GPU's, so the runtime samples it as the Mac the device presents does
+//! (`MacClass`; `SamplerDescriptor::lod_bias`). On an Apple silicon Mac every sample reads the
+//! level a bias of 0 reads (the M3 Max, Apple9): a state samples with a bias of 0
+//! ([`taken_descriptor`]). A Mac with an Intel or AMD GPU adds the bias to every sample's level,
+//! explicit, gradient and implicit alike, and clamps the sum into the texture's levels (an AMD
+//! Radeon Pro 5300M and an Intel UHD 630, the consumer's probes): a state's binds hand the device
+//! its bias as `mipLodBias` (`SamplerUse::lod_bias`, [`SamplerState::bound_use`]), which Vulkan
+//! adds to every level, an explicit one's included. A bias the device's samplers cannot take as
+//! it is, past its `maxSamplerLodBias`, NaN, or where its portability subset withholds
+//! `samplerMipLodBias`, samples with the nearest they take (`metal::sampler::device_lod_bias`),
+//! announced once (`Degradation::CappedLodBias`).
 //!
 //! A min or mag filter `Cubic` (`MTLSamplerMinMagFilterCubic`, raw value 2) is made. Without a
 //! mip filter, Metal samples through such a state as through a constexpr `filter::bicubic`
@@ -85,12 +94,13 @@ use super::key_hash::KeyMap;
 use super::resource_ids::{ElementHold, Holder, IdHold, IdPlacement, IdSpace, ResourceId};
 use super::retained::HeldBy;
 use super::Device;
+use super::MacClass;
 use crate::release;
 use ash::vk;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::error::DriverDeviation;
-use metal2vulkan::metal::sampler::{check_sampler, SamplerUse};
+use metal2vulkan::metal::sampler::{check_sampler, device_lod_bias, DeviceLodBias, SamplerUse};
 use metal2vulkan::metal::{
     CompareFunction, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter, SamplerMipFilter,
     SamplerReductionMode,
@@ -476,21 +486,35 @@ pub fn sampler_border_color(raw: u64) -> SamplerBorderColor {
     }
 }
 
-/// The descriptor a state of `descriptor` samples with (the module's rules): `descriptor` itself
-/// with plain Metal's anisotropy ([`metal_anisotropy`]) and LOD clamps ([`metal_lod_clamps`]), a
-/// LOD bias of 0 whatever its own (Metal samples none on the families the runtime claims), and
-/// for a pixel-coordinate one its repeat and mirrored-repeat axes `ClampToEdge`, its `r`
-/// axis's `MirrorClampToEdge` too (`r` addresses nothing such a sampler samples), mip filter
-/// `NotMipmapped` and anisotropy 1, as plain Metal samples it. A pixel-coordinate
-/// `MirrorClampToEdge` `s` or `t` axis keeps its mode, which Metal mirrors once by texel index and
-/// then clamps.
-pub(super) fn taken_descriptor(descriptor: &SamplerDescriptor) -> SamplerDescriptor {
+/// The LOD bias a state of `lod_bias` samples with on a device presenting a Mac of `class` (the
+/// module's rules): none on an Apple silicon Mac, whatever its own; on a Mac with an Intel or AMD
+/// GPU its own, `-0` as `0` and a NaN as none (what such a GPU samples for it is not measured,
+/// announced as the state is made).
+pub(super) fn taken_lod_bias(lod_bias: f32, class: MacClass) -> f32 {
+    match class {
+        MacClass::IntelOrAmd if !lod_bias.is_nan() => lod_bias + 0.0,
+        _ => 0.0,
+    }
+}
+
+/// The descriptor a state of `descriptor` samples with on a device presenting a Mac of `class`
+/// (the module's rules): `descriptor` itself with plain Metal's anisotropy
+/// ([`metal_anisotropy`]) and LOD clamps ([`metal_lod_clamps`]), the LOD bias that class samples
+/// with ([`taken_lod_bias`]), and for a pixel-coordinate one its repeat and mirrored-repeat axes
+/// `ClampToEdge`, its `r` axis's `MirrorClampToEdge` too (`r` addresses nothing such a sampler
+/// samples), mip filter `NotMipmapped` and anisotropy 1, as plain Metal samples it. A
+/// pixel-coordinate `MirrorClampToEdge` `s` or `t` axis keeps its mode, which Metal mirrors once
+/// by texel index and then clamps.
+pub(super) fn taken_descriptor(
+    descriptor: &SamplerDescriptor,
+    class: MacClass,
+) -> SamplerDescriptor {
     use SamplerAddressMode as A;
     let mut taken = *descriptor;
     taken.max_anisotropy = metal_anisotropy(descriptor.max_anisotropy);
     [taken.lod_min_clamp, taken.lod_max_clamp] =
         metal_lod_clamps([descriptor.lod_min_clamp, descriptor.lod_max_clamp]);
-    taken.lod_bias = 0.0;
+    taken.lod_bias = taken_lod_bias(descriptor.lod_bias, class);
     if !descriptor.normalized_coordinates {
         for mode in [&mut taken.s_address_mode, &mut taken.t_address_mode] {
             if matches!(*mode, A::Repeat | A::MirrorRepeat) {
@@ -545,6 +569,9 @@ pub(super) struct SamplerShared {
     device: Device,
     /// The descriptor the state samples with ([`taken_descriptor`]).
     descriptor: SamplerDescriptor,
+    /// Its binds add its LOD bias to every sample's level: the device presents a Mac with an
+    /// Intel or AMD GPU ([`SamplerState::bound_use`]).
+    lod_bias: bool,
     /// The state's `gpuResourceID`.
     id: IdHold,
     /// The state's element of the set-1 sampler arrays (`resource_ids.rs`).
@@ -660,7 +687,8 @@ impl Device {
         descriptor: &SamplerDescriptor,
         options: SamplerStateOptions,
     ) -> Result<SamplerState, Error> {
-        let taken = taken_descriptor(descriptor);
+        let class = self.properties().mac_class();
+        let taken = taken_descriptor(descriptor, class);
         // The LOD clamps are checked where they are used: a bind's clamps replace them.
         let mut shape_of = taken;
         shape_of.lod_min_clamp = 0.0;
@@ -718,6 +746,41 @@ impl Device {
                 )
             });
         }
+        // A Mac with an Intel or AMD GPU adds the bias to every sample's level; the device's
+        // samplers add the nearest they take (`metal::sampler::device_lod_bias`).
+        let lod_bias = class == MacClass::IntelOrAmd;
+        if lod_bias {
+            let bias = descriptor.lod_bias;
+            let why = match device_lod_bias(bias, profile) {
+                DeviceLodBias::Capped(limit) => Some(format!(
+                    "the device's samplers add at most {} (maxSamplerLodBias), so its samples add \
+                     {limit}",
+                    limit.abs()
+                )),
+                DeviceLodBias::Withheld => Some(
+                    "the device's portability subset withholds samplerMipLodBias, so its samples \
+                     add none"
+                        .to_owned(),
+                ),
+                DeviceLodBias::NotANumber => Some(
+                    "its samples add none; what a Mac with an Intel or AMD GPU samples for a NaN \
+                     bias is not measured"
+                        .to_owned(),
+                ),
+                _ => None,
+            };
+            if let Some(why) = why {
+                self.degrade(Degradation::CappedLodBias, || {
+                    (
+                        format!(
+                            "a sampler state of lodBias {bias} on a device presenting a Mac with \
+                             an Intel or AMD GPU, which adds it to every sample's level"
+                        ),
+                        why,
+                    )
+                });
+            }
+        }
         let shared = self.shared();
         let key = SamplerKey::of(descriptor, options);
         // The ID a state the program released held is back, whichever thread let go of it last
@@ -734,6 +797,7 @@ impl Device {
         let state = SamplerState(Arc::new(SamplerShared {
             device: self.clone(),
             descriptor: taken,
+            lod_bias,
             id,
             element,
             kept: Mutex::new(KeptSamplers::new()),
@@ -914,6 +978,16 @@ impl SamplerState {
     /// ([`taken_descriptor`]).
     pub(super) fn descriptor(&self) -> &SamplerDescriptor {
         &self.0.descriptor
+    }
+
+    /// `use_` as a bind of this state hands it to `bind::sampler_desc`: adding the descriptor's
+    /// LOD bias to every sample's level where the device presents a Mac whose GPU adds it
+    /// (`SamplerUse::lod_bias`, `MacClass::IntelOrAmd`). Every bind of a state makes its Vulkan
+    /// samplers through it, a slot's, an argument buffer's and a heap set's sampler array's, and
+    /// so does the reckoning of the levels a draw samples of an attachment's texture
+    /// (`render/attached_levels.rs`).
+    pub(super) fn bound_use(&self, use_: SamplerUse) -> SamplerUse {
+        use_.with_lod_bias(self.0.lod_bias)
     }
 
     /// Whether an access through an argument buffer that names this state may hand the device a

@@ -185,7 +185,7 @@ impl RenderLowering {
                     let table = stage_table(stages, bound.stage)?;
                     let (state, clamps) = table.samplers.get(&index)?;
                     let descriptor = binding::bound_sampler(state, *clamps);
-                    let use_ = SamplerUse::new(compare, integer);
+                    let use_ = state.bound_use(SamplerUse::new(compare, integer));
                     let format = Some(view.format);
                     let compile = device.compile_device();
                     metal2vulkan::bind::sampler_desc(

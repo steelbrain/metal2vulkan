@@ -83,6 +83,8 @@
 //! vertex's depth, or cannot, and bias factors in depth clamp mode through a range past 1 there
 //! ([`VERTEX_CLAMPS`]),
 //! sampler states of an anisotropy past the device's largest here ([`CAPPED_ANISOTROPY`]),
+//! sampler states of a LOD bias past the device's limit, or NaN, on a device presenting a Mac with
+//! an Intel or AMD GPU in `lod_bias` ([`CAPPED_LOD_BIAS`]),
 //! anisotropic sampler states without a mip filter through Metal's own sampler
 //! ([`NOT_MIPMAPPED_ANISOTROPY`]), draws that read an attachment's bytes in place in
 //! `attachment_reads` ([`IN_PLACE`]), textures
@@ -205,6 +207,7 @@ use super::interlocked_primitive_order::BOUND_INTERLOCKS;
 use super::kept_buffer_bytes::KEPT_BYTES;
 use super::line_widths::{LINE_TIES, SUBPIXEL_SNAP, WIDE_LINES};
 use super::linear_attachments::{CHOSEN_COPIES, LINEAR_COPIES};
+use super::lod_bias::CAPPED_LOD_BIAS;
 use super::memoryless::MEMORYLESS_TEXEL_BUFFERS;
 use super::mesh_draws::EMULATED_MESH;
 use super::no_copy_heaps::HEAP;
@@ -551,6 +554,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &LINE_TIES,
         &SUBPIXEL_SNAP,
         &CAPPED_ANISOTROPY,
+        &CAPPED_LOD_BIAS,
         &NOT_MIPMAPPED_ANISOTROPY,
         &IN_PLACE,
         &ARGUMENT_BUFFERS,

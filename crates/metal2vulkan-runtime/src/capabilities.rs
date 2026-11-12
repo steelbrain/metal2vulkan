@@ -201,6 +201,8 @@ pub struct DeviceProperties {
     /// The compile layer lowers an `interpolant` read at its centroid, a sample or an offset
     /// ([`DeviceProperties::supports_pull_model_interpolation`]).
     pull_model_interpolation: bool,
+    /// The class of Mac the device presents ([`presented_class`]).
+    mac_class: MacClass,
 }
 
 /// What [`DeviceProperties::new`] reads of the physical device itself, beside the description
@@ -249,10 +251,11 @@ pub(crate) fn working_set_buffer_bound(working_set: u64) -> u64 {
 
 /// The class of Mac a device presents, whose GPU decides answers Metal gives without a property
 /// of its own: what a new `Private` texture reads before anything writes it, the encoding a GPU
-/// blit through a compressed texture writes, a `half` NaN clear's sign, and how far a `Clear`
+/// blit through a compressed texture writes, a `half` NaN clear's sign, how far a `Clear`
 /// load reaches past the render area of a pass without a draw call (docs/API.md, the accepted
-/// differences). Every Mac's Metal answers one class's way, by the GPU it has (Apple
-/// silicon, or an Intel or AMD GPU); the runtime answers the class the consumer declares
+/// differences), and whether a sampler state's `lodBias` moves its samples' level
+/// (`SamplerDescriptor::lod_bias`). Every Mac's Metal answers one class's way, by the GPU it has
+/// (Apple silicon, or an Intel or AMD GPU); the runtime answers the class the consumer declares
 /// ([`DeviceOptions::mac_class`](crate::DeviceOptions::mac_class)), else the one of the device's
 /// GPU ([`MacClass::of_vendor`]), and states it as
 /// [`DeviceProperties::lossless_compression`]. No Metal counterpart: a Mac's GPU is what it is.
@@ -268,7 +271,9 @@ pub enum MacClass {
     /// whole level and slice past the render area, and any other texture's render area rounded
     /// up to 32x32 tiles, as a pass with a draw call clears every texture, other levels and
     /// slices untouched (our probes and the consumer's on the M3 Max). The runtime writes the pattern and the zeros (a pattern no clear or copy writes
-    /// exactly reads zero, announced as `fresh-pattern-zeroed`), and clears so.
+    /// exactly reads zero, announced as `fresh-pattern-zeroed`), and clears so. Its GPU samples
+    /// every level through a sampler state as with no LOD bias, whatever the state's `lodBias`
+    /// (an Apple M3 Max, Apple9): so does the runtime.
     AppleSilicon,
     /// A Mac with an Intel or AMD GPU, which keeps no texture compressed: a new `Private`
     /// texture holds what its memory held (zero, or a released texture's texels: an Intel UHD
@@ -279,7 +284,12 @@ pub enum MacClass {
     /// (`WorkCounts::private_textures_zero_filled`). A `Clear` load in a pass of one layer
     /// without a draw call clears the whole level and slice past the render area, the AMD Radeon
     /// Pro 5300M's answer; an Intel UHD 630 clears anything from the render area alone to the
-    /// whole texture there, by format and shape (the consumer's probes).
+    /// whole texture there, by format and shape (the consumer's probes). Its GPU adds a sampler
+    /// state's `lodBias` to every sample's level, an explicit level's, a gradient's and an
+    /// implicit one's alike, the sum clamped into the texture's levels (both GPUs, the
+    /// consumer's probes): so does the runtime, through the device's `mipLodBias`, within its
+    /// `maxSamplerLodBias` (`Degradation::CappedLodBias` past it, and where the device's
+    /// portability subset withholds `samplerMipLodBias`).
     IntelOrAmd,
 }
 
@@ -298,13 +308,14 @@ impl MacClass {
     }
 }
 
-/// Whether the Mac a device of `identity`, its class declared as `declared`, presents keeps
-/// textures losslessly compressed ([`DeviceProperties::lossless_compression`]): the one place the
-/// runtime decides it. Every answer that differs between an Apple silicon Mac and a Mac with an
-/// Intel or AMD GPU because the first compresses (a new `Private` texture's contents, a blit's
-/// canonical encodings, a `half` NaN clear's sign) reads that field, and nothing else decides it.
-fn presents_lossless_compression(identity: &DeviceIdentity, declared: Option<MacClass>) -> bool {
-    declared.unwrap_or_else(|| MacClass::of_vendor(identity.vendor_id)) == MacClass::AppleSilicon
+/// The class of Mac a device of `identity`, its class declared as `declared`, presents: the one
+/// place the runtime decides it. Every answer that differs between an Apple silicon Mac and a Mac
+/// with an Intel or AMD GPU reads it: because the first compresses
+/// ([`DeviceProperties::lossless_compression`]: a new `Private` texture's contents, a blit's
+/// canonical encodings, a `half` NaN clear's sign), and because the second adds a sampler's LOD
+/// bias to every sample's level (`sampler.rs`).
+fn presented_class(identity: &DeviceIdentity, declared: Option<MacClass>) -> MacClass {
+    declared.unwrap_or_else(|| MacClass::of_vendor(identity.vendor_id))
 }
 
 impl DeviceProperties {
@@ -317,7 +328,8 @@ impl DeviceProperties {
         compile: &metal2vulkan::device::Device,
         mac_class: Option<MacClass>,
     ) -> DeviceProperties {
-        let lossless_compression = presents_lossless_compression(&identity, mac_class);
+        let mac_class = presented_class(&identity, mac_class);
+        let lossless_compression = mac_class == MacClass::AppleSilicon;
         let metal = compile.metal_properties();
         let max_buffer_length = identity
             .device_local_heap
@@ -362,10 +374,18 @@ impl DeviceProperties {
             ),
             max_vertex_amplification_count,
             pull_model_interpolation: compile.profile().interpolation_function_needs().is_empty(),
+            mac_class,
             driver_defects: driver_defects::of(&description),
             driver_facts: description.driver_facts(),
             description,
         }
+    }
+
+    /// The class of Mac the device presents: the one
+    /// [`DeviceOptions::mac_class`](crate::DeviceOptions::mac_class) declares, else its GPU's
+    /// ([`MacClass::of_vendor`]).
+    pub(crate) fn mac_class(&self) -> MacClass {
+        self.mac_class
     }
 
     /// `areRasterOrderGroupsSupported`: the pixel interlock is enabled

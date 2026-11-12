@@ -956,9 +956,11 @@ surface! {
         struct SamplerWord E;
         struct AddressModeMap O;
         enum OpaqueBlackBorder N;
+        enum DeviceLodBias N;
         const NOT_MIPMAPPED_MAX_LOD;
         fn check_sampler;
         fn vk_sampler;
+        fn device_lod_bias;
         fn check_border_swizzle;
         fn check_border_view;
         fn opaque_black_reads_transparent;
