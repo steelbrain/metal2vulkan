@@ -5608,7 +5608,12 @@ each item named states the rule in full.
 - **A rate-mapped pass's clear covers its attachments**, where Metal's covers the physical size
   rounded up to 32-pixel tiles and leaves the attachments' other pixels as they were (an M3 Max: a
   16-pixel identity map's pass into a 64-pixel attachment cleared 32 by 32 pixels).
-- **A rate-mapped pass draws region by region, and refuses a cutting scissor.**
+- **A rate-mapped pass draws region by region, and refuses a cutting scissor.** Where the device
+  enables `multiDraw`, `multiViewport`, `shaderOutputViewportIndex` and `shaderDrawParameters`, a
+  direct draw of a vertex pipeline records as many regions as the least of its `maxViewports` and
+  one below its `maxMultiDrawCount` in one `vkCmdDrawMultiEXT` or `vkCmdDrawMultiIndexedEXT`, its
+  vertex function's variant storing `ViewportIndex` as `DrawIndex` (`BindState::region_viewports`,
+  `VariantKey::region_viewports`): the same pixels in fewer commands.
 - **A pass over a map of a zero screen extent is refused**, `RegionError::RegionExtent` on that
   axis: the layer has no physical pixel there, so no attachment of the map's physical size can be
   made, and what Metal rasterizes in such a pass is not measured.
