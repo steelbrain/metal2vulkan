@@ -675,9 +675,9 @@ fn writes_within_a_rectangle_copy_in_only_the_texels_they_changed() {
     let bytes_of = 256..256 + 320 * 32;
     let t = cut_shadow(buffer, bytes_of.clone());
     let attachment = bytes(buffer, bytes_of.clone(), true);
-    let within = |area: [u32; 4], texels: Option<&Arc<ShadowCopies>>| Within {
-        uses: vec![attachment.clone()],
-        texels: texels.cloned(),
+    let within = |area: [u32; 4], texels| Within {
+        uses: std::slice::from_ref(&attachment),
+        texels,
         area,
     };
     let whole = (true, None, false);
@@ -716,8 +716,8 @@ fn writes_within_a_rectangle_copy_in_only_the_texels_they_changed() {
     assert_eq!(read_anywhere(&mut sync, &t), [whole]);
     // Writes elsewhere in the buffer: nothing.
     let apart = Within {
-        uses: vec![bytes(buffer, 0..256, true)],
-        texels: Some(Arc::clone(&t)),
+        uses: &[bytes(buffer, 0..256, true)],
+        texels: Some(&t),
         area: [0, 0, 2, 2],
     };
     within_command(&mut sync, &[], &[apart], &[]);
@@ -768,8 +768,8 @@ fn a_read_inside_a_rectangle_leaves_the_other_changed_texels_to_the_next_read() 
     let mut sync = ShadowSync::<u32>::default();
     let drawn = |sync: &mut ShadowSync<u32>, area: [u32; 4]| {
         let part = Within {
-            uses: vec![attachment.clone()],
-            texels: Some(Arc::clone(&t)),
+            uses: std::slice::from_ref(&attachment),
+            texels: Some(&t),
             area,
         };
         within_command(sync, &[], &[part], &[])
@@ -1649,11 +1649,11 @@ fn an_images_shadow_of_one_level_and_slice_is_cut_as_a_buffers_texture_is() {
     };
     let attachment = texels(image, 2..3, 0..1, true);
     let drawn = |area: [u32; 4]| Within {
-        uses: vec![attachment.clone()],
-        texels: Some(Arc::clone(&s)),
+        uses: std::slice::from_ref(&attachment),
+        texels: Some(&s),
         area,
     };
-    let command = |sync: &mut ShadowSync<u32>, shadows: &[ShadowUse], parts: &[Within]| {
+    let command = |sync: &mut ShadowSync<u32>, shadows: &[ShadowUse], parts: &[Within<'_>]| {
         let mut uses = vec![read.clone()];
         uses.extend(parts.iter().flat_map(|part| part.uses.iter().cloned()));
         let copies = sync.before(shadows, &uses, |_, _, _| Ok(0)).unwrap();
@@ -1689,8 +1689,8 @@ fn an_images_shadow_of_one_level_and_slice_is_cut_as_a_buffers_texture_is() {
     // every texel.
     let other_level = image_shadow(image, 1, 1);
     let elsewhere = Within {
-        uses: vec![texels(image, 2..3, 0..1, true)],
-        texels: Some(Arc::clone(&other_level)),
+        uses: &[texels(image, 2..3, 0..1, true)],
+        texels: Some(&other_level),
         area: a,
     };
     command(&mut sync, &[], &[elsewhere]);
