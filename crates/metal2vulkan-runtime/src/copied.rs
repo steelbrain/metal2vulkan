@@ -151,10 +151,10 @@
 //!   tag (SSE2 on x86-64, about 55 GB/s over a block in the first-level cache on a Ryzen 7 7840HS).
 //!   A comparison of at least twice `SPLIT_BYTES` (2 MiB) of a copy, with a base or without (a
 //!   commit's copy in of every byte of a copy the GPU only reads, whose pages carry no log), splits
-//!   its blocks into runs of at least that many, one for each of up to four threads, the calling
-//!   one among them: it starts at most three, each with a 256 KiB stack, and they end before it
+//!   its blocks into runs of at least that many, one for each of up to eight threads, the calling
+//!   one among them: it starts at most seven, each with a 256 KiB stack, and they end before it
 //!   returns, so a device's comparisons, which its copies' lock keeps one at a time, hold at most
-//!   three more threads at once (`WorkCounts::copied_compare_threads`). On that host a 256 MiB
+//!   seven more threads at once (`WorkCounts::copied_compare_threads`). On that host a 256 MiB
 //!   copy with a base that agrees took 5.8-6.1 ms
 //!   each way; where every byte changed on both sides 25.7-26.4 ms in and 25.9-27.3 ms back; where
 //!   every float of it was rewritten as `x + i` (the GPU's side alone), 25.5-27.5 ms back, and
@@ -1777,8 +1777,10 @@ unsafe fn copy_in_run(ends: Ends, bytes: Range<usize>) -> u64 {
 }
 
 /// The most threads one comparison of a copy runs on ([`split`], [`copy_in_untagged`]), the
-/// calling thread among them.
-const SPLIT_THREADS: usize = 4;
+/// calling thread among them. On the RTX 5080 Laptop GPU's host (a Core Ultra 9 275HX) a commit's
+/// copy in of 256 MiB with no base takes 8.4 ms on eight threads and 11.2 ms on four, of 64 MiB
+/// 2.2 and 2.9 ms (`tests/copied_bandwidth_bench.rs`, `copied` and `copied-t4`).
+const SPLIT_THREADS: usize = 8;
 
 /// The fewest bytes of a copy each thread of a split comparison takes ([`split`],
 /// [`copy_in_untagged`]): fewer than twice as many are compared on the calling thread alone.

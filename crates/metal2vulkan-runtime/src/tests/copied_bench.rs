@@ -360,16 +360,6 @@ fn copied_256_bench() {
     bench_256("host base", &mut |_| None);
 }
 
-/// [`copied_256_bench`] with its comparisons on up to eight threads
-/// (`copied::SPLIT_THREADS_FROM`), where the runtime runs them on up to four.
-#[test]
-#[ignore = "a release-mode benchmark"]
-fn copied_256_bench_eight_threads() {
-    crate::copied::SPLIT_THREADS_FROM.store(8, Ordering::Relaxed);
-    bench_256("host base, eight threads", &mut |_| None);
-    crate::copied::SPLIT_THREADS_FROM.store(0, Ordering::Relaxed);
-}
-
 /// The copy in and merge back of one copy of 256 MiB, its base's bytes where `base` gives them
 /// (`None`: host memory), printed as the median of [`RUNS`] (`COPIED-256`): (a) nothing changed;
 /// (b) one byte in each of 1% of its 4 KiB pages, the CPU's before the copy in and the GPU's

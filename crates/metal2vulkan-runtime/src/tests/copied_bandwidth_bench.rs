@@ -14,7 +14,7 @@
 //! - `both-write`: the CPU writes a word of every 16th page, then the kernel rewrites in place.
 //!
 //! Each runs over a copy with no log of its pages' writes, over the same with its comparisons on
-//! up to eight threads (`copied-t8`, `copied::SPLIT_THREADS_FROM`), over one with a log the CPU's
+//! up to four threads (`copied-t4`, `copied::SPLIT_THREADS_FROM`), over one with a log the CPU's
 //! writes are told to (`copied_log::TestLog`, as a guest RAM's dirty log), and, as the control,
 //! over a `Shared` buffer of the device's own (host memory the GPU reaches across the bus).
 //! Printed as the median of the passes after the first two (`COPIED-BW`): the buffer's bytes a
@@ -106,7 +106,7 @@ impl Subject {
             Subject::Copied {
                 logged: false,
                 threads: _,
-            } => "copied-t8",
+            } => "copied-t4",
             Subject::Copied { logged: true, .. } => "copied-logged",
             Subject::Own => "own-shared",
         }
@@ -476,7 +476,7 @@ fn copied_bandwidth_bench() {
         },
         Subject::Copied {
             logged: false,
-            threads: 8,
+            threads: 4,
         },
         Subject::Copied {
             logged: true,

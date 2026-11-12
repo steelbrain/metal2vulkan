@@ -3437,7 +3437,7 @@ bound.
   (`copied_base_host_blocks`); a block whose tag agrees is taken as unchanged, a changed one
   missed with a chance of at most 2^-64 at each comparison, and a commit that finds no host memory
   for a base fails with `OutOfMemory` (`copied_bases_refused`). A comparison of 4 MiB or more of a
-  copy, with a base or without, splits its blocks across up to four threads, the calling one among
+  copy, with a base or without, splits its blocks across up to eight threads, the calling one among
   them (`copied_compare_threads`). An event signal submitted while a copy is live is seen once its
   batch's writes are back in the pages, as Metal's: its value at the completion turn, and a wait
   for it held on the host until then (`event_signals_behind_merge`). A

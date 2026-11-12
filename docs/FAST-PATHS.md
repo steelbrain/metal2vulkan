@@ -611,8 +611,8 @@ driver's. Each is open work.
   time, and a page that differs takes the pages' whole; from then on each comparison reads one side
   whole (the pages at a commit, the copy at a completion) and compares each 1 KiB block's tag with
   its base's (below), reading the other side's block only where the tag changed; either on up to
-  four threads for 4 MiB or more (`copied_compare_threads`). On a Ryzen 7 7840HS (the RTX 3090's and RTX 2080's hosts) a 256 MiB
-  copy that agrees takes 5.8-6.1 ms each way, 5.8-6.5 ms where 1% of its pages changed on one side
+  eight threads for 4 MiB or more (`copied_compare_threads`). On a Ryzen 7 7840HS (the RTX 3090's
+  and RTX 2080's hosts) a 256 MiB copy that agrees takes 5.8-6.1 ms each way, 5.8-6.5 ms where 1% of its pages changed on one side
   or both, and 25.7-26.4 ms in and 25.9-27.3 ms back where every byte changed on both sides (the
   byte-for-byte snapshot this replaced, interleaved with them: 14.4-15.8, 15.0-16.4, 143-152 ms in
   and 204-215 ms back; `tests/copied_bench.rs`); with other work running, 2,049 copies of 680 MiB
