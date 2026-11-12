@@ -151,10 +151,15 @@ fn state(device: &Device, library: &Library, layouts: Layouts) -> RenderPipeline
         .unwrap()
 }
 
-/// Draws of `command_types` of three vertex buffers that inherit the encoder's state.
-fn inheriting(command_types: IndirectCommandType) -> IndirectCommandBufferDescriptor {
+/// Draws of `command_types` of three vertex buffers that inherit the encoder's state, which set
+/// their own attribute strides where `strided` (`supportDynamicAttributeStride`).
+fn inheriting(
+    command_types: IndirectCommandType,
+    strided: bool,
+) -> IndirectCommandBufferDescriptor {
     let mut descriptor = IndirectCommandBufferDescriptor::new();
     descriptor.command_types = command_types;
+    descriptor.support_dynamic_attribute_stride = strided;
     descriptor.inherit_pipeline_state = true;
     descriptor.max_vertex_buffer_bind_count = 3;
     descriptor.max_fragment_buffer_bind_count = 0;
@@ -281,7 +286,8 @@ fn run(
     (writer, state): (&ComputePipelineState, &RenderPipelineState),
     (command_types, draws, layouts, host_step): (IndirectCommandType, &[Draw], Layouts, bool),
 ) -> (Vec<[u32; 4]>, (u64, u64, u64)) {
-    let icb = icb(device, &inheriting(command_types), COMMANDS);
+    let strided = layouts.positions.is_none();
+    let icb = icb(device, &inheriting(command_types, strided), COMMANDS);
     if host_step {
         let command = icb.indirect_render_command_at(COMMANDS - 1).unwrap();
         command.set_barrier().unwrap();

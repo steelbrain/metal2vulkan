@@ -1573,9 +1573,12 @@ fn plan_replay(cx: &mut SelectCx<'_>, sources: &[SlotRef]) -> Result<(), Error> 
         (f.attributes.values())
             .any(|a| *a == crate::pipeline::lower_inputs::VertexFetch::FixedFunction)
     });
+    // A drawn vertex function's sources are its pulled attributes' buffers, which its slot table
+    // holds; a kernel's are its stage-in fetch's.
+    let pulled = drawn && cx.stage == Stage::Vertex;
     if (cx.stage != Stage::Kernel && !drawn && !pieces)
         || fetches
-        || !sources.is_empty()
+        || (!sources.is_empty() && !pulled)
         || cx.inputs.stage_input.is_some()
         || cx.inputs.tile_attachments.is_some()
         || cx.families.access.tile.is_some()
