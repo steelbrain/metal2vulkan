@@ -943,10 +943,10 @@ fn draws_switching_pipeline_states_rebind_each_state_s_last_draw() {
 
 /// Draws that switch between two pipeline states, with a texture bound before each draw but the
 /// first at fragment texture 1, which neither state's functions read (another texture each time):
-/// a bind state holds no slot its state does not read (`argument_table::ReadSlots`), so every draw
-/// after each state's first is still rebound (`WorkCounts::draws_rebound`), none unlike its kept
-/// draw or stopped, with the same commands of every kind and pixels as the same draws each taking
-/// every step.
+/// a bind state holds no texture slot its state does not read (`argument_table::ReadSlots`), so
+/// every draw after each state's first is still rebound (`WorkCounts::draws_rebound`), none unlike
+/// its kept draw or stopped, with the same commands of every kind and pixels as the same draws
+/// each taking every step.
 #[test]
 fn draws_rebind_over_binds_at_a_slot_no_function_reads() {
     let scratch = Scratch::new("draw-again-unread");
