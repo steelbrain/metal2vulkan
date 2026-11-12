@@ -244,7 +244,7 @@ fn heaps_and_buffers_over_a_buffers_pages_lie_inside_its_import() {
         plus(start, [1, 0, 0, 0]),
         "the buffer's own import"
     );
-    let Some(heap) = heap(&device, &pages, 0, HEAP) else {
+    let Some(over) = heap(&device, &pages, 0, HEAP) else {
         return;
     };
     assert_eq!(
@@ -252,7 +252,7 @@ fn heaps_and_buffers_over_a_buffers_pages_lie_inside_its_import() {
         after_first,
         "a heap over the buffer's exact bytes"
     );
-    let placed = heap.new_buffer(8192, ResourceOptions::shared()).unwrap();
+    let placed = over.new_buffer(8192, ResourceOptions::shared()).unwrap();
     blits(&queue, |blit| {
         blit.fill_buffer(&placed, 0..8192, 0x5c).unwrap()
     });
@@ -296,5 +296,5 @@ fn heaps_and_buffers_over_a_buffers_pages_lie_inside_its_import() {
         blit.fill_buffer(&in_copy, 0..4096, 0x7f).unwrap()
     });
     assert!(pages.bytes(2 << 20, 4096).iter().all(|&byte| byte == 0x7f));
-    drop((in_copy, around, small, part, placed, heap, first));
+    drop((in_copy, around, small, part, placed, over, first));
 }

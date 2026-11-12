@@ -1839,7 +1839,7 @@ pub(super) struct InImport {
 impl std::fmt::Debug for InImport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InImport")
-            .field("handle", &self.handle)
+            .field("handle", &self.handle.as_raw())
             .finish_non_exhaustive()
     }
 }

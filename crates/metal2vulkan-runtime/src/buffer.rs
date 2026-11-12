@@ -2001,6 +2001,12 @@ impl Drop for HostPages {
 }
 
 impl Pages {
+    /// The placement the pages are bound in: what a buffer bound inside their import binds in
+    /// (`Device::bind_in_import`).
+    pub(super) fn placement(&self) -> &Placement {
+        &self.memory.placement
+    }
+
     /// Destroy the `VkBuffer` of a host import's pages and free their memory, on `device`, once
     /// their sparse binding completed, and note it (`Device::note_import_freed`): an import's
     /// last hold lets go. Left to the process's end while it exits. `after` goes once the memory

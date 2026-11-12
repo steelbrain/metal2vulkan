@@ -1804,7 +1804,7 @@ impl Device {
         if matches!(pages, ImportPages::StandIn(_)) {
             return None;
         }
-        let within = &pages.memory.placement;
+        let within = pages.placement();
         // One dma-buf a buffer's own import made is dedicated to its `VkBuffer`
         // (`VUID-vkBindBufferMemory-memory-01508`); a guest RAM chunk's import of one is not.
         let dedicated = within.over_dma_buf() && !within.over_ram_chunk();
