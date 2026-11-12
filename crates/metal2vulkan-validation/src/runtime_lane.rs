@@ -775,6 +775,8 @@ mod rate_map_costs;
 mod rate_mapped_layers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod rate_mapped_passes;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod rate_mapped_pieces;
 #[cfg(all(test, m2v_gpu_hazards, any(m2v_gpu, m2v_cpu_icd)))]
 mod rate_mapped_volume;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

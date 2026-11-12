@@ -37,7 +37,7 @@ const LEAD: u32 = 6;
 const SCREEN: u32 = 512;
 const QUALITY: [f32; 5] = [0.3, 0.6, 1.0, 0.6, 0.3];
 /// The piece work the cut frame is recorded under.
-const SMALL_WORK: u64 = 1 << 16;
+const SMALL_WORK: u64 = 1 << 18;
 
 /// The device, its queue, and what the frames draw with.
 struct Workload {
