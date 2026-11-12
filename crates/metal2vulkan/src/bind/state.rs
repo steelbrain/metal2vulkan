@@ -847,12 +847,12 @@ impl BindState {
             private_list,
             far_vertex_buffers,
         } = shape;
+        // Every other field first, and the stage tables, whose slots' shapes are worked out as
+        // they are compared, last: a shape another field tells apart (a draw's primitive type
+        // picks its viewport compensation and its band) is passed over before any slot's shape
+        // is worked out.
         let tables = self.stages.iter().filter(|(_, t)| !t.has_empty_shape());
-        tables.clone().count() == stages.len()
-            && tables.zip(stages).all(|((stage, t), (of, s))| {
-                stage == of && t.has_shape(s, self.view_base_alignment)
-            })
-            && self.vertex_amplification == *vertex_amplification
+        self.vertex_amplification == *vertex_amplification
             && self.imageblock_size == *imageblock_size
             && self.render_target_array_length == *render_target_array_length
             && self.tessellation_factors.buffer.is_some() == *tessellation_factor_buffer
@@ -876,6 +876,10 @@ impl BindState {
             && self.quad_primitive_ids == *quad_primitive_ids
             && self.private_list == *private_list
             && self.far_vertex_buffers == *far_vertex_buffers
+            && tables.clone().count() == stages.len()
+            && tables.zip(stages).all(|((stage, t), (of, s))| {
+                stage == of && t.has_shape(s, self.view_base_alignment)
+            })
     }
 
     /// `used_resources` by token ([`BindShape::used`]): one token names one resource, and listing
@@ -1876,8 +1880,16 @@ impl ArgumentSamplersShape {
     /// Whether it is the shape of `samplers` (`ArgumentSamplersShape::of(samplers) == *self`),
     /// answered without making that shape for up to [`SHAPES_AT_ONCE`](Self::SHAPES_AT_ONCE)
     /// samplers: each sampler's shape is among `shapes`, and each of `shapes` is some sampler's.
-    /// More are answered by making it.
+    /// More are answered by making it. The class is compared first, and a list of none (a state
+    /// that binds no argument buffer's samplers, every draw's of most programs) is the shape of
+    /// no sampler at once, with no sampler's shape worked out.
     fn is_of(&self, samplers: &[ArgumentSampler]) -> bool {
+        if self.class != capacity_class(samplers.len()) {
+            return false;
+        }
+        if samplers.is_empty() {
+            return self.shapes.is_empty();
+        }
         if samplers.len() > Self::SHAPES_AT_ONCE {
             return Self::of(samplers) == *self;
         }
@@ -1886,11 +1898,9 @@ impl ArgumentSamplersShape {
             *shape = Some(sampler.desc.shape());
         }
         let seen = &seen[..samplers.len()];
-        self.class == capacity_class(samplers.len())
-            && seen
-                .iter()
-                .flatten()
-                .all(|shape| self.shapes.contains(shape))
+        seen.iter()
+            .flatten()
+            .all(|shape| self.shapes.contains(shape))
             && self.shapes.iter().all(|shape| seen.contains(&Some(*shape)))
     }
 
