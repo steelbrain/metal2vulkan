@@ -19,12 +19,12 @@
 //!   clear reaches the buffer's rows, and the bytes after the last row keep the CPU's.
 //! - **Large, over a `Private` buffer.** A compositor's texture that renders and samples, 3840x2400
 //!   at a pitch no device's own linear image lays its rows at (37 MB), over a tracked `Private`
-//!   buffer, lies as its first three rows alone do at the same pitch (46,848 bytes; one row alone
-//!   is no control: llvmpipe makes no image of one row at a padded pitch): a
-//!   `DRM_FORMAT_MOD_LINEAR` image in place where the device makes one and its check passed,
-//!   whatever the texture's bytes, else the same shadow. Each frame uploads the texels into the buffer, reads them through the texture,
-//!   clears it through a pass and reads the buffer back: the texture reads the upload, the buffer
-//!   holds the clear, and in place no shadow texel is copied (printed: `LARGE-POOLED`).
+//!   buffer, is a `DRM_FORMAT_MOD_LINEAR` image in place where the device makes one and its
+//!   check passed, else a shadow for that cause alone (`Refused`, `CheckFailed`, `Unchecked`),
+//!   never for its size. Each frame uploads the texels into the buffer, reads them through the
+//!   texture, clears it through a pass and reads the buffer back: the texture reads the upload,
+//!   the buffer holds the clear, and in place no shadow texel is copied (printed:
+//!   `LARGE-POOLED`).
 //! - **Made before the check answered.** Such a texture of the guests' most common cache shape
 //!   (172x67 at a 704-byte pitch), made on a device whose check has not run, is a shadow made
 //!   before its pooled verdict where the query answered `Pending`; a pass's clear before the
@@ -432,7 +432,7 @@ fn a_rendered_texture_at_a_pitch_the_linear_image_misses_takes_a_pitched_image_w
 const LARGE: (u64, u64, u64) = (3840, 2400, 15_616);
 
 #[test]
-fn a_large_texture_over_a_private_buffer_lies_as_its_first_rows_do_and_reads_right() {
+fn a_large_texture_over_a_private_buffer_is_in_place_where_the_device_makes_it_and_reads_right() {
     let scratch = Scratch::new("padding-unobserved-large");
     let device = device(&scratch.0);
     assert!(
@@ -441,23 +441,13 @@ fn a_large_texture_over_a_private_buffer_lies_as_its_first_rows_do_and_reads_rig
     );
     let (width, height, pitch) = LARGE;
     let (row, length) = (width * 4, pitch * height);
-    let private = |length| {
-        let descriptor =
-            BufferDescriptor::new(length, ResourceOptions::private(), BufferContents::Zero)
-                .with_padding_unobserved();
-        device.new_buffer_with_descriptor(descriptor).unwrap()
-    };
     let mut descriptor =
         TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
     descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
     descriptor.resource_options = ResourceOptions::private();
-    // The control: the texture's first three rows alone over a buffer of their own, at the same
-    // pitch.
-    let mut first_rows = descriptor;
-    first_rows.height = 3;
-    let control = private(3 * pitch).texture_placement(&first_rows, 0, pitch);
-    let control = control.unwrap();
-    let buffer = private(length);
+    let buffer = BufferDescriptor::new(length, ResourceOptions::private(), BufferContents::Zero)
+        .with_padding_unobserved();
+    let buffer = device.new_buffer_with_descriptor(buffer).unwrap();
     let answer = buffer.texture_placement(&descriptor, 0, pitch).unwrap();
     let before = device.work_counts();
     let texture = buffer.new_texture(&descriptor, 0, pitch).unwrap();
@@ -554,14 +544,9 @@ fn a_large_texture_over_a_private_buffer_lies_as_its_first_rows_do_and_reads_rig
     let next = frame();
     eprintln!(
         "LARGE-POOLED on {}: {width}x{height} BGRA8Unorm at {pitch} ({length} bytes) over a \
-         Private buffer: its first three rows answer {control:?}, the texture {answer:?}; pitched \
-         {pitched}, shadows {shadows}; shadow texels copied in and back, the first frame \
-         {first:?}, the next {next:?}",
+         Private buffer: {answer:?}; pitched {pitched}, shadows {shadows}; shadow texels copied \
+         in and back, the first frame {first:?}, the next {next:?}",
         device.name(),
-    );
-    assert_eq!(
-        answer, control,
-        "the texture lies as its first three rows do, whatever its bytes"
     );
     match answer {
         TexturePlacement::NotHostPages => {
@@ -572,13 +557,18 @@ fn a_large_texture_over_a_private_buffer_lies_as_its_first_rows_do_and_reads_rig
             assert_eq!(shadows, 0, "counted as no shadow");
             assert_eq!((first, next), ((0, 0), (0, 0)), "no shadow texel copied");
         }
-        _ => {
+        TexturePlacement::Shadow(
+            TextureShadowReason::Refused(_)
+            | TextureShadowReason::CheckFailed { .. }
+            | TextureShadowReason::Unchecked { .. },
+        ) => {
             assert!(
                 texture.shadow().is_some(),
                 "a shadow where the device makes no image"
             );
             assert_eq!(shadows, 1, "counted as a shadow");
         }
+        other => panic!("a shadow only where the device makes no image in place, not {other:?}"),
     }
 }
 
