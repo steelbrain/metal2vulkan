@@ -2438,7 +2438,7 @@ impl Device {
             // A shadow of its linear cost over bytes no other texture was made over moves once
             // one is (`texture_spans.rs`).
             Some(MoveAfter::Aliases(pending)) => {
-                let shared: Arc<dyn Any + Send + Sync> = Arc::clone(&texture.0);
+                let shared: Arc<dyn Any + Send + Sync> = Arc::clone(&texture.0) as _;
                 let bytes = texels.layout.offset..texels.layout.end();
                 (texels.buffer).wait_for_texture_over(bytes, Arc::downgrade(&shared), pending);
             }
@@ -5194,7 +5194,7 @@ impl Texture {
         if let Some((bytes, image, exact)) = texture.image_over_bytes() {
             let sink = image.plan().usage.contains(ImageUsageFlags::STORAGE);
             let keeps = texture.tiled_levels();
-            let shared: Arc<dyn Any + Send + Sync> = Arc::clone(&texture.0);
+            let shared: Arc<dyn Any + Send + Sync> = Arc::clone(&texture.0) as _;
             let image: Arc<dyn Any + Send + Sync> = Arc::clone(image) as _;
             bytes.note_texture(NotedTexture::new(
                 Arc::downgrade(&shared),
