@@ -136,7 +136,7 @@ fn a_spare_command_pool_holding_a_begun_primary_is_taken_first() {
 
 /// A command buffer takes the spare holding the fewest command buffers of those holding a primary
 /// begun ahead, then of the rest; one past its first pool takes the spare holding the most of the
-/// level it lacks, one holding no primary begun ahead first, and any spare where none holds one.
+/// level it lacks, one holding no primary begun ahead first, and none where none holds one.
 #[test]
 fn a_taker_takes_the_fewest_and_one_past_its_first_pool_the_most() {
     let primary = vk::CommandBufferLevel::PRIMARY;
@@ -184,9 +184,9 @@ fn a_taker_takes_the_fewest_and_one_past_its_first_pool_the_most() {
     let mut empty = vec![holding(6, 0, 0)];
     assert_eq!(
         taken(take_command_pool_holding(&mut empty, 0, secondary)),
-        Some(6),
-        "a spare to grow into"
+        None
     );
+    assert_eq!(empty.len(), 1);
 }
 
 /// A command buffer takes the newest spare command pool made for its queue's family, never one

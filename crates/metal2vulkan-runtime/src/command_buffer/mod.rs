@@ -5020,8 +5020,9 @@ impl CommandBufferShared {
     /// command buffer took it is handed out again before a new one is made; its begin resets it
     /// (the pool's `VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT`, `spares.rs`). Past
     /// `ONE_POOL` handed out, once its pools handed out every one of `level` they held, it takes
-    /// the spare holding the most of them, up to `TAKEN_PAST_FIRST` past its first, and makes
-    /// what it lacks then in the last it took (`spares.rs`). The caller holds `state` (the pools
+    /// the spare holding the most of them, up to `TAKEN_PAST_FIRST` past its first; where none
+    /// holds one, or past those, it makes what it lacks in the last it took, or in a pool it takes
+    /// to grow into where it took none (`spares.rs`). The caller holds `state` (the pools
     /// are externally synchronized).
     #[cfg_attr(test, track_caller)]
     fn allocate(
@@ -5046,12 +5047,16 @@ impl CommandBufferShared {
         if grows && taken < crate::spares::TAKEN_PAST_FIRST {
             let shared = self.device.shared();
             let family = shared.queue_family_of(self.queue.vk_queue());
-            let spare = shared.spares.command_pool_holding(shared, family, level)?;
-            let spare = match spare {
-                Some(spare) => spare,
-                None => command_pool(&self.device, family)?,
-            };
-            state.pools_past_first.push(spare);
+            match shared.spares.command_pool_holding(shared, family, level)? {
+                Some(spare) => state.pools_past_first.push(spare),
+                // None holds one: it grows in the last it took, else in a pool it takes to grow
+                // into (a spare, or one made), never in its first.
+                None if taken == 0 => {
+                    let pool = command_pool(&self.device, family)?;
+                    state.pools_past_first.push(pool);
+                }
+                None => {}
+            }
         }
         match state.pools_past_first.last_mut() {
             Some(last) => hand_out(&self.device, last, level),

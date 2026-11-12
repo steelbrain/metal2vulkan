@@ -31,10 +31,11 @@
 //!   spare holding a primary begun ahead and the fewest command buffers, else the one holding the
 //!   fewest ([`take_command_pool`]), as a command buffer's size is unknown as it takes its pool.
 //!   Past [`ONE_POOL`] command buffers handed out, one whose pools hold no more of a level takes
-//!   the spare holding the most of that level ([`take_command_pool_holding`]), or makes a pool
-//!   where there is no spare, up to [`TAKEN_PAST_FIRST`] past its first, and makes what it lacks
-//!   then in the last it took; each goes back with its first (`command_buffer/mod.rs`'s
-//!   `CommandBufferShared::allocate`). So the larger command buffers of a load use the pools that
+//!   the spare holding the most of that level ([`take_command_pool_holding`]), up to
+//!   [`TAKEN_PAST_FIRST`] past its first; where no spare holds one, or past those, it makes what
+//!   it lacks in the last it took, or in one pool it takes to grow into (a spare, or one made)
+//!   where it took none, never in its first; each goes back with its first
+//!   (`command_buffer/mod.rs`'s `CommandBufferShared::allocate`). So the larger command buffers of a load use the pools that
 //!   hold the most, which the smaller leave, and the pools' command buffers follow what the load
 //!   holds at once. Each pool taking the newest spare and keeping its own uses' most, a load of
 //!   64 command buffers in flight, a cycle of one of 200 blit encoders and nine of 2, had every
@@ -649,7 +650,7 @@ impl Spares {
     /// [`command_pool`](Self::command_pool), the spare of queue family `family` holding the most
     /// command buffers of `level` ([`take_command_pool_holding`]), for a command buffer past
     /// [`ONE_POOL`] command buffers whose pools handed out every one of that level they held (the
-    /// module docs); `None` where there is no spare.
+    /// module docs); `None` where no spare holds one.
     pub(super) fn command_pool_holding(
         &self,
         device: &DeviceShared,
@@ -1084,7 +1085,7 @@ pub(super) fn take_command_pool(pools: &mut Vec<CommandPool>, family: u32) -> Op
 
 /// The spare command pool of `pools` (oldest first) made for queue family `family` that holds the
 /// most command buffers of `level`, of those the one holding no primary begun ahead, then the
-/// newest, taken out: where none holds one, the spare a command buffer grows into.
+/// newest, taken out; `None` where none holds one.
 pub(super) fn take_command_pool_holding(
     pools: &mut Vec<CommandPool>,
     family: u32,
@@ -1092,7 +1093,7 @@ pub(super) fn take_command_pool_holding(
 ) -> Option<CommandPool> {
     let at = level_index(level);
     let (most, _) = (pools.iter().enumerate())
-        .filter(|(_, pool)| pool.family == family)
+        .filter(|(_, pool)| pool.family == family && !pool.made[at].is_empty())
         .max_by_key(|&(index, pool)| (pool.made[at].len(), pool.begun.is_none(), index))?;
     Some(pools.remove(most))
 }
