@@ -133,8 +133,14 @@ enum Follow {
     InFlight,
 }
 
-/// The fills ahead of an in-flight writer's passes, of [`FILLED`] bytes each.
-const FILLS: u32 = 16;
+/// The fills ahead of an in-flight writer's passes, of [`FILLED`] bytes each: on a GPU, a GiB,
+/// some milliseconds of its work, which kept the write ahead of the reader's commit in every
+/// round on an M3 Max; on a CPU device, which fills a few GB a second, one, so the suite's legs
+/// stay short there.
+const FILLS: u32 = match cfg!(m2v_cpu_icd) {
+    true => 1,
+    false => 16,
+};
 
 /// A pass's draws: each state, its rectangle and its instances.
 type Draws<'a> = &'a [(&'a RenderPipelineState, [u64; 4], u32)];
