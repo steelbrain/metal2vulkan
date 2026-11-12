@@ -902,6 +902,8 @@ pub(crate) mod sync_coverage;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod teardown_holders;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod tensors_air29;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod tests;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod texel_swizzles;
