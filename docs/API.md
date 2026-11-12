@@ -1422,14 +1422,15 @@ the slots they were made for.
 
 `redraw_apart_into` writes again only what a draw's arguments decide, over the commands
 `instantiate_draw_apart_into` wrote for another draw of the same state that differed from it only
-in them (its vertex or index counts and starts, its index offset, its instance count, base vertex
-and base instance), both direct draws of one kind, with the same index type and index buffer for
-an indexed one: the Vulkan draw, its index overrun, the `BaseVertexInstance` push fields and the
-draw's own index buffer use. It answers `Ok(false)` where the plan reads the arguments some other
-way (an argument or root table, a mesh, patch or de-indexed draw), where a fixed-function vertex
-buffer's fetch window, which the extents hold, moves with them (another vertex range of a draw
-without indices, another instance range of a per-instance buffer), or where the two draws are no
-such pair; then instantiate the draw whole. An index offset that moves rebinds the index buffer
+in them (whether it reads indices, its index type and index buffer, its vertex or index counts and
+starts, its index offset, its instance count, base vertex and base instance), both direct draws:
+the Vulkan draw, its index overrun, the `BaseVertexInstance` push fields and the draw's own index
+buffer use. It answers `Ok(false)` where the plan reads the arguments some other way (an argument
+or root table, a mesh, patch or de-indexed draw, a vertices-per-primitive push field of a draw
+with indices and one without), where a fixed-function vertex buffer's fetch window, which the
+extents hold, moves with them (another vertex range of a draw without indices, another instance
+range of a per-instance buffer), or where the two draws are no such pair; then instantiate the
+draw whole. An index offset that moves rebinds the index buffer
 there: the draw command's `index_buffer_offset` is the new offset.
 
 A plan that reads handles (a texture's or sampler state's resource ID, a visible function table's)

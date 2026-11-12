@@ -920,8 +920,9 @@ fn redrawn(
 /// commands, writes the commands every step writes for it: its Vulkan draw, its overrun, its
 /// `BaseVertexInstance` field and its index buffer's use; and none where a fixed-function vertex
 /// buffer's fetch window moves with them (a draw's vertices, a per-instance buffer's instances),
-/// where the plan reads them some other way (a de-indexed draw), or where the two are not of one
-/// kind and index buffer. Past a multiview plan's instance limit it answers every step's error.
+/// where the plan reads them some other way (a de-indexed draw, a vertices-per-primitive field of
+/// a draw with indices and one without). Another index type or buffer, or indices read or not, is
+/// redrawn. Past a multiview plan's instance limit it answers every step's error.
 #[test]
 fn draws_of_other_arguments_redraw_what_every_step_writes() {
     use crate::pipeline::interface::PlacedField;
@@ -1000,8 +1001,9 @@ fn draws_of_other_arguments_redraw_what_every_step_writes() {
         .expect("redrawn")
         .expect("redrawn at another base vertex");
     assert_eq!(base.push_constants[0].bytes[8..12], 9u32.to_le_bytes());
-    // Other instances move the per-instance buffer's window; another kind, index type or index
-    // buffer is no such pair.
+    // Other instances move the per-instance buffer's window, and so do vertices without indices
+    // after indices, whose per-vertex window is the whole buffer; another index type or index
+    // buffer is redrawn.
     let moved = indexed(6, 64, 5, (2, 5));
     assert_eq!(redrawn(&t, &state, (&first, &moved)), Ok(None));
     let wide = DrawCall::Indexed {
@@ -1022,9 +1024,34 @@ fn draws_of_other_arguments_redraw_what_every_step_writes() {
         base_vertex: 5,
         base_instance: 1,
     };
-    for draw in [wide, other_buffer, primitives(0, 6, (1, 5))] {
-        assert_eq!(redrawn(&t, &state, (&first, &draw)), Ok(None), "{draw:?}");
+    for draw in [wide, other_buffer] {
+        let commands = redrawn(&t, &state, (&first, &draw)).expect("redrawn");
+        assert!(commands.is_some(), "{draw:?} redrawn");
     }
+    let unindexed = primitives(0, 6, (1, 5));
+    assert_eq!(redrawn(&t, &state, (&first, &unindexed)), Ok(None));
+    // With no fixed-function vertex buffer, a draw without indices after one with them, and the
+    // other way, is redrawn, its index use gone or made; but not where a vertex function divides
+    // by the vertices per primitive, which a draw with indices and one without set apart.
+    let pulled = template(Vec::new());
+    for (from, draw) in [(&first, &unindexed), (&unindexed, &first)] {
+        let commands = redrawn(&pulled, &state, (from, draw)).expect("redrawn");
+        let uses = commands.map(|commands| commands.uses.len());
+        assert_eq!(uses, Some(usize::from(draw == &first)), "{draw:?} redrawn");
+    }
+    let mut per_primitive = template(Vec::new());
+    per_primitive.stages[0].fields.push(PlacedField {
+        field: PushField::VerticesPerPrimitive,
+        loc: PushLoc::Push { offset: 0 },
+        size: 4,
+    });
+    let mut triangles = state.clone();
+    triangles.primitive_type = Some(metal::PrimitiveType::Triangle);
+    let kinds = (&unindexed, &first);
+    assert_eq!(redrawn(&per_primitive, &triangles, kinds), Ok(None));
+    let more = (&unindexed, &primitives(3, 6, (1, 5)));
+    let commands = redrawn(&per_primitive, &triangles, more).expect("redrawn");
+    assert!(commands.is_some(), "more vertices redrawn");
     // Draws without indices of other vertices move the per-vertex buffer's window; with no
     // fixed-function vertex buffer, every argument is the commands' alone.
     let vertices = primitives(2, 3, (1, 5));

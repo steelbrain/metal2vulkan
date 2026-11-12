@@ -66,11 +66,12 @@
 //!   encoder's last draw left. Each state's bind state is its own, though states of one function
 //!   pair share an interface, so the draw kept of one is never the other's.
 //! - **Of other arguments.** A draw that differs from the kept draw only in its arguments (its
-//!   vertex or index counts and starts, its index buffer's offset, its instance count, base vertex
-//!   or base instance: `UnlikeKept::arguments_alone`), of something to draw, is rebound with them
-//!   (`rebound.rs`), whatever its tables' stamps: the steps that read them are worked out again,
-//!   the rest are the kept draw's. Every other draw unlike the kept draw takes every step
-//!   (`WorkCounts::draws_unlike_kept`, by what differed).
+//!   call of the same primitive type, with indices or without, its vertex or index counts and
+//!   starts, its index buffer, index type or index buffer's offset, each read in place, its
+//!   instance count, base vertex or base instance: `UnlikeKept::arguments_alone`), of something to
+//!   draw, is rebound with them (`rebound.rs`), whatever its tables' stamps: the steps that read
+//!   them are worked out again, the rest are the kept draw's. Every other draw unlike the kept
+//!   draw takes every step (`WorkCounts::draws_unlike_kept`, by what differed).
 //! - **Restated by a render state set.** A call that sets the encoder's render state alone (its
 //!   viewports, scissor rectangles, cull mode, winding, depth/stencil state, stencil references,
 //!   depth bias, depth clip mode, fill mode or blend color: `RenderLowering::log_restating`)
@@ -545,9 +546,11 @@ impl RenderLowering {
                     || kept.index.map(KeptIndex::buffer) != index.map(KeptIndex::buffer);
                 let why = UnlikeKept {
                     pipeline: !self.pipeline.as_ref().is_some_and(drawn_by),
-                    call: kept.call != call || kept.assembly != assembly,
+                    call: kept.call != call,
+                    assembly: kept.assembly != assembly,
                     counts,
                     index_buffer,
+                    index_copied: copied,
                     index_offset: !index_buffer && (index_offset || kept.index != index),
                     tessellation: buffers.patch_indices.is_some()
                         || buffers.control_point_indices.is_some(),

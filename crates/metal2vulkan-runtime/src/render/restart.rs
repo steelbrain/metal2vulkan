@@ -111,14 +111,7 @@ impl RenderLowering {
         draw: &DrawCall,
         (provoking, line): (Provoking, LineRoute),
     ) -> Option<Restarted> {
-        let wide = match *draw {
-            DrawCall::Indexed { index_type, .. }
-            | DrawCall::Indirect {
-                indexed: Some((index_type, ..)),
-                ..
-            } => Some(index_type == metal2vulkan::vk::IndexType::UINT32),
-            _ => None,
-        };
+        let wide = wide_indices(draw);
         let index_size = wide.map(|wide| if wide { 4 } else { 2 });
         let order = provoking.order();
         // Where a restarting program over indices restarts: at `k'` after a call, else at its
@@ -153,14 +146,40 @@ impl RenderLowering {
         if line.band() && strip {
             return listed(program, ListGap::WideLines);
         }
-        if !program.restarts() {
-            return None;
+        match self.restarts_apart(program, wide) {
+            true => listed(program, ListGap::RestartedStrip),
+            false => None,
         }
-        let (k, wide) = (self.restart?, wide?);
-        if restart == restart_index(k, wide).1 {
-            return None;
-        }
-        listed(program, ListGap::RestartedStrip)
+    }
+
+    /// Whether `draw` of `assembly` is a strip over indices that the encoder's call restarts at
+    /// another index than Vulkan would, which [`restarted`](Self::restarted) draws as a list
+    /// (`ListGap::RestartedStrip`).
+    pub(super) fn restarted_strip(&self, assembly: Assembly, draw: &DrawCall) -> bool {
+        (assembly.program()).is_some_and(|program| self.restarts_apart(program, wide_indices(draw)))
+    }
+
+    /// Whether a draw of `program` over indices, 32-bit ones where `wide` (`None` without
+    /// indices), restarts at another index than Vulkan's: a strip after the encoder's call, its
+    /// `k'` not its index type's all-ones index.
+    fn restarts_apart(&self, program: RewriteProgram, wide: Option<bool>) -> bool {
+        let (Some(k), Some(wide)) = (self.restart, wide) else {
+            return false;
+        };
+        let (restart, all_ones) = restart_index(k, wide);
+        program.restarts() && restart != all_ones
+    }
+}
+
+/// Whether `draw` reads 32-bit indices, or 16-bit ones; `None` for a draw without indices.
+fn wide_indices(draw: &DrawCall) -> Option<bool> {
+    match *draw {
+        DrawCall::Indexed { index_type, .. }
+        | DrawCall::Indirect {
+            indexed: Some((index_type, ..)),
+            ..
+        } => Some(index_type == metal2vulkan::vk::IndexType::UINT32),
+        _ => None,
     }
 }
 

@@ -1731,3 +1731,72 @@ fn draws_of_another_first_index_alone_are_rebound_with_their_pixels() {
         assert_ne!(rebound.words[0], rebound.words[last], "the draws' {form}");
     }
 }
+
+/// Draws with indices and without in turn, from two index buffers in turn, each of the next
+/// rectangle ([`rectangle_points`]: the `at`th's six indices at `12 * at` bytes, or its six
+/// vertices from `6 * at`), are rebound with their call (`WorkCounts::draws_rebound_arguments`):
+/// their index buffer bound where they read one and their Vulkan draw, with the same commands of
+/// every kind and pixels as the same draws with a call between each that changes nothing for them,
+/// each of which takes every step.
+#[test]
+fn draws_with_indices_and_without_in_turn_are_rebound_with_their_call() {
+    let scratch = Scratch::new("draw-again-call");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = state(
+        &device,
+        "engine/tob_renders.ll",
+        ("tob_triangle", "tob_solid"),
+    );
+    let rectangles = rectangle_points(&device);
+    let color = bytes_of(&[1.0f32 / 64.0; 4], f32::to_le_bytes);
+    let colors = (device.new_buffer_with_bytes(&color, ResourceOptions::shared())).unwrap();
+    let indices: Vec<u16> = (0..6 * DRAWS as u16).collect();
+    let indices = bytes_of(&indices, u16::to_le_bytes);
+    let index = |_| (device.new_buffer_with_bytes(&indices, ResourceOptions::shared())).unwrap();
+    let index: [Buffer; 2] = std::array::from_fn(index);
+    let draws = |encoder: &mut RenderCommandEncoder,
+                 between: &dyn Fn(&mut RenderCommandEncoder)| {
+        encoder.set_render_pipeline_state(&state).unwrap();
+        encoder.set_vertex_buffer(Some(&rectangles), 0, 0).unwrap();
+        encoder.set_fragment_buffer(Some(&colors), 0, 0).unwrap();
+        for at in 0..DRAWS {
+            if at > 0 {
+                between(encoder);
+            }
+            let drawn = match at % 3 {
+                1 => encoder.draw_primitives(PrimitiveType::Triangle, 6 * at as u32, 6, 1, 0),
+                turn => encoder.draw_indexed_primitives(
+                    PrimitiveType::Triangle,
+                    6,
+                    IndexType::UInt16,
+                    &index[turn as usize / 2],
+                    12 * at,
+                    1,
+                    0,
+                    0,
+                ),
+            };
+            assert_eq!(drawn, Ok(()));
+        }
+    };
+    let nothing = |_: &mut RenderCommandEncoder| {};
+    let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
+    warm(&device, |encoder| draws(encoder, &nothing));
+    let rebound = run(&device, |encoder| draws(encoder, &nothing));
+    let every = run(&device, |encoder| draws(encoder, &forgets));
+    let reargued = |counts: &WorkCounts| counts.draws_rebound_arguments;
+    assert_eq!(rebound.counted(reargued), drawn_alone(HITS));
+    let missed = |counts: &WorkCounts| counts.draws_unlike_kept + counts.draws_rebind_stopped;
+    assert_eq!(rebound.counted(missed), 0);
+    assert_eq!(every.counted(reargued), 0);
+    assert_eq!(rebound.commands, every.commands);
+    assert_eq!(rebound.commands["cmd_draw_indexed"], DRAWS - DRAWS / 3);
+    assert_eq!(rebound.commands["cmd_draw"], DRAWS / 3);
+    assert_eq!(rebound.words, every.words, "the pixels of the draws");
+    let last = SIDE as usize - 1;
+    assert_ne!(
+        rebound.words[0], rebound.words[last],
+        "the draws' rectangles"
+    );
+}

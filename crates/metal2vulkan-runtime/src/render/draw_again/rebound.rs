@@ -45,23 +45,33 @@
 //!   attachments' reads' refusal is answered here, the last of its checks, which may have
 //!   announced.
 //! - **Of other arguments.** A draw that differs from the kept draw only in its arguments (its
-//!   counts and starts, index offset, instance count, base vertex or base instance:
-//!   `UnlikeKept::arguments_alone`) works out again each step that reads them, from them and the
-//!   kept draw's state: its route, which reads them only through whether the draw may make a
-//!   primitive, so the draw goes on only where that is the kept draw's; its commands' Vulkan draw,
+//!   call of the same primitive type, with indices or without, its counts and starts, its index
+//!   buffer, index type or index offset, each index buffer read in place, its instance count, base
+//!   vertex or base instance: `UnlikeKept::arguments_alone`) works out again each step that reads
+//!   them, from them and the kept draw's state: its route, which reads them only through whether
+//!   the draw may make a primitive, whether it is a strip over indices the encoder's call
+//!   restarts at another index than Vulkan's (`render/restart.rs`) and whether it runs a
+//!   de-indexed variant (`primitive_id_indices`), so the draw goes on only where each is the kept
+//!   draw's; its commands' Vulkan draw,
 //!   index overrun, base vertex and instance push fields and index buffer use
 //!   (`BindingPlan::redraw_apart_into`), which stops where the plan reads them some other way (a
-//!   de-indexed draw, a stage's argument or root table) or a fixed-function vertex buffer's fetch
+//!   de-indexed draw, a stage's argument or root table, the vertices per primitive of a draw with
+//!   indices after one without) or a fixed-function vertex buffer's fetch
 //!   window moves with them (another vertex range without indices, another instance range of a
 //!   per-instance buffer); its pulled attributes' reach (`check_vertex_reach`); its uses, the
 //!   index buffer's patched in place as a moved slot's is (`binding::patch_command_uses`), so a
-//!   draw moved and narrowed checks, notes and gathers it with the moved slots' uses; and its
-//!   index buffer's bind (`IndexBind::of`: the index source is the kept draw's buffer, read in
-//!   place, so its bound range is the one every step binds). It then records that bind where its
-//!   record holds another, with its new draw, and the kept draw takes its arguments, index source
-//!   and draw (`WorkCounts::draws_rebound_arguments`). Where its rebind stops, at any step, the
-//!   draw takes every step, counted by where (`WorkCounts::draws_rebind_stopped_arguments_*`: its
-//!   route, its plan's reads of its slots, a fetch window, its attributes' reach, or another).
+//!   draw moved and narrowed checks, notes and gathers it with the moved slots' uses, or made
+//!   again whole where the draw reads indices and the kept draw none, or the other way, or
+//!   another index buffer; and its index buffer's bind (`IndexBind::of`: the index source is read
+//!   in place, so its bound range is the one every step binds). One of another index buffer than
+//!   the kept draw's, or of one where the kept draw read none, is no draw moved: its uses meet a
+//!   buffer the kept draw's did not, so it looks at the detached buffers and shadows again as a
+//!   draw rebound does, and its encoder holds that buffer as every step's does. It then records
+//!   that bind where its record holds another, with its new draw, and the kept draw takes its
+//!   call, arguments, index source and draw (`WorkCounts::draws_rebound_arguments`). Where its
+//!   rebind stops, at any step, the draw takes every step, counted by where
+//!   (`WorkCounts::draws_rebind_stopped_arguments_*`: its route, its plan's reads of its slots, a
+//!   fetch window, its attributes' reach, or another).
 //! - **What it records and notes.** Its uses noted as any draw notes them (`note_reaching`, the
 //!   pass's reads, the instance's gathered uses), of the kept draw's access types: none writes or
 //!   reads indirect arguments (`draw_again::unwritten`), so the unordered writes, indirect reads and
@@ -332,6 +342,9 @@ struct Rebinding {
     /// Whether it reads the texture of a color attachment of its pass through its copy, and of
     /// that, at its fragments' own pixels alone, which it counts once recorded.
     through_copies: (bool, bool),
+    /// Whether it reads another index buffer than the kept draw, which its encoder holds once it
+    /// is recorded, as every step's does.
+    reindexed: bool,
 }
 
 impl RenderLowering {
@@ -367,6 +380,8 @@ impl RenderLowering {
         if reargued && !self.routed_as_kept(assembly, draw) {
             return stopped(self, (ArgumentsStop::Route, CarryStop::Other));
         }
+        // Of another index buffer than the kept draw's, or one where it read none.
+        let reindexed = reargued && self.reindexed(buffers);
         // After a call set the encoder's render state, what it decides derived again
         // (`restated.rs`).
         let restated =
@@ -383,12 +398,12 @@ impl RenderLowering {
             return stopped(self, other);
         };
         let mut stop = other;
-        let drawn = (draw, buffers, (reargued, carried));
+        let drawn = (draw, buffers, (reargued, reindexed, carried));
         let Some(rebinding) = self.rebind(call, live, &changed, drawn, &mut stop) else {
             return stopped(self, stop);
         };
         if reargued {
-            self.reargue_kept(live, draw, buffers);
+            self.reargue_kept(live, call, draw, buffers);
         }
         #[cfg(debug_assertions)]
         {
@@ -531,28 +546,51 @@ impl RenderLowering {
     /// the kept draw: a draw's route (`RenderLowering::routed_draw`) reads its arguments only
     /// through whether it may draw a primitive (`line_width::draws_primitives`, and the provoking
     /// vertex's draw of none, its converse), through how far its vertices run where it is drawn
-    /// as a list (`PrivateForm`), which no kept draw is, and through the fixed-function layouts
-    /// it pulls past 4 GiB (`render/vertex_reach.rs`), which must be the kept draw's.
+    /// as a list (`PrivateForm`), which no kept draw is, through whether it is a strip over
+    /// indices the encoder's call restarts at another index than Vulkan's (`render/restart.rs`)
+    /// and whether it runs a de-indexed variant (`primitive_id_indices`), and through the
+    /// fixed-function layouts it pulls past 4 GiB (`render/vertex_reach.rs`), each of which must
+    /// be the kept draw's.
     fn routed_as_kept(&self, assembly: Assembly, draw: &DrawCall) -> bool {
         let primitives = |draw: &DrawCall| line_width::draws_primitives(assembly, draw);
         let Some(kept) = self.again.kept.as_ref() else {
             return false;
         };
-        let far = match self.pipeline.as_ref().map(|p| p.kind()) {
+        let (far, deindexed) = match self.pipeline.as_ref().map(|p| p.kind()) {
             Some(RenderStateKind::Graphics(state)) => {
                 let base = state.base();
-                self.far_vertex_buffers(base, draw).pulled
-                    == self.far_vertex_buffers(base, &kept.draw).pulled
+                let far = self.far_vertex_buffers(base, draw).pulled
+                    == self.far_vertex_buffers(base, &kept.draw).pulled;
+                let deindexed = |draw: &DrawCall| super::super::primitive_id_indices(state, draw);
+                (far, deindexed(draw) == deindexed(&kept.draw))
             }
-            _ => true,
+            _ => (true, true),
         };
-        primitives(&kept.draw) == primitives(draw) && far
+        let restarted = |draw: &DrawCall| self.restarted_strip(assembly, draw);
+        primitives(&kept.draw) == primitives(draw)
+            && far
+            && deindexed
+            && restarted(draw) == restarted(&kept.draw)
     }
 
-    /// Take into the kept draw, rebound with the arguments of `draw` of `buffers`, those
+    /// Whether the index source of a draw of `buffers`, read in place, is of another index buffer
+    /// than the kept draw's, or the kept draw read none, or the other way.
+    fn reindexed(&self, buffers: &DrawBuffers<'_>) -> bool {
+        let index = buffers.index.as_ref().and_then(super::KeptIndex::of);
+        let kept = self.again.kept.as_ref().and_then(|kept| kept.index);
+        kept.map(super::KeptIndex::buffer) != index.map(super::KeptIndex::buffer)
+    }
+
+    /// Take into the kept draw, rebound with the arguments of `draw` of `buffers` by `call`, those
     /// arguments: its call, index source and Vulkan draw, and its kept recording's Vulkan draw and
     /// index buffer's bind, as every step binds it (`IndexBind::of`), which it records.
-    fn reargue_kept(&mut self, live: &mut LiveBind, draw: &DrawCall, buffers: &DrawBuffers<'_>) {
+    fn reargue_kept(
+        &mut self,
+        live: &mut LiveBind,
+        call: &'static str,
+        draw: &DrawCall,
+        buffers: &DrawBuffers<'_>,
+    ) {
         let command = live.commands.draw;
         let sized = self.core.device().shared().sized_index_bind;
         if let Some(recording) = live.kept.recording_mut() {
@@ -561,6 +599,7 @@ impl RenderLowering {
             recording.index = index.and_then(|source| IndexBind::of(source, command, sized));
         }
         if let Some(kept) = self.again.kept.as_mut() {
+            kept.call = call;
             kept.draw = *draw;
             kept.index = buffers.index.as_ref().and_then(super::KeptIndex::of);
             kept.command = command;
@@ -675,7 +714,8 @@ impl RenderLowering {
     }
 
     /// Work out again in `live` what the slots `changed` decide of the kept draw, `draw` of
-    /// `buffers`, of other arguments where `reargued`: its commands, set-0 writes and dynamic
+    /// `buffers`, of other arguments where `reargued` (of another index buffer where `reindexed`,
+    /// which is no draw moved: the module docs): its commands, set-0 writes and dynamic
     /// offsets, push bytes, vertex buffers and uses, with the checks a draw's steps take of them
     /// (the module docs). What it worked out where it did ([`Rebinding`]); else `None`, and the
     /// draw takes every step, which writes them all again, where it stopped left in `stop` where
@@ -685,7 +725,11 @@ impl RenderLowering {
         call: &'static str,
         live: &mut LiveBind,
         changed: &Changed,
-        (draw, buffers, (reargued, carried)): (&DrawCall, &DrawBuffers<'_>, (bool, bool)),
+        (draw, buffers, (reargued, reindexed, carried)): (
+            &DrawCall,
+            &DrawBuffers<'_>,
+            (bool, bool, bool),
+        ),
         stop: &mut (ArgumentsStop, CarryStop),
     ) -> Option<Rebinding> {
         let slots = changed.list();
@@ -703,8 +747,9 @@ impl RenderLowering {
         // whether its set-0 writes are the kept draw's (below). Not one after draws of other
         // pipeline states (`Kept::between`): what it skips looking at again, and what it notes
         // apart, it takes from the encoder's last draw.
+        // Nor one of another index buffer, whose uses meet a buffer the kept draw's did not.
         let between = (self.again.kept.as_ref()).is_some_and(|kept| kept.between);
-        let moved = changed.moved && !between;
+        let moved = changed.moved && !between && !reindexed;
         if moved {
             live.kept.ranges.clear();
             (live.kept.ranges).extend_from_slice(&live.commands.descriptor_ranges);
@@ -995,6 +1040,7 @@ impl RenderLowering {
             narrowed,
             inside,
             through_copies: (attached, own_pixel),
+            reindexed,
         };
         (unbarriered && (moved || !self.core.would_skip(named()))).then_some(rebinding)
     }
@@ -1286,6 +1332,9 @@ impl RenderLowering {
         self.fragment.retain_exclusive(&mut self.core);
         self.object.retain_exclusive(&mut self.core);
         self.mesh.retain_exclusive(&mut self.core);
+        if let (true, Some(source)) = (rebinding.reindexed, buffers.index.as_ref()) {
+            self.core.retain_shared(source.buffer.held());
+        }
         self.last_retained
             .retain_samplers(&mut self.core, &mut live.samplers);
         let under = self.under();

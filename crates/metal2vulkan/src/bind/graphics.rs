@@ -2934,18 +2934,19 @@ impl BindingPlan {
 
     /// [`instantiate_draw_apart_into`](Self::instantiate_draw_apart_into)'s commands of `draw`
     /// for `state`, written over `commands`, which hold that method's commands of `from` for
-    /// `state`: `from` and `draw` direct draws of the same kind, without indices or of the same
-    /// index type and index buffer, that differ only in their arguments (vertex or index counts
-    /// and starts, the index offset, instance count, base vertex and base instance). Only what
-    /// the arguments decide is written again: the Vulkan draw, its index overrun, the
-    /// `BaseVertexInstance` push fields and the draw's own uses (its index buffer's), so the
-    /// commands are those `instantiate_draw_apart_into` writes. `Ok(false)` where the plan reads
-    /// the arguments some other way (a stage's argument or root table, a mesh, patch or
-    /// de-indexed draw, a fixed-function vertex buffer whose fetch window the two draws set
-    /// apart, which the extents hold) or the two are no such pair: `commands` then hold no
-    /// draw's commands, as after an error, and the caller instantiates whole. An error is one
-    /// `instantiate_draw_apart_into` answers for `draw` where it answered none for `from` (its
-    /// instances past a multiview limit).
+    /// `state`: `from` and `draw` direct draws, each without indices or with indices of any
+    /// index type and index buffer, that differ only in their arguments (whether they read
+    /// indices, their index type and index buffer, vertex or index counts and starts, the index
+    /// offset, instance count, base vertex and base instance). Only what the arguments decide is
+    /// written again: the Vulkan draw, its index overrun, the `BaseVertexInstance` push fields and
+    /// the draw's own uses (its index buffer's), so the commands are those
+    /// `instantiate_draw_apart_into` writes. `Ok(false)` where the plan reads the arguments some
+    /// other way (a stage's argument or root table, a mesh, patch or de-indexed draw, a
+    /// fixed-function vertex buffer whose fetch window the two draws set apart, which the extents
+    /// hold, a vertices-per-primitive push field of a draw with indices and one without) or the
+    /// two are no such pair: `commands` then hold no draw's commands, as after an error, and the
+    /// caller instantiates whole. An error is one `instantiate_draw_apart_into` answers for
+    /// `draw` where it answered none for `from` (its instances past a multiview limit).
     pub fn redraw_apart_into(
         &self,
         state: &BindState,
@@ -5237,20 +5238,21 @@ fn redraw_with(
         || t.mesh.is_some()
         || t.tessellation.is_some()
         || t.deindexed.is_some();
-    let pair = match (*from, *draw) {
-        (DrawCall::Primitives { .. }, DrawCall::Primitives { .. }) => true,
-        (
-            DrawCall::Indexed {
-                index_type: from_type,
-                index_buffer: from_buffer,
-                ..
-            },
-            DrawCall::Indexed {
-                index_type,
-                index_buffer,
-                ..
-            },
-        ) => (from_type, from_buffer) == (index_type, index_buffer),
+    // Direct draws with or without indices, of any index type and buffer: the arguments decide
+    // their Vulkan draw, overrun and index use, written below. A draw with indices and one without
+    // differ too in the vertices per primitive a vertex function divides by, which a plan that
+    // reads them takes from the draw (`vertices_per_primitive`).
+    let direct = |draw: &DrawCall| match draw {
+        DrawCall::Primitives { .. } => Some(false),
+        DrawCall::Indexed { .. } => Some(true),
+        _ => None,
+    };
+    let per_primitive = || {
+        (t.stages.iter().flat_map(|st| &st.fields))
+            .any(|f| f.field == PushField::VerticesPerPrimitive)
+    };
+    let pair = match (direct(from), direct(draw)) {
+        (Some(from), Some(draw)) => from == draw || !per_primitive(),
         _ => false,
     };
     if other_reads || !pair {

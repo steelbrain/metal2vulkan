@@ -921,12 +921,16 @@ impl Unreadable {
 pub(crate) struct UnlikeKept {
     /// Another pipeline state, or none.
     pub(crate) pipeline: bool,
-    /// Another call or primitive assembly.
+    /// Another call: one with indices after one without, or the other way.
     pub(crate) call: bool,
+    /// Another primitive assembly.
+    pub(crate) assembly: bool,
     /// Other vertex or index counts or starts, instance count, base vertex or base instance.
     pub(crate) counts: bool,
     /// Another index buffer or index type, or an index buffer read through a copy.
     pub(crate) index_buffer: bool,
+    /// An index buffer read through a copy.
+    pub(crate) index_copied: bool,
     /// The same index buffer at another offset.
     pub(crate) index_offset: bool,
     /// Patch or control-point index buffers (a tessellation draw).
@@ -955,14 +959,15 @@ pub(crate) enum ArgumentsStop {
 }
 
 impl UnlikeKept {
-    /// Whether the draw differed by its arguments alone: its counts and starts or its index
-    /// buffer's offset, and nothing else a draw again compares
+    /// Whether the draw differed by its arguments alone: its call of the same assembly (with
+    /// indices or without), its counts and starts, its index buffer, index type or index buffer's
+    /// offset, each index buffer read in place, and nothing else a draw again compares
     /// (`WorkCounts::draws_unlike_kept_arguments_alone`).
     pub(crate) fn arguments_alone(&self) -> bool {
-        (self.counts || self.index_offset)
+        (self.call || self.counts || self.index_buffer || self.index_offset)
             && !(self.pipeline
-                || self.call
-                || self.index_buffer
+                || self.assembly
+                || self.index_copied
                 || self.tessellation
                 || self.command_buffer
                 || self.under)
@@ -1410,7 +1415,7 @@ impl Counting<'_> {
         let alone = why.arguments_alone();
         let parts: [(bool, fn(&CommandCounters) -> &AtomicU64); 9] = [
             (why.pipeline, |c| &c.draws_unlike_kept_pipeline),
-            (why.call, |c| &c.draws_unlike_kept_call),
+            (why.call || why.assembly, |c| &c.draws_unlike_kept_call),
             (why.counts, |c| &c.draws_unlike_kept_counts),
             (why.index_buffer, |c| &c.draws_unlike_kept_index_buffer),
             (why.index_offset, |c| &c.draws_unlike_kept_index_offset),
@@ -7047,12 +7052,14 @@ pub struct WorkCounts {
     /// record held otherwise (`render/draw_again/restated.rs`).
     pub draws_restated: u64,
     /// Of `draws_rebound`, those that differed from the draw they repeat only in their arguments
-    /// (`draws_unlike_kept_arguments_alone` lists them: their counts and starts, index buffer
+    /// (`draws_unlike_kept_arguments_alone` lists them: their call of the same primitive type,
+    /// with indices or without, their counts and starts, index buffer, index type or index buffer
     /// offset, instance count, base vertex or base instance), which each worked out again where a
-    /// step reads them: its route (whether it draws a primitive), its Vulkan draw, index overrun,
-    /// base vertex and instance push fields and index buffer use
-    /// (`BindingPlan::redraw_apart_into`), its pulled attributes' reach and its index buffer's
-    /// bind, which it records with its draw (`render/draw_again/rebound.rs`).
+    /// step reads them: its route (whether it draws a primitive, a strip restarted at another
+    /// index, a de-indexed variant), its Vulkan draw, index overrun, base vertex and instance push
+    /// fields and index buffer use (`BindingPlan::redraw_apart_into`), its pulled attributes'
+    /// reach and its index buffer's bind, which it records with its draw, its index buffer held
+    /// where it is another (`render/draw_again/rebound.rs`).
     pub draws_rebound_arguments: u64,
     /// Of `draws_rebound`, render encoders' first draws of the kept draw their command buffer's
     /// last render encoder carried into them (`kept_draws_carried`, `render/carried.rs`): each
@@ -7117,11 +7124,13 @@ pub struct WorkCounts {
     /// meets: a split, a color group, an extended-range color, a rate map, a notice announced at
     /// each occurrence, among others).
     pub draws_unkept_other: u64,
-    /// Render encoders' direct draws whose encoder kept a draw, of another call, index buffer,
-    /// pipeline state or command buffer, or after a no-copy buffer moved, the residency, host
-    /// aliases, parts or held images or the sampler IDs changed, or of other arguments that draw
-    /// nothing (`render/draw_again.rs`): each takes every step. A draw that differs in its
-    /// arguments alone and draws something is rebound instead (`draws_rebound_arguments`).
+    /// Render encoders' direct draws whose encoder kept a draw, of another primitive type,
+    /// pipeline state or command buffer, of an index buffer read through a copy, or after a
+    /// no-copy buffer moved, the residency, host aliases, parts or held images or the sampler IDs
+    /// changed, or of other arguments that draw nothing (`render/draw_again.rs`): each takes every
+    /// step. A draw that differs in its arguments alone (its call with indices or without among
+    /// them, and its index buffer read in place) and draws something is rebound instead
+    /// (`draws_rebound_arguments`).
     pub draws_unlike_kept: u64,
     /// Of `draws_unlike_kept`, those through another pipeline state than the kept draw's (or
     /// none); a draw is counted in each of the parts below it met.
@@ -7143,11 +7152,12 @@ pub struct WorkCounts {
     /// Of `draws_unlike_kept`, those after a no-copy buffer moved, or the residency, the host
     /// aliases, parts or held images, or the sampler IDs changed.
     pub draws_unlike_kept_under: u64,
-    /// Of `draws_unlike_kept`, those unlike only by their counts and starts or their index
-    /// buffer's offset: the same pipeline state, call, assembly, index buffer and type, command
-    /// buffer and the rest the kept draw read, and no vertex, index or instance to draw. Every
-    /// other draw so unlike its kept draw is rebound (`draws_rebound_arguments`) or takes every
-    /// step where its rebind stops (`draws_rebind_stopped_arguments`, by where).
+    /// Of `draws_unlike_kept`, those unlike only by their call of the same primitive type (with
+    /// indices or without), their counts and starts, their index buffer, index type or index
+    /// buffer's offset, each index buffer read in place: the same pipeline state, assembly,
+    /// command buffer and the rest the kept draw read, and no vertex, index or instance to draw.
+    /// Every other draw so unlike its kept draw is rebound (`draws_rebound_arguments`) or takes
+    /// every step where its rebind stops (`draws_rebind_stopped_arguments`, by where).
     pub draws_unlike_kept_arguments_alone: u64,
     /// Render encoders' direct draws of their kept draw again after calls, that took every step
     /// rather than being rebound (`draws_rebound`): a kept draw that keeps nothing to rebind, or a
@@ -7157,10 +7167,12 @@ pub struct WorkCounts {
     /// Of `draws_rebind_stopped`, draws that differed from their kept draw only in their
     /// arguments (`draws_rebound_arguments`) and whose rebind stopped, each counted in one of the
     /// five below by where. Each takes every step. A kept draw is never a de-indexed, mesh or
-    /// patch draw (`render/draw_again.rs`), so none stops for one.
+    /// patch draw (`render/draw_again.rs`); a draw with indices after it that would run
+    /// de-indexed stops at its route.
     pub draws_rebind_stopped_arguments: u64,
     /// Of `draws_rebind_stopped_arguments`, those whose route the arguments change: a draw that
-    /// may make no complete primitive after one that may make some, or the other way.
+    /// may make no complete primitive after one that may make some, or the other way, a strip
+    /// over indices restarted at another index than Vulkan's, or a de-indexed variant's draw.
     pub draws_rebind_stopped_arguments_route: u64,
     /// Of `draws_rebind_stopped_arguments`, those whose plan reads its slots some other way than a
     /// rebind works out (`BindingPlan::slot_rebinds`): a stage's argument or root table, a uniform
