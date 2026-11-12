@@ -977,8 +977,11 @@ fn the_window_ahead_moves_with_the_objects_and_imports_no_more() {
 /// source ([`HostBacking::Copied`], counted in `WorkCounts::copied_host_buffers_device_refused`
 /// and announced, `copied-host-pages`): the chunk's import by its pointer is refused
 /// (`host_ram_pointer_imports_failed`) and none goes as a dma-buf (`host_ram_dma_buf_imports`).
-/// The use still ends, the RAM's keep-alive going after it. A device that imports such pointers
-/// says so and passes.
+/// The object is made once the device's thread met that refusal for the RAM's first chunk, the
+/// object's, and holds no import of it in flight: an object made while the thread's import of its
+/// chunk is in flight is a copy all the same, for that import (`CopiedBecause::OverRamChunk`,
+/// counted in `copied_over_live_imports`). The use still ends, the RAM's keep-alive going after
+/// it. A device that imports such pointers says so and passes.
 #[test]
 fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_copies_its_objects() {
     let heard = Arc::new(AtomicUsize::new(0));
@@ -996,6 +999,21 @@ fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_copies_its_objec
     let before = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
     let page = device.shared().host_import.as_ref().unwrap().page;
+    // The device's thread imports the RAM's first chunk ahead of any object, which the device
+    // refuses; once it did, it tries that chunk no more, and once no import of it is in flight
+    // (the object's pages can be claimed), the object meets the refusal of its own pointer.
+    let object = start..start + 4 * page;
+    let started = Instant::now();
+    while device.work_counts().host_ram_pointer_imports_failed
+        == before.host_ram_pointer_imports_failed
+        || device.claim_ram_pages(object.clone()).is_none()
+    {
+        assert!(
+            started.elapsed() < crate::tests::SETTLE,
+            "the device's thread never met the refusal of the first chunk's import"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
     let made = buffer(
         &device,
@@ -1010,13 +1028,12 @@ fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_copies_its_objec
         Some(HostBacking::Copied),
         "an object over the shared RAM"
     );
-    // The device's thread met the same refusal for the RAM's first chunk, or meets it now.
-    std::thread::sleep(Duration::from_millis(300));
     let after = device.work_counts();
     assert_eq!(
         after.copied_host_buffers_device_refused - before.copied_host_buffers_device_refused,
         1,
-        "the object copied for the device's refusal"
+        "the object copied for the device's refusal (copied over a live import: {})",
+        after.copied_over_live_imports - before.copied_over_live_imports
     );
     assert_eq!(heard.load(Ordering::Relaxed), 1, "the copy announced");
     assert_eq!(
