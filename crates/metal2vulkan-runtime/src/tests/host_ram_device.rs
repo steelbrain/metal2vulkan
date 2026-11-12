@@ -2503,7 +2503,9 @@ fn a_rebind_onto_several_runs_takes_the_gate_and_the_copy_where_it_refuses() {
     let used = device.use_host_ram(&ram).unwrap();
     let page = device.shared().host_import.as_ref().unwrap().page;
     let length = 4 * page;
-    let (first, second) = (start + 2 * page, start + 20 * page);
+    // The new pages lie in the second chunk, which no import holds: the first chunk's would hold
+    // them were they in it, and the rebind be a copy the gate is not asked for (the next test).
+    let (first, second) = (start + 2 * page, start + 64 * MIB + 20 * page);
     fill_pattern(first..first + length);
     fill_pattern(second..second + length);
     let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
@@ -2522,6 +2524,10 @@ fn a_rebind_onto_several_runs_takes_the_gate_and_the_copy_where_it_refuses() {
     let after = device.work_counts();
     assert_eq!(*runs.lock().unwrap(), vec![(second, length)], "asked once");
     assert_eq!(gates.lock().unwrap().len(), 1, "the gate asked once");
+    assert_eq!(
+        after.copied_over_live_imports - before.copied_over_live_imports,
+        0
+    );
     assert_eq!(
         after.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
         0
@@ -2543,6 +2549,63 @@ fn a_rebind_onto_several_runs_takes_the_gate_and_the_copy_where_it_refuses() {
         .iter()
         .all(|&b| b == 0x3C));
     eprintln!("HOST-RAM-REBIND: a rebind onto two runs, refused by the gate, is a copy");
+    drop((made, used, ram));
+    assert!(settles(&dropped));
+}
+
+/// A rebind onto two runs of pages a live chunk import holds, at the RAM's own addresses, is a
+/// copy of them (`CopiedBecause::OverRamChunk`), the gate not asked, as a making is: an import of
+/// its own would import pages the chunk's import holds a second time. Nothing is imported over
+/// pages a live import holds (`imports_inside_live`).
+#[test]
+fn a_rebind_onto_runs_a_live_chunk_holds_is_a_copy_the_gate_not_asked() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start, dropped) = new_ram();
+    let used = device.use_host_ram(&ram).unwrap();
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    let length = 4 * page;
+    let (first, second) = (start + 2 * page, start + 20 * page);
+    fill_pattern(first..first + length);
+    fill_pattern(second..second + length);
+    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    // Its making imports the first chunk, which holds the new pages too.
+    let made = buffer(
+        &device,
+        first,
+        length,
+        resolver(&runs, itself),
+        gate(&gates, true),
+    )
+    .unwrap();
+    assert_eq!(made.host_backing(), Some(HostBacking::InHostRam));
+    let before = device.work_counts();
+    rebind(&made, second, resolver(&runs, halves), gate(&gates, true)).unwrap();
+    let after = device.work_counts();
+    assert!(gates.lock().unwrap().is_empty(), "the gate was not asked");
+    assert_eq!(
+        (
+            after.copied_over_live_imports - before.copied_over_live_imports,
+            after.copied_rebind_pages_made - before.copied_rebind_pages_made,
+            after.host_pointer_imports_made - before.host_pointer_imports_made,
+            after.object_churn.imports_inside_live - before.object_churn.imports_inside_live,
+        ),
+        (1, 1, 0, 0),
+        "a copy, no import of its own, none over a live one's pages"
+    );
+    assert_eq!(made.host_backing(), Some(HostBacking::Copied));
+    assert_eq!(
+        gpu_bytes(&device, &made, length),
+        bytes(second..second + length)
+    );
+    blit(&device, |encoder| {
+        encoder.fill_buffer(&made, page..2 * page, 0x5A).unwrap();
+    });
+    let now = bytes(second..second + length);
+    assert!(now[page as usize..2 * page as usize]
+        .iter()
+        .all(|&b| b == 0x5A));
     drop((made, used, ram));
     assert!(settles(&dropped));
 }
