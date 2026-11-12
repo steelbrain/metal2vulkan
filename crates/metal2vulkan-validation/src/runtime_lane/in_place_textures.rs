@@ -1680,9 +1680,8 @@ const DEVICE_CACHES: [(u64, u64, u64, usize); 11] = [
 /// [`DEVICE_CACHES`] over buffers that declare the bytes between rows unobserved
 /// (`BufferDescriptor::padding_unobserved`) and over ones that do not, under the in-place policy
 /// with the device's check settled. The undeclared ones are shadows (`shadowed_textures`); a
-/// declared one is a `DRM_FORMAT_MOD_LINEAR` image at its pitch where the device's linear image
-/// lays its rows out otherwise, its rows take no more than the pooled bound
-/// (`TextureShadowReason::LinearCost` past it) and the device's check passed for its pooled memory
+/// declared one is a `DRM_FORMAT_MOD_LINEAR` image at its pitch, at any size, where the device's
+/// linear image lays its rows out otherwise and the device's check passed for its pooled memory
 /// (`pooled_pitched_images`), else the device's linear image or a shadow. Each frame one command
 /// buffer clears and stores every cache and then reads each whole through a fragment function's
 /// `read`. Printed (`POOLED-PITCHED-COST`): each form's caches in place and as shadows, and the

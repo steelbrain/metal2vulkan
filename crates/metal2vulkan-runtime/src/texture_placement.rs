@@ -132,21 +132,6 @@ pub enum TextureShadowReason {
     /// rows the log reports changed (`WorkCounts::device_copy_textures`), the GPU's copy of the two
     /// a `Managed` resource is on a Mac with a discrete GPU. Not announced.
     DeviceCopy,
-    /// Over a `Private` buffer of the device's own memory whose rows the device's own linear
-    /// image lays out otherwise than Metal, a tracked texture: its rows take `bytes` bytes to their
-    /// pitch, past the bound up to which it takes a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch
-    /// ([`TexturePlacement::NotHostPages`]), as such an image renders and samples slower than the
-    /// shadow's own image with its copies past it, and over memory only the runtime's commands
-    /// write both give the same answer. The same bound on every device. Over a `Shared` or
-    /// `Managed` buffer, and for an untracked texture, the image is taken at any size. So it is
-    /// over bytes another texture was made over (another format's, a view's, one made again):
-    /// each shadow would be an image of its own with copies of its own, so a texture over such
-    /// bytes takes the image at any size, and the shadow of the first moves to it once another
-    /// texture is made over its bytes, at a quiet commit (`WorkCounts::pooled_textures_moved_in_place`).
-    LinearCost {
-        /// The bytes of the texture's rows, each to its pitch.
-        bytes: u64,
-    },
 }
 
 /// What a texture over host pages does with its image in place, each checked apart by the
@@ -277,11 +262,6 @@ impl TextureShadowReason {
             TextureShadowReason::DeviceCopy => "it is a copy in the device's memory of bytes \
                                                 whose memory carries a log of its writes"
                 .to_owned(),
-            TextureShadowReason::LinearCost { bytes } => format!(
-                "its rows take {bytes} bytes to their pitch, past the bound up to which it takes \
-                 a DRM_FORMAT_MOD_LINEAR image at Metal's pitch, and no other texture was made \
-                 over its bytes"
-            ),
         }
     }
 }
@@ -410,7 +390,6 @@ impl ShadowCause {
             ShadowCause::Refused(refusal, _) => {
                 TextureShadowReason::Refused(InPlaceRefusal::of(refusal))
             }
-            ShadowCause::LinearCost(bytes) => TextureShadowReason::LinearCost { bytes },
         };
         TexturePlacement::Shadow(reason)
     }

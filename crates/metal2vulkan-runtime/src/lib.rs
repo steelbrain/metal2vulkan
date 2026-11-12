@@ -242,7 +242,6 @@ mod tessellation;
 mod texture;
 mod texture_descriptor;
 mod texture_placement;
-mod texture_spans;
 mod this_thread;
 mod tile_pass;
 mod tracker;

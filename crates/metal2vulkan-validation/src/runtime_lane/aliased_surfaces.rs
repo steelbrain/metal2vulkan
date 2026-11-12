@@ -4,47 +4,31 @@
 //! `BGRA8Unorm` and `R32Uint` views of the same bytes with shader read and write usage, and writes
 //! and reads a few of them each frame. Each surface's maker declares the bytes between its rows
 //! unobserved (`BufferDescriptor::padding_unobserved`), as the guest's do. Each texture over a
-//! `Private` buffer whose rows the device's
-//! own linear image lays out otherwise is a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch inside
-//! the pooled bound (`in_place::POOLED_PITCHED_BYTES`), else a shadow
-//! (`TextureShadowReason::LinearCost`); a shadow is an image of its own, copied in and back apart
-//! from every other texture's over the same bytes.
+//! `Private` buffer whose rows the device's own linear image lays out otherwise is a
+//! `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch, at any size, where the device makes one and its
+//! check of its pooled memory passed: each texture over the bytes an image of its own over them,
+//! no copy.
 //!
-//! - [`textures_over_one_surface_s_bytes_take_one_shadow`]: four textures (two of each format) over
-//!   one `Private` surface past the bound, where the device makes such images: the first is a
-//!   shadow of its linear cost, and every later one over the same bytes takes the image at Metal's
-//!   pitch (`WorkCounts::pooled_pitched_images`), so the textures hold one shadow's bytes, not four;
-//!   the first's shadow moves to its image at the next quiet commit that takes storage forms (a
-//!   blit's, here, as `in_place_textures`' move checks commit;
-//!   `WorkCounts::pooled_textures_moved_in_place`), and a read through it then copies nothing.
-//! - [`textures_made_one_after_another_over_one_surface_s_bytes_take_one_shadow`]: the same four
-//!   made one after another, each written and released before the next is made, as a guest's
-//!   frames make them: the first is a shadow, every later one takes the image.
+//! - [`textures_over_one_surface_s_bytes_each_take_the_image_at_metal_s_pitch`]: four textures
+//!   (two of each format) over one `Private` surface, where the device makes such images: each
+//!   takes the image at Metal's pitch (`WorkCounts::pooled_pitched_images`), none is a shadow, and
+//!   a read through the first copies nothing.
 //! - [`writes_through_one_texture_reach_every_texture_over_the_bytes`]: a kernel's write through
 //!   each of those textures in turn is what a kernel reads through every other one, in the same
 //!   command buffer and in the next, and what the surface's bytes hold: Metal's aliasing of
 //!   textures over the same bytes.
-//! - [`aliased_surface_costs`] (ignored, release builds): the guest's surface, 6016x6016 at rows of
-//!   24,576 bytes in a buffer of 150,994,944, with 36 textures over it (25 `BGRA8Unorm`, 11
-//!   `R32Uint`) alive across the frames, or four made each frame and dropped after it, a kernel
-//!   writing a square of two of them and another reading a square of others each frame
-//!   (`ALIASED-SURFACE-COST`): the textures' forms, the shadows made and their bytes, a frame's
-//!   GPU time and its shadow copies and texels copied in and back, and the device memory the
-//!   process holds at its peak (Linux: the DRM file descriptors' resident bytes, and the process's
-//!   resident set, where lavapipe's memory lies).
 
 use super::first_use_writes::CHECK_WAIT;
 use super::in_place_textures::in_place;
-use super::{validated_device_with, Messages, ScratchCache, WAIT};
+use super::WAIT;
 use crate::air_library::AirLibrary;
-use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBuffer, ComputePipelineState,
     Device, IoSurfacePlane, Origin, PipelineOptions, ResourceOptions, Size, Texture,
-    TextureDescriptor, TexturePlacement, TextureShadowReason, WorkCounts,
+    TextureDescriptor, TexturePlacement,
 };
 
 /// The kernels: `fill_float` and `fill_uint` write constant buffer 0's value at every thread's
@@ -259,7 +243,7 @@ fn words_read(texture: &Texture, out: &Buffer, side: u64) -> Vec<u32> {
 
 /// The shape of the checks' surface, (width, rows, row bytes): 256 texels of 4 bytes a row (1024
 /// bytes, a multiple of 256 at which RADV lays linear rows, and the tight rows ANV lays) at a
-/// pitch of 1280 bytes, 64 rows (81,920 bytes, past the pooled bound).
+/// pitch of 1280 bytes, 64 rows (81,920 bytes).
 const SMALL: (u64, u64, u64) = (256, 64, 1280);
 
 /// A surface of `length` bytes of `options`, zeros, made as the guest's: its maker declares the
@@ -278,8 +262,7 @@ fn small_surface(device: &Device) -> Buffer {
 }
 
 /// Whether the device takes a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch for a texture of
-/// `SMALL`'s shape over its pooled memory where the bound does not hold it back: over a `Shared`
-/// buffer, whose textures take it at any size where the device's check passed.
+/// `SMALL`'s shape over its pooled memory, over a `Shared` buffer, where its check passed.
 fn takes_pitched(device: &Device) -> bool {
     let (_, height, pitch) = SMALL;
     let shared = made_surface(device, pitch * height, ResourceOptions::shared());
@@ -297,7 +280,7 @@ const FORMATS: [PixelFormat; 4] = [
 ];
 
 #[test]
-fn textures_over_one_surface_s_bytes_take_one_shadow() {
+fn textures_over_one_surface_s_bytes_each_take_the_image_at_metal_s_pitch() {
     super::host_memory::on_device_with(in_place, |device| {
         assert!(
             device.settle_in_place_checks(CHECK_WAIT),
@@ -315,7 +298,6 @@ fn textures_over_one_surface_s_bytes_take_one_shadow() {
         let surface = small_surface(device);
         let (width, height, pitch) = SMALL;
         let bytes = pitch * height;
-        let linear_cost = TexturePlacement::Shadow(TextureShadowReason::LinearCost { bytes });
         let before = device.work_counts();
         let mut answers = Vec::new();
         let textures: Vec<Texture> = FORMATS
@@ -329,152 +311,51 @@ fn textures_over_one_surface_s_bytes_take_one_shadow() {
         let after = device.work_counts();
         let shadows = after.shadowed_textures - before.shadowed_textures;
         let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
-        // Each shadow here is an image of the texture's whole extent, 4 bytes a texel.
-        let shadow_bytes = shadows * width * height * 4;
         eprintln!(
             "ALIASED-SURFACE {}: {} textures over one Private surface of {bytes} bytes: answers \
-             {answers:?}; {shadows} shadows ({shadow_bytes} bytes), {pitched} images at Metal's \
-             pitch",
+             {answers:?}; {shadows} shadows, {pitched} images at Metal's pitch",
             device.name(),
             textures.len(),
         );
-        assert_eq!(answers[0], linear_cost, "the first texture over the bytes");
-        for (answer, format) in answers.iter().zip(FORMATS).skip(1) {
+        for (answer, format) in answers.iter().zip(FORMATS) {
             assert_eq!(
                 *answer,
                 TexturePlacement::NotHostPages,
-                "a later {format:?} texture over the same bytes"
+                "a {format:?} texture over the bytes"
             );
         }
-        assert_eq!(shadows, 1, "one shadow over the bytes");
-        assert_eq!(
-            pitched,
-            FORMATS.len() as u64 - 1,
-            "every later texture in place"
-        );
-        assert_eq!(shadow_bytes, width * height * 4, "one shadow's bytes");
-        // The first texture's shadow moves to its image at Metal's pitch at the next commit of the
-        // device's only uncommitted command buffer that takes storage forms (a blit's), and goes
-        // once that command buffer completed: a later command buffer that reads it copies
-        // nothing.
+        assert_eq!(shadows, 0, "no shadow over the bytes");
+        assert_eq!(pitched, FORMATS.len() as u64, "every texture in place");
+        // A read through the first texture copies nothing.
         let queue = device.new_command_queue().unwrap();
         let row = width * 4;
         let out = device
             .new_buffer(row * height, ResourceOptions::shared())
             .unwrap();
-        let read = |texture: &Texture| {
-            let command_buffer = queue.command_buffer().unwrap();
-            let mut blit = command_buffer.blit_command_encoder().unwrap();
-            blit.copy_from_texture_to_buffer(
-                texture,
-                0,
-                0,
-                Origin::new(0, 0, 0),
-                Size::new(width, height, 1),
-                &out,
-                0,
-                row,
-                row * height,
-                BlitOption::None,
-            )
-            .unwrap();
-            blit.end_encoding().unwrap();
-            command_buffer.commit().unwrap();
-            command_buffer.wait_until_completed_for(WAIT).unwrap();
-            assert_eq!(command_buffer.error(), None);
-        };
-        read(&textures[0]);
-        let moved = device.work_counts();
-        read(&textures[0]);
-        let again = device.work_counts();
-        eprintln!(
-            "ALIASED-SURFACE {}: the first texture's shadow moved in place {}, freed {}; the \
-             next read's shadow copies {}",
-            device.name(),
-            moved.pooled_textures_moved_in_place - after.pooled_textures_moved_in_place,
-            again.pooled_texture_shadows_freed_after_move
-                - after.pooled_texture_shadows_freed_after_move,
-            again.shadow_copies - moved.shadow_copies,
-        );
-        assert_eq!(
-            moved.pooled_textures_moved_in_place - after.pooled_textures_moved_in_place,
-            1,
-            "the first texture's shadow moved in place"
-        );
-        assert_eq!(
-            again.shadow_copies - moved.shadow_copies,
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.copy_from_texture_to_buffer(
+            &textures[0],
             0,
-            "a read after the move copies nothing"
-        );
-    });
-}
-
-#[test]
-fn textures_made_one_after_another_over_one_surface_s_bytes_take_one_shadow() {
-    super::host_memory::on_device_with(in_place, |device| {
-        assert!(
-            device.settle_in_place_checks(CHECK_WAIT),
-            "the check settles"
-        );
-        if !takes_pitched(device) {
-            eprintln!(
-                "ALIASED-SURFACE {}: no DRM_FORMAT_MOD_LINEAR image at a {}-byte pitch: nothing \
-                 to check",
-                device.name(),
-                SMALL.2
-            );
-            return;
-        }
-        let kernels = Kernels::new(device);
-        let queue = device.new_command_queue().unwrap();
-        let surface = small_surface(device);
-        let (width, height, pitch) = SMALL;
-        let bytes = pitch * height;
-        let linear_cost = TexturePlacement::Shadow(TextureShadowReason::LinearCost { bytes });
-        let before = device.work_counts();
-        // Each texture made, written by a kernel, and released once its command buffer completed,
-        // before the next is made over the same bytes, as a guest's frames make them.
-        let answers: Vec<TexturePlacement> = FORMATS
-            .iter()
-            .enumerate()
-            .map(|(n, &format)| {
-                let (texture, answer) = surface_texture(&surface, format, (width, height, pitch));
-                let command_buffer = queue.command_buffer().unwrap();
-                kernels.fill(
-                    &command_buffer,
-                    &texture,
-                    0x0102_0304 * (n as u32 + 1),
-                    height,
-                );
-                command_buffer.commit().unwrap();
-                command_buffer.wait_until_completed_for(WAIT).unwrap();
-                assert_eq!(command_buffer.error(), None);
-                answer
-            })
-            .collect();
-        let after = device.work_counts();
-        let shadows = after.shadowed_textures - before.shadowed_textures;
-        let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
-        eprintln!(
-            "ALIASED-SURFACE {}: {} textures made one after another over one Private surface of \
-             {bytes} bytes, each released before the next: answers {answers:?}; {shadows} \
-             shadows, {pitched} images at Metal's pitch",
-            device.name(),
-            answers.len(),
-        );
-        assert_eq!(answers[0], linear_cost, "the first texture over the bytes");
-        for (answer, format) in answers.iter().zip(FORMATS).skip(1) {
-            assert_eq!(
-                *answer,
-                TexturePlacement::NotHostPages,
-                "a later {format:?} texture over bytes a released texture was made over"
-            );
-        }
-        assert_eq!(shadows, 1, "one shadow over the bytes");
+            0,
+            Origin::new(0, 0, 0),
+            Size::new(width, height, 1),
+            &out,
+            0,
+            row,
+            row * height,
+            BlitOption::None,
+        )
+        .unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        let read = device.work_counts();
         assert_eq!(
-            pitched,
-            FORMATS.len() as u64 - 1,
-            "every later texture in place"
+            read.shadow_copies - after.shadow_copies,
+            0,
+            "a read copies nothing"
         );
     });
 }
@@ -563,248 +444,4 @@ fn writes_through_one_texture_reach_every_texture_over_the_bytes() {
             }
         }
     });
-}
-
-/// The measurement's surface, (width, rows, row bytes) and its buffer's length: the guest's.
-const GUEST: (u64, u64, u64) = (6016, 6016, 24_576);
-const GUEST_BYTES: u64 = 150_994_944;
-/// The textures over it alive across the frames, and how many of them are `R32Uint`.
-const LIVE: usize = 36;
-const LIVE_UINT: usize = 11;
-/// The textures made over it each frame of the transient case, half of each format.
-const TRANSIENT: usize = 4;
-/// The square a frame's kernel writes through each written texture, and the one it reads.
-const WRITTEN: u64 = 1024;
-const READ: u64 = 256;
-/// The untimed and the timed frames of each case.
-const WARM: usize = 1;
-const TIMED: usize = if cfg!(m2v_cpu_icd) { 3 } else { 6 };
-
-/// The bytes of device memory the process holds now, `(drm, resident)`: the resident (else
-/// total) memory its DRM file descriptors report (`/proc/self/fdinfo`, the `drm-resident-*` or
-/// `drm-memory-*` keys), and its resident set (`VmRSS`), where a CPU device's memory lies. Zeros
-/// where the system reports neither.
-fn memory_now() -> (u64, u64) {
-    let bytes = |value: &str| -> u64 {
-        let mut parts = value.split_whitespace();
-        let number: u64 = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
-        match parts.next() {
-            Some("KiB") | Some("kB") => number << 10,
-            Some("MiB") => number << 20,
-            Some("GiB") => number << 30,
-            _ => number,
-        }
-    };
-    let mut drm = 0;
-    if let Ok(entries) = std::fs::read_dir("/proc/self/fdinfo") {
-        for entry in entries.flatten() {
-            let Ok(text) = std::fs::read_to_string(entry.path()) else {
-                continue;
-            };
-            if !text.contains("drm-driver") {
-                continue;
-            }
-            let lines: Vec<(&str, &str)> = text
-                .lines()
-                .filter_map(|line| line.split_once(':'))
-                .map(|(k, v)| (k.trim(), v.trim()))
-                .collect();
-            let resident: u64 = lines
-                .iter()
-                .filter(|(k, _)| k.starts_with("drm-resident-"))
-                .map(|(_, v)| bytes(v))
-                .sum();
-            let memory: u64 = lines
-                .iter()
-                .filter(|(k, _)| k.starts_with("drm-memory-"))
-                .map(|(_, v)| bytes(v))
-                .sum();
-            drm += resident.max(memory);
-        }
-    }
-    let rss = std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|status| {
-            status
-                .lines()
-                .find_map(|line| line.strip_prefix("VmRSS:").map(bytes))
-        })
-        .unwrap_or(0);
-    (drm, rss)
-}
-
-/// A measurement device: the in-place policy, without the validation layer, its check settled.
-fn measured_device(cache: &ScratchCache, messages: &Messages) -> Device {
-    let device = validated_device_with(TEST_DEVICE, messages, cache.path(), |options| {
-        options.layers.clear();
-        in_place(options);
-    })
-    .unwrap();
-    assert!(
-        device.settle_in_place_checks(CHECK_WAIT),
-        "the check settles"
-    );
-    device
-}
-
-/// What one case's frames moved and took, printed as an `ALIASED-SURFACE-COST` line.
-struct Tally {
-    times: Vec<f64>,
-    first: WorkCounts,
-    last: WorkCounts,
-    peak: (u64, u64),
-}
-
-impl Tally {
-    fn print(&self, device: &Device, case: &str, forms: &str) {
-        let mut times = self.times.clone();
-        times.sort_by(f64::total_cmp);
-        let frames = times.len() as f64;
-        let per = |f: fn(&WorkCounts) -> u64| (f(&self.last) - f(&self.first)) as f64 / frames;
-        let shadow = GUEST.0 * GUEST.1 * 4;
-        println!(
-            "ALIASED-SURFACE-COST {} {case}: {forms}; a frame's GPU time median {:.2} ms, slowest \
-             {:.2} ms; per frame: shadows made {:.1} ({:.0} MB), shadow copies {:.1}, texels \
-             copied in {:.0} ({:.0} MB), back {:.0} ({:.0} MB), merge words examined {:.0}, \
-             memory allocated {:.0} MB; peak device memory {:.0} MB (DRM), resident set {:.0} MB",
-            device.name(),
-            times[times.len() / 2] * 1e3,
-            times[times.len() - 1] * 1e3,
-            per(|c| c.shadowed_textures),
-            per(|c| c.shadowed_textures) * shadow as f64 / 1e6,
-            per(|c| c.shadow_copies),
-            per(|c| c.shadow_texels_copied_in),
-            per(|c| c.shadow_texels_copied_in) * 4.0 / 1e6,
-            per(|c| c.shadow_texels_copied_back),
-            per(|c| c.shadow_texels_copied_back) * 4.0 / 1e6,
-            per(|c| c.shadow_merge_words_examined),
-            per(|c| c.device_memory_allocated) / 1e6,
-            self.peak.0 as f64 / 1e6,
-            self.peak.1 as f64 / 1e6,
-        );
-    }
-}
-
-/// The format of the `i`th of the [`LIVE`] textures: [`LIVE_UINT`] of them `R32Uint`, spread
-/// among the rest.
-fn live_format(i: usize) -> PixelFormat {
-    match (i * LIVE_UINT) % LIVE < LIVE_UINT {
-        true => PixelFormat::R32Uint,
-        false => PixelFormat::BGRA8Unorm,
-    }
-}
-
-/// Run `frames` frames of `frame` (which returns the command buffer it committed), timed after
-/// [`WARM`], the memory sampled after each.
-fn tally(device: &Device, mut frame: impl FnMut(usize) -> f64) -> Tally {
-    let mut peak = memory_now();
-    for n in 0..WARM {
-        frame(n);
-    }
-    let first = device.work_counts();
-    let mut times = Vec::new();
-    for n in WARM..WARM + TIMED {
-        times.push(frame(n));
-        let (drm, rss) = memory_now();
-        peak = (peak.0.max(drm), peak.1.max(rss));
-    }
-    Tally {
-        times,
-        first,
-        last: device.work_counts(),
-        peak,
-    }
-}
-
-#[test]
-#[ignore = "a release-mode measurement: run by name"]
-fn aliased_surface_costs() {
-    let cache = ScratchCache::new().unwrap();
-    let messages = Messages::default();
-    let device = measured_device(&cache, &messages);
-    let kernels = Kernels::new(&device);
-    let queue = device.new_command_queue().unwrap();
-    let out = device
-        .new_buffer(READ * READ * 16, ResourceOptions::private())
-        .unwrap();
-    println!(
-        "ALIASED-SURFACE-COST {} start: device memory {:?} (DRM, resident set)",
-        device.name(),
-        memory_now()
-    );
-    for options in [ResourceOptions::private(), ResourceOptions::shared()] {
-        let storage = format!("{:?}", options.storage_mode());
-        // Live: the textures made once, a frame writing two and reading four.
-        {
-            let surface = made_surface(&device, GUEST_BYTES, options);
-            let before = device.work_counts();
-            let made: Vec<(Texture, TexturePlacement)> = (0..LIVE)
-                .map(|i| surface_texture(&surface, live_format(i), GUEST))
-                .collect();
-            let after = device.work_counts();
-            let shadows = after.shadowed_textures - before.shadowed_textures;
-            let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
-            let forms = format!(
-                "{LIVE} textures over a {storage} surface, first answered {:?}, last {:?}: \
-                 {shadows} shadows ({} MB), {pitched} images at Metal's pitch",
-                made[0].1,
-                made[LIVE - 1].1,
-                shadows * GUEST.0 * GUEST.1 * 4 / 1_000_000
-            );
-            let (uints, floats): (Vec<&Texture>, Vec<&Texture>) = made
-                .iter()
-                .map(|(t, _)| t)
-                .partition(|t| t.pixel_format() == PixelFormat::R32Uint);
-            let tally = tally(&device, |n| {
-                let command_buffer = queue.command_buffer().unwrap();
-                let word = 0x8040_2010 ^ n as u32;
-                kernels.fill(&command_buffer, floats[n % floats.len()], word, WRITTEN);
-                kernels.fill(&command_buffer, uints[n % uints.len()], word, WRITTEN);
-                for k in 1..3 {
-                    kernels.read(&command_buffer, floats[(n + k) % floats.len()], &out, READ);
-                    kernels.read(&command_buffer, uints[(n + k) % uints.len()], &out, READ);
-                }
-                command_buffer.commit().unwrap();
-                command_buffer.wait_until_completed_for(WAIT).unwrap();
-                assert_eq!(command_buffer.error(), None);
-                command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap()
-            });
-            tally.print(&device, "live", &forms);
-        }
-        // Transient: four textures made each frame and dropped after it, two written, two read.
-        {
-            let surface = made_surface(&device, GUEST_BYTES, options);
-            let mut answers = Vec::new();
-            let tally = tally(&device, |n| {
-                let made: Vec<(Texture, TexturePlacement)> = (0..TRANSIENT)
-                    .map(|i| {
-                        let format = match i % 2 {
-                            0 => PixelFormat::BGRA8Unorm,
-                            _ => PixelFormat::R32Uint,
-                        };
-                        surface_texture(&surface, format, GUEST)
-                    })
-                    .collect();
-                if answers.len() < 2 * TRANSIENT {
-                    answers.extend(made.iter().map(|(_, answer)| *answer));
-                }
-                let command_buffer = queue.command_buffer().unwrap();
-                let word = 0x0102_0408 ^ n as u32;
-                kernels.fill(&command_buffer, &made[0].0, word, WRITTEN);
-                kernels.fill(&command_buffer, &made[1].0, word, WRITTEN);
-                kernels.read(&command_buffer, &made[2].0, &out, READ);
-                kernels.read(&command_buffer, &made[3].0, &out, READ);
-                command_buffer.commit().unwrap();
-                command_buffer.wait_until_completed_for(WAIT).unwrap();
-                assert_eq!(command_buffer.error(), None);
-                command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap()
-            });
-            let forms = format!(
-                "{TRANSIENT} textures a frame over a {storage} surface, the first two frames' \
-                 answers {answers:?}"
-            );
-            tally.print(&device, "transient", &forms);
-        }
-    }
-    messages.take_notices();
 }

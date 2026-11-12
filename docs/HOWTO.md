@@ -391,11 +391,7 @@ over it is then a linear image at its pitch wherever the device lays one out so,
 the device makes `DRM_FORMAT_MOD_LINEAR` images (`VK_EXT_image_drm_format_modifier`), one at the
 pitch where its in-place check passed for its pooled memory (for a texture that renders, the
 check of renders that lets a pass change those bytes, as the declaration does, and no byte past the
-last row's pitch) and, for a tracked texture over a `Private` buffer, its rows take no more bytes
-than a bound past which such an image renders and samples slower than the shadow (over a `Shared`
-or `Managed` buffer, for an untracked texture, and over bytes another texture was made over, any
-size; the first texture's shadow moves to its image once another is made over its bytes)
-(`WorkCounts::pooled_pitched_images`; `TextureShadowReason::LinearCost` past it;
+last row's pitch), at any size (`WorkCounts::pooled_pitched_images`;
 `HostPageTexturePolicy::Shadow` turns it off; one made before that check answered is a shadow
 that moves to the image at a quiet commit once it passed, as one over host pages moves in place,
 `WorkCounts::pooled_textures_moved_in_place`), its subresources holding each row's bytes after its

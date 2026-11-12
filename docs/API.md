@@ -1903,16 +1903,8 @@ bound.
   the RX 550 makes no such image);
   for one that renders, whose rows each to its
   pitch share no line with bytes past them, the check of renders that lets the rows' padding
-  change, as the declaration does, and no byte past the last row's pitch); past a bound in bytes of its rows to their
-  pitch, the same on every device, such a texture over a `Private` buffer, tracked, stays a shadow
-  too (`TextureShadowReason::LinearCost`): there a linear image renders and samples slower than the
-  shadow's own image with its copies, and over memory only the runtime's commands write both give
-  the same answer, for one texture over the bytes (over a `Shared` or `Managed` buffer, for an
-  untracked texture, and over bytes another texture was made over, the image is taken at any size:
-  there each texture's shadow would be an image of its own, copied in whole at its first use and
-  again after a write through any other; the first texture's shadow moves to its image once
-  another texture is made over its bytes, at a quiet commit,
-  `WorkCounts::pooled_textures_moved_in_place`);
+  change, as the declaration does, and no byte past the last row's pitch), the image taken at any
+  size over any buffer of the runtime's own;
   or the buffer is over the caller's
   `VkBuffer`, whose memory backs no image of the runtime's; or it is a tiled texture of more than
   one level (`Buffer::new_tiled_texture`), over any buffer: no image over the buffer's memory holds

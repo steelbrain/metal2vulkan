@@ -716,8 +716,6 @@ mod pool_churn;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod pool_slots;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod pooled_draw_costs;
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod post_depth_coverage;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod posted_frees;

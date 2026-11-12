@@ -3923,9 +3923,6 @@ impl Counters {
             C::CheckFailed(..) => &self.host_texture_shadows_check_failed,
             C::Unchecked(..) => &self.host_texture_shadows_unchecked,
             C::Refused(refusal, _) => &self.host_texture_shadows_refused[refusal.index()],
-            // A texture over the runtime's pooled memory, no texture over host pages: counted as
-            // a shadow (`shadowed_textures`) alone.
-            C::LinearCost(_) => return,
         };
         counter.fetch_add(1, Ordering::Relaxed);
         if renders {
@@ -8421,10 +8418,7 @@ pub struct WorkCounts {
     /// over host pages): each is counted in `pooled_pitched_images` too from then on. Over memory
     /// the runtime exports (`MemoryExport`), likewise once the check of that exported memory
     /// passed, to the linear image or the `DRM_FORMAT_MOD_LINEAR` one made for its handle type
-    /// (the latter counted in `pooled_pitched_images`). And tracked textures over a `Private`
-    /// buffer made shadows of their linear cost (`TextureShadowReason::LinearCost`), the first
-    /// over their bytes, that moved to that image the same way once another texture was made over
-    /// their bytes. A runtime extension: Metal has none.
+    /// (the latter counted in `pooled_pitched_images`). A runtime extension: Metal has none.
     pub pooled_textures_moved_in_place: u64,
     /// Shadow images of textures that moved in place over the device's pooled memory
     /// (`pooled_textures_moved_in_place`) let go of once the command buffer that took the move

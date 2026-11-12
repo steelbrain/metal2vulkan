@@ -546,15 +546,6 @@ impl TextureShared {
     }
 }
 
-/// What a shadow over a buffer's bytes waits for to move in place
-/// (`Device::storage_over_buffer`), with what it moves with.
-enum MoveAfter {
-    /// Its class's in-place verdicts, made before them (`texture/storage_form.rs`).
-    Verdicts(in_place::PendingMove),
-    /// Another texture made over its bytes: a shadow of its linear cost (`texture_spans.rs`).
-    Aliases(in_place::PendingMove),
-}
-
 /// What holds a texture's texels; a view's are its texture's (the `Arc`s cloned).
 #[derive(Clone)]
 enum Storage {
@@ -2440,22 +2431,13 @@ impl Device {
     ) -> Result<Texture, Error> {
         let record = ViewRecord::of_descriptor(layout, descriptor);
         let mut pending = None;
-        let texels = Arc::new(texels);
-        let over = (Arc::clone(&texels), &mut pending);
+        let over = (Arc::new(texels), &mut pending);
         let storage = self.storage_over_buffer(call, over, descriptor, layout)?;
         let texture = Texture::made(self, storage, record, None, id_use);
-        match pending {
-            // A shadow made before its pages' (or its pooled memory's) in-place verdict moves in
-            // place once it passes.
-            Some(MoveAfter::Verdicts(pending)) => texture.wait_to_move_in_place(pending),
-            // A shadow of its linear cost over bytes no other texture was made over moves once
-            // one is (`texture_spans.rs`).
-            Some(MoveAfter::Aliases(pending)) => {
-                let shared: Arc<dyn Any + Send + Sync> = Arc::clone(&texture.0) as _;
-                let bytes = texels.layout.offset..texels.layout.end();
-                (texels.buffer).wait_for_texture_over(bytes, Arc::downgrade(&shared), pending);
-            }
-            None => {}
+        // A shadow made before its pages' (or its pooled memory's) in-place verdict moves in
+        // place once it passes.
+        if let Some(pending) = pending {
+            texture.wait_to_move_in_place(pending);
         }
         Ok(texture)
     }
@@ -2466,36 +2448,11 @@ impl Device {
     /// A shadow over host pages made before their class's verdict for its access, or over the
     /// device's pooled memory before its class's verdict for an image at Metal's pitch there
     /// (`Device::pooled_pitched_image`), sets `pending` to what it needs to move in place once the
-    /// verdict passes; a shadow of its linear cost there, to what it needs to move once another
-    /// texture is made over its bytes. Once made, the texture's bytes are noted as a texture's
-    /// (`texture_spans.rs`), and the shadows of their linear cost that waited for another texture
-    /// over them wait to move in place. Refused as it is.
+    /// verdict passes. Refused as it is.
     fn storage_over_buffer(
         &self,
         call: &'static str,
-        (texels, pending): (Arc<Texels>, &mut Option<MoveAfter>),
-        descriptor: &TextureDescriptor,
-        layout: &TextureLayout,
-    ) -> Result<Storage, Error> {
-        let bytes = texels.layout.offset..texels.layout.end();
-        let buffer = texels.buffer.clone();
-        let storage = self.storage_decided(call, (texels, pending), descriptor, layout)?;
-        if !in_place::checking() {
-            for lone in buffer.note_texture_made(bytes) {
-                let texture = lone.texture.upgrade().map(Arc::downcast::<TextureShared>);
-                if let Some(Ok(texture)) = texture {
-                    Texture(texture).wait_to_move_in_place(lone.pending);
-                }
-            }
-        }
-        Ok(storage)
-    }
-
-    /// [`storage_over_buffer`](Self::storage_over_buffer)'s storage, its bytes not noted.
-    fn storage_decided(
-        &self,
-        call: &'static str,
-        (texels, pending): (Arc<Texels>, &mut Option<MoveAfter>),
+        (texels, pending): (Arc<Texels>, &mut Option<in_place::PendingMove>),
         descriptor: &TextureDescriptor,
         layout: &TextureLayout,
     ) -> Result<Storage, Error> {
@@ -2595,29 +2552,14 @@ impl Device {
                     // been made then (`texture/storage_form.rs`).
                     Err((why, Some(ShadowCause::CheckPending(class, _, rows)))) => {
                         let line = self.shared().in_place.line();
-                        *pending = Some(MoveAfter::Verdicts(in_place::PendingMove {
+                        *pending = Some(in_place::PendingMove {
                             class,
                             rows,
                             padding: texels.padding(line),
                             usage,
                             plan: plan.clone(),
                             descriptor: *descriptor,
-                        }));
-                        why
-                    }
-                    // A shadow of its linear cost, made over bytes no other texture was made
-                    // over (`Device::pooled_pitched_image`): it moves to the image at Metal's
-                    // pitch once another texture is made over them (`texture_spans.rs`).
-                    Err((why, Some(ShadowCause::LinearCost(_)))) => {
-                        let line = self.shared().in_place.line();
-                        *pending = Some(MoveAfter::Aliases(in_place::PendingMove {
-                            class: PagesClass::Pooled,
-                            rows: texels.rows(line),
-                            padding: texels.padding(line),
-                            usage,
-                            plan: plan.clone(),
-                            descriptor: *descriptor,
-                        }));
+                        });
                         why
                     }
                     Err((why, _)) => why,
@@ -2792,20 +2734,20 @@ impl Device {
         ),
         (usage, plan): (TextureUsage, &ImagePlan),
         descriptor: &TextureDescriptor,
-        pending: &mut Option<MoveAfter>,
+        pending: &mut Option<in_place::PendingMove>,
     ) -> Result<String, Error> {
         if in_place::checking() {
             return Err(Error::NotInPlace(NotInPlace { why: cause.words() }));
         }
         if let ShadowCause::CheckPending(..) = cause {
-            *pending = Some(MoveAfter::Verdicts(in_place::PendingMove {
+            *pending = Some(in_place::PendingMove {
                 class,
                 rows,
                 padding,
                 usage,
                 plan: plan.clone(),
                 descriptor: *descriptor,
-            }));
+            });
         }
         let renders = in_place::Access::Renders.takes(usage);
         let accesses = (renders, in_place::Access::Writes.takes(usage));
@@ -3324,13 +3266,11 @@ impl Device {
     /// one plane at Metal's pitch (`VkImageDrmFormatModifierExplicitCreateInfoEXT`), no external
     /// memory (`dma_buf::ModifierMemory::Own`), unbound and made `UNDEFINED`
     /// (`Device::pitched_image`), for a texture of Metal `usage` whose texels the device's own
-    /// linear image lays out otherwise: where the device makes such images, the texture's rows to
-    /// their pitch take no more than `in_place::POOLED_PITCHED_BYTES` (past it, a linear image
-    /// renders and samples slower than the shadow), and its policy and its check of the pooled
-    /// class ([`PagesClass::Pooled`]) take each access the usage takes
-    /// for texels that lie in its lines as these do (`in_place::in_place`; a pending verdict
-    /// starts the check, and the texture is a shadow meanwhile); the check's own textures whatever
-    /// the verdicts. Why not.
+    /// linear image lays out otherwise, at any size: where the device makes such images, and its
+    /// policy and its check of the pooled class ([`PagesClass::Pooled`]) take each access the
+    /// usage takes for texels that lie in its lines as these do (`in_place::in_place`; a pending
+    /// verdict starts the check, and the texture is a shadow meanwhile); the check's own textures
+    /// whatever the verdicts. Why not.
     ///
     /// Vulkan lets such an image be bound to memory of no external handle type: an image of a DRM
     /// format modifier's tiling names its modifier and plane layout
@@ -3360,20 +3300,6 @@ impl Device {
             )));
         }
         if !in_place::checking() {
-            let layout = &texels.layout;
-            let bytes = layout.slice_pitch * (layout.slices - 1) + layout.row_pitch * layout.rows;
-            // The bound chooses between two speeds over bytes only the runtime's commands write
-            // (a tracked `Private` buffer's), where both forms give the same answer, for one
-            // texture over them: over bytes another texture was made over, each shadow would be
-            // an image of its own with copies of its own (`texture_spans.rs`). Over bytes the CPU
-            // may write, or an untracked texture's, the image lies at any size wherever the
-            // device's check passed, as over host pages, however much slower.
-            if bytes > in_place::POOLED_PITCHED_BYTES
-                && texels.only_commands_write()
-                && !(texels.buffer).textures_made_over(&(layout.offset..layout.end()))
-            {
-                return Ok(Err(ShadowCause::LinearCost(bytes)));
-            }
             let line = self.shared().in_place.line();
             let pages = (
                 PagesClass::Pooled,
