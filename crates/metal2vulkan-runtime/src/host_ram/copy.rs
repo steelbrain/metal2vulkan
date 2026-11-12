@@ -1174,6 +1174,12 @@ impl BlitCommandEncoder {
                 let offset = first - first % align;
                 let length =
                     (span.end - span.start - dispatch.window * window_bytes).min(window_bytes);
+                // Each dispatch binds the whole window it writes (a gather's, binding 1) and
+                // writes only its pieces' words there. The validation layer's synchronization
+                // checks count a bound storage range as written whole (its shader-access
+                // heuristic) and so report a write-after-write between two dispatches of one
+                // window; no word is written twice (`twice` sent such copies to regions above),
+                // so the dispatches race on no byte and need no barrier between them.
                 let buffers = vec![
                     (chunk.raw, 0, chunk.bytes()),
                     (raw, offset, first - offset + length),
