@@ -412,6 +412,10 @@ pub(crate) struct QueueSwitch {
     /// (`tests/device_recovery.rs`, `tests/queue_switch_gate.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) between: crate::freed_memory::held::Held,
+    /// The crate's device tests' hold of the check once a round on one `VkQueue` made its last
+    /// submission, its queue's lock held (`tests/queue_switch_gate.rs`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) submitted: crate::freed_memory::held::Held,
     /// The crate's device tests' count of the check's late rounds, whose gaps counted for nothing
     /// (`queue_switch_check.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -446,6 +450,8 @@ impl QueueSwitch {
             held: Default::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             between: Default::default(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            submitted: Default::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             late_rounds: AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

@@ -735,6 +735,12 @@ impl Objects {
                 }
                 submitted += 1;
             }
+            // The crate's device tests' hold of a round on one `VkQueue` once its last batch was
+            // submitted (`tests::queue_switch_gate`).
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            if submitted == batches.len() && batches[1].queue == batches[2].queue {
+                parts.switch.submitted.pass();
+            }
             (submitted, refused, step, marks)
         });
         // Late where the gate opened before the last submission returned: the batch the GPU ran
