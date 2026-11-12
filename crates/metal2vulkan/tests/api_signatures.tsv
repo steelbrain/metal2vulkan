@@ -3204,6 +3204,7 @@ field	metal2vulkan-runtime::WorkCounts.reading_draws_split_variant_refused	pub r
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_views	pub reading_draws_split_views: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_visibility_query	pub reading_draws_split_visibility_query: u64
 field	metal2vulkan-runtime::WorkCounts.reencodes_refused	pub reencodes_refused: u64
+field	metal2vulkan-runtime::WorkCounts.region_pipelines_evicted	pub region_pipelines_evicted: u64
 field	metal2vulkan-runtime::WorkCounts.registrations_waited	pub registrations_waited: u64
 field	metal2vulkan-runtime::WorkCounts.render_encoders_ended	pub render_encoders_ended: u64
 field	metal2vulkan-runtime::WorkCounts.render_log_batches_by_program	pub render_log_batches_by_program: u64

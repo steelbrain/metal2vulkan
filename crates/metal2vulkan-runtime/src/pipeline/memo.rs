@@ -34,6 +34,10 @@ use std::sync::{Arc, Mutex, Weak};
 /// The most entries the device's memo holds, whatever their sizes.
 pub(crate) const MEMO_ENTRIES: usize = 4096;
 
+/// What a map tells, at each insert that removed entries past its bounds, of how many it removed
+/// ([`Lru::counting_evictions`]).
+pub(crate) type Evictions = Box<dyn Fn(u64) + Send + Sync>;
+
 /// A map that keeps at most `max_weight` of its entries' weights and at most `max_entries`
 /// entries, removing the least recently used past either. A lookup or an insert is a use.
 pub(crate) struct Lru<K, V> {
@@ -50,6 +54,8 @@ pub(crate) struct Lru<K, V> {
     weight: u64,
     max_weight: u64,
     max_entries: usize,
+    /// Told of the entries an insert removed past the bounds, where the map counts them.
+    evictions: Option<Evictions>,
     /// The uses that moved an entry in `order` ([`used`](Self::used)).
     #[cfg(test)]
     reordered: u64,
@@ -78,6 +84,7 @@ impl<K: Clone + Eq + Hash, V> Lru<K, V> {
             weight: 0,
             max_weight,
             max_entries,
+            evictions: None,
             #[cfg(test)]
             reordered: 0,
         }
@@ -86,6 +93,12 @@ impl<K: Clone + Eq + Hash, V> Lru<K, V> {
     /// An empty map of at most `max_entries` entries, each of weight 1.
     pub(crate) fn counted(max_entries: usize) -> Lru<K, V> {
         Lru::new(u64::MAX, max_entries)
+    }
+
+    /// The map, telling `evictions` how many entries each insert removes past its bounds.
+    pub(crate) fn counting_evictions(mut self, evictions: Evictions) -> Lru<K, V> {
+        self.evictions = Some(evictions);
+        self
     }
 
     /// The value of `key`, now the most recently used.
@@ -153,6 +166,7 @@ impl<K: Clone + Eq + Hash, V> Lru<K, V> {
         self.entries.insert(stamp, slot);
         self.order.insert(stamp, stamp);
         self.weight += weight;
+        let mut evicted = 0;
         while self.weight > self.max_weight || self.entries.len() > self.max_entries {
             let Some((_, oldest)) = self.order.pop_first() else {
                 break;
@@ -160,7 +174,11 @@ impl<K: Clone + Eq + Hash, V> Lru<K, V> {
             if let Some(slot) = self.entries.remove(&oldest) {
                 self.numbers.remove(&slot.key);
                 self.weight -= slot.weight;
+                evicted += 1;
             }
+        }
+        if let Some(evictions) = self.evictions.as_ref().filter(|_| evicted > 0) {
+            evictions(evicted);
         }
     }
 

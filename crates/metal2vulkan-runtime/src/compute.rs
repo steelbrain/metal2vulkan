@@ -1848,7 +1848,7 @@ fn settle_indirect(
 /// So a grid narrower than one threadgroup on an axis, which the split runs as one region of the
 /// grid's own size, a `VkPipeline` of each width, takes the flat form's one `VkPipeline` of the
 /// call's size too: on a guest's run on an RX 7900 XTX, a kernel dispatched at 64 such widths
-/// made 185,566 `VkPipeline`s in 45 s, past the most its variant keeps (`PIPELINES`).
+/// made 185,566 `VkPipeline`s in 45 s while its variant kept 32 (`pipeline::REGION_PIPELINES`).
 ///
 /// `None`, so the dispatch keeps its exact split, where its grid is already a whole number of
 /// threadgroups on every axis (the split is one region of the call's size, which the flat form

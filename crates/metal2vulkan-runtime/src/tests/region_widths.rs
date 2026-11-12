@@ -106,6 +106,8 @@ fn a_kernel_dispatched_at_every_width_makes_each_region_pipeline_once() {
     let device = device(&scratch.0);
     let state = state(&device);
     let made = || device.work_counts().variant_pipelines_made;
+    let evicted = || device.work_counts().region_pipelines_evicted;
+    let evicted_before = evicted();
     let empty = process_memory();
     let mut passes = Vec::new();
     let mut times = Vec::new();
@@ -122,9 +124,10 @@ fn a_kernel_dispatched_at_every_width_makes_each_region_pipeline_once() {
     }
     println!(
         "REGION-WIDTHS {}: {GRIDS} grids in threadgroups of up to {WIDEST}, twice: VkPipelines \
-         made {passes:?}, passes took {times:?}; memory before {empty:?}, after the first pass \
-         {full:?}",
-        device.name()
+         made {passes:?}, evicted {}, passes took {times:?}; memory before {empty:?}, after the \
+         first pass {full:?}",
+        device.name(),
+        evicted() - evicted_before
     );
     assert!(
         passes[0] <= KEYS,
@@ -132,4 +135,9 @@ fn a_kernel_dispatched_at_every_width_makes_each_region_pipeline_once() {
         passes[0]
     );
     assert_eq!(passes[1], 0, "the second pass made VkPipelines again");
+    assert_eq!(
+        evicted(),
+        evicted_before,
+        "the variant's memo let a region pipeline go"
+    );
 }

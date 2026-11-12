@@ -211,8 +211,26 @@ pub(super) fn specialization_values(
 
 /// The most plans a variant keeps.
 const PLANS: usize = 64;
-/// The most `VkPipeline`s a variant keeps.
+/// The most `VkPipeline`s a render variant keeps, and a tile function's variant of its regions.
 const PIPELINES: usize = 32;
+/// The most region `VkPipeline`s a kernel's variant keeps, the least recently used going first
+/// (`WorkCounts::region_pipelines_evicted` counts those let go).
+///
+/// A region's local size and `MultiRegion` are specializations, so a kernel takes a `VkPipeline`
+/// per threadgroup width its program's calls ask for, and with `dispatchThreads`, where the
+/// kernel observes its partition (no flat variant runs it, `compute::flat_direct`), one per
+/// remainder that is an edge region and one more per width whose interior has an edge. Measured
+/// on a guest's run on an RX 7900 XTX: one kernel dispatched as `dispatchThreads(n, min(n, 64))`
+/// took 128 keys of one variant (each width from 1 to 64 alone, and the interior of 64 with each
+/// edge from 1 to 63), and with the 32 a variant kept before, each was made again about 6,300 times
+/// in 146 s, every such dispatch's command buffer waiting for a making on the pool. 256 holds that
+/// working set twice over (`tests/region_widths.rs` makes each of the 128 once).
+///
+/// What the bound costs where it is full: a compute `VkPipeline` of a small kernel is its shader
+/// binary in the driver's arena and the driver's own records of it, a few KiB each
+/// (`tests/region_widths.rs` prints the process's memory across 128 makings); a variant whose
+/// dispatches take no more keys than they did holds no more than before.
+const REGION_PIPELINES: usize = 256;
 /// The most variants besides the first a state keeps.
 const VARIANTS: usize = 8;
 /// The most plans a state keeps of its latest direct dispatches that planned ([`Planned`]): a
@@ -1854,12 +1872,18 @@ impl Variant {
             None,
         )?;
         objects.log_kernel(function, &pipeline.stage);
+        // A tile function's dispatch is one region of its pass's threads per tile; a kernel's
+        // takes the call's threadgroup and its grid's edges (`REGION_PIPELINES`).
+        let tile = (pipeline.dependencies.iter()).any(|d| d.fact == RuntimeFact::TileFunction);
+        let bound = if tile { PIPELINES } else { REGION_PIPELINES };
+        let counts = Arc::clone(&device.shared().counts);
+        let evicted = move |evicted| counts.region_pipelines_evicted(evicted);
         let variant = Arc::new(Variant {
             key,
             pipeline,
             objects: Arc::new(objects),
             plans: Mutex::new(Lru::counted(PLANS)),
-            pipelines: making::Making::counted(PIPELINES),
+            pipelines: making::Making::counted_evicting(bound, Box::new(evicted)),
         });
         for (place, made) in kept {
             if let kept::Place::Region(region) = place {

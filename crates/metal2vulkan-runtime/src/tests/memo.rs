@@ -77,6 +77,39 @@ fn the_least_recently_used_goes_first() {
     assert!(lru.get(&2).is_none() && lru.get(&3).is_some() && lru.get(&5).is_some());
 }
 
+/// A map counting its evictions is told of each entry an insert removed past its bounds, and of
+/// nothing else: not an insert within them, not a key's replacement, not a removal by key.
+#[test]
+fn a_counting_map_tells_each_eviction_and_nothing_else() {
+    let told = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let counted = Arc::clone(&told);
+    let tell = move |n| {
+        counted.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+    };
+    let evicted = || told.load(std::sync::atomic::Ordering::Relaxed);
+    let mut lru: Lru<u32, ()> = Lru::new(10, 3).counting_evictions(Box::new(tell));
+    for key in 0..3 {
+        lru.insert(key, (), 1);
+    }
+    lru.insert(1, (), 1);
+    lru.remove(&2);
+    assert_eq!(
+        evicted(),
+        0,
+        "within the bounds, a replacement and a removal"
+    );
+    lru.insert(3, (), 1);
+    lru.insert(4, (), 1);
+    assert_eq!(evicted(), 1, "past the entries' bound: the oldest");
+    lru.insert(5, (), 9);
+    assert_eq!(
+        evicted(),
+        3,
+        "past the weight's bound: the two oldest in one insert"
+    );
+    assert_eq!(lru.footprint(), (10, 2));
+}
+
 #[test]
 fn replacing_counts_once_and_nothing_heavier_than_the_bound_is_kept() {
     let mut lru: Lru<u32, u32> = Lru::new(10, 4);

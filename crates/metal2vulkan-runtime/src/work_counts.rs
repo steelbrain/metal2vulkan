@@ -621,6 +621,7 @@ pub(crate) struct Counters {
     pipelines_linked: AtomicU64,
     linked_pipelines_shared: AtomicU64,
     dispatch_pipelines_pooled: AtomicU64,
+    region_pipelines_evicted: AtomicU64,
     tile_pipelines_pooled: AtomicU64,
     upload_chunks_in_device_memory: AtomicU64,
     render_log_batches_by_thread: AtomicU64,
@@ -2221,6 +2222,13 @@ impl Counters {
     pub(crate) fn dispatch_pipeline_pooled(&self) {
         self.dispatch_pipelines_pooled
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A compute variant's memo of region `VkPipeline`s let `evicted` of them go past its bound
+    /// (`pipeline/mod.rs`, `REGION_PIPELINES`).
+    pub(crate) fn region_pipelines_evicted(&self, evicted: u64) {
+        self.region_pipelines_evicted
+            .fetch_add(evicted, Ordering::Relaxed);
     }
 
     /// A render encoder's tile dispatch handed the making of a region's `VkPipeline` to the
@@ -8943,6 +8951,10 @@ pub struct WorkCounts {
     /// device's pool and went on, rather than make it at the dispatch: each counted once per
     /// region it handed.
     pub dispatch_pipelines_pooled: u64,
+    /// Region `VkPipeline`s compute variants' memos let go past their bound, the least recently
+    /// used first (`pipeline/mod.rs`, `REGION_PIPELINES`): each one a dispatch takes again is made
+    /// again. None while each variant's dispatches take no more keys than the bound.
+    pub region_pipelines_evicted: u64,
     /// Render encoders' tile dispatches that handed the making of a region's `VkPipeline` to the
     /// device's pool and went on, their passes recorded once it is made, rather than make it at
     /// the dispatch: each counted once per region it handed.
@@ -10339,6 +10351,7 @@ impl Device {
             pipelines_linked: counters.pipelines_linked.load(Ordering::Relaxed),
             linked_pipelines_shared: counters.linked_pipelines_shared.load(Ordering::Relaxed),
             dispatch_pipelines_pooled: counters.dispatch_pipelines_pooled.load(Ordering::Relaxed),
+            region_pipelines_evicted: counters.region_pipelines_evicted.load(Ordering::Relaxed),
             tile_pipelines_pooled: counters.tile_pipelines_pooled.load(Ordering::Relaxed),
             upload_chunks_in_device_memory: (counters.upload_chunks_in_device_memory)
                 .load(Ordering::Relaxed),

@@ -1,9 +1,8 @@
 //! Direct `dispatchThreads:` of grids narrower than one threadgroup, at many widths: a kernel that
 //! does not observe its threadgroup partition runs each on its flat variant's one `VkPipeline` of
 //! the call's threadgroup size (`compute.rs`'s `flat_direct`), so a second pass over the same
-//! widths makes none. Split instead, each width was a region of its own local size, a
-//! `VkPipeline` each, past the most a variant keeps (`pipeline/mod.rs`'s `PIPELINES`): the second
-//! pass made them all again.
+//! widths makes none. Split instead, each width is a region of its own local size, a
+//! `VkPipeline` each: the first pass makes 100.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The kernel is the owned fixture's

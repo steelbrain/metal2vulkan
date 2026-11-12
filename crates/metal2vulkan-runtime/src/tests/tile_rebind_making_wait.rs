@@ -7,8 +7,8 @@
 //! Metal makes a tile state's pipeline at `newRenderPipelineStateWithTileDescriptor`, so no Metal
 //! call of the program's blocks on a shader compile afterwards: a tile dispatch waits for none
 //! (`tile_pending.rs`), and neither does a replace of a buffer's bytes. The runtime makes a
-//! region's `VkPipeline` on demand instead, in the device's pool, and keeps at most 32 of a
-//! variant's (`pipeline::PIPELINES`): a rebind's encoding again of a dispatch whose region key
+//! region's `VkPipeline` on demand instead, in the device's pool, and keeps at most 32 of a tile
+//! function's variant's (`pipeline::PIPELINES`): a rebind's encoding again of a dispatch whose region key
 //! the memo let go of must answer as the first encoding did -- hand the making to the pool and
 //! leave the pass to record later -- and never make the pipeline on the program's thread, nor
 //! wait for a making another encoder began.

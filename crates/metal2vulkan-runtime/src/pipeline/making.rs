@@ -26,7 +26,7 @@
 //!   (`budget::Urgency`, `pool.rs`).
 
 use super::budget::{Asked, Urgency};
-use super::memo::{At, Lru};
+use super::memo::{At, Evictions, Lru};
 use super::pool::Place;
 use crate::device::lock;
 use crate::error::{internal, Error};
@@ -203,6 +203,16 @@ impl<K: Clone + Eq + Hash, V> Making<K, V> {
     pub(crate) fn counted(max_entries: usize) -> Making<K, V> {
         Making {
             memo: Arc::new(Mutex::new(Lru::counted(max_entries))),
+        }
+    }
+
+    /// An empty memo of at most `max_entries` entries, telling `evictions` how many it lets go
+    /// past that bound at each making it begins or keeps.
+    pub(crate) fn counted_evicting(max_entries: usize, evictions: Evictions) -> Making<K, V> {
+        Making {
+            memo: Arc::new(Mutex::new(
+                Lru::counted(max_entries).counting_evictions(evictions),
+            )),
         }
     }
 
