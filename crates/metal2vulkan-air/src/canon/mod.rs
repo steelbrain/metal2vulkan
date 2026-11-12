@@ -113,6 +113,7 @@ mod pieces;
 mod prune;
 mod rate_map;
 pub mod rate_map_data;
+mod reach;
 mod reads;
 mod recursion;
 mod renumber;
@@ -673,6 +674,9 @@ pub fn specialize_dynamic(
             unrolled.release(m);
         }
     }
+    // Each private array of nested arrays allocated as far as its accesses reach, where the
+    // constants bound every index of it.
+    let body = reach::narrow(body, &mut parts, func, m)?;
     matmul2d::refuse_left(&body, &parts, &ep.stage, &name, m)?;
     post_check(&body, &parts, &stubs, &name, &control_points(ep), m)?;
     // A branch's short arms that Metal's backend speculates, where a group operation in them

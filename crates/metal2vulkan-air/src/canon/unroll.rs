@@ -187,36 +187,68 @@ fn has_back_edge(body: &Body) -> bool {
 }
 
 /// What the analysis of one round reads.
-struct Cx<'a> {
+pub(super) struct Cx<'a> {
     body: &'a Body,
     cfg: &'a Cfg<BlockId>,
     forest: &'a LoopForest<BlockId>,
     block_of: Vec<BlockId>,
 }
 
+impl<'a> Cx<'a> {
+    /// The analysis of `body` over its graph and loop forest: each instruction's block, a table
+    /// charged to the ledger and recorded in `held`.
+    pub(super) fn new(
+        body: &'a Body,
+        (cfg, forest): (&'a Cfg<BlockId>, &'a LoopForest<BlockId>),
+        m: &mut Meter,
+        held: &mut usize,
+    ) -> Result<Cx<'a>, Error> {
+        let mut block_of = filled(m, held, body.insts.len(), BlockId::new(0))?;
+        for (b, block) in body.blocks.iter() {
+            m.tick(1)?;
+            for i in block.inst_ids() {
+                if let Some(slot) = block_of.get_mut(i.index()) {
+                    *slot = b;
+                }
+            }
+        }
+        Ok(Cx {
+            body,
+            cfg,
+            forest,
+            block_of,
+        })
+    }
+
+    /// The body analysed.
+    pub(super) fn body(&self) -> &'a Body {
+        self.body
+    }
+
+    /// The body's loop forest.
+    pub(super) fn forest(&self) -> &'a LoopForest<BlockId> {
+        self.forest
+    }
+
+    /// The block of instruction `i`.
+    pub(super) fn block_of(&self, i: InstId) -> Result<BlockId, Error> {
+        self.block_of
+            .get(i.index())
+            .copied()
+            .ok_or_else(|| invariant("instruction out of range"))
+    }
+}
+
 fn unroll_in(
     body: &Body,
     parts: &mut ModuleParts,
-    (cfg, forest): (&Cfg<BlockId>, &LoopForest<BlockId>),
+    graphs: (&Cfg<BlockId>, &LoopForest<BlockId>),
     grown: &mut u64,
     m: &mut Meter,
     held: &mut usize,
 ) -> Result<Option<Body>, Error> {
-    let mut block_of = filled(m, held, body.insts.len(), BlockId::new(0))?;
-    for (b, block) in body.blocks.iter() {
-        m.tick(1)?;
-        for i in block.inst_ids() {
-            if let Some(slot) = block_of.get_mut(i.index()) {
-                *slot = b;
-            }
-        }
-    }
-    let cx = Cx {
-        body,
-        cfg,
-        forest,
-        block_of,
-    };
+    let cx = Cx::new(body, graphs, m, held)?;
+    let forest = cx.forest;
     let mut inside = filled(m, held, body.insts.len(), false)?;
     let mut plans: Vec<Plan> = Vec::new();
     // Loops come outer before inner: one nested in a planned loop is copied with it.
@@ -249,16 +281,33 @@ fn unroll_in(
     build(&cx, &plans, &mut parts.consts, m, held).map(Some)
 }
 
-/// The plan of loop `l`, when it qualifies (module docs). `inside` is all false on entry and on
-/// return.
-fn plan(
-    cx: &Cx<'_>,
-    l: LoopId,
-    (folder, globals): (&mut Folder<'_>, &Arena<GlobalId, Global>),
-    inside: &mut [bool],
-    grown: u64,
-    m: &mut Meter,
-) -> Result<Option<Plan>, Error> {
+/// A conditional branch with one way in its loop and one out: its condition, its way in, its way
+/// out, and the condition's value that leaves.
+type Exit = (Value, BlockId, BlockId, bool);
+
+/// A loop whose header runs the constants may decide ([`shape`]).
+struct Shape {
+    header: BlockId,
+    latch: BlockId,
+    /// The header's PHIs, each with its preheader and latch entries' values, charged to the
+    /// ledger ([`Shape::release`]).
+    phis: Vec<(InstId, Value, Value)>,
+    header_exit: Option<Exit>,
+    latch_exit: Option<Exit>,
+}
+
+impl Shape {
+    /// Return the ledger bytes the PHI list holds, dropping it.
+    fn release(self, m: &mut Meter) {
+        m.release(self.phis.capacity() * std::mem::size_of::<(InstId, Value, Value)>());
+    }
+}
+
+/// The shape of loop `l` when the module docs' first two conditions hold: reducible, one
+/// preheader edge and one back edge into its header, from its latch, and left only from its
+/// header or its latch, each a conditional branch with one way out; its header's PHIs each with
+/// exactly its two entries.
+fn shape(cx: &Cx<'_>, l: LoopId, m: &mut Meter) -> Result<Option<Shape>, Error> {
     let (body, forest) = (cx.body, cx.forest);
     let header = forest.header(l);
     if !forest.is_reducible(l) || header.index() == 0 {
@@ -283,35 +332,14 @@ fn plan(
     if edges_to(pre) != 1 || edges_to(latch) != 1 {
         return Ok(None);
     }
-    let Some(term) = body.terminator(latch) else {
-        return Ok(None);
-    };
-    if term
-        .kind
-        .loop_hints()
-        .is_some_and(|h| h.unroll == Unroll::Disable)
-    {
-        return Ok(None);
-    }
-    // The size, and the exits: only from the header or the latch.
-    let mut size = 0u64;
+    // The exits: only from the header or the latch.
     for b in forest.blocks(l) {
         m.tick(1)?;
-        let block = body
-            .blocks
-            .get(b)
-            .ok_or_else(|| invariant("loop block out of range"))?;
-        size += block.len() as u64;
-        if size > UNROLLED {
-            return Ok(None);
-        }
         if b != header && b != latch && body.successors(b).any(|s| !forest.contains(l, s)) {
             return Ok(None);
         }
     }
-    // A conditional branch with one way in the loop and one out: its condition, its way in, its
-    // way out, and the condition's value that leaves.
-    let exit_of = |b: BlockId| -> Option<Option<(Value, BlockId, BlockId, bool)>> {
+    let exit_of = |b: BlockId| -> Option<Option<Exit>> {
         let term = body.terminator(b)?;
         if !body.successors(b).any(|s| !forest.contains(l, s)) {
             return Some(None);
@@ -355,25 +383,46 @@ fn plan(
             } else if p == latch {
                 &mut from_latch
             } else {
+                m.release(phis.capacity() * std::mem::size_of::<(InstId, Value, Value)>());
                 return Ok(None);
             };
             if slot.replace(v).is_some() {
+                m.release(phis.capacity() * std::mem::size_of::<(InstId, Value, Value)>());
                 return Ok(None);
             }
         }
         let (Some(a), Some(b)) = (from_pre, from_latch) else {
+            m.release(phis.capacity() * std::mem::size_of::<(InstId, Value, Value)>());
             return Ok(None);
         };
         m.grow(&mut phis, 1)?;
         phis.push((i, a, b));
     }
-    let profitable = scoped(m, |m, _| profitable(cx, l, folder.types, inside, m));
-    if !profitable? {
-        m.release(phis.capacity() * std::mem::size_of::<(InstId, Value, Value)>());
-        return Ok(None);
-    }
-    // The iterations, until one leaves.
-    let mut vals: Vec<Option<ConstId>> = phis
+    Ok(Some(Shape {
+        header,
+        latch,
+        phis,
+        header_exit,
+        latch_exit,
+    }))
+}
+
+/// The header runs of the loop `l` of shape `s`, evaluated from its preheader's constants
+/// (module docs, the third condition): each run's PHI values are handed to `each`, until an exit
+/// is taken within `cap` runs. The number of runs and the exit taken, or `None` when no exit is
+/// decided within them.
+fn runs(
+    cx: &Cx<'_>,
+    l: LoopId,
+    s: &Shape,
+    (folder, globals): (&mut Folder<'_>, &Arena<GlobalId, Global>),
+    cap: u32,
+    m: &mut Meter,
+    mut each: impl FnMut(&[Option<ConstId>], &Folder<'_>),
+) -> Result<Option<(u32, (BlockId, BlockId))>, Error> {
+    let (header, latch) = (s.header, s.latch);
+    let mut vals: Vec<Option<ConstId>> = s
+        .phis
         .iter()
         .map(|&(_, pre, _)| match pre {
             Value::Const(c) => Some(c),
@@ -383,19 +432,19 @@ fn plan(
     let mut sim = Sim {
         cx,
         l,
-        phis: &phis,
+        phis: &s.phis,
         memo: Vec::new(),
         steps: 0,
     };
-    let mut decided = None;
-    for k in 1..=TRIPS {
+    for k in 1..=cap {
         m.tick(1)?;
+        each(&vals, folder);
         sim.memo.clear();
         sim.steps = 0;
         let leaves = |sim: &mut Sim<'_>,
                       folder: &mut Folder<'_>,
                       vals: &[Option<ConstId>],
-                      exit: Option<(Value, BlockId, BlockId, bool)>,
+                      exit: Option<Exit>,
                       m: &mut Meter|
          -> Result<Option<Option<BlockId>>, Error> {
             let Some((c, _, out, when)) = exit else {
@@ -406,31 +455,112 @@ fn plan(
                 .and_then(|x| folder.int(x))
                 .map(|x| ((x != 0) == when).then_some(out)))
         };
-        let Some(out) = leaves(&mut sim, folder, &vals, header_exit, m)? else {
-            break;
+        let Some(out) = leaves(&mut sim, folder, &vals, s.header_exit, m)? else {
+            return Ok(None);
         };
         if let Some(out) = out {
-            decided = Some((k, (header, out)));
-            break;
+            return Ok(Some((k, (header, out))));
         }
         if latch != header {
-            let Some(out) = leaves(&mut sim, folder, &vals, latch_exit, m)? else {
-                break;
+            let Some(out) = leaves(&mut sim, folder, &vals, s.latch_exit, m)? else {
+                return Ok(None);
             };
             if let Some(out) = out {
-                decided = Some((k, (latch, out)));
-                break;
+                return Ok(Some((k, (latch, out))));
             }
         }
         let mut next = Vec::with_capacity(vals.len());
-        for &(_, _, back) in &phis {
+        for &(_, _, back) in &s.phis {
             next.push(sim.eval(back, &vals, (folder, globals), m)?);
         }
         vals = next;
     }
-    let Some((trips, exit)) = decided else {
+    Ok(None)
+}
+
+/// The least and the greatest value each of loop `l`'s header PHIs holds over the header's runs,
+/// where the constants decide those runs (the module docs' first three conditions, within `cap`
+/// runs): each PHI with its bounds as zero-extended integers, or `None` for one that some run
+/// holds no integer constant in. `None` when the runs are not decided. The list is charged to the
+/// ledger and recorded in `held`.
+pub(super) fn counter_bounds(
+    cx: &Cx<'_>,
+    l: LoopId,
+    (folder, globals): (&mut Folder<'_>, &Arena<GlobalId, Global>),
+    cap: u32,
+    m: &mut Meter,
+    held: &mut usize,
+) -> Result<Option<Vec<(InstId, Option<(u64, u64)>)>>, Error> {
+    let Some(s) = shape(cx, l, m)? else {
         return Ok(None);
     };
+    let mut bounds: Vec<(InstId, Option<(u64, u64)>)> = Vec::new();
+    m.reserve_exact(&mut bounds, s.phis.len())?;
+    *held = held
+        .saturating_add(bounds.capacity() * std::mem::size_of::<(InstId, Option<(u64, u64)>)>());
+    bounds.extend(s.phis.iter().map(|&(p, _, _)| (p, Some((u64::MAX, 0)))));
+    let decided = runs(cx, l, &s, (folder, globals), cap, m, |vals, f| {
+        for ((_, b), &v) in bounds.iter_mut().zip(vals) {
+            *b = b
+                .zip(v.and_then(|c| f.int(c)))
+                .map(|((lo, hi), x)| (lo.min(x), hi.max(x)));
+        }
+    });
+    s.release(m);
+    Ok(decided?.map(|_| bounds))
+}
+
+/// The plan of loop `l`, when it qualifies (module docs). `inside` is all false on entry and on
+/// return.
+fn plan(
+    cx: &Cx<'_>,
+    l: LoopId,
+    (folder, globals): (&mut Folder<'_>, &Arena<GlobalId, Global>),
+    inside: &mut [bool],
+    grown: u64,
+    m: &mut Meter,
+) -> Result<Option<Plan>, Error> {
+    let (body, forest) = (cx.body, cx.forest);
+    let Some(s) = shape(cx, l, m)? else {
+        return Ok(None);
+    };
+    let (header, latch) = (s.header, s.latch);
+    let disabled = body.terminator(latch).is_none_or(|term| {
+        term.kind
+            .loop_hints()
+            .is_some_and(|h| h.unroll == Unroll::Disable)
+    });
+    if disabled {
+        s.release(m);
+        return Ok(None);
+    }
+    // The size.
+    let mut size = 0u64;
+    for b in forest.blocks(l) {
+        m.tick(1)?;
+        let block = body
+            .blocks
+            .get(b)
+            .ok_or_else(|| invariant("loop block out of range"))?;
+        size += block.len() as u64;
+        if size > UNROLLED {
+            s.release(m);
+            return Ok(None);
+        }
+    }
+    let profitable = scoped(m, |m, _| profitable(cx, l, folder.types, inside, m));
+    if !profitable? {
+        s.release(m);
+        return Ok(None);
+    }
+    // The iterations, until one leaves.
+    let Some((trips, exit)) = runs(cx, l, &s, (folder, globals), TRIPS, m, |_, _| {})? else {
+        s.release(m);
+        return Ok(None);
+    };
+    let Shape {
+        phis, header_exit, ..
+    } = s;
     let nphis = u32::try_from(phis.len()).map_err(|_| invariant("header PHIs"))?;
     let copy_insts = u32::try_from(size)
         .map_err(|_| invariant("loop size"))?

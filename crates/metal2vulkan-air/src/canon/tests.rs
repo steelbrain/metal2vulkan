@@ -27,6 +27,7 @@ mod float_folds;
 mod global_builtins;
 mod opencl;
 mod private_memory;
+mod private_reach;
 mod table_copies;
 mod texture_writes;
 mod unbound_immediates;
