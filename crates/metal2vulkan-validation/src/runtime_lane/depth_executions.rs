@@ -10,9 +10,11 @@
 //! (`execute_commands_in_buffer_indirect`). The depth the pass stores is each visible chunk's quad
 //! at its depth, and the clear depth elsewhere: into a 2D texture, into slice 1 of a 2D array,
 //! beside a later encoder of the command buffer that makes a shadowed texture resident, and over a
-//! rasterization rate map. And a frame's two passes that execute the commands after the culling
-//! wait for the culling alone: not for another queue's unrelated work submitted before them, nor
-//! the second for the first.
+//! rasterization rate map. And a frame's two passes that execute the commands after the culling,
+//! where each command binds the positions at a stride of its own (`dio_encode_strided`, a state
+//! whose layout takes its stride per bind), which keeps their executions on the host step, wait
+//! for the culling alone: not for another queue's unrelated work submitted before them, nor the
+//! second for the first. At the state's fixed stride the frame's executions run on the GPU alone.
 
 use super::degrade_notices::on_device;
 use super::rate_maps::descriptor as descriptor_of_rate_map;
@@ -74,15 +76,17 @@ fn kernel(device: &Device, library: &Library, name: &str) -> ComputePipelineStat
 }
 
 /// The depth-only state of `dio_vertex`: attribute 0 a `float3` of buffer 0's 12-byte layout,
-/// no fragment function, a `Depth32Float` attachment, made for indirect command buffers.
-fn depth_only(device: &Device, library: &Library) -> RenderPipelineState {
+/// or of a layout whose stride each bind sets where `per_bind`, no fragment function, a
+/// `Depth32Float` attachment, made for indirect command buffers.
+fn depth_only(device: &Device, library: &Library, per_bind: bool) -> RenderPipelineState {
     let function = library.new_function_with_name("dio_vertex").unwrap();
     let mut descriptor =
         RenderPipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
     let mut vertex = VertexDescriptor::new();
-    vertex
-        .layouts
-        .insert(0, VertexBufferLayoutDescriptor::new(Some(12)));
+    vertex.layouts.insert(
+        0,
+        VertexBufferLayoutDescriptor::new((!per_bind).then_some(12)),
+    );
     vertex.attributes.insert(
         0,
         VertexAttributeDescriptor::new(VertexFormat::Float3, 0, 0),
@@ -221,10 +225,19 @@ struct Workload {
 }
 
 impl Workload {
+    /// The workload at the state's fixed stride.
     fn new(device: &Device) -> Workload {
+        Workload::with_strides(device, false)
+    }
+
+    /// The workload, each command binding the positions at a stride of its own where `per_bind`
+    /// (`dio_encode_strided`, the state's layout taking its stride per bind), else at the state's
+    /// fixed stride (`dio_encode`).
+    fn with_strides(device: &Device, per_bind: bool) -> Workload {
         let library = library(device);
         let mut descriptor = IndirectCommandBufferDescriptor::new();
         descriptor.command_types = IndirectCommandType::DRAW_INDEXED;
+        descriptor.support_dynamic_attribute_stride = per_bind;
         descriptor.inherit_pipeline_state = true;
         descriptor.inherit_buffers = false;
         descriptor.max_vertex_buffer_bind_count = 2;
@@ -235,8 +248,11 @@ impl Workload {
         let camera: Vec<u8> = CAMERA.iter().flat_map(|f| f.to_le_bytes()).collect();
         Workload {
             reset: kernel(device, &library, "dio_reset"),
-            encode: kernel(device, &library, "dio_encode"),
-            state: depth_only(device, &library),
+            encode: match per_bind {
+                true => kernel(device, &library, "dio_encode_strided"),
+                false => kernel(device, &library, "dio_encode"),
+            },
+            state: depth_only(device, &library, per_bind),
             less: less(device),
             icb,
             encoder_args,
@@ -370,55 +386,77 @@ fn a_kernel_s_depth_only_commands_draw_through_the_range_it_wrote() {
     });
 }
 
-/// A frame's executions after the culling wait for the culling alone. One queue commits the
-/// culling; another commits unrelated work (a fill of a buffer of its own), submitted before the
-/// frame is committed; then the first commits the frame: two passes, each into a target of its
-/// own, that execute the commands through the range. Each pass's host step waits for the batches
-/// that wrote the records and the range, so both gates leave work submitted before them out (the
-/// unrelated fill, and for the second the first pass's batch): `host_step_gates_narrowed` counts
-/// two, against none where a gate is every queue's last submission. Both targets hold each kept
-/// chunk's depth.
+/// A frame's executions after the culling wait for the culling alone ([`frame`]). Each command
+/// binds the positions at a stride of its own, which keeps the executions on the host step (a
+/// command's stride lives in its record alone: `DrawReplayRule::VertexAttributes`). Each pass's
+/// host step waits for the batches that wrote the records and the range, so both gates leave
+/// work submitted before them out (the unrelated fill, and for the second the first pass's
+/// batch): `host_step_gates_narrowed` counts two, against none where a gate is every queue's last
+/// submission. Both targets hold each kept chunk's depth.
 #[test]
 fn a_frame_s_executions_wait_for_the_culling_alone() {
     on_device(|device, _| {
-        let work = Workload::new(device);
-        let queue = device.new_command_queue().unwrap();
-        let other = device.new_command_queue().unwrap();
-        let culling = queue.command_buffer().unwrap();
-        work.cull(&culling);
-        culling.commit().unwrap();
-        let filled = buffer_with(device, &[0; 1 << 16]).unwrap();
-        let unrelated = other.command_buffer().unwrap();
-        let mut fill = unrelated.blit_command_encoder().unwrap();
-        fill.fill_buffer(&filled, 0..1 << 16, 0x5A).unwrap();
-        fill.end_encoding().unwrap();
-        unrelated.commit().unwrap();
-        unrelated.wait_until_scheduled().unwrap();
-        // The culling's own host steps (a dispatch whose pipeline was still being made) are
-        // behind it once it is scheduled.
-        culling.wait_until_scheduled().unwrap();
-        let before = device.work_counts();
-        let targets = [target(device, None), target(device, None)];
-        let frame = queue.command_buffer().unwrap();
-        for target in &targets {
-            work.draw(&frame, &depth_pass(target, 0));
-        }
-        frame.commit().unwrap();
-        frame.wait_until_completed_for(WAIT).unwrap();
-        let after = device.work_counts();
-        unrelated.wait_until_completed_for(WAIT).unwrap();
-        let narrowed = after.host_step_gates_narrowed - before.host_step_gates_narrowed;
-        let steps = after.host_steps_recorded - before.host_steps_recorded;
-        let drawn: Vec<Vec<f32>> = targets.iter().map(|target| depths(target, 0)).collect();
-        let statuses = [culling.status(), unrelated.status(), frame.status()];
-        eprintln!(
-            "statuses {statuses:?}, refusal {:?}, steps {steps}, gates narrowed {narrowed}, \
-             depths {drawn:?}",
-            frame.refusal()
-        );
-        assert_eq!(statuses, [CommandBufferStatus::Completed; 3]);
-        assert_eq!(frame.refusal(), None);
-        assert_eq!(drawn, [expected(), expected()]);
-        assert_eq!((steps, narrowed), (2, 2), "host steps, gates narrowed");
+        let counts = frame(device, true);
+        assert_eq!(counts, (2, 2), "host steps, gates narrowed");
     });
+}
+
+/// [`frame`] at the state's fixed stride: the executions take the GPU form (the replay pulls the
+/// state's `float3` attribute from its 12-byte layout), so no host step runs and no gate is
+/// taken, and both targets hold each kept chunk's depth.
+#[test]
+fn a_frame_s_executions_at_a_fixed_stride_run_on_the_gpu() {
+    on_device(|device, _| {
+        let counts = frame(device, false);
+        assert_eq!(counts, (0, 0), "host steps, gates narrowed");
+    });
+}
+
+/// A frame after the culling on `device`. One queue commits the culling; another commits
+/// unrelated work (a fill of a buffer of its own), submitted before the frame is committed; then
+/// the first commits the frame: two passes, each into a target of its own, that execute the
+/// commands through the range, each command binding the positions at a stride of its own where
+/// `per_bind` ([`Workload::with_strides`]). Every command buffer completes, the frame refuses
+/// nothing, and both targets hold each kept chunk's depth. Returns the host steps the frame
+/// recorded and the gates it narrowed.
+fn frame(device: &Device, per_bind: bool) -> (u64, u64) {
+    let work = Workload::with_strides(device, per_bind);
+    let queue = device.new_command_queue().unwrap();
+    let other = device.new_command_queue().unwrap();
+    let culling = queue.command_buffer().unwrap();
+    work.cull(&culling);
+    culling.commit().unwrap();
+    let filled = buffer_with(device, &[0; 1 << 16]).unwrap();
+    let unrelated = other.command_buffer().unwrap();
+    let mut fill = unrelated.blit_command_encoder().unwrap();
+    fill.fill_buffer(&filled, 0..1 << 16, 0x5A).unwrap();
+    fill.end_encoding().unwrap();
+    unrelated.commit().unwrap();
+    unrelated.wait_until_scheduled().unwrap();
+    // The culling's own host steps (a dispatch whose pipeline was still being made) are
+    // behind it once it is scheduled.
+    culling.wait_until_scheduled().unwrap();
+    let before = device.work_counts();
+    let targets = [target(device, None), target(device, None)];
+    let frame = queue.command_buffer().unwrap();
+    for target in &targets {
+        work.draw(&frame, &depth_pass(target, 0));
+    }
+    frame.commit().unwrap();
+    frame.wait_until_completed_for(WAIT).unwrap();
+    let after = device.work_counts();
+    unrelated.wait_until_completed_for(WAIT).unwrap();
+    let narrowed = after.host_step_gates_narrowed - before.host_step_gates_narrowed;
+    let steps = after.host_steps_recorded - before.host_steps_recorded;
+    let drawn: Vec<Vec<f32>> = targets.iter().map(|target| depths(target, 0)).collect();
+    let statuses = [culling.status(), unrelated.status(), frame.status()];
+    eprintln!(
+        "per bind {per_bind}: statuses {statuses:?}, refusal {:?}, steps {steps}, gates \
+         narrowed {narrowed}, depths {drawn:?}",
+        frame.refusal()
+    );
+    assert_eq!(statuses, [CommandBufferStatus::Completed; 3]);
+    assert_eq!(frame.refusal(), None);
+    assert_eq!(drawn, [expected(), expected()]);
+    (steps, narrowed)
 }

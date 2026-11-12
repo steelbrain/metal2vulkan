@@ -4,7 +4,9 @@
 // by an atomic increment of the range's length (buffer 4, the range's second word) and encodes
 // there, onto the executing encoder's pipeline state, which the commands inherit, its own vertex
 // buffers (the `positions` buffer at 0, the address of the constant `camera` argument at 1) and
-// an indexed triangle-list draw of 6 16-bit indices from 6 * tid, once. `dio_vertex` reads its
+// an indexed triangle-list draw of 6 16-bit indices from 6 * tid, once. `dio_encode_strided` does
+// the same, binding the positions with a stride of 12 bytes of its own, for a state whose layout
+// takes its stride per bind (`MTLBufferLayoutStrideDynamic`). `dio_vertex` reads its
 // position as attribute 0 (a float3 from buffer 0) and places it at depth
 // position.z * camera.depth_scale + camera.depth_offset. There is no fragment function. Written
 // for this repository; no third-party source. Loop-free.
@@ -40,6 +42,24 @@ kernel void dio_encode(device const Encoder &encoder [[buffer(0)]],
     uint slot = atomic_fetch_add_explicit(length, 1, memory_order_relaxed);
     render_command command(encoder.commands, slot);
     command.set_vertex_buffer(positions, 0);
+    command.set_vertex_buffer(&camera, 1);
+    command.draw_indexed_primitives(primitive_type::triangle, 6, indices + 6 * tid, 1);
+}
+
+kernel void dio_encode_strided(device const Encoder &encoder [[buffer(0)]],
+                               const device float *positions [[buffer(1)]],
+                               const device ushort *indices [[buffer(2)]],
+                               constant Camera &camera [[buffer(3)]],
+                               device atomic_uint *length [[buffer(4)]],
+                               constant uint &visible [[buffer(5)]],
+                               uint tid [[thread_position_in_grid]])
+{
+    if (((visible >> tid) & 1) == 0) {
+        return;
+    }
+    uint slot = atomic_fetch_add_explicit(length, 1, memory_order_relaxed);
+    render_command command(encoder.commands, slot);
+    command.set_vertex_buffer(positions, 12, 0);
     command.set_vertex_buffer(&camera, 1);
     command.draw_indexed_primitives(primitive_type::triangle, 6, indices + 6 * tid, 1);
 }

@@ -11,15 +11,15 @@ target triple = "air64_v28-apple-macosx26.0.0"
 
 ; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(argmem: write)
 define void @dio_reset(ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %0) local_unnamed_addr #0 {
-  store i32 0, ptr addrspace(1) %0, align 4, !tbaa !38, !alias.scope !42
+  store i32 0, ptr addrspace(1) %0, align 4, !tbaa !39, !alias.scope !43
   %2 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 1
-  store i32 0, ptr addrspace(1) %2, align 4, !tbaa !38, !alias.scope !42
+  store i32 0, ptr addrspace(1) %2, align 4, !tbaa !39, !alias.scope !43
   ret void
 }
 
 ; Function Attrs: mustprogress nounwind willreturn
 define void @dio_encode(ptr addrspace(1) noundef readonly align 8 captures(none) dereferenceable(8) "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1, ptr addrspace(1) noundef "air-buffer-no-alias" %2, ptr addrspace(2) noundef align 4 dereferenceable(8) "air-buffer-no-alias" %3, ptr addrspace(1) noundef captures(none) "air-buffer-no-alias" %4, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %5, i32 noundef %6) local_unnamed_addr #1 {
-  %8 = load i32, ptr addrspace(2) %5, align 4, !tbaa !38, !alias.scope !45, !noalias !48
+  %8 = load i32, ptr addrspace(2) %5, align 4, !tbaa !39, !alias.scope !46, !noalias !49
   %9 = and i32 %6, 31
   %10 = shl nuw i32 1, %9
   %11 = and i32 %8, %10
@@ -30,9 +30,37 @@ define void @dio_encode(ptr addrspace(1) noundef readonly align 8 captures(none)
   %14 = getelementptr inbounds %"struct.metal::_atomic", ptr addrspace(1) %4, i64 0, i32 0
   %15 = tail call i32 @air.atomic.global.add.u.i32(ptr addrspace(1) captures(none) %14, i32 1, i32 0, i32 2, i1 true) #4
   %16 = getelementptr inbounds %struct.Encoder, ptr addrspace(1) %0, i64 0, i32 0, i32 0
-  %17 = load ptr addrspace(1), ptr addrspace(1) %16, align 8, !tbaa.struct !54, !alias.scope !57, !noalias !58
+  %17 = load ptr addrspace(1), ptr addrspace(1) %16, align 8, !tbaa.struct !55, !alias.scope !58, !noalias !59
   %18 = bitcast ptr addrspace(1) %1 to ptr addrspace(1)
   tail call void @air.set_vertex_buffer_render_command.p1i8(ptr addrspace(1) captures(none) %17, i32 %15, ptr addrspace(1) %18, i64 -1, i32 0) #4
+  %19 = bitcast ptr addrspace(2) %3 to ptr addrspace(2)
+  tail call void @air.set_vertex_buffer_render_command.p2i8(ptr addrspace(1) captures(none) %17, i32 %15, ptr addrspace(2) %19, i64 -1, i32 1) #4
+  %20 = mul i32 %6, 6
+  %21 = zext i32 %20 to i64
+  %22 = getelementptr inbounds i16, ptr addrspace(1) %2, i64 %21
+  tail call void @air.draw_indexed_primitives_render_command.p1i16(ptr addrspace(1) captures(none) %17, i32 %15, i32 3, i32 6, ptr addrspace(1) %22, i32 1, i32 0, i32 0) #4
+  br label %23
+
+23:                                               ; preds = %13, %7
+  ret void
+}
+
+; Function Attrs: mustprogress nounwind willreturn
+define void @dio_encode_strided(ptr addrspace(1) noundef readonly align 8 captures(none) dereferenceable(8) "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1, ptr addrspace(1) noundef "air-buffer-no-alias" %2, ptr addrspace(2) noundef align 4 dereferenceable(8) "air-buffer-no-alias" %3, ptr addrspace(1) noundef captures(none) "air-buffer-no-alias" %4, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %5, i32 noundef %6) local_unnamed_addr #1 {
+  %8 = load i32, ptr addrspace(2) %5, align 4, !tbaa !39, !alias.scope !60, !noalias !63
+  %9 = and i32 %6, 31
+  %10 = shl nuw i32 1, %9
+  %11 = and i32 %8, %10
+  %12 = icmp eq i32 %11, 0
+  br i1 %12, label %23, label %13
+
+13:                                               ; preds = %7
+  %14 = getelementptr inbounds %"struct.metal::_atomic", ptr addrspace(1) %4, i64 0, i32 0
+  %15 = tail call i32 @air.atomic.global.add.u.i32(ptr addrspace(1) captures(none) %14, i32 1, i32 0, i32 2, i1 true) #4
+  %16 = getelementptr inbounds %struct.Encoder, ptr addrspace(1) %0, i64 0, i32 0, i32 0
+  %17 = load ptr addrspace(1), ptr addrspace(1) %16, align 8, !tbaa.struct !55, !alias.scope !69, !noalias !70
+  %18 = bitcast ptr addrspace(1) %1 to ptr addrspace(1)
+  tail call void @air.set_vertex_buffer_render_command.p1i8(ptr addrspace(1) captures(none) %17, i32 %15, ptr addrspace(1) %18, i64 12, i32 0) #4
   %19 = bitcast ptr addrspace(2) %3 to ptr addrspace(2)
   tail call void @air.set_vertex_buffer_render_command.p2i8(ptr addrspace(1) captures(none) %17, i32 %15, ptr addrspace(2) %19, i64 -1, i32 1) #4
   %20 = mul i32 %6, 6
@@ -50,10 +78,10 @@ define <4 x float> @dio_vertex(<3 x float> %0, ptr addrspace(2) noundef readonly
   %3 = shufflevector <3 x float> %0, <3 x float> poison, <4 x i32> <i32 0, i32 1, i32 poison, i32 poison>
   %4 = extractelement <3 x float> %0, i64 2
   %5 = getelementptr inbounds %struct.Camera, ptr addrspace(2) %1, i64 0, i32 0
-  %6 = load float, ptr addrspace(2) %5, align 4, !tbaa !59, !alias.scope !62
+  %6 = load float, ptr addrspace(2) %5, align 4, !tbaa !71, !alias.scope !74
   %7 = fmul fast float %6, %4
   %8 = getelementptr inbounds %struct.Camera, ptr addrspace(2) %1, i64 0, i32 1
-  %9 = load float, ptr addrspace(2) %8, align 4, !tbaa !65, !alias.scope !62
+  %9 = load float, ptr addrspace(2) %8, align 4, !tbaa !77, !alias.scope !74
   %10 = fadd fast float %7, %9
   %11 = insertelement <4 x float> %3, float 1.000000e+00, i64 3
   %12 = insertelement <4 x float> %11, float %10, i64 2
@@ -79,12 +107,12 @@ attributes #3 = { mustprogress nounwind willreturn }
 attributes #4 = { nounwind willreturn }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
-!air.kernel = !{!9, !13}
-!air.vertex = !{!26}
-!air.compile_options = !{!32, !33, !34}
-!llvm.ident = !{!35}
-!air.version = !{!36}
-!air.language_version = !{!37}
+!air.kernel = !{!9, !13, !26}
+!air.vertex = !{!27}
+!air.compile_options = !{!33, !34, !35}
+!llvm.ident = !{!36}
+!air.version = !{!37}
+!air.language_version = !{!38}
 
 !0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
@@ -112,43 +140,55 @@ attributes #4 = { nounwind willreturn }
 !23 = !{i32 0, i32 4, i32 0, !"uint", !"__s"}
 !24 = !{i32 5, !"air.buffer", !"air.buffer_size", i32 4, !"air.location_index", i32 5, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"visible"}
 !25 = !{i32 6, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"tid"}
-!26 = !{ptr @dio_vertex, !27, !29}
-!27 = !{!28}
-!28 = !{!"air.position", !"air.arg_type_name", !"float4"}
-!29 = !{!30, !31}
-!30 = !{i32 0, !"air.vertex_input", !"air.location_index", i32 0, i32 1, !"air.arg_type_name", !"float3", !"air.arg_name", !"position"}
-!31 = !{i32 1, !"air.buffer", !"air.buffer_size", i32 8, !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 2, !"air.struct_type_info", !21, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"Camera", !"air.arg_name", !"camera"}
-!32 = !{!"air.compile.denorms_disable"}
-!33 = !{!"air.compile.fast_math_enable"}
-!34 = !{!"air.compile.framebuffer_fetch_enable"}
-!35 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
-!36 = !{i32 2, i32 8, i32 0}
-!37 = !{!"Metal", i32 4, i32 0, i32 0}
-!38 = !{!39, !39, i64 0}
-!39 = !{!"int", !40, i64 0}
-!40 = !{!"omnipotent char", !41, i64 0}
-!41 = !{!"Simple C++ TBAA"}
-!42 = !{!43}
-!43 = distinct !{!43, !44, !"air-alias-scope-arg(0)"}
-!44 = distinct !{!44, !"air-alias-scopes(dio_reset)"}
-!45 = !{!46}
-!46 = distinct !{!46, !47, !"air-alias-scope-arg(5)"}
-!47 = distinct !{!47, !"air-alias-scopes(dio_encode)"}
-!48 = !{!49, !50, !51, !52, !53}
-!49 = distinct !{!49, !47, !"air-alias-scope-arg(0)"}
-!50 = distinct !{!50, !47, !"air-alias-scope-arg(1)"}
-!51 = distinct !{!51, !47, !"air-alias-scope-arg(2)"}
-!52 = distinct !{!52, !47, !"air-alias-scope-arg(3)"}
-!53 = distinct !{!53, !47, !"air-alias-scope-arg(4)"}
-!54 = !{i64 0, i64 8, !55}
-!55 = !{!56, !56, i64 0}
-!56 = !{!"__metal_command_buffer_t", !40, i64 0}
-!57 = !{!49}
-!58 = !{!50, !51, !52, !53, !46}
-!59 = !{!60, !61, i64 0}
-!60 = !{!"_ZTS6Camera", !61, i64 0, !61, i64 4}
-!61 = !{!"float", !40, i64 0}
-!62 = !{!63}
-!63 = distinct !{!63, !64, !"air-alias-scope-arg(1)"}
-!64 = distinct !{!64, !"air-alias-scopes(dio_vertex)"}
-!65 = !{!60, !61, i64 4}
+!26 = !{ptr @dio_encode_strided, !10, !14}
+!27 = !{ptr @dio_vertex, !28, !30}
+!28 = !{!29}
+!29 = !{!"air.position", !"air.arg_type_name", !"float4"}
+!30 = !{!31, !32}
+!31 = !{i32 0, !"air.vertex_input", !"air.location_index", i32 0, i32 1, !"air.arg_type_name", !"float3", !"air.arg_name", !"position"}
+!32 = !{i32 1, !"air.buffer", !"air.buffer_size", i32 8, !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 2, !"air.struct_type_info", !21, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"Camera", !"air.arg_name", !"camera"}
+!33 = !{!"air.compile.denorms_disable"}
+!34 = !{!"air.compile.fast_math_enable"}
+!35 = !{!"air.compile.framebuffer_fetch_enable"}
+!36 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!37 = !{i32 2, i32 8, i32 0}
+!38 = !{!"Metal", i32 4, i32 0, i32 0}
+!39 = !{!40, !40, i64 0}
+!40 = !{!"int", !41, i64 0}
+!41 = !{!"omnipotent char", !42, i64 0}
+!42 = !{!"Simple C++ TBAA"}
+!43 = !{!44}
+!44 = distinct !{!44, !45, !"air-alias-scope-arg(0)"}
+!45 = distinct !{!45, !"air-alias-scopes(dio_reset)"}
+!46 = !{!47}
+!47 = distinct !{!47, !48, !"air-alias-scope-arg(5)"}
+!48 = distinct !{!48, !"air-alias-scopes(dio_encode)"}
+!49 = !{!50, !51, !52, !53, !54}
+!50 = distinct !{!50, !48, !"air-alias-scope-arg(0)"}
+!51 = distinct !{!51, !48, !"air-alias-scope-arg(1)"}
+!52 = distinct !{!52, !48, !"air-alias-scope-arg(2)"}
+!53 = distinct !{!53, !48, !"air-alias-scope-arg(3)"}
+!54 = distinct !{!54, !48, !"air-alias-scope-arg(4)"}
+!55 = !{i64 0, i64 8, !56}
+!56 = !{!57, !57, i64 0}
+!57 = !{!"__metal_command_buffer_t", !41, i64 0}
+!58 = !{!50}
+!59 = !{!51, !52, !53, !54, !47}
+!60 = !{!61}
+!61 = distinct !{!61, !62, !"air-alias-scope-arg(5)"}
+!62 = distinct !{!62, !"air-alias-scopes(dio_encode_strided)"}
+!63 = !{!64, !65, !66, !67, !68}
+!64 = distinct !{!64, !62, !"air-alias-scope-arg(0)"}
+!65 = distinct !{!65, !62, !"air-alias-scope-arg(1)"}
+!66 = distinct !{!66, !62, !"air-alias-scope-arg(2)"}
+!67 = distinct !{!67, !62, !"air-alias-scope-arg(3)"}
+!68 = distinct !{!68, !62, !"air-alias-scope-arg(4)"}
+!69 = !{!64}
+!70 = !{!65, !66, !67, !68, !61}
+!71 = !{!72, !73, i64 0}
+!72 = !{!"_ZTS6Camera", !73, i64 0, !73, i64 4}
+!73 = !{!"float", !41, i64 0}
+!74 = !{!75}
+!75 = distinct !{!75, !76, !"air-alias-scope-arg(1)"}
+!76 = distinct !{!76, !"air-alias-scopes(dio_vertex)"}
+!77 = !{!72, !73, i64 4}
