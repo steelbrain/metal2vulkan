@@ -411,7 +411,7 @@ alignment of images over host pages) can miss.
 
 Such an image is bound at the buffer's memory offset plus the texture's offset, which must be a
 multiple of the device's linear-image alignment (`Device::minimum_linear_texture_alignment_for_pixel_format`
-answers it: 256 bytes on RADV, 128 on NVIDIA, 64 on lavapipe, 16 on MoltenVK). The runtime starts
+answers it: 256 bytes on RADV, 128 on NVIDIA, 64 on ANV and lavapipe, 16 on MoltenVK). The runtime starts
 each buffer of its own memory on a multiple of 256, so a texture at offset 0 (or any multiple of
 256) aliases the buffer where the device lays its rows out; one at another offset, as a decoded
 frame's planes CoreVideo lays 32 bytes into their surface (and its second plane 32 bytes past a

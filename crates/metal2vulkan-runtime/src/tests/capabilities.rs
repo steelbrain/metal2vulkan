@@ -42,7 +42,7 @@ pub(super) fn committed_descriptions() -> Vec<(String, DeviceDescription)> {
 
 /// The value the profile `stem` states under the member `key`, the first in its file; `None`
 /// where it states none.
-fn profile_value(stem: &str, key: &str) -> Option<serde_json::Value> {
+pub(super) fn profile_value(stem: &str, key: &str) -> Option<serde_json::Value> {
     fn find<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
         match value {
             serde_json::Value::Object(map) => map

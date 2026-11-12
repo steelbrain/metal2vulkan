@@ -1,10 +1,58 @@
 //! `texture/linear_alignment.rs`: the record of a device's linear texture alignments, read back
 //! for its driver alone and only whole.
 
+use super::capabilities::{committed_descriptions, profile_value};
 use crate::in_place::DriverIdentity;
-use crate::texture::linear_alignment::{backed_formats, decode, encode, record_name};
+use crate::texture::linear_alignment::{
+    backed_formats, decode, encode, placed_answer, record_name, USAGES,
+};
 use metal2vulkan::metal::PixelFormat;
 use std::collections::HashMap;
+
+/// A format's answer is the largest of its usages' in-place alignments, at least the device's
+/// line of memory (`nonCoherentAtomSize`), and Metal's 16 where no usage is ever in place. Over
+/// the committed profiles' lines, with the probe answers the venues' drivers gave for reads
+/// (ANV's 16, lavapipe's 64, NVIDIA's 128, RADV's 256, MoltenVK's 16): ANV's 16 rises to its
+/// 64-byte line, which its probe alone answered before, and every other venue's stays.
+#[test]
+fn the_answer_is_the_usages_largest_and_at_least_the_line() {
+    assert_eq!(USAGES.len(), 3);
+    let line = |stem: &str| {
+        profile_value(stem, "nonCoherentAtomSize")
+            .and_then(|v| v.as_u64())
+            .unwrap_or_else(|| panic!("{stem}: no nonCoherentAtomSize"))
+    };
+    // (profile, the probe's read answer, the answer before the line, after it)
+    let venues = [
+        ("intel-irisxe-rplp-anv", 16, 16, 64),
+        ("intel-uhd770-rpls-anv", 16, 16, 64),
+        ("gate-lavapipe", 64, 64, 64),
+        ("nvidia-rtx5080-laptop", 128, 128, 128),
+        ("amd-780m-radv", 256, 256, 256),
+        ("moltenvk-m3", 16, 16, 16),
+    ];
+    for (stem, read, before, after) in venues {
+        let line = line(stem);
+        assert_eq!(placed_answer(&[Some(read)], 1), before, "{stem}");
+        assert_eq!(
+            placed_answer(&[Some(read), None, None], line),
+            after,
+            "{stem}"
+        );
+        // A usage that needs a wider pitch raises the answer; one never in place leaves it.
+        assert_eq!(
+            placed_answer(&[Some(read), Some(512), None], line),
+            512,
+            "{stem}"
+        );
+        assert_eq!(placed_answer(&[None, None, None], line), 16, "{stem}");
+    }
+    for (stem, _) in committed_descriptions() {
+        let line = line(&stem);
+        assert!(line.is_power_of_two() && line <= 256, "{stem}: {line}");
+        assert_eq!(placed_answer(&[Some(16)], line), line.max(16), "{stem}");
+    }
+}
 
 fn identity() -> DriverIdentity {
     DriverIdentity {

@@ -364,6 +364,30 @@ fn a_render_target_at_the_answered_alignment_is_in_place() {
                  place, the line {line}, renders of rows on lines passed: {renders}",
                 device.name()
             );
+            // The same texture at Metal's 16, an offset under the line where the line is longer:
+            // its texels then share their first line with bytes before them, so it is a shadow
+            // wherever the device's check failed renders of such texels.
+            let (pf, texel, row) = (PixelFormat::RGBA8Unorm, 4, 4 * line.max(16));
+            let at = (16, row);
+            let what = format!("{} {}x{ROWS} at {at:?}", pf.name(), row / texel);
+            if let Some(over) = over_pages(device, (pf, usage), (row / texel, ROWS), at) {
+                let base = over.buffer.contents().map_or(0, |a| a.as_ptr() as u64);
+                let on_lines = in_place_rows::on_lines(device, base + at.0, row, row, ROWS);
+                // SAFETY: the handle is only compared, while the texture lives.
+                let aliased = unsafe { over.texture.vk_image() }.is_some();
+                let passed = in_place_rows::passed(device, "Pointer renders", on_lines);
+                eprintln!(
+                    "LINEAR-ALIGNMENT on {}: {what}: rows on lines {on_lines}, renders passed \
+                     {passed}, in place {aliased}",
+                    device.name()
+                );
+                if !passed {
+                    assert!(
+                        !aliased,
+                        "{what}: in place where the check failed its renders"
+                    );
+                }
+            }
         },
     );
 }

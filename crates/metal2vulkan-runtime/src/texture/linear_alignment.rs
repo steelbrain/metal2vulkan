@@ -6,16 +6,31 @@
 //!   does, and answers no alignment below it. A texture under the answer but at 16 is made as
 //!   before: an image in place where the device takes its layout, else a shadow, announced
 //!   (`shadowed-texture`). Nothing is refused for lying under the answer.
-//! - **The answer is where the device's images sit.** For a format, the smallest power of two `P`
-//!   from 16 to [`MOST`] at which a 2D texture of every width of [`WIDTHS`], [`ROWS`] rows tall
-//!   (no multiple of 4, as a driver may render an explicit plane's rows in blocks of 4:
-//!   `RuntimeDriverDefect::ExplicitPlaneRowsPastHeight`), of `ShaderRead` usage, its rows
+//! - **The answer is where the device's images sit.** For a format and each usage of
+//!   [`USAGES`] (reading; reading and rendering; reading and a shader's writes), the smallest
+//!   power of two `P` from 16 to [`MOST`] at which a 2D texture of every width of [`WIDTHS`],
+//!   [`ROWS`] rows tall (no multiple of 4, as a driver may render an explicit plane's rows in
+//!   blocks of 4: `RuntimeDriverDefect::ExplicitPlaneRowsPastHeight`), of that usage, its rows
 //!   `width × texel` bytes rounded up to `P` apart, gets the image a texture over host pages takes
 //!   in place (`texture/in_place_image.rs`'s `in_place_unbound`: the driver's linear image made for
-//!   host allocations where it lays the rows out at that pitch, else the `DRM_FORMAT_MOD_LINEAR`
-//!   image at it), and the image's memory alignment divides `P`, so that an offset that is a
-//!   multiple of `P` meets it. The runtime asks the driver and takes its answer: each image is made
-//!   and released, never bound.
+//!   host allocations where it lays the rows out at that pitch, as `vkGetImageSubresourceLayout`
+//!   reports them, else the `DRM_FORMAT_MOD_LINEAR` image at it), and the image's memory
+//!   alignment divides `P`, so that an offset that is a multiple of `P` meets it. The format's
+//!   answer is the largest of its usages' (a usage no candidate brings in place, as one the
+//!   format's linear images cannot take, has none). The runtime asks the driver and takes its
+//!   answer: each image is made and released, never bound.
+//! - **At least the device's line of memory.** The answer is at least `nonCoherentAtomSize`, "the
+//!   size and alignment in bytes that bounds concurrent access to host-mapped device memory"
+//!   (vkspec, Limits), the line the device's check of images in place measures
+//!   (`in_place::RowEnds`): a texture at an offset and `bytesPerRow` of the answer whose rows'
+//!   bytes are a multiple of the line shares no line with bytes beside its texels, so it is in
+//!   place for its renders and a shader's writes too on a device whose stores write back a row's
+//!   last line whole (the Iris Xe: its check fails those of a texture whose texels share a line
+//!   with bytes beside them). Its rows' padding lies in their last line whatever the answer where
+//!   their bytes are no multiple of the line (an `RGBA8Unorm` row of 100 texels, 400 bytes, at
+//!   64-byte lines), so on such a device that texture is a shadow for its renders and writes at
+//!   every alignment, Metal's 256 on an AMD GPU included: the answer promises no texture in place
+//!   for every width.
 //! - **Metal's 16 elsewhere**: on a device that imports no host pages, where no image is ever in
 //!   place over them; for a format no candidate brings every width in place at (the device makes
 //!   no linear image of it, or lays its rows at no power of two's pitch); and where a probe failed
@@ -58,9 +73,17 @@ pub(crate) const WIDTHS: [u64; 9] = [1, 3, 17, 64, 65, 100, 129, 1000, 1920];
 /// The rows of each texture the probe tries: no multiple of 4.
 pub(crate) const ROWS: u64 = 3;
 
+/// The usages the probe tries each format's textures at: read, rendered and written by a shader,
+/// each beside reading, as a program's textures over a buffer are made.
+pub(crate) const USAGES: [TextureUsage; 3] = [
+    TextureUsage::SHADER_READ,
+    TextureUsage::SHADER_READ.union(TextureUsage::RENDER_TARGET),
+    TextureUsage::SHADER_READ.union(TextureUsage::SHADER_WRITE),
+];
+
 /// The version of what the probe tries and of how its record is named and framed: a change to
 /// either bumps it, and a record of another version is never read.
-pub(crate) const VERSION: u32 = 1;
+pub(crate) const VERSION: u32 = 2;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VLINA\0";
@@ -81,6 +104,17 @@ const ANSWER_BYTES: usize = 4 + 8;
 /// `linear_plan::linear_alignment` answers.
 pub(crate) fn backed_formats() -> impl Iterator<Item = PixelFormat> {
     (PixelFormat::ALL.iter().copied()).filter(|&pf| linear_alignment(pf).is_ok())
+}
+
+/// A format's answer from its usages' smallest in-place alignments `usages` (`None` for one no
+/// candidate brings in place) on a device whose line of memory is `line` bytes
+/// (`nonCoherentAtomSize`): the largest of them, at least the line; Metal's 16 where no usage has
+/// one, as a texture of the format is then never in place.
+pub(crate) fn placed_answer(usages: &[Option<u64>], line: u64) -> u64 {
+    match usages.iter().flatten().max() {
+        Some(&placed) => placed.max(line).clamp(LINEAR_ALIGNMENT, MOST),
+        None => LINEAR_ALIGNMENT,
+    }
 }
 
 /// The digest of `identity` that names its record and that the record holds again.
@@ -174,18 +208,30 @@ impl Device {
     /// can back.
     ///
     /// The runtime asks the device's driver at the first query of any format, for every format a
-    /// buffer can back: it makes the images a 2D texture over host pages takes in place, at each
-    /// power of two from 16 bytes to 4096 and at widths of 1 to 1920 texels, and answers the first
-    /// at which every width's image lies at the texture's pitch and its memory alignment divides
-    /// the answer. None is bound; every format took 17 to 23 ms on an Apple M3 Max, a Radeon 780M
-    /// and lavapipe. Those answers stay the device's for its life, and a device of the same driver
-    /// and runtime release reads them again from one record in the shader cache's content
-    /// directory (0.3 ms there).
+    /// buffer can back: it makes the images a 2D texture over host pages takes in place, read,
+    /// rendered and written by a shader where the format's linear images take those usages, at
+    /// each power of two from 16 bytes to 4096 and at widths of 1 to 1920 texels, and answers the
+    /// first at which every width's image lies at the texture's pitch and its memory alignment
+    /// divides the answer, for every usage that has one. None is bound. The answer is at least the
+    /// device's `nonCoherentAtomSize`, "the size and alignment in bytes that bounds concurrent
+    /// access to host-mapped device memory" (vkspec, Limits): at it, a texture whose rows' bytes
+    /// fill whole lines of that size shares no line with bytes beside its texels, which a device
+    /// whose stores write back a row's last line whole (the Iris Xe) needs of a texture it renders
+    /// or writes in place. Those answers stay the device's for its life, and a device of the same
+    /// driver and runtime release reads them again from one record in the shader cache's content
+    /// directory.
     ///
-    /// It differs from Metal's where the device's images need more than 16 bytes: Mesa's RADV
-    /// lays a linear image's rows at multiples of 256 bytes and aligns its memory to 256, and
-    /// lavapipe aligns its memory to 64. It is 16 on a device that imports no host pages, for a
-    /// format whose images lie at no such pitch, and where asking the driver failed.
+    /// It differs from Metal's where the device's images or its lines need more than 16 bytes:
+    /// Mesa's RADV lays a linear image's rows at multiples of 256 bytes and aligns its memory to
+    /// 256, lavapipe aligns its memory to 64, and ANV's lines are 64 bytes. It is 16 on a device
+    /// that imports no host pages, for a format whose images lie at no such pitch, and where
+    /// asking the driver failed.
+    ///
+    /// The answer does not make every texture in place: a texture whose rows' bytes are no
+    /// multiple of the device's line (an `RGBA8Unorm` row of 100 texels, 400 bytes, at 64-byte
+    /// lines) keeps its padding in its rows' last line at every alignment, so on a device whose
+    /// check of images in place fails such textures' renders and writes (the Iris Xe) it is a
+    /// shadow for them, announced, whatever the alignment.
     ///
     /// A texture at any other multiple of 16 is made all the same, as Metal makes it: in place
     /// where the device's images take its layout, else as a shadow of the buffer's bytes,
@@ -307,8 +353,9 @@ impl Device {
         answers
     }
 
-    /// The smallest power of two from 16 to [`MOST`] at which every width of [`WIDTHS`] takes an
-    /// image in place (the module docs), else 16.
+    /// The format's answer (the module docs): the largest of its usages' smallest alignments at
+    /// which every width of [`WIDTHS`] takes an image in place, at least the device's line of
+    /// memory ([`placed_answer`]); 16 where no usage's does.
     fn linear_texture_alignment_probed(&self, pf: PixelFormat) -> Result<u64, Error> {
         let Some(texel) = texel_bytes(pf) else {
             return Ok(LINEAR_ALIGNMENT);
@@ -317,24 +364,40 @@ impl Device {
             .shared()
             .textures
             .facts(self.compile_device().profile());
+        let mut usages = Vec::with_capacity(USAGES.len());
+        for usage in USAGES {
+            usages.push(self.smallest_in_place(pf, texel, usage, &facts)?);
+        }
+        Ok(placed_answer(&usages, self.shared().in_place.line()))
+    }
+
+    /// The smallest power of two from 16 to [`MOST`] at which every width of [`WIDTHS`] takes an
+    /// image in place at `usage`; `None` where none does.
+    fn smallest_in_place(
+        &self,
+        pf: PixelFormat,
+        texel: u64,
+        usage: TextureUsage,
+        facts: &ImageFacts<'_>,
+    ) -> Result<Option<u64>, Error> {
         let mut alignment = LINEAR_ALIGNMENT;
         while alignment <= MOST {
             let mut every = true;
             for width in WIDTHS {
-                if !self.in_place_at(pf, (width, texel), alignment, &facts)? {
+                if !self.in_place_at(pf, (width, texel), usage, alignment, facts)? {
                     every = false;
                     break;
                 }
             }
             if every {
-                return Ok(alignment);
+                return Ok(Some(alignment));
             }
             alignment *= 2;
         }
-        Ok(LINEAR_ALIGNMENT)
+        Ok(None)
     }
 
-    /// Whether a 2D `ShaderRead` texture of `pf`, `width` texels of `texel` bytes wide and
+    /// Whether a 2D texture of `pf` and `usage`, `width` texels of `texel` bytes wide and
     /// [`ROWS`] tall, its rows its row's bytes rounded up to `alignment` apart, takes an image in
     /// place over host pages whose memory alignment divides `alignment`: the image is made and
     /// released.
@@ -342,6 +405,7 @@ impl Device {
         &self,
         pf: PixelFormat,
         (width, texel): (u64, u64),
+        usage: TextureUsage,
         alignment: u64,
         facts: &ImageFacts<'_>,
     ) -> Result<bool, Error> {
@@ -353,7 +417,7 @@ impl Device {
             layers: 1,
             samples: 1,
         };
-        let usage = texture_usage(TextureUsage::SHADER_READ, TextureSwizzleChannels::DEFAULT);
+        let usage = texture_usage(usage, TextureSwizzleChannels::DEFAULT);
         let Ok(plan) = plan_image(&layout, usage, false, facts) else {
             return Ok(false);
         };

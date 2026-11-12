@@ -945,15 +945,19 @@ function that reads at a sample is refused (`RuntimeGap::InterpolateAtSampleWith
 `Device::minimum_linear_texture_alignment_for_pixel_format`
 (`minimumLinearTextureAlignmentForPixelFormat:`) answers, per pixel format, the alignment of a
 texture's offset and `bytesPerRow` in a buffer at which the device's images hold the texture in
-place over host pages, at least the 16 bytes Metal answers on an Apple GPU. The runtime asks the
-driver for every format at the first query of any by making those images (none is bound; 17 to
-23 ms for all of them on the devices measured), keeps those answers for the device's life, and
-writes them as one record per driver in the shader cache's content directory. The M3
-Max's MoltenVK answers 16 for every format; RADV answers 256 and lavapipe 64 for each format
-whose texture over a buffer they can hold in place, and 16 for the rest (the two-plane YCbCr,
-packed and extended-range formats among them). A texture at a smaller
-multiple of 16 is still made, as a shadow where the device's images do not take its layout
-(`shadowed-texture`). The private `deviceLinearTextureAlignmentBytes` and
+place over host pages, read, rendered and written by a shader, at least the 16 bytes Metal
+answers on an Apple GPU and at least the device's `nonCoherentAtomSize`, the line of memory its
+check of images in place measures. The runtime asks the driver for every format at the first
+query of any by making those images (none is bound), keeps those answers for the device's life,
+and writes them as one record per driver in the shader cache's content directory. The M3 Max's
+MoltenVK answers 16 for every format; RADV answers 256, and ANV and lavapipe 64, for
+each format whose texture over a buffer they can hold in place, and 16 for the rest (the
+two-plane YCbCr, packed and extended-range formats among them). A texture at a smaller multiple
+of 16 is still made, as a shadow where the device's images do not take its layout
+(`shadowed-texture`). The answer does not put every texture in place: one whose rows' bytes are
+no multiple of the device's line keeps its padding in its rows' last line at any alignment, and
+on a device whose stores write back such a line whole (ANV's Iris Xe) its renders and writes go
+through a shadow. The private `deviceLinearTextureAlignmentBytes` and
 `linearTextureAlignmentBytes` answer the largest of the formats' answers.
 `Device::linear_texture_bytes_per_row` (a runtime extension, no Metal counterpart) answers, for a
 2D texture's descriptor, the row pitch the driver lays its own linear image's rows at, which a
