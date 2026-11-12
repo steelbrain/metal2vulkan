@@ -204,8 +204,8 @@ fn a_batch_that_reaches_no_new_memory_waits_for_none_of_its_fills() {
         );
     }
     let out = read(&frame_out);
-    for (at, word) in out.chunks_exact(4).enumerate().step_by(997) {
-        let value = f32::from_le_bytes(word.try_into().unwrap());
+    for (at, word) in out.as_chunks::<4>().0.iter().enumerate().step_by(997) {
+        let value = f32::from_le_bytes(*word);
         assert_eq!(value, 2.0 * at as f32, "{name}: the frame's float {at}");
     }
     assert_eq!(
