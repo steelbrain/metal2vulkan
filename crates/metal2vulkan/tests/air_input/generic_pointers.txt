@@ -1,0 +1,276 @@
+target triple = "air64_v29-apple-macosx27.0.0"
+source_filename = "-"
+; datalayout DataLayout { endian: Little, pointers: {0: PointerSpec { size_bits: 64, abi_bits: 64, pref_bits: 64, index_bits: 64 }}, ints: {1: AlignSpec { abi_bits: 8, pref_bits: 8 }, 8: AlignSpec { abi_bits: 8, pref_bits: 8 }, 16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }}, floats: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }}, vectors: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 24: AlignSpec { abi_bits: 32, pref_bits: 32 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 48: AlignSpec { abi_bits: 64, pref_bits: 64 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 96: AlignSpec { abi_bits: 128, pref_bits: 128 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }, 192: AlignSpec { abi_bits: 256, pref_bits: 256 }, 256: AlignSpec { abi_bits: 256, pref_bits: 256 }, 512: AlignSpec { abi_bits: 512, pref_bits: 512 }, 1024: AlignSpec { abi_bits: 1024, pref_bits: 1024 }}, aggregate: AlignSpec { abi_bits: 0, pref_bits: 64 }, native_ints: [8, 16, 32], stack_align_bits: None, alloca_space: 0, program_space: 0, globals_space: 0, mangling: None, fn_ptr_align: None, non_integral: [] }
+%t2 = type [8 x float]
+%t5 = type float (ptr addrspace(8))
+%t7 = type float (ptr addrspace(8), i32)
+%t9 = type void (ptr addrspace(8), i32, float)
+%t11 = type void (ptr addrspace(1), ptr addrspace(1), i32, i32)
+%t12 = type float (i32)
+%t13 = type void (ptr addrspace(1), ptr addrspace(1), i32)
+%t15 = type i1 (ptr addrspace(8))
+%t16 = type void (i32, i32, i32)
+%t18 = type [2 x i32]
+%t21 = type [4 x float]
+%t22 = type [2 x float]
+c16 = %t18 [27, 2]
+c38 = ptr addrspace(8) addrspacecast (@g0)
+c47 = ptr addrspace(8) addrspacecast (@g1)
+@g0 "_ZZ14generic_spacesPU9MTLdevicefPU9MTLdeviceKfjjE6shared" = internal addrspace(3) global %t2 undef, align 4
+@g1 "_ZZ12generic_nullPU9MTLdevicefPU9MTLdeviceKfjjE6shared" = internal addrspace(3) global %t2 undef, align 4
+
+define %t5 @f0 "_Z5spacePKf" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = bitcast %a0 to ptr addrspace(8)
+  %i1 = tail call i1 @f7 [air PointerSpace(PointerSpace { space: Device })](%i0)
+  br %i1, bb3, bb1
+bb1:
+  %i3 = tail call i1 @f8 [air PointerSpace(PointerSpace { space: Thread })](%i0)
+  br %i3, bb3, bb2
+bb2:
+  %i5 = tail call i1 @f9 [air PointerSpace(PointerSpace { space: Threadgroup })](%i0)
+  %i6 = select reassoc nnan ninf nsz arcp contract afn float %i5, float 0x40400000, float 0x40800000
+  br bb3
+bb3:
+  %i8 = phi reassoc nnan ninf nsz arcp contract afn float [%i6, bb2], [float 0x3F800000, bb0], [float 0x40000000, bb1]
+  ret %i8
+}
+
+define %t7 @f1 "_Z5weighPKfj" convergent memory(Ref, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
+bb0:
+  %i0 = zext %a1 to i64
+  %i1 = getelementptr inbounds float, %a0, %i0
+  %i2 = load float, %i1, align 4
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f0(%a0) "no-builtins"=""
+  %i4 = fmul reassoc nnan ninf nsz arcp contract afn float %i3, float 0x42C80000
+  %i5 = fadd reassoc nnan ninf nsz arcp contract afn float %i4, %i2
+  ret %i5
+}
+
+define %t9 @f2 "_Z4bumpPfjf" memory(ModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( nocapture ) {
+bb0:
+  %i0 = zext %a1 to i64
+  %i1 = getelementptr inbounds float, %a0, %i0
+  %i2 = load float, %i1, align 4
+  %i3 = fadd reassoc nnan ninf nsz arcp contract afn float %i2, %a2
+  store %i3, %i1, align 4
+  ret void
+}
+
+define %t11 @f3 "generic_spaces" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( nocapture "air-buffer-no-alias"="" ) %a1( "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = alloca %t21, i32 1, align 4
+  %i1 = zext %a3 to i64
+  %i2 = getelementptr inbounds float, %a1, %i1
+  %i3 = load float, %i2, align 4
+  %i4 = fmul reassoc nnan ninf nsz arcp contract afn float %i3, float 0x40000000
+  %i5 = getelementptr inbounds %t2, ptr addrspace(3) @g0, i64 0, %i1
+  store %i4, %i5, align 4
+  %i7 = tail call reassoc nnan ninf nsz arcp contract afn float @f4 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a2)
+  %i8 = getelementptr inbounds %t21, %i0, i64 0, i64 0
+  store %i7, %i8, align 4
+  %i10 = fadd reassoc nnan ninf nsz arcp contract afn float %i7, float 0x3F800000
+  %i11 = getelementptr inbounds %t21, %i0, i64 0, i64 1
+  store %i10, %i11, align 4
+  %i13 = fadd reassoc nnan ninf nsz arcp contract afn float %i7, float 0x40000000
+  %i14 = getelementptr inbounds %t21, %i0, i64 0, i64 2
+  store %i13, %i14, align 4
+  %i16 = fadd reassoc nnan ninf nsz arcp contract afn float %i7, float 0x40400000
+  %i17 = getelementptr inbounds %t21, %i0, i64 0, i64 3
+  store %i16, %i17, align 4
+  %i19 = addrspacecast %i8 to ptr addrspace(8)
+  %i20 = and i32 %a2, i32 3
+  call void @f2(%i19, %i20, float 0x3F000000) "no-builtins"=""
+  tail call void @f10 [air Sync(Barrier { name: Threadgroup, flags: MemFlags { device: false, threadgroup: true, texture: false, threadgroup_imageblock: false, object_data: false }, order: Some(SeqCst), scope: Threadgroup, memory: Threadgroup })](i32 2, i32 5, i32 1) convergent
+  %i23 = shl i32 %a2, i32 3
+  %i24 = and i32 %i23, i32 8
+  %i25 = zext %i24 to i64
+  %i26 = getelementptr float, %a1, %i25
+  %i27 = zext %i23 to i64
+  %i28 = getelementptr inbounds float, %a0, %i27
+  %i29 = addrspacecast %a1 to ptr addrspace(8)
+  %i30 = tail call reassoc nnan ninf nsz arcp contract afn float @f1(%i29, %a2) convergent "no-builtins"=""
+  store %i30, %i28, align 4
+  %i32 = call reassoc nnan ninf nsz arcp contract afn float @f1(%i19, %i20) convergent "no-builtins"=""
+  %i33 = getelementptr inbounds float, %i28, i64 1
+  store %i32, %i33, align 4
+  %i35 = add i32 %a2, i32 1
+  %i36 = and i32 %i35, i32 7
+  %i37 = call reassoc nnan ninf nsz arcp contract afn float @f1(ptr addrspace(8) c38, %i36) convergent "no-builtins"=""
+  %i38 = getelementptr inbounds float, %i28, i64 2
+  store %i37, %i38, align 4
+  %i40 = addrspacecast %i26 to ptr addrspace(8)
+  %i41 = call reassoc nnan ninf nsz arcp contract afn float @f1(%i40, %a2) convergent "no-builtins"=""
+  %i42 = getelementptr inbounds float, %i28, i64 3
+  store %i41, %i42, align 4
+  %i44 = getelementptr inbounds float, %i28, i64 4
+  store float 0x40000000, %i44, align 4
+  %i46 = addrspacecast %i28 to ptr addrspace(8)
+  call void @f2(%i46, i32 4, float 0x3FC00000) "no-builtins"=""
+  %i48 = call reassoc nnan ninf nsz arcp contract afn float @f0(ptr addrspace(8) c38) "no-builtins"=""
+  %i49 = getelementptr inbounds float, %i28, i64 5
+  store %i48, %i49, align 4
+  %i51 = call reassoc nnan ninf nsz arcp contract afn float @f0(%i19) "no-builtins"=""
+  %i52 = getelementptr inbounds float, %i28, i64 6
+  store %i51, %i52, align 4
+  %i54 = call reassoc nnan ninf nsz arcp contract afn float @f0(%i29) "no-builtins"=""
+  %i55 = getelementptr inbounds float, %i28, i64 7
+  store %i54, %i55, align 4
+  ret void
+}
+
+declare %t12 @f4 "air.convert.f.f32.u.i32" memory(NoModRef, NoModRef, NoModRef)
+
+define %t13 @f5 "generic_mixed" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = alloca %t22, i32 1, align 4
+  %i1 = getelementptr inbounds %t22, %i0, i64 0, i64 0
+  store float 0x41200000, %i1, align 4
+  %i3 = getelementptr inbounds %t22, %i0, i64 0, i64 1
+  store float 0x41300000, %i3, align 4
+  %i5 = zext %a2 to i64
+  %i6 = getelementptr inbounds float, %a1, %i5
+  %i7 = load float, %i6, align 4
+  %i8 = fcmp reassoc nnan ninf nsz arcp contract afn olt %i7, float 0x40800000
+  %i9 = addrspacecast %i1 to ptr addrspace(8)
+  %i10 = addrspacecast %a1 to ptr addrspace(8)
+  %i11 = select ptr addrspace(8) %i8, %i9, %i10
+  %i12 = and i32 %a2, i32 1
+  %i13 = call reassoc nnan ninf nsz arcp contract afn float @f1(%i11, %i12) convergent "no-builtins"=""
+  %i14 = getelementptr inbounds float, %a0, %i5
+  store %i13, %i14, align 4
+  ret void
+}
+
+define %t11 @f6 "generic_null" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) %a1( "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = alloca %t22, i32 1, align 4
+  %i1 = getelementptr inbounds %t22, %i0, i64 0, i64 0
+  %i2 = zext %a3 to i64
+  %i3 = getelementptr inbounds %t2, ptr addrspace(3) @g1, i64 0, %i2
+  store float 0x3F800000, %i3, align 4
+  %i5 = zext %a2 to i64
+  %i6 = getelementptr inbounds float, %a1, %i5
+  %i7 = load float, %i6, align 4
+  %i8 = fcmp reassoc nnan ninf nsz arcp contract afn olt %i7, float 0x40800000
+  %i9 = addrspacecast %a1 to ptr addrspace(8)
+  %i10 = select ptr addrspace(8) %i8, %i9, ptr addrspace(8) zeroinitializer
+  %i11 = tail call reassoc nnan ninf nsz arcp contract afn float @f0(%i10) "no-builtins"=""
+  %i12 = shl i32 %a2, i32 2
+  %i13 = zext %i12 to i64
+  %i14 = getelementptr inbounds float, %a0, %i13
+  store %i11, %i14, align 4
+  %i16 = addrspacecast %i1 to ptr addrspace(8)
+  %i17 = select ptr addrspace(8) %i8, %i16, ptr addrspace(8) zeroinitializer
+  %i18 = call reassoc nnan ninf nsz arcp contract afn float @f0(%i17) "no-builtins"=""
+  %i19 = or i32 %i12, i32 1
+  %i20 = zext %i19 to i64
+  %i21 = getelementptr inbounds float, %a0, %i20
+  store %i18, %i21, align 4
+  %i23 = select ptr addrspace(8) %i8, ptr addrspace(8) c47, ptr addrspace(8) zeroinitializer
+  %i24 = call reassoc nnan ninf nsz arcp contract afn float @f0(%i23) "no-builtins"=""
+  %i25 = or i32 %i12, i32 2
+  %i26 = zext %i25 to i64
+  %i27 = getelementptr inbounds float, %a0, %i26
+  store %i24, %i27, align 4
+  %i29 = call reassoc nnan ninf nsz arcp contract afn float @f0(ptr addrspace(8) zeroinitializer) "no-builtins"=""
+  %i30 = or i32 %i12, i32 3
+  %i31 = zext %i30 to i64
+  %i32 = getelementptr inbounds float, %a0, %i31
+  store %i29, %i32, align 4
+  ret void
+}
+
+declare %t15 @f7 "air.is_device_pointer" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t15 @f8 "air.is_thread_pointer" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t15 @f9 "air.is_threadgroup_pointer" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t16 @f10 "air.wg.barrier" convergent
+!md0 = !"SDK Version"
+!md1 = !"wchar_size"
+!md2 = !"frame-pointer"
+!md3 = !"air.max_device_buffers"
+!md4 = !"air.max_constant_buffers"
+!md5 = !"air.max_threadgroup_buffers"
+!md6 = !"air.max_textures"
+!md7 = !"air.max_read_write_textures"
+!md8 = !"air.max_samplers"
+!md9 = !"air.buffer"
+!md10 = !"air.location_index"
+!md11 = !"air.read_write"
+!md12 = !"air.address_space"
+!md13 = !"air.arg_type_size"
+!md14 = !"air.arg_type_align_size"
+!md15 = !"air.arg_type_name"
+!md16 = !"float"
+!md17 = !"air.arg_name"
+!md18 = !"out"
+!md19 = !"air.read"
+!md20 = !"in"
+!md21 = !"air.thread_position_in_grid"
+!md22 = !"uint"
+!md23 = !"t"
+!md24 = !"air.thread_position_in_threadgroup"
+!md25 = !"l"
+!md26 = !"air.compile.denorms_disable"
+!md27 = !"air.compile.fast_math_enable"
+!md28 = !"air.compile.framebuffer_fetch_enable"
+!md29 = !"Apple metal version 32023.922 (metalfe-32023.922.4)"
+!md30 = !"Metal"
+!md31 = !"omnipotent char"
+!md32 = !"Simple C++ TBAA"
+!md33 = !"air-alias-scope-arg(1)"
+!md34 = !"air-alias-scope-arg(0)"
+!md35 = i32 2
+!md36 = %t18 c16
+!md37 = i32 1
+!md38 = i32 4
+!md39 = i32 7
+!md40 = i32 31
+!md41 = i32 128
+!md42 = i32 8
+!md43 = i32 16
+!md44 = ptr addrspace(0) @f3
+!md45 = i32 0
+!md46 = i32 3
+!md47 = ptr addrspace(0) @f5
+!md48 = ptr addrspace(0) @f6
+!md49 = i32 9
+!md50 = i64 0
+!md51 = !{!md35, !md0, !md36}
+!md52 = !{!md37, !md1, !md38}
+!md53 = !{!md39, !md2, !md35}
+!md54 = !{!md39, !md3, !md40}
+!md55 = !{!md39, !md4, !md40}
+!md56 = !{!md39, !md5, !md40}
+!md57 = !{!md39, !md6, !md41}
+!md58 = !{!md39, !md7, !md42}
+!md59 = !{!md39, !md8, !md43}
+!md60 = !{}
+!md61 = !{!md45, !md9, !md10, !md45, !md37, !md11, !md12, !md37, !md13, !md38, !md14, !md38, !md15, !md16, !md17, !md18}
+!md62 = !{!md37, !md9, !md10, !md37, !md37, !md19, !md12, !md37, !md13, !md38, !md14, !md38, !md15, !md16, !md17, !md20}
+!md63 = !{!md35, !md21, !md15, !md22, !md17, !md23}
+!md64 = !{!md46, !md24, !md15, !md22, !md17, !md25}
+!md65 = !{!md61, !md62, !md63, !md64}
+!md66 = !{!md44, !md60, !md65}
+!md67 = !{!md61, !md62, !md63}
+!md68 = !{!md47, !md60, !md67}
+!md69 = !{!md48, !md60, !md65}
+!md70 = !{!md26}
+!md71 = !{!md27}
+!md72 = !{!md28}
+!md73 = !{!md29}
+!md74 = !{!md35, !md49, !md45}
+!md75 = !{!md30, !md38, !md37, !md45}
+!md76 = !{!md32}
+!md77 = !{!md31, !md76, !md50}
+!md78 = !{!md16, !md77, !md50}
+!md79 = !{!md78, !md78, !md50}
+!"llvm.module.flags" = !{!md51, !md52, !md53, !md54, !md55, !md56, !md57, !md58, !md59}
+!"air.kernel" = !{!md66, !md68, !md69}
+!"air.compile_options" = !{!md70, !md71, !md72}
+!"llvm.ident" = !{!md73}
+!"air.version" = !{!md74}
+!"air.language_version" = !{!md75}
