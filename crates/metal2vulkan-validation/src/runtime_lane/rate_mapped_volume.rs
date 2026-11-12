@@ -10,9 +10,13 @@
 //! begun again, reset or freed. Here [`LIGHT_POOLS`] light command buffers at once leave as many
 //! spare command pools; then each round commits [`HEAVY_AT_ONCE`] heavy command buffers at once,
 //! each a pass of [`EXECUTIONS`] executions of the commands over a map of [`ZONES`] zones a side
-//! alternating between full and half quality, and waits for them. A heavy command buffer takes
-//! the spare holding the fewest command buffers, so each round's go to pools no heavy one used.
-//! Every round must complete without an error, after [`ROUNDS`] rounds.
+//! alternating between full and half quality, and waits for them. A taker takes a spare holding a
+//! primary begun ahead first, then the one holding the fewest command buffers, and a settled pool
+//! begins one where no thread waits on its command buffer's gate as it completes: the light
+//! command buffers are polled to completion, so each of their pools begins one, and a thread
+//! waits on each heavy one's gate from its commit, so none of theirs does. Each round's heavy
+//! command buffers so take pools no heavy one used. Every round must complete without an error,
+//! after [`ROUNDS`] rounds.
 
 use super::{buffer_with, open_device, WAIT};
 use crate::air_library::AirLibrary;
@@ -30,7 +34,7 @@ use metal2vulkan_runtime::{
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, SharedEvent, Size, StoreAction,
     Texture, TextureDescriptor, WorkCounts,
 };
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The textures the draws read, and the draws: draw `j` is command `5 * j` (`ivt_encode`).
 const TEXTURES: u64 = 8;
@@ -277,6 +281,16 @@ fn rate_mapped_recordings_in_spare_pools_leave_the_drivers_pools_room() {
     let event = device.new_shared_event().unwrap();
     let lights: Vec<CommandBuffer> = (0..LIGHT_POOLS).map(|_| page.light(&event)).collect();
     event.set_signaled_value(1);
+    let deadline = Instant::now() + WAIT;
+    while (lights.iter()).any(|light| light.status() != CommandBufferStatus::Completed) {
+        assert!(
+            Instant::now() < deadline,
+            "the light command buffers completed"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // Their pools' primaries are begun ahead once their completed handlers ran.
+    std::thread::sleep(Duration::from_millis(200));
     lights.iter().for_each(completed);
     drop(lights);
     let start = Instant::now();
@@ -290,7 +304,11 @@ fn rate_mapped_recordings_in_spare_pools_leave_the_drivers_pools_room() {
         let heavy: Vec<CommandBuffer> = (0..HEAVY_AT_ONCE)
             .map(|_| page.heavy(&target, &map))
             .collect();
-        heavy.iter().for_each(completed);
+        std::thread::scope(|scope| {
+            for command_buffer in &heavy {
+                scope.spawn(move || completed(command_buffer));
+            }
+        });
         drop(heavy);
         eprintln!(
             "RM-VOLUME round {round} at {:.1} s: {}",
