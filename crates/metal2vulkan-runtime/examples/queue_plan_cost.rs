@@ -348,11 +348,13 @@ fn runtime_phase() {
         })
         .chain([None])
         .collect();
-    let options = |queue_limits: Option<QueueLimits>| DeviceOptions {
-        kinds: vec![DeviceKind::Discrete, DeviceKind::Integrated],
-        shader_cache: metal2vulkan_runtime::ShaderCacheOptions::in_directory(cache.clone()),
-        queue_limits,
-        ..DeviceOptions::default()
+    let options = |queue_limits: Option<QueueLimits>| {
+        let mut options = DeviceOptions::default();
+        options.kinds = vec![DeviceKind::Discrete, DeviceKind::Integrated];
+        options.shader_cache =
+            metal2vulkan_runtime::ShaderCacheOptions::in_directory(cache.clone());
+        options.queue_limits = queue_limits;
+        options
     };
     let mut made: Vec<Vec<f64>> = vec![Vec::new(); limits.len()];
     let mut dropped: Vec<Vec<f64>> = vec![Vec::new(); limits.len()];
