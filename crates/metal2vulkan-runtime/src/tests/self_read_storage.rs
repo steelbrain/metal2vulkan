@@ -45,7 +45,7 @@ use std::time::{Duration, Instant};
 
 /// The target's side, in pixels: large enough that a reader through the whole target's scissor
 /// takes the snapshot by the area rule (`render/snapshot.rs`).
-const SIDE: u64 = 1024;
+pub(super) const SIDE: u64 = 1024;
 
 /// The target's format, a guest framebuffer's.
 const FORMAT: PixelFormat = PixelFormat::BGRA8Unorm;
@@ -70,7 +70,7 @@ fn red_of(pass: u8) -> u8 {
 
 /// The state of `tob_rect` and the fixture `fixture`'s `fragment`, into a color of [`FORMAT`],
 /// where the device makes it.
-fn state_of(
+pub(super) fn state_of(
     device: &Device,
     fixture: &str,
     fragment: &str,
@@ -87,12 +87,12 @@ fn state_of(
 }
 
 /// The state of `tob_rect` and `tob_renders.ll`'s `fragment`, into a color of [`FORMAT`].
-fn state(device: &Device, fragment: &str) -> RenderPipelineState {
+pub(super) fn state(device: &Device, fragment: &str) -> RenderPipelineState {
     state_of(device, "engine/tob_renders.ll", fragment).unwrap()
 }
 
 /// A private [`FORMAT`] render target that shaders read, its hazards tracked where `tracked`.
-fn target(device: &Device, tracked: bool) -> Texture {
+pub(super) fn target(device: &Device, tracked: bool) -> Texture {
     let mut d = TextureDescriptor::texture_2d(FORMAT, SIDE, SIDE, false);
     d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
     d.resource_options = match tracked {
@@ -126,7 +126,7 @@ fn scissor([x0, y0, x1, y1]: [u64; 4]) -> ScissorRect {
 /// Pass `pass` over `target` in a command buffer of its own, committed and completed, a draw of
 /// `fetch` over [`FETCHED`] after the reader where it is given: the target's red at each pixel
 /// after it, and the device's work counts as it completed.
-fn pass_over(
+pub(super) fn pass_over(
     queue: &CommandQueue,
     target: &Texture,
     (fill, read, fetch): (
@@ -195,7 +195,7 @@ fn pass_over(
 }
 
 /// Wait until the device's pipeline pool makes nothing.
-fn settled(device: &Device) {
+pub(super) fn settled(device: &Device) {
     let until = Instant::now() + WAIT;
     while device.work_counts().pipeline_pool_busy != 0 {
         assert!(Instant::now() < until, "the pipeline pool still busy");
@@ -240,7 +240,7 @@ fn counts_moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 5] {
 
 /// The red `fetched` passes leave at `(x, y)` of a target cleared to [`CLEARED`]: the last pass's
 /// red inside [`BLOCK`], halved inside [`FETCHED`] by each pass that fetched.
-fn red_after(pass: u8, fetched: bool, x: u64, y: u64) -> u8 {
+pub(super) fn red_after(pass: u8, fetched: bool, x: u64, y: u64) -> u8 {
     let within = |[x0, y0, x1, y1]: [u64; 4]| (x0..x1).contains(&x) && (y0..y1).contains(&y);
     let mut red = CLEARED;
     for at in 0..=pass {

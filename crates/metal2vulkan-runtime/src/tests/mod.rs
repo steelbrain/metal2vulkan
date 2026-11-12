@@ -562,6 +562,8 @@ mod staged_work_teardown;
 mod staging_waits;
 mod stand_in;
 mod storage_form;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod storage_form_recycle;
 mod submit_check;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod submit_check_device;
