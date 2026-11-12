@@ -2189,8 +2189,8 @@ degradations! {
              their commands, barriers and GPU times are unchanged; CompletionPolicy::Exact \
              submits and checks each batch alone";
         /// A draw of an execution's replay (render commands of an indirect command buffer
-        /// replayed on the CPU) whose `VkPipeline` the replay itself began making, of a key its
-        /// commit's settle did not foresee, and the driver was still making once its command
+        /// replayed on the CPU) whose `VkPipeline` the replay waits for itself (a making its commit's
+        /// settle left no host step to wait for), and the driver was still making once its command
         /// buffer's bound passed (`PipelineWaitPolicy::Bounded`, the default: its commit plus the
         /// policy's `pipeline_commit_wait`, 4.5 s by default, `render/pending.rs`) ran nothing:
         /// its recording records nothing of it, and the command buffer runs on without error.

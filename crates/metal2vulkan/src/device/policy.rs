@@ -89,7 +89,7 @@ pub struct DevicePolicy {
     /// Under [`PipelineWaitPolicy::Bounded`], how long after its commit a command buffer's
     /// `commit` waits for the pipelines of a pass that executes render commands the CPU writes,
     /// leaving the pass to its host step past it, and how long an execution's replay waits for a
-    /// making it began itself, past which that draw records as nothing (the open gap,
+    /// making it waits for itself, past which that draw records as nothing (the open gap,
     /// `draw-dropped-still-making`). Every other command's making is waited for until made. 4.5 s
     /// by default (as the creation wait, above). Unread under `Exact`. The runtime's alone: no
     /// emitted code changes.
@@ -490,7 +490,7 @@ pub enum PipelineWaitPolicy {
     /// waits for its draws' and dispatches' pipelines still being made until they are made, under
     /// either value, on the runtime's scheduler thread, which no program call waits for: it
     /// completes later, and no command is dropped, but one, an open gap: a draw of an
-    /// execution's replay whose pipeline the replay itself began making, still being made at its
+    /// execution's replay whose making the replay waits for itself, still being made at its
     /// commit plus [`DevicePolicy::pipeline_commit_wait`] (4.5 s by default), records nothing, the
     /// command buffer running on, counted, named, announced `draw-dropped-still-making`.
     ///

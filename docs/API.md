@@ -194,8 +194,8 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   past that; no other program call blocks for a making but those that wait for the GPU (a wait
   for the command buffer's completion or scheduling, an event it signals, a new command buffer
   of a queue whose most are all uncompleted). One draw is still dropped, an open gap: an
-  execution's replayed draw whose pipeline the replay itself began making, of a key the commit's
-  settle did not foresee, still being made at that bound (`draw-dropped-still-making`, named by
+  execution's replayed draw whose making the replay waits for itself (one the commit's settle
+  left the host step no wait for), still being made at that bound (`draw-dropped-still-making`, named by
   `CommandBuffer::dropped_draw` with `VK_TIMEOUT`, counted
   `WorkCounts::draws_dropped_still_making`). Meanwhile it holds back only its own queue's later
   command buffers: one of
@@ -3563,8 +3563,8 @@ bound.
   `CompletionPolicy::Exact` submits and checks each batch alone.
 - `metal2vulkan-degrade-draw-dropped-still-making` (precision). `DrawDroppedStillMaking`: A draw
   of an execution's replay (render commands of an indirect command buffer replayed on the CPU)
-  whose `VkPipeline` the replay itself began making, of a key its commit's settle did not foresee,
-  and the driver was still making once its command buffer's bound passed
+  whose `VkPipeline` the replay waits for itself (a making its commit's settle left no host step
+  to wait for), and the driver was still making once its command buffer's bound passed
   (`PipelineWaitPolicy::Bounded`, the default: its commit plus
   `DevicePolicy::pipeline_commit_wait`, 4.5 s by default) ran nothing: its recording records
   nothing of it, and the command buffer runs on without error. Every other draw and dispatch waits

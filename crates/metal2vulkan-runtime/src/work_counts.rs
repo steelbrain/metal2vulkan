@@ -2332,7 +2332,7 @@ impl Counters {
         self.draws_dropped_unmade.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A draw of an execution's replay whose pipeline the replay itself began making was still
+    /// A draw of an execution's replay whose making the replay waits for itself was still
     /// being made at its command buffer's bound and ran nothing (`CommandBuffer::drop_late_draw`).
     pub(crate) fn draw_dropped_still_making(&self) {
         self.draws_dropped_still_making
@@ -5501,7 +5501,7 @@ pub struct WorkCounts {
     /// a draw's pipeline while the draw goes on): each ran nothing, its command buffer running on
     /// without error (`CommandBuffer::dropped_draw` names the first of a command buffer).
     pub draws_dropped_unmade: u64,
-    /// Draws of executions' replays whose `VkPipeline` the replay itself began making and that was
+    /// Draws of executions' replays whose `VkPipeline` the replay waits for itself and that was
     /// still being made once their command buffer's bound passed (`PipelineWaitPolicy::Bounded`,
     /// the default: its commit plus the policy's `pipeline_commit_wait`; the open gap): each ran
     /// nothing, its command buffer running on without error, and the command buffers after it draw

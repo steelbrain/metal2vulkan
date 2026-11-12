@@ -807,7 +807,7 @@ fn an_anisotropic_state_without_mips_is_announced_through_metals_sampler() {
 /// takes its site, as a build without debug assertions does.
 const MISPLACED: [Degradation; 1] = [Degradation::MisplacedNotice];
 
-/// The kinds a draw of an execution's replay takes whose pipeline the replay itself began making
+/// The kinds a draw of an execution's replay takes whose making the replay waits for itself
 /// and that was still being made once its command buffer's bound passed
 /// (`PipelineWaitPolicy::Bounded`, `pipeline_commit_wait` after its commit: the runtime's open
 /// gap), and a draw whose pipeline the driver failed to make. No lane meets them: a lane holds

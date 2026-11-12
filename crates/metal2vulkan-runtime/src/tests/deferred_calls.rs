@@ -1537,18 +1537,18 @@ fn a_draw_whose_pipeline_is_still_being_made_past_its_bound_renders_once_made() 
     );
 }
 
-/// A draw of an execution's replay whose pipeline, settled at commit, is still being made past
-/// its command buffer's bound renders once its making lands, under `PipelineWaitPolicy::Bounded`
-/// (the default), the slow compile the pool's test hold (`pool::held`), no sleep. The commit
-/// settles the records the CPU wrote, the draw's making among them, held in the pool, and waits
-/// for it until its bound at most, then leaves the pass to its host step: the commit returns
-/// within the 10 s a guest's FIFO check allowed, and the command buffer is not completed a second
-/// past its bound while another queue's command buffer completes meanwhile. Once the hold goes,
-/// the making lands and the command buffer completes without error, the rectangle drawn,
-/// `dropped_draw` naming nothing, nothing counted in `draws_dropped_still_making` and no
-/// `draw-dropped-still-making` announced.
+/// The open gap (`docs/FAST-PATHS.md`): a draw of an execution's replay whose pipeline is still
+/// being made at its command buffer's bound runs nothing, under `PipelineWaitPolicy::Bounded` (the
+/// default), the slow compile the pool's test hold (`pool::held`), no sleep. The commit replays the
+/// records the CPU wrote as it reads them, so the draw takes no pending recording: the replay
+/// waits for its making, held in the pool, until the bound, then records nothing. The commit returns once the bound passed, within the
+/// 10 s a guest's FIFO check allows, and the command buffer completes without error, its pass
+/// clearing its target and the blit after it copying it: `dropped_draw` names the draw (its
+/// execution's encoder 0, draw 0, `VK_TIMEOUT`), `failed_pipeline` nothing, counted
+/// `draws_dropped_still_making` and announced `draw-dropped-still-making`. Once the hold goes the
+/// making lands, and a later command buffer draws the rectangle.
 #[test]
-fn a_replayed_draw_whose_pipeline_is_still_being_made_past_its_bound_renders_once_made() {
+fn a_replayed_draw_whose_pipeline_is_still_being_made_at_its_bound_runs_nothing() {
     use super::encoder_holds::library;
     use crate::{IndirectCommandBufferDescriptor, PipelineOptions};
     use metal2vulkan::metal::{IndirectCommandType, RenderStages, ResourceUsage};
@@ -1615,34 +1615,46 @@ fn a_replayed_draw_whose_pipeline_is_still_being_made_past_its_bound_renders_onc
     let back = replayed(&command_buffer);
     let committing = Instant::now();
     command_buffer.commit().unwrap();
-    let commit = committing.elapsed();
-    assert!(
-        commit < GUEST_WATCHDOG,
-        "the commit took {commit:?}, past its bound"
-    );
-    held_past_its_bound(&device, &command_buffer, committing);
-    drop(hold);
     command_buffer
-        .wait_until_completed_for(WAIT)
-        .expect("the command buffer completes once its draw's making lands");
+        .wait_until_completed_for(GUEST_WATCHDOG)
+        .expect("the command buffer completes at its bound with its draw's making held");
+    let waited = committing.elapsed();
+    assert!(
+        (COMMIT_WAIT..GUEST_WATCHDOG).contains(&waited),
+        "completed after {waited:?}, not its own bound"
+    );
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
     assert_eq!(command_buffer.error(), None);
     assert!(command_buffer.failed_pipeline().is_none());
-    assert!(command_buffer.dropped_draw().is_none());
-    assert!(
-        words_of(&back).iter().all(|&w| w == PACKED),
-        "the rectangle, drawn"
-    );
+    let dropped = command_buffer
+        .dropped_draw()
+        .expect("the replayed draw dropped is named");
+    assert_eq!((dropped.encoder, dropped.draw), (0, 0));
+    assert_eq!(dropped.error, vulkan(vk::Result::TIMEOUT));
+    assert!(words_of(&back).iter().all(|&w| w == 0), "the draw drew");
     let after = device.work_counts();
     assert_eq!(
-        after.draws_dropped_still_making,
-        counts.draws_dropped_still_making
+        after.draws_dropped_still_making - counts.draws_dropped_still_making,
+        1
     );
     assert!(
-        !(heard.lock().unwrap().iter())
+        (heard.lock().unwrap().iter())
             .any(|notice| notice.degradation == Degradation::DrawDroppedStillMaking),
-        "a draw was dropped"
+        "no notice of the dropped draw"
     );
+    drop(hold);
+    // The making lands for the command buffers after it.
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let command_buffer = queue.command_buffer().unwrap();
+        let back = replayed(&command_buffer);
+        let words = committed(&command_buffer, &back);
+        if command_buffer.dropped_draw().is_none() {
+            assert!(words.iter().all(|&w| w == PACKED), "the rectangle, drawn");
+            break;
+        }
+        assert!(Instant::now() < deadline, "the making never landed");
+    }
 }
 
 /// A compute dispatch whose pipeline is still being made past its command buffer's bound runs

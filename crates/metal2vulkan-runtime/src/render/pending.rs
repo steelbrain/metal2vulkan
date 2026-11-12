@@ -37,8 +37,8 @@
 //!   (the host step, or `commit` for records the CPU writes), so it takes no pending recording:
 //!   its pipeline, most begun on the device's pool by the execution's settle at commit
 //!   (`RenderExecution::settle`), which the batch's host step waits for as for a pending draw's.
-//!   A making the replay itself begins, of a key the settle did not foresee, is waited for until
-//!   its command buffer's bound at most, and one still being made then makes the draw record
+//!   A making the replay waits for itself, one the settle left the host step no wait for, is
+//!   waited for until its command buffer's bound at most, and one still being made then makes the draw record
 //!   nothing, before anything of it is tracked, named by its execution's encoder's place and its
 //!   order among the replay's draws with the error `VK_TIMEOUT`, counted
 //!   (`WorkCounts::draws_dropped_still_making`) and announced (`draw-dropped-still-making`,

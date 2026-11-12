@@ -4104,7 +4104,7 @@ impl CommandBuffer {
         self.keep_dropped(failed);
     }
 
-    /// Note `late`, a draw of an execution's replay whose pipeline the replay itself began making
+    /// Note `late`, a draw of an execution's replay whose making the replay waits for itself
     /// and that was still being made once the command buffer's bound passed
     /// ([`making_deadline`](Self::making_deadline)), whose recording drops the draw (the open gap,
     /// `render/pending.rs`): kept where it is the first, its error `VK_TIMEOUT`, which no

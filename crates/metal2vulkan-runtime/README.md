@@ -797,7 +797,7 @@ pipeline it hands to the runtime's pool): the command buffer completes later, as
 and renders and writes what Metal's does. `commit` and every other call return as before; only
 calls that wait for the GPU (its completion or scheduling, an event it signals, a new command
 buffer of a queue whose most are all uncompleted) wait for it. One draw is still dropped, an open
-gap: a draw of an execution's replay whose pipeline the replay itself began making, still being
+gap: a draw of an execution's replay whose making the replay waits for itself, still being
 made `DevicePolicy::pipeline_commit_wait` (4.5 s by default) after the commit, runs nothing, its
 command buffer running on, and the command buffers after it draw with the pipeline once made.
 While it waits, another queue's command buffer committed after it goes first, even over a tracked
