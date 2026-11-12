@@ -1,7 +1,8 @@
 //! The device's checks step aside for its other work: before each step that allocates or frees
 //! memory, maps or unmaps pages, or submits, a check's thread (`submit_check.rs`,
-//! `queue_switch_check.rs`, `in_place_check.rs`) waits until no allocation or free of the
-//! device's is in progress on another thread and none ended in the last [`QUIET`].
+//! `queue_switch_check.rs`, `in_place_check.rs`) first waits as long as its own allocations and
+//! frees since its last step took, then until no allocation or free of the device's is in
+//! progress on another thread and none ended in the last [`QUIET`].
 //!
 //! - **Why.** A device whose checks have no record runs them on threads of their own as it is
 //!   made (the submission checks) or at the first use that asks (the others), beside the program's
@@ -19,6 +20,20 @@
 //!   threads' work for them (the guest RAM's imports ahead, the free thread's frees). A making
 //!   that allocates nothing (a buffer in a block already allocated) is not seen, nor waits on a
 //!   check in the driver.
+//! - **A check's own calls give way** ([`OwnCall`]). A check's allocation or free of memory at
+//!   the same two doors may hold the driver against the device's other threads for as long as it
+//!   runs, so its length is owed: the thread's next step waits as long first. On an RTX 3090
+//!   (NVIDIA 620.70.06, Linux), each `vkFreeMemory` of a host-pointer import held back every
+//!   other thread's `vkQueueSubmit` while it ran. A probe outside the runtime made and freed 32
+//!   imports of 512 KiB in turn beside one fill submitted 4,800 times a second: each free took
+//!   0.52 to 0.80 ms (p50) with the GPU otherwise idle, and 0.82 to 0.90 ms beside 30 ms command
+//!   buffers on another queue. The fills' latency went from 0.12 to 3.9 and 8.3 ms (p50) alone, and
+//!   from 0.74 to 11.4 and 12.7 ms beside the long work. The submission checks' import tax
+//!   (`submit_check.rs`) freed its imports back to back, so the scheduler's thread got a
+//!   submission in only between two frees, and a compositor's command buffers beside long work
+//!   waited up to 21 ms from commit to submission. Paced so, the device's other threads' calls go
+//!   between the check's own, whose allocations and frees hold the driver at most half the time
+//!   they run; a call of microseconds is owed microseconds.
 //! - **Never for a waiter.** A step steps aside for no one while a program's call waits for the
 //!   check's verdicts (`SubmitChecks::wait`, `InPlaceChecks::wait`), so such a wait is the check's
 //!   own run alone.
@@ -64,6 +79,9 @@ thread_local! {
     static CHECKS: Cell<bool> = const { Cell::new(false) };
     /// Its makings, releases and submissions are counted as the checks' ([`Counted::Apart`]).
     static APART: Cell<bool> = const { Cell::new(false) };
+    /// How long its own allocations and frees took since its last step, owed to its next
+    /// ([`OwnCall`]).
+    static OWED: Cell<Duration> = const { Cell::new(Duration::ZERO) };
 }
 
 /// Whose counts a check's thread's makings, releases and submissions are.
@@ -93,6 +111,25 @@ fn on_a_check_s_thread() -> bool {
 /// ([`Counted::Apart`]).
 pub(crate) fn counted_apart() -> bool {
     APART.with(Cell::get)
+}
+
+/// A check's own allocation or free of memory in progress on its thread, at one of the two doors
+/// (`allocations::Busy`): as it ends, its length is owed to the thread's next step (the module
+/// docs).
+pub(crate) struct OwnCall(Instant);
+
+impl OwnCall {
+    /// One beginning now, where this is a check's thread.
+    pub(crate) fn begin() -> Option<OwnCall> {
+        on_a_check_s_thread().then(|| OwnCall(Instant::now()))
+    }
+}
+
+impl Drop for OwnCall {
+    fn drop(&mut self) {
+        let took = self.0.elapsed();
+        OWED.with(|owed| owed.set(owed.get().saturating_add(took)));
+    }
 }
 
 /// One device's allocations and frees in progress on threads not its checks', and when the last
@@ -147,12 +184,20 @@ impl Activity {
         QUIET.saturating_sub(since).min(SLICE)
     }
 
-    /// Wait, on a check's thread, until a step may go on ([`Activity::left`]), `stop` says to
-    /// go on now (the check stops, or a call waits for its verdicts) or it waited
-    /// [`MOST_ASIDE`]: the time it waited, `None` where it went on at once.
+    /// Wait, on a check's thread, as long as its own calls since its last step took
+    /// ([`OwnCall`]), then until a step may go on ([`Activity::left`]), `stop` says to go on now
+    /// (the check stops, or a call waits for its verdicts) or it waited [`MOST_ASIDE`]: the time
+    /// it waited, `None` where it went on at once.
     pub(crate) fn step_aside(&self, stop: impl Fn() -> bool) -> Option<Duration> {
         let began = Instant::now();
+        let owed = OWED
+            .with(|owed| owed.replace(Duration::ZERO))
+            .min(MOST_ASIDE);
         let mut waited = false;
+        if !owed.is_zero() && !stop() {
+            std::thread::sleep(owed);
+            waited = true;
+        }
         loop {
             let left = self.left();
             let past = began.elapsed();
@@ -201,6 +246,33 @@ mod tests {
         assert_eq!(activity.step_aside(|| true), None);
         activity.end();
         assert_eq!(activity.step_aside(|| true), None, "told to go on");
+    }
+
+    /// A check's own call is owed to its next step once, which waits as long first; a step told
+    /// to go on pays nothing. The test's own thread is marked, as below.
+    #[test]
+    fn a_check_s_own_call_is_owed_to_its_next_step() {
+        let activity = Activity::new();
+        mark_a_check_s_thread(Counted::Apart);
+        let call = Duration::from_millis(5);
+        {
+            let _call = OwnCall::begin().expect("a check's thread");
+            std::thread::sleep(call);
+        }
+        let waited = activity.step_aside(|| false).expect("it waited");
+        assert!(waited >= call, "waited {waited:?}");
+        assert_eq!(activity.step_aside(|| false), None, "owed once");
+        {
+            let _call = OwnCall::begin().expect("a check's thread");
+            std::thread::sleep(call);
+        }
+        assert_eq!(activity.step_aside(|| true), None, "told to go on");
+        assert_eq!(activity.step_aside(|| false), None, "nothing left owed");
+    }
+
+    #[test]
+    fn a_call_on_another_thread_is_owed_nothing() {
+        assert!(OwnCall::begin().is_none());
     }
 
     /// The test's own thread is marked, for the rest of its life: each test has a thread of its

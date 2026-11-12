@@ -35,7 +35,7 @@
 //!   released, `host_ram.rs` its chunks' with theirs), and allocates nothing, so the wait ends.
 
 use crate::free_thread::FreeThread;
-use crate::step_aside::Activity;
+use crate::step_aside::{Activity, OwnCall};
 use ash::vk;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
@@ -361,12 +361,16 @@ pub(crate) fn freed(allocations: Option<&Allocations>) {
 
 /// An allocation or free of the device of `allocations` in progress on this thread, counted for
 /// its checks to step aside for (`step_aside.rs`) until this goes: none where the device is not
-/// registered or this is a check's thread.
-pub(crate) struct Busy<'a>(Option<&'a Allocations>);
+/// registered or this is a check's thread, whose own call on a registered device is owed to its
+/// next step instead ([`OwnCall`]).
+pub(crate) struct Busy<'a>(Option<&'a Allocations>, Option<OwnCall>);
 
 impl<'a> Busy<'a> {
     pub(crate) fn of(allocations: Option<&'a Allocations>) -> Busy<'a> {
-        Busy(allocations.filter(|allocations| allocations.activity.begin()))
+        Busy(
+            allocations.filter(|allocations| allocations.activity.begin()),
+            allocations.and_then(|_| OwnCall::begin()),
+        )
     }
 }
 
@@ -375,6 +379,8 @@ impl Drop for Busy<'_> {
         if let Some(allocations) = self.0 {
             allocations.activity.end();
         }
+        // A check's own call ends: its length is owed now.
+        drop(self.1.take());
     }
 }
 

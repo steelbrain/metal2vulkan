@@ -4762,8 +4762,9 @@ pub struct DeviceCheckWork {
     /// uses of a queue (`WorkCounts::queue_submissions` leaves them out); the submission checks'
     /// are `WorkCounts::submit_check_calls`.
     pub queue_submissions: u64,
-    /// Steps of the device's checks that waited for the device's allocations and frees on other
-    /// threads before they went on (`step_aside.rs`).
+    /// Steps of the device's checks that waited before they went on: as long as their own
+    /// allocations and frees since their last step took, then for the device's allocations and
+    /// frees on other threads (`step_aside.rs`).
     pub steps_aside: u64,
     /// The nanoseconds those steps waited, in all.
     pub aside_nanos: u64,
