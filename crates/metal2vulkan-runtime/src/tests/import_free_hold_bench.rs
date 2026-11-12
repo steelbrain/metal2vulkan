@@ -5,7 +5,9 @@
 //! kinds: [`PIECES`] imports of 512 KiB of anonymous pages by their pointer
 //! (`VK_EXT_external_memory_host`, the submission checks' import tax's shape), four of 64 MiB (a
 //! buffer in fresh pages, `fresh_pages.rs`), [`PIECES`] dma-bufs of 512 KiB of a sealed `memfd`'s
-//! pages (udmabuf, where the device imports dma-bufs and `/dev/udmabuf` opens), and, beside them,
+//! pages (udmabuf, where the device imports dma-bufs and `/dev/udmabuf` opens), each imported as
+//! a no-copy buffer's is (`memory::import_dma_buf`: for a buffer made for dma-bufs, dedicated to it
+//! where the driver takes no import dedicated to nothing), and, beside them,
 //! [`PIECES`] plain host-visible allocations of 512 KiB. Each kind runs [`ROUNDS`] rounds of each
 //! order, alternating: its frees in turn, one right after another, and paced, each after a wait
 //! as long as the frees before it took, less the time since the last ended (`step_aside::pace`,
@@ -19,7 +21,7 @@ use super::host_residency::{udmabuf, udmabuf_openable};
 use crate::{Device, DeviceKind, DeviceOptions, ResourceOptions};
 use ash::vk;
 use std::ops::Range;
-use std::os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -210,6 +212,13 @@ fn memfd(len: usize) -> OwnedFd {
     }
 }
 
+/// One the bench made: its memory, and the buffer made for a dma-buf's import, destroyed before
+/// the memory is freed.
+struct Made {
+    memory: vk::DeviceMemory,
+    buffer: Option<vk::Buffer>,
+}
+
 /// What one round makes its memory of.
 enum Backing {
     Pointer(Pages),
@@ -235,7 +244,7 @@ fn make(
     device: &Device,
     properties: &vk::PhysicalDeviceMemoryProperties,
     (kind, backing, index): (Kind, &Backing, usize),
-) -> Result<vk::DeviceMemory, String> {
+) -> Result<Made, String> {
     let shared = device.shared();
     let raw = shared.vk();
     let importer = (shared.host_import.as_ref()).map_err(|refusal| refusal.to_string())?;
@@ -253,35 +262,65 @@ fn make(
                 .host_pointer(at.as_ptr().cast());
             let info = info.memory_type_index(type_index).push_next(&mut import);
             // SAFETY: the pages stay mapped until every import of them is freed.
-            unsafe { crate::creation::allocate_memory(raw, &info) }.map_err(|e| e.to_string())
+            let memory = unsafe { crate::creation::allocate_memory(raw, &info) };
+            let memory = memory.map_err(|e| e.to_string())?;
+            Ok(Made {
+                memory,
+                buffer: None,
+            })
         }
         Backing::DmaBuf(memfd) => {
             let fd = udmabuf(memfd, offset, kind.bytes).map_err(|e| e.to_string())?;
             // SAFETY: the device is the importer's.
             let bits =
                 unsafe { importer.dma_buf_types(raw, fd.as_fd()) }.map_err(|e| e.to_string())?;
-            let type_index = coherent(properties, bits)
-                .or((bits != 0).then_some(bits.trailing_zeros()))
-                .ok_or("no type")?;
-            let fd = fd.into_raw_fd();
-            let mut import = vk::ImportMemoryFdInfoKHR::default()
-                .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
-                .fd(fd);
-            let info = info.memory_type_index(type_index).push_next(&mut import);
-            // SAFETY: a successful import owns the descriptor; a failed one leaves it ours.
-            match unsafe { crate::creation::allocate_memory(raw, &info) } {
-                Ok(memory) => Ok(memory),
-                Err(error) => {
-                    // SAFETY: the descriptor the failed import left ours.
-                    drop(unsafe { OwnedFd::from_raw_fd(fd) });
-                    Err(error.to_string())
+            let mut external = vk::ExternalMemoryBufferCreateInfo::default()
+                .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+            let buffer_info = shared.sharing().buffer(
+                vk::BufferCreateInfo::default()
+                    .size(kind.bytes)
+                    .usage(crate::buffer::usage(shared.device_address))
+                    .push_next(&mut external),
+            );
+            // SAFETY: the device is live and the info valid; the buffer goes with the import.
+            let buffer = unsafe { crate::creation::buffer(raw, &buffer_info) };
+            let buffer = buffer.map_err(|e| e.to_string())?;
+            // SAFETY: the buffer is live.
+            let requirements = unsafe { raw.get_buffer_memory_requirements(buffer) };
+            let allowed = (
+                bits & requirements.memory_type_bits,
+                crate::memory::MemoryClass::Shared,
+            );
+            let purpose = crate::memory::DmaBufFor::Buffer(buffer);
+            let imported = crate::memory::import_dma_buf(
+                &shared.memory,
+                raw,
+                fd,
+                kind.bytes,
+                allowed,
+                purpose,
+            );
+            match imported {
+                Ok((memory, _, _)) => Ok(Made {
+                    memory,
+                    buffer: Some(buffer),
+                }),
+                Err(failure) => {
+                    // SAFETY: nothing is bound to the buffer, and no command uses it.
+                    unsafe { crate::release::object(raw, buffer) };
+                    Err(format!("{failure:?}"))
                 }
             }
         }
         Backing::Plain(type_index) => {
             let info = info.memory_type_index(*type_index);
             // SAFETY: a plain allocation.
-            unsafe { crate::creation::allocate_memory(raw, &info) }.map_err(|e| e.to_string())
+            let memory = unsafe { crate::creation::allocate_memory(raw, &info) };
+            let memory = memory.map_err(|e| e.to_string())?;
+            Ok(Made {
+                memory,
+                buffer: None,
+            })
         }
     }
 }
@@ -311,6 +350,19 @@ fn backing(device: &Device, kind: Kind) -> Option<Backing> {
     }
 }
 
+/// Destroy `one`'s buffer and free its memory: the free's span.
+fn free(raw: &ash::Device, one: Made) -> Range<Instant> {
+    // SAFETY: nothing uses the buffer or the memory.
+    unsafe {
+        if let Some(buffer) = one.buffer {
+            crate::release::object(raw, buffer);
+        }
+        let started = Instant::now();
+        crate::release::object(raw, one.memory);
+        started..Instant::now()
+    }
+}
+
 /// Run [`ROUNDS`] rounds of each order of `kind` on `device`, [`GAP`] apart; `None` where it
 /// cannot be made.
 fn measure(device: &Device, kind: Kind) -> Option<Spans> {
@@ -333,12 +385,11 @@ fn measure(device: &Device, kind: Kind) -> Option<Spans> {
         for index in 0..kind.count {
             let started = Instant::now();
             match make(device, &properties, (kind, &backing, index)) {
-                Ok(memory) => made.push(memory),
+                Ok(one) => made.push(one),
                 Err(why) => {
                     eprintln!("IMPORT-FREE-HOLD {kind}: refused ({why}): not run");
-                    for memory in made {
-                        // SAFETY: nothing uses the memory.
-                        unsafe { crate::release::object(raw, memory) };
+                    for one in made {
+                        free(raw, one);
                     }
                     return None;
                 }
@@ -349,14 +400,11 @@ fn measure(device: &Device, kind: Kind) -> Option<Spans> {
         // What the makes owe is not the frees' (`step_aside::pace`).
         let _ = crate::step_aside::pace(|| true);
         let began = Instant::now();
-        for memory in made {
+        for one in made {
             if order == Order::Paced {
                 let _ = crate::step_aside::pace(|| false);
             }
-            let started = Instant::now();
-            // SAFETY: nothing uses the memory.
-            unsafe { crate::release::object(raw, memory) };
-            spans.frees.push((order, started..Instant::now()));
+            spans.frees.push((order, free(raw, one)));
         }
         spans.runs.push((order, began..Instant::now()));
         std::thread::sleep(GAP);
