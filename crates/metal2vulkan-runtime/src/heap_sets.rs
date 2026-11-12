@@ -128,7 +128,7 @@ use super::pipeline::{set_needs, VariantObjects};
 use super::release;
 use super::resource::ResourceKey;
 use super::resource_ids::PassingHold;
-use super::sampler::{SamplerShared, SamplerState};
+use super::sampler::{HashedDesc, SamplerShared, SamplerState};
 use super::texture::{Texture, TextureShared, TwinRead};
 use super::tracker::{Access, Use};
 use ash::vk;
@@ -1551,7 +1551,7 @@ fn sampler_writes(
             None,
         )
         .map_err(Error::Bind)
-        .and_then(|desc| state.vk_sampler(&desc));
+        .and_then(|desc| state.vk_sampler(&HashedDesc::new(desc)));
         let (info, keeper) = match made {
             Ok(sampler) => (
                 sampler_info(sampler.raw()),

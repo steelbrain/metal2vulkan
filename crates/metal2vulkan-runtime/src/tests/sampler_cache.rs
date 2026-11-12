@@ -15,7 +15,7 @@
 //! device profile (`validation/profiles`), so the count of a state's descriptions is a fact of the
 //! translator's sampler rules and not of a case written here.
 
-use super::super::sampler::{KeptCounts, KeptSamplers};
+use super::super::sampler::{HashedDesc, KeptCounts, KeptSamplers};
 use super::capabilities::committed_descriptions;
 use metal2vulkan::bind::{sampler_desc, SamplerDescriptor};
 use metal2vulkan::device::{Device, DevicePolicy};
@@ -24,7 +24,6 @@ use metal2vulkan::metal::{
     SamplerAddressMode as A, SamplerBorderColor as B, SamplerMinMagFilter as F,
     SamplerMipFilter as M,
 };
-use metal2vulkan::vk::SamplerDesc;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -69,7 +68,7 @@ pub(super) fn streaming_descriptions(
     device: &Device,
     descriptor: &SamplerDescriptor,
     levels: u32,
-) -> Vec<SamplerDesc> {
+) -> Vec<HashedDesc> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for level in 0..levels.max(1) {
@@ -84,7 +83,7 @@ pub(super) fn streaming_descriptions(
                     continue;
                 };
                 if seen.insert(desc) {
-                    out.push(desc);
+                    out.push(HashedDesc::new(desc));
                 }
             }
         }
@@ -173,7 +172,7 @@ fn a_binds_clamps_are_handed_to_the_device_as_given() {
 /// Bind every description of `stream` in turn, `rounds` times, over a cache of `limit`: what the
 /// cache did. Each sampler the cache makes is a value of its own that nothing else holds, as a
 /// `VkSampler` of a state no command buffer has bound is.
-fn cycled(stream: &[SamplerDesc], limit: usize, rounds: usize) -> KeptCounts {
+fn cycled(stream: &[HashedDesc], limit: usize, rounds: usize) -> KeptCounts {
     let mut cache: KeptSamplers<()> = KeptSamplers::new();
     for _ in 0..rounds {
         for desc in stream {
@@ -252,7 +251,7 @@ fn a_full_cache_forgets_the_least_recently_bound_sampler_nothing_else_holds() {
     let stream = streaming_descriptions(&device, &bordered(), 0);
     /// One bind of the sampler `at` of the stream, as `SamplerState::vk_sampler` binds one, over a
     /// cache of three.
-    fn bind(cache: &mut KeptSamplers<u32>, desc: &SamplerDesc, sampler: &Arc<u32>) {
+    fn bind(cache: &mut KeptSamplers<u32>, desc: &HashedDesc, sampler: &Arc<u32>) {
         if cache.found(desc).is_none() {
             cache.make_room(3);
             cache.keep(*desc, sampler);

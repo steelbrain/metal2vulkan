@@ -90,7 +90,7 @@ use super::degradation::Degradation;
 use super::device::lock;
 use super::error::{Error, SamplerLimit};
 use super::exit_guard;
-use super::key_hash::KeyMap;
+use super::key_hash::{KeyHasher, KeyMap};
 use super::resource_ids::{ElementHold, Holder, IdHold, IdPlacement, IdSpace, ResourceId};
 use super::retained::HeldBy;
 use super::Device;
@@ -107,6 +107,7 @@ use metal2vulkan::metal::{
 };
 use std::any::Any;
 use std::collections::HashMap;
+use std::hash::{BuildHasher, BuildHasherDefault, Hash, Hasher};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -303,15 +304,17 @@ pub(super) fn argument_buffer_sampler_count(elements: u32, limit: u32) -> u64 {
 /// slot's, a heap set's sampler array's, an argument buffer's ([`SamplerState::vk_sampler`]) ---
 /// so the encoding thread reads this at every draw and dispatch that samples through the state.
 /// It is a map ([`KeyMap`], whose keys are descriptions of Vulkan objects as its docs describe),
-/// not a list walked from the least recently bound: a bind pays one hash of the description
+/// not a list walked from the least recently bound: a bind pays one probe of the description
 /// however many samplers the state keeps, so the state can keep enough of them for a workload
 /// cycling its descriptions to find them all rather than make and destroy a `VkSampler` at every
-/// bind. Making room is the only walk, on a bind that makes a sampler with the cache full.
+/// bind. Making room is the only walk, on a bind that makes a sampler with the cache full. A
+/// description comes hashed ([`HashedDesc`]): a render encoder's binds keep the ones they worked
+/// out (`binding::BindMemo`), so a bind that finds its description there hashes nothing.
 ///
 /// `T` is [`OwnedSampler`]; the tests drive these rules over a value of their own.
 pub(super) struct KeptSamplers<T> {
     /// The samplers kept, each with the bind that last read it.
-    kept: KeyMap<metal2vulkan::vk::SamplerDesc, Kept<T>>,
+    kept: KeyMap<HashedDesc, Kept<T>>,
     /// The binds that read the cache so far: what stamps the sampler a bind reads or makes.
     binds: u64,
     /// What the cache has done ([`KeptCounts`]). Only the tests that measure the cache read it, so
@@ -334,6 +337,37 @@ pub(super) struct KeptCounts {
     pub(super) forgot: u64,
 }
 
+/// A Vulkan sampler's description and its hash under the maps' hasher ([`KeyMap`]), worked out
+/// once: the key of a state's cache ([`KeptSamplers`]), which hashes the hash alone. Two are
+/// equal where their descriptions are (`SamplerDesc`'s equality, the floats by their bits).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HashedDesc {
+    hash: u64,
+    desc: metal2vulkan::vk::SamplerDesc,
+}
+
+impl HashedDesc {
+    /// `desc`, hashed.
+    pub(crate) fn new(desc: metal2vulkan::vk::SamplerDesc) -> HashedDesc {
+        let hash = BuildHasherDefault::<KeyHasher>::default().hash_one(desc);
+        HashedDesc { hash, desc }
+    }
+}
+
+impl PartialEq for HashedDesc {
+    fn eq(&self, other: &HashedDesc) -> bool {
+        self.hash == other.hash && self.desc == other.desc
+    }
+}
+
+impl Eq for HashedDesc {}
+
+impl Hash for HashedDesc {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
+}
+
 /// A Vulkan sampler a state keeps ([`KeptSamplers`]).
 struct Kept<T> {
     sampler: Arc<T>,
@@ -354,7 +388,7 @@ impl<T> KeptSamplers<T> {
 
     /// The sampler of `desc` this bind asks for, where the cache keeps it, read now so that it is
     /// the last the cache forgets. Counts the bind, found or not.
-    pub(super) fn found(&mut self, desc: &metal2vulkan::vk::SamplerDesc) -> Option<Arc<T>> {
+    pub(super) fn found(&mut self, desc: &HashedDesc) -> Option<Arc<T>> {
         self.binds += 1;
         let read_at = self.binds;
         let kept = self.kept.get_mut(desc)?;
@@ -410,7 +444,7 @@ impl<T> KeptSamplers<T> {
     }
 
     /// Keep `sampler`, the one this bind made of `desc`.
-    pub(super) fn keep(&mut self, desc: metal2vulkan::vk::SamplerDesc, sampler: &Arc<T>) {
+    pub(super) fn keep(&mut self, desc: HashedDesc, sampler: &Arc<T>) {
         #[cfg(test)]
         {
             self.counts.made += 1;
@@ -969,6 +1003,11 @@ impl SamplerState {
         Arc::downgrade(&self.0)
     }
 
+    /// Whether `weak` holds this state.
+    pub(super) fn is(&self, weak: &Weak<SamplerShared>) -> bool {
+        std::ptr::eq(Weak::as_ptr(weak), Arc::as_ptr(&self.0))
+    }
+
     /// The state `weak` holds, where it lives.
     pub(super) fn upgrade(weak: &Weak<SamplerShared>) -> Option<SamplerState> {
         weak.upgrade().map(SamplerState)
@@ -1005,10 +1044,7 @@ impl SamplerState {
     /// to make room, else a released variant's kept instance that holds immutable samplers
     /// (`pipeline/kept.rs`); `Error::SamplerLimit` is the answer only where every one it keeps is
     /// held and no kept instance holds one ([`SamplerCount`]).
-    pub(super) fn vk_sampler(
-        &self,
-        desc: &metal2vulkan::vk::SamplerDesc,
-    ) -> Result<Arc<OwnedSampler>, Error> {
+    pub(super) fn vk_sampler(&self, desc: &HashedDesc) -> Result<Arc<OwnedSampler>, Error> {
         let device = &self.0.device;
         let mut kept = lock(&self.0.kept);
         if let Some(sampler) = kept.found(desc) {
@@ -1018,7 +1054,7 @@ impl SamplerState {
         let mut reduction = vk::SamplerReductionModeCreateInfo::default();
         let mut border = vk::SamplerBorderColorComponentMappingCreateInfoEXT::default();
         let info =
-            metal2vulkan::ash_interop::sampler_create_info(desc, &mut reduction, &mut border);
+            metal2vulkan::ash_interop::sampler_create_info(&desc.desc, &mut reduction, &mut border);
         let raw = loop {
             // SAFETY: the create info is valid for the device: `check_sampler` admitted its
             // features, its LOD range is ordered (`bind::sampler_desc`), and a border mapping is

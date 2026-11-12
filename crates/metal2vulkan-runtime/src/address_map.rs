@@ -76,6 +76,12 @@ impl SamplerMaps {
         }
     }
 
+    /// The map the command binds the sampler at `slot` with, where the slot samples a mapped
+    /// texture.
+    pub(super) fn map(&self, slot: SlotRef) -> Option<AddressModeMap> {
+        self.maps.get(&slot).copied()
+    }
+
     /// `state`'s samplers as the command binds them, so the plan's specialization reads the
     /// mapped words.
     pub(super) fn apply(&self, state: &mut BindState) {

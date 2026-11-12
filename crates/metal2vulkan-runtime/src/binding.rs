@@ -66,7 +66,7 @@ use super::render_pass::{PassLayout, Target};
 use super::render_target;
 use super::residency::{Residency, Used};
 use super::resource::ResourceKey;
-use super::sampler::{OwnedSampler, SamplerState};
+use super::sampler::{HashedDesc, OwnedSampler, SamplerShared, SamplerState};
 use super::texture::{Texture, TextureShared};
 use super::tracker::{Access, Use, UseRange};
 use super::upload::Upload;
@@ -78,7 +78,7 @@ use metal2vulkan::bind::{
     NeutralResource, PushConstantWrite, PushHole, ResourceUse, RootTable, SamplerDescriptor,
     SamplerSource, UseTarget, ViewSetup, WriteSource,
 };
-use metal2vulkan::metal::sampler::{OpaqueBlackBorder, SamplerUse};
+use metal2vulkan::metal::sampler::{AddressModeMap, OpaqueBlackBorder, SamplerUse};
 use metal2vulkan::pipeline::{HandleClass, SlotClass, SlotRef, Stage, StorageAttachmentView};
 use std::collections::BTreeSet;
 use std::ops::{Deref, Range};
@@ -1794,14 +1794,14 @@ const KEPT_VIEWS: usize = 256;
 ///   moves. A view is kept by its texture's address ([`KeptView`]), which stays the texture's
 ///   while the memo keeps the view: a texture found there is the one the view is of.
 /// - **A sampler's description** (`sampler_desc`'s answer) for a sampler slot is a function of
-///   the descriptor the bind maps the slot's state to (its LOD clamps and the address modes its
-///   textures map), the facts `sampler_desc` takes beside the device (the use: a comparison, an
-///   integer texture, a cube's explicit gradients; the opaque black border; the image's format)
-///   and the device. The bind still asks the
-///   state for its `VkSampler` of the description (`SamplerState::vk_sampler`), so the state keeps
-///   and forgets its samplers as before.
-///
-/// A sampler's descriptor is compared exactly, a float field by its bits.
+///   the state bound (its descriptor and its LOD bias, fixed as it is made), the bind's LOD
+///   clamps, the address-mode map the slot's textures give it, the facts `sampler_desc` takes
+///   beside the device (the use: a comparison, an integer texture, a cube's explicit gradients;
+///   the opaque black border; the image's format) and the device. It is kept by the state's
+///   address ([`KeptSampler`]), which stays the state's while the memo keeps it, the clamps by
+///   their bits, the map and the facts; and kept hashed (`sampler::HashedDesc`). The bind still
+///   asks the state for its `VkSampler` of the description (`SamplerState::vk_sampler`), so the
+///   state keeps and forgets its samplers as before.
 #[derive(Default)]
 pub(super) struct BindMemo {
     /// The views epoch the views were kept under.
@@ -1879,11 +1879,17 @@ impl SpareBindMemos {
     }
 }
 
-/// A sampler description a bind worked out ([`BindMemo`]): `descriptor`'s under `facts`.
+/// A sampler description a bind worked out ([`BindMemo`]): `state`'s, bound with `clamps`
+/// through `map` under `facts`. The state is held weakly: a state that goes leaves its
+/// allocation, and so its address, to its weak handles, so no other state is at the address while
+/// the description is kept.
 struct KeptSampler {
-    descriptor: SamplerDescriptor,
+    state: Weak<SamplerShared>,
+    /// The bind's LOD clamps, by their bits.
+    clamps: Option<[u32; 2]>,
+    map: Option<AddressModeMap>,
     facts: SamplerFacts,
-    desc: metal2vulkan::vk::SamplerDesc,
+    desc: HashedDesc,
 }
 
 /// What `sampler_desc` takes of a binding beside its descriptor and the device.
@@ -1892,13 +1898,6 @@ struct SamplerFacts {
     use_: SamplerUse,
     opaque_black: OpaqueBlackBorder,
     format: Option<metal2vulkan::vk::Format>,
-}
-
-/// Whether `a` and `b` are the same descriptor: every field equal, the floats by their bits.
-fn same_descriptor(a: &SamplerDescriptor, b: &SamplerDescriptor) -> bool {
-    a == b
-        && a.lod_min_clamp.to_bits() == b.lod_min_clamp.to_bits()
-        && a.lod_max_clamp.to_bits() == b.lod_max_clamp.to_bits()
 }
 
 /// Keep `entry` at the front of `kept`, at most [`KEPT`] entries.
@@ -1974,32 +1973,44 @@ fn image_descriptor(
         let (state, clamps) = slot_sampler(tables, slot)
             .ok_or_else(|| internal("the plan binds an unbound sampler slot"))?;
         // Its address modes as the textures it samples map them.
-        let descriptor = tables
-            .sampler_maps
-            .sampler(slot, bound_sampler(state, *clamps));
+        let map = tables.sampler_maps.map(slot);
         let facts = SamplerFacts {
             use_,
             opaque_black,
             format,
         };
+        let bits = clamps.map(|clamps| clamps.map(f32::to_bits));
         let kept = kept_samplers.as_deref().and_then(|kept| {
-            kept.iter()
-                .find(|k| same_descriptor(&k.descriptor, &descriptor) && k.facts == facts)
+            kept.iter().find(|k| {
+                state.is(&k.state) && k.clamps == bits && k.map == map && k.facts == facts
+            })
         });
+        let work_out = || {
+            let bound = bound_sampler(state, *clamps);
+            let descriptor = map.map_or(bound, |map| map.sampler(bound));
+            let desc = metal2vulkan::bind::sampler_desc(
+                device.compile_device(),
+                &descriptor,
+                state.bound_use(use_),
+                opaque_black,
+                format,
+            )
+            .map_err(Error::Bind)?;
+            Ok::<_, Error>(HashedDesc::new(desc))
+        };
         let desc = match kept {
-            Some(kept) => kept.desc,
+            Some(kept) => {
+                // The kept description is the one the bind works out.
+                debug_assert_eq!(work_out().ok(), Some(kept.desc));
+                kept.desc
+            }
             None => {
-                let desc = metal2vulkan::bind::sampler_desc(
-                    device.compile_device(),
-                    &descriptor,
-                    state.bound_use(use_),
-                    opaque_black,
-                    format,
-                )
-                .map_err(Error::Bind)?;
+                let desc = work_out()?;
                 if let Some(kept) = kept_samplers.as_deref_mut() {
                     let entry = KeptSampler {
-                        descriptor,
+                        state: state.downgrade(),
+                        clamps: bits,
+                        map,
                         facts,
                         desc,
                     };
@@ -2201,7 +2212,7 @@ fn image_descriptor(
                     None,
                 )
                 .map_err(Error::Bind)?;
-                let owned = state.vk_sampler(&desc)?;
+                let owned = state.vk_sampler(&HashedDesc::new(desc))?;
                 let raw = owned.raw();
                 samplers.push(owned);
                 vk::DescriptorImageInfo::default().sampler(raw)
