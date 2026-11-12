@@ -181,6 +181,8 @@ mod event_timeline;
 mod event_vk_signal;
 mod exactness;
 mod exit_guard;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod export_after_dma_buf;
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
 mod export_dedication;
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
