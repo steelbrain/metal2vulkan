@@ -770,7 +770,7 @@ fn aliased_surface_costs() {
                     })
                     .collect();
                 if answers.len() < 2 * TRANSIENT {
-                    answers.extend(made.iter().map(|(_, answer)| answer.clone()));
+                    answers.extend(made.iter().map(|(_, answer)| *answer));
                 }
                 let command_buffer = queue.command_buffer().unwrap();
                 let word = 0x0102_0408 ^ n as u32;
