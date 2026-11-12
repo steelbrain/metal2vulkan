@@ -2070,6 +2070,11 @@ degradations! {
         ///   them is held: a command buffer submitted before a texture over them was released may
         ///   still read that texture through its resource ID, and its image holds the import until
         ///   the command buffer completes (`heap_sets.rs`);
+        /// - with no keep-alive, while a buffer made over part of its bytes, or over the same
+        ///   bytes as memory of another class, while it lived is bound inside its import and holds
+        ///   it (one live import of a page, as `VK_EXT_external_memory_host` leaves a page imported
+        ///   twice into one device undefined: `buffer.rs`'s `Inside`;
+        ///   `WorkCounts::host_releases_held_inside`), until that buffer goes;
         /// - with no keep-alive, while a live buffers' table that lists them is held: a command
         ///   buffer whose commands may reach the buffer unnamed holds its first submission's table
         ///   and its host steps' until it completes, and one a rebind encoded again, or a host
@@ -2091,8 +2096,9 @@ degradations! {
         HostDeallocatorDelayed = "host-deallocator-delayed", Precision,
             "the deallocator runs once every command buffer that may still reach the pages \
              (through a texture over them, or a table of the live buffers it holds) lets go of \
-             them, or the batches submitted before the import's memory went complete, where \
-             Metal's runs at the release; the pages stay mapped until then";
+             them, every buffer bound inside their import goes, or the batches submitted before \
+             the import's memory went complete, where Metal's runs at the release; the pages stay \
+             mapped until then";
         /// A no-copy buffer, a no-copy heap or a buffer's rebind was made over a copy of the
         /// caller's host pages in memory of the device's own, which no import maps (`copied.rs`;
         /// a heap's textures shadows of its bytes): the caller's gate

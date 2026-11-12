@@ -3353,7 +3353,7 @@ bound.
   deallocator runs at the release, as Metal's, and the import keeps the keep-alive, which keeps the
   pages mapped, until it is freed: not announced (section 10). Cost: the deallocator runs once every
   command buffer that may still reach the pages (through a texture over them, or a table of the live
-  buffers it holds) lets go of them, every buffer bound inside their import went, or the batches
+  buffers it holds) lets go of them, every buffer bound inside their import goes, or the batches
   submitted before the import's memory went complete, where Metal's runs at the release; the pages
   stay mapped until then.
 - `metal2vulkan-degrade-copied-host-pages` (precision). `CopiedHostPages`: A no-copy buffer, a
