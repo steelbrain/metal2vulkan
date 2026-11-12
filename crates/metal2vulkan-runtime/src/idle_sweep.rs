@@ -21,7 +21,7 @@
 //!   (`Device::keep_room`), stopped and joined by the device's teardown before the teardown
 //!   destroys the parked objects and frees the memory ([`IdleSweep::stop`]).
 //! - **Holds nothing of the device.** The thread holds the device's memory, its two recyclers, its
-//!   functions and its counts ([`Swept`]), as the free thread does (`free_thread.rs`), never the
+//!   functions and its counts ([`SweepTargets`]), as the free thread does (`free_thread.rs`), never the
 //!   device: no release of the device's runs on it. A block it lets go of is posted to the free
 //!   thread, which paces its frees (`step_aside::pace`).
 //! - **A section of the exit guard** (`exit_guard.rs`): each sweep's Vulkan calls run in one; once
@@ -106,7 +106,7 @@ impl Due {
 
 /// What the thread sweeps: the device's memory, its recyclers, and what their objects' release
 /// takes.
-pub(crate) struct Swept {
+pub(crate) struct SweepTargets {
     pub(crate) memory: Arc<Mutex<Memory>>,
     pub(crate) images: Arc<Mutex<Recycler<vk::Image, ImageMaking>>>,
     pub(crate) buffers: Arc<Mutex<Recycler<vk::Buffer, BufferMaking>>>,
@@ -137,7 +137,7 @@ impl IdleSweep {
     /// Start the thread over what `swept` gives, unless a start was tried or the teardown began.
     /// Where the host starts no thread, what is kept goes at the calls that let it go as they
     /// come (the module docs).
-    pub(crate) fn start(&self, swept: impl FnOnce() -> Swept) {
+    pub(crate) fn start(&self, swept: impl FnOnce() -> SweepTargets) {
         if self.tried.load(Ordering::Acquire) {
             return;
         }
@@ -171,7 +171,7 @@ impl IdleSweep {
 }
 
 /// The thread's loop: a sweep each time one is due, until stopped or the process exits.
-fn run(due: &Due, swept: &Swept) {
+fn run(due: &Due, swept: &SweepTargets) {
     while due.wait() {
         let Some(busy) = exit_guard::enter() else {
             return;
@@ -189,7 +189,7 @@ fn run(due: &Due, swept: &Swept) {
 /// Let go of what stayed kept past its time at `now`: the parked objects, then the memory's
 /// blocks (each recycler's lock before the memory's, as everywhere). When the next of what stays
 /// may go.
-fn sweep(swept: &Swept, now: Instant) -> Option<Instant> {
+fn sweep(swept: &SweepTargets, now: Instant) -> Option<Instant> {
     let device = swept.functions.get();
     let (images, images_due) = lock(&swept.images).sweep(now);
     if !images.is_empty() {

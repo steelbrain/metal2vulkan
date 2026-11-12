@@ -2239,7 +2239,7 @@ fn the_device_s_functions_are_reached_through_checked_accessors() {
 /// tuple field, a type argument or a by-value parameter) fails
 /// `only_the_listed_modules_keep_the_device_s_functions`; so does a listed module that keeps none
 /// any more.
-const KEEPERS: [(&str, &str); 31] = [
+const KEEPERS: [(&str, &str); 32] = [
     (
         "binding.rs",
         "the push command (vkCmdPushDescriptorSet), a call's parameter (`push_set`) and the \
@@ -2310,6 +2310,11 @@ const KEEPERS: [(&str, &str); 31] = [
     (
         "host_memory.rs",
         "the device's host-memory importer (DeviceShared)",
+    ),
+    (
+        "idle_sweep.rs",
+        "the idle sweep of the device's kept blocks and parked objects, on a thread of its own \
+         inside a section; the teardown stops and joins it before vkDestroyDevice",
     ),
     (
         "index_bounds.rs",

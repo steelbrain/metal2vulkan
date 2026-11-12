@@ -1543,7 +1543,7 @@ impl Device {
         }
         let shared = self.shared();
         // The idle sweep's thread, from the device's first such call on (`idle_sweep.rs`).
-        shared.idle_sweep.start(|| crate::idle_sweep::Swept {
+        shared.idle_sweep.start(|| crate::idle_sweep::SweepTargets {
             memory: Arc::clone(&shared.memory),
             images: Arc::clone(&shared.textures.recycled),
             buffers: Arc::clone(&shared.recycled_buffers),
