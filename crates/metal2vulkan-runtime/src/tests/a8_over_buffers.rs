@@ -1,0 +1,205 @@
+//! An `A8Unorm` texture over a buffer's bytes that only reads, where the device's linear
+//! `A8_UNORM` image lacks what its optimal one does and its linear `R8_UNORM` image lacks nothing
+//! (NVIDIA's linear `A8_UNORM` has no sampling, linear filtering or transfer features): its image
+//! is the one an `R8Unorm` texture over the same bytes takes, in place, which its bindings read
+//! through `(Zero, Zero, Zero, Red)` (`texture/red_held_alpha.rs`), so it is no shadow. Over a
+//! `Shared` buffer of the device's own memory and over a no-copy buffer's host pages, a kernel's
+//! `read` through a sampler (`kernel_read_through.ll`'s `rt_repeat`) of each texel reads
+//! `(0, 0, 0, code / 255)`, what the same kernel reads of an `A8Unorm` texture of the device's own
+//! holding the same bytes. Where the device's linear `A8_UNORM` image lacks nothing (lavapipe, the
+//! M3 Max's MoltenVK, RADV), the texture's image is `A8_UNORM`'s, in place as before.
+//!
+//! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
+//! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`A8-OVER-BUFFERS`): the
+//! device's linear and optimal features of both formats, and each texture's image format and
+//! shadow count.
+
+use super::blit_holds::{device, Host, Scratch, WAIT};
+use crate::{
+    Buffer, CommandBufferStatus, ComputePipelineState, Device, PipelineOptions, Region,
+    ResourceOptions, Size, Texture, TextureDescriptor,
+};
+use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
+use std::time::Duration;
+
+const TEST: &str = "A8-OVER-BUFFERS";
+
+/// The texture's width (its rows' bytes, tight) and height.
+const WIDTH: u64 = 256;
+const HEIGHT: u64 = 16;
+
+/// The longest the device's check of images in place may take.
+const CHECK_WAIT: Duration = Duration::from_secs(120);
+
+/// The texture's bytes: every code, in an order no row repeats.
+fn codes() -> Vec<u8> {
+    (0..WIDTH * HEIGHT)
+        .map(|i| ((i * 7 + i / WIDTH * 3) % 256) as u8)
+        .collect()
+}
+
+/// The compute state of `kernel_read_through.ll`'s `rt_repeat` on `device`.
+fn reader(device: &Device) -> ComputePipelineState {
+    let ll = metal2vulkan_devtools::engine_dir().join("kernel_read_through.ll");
+    let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
+    let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
+    let function = device
+        .new_library_with_compile_library(library)
+        .new_function_with_name("rt_repeat")
+        .unwrap();
+    let descriptor =
+        ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
+    device
+        .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
+        .unwrap()
+}
+
+/// A `Shared` buffer of the device's own memory holding `bytes`.
+fn holding(device: &Device, bytes: &[u8]) -> Buffer {
+    let buffer = device
+        .new_buffer(bytes.len() as u64, ResourceOptions::shared())
+        .unwrap();
+    let contents = buffer.contents().unwrap();
+    // SAFETY: the new buffer's bytes, which no command uses yet.
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents.as_ptr(), bytes.len()) };
+    buffer
+}
+
+/// What `rt_repeat` reads of `texture` at each texel, row by row.
+fn read(device: &Device, state: &ComputePipelineState, texture: &Texture) -> Vec<[f32; 4]> {
+    let texels = (WIDTH * HEIGHT) as usize;
+    let positions: Vec<u8> = (0..WIDTH * HEIGHT)
+        .flat_map(|i| [(i % WIDTH) as i32, (i / WIDTH) as i32, 0, 0])
+        .flat_map(i32::to_le_bytes)
+        .collect();
+    let positions = holding(device, &positions);
+    let out = holding(device, &vec![0; 16 * texels]);
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(state).unwrap();
+    encoder.set_texture(Some(texture), 0).unwrap();
+    encoder.set_buffer(Some(&positions), 0, 0).unwrap();
+    encoder.set_buffer(Some(&out), 0, 1).unwrap();
+    let threads = Size::new(texels as u64, 1, 1);
+    encoder
+        .dispatch_threads(threads, Size::new(64, 1, 1))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    assert_eq!(command_buffer.error(), None);
+    let contents = out.contents().unwrap();
+    // SAFETY: the buffer's bytes, which the completed command buffer wrote.
+    let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), 16 * texels) };
+    let words: Vec<f32> = (bytes.as_chunks::<4>().0.iter())
+        .map(|&word| f32::from_le_bytes(word))
+        .collect();
+    words.as_chunks::<4>().0.to_vec()
+}
+
+/// The descriptor of the textures: `A8Unorm`, `WIDTH` by `HEIGHT`, read alone.
+fn descriptor() -> TextureDescriptor {
+    let mut d = TextureDescriptor::texture_2d(PixelFormat::A8Unorm, WIDTH, HEIGHT, false);
+    d.usage = TextureUsage::SHADER_READ;
+    d
+}
+
+/// The device's linear and optimal tiling features of `format`, as it reports them.
+fn features(device: &Device, format: ash::vk::Format) -> String {
+    // SAFETY: the handles are used while the device lives.
+    let handles = unsafe { device.raw() };
+    // SAFETY: the physical device is the instance's.
+    let properties = unsafe {
+        (handles.instance).get_physical_device_format_properties(handles.physical_device, format)
+    };
+    format!(
+        "{format:?}: linear {:?}, optimal {:?}",
+        properties.linear_tiling_features, properties.optimal_tiling_features
+    )
+}
+
+/// A texture over `buffer`'s first bytes, rows `WIDTH` apart, with what it read, whether it is a
+/// shadow, and its image's format.
+fn over(
+    device: &Device,
+    state: &ComputePipelineState,
+    buffer: &Buffer,
+    what: &str,
+) -> Vec<[f32; 4]> {
+    let before = device.work_counts();
+    let placement = buffer.texture_placement(&descriptor(), 0, WIDTH).unwrap();
+    let texture = buffer.new_texture(&descriptor(), 0, WIDTH).unwrap();
+    let after = device.work_counts();
+    let shadows = after.shadowed_textures - before.shadowed_textures;
+    let format = texture.image_plan().map(|plan| plan.format);
+    println!(
+        "{TEST} on {}: over {what}: {placement:?}, {shadows} shadow(s) made, its image {format:?}",
+        device.name()
+    );
+    let reads = read(device, state, &texture);
+    assert_eq!(
+        shadows, 0,
+        "{TEST}: an A8Unorm texture over {what} that only reads is no shadow ({placement:?})"
+    );
+    reads
+}
+
+#[test]
+fn an_a8_texture_over_a_buffer_that_only_reads_is_in_place_and_reads_its_alpha() {
+    let scratch = Scratch::new("a8-over-buffers");
+    let device = device(&scratch.0);
+    assert!(
+        device.settle_in_place_checks(CHECK_WAIT),
+        "{TEST}: the check"
+    );
+    for format in [ash::vk::Format::A8_UNORM_KHR, ash::vk::Format::R8_UNORM] {
+        println!("{TEST} on {}: {}", device.name(), features(&device, format));
+    }
+    let state = reader(&device);
+    let bytes = codes();
+    // The device's own texture of the same bytes: what the kernel reads of an `A8Unorm` texture.
+    let mut own = descriptor();
+    own.resource_options = ResourceOptions::shared();
+    let own = device.new_texture(&own).unwrap();
+    let whole = Region::new_2d(0, 0, WIDTH, HEIGHT);
+    own.replace_region(whole, 0, 0, &bytes, WIDTH, 0).unwrap();
+    let want = read(&device, &state, &own);
+    for (texel, (read, &code)) in want.iter().zip(&bytes).enumerate() {
+        let alpha = f32::from(code) / 255.0;
+        assert!(
+            read[..3] == [0.0; 3] && (read[3] - alpha).abs() < 1e-6,
+            "{TEST}: the device's own A8Unorm texture at texel {texel} reads {read:?}, not \
+             (0, 0, 0, {alpha})"
+        );
+    }
+    let shared = holding(&device, &bytes);
+    let reads = over(&device, &state, &shared, "a Shared buffer");
+    assert_eq!(reads, want, "{TEST}: over a Shared buffer");
+    let host = Host::new();
+    let words: Vec<u32> = (bytes.as_chunks::<4>().0.iter())
+        .map(|&word| u32::from_le_bytes(word))
+        .collect();
+    host.set(0, &words);
+    // SAFETY: the pages outlive the buffer (the host is dropped after it), which alone uses them.
+    let no_copy = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            host.memory(),
+            super::blit_holds::BYTES as u64,
+            ResourceOptions::default(),
+            None,
+        )
+    };
+    match no_copy {
+        Ok(no_copy) => {
+            let reads = over(&device, &state, &no_copy, "a no-copy buffer's host pages");
+            assert_eq!(reads, want, "{TEST}: over a no-copy buffer's host pages");
+        }
+        Err(error) => println!(
+            "{TEST} on {}: the device imports no host pages ({error:?}): over them not run",
+            device.name()
+        ),
+    }
+}

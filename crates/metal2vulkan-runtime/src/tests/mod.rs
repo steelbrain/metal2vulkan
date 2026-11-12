@@ -6,6 +6,8 @@
 //! checkout, not from a packaged crate; the crate's build (its build script and `include_str!`)
 //! reads nothing outside its own directory.
 
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod a8_over_buffers;
 mod address;
 mod address_map;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -556,6 +558,8 @@ mod shader_cache_time;
 mod shadow;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod shadow_carried_read;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod shadow_causes_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod shadow_host_writes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
