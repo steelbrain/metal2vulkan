@@ -1900,10 +1900,13 @@ impl Imported {
     }
 
     /// Hold the device through a handle the program's last drop waits for, in place of its own
-    /// ([`Device::held_for_release`]): the import going, these objects go in a release posted to
-    /// a handler thread.
+    /// ([`Device::held_for_release`]), and so the dma-buf imports its pages lie in where they
+    /// alone hold them: the import going, these objects go in a release posted to a handler
+    /// thread.
     fn hold_for_release(&mut self) {
         self.device = self.device.held_for_release();
+        #[cfg(unix)]
+        self.pages.memory.placement.hold_dma_buf_for_release();
     }
 }
 

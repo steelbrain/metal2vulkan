@@ -2115,6 +2115,19 @@ impl Placement {
         self.dma_buf.as_ref()
     }
 
+    /// Its dma-buf imports ([`dma_buf_pages`]) held through a handle of the device the program's
+    /// last drop waits for (`Device::held_for_release`), where the placement alone holds them:
+    /// they go in a release posted to a handler thread (`buffer.rs`'s `HostImport`). Shared, they
+    /// go with their last holder.
+    ///
+    /// [`dma_buf_pages`]: Placement::dma_buf_pages
+    #[cfg(unix)]
+    pub(super) fn hold_dma_buf_for_release(&mut self) {
+        if let Some(pages) = self.dma_buf.as_mut().and_then(Arc::get_mut) {
+            pages.hold_for_release();
+        }
+    }
+
     /// The address, among the pages its dma-buf imports were made of ([`dma_buf_pages`]), of
     /// the byte the caller reaches at host address `view`: `view` itself, but in a guest RAM's
     /// chunk (`host_ram.rs`), whose import is of the RAM's own addresses while the caller reaches

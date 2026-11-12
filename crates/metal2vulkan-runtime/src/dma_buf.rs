@@ -354,6 +354,13 @@ impl DmaBufPages {
         lock(&self.after_free).push(after);
     }
 
+    /// Hold the device through a handle the program's last drop waits for, in place of its own
+    /// (`Device::held_for_release`): the imports go in a release posted to a handler thread
+    /// (`buffer.rs`'s `HostImport`).
+    pub(super) fn hold_for_release(&mut self) {
+        self.device = self.device.held_for_release();
+    }
+
     /// Hold `memory`, imported from one of the source's dma-bufs, until the pages go; counted
     /// live.
     fn hold(&mut self, memory: vk::DeviceMemory) {
