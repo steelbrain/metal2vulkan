@@ -222,7 +222,8 @@ recorded here.
   blit does. On the Radeon 780M (`runtime_lane::submit_per_surface`, three runs), 128 surfaces of
   64 KiB, each a buffer and a texture in place over it, list 256 dma-bufs in each kernel
   submission (115 to 129 µs in the ioctl) while their buffers are in use, and 128 once the buffers
-  sat idle past their window (58 to 67 µs). For the same reason a guest RAM
+  sat idle past their window (58 to 67 µs); on the RX 7900 XTX 108 to 109 µs and 59 to 70 µs. For
+  the same reason a guest RAM
   there (`Device::use_host_ram`, with a source of dma-bufs) is imported in chunks longer than 64
   MiB, as long as one dma-buf of the source holds (`HostRam::with_largest_dma_buf`) within the
   device's allocation, buffer and storage-range limits, none ahead of the objects. Each live chunk
