@@ -185,7 +185,7 @@ impl Texture {
                     return Err(TextureLeft::Buffer);
                 }
                 let over = (*offset, *bytes_per_row);
-                let made = buffer.texture_over_again(*call, descriptor, over, *form, *ycbcr);
+                let made = buffer.texture_over_again(call, descriptor, over, *form, *ycbcr);
                 (made, Remade::Over)
             }
             Remake::View { call, request } => {
@@ -193,7 +193,7 @@ impl Texture {
                     return Err(TextureLeft::Other);
                 };
                 parent.carry(to)?;
-                (parent.view_as(*call, request, IdUse::Runtime), Remade::View)
+                (parent.view_as(call, request, IdUse::Runtime), Remade::View)
             }
         };
         let made = made.map_err(|_| TextureLeft::Failed)?;
