@@ -419,6 +419,8 @@ mod pool_room;
 mod pool_room_creations;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod posted_frees;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod primed_devices;
 mod private_properties;
 mod push_raw_writes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

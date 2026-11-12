@@ -2197,51 +2197,81 @@ impl Device {
             color_write_masks,
             sized_index_bind,
         };
-        // Before the exit hook is registered for this device (below): the first call of each
-        // entry point of the exit guard's table (`prime.rs`), counted as the first since a load
-        // of a shared object where the device is the first after one.
-        exit_guard::before_priming();
-        // SAFETY: the device is live, of `physical`, and enables timeline semaphores, and
-        // `bufferDeviceAddress` where `device_address` says so; `queues` holds at least one of
-        // its queues, which nothing uses yet.
-        if let Err(error) = unsafe {
-            prime::prime(
-                &instance.raw,
-                physical,
-                &Vk::new(
+        // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put back.
+        let functions = unsafe {
+            loader_word.restored(|| {
+                Functions::new(
+                    &instance.raw,
                     raw.clone(),
                     memory_reads,
                     push_descriptor,
                     object_name,
-                    Default::default(),
-                    None,
-                ),
-                &loader_word,
-                queue_family,
-                &queues,
-                Sharing::with_buffers(&queue_families, &buffer_families),
-                drawn.has(prime::Has {
-                    timestamps: timestamp_bits > 0,
-                    // A device the runtime created enables it (`enables.rs`).
-                    host_query_reset: owned,
-                    device_addresses: device_address,
-                    generated_commands: generated_commands.is_some(),
-                    sparse_binding: sparse.binds(),
-                    push_descriptor: push_descriptor.is_some(),
-                    calibration: calibrated.is_some(),
-                    object_names: object_name.is_some(),
-                    extended_dynamic_state: false,
-                    primitive_restart: false,
-                    color_write_masks: false,
-                    sized_index_bind: false,
-                    ycbcr_conversion: ycbcr_formats.primer().is_some(),
-                }),
-                generated_commands.as_ref(),
-                push_descriptor,
-                calibrated,
-                drawn,
-                ycbcr_formats.primer(),
-            )
+                    recording.as_ref(),
+                    PendingAudit::new(pending_audit, instance.sink()),
+                )
+            })
+        };
+        // The device's identity, by which the exit hook is registered (below) where the device
+        // can have made statics since its last registration: its driver's and its own UUIDs, and
+        // the entry points its sections reach.
+        // SAFETY: as above.
+        let uuids = unsafe { properties::uuids(&instance.raw, physical) };
+        let identity: Vec<u64> = uuids
+            .iter()
+            .flat_map(|uuid| uuid.chunks(8))
+            .map(|half| u64::from_le_bytes(half.try_into().unwrap_or_default()))
+            .chain(functions.entry_points().iter().copied())
+            .collect();
+        // Where the device registers the hook, before it: the first call of each entry point of
+        // the exit guard's table (`prime.rs`), counted as the first since a load of a shared
+        // object where the device is the first after one. A device that registers nothing (one
+        // of an identity registered since the last load) is not primed: an earlier device's
+        // priming made those calls first, on what stays loaded.
+        let primes = exit_guard::before_priming(&identity);
+        if let Err(error) = match primes {
+            false => Ok(()),
+            // SAFETY: the device is live, of `physical`, and enables timeline semaphores, and
+            // `bufferDeviceAddress` where `device_address` says so; `queues` holds at least one
+            // of its queues, which nothing uses yet.
+            true => unsafe {
+                prime::prime(
+                    &instance.raw,
+                    physical,
+                    &Vk::new(
+                        raw.clone(),
+                        memory_reads,
+                        push_descriptor,
+                        object_name,
+                        Default::default(),
+                        None,
+                    ),
+                    &loader_word,
+                    queue_family,
+                    &queues,
+                    Sharing::with_buffers(&queue_families, &buffer_families),
+                    drawn.has(prime::Has {
+                        timestamps: timestamp_bits > 0,
+                        // A device the runtime created enables it (`enables.rs`).
+                        host_query_reset: owned,
+                        device_addresses: device_address,
+                        generated_commands: generated_commands.is_some(),
+                        sparse_binding: sparse.binds(),
+                        push_descriptor: push_descriptor.is_some(),
+                        calibration: calibrated.is_some(),
+                        object_names: object_name.is_some(),
+                        extended_dynamic_state: false,
+                        primitive_restart: false,
+                        color_write_masks: false,
+                        sized_index_bind: false,
+                        ycbcr_conversion: ycbcr_formats.primer().is_some(),
+                    }),
+                    generated_commands.as_ref(),
+                    push_descriptor,
+                    calibrated,
+                    drawn,
+                    ycbcr_formats.primer(),
+                )
+            },
         } {
             scheduler.stop();
             completion.stop();
@@ -2535,20 +2565,6 @@ impl Device {
             // device the runtime created (`enables.rs`).
             owned,
         );
-        // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put back.
-        let functions = unsafe {
-            loader_word.restored(|| {
-                Functions::new(
-                    &instance.raw,
-                    raw.clone(),
-                    memory_reads,
-                    push_descriptor,
-                    object_name,
-                    recording.as_ref(),
-                    PendingAudit::new(pending_audit, instance.sink()),
-                )
-            })
-        };
         let shader_cache = match ShaderCache::start(
             cache,
             &physical_properties,
@@ -2567,17 +2583,8 @@ impl Device {
         };
         // The device's driver and layers are loaded and primed: the exit hook, registered (again)
         // after them when the device can have made statics since its last registration, runs
-        // before their destructors. The device's identity: its driver's and its own UUIDs, and
-        // the entry points its sections reach.
-        // SAFETY: as above.
-        let uuids = unsafe { properties::uuids(&instance.raw, physical) };
-        let identity = uuids
-            .iter()
-            .flat_map(|uuid| uuid.chunks(8))
-            .map(|half| u64::from_le_bytes(half.try_into().unwrap_or_default()))
-            .chain(functions.entry_points().iter().copied())
-            .collect();
-        exit_guard::register_device(identity);
+        // before their destructors.
+        exit_guard::register_device(identity, primes);
         let in_process = properties.kind == DeviceKind::Cpu;
         // A device whose driver reports a command buffer's execution failure through the
         // instance's messenger alone, and whose instance has the relay, has its queues' failures

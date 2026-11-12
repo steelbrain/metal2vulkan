@@ -6,6 +6,14 @@
 //! destructor then, before the hook, which therefore runs first. So neither a section in progress
 //! as the process exits, nor the program's own calls before it, is the first to make such a static.
 //!
+//! **Only a device that registers the hook is primed** (`exit_guard::before_priming`): the
+//! process's first device, the first after a load of a shared object, and one of an identity new
+//! since. A device made again on what stays loaded, after a device of its identity registered,
+//! registers nothing, and its calls are not the first: the earlier device's priming made each.
+//! Priming costs a device's making the driver's time for its objects: on NVIDIA's 620.70.06 on
+//! the RTX 3090, 120 to 160 ms, nearly all in `vkCreateIndirectCommandsLayoutEXT` (112 to 144 ms)
+//! where the device generates commands, so a device made again there takes that much less.
+//!
 //! Measured: without it, at 175dd511 on lavapipe x86_64, an exit right after committing 256
 //! command buffers ended by `SIGSEGV` in one of 10 rounds. The core's stack: the scheduler's
 //! `vkCmdPipelineBarrier` (its first submission's barriers) faulting inside the validation

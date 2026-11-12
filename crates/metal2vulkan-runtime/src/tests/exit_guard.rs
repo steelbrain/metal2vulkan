@@ -2986,10 +2986,13 @@ fn a_device_s_priming_makes_the_first_calls_since_a_load() {
     // `atexit`), registers a handler, runs a section, and exits.
     let child = unsafe { libc::fork() };
     if child == 0 {
-        // A forked child's first device is the first after a load.
-        exit_guard::before_priming();
+        // A forked child's first device is the first after a load, and primed.
+        if !exit_guard::before_priming(&[1]) {
+            // SAFETY: ends the child at once.
+            unsafe { libc::_exit(44) };
+        }
         call_the_first_entry_point();
-        exit_guard::register_device(vec![1]);
+        exit_guard::register_device(vec![1], true);
         // SAFETY: `program_handler` is a function with no arguments that never unwinds.
         unsafe { libc::atexit(program_handler) };
         call_the_first_entry_point();
@@ -3025,9 +3028,9 @@ fn a_device_s_primed_calls_register_the_hook_no_more() {
     // `atexit`), registers a handler, runs a section, and exits.
     let child = unsafe { libc::fork() };
     if child == 0 {
-        exit_guard::before_priming();
+        exit_guard::before_priming(&[1]);
         exit_guard::primed(Calls::NONE.with(Call::ALL[0]));
-        exit_guard::register_device(vec![1]);
+        exit_guard::register_device(vec![1], true);
         // SAFETY: `program_handler` is a function with no arguments that never unwinds.
         unsafe { libc::atexit(program_handler) };
         call_the_first_entry_point();
@@ -3044,6 +3047,85 @@ fn a_device_s_primed_calls_register_the_hook_no_more() {
         libc::WEXITSTATUS(status),
         43,
         "a section of an entry point the priming called registered the hook again"
+    );
+}
+
+/// A device that registers the hook unprimed (its priming left out as it registered nothing when
+/// asked, then a load or another device changed that before its registration) made no first call
+/// since: the calls primed before are forgotten, so a later section calling one of them (after an
+/// exit handler the program registered, which the destructor stands for) registers the hook again,
+/// and the hook runs before the handler (42; 43 where the calls stayed primed).
+#[cfg(unix)]
+#[test]
+fn a_device_registered_unprimed_forgets_the_primed_calls() {
+    extern "C" fn program_handler() {
+        let code = if exit_guard::closed() { 42 } else { 43 };
+        // SAFETY: ends the child at once, from its exit handlers.
+        unsafe { libc::_exit(code) };
+    }
+    // SAFETY: the child primes and registers a device, registers another unprimed (atomics,
+    // locks and the C library's `atexit`), registers a handler, runs a section, and exits.
+    let child = unsafe { libc::fork() };
+    if child == 0 {
+        exit_guard::before_priming(&[1]);
+        exit_guard::primed(Calls::NONE.with(Call::ALL[0]));
+        exit_guard::register_device(vec![1], true);
+        exit_guard::register_device(vec![2], false);
+        // SAFETY: `program_handler` is a function with no arguments that never unwinds.
+        unsafe { libc::atexit(program_handler) };
+        call_the_first_entry_point();
+        // SAFETY: as above.
+        unsafe { libc::exit(0) };
+    }
+    assert!(child > 0, "fork");
+    let mut status = 0;
+    // SAFETY: `child` is this process's child.
+    let reaped = unsafe { libc::waitpid(child, &mut status, 0) };
+    assert_eq!(reaped, child);
+    assert!(libc::WIFEXITED(status), "the child did not exit: {status}");
+    assert_eq!(
+        libc::WEXITSTATUS(status),
+        42,
+        "a section's first call after a device registered unprimed registered nothing"
+    );
+}
+
+/// Whether a device registers the hook is answered before its priming (`Devices::admits`), noting
+/// nothing, as its registration then answers it: so a device made again on what stays loaded is
+/// not primed, and each one that registers is.
+#[test]
+fn whether_a_device_registers_is_answered_before_its_priming() {
+    use crate::exit_guard::Devices;
+    let mut devices = Devices::new();
+    let cases = [
+        (false, Some(7), 1),
+        (true, Some(7), 1),
+        (true, Some(7), 2),
+        (true, Some(7), 1),
+        (true, Some(7), 2),
+        (true, Some(8), 2),
+        (true, Some(8), 1),
+        (true, Some(8), 2),
+        (false, Some(8), 1),
+        (true, None, 1),
+        (true, None, 1),
+    ];
+    let mut primed = 0;
+    for (registered, loads, identity) in cases {
+        let kept = devices.kept();
+        let primes = devices.admits(registered, loads, &[identity]);
+        assert_eq!(devices.kept(), kept, "the answer noted an identity");
+        let admitted = devices.admit(registered, loads, vec![identity]);
+        assert_eq!(
+            primes,
+            admitted.is_some(),
+            "registered {registered}, loads {loads:?}, identity {identity}"
+        );
+        primed += usize::from(primes);
+    }
+    assert_eq!(
+        primed, 7,
+        "four of the eleven made again on what stays loaded"
     );
 }
 

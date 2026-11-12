@@ -1619,6 +1619,13 @@ impl Devices {
         !(registered && loads.is_some() && self.loads == loads)
     }
 
+    /// Whether a device of `identity` would register the hook now ([`Devices::admit`]), noting
+    /// nothing: the first after a load ([`Devices::at_load`]), or one of an identity no device
+    /// registered at since.
+    pub(crate) fn admits(&self, registered: bool, loads: Option<u64>, identity: &[u64]) -> bool {
+        self.at_load(registered, loads) || !self.identities.iter().any(|kept| kept == identity)
+    }
+
     /// Whether a device of `identity` registers the hook ([`register_device`]), the process
     /// having loaded `loads` shared objects, and the hook being registered in this process
     /// (`registered`), and why; noted when it does. The identities kept are those registered
@@ -1630,7 +1637,7 @@ impl Devices {
         identity: Vec<u64>,
     ) -> Option<Admitted> {
         let current = !self.at_load(registered, loads);
-        if current && self.identities.contains(&identity) {
+        if !self.admits(registered, loads, &identity) {
             return None;
         }
         if !current {
@@ -1681,32 +1688,44 @@ static INSTALLED: AtomicU64 = AtomicU64::new(0);
 /// makes its statics again. Devices made again on what stays loaded register nothing, so a
 /// process that makes devices over and over adds a registration per load, not per device. Where
 /// the host keeps no count of loads, every device registers.
-pub(crate) fn register_device(identity: Vec<u64>) {
+///
+/// `primed`: whether the device was primed ([`before_priming`] answered that it registers). One
+/// that registers unprimed (a shared object loaded, or a device of its identity registered,
+/// between the two calls) made no first calls since: the entry points called so far are
+/// forgotten ([`forget_calls`]), so each section's first call of one registers the hook again.
+pub(crate) fn register_device(identity: Vec<u64>, primed: bool) {
     let loads = loaded::count();
     let mut devices = DEVICES.lock().unwrap_or_else(PoisonError::into_inner);
     let registered = REGISTERED.load(Ordering::SeqCst) == std::process::id();
     if devices.admit(registered, loads, identity).is_none() {
         return;
     }
+    if !primed {
+        forget_calls();
+    }
     AT_DEVICES.fetch_add(1, Ordering::Relaxed);
     register();
 }
 
-/// Before a device made or adopted is primed (`device/prime.rs`): where it registers the hook as
-/// the first after a load of a shared object ([`Admitted::Load`]), forget the entry points called
-/// so far ([`forget_calls`]). A layer the loader unloaded with the last instance and loaded again
-/// with this one makes its statics again at the first call of each entry point: the priming's,
-/// which come before the device's registration, and count as the first calls since, so a later
-/// section that calls one of them registers nothing again (after an exit handler the program
-/// registered once its device was made, such a registration would close the guard before it); one
-/// the priming did not call registers the hook again as its section ends.
-pub(crate) fn before_priming() {
+/// Before a device of `identity`, made or adopted, is primed (`device/prime.rs`): whether it
+/// registers the hook ([`register_device`]), and so is primed; a device that registers nothing,
+/// made on what stays loaded after a device of its identity registered, makes no call first,
+/// the earlier device's priming having made each. Where it registers the hook as the first after
+/// a load of a shared object ([`Admitted::Load`]), forget the entry points called so far
+/// ([`forget_calls`]). A layer the loader unloaded with the last instance and loaded again with
+/// this one makes its statics again at the first call of each entry point: the priming's, which
+/// come before the device's registration, and count as the first calls since, so a later section
+/// that calls one of them registers nothing again (after an exit handler the program registered
+/// once its device was made, such a registration would close the guard before it); one the
+/// priming did not call registers the hook again as its section ends.
+pub(crate) fn before_priming(identity: &[u64]) -> bool {
     let loads = loaded::count();
     let devices = DEVICES.lock().unwrap_or_else(PoisonError::into_inner);
     let registered = REGISTERED.load(Ordering::SeqCst) == std::process::id();
     if devices.at_load(registered, loads) {
         forget_calls();
     }
+    devices.admits(registered, loads, identity)
 }
 
 /// A `vkCreateInstance` was called, whatever it answered: by this thread (the runtime's one door,
@@ -1745,7 +1764,11 @@ pub fn program_instance_made() {
 /// a section's later call of one of them registers nothing again ([`CALLED`]).
 pub(crate) fn primed(calls: Calls) {
     CALLED.fetch_or(calls);
+    PRIMINGS.fetch_add(1, Ordering::Relaxed);
 }
+
+/// The devices primed in this process ([`primed`]).
+static PRIMINGS: AtomicU64 = AtomicU64::new(0);
 
 /// Forget the entry points called so far ([`CALLED`]): the next section that calls each
 /// registers the hook again as it ends.
@@ -1781,6 +1804,9 @@ pub struct Registrations {
     /// that registers the hook at a device after a load counts them; `None` where the host keeps
     /// no count, and every device registers.
     pub loads: Option<u64>,
+    /// The devices primed (`device/prime.rs`): each that registers the hook at its making, and
+    /// none made again on what stays loaded.
+    pub primings: u64,
 }
 
 /// This process's [`Registrations`] so far.
@@ -1793,6 +1819,7 @@ pub fn registrations() -> Registrations {
         total: INSTALLED.load(Ordering::Relaxed),
         section_bound: Call::ALL.len() as u64 * LOADS.load(Ordering::Relaxed).max(1),
         loads: loaded::count(),
+        primings: PRIMINGS.load(Ordering::Relaxed),
     }
 }
 
