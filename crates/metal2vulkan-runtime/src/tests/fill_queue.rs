@@ -8,11 +8,13 @@
 //! - **Bytes.** A `Managed` buffer's copy in after `did_modify_range`, a new `Private` buffer's
 //!   zeros and a `Private` buffer made with bytes read back exactly, through a blit into a
 //!   `Shared` buffer.
-//! - **Order.** A command buffer whose blit reads the `Managed` buffer behind a long run of
-//!   kernels, submitted and still in flight as the CPU writes the buffer again and a second
-//!   command buffer of the same queue takes the copy in: the first reads the first bytes, the second the new ones.
-//!   Where the device has unified memory (lavapipe), whose `Managed` buffer is one copy, the first
-//!   completes before the CPU writes again.
+//! - **Order.** A first command buffer takes the `Managed` buffer's first copy in and completes:
+//!   until then the copy may read the host copy, which the CPU leaves alone, as on Metal. A second
+//!   one's blit reads the buffer behind a long run of kernels, submitted and still in flight as
+//!   the CPU writes the buffer again and a third command buffer of the same queue takes that copy
+//!   in: the second reads the first bytes, the third the new ones. Where the device has unified
+//!   memory (lavapipe), whose `Managed` buffer is one copy, the second completes before the CPU
+//!   writes again.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects.
@@ -145,16 +147,23 @@ fn a_batch_s_fills_run_on_the_fill_queue_in_order_with_exact_bytes() {
         "{name}"
     );
     let before = device.work_counts();
+    // The first copy in, with the load buffers' zeros, by a command buffer of its own that
+    // completes before the CPU writes the buffer again (the module docs).
     write(&first);
-    let first_read = shared(BYTES);
+    let (primed, first_read) = (shared(BYTES), shared(BYTES));
+    let priming = queue.command_buffer().unwrap();
+    copy(&priming, &managed, &primed);
+    priming.commit().unwrap();
+    priming.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(priming.status(), CommandBufferStatus::Completed, "{name}");
     let behind = queue.command_buffer().unwrap();
     load(&behind, &state, &load_buffer, &load_scratch);
     copy(&behind, &managed, &first_read);
     behind.commit().unwrap();
-    // Once it was submitted, so its submission took the first copy in, the CPU writes the buffer
-    // again while it may still run, and a second command buffer of the queue takes that copy in,
-    // with a new buffer's zeros and another's bytes. Where the device has unified memory the
-    // buffer is one copy, which the CPU's write would race, as on Metal: there the first command
+    // Once it was submitted, the CPU writes the buffer again while it may still run, and a third
+    // command buffer of the queue takes that copy in, with a new buffer's zeros and another's
+    // bytes: the copy must wait for the blit before it. Where the device has unified memory the
+    // buffer is one copy, which the CPU's write would race, as on Metal: there the second command
     // buffer completes first.
     behind.wait_until_scheduled().unwrap();
     if device.properties().has_unified_memory {
@@ -187,16 +196,20 @@ fn a_batch_s_fills_run_on_the_fill_queue_in_order_with_exact_bytes() {
         .map(|(family, flags)| format!("family {family}, flags {:#x}", flags.as_raw())))
     .unwrap_or_else(|| "none".to_owned());
     eprintln!(
-        "FILL-QUEUE {name}: fill queue {shown}, submissions {submissions}, first command buffer \
-         still running as the second committed: {still_running}"
+        "FILL-QUEUE {name}: fill queue {shown}, submissions {submissions}, second command buffer \
+         still running as the third committed: {still_running}"
     );
     assert!(
-        read(&first_read) == first,
+        read(&primed) == first,
         "{name}: the first command buffer read other bytes"
     );
     assert!(
+        read(&first_read) == first,
+        "{name}: the second command buffer read other bytes than the first copy in"
+    );
+    assert!(
         read(&second_read) == second,
-        "{name}: the second command buffer read other bytes"
+        "{name}: the third command buffer read other bytes"
     );
     assert!(
         read(&zeros_read).iter().all(|&byte| byte == 0),
@@ -206,7 +219,8 @@ fn a_batch_s_fills_run_on_the_fill_queue_in_order_with_exact_bytes() {
         read(&bytes_read) == staged,
         "{name}: a buffer made with bytes read other bytes"
     );
-    // One submission a command buffer that took fills; none without a fill queue.
+    // One submission a command buffer that took fills (the first and the third); none without
+    // a fill queue.
     let expected = match place {
         Some(_) => 2,
         None => 0,
