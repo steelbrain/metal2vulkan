@@ -3,7 +3,7 @@
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips]... [--runs N] [--calls] [--counts] [--heap] [--threads N] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--threads N] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -22,6 +22,9 @@
 //!   `set_scissor_rect` (the top half of the target, then the bottom, in turn); every 4 draws
 //!   instead `set_render_pipeline_state` (the next of 4), `set_fragment_sampler_states` and
 //!   `set_fragment_texture` (the next of 16).
+//! - **damage**, a compositor's frames of damaged rectangles: as **clips**, but each draw after a
+//!   `set_scissor_rect` of its own, the next cell of a grid of 25 by 20 cells of 20x25 pixels, so
+//!   a pass's 500 draws are bounded by 500 rectangles.
 //!
 //! The slots lie in 64 KiB no-copy buffers over host pages (`new_buffer_with_bytes_no_copy`), as
 //! a guest's upload chunks do, each command buffer's in chunks of its own. With `--heap`, the
@@ -36,6 +39,12 @@
 //! function that returns fragment buffer 0's first value or samples texture 0 with sampler 0,
 //! each opaque and blended over (`draw_costs.metal`). The device is opened with GPU times from
 //! the host's clock and a message sink, the rest at its defaults.
+//!
+//! With `--shadowed`, the target is a texture over a no-copy buffer of host pages, as a guest's
+//! window surface is, each pass loading it rather than clearing it, and the device is opened with
+//! `HostPageTexturePolicy::Shadow`, so the target is a shadow on every device: each pass's end
+//! plans its copy back, and counts its tiles against its draws' scissor rectangles
+//! (`WorkCounts::shadow_attachment_tiles_covered`).
 //!
 //! A run is 2 untimed repetitions then 6 counted ones. Each repetition counts the calling
 //! thread's CPU time and its instructions and cycles from the first command buffer's creation
@@ -70,6 +79,7 @@
 //! `xcrun metal` in a scratch directory, removed once read.
 
 use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{BlendFactor, PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
@@ -124,6 +134,25 @@ enum Stream {
     /// rectangle of [`CLIPS`] before it, and every [`RUN`] draws instead the pipeline state, the
     /// sampler and a texture again.
     Clipped,
+    /// A compositor's under damaged rectangles: as [`Stream::Clipped`], each draw after a
+    /// scissor rectangle of its own ([`damaged`]).
+    Damaged,
+}
+
+/// The columns of the grid of damaged rectangles a [`Stream::Damaged`] pass's draws take in turn,
+/// and a cell's side in pixels.
+const DAMAGE_COLUMNS: u64 = 25;
+const DAMAGE_CELL: [u64; 2] = [20, 25];
+
+/// Draw `draw`'s scissor rectangle in a [`Stream::Damaged`] pass: the next cell of the grid.
+fn damaged(draw: usize) -> ScissorRect {
+    let (column, row) = (draw as u64 % DAMAGE_COLUMNS, draw as u64 / DAMAGE_COLUMNS);
+    ScissorRect {
+        x: column * DAMAGE_CELL[0],
+        y: row * DAMAGE_CELL[1] % SIDE,
+        width: DAMAGE_CELL[0],
+        height: DAMAGE_CELL[1],
+    }
 }
 
 /// The scissor rectangles a clipped stream's draws take in turn: the target's top half, then its
@@ -153,7 +182,7 @@ struct Shape {
 }
 
 /// The shapes, in the order they run.
-const SHAPES: [Shape; 4] = [
+const SHAPES: [Shape; 5] = [
     Shape {
         name: "ws",
         buffers: 8,
@@ -178,13 +207,19 @@ const SHAPES: [Shape; 4] = [
         draws: 500,
         stream: Stream::Clipped,
     },
+    Shape {
+        name: "damage",
+        buffers: 8,
+        draws: 500,
+        stream: Stream::Damaged,
+    },
 ];
 
 impl Shape {
     /// The slots a draw takes: its vertex bytes, and its fragment bytes in a compositor's stream.
     fn slots(self) -> u64 {
         match self.stream {
-            Stream::Bytes | Stream::Clipped => 1,
+            Stream::Bytes | Stream::Clipped | Stream::Damaged => 1,
             Stream::Layers => 2,
         }
     }
@@ -271,6 +306,8 @@ struct Bench {
     textures: Vec<Texture>,
     sampler: SamplerState,
     constants: Buffer,
+    /// With `--shadowed`, the no-copy buffer the target is a texture over.
+    _target_pages: Option<Buffer>,
 }
 
 /// A shape's chunks, and with `--heap` the heap they are placed in and the buffer over the guest
@@ -282,7 +319,7 @@ struct Chunks {
 }
 
 impl Bench {
-    fn new(device: Device, library: &Library) -> Result<Bench> {
+    fn new(device: Device, library: &Library, shadowed: bool) -> Result<Bench> {
         let function = |name: &str| -> Result<StageSource> {
             let function = library.new_function_with_name(name)?;
             Ok(StageSource::Function(function.function_descriptor()))
@@ -322,10 +359,30 @@ impl Bench {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let mut target = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, SIDE, SIDE, false);
         target.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+        // With `--shadowed`, a texture over host pages at its packed rows, loaded.
+        let (texture, target_pages, load) = match shadowed {
+            false => (device.new_texture(&target)?, None, LoadAction::Clear),
+            true => {
+                let bytes = SIDE * SIDE * 4;
+                // SAFETY: page-aligned read-write memory of `bytes` bytes, never unmapped, which
+                // outlives the buffer.
+                let pages = unsafe {
+                    device.new_buffer_with_bytes_no_copy(
+                        HostMemory::new(host_pages(bytes as usize)?),
+                        bytes,
+                        ResourceOptions::shared(),
+                        None,
+                    )
+                }?;
+                target.resource_options = ResourceOptions::shared();
+                let texture = pages.new_texture(&target, 0, SIDE * 4)?;
+                (texture, Some(pages), LoadAction::Load)
+            }
+        };
         let mut pass = RenderPassDescriptor::new();
         let color = &mut pass.color_attachments[0];
-        color.texture = Some(device.new_texture(&target)?);
-        color.load_action = LoadAction::Clear;
+        color.texture = Some(texture);
+        color.load_action = load;
         color.store_action = StoreAction::Store;
         color.clear_color = ClearColor::new(0.0, 0.0, 0.0, 1.0);
         Ok(Bench {
@@ -336,6 +393,7 @@ impl Bench {
             pass,
             pipelines,
             textures,
+            _target_pages: target_pages,
         })
     }
 
@@ -347,26 +405,11 @@ impl Bench {
         // With `heap`, one chunk before the heap's pages that only the guest RAM's buffer covers.
         let ahead = u64::from(heap) * CHUNK;
         let bytes = (ahead + count * CHUNK) as usize;
-        // Private, as RADV refuses to import shared anonymous memory (`host_memory.rs`'s
-        // `import_refused`).
-        // SAFETY: a fresh anonymous mapping, read-write, never unmapped.
-        let pages = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                bytes,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_ANON | libc::MAP_PRIVATE,
-                -1,
-                0,
-            )
-        };
-        if pages == libc::MAP_FAILED {
-            return Err(format!("mmap: {}", std::io::Error::last_os_error()).into());
-        }
+        let pages = host_pages(bytes)?;
         let at = |offset: u64| {
             // SAFETY: inside the mapping, which stays mapped and writable for the process's
             // life; CHUNK is a multiple of the host's page.
-            NonNull::new(unsafe { pages.cast::<u8>().add(offset as usize) }).ok_or("a null mapping")
+            NonNull::new(unsafe { pages.as_ptr().add(offset as usize) }).ok_or("a null mapping")
         };
         if !heap {
             let buffers = (0..count)
@@ -451,13 +494,16 @@ impl Bench {
                     steps.push(Step::VertexBuffer(&chunks[chunk], offset, 0));
                     steps.push(Step::Draw(PrimitiveType::TriangleStrip, 4));
                 }
-                Stream::Clipped => {
+                Stream::Clipped | Stream::Damaged => {
                     if draw % RUN == 0 {
                         steps.push(Step::Pipeline(&self.pipelines[draw / RUN % PIPELINES]));
                         steps.push(Step::FragmentSampler(&self.sampler));
                         steps.push(Step::FragmentTexture(&self.textures[draw / RUN % TEXTURES]));
-                    } else if draw % 2 == 1 {
+                    } else if draw % 2 == 1 && shape.stream == Stream::Clipped {
                         steps.push(Step::Scissor(CLIPS[draw / 2 % CLIPS.len()]));
+                    }
+                    if shape.stream == Stream::Damaged {
+                        steps.push(Step::Scissor(damaged(draw)));
                     }
                     let (chunk, offset) = shape.slot(buffer, slot);
                     steps.push(Step::VertexBuffer(&chunks[chunk], offset, 0));
@@ -877,6 +923,26 @@ fn measure(bench: &Bench, shape: Shape, runs: usize, options: Options) -> Result
     Ok(())
 }
 
+/// `bytes` bytes of fresh host pages, read-write, never unmapped: private, as RADV refuses to
+/// import shared anonymous memory (`host_memory.rs`'s `import_refused`).
+fn host_pages(bytes: usize) -> Result<NonNull<u8>> {
+    // SAFETY: a fresh anonymous mapping, read-write, never unmapped.
+    let pages = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            bytes,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_ANON | libc::MAP_PRIVATE,
+            -1,
+            0,
+        )
+    };
+    if pages == libc::MAP_FAILED {
+        return Err(format!("mmap: {}", std::io::Error::last_os_error()).into());
+    }
+    Ok(NonNull::new(pages.cast::<u8>()).ok_or("a null mapping")?)
+}
+
 /// The library: the metallib at `metallib`, or `draw_costs.metal` compiled by `xcrun metal`.
 fn library(device: &Device, metallib: Option<&Path>) -> Result<Library> {
     if let Some(path) = metallib {
@@ -908,7 +974,7 @@ fn compile(scratch: &Path) -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     let mut shapes = Vec::new();
-    let (mut runs, mut metallib) = (RUNS, None);
+    let (mut runs, mut metallib, mut shadowed) = (RUNS, None, false);
     let mut options = Options {
         calls: false,
         counts: false,
@@ -922,6 +988,7 @@ fn main() -> Result<()> {
             "--calls" => options.calls = true,
             "--counts" => options.counts = true,
             "--heap" => options.heap = true,
+            "--shadowed" => shadowed = true,
             "--threads" => {
                 options.threads = args.next().ok_or("--threads N")?.parse()?;
                 if options.threads == 0 {
@@ -933,7 +1000,7 @@ fn main() -> Result<()> {
                 *SHAPES
                     .iter()
                     .find(|shape| shape.name == name)
-                    .ok_or_else(|| format!("no shape {name}: ws, many, 10k or clips"))?,
+                    .ok_or_else(|| format!("no shape {name}: ws, many, 10k, clips or damage"))?,
             ),
         }
     }
@@ -949,6 +1016,9 @@ fn main() -> Result<()> {
     }
     let mut device_options = DeviceOptions::default();
     device_options.gpu_times_from_host = true;
+    if shadowed {
+        device_options.policy.host_page_textures = HostPageTexturePolicy::Shadow;
+    }
     device_options.messages = Some(MessageSink::new(|message| {
         if message.degradation.is_some() {
             NOTICES.fetch_add(1, Ordering::Relaxed);
@@ -957,7 +1027,7 @@ fn main() -> Result<()> {
     let device = Device::system_default_with(&device_options)?;
     println!("device: {}", device.name());
     let library = library(&device, metallib.as_deref())?;
-    let bench = Bench::new(device, &library)?;
+    let bench = Bench::new(device, &library, shadowed)?;
     for shape in shapes {
         measure(&bench, shape, runs, options)?;
     }
