@@ -503,6 +503,51 @@ fn an_indexed_draw_runs_the_de_indexed_variant() {
     assert_eq!(plan.variant.primitive_id_indices, None);
 }
 
+/// A vertex function whose attribute fixed-function input fetches in its base pipeline
+/// (`pi_attrib`'s `float2` at stride 8) reaches link in the de-indexed and private list forms,
+/// whose compile pulls every attribute (`pipeline::link::vertex`'s item 8): the variant the base
+/// plan asks for links, its vertex input binds no layout and pulls the attribute, its plan states
+/// the same variant, and every module is valid.
+#[test]
+fn a_fixed_function_attribute_links_in_the_de_indexed_and_list_forms() {
+    use crate::metal::{IndexType, PrimitiveType};
+    let Some(bc) = fixture() else { return };
+    let mut d = pipeline(&bc, "pi_attrib", Some("pi_ids"), 1);
+    d.vertex_descriptor = Some(attribute_descriptor());
+    for (dev, form) in [
+        (withheld(8), "de-indexed"),
+        (withheld(8), "listed"),
+        (device("lavapipe"), "listed"),
+    ] {
+        let base = compile(&dev, &d).expect("base");
+        assert_eq!(
+            base.vertex_input.bindings.len(),
+            1,
+            "{form}: the base fetch"
+        );
+        let mut state = bound();
+        state.primitive_type = Some(PrimitiveType::Triangle);
+        match form {
+            "de-indexed" => state.primitive_id_indices = Some(IndexType::UInt16),
+            _ => state.private_list = true,
+        }
+        let plan = base.plan(&dev, &state.shape()).expect("base plan");
+        let key = plan.variant.clone();
+        assert!(
+            key.primitive_id_indices.is_some() || key.private_list,
+            "{form}: {key:?}"
+        );
+        let p = dev
+            .compile_render_variant(&d, &key, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{form}: the variant: {e}"));
+        validate(&p, &dev);
+        assert!(p.vertex_input.bindings.is_empty(), "{form}");
+        assert_eq!(p.vertex_input.pulled.len(), 1, "{form}");
+        let plan = p.plan(&dev, &state.shape()).expect("variant plan");
+        assert_eq!(plan.variant, key, "{form}");
+    }
+}
+
 /// A vertex function that writes device memory (`pi_counts`' atomic counter) would run once per
 /// index in the de-indexed form: that variant is `NotImplemented(PrimitiveId)`, and its draws
 /// without indices still run.

@@ -784,6 +784,8 @@ mod render_executions;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod render_gpu_executions;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod render_merged_attributes;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod render_merged_executions;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod render_merged_indexed;
