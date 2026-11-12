@@ -899,19 +899,40 @@ pub(super) fn local_ptr(cx: &SelectCx<'_>, v: Value, home: Home) -> Result<Local
                 offset32(e.offset)?.wrapping_add(displacement as u32),
             ))
         }
+        // The null pointer (or an undefined one) of an arena that keeps its first word for it.
+        (Const::Null | Const::Undef | Const::Poison, Home::Arena(arena))
+            if arena_null(cx, arena) =>
+        {
+            Ok(LocalPtr::Offset(0))
+        }
         _ => Err(refuse()),
     }
 }
 
+/// Whether `arena` keeps its first word for the null pointer, so a pointer into it that may be
+/// null is null at offset 0 (`memory::plan::ArenaLayout::null_word`): the private arena, where
+/// some pointer into it may be null.
+fn arena_null(cx: &SelectCx<'_>, arena: Arena) -> bool {
+    arena == Arena::Private && cx.memory.priv_arena.null_word
+}
+
 /// The lowered representation of an arena or typed-object pointer `v`
 /// (`DemoteTy::ArenaOffset`), `None` for any other pointer. A phi with a constant incoming
-/// pointer is refused (its copy would need the constant materialized in the incoming block).
+/// pointer is refused (its copy would need the constant materialized in the incoming block),
+/// but for the null pointer into an arena that keeps its first word for it, whose copy stores
+/// offset 0.
 pub fn lowered_pointer(cx: &SelectCx<'_>, v: Value) -> Result<Option<DemoteTy>, Error> {
-    if home_of(cx, v).is_none() {
+    let Some(home) = home_of(cx, v) else {
         return Ok(None);
-    }
-    if super::phis::incoming(cx, v)?.is_some_and(|i| i.constant) {
-        return Err(refuse());
+    };
+    if let Some(i) = super::phis::incoming(cx, v)? {
+        let null_only = match home {
+            Home::Arena(arena) => arena_null(cx, arena) && !i.not_null,
+            _ => false,
+        };
+        if i.constant && !null_only {
+            return Err(refuse());
+        }
     }
     Ok(Some(DemoteTy::ArenaOffset))
 }
@@ -1708,12 +1729,6 @@ fn compare(
         ),
         _ => false,
     };
-    // A pointer that may be null or may be any arena offset.
-    let nullable = |cx: &SelectCx<'_>, v: Value| {
-        cx.memory
-            .roots_of(v)
-            .is_none_or(|r| r.iter().any(|r| matches!(r, Root::Null | Root::Dynamic)))
-    };
     let (ptr, against_null) = match (null(cx, a), null(cx, b)) {
         (false, true) => (a, Some(pred)),
         (true, false) => (b, Some(swapped(pred))),
@@ -1721,6 +1736,17 @@ fn compare(
         (false, false) => (a, None),
     };
     let home = home_of(cx, ptr).ok_or_else(refuse)?;
+    // In an arena that keeps its first word for null, a pointer that may be null is null at
+    // offset 0, below every object's address, as Metal's null is below every object's: its
+    // offset compares as its address does.
+    let null_at_zero = matches!(home, Home::Arena(arena) if arena_null(cx, arena));
+    // A pointer that may be any arena offset, or that may be null where null has no offset.
+    let nullable = |cx: &SelectCx<'_>, v: Value| {
+        cx.memory.roots_of(v).is_none_or(|r| {
+            r.iter()
+                .any(|r| *r == Root::Dynamic || (*r == Root::Null && !null_at_zero))
+        })
+    };
     let Some(against_null) = against_null else {
         if home_of(cx, b) != Some(home) || nullable(cx, a) || nullable(cx, b) {
             return Err(refuse());
@@ -1735,6 +1761,26 @@ fn compare(
     };
     if nullable(cx, ptr) {
         return Err(refuse());
+    }
+    let may_be_null = cx
+        .memory
+        .roots_of(ptr)
+        .is_some_and(|r| r.contains(&Root::Null));
+    if may_be_null {
+        // Null at offset 0 (`null_at_zero`): an unsigned or equality compare of the offsets.
+        if matches!(
+            against_null,
+            IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+        ) {
+            return Err(refuse());
+        }
+        use_home(cx, home, m)?;
+        return Ok(Some(LocalStrategy::Compare {
+            home,
+            pred: against_null,
+            a: local_ptr(cx, ptr, home)?,
+            b: LocalPtr::Offset(0),
+        }));
     }
     // `ptr` against null, whose address is below every object's.
     let result = match against_null {

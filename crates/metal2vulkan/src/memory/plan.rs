@@ -149,6 +149,11 @@ pub struct ArenaLayout {
     pub dynamic: Vec<DynamicRegion>,
     /// The threadgroup arena's imageblock, last.
     pub imageblock: Option<ImageblockRegion>,
+    /// The arena keeps its first word ([`NULL_WORD`] bytes) for the null pointer: no object lies
+    /// at offset 0, so a pointer into it that may be null is null at offset 0, the value zero
+    /// bytes hold. The private arena keeps it when some pointer into it may be null
+    /// (`lower::access::local`).
+    pub null_word: bool,
 }
 
 impl ArenaLayout {
@@ -224,6 +229,9 @@ impl ArenaLayout {
         self.entries.get(at)
     }
 }
+
+/// The bytes an arena keeps for the null pointer ([`ArenaLayout::null_word`]): one word.
+pub const NULL_WORD: u64 = 4;
 
 /// The least alignment of Metal's static threadgroup objects: a `uchar[3]` after a `ushort[5]`
 /// at 0 lies at 12 (measured on an M3 Max and an M4).
@@ -1861,6 +1869,10 @@ impl Planner<'_> {
             }
         }
         let mut arena = ArenaLayout::default();
+        if self.private_may_be_null(m)? {
+            arena.static_size = NULL_WORD;
+            arena.null_word = true;
+        }
         let mut typed = Vec::new();
         let mut next = eligible.iter().peekable();
         for (id, inst) in body.insts.iter() {
@@ -1921,6 +1933,22 @@ impl Planner<'_> {
                 })?;
         }
         Ok((arena, typed, values))
+    }
+
+    /// Whether some pointer into the private arena may be null: a root set holds an alloca and
+    /// the null root (a `phi` or `select` of an alloca's address and null, or a pointer a cell
+    /// may hold null at). Such an alloca is merged, so it is never typed: its pointers are
+    /// private-arena offsets. One work unit per interned set.
+    fn private_may_be_null(&self, m: &mut Meter) -> Result<bool, Error> {
+        for roots in self.prov.sets.iter() {
+            m.tick(1)?;
+            if roots.first() == Some(&Root::Null)
+                && roots.iter().any(|r| matches!(r, Root::Alloca(_)))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// The representation of every pointer value, the offsets, and the handle-table classes.

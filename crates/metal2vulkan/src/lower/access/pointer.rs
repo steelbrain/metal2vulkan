@@ -215,6 +215,15 @@ impl PointerValue {
 /// Whether `v` is a device or constant pointer constant that is the null root: `null`, `undef`,
 /// or `poison`. A threadgroup or private null is not: the arena families hold those pointers as
 /// offsets with no null value, so such a constant operand stays refused there.
+/// Whether `v` is the null pointer constant (or an undefined pointer), in any space.
+pub(super) fn null_pointer_constant(cx: &SelectCx<'_>, v: Value) -> bool {
+    let Value::Const(c) = v else { return false };
+    matches!(
+        cx.entry.module.consts().get(c).map(|k| &k.value),
+        Some(Const::Null | Const::Undef | Const::Poison)
+    )
+}
+
 pub(super) fn null_constant(cx: &SelectCx<'_>, v: Value) -> bool {
     let Value::Const(c) = v else { return false };
     matches!(
@@ -619,6 +628,12 @@ pub fn phi_incoming(
     phi: ValueId,
     src: ValueId,
 ) -> BResult<SValue> {
+    // A null thread pointer into an arena that keeps its first word for null is offset 0
+    // (`memory::plan::ArenaLayout::null_word`); the families whose offsets have no null refuse
+    // a phi with a constant incoming value (`access::local::lowered_pointer`).
+    if null_thread_source(cx, src) && phi_ty(cx, phi) == Some(DemoteTy::ArenaOffset) {
+        return k32(fb, 0);
+    }
     if null_source(cx, src) {
         let ty = cx
             .plan
@@ -634,6 +649,33 @@ pub fn phi_incoming(
         }
     }
     cx.operand(fb, src)
+}
+
+/// The lowered type of phi `phi`.
+fn phi_ty(cx: &EmitCx<'_>, phi: ValueId) -> Option<DemoteTy> {
+    cx.plan
+        .phis
+        .binary_search_by_key(&phi, |(v, _)| *v)
+        .ok()
+        .and_then(|i| cx.plan.phis.get(i))
+        .map(|(_, t)| t.clone())
+}
+
+/// Whether AIR value `v` is a thread pointer constant that is the null root.
+fn null_thread_source(cx: &EmitCx<'_>, v: ValueId) -> bool {
+    let Some(Value::Const(c)) = cx.plan.values.value(v) else {
+        return false;
+    };
+    let Some(k) = cx.entry.module.consts().get(c) else {
+        return false;
+    };
+    matches!(k.value, Const::Null | Const::Undef | Const::Poison)
+        && matches!(
+            cx.entry.module.types().get(k.ty),
+            Some(Type::Ptr {
+                space: crate::air::ir::AddrSpace::Thread
+            })
+        )
 }
 
 /// A 64-bit Metal address: a `u64`, or its two words without `shaderInt64`.

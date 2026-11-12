@@ -34,6 +34,9 @@ pub struct PhiFacts {
 pub(super) struct Incoming {
     /// Some incoming value is a constant.
     pub(super) constant: bool,
+    /// Some incoming value is a constant other than the null pointer (or an undefined one),
+    /// whatever its space.
+    pub(super) not_null: bool,
     /// The first incoming value, in order, that a static fat pointer refuses (a constant other
     /// than null, or a blob pointer), or whose root set selection did not read.
     pub(super) fat: Fat,
@@ -84,6 +87,7 @@ fn fill(cx: &SelectCx<'_>, facts: &mut PhiFacts, m: &mut Meter) -> Result<(), Er
         }
         m.tick(1)?;
         let mut constant = false;
+        let mut not_null = false;
         let mut fat = None;
         let mut not_wide = false;
         for (x, _) in incoming.iter() {
@@ -91,6 +95,7 @@ fn fill(cx: &SelectCx<'_>, facts: &mut PhiFacts, m: &mut Meter) -> Result<(), Er
             let is_const = matches!(x, Value::Const(_));
             let null = pointer::null_constant(cx, *x);
             constant |= is_const;
+            not_null |= is_const && !pointer::null_pointer_constant(cx, *x);
             not_wide |= !null && (is_const || !dynamic::is_wide(cx, *x));
             if fat.is_none() {
                 if is_const && !null {
@@ -111,6 +116,7 @@ fn fill(cx: &SelectCx<'_>, facts: &mut PhiFacts, m: &mut Meter) -> Result<(), Er
             id,
             Incoming {
                 constant,
+                not_null,
                 fat: fat.unwrap_or(Fat::Plain),
                 not_wide,
             },

@@ -123,6 +123,11 @@ impl RootSets {
         self.sets.len()
     }
 
+    /// Every interned set, in interning order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &[Root]> {
+        self.sets.iter().map(|s| &**s)
+    }
+
     /// The sets alone, without the interning index and the join memo (for a finished plan).
     pub fn into_table(self) -> RootSets {
         RootSets {
