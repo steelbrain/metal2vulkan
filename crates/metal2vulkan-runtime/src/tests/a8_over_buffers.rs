@@ -1,18 +1,20 @@
-//! An `A8Unorm` texture over a buffer's bytes that only reads, where the device's linear
-//! `A8_UNORM` image lacks what its optimal one does and its linear `R8_UNORM` image lacks nothing
-//! (NVIDIA's linear `A8_UNORM` has no sampling, linear filtering or transfer features): its image
-//! is the one an `R8Unorm` texture over the same bytes takes, in place, which its bindings read
-//! through `(Zero, Zero, Zero, Red)` (`texture/red_held_alpha.rs`), so it is no shadow. Over a
-//! `Shared` buffer of the device's own memory and over a no-copy buffer's host pages, a kernel's
-//! `read` through a sampler (`kernel_read_through.ll`'s `rt_repeat`) of each texel reads
-//! `(0, 0, 0, code / 255)`, what the same kernel reads of an `A8Unorm` texture of the device's own
-//! holding the same bytes. Where the device's linear `A8_UNORM` image lacks nothing (lavapipe, the
-//! M3 Max's MoltenVK, RADV), the texture's image is `A8_UNORM`'s, in place as before.
+//! An `A8Unorm` texture over a buffer's bytes that only reads is a shadow only where an `R8Unorm`
+//! texture over the same bytes is one: where the device's `A8_UNORM` image in a tiling a texture
+//! over a buffer takes lacks what its optimal one does and its `R8_UNORM` image lacks nothing
+//! (the RTX 3090 lists no `DRM_FORMAT_MOD_LINEAR` modifier for `A8_UNORM`, so no image of it lies
+//! at a pitch other than its linear image's), its image is the one an `R8Unorm` texture over the
+//! same bytes takes, which its bindings read through `(Zero, Zero, Zero, Red)`
+//! (`texture/red_held_alpha.rs`). Over a `Shared` buffer of the device's own memory and over a
+//! no-copy buffer's host pages, `WIDTH` texels wide at tight rows (no shadow) and `NARROW` wide at
+//! the same rows, a kernel's `read` through a sampler (`kernel_read_through.ll`'s `rt_repeat`) of
+//! each texel reads `(0, 0, 0, code / 255)`, what the same kernel reads of an `A8Unorm` texture
+//! of the device's own holding the same bytes. Where the device's `A8_UNORM` images lack nothing
+//! (lavapipe, RADV), the texture's image is `A8_UNORM`'s, as before.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`A8-OVER-BUFFERS`): the
-//! device's linear and optimal features of both formats, and each texture's image format and
-//! shadow count.
+//! device's linear, optimal and `DRM_FORMAT_MOD_LINEAR` features of both formats, the
+//! placements of glyph-sized textures, and each texture's image format and shadow count.
 
 use super::blit_holds::{device, Host, Scratch, WAIT};
 use crate::{
@@ -28,6 +30,10 @@ const TEST: &str = "A8-OVER-BUFFERS";
 /// The texture's width (its rows' bytes, tight) and height.
 const WIDTH: u64 = 256;
 const HEIGHT: u64 = 16;
+
+/// The width of a texture over the same rows, `WIDTH` apart: a glyph's, whose rows the driver's
+/// linear image may lay at another pitch (NVIDIA's at 128 bytes).
+const NARROW: u64 = 100;
 
 /// The longest the device's check of images in place may take.
 const CHECK_WAIT: Duration = Duration::from_secs(120);
@@ -68,9 +74,10 @@ fn holding(device: &Device, bytes: &[u8]) -> Buffer {
 
 /// What `rt_repeat` reads of `texture` at each texel, row by row.
 fn read(device: &Device, state: &ComputePipelineState, texture: &Texture) -> Vec<[f32; 4]> {
-    let texels = (WIDTH * HEIGHT) as usize;
-    let positions: Vec<u8> = (0..WIDTH * HEIGHT)
-        .flat_map(|i| [(i % WIDTH) as i32, (i / WIDTH) as i32, 0, 0])
+    let width = texture.width();
+    let texels = (width * texture.height()) as usize;
+    let positions: Vec<u8> = (0..texels as u64)
+        .flat_map(|i| [(i % width) as i32, (i / width) as i32, 0, 0])
         .flat_map(i32::to_le_bytes)
         .collect();
     let positions = holding(device, &positions);
@@ -100,9 +107,9 @@ fn read(device: &Device, state: &ComputePipelineState, texture: &Texture) -> Vec
     words.as_chunks::<4>().0.to_vec()
 }
 
-/// The descriptor of the textures: `A8Unorm`, `WIDTH` by `HEIGHT`, read alone.
-fn descriptor() -> TextureDescriptor {
-    let mut d = TextureDescriptor::texture_2d(PixelFormat::A8Unorm, WIDTH, HEIGHT, false);
+/// The descriptor of the textures: `pf`, `width` by `HEIGHT`, read alone.
+fn descriptor(pf: PixelFormat, width: u64) -> TextureDescriptor {
+    let mut d = TextureDescriptor::texture_2d(pf, width, HEIGHT, false);
     d.usage = TextureUsage::SHADER_READ;
     d
 }
@@ -215,29 +222,47 @@ fn widths(device: &Device) {
     }
 }
 
-/// A texture over `buffer`'s first bytes, rows `WIDTH` apart, with what it read, whether it is a
-/// shadow, and its image's format.
+/// The shadows the making of a texture of `descriptor` over `buffer`'s first bytes, rows `pitch`
+/// apart, counted.
+fn shadows_made(buffer: &Buffer, descriptor: &TextureDescriptor, pitch: u64) -> u64 {
+    let device = buffer.device();
+    let before = device.work_counts().shadowed_textures;
+    drop(buffer.new_texture(descriptor, 0, pitch).unwrap());
+    device.work_counts().shadowed_textures - before
+}
+
+/// An `A8Unorm` texture `width` texels wide over `buffer`'s first bytes, rows `pitch` apart,
+/// with what it read, whether it is a shadow, and its image's format: no shadow where its rows
+/// are tight, and a shadow only where an `R8Unorm` texture over the same bytes is one.
 fn over(
     device: &Device,
     state: &ComputePipelineState,
     buffer: &Buffer,
     what: &str,
+    (width, pitch): (u64, u64),
 ) -> Vec<[f32; 4]> {
+    let red = shadows_made(buffer, &descriptor(PixelFormat::R8Unorm, width), pitch);
+    let alpha = descriptor(PixelFormat::A8Unorm, width);
     let before = device.work_counts();
-    let placement = buffer.texture_placement(&descriptor(), 0, WIDTH).unwrap();
-    let texture = buffer.new_texture(&descriptor(), 0, WIDTH).unwrap();
+    let placement = buffer.texture_placement(&alpha, 0, pitch).unwrap();
+    let texture = buffer.new_texture(&alpha, 0, pitch).unwrap();
     let after = device.work_counts();
     let shadows = after.shadowed_textures - before.shadowed_textures;
     let held = after.alpha_textures_held_in_red - before.alpha_textures_held_in_red;
     let format = texture.image_plan().map(|plan| plan.format);
     println!(
-        "{TEST} on {}: over {what}: {placement:?}, {shadows} shadow(s) made, {held} held in red, \
-         its image {format:?}",
+        "{TEST} on {}: over {what}, {width} wide, rows {pitch} apart: {placement:?}, {shadows} \
+         shadow(s) made ({red} for R8Unorm), {held} held in red, its image {format:?}",
         device.name()
     );
     let reads = read(device, state, &texture);
-    assert_eq!(
-        shadows, 0,
+    assert!(
+        shadows <= red,
+        "{TEST}: an A8Unorm texture over {what} that only reads is a shadow ({placement:?}) \
+         where an R8Unorm one over the same bytes is not"
+    );
+    assert!(
+        width != pitch || shadows == 0,
         "{TEST}: an A8Unorm texture over {what} that only reads is no shadow ({placement:?})"
     );
     // A device that holds no `A8_UNORM` image at all holds every `A8Unorm` texture in red, uncounted.
@@ -266,13 +291,17 @@ fn an_a8_texture_over_a_buffer_that_only_reads_is_in_place_and_reads_its_alpha()
     widths(&device);
     let state = reader(&device);
     let bytes = codes();
-    // The device's own texture of the same bytes: what the kernel reads of an `A8Unorm` texture.
-    let mut own = descriptor();
-    own.resource_options = ResourceOptions::shared();
-    let own = device.new_texture(&own).unwrap();
-    let whole = Region::new_2d(0, 0, WIDTH, HEIGHT);
-    own.replace_region(whole, 0, 0, &bytes, WIDTH, 0).unwrap();
-    let want = read(&device, &state, &own);
+    // The device's own textures of the same bytes, rows `WIDTH` apart, all of each row and its
+    // first `NARROW` bytes: what the kernel reads of an `A8Unorm` texture.
+    let own = |width| {
+        let mut own = descriptor(PixelFormat::A8Unorm, width);
+        own.resource_options = ResourceOptions::shared();
+        let own = device.new_texture(&own).unwrap();
+        let whole = Region::new_2d(0, 0, width, HEIGHT);
+        own.replace_region(whole, 0, 0, &bytes, WIDTH, 0).unwrap();
+        read(&device, &state, &own)
+    };
+    let (want, narrow) = (own(WIDTH), own(NARROW));
     for (texel, (read, &code)) in want.iter().zip(&bytes).enumerate() {
         let alpha = f32::from(code) / 255.0;
         assert!(
@@ -282,8 +311,10 @@ fn an_a8_texture_over_a_buffer_that_only_reads_is_in_place_and_reads_its_alpha()
         );
     }
     let shared = holding(&device, &bytes);
-    let reads = over(&device, &state, &shared, "a Shared buffer");
+    let reads = over(&device, &state, &shared, "a Shared buffer", (WIDTH, WIDTH));
     assert_eq!(reads, want, "{TEST}: over a Shared buffer");
+    let reads = over(&device, &state, &shared, "a Shared buffer", (NARROW, WIDTH));
+    assert_eq!(reads, narrow, "{TEST}: over a Shared buffer, {NARROW} wide");
     let host = Host::new();
     let words: Vec<u32> = (bytes.as_chunks::<4>().0.iter())
         .map(|&word| u32::from_le_bytes(word))
@@ -300,8 +331,11 @@ fn an_a8_texture_over_a_buffer_that_only_reads_is_in_place_and_reads_its_alpha()
     };
     match no_copy {
         Ok(no_copy) => {
-            let reads = over(&device, &state, &no_copy, "a no-copy buffer's host pages");
-            assert_eq!(reads, want, "{TEST}: over a no-copy buffer's host pages");
+            let what = "a no-copy buffer's host pages";
+            let reads = over(&device, &state, &no_copy, what, (WIDTH, WIDTH));
+            assert_eq!(reads, want, "{TEST}: over {what}");
+            let reads = over(&device, &state, &no_copy, what, (NARROW, WIDTH));
+            assert_eq!(reads, narrow, "{TEST}: over {what}, {NARROW} wide");
         }
         Err(error) => println!(
             "{TEST} on {}: the device imports no host pages ({error:?}): over them not run",
