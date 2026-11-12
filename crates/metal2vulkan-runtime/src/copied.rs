@@ -985,6 +985,25 @@ unsafe impl Send for HostBlock {}
 // SAFETY: as above.
 unsafe impl Sync for HostBlock {}
 
+/// How far ahead of the block it compares a comparison asks for the bytes it reads next
+/// ([`prefetch`]): a host page. The host's own prefetchers follow a run of reads within a page,
+/// and start again at each page they cross.
+const AHEAD: usize = SYNC_BLOCK;
+
+/// Ask the host to fetch the `span` bytes at `at` into its caches before they are read: on an
+/// x86-64 host, each line of 64 bytes (`PREFETCHT0`), which faults on no address, mapped or not;
+/// elsewhere nothing.
+fn prefetch(at: *const u8, span: usize) {
+    #[cfg(target_arch = "x86_64")]
+    for line in (0..span).step_by(64) {
+        use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+        // SAFETY: a prefetch reads nothing the program sees and faults on no address.
+        unsafe { _mm_prefetch::<_MM_HINT_T0>(at.wrapping_add(line).cast()) };
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = (at, span);
+}
+
 /// Read `span` bytes at `from` into `into`, the rest of it zero: a block the tags read whole.
 ///
 /// # Safety
@@ -1715,6 +1734,16 @@ unsafe fn copy_in_run(ends: Ends, bytes: Range<usize>) -> u64 {
     let mut at = bytes.start;
     while at < bytes.end {
         let span = (bytes.end - at).min(SYNC_BLOCK);
+        // Both sides' block a page ahead, within the run.
+        let ahead = (at + AHEAD).min(bytes.end);
+        prefetch(
+            pages.wrapping_add(ahead),
+            (bytes.end - ahead).min(SYNC_BLOCK),
+        );
+        prefetch(
+            copy.wrapping_add(ahead),
+            (bytes.end - ahead).min(SYNC_BLOCK),
+        );
         // SAFETY: `span` bytes at `at` lie in both (the caller's); the blocks are this call's own.
         unsafe {
             std::ptr::copy_nonoverlapping(pages.add(at), now.as_mut_ptr(), span);
@@ -2164,6 +2193,11 @@ unsafe fn copy_in_blocks(
         let mut lap = clock::Lap::new(clock::COPY_IN, index);
         let at = index * TAG_BLOCK;
         let span = (sides.length - at).min(TAG_BLOCK);
+        let ahead = (at + AHEAD < sides.length).then_some(at + AHEAD);
+        // The pages' block a page ahead, which a comparison reads whatever it holds.
+        if let Some(ahead) = ahead {
+            prefetch(pages.wrapping_add(ahead), TAG_BLOCK);
+        }
         // SAFETY: `span` bytes at `at` lie in the pages (the caller's).
         if unsafe { tag_in_place(pages.add(at), span, &mut now) } == *agreed {
             return;
@@ -2175,6 +2209,11 @@ unsafe fn copy_in_blocks(
         if changed == *agreed {
             // Written back since its tag was read.
             return;
+        }
+        // The copy's block a page ahead, which a comparison reads where the pages' changed, as
+        // they did here.
+        if let Some(ahead) = ahead {
+            prefetch(copy.wrapping_add(ahead), TAG_BLOCK);
         }
         #[cfg(test)]
         lap.next();
@@ -2249,6 +2288,11 @@ unsafe fn merge_blocks(
         let mut lap = clock::Lap::new(clock::MERGE_BACK, index);
         let at = index * TAG_BLOCK;
         let span = (sides.length - at).min(TAG_BLOCK);
+        let ahead = (at + AHEAD < sides.length).then_some(at + AHEAD);
+        // The copy's block a page ahead, which a comparison reads whatever it holds.
+        if let Some(ahead) = ahead {
+            prefetch(copy.wrapping_add(ahead), TAG_BLOCK);
+        }
         // SAFETY: `span` bytes at `at` lie in the copy (the caller's).
         if unsafe { tag_in_place(copy.add(at), span, &mut now) } == *agreed {
             return;
@@ -2259,6 +2303,11 @@ unsafe fn merge_blocks(
         let changed = tag(&now);
         if changed == *agreed {
             return;
+        }
+        // The pages' block a page ahead, which a comparison reads where the copy's changed, as
+        // it did here.
+        if let Some(ahead) = ahead {
+            prefetch(pages.wrapping_add(ahead), TAG_BLOCK);
         }
         #[cfg(test)]
         lap.next();
