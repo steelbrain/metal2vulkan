@@ -553,10 +553,8 @@ pub(super) struct Affected {
 ///   tracking, which is per `MTLBuffer`, and each import of host pages is an `MTLBuffer` of its
 ///   own (`host_aliases.rs`). So in one blit encoder a fill through a buffer bound in an import of one
 ///   run of a guest RAM's chunk, a barrier, then a copy of the same bytes through a buffer bound
-///   in the chunk's import read the bytes from before the fill
-///   (`tests::host_ram_device::a_run_bound_and_a_chunk_bound_buffer_over_the_same_pages_order_by_their_host_bytes`
-///   on the M3 Max under macOS 27.0.1, MoltenVK 1.4.2, driverVersion 10402: known broken through
-///   1.4.2). NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU orders them, in one encoder, two
+///   in the chunk's import read the bytes from before the fill (measured on the M3 Max under
+///   macOS 27.0.1, MoltenVK 1.4.2, driverVersion 10402: known broken through 1.4.2). NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU orders them, in one encoder, two
 ///   encoders and across queues. Nothing is refused: an object over a chunk not yet imported is
 ///   bound in the chunk's import, which it waits for, never in an import of its own run
 ///   (`host_ram.rs`'s `RamOnDevice::for_object`).
@@ -568,10 +566,10 @@ pub(super) struct Affected {
 ///   buffers of one queue, a wait for the fill's before the copy's commit, and two queues each
 ///   ordered them (all 4096), and so did every way through one import (one chunk-bound buffer to
 ///   another). Measured on Iris Xe Graphics (Raptor Lake-P) under Mesa 26.2.6, a probe of each way
-///   run twice; and
-///   `tests::host_ram_device::a_run_bound_and_a_chunk_bound_buffer_over_the_same_pages_order_by_their_host_bytes`
-///   and `a_run_bound_buffer_and_a_copy_of_its_pages_order_by_their_host_bytes` failed there in
-///   each of two runs. Nothing is refused, as on MoltenVK.
+///   run twice; and a buffer bound in a run's import ordered against one in the chunk's, and
+///   against a copy of its pages, failed there in each of two runs. Nothing is refused, as on
+///   MoltenVK. (A run of a RAM whose chunks are imports of their pointer is never imported alone
+///   on any device, `RamOnDevice::runs_alone`; one whose chunks are dma-bufs is, as one more.)
 ///
 /// `TrimmedCommandBufferFailsResubmission`:
 /// - Mesa's ANV (`INTEL_OPEN_SOURCE_MESA`): a submission's command buffers are chained into one

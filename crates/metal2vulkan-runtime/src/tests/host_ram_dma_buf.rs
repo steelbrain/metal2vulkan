@@ -63,7 +63,7 @@
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on Linux.
 
-use super::host_ram_device::{copies_heard, runs_alone};
+use super::host_ram_device::copies_heard;
 use super::host_residency::{device, device_with, udmabuf, udmabuf_list, Scratch};
 use crate::submit_check::{Check, Verdict};
 use crate::{
@@ -1758,6 +1758,17 @@ impl TileRound<'_> {
         }
         (took, failures)
     }
+}
+
+/// 1 where the device binds an object over a chunk not imported yet of a RAM whose chunks are
+/// dma-bufs (`Plan::listed`, this file's listed RAMs) in an import of its own run alone, 0 where its
+/// barriers do not order blits through two imports of the same pages
+/// (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, ANV's) and the object imports the chunk,
+/// as one that finds the device's thread stopped does. A RAM whose chunks are imports of their
+/// pointer never imports a run alone (`RamOnDevice::runs_alone`).
+fn runs_alone(device: &Device) -> u64 {
+    let defect = metal2vulkan::error::RuntimeDriverDefect::AliasedImportBlitsUnordered;
+    u64::from(!device.properties().driver_defects.contains(&defect))
 }
 
 /// Whether a copy over a chunk not imported takes lists of its runs, given the RAM's source of
