@@ -13,8 +13,10 @@
 //! is zero, as a heap read's. A comparison samples a heap depth texture of the depth-comparison
 //! class through a comparison heap sampler. A runtime `[[sampler(n)]]` beside a heap image is a
 //! heap sampler binding without an immutable sampler, which the binder writes with the sampler
-//! bound at slot `n` made for the use, as a combined binding's runtime sampler. Several sampler
-//! candidates beside a heap image are not implemented (`ArgumentBufferTextures`).
+//! bound at slot `n` made for the use, as a combined binding's runtime sampler. A sampler of
+//! several static candidates beside a heap image (a table of constexpr samplers read at an index
+//! the run knows) is a switch-at-use over them, one arm per candidate, each the heap element
+//! through that candidate's heap sampler.
 //!
 //! **Argument buffers' samplers** (the sampler half). A heap image sampled through a sampler loaded
 //! from an argument buffer reads `OpSampledImage` of its heap element and of the heap sampler's

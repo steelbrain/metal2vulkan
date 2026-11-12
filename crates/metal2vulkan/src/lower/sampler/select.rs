@@ -336,37 +336,7 @@ pub fn select_sampling(
     let (tex_handle, textures) = split(texture);
     let (smp_handle, samplers) = split(sampler);
     let combinations = textures.len().saturating_mul(samplers.len());
-    // A tangled use: the fragment's implicit-LOD sample, or an LOD query.
-    let fragment = cx.stage == Stage::Fragment;
-    let mut queries = false;
-    let hoist = match t.op {
-        // Every candidate's query, at the call's own position with the call's coordinate,
-        // before the switch, which selects one: bounded, as every fragment runs each.
-        TexOp::CalculateLod { .. } if fragment => {
-            if combinations > super::LOD_QUERY_CANDIDATES {
-                return Err(Unsupported::not_implemented(Feature::DivergentImplicitLod).into());
-            }
-            queries = true;
-            None
-        }
-        TexOp::Sample {
-            lod: LodMode::Bias, ..
-        } if fragment => {
-            let coord = ops
-                .get(TexRole::Coord)
-                .ok_or_else(|| cx.invariant("a sampling call without a coordinate"))?;
-            let bias = match ops.get(TexRole::LodValue) {
-                Some(v) if !is_zero_float(cx, v) => Some(id(cx, v)?),
-                _ => None,
-            };
-            Some(super::Hoist {
-                coord: id(cx, coord)?,
-                lanes: plane(t.image.dim),
-                bias,
-            })
-        }
-        _ => None,
-    };
+    let (hoist, queries) = tangled(cx, &ops, combinations)?;
     let mut arms = Vec::with_capacity(combinations);
     for tc in &textures {
         let index = match *tc {
@@ -394,6 +364,65 @@ pub fn select_sampling(
             arms.push((lits, one));
         }
     }
+    let prelude = prelude(cx, (hoist, queries), &arms, &ops, &samplers)?;
+    Ok(TextureStrategy::Switch(Box::new(Switch {
+        handles: tex_handle.into_iter().chain(smp_handle).collect(),
+        arms,
+        null: NullArm::Zero(cx.lowered_repr(Value::Inst(at), inst.ty)?),
+        prelude,
+    })))
+}
+
+/// How sampling call `ops` sits in a switch-at-use of `combinations` arms: the gradients a
+/// fragment's implicit-LOD sample hoists before the switch, and whether a fragment's LOD query
+/// runs every arm's query before it (up to [`super::LOD_QUERY_CANDIDATES`] combinations, past
+/// them `DivergentImplicitLod`, not implemented).
+fn tangled(
+    cx: &SelectCx<'_>,
+    ops: &Operands<'_>,
+    combinations: usize,
+) -> Result<(Option<super::Hoist>, bool), Error> {
+    let t = ops.t;
+    let fragment = cx.stage == Stage::Fragment;
+    match t.op {
+        // Every candidate's query, at the call's own position with the call's coordinate,
+        // before the switch, which selects one: bounded, as every fragment runs each.
+        TexOp::CalculateLod { .. } if fragment => {
+            if combinations > super::LOD_QUERY_CANDIDATES {
+                return Err(Unsupported::not_implemented(Feature::DivergentImplicitLod).into());
+            }
+            Ok((None, true))
+        }
+        TexOp::Sample {
+            lod: LodMode::Bias, ..
+        } if fragment => {
+            let coord = ops
+                .get(TexRole::Coord)
+                .ok_or_else(|| cx.invariant("a sampling call without a coordinate"))?;
+            let bias = match ops.get(TexRole::LodValue) {
+                Some(v) if !is_zero_float(cx, v) => Some(id(cx, v)?),
+                _ => None,
+            };
+            let hoist = super::Hoist {
+                coord: id(cx, coord)?,
+                lanes: plane(t.image.dim),
+                bias,
+            };
+            Ok((Some(hoist), false))
+        }
+        _ => Ok((None, false)),
+    }
+}
+
+/// The prelude of a switch-at-use of `arms` over the sampler candidates `samplers`, the use
+/// planned as [`tangled`] answered.
+fn prelude(
+    cx: &mut SelectCx<'_>,
+    (hoist, queries): (Option<super::Hoist>, bool),
+    arms: &[(Vec<u32>, TextureStrategy)],
+    ops: &Operands<'_>,
+    samplers: &[Candidate],
+) -> Result<Prelude, Error> {
     // The gradients are hoisted only for arms that sample with them: an arm through a nearest
     // pixel sampler fetches and needs none.
     let hoist = hoist.filter(|_| {
@@ -410,23 +439,17 @@ pub fn select_sampling(
     // The hoisted derivatives are the whole bias's, but Metal's own sample where the device samples
     // through Metal's sampler and the sample takes no bias, which the module then requires.
     if let Some(h) = &hoist {
-        if hoist_is_metals(cx, h, &ops, &samplers)? {
+        if hoist_is_metals(cx, h, ops, samplers)? {
             cx.families.sampler.metal_sampler = true;
         } else {
             cx.precision.insert(PrecisionNote::GradFromBias);
         }
     }
-    let prelude = match hoist {
+    Ok(match hoist {
         Some(h) => Prelude::Gradients(h),
         None if queries => Prelude::Arms,
         None => Prelude::Nothing,
-    };
-    Ok(TextureStrategy::Switch(Box::new(Switch {
-        handles: tex_handle.into_iter().chain(smp_handle).collect(),
-        arms,
-        null: NullArm::Zero(cx.lowered_repr(Value::Inst(at), inst.ty)?),
-        prelude,
-    })))
+    })
 }
 
 /// Select sampling call `inst` (sample, gather, or LOD query) decoded as `t` on element `handle`
@@ -434,8 +457,8 @@ pub fn select_sampling(
 /// separate heap sampler. The sampler is one constexpr sampler, or one runtime `[[sampler(n)]]`,
 /// whose heap sampler binding the binder writes with the sampler bound at the slot, or a sampler
 /// loaded from an argument buffer, whose element of the sampler array of the use the binder writes
-/// with it; several sampler candidates beside a heap image are not implemented
-/// (`ArgumentBufferTextures`), and the null sampler has no defined result.
+/// with it; a sampler of several static candidates beside a heap image is a switch-at-use over
+/// them ([`select_heap_switch`]), and the null sampler has no defined result.
 pub fn select_heap_sampling(
     cx: &mut SelectCx<'_>,
     at: InstId,
@@ -460,15 +483,68 @@ pub fn select_heap_sampling(
             }
             HandleTarget::One(c) => sampler_of(cx, c)?,
             HandleTarget::Null => return Err(refuse()),
-            HandleTarget::Switch { .. } => {
-                return Err(Unsupported::not_implemented(Feature::ArgumentBufferTextures).into())
-            }
+            HandleTarget::Switch {
+                handle: smp_handle,
+                cands,
+            } => return select_heap_switch(cx, call, (group, handle), smp_handle, &cands, m),
         },
     };
+    select_heap_arm(cx, call, (group, handle), s, None, m)
+}
+
+/// The sampling `call` of element `handle` of heap group `group` through `sampler`: the heap
+/// element through a separate heap sampler, with its raw-texel emulation ([`select_heap_raw`]);
+/// `arm` as [`select_one`] takes it.
+fn select_heap_arm(
+    cx: &mut SelectCx<'_>,
+    call: Call<'_>,
+    (group, handle): (u32, ValueId),
+    sampler: SamplerArg,
+    arm: Option<bool>,
+    m: &mut Meter,
+) -> Result<TextureStrategy, Error> {
     let image = ImageRef::Heap { group, handle };
-    let mut x = select_one(cx, call, image, s, None, m)?;
-    x.heap_raw = select_heap_raw(cx, call, (group, handle), s, m)?;
+    let mut x = select_one(cx, call, image, sampler, arm, m)?;
+    x.heap_raw = select_heap_raw(cx, call, (group, handle), sampler, m)?;
     Ok(TextureStrategy::Sampling(Box::new(x)))
+}
+
+/// A heap image sampled through a sampler of several static candidates `cands`, chosen by handle
+/// `smp_handle` (a table of constexpr samplers read at an index the run knows): a switch-at-use
+/// with one arm per candidate, each the heap element's sampling through that sampler
+/// ([`select_heap_arm`]), the absent sampler's the absent read, and every other handle value the
+/// null arm, zero. A tangled use is planned as a static texture's switch plans it ([`tangled`]).
+fn select_heap_switch(
+    cx: &mut SelectCx<'_>,
+    call: Call<'_>,
+    heap: (u32, ValueId),
+    smp_handle: ValueId,
+    cands: &[Candidate],
+    m: &mut Meter,
+) -> Result<TextureStrategy, Error> {
+    let ops = Operands {
+        t: call.t,
+        args: call.args,
+    };
+    let (hoist, queries) = tangled(cx, &ops, cands.len())?;
+    let mut arms = Vec::with_capacity(cands.len());
+    for &c in cands {
+        let one = match c {
+            Candidate::Absent => AbsentArgument::select(cx, call.at, call.inst, call.t)?,
+            c => {
+                let s = sampler_of(cx, c)?;
+                select_heap_arm(cx, call, heap, s, Some(hoist.is_some()), m)?
+            }
+        };
+        arms.push((vec![c.handle()], one));
+    }
+    let prelude = prelude(cx, (hoist, queries), &arms, &ops, cands)?;
+    Ok(TextureStrategy::Switch(Box::new(Switch {
+        handles: vec![smp_handle],
+        arms,
+        null: NullArm::Zero(cx.lowered_repr(Value::Inst(call.at), call.inst.ty)?),
+        prelude,
+    })))
 }
 
 /// The emulation of heap sampling call `call` of element `handle` of heap group `group` through
