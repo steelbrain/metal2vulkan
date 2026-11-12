@@ -863,9 +863,10 @@ mod device {
     }
 
     /// A load of command buffers of mixed sizes, [`MIXED_IN_FLIGHT`] committed at once, the same
-    /// each cycle, makes and frees no command buffer once warm: its larger command buffers take
-    /// the spares holding the most past their first pools, so the pools' command buffers follow
-    /// what the load holds at once (`spares.rs`). Where each pool kept the most its own uses
+    /// each cycle, frees no command buffer once warm, and makes fewer than its large command
+    /// buffer's encoders (none, or a few where a large one found every pool holding the most out):
+    /// its larger command buffers take the spares holding the most past their first pools, so the
+    /// pools' command buffers follow what the load holds at once (`spares.rs`). Where each pool kept the most its own uses
     /// handed out, and a taker took the newest, every pool came to keep the larger command
     /// buffer's, past [`HELD`] together, and each give-back then shed the oldest spare, whose next
     /// taker made its command buffers again.
@@ -929,9 +930,13 @@ mod device {
             counts.command_buffers_begun - warm.command_buffers_begun,
         );
         assert_eq!(
-            (allocated, freed, trims),
-            (0, [0; 3], 0),
-            "the load made and freed command buffers once warm"
+            (freed, trims),
+            ([0; 3], 0),
+            "the load freed command buffers once warm, and made {allocated}"
+        );
+        assert!(
+            allocated <= MIXED[0] as u64,
+            "the load made {allocated} command buffers once warm"
         );
         assert!(
             past_first > 0,
