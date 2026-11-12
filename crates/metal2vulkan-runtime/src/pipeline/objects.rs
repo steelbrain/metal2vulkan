@@ -841,11 +841,15 @@ impl VariantObjects {
         Ok((objects, pipelines))
     }
 
-    /// Keep the kernel `stage` of the function named `name` for the pipeline creation log's line
-    /// of each compute `VkPipeline` these objects make, while the log is on
+    /// Keep the kernel `stage` of the function `function` describes for the pipeline creation
+    /// log's line of each compute `VkPipeline` these objects make, while the log is on
     /// (`creation_log::compute_kernel`).
-    pub(crate) fn log_kernel(&mut self, name: &str, stage: &StageModule) {
-        self.logged = creation_log::compute_kernel(name, stage);
+    pub(crate) fn log_kernel(
+        &mut self,
+        function: &metal2vulkan::pipeline::FunctionDescriptor,
+        stage: &StageModule,
+    ) {
+        self.logged = creation_log::compute_kernel(function, stage);
     }
 
     /// The kinds its making may announce (`Kinds::of`), which a bind tests.

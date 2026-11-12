@@ -853,7 +853,7 @@ impl ComputePipelineState {
             indirect_arguments::check_compute(call, uses)?;
         }
         let stand_in = !key.storage_images.is_empty();
-        let base = Variant::of(device, key, found, function.function.info().name)?;
+        let base = Variant::of(device, key, found, function)?;
         // The device's neutrals the base's plan for nothing bound may bind (an unbound texture,
         // sampler or texel slot's), made here, where the creation may wait, so that no dispatch's
         // encoding makes one (`neutral.rs`; `RenderPipelineState::make_neutrals`). One that fails
@@ -1763,7 +1763,7 @@ impl Variant {
         let _noted = NoteEntries(device);
         let (found, _) = Variant::compiled(&Sources::later(device), function, descriptor, &key)
             .map_err(|error| compile_error(device, error))?;
-        Variant::of(device, key, found, function.function.info().name)
+        Variant::of(device, key, found, function)
     }
 
     /// The pipeline of `descriptor` with `function` its kernel or tile function, under `key`:
@@ -1804,13 +1804,13 @@ impl Variant {
     }
 
     /// The variant of `key` of what the memo or a compile `found`: the live variant, or one made
-    /// of the pipeline, its objects made, which the memo then knows live. `name` is its function's,
-    /// which the pipeline creation log names its pipelines by.
+    /// of the pipeline, its objects made, which the memo then knows live. `function` is the
+    /// descriptor's, which the pipeline creation log names its pipelines by.
     fn of(
         device: &Device,
         key: VariantKey,
         found: Remembered<ComputePipeline, Variant>,
-        name: &str,
+        function: &FunctionDescriptor,
     ) -> Result<Arc<Variant>, Error> {
         let pipeline = match found {
             Remembered::Live(variant) if variant.key == key => return Ok(variant),
@@ -1827,7 +1827,7 @@ impl Variant {
             CompiledPipeline::Kernel(&pipeline),
             None,
         )?;
-        objects.log_kernel(name, &pipeline.stage);
+        objects.log_kernel(function, &pipeline.stage);
         let variant = Arc::new(Variant {
             key,
             pipeline,

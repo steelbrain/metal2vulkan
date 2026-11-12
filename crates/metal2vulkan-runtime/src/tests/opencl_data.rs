@@ -471,12 +471,16 @@ const LOG_LINE: &str = "metal2vulkan: pipeline creation: compute pipeline `__ent
 
 /// With `METAL2VULKAN_LOG_PIPELINES` set, the compute `VkPipeline` a dispatch of `vsh_round`
 /// makes has its line in the pipeline creation log (`pipeline/creation_log.rs`), naming the
-/// kernel, its module, its specialization and its precision notes: `NativeNanEncoding` among
-/// them, but where the device's narrowing is measured to move a NaN as Metal's. A child process
-/// of this test binary ([`compute_log_child`]) dispatches it with the log on.
+/// kernel, its module, its specialization, its precision notes (`NativeNanEncoding` among them,
+/// but where the device's narrowing is measured to move a NaN as Metal's) and what it was made
+/// from (the function, its bitcode's SHA-256 and its constant values); with
+/// `METAL2VULKAN_DUMP_PIPELINES` naming a directory, its module is written there by the hash the
+/// line names it by. A child process of this test binary ([`compute_log_child`]) dispatches it
+/// with the log on.
 #[test]
 fn the_pipeline_creation_log_names_a_compute_pipeline_and_its_notes() {
     let scratch = Scratch::new("opencl-data-compute-log");
+    let dumped = scratch.0.join("dump");
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -487,7 +491,7 @@ fn the_pipeline_creation_log_names_a_compute_pipeline_and_its_notes() {
         ])
         .current_dir(&scratch.0)
         .env("METAL2VULKAN_LOG_PIPELINES", "1")
-        .env_remove("METAL2VULKAN_DUMP_PIPELINES")
+        .env("METAL2VULKAN_DUMP_PIPELINES", &dumped)
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -497,6 +501,23 @@ fn the_pipeline_creation_log_names_a_compute_pipeline_and_its_notes() {
         .find(|l| l.starts_with(LOG_LINE))
         .unwrap_or_else(|| panic!("no compute pipeline's line: {stderr}"));
     assert!(logged.contains(" words), specialization ["), "{logged}");
+    assert!(
+        logged.contains("; descriptor: `__entry_vsh_round` air ")
+            && logged.contains(" constants {"),
+        "{logged}"
+    );
+    assert!(!logged.contains("SPIR-V dump into"), "{logged}");
+    let hash = logged
+        .split_once(", spirv ")
+        .and_then(|(_, rest)| rest.split_once(' '))
+        .map(|(hash, _)| hash)
+        .unwrap_or_else(|| panic!("no module hash: {logged}"));
+    let module = std::fs::read(dumped.join(format!("{hash}.spv"))).unwrap();
+    assert_eq!(
+        module.get(..4),
+        Some(&0x0723_0203u32.to_le_bytes()[..]),
+        "{logged}"
+    );
     let moves = device(&scratch.0)
         .compile_device()
         .profile()

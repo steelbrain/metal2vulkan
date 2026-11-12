@@ -426,29 +426,11 @@ impl StateDescriptor {
     /// made with, by index and by name, each as its type and its bytes; each color attachment's
     /// format, blend and write mask; the depth and stencil formats; and the raster samples.
     fn logged(&self) -> String {
-        let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
         let functions: Vec<String> = self
             .stages()
             .into_iter()
             .map(|source| match source {
-                StageSource::Function(descriptor) => {
-                    let info = descriptor.function.info();
-                    let constants = &descriptor.constants;
-                    let values: Vec<String> = (constants.by_index.iter())
-                        .map(|(index, value)| {
-                            format!("{index}: {:?} {}", value.ty, hex(&value.bytes))
-                        })
-                        .chain(constants.by_name.iter().map(|(name, value)| {
-                            format!("{name}: {:?} {}", value.ty, hex(&value.bytes))
-                        }))
-                        .collect();
-                    format!(
-                        "`{}` air {} constants {{{}}}",
-                        info.name,
-                        hex(&info.air_hash),
-                        values.join(", ")
-                    )
-                }
+                StageSource::Function(descriptor) => logged_function(descriptor),
                 StageSource::Compiled(compiled) => format!("{:?}", compiled.key()),
             })
             .collect();
@@ -2771,6 +2753,27 @@ fn stage_name(source: &StageSource) -> String {
         StageSource::Function(descriptor) => descriptor.function.info().name.to_string(),
         StageSource::Compiled(compiled) => format!("{:?}", compiled.key()),
     }
+}
+
+/// What the pipeline creation log names a function of a render or compute state by
+/// (`creation_log.rs`): its name, the SHA-256 of its bitcode (`FunctionInfo::air_hash`) and the
+/// constant values it was made with, by index and by name, each as its type and its bytes.
+pub(super) fn logged_function(descriptor: &metal2vulkan::pipeline::FunctionDescriptor) -> String {
+    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let info = descriptor.function.info();
+    let constants = &descriptor.constants;
+    let by_index = (constants.by_index.iter()).map(|(index, value)| (index.to_string(), value));
+    let by_name = (constants.by_name.iter()).map(|(name, value)| (name.to_string(), value));
+    let values: Vec<String> = by_index
+        .chain(by_name)
+        .map(|(at, value)| format!("{at}: {:?} {}", value.ty, hex(&value.bytes)))
+        .collect();
+    format!(
+        "`{}` air {} constants {{{}}}",
+        info.name,
+        hex(&info.air_hash),
+        values.join(", ")
+    )
 }
 
 /// What a render variant's compile gives back ([`RenderVariant::compiled`]): the pipeline, and

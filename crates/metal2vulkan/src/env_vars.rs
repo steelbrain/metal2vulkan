@@ -38,8 +38,10 @@ pub const REGISTRY: &[EnvVar] = &[
         name: "METAL2VULKAN_LOG_PIPELINES",
         default: "unset (off)",
         effect: "metal2vulkan-runtime's diagnostics: one line per compute VkPipeline a device \
-                 makes (its kernel, its SPIR-V, its specialization constants, its precision notes \
-                 and the creation's time) and one per render VkPipeline, through the device's \
+                 makes (its kernel, its SPIR-V, its specialization constants, its precision notes, \
+                 the creation's time and the descriptor it was made from: the function's name, \
+                 the SHA-256 of its bitcode and the constant values it was made with) and one per \
+                 render VkPipeline, through the device's \
                  message sink or on stderr: its state, its key, the \
                  key's fields that differ from the state's closest earlier pipeline (a state's \
                  first line also names the descriptor the state was made from: each function's \
@@ -59,7 +61,8 @@ pub const REGISTRY: &[EnvVar] = &[
         name: "METAL2VULKAN_DUMP_PIPELINES",
         default: "unset (off)",
         effect: "metal2vulkan-runtime's diagnostics: a directory (made where missing) each device \
-                 writes the SPIR-V modules of every render VkPipeline it makes into, one file per \
+                 writes the SPIR-V modules of every render and compute VkPipeline it makes into, \
+                 one file per \
                  module, `<hash>.spv`, the hash METAL2VULKAN_LOG_PIPELINES's lines name the \
                  module by, each written once; setting it turns that log on too; empty or 0 is \
                  off",
@@ -170,7 +173,7 @@ pub fn log_shadows() -> bool {
         .is_some_and(|value| !value.is_empty() && value != "0")
 }
 
-/// The directory metal2vulkan-runtime writes its render pipelines' SPIR-V modules into
+/// The directory metal2vulkan-runtime writes its pipelines' SPIR-V modules into
 /// (`REGISTRY`), as set; `None` where unset, empty or `0`. A default-off diagnostic: it writes
 /// files, and changes no pipeline.
 pub fn dump_pipelines() -> Option<OsString> {

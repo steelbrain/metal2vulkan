@@ -3,12 +3,14 @@
 //! of its own, and where that creation's time went.
 //!
 //! - **Compute pipelines.** One line per compute `VkPipeline` a device makes ([`compute`]): the
-//!   kernel's function name, its SPIR-V (a hash and its length), each specialization constant (its id, its
-//!   meaning and its value), the precision notes the stage holds under that specialization
-//!   (`notes`, as a render line names a stage's) and the creation's wall time. A compute state's
-//!   pipelines differ by their specialization alone (the threadgroup size, an edge region), so
-//!   each line prints it whole: no numbering, no diff and no split. The rest of this log is the
-//!   render pipelines'.
+//!   kernel's function name, its SPIR-V (a hash and its length), each specialization constant (its
+//!   id, its meaning and its value), the precision notes the stage holds under that
+//!   specialization (`notes`, as a render line names a stage's), the creation's wall time, and
+//!   what the kernel was made from (`descriptor:`, as a render state's first line names each
+//!   function: its name, its bitcode's SHA-256 and the constant values it was made with). A
+//!   compute state's pipelines differ by their specialization alone (the threadgroup size, an
+//!   edge region), so each line prints it whole: no numbering, no diff and no split. The rest of
+//!   this log is the render pipelines'.
 //!
 //! - **What it prints.** One line per render `VkPipeline` a device makes for a draw (or a host
 //!   step's draw), through the device's message sink at `Info` severity (id name
@@ -37,7 +39,8 @@
 //!   with, each color attachment's format, blend and write mask, the depth and stencil formats,
 //!   and the raster samples: enough to make the same state again from the same library.
 //! - **The SPIR-V.** With `METAL2VULKAN_DUMP_PIPELINES` naming a directory, each pipeline's
-//!   modules are written there ([`dump`]), one file per module named by the hash the line prints
+//!   modules, render and compute, are written there ([`dump`], [`dump_modules`]), one file per
+//!   module named by the hash the line prints
 //!   it by (`<hash>.spv`), each once; a write that fails is named in the line. Setting it turns
 //!   the log on too, so the lines that name the files are there.
 //! - **MoltenVK's split.** Where the device's driver is MoltenVK and its performance tracking is
@@ -52,9 +55,11 @@
 //!   the digests of the pipeline's parts that name its record and its libraries; for a pipeline
 //!   linked from libraries, each part's library, `made` by this making (a part with shaders
 //!   through its record: `record loaded` where its driver cache started from the record, `record
-//!   missed` where not) or `another caller's` (found made, or waited for while another caller
-//!   made it), then the `link`; else the whole `pipeline`'s driver making, its record loaded or
-//!   missed. The translation of the state's functions is not in it: a variant is translated
+//!   missed` where not, `record's cache shared` where an earlier making of the same record made
+//!   the cache it was handed; then `found in cache` or `compiled` where the driver reports which,
+//!   [`record_text`]) or `another caller's` (found made, or waited for while another caller made
+//!   it), then the `link`; else the whole `pipeline`'s driver making, its record named the same
+//!   way. The translation of the state's functions is not in it: a variant is translated
 //!   before any of its pipelines is made, on the program's thread.
 //! - **Bounded, and off by default.** Nothing is kept or measured while the variables are unset.
 //!   With it set, each state keeps the fields of its last [`HISTORY`] pipelines, and nothing
@@ -70,7 +75,7 @@ use crate::device::lock;
 use crate::Device;
 use metal2vulkan::cache::SpecializationKey;
 use metal2vulkan::cache::VariantKey;
-use metal2vulkan::pipeline::{RenderPipeline, SpecKey, StageModule};
+use metal2vulkan::pipeline::{FunctionDescriptor, RenderPipeline, SpecKey, StageModule};
 use metal2vulkan::vk::{DriverId, ShaderStage};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
@@ -112,13 +117,21 @@ fn dump_dir() -> Option<&'static Path> {
 /// `<hash>.spv` (`spirv` holding each stage's [`spirv_hash`], in its stages' order), each once:
 /// a module already there is left as it is. Where a write fails, the line's note of it.
 fn dump(pipeline: &RenderPipeline, spirv: &[u64]) -> Option<String> {
+    dump_modules(pipeline.stages.iter().enumerate().map(|(i, module)| {
+        let hash = spirv
+            .get(i)
+            .copied()
+            .unwrap_or_else(|| spirv_hash(&module.spirv));
+        (hash, &module.spirv[..])
+    }))
+}
+
+/// Write each module of `modules` (its [`spirv_hash`] and its words) into the dump directory, as
+/// [`dump`] does.
+fn dump_modules<'a>(modules: impl Iterator<Item = (u64, &'a [u32])>) -> Option<String> {
     let dir = dump_dir()?;
     let written = std::fs::create_dir_all(dir).and_then(|()| {
-        for (i, module) in pipeline.stages.iter().enumerate() {
-            let hash = spirv
-                .get(i)
-                .copied()
-                .unwrap_or_else(|| spirv_hash(&module.spirv));
+        for (hash, words) in modules {
             let path = dir.join(format!("{hash:016x}.spv"));
             let opened = std::fs::OpenOptions::new()
                 .write(true)
@@ -129,7 +142,7 @@ fn dump(pipeline: &RenderPipeline, spirv: &[u64]) -> Option<String> {
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error),
             };
-            let bytes: Vec<u8> = module.spirv.iter().flat_map(|w| w.to_le_bytes()).collect();
+            let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
             file.write_all(&bytes)?;
         }
         Ok(())
@@ -668,15 +681,22 @@ fn elided(old: &str, new: &str) -> (String, String) {
 pub(crate) struct LoggedKernel {
     /// The kernel's library function's name.
     name: String,
+    /// What the variant was made from: the function, its bitcode's SHA-256 and its constant
+    /// values (`render::logged_function`).
+    function: String,
     stage: StageModule,
 }
 
-/// The kernel `stage` of a compute variant of the function named `name`, kept for its pipelines'
-/// lines while the log is on; `None` while it is off.
-pub(crate) fn compute_kernel(name: &str, stage: &StageModule) -> Option<Box<LoggedKernel>> {
+/// The kernel `stage` of a compute variant of the function `function` describes, kept for its
+/// pipelines' lines while the log is on; `None` while it is off.
+pub(crate) fn compute_kernel(
+    function: &FunctionDescriptor,
+    stage: &StageModule,
+) -> Option<Box<LoggedKernel>> {
     enabled().then(|| {
         Box::new(LoggedKernel {
-            name: name.to_owned(),
+            name: function.function.info().name.to_owned(),
+            function: super::render::logged_function(function),
             stage: stage.clone(),
         })
     })
@@ -713,16 +733,18 @@ pub(crate) fn compute(
         })
         .collect();
     let notes = stage.precision_notes_under(specialization);
+    let hash = spirv_hash(&stage.spirv);
+    let dumped = dump_modules(std::iter::once((hash, &stage.spirv[..]))).unwrap_or_default();
     deliver(
         device,
         format!(
-            "metal2vulkan: pipeline creation: compute pipeline `{}`: {:.3} ms, spirv {:016x} ({} \
-             words), specialization [{}], notes {notes:?}",
+            "metal2vulkan: pipeline creation: compute pipeline `{}`: {:.3} ms, spirv {hash:016x} \
+             ({} words), specialization [{}], notes {notes:?}; descriptor: {}{dumped}",
             kernel.name,
             took.as_secs_f64() * 1000.0,
-            spirv_hash(&stage.spirv),
             stage.spirv.len(),
             constants.join(", "),
+            kernel.function,
         ),
     );
 }
