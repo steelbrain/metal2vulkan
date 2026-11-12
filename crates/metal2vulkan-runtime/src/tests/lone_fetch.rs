@@ -66,6 +66,7 @@ use crate::{
     Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::sync::atomic::AtomicUsize;
@@ -509,16 +510,25 @@ fn run(case: &str, format: PixelFormat, shape: Shape, home: Home) {
             }
         }
     }
+    // On a driver whose fast-linked pipelines leave the interlock unordered, a fetching state's
+    // pipeline is made whole (`pipeline/graphics.rs`'s `GraphicsContent::links`).
+    let made = device.work_counts();
+    let whole = made.variant_pipelines_made - made.pipelines_linked;
     eprintln!(
         "LONE-FETCH {case} on {}: {} of {} targets wrong; per round (instances, inline \
          instances, interlocked splits, storage forms, variants made, shadowed textures, shadow \
-         copies) {counts:?}; first {:?}",
+         copies) {counts:?}; first {:?}; pipelines made whole {whole} of {}",
         device.name(),
         failures.len(),
         ROUNDS * count,
-        failures.first()
+        failures.first(),
+        made.variant_pipelines_made
     );
     assert!(failures.is_empty(), "{case}: {failures:?}");
+    let defects = &device.properties().driver_defects;
+    if defects.contains(&RuntimeDriverDefect::FastLinkedInterlocksUnordered) {
+        assert!(whole > 0, "{case}: no fetching pipeline made whole");
+    }
 }
 
 /// The pair run: two textures of `format` over one surface's host pages through two no-copy

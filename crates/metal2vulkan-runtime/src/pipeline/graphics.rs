@@ -19,6 +19,7 @@
 //! mesh's topology.
 
 use super::creation_log;
+use super::interlocked_writes;
 use super::kept::Place;
 use super::libraries::{Linked, Part};
 use super::objects::{RawPipeline, VariantObjects};
@@ -30,6 +31,7 @@ use crate::shader_cache::{found_in_cache, REPORTED_STAGES};
 use ash::vk;
 use metal2vulkan::cache::Hash256;
 use metal2vulkan::cache::SpecializationKey;
+use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::metal::state::DepthStencilState;
 use metal2vulkan::pipeline::{BandPrimitive, RenderPipeline, VertexStride};
 use std::sync::atomic::AtomicBool;
@@ -355,6 +357,10 @@ pub(crate) struct GraphicsContent {
     /// (`GraphicsState::snapshot_reads`, `render/snapshot.rs`): made whole, with
     /// `VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT`.
     feedback_loop: bool,
+    /// Its fragment stage declares an interlock execution mode (`interlocked_writes`) on a
+    /// driver whose fast-linked pipelines do not order it
+    /// (`RuntimeDriverDefect::FastLinkedInterlocksUnordered`): made whole.
+    unlinked_interlock: bool,
 }
 
 /// One stage of a [`GraphicsContent`]: its index among the variant's modules, its flags, its
@@ -517,12 +523,15 @@ impl PartRecords {
 
 impl GraphicsContent {
     /// Whether its pipeline links from the four libraries: one with vertex input that rasterizes
-    /// (a mesh pipeline, or one that discards every primitive, is made whole), and that reads no
-    /// texture through a snapshot, whose creation flag is made whole too ([`feedback_loop`]).
+    /// (a mesh pipeline, or one that discards every primitive, is made whole), that reads no
+    /// texture through a snapshot, whose creation flag is made whole too ([`feedback_loop`]),
+    /// and whose fragment stage runs in no interlock its driver's fast link leaves unordered
+    /// ([`unlinked_interlock`]).
     ///
     /// [`feedback_loop`]: GraphicsContent::feedback_loop
+    /// [`unlinked_interlock`]: GraphicsContent::unlinked_interlock
     pub(crate) fn links(&self) -> bool {
-        !self.meshes && !self.rasterizer_discard && !self.feedback_loop
+        !self.meshes && !self.rasterizer_discard && !self.feedback_loop && !self.unlinked_interlock
     }
 
     /// The digest of each part's state, in [`Part::ALL`]'s order: the names of its libraries
@@ -1202,6 +1211,13 @@ impl VariantObjects {
                 .iter()
                 .any(|stage| stage.stage == metal2vulkan::vk::ShaderStage::MESH_EXT),
             feedback_loop: graphics.snapshot_reads,
+            unlinked_interlock: (self.device.properties().driver_defects)
+                .contains(&RuntimeDriverDefect::FastLinkedInterlocksUnordered)
+                && pipeline.stages.iter().any(|stage| {
+                    let flags: vk::ShaderStageFlags = stage.stage.into();
+                    flags == vk::ShaderStageFlags::FRAGMENT
+                        && interlocked_writes::facts(&stage.spirv).interlocks
+                }),
         })
     }
 

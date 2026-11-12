@@ -1020,6 +1020,12 @@ pub enum RuntimeDriverDefect {
     /// a buffer's length on a driver with [`RuntimeDriverDefect::PushedBufferSizesUnset`]) binds
     /// it, announced (`interlocked-buffer-order`).
     InterlockedBoundBuffersUnordered,
+    /// A fragment shader's ordered interlock does not order the overlapping fragments of a draw
+    /// in a pipeline linked from graphics pipeline libraries without link-time optimization: a
+    /// fragment reads a storage image as it was before an earlier overlapping fragment's write,
+    /// where the same stages in a pipeline made whole read it after. Nothing is refused: a render
+    /// variant whose fragment stage declares an interlock execution mode is made whole there.
+    FastLinkedInterlocksUnordered,
     /// A compute dispatch recorded after a copy in the same `VkCommandBuffer` samples a binding
     /// its pipeline layout bakes an immutable sampler into (a constexpr sampler's) as Repeat, not
     /// with the baked sampler's modes. Nothing is refused: an encoder's dispatch of a variant

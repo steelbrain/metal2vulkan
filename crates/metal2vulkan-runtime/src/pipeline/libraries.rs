@@ -18,7 +18,10 @@
 //!
 //! - **Same pipeline.** The libraries are made from the very create infos the whole pipeline's
 //!   making takes, split by part; linking them is the driver's, so a linked pipeline is the
-//!   whole pipeline the same state describes. Nothing an answer depends on changes.
+//!   whole pipeline the same state describes. Nothing an answer depends on changes. Not on a
+//!   driver whose fast link leaves a fragment shader's interlock unordered
+//!   (`RuntimeDriverDefect::FastLinkedInterlocksUnordered`, RADV): a variant whose fragment stage
+//!   interlocks is made whole there (`graphics.rs`'s `GraphicsContent::links`).
 //! - **The device's, by content** (`content_keyed.rs`). A program's call (a draw, a state's
 //!   creation) claims each part's library, inserting it where the device has none; a pool piece
 //!   only looks up, and on a miss makes one of its own that no lookup finds. A claimed library is

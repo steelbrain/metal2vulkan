@@ -373,6 +373,23 @@ pub(super) struct Affected {
 ///   announced, where it cannot. Keyed on the driver: a pushed set is discrete in either of
 ///   MoltenVK's modes, so the push holds however the device binds.
 ///
+/// `FastLinkedInterlocksUnordered`:
+/// - Mesa's RADV (`MESA_RADV`): a fragment shader library made without the fragment output
+///   interface ends in a jump to a separate epilog that writes the colors, and ACO waits for the
+///   shader's storage writes before its final export only where that export is the shader's
+///   own: in `RADV_DEBUG=shaders`, a whole pipeline's interlocked `image_store` is followed by
+///   `s_waitcnt_vscnt` and the `done` export, a fast-linked one's by `s_setpc_b64` into the
+///   epilog with no wait. The GPU ends the ordered section at that export, so the next
+///   overlapping fragment reads the image before the write lands. On the Radeon RX 7900 XTX
+///   (Navi 31) with 26.2.6: a bare-Vulkan program of 12 instances of one quad in one draw, each
+///   fragment doubling a counter inside `PixelInterlockOrderedEXT`, left 62 of 72 counters wrong
+///   (7192 texels one step short) linked from four libraries without link-time optimization and
+///   none made whole; `tests::lone_fetch`'s layers left 35 of 72 targets wrong, and none under
+///   `RADV_DEBUG=nogpl`. Known broken through 26.2.6. Every RADV GPU takes it; the other GPUs
+///   are unmeasured. Nothing is refused: a render variant whose
+///   fragment stage declares an interlock execution mode is made whole there
+///   (`pipeline/graphics.rs`'s `GraphicsContent::links`).
+///
 /// `ImmutableSamplersLostAfterCopies`:
 /// - Mesa's lavapipe (`MESA_LLVMPIPE`): a compute dispatch recorded after a copy in the same
 ///   `VkCommandBuffer` samples a combined image sampler binding whose pipeline layout bakes an
@@ -738,6 +755,11 @@ pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::InterlockedBoundBuffersUnordered,
         driver: DriverId::MOLTENVK,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::FastLinkedInterlocksUnordered,
+        driver: DriverId::MESA_RADV,
         clean: &[],
     },
     Affected {

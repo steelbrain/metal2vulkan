@@ -25,6 +25,8 @@ const PUSHES: RuntimeDriverDefect = RuntimeDriverDefect::PushedBufferSizesUnset;
 const STALE_PUSHES: RuntimeDriverDefect =
     RuntimeDriverDefect::PushedDescriptorsStaleAfterPipelineBinds;
 const BOUND_INTERLOCKS: RuntimeDriverDefect = RuntimeDriverDefect::InterlockedBoundBuffersUnordered;
+const FAST_LINKED_INTERLOCKS: RuntimeDriverDefect =
+    RuntimeDriverDefect::FastLinkedInterlocksUnordered;
 const BAKED_SAMPLERS: RuntimeDriverDefect = RuntimeDriverDefect::ImmutableSamplersLostAfterCopies;
 const SET_SUPPORT: RuntimeDriverDefect = RuntimeDriverDefect::SetLayoutSupportUnderstated;
 const PART_VIEWS: RuntimeDriverDefect = RuntimeDriverDefect::LazilyAllocatedSubresourceViews;
@@ -55,7 +57,8 @@ const WRAPS: RuntimeDriverDefect = RuntimeDriverDefect::VertexFetchWrapsPast4GiB
 /// colour copies, the depth/stencil resolve of the first layer and level, the explicit plane's
 /// rows past its height, the baked samplers lost after a copy, the 10-bit codes its Y′CbCr
 /// conversion reads as words and the fixed-function vertex fetch that wraps past 4 GiB;
-/// RADV the multisampled copies that convert float NaNs, the 10-bit codes its Y′CbCr conversion
+/// RADV the multisampled copies that convert float NaNs, the interlock its fast-linked pipelines
+/// do not order, the 10-bit codes its Y′CbCr conversion
 /// reads as words, the color resolve into a 3D image's first plane whatever plane its view begins
 /// at, and the implicit
 /// preprocessing after an execution set on every GPU but the 780M (Phoenix's and Hawk Point's),
@@ -115,10 +118,21 @@ fn the_committed_profiles_drivers_have_their_defects() {
             }
             // The 780M, under Phoenix's `deviceID` and Hawk Point's.
             Some(DriverId::MESA_RADV) if matches!(desc.device_id, 0x15bf | 0x1900) => {
-                vec![NAN_COPIES, TEN_BIT_WORDS, VOLUME_RESOLVES]
+                vec![
+                    NAN_COPIES,
+                    FAST_LINKED_INTERLOCKS,
+                    TEN_BIT_WORDS,
+                    VOLUME_RESOLVES,
+                ]
             }
             Some(DriverId::MESA_RADV) => {
-                vec![NAN_COPIES, PREPROCESS, TEN_BIT_WORDS, VOLUME_RESOLVES]
+                vec![
+                    NAN_COPIES,
+                    PREPROCESS,
+                    FAST_LINKED_INTERLOCKS,
+                    TEN_BIT_WORDS,
+                    VOLUME_RESOLVES,
+                ]
             }
             Some(DriverId::INTEL_OPEN_SOURCE_MESA) => {
                 vec![COMPRESSION, COUNTS, STALE_PUSHES, ALIASED_BLITS, TRIMS]
@@ -203,6 +217,26 @@ fn radv_s_preprocessing_is_clean_on_the_gpu_measured_alone() {
     assert!(!nvidia.contains(&PREPROCESS));
 }
 
+/// RADV's fast-linked interlock, measured broken on the RX 7900 XTX (0x744c), is every RADV GPU's,
+/// the unmeasured ones too (the 780M, 0x15bf; a Navi 21, 0x73bf); a device that runs another
+/// driver has none.
+#[test]
+fn radv_s_fast_linked_interlock_is_every_gpu_s() {
+    for device in [0x744c, 0x15bf, 0x73bf] {
+        assert!(
+            among(AFFECTED, Some(DriverId::MESA_RADV), device).contains(&FAST_LINKED_INTERLOCKS)
+        );
+    }
+    for driver in [
+        DriverId::MESA_LLVMPIPE,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        DriverId::NVIDIA_PROPRIETARY,
+        DriverId::MOLTENVK,
+    ] {
+        assert!(!among(AFFECTED, Some(driver), 0x744c).contains(&FAST_LINKED_INTERLOCKS));
+    }
+}
+
 /// lavapipe's baked samplers lost after a copy, measured broken at 26.0.8, are lavapipe's at every
 /// release. A device that runs another driver has none.
 #[test]
@@ -214,8 +248,8 @@ fn lavapipe_s_baked_samplers_are_every_release_s() {
 }
 
 /// Hawk Point's Radeon 780M (`deviceID` 0x1900) is Phoenix's GPU (0x15bf): it takes Phoenix's
-/// driver facts and defects, the implicit preprocessing measured clean among them, at every
-/// release. A neighbouring `deviceID` (0x1901) is another GPU, which works the preprocessing
+/// driver facts and defects, the implicit preprocessing measured clean among them and the
+/// fast-linked interlock every RADV GPU's, at every release. A neighbouring `deviceID` (0x1901) is another GPU, which works the preprocessing
 /// around.
 #[test]
 fn hawk_points_780m_is_phoenixs_gpu() {
@@ -232,12 +266,22 @@ fn hawk_points_780m_is_phoenixs_gpu() {
     assert_eq!(properties.driver_defects, measured.driver_defects);
     assert_eq!(
         of(&hawk_point).into_iter().collect::<Vec<_>>(),
-        [NAN_COPIES, TEN_BIT_WORDS, VOLUME_RESOLVES]
+        [
+            NAN_COPIES,
+            FAST_LINKED_INTERLOCKS,
+            TEN_BIT_WORDS,
+            VOLUME_RESOLVES
+        ]
     );
     hawk_point.driver_version += 1;
     assert_eq!(
         of(&hawk_point).into_iter().collect::<Vec<_>>(),
-        [NAN_COPIES, TEN_BIT_WORDS, VOLUME_RESOLVES]
+        [
+            NAN_COPIES,
+            FAST_LINKED_INTERLOCKS,
+            TEN_BIT_WORDS,
+            VOLUME_RESOLVES
+        ]
     );
     let mut neighbour = phoenix;
     neighbour.device_id = 0x1901;

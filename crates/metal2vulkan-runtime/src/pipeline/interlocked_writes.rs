@@ -1,7 +1,9 @@
 //! What a stage's SPIR-V words state about its set 0 that decides whether a variant pushes it on
 //! a driver whose pushed sets lose their buffers' sizes (`objects::pushes_set_zero`): whether the
 //! stage runs in a fragment shader interlock, whether it declares a storage buffer of set 0 it may
-//! write, and whether it reads a buffer's length.
+//! write, and whether it reads a buffer's length. Whether a fragment stage interlocks also decides
+//! whether its pipeline is made whole on a driver whose fast-linked pipelines leave the interlock
+//! unordered (`graphics.rs`'s `GraphicsContent::links`).
 //!
 //! The words are a module's binary form (the SPIR-V specification, "Physical Layout of a SPIR-V
 //! Module and Instruction"): a header of five words, then the instructions, each opening with its
