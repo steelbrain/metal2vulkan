@@ -1,36 +1,46 @@
-//! Icons rendered as a window server renders them after its process starts: each icon's pass the
-//! first of targets made moments before. Its first color is the icon, an `RGBA16Float` texture
-//! of 128x128 cleared and stored, which a program can write (`ShaderRead`, `ShaderWrite`,
-//! `RenderTarget`), over a buffer's bytes that the CPU reads after the pass (or `Private`, read
-//! back by a blit); its second color a new `RG16Float` texture of its size, `RenderTarget` usage
-//! alone, cleared to the icon's own value (or loaded `DontCare`) and stored `DontCare`; and a
-//! `Stencil8` texture of its size, loaded and stored `DontCare`. The pass draws a mark into both
-//! colors over the left half (`dcs_mark`); then, over the middle rows, a draw that fetches the
-//! second color and writes both from it (`con_fetch_coverage`: `w = c1.x / 2 + c1.y` into every
-//! channel of the first color, `(w, c1.y / 4)` into the second); a flag into the first color over
-//! the top rows (`dcs_flag`); and over the bottom rows a draw that fetches the second color into
-//! the first (`dcs_read`).
+//! Icons rendered as a window server renders them after its process starts, every pass the first
+//! of targets made moments before: each icon's content in a pass of several draws, then its
+//! bitmap copied out of the content by a pass of one draw.
 //!
-//! A device that fetches through the pixel interlock leaves the second color out of the subpass
-//! of the draws that write it so, while the others need it in theirs, so the pass runs as several
-//! render pass instances; where the second color's image lacks `STORAGE` (the M3), the pass
+//! - **The content pass.** Its first color a new `Private` `RGBA16Float` texture of 128x128,
+//!   loaded and stored; its second color a new `RG16Float` texture of its size, `RenderTarget`
+//!   usage alone, cleared to the icon's own value (or loaded `DontCare`) and stored `DontCare`;
+//!   and a `Stencil8` texture of its size, loaded and stored `DontCare`. It draws a mark into
+//!   both colors over the left half (`dcs_mark`); over the middle rows a draw that fetches the
+//!   second color and writes both from it (`con_fetch_coverage`: `w = c1.x / 2 + c1.y` into every
+//!   channel of the first color, `(w, c1.y / 4)` into the second); a flag into the first color
+//!   over the top rows (`dcs_flag`); a draw over the whole target that fetches the first color and
+//!   halves it (`fetch_ordered`); the coverage draw again; and over the bottom rows a draw that
+//!   fetches the second color into the first (`dcs_read`).
+//! - **The bitmap pass.** Its first color the bitmap, an `RGBA16Float` texture a program can
+//!   write (`ShaderRead`, `ShaderWrite`, `RenderTarget`) over a buffer's bytes that the CPU reads
+//!   after the command buffer completed (or `Private`, read back by a blit), cleared and stored;
+//!   a new `RG16Float` second color and a `Stencil8` of its size, loaded and stored `DontCare`.
+//!   One draw samples the content into it, texel for texel (`alv_implicit`).
+//!
+//! A device that fetches through the pixel interlock leaves a color out of the subpass of the
+//! draws that write it so, while the others need it in theirs, so the content pass runs as
+//! several render pass instances; where a fetched color's image lacks `STORAGE` (the M3), the pass
 //! renders it through a scratch, and the texture takes its storage form at a commit
-//! (`texture/storage_form.rs`). Each icon's first color holds the flag over the top rows; over the
-//! middle rows `w` of the mark's second color on the left and of the second color's clear on the
-//! right (zero where it loads `DontCare`: Metal's answer for a `DontCare` load a pass does not
-//! store, `clear_reach.rs`); over the bottom rows the mark's second color on the left and the
-//! clear on the right, each `(c1.x, c1.y, 1, 1)`.
+//! (`texture/storage_form.rs`). Each bitmap holds, over the top rows, the flag halved; over the
+//! middle rows, in every channel, the second coverage draw's `w` of the mark's second color on the
+//! left and of the second color's clear on the right (zero where it loads `DontCare`: Metal's
+//! answer for a `DontCare` load a pass does not store, `clear_reach.rs`); over the bottom rows the
+//! mark's second color on the left and the clear on the right, each `(c1.x, c1.y, 1, 1)`.
 //!
 //! Four forms of the render: every icon in one command buffer; each in its own, every one made
-//! before the first commits; each in its own, encoded and committed on several threads at once
-//! on one queue; and every icon in one command buffer with one second color kept across icons
-//! and rounds, so that its first pass renders through the scratch and its later ones in place.
-//! And three homes of the icon: a `Private` texture, a texture over a `Shared` buffer's bytes, and
-//! one over host pages a no-copy buffer imports, as a surface's texture lies.
+//! before the first commits; each in its own, encoded and committed on several threads at once on
+//! one queue; and every icon in one command buffer with one second color kept across the content
+//! passes of every round, so that its first pass renders through the scratch and its later ones
+//! in place. And three homes of the bitmap: a `Private` texture, a texture over a `Shared`
+//! buffer's bytes, and one over host pages a no-copy buffer imports, as a surface's texture lies,
+//! its rows one after another or 64 bytes apart past that (a pitch a device's linear image may not
+//! take, which shadows the texture).
 //!
 //! The functions are `dcs_rect`, `dcs_mark`, `dcs_read` and `dcs_flag` of the owned fixture
-//! `validation/fixtures/public/engine/dcs_dont_care_split.ll`, and `con_fetch_coverage` of
-//! `validation/fixtures/public/engine/con_fetch_coverage.ll`.
+//! `validation/fixtures/public/engine/dcs_dont_care_split.ll`, `con_fetch_coverage` of
+//! `con_fetch_coverage.ll`, `fetch_ordered` of `fragment_fetch.ll`, and `alv_rect` and
+//! `alv_implicit` of `alv_levels.ll` there.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -38,10 +48,11 @@
 use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::{
-    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, LoadAction, Origin,
-    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction,
-    Texture, TextureDescriptor, WorkCounts,
+    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, Library, LoadAction,
+    Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
+    SamplerState, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
+use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::sync::atomic::AtomicUsize;
@@ -52,7 +63,7 @@ const SIDE: u64 = 128;
 const TEXEL: u64 = 8;
 const ICON_BYTES: u64 = SIDE * SIDE * TEXEL;
 
-/// The rows of an icon over bytes: one after another, and 64 bytes apart past that, as a
+/// The rows of a bitmap over bytes: one after another, and 64 bytes apart past that, as a
 /// surface's rows lie, at a pitch a device's linear image may not take.
 const TIGHT: u64 = SIDE * TEXEL;
 const PADDED: u64 = SIDE * TEXEL + 64;
@@ -63,11 +74,11 @@ const ICONS: usize = 24;
 const ROUNDS: usize = 3;
 const THREADS: usize = 4;
 
-/// The draws' rectangles, in pixels (left, top, right, bottom): the mark, the coverage, the
-/// flag, the read.
+/// The draws' rectangles, in pixels (left, top, right, bottom).
 const MARK: [u64; 4] = [0, 0, SIDE / 2, SIDE];
 const MIDDLE: [u64; 4] = [0, SIDE / 4, SIDE, SIDE * 3 / 4];
 const FLAG: [u64; 4] = [0, 0, SIDE, SIDE / 4];
+const WHOLE: [u64; 4] = [0, 0, SIDE, SIDE];
 const BOTTOM: [u64; 4] = [0, SIDE * 3 / 4, SIDE, SIDE];
 
 /// A half's 1.0.
@@ -82,7 +93,7 @@ enum Form {
     KeptCoverage,
 }
 
-/// Where an icon's texels lie.
+/// Where a bitmap's texels lie.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Home {
     Private,
@@ -93,7 +104,7 @@ enum Home {
 }
 
 impl Home {
-    /// How far apart an icon's rows lie where the CPU reads them.
+    /// How far apart a bitmap's rows lie where the CPU reads them.
     fn pitch(self) -> u64 {
         match self {
             Home::Private => TIGHT,
@@ -102,14 +113,29 @@ impl Home {
     }
 }
 
-/// The queue, the states, the target's size as `dcs_rect` takes it, the coverage's tint, and a
-/// read-back buffer.
+/// An icon's textures: its content and the content pass's second color, its clear (`None`:
+/// loaded `DontCare`) and stencil; its bitmap and the bitmap pass's second color and stencil.
+struct Icon {
+    content: Texture,
+    clear: Option<[f32; 2]>,
+    coverage: Texture,
+    stencil: Texture,
+    bitmap: Texture,
+    bitmap_coverage: Texture,
+    bitmap_stencil: Texture,
+}
+
+/// The queue, the states, the sampler, the target's size as `dcs_rect` takes it, the coverage's
+/// tint, and a read-back buffer.
 struct Tools {
     queue: CommandQueue,
     mark: RenderPipelineState,
     coverage: RenderPipelineState,
     flag: RenderPipelineState,
+    halve: RenderPipelineState,
     read: RenderPipelineState,
+    copy: RenderPipelineState,
+    sampler: SamplerState,
     size: Vec<u8>,
     tint: Vec<u8>,
     back: Buffer,
@@ -118,14 +144,19 @@ struct Tools {
 impl Tools {
     /// The tools, or `None` where the device makes no state that fetches.
     fn new(device: &Device) -> Option<Tools> {
-        let dcs = library(device, "engine/dcs_dont_care_split.ll");
-        let con = library(device, "engine/con_fetch_coverage.ll");
-        let function = |library: &crate::Library, name: &str| {
+        let [dcs, con, fetch, alv] = [
+            "engine/dcs_dont_care_split.ll",
+            "engine/con_fetch_coverage.ll",
+            "engine/fragment_fetch.ll",
+            "engine/alv_levels.ll",
+        ]
+        .map(|path| library(device, path));
+        let function = |library: &Library, name: &str| {
             let function = library.new_function_with_name(name).unwrap();
             StageSource::Function(function.function_descriptor())
         };
-        let state = |fragment: StageSource| {
-            let mut descriptor = RenderPipelineDescriptor::new(function(&dcs, "dcs_rect"));
+        let state = |vertex: StageSource, fragment: StageSource| {
+            let mut descriptor = RenderPipelineDescriptor::new(vertex);
             descriptor.fragment = Some(fragment);
             descriptor.color_attachments[0] =
                 Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float));
@@ -134,12 +165,16 @@ impl Tools {
             descriptor.stencil_format = Some(PixelFormat::Stencil8);
             device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())
         };
+        let rect = |fragment: StageSource| state(function(&dcs, "dcs_rect"), fragment);
         Some(Tools {
             queue: device.new_command_queue().unwrap(),
-            mark: state(function(&dcs, "dcs_mark")).unwrap(),
-            coverage: state(function(&con, "con_fetch_coverage")).ok()?,
-            flag: state(function(&dcs, "dcs_flag")).unwrap(),
-            read: state(function(&dcs, "dcs_read")).ok()?,
+            mark: rect(function(&dcs, "dcs_mark")).unwrap(),
+            coverage: rect(function(&con, "con_fetch_coverage")).ok()?,
+            flag: rect(function(&dcs, "dcs_flag")).unwrap(),
+            halve: rect(function(&fetch, "fetch_ordered")).ok()?,
+            read: rect(function(&dcs, "dcs_read")).ok()?,
+            copy: state(function(&alv, "alv_rect"), function(&alv, "alv_implicit")).unwrap(),
+            sampler: device.new_sampler_state(&SamplerDescriptor::new()).unwrap(),
             size: bytes_of(&[SIDE as f32, SIDE as f32], f32::to_le_bytes),
             tint: bytes_of(&[ONE; 4], u16::to_le_bytes),
             back: device
@@ -148,7 +183,7 @@ impl Tools {
         })
     }
 
-    /// A new `Private` render target of `format` at the icon's side, of `usage`.
+    /// A new `Private` texture of `format` at the icon's side, of `usage`.
     fn target(&self, format: PixelFormat, usage: TextureUsage) -> Texture {
         let mut d = TextureDescriptor::texture_2d(format, SIDE, SIDE, false);
         d.usage = usage;
@@ -156,9 +191,19 @@ impl Tools {
         self.queue.device().new_texture(&d).unwrap()
     }
 
-    /// Icon `index`'s new texture: `Private`, or over `bytes` at the icon's place in them, its
+    /// A new `RG16Float` second color, `RenderTarget` usage alone.
+    fn second(&self) -> Texture {
+        self.target(PixelFormat::RG16Float, TextureUsage::RENDER_TARGET)
+    }
+
+    /// A new `Stencil8` texture.
+    fn stencil(&self) -> Texture {
+        self.target(PixelFormat::Stencil8, TextureUsage::RENDER_TARGET)
+    }
+
+    /// Icon `index`'s new bitmap: `Private`, or over `bytes` at the icon's place in them, its
     /// rows `pitch` apart.
-    fn icon(&self, (bytes, pitch): (Option<&Buffer>, u64), index: usize) -> Texture {
+    fn bitmap(&self, (bytes, pitch): (Option<&Buffer>, u64), index: usize) -> Texture {
         let usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
         let usage = usage | TextureUsage::RENDER_TARGET;
         let Some(bytes) = bytes else {
@@ -170,40 +215,50 @@ impl Tools {
         (bytes.new_texture(&d, index as u64 * pitch * SIDE, pitch)).unwrap()
     }
 
-    /// Icon `index`'s pass into `icon`, beside `coverage` as its second color and `stencil`,
-    /// encoded in `command_buffer`.
-    fn pass(
-        &self,
-        command_buffer: &CommandBuffer,
-        (icon, coverage, stencil): (&Texture, &Texture, &Texture),
-        index: usize,
-    ) {
+    /// A pass over `color`, beside `second` and `stencil`, both loaded and stored `DontCare` but
+    /// that `second` is cleared to `clear` where it is given.
+    fn descriptor(
+        (color, load): (&Texture, LoadAction),
+        (second, clear): (&Texture, Option<[f32; 2]>),
+        stencil: &Texture,
+    ) -> RenderPassDescriptor {
         let mut pass = RenderPassDescriptor::new();
-        let color = &mut pass.color_attachments[0];
-        color.texture = Some(icon.clone());
-        color.load_action = LoadAction::Clear;
-        color.clear_color = ClearColor::new(0.0, 0.0, 0.0, 0.0);
-        color.store_action = StoreAction::Store;
-        let second = &mut pass.color_attachments[1];
-        second.texture = Some(coverage.clone());
-        second.load_action = match clear(index) {
+        let first = &mut pass.color_attachments[0];
+        first.texture = Some(color.clone());
+        first.load_action = load;
+        first.clear_color = ClearColor::new(0.0, 0.0, 0.0, 0.0);
+        first.store_action = StoreAction::Store;
+        let coverage = &mut pass.color_attachments[1];
+        coverage.texture = Some(second.clone());
+        coverage.load_action = match clear {
             Some([x, y]) => {
-                second.clear_color = ClearColor::new(f64::from(x), f64::from(y), 0.0, 0.0);
+                coverage.clear_color = ClearColor::new(f64::from(x), f64::from(y), 0.0, 0.0);
                 LoadAction::Clear
             }
             None => LoadAction::DontCare,
         };
-        second.store_action = StoreAction::DontCare;
-        let stencil_attachment = &mut pass.stencil_attachment;
-        stencil_attachment.texture = Some(stencil.clone());
-        stencil_attachment.load_action = LoadAction::DontCare;
-        stencil_attachment.store_action = StoreAction::DontCare;
+        coverage.store_action = StoreAction::DontCare;
+        let depth_stencil = &mut pass.stencil_attachment;
+        depth_stencil.texture = Some(stencil.clone());
+        depth_stencil.load_action = LoadAction::DontCare;
+        depth_stencil.store_action = StoreAction::DontCare;
+        pass
+    }
+
+    /// An icon's content pass and bitmap pass, encoded in `command_buffer`.
+    fn render(&self, command_buffer: &CommandBuffer, icon: &Icon) {
+        let pass = Tools::descriptor(
+            (&icon.content, LoadAction::Load),
+            (&icon.coverage, icon.clear),
+            &icon.stencil,
+        );
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
         encoder.set_fragment_bytes(&self.tint, 0).unwrap();
         let draws = [
             (&self.mark, MARK),
             (&self.coverage, MIDDLE),
             (&self.flag, FLAG),
+            (&self.halve, WHOLE),
             (&self.coverage, MIDDLE),
             (&self.read, BOTTOM),
         ];
@@ -215,16 +270,28 @@ impl Tools {
             (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
         }
         encoder.end_encoding().unwrap();
+        let pass = Tools::descriptor(
+            (&icon.bitmap, LoadAction::Clear),
+            (&icon.bitmap_coverage, None),
+            &icon.bitmap_stencil,
+        );
+        let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        encoder.set_render_pipeline_state(&self.copy).unwrap();
+        encoder
+            .set_fragment_texture(Some(&icon.content), 0)
+            .unwrap();
+        (encoder.set_fragment_sampler_state(Some(&self.sampler), 0)).unwrap();
+        (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
+        encoder.end_encoding().unwrap();
     }
 
-    /// Every `Private` icon's first color copied into the read-back buffer, in a command buffer of
-    /// its own.
-    fn read_back(&self, icons: &[Texture]) {
+    /// Every `Private` bitmap copied into the read-back buffer, in a command buffer of its own.
+    fn read_back(&self, icons: &[Icon]) {
         let command_buffer = self.queue.command_buffer().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         for (index, icon) in icons.iter().enumerate() {
             blit.copy_from_texture_to_buffer(
-                icon,
+                &icon.bitmap,
                 0,
                 0,
                 Origin::new(0, 0, 0),
@@ -245,8 +312,12 @@ impl Tools {
 }
 
 /// Icon `index`'s wrong texels in `bytes` (the icons one after another, their rows `pitch`
-/// apart), and the first: its pixel and texel.
-fn wrong(bytes: &Buffer, pitch: u64, index: usize) -> (usize, Option<((u64, u64), [u16; 4])>) {
+/// apart), its second color cleared to `clear`, and the first: its pixel and texel.
+fn wrong(
+    bytes: &Buffer,
+    pitch: u64,
+    (index, clear): (usize, Option<[f32; 2]>),
+) -> (usize, Option<((u64, u64), [u16; 4])>) {
     let contents = bytes.contents().unwrap();
     let span = (pitch * SIDE) as usize;
     // SAFETY: bytes within the buffer, which no command buffer writes now.
@@ -258,15 +329,17 @@ fn wrong(bytes: &Buffer, pitch: u64, index: usize) -> (usize, Option<((u64, u64)
             let h = |i: usize| u16::from_le_bytes([bytes[at + i], bytes[at + i + 1]]);
             ((x, y), [h(0), h(2), h(4), h(6)])
         })
-        .filter(|&(pixel, texel)| texel != expected(index, pixel))
+        .filter(|&(pixel, texel)| texel != expected(clear, pixel))
         .collect();
     (wrong.len(), wrong.first().copied())
 }
 
-/// Icon `index`'s second color's clear, exact in a half; `None` for the odd icons, whose second
-/// color loads `DontCare`.
-fn clear(index: usize) -> Option<[f32; 2]> {
-    (index % 2 == 0).then(|| [(index + 1) as f32 / 64.0, (63 - index) as f32 / 64.0])
+/// Icon `index`'s second color's clear in `form`, exact in a half; `None` for the odd icons,
+/// whose second color loads `DontCare`, but where it is kept (a driver's `DontCare` may leave
+/// the last icon's there).
+fn clear(index: usize, form: Form) -> Option<[f32; 2]> {
+    (index % 2 == 0 || form == Form::KeptCoverage)
+        .then(|| [(index + 1) as f32 / 64.0, (63 - index) as f32 / 64.0])
 }
 
 /// The bits of a half that holds `value` exactly, `value` zero or normal.
@@ -279,18 +352,20 @@ fn half(value: f32) -> u16 {
     ((exponent as u16) << 10) | ((bits & 0x7f_ffff) >> 13) as u16
 }
 
-/// Icon `index`'s first color at `(x, y)`.
-fn expected(index: usize, (x, y): (u64, u64)) -> [u16; 4] {
+/// A bitmap at `(x, y)` whose second color was cleared to `clear` (`None`: loaded `DontCare`).
+fn expected(clear: Option<[f32; 2]>, (x, y): (u64, u64)) -> [u16; 4] {
     // The second color there before the coverage draws: the mark's, or the clear (zero where it
     // loads `DontCare`).
     let [r, g] = match x < MARK[2] {
         true => [0.25, 0.5],
-        false => clear(index).unwrap_or([0.0; 2]),
+        false => clear.unwrap_or([0.0; 2]),
     };
     if y < FLAG[3] {
-        [ONE, 0, ONE, ONE]
+        // The flag, halved.
+        [half(0.5), 0, half(0.5), half(0.5)]
     } else if y < MIDDLE[3] {
-        // Two coverage draws: `w = c1.x / 2 + c1.y`, then `c1 = (w, c1.y / 4)`.
+        // Two coverage draws: `w = c1.x / 2 + c1.y`, then `c1 = (w, c1.y / 4)`; the halving
+        // between them is drawn over.
         let first = r / 2.0 + g;
         let second = half(first / 2.0 + g / 4.0);
         [second; 4]
@@ -337,14 +412,16 @@ fn run(case: &str, form: Form, home: Home) {
         return;
     };
     let pitch = home.pitch();
-    let length = pitch * SIDE * ICONS as u64;
     let bytes = match home {
         Home::Private => None,
-        Home::Buffer(_) => Some(
-            device
-                .new_buffer(length, ResourceOptions::shared())
-                .unwrap(),
-        ),
+        Home::Buffer(_) => {
+            let length = pitch * SIDE * ICONS as u64;
+            Some(
+                device
+                    .new_buffer(length, ResourceOptions::shared())
+                    .unwrap(),
+            )
+        }
         Home::HostPages(_) => {
             let Some(bytes) = over_host(&device, &host, &Arc::new(AtomicUsize::new(0))) else {
                 return;
@@ -352,30 +429,33 @@ fn run(case: &str, form: Form, home: Home) {
             Some(bytes)
         }
     };
-    let coverage = || tools.target(PixelFormat::RG16Float, TextureUsage::RENDER_TARGET);
-    let kept = coverage();
+    let kept = tools.second();
     let mut failures = Vec::new();
     let mut counts = Vec::new();
     for round in 0..ROUNDS {
         let before = device.work_counts();
-        let icons: Vec<Texture> = (0..ICONS)
-            .map(|index| tools.icon((bytes.as_ref(), pitch), index))
-            .collect();
-        let coverages: Vec<Texture> = (0..ICONS)
-            .map(|_| match form {
-                Form::KeptCoverage => kept.clone(),
-                _ => coverage(),
+        let icons: Vec<Icon> = (0..ICONS)
+            .map(|index| Icon {
+                content: tools.target(
+                    PixelFormat::RGBA16Float,
+                    TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
+                ),
+                clear: clear(index, form),
+                coverage: match form {
+                    Form::KeptCoverage => kept.clone(),
+                    _ => tools.second(),
+                },
+                stencil: tools.stencil(),
+                bitmap: tools.bitmap((bytes.as_ref(), pitch), index),
+                bitmap_coverage: tools.second(),
+                bitmap_stencil: tools.stencil(),
             })
             .collect();
-        let stencils: Vec<Texture> = (0..ICONS)
-            .map(|_| tools.target(PixelFormat::Stencil8, TextureUsage::RENDER_TARGET))
-            .collect();
-        let targets = |index: usize| (&icons[index], &coverages[index], &stencils[index]);
         match form {
             Form::OneBuffer | Form::KeptCoverage => {
                 let command_buffer = tools.queue.command_buffer().unwrap();
-                for index in 0..ICONS {
-                    tools.pass(&command_buffer, targets(index), index);
+                for icon in &icons {
+                    tools.render(&command_buffer, icon);
                 }
                 commit_all(vec![command_buffer]);
             }
@@ -383,18 +463,18 @@ fn run(case: &str, form: Form, home: Home) {
                 let command_buffers: Vec<CommandBuffer> = (0..ICONS)
                     .map(|_| tools.queue.command_buffer().unwrap())
                     .collect();
-                for (index, command_buffer) in command_buffers.iter().enumerate() {
-                    tools.pass(command_buffer, targets(index), index);
+                for (command_buffer, icon) in command_buffers.iter().zip(&icons) {
+                    tools.render(command_buffer, icon);
                 }
                 commit_all(command_buffers);
             }
             Form::Threads => std::thread::scope(|scope| {
                 for thread in 0..THREADS {
-                    let (tools, targets) = (&tools, &targets);
+                    let (tools, icons) = (&tools, &icons);
                     scope.spawn(move || {
                         let command_buffers = (thread..ICONS).step_by(THREADS).map(|index| {
                             let command_buffer = tools.queue.command_buffer().unwrap();
-                            tools.pass(&command_buffer, targets(index), index);
+                            tools.render(&command_buffer, &icons[index]);
                             command_buffer.commit().unwrap();
                             command_buffer
                         });
@@ -407,7 +487,7 @@ fn run(case: &str, form: Form, home: Home) {
             }),
         }
         counts.push(moved(&before, &device.work_counts()));
-        // The CPU reads an icon over bytes in them; a `Private` one is copied out first.
+        // The CPU reads a bitmap over bytes in them; a `Private` one is copied out first.
         let read = match &bytes {
             Some(bytes) => bytes,
             None => {
@@ -416,7 +496,7 @@ fn run(case: &str, form: Form, home: Home) {
             }
         };
         for index in 0..ICONS {
-            if let (n @ 1.., first) = wrong(read, pitch, index) {
+            if let (n @ 1.., first) = wrong(read, pitch, (index, icons[index].clear)) {
                 failures.push(format!(
                     "round {round} icon {index}: {n} wrong texels, first {first:x?}"
                 ));
@@ -436,52 +516,52 @@ fn run(case: &str, form: Form, home: Home) {
 }
 
 #[test]
-fn icons_rendered_in_one_command_buffer_keep_their_fetched_second_colors_value() {
+fn icons_rendered_in_one_command_buffer_keep_their_fetched_colors_values() {
     run("one-buffer", Form::OneBuffer, Home::Private);
 }
 
 #[test]
-fn icons_rendered_in_command_buffers_of_their_own_keep_their_fetched_second_colors_value() {
+fn icons_rendered_in_command_buffers_of_their_own_keep_their_fetched_colors_values() {
     run("own-buffers", Form::OwnBuffers, Home::Private);
 }
 
 #[test]
-fn icons_rendered_on_several_threads_keep_their_fetched_second_colors_value() {
+fn icons_rendered_on_several_threads_keep_their_fetched_colors_values() {
     run("threads", Form::Threads, Home::Private);
 }
 
 #[test]
-fn icons_sharing_one_kept_second_color_keep_its_fetched_value() {
+fn icons_sharing_one_kept_second_color_keep_their_fetched_colors_values() {
     run("kept-coverage", Form::KeptCoverage, Home::Private);
 }
 
 #[test]
-fn icons_over_a_buffers_bytes_keep_their_fetched_second_colors_value() {
+fn icon_bitmaps_over_a_buffers_bytes_keep_their_fetched_colors_values() {
     run("over-buffer", Form::OneBuffer, Home::Buffer(TIGHT));
 }
 
 #[test]
-fn icons_over_a_buffers_padded_rows_keep_their_fetched_second_colors_value() {
+fn icon_bitmaps_over_a_buffers_padded_rows_keep_their_fetched_colors_values() {
     run("over-buffer-padded", Form::OneBuffer, Home::Buffer(PADDED));
 }
 
 #[test]
-fn icons_over_host_pages_keep_their_fetched_second_colors_value() {
+fn icon_bitmaps_over_host_pages_keep_their_fetched_colors_values() {
     run("over-host", Form::OneBuffer, Home::HostPages(TIGHT));
 }
 
 #[test]
-fn icons_over_host_pages_padded_rows_keep_their_fetched_second_colors_value() {
+fn icon_bitmaps_over_host_pages_padded_rows_keep_their_fetched_colors_values() {
     run("over-host-padded", Form::OneBuffer, Home::HostPages(PADDED));
 }
 
 #[test]
-fn icons_over_host_pages_rendered_on_several_threads_keep_their_fetched_second_colors_value() {
+fn icon_bitmaps_over_host_pages_rendered_on_several_threads_keep_their_fetched_colors_values() {
     run("over-host-threads", Form::Threads, Home::HostPages(PADDED));
 }
 
 #[test]
-fn icons_over_host_pages_in_command_buffers_of_their_own_keep_their_fetched_second_colors_value() {
+fn icon_bitmaps_over_host_pages_in_command_buffers_of_their_own_keep_their_fetched_colors_values() {
     run(
         "over-host-own-buffers",
         Form::OwnBuffers,
