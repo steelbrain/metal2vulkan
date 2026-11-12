@@ -515,11 +515,11 @@ fn device_local_dma_buf(device: &Device, bytes: u64) -> Option<(OwnedFd, vk::Dev
         .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
     // SAFETY: memory just made, exportable as a dma-buf.
     match unsafe { loader.get_memory_fd(&info) } {
-        // SAFETY: the driver hands the descriptor over.
-        Ok(fd) => Some((
-            unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd) },
-            made,
-        )),
+        Ok(fd) => {
+            // SAFETY: the driver hands the descriptor over.
+            let fd = unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd) };
+            Some((fd, made))
+        }
         Err(_) => {
             // SAFETY: just made, used by nothing.
             unsafe { handles.device.free_memory(made, None) };
@@ -584,7 +584,7 @@ fn the_type_each_class_s_dma_buf_import_takes_against_the_class_s_order() {
     };
     let types = &properties.memory_types[..properties.memory_type_count as usize];
     let unified = device.properties().has_unified_memory;
-    let flags = |index: u32| types[index as usize].property_flags;
+    let flags = |index: u32| format!("{:#x}", types[index as usize].property_flags.as_raw());
     let mut sources = Vec::new();
     // The device's own dma-buf first: no import was refused yet when it is made.
     let own = device_local_dma_buf(&device, bytes);
