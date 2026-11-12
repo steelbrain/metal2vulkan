@@ -2033,6 +2033,8 @@ pub fn analyze(e: &Entry, layouts: &TypeLayouts, m: &mut Meter) -> Result<Proven
         }
     }
     cx.cells.bit_copies = bit_copies;
+    // And the pointers data may carry into a pool.
+    cx.cells.escapes = cells::escapes(&cx, body, m)?;
     for (id, inst) in body.insts.iter() {
         match &inst.kind {
             InstKind::Store { val, ptr, .. } if cx.space_of_value(*val).is_some() => {
@@ -2061,7 +2063,7 @@ pub fn analyze(e: &Entry, layouts: &TypeLayouts, m: &mut Meter) -> Result<Proven
     }
 
     // The fixpoint, in rounds: every alloca forwards until the verification of a round's facts
-    // opens it; a second failed verification opens every alloca.
+    // opens it or makes it a pool; a second failed verification opens every alloca.
     let flow = Flow {
         start: &start,
         users: &users,
@@ -2074,19 +2076,28 @@ pub fn analyze(e: &Entry, layouts: &TypeLayouts, m: &mut Meter) -> Result<Proven
                 None => err,
             }
         })?;
-        let failed = cells::verify(&mut cx, body, m)?;
-        if failed.is_empty() {
+        let verdict = cells::verify(&mut cx, body, m)?;
+        if verdict.holds() {
+            m.release(verdict.bytes());
             break;
         }
         failures += 1;
         if failures >= 2 {
             cx.cells.facts.all_open = true;
         } else {
-            for a in failed {
+            for &a in &verdict.open {
                 m.charge(map_entry_bytes::<InstId, ()>())?;
                 cx.cells.facts.open.insert(a);
+                if cx.cells.facts.pooled.remove(&a) {
+                    m.release(map_entry_bytes::<InstId, ()>());
+                }
+            }
+            for &a in &verdict.pooled {
+                m.charge(map_entry_bytes::<InstId, ()>())?;
+                cx.cells.facts.pooled.insert(a);
             }
         }
+        m.release(verdict.bytes());
     }
     cx.cells.reset(m);
     drop((users, start, out_deg));
@@ -2664,7 +2675,8 @@ impl Walk<'_, '_> {
 
     /// Join the classes of the pointers stored into and loaded from each cell slot: a load at an
     /// exact offset reads the pointers stored there, and an access at an unknown offset meets
-    /// every slot of its cell. A slot copy moves a source slot's pointers to its destination slot,
+    /// every slot of its cell; every access of a pool meets every other pool's access, since data
+    /// moves pointers' bytes between pools. A slot copy moves a source slot's pointers to its destination slot,
     /// so they join that slot's too. The stores and loads that meet this way form the cell's slot
     /// groups ([`CellFacts::groups`]): one group's loads read the bytes its stores write.
     fn join_slot_classes(&mut self, m: &mut Meter) -> Result<(), Error> {
@@ -2673,10 +2685,13 @@ impl Walk<'_, '_> {
         let mut groups = SlotGroups::new(&self.cx.cells.facts.accesses, m)?;
         let len = self.slots.len();
         let at = |w: &Self, i: usize| w.slots.get(i).copied();
+        // The first pool's first access and a pointer value of the pools', once met.
+        let mut pools: Option<(InstId, Option<Value>)> = None;
         let mut i = 0;
         while let Some((cell, _, _, _)) = at(self, i) {
             let mut j = i;
-            let mut wild = false;
+            // A pool's accesses meet whatever their slots.
+            let mut wild = self.cx.cells.facts.pooled.contains(&cell);
             while let Some((a, s, _, _)) = at(self, j) {
                 if a != cell {
                     break;
@@ -2708,6 +2723,20 @@ impl Walk<'_, '_> {
                         m.tick(1)?;
                         if let Some((_, _, v, _)) = at(self, x) {
                             self.join_class(rep, v, m)?;
+                        }
+                    }
+                }
+                // Data moves pointers' bytes between pools: every pool's accesses meet.
+                if self.cx.cells.facts.pooled.contains(&cell) {
+                    match pools {
+                        None => pools = Some((first, rep)),
+                        Some((other, other_rep)) => {
+                            groups.union(other, first);
+                            if let (Some(a), Some(b)) = (other_rep, rep) {
+                                self.join_class(a, b, m)?;
+                            } else if other_rep.is_none() {
+                                pools = Some((other, rep));
+                            }
                         }
                     }
                 }

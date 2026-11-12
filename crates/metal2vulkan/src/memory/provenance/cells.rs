@@ -22,9 +22,30 @@
 //! slots overlap, one slot is accessed as two pointer types, a pointer access at an unknown
 //! offset meets any data access, a data access (a load or store of a non-pointer, a memory
 //! intrinsic's bytes) overlaps a pointer slot, or a data access's bytes are not
-//! translation-time constants. And every alloca is open when some access goes through a
-//! thread-space pointer that may be `Dynamic` (it may alias any alloca). A verification that opens allocas reruns the fixpoint
-//! with them open; a second one opens every alloca, so the analysis runs at most three rounds.
+//! translation-time constants; unless it is a pool (below). And every alloca is open when some
+//! access goes through a thread-space pointer that may be `Dynamic` (it may alias any alloca). A
+//! verification that opens allocas or makes pools reruns the fixpoint with them open or pooled; a
+//! second one opens every alloca, so the analysis runs at most three rounds.
+//!
+//! **Pools**. An alloca reached only through the accesses above whose slots are not disciplined,
+//! every pointer access of which is of a thread-space pointer, and every pointer it holds an arena
+//! pointer (null, a stack allocation, or `Dynamic`; not a table parameter's), forwards as a pool
+//! ([`CellFacts::pooled`]): its data may overlap its pointers, and its pointer accesses may be at
+//! any offset (an array of structs indexed at run time, each holding a thread pointer into the
+//! array). Each round verifies its pools again: one reached otherwise, or holding another pointer,
+//! opens. A pointer loaded from a pool is any pointer whose bytes may be there, or bytes no pointer
+//! wrote: the join of the pointers that leak, and null. A pointer leaks when it is stored into a
+//! pool; when it is a pool's (data read from a pool may carry its bytes anywhere); when it is
+//! stored into memory that does not forward it (data read back from there may carry it); and when
+//! an instruction turns it into data or hands it to code no cell sees ([`escapes`]: `ptrtoint`, an
+//! aggregate or vector built of it, a call other than an intrinsic's, an atomic's value, a return).
+//! Every pool holds every leaked pointer, so a pointer moved as data (a byte copy, a `memcpy`, an
+//! integer of its bits) between pools, or out of any memory into a pool, is among its loads'
+//! pointers. A pointer that is `Dynamic` among them makes the loads `Dynamic`, and every access
+//! through them then opens every alloca, as above. The lowered pool holds each thread pointer as
+//! its `u32` arena offset (`lower::access::cell`); a load of bytes no pointer wrote reads whatever
+//! they hold, an arena offset that Metal's pointer of those bytes would not have, both undefined to
+//! dereference.
 //!
 //! **Slot copies**. A `memcpy` or `memmove` of a translation-time constant length between two
 //! pointers into forwarding cells at constant offsets moves each source pointer slot that lies
@@ -133,6 +154,9 @@ pub struct CellFacts {
     pub all_open: bool,
     /// Allocas whose pointer loads are `Dynamic`.
     pub open: BTreeSet<InstId>,
+    /// Forwarding allocas whose slots are not disciplined, each holding thread-space pointers only:
+    /// a pointer loaded from one is one of the pool's pointers (module doc, **Pools**).
+    pub pooled: BTreeSet<InstId>,
     /// The loads and stores of pointers that go through forwarding cells only: each moves the
     /// pointer's lowered representation (`lower::access::cell`).
     pub accesses: BTreeSet<InstId>,
@@ -177,7 +201,8 @@ impl CellFacts {
 
     /// The bytes the verdict holds, as the ledger charges them.
     pub fn retained_bytes(&self) -> usize {
-        (self.open.len() + self.accesses.len()) * map_entry_bytes::<InstId, ()>()
+        (self.open.len() + self.pooled.len() + self.accesses.len())
+            * map_entry_bytes::<InstId, ()>()
             + self.groups.len() * map_entry_bytes::<InstId, InstId>()
             + self.bits.len() * map_entry_bytes::<InstId, Value>()
             + self.words.len() * map_entry_bytes::<InstId, InstId>()
@@ -293,6 +318,13 @@ pub(crate) struct Cells {
     /// Every `memset` of zero bytes of a translation-time constant length into thread memory,
     /// `(address, length)`, found once ([`zero_fill`]).
     pub(crate) zero_fills: Vec<(Value, u64)>,
+    /// Every thread-space pointer an instruction turns into data or hands to code no cell sees
+    /// (`ptrtoint`, an aggregate or vector built of it, a call other than an intrinsic's, an
+    /// atomic's value, a return), found once ([`escapes`]): data may carry it into a pool.
+    pub(crate) escapes: Vec<Value>,
+    /// The join of every pointer whose bytes data may carry into a pool (module doc, **Pools**);
+    /// `None` while there is none.
+    leaked: Option<PtrFact>,
     /// The join of the pointers stored at each slot of each cell.
     contents: BTreeMap<(InstId, Slot), PtrFact>,
     /// `(cell, lo, hi)`: the bytes `[lo, hi)` of a cell that a zero fill writes, at its own
@@ -315,6 +347,7 @@ impl Cells {
         self.contents.clear();
         self.readers.clear();
         self.zeros.clear();
+        self.leaked = None;
         self.settled = false;
     }
 
@@ -381,11 +414,13 @@ impl Cx<'_> {
             if self.cells.readers.insert((a, me)) {
                 self.cells.charge(READER_BYTES, m)?;
             }
-            zeroed = zeroed || self.cells.zeroed(a, slot, m)?;
+            // A pool's load reads any of its pointers, or bytes no pointer wrote (module doc).
+            let pooled = self.cells.facts.pooled.contains(&a);
+            zeroed = zeroed || pooled || self.cells.zeroed(a, slot, m)?;
             let all = (a, Slot::At(i64::MIN))..=(a, Slot::Any);
             for (&(_, s), x) in self.cells.contents.range(all) {
                 m.tick(1)?;
-                if slot == Slot::Any || s == Slot::Any || s == slot {
+                if pooled || slot == Slot::Any || s == Slot::Any || s == slot {
                     out = PtrFact {
                         roots: self.sets.join(out.roots, x.roots, m)?,
                         range: out.range.join(x.range),
@@ -422,6 +457,13 @@ impl Cx<'_> {
             }
             let roots = self.sets.get(pf.roots);
             if !self.cells.facts.forwards(roots) {
+                // A thread-space pointer stored where no cell forwards it: data read back from
+                // there may carry it into a pool.
+                if !self.cells.facts.pooled.is_empty()
+                    && self.space_of_value(val) == Some(AddrSpace::Thread)
+                {
+                    self.leak(vf, m)?;
+                }
                 continue;
             }
             let cells: Vec<InstId> = roots
@@ -433,6 +475,12 @@ impl Cx<'_> {
                 .collect();
             let slot = Slot::of(pf.range);
             for a in cells {
+                // A pool keeps its pointers whatever their slots.
+                let slot = if self.cells.facts.pooled.contains(&a) {
+                    Slot::Any
+                } else {
+                    slot
+                };
                 let old = self.cells.contents.get(&(a, slot)).copied();
                 let new = self.join(old.unwrap_or(PtrFact::BOTTOM), vf, m)?;
                 if Some(new) != old {
@@ -460,6 +508,7 @@ impl Cx<'_> {
             }
         }
         self.copy_pass(&mut grew, m)?;
+        self.pool_pass(&mut grew, m)?;
         grew.sort_unstable();
         grew.dedup();
         let mut out = Vec::new();
@@ -575,6 +624,84 @@ impl Cx<'_> {
         }
     }
 
+    /// Join `f` into the pointers whose bytes data may carry into a pool.
+    fn leak(&mut self, f: PtrFact, m: &mut Meter) -> Result<(), Error> {
+        if f == PtrFact::BOTTOM {
+            return Ok(());
+        }
+        self.cells.leaked = Some(match self.cells.leaked {
+            Some(l) => self.join(l, f, m)?,
+            None => f,
+        });
+        Ok(())
+    }
+
+    /// Carry the pointers data may move between pools (module doc, **Pools**): every pool's
+    /// pointers, every escaping pointer, and every thread-space pointer stored where no cell
+    /// forwards it (joined by the store pass) leak; every pool holds what leaks. The pools whose
+    /// contents grew are added to `grew`. One work unit per pool, per pool's content and per
+    /// escaping pointer.
+    fn pool_pass(&mut self, grew: &mut Vec<InstId>, m: &mut Meter) -> Result<(), Error> {
+        if self.cells.facts.pooled.is_empty() {
+            return Ok(());
+        }
+        for i in 0..self.cells.escapes.len() {
+            m.tick(1)?;
+            let Some(&v) = self.cells.escapes.get(i) else {
+                break;
+            };
+            let f = self.get(v, m)?;
+            self.leak(f, m)?;
+        }
+        let mut next = self.next_pool(None);
+        while let Some(a) = next {
+            m.tick(1)?;
+            let all = (a, Slot::At(i64::MIN))..=(a, Slot::Any);
+            let mut held = PtrFact::BOTTOM;
+            for (_, x) in self.cells.contents.range(all) {
+                m.tick(1)?;
+                held = PtrFact {
+                    roots: self.sets.join(held.roots, x.roots, m)?,
+                    range: held.range.join(x.range),
+                    shape: held.shape.join(x.shape),
+                };
+            }
+            self.leak(held, m)?;
+            next = self.next_pool(Some(a));
+        }
+        let Some(leaked) = self.cells.leaked else {
+            return Ok(());
+        };
+        let mut next = self.next_pool(None);
+        while let Some(a) = next {
+            m.tick(1)?;
+            let old = self.cells.contents.get(&(a, Slot::Any)).copied();
+            let new = self.join(old.unwrap_or(PtrFact::BOTTOM), leaked, m)?;
+            if Some(new) != old {
+                if old.is_none() {
+                    self.cells.charge(CONTENT_BYTES, m)?;
+                }
+                self.cells.contents.insert((a, Slot::Any), new);
+                grow(grew, 1, m)?;
+                grew.push(a);
+            }
+            next = self.next_pool(Some(a));
+        }
+        Ok(())
+    }
+
+    /// The first pool after `after` (the first of all for `None`) that is not open.
+    fn next_pool(&self, after: Option<InstId>) -> Option<InstId> {
+        use std::ops::Bound::{Excluded, Unbounded};
+        let from = after.map_or(Unbounded, Excluded);
+        self.cells
+            .facts
+            .pooled
+            .range((from, Unbounded))
+            .find(|a| !self.cells.facts.open.contains(a))
+            .copied()
+    }
+
     /// The contents a slot copy moves, each at its destination slot, into `moved` (a working
     /// vector whose charges `bytes` counts).
     fn move_contents(
@@ -671,9 +798,10 @@ struct Use {
 
 /// The allocas that pointers are stored into or loaded from and that the final facts of this
 /// round show are not closed (module doc), in order: every such alloca when some access goes
-/// through a thread-space pointer that may be `Dynamic`. An alloca no pointer access reaches
-/// needs no verdict: forwarding only changes pointer loads.
-pub(super) fn verify(cx: &mut Cx<'_>, body: &Body, m: &mut Meter) -> Result<Vec<InstId>, Error> {
+/// through a thread-space pointer that may be `Dynamic`; and the closed ones whose slots are not
+/// disciplined that become pools. An alloca no pointer access reaches needs no verdict:
+/// forwarding only changes pointer loads.
+pub(super) fn verify(cx: &mut Cx<'_>, body: &Body, m: &mut Meter) -> Result<Verdict, Error> {
     m.release(
         cx.cells.facts.bits.len() * map_entry_bytes::<InstId, Value>()
             + cx.cells.facts.words.len() * map_entry_bytes::<InstId, InstId>(),
@@ -681,7 +809,7 @@ pub(super) fn verify(cx: &mut Cx<'_>, body: &Body, m: &mut Meter) -> Result<Vec<
     cx.cells.facts.bits.clear();
     cx.cells.facts.words.clear();
     if cx.cells.facts.all_open {
-        return Ok(Vec::new());
+        return Ok(Verdict::default());
     }
     let bits = pointer_bits(cx, m)?;
     let words = pointer_words(cx, m)?;
@@ -828,7 +956,7 @@ fn verify_round(
     words: &BTreeMap<InstId, InstId>,
     ends: &BitCopies,
     m: &mut Meter,
-) -> Result<Vec<InstId>, Error> {
+) -> Result<Verdict, Error> {
     let mut round = Round::default();
     let r = round.walk(cx, body, (bits, words, ends), m);
     m.release(round.charged());
@@ -878,7 +1006,7 @@ impl Round {
         body: &Body,
         ((by_store, by_cast), words, (copy_ends, copy_stores)): RoundInputs<'_>,
         m: &mut Meter,
-    ) -> Result<Vec<InstId>, Error> {
+    ) -> Result<Verdict, Error> {
         // The pointer a store of pointer bits stores, when it is a store of that pointer.
         let bits_stored = |store: InstId| {
             let c = by_store.get(&store)?;
@@ -1031,18 +1159,131 @@ impl Round {
             }
         }
         settle_copies(uses, &self.copies, m)?;
-        let mut out = Vec::new();
+        let mut out = Verdict::default();
         for (a, u) in uses.iter() {
             m.tick(1)?;
             if cx.cells.facts.open.contains(a) || !u.pointers() {
                 continue;
             }
-            if aliased || !disciplined(u, m)? {
-                out.push(*a);
+            if aliased {
+                grow(&mut out.open, 1, m)?;
+                out.open.push(*a);
+                continue;
+            }
+            let pooled = cx.cells.facts.pooled.contains(a);
+            if !pooled && disciplined(u, m)? {
+                continue;
+            }
+            // A cell reached only through its accesses whose slots are not disciplined forwards
+            // as a pool when every pointer it holds is an arena pointer of the thread space; a
+            // pool that this round's facts show reached otherwise, or holding another pointer,
+            // opens (module doc).
+            let pool = !u.open && thread_only(cx, u, m)? && arena_only(cx, *a, m)?;
+            if pool && !pooled {
+                grow(&mut out.pooled, 1, m)?;
+                out.pooled.push(*a);
+            } else if !pool {
+                grow(&mut out.open, 1, m)?;
+                out.open.push(*a);
             }
         }
         Ok(out)
     }
+}
+
+/// What one round's verification finds ([`verify`]).
+#[derive(Default)]
+pub(super) struct Verdict {
+    /// The allocas it opens.
+    pub(super) open: Vec<InstId>,
+    /// The allocas that forward as pools from the next round.
+    pub(super) pooled: Vec<InstId>,
+}
+
+impl Verdict {
+    /// The round's facts stand: nothing opens and no pool is new.
+    pub(super) fn holds(&self) -> bool {
+        self.open.is_empty() && self.pooled.is_empty()
+    }
+
+    /// The ledger bytes the two lists hold.
+    pub(super) fn bytes(&self) -> usize {
+        (self.open.capacity() + self.pooled.capacity())
+            .saturating_mul(std::mem::size_of::<InstId>())
+    }
+}
+
+/// Whether every pointer access of `u` is of a thread-space pointer: one work unit per slot.
+fn thread_only(cx: &Cx<'_>, u: &Use, m: &mut Meter) -> Result<bool, Error> {
+    for t in u.wild.iter().chain(u.slots.values()) {
+        m.tick(1)?;
+        if cx.space_of(*t) != Some(AddrSpace::Thread) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Whether every pointer cell `a` holds this round is an arena pointer of the thread space: null,
+/// a stack allocation, or `Dynamic` (some arena offset). A table parameter, a global, or an
+/// intrinsic's pointer has another representation. One work unit per slot's content and per root.
+fn arena_only(cx: &Cx<'_>, a: InstId, m: &mut Meter) -> Result<bool, Error> {
+    let all = (a, Slot::At(i64::MIN))..=(a, Slot::Any);
+    for (_, x) in cx.cells.contents.range(all) {
+        m.tick(1)?;
+        for r in cx.sets.get(x.roots) {
+            m.tick(1)?;
+            if !matches!(r, Root::Null | Root::Alloca(_) | Root::Dynamic) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// The thread-space pointers in `body` that an instruction turns into data or hands to code no
+/// cell sees ([`Cells::escapes`]): every thread-space operand of an instruction other than a load
+/// or store (whose stored pointer the store pass follows), an address computation (`getelementptr`,
+/// `bitcast`, `phi`, `select`, `freeze`), a compare, or a call of an `air.*` or `llvm.*` intrinsic
+/// (whose pointer operands are memory it reads or writes). One work unit per instruction and per
+/// operand.
+pub(super) fn escapes(cx: &Cx<'_>, body: &Body, m: &mut Meter) -> Result<Vec<Value>, Error> {
+    let mut out = Vec::new();
+    for (_, inst) in body.insts.iter() {
+        m.tick(1)?;
+        match &inst.kind {
+            InstKind::Load { .. }
+            | InstKind::Store { .. }
+            | InstKind::Gep { .. }
+            | InstKind::Phi { .. }
+            | InstKind::Select { .. }
+            | InstKind::Freeze(_)
+            | InstKind::ICmp { .. }
+            | InstKind::Cast {
+                op: CastOp::Bitcast,
+                ..
+            } => continue,
+            InstKind::Call(call)
+                if matches!(call.callee, Callee::Air { .. } | Callee::Llvm { .. }) =>
+            {
+                continue
+            }
+            _ => {}
+        }
+        let mut found = Ok(());
+        inst.kind.for_each_value(|v| {
+            if found.is_err() || cx.space_of_value(v) != Some(AddrSpace::Thread) {
+                return;
+            }
+            found = m
+                .tick(1)
+                .map_err(Error::from)
+                .and_then(|()| grow(&mut out, 1, m))
+                .map(|()| out.push(v));
+        });
+        found?;
+    }
+    Ok(out)
 }
 
 /// The stores of pointer bits in `body`: each plain store whose value is a `ptrtoint` of a pointer
