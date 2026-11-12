@@ -147,6 +147,30 @@
 //!   of primitive type 9 (`command_buffer/hang.rs`), where no command buffer of the device with a
 //!   draw call over a mutable map was committed before (`DeviceShared::mutable_rate_map_called`,
 //!   raised at that commit).
+//! - **Pieces.** Drawn region by region, a pass's executed commands may hold more GPU work than a
+//!   driver lets one kernel submission run: amdgpu ends a job that runs past its timeout (2 s by
+//!   default) with a reset of the GPU, and the work is lost. So where an execution's commands
+//!   record inline, at commit or at the host step (`render/executions.rs`), each command's region
+//!   draws count their work as they record ([`draw_work`]: each region draw's vertices or indices
+//!   times its instances, and [`REGION_DRAW_WORK`] for the draw itself), across the pass's
+//!   executions; once it reaches [`PIECE_WORK`], the next command that draws begins the
+//!   execution's next run, in a render pass instance of its own after a barrier from everything
+//!   before, as a command's barrier begins one, and that run begins a *piece*: the pass's
+//!   recording ends its `VkCommandBuffer` before it and goes on in a new one
+//!   (`EncoderCore::cut_piece`), and its batch's submission submits each piece but the last as a
+//!   `VkSubmitInfo` of its own that signals its `VkQueue`'s timeline of pieces
+//!   (`command_buffer/submit.rs`). Vulkan defines no kernel submission; Mesa's common queue merges
+//!   a submission that signals nothing into the next one's (`command_buffer/group.rs`) and keeps
+//!   one that signals apart, so there each piece runs as a kernel submission of its own. The
+//!   pixels are the uncut pass's: each run loads what the one before stored, and the commands keep
+//!   their order. Each cut costs a store and a load of the pass's attachments. The bound is a
+//!   forecast, not a measure: [`PIECE_WORK`] is about 56 ms of an Iris Xe's GPU at a trivial vertex
+//!   function, so a piece whose vertex function costs 30 times as much still runs well within 2 s.
+//!   Where the device writes timestamps each piece of a pass recorded in several is timed
+//!   (`WorkCounts::rate_map_piece_gpu_nanos_most`), and the pieces are counted
+//!   (`WorkCounts::rate_map_pieces`). An execution recorded on the GPU alone
+//!   (`render/executions/gpu.rs`), whose commands the host never reads, is not cut, nor are the
+//!   encoder's own draws.
 //! - **What the plan refuses** is `NotImplemented(RuntimeGap::RateMapRegions)`, naming the
 //!   compile layer's reason ([`RegionRefusal`]): a viewport of no extent or a flipped one, a
 //!   scissor as above, a plan past its bound or past the device's viewport limits, a pipeline whose
@@ -155,7 +179,10 @@
 //!   write once per region.
 
 use super::degradation::Degradation;
+use super::device::functions::Vk;
 use super::error::{internal, invalid, Error, Problem, RuntimeGap};
+use super::exit_guard::{self, Call};
+use super::gpu_time::Slot;
 use super::rate_map::{MapState, RasterizationRateMap};
 use super::render_pass::{PassLayout, RenderPassDescriptor, RenderPassProblem};
 use super::render_values::{ScissorRect, Viewport};
@@ -164,6 +191,9 @@ use ash::vk;
 use metal2vulkan::bind::{RegionError, RegionLimits};
 use metal2vulkan::metal::Mutability;
 use metal2vulkan::pipeline::GraphicsState;
+use metal2vulkan::vk::DrawCommand;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 /// Why a draw in a rate-mapped pass is not drawn region by region: the compile layer's
@@ -494,6 +524,167 @@ pub(super) fn reset_bound(taken: u32, now: u32) -> u32 {
         Some(1) => (tiles(now) * 32).min(taken),
         _ => taken,
     }
+}
+
+/// The work a piece of a rate-mapped pass's recorded commands holds before the next command
+/// begins another (the module docs, **Pieces**), in vertex invocations: about 56 ms of an Intel
+/// Iris Xe's GPU (ANV) at the 0.42 ns a vertex invocation of a trivial vertex function cost it.
+const PIECE_WORK: u64 = 1 << 27;
+
+/// What one region's draw costs beyond its vertices, in vertex invocations (the module docs,
+/// **Pieces**): about 240 ns of an Iris Xe's GPU (ANV) per region drawn 16 at a time, the
+/// viewports' and scissors' setting among it.
+const REGION_DRAW_WORK: u64 = 512;
+
+/// The work a piece holds before the next command begins another ([`PIECE_WORK`]; a device
+/// test's own where it set one, [`set_piece_work`]).
+pub(super) fn piece_work() -> u64 {
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    if let Some(work) = std::num::NonZeroU64::new(TEST_PIECE_WORK.load(Ordering::Relaxed)) {
+        return work.get();
+    }
+    PIECE_WORK
+}
+
+/// The work of `draw` recorded through `scissors`, a recording's (the module docs, **Pieces**):
+/// one region draw for each scissor that holds a pixel (at least one), each of the draw's
+/// vertices or indices times its instances, an indirect or mesh draw's counted as none.
+pub(super) fn draw_work(scissors: &[vk::Rect2D], draw: &DrawCommand) -> u64 {
+    let regions = (scissors.iter())
+        .filter(|scissor| scissor.extent.width > 0 && scissor.extent.height > 0)
+        .count()
+        .max(1) as u64;
+    let vertices = match *draw {
+        DrawCommand::Draw {
+            vertex_count,
+            instance_count,
+            ..
+        } => u64::from(vertex_count) * u64::from(instance_count),
+        DrawCommand::DrawIndexed {
+            index_count,
+            instance_count,
+            ..
+        } => u64::from(index_count) * u64::from(instance_count),
+        DrawCommand::DrawIndirect { .. }
+        | DrawCommand::DrawIndexedIndirect { .. }
+        | DrawCommand::DrawMeshTasks { .. }
+        | DrawCommand::DrawMeshTasksIndirect { .. }
+        | DrawCommand::DrawMeshTasksIndirectCount { .. } => 0,
+    };
+    regions.saturating_mul(vertices.saturating_add(REGION_DRAW_WORK))
+}
+
+/// The GPU times of a pass's pieces (the module docs, **Pieces**): a timestamp slot of the
+/// device's for each (`gpu_time::Slot`), its start written before the piece's first command and
+/// its end after its last; read, counted (`WorkCounts::rate_map_piece_gpu_nanos`) and given back
+/// as the command buffer lets go of what it retained, once its work completed or it failed.
+pub(super) struct PieceTimes {
+    device: Device,
+    slots: Vec<Slot>,
+}
+
+impl PieceTimes {
+    /// Slots for the `pieces` pieces of a pass recorded on `device`, reset on the host where the
+    /// device resets them there; `None` where it has fewer than two, the device writes no
+    /// timestamps or answers GPU times from the host, or a slot cannot be had.
+    pub(super) fn take(device: &Device, pieces: usize) -> Option<PieceTimes> {
+        let shared = device.shared();
+        if pieces < 2 || shared.timing.answers_from_host() {
+            return None;
+        }
+        let raw = shared.vk();
+        let slots = (0..pieces)
+            // SAFETY: the timing is the live device's.
+            .map(|_| unsafe { shared.timing.slot(raw, &shared.counts) })
+            .collect::<Option<Vec<Slot>>>()?;
+        Some(PieceTimes {
+            device: device.clone(),
+            slots,
+        })
+    }
+
+    /// Record piece `piece`'s start into `cb`: its queries reset first where the device does not
+    /// reset them on the host.
+    ///
+    /// # Safety
+    ///
+    /// `cb` is a command buffer of the device's recording outside a render pass, and these times
+    /// are held until it completes.
+    pub(super) unsafe fn begin(&self, raw: &Vk, cb: vk::CommandBuffer, piece: usize) {
+        let Some(slot) = self.slots.get(piece) else {
+            return;
+        };
+        // SAFETY: the caller's; the slot's two queries are its own, which no other work uses.
+        unsafe {
+            if !self.device.shared().timing.resets_on_host() {
+                raw.cmd_reset_query_pool(cb, slot.queries(), slot.first(), 2);
+                exit_guard::called(Call::CmdResetQueryPool);
+            }
+            let top = vk::PipelineStageFlags::TOP_OF_PIPE;
+            raw.cmd_write_timestamp(cb, top, slot.queries(), slot.first());
+        }
+        exit_guard::called(Call::CmdWriteTimestamp);
+    }
+
+    /// Record piece `piece`'s end into `cb`.
+    ///
+    /// # Safety
+    ///
+    /// As [`begin`](Self::begin)'s, after the piece's last command.
+    pub(super) unsafe fn end(&self, raw: &Vk, cb: vk::CommandBuffer, piece: usize) {
+        let Some(slot) = self.slots.get(piece) else {
+            return;
+        };
+        let bottom = vk::PipelineStageFlags::BOTTOM_OF_PIPE;
+        // SAFETY: the caller's.
+        unsafe { raw.cmd_write_timestamp(cb, bottom, slot.queries(), slot.first() + 1) };
+        exit_guard::called(Call::CmdWriteTimestamp);
+    }
+}
+
+impl Drop for PieceTimes {
+    fn drop(&mut self) {
+        let Some(_busy) = exit_guard::enter() else {
+            return;
+        };
+        let shared = self.device.shared();
+        let Some(clock) = shared.timing.clock() else {
+            return;
+        };
+        let raw = shared.vk();
+        for slot in &self.slots {
+            // Each query's value, then its availability: a piece that never ran reads none.
+            let mut result = [[0u64; 2]; 2];
+            // SAFETY: the slot's queries, reset before the pass was recorded, written by work that
+            // completed or never ran; the result is 64-bit with availability, two words a query.
+            let read = unsafe {
+                raw.get_query_pool_results(
+                    slot.queries(),
+                    slot.first(),
+                    &mut result,
+                    vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WITH_AVAILABILITY,
+                )
+            };
+            exit_guard::called(Call::GetQueryPoolResults);
+            let [[start, started], [end, ended]] = result;
+            if matches!(read, Ok(()) | Err(vk::Result::NOT_READY)) && started != 0 && ended != 0 {
+                shared
+                    .counts
+                    .rate_map_piece_time(clock.duration(start, end));
+            }
+        }
+    }
+}
+
+/// A device test's piece work in place of [`PIECE_WORK`] (0: none), so a small pass is recorded
+/// in pieces.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+static TEST_PIECE_WORK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Set the piece work a device test's passes are recorded in pieces by (`None`: [`PIECE_WORK`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn set_piece_work(work: Option<u64>) {
+    TEST_PIECE_WORK.store(work.unwrap_or(0), Ordering::Relaxed);
 }
 
 /// The runtime's refusal of the compile layer's `error` (the module docs).

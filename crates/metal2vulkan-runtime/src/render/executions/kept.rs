@@ -768,6 +768,7 @@ impl RenderExecution {
                 steps: None,
                 framed: Vec::new(),
                 before: Vec::new(),
+                piece: false,
             };
             return Ok(Recorded {
                 core,

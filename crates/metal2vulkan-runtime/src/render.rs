@@ -1374,6 +1374,9 @@ struct Instance {
     /// holds, as its descriptor names `GENERAL` (`render/attached_levels.rs`). A draw that reads
     /// one of them through a snapshot records into another instance (`render/snapshot.rs`).
     general_colors: u32,
+    /// It is a run of an execution's commands in a rate-mapped pass that begins a piece of the
+    /// pass's submission (`rate_mapped_pass.rs`, **Pieces**).
+    piece: bool,
 }
 
 /// A pass color a draw renders in another format than the attachment's, where the state's color
@@ -1734,6 +1737,13 @@ pub(crate) struct RenderLowering {
     /// records into the execution's next run, after a barrier from everything before
     /// (`render/executions.rs`).
     run_barrier: bool,
+    /// The encoder records an execution's commands in a rate-mapped pass, and the pieces before
+    /// hold their work: the next draw records into the execution's next run, which begins a
+    /// piece of the pass's submission (`rate_mapped_pass.rs`, **Pieces**).
+    piece_split: bool,
+    /// The work of the draws the encoder recorded of an execution's commands in a rate-mapped
+    /// pass since the execution's recording last read it (`rate_mapped_pass::region_work`).
+    piece_work: u64,
     /// The encoder records an execution's commands and the command it draws holds a barrier,
     /// which orders its draw after every draw before it (`render/executions.rs`).
     command_barrier: bool,
@@ -2425,6 +2435,7 @@ impl RenderLowering {
                     planned: false,
                     feedback: Feedback::NONE,
                     general_colors: 0,
+                    piece: false,
                 },
                 state: Versioned::new(EncoderState::metal_defaults(area)),
                 scissors: ScissorRects::metal_default(area),
@@ -2474,6 +2485,8 @@ impl RenderLowering {
                 replayed: None,
                 drawn_before: Vec::new(),
                 run_barrier: false,
+                piece_split: false,
+                piece_work: 0,
                 command_barrier: false,
                 unordered: UnorderedWrites::new(),
                 zero_indices: None,
@@ -7178,6 +7191,7 @@ impl RenderLowering {
             planned: false,
             feedback: Feedback::NONE,
             general_colors: 0,
+            piece: false,
         };
         let instance = Box::new(instance);
         Ok((Next::New { instance, split }, stood))
@@ -7292,6 +7306,7 @@ impl RenderLowering {
             planned: false,
             feedback: Feedback::NONE,
             general_colors: 0,
+            piece: false,
         };
         Ok(Next::New {
             instance: Box::new(instance),
@@ -9200,16 +9215,20 @@ impl RenderLowering {
         if self.rerouting && !matches!(next, Next::Current) {
             return Err(Error::NotImplemented(RuntimeGap::Render));
         }
-        // So does one whose command's barrier stands (`run_barrier`), and one that reaches
+        // So does one whose command's barrier stands (`run_barrier`), one that reaches
         // interlocked storage an earlier command of the run wrote where the driver's draws race
-        // on it (`storage_split`).
-        let next = match (
-            self.replaying && (ordered || storage_split || self.run_barrier),
+        // on it (`storage_split`), and one after the work a piece of a rate-mapped pass holds
+        // (`piece_split`), whose run begins the next piece.
+        let mut next = match (
+            self.replaying && (ordered || storage_split || self.run_barrier || self.piece_split),
             next,
         ) {
             (true, Next::Current) => self.next_run()?,
             (_, next) => next,
         };
+        if let (true, Next::New { instance, .. }) = (self.piece_split, &mut next) {
+            instance.piece = true;
+        }
         let split = matches!(next, Next::New { split: true, .. });
         let tile_memory_split = ordered && split;
         let interlocked_split = storage_split && !ordered && split;
@@ -10654,6 +10673,7 @@ impl RenderLowering {
         self.interlocked_splits += usize::from(interlocked_split);
         self.barrier_splits += usize::from(run_barrier_split);
         self.run_barrier = false;
+        self.piece_split = false;
         if let Some(clears) = copy_clears.as_deref().filter(|clears| !clears.is_empty()) {
             self.gathering().clear_in(clears);
             device.shared().counts.attachment_read_cleared();
@@ -10860,6 +10880,10 @@ impl RenderLowering {
             // The Vulkan draws it records, now or once its pipeline is made: its command
             // buffer's count of what its recordings hold (`CommandBuffer::recorded`).
             let mut draws_recorded = 0u64;
+            // The work of what it records of an execution's commands in a rate-mapped pass
+            // (`rate_mapped_pass.rs`, **Pieces**).
+            let mut piece_work = 0u64;
+            let counts_work = self.replaying && self.rate_map.is_some();
             // A draw read through snapshots records its recordings twice: every snapshot draw,
             // then every drawing draw (`render/snapshot.rs`); one read in place, once.
             let phases: &[Option<snapshot::Phase>] = match &pair_base {
@@ -10923,6 +10947,10 @@ impl RenderLowering {
                     for state in draw_states.of(a) {
                         for &(index, indirect, draw) in vk_draws {
                             draws_recorded += 1;
+                            if counts_work {
+                                let work = rate_mapped_pass::draw_work(&state.scissors, &draw);
+                                piece_work = piece_work.saturating_add(work);
+                            }
                             if indirect.is_some()
                                 && phase != Some(snapshot::Phase::Snapshot)
                                 && matches!(
@@ -11024,6 +11052,7 @@ impl RenderLowering {
                 }
             }
             draw_alone = states_recorded.draw_alone();
+            self.piece_work = self.piece_work.saturating_add(piece_work);
             states_recorded.count(self.core.counts());
             (self.core.command_buffer()).recorded(draws_recorded + states_recorded.states);
             if let Some((making, state, draws, query)) = split {

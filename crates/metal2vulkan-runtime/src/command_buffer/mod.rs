@@ -895,6 +895,10 @@ pub(super) struct State {
     /// otherwise. The step holds the turn (`reencoding`), so no other recording into the command
     /// buffer's pool meets it.
     pub(super) step_takes: Takes,
+    /// The placed segments' `VkCommandBuffer`s that end a piece of their batch's submission
+    /// (`RecordedSegment::piece_ends`, `rate_mapped_pass.rs`'s **Pieces**), until the batch's
+    /// submission submits each apart from what follows it (`submit.rs`).
+    pub(super) piece_ends: Vec<vk::CommandBuffer>,
     /// The pools of its commands' set 0 (`descriptor_arena.rs`), given back or released with
     /// the uploads.
     pub(super) descriptors: DescriptorArena,
@@ -2100,6 +2104,7 @@ impl State {
             faults,
             placed,
             ended,
+            piece_ends,
             ..
         } = self;
         let encoders = &mut recorded[range];
@@ -2142,6 +2147,7 @@ impl State {
                 // The pages its commands took, held until the command buffer completes.
                 done.taken.retain_into(retained);
                 let raws = done.raws.len();
+                piece_ends.extend(done.piece_ends);
                 encoder.raws.splice(at + before..at + before, done.raws);
                 before += raws;
                 encoder.summary.join(done.summary);
@@ -2379,6 +2385,7 @@ impl CommandBuffer {
                 replaying_keeps: Vec::new(),
                 replaying_takes: Takes::default(),
                 step_takes: Takes::default(),
+                piece_ends: Vec::new(),
                 descriptors: DescriptorArena::default(),
                 status_words: None,
                 mesh_grid_past: false,

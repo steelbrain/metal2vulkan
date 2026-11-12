@@ -317,6 +317,9 @@ pub(super) struct RecordedSegment {
     /// The copies taken at use its recording took (`shadow::Takes`), given back where its part
     /// runs nothing (`State::fail_part`).
     pub(super) takes: Takes,
+    /// Those of `raws` that end a piece of its submission (`rate_mapped_pass.rs`, **Pieces**):
+    /// its batch's submission submits each apart from what follows it.
+    pub(super) piece_ends: Vec<vk::CommandBuffer>,
 }
 
 impl RecordedSegment {
@@ -333,6 +336,7 @@ impl RecordedSegment {
             resident_misses: 0,
             faults: ReplayFaults::default(),
             takes: Takes::default(),
+            piece_ends: Vec::new(),
         }
     }
 
@@ -347,6 +351,7 @@ impl RecordedSegment {
         self.resident_misses = self.resident_misses.wrapping_add(other.resident_misses);
         self.faults = ReplayFaults(self.faults.0 | other.faults.0);
         self.takes.join(other.takes);
+        self.piece_ends.extend(other.piece_ends);
     }
 }
 
@@ -372,6 +377,8 @@ pub(super) struct EncoderCore {
     barriered: Option<vk::CommandBuffer>,
     /// The encoder's `VkCommandBuffer`s ended before a segment, in order.
     ended: Vec<vk::CommandBuffer>,
+    /// Those of `ended` that end a piece of a segment's submission ([`cut_piece`](Self::cut_piece)).
+    piece_ends: Vec<vk::CommandBuffer>,
     /// The segments it left for commit, `executions_at` counting its own executions.
     segments: Vec<Segment>,
     /// Its first parts, which a command-predication record left out of the command buffer's
@@ -670,6 +677,7 @@ impl EncoderCore {
             pass: None,
             barriered,
             ended: Vec::new(),
+            piece_ends: Vec::new(),
             segments: Vec::new(),
             left_out: 0,
             uses: EncoderUses::new(ordered),
@@ -827,6 +835,7 @@ impl EncoderCore {
             pass: None,
             barriered: None,
             ended: Vec::new(),
+            piece_ends: Vec::new(),
             segments: Vec::new(),
             left_out: 0,
             uses: EncoderUses::new(ordered),
@@ -1314,6 +1323,20 @@ impl EncoderCore {
         unsafe { self.open.command_buffer.end_raw(self.raw) }.map_err(vulkan)?;
         self.ended.push(self.raw);
         self.ended.push(before);
+        self.raw = self.continuation()?.0;
+        self.barrier(Barrier::everything());
+        Ok(())
+    }
+
+    /// In a [`segment`](Self::segment): end the `VkCommandBuffer` it records into as a piece of
+    /// its submission (`rate_mapped_pass.rs`, **Pieces**), which its batch's submission submits
+    /// apart from what follows, and go on in a new one, begun with a barrier from everything
+    /// before. Refused where the current one does not end or the new one cannot be begun.
+    pub(super) fn cut_piece(&mut self) -> Result<(), Error> {
+        // SAFETY: as in `barrier`.
+        unsafe { self.open.command_buffer.end_raw(self.raw) }.map_err(vulkan)?;
+        self.ended.push(self.raw);
+        self.piece_ends.push(self.raw);
         self.raw = self.continuation()?.0;
         self.barrier(Barrier::everything());
         Ok(())
@@ -3161,6 +3184,7 @@ impl EncoderCore {
             resident_misses: 0,
             faults: ReplayFaults::default(),
             takes: Takes::default(),
+            piece_ends: Vec::new(),
         }
     }
 
@@ -3198,6 +3222,7 @@ impl EncoderCore {
             resident_misses: 0,
             faults: ReplayFaults::default(),
             takes: Takes::default(),
+            piece_ends: Vec::new(),
         })
     }
 
@@ -3224,6 +3249,7 @@ impl EncoderCore {
             keys,
             taken,
             shadows,
+            piece_ends,
             ..
         } = self;
         ended.push(raw);
@@ -3237,6 +3263,7 @@ impl EncoderCore {
             resident_misses: 0,
             faults: ReplayFaults::default(),
             takes: shadows.into_takes(),
+            piece_ends,
         })
     }
 
@@ -3479,6 +3506,7 @@ impl Captured {
             resident_misses: 0,
             faults: ReplayFaults::default(),
             takes: Takes::default(),
+            piece_ends: Vec::new(),
         })
     }
 }

@@ -471,6 +471,7 @@ fn nothing() -> RecordedSegment {
         resident_misses: 0,
         faults: ReplayFaults::default(),
         takes: Default::default(),
+        piece_ends: Vec::new(),
     }
 }
 

@@ -452,9 +452,16 @@ impl CommandBufferShared {
         // nothing changed, for the group to go first. Its event signals ride to the group's end;
         // a wait for an event a batch held signals, which only that end meets, goes after it.
         let met = (event_waits.iter()).any(|&wait| scheduler.group.meets(wait));
+        // A batch whose work a segment cut into pieces goes in a submission of its own, whose
+        // pieces are `VkSubmitInfo`s of their own (below).
+        let pieced = (state.recorded[state.batch_range(index)].iter())
+            .flat_map(|recorded| &recorded.segments)
+            .filter_map(|segment| segment.recorded.as_ref())
+            .any(|done| !done.piece_ends.is_empty());
         let joins = {
             let sync = &state.batches.all()[index];
             !alone
+                && !pieced
                 && self.groups()
                 && !(last && super::fences::ends_at_fence(device, queue))
                 && !met
@@ -1172,15 +1179,63 @@ impl CommandBufferShared {
                 false => work.insert(0, lead),
             }
         }
-        let mut work_timeline = vk::TimelineSemaphoreSubmitInfo::default()
-            .wait_semaphore_values(wait_values)
-            .signal_semaphore_values(work_signal_values);
-        let first = vk::SubmitInfo::default()
-            .wait_semaphores(wait_semaphores)
-            .wait_dst_stage_mask(wait_stages)
-            .command_buffers(&work)
-            .signal_semaphores(work_signals)
-            .push_next(&mut work_timeline);
+        // The pieces the batch's segments cut its work into (`RecordedSegment::piece_ends`,
+        // `rate_mapped_pass.rs`'s **Pieces**): each but the last a `VkSubmitInfo` of its own that
+        // signals its `VkQueue`'s timeline of pieces (`QueueSlot::pieces`), so no driver merges it
+        // into the next, as Mesa's common queue merges a submission that signals nothing into the
+        // next one's kernel submission (`group.rs`). The first takes the work's waits, the last
+        // its signals. Each piece runs after the one before it in submission order, and begins
+        // with a barrier from everything before (`EncoderCore::cut_piece`).
+        let cuts: Vec<usize> = (1..work.len())
+            .filter(|&at| state.piece_ends.contains(&work[at - 1]))
+            .collect();
+        state.piece_ends.retain(|raw| !work.contains(raw));
+        let pieces = cuts.len();
+        if pieces > 0 {
+            shared.counts.rate_map_pieces(pieces as u64);
+        }
+        let piece_from = match pieces {
+            0 => 0,
+            count => shared.queues[queue].piece_values(count as u64),
+        };
+        let piece_values: Vec<u64> = (0..pieces as u64).map(|k| piece_from + k).collect();
+        let piece_semaphore = [shared.queues[queue].pieces];
+        let starts: Vec<usize> = [0].into_iter().chain(cuts.iter().copied()).collect();
+        let ends: Vec<usize> = cuts.iter().copied().chain([work.len()]).collect();
+        let mut work_timelines: Vec<vk::TimelineSemaphoreSubmitInfo> = (0..=pieces)
+            .map(|k| {
+                let waits: &[u64] = match k {
+                    0 => &wait_values[..],
+                    _ => &[],
+                };
+                let signals: &[u64] = match piece_values.get(k) {
+                    Some(value) => std::slice::from_ref(value),
+                    None => work_signal_values,
+                };
+                vk::TimelineSemaphoreSubmitInfo::default()
+                    .wait_semaphore_values(waits)
+                    .signal_semaphore_values(signals)
+            })
+            .collect();
+        let mut infos: Vec<vk::SubmitInfo> = Vec::with_capacity(pieces + 2);
+        for (k, timeline) in work_timelines.iter_mut().enumerate() {
+            let (waits, stages): (&[vk::Semaphore], &[vk::PipelineStageFlags]) = match k {
+                0 => (&wait_semaphores[..], &wait_stages[..]),
+                _ => (&[], &[]),
+            };
+            let signals: &[vk::Semaphore] = match k < pieces {
+                true => &piece_semaphore,
+                false => work_signals,
+            };
+            infos.push(
+                vk::SubmitInfo::default()
+                    .wait_semaphores(waits)
+                    .wait_dst_stage_mask(stages)
+                    .command_buffers(&work[starts[k]..ends[k]])
+                    .signal_semaphores(signals)
+                    .push_next(timeline),
+            );
+        }
         // The fence the last batch signals where the driver reads a command buffer's objects
         // after its value, and every batch where the queue's failures are relayed
         // (`device/relay.rs`): taken before the submission, given back if it fails. Elsewhere
@@ -1205,13 +1260,12 @@ impl CommandBufferShared {
             .command_buffers(&finale)
             .signal_semaphores(&signal_semaphores)
             .push_next(&mut end_timeline);
-        let infos = [first, second];
-        let infos = match (single, folded) {
-            (true, _) => &infos[1..],
-            (false, true) => &infos[..1],
-            (false, false) => &infos[..],
-        };
-        let submits = infos;
+        match (single, folded) {
+            (true, _) => infos = vec![second],
+            (false, true) => {}
+            (false, false) => infos.push(second),
+        }
+        let submits = &infos[..];
         let buffers = (submits.iter())
             .map(|info| info.command_buffer_count as usize)
             .sum();

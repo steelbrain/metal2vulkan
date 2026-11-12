@@ -1141,6 +1141,7 @@ impl Drop for DeviceShared {
             release::object(self.vk(), self.nudge);
             for queue in self.queues.iter() {
                 release::object(self.vk(), queue.timeline);
+                release::object(self.vk(), queue.pieces);
                 // The marks after the last uses of the queue outside a batch (`relay.rs`).
                 for fence in queue.flights.get().map(|f| f.drain()).unwrap_or_default() {
                     release::object(self.vk(), fence);
@@ -1267,6 +1268,14 @@ pub(crate) struct QueueSlot {
     /// The timeline semaphore every batch submitted here signals, with rising values: Vulkan's
     /// signal operation order makes them complete in that order.
     pub(super) timeline: vk::Semaphore,
+    /// The timeline semaphore each piece of a batch's work but its last signals, with rising
+    /// values, which nothing waits for: a submission that signals no semaphore is one a driver
+    /// may merge into the next (`command_buffer/submit.rs`, `rate_mapped_pass.rs`'s
+    /// **Pieces**).
+    pub(crate) pieces: vk::Semaphore,
+    /// The last value a piece signalled `pieces` to. Taken under the scheduler's lock, which
+    /// every batch's submission holds, so the values rise in submission order.
+    piece_value: AtomicU64,
     /// The value through which every batch submitted here completed, as the host saw.
     completed: AtomicU64,
     /// The value of the last batch submitted here: what the exit hook waits for on a device
@@ -1341,6 +1350,12 @@ impl QueueSlot {
             self.share.completed();
             self.waits.completed(value, counts);
         }
+    }
+
+    /// The values `count` pieces of a batch's work signal [`pieces`](Self::pieces) to, the
+    /// first of them, each above every earlier one: under the scheduler's lock.
+    pub(crate) fn piece_values(&self, count: u64) -> u64 {
+        self.piece_value.fetch_add(count, Ordering::Relaxed) + 1
     }
 
     /// The value through which every batch completed, as the host saw.
@@ -2046,9 +2061,10 @@ impl Device {
                 }
             }
         };
-        // Each `VkQueue`'s timeline, then the scheduler's nudge (`scheduler/mod.rs`).
-        let mut timelines = Vec::with_capacity(queue_places.len() + 1);
-        for _ in 0..=queue_places.len() {
+        // Each `VkQueue`'s timeline, then the scheduler's nudge (`scheduler/mod.rs`), then each
+        // `VkQueue`'s timeline of pieces.
+        let mut timelines = Vec::with_capacity(2 * queue_places.len() + 1);
+        for _ in 0..=2 * queue_places.len() {
             let mut kind = vk::SemaphoreTypeCreateInfo::default()
                 .semaphore_type(vk::SemaphoreType::TIMELINE)
                 .initial_value(0);
@@ -2104,10 +2120,11 @@ impl Device {
         // CPU time tells its stall (`submit_stalls.rs`).
         let stalls = (description.driver_facts())
             .contains(&metal2vulkan::device::DriverFact::SignallingSubmitsStallEvery1024);
+        let piece_timelines = &timelines[queue_places.len() + 1..];
         let queues: Vec<QueueSlot> = queue_places
             .iter()
-            .zip(&timelines)
-            .map(|(&(family, index), &timeline)| {
+            .zip(timelines.iter().zip(piece_timelines))
+            .map(|(&(family, index), (&timeline, &pieces))| {
                 // SAFETY: the queue exists (the caller's contract), and the loader serves the
                 // call after the word is put back.
                 let queue = unsafe { loader_word.restored(|| raw.get_device_queue(family, index)) };
@@ -2120,6 +2137,8 @@ impl Device {
                     word: unsafe { LoaderWord::of_handle(queue.as_raw()) },
                     flights: OnceLock::new(),
                     timeline,
+                    pieces,
+                    piece_value: AtomicU64::new(0),
                     completed: AtomicU64::new(0),
                     submitted: AtomicU64::new(0),
                     submitted_before: AtomicU64::new(0),

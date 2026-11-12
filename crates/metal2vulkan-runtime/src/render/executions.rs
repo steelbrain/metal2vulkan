@@ -316,7 +316,7 @@ use crate::pipeline::Settled;
 use crate::pipeline::{
     BufferForms, DrawPipeline, FixedState, GraphicsKey, Pending, RawPipeline, RenderVariant,
 };
-use crate::rate_mapped_pass::RateMappedPass;
+use crate::rate_mapped_pass::{self, RateMappedPass};
 use crate::render_pass::{ColorTarget, PassLayout, Target};
 use crate::render_state::{EncoderState, ScissorRects};
 use crate::render_target::{self, Feedback, PassShape, Position, RenderPassObject};
@@ -1030,7 +1030,9 @@ type Command = (CommandRecord, Option<RenderPipelineState>);
 /// What an execution's recording found: resident-set misses and faults, and the runs its draws
 /// that reach the tile threadgroup memory began, those its draws that reach interlocked storage
 /// an earlier draw of the run wrote began where the driver's such draws race under load, and
-/// those its commands' barriers began.
+/// those its commands' barriers began; and, in a rate-mapped pass, the work of the commands
+/// recorded since the last piece began (`rate_mapped_pass.rs`, **Pieces**), carried from one
+/// execution of the pass to the next.
 #[derive(Default)]
 struct Found {
     misses: u32,
@@ -1038,6 +1040,11 @@ struct Found {
     tile_memory_splits: usize,
     interlocked_splits: usize,
     barrier_splits: usize,
+    /// The work recorded since the last piece began.
+    piece_work: u64,
+    /// That work reached the piece's (`rate_mapped_pass::piece_work`): the next command that
+    /// draws begins the next piece.
+    piece_due: bool,
 }
 
 /// An execution's recording: the encoder core back, with what the draws noted, retained and
@@ -1408,6 +1415,9 @@ struct Run {
     /// earlier draw's stages before its fragments touched (`RenderCommandEncoder::draw_resident`).
     /// A command's barrier begins every run that has them.
     before: Vec<Before>,
+    /// It begins a piece of a rate-mapped pass's submission (`rate_mapped_pass.rs`,
+    /// **Pieces**): the pass's recording goes on in a new `VkCommandBuffer` before it.
+    piece: bool,
 }
 
 impl Run {
@@ -2298,6 +2308,16 @@ impl RenderExecution {
                     table(BufferStage::Object, descriptor.max_object_buffer_bind_count);
                 encoder.mesh = table(BufferStage::Mesh, descriptor.max_mesh_buffer_bind_count);
             }
+            // A command after the work its piece holds begins the next piece of a rate-mapped
+            // pass (`rate_mapped_pass.rs`, **Pieces**): its draw records into the execution's
+            // next run, which begins it; but where the run so far is one the execution began with
+            // nothing in it, that run begins it.
+            if found.piece_due {
+                match encoder.current.recorded || encoder.earlier.is_empty() {
+                    true => encoder.piece_split = true,
+                    false => encoder.current.piece = true,
+                }
+            }
             match draw {
                 Draw::Primitives(assembly, draw) => {
                     encoder.draw(live, CALL, assembly, draw, DrawBuffers::default(), false)?
@@ -2340,6 +2360,14 @@ impl RenderExecution {
                     };
                     encoder.draw_patch_range(live, CALL, draw, patch_indices, points)?;
                 }
+            }
+            // A draw that recorded nothing leaves the next piece to the next command that draws.
+            found.piece_due = encoder.piece_split;
+            found.piece_work = found.piece_work.saturating_add(encoder.piece_work);
+            encoder.piece_work = 0;
+            if found.piece_work >= rate_mapped_pass::piece_work() {
+                found.piece_due = true;
+                found.piece_work = 0;
             }
         }
         Ok(())
@@ -2430,6 +2458,7 @@ impl RenderExecution {
                 steps,
                 framed,
                 before: run.before,
+                piece: run.piece,
             });
         }
         for raw in runs.iter().flat_map(|run| &run.draws) {
@@ -2501,6 +2530,7 @@ impl RenderExecution {
                 planned: false,
                 feedback: Feedback::NONE,
                 general_colors: 0,
+                piece: false,
             },
             layout: Versioned::new(layout),
             passes: vec![(snapshot.shape.clone(), Arc::clone(&snapshot.compatible))],
@@ -2560,6 +2590,8 @@ impl RenderExecution {
             replayed: None,
             drawn_before: snapshot.drawn.clone(),
             run_barrier: false,
+            piece_split: false,
+            piece_work: 0,
             command_barrier: false,
             unordered: UnorderedWrites::new(),
             zero_indices: None,
@@ -3488,7 +3520,10 @@ impl DeferredPass {
                         "a run with steps around it first or last in its instance",
                     ));
                 }
-                objects.push((pass, framebuffer, run, (shadowed, steps, before)));
+                // A run that begins a piece of a rate-mapped pass's submission (`rate_mapped_pass.rs`,
+                // **Pieces**): the pass's first run begins its first.
+                let piece = of.is_some_and(|of| of.piece);
+                objects.push((pass, framebuffer, run, (shadowed, steps, before), piece));
             }
             instances.push(objects);
         }
@@ -3504,72 +3539,125 @@ impl DeferredPass {
         let steps = &self.steps;
         let first = self.first;
         let shadow_copies = shadow_copies.as_ref();
-        core.command(render_target::ATTACHMENT_STAGES, &uses, |raw, cb| {
-            // SAFETY: the segment's command buffer is recording outside a render pass; the
-            // passes, framebuffers and attachments are live until the command buffer completes
-            // (its encoder retained them), as are the steps' objects (held with the pass, which
-            // the encoder retained) and the shadowed textures the copies name (retained with the
-            // draws, the executions and the attachments that use them); each secondary was
-            // recorded against a pass compatible with its instance's and ended; every image rests
-            // in `GENERAL`, and each step is recorded between two instances, as the encoder's own
-            // pass records it; the shadow's copies, around a run that is neither its instance's
-            // first nor its last, name the shadow and the stencil, held so too; the steps before a
-            // run past an execution's first are held with the runs, each recorded between barriers
-            // outside a render pass.
-            unsafe {
-                // The tile dispatches after the instances the encoder recorded inline, which the
-                // command buffer it handed over, placed before these, leaves out
-                // (`render/pending_tile.rs`).
-                if let Some(last) = first.checked_sub(1) {
-                    steps.dispatches_after(raw, cb, last, &tiles);
-                }
-                let runs = instances.iter().enumerate().flat_map(|(at, runs)| {
-                    let last = runs.len() - 1;
-                    runs.iter()
-                        .enumerate()
-                        .map(move |(run, (pass, framebuffer, cbs, around))| {
-                            (at, run, run == last, (*framebuffer, *pass), cbs, *around)
-                        })
-                });
-                for (index, (at, run_index, last_run, (framebuffer, pass), run, around)) in
-                    runs.enumerate()
-                {
-                    let (shadowed, run_steps, before) = around;
-                    // Each instance after the first sees everything the one before wrote.
-                    if index > 0 {
-                        Barrier::everything().record(raw, cb);
-                    }
-                    // Its steps before its first run, and after its last (`render/pass_steps.rs`).
-                    if run_index == 0 {
-                        steps.before(raw, cb, at + first);
-                    }
-                    let copies = shadow_copies.filter(|_| shadowed);
-                    if let Some(copies) = copies {
-                        copies.record_in(raw, cb, false);
-                    }
-                    for step in before {
-                        step.record_in(raw, cb);
-                    }
-                    if let Some(run_steps) = run_steps {
-                        run_steps.before(raw, cb);
-                    }
-                    steps.begin(raw, cb, at + first, pass, framebuffer);
-                    raw.cmd_execute_commands(cb, run);
-                    raw.cmd_end_render_pass(cb);
-                    steps.ended(raw, cb, at + first);
-                    if let Some(run_steps) = run_steps {
-                        run_steps.after(raw, cb);
-                    }
-                    if let Some(copies) = copies {
-                        copies.record_out(raw, cb);
-                    }
-                    if last_run {
-                        steps.after(raw, cb, at + first, &tiles);
-                    }
-                }
-                steps.end(raw, cb);
+        // The runs in order, each with its instance's index, its place among the instance's runs,
+        // whether it is the instance's last, its pass and framebuffer, its secondaries, the steps
+        // around it, and whether it begins a piece of a rate-mapped pass's submission.
+        let runs: Vec<_> = (instances.iter().enumerate())
+            .flat_map(|(at, runs)| {
+                let last = runs.len() - 1;
+                runs.iter().enumerate().map(
+                    move |(run, (pass, framebuffer, cbs, around, piece))| {
+                        (
+                            at,
+                            run,
+                            run == last,
+                            (*framebuffer, *pass),
+                            cbs,
+                            *around,
+                            *piece,
+                        )
+                    },
+                )
+            })
+            .collect();
+        // The pieces (`rate_mapped_pass.rs`, **Pieces**): each from a run that begins one, the
+        // first run's aside, to the next; each ends a `VkCommandBuffer` its batch's submission
+        // submits apart from what follows (`EncoderCore::cut_piece`), timed where the device
+        // writes timestamps.
+        let starts: Vec<usize> = (runs.iter().enumerate())
+            .filter(|&(at, run)| at > 0 && run.6)
+            .map(|(at, _)| at)
+            .collect();
+        let pieces: Vec<(usize, usize)> = (std::iter::once(0).chain(starts.iter().copied()))
+            .zip(starts.iter().copied().chain([runs.len()]))
+            .collect();
+        let times = rate_mapped_pass::PieceTimes::take(command_buffer.device(), pieces.len());
+        for (piece, &(from, to)) in pieces.iter().enumerate() {
+            if piece > 0 {
+                core.cut_piece()?;
             }
-        });
+            // The pass's uses are noted once, with its first piece's commands: the later pieces
+            // begin with a barrier from everything before.
+            let noted = match piece {
+                0 => &uses[..],
+                _ => &[],
+            };
+            let last_piece = piece + 1 == pieces.len();
+            let times = times.as_ref();
+            let runs = &runs[from..to];
+            core.command(render_target::ATTACHMENT_STAGES, noted, |raw, cb| {
+                // SAFETY: the segment's command buffer is recording outside a render pass; the
+                // passes, framebuffers and attachments are live until the command buffer
+                // completes (its encoder retained them), as are the steps' objects (held with the
+                // pass, which the encoder retained) and the shadowed textures the copies name
+                // (retained with the draws, the executions and the attachments that use them);
+                // each secondary was recorded against a pass compatible with its instance's and
+                // ended; every image rests in `GENERAL`, and each step is recorded between two
+                // instances, as the encoder's own pass records it; the shadow's copies, around a
+                // run that is neither its instance's first nor its last, name the shadow and the
+                // stencil, held so too; the steps before a run past an execution's first are held
+                // with the runs, each recorded between barriers outside a render pass; the
+                // pieces' times are held with the segment until the command buffer completes.
+                unsafe {
+                    // The tile dispatches after the instances the encoder recorded inline, which
+                    // the command buffer it handed over, placed before these, leaves out
+                    // (`render/pending_tile.rs`).
+                    if let (0, Some(last)) = (piece, first.checked_sub(1)) {
+                        steps.dispatches_after(raw, cb, last, &tiles);
+                    }
+                    if let Some(times) = times {
+                        times.begin(raw, cb, piece);
+                    }
+                    let runs = runs.iter().enumerate();
+                    for (offset, &(at, run_index, last_run, (framebuffer, pass), run, around, _)) in
+                        runs
+                    {
+                        let (shadowed, run_steps, before) = around;
+                        // Each instance after the first sees everything the one before wrote.
+                        if from + offset > 0 {
+                            Barrier::everything().record(raw, cb);
+                        }
+                        // Its steps before its first run, and after its last
+                        // (`render/pass_steps.rs`).
+                        if run_index == 0 {
+                            steps.before(raw, cb, at + first);
+                        }
+                        let copies = shadow_copies.filter(|_| shadowed);
+                        if let Some(copies) = copies {
+                            copies.record_in(raw, cb, false);
+                        }
+                        for step in before {
+                            step.record_in(raw, cb);
+                        }
+                        if let Some(run_steps) = run_steps {
+                            run_steps.before(raw, cb);
+                        }
+                        steps.begin(raw, cb, at + first, pass, framebuffer);
+                        raw.cmd_execute_commands(cb, run);
+                        raw.cmd_end_render_pass(cb);
+                        steps.ended(raw, cb, at + first);
+                        if let Some(run_steps) = run_steps {
+                            run_steps.after(raw, cb);
+                        }
+                        if let Some(copies) = copies {
+                            copies.record_out(raw, cb);
+                        }
+                        if last_run {
+                            steps.after(raw, cb, at + first, &tiles);
+                        }
+                    }
+                    if last_piece {
+                        steps.end(raw, cb);
+                    }
+                    if let Some(times) = times {
+                        times.end(raw, cb, piece);
+                    }
+                }
+            });
+        }
+        if let Some(times) = times {
+            core.retain(times);
+        }
         if shapes.len() > self.instances.len() {
             let causes = SplitCauses {
                 shadow: shadow_runs > 0,

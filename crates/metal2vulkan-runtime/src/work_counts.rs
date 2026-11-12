@@ -219,6 +219,10 @@ pub(crate) struct Counters {
     render_encoders_ended: AtomicU64,
     render_passes_begun_by: [AtomicU64; PassBegun::COUNT],
     instance_splits_by: [AtomicU64; Split::COUNT],
+    rate_map_pieces: AtomicU64,
+    rate_map_pieces_timed: AtomicU64,
+    rate_map_piece_gpu_nanos: AtomicU64,
+    rate_map_piece_gpu_nanos_most: AtomicU64,
     encoder_primaries_begun_ahead: AtomicU64,
     primaries_begun_ahead: AtomicU64,
     barrier_buffers_kept: AtomicU64,
@@ -2691,6 +2695,20 @@ impl Counters {
     /// one that recorded.
     pub(crate) fn instance_split(&self, cause: Split) {
         self.instance_splits_by[cause as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A batch's work went to its `VkQueue` in `pieces` more pieces than one, each a
+    /// `VkSubmitInfo` of its own (`rate_mapped_pass.rs`, **Pieces**).
+    pub(crate) fn rate_map_pieces(&self, pieces: u64) {
+        (self.rate_map_pieces).fetch_add(pieces, Ordering::Relaxed);
+    }
+
+    /// A piece of a rate-mapped pass's submission ran for `nanos` of GPU time, read from its
+    /// timestamps once its work completed (`rate_mapped_pass.rs`, **Pieces**).
+    pub(crate) fn rate_map_piece_time(&self, nanos: u64) {
+        (self.rate_map_pieces_timed).fetch_add(1, Ordering::Relaxed);
+        (self.rate_map_piece_gpu_nanos).fetch_add(nanos, Ordering::Relaxed);
+        (self.rate_map_piece_gpu_nanos_most).fetch_max(nanos, Ordering::Relaxed);
     }
 
     /// A `VkCommandBuffer` was begun (`vkBeginCommandBuffer`) for `what`.
@@ -6776,6 +6794,22 @@ pub struct WorkCounts {
     /// At a draw the instance's shape does not take: fetched attachments, views, stand-ins or
     /// sample planes arriving, a shader-side stencil or depth test, its colors' places or formats.
     pub instance_splits_shape: u64,
+    /// Pieces past the first that batches' work went to their `VkQueue`s in, each a
+    /// `VkSubmitInfo` of its own that signals a semaphore, so a driver that merges only
+    /// submissions that signal nothing runs each as a kernel submission of its own: a
+    /// rate-mapped pass's executed commands cut where the work recorded since the last cut, its
+    /// region draws' vertices and the draws themselves, reached a bound (`rate_mapped_pass.rs`,
+    /// **Pieces**).
+    pub rate_map_pieces: u64,
+    /// The pieces of passes recorded in several whose GPU time was read from timestamps written
+    /// before and after each (none where the device writes no timestamps or answers GPU times
+    /// from the host): every piece of such a pass, its first included.
+    pub rate_map_pieces_timed: u64,
+    /// Their GPU time, in nanoseconds.
+    pub rate_map_piece_gpu_nanos: u64,
+    /// The longest of them, in nanoseconds: a bound on the time of each kernel submission they
+    /// ran in, where each ran in one of its own.
+    pub rate_map_piece_gpu_nanos_most: u64,
     /// Render passes whose first instance did not record inline, its draws in a secondary command
     /// buffer, by the first check that ruled it out (`render/inline_first.rs`), counted as the pass
     /// opens or at its first draw that records: here, the encoder encodes an ended encoder's calls
@@ -9784,6 +9818,11 @@ impl Device {
             instance_splits_execution: split(Split::Execution),
             instance_splits_visibility: split(Split::Visibility),
             instance_splits_shape: split(Split::Shape),
+            rate_map_pieces: counters.rate_map_pieces.load(Ordering::Relaxed),
+            rate_map_pieces_timed: counters.rate_map_pieces_timed.load(Ordering::Relaxed),
+            rate_map_piece_gpu_nanos: counters.rate_map_piece_gpu_nanos.load(Ordering::Relaxed),
+            rate_map_piece_gpu_nanos_most: (counters.rate_map_piece_gpu_nanos_most)
+                .load(Ordering::Relaxed),
             passes_not_inline_encoders: not_inline(NotInline::Encoders),
             passes_not_inline_layouts: not_inline(NotInline::Layouts),
             passes_not_inline_memoryless: not_inline(NotInline::Memoryless),
