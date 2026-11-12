@@ -21,6 +21,7 @@ use crate::ir::{
 mod aggregates;
 mod command_buffers;
 mod constant_fields;
+mod constant_sets;
 mod conversions;
 mod float_compares;
 mod float_folds;

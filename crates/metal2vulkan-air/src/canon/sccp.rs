@@ -32,6 +32,14 @@
 //!   a fragment's output (the Apple M3 Max, the AMD Radeon Pro 5300M and the Intel UHD Graphics
 //!   630, macOS 27.0.1), where a device given the operation answers otherwise (MoltenVK 1.4.2 `0`
 //!   for a quotient by a NaN, MoltenVK and RADV a NaN for an infinity or a NaN times a zero).
+//! - A value may be **one of a few constants** ([`Lat::Set`], at most [`SET`]): a PHI whose every
+//!   entry is a literal constant merges them as such a set (a `switch`'s cases each giving one),
+//!   and so does a `select` between two constants on a condition only the run knows. A pure
+//!   operation over such values folds each choice of their members and is the set of the
+//!   answers; where they all agree it is that constant, so a branch on it is decided (a GL
+//!   shader's bit test of the texture unit a `switch` picked, true for every unit it can pick). A
+//!   PHI with an entry an instruction gives meets flat as before: two values of a loop's counter
+//!   meet as overdefined, so the deeper lattice adds no turn to a loop.
 //!
 //! Afterwards unreachable blocks are deleted, branches on constants become unconditional, PHIs
 //! keep one entry per remaining edge, and instructions with a constant value are replaced by it.
@@ -81,15 +89,106 @@ pub(super) struct FcState {
     pub decl: bool,
 }
 
-/// The SCCP lattice, flat: `Top`, then each constant and the undefined value (`Fc`, one more
-/// value, of an unsupplied constant or of the IR), then `Bottom`. Two different values meet as
-/// `Bottom`.
+/// The SCCP lattice: `Top`, then each constant and the undefined value (`Fc`, one more value, of
+/// an unsupplied constant or of the IR), then each set of 2 to [`SET`] constants (`Set`, an
+/// index into the solver's [`Sets`]), then `Bottom`. The flat meet ([`meet`]) meets two
+/// different values as `Bottom`; the meet that keeps a few constants ([`union`]) meets
+/// constants and sets as their union while it holds at most [`SET`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Lat {
     Top,
     Const(ConstId),
+    Set(u32),
     Fc(Undefined),
     Bottom,
+}
+
+/// The most constants a [`Lat::Set`] holds. A value is one of a few constants where a PHI merges
+/// a `switch`'s cases or a `select` picks between two; eight covers such a handful, keeps an
+/// operation over two such values at 64 folds, and deepens the lattice by seven levels, each a
+/// visit more of the few instructions such a value reaches.
+const SET: usize = 8;
+
+/// The most folds of one operation over sets: each choice of two full sets' members.
+const CHOICES: usize = SET * SET;
+
+/// Up to [`SET`] constants, ascending; the slots past `len` hold `ConstId::new(0)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct Members {
+    len: u8,
+    ids: [ConstId; SET],
+}
+
+impl Members {
+    const NONE: Members = Members {
+        len: 0,
+        ids: [ConstId::new(0); SET],
+    };
+
+    fn as_slice(&self) -> &[ConstId] {
+        self.ids.get(..usize::from(self.len)).unwrap_or(&[])
+    }
+}
+
+/// The sets [`Lat::Set`] names, interned in the order they are made, each charged to the ledger
+/// when made.
+#[derive(Default)]
+struct Sets {
+    list: Vec<Members>,
+    index: HashMap<Members, u32>,
+}
+
+impl Sets {
+    /// The constants `lat` is one of: a constant's one, a set's members, none for another value.
+    fn of(&self, lat: Lat) -> Members {
+        match lat {
+            Lat::Const(c) => {
+                let mut one = Members::NONE;
+                if let Some(slot) = one.ids.first_mut() {
+                    *slot = c;
+                    one.len = 1;
+                }
+                one
+            }
+            Lat::Set(k) => self.list.get(k as usize).copied().unwrap_or(Members::NONE),
+            _ => Members::NONE,
+        }
+    }
+
+    /// The value that is one of `ids` (some, repeats allowed): a constant, the set of them, or
+    /// `Bottom` past [`SET`].
+    fn make(&mut self, ids: &mut [ConstId], m: &mut Meter, held: &mut usize) -> Result<Lat, Error> {
+        ids.sort_unstable();
+        let mut set = Members::NONE;
+        let mut last = None;
+        for &c in ids.iter() {
+            if last == Some(c) {
+                continue;
+            }
+            last = Some(c);
+            let Some(slot) = set.ids.get_mut(usize::from(set.len)) else {
+                return Ok(Lat::Bottom);
+            };
+            *slot = c;
+            set.len += 1;
+        }
+        match (set.len, last) {
+            (_, None) => Err(invariant("a set of no constants")),
+            (1, Some(c)) => Ok(Lat::Const(c)),
+            _ => {
+                if let Some(&k) = self.index.get(&set) {
+                    return Ok(Lat::Set(k));
+                }
+                let bytes = std::mem::size_of::<(Members, Members, u32)>() * 2;
+                m.charge(bytes)?;
+                *held = held.saturating_add(bytes);
+                let k = u32::try_from(self.list.len()).map_err(|_| invariant("sets past u32"))?;
+                self.list.push(set);
+                self.index.insert(set, k);
+                Ok(Lat::Set(k))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -106,8 +205,27 @@ fn meet(a: Lat, b: Lat) -> Lat {
         (Lat::Top, x) | (x, Lat::Top) => x,
         (Lat::Fc(i), Lat::Fc(j)) => Lat::Fc(i.min(j)),
         (Lat::Const(x), Lat::Const(y)) if x == y => Lat::Const(x),
+        (Lat::Set(x), Lat::Set(y)) if x == y => Lat::Set(x),
         _ => Lat::Bottom,
     }
+}
+
+/// The meet that keeps a few constants: two different constants or sets meet as the set of their
+/// members while it holds at most [`SET`], everything else as [`meet`] meets it.
+fn union(a: Lat, b: Lat, sets: &mut Sets, m: &mut Meter, held: &mut usize) -> Result<Lat, Error> {
+    let few = |l: Lat| matches!(l, Lat::Const(_) | Lat::Set(_));
+    if a == b || !few(a) || !few(b) {
+        return Ok(meet(a, b));
+    }
+    #[cfg(test)]
+    MEETS.with(|n| n.set(n.get().saturating_add(1)));
+    let (x, y) = (sets.of(a), sets.of(b));
+    let mut buf = [ConstId::new(0); 2 * SET];
+    for (slot, &c) in buf.iter_mut().zip(x.as_slice().iter().chain(y.as_slice())) {
+        *slot = c;
+    }
+    let n = x.as_slice().len() + y.as_slice().len();
+    sets.make(buf.get_mut(..n).unwrap_or(&mut []), m, held)
 }
 
 /// Record that the body reads the value `k` leaves undefined: an unsupplied constant's index. A
@@ -409,6 +527,9 @@ struct Phis {
     first: Vec<u32>,
     /// Per PHI slot: the meet of its entries' values over the executable edges.
     acc: Vec<Lat>,
+    /// Per PHI slot: whether every entry is a literal constant, whose values it merges as a set
+    /// ([`union`]); every other PHI meets flat ([`meet`]).
+    constant: Vec<bool>,
     /// The index of each edge `(pred, block)` some PHI entry names, in first-named order.
     edge_of: HashMap<(BlockId, BlockId), u32>,
     /// Per edge index: whether the edge is executable.
@@ -460,6 +581,7 @@ impl Phis {
             return Ok(Phis {
                 first,
                 acc: filled(m, held, phis, Lat::Top)?,
+                constant: filled(m, held, phis, false)?,
                 edge_of,
                 open: Vec::new(),
                 edge_start: Vec::new(),
@@ -514,8 +636,12 @@ impl Phis {
         }
         let mut by_edge = filled(m, held, total, (0u32, Value::Arg(ArgIdx::new(0))))?;
         let mut by_def = filled(m, held, defs, (0u32, 0u32))?;
+        let mut constant = filled(m, held, phis, false)?;
         for ((b, incoming), slot) in each().zip(0u32..) {
             m.tick(units(incoming.len() + 1))?;
+            if let Some(c) = constant.get_mut(slot as usize) {
+                *c = incoming.iter().all(|&(v, _)| matches!(v, Value::Const(_)));
+            }
             for &(v, pred) in incoming {
                 let e = edge_of
                     .get(&(pred, b))
@@ -546,6 +672,7 @@ impl Phis {
         Ok(Phis {
             first,
             acc: filled(m, held, phis, Lat::Top)?,
+            constant,
             edge_of,
             open: filled(m, held, edges, false)?,
             edge_start,
@@ -567,11 +694,11 @@ impl Phis {
     /// Edge `(from, to)` became executable: meet each entry naming it into its PHI.
     fn open(
         &mut self,
-        from: BlockId,
-        to: BlockId,
-        val: &[Lat],
-        taint: &[Option<Undefined>],
+        (from, to): (BlockId, BlockId),
+        (val, taint): (&[Lat], &[Option<Undefined>]),
+        sets: &mut Sets,
         m: &mut Meter,
+        held: &mut usize,
     ) -> Result<(), Error> {
         let Some(&e) = self.edge_of.get(&(from, to)) else {
             return Ok(());
@@ -585,8 +712,13 @@ impl Phis {
             .unwrap_or(&[]);
         m.tick(units(entries.len()))?;
         for &(s, v) in entries {
+            let few = self.constant.get(s as usize).copied().unwrap_or(false);
             if let Some(a) = self.acc.get_mut(s as usize) {
-                *a = meet(*a, merged(lat_of(val, taint, v)));
+                let entry = merged(lat_of(val, taint, v));
+                *a = match few {
+                    true => union(*a, entry, sets, m, held)?,
+                    false => meet(*a, entry),
+                };
             }
         }
         Ok(())
@@ -623,6 +755,8 @@ struct Solver<'b> {
     /// Per constant present when SCCP started: the unsupplied function constant it depends on.
     taint: Vec<Option<Undefined>>,
     val: Vec<Lat>,
+    /// The sets of constants `val` and the PHIs' slots name.
+    sets: Sets,
     exec: Vec<bool>,
     edges: HashSet<(BlockId, BlockId)>,
     phis: Phis,
@@ -726,6 +860,7 @@ impl<'b> Solver<'b> {
             users,
             taint,
             val: filled(m, held, n, Lat::Top)?,
+            sets: Sets::default(),
             exec: filled(m, held, body.blocks.len(), false)?,
             edges: HashSet::new(),
             phis: Phis::new(body, first, m, held)?,
@@ -747,7 +882,7 @@ impl<'b> Solver<'b> {
         match self.lat(v) {
             Lat::Top => Decision::Wait,
             Lat::Fc(_) => Decision::Taken(0),
-            Lat::Bottom => Decision::All,
+            Lat::Bottom | Lat::Set(_) => Decision::All,
             Lat::Const(k) => match cx.folder.int(k) {
                 Some(x) => Decision::Taken(x),
                 None => match cx.folder.consts.get(k).map(|c| &c.value) {
@@ -775,7 +910,13 @@ impl<'b> Solver<'b> {
                 m.charge(bytes)?;
                 *held = held.saturating_add(bytes);
                 // The PHIs of `to` meet the values the edge brings before any of them is visited.
-                self.phis.open(from, to, &self.val, &self.taint, m)?;
+                self.phis.open(
+                    (from, to),
+                    (&self.val, &self.taint),
+                    &mut self.sets,
+                    m,
+                    held,
+                )?;
                 if self.exec.get(to.index()).copied().unwrap_or(true) {
                     // Newly executable edge into a live block: its PHIs see one more input.
                     let phis = span(&self.phis.first, to.index());
@@ -837,14 +978,16 @@ impl<'b> Solver<'b> {
     /// Lower instruction `i`'s value to its meet with `new`; when that changes it, its users are
     /// visited again and the PHI entries carrying it meet the new value.
     fn set(&mut self, i: InstId, new: Lat, m: &mut Meter, held: &mut usize) -> Result<(), Error> {
-        let Some(slot) = self.val.get_mut(i.index()) else {
+        let Some(&old) = self.val.get(i.index()) else {
             return Ok(());
         };
-        let merged = meet(*slot, new);
-        if merged == *slot {
+        let merged = union(old, new, &mut self.sets, m, held)?;
+        if merged == old {
             return Ok(());
         }
-        *slot = merged;
+        if let Some(slot) = self.val.get_mut(i.index()) {
+            *slot = merged;
+        }
         if let Some(us) = self.users.get(span(&self.user_start, i.index())) {
             room(&mut self.ssa, us.len(), m, held)?;
             self.ssa.extend_from_slice(us);
@@ -853,7 +996,7 @@ impl<'b> Solver<'b> {
     }
 
     /// The value of PHI `i` of block `b`: the meet its slot keeps.
-    fn phi(&self, i: InstId, b: BlockId) -> Result<Lat, Error> {
+    fn phi(&mut self, i: InstId, b: BlockId) -> Result<Lat, Error> {
         let slot = self
             .phis
             .slot(self.body, b, i)
@@ -870,38 +1013,75 @@ impl<'b> Solver<'b> {
     }
 
     /// The lattice value of a pure operation over `ops`: tainted if any operand is, unknown while
-    /// any is unknown, `fold` over constants, otherwise overdefined.
+    /// any is unknown, `fold` over constants, the set of `fold`'s answers over each choice of the
+    /// members of operands that are sets (at most [`CHOICES`] folds, every one an answer),
+    /// otherwise overdefined.
     fn pure(
-        &self,
+        &mut self,
         ops: &[Value],
         cx: &mut Context<'_>,
         m: &mut Meter,
-        fold: impl FnOnce(&mut Folder<'_>, &[ConstId], &mut Meter) -> Result<Option<ConstId>, Error>,
+        held: &mut usize,
+        fold: impl Fn(&mut Folder<'_>, &[ConstId], &mut Meter) -> Result<Option<ConstId>, Error>,
     ) -> Result<Lat, Error> {
-        let mut consts = Vec::with_capacity(ops.len());
+        let mut members = Vec::with_capacity(ops.len());
         let mut any_top = false;
         let mut any_bottom = false;
+        let mut choices = 1usize;
         let mut fc: Option<Undefined> = None;
         for &v in ops {
             match self.lat(v) {
                 Lat::Fc(i) => fc = Some(fc.map_or(i, |j| j.min(i))),
                 Lat::Top => any_top = true,
                 Lat::Bottom => any_bottom = true,
-                Lat::Const(c) => consts.push(c),
+                lat @ (Lat::Const(_) | Lat::Set(_)) => {
+                    let set = self.sets.of(lat);
+                    choices = choices.saturating_mul(set.as_slice().len());
+                    members.push(set);
+                }
             }
         }
-        Ok(if let Some(i) = fc {
-            match any_bottom {
+        if let Some(i) = fc {
+            // A value the run knows beside an undefined one: what the run computes.
+            return Ok(match any_bottom || choices > 1 {
                 true => Lat::Bottom,
                 false => Lat::Fc(i),
+            });
+        }
+        if any_top {
+            return Ok(Lat::Top);
+        }
+        if any_bottom || choices > CHOICES {
+            return Ok(Lat::Bottom);
+        }
+        let mut consts = Vec::with_capacity(members.len());
+        if choices == 1 {
+            consts.extend(
+                members
+                    .iter()
+                    .filter_map(|set| set.as_slice().first().copied()),
+            );
+            return Ok(fold(&mut cx.folder, &consts, m)?.map_or(Lat::Bottom, Lat::Const));
+        }
+        m.tick(units(choices))?;
+        let mut answers = [ConstId::new(0); CHOICES];
+        for (k, slot) in answers.iter_mut().take(choices).enumerate() {
+            // Choice `k` in mixed radix over the operands' member counts.
+            consts.clear();
+            let mut rest = k;
+            for set in &members {
+                let ids = set.as_slice();
+                let len = ids.len().max(1);
+                consts.push(ids.get(rest % len).copied().unwrap_or(ConstId::new(0)));
+                rest /= len;
             }
-        } else if any_top {
-            Lat::Top
-        } else if any_bottom {
-            Lat::Bottom
-        } else {
-            fold(&mut cx.folder, &consts, m)?.map_or(Lat::Bottom, Lat::Const)
-        })
+            match fold(&mut cx.folder, &consts, m)? {
+                Some(c) => *slot = c,
+                None => return Ok(Lat::Bottom),
+            }
+        }
+        self.sets
+            .make(answers.get_mut(..choices).unwrap_or(&mut []), m, held)
     }
 
     /// `a op b` with one operand undefined, where the other can decide it: that operand when it
@@ -943,7 +1123,7 @@ impl<'b> Solver<'b> {
             match self.lat(v) {
                 Lat::Fc(_) => return Ok(None),
                 Lat::Top => return Ok(Some(Lat::Top)),
-                Lat::Bottom => run = true,
+                Lat::Bottom | Lat::Set(_) => run = true,
                 Lat::Const(k) => match cx.folder.float_class(k, m)? {
                     FloatClass::Nan => {
                         nan.get_or_insert(k);
@@ -995,7 +1175,7 @@ impl<'b> Solver<'b> {
                 };
                 match folded {
                     Some(lat) => lat,
-                    None => self.pure(&[*a, *b], cx, m, |f, c, m| match c {
+                    None => self.pure(&[*a, *b], cx, m, held, |f, c, m| match c {
                         [x, y] => f.binop(op, ty, *x, *y, m),
                         _ => Ok(None),
                     })?,
@@ -1003,56 +1183,56 @@ impl<'b> Solver<'b> {
             }
             InstKind::ICmp { pred, a, b } => {
                 let pred = *pred;
-                self.pure(&[*a, *b], cx, m, |f, c, m| match c {
+                self.pure(&[*a, *b], cx, m, held, |f, c, m| match c {
                     [x, y] => f.icmp(pred, ty, *x, *y, m),
                     _ => Ok(None),
                 })?
             }
             InstKind::FCmp { pred, a, b, .. } => {
                 let pred = *pred;
-                self.pure(&[*a, *b], cx, m, |f, c, m| match c {
+                self.pure(&[*a, *b], cx, m, held, |f, c, m| match c {
                     [x, y] => f.fcmp(pred, ty, *x, *y, m),
                     _ => Ok(None),
                 })?
             }
             InstKind::Cast { op, v } => {
                 let op = *op;
-                self.pure(&[*v], cx, m, |f, c, m| match c {
+                self.pure(&[*v], cx, m, held, |f, c, m| match c {
                     [x] => f.cast(op, *x, ty, m),
                     _ => Ok(None),
                 })?
             }
-            InstKind::Freeze(v) => self.pure(&[*v], cx, m, |f, c, m| match c {
+            InstKind::Freeze(v) => self.pure(&[*v], cx, m, held, |f, c, m| match c {
                 [x] => f.freeze(*x, m),
                 _ => Ok(None),
             })?,
             InstKind::ExtractElement { vec, idx } => {
-                self.pure(&[*vec, *idx], cx, m, |f, c, m| match c {
+                self.pure(&[*vec, *idx], cx, m, held, |f, c, m| match c {
                     [v, x] => f.extract_element(*v, *x, m),
                     _ => Ok(None),
                 })?
             }
             InstKind::InsertElement { vec, elt, idx } => {
-                self.pure(&[*vec, *elt, *idx], cx, m, |f, c, m| match c {
+                self.pure(&[*vec, *elt, *idx], cx, m, held, |f, c, m| match c {
                     [v, e, x] => f.insert_element(ty, *v, *e, *x, m),
                     _ => Ok(None),
                 })?
             }
             InstKind::ExtractValue { agg, indices } => {
-                self.pure(&[*agg], cx, m, |f, c, m| match c {
+                self.pure(&[*agg], cx, m, held, |f, c, m| match c {
                     [a] => f.extract_value(*a, indices, m),
                     _ => Ok(None),
                 })?
             }
             InstKind::InsertValue { agg, val, indices } => {
-                self.pure(&[*agg, *val], cx, m, |f, c, m| match c {
+                self.pure(&[*agg, *val], cx, m, held, |f, c, m| match c {
                     [a, v] => f.insert_value(*a, *v, indices, m),
                     _ => Ok(None),
                 })?
             }
-            InstKind::FNeg { v, .. } => self.pure(&[*v], cx, m, never)?,
+            InstKind::FNeg { v, .. } => self.pure(&[*v], cx, m, held, never)?,
             InstKind::ShuffleVector { a, b, mask } => {
-                self.pure(&[*a, *b], cx, m, |f, c, m| match c {
+                self.pure(&[*a, *b], cx, m, held, |f, c, m| match c {
                     [x, y] => f.shuffle(ty, *x, *y, mask, m),
                     _ => Ok(None),
                 })?
@@ -1071,23 +1251,28 @@ impl<'b> Solver<'b> {
                     ops.extend_from_slice(indices);
                     // A field of a constant global SCCP reads is its address constant.
                     let (gep, globals) = ((*src_ty, *inbounds, ty), cx.globals);
-                    self.pure(&ops, cx, m, |f, c, m| {
+                    self.pure(&ops, cx, m, held, |f, c, m| {
                         const_loads::constant_field_address(f, globals, gep, c, m)
                     })?
                 }
             },
-            InstKind::Select { c, t, f, .. } => match self.lat(*c) {
-                Lat::Top => Lat::Top,
-                Lat::Fc(_) => self.lat(*f),
-                Lat::Const(k) => match cx.folder.int(k) {
-                    Some(1) => self.lat(*t),
-                    Some(0) => self.lat(*f),
-                    _ => meet(self.lat(*t), self.lat(*f)),
-                },
-                Lat::Bottom => meet(self.lat(*t), self.lat(*f)),
-            },
+            InstKind::Select { c, t, f, .. } => {
+                let (t, f) = (self.lat(*t), self.lat(*f));
+                match self.lat(*c) {
+                    Lat::Top => Lat::Top,
+                    Lat::Fc(_) => f,
+                    Lat::Const(k) => match cx.folder.int(k) {
+                        Some(1) => t,
+                        Some(0) => f,
+                        _ => union(t, f, &mut self.sets, m, held)?,
+                    },
+                    Lat::Set(_) | Lat::Bottom => union(t, f, &mut self.sets, m, held)?,
+                }
+            }
             #[cfg(test)]
-            InstKind::Phi { incoming, .. } if self.full_meet => self.full_phi(incoming, b, m)?,
+            InstKind::Phi { incoming, .. } if self.full_meet => {
+                self.full_phi(incoming, b, m, held)?
+            }
             InstKind::Phi { .. } => self.phi(i, b)?,
             InstKind::Load {
                 ptr,
@@ -1097,7 +1282,7 @@ impl<'b> Solver<'b> {
             } => match self.lat(*ptr) {
                 Lat::Top => Lat::Top,
                 Lat::Fc(i) => Lat::Fc(i),
-                Lat::Bottom => Lat::Bottom,
+                Lat::Bottom | Lat::Set(_) => Lat::Bottom,
                 Lat::Const(k) => match cx.folder.consts.get(k).map(|c| &c.value) {
                     Some(Const::GlobalAddr(g))
                         if cx.globals.get(*g).is_some_and(|g| {
@@ -1120,7 +1305,7 @@ impl<'b> Solver<'b> {
             InstKind::Call(call) if is_normalize(&inst.kind) => match call.args.first() {
                 Some(&x) => match self.lat(x) {
                     Lat::Top => Lat::Top,
-                    Lat::Bottom => Lat::Bottom,
+                    Lat::Bottom | Lat::Set(_) => Lat::Bottom,
                     Lat::Fc(_) => cx
                         .folder
                         .normalize_predicate(ty, None, m)?
@@ -1136,7 +1321,7 @@ impl<'b> Solver<'b> {
             // undefined value, what the run computes, as any call's.
             InstKind::Call(call) if int_op(&inst.kind).is_some() => {
                 let op = int_op(&inst.kind).ok_or_else(|| invariant("an integer operation"))?;
-                match self.pure(&call.args, cx, m, |f, c, m| match c {
+                match self.pure(&call.args, cx, m, held, |f, c, m| match c {
                     [x] => f.int_unary(op, ty, *x, m),
                     [x, y] => f.int_minmax(op, ty, *x, *y, m),
                     _ => Ok(None),
@@ -1383,7 +1568,7 @@ impl<'b> Solver<'b> {
                             _ => {}
                         },
                         Lat::Fc(_) => edit.replace(i, *f),
-                        Lat::Top | Lat::Bottom => {}
+                        Lat::Top | Lat::Set(_) | Lat::Bottom => {}
                     },
                     (InstKind::CondBr { c, t, f, hints }, _) => {
                         if let Decision::Taken(x) = self.decide(*c, cx) {

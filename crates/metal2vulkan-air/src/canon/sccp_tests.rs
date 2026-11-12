@@ -22,45 +22,73 @@ fn meets() -> u64 {
 }
 
 impl Solver<'_> {
-    /// The meet of every entry of a PHI of block `b` whose edge is executable.
-    fn full_value(&self, incoming: &[(Value, BlockId)], b: BlockId) -> Lat {
+    /// The meet of every entry of a PHI of block `b` whose edge is executable: as a set where
+    /// every entry is a literal constant, flat otherwise.
+    fn full_value(
+        &mut self,
+        incoming: &[(Value, BlockId)],
+        b: BlockId,
+        m: &mut Meter,
+        held: &mut usize,
+    ) -> Result<Lat, Error> {
+        let few = incoming.iter().all(|&(v, _)| matches!(v, Value::Const(_)));
         let mut acc = Lat::Top;
         for &(v, p) in incoming {
             if self.edges.contains(&(p, b)) {
-                acc = meet(acc, merged(self.lat(v)));
+                let entry = merged(self.lat(v));
+                acc = match few {
+                    true => union(acc, entry, &mut self.sets, m, held)?,
+                    false => meet(acc, entry),
+                };
             }
         }
-        acc
+        Ok(acc)
     }
 
     /// A PHI's value as SCCP once computed it: the meet of every entry whose edge is executable, at
     /// every visit, here also a work unit an entry.
     pub(super) fn full_phi(
-        &self,
+        &mut self,
         incoming: &[(Value, BlockId)],
         b: BlockId,
         m: &mut Meter,
+        held: &mut usize,
     ) -> Result<Lat, Error> {
         m.tick(units(incoming.len()))?;
-        Ok(self.full_value(incoming, b))
+        self.full_value(incoming, b, m, held)
     }
 
     /// With `check_slots`, assert that the value PHI `i` of block `b` reads from its slot is the
     /// full meet of its executable entries at this visit, without counting the check's meets.
-    pub(super) fn check_slot(&self, i: InstId, b: BlockId, value: Lat) {
+    pub(super) fn check_slot(&mut self, i: InstId, b: BlockId, value: Lat) {
         if !self.check_slots {
             return;
         }
-        let Some(InstKind::Phi { incoming, .. }) = self.body.insts.get(i).map(|x| &x.kind) else {
+        let body = self.body;
+        let Some(InstKind::Phi { incoming, .. }) = body.insts.get(i).map(|x| &x.kind) else {
             panic!("{i:?} is not a PHI");
         };
         let counted = meets();
-        let full = self.full_value(incoming, b);
+        let mut scratch = Meter::with_caps(&Budget::default(), u64::MAX, u64::MAX);
+        let full = self
+            .full_value(incoming, b, &mut scratch, &mut 0)
+            .expect("the full meet");
         MEETS.with(|n| n.set(counted));
         assert_eq!(
             value, full,
             "PHI {i:?} of {b:?}: its slot is not the full meet"
         );
+    }
+
+    /// Each instruction's value, a set as its members: two solves intern their sets apart.
+    fn resolved(&self) -> Vec<(Lat, Vec<ConstId>)> {
+        self.val
+            .iter()
+            .map(|&lat| match lat {
+                Lat::Set(_) => (Lat::Set(0), self.sets.of(lat).as_slice().to_vec()),
+                lat => (lat, Vec::new()),
+            })
+            .collect()
     }
 }
 
@@ -68,7 +96,7 @@ impl Solver<'_> {
 /// executable edges.
 #[derive(Debug, PartialEq)]
 struct Settled {
-    val: Vec<Lat>,
+    val: Vec<(Lat, Vec<ConstId>)>,
     exec: Vec<bool>,
     edges: Vec<(BlockId, BlockId)>,
 }
@@ -94,7 +122,7 @@ fn solve_with(body: &Body, cx: &mut Context<'_>, full: bool, check: bool) -> Sol
         let mut edges: Vec<(BlockId, BlockId)> = s.edges.iter().copied().collect();
         edges.sort_unstable();
         settled = Some(solved.clone().map(|()| Settled {
-            val: s.val.clone(),
+            val: s.resolved(),
             exec: s.exec.clone(),
             edges,
         }));
@@ -556,8 +584,8 @@ fn a_value_that_changes_after_its_edge_opened_is_met_again() {
     let Some(Ok(settled)) = solved.settled else {
         panic!("not solved: {:?}", solved.out);
     };
-    assert_eq!(settled.val.get(r.index()), Some(&Lat::Bottom));
-    assert_eq!(settled.val.get(i.index()), Some(&Lat::Bottom));
+    assert_eq!(settled.val.get(r.index()).map(|v| v.0), Some(Lat::Bottom));
+    assert_eq!(settled.val.get(i.index()).map(|v| v.0), Some(Lat::Bottom));
 }
 
 /// The phi_kernel family settles and rebuilds alike under both meets: pointer entries
