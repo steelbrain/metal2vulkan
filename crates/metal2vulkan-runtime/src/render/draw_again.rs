@@ -1020,11 +1020,7 @@ impl Checked {
             (again.command_buffer, again.carried) = (kept.command_buffer, kept.carried);
             again.across = kept.across;
         }
-        // Its `VkPipeline` the kept draw's: one kept through its key's general form records
-        // through that form again, where every step now finds the key's own made (`Kept::made`).
-        let made = std::mem::replace(&mut again.made, KeptPipeline(Arc::clone(&kept.made.0)));
         assert!(*again == kept, "a draw again kept another draw");
-        again.made = made;
         (again.draw_alone, again.stamps, again.under) = (draw_alone, stamps, under);
         (again.settled, again.between, again.stated) = (settled, between, stated);
         (again.command_buffer, again.carried) = (command_buffer, carried);

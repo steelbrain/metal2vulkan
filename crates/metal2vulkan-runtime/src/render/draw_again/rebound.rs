@@ -430,7 +430,8 @@ impl RenderLowering {
         #[cfg(debug_assertions)]
         {
             // The first and every second draw rebound since the draw was kept, or carried in since
-            // the command buffer's first render encoder (`render/carried.rs`), takes every step.
+            // the command buffer's first render encoder, or a commit's (`render/carried.rs`), takes
+            // every step.
             let count = match carried {
                 true => &mut self.again.carries,
                 false => &mut self.again.hits,
@@ -438,6 +439,12 @@ impl RenderLowering {
             let hits = *count;
             *count += 1;
             if hits.is_multiple_of(2) {
+                // Its reads through copies as the rebind worked them out, which it records
+                // (`record_rebound`) and every step must work out too: a carried draw's pass may
+                // render a texture its kept draw's did not.
+                if let Some(kept) = self.again.kept.as_mut() {
+                    kept.through_copies = rebinding.through_copies;
+                }
                 let rebound = super::Expected::Rebound(super::Rebound::of(live));
                 *checked = Some(super::Checked::of(self, rebound));
                 return Again::Check;
