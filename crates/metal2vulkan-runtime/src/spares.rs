@@ -33,9 +33,10 @@
 //!   Past [`ONE_POOL`] command buffers handed out, one whose pools hold no more of a level takes
 //!   the spare holding the most of that level ([`take_command_pool_holding`]), up to
 //!   [`TAKEN_PAST_FIRST`] past its first; where no spare holds one, or past those, it makes what
-//!   it lacks in the last it took, or in one pool it takes to grow into (a spare, or one made)
-//!   where it took none, never in its first; each goes back with its first
-//!   (`command_buffer/mod.rs`'s `CommandBufferShared::allocate`). So the larger command buffers of a load use the pools that
+//!   it lacks in the last it took, else in its first; each goes back with its first
+//!   (`command_buffer/mod.rs`'s `CommandBufferShared::allocate`). A command buffer never makes a
+//!   pool past its first: a pool made per command buffer stays among the spares for the
+//!   device's life. So the larger command buffers of a load use the pools that
 //!   hold the most, which the smaller leave, and the pools' command buffers follow what the load
 //!   holds at once. Each pool taking the newest spare and keeping its own uses' most, a load of
 //!   64 command buffers in flight, a cycle of one of 200 blit encoders and nine of 2, had every
