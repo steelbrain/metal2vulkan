@@ -43,7 +43,7 @@ const KEPT: usize = 64;
 /// allocates (`texture/heap.rs`'s `planned_requirements`), or its linear image made for host
 /// allocations (`VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT`, made `UNDEFINED`:
 /// `texture/heap.rs`'s `host_image_requirements`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Query {
     Tiling(vk::ImageTiling),
     HostLinear,
