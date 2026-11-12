@@ -346,8 +346,11 @@ fn run(case: &str, format: PixelFormat, shape: Shape, home: Home) {
             (Some(bytes), tight + pad)
         }
     };
-    // As many targets as the host pages hold.
-    let count = TARGETS.min(BYTES / (pitch * SIDE) as usize);
+    // As many targets as the host pages hold; every one of them where they are `Private`.
+    let count = match &bytes {
+        Some(_) => TARGETS.min(BYTES / (pitch * SIDE) as usize),
+        None => TARGETS,
+    };
     let mut failures = Vec::new();
     let mut counts = Vec::new();
     for round in 0..ROUNDS {
