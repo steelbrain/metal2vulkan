@@ -456,7 +456,8 @@ pub enum SnapshotRefusal {
 /// first level (`StageInterface::level_reads`, `StageModule::level_reads`), as the module's
 /// instructions decide them (`spirv::requirements::level_reads`, structural). A sample's level is
 /// its sampler's to bound, so the fact lists each sampler the slot is sampled through apart, and a
-/// runtime asks [`LevelReads::highest_level`] with the samplers it binds. Vulkan's rules decide
+/// runtime asks [`LevelReads::highest_level`] and [`LevelReads::lowest_level`] with the samplers
+/// it binds. Vulkan's rules decide
 /// the levels (Image Level(s) Selection): a sample reads `clamp(λ, 0, q)` past the view's first
 /// level, `λ` its level of detail clamped into the sampler's `[minLod, maxLod]`; a gather reads
 /// the first level; a fetch and a size query read the level they name.
@@ -476,6 +477,9 @@ pub struct LevelReads {
     /// level 0), or the highest constant a level-count containment compares; `None` where none
     /// does.
     pub named: Option<u32>,
+    /// The lowest level a fetch, a size query or a gather reads, each a constant (a gather reads
+    /// level 0); `None` where none does. A level-count containment's comparison reads no level.
+    pub lowest_read: Option<u32>,
     /// The slot's samples, by the sampler each reads through, sorted by sampler.
     pub sampled: Vec<SampledLevels>,
 }
@@ -488,8 +492,11 @@ pub struct SampledLevels {
     /// The sampler: a runtime sampler's slot, or a constexpr sampler.
     pub sampler: crate::pipeline::sym::SamplerRef,
     /// The bits of the highest explicit level of detail among its samples that is a constant
-    /// `f32`; `None` where none is.
+    /// `f32` (a NaN where one is); `None` where none is.
     pub highest_lod_bits: Option<u32>,
+    /// The bits of the lowest explicit level of detail among its samples that is a constant `f32`
+    /// (a NaN where one is); `None` where none is.
+    pub lowest_lod_bits: Option<u32>,
     /// Some sample's level of detail is the module's to compute: implicit, biased, from
     /// gradients, or an explicit level that is no constant. The sampler's `maxLod` bounds it.
     pub computed: bool,
@@ -610,6 +617,38 @@ impl SampledLevels {
         };
         Some(level as u32)
     }
+
+    /// The lowest explicit constant level of detail among the samples.
+    pub fn lowest_lod(&self) -> Option<f32> {
+        self.lowest_lod_bits.map(f32::from_bits)
+    }
+
+    /// The lowest level, counted from the view's first, these samples may read through a sampler
+    /// of levels `s`, over a view of more levels than it (a view whose last level is lower reads
+    /// that one in its place: the LOD Operation clamps into `[0, q]`).
+    ///
+    /// A sample's level of detail is at least `L`: `minLod` where one is computed (the LOD
+    /// Operation clamps it into `[minLod, maxLod]` after any bias), and for the lowest constant
+    /// explicit `c`, `c` plus the sampler's bias where it is negative, clamped so; at least 0.
+    /// Either mipmap mode reads level `floor(L)` or a higher one: the nearest one
+    /// `ceil(L + 0.5) - 1` or `floor(L + 0.5)`, the linear one `floor(L)` and the next. A NaN
+    /// constant, a sampler whose `minLod` exceeds its `maxLod` (the level of detail is undefined),
+    /// or one whose bounds are no finite numbers, reaches the first level.
+    pub fn lowest(&self, s: SamplerLevels) -> u32 {
+        if !(s.min_lod.is_finite() && s.max_lod.is_finite()) || s.min_lod > s.max_lod {
+            return 0;
+        }
+        let computed = self.computed.then_some(s.min_lod);
+        let explicit = match self.lowest_lod() {
+            Some(c) if c.is_nan() => return 0,
+            // A positive bias is not counted on to raise the level.
+            Some(c) => Some((c + s.bias.min(0.0)).clamp(s.min_lod, s.max_lod)),
+            None => None,
+        };
+        // A NaN bias makes the bound NaN, which `max` takes as 0.
+        let low = (computed.into_iter().chain(explicit)).reduce(f32::min);
+        low.map_or(0, |low| low.max(0.0).floor() as u32)
+    }
 }
 
 impl LevelReads {
@@ -629,6 +668,20 @@ impl LevelReads {
             highest = highest.max(sampled(samples)?);
         }
         Some(highest)
+    }
+
+    /// The lowest level, counted from the view's first, that the slot's reads may reach, where
+    /// `sampled` answers for each of its samplers' samples the lowest level they may reach
+    /// through the sampler the runtime binds ([`SampledLevels::lowest`]): 0 where a read may reach
+    /// any level ([`LevelReads::any`]); `None` where no read reaches a level (a size query
+    /// without one, a level-count containment's comparison). Over a view of the same first level
+    /// whose last level is lower, a read reaches that last level in its place.
+    pub fn lowest_level(&self, sampled: impl Fn(&SampledLevels) -> u32) -> Option<u32> {
+        if self.any {
+            return Some(0);
+        }
+        let samples = self.sampled.iter().map(sampled);
+        self.lowest_read.into_iter().chain(samples).min()
     }
 }
 

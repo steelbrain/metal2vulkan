@@ -1,5 +1,5 @@
 //! [`level_reads`] on hand-built fragment modules, one read of texture slot 0 each, and
-//! [`LevelReads::highest_level`] under samplers of each kind.
+//! [`LevelReads::highest_level`] and [`LevelReads::lowest_level`] under samplers of each kind.
 
 use super::level_reads;
 use crate::budget::{Budget, Meter};
@@ -31,6 +31,8 @@ enum Read {
     Gather,
     /// A fetch at the constant level 2.
     FetchConstant,
+    /// A fetch at the constant level 2, beside `3 < levels`.
+    FetchCompared,
     /// A fetch at the lowering's containment of level 1: `UMin(1, levels - 1)`, beside `1 <
     /// levels`.
     FetchContained,
@@ -202,10 +204,20 @@ fn module(read: Read) -> TypedModule {
             f.sample(si, uv, None, false, &ImageOperands::default())
                 .expect("sample")
         }
-        Read::FetchConstant | Read::FetchContained | Read::FetchComputed | Read::FetchBase => {
+        Read::FetchConstant
+        | Read::FetchCompared
+        | Read::FetchContained
+        | Read::FetchComputed
+        | Read::FetchBase => {
             let img = f.load(tv, MemAccess::default()).expect("t");
             let lod = match read {
                 Read::FetchConstant => Some(scalar(&mut f, u32_, 2)),
+                Read::FetchCompared => {
+                    let levels = f.query(ImageQuery::Levels, img).expect("levels");
+                    let three = scalar(&mut f, u32_, 3);
+                    let _ = f.binary(BinOp::ULessThan, three, levels).expect("in range");
+                    Some(scalar(&mut f, u32_, 2))
+                }
                 Read::FetchContained => {
                     let levels = f.query(ImageQuery::Levels, img).expect("levels");
                     let top = f.binary(BinOp::ISub, levels, one).expect("top");
@@ -257,17 +269,21 @@ fn module(read: Read) -> TypedModule {
     b.finalize().expect("finalize")
 }
 
-fn sampled(sampler: SamplerRef, lod: Option<f32>, computed: bool) -> SampledLevels {
+/// Samples through `sampler` at the constant levels of detail `lods` (the lowest and the highest,
+/// or none), and computed ones where `computed`.
+fn sampled(sampler: SamplerRef, lods: Option<(f32, f32)>, computed: bool) -> SampledLevels {
     SampledLevels {
         sampler,
-        highest_lod_bits: lod.map(f32::to_bits),
+        highest_lod_bits: lods.map(|(_, highest)| highest.to_bits()),
+        lowest_lod_bits: lods.map(|(lowest, _)| lowest.to_bits()),
         computed,
     }
 }
 
 /// Each read states the levels it reaches: a sample by its sampler, a constant level of detail
 /// or a computed one; a gather, a fetch and a size query the level they name, the lowering's
-/// containment of a constant included; and a fetch or level at a computed level, a level count
+/// containment of a constant included, as the highest and the lowest read (a comparison of the
+/// level count raises the highest alone); and a fetch or level at a computed level, a level count
 /// used otherwise, a level-of-detail query, a minimum level of detail and a storage write any
 /// level.
 #[test]
@@ -278,6 +294,7 @@ fn each_read_states_the_levels_it_reaches() {
         slot: 0,
         any,
         named,
+        lowest_read: named,
         sampled,
     };
     for (read, want) in [
@@ -287,7 +304,7 @@ fn each_read_states_the_levels_it_reaches() {
         ),
         (
             Read::ExplicitConstant,
-            reads(false, None, vec![sampled(runtime, Some(1.5), false)]),
+            reads(false, None, vec![sampled(runtime, Some((1.5, 1.5)), false)]),
         ),
         (
             Read::ExplicitComputed,
@@ -304,6 +321,13 @@ fn each_read_states_the_levels_it_reaches() {
         ),
         (Read::Gather, reads(false, Some(0), Vec::new())),
         (Read::FetchConstant, reads(false, Some(2), Vec::new())),
+        (
+            Read::FetchCompared,
+            LevelReads {
+                named: Some(3),
+                ..reads(false, Some(2), Vec::new())
+            },
+        ),
         (Read::FetchContained, reads(false, Some(1), Vec::new())),
         (Read::FetchComputed, reads(true, None, Vec::new())),
         (Read::FetchBase, reads(false, Some(0), Vec::new())),
@@ -341,10 +365,11 @@ fn the_highest_level_follows_the_bound_sampler() {
         slot: 0,
         any: false,
         named: None,
+        lowest_read: None,
         sampled: vec![sampled(s, None, true)],
     };
     let constant = |c: f32| LevelReads {
-        sampled: vec![sampled(s, Some(c), false)],
+        sampled: vec![sampled(s, Some((c, c)), false)],
         ..computed.clone()
     };
     let at = |reads: &LevelReads, l: SamplerLevels| {
@@ -394,6 +419,7 @@ fn the_highest_level_follows_the_bound_sampler() {
     assert_eq!(computed.highest_level(|_| None), None);
     let fetched = LevelReads {
         named: Some(2),
+        lowest_read: Some(2),
         ..computed.clone()
     };
     assert_eq!(at(&fetched, levels(0.0, 1.0, false, true)), Some(2));
@@ -402,6 +428,87 @@ fn the_highest_level_follows_the_bound_sampler() {
         ..fetched
     };
     assert_eq!(at(&any, levels(0.0, 0.25, false, true)), None);
+}
+
+/// The lowest level a slot's reads may reach under a sampler: `floor` of the sampler's `minLod`
+/// where a level of detail is computed, of the lowest constant clamped into the sampler's bounds
+/// and lowered by a negative bias, the lowest a fetch names, the first level where a read reaches
+/// any level, a NaN constant, or the sampler's bounds are crossed or not finite, and none where
+/// no read reaches a level.
+#[test]
+fn the_lowest_level_follows_the_bound_sampler() {
+    let s = SamplerRef::Slot(0);
+    let computed = LevelReads {
+        slot: 0,
+        any: false,
+        named: None,
+        lowest_read: None,
+        sampled: vec![sampled(s, None, true)],
+    };
+    let constants = |lowest: f32, highest: f32| LevelReads {
+        sampled: vec![sampled(s, Some((lowest, highest)), false)],
+        ..computed.clone()
+    };
+    let at = |reads: &LevelReads, l: SamplerLevels| reads.lowest_level(|r| r.lowest(l));
+    assert_eq!(at(&computed, levels(0.0, 1000.0, false, true)), Some(0));
+    assert_eq!(at(&computed, levels(3.0, 1000.0, false, true)), Some(3));
+    // Both nearest roundings of 2.5 read level 2; the linear mode reads 2 and 3.
+    assert_eq!(at(&computed, levels(2.5, 1000.0, false, true)), Some(2));
+    assert_eq!(at(&computed, levels(2.5, 1000.0, true, true)), Some(2));
+    assert_eq!(at(&computed, levels(3.0, f32::MAX, true, false)), Some(3));
+    assert_eq!(
+        at(&constants(3.7, 5.0), levels(0.0, 1000.0, false, true)),
+        Some(3)
+    );
+    assert_eq!(
+        at(&constants(3.0, 5.0), levels(4.0, 1000.0, false, true)),
+        Some(4)
+    );
+    assert_eq!(
+        at(&constants(3.0, 5.0), levels(0.0, 1.0, false, true)),
+        Some(1)
+    );
+    assert_eq!(
+        at(&constants(-2.0, 5.0), levels(0.0, 1.0, false, true)),
+        Some(0)
+    );
+    assert_eq!(
+        at(&constants(f32::NAN, 5.0), levels(2.0, 9.0, false, true)),
+        Some(0)
+    );
+    // A negative bias lowers a constant level of detail; a positive one is not counted on to
+    // raise it. A computed one stays at `minLod` or above whatever the bias.
+    let biased = |min_lod: f32, bias: f32| SamplerLevels {
+        bias,
+        ..levels(min_lod, 1000.0, false, true)
+    };
+    assert_eq!(at(&constants(3.0, 5.0), biased(0.0, -1.0)), Some(2));
+    assert_eq!(at(&constants(3.0, 5.0), biased(0.0, 1.0)), Some(3));
+    assert_eq!(at(&computed, biased(2.0, -1.0)), Some(2));
+    assert_eq!(at(&constants(3.0, 5.0), biased(0.0, f32::NAN)), Some(0));
+    // Crossed or unbounded sampler levels: the first level.
+    assert_eq!(at(&computed, levels(2.0, 1.0, false, true)), Some(0));
+    assert_eq!(
+        at(&computed, levels(2.0, f32::INFINITY, false, true)),
+        Some(0)
+    );
+    // A fetch's level among the samples' (a comparison of the level count is no read).
+    let fetched = LevelReads {
+        named: Some(5),
+        lowest_read: Some(2),
+        ..computed.clone()
+    };
+    assert_eq!(at(&fetched, levels(3.0, 1000.0, false, true)), Some(2));
+    let any = LevelReads {
+        any: true,
+        ..fetched
+    };
+    assert_eq!(at(&any, levels(3.0, 1000.0, false, true)), Some(0));
+    let none = LevelReads {
+        sampled: Vec::new(),
+        ..computed
+    };
+    assert_eq!(at(&none, levels(3.0, 1000.0, false, true)), None);
 }
 
 /// A NaN among a sampler's constant levels of detail stays the highest whatever comes after it,
@@ -413,12 +520,30 @@ fn constant_levels_of_detail_keep_a_nan() {
     for c in [2.0, f32::NAN, 1.0] {
         found.sample(s, Some(c));
     }
-    let (highest, computed) = found.sampled[&s];
-    assert!(highest.is_some_and(f32::is_nan) && !computed);
+    let lods = &found.sampled[&s];
+    assert!(lods.highest.is_some_and(f32::is_nan) && !lods.computed);
     let levels = SampledLevels {
         sampler: s,
-        highest_lod_bits: highest.map(f32::to_bits),
-        computed,
+        highest_lod_bits: lods.highest.map(f32::to_bits),
+        lowest_lod_bits: lods.lowest.map(f32::to_bits),
+        computed: lods.computed,
     };
     assert_eq!(levels.level(self::levels(0.0, 3.0, false, true)), Some(3));
+}
+
+/// Samples at several constant levels of detail keep the lowest apart from the highest, and a NaN
+/// among them as the lowest too.
+#[test]
+fn constant_levels_of_detail_keep_their_lowest_and_a_nan_there() {
+    let mut found = super::Found::default();
+    let s = SamplerRef::Slot(0);
+    for c in [2.0, 0.5, 3.0] {
+        found.sample(s, Some(c));
+    }
+    let lods = &found.sampled[&s];
+    assert_eq!((lods.lowest, lods.highest), (Some(0.5), Some(3.0)));
+    found.sample(s, Some(f32::NAN));
+    found.sample(s, Some(1.0));
+    let lods = &found.sampled[&s];
+    assert!(lods.lowest.is_some_and(f32::is_nan) && lods.highest.is_some_and(f32::is_nan));
 }

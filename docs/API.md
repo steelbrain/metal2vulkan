@@ -1539,13 +1539,16 @@ view's first level (`StageModule::level_reads`, one `LevelReads` a slot): whethe
 reach any level (`any`: a level the function computes, a level-count query used beyond the
 containment of a constant level, a level-of-detail query, a sample through no sampler or with a
 minimum level of detail, a storage access, or a use the analysis does not follow), the highest
-constant level a fetch, size query or gather names (`named`), and its samples by the sampler each
-reads through (`sampled`). A sample's level is its sampler's to bound: ask
+constant level a fetch, size query or gather names (`named`) and the lowest one it reads
+(`lowest_read`), and its samples by the sampler each reads through (`sampled`, with the highest
+and the lowest constant level of detail). A sample's level is its sampler's to bound: ask
 `LevelReads::highest_level` with `SampledLevels::level` of the sampler you bind
 (`SamplerLevels::of` its `vk::SamplerDesc`, and `SamplerLevels::finite_texels` of the view's
-format). A view of the same first level and more levels than the answer reads what the whole view
-reads. The runtime counts with it which levels a draw reads of a texture its own render pass
-instance renders.
+format), and `LevelReads::lowest_level` with `SampledLevels::lowest`. A view of the same first
+level and more levels than the highest answer reads what the whole view reads, and no read reaches
+a level below the lowest answer. The runtime counts with it which levels a draw reads of a texture
+its own render pass instance renders, and reads in place those that no attachment of the instance
+renders.
 
 ### Indirect command buffers
 

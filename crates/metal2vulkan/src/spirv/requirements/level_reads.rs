@@ -2,10 +2,10 @@
 //! (`pipeline::LevelReads`).
 //!
 //! A runtime that serves a draw's read of a texture its own render pass renders at one level
-//! (the runtime's `texture/attached_reads.rs`) can bind the texture's own image through a view of
-//! fewer levels where the draw reads none of the attached ones, in place of a copy. That needs
-//! the levels each read reaches, counted from the view's first level, which this decides from the
-//! module's instructions alone:
+//! (the runtime's `texture/attached_reads.rs`) can bind the texture's own image in place of a copy
+//! where the draw reads none of the attached levels. That needs the highest and the lowest level
+//! each read reaches, counted from the view's first level, which this decides from the module's
+//! instructions alone:
 //!
 //! - **A sample** (`OpImageSample*`, any of its forms) reads the levels its level of detail
 //!   selects, which its sampler clamps into `[minLod, maxLod]` (Vulkan's LOD Operation), so the
@@ -56,20 +56,40 @@ mod tests;
 struct Found {
     any: bool,
     named: Option<u32>,
-    /// By sampler: the highest constant explicit level of detail, and whether one is computed.
-    sampled: BTreeMap<SamplerRef, (Option<f32>, bool)>,
+    lowest_read: Option<u32>,
+    sampled: BTreeMap<SamplerRef, Lods>,
+}
+
+/// The levels of detail of one sampler's samples of a slot.
+#[derive(Default)]
+struct Lods {
+    /// The highest and the lowest constant explicit level of detail, each a NaN where one is.
+    highest: Option<f32>,
+    lowest: Option<f32>,
+    /// Whether one is computed.
+    computed: bool,
 }
 
 impl Found {
+    /// A level-count containment's comparison of `level`: the view holds more levels than it.
     fn name(&mut self, level: u32) {
         self.named = Some(self.named.map_or(level, |n| n.max(level)));
     }
 
+    /// A read of `level`.
+    fn read(&mut self, level: u32) {
+        self.name(level);
+        self.lowest_read = Some(self.lowest_read.map_or(level, |l| l.min(level)));
+    }
+
     fn sample(&mut self, sampler: SamplerRef, lod: Option<f32>) {
-        let (highest, computed) = self.sampled.entry(sampler).or_default();
+        let lods = self.sampled.entry(sampler).or_default();
         match lod {
-            Some(c) => *highest = Some(highest.map_or(c, |h| kept_nan(h, c, f32::max))),
-            None => *computed = true,
+            Some(c) => {
+                lods.highest = Some(lods.highest.map_or(c, |h| kept_nan(h, c, f32::max)));
+                lods.lowest = Some(lods.lowest.map_or(c, |l| kept_nan(l, c, f32::min)));
+            }
+            None => lods.computed = true,
         }
     }
 }
@@ -207,13 +227,15 @@ pub fn level_reads(m: &TypedModule, meter: &mut Meter) -> Result<Vec<LevelReads>
             slot,
             any: f.any,
             named: f.named,
+            lowest_read: f.lowest_read,
             sampled: f
                 .sampled
                 .into_iter()
-                .map(|(sampler, (highest, computed))| SampledLevels {
+                .map(|(sampler, lods)| SampledLevels {
                     sampler,
-                    highest_lod_bits: highest.map(f32::to_bits),
-                    computed,
+                    highest_lod_bits: lods.highest.map(f32::to_bits),
+                    lowest_lod_bits: lods.lowest.map(f32::to_bits),
+                    computed: lods.computed,
                 })
                 .collect(),
         })
@@ -380,7 +402,7 @@ fn judge(
         Inst::ImageQuery { query, image } if *image == v => match query {
             ImageQuery::Size | ImageQuery::Samples => {}
             ImageQuery::SizeLod(l) => match contained.level(m, *l, slot)? {
-                Some(c) => f.name(c),
+                Some(c) => f.read(c),
                 None => f.any = true,
             },
             // Its uses are judged as the level count's (`level_reads`).
@@ -388,16 +410,16 @@ fn judge(
             _ => f.any = true,
         },
         Inst::ImageFetch { image, ops, .. } if *image == v => match ops.lod {
-            None => f.name(0),
+            None => f.read(0),
             Some(l) => match contained.level(m, l, slot)? {
-                Some(c) => f.name(c),
+                Some(c) => f.read(c),
                 None => f.any = true,
             },
         },
         Inst::ImageGather { sampled_image, .. } | Inst::ImageDrefGather { sampled_image, .. }
             if *sampled_image == v =>
         {
-            f.name(0)
+            f.read(0)
         }
         Inst::ImageSample {
             form,

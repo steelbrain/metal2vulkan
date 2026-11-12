@@ -1115,8 +1115,8 @@ codec_struct! {
         own_pixel_textures,
         snapshot_textures, snapshot_refusals, level_reads, private_bytes,
     }
-    LevelReads { slot, any, named, sampled }
-    SampledLevels { sampler, highest_lod_bits, computed }
+    LevelReads { slot, any, named, lowest_read, sampled }
+    SampledLevels { sampler, highest_lod_bits, lowest_lod_bits, computed }
     TessellationStage { domain, control_points, emulated }
     TessellationDescriptor {
         max_tessellation_factor, partition_mode, factor_format, factor_step_function,

@@ -4653,6 +4653,7 @@ field	metal2vulkan::pipeline::InputAttachmentUse.color_index	pub color_index: u3
 field	metal2vulkan::pipeline::InputAttachmentUse.format_class	pub format_class: SampledType
 field	metal2vulkan::pipeline::InputAttachmentUse.input_attachment_index	pub input_attachment_index: u32
 field	metal2vulkan::pipeline::LevelReads.any	pub any: bool
+field	metal2vulkan::pipeline::LevelReads.lowest_read	pub lowest_read: Option<u32>
 field	metal2vulkan::pipeline::LevelReads.named	pub named: Option<u32>
 field	metal2vulkan::pipeline::LevelReads.sampled	pub sampled: Vec<SampledLevels>
 field	metal2vulkan::pipeline::LevelReads.slot	pub slot: u32
@@ -4867,6 +4868,7 @@ field	metal2vulkan::pipeline::RuntimeDependency.fact	pub fact: RuntimeFact
 field	metal2vulkan::pipeline::RuntimeDependency.mechanism	pub mechanism: Mechanism
 field	metal2vulkan::pipeline::SampledLevels.computed	pub computed: bool
 field	metal2vulkan::pipeline::SampledLevels.highest_lod_bits	pub highest_lod_bits: Option<u32>
+field	metal2vulkan::pipeline::SampledLevels.lowest_lod_bits	pub lowest_lod_bits: Option<u32>
 field	metal2vulkan::pipeline::SampledLevels.sampler	pub sampler: crate::pipeline::sym::SamplerRef
 field	metal2vulkan::pipeline::SamplerLevels.bias	pub bias: f32
 field	metal2vulkan::pipeline::SamplerLevels.finite_texels	pub finite_texels: bool
@@ -9627,6 +9629,7 @@ method	metal2vulkan::pipeline::HandleClass::sampler	pub fn sampler(use_: crate::
 method	metal2vulkan::pipeline::HandleClass::sampler_use	pub fn sampler_use(self) -> Option<crate::metal::sampler::SamplerUse>
 method	metal2vulkan::pipeline::InputAttachmentUse::new	pub fn new(color_index: u32, input_attachment_index: u32, format_class: SampledType) -> InputAttachmentUse
 method	metal2vulkan::pipeline::LevelReads::highest_level	pub fn highest_level(&self, sampled: impl Fn(&SampledLevels) -> Option<u32>) -> Option<u32>
+method	metal2vulkan::pipeline::LevelReads::lowest_level	pub fn lowest_level(&self, sampled: impl Fn(&SampledLevels) -> u32) -> Option<u32>
 method	metal2vulkan::pipeline::LinkedFunction::name	pub fn name(&self) -> &str
 method	metal2vulkan::pipeline::LinkedFunction::new	pub fn new(function: Function) -> LinkedFunction
 method	metal2vulkan::pipeline::LinkedFunction::with_constants	pub fn with_constants(mut self, constants: FunctionConstantValues) -> LinkedFunction
@@ -9677,6 +9680,8 @@ method	metal2vulkan::pipeline::ResourceSlot::separate_texture_of	pub fn separate
 method	metal2vulkan::pipeline::RuntimeDependency::new	pub fn new(fact: RuntimeFact, mechanism: Mechanism) -> RuntimeDependency
 method	metal2vulkan::pipeline::SampledLevels::highest_lod	pub fn highest_lod(&self) -> Option<f32>
 method	metal2vulkan::pipeline::SampledLevels::level	pub fn level(&self, s: SamplerLevels) -> Option<u32>
+method	metal2vulkan::pipeline::SampledLevels::lowest	pub fn lowest(&self, s: SamplerLevels) -> u32
+method	metal2vulkan::pipeline::SampledLevels::lowest_lod	pub fn lowest_lod(&self) -> Option<f32>
 method	metal2vulkan::pipeline::SamplerLevels::finite_texels	pub fn finite_texels(format: vk::Format) -> bool
 method	metal2vulkan::pipeline::SamplerLevels::of	pub fn of(desc: &vk::SamplerDesc, finite_texels: bool) -> SamplerLevels
 method	metal2vulkan::pipeline::SamplerRef::constexpr_address_modes	pub fn constexpr_address_modes(self) -> Option<[crate::metal::SamplerAddressMode; 3]>
