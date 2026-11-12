@@ -614,7 +614,7 @@ impl Bench {
                 }
                 let encoder = open.as_mut().ok_or("a step before its pass")?;
                 match step {
-                    Step::Pass(_) => {}
+                    Step::Pass(_) => Ok(()),
                     Step::Pipeline(state) => {
                         call(&mut tally, 2, || encoder.set_render_pipeline_state(state))
                     }
