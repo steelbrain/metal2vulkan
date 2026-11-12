@@ -6,7 +6,9 @@
 //! ([`metal2vulkan::metal::state::depth_stencil_state`]): a render encoder's draws take it as the
 //! pipeline's static depth/stencil state, or as dynamic state where the pipeline makes it dynamic
 //! (`render.rs`). Metal makes a state of any descriptor, masks wider than the 8-bit stencil
-//! included (measured on an M4), so creation refuses nothing.
+//! included (measured on an M4), so creation refuses nothing. A state holds no Vulkan object, so
+//! it is no generation's (`device/line.rs`): it holds a root handle of its device and goes on past
+//! the device's recovery, as Metal's state does.
 //!
 //! A state's `gpuResourceID` below Apple10 is the release's answer, not a refusal: Metal's API
 //! validation stops the call ("Obtaining the resourceID of a DepthStencilState object requires
@@ -30,6 +32,7 @@ use std::sync::Arc;
 pub struct DepthStencilState(Arc<Shared>);
 
 struct Shared {
+    /// A root handle of the device (`device/line.rs`): of whatever generation serves.
     device: Device,
     descriptor: DepthStencilDescriptor,
     vulkan: metal2vulkan::metal::state::DepthStencilState,
@@ -65,7 +68,7 @@ impl Device {
         descriptor: &DepthStencilDescriptor,
     ) -> Result<DepthStencilState, Error> {
         Ok(DepthStencilState(Arc::new(Shared {
-            device: self.clone(),
+            device: self.root(),
             descriptor: *descriptor,
             vulkan: depth_stencil_state(descriptor),
         })))
@@ -73,7 +76,8 @@ impl Device {
 }
 
 impl DepthStencilState {
-    /// `device`: the device that made the state.
+    /// `device`: the device that made the state, as a root handle, whose calls go to the
+    /// generation that serves (the module docs).
     pub fn device(&self) -> &Device {
         &self.0.device
     }
@@ -88,7 +92,7 @@ impl DepthStencilState {
     /// `NotImplemented(IndirectRenderCommands)` on a device that claims Apple10: indirect render
     /// commands that set a depth/stencil state are not built.
     pub fn gpu_resource_id(&self) -> Result<ResourceId, Error> {
-        if self.0.device.supports_family_now(GpuFamily::Apple10.raw()) {
+        if self.0.device.supports_family(GpuFamily::Apple10.raw()) {
             return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
                 IndirectRule::CommandRenderStates,
             )));
