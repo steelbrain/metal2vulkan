@@ -10,7 +10,11 @@
 //! (Metal's answers: the texels from before the pass at a read before any draw, the draw's after
 //! a barrier over the render targets, `metal2vulkan-conformance`'s `pass-start-barrier-*` rows),
 //! and the texels the copies in moved (`WorkCounts::shadow_texels_copied_in`). A copy cut wrong
-//! leaves the read's texels wrong; a copy of every texel leaves the counts wrong.
+//! leaves the read's texels wrong; a copy of every texel leaves the counts wrong. Where the device
+//! reads the texture through a snapshot inside the pass (`render/snapshot.rs`: a texture over a
+//! buffer's bytes takes it at any area, with a barrier or without), the read copies nothing in,
+//! and only the bytes are checked there; a device without the snapshot route (lavapipe, whose
+//! passes fetch colors as input attachments) checks the copies.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_rect`,
@@ -140,7 +144,7 @@ impl Tools {
 }
 
 /// What one pass moved, between its counts `before` and `after`.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Read {
     /// `WorkCounts::shadow_texels_copied_in`.
     copied_in: u64,
@@ -174,7 +178,7 @@ fn rows_hold(bytes: &[u8], value_of: impl Fn(u64) -> u8) -> bool {
 /// before the pass moves the read's texels alone, command buffer after command buffer, a fill of
 /// the bytes between them reaching the next read; a read after a draw and a barrier takes the
 /// draw's texels, through a copy after the draw of the read's texels alone where the device
-/// splits the pass there, or through a snapshot, with no copy, where it reads so.
+/// splits the pass there. Each reads through a snapshot, with no copy, where the device reads so.
 #[test]
 fn a_reader_of_its_own_pass_s_target_over_private_bytes_copies_in_what_it_reads() {
     let scratch = Scratch::new("attached-read-standing");
@@ -204,8 +208,19 @@ fn a_reader_of_its_own_pass_s_target_over_private_bytes_copies_in_what_it_reads(
         through_copies: 1,
         splits: 0,
     };
-    let (moved, _) = read(tools.pass(&texture, None));
-    assert_eq!(moved, only_read, "the first read's copy in");
+    let snapshot = Read {
+        copied_in: 0,
+        own_pixel: 0,
+        through_copies: 0,
+        splits: 0,
+    };
+    // With no barrier: the copy in, or a snapshot (the module docs).
+    let unordered = |snapshotted: u64| match snapshotted {
+        0 => only_read,
+        _ => snapshot,
+    };
+    let (moved, snapshotted) = read(tools.pass(&texture, None));
+    assert_eq!(moved, unordered(snapshotted), "the first read's copy in");
     assert!(
         rows_hold(&tools.bytes(&buffer), first),
         "the read wrote the texels from before the pass"
@@ -216,8 +231,12 @@ fn a_reader_of_its_own_pass_s_target_over_private_bytes_copies_in_what_it_reads(
         true => 0x77,
         false => first(y),
     };
-    let (moved, _) = read(tools.pass(&texture, None));
-    assert_eq!(moved, only_read, "the next command buffer's copy in");
+    let (moved, snapshotted) = read(tools.pass(&texture, None));
+    assert_eq!(
+        moved,
+        unordered(snapshotted),
+        "the next command buffer's copy in"
+    );
     assert!(
         rows_hold(&tools.bytes(&buffer), filled),
         "the read took the fill"
@@ -232,12 +251,7 @@ fn a_reader_of_its_own_pass_s_target_over_private_bytes_copies_in_what_it_reads(
             splits: 1,
             ..only_read
         },
-        _ => Read {
-            copied_in: 0,
-            own_pixel: 0,
-            through_copies: 0,
-            splits: 0,
-        },
+        _ => snapshot,
     };
     assert_eq!(moved, after_draw, "the read after the draw and the barrier");
     assert!(
