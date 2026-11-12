@@ -60,8 +60,8 @@ fragment void rch_select_sampled(float4 position [[position]],
     uint2 p = uint2(position.xy);
     float c = coverage.read(p).x;
     float4 out = base(position, noise);
-    float2 uv = c != 1.0f ? float2(out.x + out.y, out.y) : out.zw;
-    out = noise.sample(select_sampler, uv);
+    float u = c != 1.0f ? out.x + out.y : out.z;
+    out = noise.sample(select_sampler, float2(u, out.w));
     dst.write(out, p);
 }
 
