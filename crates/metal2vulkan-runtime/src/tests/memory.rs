@@ -57,16 +57,18 @@ fn classes_pick_their_memory_types_best_first() {
     );
 }
 
-/// An import of a dma-buf tries the types the host does not map first, then those it maps, each
-/// in its class's order: the class's types first, then every other type the dma-buf and what is
-/// bound in it take that the runtime may allocate and that is neither protected nor lazily
-/// allocated, in Vulkan's order. With an RTX 3090's types (NVIDIA's 620.70.06), whose udmabuf
-/// lists types 0 and 4, a `Shared` import tries type 0, system memory with no property flag,
-/// which that driver imports a udmabuf as, before type 4, the class's, whose refused import
-/// breaks the device's exportable device-local allocations. Each form of an import tries a type
-/// the host does not map before any form tries one it maps.
+/// An import of a dma-buf tries its class's order (the class's types first, then every other
+/// type the dma-buf and what is bound in it take that the runtime may allocate and that is
+/// neither protected nor lazily allocated, in Vulkan's order), but the system-memory types the
+/// host maps (host-visible, not device-local) last. With an RTX 3090's types (NVIDIA's
+/// 620.70.06), whose udmabuf lists types 0 and 4, a `Shared` import tries type 0, system memory
+/// with no property flag, which that driver imports a udmabuf as, before type 4, the class's,
+/// whose refused import breaks the device's exportable device-local allocations. Each form of an
+/// import tries the other types before any form tries a system-memory type the host maps. Where
+/// the types are all device-local (ANV's on an Iris Xe) or all host-mapped system memory (RADV's
+/// for a udmabuf), the class's order stands.
 #[test]
-fn dma_buf_imports_try_the_types_the_host_does_not_map_first() {
+fn dma_buf_imports_try_the_system_memory_types_the_host_maps_last() {
     use vk::MemoryPropertyFlags as P;
     let host = P::HOST_VISIBLE | P::HOST_COHERENT;
     let nvidia = [
@@ -85,22 +87,22 @@ fn dma_buf_imports_try_the_types_the_host_does_not_map_first() {
         dma_buf_candidates(&nvidia, 0x11, MemoryClass::Shared, false),
         [0, 4]
     );
-    // The class's own order first, the others after it in Vulkan's; then the types the host
-    // does not map before those it maps, each group in that order.
+    // The class's own order first, the others after it in Vulkan's; then the system-memory types
+    // the host maps (3 and 4) after the rest, each group in that order.
     assert_eq!(
         dma_buf_class_order(&nvidia, 0x3f, MemoryClass::Shared, false),
         [4, 5, 3, 0, 1, 2]
     );
     assert_eq!(
         dma_buf_candidates(&nvidia, 0x3f, MemoryClass::Shared, false),
-        [0, 1, 2, 4, 5, 3]
+        [5, 0, 1, 2, 4, 3]
     );
-    // Types 0 to 2 are the ones the host does not map.
     let private = dma_buf_class_order(&nvidia, 0x3f, MemoryClass::Private, false);
-    let (unmapped, mapped): (Vec<u32>, Vec<u32>) = private.iter().partition(|&&index| index < 3);
+    let (others, mapped): (Vec<u32>, Vec<u32>) =
+        private.iter().partition(|&&index| index != 3 && index != 4);
     assert_eq!(
         dma_buf_candidates(&nvidia, 0x3f, MemoryClass::Private, false),
-        [unmapped, mapped].concat()
+        [others, mapped].concat()
     );
     assert!(dma_buf_candidates(&nvidia, 0, MemoryClass::Shared, false).is_empty());
     // A buffer's import, dedicated to nothing and then to the buffer: both forms as type 0
@@ -110,31 +112,39 @@ fn dma_buf_imports_try_the_types_the_host_does_not_map_first() {
         dma_buf_attempts(&nvidia, &ranked, &[false, true]),
         [(false, 0), (true, 0), (false, 4), (true, 4)]
     );
-    // Where every type the dma-buf lists is one the host maps (RADV's, ANV's and lavapipe's
-    // udmabufs), the class's order and the forms' stand.
-    let mapped = [
+    // Where every type the dma-buf lists is device-local (ANV's on an Iris Xe: 0x1, 0x7, 0xf,
+    // unified) or host-mapped system memory (RADV's for a udmabuf on a discrete GPU), the
+    // class's order and the forms' stand.
+    let anv = [
+        ty(P::DEVICE_LOCAL),
+        ty(P::DEVICE_LOCAL | host),
+        ty(P::DEVICE_LOCAL | host | P::HOST_CACHED),
+    ];
+    let gtt = [
         ty(P::DEVICE_LOCAL),
         ty(host),
         ty(P::DEVICE_LOCAL | host),
         ty(host | P::HOST_CACHED),
     ];
-    for class in [
-        MemoryClass::Shared,
-        MemoryClass::WriteCombined,
-        MemoryClass::Private,
-        MemoryClass::Managed,
-    ] {
-        let ranked = dma_buf_candidates(&mapped, 0b1110, class, false);
-        assert_eq!(
-            ranked,
-            dma_buf_class_order(&mapped, 0b1110, class, false),
-            "{class:?}"
-        );
-        let forms: Vec<(bool, u32)> = [false, true]
-            .into_iter()
-            .flat_map(|dedicated| ranked.iter().map(move |&index| (dedicated, index)))
-            .collect();
-        assert_eq!(dma_buf_attempts(&mapped, &ranked, &[false, true]), forms);
+    for (types, allowed, unified) in [(&anv[..], 0b111, true), (&gtt[..], 0b1010, false)] {
+        for class in [
+            MemoryClass::Shared,
+            MemoryClass::WriteCombined,
+            MemoryClass::Private,
+            MemoryClass::Managed,
+        ] {
+            let ranked = dma_buf_candidates(types, allowed, class, unified);
+            assert_eq!(
+                ranked,
+                dma_buf_class_order(types, allowed, class, unified),
+                "{class:?}"
+            );
+            let forms: Vec<(bool, u32)> = [false, true]
+                .into_iter()
+                .flat_map(|dedicated| ranked.iter().map(move |&index| (dedicated, index)))
+                .collect();
+            assert_eq!(dma_buf_attempts(types, &ranked, &[false, true]), forms);
+        }
     }
     // Never a protected, lazily allocated or AMD device-coherent type.
     let others = [

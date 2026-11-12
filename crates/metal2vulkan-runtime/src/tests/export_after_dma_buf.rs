@@ -19,12 +19,12 @@
 //!
 //! The driver's behaviour behind it, as evidence (`EXPORT-AFTER-DMA-BUF-RAW`, printed, not
 //! asserted: a driver may change it): NVIDIA's 620.70.06 on an RTX 3090, once it refused an
-//! import of the udmabuf into a type the host maps (its type 4, `ERROR_OUT_OF_DEVICE_MEMORY`),
-//! answers `ERROR_OUT_OF_DEVICE_MEMORY` to every exportable allocation of its device-local type,
-//! for the device's life, where its successful import into type 0 leaves them made. So the
-//! runtime's imports try the types the host does not map first (`memory::dma_buf_candidates`),
-//! and `DMA-BUF-IMPORT-TYPES` prints where that order puts each class's import on the device under
-//! test, against the class's order alone.
+//! import of the udmabuf into a system-memory type the host maps (its type 4,
+//! `ERROR_OUT_OF_DEVICE_MEMORY`), answers `ERROR_OUT_OF_DEVICE_MEMORY` to every exportable
+//! allocation of its device-local type, for the device's life, where its successful import into
+//! type 0 leaves them made. So the runtime's imports try the system-memory types the host maps
+//! last (`memory::dma_buf_candidates`), and `DMA-BUF-IMPORT-TYPES` prints where that order puts
+//! each class's import on the device under test, against the class's order alone.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on Linux.
 
@@ -551,8 +551,8 @@ fn dma_buf_buffer_types(device: &Device, bytes: u64) -> u32 {
     bits
 }
 
-/// Where the runtime's order of a dma-buf import's types (those the host does not map first,
-/// `memory::dma_buf_candidates`) puts a buffer's import of each class, against the class's order
+/// Where the runtime's order of a dma-buf import's types (the system-memory types the host maps
+/// last, `memory::dma_buf_candidates`) puts a buffer's import of each class, against the class's order
 /// alone (`memory::dma_buf_class_order`, the order before): for a scattered udmabuf and for a
 /// dma-buf of the device's own device-local memory, the types the driver lists and a buffer
 /// takes, both orders, the type the runtime's import took (`memory::import_dma_buf`, dedicated
@@ -648,7 +648,7 @@ fn the_type_each_class_s_dma_buf_import_takes_against_the_class_s_order() {
             .find(|&index| raw_import(&device, fd, bytes, index) == 0);
         eprintln!(
             "{TYPES} on {}: {source}, {class:?}: allowed {allowed:#b}; class order {before:?}, \
-             unmapped first {after:?}; the runtime's import took {:?}, the class's order takes \
+             runtime order {after:?}; the runtime's import took {:?}, the class's order takes \
              {:?}",
             device.name(),
             took.map(|index| (index, flags(index))),

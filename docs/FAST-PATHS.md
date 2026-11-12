@@ -1709,9 +1709,11 @@ driver's. Each is open work.
   descriptor or a dma-buf, as out of device memory, for the device's life, where it made each
   before and makes them after a successful import as 0 (measured on an RTX 3090,
   `tests::export_after_dma_buf`): an exportable buffer then overflowed into system memory. So a
-  dma-buf import tries the memory types the host does not map before those it maps, in every
-  form (`memory.rs`'s `dma_buf_candidates`; the runtime maps no dma-buf import), and NVIDIA's
-  udmabuf imports never try type 4 where type 0 takes them. 615.71.09 also refuses
+  dma-buf import tries the system-memory types the host maps (host-visible, not device-local)
+  after every other type, in every form (`memory.rs`'s `dma_buf_candidates`; the runtime maps no
+  dma-buf import), and NVIDIA's udmabuf imports never try type 4 where type 0 takes them.
+  Device-local types keep their class's order, so ANV's, RADV's and lavapipe's imports are as
+  before. 615.71.09 also refuses
   most udmabufs of scattered pages dedicated to nothing, of 16 KiB to 63 MiB, and takes them
   dedicated to their buffer (measured on an RTX 5080 Laptop GPU: 4346 of the leak probe's 6000
   imports). So an import tries first the form and type its kind (what it backs, and its class)
