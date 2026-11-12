@@ -11,6 +11,11 @@
 //!   (`LINEAR-ALIGNMENT`): every format's answer, by answer, the device's own
 //!   (`deviceLinearTextureAlignmentBytes`), which `iosurfaceTextureAlignmentBytes` and
 //!   `iosurfaceReadOnlyTextureAlignmentBytes` answer too, and how long the answers took.
+//! - [`a_render_target_at_the_answered_alignment_is_in_place`]: each answer is at least the
+//!   device's line of memory, and a `RenderTarget` texture of each of [`RENDERED`] at an offset
+//!   of the answer, its rows' bytes a multiple of it, shares no line with bytes beside its texels
+//!   and is in place wherever the device's check passed renders of such textures. Printed
+//!   (`LINEAR-ALIGNMENT`): how many were in place.
 //! - [`a_row_under_the_answer_is_made`]: an `RGBA8Unorm` texture of rows of 64 bytes at an
 //!   offset of 64, over a no-copy buffer, over a buffer of the runtime's and over that buffer as
 //!   an IOSurface's plane, is made on every device, as Metal makes it: a shadow (counted
@@ -66,13 +71,13 @@ struct Over {
     mapping: Mapping,
 }
 
-/// A `ShaderRead` texture of `pf`, `w` x `h` texels, at `offset` with rows
+/// A texture of `pf` and `usage`, `w` x `h` texels, at `offset` with rows
 /// `bpr` apart in a no-copy buffer of anonymous pages holding [`counting`] bytes, with room for 4
 /// rows past its last (lavapipe's linear image takes its height rounded up to 4, and an image in
 /// place lies inside the buffer's memory); `None` where the device imports no host pages.
 fn over_pages(
     device: &Device,
-    pf: PixelFormat,
+    (pf, usage): (PixelFormat, TextureUsage),
     (w, h): (u64, u64),
     (offset, bpr): (u64, u64),
 ) -> Option<Over> {
@@ -96,7 +101,7 @@ fn over_pages(
         Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
     };
     let mut d = TextureDescriptor::texture_2d(pf, w, h, false);
-    d.usage = TextureUsage::SHADER_READ;
+    d.usage = usage;
     d.resource_options = buffer.resource_options();
     let texture = buffer.new_texture(&d, offset, bpr).unwrap();
     Some(Over {
@@ -241,7 +246,9 @@ fn a_texture_at_the_answered_alignment_is_in_place() {
                 for w in WIDTHS {
                     let at = (answer, (w * texel).next_multiple_of(answer));
                     let before = device.work_counts();
-                    let Some(over) = over_pages(device, pf, (w, ROWS), at) else {
+                    let Some(over) =
+                        over_pages(device, (pf, TextureUsage::SHADER_READ), (w, ROWS), at)
+                    else {
                         eprintln!(
                             "LINEAR-ALIGNMENT on {}: the device imports no host memory",
                             device.name()
@@ -280,6 +287,87 @@ fn a_texture_at_the_answered_alignment_is_in_place() {
     );
 }
 
+/// The formats the render target test makes textures of, with their texel's bytes: colour
+/// formats a buffer backs that render, of 4, 8 and 16 bytes.
+const RENDERED: [(PixelFormat, u64); 3] = [
+    (PixelFormat::RGBA8Unorm, 4),
+    (PixelFormat::RGBA16Float, 8),
+    (PixelFormat::RGBA32Float, 16),
+];
+
+/// A render target at the answer is in place. On a device that imports host pages each format's
+/// answer is at least the device's line of memory (`Device::in_place_check_line`, its
+/// `nonCoherentAtomSize`), so a `ShaderRead | RenderTarget` texture over a no-copy buffer at an
+/// offset of the answer, its rows' bytes a multiple of the answer, tight or the answer apart past
+/// them, shares no line with bytes beside its texels. Where the device's check passed renders of
+/// such textures over pages imported by their pointer, it is an image in place (counted
+/// `host_textures_in_place`), and a blit out of it reads the caller's texels. On the Iris Xe,
+/// whose check fails renders of texels that share a line with bytes beside them, the answer was
+/// 16, and such a texture at an offset of 16 a shadow.
+#[test]
+fn a_render_target_at_the_answered_alignment_is_in_place() {
+    let cache = ScratchCache::new().unwrap();
+    on_device_of_with(
+        at_plan,
+        HostPageTexturePolicy::InPlace,
+        &cache,
+        |device, _| {
+            assert!(device.settle_in_place_checks(CHECK_WAIT));
+            let line = device.in_place_check_line();
+            let renders = in_place_rows::passed(device, "Pointer renders", true);
+            let usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+            let (mut made, mut in_place) = (0, 0);
+            for (pf, texel) in RENDERED {
+                let answer = device
+                    .minimum_linear_texture_alignment_for_pixel_format(pf)
+                    .unwrap();
+                for lines in [1, 3, 30] {
+                    let (w, row) = (lines * answer / texel, lines * answer);
+                    for bpr in [row, row + answer] {
+                        let at = (answer, bpr);
+                        let what = format!("{} {w}x{ROWS} at {at:?}", pf.name());
+                        let before = device.work_counts();
+                        let Some(over) = over_pages(device, (pf, usage), (w, ROWS), at) else {
+                            eprintln!(
+                                "LINEAR-ALIGNMENT on {}: the device imports no host memory",
+                                device.name()
+                            );
+                            assert_eq!(answer, 16, "{pf:?}: Metal's where no image is in place");
+                            return;
+                        };
+                        assert!(answer >= line, "{what}: under the device's line, {line}");
+                        let base = over.buffer.contents().map_or(0, |a| a.as_ptr() as u64);
+                        let on_lines =
+                            in_place_rows::on_lines(device, base + at.0, row, at.1, ROWS);
+                        assert!(on_lines, "{what}: its texels share a line with other bytes");
+                        // SAFETY: the handle is only compared, while the texture lives.
+                        let aliased = unsafe { over.texture.vk_image() }.is_some();
+                        let counted = device.work_counts().host_textures_in_place
+                            - before.host_textures_in_place;
+                        assert_eq!(counted, u64::from(aliased), "{what}: its form not counted");
+                        if renders {
+                            assert!(aliased, "{what}: a shadow at the answered alignment");
+                        }
+                        made += 1;
+                        in_place += u64::from(aliased);
+                        let pages = over.mapping.read(0..over.buffer.length() as usize);
+                        let ours = blitted(device, &over.texture, (w, ROWS), texel);
+                        assert!(
+                            ours == packed(&pages, at, (w, ROWS), texel),
+                            "{what}: the blit out read other bytes than the caller's texels"
+                        );
+                    }
+                }
+            }
+            eprintln!(
+                "LINEAR-ALIGNMENT on {}: {in_place} of {made} render targets at the answer in \
+                 place, the line {line}, renders of rows on lines passed: {renders}",
+                device.name()
+            );
+        },
+    );
+}
+
 /// A texture of rows of 64 bytes at an offset of 64 (`RGBA8Unorm`, 16 texels wide), a multiple
 /// of Metal's 16 and under the device's answer where it is larger, is made over a no-copy buffer
 /// and over a buffer of the runtime's, as a shadow where the answer is more than 64, and reads its
@@ -300,7 +388,7 @@ fn a_row_under_the_answer_is_made() {
             assert!(device.settle_in_place_checks(CHECK_WAIT));
             // Over host pages.
             let before = device.work_counts();
-            if let Some(over) = over_pages(device, pf, (w, ROWS), at) {
+            if let Some(over) = over_pages(device, (pf, TextureUsage::SHADER_READ), (w, ROWS), at) {
                 let shadowed = device.work_counts().shadowed_textures - before.shadowed_textures;
                 // SAFETY: the handle is only compared, while the texture lives.
                 let aliased = unsafe { over.texture.vk_image() }.is_some();
