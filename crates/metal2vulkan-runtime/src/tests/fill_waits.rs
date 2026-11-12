@@ -301,15 +301,26 @@ fn new_memory_reads_zero_through_every_reach() {
     for command_buffer in [&load, &first, &by_name, &through] {
         completed(&name, command_buffer);
     }
-    for (what, buffer) in [("its first batch", &first_read), ("by name", &named_read)] {
-        assert!(
-            read(buffer).iter().all(|&byte| byte == 0),
-            "{name}: the new buffer read other bytes than zero {what}"
-        );
-    }
+    let reads = [
+        ("its first batch", &first_read),
+        ("by name", &named_read),
+        ("through a pointer", &out),
+    ];
+    let not_zero: Vec<String> = (reads.iter())
+        .filter_map(|&(what, buffer)| {
+            let bytes = read(buffer);
+            let at = bytes.iter().position(|&byte| byte != 0)?;
+            let count = bytes.iter().filter(|&&byte| byte != 0).count();
+            Some(format!(
+                "{what}: {count} bytes, the first at {at}: {:#x}",
+                bytes[at]
+            ))
+        })
+        .collect();
     assert!(
-        read(&out).iter().all(|&byte| byte == 0),
-        "{name}: the new buffer read other bytes than zero through a pointer"
+        not_zero.is_empty(),
+        "{name}: the new buffer read other bytes than zero: {}",
+        not_zero.join("; ")
     );
     // A heap's texture whose move a batch that names nothing of the heap takes: what a blit then
     // writes into it reads back.
