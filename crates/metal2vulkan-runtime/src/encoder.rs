@@ -2209,11 +2209,22 @@ impl EncoderCore {
             let from_staging = staged.contains(&i);
             if let Some(gate) = gate {
                 // Tracked here as the copy, recorded at its batch's submission.
-                let named = std::cell::Cell::new(false);
-                let tracked = |_: &Vk, _: vk::CommandBuffer| named.set(true);
-                self.shadow_command(&mut run, (stages, &uses, copy.writes_truth()), tracked);
-                if named.get() {
-                    self.defer_copy_in(copy, gate);
+                let named = match self.defers_apart() {
+                    true => self.track_deferred(stages, &uses),
+                    false => {
+                        let named = std::cell::Cell::new(false);
+                        let tracked = |_: &Vk, _: vk::CommandBuffer| named.set(true);
+                        let writes = copy.writes_truth();
+                        self.shadow_command(&mut run, (stages, &uses, writes), tracked);
+                        named.get()
+                    }
+                };
+                if named {
+                    // Its segment's barriers order it after everything before and before
+                    // everything after (`GatedCopyIn::record`): the run goes on as after one.
+                    if self.defer_copy_in(copy, gate) {
+                        run = ShadowRun::after_barrier();
+                    }
                 }
                 if let Some(sets) = rows.and_then(RowCopies::retained) {
                     self.retain(sets);
@@ -2291,14 +2302,18 @@ impl EncoderCore {
     /// `VkCommandBuffer`. A render pass held for an instance recorded inline
     /// ([`hold_pass`](Self::hold_pass)) stays held: the copies of its first instance go before
     /// the pass, so the segment goes between the command buffers of the commands before it,
-    /// ahead of the pass's draws that read the copy. Recorded whole here instead inside a
-    /// predicated loop's laying, which its check may submit again, or where no new
-    /// `VkCommandBuffer` can be made.
-    fn defer_copy_in(&mut self, copy: &ShadowCopy, gate: CopyGate) {
+    /// ahead of the pass's draws that read the copy: there the encoder begins no
+    /// `VkCommandBuffer` to go on in until a command records before the pass
+    /// ([`defers_apart`](Self::defers_apart)). Recorded whole here instead inside a predicated
+    /// loop's laying, which its check may submit again, or where no new `VkCommandBuffer` can be
+    /// made. Whether it went apart so, with no barrier of the encoder's before it.
+    fn defer_copy_in(&mut self, copy: &ShadowCopy, gate: CopyGate) -> bool {
         let laying = (self.open.command_buffer.state().predication_mut()).laying();
-        let next = match laying {
-            true => None,
-            false => self.continuation().ok(),
+        let apart = self.defers_apart();
+        let next = match (laying, apart) {
+            (true, _) => None,
+            (false, true) => Some(None),
+            (false, false) => self.continuation().ok().map(Some),
         };
         let Some(next) = next else {
             if matches!(gate, CopyGate::Standing) {
@@ -2310,12 +2325,48 @@ impl EncoderCore {
                 // the `GENERAL` layout.
                 unsafe { copy.record(self.device().shared().vk(), raw, None) };
             }
-            return;
+            return false;
         };
         let work = Deferred::GatedCopyIn(Arc::new(GatedCopyIn::new(copy.clone(), gate)));
         // Refused only where the current `VkCommandBuffer` does not end, which abandons the
         // command buffer.
         let _abandoned = self.defer_into(next, work);
+        apart
+    }
+
+    /// Whether a shadow's gated copy in goes apart from the encoder's commands with no
+    /// `VkCommandBuffer` of the encoder's around it: where a render pass is held for an instance
+    /// recorded inline ([`hold_pass`](Self::hold_pass)), whose release gives the encoder its
+    /// command buffer to go on in, in an encoder whose commands Metal leaves unordered, outside a
+    /// predicated loop's laying. Its segment records a barrier from everything before it and one
+    /// to everything after it (`GatedCopyIn::record`), which order it among the encoder's
+    /// commands as the encoder's own barriers around it would: so the encoder records neither,
+    /// nor begins a `VkCommandBuffer` for them, before the pass or after the copy
+    /// (`WorkCounts::command_buffers_begun_continuations`).
+    fn defers_apart(&mut self) -> bool {
+        self.pass.is_some()
+            && !self.uses.ordered()
+            && !(self.open.command_buffer.state().predication_mut()).laying()
+    }
+
+    /// Track a gated copy in, in `stages` with `uses`, that goes apart
+    /// ([`defers_apart`](Self::defers_apart)), as [`shadow_command`](Self::shadow_command) tracks
+    /// a copy it records, recording nothing: whether it is to be made (a copy of a detached
+    /// buffer's bytes is not, nor what follows, [`skips`](Self::skips)).
+    fn track_deferred(
+        &mut self,
+        stages: vk::PipelineStageFlags2,
+        uses: &[Use<ResourceKey>],
+    ) -> bool {
+        if self.skips(uses.iter().map(|used| used.key)) {
+            return false;
+        }
+        let aliased = self.aliased(uses);
+        let tracked = aliased.as_deref().unwrap_or(uses);
+        self.open.command_buffer.note_dirty(tracked);
+        self.uses.record(stages, tracked, None);
+        self.touch(uses);
+        true
     }
 
     /// Whether a command of an encoder of the command buffer that ended before this one wrote the
@@ -2421,7 +2472,7 @@ impl EncoderCore {
     pub(super) fn defer(&mut self, work: Deferred) -> Result<(), Error> {
         self.release_pass()?;
         let next = self.continuation()?;
-        self.defer_into(next, work)
+        self.defer_into(Some(next), work)
     }
 
     /// Note the uses `uses`, in `stages`, of work a segment left to a later recording records
@@ -2600,9 +2651,10 @@ impl EncoderCore {
         Ok(())
     }
 
-    /// [`defer`](Self::defer) `work`, the encoder going on in `next`: refused only where the
+    /// [`defer`](Self::defer) `work`, the encoder going on in `next`, or where none, in one begun
+    /// at its next command ([`raw_recording`](Self::raw_recording)): refused only where the
     /// current `VkCommandBuffer` does not end, which abandons the command buffer.
-    fn defer_into(&mut self, next: Continuation, work: Deferred) -> Result<(), Error> {
+    fn defer_into(&mut self, next: Option<Continuation>, work: Deferred) -> Result<(), Error> {
         self.flush_gathers();
         if work.leaves_shadows() {
             let copies = self.shadows.leave();
@@ -2619,11 +2671,13 @@ impl EncoderCore {
             }
             self.ended.push(self.raw);
         }
-        self.raw = next.0;
+        self.raw = next
+            .as_ref()
+            .map_or(vk::CommandBuffer::null(), |next| next.0);
         self.recorded = false;
         // Inside a predicated loop's laying, the work goes among its pieces, before the command
         // buffer the encoder goes on in (`command_buffer/rerun.rs`).
-        if next.1 == Laid::Inside {
+        if next.is_some_and(|next| next.1 == Laid::Inside) {
             (self.open.command_buffer.state().predication_mut()).laid_apart(&work);
         }
         let host = work.gpu_written();
@@ -2654,7 +2708,7 @@ impl EncoderCore {
         next: Continuation,
         dispatch: PendingDispatch,
     ) -> Result<(), Error> {
-        self.defer_into(next, Deferred::Pending(Arc::new(dispatch)))
+        self.defer_into(Some(next), Deferred::Pending(Arc::new(dispatch)))
     }
 
     /// Metal fails the command buffer from this encoder on with `error`, as it commits: the

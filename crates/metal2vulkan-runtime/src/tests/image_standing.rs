@@ -248,7 +248,9 @@ enum Between {
 /// inside the rectangle bounding the scissors the pass before drew through, where that pass was
 /// an attached read's; every texel after another write. Every texel holds what Metal's draws
 /// leave: [`SOLID`] inside [`SOLID_AT`], [`BETWEEN`] inside [`BETWEEN_AT`] where a pass drew it,
-/// [`CLEARED`] elsewhere (the reads sample what is there).
+/// [`CLEARED`] elsewhere (the reads sample what is there). The last pass's copy goes to its
+/// batch's submission, with its own barriers, and the pass begins no `VkCommandBuffer` around it
+/// (`command_buffers_begun_continuations`).
 #[test]
 fn a_copy_in_after_an_attached_read_moves_what_its_pass_drew_alone() {
     let scratch = Scratch::new("image-standing");
@@ -273,10 +275,18 @@ fn a_copy_in_after_an_attached_read_moves_what_its_pass_drew_alone() {
         let texels = delta(|c| c.shadow_texels_copied_in_images);
         let skipped = delta(|c| c.shadow_texels_skipped_by_standing);
         let stale_within = delta(|c| c.shadow_texels_unskipped_stale_within);
+        let against = delta(|c| c.shadow_copies_in_against_standing);
+        let continuations = delta(|c| c.command_buffers_begun_continuations);
         eprintln!(
             "IMAGE-STANDING {} {between:?}: the last pass's copy {texels} texels, {skipped} \
-             skipped by standing, {stale_within} moved inside a stale rectangle",
+             skipped by standing, {stale_within} moved inside a stale rectangle, {against} \
+             against a standing; continuations begun {continuations}",
             device.name()
+        );
+        assert_eq!(
+            (against, continuations),
+            (1, 0),
+            "{between:?}: the last pass's copies against a standing, and its continuations"
         );
         let moved = match between {
             Between::Nothing => bound_texels(READ_AT, SOLID_AT),
