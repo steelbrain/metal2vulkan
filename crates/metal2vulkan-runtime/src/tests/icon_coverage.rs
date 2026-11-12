@@ -26,7 +26,12 @@
 //! middle rows, in every channel, the second coverage draw's `w` of the mark's second color on the
 //! left and of the second color's clear on the right (zero where it loads `DontCare`: Metal's
 //! answer for a `DontCare` load a pass does not store, `clear_reach.rs`); over the bottom rows the
-//! mark's second color on the left and the clear on the right, each `(c1.x, c1.y, 1, 1)`.
+//! mark's second color on the left and the clear on the right, each `(c1.x, c1.y, 1, 1)`. The
+//! device clears such a `DontCare` load (`UnstoredDontCarePolicy::Cleared`): the default does
+//! only on a driver measured to clear it no slower (`DriverFact::UnstoredClearNoSlower`, the M3
+//! among them, so the M3 renders as under the default), and elsewhere leaves the driver's
+//! `DONT_CARE`, whose texels on the right are a texture's earlier ones (lavapipe: from the second
+//! round on, as textures are made again in freed memory).
 //!
 //! Four forms of the render: every icon in one command buffer; each in its own, every one made
 //! before the first commits; each in its own, encoded and committed on several threads at once on
@@ -45,7 +50,7 @@
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
-use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
+use super::blit_holds::{options, over_host, Host, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::{
     BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, DepthStencilState, Device,
@@ -53,6 +58,7 @@ use crate::{
     ResourceOptions, SamplerState, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::device::UnstoredDontCarePolicy;
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{
     CompareFunction, PixelFormat, PrimitiveType, StencilOperation, TextureUsage,
@@ -458,7 +464,9 @@ fn run(case: &str, form: Form, home: Home) {
     // Declared before the device, so dropped after it.
     let host = Host::new();
     let scratch = Scratch::new(&format!("icon-coverage-{case}"));
-    let device = device(&scratch.0);
+    let mut options = options(&scratch.0);
+    options.policy.unstored_dont_care_loads = UnstoredDontCarePolicy::Cleared;
+    let device = Device::system_default_with(&options).unwrap();
     let Some(mut tools) = Tools::new(&device) else {
         eprintln!(
             "ICON-COVERAGE {case} on {}: no framebuffer fetch: nothing to check",
