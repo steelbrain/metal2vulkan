@@ -163,12 +163,17 @@ pub enum AddrSpace {
     ObjectData = 6,
     /// A mesh function's output handle (`metal::mesh<..>`, an opaque struct).
     MeshOutput = 7,
+    /// MSL 4.1's generic address space: a pointer declared with no address space, which a device,
+    /// thread or threadgroup pointer converts to (`addrspacecast`) and keeps pointing into its
+    /// space; `air.is_{device,thread,threadgroup}_pointer` asks which. Canonicalization gives each
+    /// generic pointer the one space every pointer it may hold comes from (`canon::generic`).
+    Generic = 8,
 }
 
 impl AddrSpace {
     /// Every address space.
     #[cfg(test)]
-    pub const ALL: [AddrSpace; 7] = [
+    pub const ALL: [AddrSpace; 8] = [
         AddrSpace::Thread,
         AddrSpace::Device,
         AddrSpace::Constant,
@@ -176,6 +181,7 @@ impl AddrSpace {
         AddrSpace::ThreadgroupImageblock,
         AddrSpace::ObjectData,
         AddrSpace::MeshOutput,
+        AddrSpace::Generic,
     ];
 
     /// The address space numbered `n` in LLVM IR.
@@ -188,6 +194,7 @@ impl AddrSpace {
             4 => Ok(AddrSpace::ThreadgroupImageblock),
             6 => Ok(AddrSpace::ObjectData),
             7 => Ok(AddrSpace::MeshOutput),
+            8 => Ok(AddrSpace::Generic),
             _ => Err(Unsupported::not_implemented(Feature::AddressSpace(n))),
         }
     }

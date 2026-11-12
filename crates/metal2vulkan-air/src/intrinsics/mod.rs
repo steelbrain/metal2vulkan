@@ -28,7 +28,7 @@
 //! simdgroup and quad operations, simdgroup matrices, function constants, fragment operations,
 //! pull-model interpolation, imageblocks, async copies, function tables, acceleration-structure
 //! queries, ray intersection (`air.intersect`), tensor descriptors, indirect commands, OpenCL C's
-//! vector data loads and stores, and the
+//! vector data loads and stores, MSL 4.1's generic-pointer space queries, and the
 //! closed `llvm.*` set with the AGX family. Every other `air.*` name (names whose declarations have not been observed) stays
 //! unknown. [`UNDECODED`] lists the known families among them, and the intrinsic census of the
 //! `bitcode-reader` audit reports every unknown name with row counts. [`UNDECODED_FEATURES`] names
@@ -37,6 +37,7 @@
 
 mod atomic;
 mod convert;
+mod generic;
 mod intersect;
 mod layout;
 mod llvm;
@@ -61,6 +62,7 @@ mod tests;
 
 pub use atomic::{AccessKind, Atomic, AtomicOp, AtomicSpace, Coherent, MemoryOrder, ThreadScope};
 pub use convert::{Convert, Fp8, NumKind, Pack, PackDir, PackFormat, Rounding};
+pub use generic::PointerSpace;
 pub use intersect::{Instancing, Intersect, IntersectTags, ResultField, Role as IntersectRole};
 pub use layout::Layout;
 pub use llvm::{dropped_family, AgxSpace};
@@ -156,6 +158,9 @@ pub enum AirIntrinsic {
     /// OpenCL C's vector data loads and stores: `air.vload[a][_half].<space>.<type>` and
     /// `air.vstore[a][_half].<space>[.<rounding>].<type>`.
     VectorData(VectorData),
+    /// `air.is_{device,thread,threadgroup}_pointer`: which address space a generic pointer points
+    /// into (MSL 4.1).
+    PointerSpace(PointerSpace),
 }
 
 impl AirIntrinsic {
@@ -213,6 +218,7 @@ impl AirIntrinsic {
             .or_else(|| IndirectCommand::parse(rest).map(A::IndirectCommand))
             .or_else(|| Mesh::parse(rest).map(A::Mesh))
             .or_else(|| VectorData::parse(rest).map(A::VectorData))
+            .or_else(|| PointerSpace::parse(rest).map(A::PointerSpace))
             .or_else(|| Math::parse(rest).map(A::Math))
     }
 
@@ -263,6 +269,7 @@ impl AirIntrinsic {
             AirIntrinsic::IndirectCommand(c) => c.signature(),
             AirIntrinsic::Mesh(m) => m.signature(),
             AirIntrinsic::VectorData(v) => v.signature(),
+            AirIntrinsic::PointerSpace(p) => p.signature(),
         }
     }
 

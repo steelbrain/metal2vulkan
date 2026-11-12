@@ -87,6 +87,7 @@ fn operator_lists_are_exhaustive_with_unique_mnemonics() {
         AddrSpace::ThreadgroupImageblock => 4,
         AddrSpace::ObjectData => 5,
         AddrSpace::MeshOutput => 6,
+        AddrSpace::Generic => 7,
     });
     assert!(AddrSpace::ALL.windows(2).all(|w| w[0].raw() < w[1].raw()));
     for space in AddrSpace::ALL {
@@ -193,7 +194,7 @@ fn addr_spaces_decode_and_refuse_unknown() {
     for space in AddrSpace::ALL {
         assert_eq!(AddrSpace::from_raw(space.raw()), Ok(space));
     }
-    for n in [5, 8] {
+    for n in [5, 9] {
         let err = AddrSpace::from_raw(n).unwrap_err();
         assert_eq!(err.feature, Feature::AddressSpace(n));
     }

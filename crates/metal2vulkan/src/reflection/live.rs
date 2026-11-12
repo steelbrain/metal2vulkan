@@ -631,6 +631,7 @@ impl<'a> Engine<'a> {
                 | AirIntrinsic::WorkItem(_)
                 | AirIntrinsic::FunctionConstant(_)
                 | AirIntrinsic::Interpolate(_)
+                | AirIntrinsic::PointerSpace(_)
                 | AirIntrinsic::AccelerationStructure(_) => false,
                 AirIntrinsic::Texture(t) => matches!(
                     t.op,

@@ -36,7 +36,11 @@
 //!    run knows as the `select` chain over its elements (`const_tables`), the integer `llvm.*`
 //!    operations on constants, and the
 //!    float operations a constant operand decides whatever the others hold (a NaN operand, and a
-//!    product by a zero under `nnan` and `nsz`); unreachable blocks are deleted. A call whose immediates were not constants where it was
+//!    product by a zero under `nnan` and `nsz`); unreachable blocks are deleted. **Generic
+//!    pointers**: then each pointer of MSL 4.1's generic address space becomes a pointer of the
+//!    one space every pointer it may hold comes from, its space queries answered, and SCCP runs
+//!    again where one was; a generic pointer of two spaces, or of one only the run knows, is
+//!    `Unsupported{AddressSpace(8)}` (`generic`). A call whose immediates were not constants where it was
 //!    decoded (`Callee::Unbound`: an internal function's parameter passed on to the intrinsic) is
 //!    bound where they now are, each inlined copy with its own call site's constants. A value use of an unsupplied
 //!    constant that survives is `Error::NeedsInput(FunctionConstant)`. **Unrolling**: a loop whose
@@ -105,6 +109,7 @@ mod erase;
 mod fc;
 mod fold;
 pub mod function_table;
+mod generic;
 mod global_builtin;
 mod inline;
 mod interface;
@@ -652,6 +657,17 @@ pub fn specialize_dynamic(
         solved.body
     } else {
         body
+    };
+    // MSL 4.1's generic pointers, each a pointer of the one space its pointers come from; SCCP
+    // runs again over a body whose space queries that answered.
+    let (resolved, queried) = generic::resolve(body, &mut parts, func, m)?;
+    body = if queried {
+        let solved = solve(&resolved, &mut parts, &fcs, &name, m)?;
+        resolved.release(m);
+        undefined_reads.extend(solved.reads);
+        solved.body
+    } else {
+        resolved
     };
     // Loops whose trip count the constants decided, unrolled where their counters decide a branch
     // of their body; SCCP after each round folds what the copies decide. The unrolled body is

@@ -170,6 +170,7 @@ fn observes(callee: &Callee) -> bool {
         | AirIntrinsic::Pack(_)
         | AirIntrinsic::Coherent(_)
         | AirIntrinsic::VectorData(_)
+        | AirIntrinsic::PointerSpace(_)
         | AirIntrinsic::Texture(_)
         | AirIntrinsic::Sampler(_)
         | AirIntrinsic::FunctionConstant(_)

@@ -24,6 +24,7 @@ mod constant_fields;
 mod conversions;
 mod float_compares;
 mod float_folds;
+mod generic_pointers;
 mod global_builtins;
 mod opencl;
 mod private_memory;

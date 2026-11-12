@@ -2086,7 +2086,11 @@ impl Planner<'_> {
                         _ => return Err(Unsupported::not_implemented(Feature::MeshShading).into()),
                     }
                 }
-                (_, space @ (AddrSpace::ObjectData | AddrSpace::MeshOutput)) => {
+                // A generic pointer canonicalization could give no one space (`canon::generic`).
+                (
+                    _,
+                    space @ (AddrSpace::ObjectData | AddrSpace::MeshOutput | AddrSpace::Generic),
+                ) => {
                     return Err(
                         Unsupported::not_implemented(Feature::AddressSpace(space.raw())).into(),
                     )
