@@ -692,8 +692,14 @@ pub(crate) enum ShadowCause {
 /// over takes the image at any size (`texture_spans.rs`), and the first texture's shadow moves to
 /// its image once another texture is made over its bytes. Measured with a guest's surface, 36
 /// textures (25 `BGRA8Unorm`, 11 `R32Uint`) of 6016x6016 at rows of 24,576 bytes over one
-/// `Private` buffer, a kernel writing a 1024-texel square of two of them and reading a 256-texel
-/// square of four others each frame (`runtime_lane::aliased_surfaces::aliased_surface_costs`).
+/// `Private` buffer, a kernel writing a 1024x1024-texel square of two of them and reading a
+/// 256x256-texel square of four others each frame
+/// (`runtime_lane::aliased_surfaces::aliased_surface_costs`): with each texture a shadow of its
+/// own (5211 MB of them), a frame copied 869 MB in and 290 MB back and took 28.22 ms of GPU time
+/// on a Radeon 780M (RADV), 32.80 ms on an Iris Xe (ANV) and 119.08 ms on lavapipe; with one
+/// shadow and 35 images at Metal's pitch, it copied nothing and took 0.22, 1.40 and 1.48 ms. With
+/// four textures made each frame and dropped after it, four shadows (579 MB) were made a frame,
+/// at 26.67, 28.37 and 102.05 ms a frame; with the images, none, at 0.18, 0.83 and 1.28 ms.
 pub(crate) const POOLED_PITCHED_BYTES: u64 = 48 << 10;
 
 /// Why the device makes no image in place over a texture's texels.
