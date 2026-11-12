@@ -127,13 +127,24 @@ fn exported(device: &Device, export: MemoryExport) -> Option<(u32, u32, bool, u6
 /// device counted of dma-buf imports, dedicated and live, after its making.
 fn probe(device: &Device, page: u64) -> (u64, u64) {
     // SAFETY: a name and flags the call takes.
-    let raw = unsafe { libc::memfd_create(c"m2v-export-probe".as_ptr(), libc::MFD_CLOEXEC) };
+    let raw = unsafe {
+        libc::memfd_create(
+            c"m2v-export-probe".as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        )
+    };
     assert!(raw >= 0);
     // SAFETY: the descriptor was just made, and is the test's alone.
     let memfd = unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw) };
     // SAFETY: the test's descriptor.
     assert_eq!(
         unsafe { libc::ftruncate(memfd.as_raw_fd(), (FILE_PAGES * page) as libc::off_t) },
+        0
+    );
+    // udmabuf takes pages only of a file that cannot shrink.
+    // SAFETY: as above.
+    assert_eq!(
+        unsafe { libc::fcntl(memfd.as_raw_fd(), libc::F_ADD_SEALS, libc::F_SEAL_SHRINK) },
         0
     );
     // Every fourth page, in an order of its own: scattered, none twice.
