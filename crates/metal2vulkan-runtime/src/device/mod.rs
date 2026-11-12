@@ -2211,12 +2211,12 @@ impl Device {
                 )
             })
         };
-        // The device's identity, by which the exit hook is registered (below) where the device
-        // can have made statics since its last registration: its driver's and its own UUIDs, and
-        // the entry points its sections reach.
+        // The device's identity to the exit guard, by which the hook is registered (below) where
+        // the device can have made statics since its last registration: its driver's and its own
+        // UUIDs, and the entry points its sections reach.
         // SAFETY: as above.
         let uuids = unsafe { properties::uuids(&instance.raw, physical) };
-        let identity: Vec<u64> = uuids
+        let guard_identity: Vec<u64> = uuids
             .iter()
             .flat_map(|uuid| uuid.chunks(8))
             .map(|half| u64::from_le_bytes(half.try_into().unwrap_or_default()))
@@ -2227,7 +2227,7 @@ impl Device {
         // object where the device is the first after one. A device that registers nothing (one
         // of an identity registered since the last load) is not primed: an earlier device's
         // priming made those calls first, on what stays loaded.
-        let primes = exit_guard::before_priming(&identity);
+        let primes = exit_guard::before_priming(&guard_identity);
         if let Err(error) = match primes {
             false => Ok(()),
             // SAFETY: the device is live, of `physical`, and enables timeline semaphores, and
@@ -2584,7 +2584,7 @@ impl Device {
         // The device's driver and layers are loaded and primed: the exit hook, registered (again)
         // after them when the device can have made statics since its last registration, runs
         // before their destructors.
-        exit_guard::register_device(identity, primes);
+        exit_guard::register_device(guard_identity, primes);
         let in_process = properties.kind == DeviceKind::Cpu;
         // A device whose driver reports a command buffer's execution failure through the
         // instance's messenger alone, and whose instance has the relay, has its queues' failures
