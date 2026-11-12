@@ -912,6 +912,8 @@ mod texture_creators;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod texture_fills;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod texture_unit_bit_test;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod textures;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod tile_dispatches;

@@ -174,6 +174,7 @@ mod engine_texture_levels;
 mod engine_texture_oob;
 mod engine_texture_tail;
 mod engine_texture_ulong;
+mod engine_texture_unit_bit_test;
 mod engine_texture_unk;
 mod engine_tile;
 mod engine_tiny_products;
