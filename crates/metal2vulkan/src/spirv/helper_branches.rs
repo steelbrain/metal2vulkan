@@ -68,6 +68,16 @@
 //! selection and loop of a callee counts at its call sites. An arm a guard sends helpers past holds
 //! no tangled instruction, so the guards are as before.
 //!
+//! **Calls a condition picks outside a branch.** SPIRV-Cross moves an expression read once into
+//! what reads it, so a call outside every selection and loop still runs only where a condition
+//! picks it when the chain of its value's single readers reaches an arm of a `?:` (a value operand
+//! of an `OpSelect` on a scalar condition), the right side of a `&&` or `||` (the second operand of
+//! a scalar `OpLogicalAnd` or `OpLogicalOr`), or an instruction inside a selection's arm, where
+//! that condition is not draw-uniform ([`Facts::conditional`]): SPIRV-Cross writes the call there.
+//! Such a call counts as one in an arm does, where only helper invocations may make it: a test of
+//! a coverage, `coverage < t ? spvFAdd(a, b) : c`, is one only the helpers past a primitive's edges
+//! pass. A loop that reads the value keeps it where it is defined, so the chain ends there.
+//!
 //! **Fences.** Each call that counts is fenced ([`Fences`]): an identity shuffle follows it, its
 //! result read in every invocation from the invocation's own lane (`OpGroupNonUniformShuffle` at
 //! `SubgroupLocalInvocationId`; a `MulExtended`'s structure member by member, put together again),
@@ -333,6 +343,27 @@ struct Construct {
     start: u32,
     end: u32,
     selection: bool,
+}
+
+impl Construct {
+    /// Whether the block at layout position `p` is inside the construct: past a selection's
+    /// header, at a loop's header or past it, and before the merge.
+    fn holds(&self, p: u32) -> bool {
+        if self.selection {
+            self.start < p && p < self.end
+        } else {
+            self.start <= p && p < self.end
+        }
+    }
+}
+
+/// What reads a value of the entry's functions: nothing, one operand of one instruction (its
+/// block and index), or anything else (more than one operand, a phi, a terminator).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reader {
+    Nothing,
+    One(BlockId, u32),
+    Other,
 }
 
 /// What [`Facts::uniform`] has decided: the instruction of each result of the entry's functions
@@ -824,6 +855,8 @@ impl<'a> Facts<'a> {
         // Every guard exact at once, where the union of all candidates' taint reaches nothing.
         let mut all_exact: Option<bool> = None;
         let mut uniformity = Uniformity::default();
+        // Each value's reader, taken at the first call outside every construct.
+        let mut readers: Option<Vec<Reader>> = None;
         for f in self.order.iter().rev() {
             let blocks = self.blocks_of(*f);
             let n = blocks.len();
@@ -915,35 +948,46 @@ impl<'a> Facts<'a> {
             // What the note counts: an open call a path from which ends (a return, kill or
             // termination) without passing a tangled instruction that reads what the call
             // computes. A call inside a selection or loop whose condition is not draw-uniform
-            // records the note; one outside every such construct of a callee is its callers' to
-            // count, through the call. Guards are as before: an arm they guard holds no tangled
-            // instruction at all. Every function's bare calls are listed, whatever the note.
+            // records the note, and so does one outside them that SPIRV-Cross writes where a
+            // condition picks it ([`Facts::conditional`]); another outside every such construct
+            // of a callee is its callers' to count, through the call. Guards are as before: an arm
+            // they guard holds no tangled instruction at all. Every function's bare calls are
+            // listed, whatever the note.
             let mut inner = Vec::new();
             let mut outer = Vec::new();
             for &p in &open {
                 let at = u32::try_from(p).unwrap_or(NONE);
-                let inside = cons.iter().any(|c| {
-                    if c.selection {
-                        c.start < at && at < c.end
-                    } else {
-                        c.start <= at && at < c.end
-                    }
-                });
-                if !inside && *f == m.entry.func {
-                    continue;
-                }
+                let inside = cons.iter().any(|c| c.holds(at));
                 let Some(b) = blocks.get(p) else {
                     continue;
                 };
-                for (i, node) in self.block(*b)?.insts.iter().enumerate() {
+                let blk = self.block(*b)?;
+                // A write follows instruction `i` where the block's last write is past it, or
+                // one may follow the block.
+                let last = blk.insts.iter().rposition(|n| self.writes_inst(&n.inst));
+                let tail = self.write_after(*f, *b, blk.insts.len())?;
+                for (i, node) in blk.insts.iter().enumerate() {
                     let hit = if optnone(&node.inst) {
-                        self.write_after(*f, *b, i + 1)?
+                        tail || last.is_some_and(|l| l > i)
                     } else {
                         self.calls(&node.inst, &bare_fn)
                     };
-                    if hit && inside {
+                    if !hit {
+                        continue;
+                    }
+                    let picked = match node.result {
+                        Some(v) if !inside => {
+                            let readers = match &mut readers {
+                                Some(r) => r,
+                                None => readers.insert(self.readers(meter)?),
+                            };
+                            self.conditional(v, &cons, readers, &mut uniformity, meter)?
+                        }
+                        _ => false,
+                    };
+                    if inside || picked {
                         inner.push((p, i));
-                    } else if hit {
+                    } else if *f != m.entry.func {
                         outer.push((p, i));
                     }
                 }
@@ -975,6 +1019,107 @@ impl<'a> Facts<'a> {
             bare,
             problem,
         })
+    }
+
+    /// Each value's [`Reader`] among the entry's functions, by value.
+    fn readers(&self, meter: &mut Meter) -> Result<Vec<Reader>, Error> {
+        let mut out = vec![Reader::Nothing; self.m.values.len()];
+        let mut read = |v: Value, by: Reader| {
+            if let Some(x) = out.get_mut(v.index()) {
+                *x = match *x {
+                    Reader::Nothing => by,
+                    _ => Reader::Other,
+                };
+            }
+        };
+        for f in &self.order {
+            for b in self.blocks_of(*f) {
+                let blk = self.block(b)?;
+                meter.tick(u32::try_from(blk.insts.len() + blk.phis.len()).unwrap_or(u32::MAX))?;
+                for phi in &blk.phis {
+                    for (v, _) in &phi.incoming {
+                        read(*v, Reader::Other);
+                    }
+                }
+                for (i, node) in blk.insts.iter().enumerate() {
+                    let i = u32::try_from(i).map_err(|_| invariant("an instruction index"))?;
+                    node.inst.for_each_value(|v| read(v, Reader::One(b, i)));
+                }
+                blk.term.for_each_value(|v| read(v, Reader::Other));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether SPIRV-Cross writes the call whose result is `v` (an `optnone` call, or a call of a
+    /// function that holds one), outside every construct of `cons` (its function's, less the
+    /// selections every invocation of a draw takes alike), where an invocation makes it only on a
+    /// condition. SPIRV-Cross moves an expression read once into what reads it, so the call is
+    /// written where the chain of its value's single readers ends: at a value read more than once,
+    /// at one without a reader, at a statement (a store, a phi's or terminator's operand, an
+    /// instruction without a result), or where a loop reads it (a value a loop it is outside reads
+    /// stays where it is defined: measured with Homebrew's SPIRV-Cross). On the way, a value
+    /// operand of an `OpSelect` on a scalar condition is an arm of a `?:`, and the second operand
+    /// of a scalar `OpLogicalAnd` or `OpLogicalOr` the right side of a `&&` or `||` (not a
+    /// vector's, which SPIRV-Cross writes component by component, the operands held first): the
+    /// call is conditional where such a condition or first operand is not draw-uniform
+    /// ([`Facts::uniform`]), or where a reader is inside a selection of `cons`, the arm SPIRV-Cross
+    /// writes the call in.
+    fn conditional(
+        &self,
+        v: Value,
+        cons: &[Construct],
+        readers: &[Reader],
+        u: &mut Uniformity<'a>,
+        meter: &mut Meter,
+    ) -> Result<bool, Error> {
+        let mut x = v;
+        loop {
+            meter.tick(1)?;
+            let Some(&Reader::One(b, i)) = readers.get(x.index()) else {
+                return Ok(false);
+            };
+            let at = self.pos(b);
+            if cons.iter().any(|c| !c.selection && c.holds(at)) {
+                return Ok(false);
+            }
+            if cons.iter().any(|c| c.selection && c.holds(at)) {
+                return Ok(true);
+            }
+            let node = self
+                .block(b)?
+                .insts
+                .get(i as usize)
+                .ok_or_else(|| invariant("a value's reader"))?;
+            let cond = match node.inst {
+                Inst::Select { cond, t, f } if t == x || f == x => Some(cond),
+                Inst::Binary {
+                    op: BinOp::LogicalAnd | BinOp::LogicalOr,
+                    a,
+                    b,
+                    ..
+                } if b == x => Some(a),
+                _ => None,
+            };
+            if let Some(c) = cond {
+                if self.scalar_bool(c) && !self.uniform(c, u, meter)? {
+                    return Ok(true);
+                }
+            }
+            match node.result {
+                Some(r) => x = r,
+                None => return Ok(false),
+            }
+        }
+    }
+
+    /// Whether `v` is a scalar `bool`.
+    fn scalar_bool(&self, v: Value) -> bool {
+        self.m
+            .values
+            .get(v.index())
+            .and_then(|d| self.m.types.get(d.ty).ok())
+            .is_some_and(|t| matches!(t, Type::Bool))
     }
 
     /// The calls of `calls` (block position and instruction index in `blocks`, one function's
