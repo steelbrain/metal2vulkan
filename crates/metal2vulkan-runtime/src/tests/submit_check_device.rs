@@ -456,11 +456,12 @@ fn stall(name: &str, refuse_second: bool) {
         checks.left_to_teardown(),
         "the stalled submission's objects were not left to the teardown"
     );
-    // One use of the queue, the stalled one, and where a call was refused one more, of the fence
-    // alone: their calls and, where the device relays its queues' failures, the relay's mark
-    // after each.
+    // One use of the queue, the stalled one: its calls and, where the device relays its queues'
+    // failures, the relay's mark after them. Where a call was refused, the stalled use is the
+    // first of several calls, so a use of one call (a merge round's call of the infos) may come
+    // before it, and one of the fence alone after it, each with its mark.
     let (most, fence_alone) = match refuse_second {
-        true => (MERGED as u64 + 3, 1),
+        true => (1 + 1 + MERGED as u64 + 1 + 1 + 1, 1),
         false => (MERGED as u64 + 1, 0),
     };
     assert!(
