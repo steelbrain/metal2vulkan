@@ -602,14 +602,15 @@ fn a_logged_pass_turns_and_its_encoding_again_meets_the_faces_as_first_met() {
 /// that clears the texture and reads it, in one command buffer. The execution's command reads
 /// the texel at (12, 6), inside [`RECT`], and at (0, 0), outside it, through an argument buffer
 /// naming the texture's ID: 0x50 and 0x20, the texels from before the pass. The face the pass
-/// would turn to holds 0x40 and 0x10 there, what the first read copied in.
+/// would turn to holds 0x40 inside [`RECT`], what the first read copied in, and no texel the
+/// texture held outside it (lavapipe read 0 there).
 #[test]
 fn an_execution_before_a_clearing_pass_reads_the_texels_from_before_it() {
     let scratch = Scratch::new("attached-read-faces-execution");
     let device = device(&scratch.0);
     let tools = Tools::new(&device);
     let texture = texture(&device);
-    // The faces, made by the first read, which copies 0x10 and 0x40 into the other face; then the
+    // The faces, made by the first read, which copies its 0x40 into the other face; then the
     // texture's own face holds 0x20 and 0x50.
     tools.pass(&texture, Some(0x10), Draw::Nothing);
     tools.pass(&texture, None, Draw::Solid(0x40));
