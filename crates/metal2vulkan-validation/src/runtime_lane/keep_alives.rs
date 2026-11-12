@@ -32,13 +32,14 @@
 use super::degrade_notices::{made_once, on_device as on_device_noticed};
 use super::host_memory::{not_importable, on_device, Mapping, GUEST_PAGE};
 use super::resource_ids::{Sampling, DELAYED_DEALLOCATORS};
-use super::{shared_kinds, WAIT};
+use super::WAIT;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan_runtime::{
     Buffer, BufferContents, BufferDescriptor, CpuCacheMode, Deallocator, Degradation, Device,
     Error, HazardTrackingMode, HostMemory, KeepAlive, ResourceOptions, StorageMode, Texture,
     TextureDescriptor, WorkCounts,
 };
+use std::collections::BTreeSet;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -488,8 +489,11 @@ fn a_narrower_live_buffer_covers_no_wider_released_one() {
 /// once the narrower one went, where Metal's runs at the wider one's release. Counted
 /// (`WorkCounts::host_deallocators_delayed`, `host_releases_held_inside`) and announced once
 /// (`host-deallocator-delayed`, naming the buffer inside). Where the device does not bind the
-/// narrower one there, it is a copy of its half, and the deallocator runs at the release, as
-/// Metal's.
+/// narrower one there, it is a copy of its half (`copied-host-pages`), and the deallocator runs at
+/// the release, as Metal's. Nothing else is announced: the buffers lie in the caller's pages,
+/// which no `shared-in-system-memory` notice names on a device without unified memory (the runtime
+/// announces it of memory it allocates for a `Shared` resource, which the caller's pages are
+/// not).
 #[test]
 fn a_buffer_inside_an_import_holds_a_deallocator_given_no_keep_alive() {
     let len = 2 * GUEST_PAGE;
@@ -551,9 +555,9 @@ fn a_buffer_inside_an_import_holds_a_deallocator_given_no_keep_alive() {
         );
         let kinds: &[Degradation] = match inside {
             true => &DELAYED_DEALLOCATORS,
-            false => &[],
+            false => &[Degradation::CopiedHostPages],
         };
-        let notices = made_once(messages, kinds, &shared_kinds(device));
+        let notices = made_once(messages, kinds, &BTreeSet::new());
         let reason = (notices.iter())
             .filter_map(|message| message.degradation.as_ref())
             .find(|notice| notice.degradation == Degradation::HostDeallocatorDelayed)
