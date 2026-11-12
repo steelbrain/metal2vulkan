@@ -25,7 +25,25 @@
 // A's and B's GPU start and end from A's start, whether B ended before A did, and the first word B
 // read (0 = before A's write).
 //
-// WHAT IT MEASURED: not yet run.
+// WHAT IT MEASURED (MTL_DEBUG_LAYER unset; runs where B ran after A and, but in surface-apart,
+// whose texture A never writes, read A's writes; three a case a process, the M3's of two
+// processes but for surface-apart and surface-two-untracked):
+//
+//   case                   M3 Max, 27.0.1   Radeon Pro 5300M, 26.7.1   UHD 630, 26.7.1
+//   surface-two            6 of 6           3 of 3                     3 of 3
+//   surface-one            6 of 6           3 of 3                     3 of 3
+//   surface-apart          0 of 3           0 of 3                     3 of 3 (read zeros)
+//   surface-two-untracked  3 of 3           2 of 3                     3 of 3
+//   nocopy-two             0 of 6           0 of 3 (one read mixed)    2 of 3
+//   nocopy-one             6 of 6           2 of 3                     2 of 3
+//
+// Where B went first it ran alongside A (from about A's start), or on the x86 Macs began up to
+// 0.4 ms before A, and read zeros. So the M3 orders a later commit of another queue behind an
+// earlier one over one tracked buffer, and over one IOSurface through any textures, tracked or
+// not, and two no-copy buffers over one allocation not at all; the x86 Macs' GPUs take a later
+// commit first now and then even over one tracked buffer, the 630 running the two queues' work one
+// after the other but for those. Metal's order across queues is the order the GPU takes the
+// command buffers.
 //
 // Run with no argument for the system default device, or with a part of a device's name to
 // pick it among `MTLCopyAllDevices()` (an x86 Mac's two GPUs: `5300M`, `630`).
