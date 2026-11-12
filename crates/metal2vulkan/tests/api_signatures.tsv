@@ -2652,6 +2652,7 @@ field	metal2vulkan-runtime::WorkCounts.command_buffers_completed_after_another_q
 field	metal2vulkan-runtime::WorkCounts.command_buffers_submitted	pub command_buffers_submitted: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_unsubmitted	pub command_buffers_unsubmitted: u64
 field	metal2vulkan-runtime::WorkCounts.command_pools_made	pub command_pools_made: u64
+field	metal2vulkan-runtime::WorkCounts.command_queues_live_most	pub command_queues_live_most: u64
 field	metal2vulkan-runtime::WorkCounts.commands_noted_as_before	pub commands_noted_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.commands_recorded	pub commands_recorded: CommandsRecorded
 field	metal2vulkan-runtime::WorkCounts.commands_uncounted	pub commands_uncounted: u64
@@ -3364,6 +3365,7 @@ field	metal2vulkan-runtime::WorkCounts.unrun_instances_ended	pub unrun_instances
 field	metal2vulkan-runtime::WorkCounts.unshared_command_buffers_behind_other_queues	pub unshared_command_buffers_behind_other_queues: u64
 field	metal2vulkan-runtime::WorkCounts.unshared_command_buffers_behind_other_queues_over_16ms	pub unshared_command_buffers_behind_other_queues_over_16ms: u64
 field	metal2vulkan-runtime::WorkCounts.unshared_command_buffers_behind_other_queues_over_33ms	pub unshared_command_buffers_behind_other_queues_over_33ms: u64
+field	metal2vulkan-runtime::WorkCounts.unshared_queues_sharing_a_vk_queue	pub unshared_queues_sharing_a_vk_queue: u64
 field	metal2vulkan-runtime::WorkCounts.unshared_wait_behind_other_queues_longest_nanos	pub unshared_wait_behind_other_queues_longest_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.unshared_waits_over_16ms_batches_ahead	pub unshared_waits_over_16ms_batches_ahead: u64
 field	metal2vulkan-runtime::WorkCounts.unshared_waits_over_16ms_behind_one_long_run	pub unshared_waits_over_16ms_behind_one_long_run: u64

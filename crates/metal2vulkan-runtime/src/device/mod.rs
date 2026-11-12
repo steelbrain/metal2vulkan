@@ -271,8 +271,9 @@ pub(super) struct DeviceShared {
     /// How many of `queues`, the first, logical queues share round robin; the rest are reserved
     /// for presenting queues.
     round_robin: usize,
-    /// The logical queues made round robin so far: the next one takes `VkQueue` this modulo
-    /// `round_robin`.
+    /// The logical queues made round robin so far, unshared ones among them: the next one's turn
+    /// among the round robin's `VkQueue`s the fewest live queues hold is this modulo
+    /// `round_robin` (`Device::take_round_robin`).
     round_robin_made: AtomicU64,
     /// The presenting queues made so far on the reserved `VkQueue`s: the next one takes the
     /// reserved queue this modulo their number.
@@ -287,9 +288,12 @@ pub(super) struct DeviceShared {
     /// The presenting queues made so far, on a reserved `VkQueue` or not, counted only where
     /// `planned` is.
     presenting_asked: AtomicU64,
-    /// The program's command queues made round robin so far, unshared ones that took the round
-    /// robin's next among them, counted only where `planned` is: the runtime's own are not.
+    /// The program's command queues made round robin so far, unshared ones among them, counted
+    /// only where `planned` is: the runtime's own are not.
     program_queues_made: AtomicU64,
+    /// The program's command queues live on this generation, of every kind
+    /// (`WorkCounts::command_queues_live_most`).
+    pub(crate) program_queues_live: AtomicU64,
     /// Whether its command queues share `VkQueue`s, and its check's verdict
     /// (`queue_share.rs`). Shared with the check's thread, which holds no device handle
     /// (`queue_switch_check.rs`).
@@ -1628,19 +1632,38 @@ impl Device {
         )
     }
 
-    /// A new logical queue's identity, and the index of the `VkQueue` it submits to: round
-    /// robin over the device's queues that are not reserved for presenting.
-    ///
-    /// Past the round robin's queues it gives one an earlier logical queue took, whose
-    /// submissions this queue's then wait behind where Metal's queues would not
-    /// (`device/create.rs`'s `ROUND_ROBIN_CEILING`): counted,
-    /// `WorkCounts::queues_sharing_a_vk_queue`. Where the device's queue limits changed its round
-    /// robin (`DeviceOptions::queue_limits`) and this is a queue the program made, `noted` naming
-    /// it (`None` for the runtime's own and for a presenting queue's, which
-    /// `Device::next_presenting_queue` notes), the device says so where the program's queues
-    /// made so far reach past the limits' `VkQueue`s and the plan gives this one its own: once
-    /// per device ([`Told::QueueLimitsReached`]).
+    /// A new logical queue's identity, and the index of the `VkQueue` it submits to, counted
+    /// there as one of the command queues it holds: of the device's queues that are not reserved
+    /// for presenting (the round robin's), the one the fewest live command queues hold, of those
+    /// no unshared queue holds, in turn among equals (`Device::take_round_robin`). `noted` names
+    /// a queue the program made, `None` the runtime's own and a presenting queue's, which
+    /// `Device::next_presenting_queue` notes ([`note_past_limits`](Self::note_past_limits)).
     pub(super) fn next_queue(&self, noted: Option<&str>) -> (u64, usize) {
+        let (id, made) = self.round_robin_turn();
+        let vk_queue = self.take_round_robin(made, false);
+        self.note_past_limits(noted, vk_queue);
+        (id, vk_queue)
+    }
+
+    /// A new unshared queue's identity, and the index of the `VkQueue` it submits to, counted
+    /// there as an unshared queue: one of the round robin's no command queue holds where one is
+    /// free (`Device::place_unshared`), else the one the fewest hold
+    /// (`Device::take_round_robin`). A queue the program made, as
+    /// [`next_queue`](Self::next_queue)'s.
+    pub(super) fn next_unshared_queue(&self) -> (u64, usize) {
+        let (id, made) = self.round_robin_turn();
+        let vk_queue = (self.place_unshared()).unwrap_or_else(|| self.take_round_robin(made, true));
+        self.note_past_limits(Some("an unshared command queue"), vk_queue);
+        (id, vk_queue)
+    }
+
+    /// A new round robin's or unshared queue's identity, and how many such the device made before
+    /// it: its turn among equals (`Device::take_round_robin`). One made past the round robin's
+    /// queues takes one an earlier logical queue took, whose submissions this queue's wait
+    /// behind where Metal's queues would not where that queue still lives
+    /// (`device/create.rs`'s `ROUND_ROBIN_CEILING`): counted,
+    /// `WorkCounts::queues_sharing_a_vk_queue`.
+    fn round_robin_turn(&self) -> (u64, u64) {
         let id = self.shared().contexts.fresh();
         let made = self
             .shared()
@@ -1649,7 +1672,14 @@ impl Device {
         if made >= self.shared().round_robin as u64 {
             self.shared().counts.queue_shared_a_vk_queue();
         }
-        let vk_queue = (made % self.shared().round_robin as u64) as usize;
+        (id, made)
+    }
+
+    /// Where the device's queue limits changed its round robin (`DeviceOptions::queue_limits`)
+    /// and the queue that took `VkQueue` `vk_queue` is one the program made, `noted` naming it,
+    /// say so where the program's queues made so far reach past the limits' `VkQueue`s and the
+    /// plan gives this one its own: once per device ([`Told::QueueLimitsReached`]).
+    fn note_past_limits(&self, noted: Option<&str>, vk_queue: usize) {
         if let (Some(queue), Some((planned, _))) = (noted, self.shared().planned) {
             let program = (self.shared().program_queues_made).fetch_add(1, Ordering::Relaxed);
             if create::shares_past_limit(program, self.shared().round_robin, planned) {
@@ -1669,13 +1699,6 @@ impl Device {
                 );
             }
         }
-        (id, vk_queue)
-    }
-
-    /// A new logical queue's identity alone, for one whose `VkQueue` is chosen otherwise
-    /// (`Device::place_unshared`).
-    pub(super) fn new_queue_id(&self) -> u64 {
-        self.shared().contexts.fresh()
     }
 
     /// A new presenting queue's identity, and the index of the `VkQueue` it submits to: the
@@ -2689,6 +2712,7 @@ impl Device {
             least_plan,
             presenting_asked: AtomicU64::new(0),
             program_queues_made: AtomicU64::new(0),
+            program_queues_live: AtomicU64::new(0),
             queue_switch: Arc::new(crate::queue_share::QueueSwitch::new(
                 invariant.compile.policy().queue_sharing,
             )),

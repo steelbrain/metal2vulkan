@@ -519,9 +519,12 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   that command buffer's whole length (beside 30 ms command buffers on an RTX 5080, a compositor's
   64 completions over 10 ms and one of 30 ms). Make a queue that must never wait so (a
   compositor's) with this call: on that GPU, none of its completions took over 10 ms in any run.
-  Under `QueueSharingPolicy::PerQueue`, and on a device that does not share, it is
-  `new_command_queue_with_max_command_buffer_count`. A count of 0 and a lost device are refused
-  as there.
+  Under every policy it takes a `VkQueue` no other command queue holds where one is free, and no
+  command queue made later takes that `VkQueue` while another is free of unshared queues (every
+  command queue takes, as it is made, the `VkQueue` the fewest live queues hold); where none is
+  free it shares the one the fewest hold, counted
+  (`WorkCounts::unshared_queues_sharing_a_vk_queue`). A count of 0 and a lost device are refused
+  as `new_command_queue_with_max_command_buffer_count` refuses them.
 
 - `CommandBuffer::commit_failed(CommitFailure)` commits a command buffer as failed, running the
   encoders Metal would still run and keeping its signals, as a consumer measured on an M3 Max.

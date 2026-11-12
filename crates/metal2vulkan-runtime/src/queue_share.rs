@@ -10,8 +10,8 @@
 //!   switches 60% of its time, where one `VkQueue` for all of them ran 54,700 to 58,700.
 //! - **Where.** A device whose policy is `Adaptive`, once its check found the switch cost above
 //!   [`SWITCH_IDLES`] ([`QueueSwitch::shares`]); before the check answered, and everywhere else,
-//!   each command queue keeps the `VkQueue` it took at its creation, round robin, as under
-//!   `QueueSharingPolicy::PerQueue`. MoltenVK's four families of one queue each, and RADV's and
+//!   each command queue keeps the `VkQueue` it took at its creation (the fewest live queues',
+//!   below), as under `QueueSharingPolicy::PerQueue`. MoltenVK's four families of one queue each, and RADV's and
 //!   lavapipe's single graphics queue, have no two `VkQueue`s of one family, so no queue ever
 //!   moves there and the check makes no measurement.
 //! - **When a queue moves.** Only as it makes a command buffer while it holds no other uncompleted
@@ -59,13 +59,24 @@
 //!   later command buffers while the long queue holds work until its next idle point; a queue
 //!   that held a long queue's `VkQueue` leaves at its own next idle point. A queue gives no sign of
 //!   its first long command buffer before it runs, so no rule of joining avoids that first one.
+//! - **Placement at creation**, under every policy and verdict, before the check answered too: a
+//!   command queue takes the round robin's `VkQueue` that the fewest live command queues hold, of
+//!   those no unshared queue holds, the first in turn among equals ([`fewest_held`]), so live
+//!   queues spread over the `VkQueue`s whatever queues came and went before them (a guest's
+//!   processes make and drop hundreds), and share one only where each holds one. One pass over
+//!   the round robin's `VkQueue`s' counts, atomics alone, as the queue is made; nothing scans the
+//!   command queues.
 //! - **Unshared queues** (`Device::new_command_queue_unshared`): never moved and never joined. One
-//!   takes, where the device shares, a round robin's `VkQueue` that no command queue holds, the one
-//!   used least recently; else one no long or unshared queue holds, the one fewest command queues
-//!   hold; else the round robin's next. A command queue on a `VkQueue` an unshared queue took
-//!   leaves at its next idle point, where another of its family takes it. A queue's claim of a
-//!   `VkQueue` and an unshared queue's are made so that two made at once never both succeed: each
-//!   counts itself there first, then reads the other's count, both sequentially consistent.
+//!   takes, under every policy and verdict, a round robin's `VkQueue` that no command queue holds,
+//!   the one used least recently; else one no long or unshared queue holds, the one fewest command
+//!   queues hold; else, where a long or unshared queue holds every one, the one the fewest hold.
+//!   One that shares as it is made is counted (`WorkCounts::unshared_queues_sharing_a_vk_queue`):
+//!   a device of one graphics queue, or more queues live than `VkQueue`s. Where the device shares,
+//!   a command queue on a `VkQueue` an unshared queue took leaves at its next idle point, where
+//!   another of its family takes it; where it does not, the queue keeps it, and no later queue
+//!   takes it while another is free of unshared queues. A queue's claim of a `VkQueue` and an
+//!   unshared queue's are made so that two made at once never both succeed: each counts itself
+//!   there first, then reads the other's count, both sequentially consistent.
 //! - **Counted**: `WorkCounts::queue_moves`, `queue_joins`, `queues_gone_long`,
 //!   `long_queue_settles`, `queue_moves_off_unshared`, `joins_withheld_from_unshared`,
 //!   `picks_with_none_busy` and `joins_withheld_from_old_heads`. A choice at an idle point that
@@ -181,6 +192,11 @@ impl SlotShare {
     /// An unshared command queue left it.
     pub(crate) fn unshared_left(&self) {
         self.unshared.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// Whether another command queue holds it beside the one unshared queue that took it.
+    pub(crate) fn held_beside_unshared(&self) -> bool {
+        self.homes.load(Ordering::SeqCst) > 0 || self.unshared.load(Ordering::SeqCst) > 1
     }
 }
 
@@ -307,6 +323,19 @@ pub(crate) fn unshared_order(looks: &[(Look, usize)]) -> Vec<usize> {
         .chain(fewest)
         .map(|(look, _)| look.index)
         .collect()
+}
+
+/// The round robin's `VkQueue` a command queue made now takes, among `held`, each one's live
+/// command queues and whether it is barred (an unshared queue holds it, or the choice passed it
+/// over): of those not barred, the one the fewest hold, the first from `start` on in turn among
+/// equals; where every one is barred, the one the fewest hold, so. So live queues spread over the
+/// `VkQueue`s whatever queues came and went before them, and share one only where each holds one.
+pub(crate) fn fewest_held(start: usize, held: &[(usize, bool)]) -> usize {
+    let count = held.len();
+    (0..count)
+        .map(|turn| (start + turn) % count)
+        .min_by_key(|&index| (held[index].1, held[index].0))
+        .unwrap_or(0)
 }
 
 /// What the device's check answered (`queue_switch_check.rs`).
@@ -678,6 +707,63 @@ impl Device {
             .map(move |(index, slot)| look(index, slot, now))
     }
 
+    /// Every round robin's `VkQueue`, each looked at now ([`Look`]), with how many command queues
+    /// each holds: of one family where the device shares, of MoltenVK's four where it has them.
+    fn round_robin_looks(&self) -> Vec<(Look, usize)> {
+        let shared = self.shared();
+        let now = crate::gpu_time::host_nanos();
+        (shared.queues[..shared.round_robin()].iter().enumerate())
+            .map(|(index, slot)| look(index, slot, now))
+            .collect()
+    }
+
+    /// Each round robin's `VkQueue`'s live command queues, and whether an unshared queue holds
+    /// it: what a test reads of the placement.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn round_robin_held(&self) -> Vec<(usize, bool)> {
+        (self.round_robin_looks().into_iter())
+            .map(|(look, homes)| (homes, look.unshared))
+            .collect()
+    }
+
+    /// The round robin's `VkQueue` a command queue made now takes, counted there as one of the
+    /// command queues it holds ([`SlotShare::took`]), or, `unshared`, as an unshared queue
+    /// ([`SlotShare::unshared_took`]), `made` the round robin's command queues the device made
+    /// before it: of the `VkQueue`s no unshared queue holds, the one the fewest live command
+    /// queues hold, the first from the `made`th on in turn among equals ([`fewest_held`]); where
+    /// an unshared queue holds every one, the one the fewest hold. Under every policy and verdict,
+    /// as the queue is made: one pass over the round robin's `VkQueue`s, atomics alone, made again
+    /// only where an unshared queue took the chosen one meanwhile (each counts itself there
+    /// first, then reads the other's count, both sequentially consistent, so the two never both
+    /// succeed: [`place_unshared`](Self::place_unshared)).
+    pub(crate) fn take_round_robin(&self, made: u64, unshared: bool) -> usize {
+        let queues = &self.shared().queues[..self.shared().round_robin()];
+        let start = (made % queues.len() as u64) as usize;
+        let mut passed = vec![false; queues.len()];
+        loop {
+            let held: Vec<(usize, bool)> = (queues.iter().zip(&passed))
+                .map(|(slot, &passed)| {
+                    let share = &slot.share;
+                    let barred = passed || share.unshared.load(Ordering::SeqCst) > 0;
+                    (share.homes.load(Ordering::SeqCst), barred)
+                })
+                .collect();
+            let index = fewest_held(start, &held);
+            let share = &queues[index].share;
+            if unshared {
+                share.unshared_took();
+                return index;
+            }
+            share.took();
+            if held[index].1 || share.unshared.load(Ordering::SeqCst) == 0 {
+                return index;
+            }
+            // An unshared queue took it meanwhile: another, where one is free of them.
+            share.left(false);
+            passed[index] = true;
+        }
+    }
+
     /// The choice of a round robin's command queue on `current` that holds no uncompleted command
     /// buffer and is not long (the module docs): one pass over the `VkQueue`s of its family,
     /// atomics alone. Counted where a busy, young `VkQueue` was passed over for the unshared queue
@@ -751,16 +837,13 @@ impl Device {
         true
     }
 
-    /// The `VkQueue` a new unshared queue takes, counted there (the module docs); `None` for the
-    /// round robin's next, where the device does not share or every `VkQueue` holds an unshared
-    /// queue. The primary family's alone: where the device shares, the round robin's queues are
-    /// of one family that has two or more (`queue_switch_check.rs`).
+    /// The `VkQueue` a new unshared queue takes, counted there (the module docs), under every
+    /// policy and verdict: one of the round robin's that no command queue holds, else one no long
+    /// or unshared queue holds, the one the fewest hold ([`unshared_order`]); `None` where every
+    /// one holds a long or unshared queue, for [`take_round_robin`](Self::take_round_robin)'s.
     pub(crate) fn place_unshared(&self) -> Option<usize> {
-        if !self.shares_queues() {
-            return None;
-        }
         let queues = &self.shared().queues;
-        let looks: Vec<(Look, usize)> = self.looks(0).collect();
+        let looks = self.round_robin_looks();
         for index in unshared_order(&looks) {
             let share = &queues[index].share;
             let empty = looks

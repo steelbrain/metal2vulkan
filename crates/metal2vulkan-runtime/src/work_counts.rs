@@ -248,6 +248,8 @@ pub(crate) struct Counters {
     slot_return_nanos: AtomicU64,
     slot_waits: AtomicU64,
     queues_sharing_a_vk_queue: AtomicU64,
+    command_queues_live_most: AtomicU64,
+    unshared_queues_sharing_a_vk_queue: AtomicU64,
     queue_moves: AtomicU64,
     queue_joins: AtomicU64,
     queues_gone_long: AtomicU64,
@@ -2750,6 +2752,17 @@ impl Counters {
     pub(crate) fn queue_shared_a_vk_queue(&self) {
         self.queues_sharing_a_vk_queue
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The program held `live` command queues of the device at once (`queue.rs`).
+    pub(crate) fn command_queues_live(&self, live: u64) {
+        (self.command_queues_live_most).fetch_max(live, Ordering::Relaxed);
+    }
+
+    /// A new unshared command queue took a `VkQueue` another command queue held, the round robin
+    /// having none that no command queue holds (`queue_share.rs`).
+    pub(crate) fn unshared_queue_shared_a_vk_queue(&self) {
+        (self.unshared_queues_sharing_a_vk_queue).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A command queue moved to another `VkQueue` (`queue_share.rs`): onto one with another
@@ -6085,13 +6098,27 @@ pub struct WorkCounts {
     pub slot_waits: u64,
     /// Nanoseconds those makes waited.
     pub slot_wait_nanos: u64,
-    /// Command queues made on a `VkQueue` an earlier command queue of the device took too, so
-    /// that one's command buffers wait for the other's where Metal's would not: the device shares
-    /// its `VkQueue`s round robin at their creation, so a program that makes more command queues
-    /// than the device took `VkQueue`s shares them (`queue.rs`, `device/create.rs`). Zero on a
-    /// device with a `VkQueue` for each. Under `QueueSharingPolicy::Adaptive` queues also share
-    /// by moving, after their creation (`queue_joins`).
+    /// Command queues made past the round robin's `VkQueue`s, unshared ones among them, each on a
+    /// `VkQueue` an earlier command queue of the device took too: the command queues made, live or
+    /// gone, less the `VkQueue`s the device lends them (`queue.rs`, `device/create.rs`). Zero on a device
+    /// with a `VkQueue` for each. A command queue takes, as it is made, the round robin's
+    /// `VkQueue` the fewest live command queues hold (`queue_share.rs`), so its command buffers
+    /// wait behind another live queue's, where Metal's would not, only where every `VkQueue` holds
+    /// one: a program that keeps more command queues live than the device lends (at most
+    /// `command_queues_live_most` of its own). Under `QueueSharingPolicy::Adaptive` queues also
+    /// share by moving, after their creation (`queue_joins`).
     pub queues_sharing_a_vk_queue: u64,
+    /// The most command queues the program held at once on the device: those its
+    /// `new_command_queue` and kin made, unshared and presenting ones included, the runtime's
+    /// own left out. A high-water mark: what a program keeps live, against the round robin's
+    /// `VkQueue`s (`DeviceOptions::queue_limits`).
+    pub command_queues_live_most: u64,
+    /// Unshared command queues (`Device::new_command_queue_unshared`) that took, as they were
+    /// made, a `VkQueue` another command queue held: the round robin had none that no command
+    /// queue holds (a device of one graphics queue, or more queues live than `VkQueue`s), so
+    /// their command buffers may wait behind another queue's (`queue_share.rs`). Zero where
+    /// each unshared queue took a `VkQueue` of its own.
+    pub unshared_queues_sharing_a_vk_queue: u64,
     /// Command queues that moved to another `VkQueue` of their family as they made a command
     /// buffer while they held no other uncompleted one (`QueueSharingPolicy::Adaptive`, on a
     /// device whose GPU idles between `VkQueue`s: `queue_share.rs`). Zero where the device does
@@ -8970,6 +8997,9 @@ impl Device {
             slot_waits: counters.slot_waits.load(Ordering::Relaxed),
             slot_wait_nanos: counters.slot_wait_nanos.load(Ordering::Relaxed),
             queues_sharing_a_vk_queue: counters.queues_sharing_a_vk_queue.load(Ordering::Relaxed),
+            command_queues_live_most: counters.command_queues_live_most.load(Ordering::Relaxed),
+            unshared_queues_sharing_a_vk_queue: (counters.unshared_queues_sharing_a_vk_queue)
+                .load(Ordering::Relaxed),
             queue_moves: counters.queue_moves.load(Ordering::Relaxed),
             queue_joins: counters.queue_joins.load(Ordering::Relaxed),
             queues_gone_long: counters.queues_gone_long.load(Ordering::Relaxed),

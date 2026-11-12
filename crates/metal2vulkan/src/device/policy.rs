@@ -521,9 +521,11 @@ pub enum ExtendedRangeBlitPolicy {
 /// for each other only inside one command. NVIDIA's driver (615.71.09 on the RTX 5080 Laptop GPU)
 /// leaves the GPU idle 56 to 62 us whenever consecutive work comes from another `VkQueue`, which
 /// held a device of a `VkQueue` per command queue near 30,000 one-draw command buffers a second,
-/// the GPU idle at the switches 60% of its time. Presenting queues, and queues made with
-/// `new_command_queue_unshared`, keep their `VkQueue` under either value. The runtime's choice
-/// alone: no emitted code changes.
+/// the GPU idle at the switches 60% of its time. Under either value a command queue takes, as it
+/// is made, the `VkQueue` the fewest live command queues hold, of those no unshared queue holds,
+/// in turn among equals, and a queue made with `new_command_queue_unshared` one no command queue
+/// holds where one is free. Presenting queues, and unshared queues, keep their `VkQueue` under
+/// either value. The runtime's choice alone: no emitted code changes.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -543,8 +545,9 @@ pub enum QueueSharingPolicy {
     /// not share, and the runtime counts it (`WorkCounts::queue_sharing_untimed`).
     #[default]
     Adaptive,
-    /// Each command queue on the `VkQueue` it took at its creation, round robin, for its life:
-    /// command queues share one only past the `VkQueue`s the device lends the round robin.
+    /// Each command queue on the `VkQueue` it took at its creation for its life: command queues
+    /// share one only while the program keeps more live than the `VkQueue`s the device lends
+    /// them.
     PerQueue,
 }
 

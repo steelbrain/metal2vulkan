@@ -248,12 +248,17 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   where a shared one's had one stall of 30 ms beside 30 ms command buffers). Presenting queues, and a queue that lent its `VkQueue`
   (`CommandQueue::with_vk_queue`), never move. Before the check answers, and on a device whose
   check finds no idling or that has no two `VkQueue`s of one family (MoltenVK, RADV, lavapipe),
-  each queue keeps the `VkQueue` it took at its creation, round robin. So does a device whose
+  each queue keeps the `VkQueue` it took at its creation. So does a device whose
   command buffers write no GPU timestamps it reads (`DeviceOptions::gpu_times_from_host`, or a
   driver whose timestamps wait for every queue's), counted `WorkCounts::queue_sharing_untimed`: a
   queue is known long only by its command buffers' timestamps.
   `queue_sharing = QueueSharingPolicy::PerQueue`, which `exact_answers()` selects, keeps each
-  command queue on that `VkQueue` everywhere and runs no check.
+  command queue on that `VkQueue` everywhere and runs no check. Under either value a queue takes,
+  as it is made, the `VkQueue` the fewest live command queues hold, of those no unshared queue
+  holds, in turn among equals, so queues share one only while more are live than `VkQueue`s,
+  however many came and went before (`WorkCounts::command_queues_live_most`); an unshared queue
+  takes one no command queue holds where one is free
+  (`WorkCounts::unshared_queues_sharing_a_vk_queue` counts one that found none).
 - **Other queues' work is held back from an unshared queue's `VkQueue`**
   (`UnsharedIsolationPolicy::Bounded`, the default; the runtime's choice, no pipeline differs).
   Where a queue made with `Device::new_command_queue_unshared` shares its `VkQueue` with other

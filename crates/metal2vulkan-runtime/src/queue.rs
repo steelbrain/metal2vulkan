@@ -1,9 +1,10 @@
 //! `CommandQueue` (`MTLCommandQueue`).
 //!
 //! A queue is a logical stream of command buffers, run in commit order. The device's scheduler
-//! submits them to the queue's `VkQueue`: the one it took at creation, the device's `VkQueue`s
-//! shared round robin among its logical queues, but for the ones it reserved for queues made for
-//! presenting (`Device::new_command_queue_for_presenting`). Under `QueueSharingPolicy::Adaptive`
+//! submits them to the queue's `VkQueue`: the one it took at creation, of the device's
+//! `VkQueue`s its logical queues share (but for the ones it reserved for queues made for
+//! presenting, `Device::new_command_queue_for_presenting`) the one the fewest live queues hold,
+//! in turn among equals (`queue_share.rs`). Under `QueueSharingPolicy::Adaptive`
 //! (the default), on a device whose own check finds its GPU idle between consecutive work of two
 //! `VkQueue`s, a queue moves where it holds no uncompleted command buffer but the one it makes
 //! (`queue_share.rs`); under `PerQueue`, and on every other device, it keeps its first.
@@ -24,20 +25,24 @@
 //! queue. Where queues keep their first `VkQueue`, the runtime answers that with queues rather
 //! than with scheduling, which one `VkQueue` cannot give: a created device lends the round robin
 //! every queue its families have past the two it reserves for presenting, up to 16
-//! (`device/create.rs`), so a program that makes no more command queues than that shares none.
-//! Past them, and on a device whose families have one queue each (MoltenVK's four, RADV's and
-//! lavapipe's single graphics queue), queues share and the waiting stands; each queue that takes a
-//! `VkQueue` another took is counted (`WorkCounts::queues_sharing_a_vk_queue`). Where queues move,
+//! (`device/create.rs`), and a new queue takes the one the fewest live queues hold, so a program
+//! that keeps no more command queues live than that shares none, however many it made and
+//! dropped before (`WorkCounts::command_queues_live_most`). Past them, and on a device whose
+//! families have one queue each (MoltenVK's four, RADV's and lavapipe's single graphics queue),
+//! queues share and the waiting stands; each queue made past the round robin's `VkQueue`s is
+//! counted (`WorkCounts::queues_sharing_a_vk_queue`). Where queues move,
 //! they share by choice, to spare the GPU's idling at each switch, and a queue whose command buffer
 //! ran on the GPU for over 2 ms, by its own timestamps, is long: it holds the queues that shared
 //! with it through that command buffer and while it holds work, then moves to a `VkQueue` of its
 //! own at its next idle point, and no queue joins it (`queue-sharing`, `queue_share.rs`).
 //!
 //! **Isolation.** A queue made with `Device::new_command_queue_unshared` never moves, and no queue
-//! joins its `VkQueue`: where the device shares, it takes a `VkQueue` no command queue holds where
-//! one is free, so its command buffers (a compositor's) wait behind no other queue's from the
-//! start, without the one stall a long queue's first long command buffer costs the queues that
-//! shared with it.
+//! joins its `VkQueue` or takes it as it is made while another `VkQueue` is free of unshared
+//! queues: under every policy, it takes a `VkQueue` no command queue holds where one is free, so
+//! its command buffers (a compositor's) wait behind no other queue's from the start, without the
+//! one stall a long queue's first long command buffer costs the queues that shared with it. One
+//! that finds none free shares the one the fewest hold, counted
+//! (`WorkCounts::unshared_queues_sharing_a_vk_queue`).
 //!
 //! **The caller's own queues.** A caller that submits Vulkan work of its own beside Metal's, and
 //! must not wait behind a command queue's command buffers nor hold one back, asks the device for
@@ -208,6 +213,9 @@ struct QueueShared {
     vk_queue: AtomicUsize,
     /// Which constructor made it.
     kind: Kind,
+    /// Whom for: the program's, counted live (`WorkCounts::command_queues_live_most`), or the
+    /// runtime's own.
+    made_for: MadeFor,
     /// Its part in the sharing: [`LONG`], [`SETTLED`], [`PINNED`].
     sharing: AtomicU8,
     /// The slots its uncompleted command buffers hold.
@@ -409,18 +417,19 @@ impl Device {
     /// - a command queue already on it moves to another `VkQueue` of its family at its next such
     ///   make, where one is not held by a long or unshared queue.
     ///
-    /// Where the device shares, it takes a `VkQueue` of the round robin's that no command queue
-    /// holds, the one used least recently; else one that no long or unshared queue holds, the one
-    /// fewest command queues hold; else the round robin's next. One made before the device's check
-    /// answered takes the round robin's next, and the guarantees above hold from the answer on.
-    ///
-    /// Under [`QueueSharingPolicy::PerQueue`](metal2vulkan::device::QueueSharingPolicy::PerQueue),
-    /// and on a device whose check found no such idling (or that has no two `VkQueue`s of one
-    /// family to share: MoltenVK's four families of one queue, RADV's and lavapipe's single
-    /// graphics queue), no command queue moves and this is
-    /// [`new_command_queue_with_max_command_buffer_count`](Self::new_command_queue_with_max_command_buffer_count)
-    /// itself: the round robin's next `VkQueue`, shared past the round robin's `VkQueue`s as every
-    /// command queue's is.
+    /// Under every policy, before the device's check answered too, it takes a `VkQueue` of the
+    /// round robin's that no command queue holds, the one used least recently; else one that no
+    /// long or unshared queue holds, the one fewest command queues hold; else the one the fewest
+    /// hold. A command queue made later takes a `VkQueue` no unshared queue holds wherever one is
+    /// (the one the fewest live queues hold), so where no command queue moves
+    /// ([`QueueSharingPolicy::PerQueue`](metal2vulkan::device::QueueSharingPolicy::PerQueue), a
+    /// device whose check found no such idling or that answers GPU times from the host, or one
+    /// with no two `VkQueue`s of one family to share: MoltenVK's four families of one queue) its
+    /// `VkQueue` is its own while the program keeps fewer command queues live than the round
+    /// robin's `VkQueue`s. Where it finds none that no command queue holds (RADV's and lavapipe's
+    /// single graphics queue, or more queues live than `VkQueue`s), it shares one, counted
+    /// (`WorkCounts::unshared_queues_sharing_a_vk_queue`), and the hold below keeps it about one
+    /// batch behind the others.
     ///
     /// On a `VkQueue` it shares with other command queues, so (a device with one graphics queue:
     /// RADV, ANV, lavapipe), under
@@ -470,8 +479,8 @@ impl Device {
     /// presenting queues take them in turn; one made past their number shares one with an
     /// earlier presenting queue. A device with no such queue (MoltenVK's four families of one
     /// queue, RADV's and lavapipe's single graphics queue, or a device the caller made,
-    /// `Device::from_raw`) gives the queue its `VkQueue` round robin, as `new_command_queue`
-    /// does, and announces `Degradation::SharedPresentQueue` (`shared-present-queue`) once.
+    /// `Device::from_raw`) gives the queue its `VkQueue` as `new_command_queue` does (the round
+    /// robin's that the fewest live queues hold), and announces `Degradation::SharedPresentQueue` (`shared-present-queue`) once.
     pub fn new_command_queue_for_presenting(&self) -> Result<CommandQueue, Error> {
         self.at_serving(|device| device.new_command_queue_for_presenting_now())
     }
@@ -507,10 +516,11 @@ impl Device {
         queue
     }
 
-    /// The `VkQueue` a queue `kind`'s constructor made takes on this generation, and its identity
-    /// among the device's logical queues: the round robin's next; for an unshared queue one no
-    /// command queue holds where the device shares; for a presenting one a reserved queue, else
-    /// the round robin's next, announced (`shared-present-queue`). The queue limits' notes
+    /// The `VkQueue` a queue `kind`'s constructor made takes on this generation, counted there,
+    /// and its identity among the device's logical queues: the round robin's that the fewest live
+    /// queues hold (`Device::take_round_robin`); for an unshared queue one no command queue holds
+    /// where one is free (`Device::place_unshared`), counted where it shares one; for a presenting
+    /// one a reserved queue, else the round robin's, announced (`shared-present-queue`). The queue limits' notes
     /// (`DeviceOptions::queue_limits`) count the program's queues alone: the runtime's own
     /// (`made_for`) shares as it does on a device of one queue.
     fn place_queue(&self, kind: Kind, made_for: MadeFor) -> (u64, usize) {
@@ -518,14 +528,13 @@ impl Device {
             Kind::RoundRobin => {
                 self.next_queue((made_for == MadeFor::Program).then_some("a command queue"))
             }
-            Kind::Unshared => match self.place_unshared() {
-                Some(vk_queue) => (self.new_queue_id(), vk_queue),
-                None => {
-                    let (id, vk_queue) = self.next_queue(Some("an unshared command queue"));
-                    self.shared().queues[vk_queue].share.unshared_took();
-                    (id, vk_queue)
+            Kind::Unshared => {
+                let (id, vk_queue) = self.next_unshared_queue();
+                if self.shared().queues[vk_queue].share.held_beside_unshared() {
+                    self.shared().counts.unshared_queue_shared_a_vk_queue();
                 }
-            },
+                (id, vk_queue)
+            }
             Kind::Presenting => match self.next_presenting_queue() {
                 Some(reserved) => reserved,
                 None => {
@@ -557,9 +566,9 @@ impl Device {
     /// command buffers, made by `kind`'s constructor for `made_for`, `common` what its places
     /// share: on the `VkQueue` [`place_queue`](Self::place_queue) gives. One the program made
     /// takes Metal's device sampler ID and makes its texture pool, as Metal's first queue does
-    /// (`resource_ids.rs`); the runtime's own touches neither. One on a round robin's `VkQueue`
-    /// counts itself there (an unshared one counted itself already), and the first starts the
-    /// device's check of its GPU's idling between `VkQueue`s (`queue_share.rs`).
+    /// (`resource_ids.rs`); the runtime's own touches neither, nor counts among the program's live
+    /// queues (`WorkCounts::command_queues_live_most`). The first on a round robin's `VkQueue`
+    /// starts the device's check of its GPU's idling between `VkQueue`s (`queue_share.rs`).
     fn queue_place(
         &self,
         (count, kind, made_for): (usize, Kind, MadeFor),
@@ -573,10 +582,11 @@ impl Device {
         self.keep_room();
         let shared = self.shared();
         if vk_queue < shared.round_robin() {
-            if kind != Kind::Unshared {
-                shared.queues[vk_queue].share.took();
-            }
             self.start_queue_switch_check();
+        }
+        if made_for == MadeFor::Program {
+            let live = shared.program_queues_live.fetch_add(1, Ordering::Relaxed) + 1;
+            shared.counts.command_queues_live(live);
         }
         // Its slots, which its command buffers hold while they may record, watched for the
         // generation's rest once its recovery carried its objects (`device/carry.rs`).
@@ -589,6 +599,7 @@ impl Device {
             id,
             vk_queue: AtomicUsize::new(vk_queue),
             kind,
+            made_for,
             sharing: AtomicU8::new(0),
             slots,
             latest_gpu_end: Mutex::new(0),
@@ -649,6 +660,9 @@ impl Drop for QueueShared {
             Kind::Unshared => share.unshared_left(),
             _ if vk_queue < shared.round_robin() => share.left(*self.sharing.get_mut() & LONG != 0),
             _ => {}
+        }
+        if self.made_for == MadeFor::Program {
+            shared.program_queues_live.fetch_sub(1, Ordering::Relaxed);
         }
     }
 }

@@ -742,13 +742,19 @@ fn a_deallocator_returns_whatever_thread_submits_past_its_completion() {
 }
 
 /// A new command queue of `device` on the `VkQueue` `vk_queue` (`shared`), or on another: the
-/// first such of up to 64 made one after another, which the round robin spreads over the
-/// device's `VkQueue`s (`CommandQueue::vk_queue_sharing`). `None` where none was: a device of one
-/// `VkQueue`, for another.
+/// first such of up to 64 made one after another and kept until then, as a new queue takes the
+/// `VkQueue` the fewest live queues hold (`CommandQueue::vk_queue_sharing`). `None` where none
+/// was: a device of one `VkQueue`, for another.
 fn queue_where(device: &Device, vk_queue: usize, shared: bool) -> Option<CommandQueue> {
-    (0..64)
-        .map(|_| device.new_command_queue().unwrap())
-        .find(|queue| (queue.vk_queue_sharing().0 == vk_queue) == shared)
+    let mut kept = Vec::new();
+    for _ in 0..64 {
+        let queue = device.new_command_queue().unwrap();
+        if (queue.vk_queue_sharing().0 == vk_queue) == shared {
+            return Some(queue);
+        }
+        kept.push(queue);
+    }
+    None
 }
 
 /// [`a_deallocator_returns_whatever_thread_submits_past_its_completion`] on `first` and `second`,

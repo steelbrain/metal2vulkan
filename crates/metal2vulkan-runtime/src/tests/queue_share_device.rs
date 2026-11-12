@@ -14,9 +14,16 @@
 //!   The join is asserted where the rule calls for it, as above.
 //! - **Pinned and presenting queues never move**, where an unpinned one in the same place does.
 //! - **Unshared queues.** No queue moves onto an unshared queue's `VkQueue` (each command buffer's
-//!   `VkQueue` read, `joins_withheld_from_unshared` above 0 where the device shares), a queue
-//!   placed on one leaves it at its next idle point (`queue_moves_off_unshared`), and under
-//!   `PerQueue` an unshared queue takes the round robin's next `VkQueue`, as any queue does.
+//!   `VkQueue` read, `joins_withheld_from_unshared` above 0 where the device shares), and none
+//!   takes it as it is made while another is free of unshared queues; a queue placed on one where
+//!   none was free leaves it at its next idle point where the device shares
+//!   (`queue_moves_off_unshared`).
+//! - **Placement at creation**, under `Adaptive` (sharing or not, as the device's check found),
+//!   `PerQueue` and an untimed device: over a churn of queues made and dropped well past the round
+//!   robin's `VkQueue`s, as a guest's processes make them, each new queue takes the `VkQueue` the
+//!   fewest live queues hold of those no unshared queue holds, and an unshared queue one no queue
+//!   holds where one is free; the most live at once is counted (`command_queues_live_most`), and
+//!   an unshared queue that found none free (`unshared_queues_sharing_a_vk_queue`).
 //! - **Untimed devices.** A device that answers GPU times from the host (`gpu_times_from_host`)
 //!   does not share, and counts it (`queue_sharing_untimed`) where it has two `VkQueue`s of one
 //!   family to share: a queue is known long only by its command buffers' timestamps.
@@ -360,9 +367,9 @@ fn no_queue_joins_an_unshared_queue_s_vk_queue_and_one_placed_there_leaves() {
         let others: Vec<CommandQueue> = (0..3)
             .map(|_| device.new_command_queue().unwrap())
             .collect();
-        // Where the device does not share, the unshared queue and each after it took the round
-        // robin's next `VkQueue` (`Device::new_command_queue_unshared`), so every `round_robin`-th
-        // queue after it is on its `VkQueue` (on a device of one queue, each), and no other.
+        // Each queue after the unshared one took a `VkQueue` no unshared queue holds where the
+        // round robin has another (`Device::new_command_queue_unshared`), so none is on its
+        // `VkQueue` but on a device of one round-robin queue, where each is.
         let round_robin = device.shared().round_robin();
         // A choice withholds a join from the unshared queue's `VkQueue` only while that
         // `VkQueue` is busy and its oldest batch in flight young (`queue_share.rs`), as a choice
@@ -380,10 +387,9 @@ fn no_queue_joins_an_unshared_queue_s_vk_queue_and_one_placed_there_leaves() {
             let kept = burst(&unshared, &scratch, 24);
             for (after, queue) in others.iter().enumerate() {
                 let made = queue.command_buffer().unwrap();
-                let wrapped = !shares && (after + 1) % round_robin == 0;
                 assert_eq!(
                     queue.vk_queue_sharing().0 == home,
-                    wrapped,
+                    round_robin == 1,
                     "queue {after} after the unshared one, of a round robin of {round_robin} \
                      VkQueues (shares: {shares}): on the unshared queue's VkQueue"
                 );
@@ -430,33 +436,120 @@ fn no_queue_joins_an_unshared_queue_s_vk_queue_and_one_placed_there_leaves() {
     });
 }
 
-#[test]
-fn under_per_queue_an_unshared_queue_takes_the_round_robin_s_next_vk_queue() {
-    let scratch = Scratch::new("queue-share-per-queue");
-    let device = device(&scratch, QueueSharingPolicy::PerQueue);
-    let round_robin = device.shared().round_robin();
-    let queues: Vec<CommandQueue> = (0..2 * round_robin + 1)
-        .map(|made| match made % 2 {
-            0 => device.new_command_queue().unwrap(),
-            _ => device.new_command_queue_unshared(64).unwrap(),
-        })
-        .collect();
-    for (made, queue) in queues.iter().enumerate() {
-        assert_eq!(
-            queue.vk_queue_sharing().0,
-            made % round_robin,
-            "queue {made}"
+/// A placement test's device under each configuration: `Adaptive` (sharing or not, as its check
+/// found), `PerQueue`, and `Adaptive` answering GPU times from the host (untimed, `Unchecked`),
+/// each with a device of its own, its check settled.
+fn each_placement(leg: &str, test: impl Fn(&Device)) {
+    let configurations = [
+        (QueueSharingPolicy::Adaptive, false),
+        (QueueSharingPolicy::PerQueue, false),
+        (QueueSharingPolicy::Adaptive, true),
+    ];
+    for (policy, untimed) in configurations {
+        let scratch = Scratch::new(&format!("queue-place-{leg}-{policy:?}-{untimed}"));
+        let mut options = options(&scratch, policy);
+        options.gpu_times_from_host = untimed;
+        let device = Device::system_default_with(&options).unwrap();
+        assert!(device.settle_queue_switch_check(WAIT), "the check settles");
+        println!(
+            "PLACEMENT {leg} {policy:?}, untimed {untimed}, round robin {}: {}",
+            device.shared().round_robin(),
+            device.queue_switch_check_report()
         );
+        assert!(
+            !untimed || !device.shares_queues(),
+            "an untimed device shares"
+        );
+        test(&device);
     }
-    assert_eq!(
-        device.work_counts().queues_sharing_a_vk_queue,
-        (queues.len() - round_robin) as u64
-    );
-    let refused = device.new_command_queue_unshared(0).unwrap_err();
-    assert!(
-        matches!(refused, crate::Error::Invalid(ref invalid) if invalid.call == "new_command_queue_unshared"),
-        "{refused:?}"
-    );
+}
+
+/// A deterministic sequence's next value of `seed`, below `below`.
+fn next(seed: &mut u64, below: u64) -> u64 {
+    *seed = (seed.wrapping_mul(6_364_136_223_846_793_005)).wrapping_add(1_442_695_040_888_963_407);
+    (*seed >> 33) % below
+}
+
+/// A new command queue (`unshared`, an unshared one) of `device`, asserted to take, of the
+/// round robin's `VkQueue`s as they stood just before, the one the fewest live queues hold of
+/// those no unshared queue holds (a command queue), or one no queue holds where one is free (an
+/// unshared queue).
+fn placed(device: &Device, unshared: bool) -> CommandQueue {
+    let before = device.round_robin_held();
+    let queue = match unshared {
+        true => device.new_command_queue_unshared(64).unwrap(),
+        false => device.new_command_queue().unwrap(),
+    };
+    let at = queue.vk_queue_sharing().0;
+    let free = || (before.iter()).filter(|&&(_, held_by_unshared)| !held_by_unshared);
+    match unshared {
+        true => {
+            let empty = free().any(|&(homes, _)| homes == 0);
+            assert!(
+                !empty || before[at] == (0, false),
+                "an unshared queue took VkQueue {at} of {before:?}, where one was free"
+            );
+        }
+        false => {
+            if let Some(least) = free().map(|&(homes, _)| homes).min() {
+                assert_eq!(
+                    before[at],
+                    (least, false),
+                    "a queue took VkQueue {at} of {before:?}"
+                );
+            }
+        }
+    }
+    queue
+}
+
+/// Under every configuration, over a churn shaped like a guest's (an unshared queue and three
+/// kept for the whole run, then four times the round robin's `VkQueue`s and 40 more made one at a
+/// time, each dropped after 1 to `round_robin / 2` more makes): each queue takes the `VkQueue` the
+/// fewest live queues hold of those no unshared queue holds, the unshared one an empty one, so no
+/// queue shares while fewer are live than `VkQueue`s; a second unshared queue, with a `VkQueue`
+/// still free, takes it, and one with none free shares, counted.
+#[test]
+fn over_a_churn_queues_take_the_least_held_vk_queue_and_unshared_ones_an_empty_one() {
+    each_placement("churn", |device| {
+        let round_robin = device.shared().round_robin();
+        let before = device.work_counts();
+        let unshared = placed(device, true);
+        let kept: Vec<CommandQueue> = (0..3).map(|_| placed(device, false)).collect();
+        let lifetime = (round_robin as u64 / 2).max(1);
+        let mut seed = 0x2545_f491_4f6c_dd1d;
+        let mut live: Vec<(CommandQueue, usize)> = Vec::new();
+        let makes = 4 * round_robin + 40;
+        for made in 0..makes {
+            live.retain(|(_, until)| *until > made);
+            let queue = placed(device, false);
+            let until = made + 1 + next(&mut seed, lifetime) as usize;
+            live.push((queue, until));
+        }
+        let home = unshared.vk_queue_sharing().0;
+        let shared_home = (kept.iter().chain(live.iter().map(|(queue, _)| queue)))
+            .filter(|queue| queue.vk_queue_sharing().0 == home)
+            .count();
+        let counts = device.work_counts();
+        println!(
+            "PLACEMENT churn: {makes} made, at most {} live, {shared_home} beside the unshared \
+             queue; {} past the round robin",
+            counts.command_queues_live_most,
+            counts.queues_sharing_a_vk_queue - before.queues_sharing_a_vk_queue
+        );
+        assert_eq!(shared_home > 0, round_robin == 1);
+        // The unshared queue, the kept ones and one of the churn's at least.
+        assert!(counts.command_queues_live_most >= 5);
+        drop(live);
+        // A second unshared queue: on a `VkQueue` no queue holds where one is free, else beside
+        // another, counted, never the first unshared queue's but on a device of one.
+        let free = (device.round_robin_held().iter()).any(|&held| held == (0, false));
+        let sharing = || device.work_counts().unshared_queues_sharing_a_vk_queue;
+        let first = sharing();
+        let second = placed(device, true);
+        assert!(second.vk_queue_sharing().0 != home || round_robin == 1);
+        assert_eq!(sharing() - first, u64::from(!free));
+    });
 }
 
 /// What one isolation run measured: the compositor's latencies in milliseconds.
@@ -839,13 +932,23 @@ impl Behind {
     }
 }
 
-/// A queue `make` makes on `queue`'s `VkQueue`, made until the round robin wraps (`PerQueue`).
+/// A queue `make` makes on `queue`'s `VkQueue` (`PerQueue`: no queue moves): the queues it makes
+/// are kept until one takes it, as a new queue takes the `VkQueue` the fewest live queues hold,
+/// once the others hold as many.
 fn beside(queue: &CommandQueue, make: &dyn Fn() -> CommandQueue) -> CommandQueue {
     let at = queue.vk_queue_sharing().0;
-    let found = (0..64)
-        .map(|_| make())
-        .find(|queue| queue.vk_queue_sharing().0 == at);
-    found.expect("a queue on the other queue's VkQueue")
+    let mut kept = Vec::new();
+    for _ in 0..64 {
+        let made = make();
+        if made.vk_queue_sharing().0 == at {
+            return made;
+        }
+        kept.push(made);
+    }
+    panic!(
+        "no queue on the other queue's VkQueue of {} made",
+        kept.len()
+    )
 }
 
 /// Two command queues on one `VkQueue` (`PerQueue`: no queue moves), a long command buffer of
