@@ -111,7 +111,12 @@
 //!   the device's use of the RAM began, or with no run resolver), is not imported while any such
 //!   import lives ([`RamOnDevice::held_back`]): the objects over it meanwhile take their own
 //!   paths, as over memory no RAM holds, and the copies over it go through the CPU
-//!   ([`RamOnDevice::copy_take`]). Counted: `WorkCounts::host_ram_chunks_held_back`.
+//!   ([`RamOnDevice::copy_take`]). Counted: `WorkCounts::host_ram_chunks_held_back`. An object's
+//!   own import of a RAM's pages claims them from before it looks at the RAM's chunks until the
+//!   import is noted (`Device::claim_ram_pages`), and a chunk's import is marked in flight only
+//!   under the same claims: an object over pages a chunk's import holds or is making is a copy
+//!   of them (`CopiedBecause::OverRamChunk`), and a chunk whose pages an object's import in
+//!   flight claims is held back, whichever comes first.
 //! - **Paced.** The thread runs as the system's batch work (never at a weight the system may
 //!   starve: it holds a chunk's lock and, pinning, the process's memory map lock), yields between
 //!   chunks, and on Linux faults each chunk's pages in 2 MiB at a time before its import, so that
@@ -501,6 +506,25 @@ pub(crate) struct RamOnDevice {
     /// The lists of copies' runs kept past their copies, for the copies after them
     /// ([`RamOnDevice::run_lists`], `host_ram/kept.rs`).
     kept: Mutex<kept::Kept<Arc<RamChunk>>>,
+    /// The RAM's pages objects' own imports in flight claim ([`RamOnDevice::claim`]), under whose
+    /// lock a chunk's import is marked in flight ([`RamOnDevice::chunk`]). Taken before any
+    /// chunk's lock.
+    claims: Mutex<Claims>,
+}
+
+/// The RAM's pages objects' own imports in flight claim, at the RAM's own addresses, each claim
+/// by its number ([`RamOnDevice::claim`]).
+#[derive(Default)]
+struct Claims {
+    next: u64,
+    held: Vec<(u64, Range<u64>)>,
+}
+
+impl Claims {
+    /// Whether a claim holds any of the bytes `span`.
+    fn meet(&self, span: &Range<u64>) -> bool {
+        (self.held.iter()).any(|(_, bytes)| bytes.start < span.end && span.start < bytes.end)
+    }
 }
 
 /// The chunks of a RAM the device's thread keeps imported for the objects ([`import_ahead`]): the
@@ -883,6 +907,7 @@ impl RamOnDevice {
             plan,
             copies: copy::ChunkKeys::new(slots.len()),
             kept: Mutex::default(),
+            claims: Mutex::default(),
             slots,
             window: Mutex::new(Window::START),
             wake: Arc::default(),
@@ -918,22 +943,34 @@ impl RamOnDevice {
         if by == By::Object {
             span.untaken.store(false, Ordering::Relaxed);
         }
-        loop {
-            match &*import {
-                Import::Made(chunk) => return Ok(Arc::clone(chunk)),
-                Import::Making => {
-                    import = (span.made.wait(import)).unwrap_or_else(PoisonError::into_inner);
+        let claims = loop {
+            loop {
+                match &*import {
+                    Import::Made(chunk) => return Ok(Arc::clone(chunk)),
+                    Import::Making => {
+                        import = (span.made.wait(import)).unwrap_or_else(PoisonError::into_inner);
+                    }
+                    Import::None => break,
                 }
-                Import::None => break,
             }
-        }
-        if self.held_back(device, importer, slot) {
+            // The import is marked in flight under the RAM's claims, taken before the chunk's
+            // lock as an object's claim takes them ([`RamOnDevice::claim`]): the chunk's lock is
+            // let go, taken again under them, and the chunk looked at again.
+            drop(import);
+            let claims = lock(&self.claims);
+            import = lock(&span.import);
+            if matches!(*import, Import::None) {
+                break claims;
+            }
+        };
+        if self.held_back(device, importer, slot, &claims) {
             return Err(crate::error::internal(
                 "a guest RAM chunk a live import of an object's own holds pages of",
             ));
         }
         *import = Import::Making;
         drop(import);
+        drop(claims);
         let making = Making {
             slot: span,
             ended: false,
@@ -1038,19 +1075,58 @@ impl RamOnDevice {
     /// (`Device::route_runs`). `VK_EXT_external_memory_host` leaves a page imported twice
     /// undefined (its issue 6), so the chunk is not imported while any such import lives
     /// (`host_aliases.rs`): the objects over it take their own paths meanwhile, as over memory no
-    /// RAM holds, and the copies over it go through the CPU ([`RamOnDevice::copy_take`]).
-    /// Counted: `WorkCounts::host_ram_chunks_held_back`.
-    fn held_back(&self, device: &Device, importer: &Importer, slot: usize) -> bool {
+    /// RAM holds, and the copies over it go through the CPU ([`RamOnDevice::copy_take`]). So does
+    /// a chunk some of whose pages an object's own import in flight claims (`claims`, the RAM's,
+    /// [`RamOnDevice::claim`]), not yet noted. Counted: `WorkCounts::host_ram_chunks_held_back`.
+    fn held_back(
+        &self,
+        device: &Device,
+        importer: &Importer,
+        slot: usize,
+        claims: &Claims,
+    ) -> bool {
         let span = &self.slots[slot].span;
         let bytes = (span.start, span.end - span.start);
-        let held = !matches!(
-            device.shared().aliases.within(bytes, importer.unit()),
-            Within::Free
-        );
+        let held = claims.meet(span)
+            || !matches!(
+                device.shared().aliases.within(bytes, importer.unit()),
+                Within::Free
+            );
         if held {
             device.shared().counts.host_ram_chunk_held_back();
         }
         held
+    }
+
+    /// Whether any of the RAM's chunks holds some of the host bytes `bytes`.
+    fn meets(&self, bytes: &Range<u64>) -> bool {
+        (self.slots.iter()).any(|slot| bytes.start < slot.span.end && slot.span.start < bytes.end)
+    }
+
+    /// Claim the RAM's host bytes `bytes` for an object's own import of them: its claim's number,
+    /// which keeps every chunk holding some of them from being imported until it is let go
+    /// ([`RamOnDevice::release_claim`], [`RamOnDevice::held_back`]); `None`, claiming nothing,
+    /// where a chunk's import, made or in flight, holds some of them. Read and made under the
+    /// RAM's claims, under which a chunk's import is marked in flight ([`RamOnDevice::chunk`]),
+    /// so of an object's import and a chunk's over the same pages only the first is made.
+    fn claim(&self, bytes: &Range<u64>) -> Option<u64> {
+        let mut claims = lock(&self.claims);
+        let held = (self.slots.iter()).any(|slot| {
+            let meets = bytes.start < slot.span.end && slot.span.start < bytes.end;
+            meets && !matches!(*lock(&slot.import), Import::None)
+        });
+        if held {
+            return None;
+        }
+        let number = claims.next;
+        claims.next += 1;
+        claims.held.push((number, bytes.clone()));
+        Some(number)
+    }
+
+    /// Let claim `number` go ([`RamOnDevice::claim`]).
+    fn release_claim(&self, number: u64) {
+        lock(&self.claims).held.retain(|(held, _)| *held != number);
     }
 
     /// Whether a chunk's import, made by now, holds any of the RAM's host bytes `runs`.
@@ -1210,7 +1286,7 @@ impl RamOnDevice {
         if self.made(slot).is_some() {
             return CopyTake::Now;
         }
-        if span.refused || self.held_back(device, importer, slot) {
+        if span.refused || self.held_back(device, importer, slot, &lock(&self.claims)) {
             return CopyTake::ThroughCpu;
         }
         let running = self.wake.running.load(Ordering::Relaxed)
@@ -2457,12 +2533,45 @@ impl Device {
     }
 }
 
+/// An object's claim of guest RAM pages for its own import of them ([`Device::claim_ram_pages`]),
+/// let go as it drops.
+pub(crate) struct RamClaim {
+    claims: Vec<(Arc<RamOnDevice>, u64)>,
+}
+
+impl Drop for RamClaim {
+    fn drop(&mut self) {
+        for (ram, number) in &self.claims {
+            ram.release_claim(*number);
+        }
+    }
+}
+
 impl Device {
     /// Whether a live import of a chunk of a guest RAM the device uses holds any of the host
     /// bytes `bytes`, at the RAM's own addresses (`ObjectChurn::imports_inside_live`).
     pub(crate) fn ram_chunks_hold_any(&self, bytes: Range<u64>) -> bool {
         let rams = self.shared().host_ram.used();
         (rams.iter()).any(|used| used.chunks_hold_any(std::slice::from_ref(&bytes)))
+    }
+
+    /// Claim the host bytes `bytes`, a no-copy object's own import's window, in each guest RAM
+    /// the device uses whose chunks hold some of them, at the RAM's own addresses: the claim,
+    /// which keeps those chunks from being imported while it lives ([`RamOnDevice::claim`]), held
+    /// by the caller through its import until the import is noted (`host_aliases.rs`), whose
+    /// note keeps them so after it (`RamOnDevice::held_back`); `None`, claiming nothing, where a
+    /// chunk's import, made or in flight, holds some of them, which the object then copies
+    /// (`CopiedBecause::OverRamChunk`). So a chunk's import and an object's own never hold the
+    /// same page, whichever starts first.
+    pub(crate) fn claim_ram_pages(&self, bytes: Range<u64>) -> Option<RamClaim> {
+        let rams = self.shared().host_ram.used();
+        let mut claim = RamClaim { claims: Vec::new() };
+        for ram in (rams.iter()).filter(|ram| ram.meets(&bytes)) {
+            // A refusal lets the RAMs claimed before it go with `claim`.
+            let number = ram.claim(&bytes)?;
+            claim.claims.push((Arc::clone(ram), number));
+        }
+        Some(claim)
     }
 
     /// Where `resolver` puts the pages of `window` (`HostMemory::with_runs`): asked once, here,

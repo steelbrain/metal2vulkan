@@ -915,11 +915,14 @@ impl Device {
             _ => None,
         };
         let over_import = inside.is_none() && !matches!(within, Within::Free);
-        // Pages a guest RAM's live chunk import holds some of, at the RAM's own addresses, that
-        // no chunk binds the buffer in (its bytes cross a chunk's end, or no run resolver routed
-        // them): a copy too, never a second import of them (`host_ram.rs`).
-        let over_chunk = (in_chunk.is_none() && inside.is_none() && !drops_writes)
-            && self.ram_chunks_hold_any(window.start..window.start + window.size);
+        // Pages a guest RAM's chunk import, made or in flight, holds some of, at the RAM's own
+        // addresses, that no chunk binds the buffer in (its bytes cross a chunk's end, or no run
+        // resolver routed them): a copy too, never a second import of them (`host_ram.rs`).
+        // Others the buffer's own import may take are claimed until it is noted below, so that
+        // no chunk's import takes them meanwhile (`Device::claim_ram_pages`).
+        let claim = (in_chunk.is_none() && inside.is_none() && !drops_writes)
+            .then(|| self.claim_ram_pages(window.start..window.start + window.size));
+        let over_chunk = matches!(claim, Some(None));
         let (buffer, memory, again) = match (in_chunk, inside) {
             // A buffer (not a heap) bound in an import of its own run alone, its chunk not
             // imported yet, is released while idle and bound in the chunk's import at its next
@@ -1331,11 +1334,12 @@ impl Device {
                     },
                     _ => None,
                 };
-                // And new pages a guest RAM's live chunk import holds some of at the RAM's own
-                // addresses, which no chunk binds (`host_ram.rs`), as at a buffer's making.
-                let over_chunk =
-                    (in_chunk.is_none() && inside.is_none() && !moved && !drops_writes)
-                        && self.ram_chunks_hold_any(window.start..window.start + window.size);
+                // And new pages a guest RAM's chunk import, made or in flight, holds some of at
+                // the RAM's own addresses, which no chunk binds (`host_ram.rs`), as at a buffer's
+                // making; others claimed through their import, made below.
+                let claim = (in_chunk.is_none() && inside.is_none() && !moved && !drops_writes)
+                    .then(|| self.claim_ram_pages(window.start..window.start + window.size));
+                let over_chunk = matches!(claim, Some(None));
                 let over_import = inside.is_none() && !matches!(within, Within::Free);
                 let in_chunk = in_chunk.or(inside);
                 let chunk_bound = in_chunk.is_some();
@@ -2183,10 +2187,10 @@ impl Device {
                      VK_EXT_external_memory_host leaves pages imported twice undefined"
                 }
                 CopiedBecause::OverRamChunk => {
-                    "a live import of a guest RAM's chunk holds some of their pages at the \
-                     RAM's own addresses, and no chunk binds them (they cross a chunk's end, or \
-                     no run resolver routed them), and VK_EXT_external_memory_host leaves pages \
-                     imported twice undefined"
+                    "an import of a guest RAM's chunk, made or in flight, holds some of their \
+                     pages at the RAM's own addresses, and no chunk binds them (they cross a \
+                     chunk's end, or no run resolver routed them), and \
+                     VK_EXT_external_memory_host leaves pages imported twice undefined"
                 }
             };
             let dropped = match (drops, cause) {
@@ -2701,8 +2705,9 @@ enum CopiedFor {
     /// than a heap's own bytes (`host_aliases.rs`, "One page, one import"): no page is imported
     /// twice.
     OverImport,
-    /// A live import of a guest RAM's chunk holds some of them, at the RAM's own addresses, and no
-    /// chunk binds the buffer: its bytes cross a chunk's end (the chunks on both sides imported),
+    /// An import of a guest RAM's chunk, made or in flight, holds some of them, at the RAM's own
+    /// addresses, and no chunk binds the buffer: its bytes cross a chunk's end (the chunks on both
+    /// sides imported),
     /// or no run resolver routed them (`host_ram.rs`). No page is imported twice.
     OverRamChunk,
 }

@@ -7264,8 +7264,9 @@ pub struct WorkCounts {
     /// Of `copied_host_buffers_made`: no-copy buffers and heaps whose pages a live import of
     /// another held some of, and not all (a buffer's bytes across the edge of another's or a
     /// heap's), or a heap whose pages one held more of than the heap's own bytes, and those whose
-    /// pages a live import of a guest RAM's chunk held some of at the RAM's own addresses where no
-    /// chunk bound them (their bytes across a chunk's end, or routed by no run resolver), made
+    /// pages an import of a guest RAM's chunk (made or in flight) held some of at the RAM's own
+    /// addresses where no chunk bound them (their bytes across a chunk's end, or routed by no run
+    /// resolver), made
     /// over a copy so that no page is imported twice (`host_aliases.rs`, "One page, one import";
     /// `host_ram.rs`): `VK_EXT_external_memory_host` leaves a host allocation imported twice into
     /// a device undefined. Their import is never tried, their gate never asked.
@@ -9796,8 +9797,8 @@ pub(crate) enum CopiedBecause {
     /// A live import of another buffer or heap holds some of the pages and not all, or more than
     /// a heap's own bytes: a second import would pin them twice (`host_aliases.rs`).
     OverImport,
-    /// A live import of a guest RAM's chunk holds some of the pages, at the RAM's own addresses,
-    /// and no chunk binds the buffer (its bytes cross a chunk's end, or no run resolver routed
-    /// them): a second import would pin them twice (`host_ram.rs`).
+    /// An import of a guest RAM's chunk, made or in flight, holds some of the pages, at the RAM's
+    /// own addresses, and no chunk binds the buffer (its bytes cross a chunk's end, or no run
+    /// resolver routed them): a second import would pin them twice (`host_ram.rs`).
     OverRamChunk,
 }
