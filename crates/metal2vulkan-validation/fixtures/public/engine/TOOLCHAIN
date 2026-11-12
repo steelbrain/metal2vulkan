@@ -341,6 +341,7 @@ fixture stx_stencil_ms: metal: Apple metal version 32023.921 (metalfe-32023.921.
 fixture sxc_taps_before_step: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture tail_argument_cube_gradient: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture tail_argument_samplers: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
+fixture tail_argument_sparse_samples: metal: Apple metal version 32023.922 (metalfe-32023.922.4); macosx-sdk: 27.2 (26B118)
 fixture tail_cases: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture tgp_composite: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture threadgroup_integer_address: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
