@@ -6,18 +6,25 @@
 //! (`attachment_stand_in.rs`).
 //!
 //! An `RGBA16Float` icon is filled by a pass clearing it to [`ICON`]; the composite pass clears
-//! its `RGBA16Float` target to [`BACKGROUND`], then draws the icon at [`A`], fetches [`F`], draws
-//! the icon at [`A2`] and fetches [`F2`], which covers half of [`A`]. The target is a `Private`
-//! render target, or a texture over a `Shared` buffer's bytes (a linear image, as a surface's
-//! back buffer is). Each target is composited twice: in the icon's command buffer, then in a later
-//! one with a new icon, the first released.
+//! its `RGBA16Float` target to [`BACKGROUND`] (or loads it, the CPU having written it), then draws
+//! the icon at [`A`], fetches [`F`], draws the icon at [`A2`] and fetches [`F2`], which covers half
+//! of [`A`]. The target is a `Private` render target, a texture over a `Shared` buffer's bytes (a
+//! linear image, as a surface's back buffer is), or a texture over a no-copy buffer's host pages,
+//! loaded, as a guest's surface is. Over host pages in place, where the device's check passed for
+//! a shader's writes of its texels, its image takes the storage usage the fetch reads through
+//! (`texture/in_place_image.rs`), so the pass fetches it in place: with the feedback loop usage or
+//! without it (MoltenVK, which has no `VK_EXT_attachment_feedback_loop_layout`). Each target is
+//! composited twice: in the icon's command buffer, then in a later one with a new icon, the first
+//! released.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. A device without a framebuffer fetch in
 //! the pixel interlock says so and checks nothing.
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
+use crate::framebuffer_fetch::through_storage;
+use crate::in_place::{Access, Padding, PagesClass, RowEnds, Verdict};
 use crate::{
     BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, LoadAction, Origin,
     PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, SamplerState,
@@ -26,6 +33,21 @@ use crate::{
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use metal2vulkan::vk::ImageUsageFlags;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
+use std::time::Duration;
+
+/// Where the composite's target lies.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Home {
+    /// A `Private` render target.
+    Private,
+    /// A texture over a `Shared` buffer's bytes.
+    Buffer,
+    /// A texture over a no-copy buffer's host pages.
+    HostPages,
+}
 
 /// The target's side, in pixels.
 const SIDE: u64 = 128;
@@ -140,12 +162,21 @@ impl Tools {
         icon
     }
 
-    /// The composite pass over `target`, sampling `icon`, encoded in `command_buffer`.
-    fn composite(&self, command_buffer: &CommandBuffer, target: &Texture, icon: &Texture) {
+    /// The composite pass over `target`, sampling `icon`, encoded in `command_buffer`: loading
+    /// the target where `load`, else clearing it to [`BACKGROUND`].
+    fn composite(
+        &self,
+        command_buffer: &CommandBuffer,
+        (target, load): (&Texture, bool),
+        icon: &Texture,
+    ) {
         let mut pass = RenderPassDescriptor::new();
         let color = &mut pass.color_attachments[0];
         color.texture = Some(target.clone());
-        color.load_action = LoadAction::Clear;
+        color.load_action = match load {
+            true => LoadAction::Load,
+            false => LoadAction::Clear,
+        };
         let [r, g, b, a] = BACKGROUND;
         color.clear_color = ClearColor::new(r, g, b, a);
         color.store_action = StoreAction::Store;
@@ -217,7 +248,23 @@ fn wrong(texels: &[[u16; 4]]) -> (usize, Vec<((u64, u64), [u16; 4], [u16; 4])>) 
     (all.len(), all.into_iter().take(8).collect())
 }
 
-fn run(case: &str, over_buffer: bool) {
+/// Write [`BACKGROUND`] into every texel of the target over `buffer`'s first bytes, a
+/// host-visible buffer no command uses now.
+fn fill_background(buffer: &Buffer) {
+    let contents = buffer.contents().unwrap();
+    let texel: Vec<u8> = (BACKGROUND.map(half).iter())
+        .flat_map(|h| h.to_le_bytes())
+        .collect();
+    let bytes = texel.repeat((SIDE * SIDE) as usize);
+    // SAFETY: the buffer holds at least the target's `SIDE * SIDE * TEXEL` bytes, which no
+    // command buffer uses now.
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents.as_ptr(), bytes.len()) };
+}
+
+fn run(case: &str, home: Home) {
+    // The host pages outlive the buffer over them, made later and dropped first.
+    let host = Host::new();
+    let runs = Arc::new(AtomicUsize::new(0));
     let scratch = Scratch::new(&format!("fetch-composite-{case}"));
     let device = device(&scratch.0);
     let fetch = match state(&device, "engine/fragment_fetch.ll", "fetch_ordered") {
@@ -239,8 +286,8 @@ fn run(case: &str, over_buffer: bool) {
     let length = SIDE * SIDE * TEXEL;
     let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, SIDE, SIDE, false);
     d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
-    let (target, _backing) = match over_buffer {
-        true => {
+    let (target, backing) = match home {
+        Home::Buffer => {
             d.resource_options = ResourceOptions::shared();
             let backing = device
                 .new_buffer(length, ResourceOptions::shared())
@@ -248,11 +295,61 @@ fn run(case: &str, over_buffer: bool) {
             let target = backing.new_texture(&d, 0, SIDE * TEXEL).unwrap();
             (target, Some(backing))
         }
-        false => {
+        Home::HostPages => {
+            let Some(backing) = over_host(&device, &host, &runs) else {
+                return;
+            };
+            // The target is made once the check's verdicts are known, so its pages' class has
+            // them: an image in place, not a shadow waiting for them.
+            device.settle_in_place_checks(Duration::from_secs(120));
+            d.resource_options = backing.resource_options();
+            let target = backing.new_texture(&d, 0, SIDE * TEXEL).unwrap();
+            (target, Some(backing))
+        }
+        Home::Private => {
             d.resource_options = ResourceOptions::private();
             (device.new_texture(&d).unwrap(), None)
         }
     };
+    // Over host pages, the pass loads what the CPU wrote there.
+    let load = home == Home::HostPages;
+    if load {
+        fill_background(backing.as_ref().unwrap());
+    }
+    // In place over host pages where the device's check passed for a shader's writes of its
+    // texels, on a device that fetches through storage, the image takes the storage usage, and
+    // the pass fetches it in place (`texture/in_place_image.rs`).
+    if home == Home::HostPages {
+        let backing = backing.as_ref().unwrap();
+        let in_place = target.shadow().is_none() && target.linear_image().unwrap();
+        let layout = crate::linear_plan::BufferLayout {
+            offset: 0,
+            row_pitch: SIDE * TEXEL,
+            slice_pitch: length,
+            row_bytes: SIDE * TEXEL,
+            rows: SIDE,
+            slices: 1,
+        };
+        let start = backing.contents().map_or(0, |at| at.as_ptr().addr() as u64);
+        let checks = &device.shared().in_place;
+        let rows = RowEnds::of(start, &layout, checks.line());
+        let writes = Access::written(TEXEL, Padding::Kept)
+            .is_some_and(|w| checks.verdict(PagesClass::Pointer, w, rows) == Verdict::Passed);
+        let fetches = through_storage(device.compile_device().profile());
+        let usage = target.image_plan().unwrap().usage;
+        let storage = usage.contains(ImageUsageFlags::STORAGE);
+        eprintln!(
+            "FETCH-COMPOSITE {case} on {}: in place {in_place}, writes passed {writes}, fetched \
+             through storage {fetches}, feedback loop usage {}, storage usage {storage}",
+            device.name(),
+            usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT),
+        );
+        assert!(
+            !(in_place && writes && fetches) || storage,
+            "{case}: in place, the check passed for writes and the device fetches through \
+             storage, but the image took no storage usage: its pass fetches it through a scratch"
+        );
+    }
     let back = device
         .new_buffer(length, ResourceOptions::shared())
         .unwrap();
@@ -273,7 +370,7 @@ fn run(case: &str, over_buffer: bool) {
             _ => tools.queue.command_buffer().unwrap(),
         };
         drop(icon.replace(new));
-        tools.composite(&command_buffer, &target, icon.as_ref().unwrap());
+        tools.composite(&command_buffer, (&target, load), icon.as_ref().unwrap());
         tools.read(&command_buffer, &target, &back);
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
@@ -302,10 +399,15 @@ fn run(case: &str, over_buffer: bool) {
 
 #[test]
 fn a_private_targets_composite_of_icons_and_fetches_keeps_every_draw() {
-    run("private", false);
+    run("private", Home::Private);
 }
 
 #[test]
 fn a_composite_over_a_buffers_bytes_of_icons_and_fetches_keeps_every_draw() {
-    run("over-buffer", true);
+    run("over-buffer", Home::Buffer);
+}
+
+#[test]
+fn a_loaded_composite_over_host_pages_fetches_them_in_place_and_keeps_every_draw() {
+    run("over-host-pages", Home::HostPages);
 }
