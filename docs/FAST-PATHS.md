@@ -1123,6 +1123,20 @@ driver's. Each is open work.
   GPU, once per cold cache; states that share the module then take 13 to 16 ms, and a warm cache
   2 ms. The module inlines a few sampling helpers five or six times each; keeping one copy of each
   would cut it. It is not built.
+- **A cold making of a compositing fragment module of some 200,000 words takes its driver
+  seconds, once per module.** Its fragment shader library, cold with the driver's disk cache off
+  (203,016 words, macOS 26.7.2's fixed-function compositing shader, which a uniform buffer's state
+  drives): ANV on the Iris Xe (Mesa 26.2.6) 3.3 to 3.7 s at a load of about 16, its program 29,101
+  SIMD8 instructions with 34 spills; RADV on the Radeon 780M 1.3 to 3.0 s; the RTX 3090's driver
+  (620.70.06) 4.5 to 7.4 s. A state over another attachment format takes the first's record and
+  is found in it in milliseconds (`PassShape::without_formats`). The time is the driver's own work
+  on what the shader computes, not the module's size: spirv-opt's `-O` (186,314 words) and its
+  frozen specialization constants (180,402) leave ANV's NIR within 0.2% and its program within 9
+  instructions (29,110, 36 spills), its time within the run's noise, and holding `half` values in
+  16 bits across moves, phis and selects adds spills (103).
+  `VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT` leaves ANV's program and time, and the 3090's
+  time, as they were; RADV takes 0.9 to 1.0 s with it, at a draw cost not measured. Nothing is
+  built around it.
 - **On NVIDIA, a command buffer submitted while the runtime makes or frees a GPU pool block
   completes as that call ends.** A queue's first lease of an index or mesh records pool makes its
   block as the command buffer encodes where the device holds no spare of that kind, a block
