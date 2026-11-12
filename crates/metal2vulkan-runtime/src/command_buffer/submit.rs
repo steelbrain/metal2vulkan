@@ -428,6 +428,9 @@ impl CommandBufferShared {
         if device.is_lost() {
             return Err(CommandBufferError::DeviceLost);
         }
+        // A batch that waits for an event value its commit's copy in came before copies the
+        // copied host buffers in again, its wait met (`copies_again.rs`).
+        self.copy_in_again(index)?;
         let shared = device.shared();
         let raw = shared.vk();
         let queue = self.queue.vk_queue();

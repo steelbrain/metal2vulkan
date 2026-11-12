@@ -387,6 +387,7 @@ pub(crate) struct Counters {
     copied_copy_in_bytes: AtomicU64,
     copied_copy_in_bytes_skipped: AtomicU64,
     copied_copy_ins_unused: AtomicU64,
+    copied_copy_ins_after_waits: AtomicU64,
     copied_merge_back_bytes: AtomicU64,
     copied_merges_compared: AtomicU64,
     copied_merges_skipped: AtomicU64,
@@ -3597,6 +3598,12 @@ impl Counters {
     /// buffer used them (`copied.rs`).
     pub(crate) fn copied_copy_ins_unused(&self, copies: u64) {
         (self.copied_copy_ins_unused).fetch_add(copies, Ordering::Relaxed);
+    }
+
+    /// A batch whose event wait its commit's copy in came before copied the copied host buffers
+    /// in again as it was submitted (`command_buffer/copies_again.rs`).
+    pub(crate) fn copied_copy_ins_after_waits(&self) {
+        (self.copied_copy_ins_after_waits).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A batch's completion merged `bytes` the GPU changed back into the caller's pages
@@ -7350,6 +7357,11 @@ pub struct WorkCounts {
     /// name), so neither their bytes nor their pages' logs were asked; the first commit that uses
     /// one takes every write since.
     pub copied_copy_ins_unused: u64,
+    /// The copies in again of copied host buffers, one per batch: a batch that waits for an event
+    /// value its command buffer's commit found not reached, before the commit's copy in, copies
+    /// in again as it is submitted, after the wait, so its commands read the CPU's writes made
+    /// before the signal, as Metal's do. A command buffer with no such wait makes none.
+    pub copied_copy_ins_after_waits: u64,
     /// The bytes the GPU changed in copied host buffers' copies that batches' completions merged
     /// back into the caller's pages.
     pub copied_merge_back_bytes: u64,
@@ -9397,6 +9409,8 @@ impl Device {
             copied_copy_in_bytes_skipped: (counters.copied_copy_in_bytes_skipped)
                 .load(Ordering::Relaxed),
             copied_copy_ins_unused: counters.copied_copy_ins_unused.load(Ordering::Relaxed),
+            copied_copy_ins_after_waits: (counters.copied_copy_ins_after_waits)
+                .load(Ordering::Relaxed),
             copied_merge_back_bytes: counters.copied_merge_back_bytes.load(Ordering::Relaxed),
             copied_merges_compared: counters.copied_merges_compared.load(Ordering::Relaxed),
             copied_merges_skipped: counters.copied_merges_skipped.load(Ordering::Relaxed),

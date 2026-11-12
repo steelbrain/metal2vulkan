@@ -544,9 +544,11 @@ with buffers another thread makes on the same device.
 
 The copy is host-visible memory of the device's own; the buffer's `contents` is still the pointer.
 Each commit writes into the copy every byte the CPU changed in the pages since the copy and the
-pages last agreed, and each batch's completion writes back every byte the GPU changed, before its
-handlers run or a waiter returns, keeping a byte the CPU changed since (`copied_copy_in_bytes`,
-`copied_merge_back_bytes`). Until a command buffer that may write the copy is committed, the copy
+pages last agreed, and so does the submission of a batch that waits for an event value not reached
+at the commit, once the wait is met (`copied_copy_ins_after_waits`), as Metal's commands after the
+wait read the pages as they stand then. Each batch's completion writes back every byte the GPU
+changed, before its handlers run or a waiter returns, keeping a byte the CPU changed since
+(`copied_copy_in_bytes`, `copied_merge_back_bytes`). Until a command buffer that may write the copy is committed, the copy
 itself holds the bytes the pages and it agree on, and nothing else is kept: a copy the GPU only
 reads costs its own length and no more. At the first such commit the copy takes a base
 (`copied_bases_made`): a 128-bit tag of each 1 KiB block in host memory (a 64th of the copy's

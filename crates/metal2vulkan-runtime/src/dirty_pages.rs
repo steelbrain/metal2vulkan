@@ -11,8 +11,10 @@
 //!   its copies takes the pages again, and waits for that publication as the batch that holds
 //!   the copy is submitted, which records the copy then (`shadow::GatedCopyIn`,
 //!   [`DirtyPages::wait`]); a copied host buffer (`copied.rs`), whose copy in is the commit's
-//!   own, asks and waits at the commit, one stamp of each log for every copy. A copy then syncs
-//!   to that stamp: every write made after it is stamped later.
+//!   own, asks and waits at the commit, one stamp of each log for every copy, and again as a batch
+//!   that waits for an event value not reached before that copy in is submitted
+//!   (`command_buffer/copies_again.rs`). A copy then syncs to that stamp: every write made after
+//!   it is stamped later.
 //! - **The pages changed** ([`DirtyPages::changed_except`]) since the stamp a copy synced to, by
 //!   any writer but that copy's own, are the only bytes it may lack: they are copied in, the rest
 //!   skipped. Copied host buffers ask once per log and stamp for all of them, every writer's

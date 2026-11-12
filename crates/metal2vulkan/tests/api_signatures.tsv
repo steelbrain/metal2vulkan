@@ -2680,6 +2680,7 @@ field	metal2vulkan-runtime::WorkCounts.copied_bases_refused	pub copied_bases_ref
 field	metal2vulkan-runtime::WorkCounts.copied_compare_threads	pub copied_compare_threads: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes	pub copied_copy_in_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes_skipped	pub copied_copy_in_bytes_skipped: u64
+field	metal2vulkan-runtime::WorkCounts.copied_copy_ins_after_waits	pub copied_copy_ins_after_waits: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_ins_unused	pub copied_copy_ins_unused: u64
 field	metal2vulkan-runtime::WorkCounts.copied_dropped_bytes	pub copied_dropped_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.copied_heaps_made	pub copied_heaps_made: u64

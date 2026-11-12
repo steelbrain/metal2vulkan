@@ -13,8 +13,10 @@
 //! CPU writes a second pattern (told to the log), and the host signals: both blits must read the
 //! second.
 //!
-//! And the same rounds over a copy with no wait, the second pattern written before the second
-//! command buffer's commit: what each commit copies in.
+//! Over a copy, each waiting command buffer copies in again as its batch is submitted after the
+//! wait (`command_buffer/copies_again.rs`, `WorkCounts::copied_copy_ins_after_waits`): one a
+//! round. The same rounds over a copy with no wait, the second pattern written before the second
+//! command buffer's commit, copy in again never: only at each commit.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -116,10 +118,11 @@ fn first_wrong(out: &Buffer, value: u8) -> Option<(&'static str, usize, u8)> {
     Some((read, at % SPAN as usize, bytes[at]))
 }
 
-/// What the rounds moved: (copied bytes copied in, logged copies in gated, logged copies in
-/// whole).
-fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 3] {
+/// What the rounds moved: (copied copies in again after waits, copied bytes copied in, logged
+/// copies in gated, logged copies in whole).
+fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
     [
+        after.copied_copy_ins_after_waits - before.copied_copy_ins_after_waits,
         after.copied_copy_in_bytes - before.copied_copy_in_bytes,
         after.dirty_copies_in_gated - before.dirty_copies_in_gated,
         after.dirty_copies_in_whole - before.dirty_copies_in_whole,
@@ -180,17 +183,23 @@ fn run(case: &str, home: Home, waits: bool) {
             failures.push(format!("round {round}: the read after: {wrong:x?}"));
         }
     }
+    let moved = moved(&before, &device.work_counts());
     eprintln!(
-        "WAITED-READS {case} on {}: {} wrong reads of {}; (copied bytes copied in, logged copies \
-         in gated, whole) {:?} over {} commits; first {:?}",
+        "WAITED-READS {case} on {}: {} wrong reads of {}; (copied copies in again after waits, \
+         copied bytes copied in, logged copies in gated, whole) {moved:?} over {} commits; first \
+         {:?}",
         device.name(),
         failures.len(),
         2 * ROUNDS,
-        moved(&before, &device.work_counts()),
         2 * ROUNDS,
         failures.first()
     );
     assert!(failures.is_empty(), "{case}: {failures:?}");
+    let again = match (home, waits) {
+        (Home::Copied, true) => ROUNDS,
+        _ => 0,
+    };
+    assert_eq!(moved[0], again, "{case}: copies in again after waits");
 }
 
 #[test]

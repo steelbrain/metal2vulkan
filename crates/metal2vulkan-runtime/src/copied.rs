@@ -31,7 +31,11 @@
 //!   changed in the pages since then is written into each copy its commands use, or into every copy
 //!   where one may reach memory no use names (a function that reaches buffers through addresses,
 //!   work on the GPU alone; [`CopiedBuffers::copy_in`]): a copy the command buffer does not use
-//!   takes the CPU's writes at the first commit that uses it. At each batch's completion, before
+//!   takes the CPU's writes at the first commit that uses it. A batch that waits for an event value
+//!   not reached before that copy in runs its commands after the wait, where Metal's read the
+//!   pages as they stand then: it copies in again the same way as it is submitted, its wait met
+//!   (`command_buffer/copies_again.rs`, `WorkCounts::copied_copy_ins_after_waits`), so a CPU
+//!   write made before the signal reaches it. At each batch's completion, before
 //!   its events are seen signaled, the scheduler is told, its handlers run or a waiter returns,
 //!   every byte the GPU changed in the copy is written back into the pages, where the CPU did not
 //!   change that byte since ([`CopiedBuffers::merge_back`]): a byte both changed keeps the CPU's,
@@ -128,10 +132,10 @@
 //!   bytes for the other storage mode's class (a `Managed` buffer's import, then a `Shared`
 //!   buffer's copy where the gate refused its own), are two memories, which agree only through
 //!   the pages: at the writer's completion (its merge back, or its writes in place) and at the
-//!   reader's commit (its copy in). A read committed before the write completed reads the bytes
-//!   as of its commit, wherever the tracker orders it after the write: in one command buffer, in
-//!   one queue's command buffers in flight together, and across queues an event orders, as the
-//!   held reader is not copied in again when the event releases it. Of two such copies written in
+//!   reader's commit (its copy in), or a batch's submission after an event wait its commit came
+//!   before (its copy in again, above). A read committed before the write completed reads the
+//!   bytes as of its commit, wherever the tracker orders it after the write: in one command
+//!   buffer, and in one queue's command buffers in flight together. Of two such copies written in
 //!   flight, the second's merge back takes a byte the first merged for the CPU's write, which a
 //!   merge keeps, so the first write stays where Metal keeps the later.
 //! - **Event signals.** A batch's event signals, submitted while a copy is live, are seen at its
@@ -1155,10 +1159,12 @@ impl CopiedBuffers {
         }
     }
 
-    /// At a commit: write into each copy the command buffer's commands may reach (`used`: the
-    /// keys they used, `DirtyCommit::copies_used`, or every copy where one may reach memory no
-    /// use names) the bytes the CPU changed in its pages since they last agreed, before any of
-    /// the command buffer's work is submitted. A copy none of them reaches is neither compared nor
+    /// At a commit, before any of the command buffer's work is submitted, and again as a batch
+    /// that waits for an event value not reached before the commit's copy in is submitted
+    /// (`command_buffer/copies_again.rs`): write into each copy the command buffer's commands may
+    /// reach (`used`: the keys they used, `DirtyCommit::copies_used`, or every copy where one may
+    /// reach memory no use names) the bytes the CPU changed in its pages since they last agreed.
+    /// A copy none of them reaches is neither compared nor
     /// asked of its logs, and keeps the stamp it last synced to, so the first commit whose
     /// commands reach it takes every write since: a command buffer reads only the resources its
     /// commands use, as Metal's GPU reaches only those (counted:

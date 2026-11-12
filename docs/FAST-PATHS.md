@@ -603,7 +603,10 @@ driver's. Each is open work.
   copies the texels in before each command buffer that uses the texture and merges them back
   after each write.
 - **A copied host buffer costs O(its size) at every batch's completion that may have written it, and
-  at every commit where its pages carry no log** (`copied.rs`, `copied-host-pages`): until a command
+  at every commit where its pages carry no log** (`copied.rs`, `copied-host-pages`), and again at
+  the submission of each batch that waits for an event value its commit found not reached
+  (`command_buffer/copies_again.rs`, `copied_copy_ins_after_waits`; none for a command buffer
+  without such a wait): until a command
   buffer that may write the copy is committed, a commit compares the pages with the copy a page at a
   time; from then on each comparison reads one side whole (the pages at a commit, the copy at a
   completion) and compares each 1 KiB block's tag with its base's (below), reading the other side's
@@ -695,9 +698,10 @@ driver's. Each is open work.
   the same bytes for the other storage mode (a `Managed` buffer's import, then a `Shared` buffer
   over them whose import the gate refused). The writer's bytes reach the pages
   at its completion, and the reader's copy at its commit, so a read committed before the write
-  completed reads the bytes from before it: in one command buffer, in one queue's command buffers
-  in flight together, and across queues an event orders (the held reader is not copied in again
-  when the event releases it). Of two such copies written in flight, the first's write stays where
+  completed reads the bytes from before it: in one command buffer, and in one queue's command
+  buffers in flight together. A reader held by an event wait its commit found not reached copies in
+  again once the wait is met (`command_buffer/copies_again.rs`). Of two such copies written in
+  flight, the first's write stays where
   Metal keeps the later. Buffers over exactly the bytes a live copy covers lie in that copy and are
   one memory (`copied_host_buffers_shared`).
 - **A copied host buffer's merge keeps the CPU's byte where the CPU and the GPU both wrote it**

@@ -34,6 +34,7 @@
 pub(super) mod batches;
 pub(super) mod checks;
 pub(super) mod completion;
+mod copies_again;
 pub(super) mod fences;
 mod first_submission;
 pub(super) mod follow;
@@ -52,6 +53,7 @@ mod storage_form;
 mod submit;
 
 pub(super) use completion::Completion;
+use copies_again::CopiesAgain;
 pub(super) use first_submission::{NotedTable, ReplayTable};
 use follow::{Follow, Release};
 pub(super) use group::{Group, GroupEnd, GROUP_BATCHES};
@@ -898,6 +900,9 @@ pub(super) struct State {
     /// Why a host step failed: the batch it recorded for is not submitted, and the command buffer
     /// finishes with it.
     step_failure: Option<CommandBufferError>,
+    /// The batches that copy copied host buffers in again as they are submitted, after an event
+    /// wait their commit's copy in came before (`copies_again.rs`).
+    copies_again: Option<CopiesAgain>,
     /// The refusal of a host step that failed so (`CommandBufferError::Refused`).
     refusal: Option<Error>,
     /// The first dispatch's pipeline whose making failed, which a host step met
@@ -2293,6 +2298,7 @@ impl CommandBuffer {
                 faults: ReplayFaults::default(),
                 placed: 0,
                 step_failure: None,
+                copies_again: None,
                 refusal: None,
                 failed_pipeline: None,
                 dropped_draw: None,
@@ -3619,13 +3625,17 @@ impl CommandBuffer {
         // Each such copy its commands may write takes a base of the bytes it then holds, before
         // any of its work is submitted; where the host has no memory for one, the command
         // buffer runs nothing (`copied.rs`, "A base once it may").
+        // A batch that waits for an event value not reached before this copy in copies in again
+        // as it is submitted, after the wait (`copies_again.rs`).
+        let mut copies_again = None;
         if shared.copied.any() {
             let (mut used, mut written) = (CopiesReached::default(), CopiesReached::default());
             let unnoted = self.0.unnoted.load(Ordering::Relaxed);
             // The state's lock goes before the dirty log's is taken.
-            let (reaches, writes) = {
+            let (reaches, writes, unreached) = {
                 let state = self.state();
-                (state.reaches_unnamed, state.writes_unnamed)
+                let unreached = CopiesAgain::unreached(state.batches.all());
+                (state.reaches_unnamed, state.writes_unnamed, unreached)
             };
             match unnoted || reaches {
                 true => used.reached_all(),
@@ -3646,10 +3656,12 @@ impl CommandBuffer {
                 self.state().committing = false;
                 return Err(Error::OutOfMemory(MemoryKind::Host));
             }
+            copies_again = CopiesAgain::new(unreached, (used, written));
         }
         let (waits, away, reaches, unreplayable, reset) = {
             let mut state = self.state();
             state.committing = false;
+            state.copies_again = copies_again;
             if let Some(failure) = failure {
                 state.fail(failure);
             }
