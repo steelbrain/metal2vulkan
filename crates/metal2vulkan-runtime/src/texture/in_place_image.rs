@@ -50,12 +50,17 @@
 //! - **One that renders** also takes the feedback loop usage a draw takes that reads the texture
 //!   its own pass renders through a snapshot (`texture::feedback_candidate`, `render/snapshot.rs`)
 //!   where the device makes the image with it, as an aliasing image over a buffer of the
-//!   runtime's does, and with it the storage usage the snapshot's fetch of the attachment in the
-//!   pixel interlock reads through (`framebuffer_fetch::storage_candidate`, which may list a view
-//!   in another format), where the device's check passed for a shader's writes over the pages'
-//!   class too, those that keep the rows' padding, and the texel is one its kernel stores (with
-//!   that usage a shader writes the texels in place, as one declared to does): the first of those
-//!   plans the device makes the image in place with, else the declared plan's image.
+//!   runtime's does, and the storage usage a fetch of the attachment in the pixel interlock reads
+//!   through, a fetching draw's and the snapshot's (`framebuffer_fetch::storage_candidate`, which
+//!   may list a view in another format), where the device's check passed for a shader's writes
+//!   over the pages' class too, those that keep the rows' padding, and the texel is one its kernel
+//!   stores (with that usage a shader writes the texels in place, as one declared to does). The
+//!   storage usage does not wait on the feedback loop usage: a device without
+//!   `VK_EXT_attachment_feedback_loop_layout` (MoltenVK) takes it alone, so a pass that fetches
+//!   the texture reads it in place, not through a scratch image (`attachment_stand_in.rs`). Tried
+//!   widest first: both usages, the feedback loop usage alone, the storage usage alone; the first
+//!   plan the device makes the image in place with (its linear tiling has each usage's features
+//!   and the image lies at the texels' pitch in their memory), else the declared plan's image.
 //! - **A rebind** (`rebind.rs`) makes it again over the new pages, its texels as far from their
 //!   first byte as from the old pages', as a no-copy heap's images are
 //!   ([`Device::rebound_in_place_images`]); a detach makes it present a stand-in, as it does every
@@ -412,22 +417,26 @@ impl Device {
     }
 
     /// The plans wider than `plan`, of a texture that renders, an image in place is tried with
-    /// before it, widest first: the feedback loop usage where the device makes it, and with it the
-    /// storage usage where `storable` (the module docs, [`in_place_plans`](Self::in_place_plans)).
+    /// before it, widest first: the feedback loop usage where the device makes it and the storage
+    /// usage where `storable`, then the feedback loop usage alone, then the storage usage alone
+    /// (the module docs, [`in_place_plans`](Self::in_place_plans)).
     fn wider_in_place_plans(&self, plan: &ImagePlan, storable: bool) -> Vec<ImagePlan> {
         let profile = self.compile_device().profile();
+        let storage =
+            |plan: &ImagePlan| storable.then(|| storage_candidate(plan, profile)).flatten();
         let feedback = feedback_candidate(plan, self);
-        let storage = feedback
-            .as_ref()
-            .filter(|_| storable)
-            .and_then(|feedback| storage_candidate(feedback, profile));
-        storage.into_iter().chain(feedback).collect()
+        let both = feedback.as_ref().and_then(storage);
+        both.into_iter()
+            .chain(feedback)
+            .chain(storage(plan))
+            .collect()
     }
 
     /// The wider plans an image in place of a texture of `plan` made with `descriptor` over
     /// `texels`, host pages of `class`, is tried with before `plan`, widest first (the module
-    /// docs). For one that renders: the feedback loop usage, and with it the storage usage the
-    /// snapshot's fetch reads through where `storable` (the route's, `texture/route.rs`). For one
+    /// docs). For one that renders: the feedback loop usage and the storage usage a fetch in the
+    /// pixel interlock reads through where `storable` (the route's, `texture/route.rs`), together
+    /// and each alone ([`wider_in_place_plans`](Self::wider_in_place_plans)). For one
     /// that does not: the usages its descriptor lacks, each where the device's check passed for
     /// what it lets reach the pages (the storage usage where a shader's writes may reach the
     /// texels in place, [`writes_reach`](Self::writes_reach), the attachment

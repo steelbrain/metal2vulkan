@@ -781,9 +781,9 @@ pub(crate) fn in_place(
 /// storage usage too: where no shader writes it by its usage (whose own check covers such
 /// writes), and `verdict` passed the check of a shader's writes of texels of its width that keeps
 /// every byte beside them ([`Access::written`] of [`Padding::Kept`]: a render target's rows keep
-/// their padding). A draw that reads such a texture through a snapshot fetches it in the pixel
-/// interlock through that usage (`render/snapshot.rs`), and with it a shader's writes reach the
-/// texels in place, as the check's writes do.
+/// their padding). A draw that fetches such a texture in the pixel interlock, as its pass's
+/// attachment or through a snapshot (`render/snapshot.rs`), reads and writes it in place through
+/// that usage, and with it a shader's writes reach the texels in place, as the check's writes do.
 pub(crate) fn storable(
     usage: TextureUsage,
     (class, rows, texel): (PagesClass, RowEnds, u64),

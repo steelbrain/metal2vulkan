@@ -20,8 +20,8 @@
 //!   Where its usage and those verdicts take an image in place (`in_place::in_place`), as they
 //!   would for a texture made then, it waits for a switch; else it stays a shadow, as such a
 //!   texture is. At the switch's commit the image in place is made as the texture's making makes
-//!   it (over host pages `Device::in_place_image`: the declared plan, with the feedback loop usage
-//!   and the storage usage where the device makes them so, noted for a rebind and for its first
+//!   it (over host pages `Device::in_place_image`: the declared plan, with the feedback loop usage,
+//!   the storage usage or both where the device makes them so, noted for a rebind and for its first
 //!   move; over the pooled memory `Device::pooled_move_image`: the first of the plans with the
 //!   feedback loop usage and the usage the texture lacks the device makes it of, noted for its
 //!   first move); where the device makes none (a refused pitch, its placement), or the buffer's
