@@ -157,7 +157,7 @@ use super::super::release;
 use super::super::resource::{ObjectId, ResourceKey};
 use super::super::tracker::Point;
 use super::super::work_counts::Counters;
-use super::super::Device;
+use super::super::{Buffer, Device};
 use super::decoded_twin::DecodePass;
 use super::{buffer_image_copy, image_aspects, transfer_barrier, ImageRegion, ZERO_BYTES};
 use crate::device::functions::Vk;
@@ -189,6 +189,78 @@ pub(crate) struct FirstMove {
     /// The queue family the move acquires the image for from `VK_QUEUE_FAMILY_FOREIGN_EXT`, an
     /// image over dma-buf pages the CPU writes ([`FirstMove::acquired`]).
     acquire: Option<u32>,
+    /// The bytes of a buffer the image is bound to that the move keeps by copies on the device
+    /// around its layout transition ([`FirstMove::kept`]).
+    keep: Option<GpuKeep>,
+}
+
+/// A first move's keep of the bytes its image is bound to, by copies on the device
+/// ([`FirstMove::kept`]): the image, made `UNDEFINED`, aliases a buffer's bytes that only the
+/// device's ordered commands write (`linear_plan::Between::Kept`), and of its move out of
+/// `UNDEFINED` the Synchronization chapter says "the contents of that range may be discarded"
+/// (Image Layout Transitions), the range its subresources are bound to and no more. So the move
+/// copies that span of the buffer into `scratch`, moves the image to `GENERAL`, and copies the
+/// span back through the buffer, in one ordered sequence ([`Taken::record`]). In `GENERAL` the
+/// image is a host-accessible subresource (a `DRM_FORMAT_MOD_LINEAR` image is linear, the
+/// Glossary's Linear Resource), as the buffer is, and two such aliases "interpret the contents of
+/// the memory in consistent ways, and data written to one alias can be read by the other alias"
+/// (Memory Aliasing): the image reads the bytes the buffer held, the bytes between its rows among
+/// them, and the buffer holds every byte it held. Its submission waits for every earlier
+/// submission on the device's other `VkQueue`s, which may access the span ([`Taken::keeps`]), and
+/// a later one there that may reach the buffer's memory waits for it, as for all first work. The
+/// image is a buffer's alias, which copies on no staging queue, so no staging queue records it
+/// (`record_several`). Counted: `WorkCounts::first_moves_kept`, `first_move_bytes_kept`.
+pub(crate) struct GpuKeep {
+    /// The buffer, held until the move's submission completed.
+    buffer: Buffer,
+    /// Where the span starts in the buffer, and its length.
+    at: u64,
+    length: u64,
+    /// The scratch buffer of `length` bytes the span is copied into and back from, held likewise.
+    scratch: Buffer,
+}
+
+impl GpuKeep {
+    /// The keep of `length` bytes of `buffer` from its byte `at`, through `scratch`, a buffer of
+    /// the runtime's own of at least `length` bytes (`Device::scratch_buffer`).
+    pub(crate) fn new(buffer: Buffer, at: u64, length: u64, scratch: Buffer) -> GpuKeep {
+        GpuKeep {
+            buffer,
+            at,
+            length,
+            scratch,
+        }
+    }
+
+    /// The copy of the span out to the scratch buffer, or back with `back`: the source, the
+    /// destination and the region.
+    fn copy(&self, back: bool) -> (vk::Buffer, vk::Buffer, vk::BufferCopy) {
+        let (buffer, at) = self.buffer.at(self.at);
+        let (scratch, start) = self.scratch.at(0);
+        let (src, dst, region) = match back {
+            false => (buffer, scratch, (at, start)),
+            true => (scratch, buffer, (start, at)),
+        };
+        let copy = vk::BufferCopy {
+            src_offset: region.0,
+            dst_offset: region.1,
+            size: self.length,
+        };
+        (src, dst, copy)
+    }
+
+    /// Record the copy out, or back with `back`, into `command_buffer`.
+    ///
+    /// # Safety
+    ///
+    /// As [`Taken::record`]'s; both buffers are live (held) and have transfer usage.
+    unsafe fn record(&self, device: &Vk, command_buffer: vk::CommandBuffer, back: bool) {
+        let (src, dst, copy) = self.copy(back);
+        // SAFETY: the caller's contract; the span lies within the buffer's `VkBuffer` (the image
+        // it is bound to lies within the buffer: `linear_plan::aliases`) and the scratch's.
+        unsafe { device.cmd_copy_buffer(command_buffer, src, dst, &[copy]) };
+        exit_guard::called(Call::CmdCopyBuffer);
+    }
 }
 
 /// How a first move writes Metal's pattern into the first `levels` levels of its image, of
@@ -302,6 +374,7 @@ impl FirstMove {
             holding: None,
             pattern: None,
             acquire: None,
+            keep: None,
         }
     }
 
@@ -336,6 +409,12 @@ impl FirstMove {
     pub(crate) fn acquired(mut self, family: u32) -> FirstMove {
         self.old = vk::ImageLayout::GENERAL;
         self.acquire = Some(family);
+        self
+    }
+
+    /// The move, from `UNDEFINED`, keeping the bytes `keep` names by copies around it ([`GpuKeep`]).
+    pub(crate) fn kept(mut self, keep: GpuKeep) -> FirstMove {
+        self.keep = Some(keep);
         self
     }
 
@@ -1826,6 +1905,16 @@ impl<'a> Taken<'a> {
         (self.held.iter()).any(|held| matches!(held, Held::Moves(..) | Held::Fill(..)))
     }
 
+    /// Whether it took a move that keeps a buffer's bytes by copies around its layout transition
+    /// ([`GpuKeep`]): the submission that records it waits for every earlier submission on the
+    /// device's other `VkQueue`s, whose commands may access those bytes while the transition
+    /// rewrites them.
+    pub(crate) fn keeps(&self) -> bool {
+        (self.held.iter()).any(|held| {
+            matches!(held, Held::Moves(_, moves, _) if moves.iter().any(|first| first.keep.is_some()))
+        })
+    }
+
     /// Whether it took host calls' staged copies ([`record_staged`](Self::record_staged)'s).
     pub(crate) fn has_staged(&self) -> bool {
         (self.held.iter()).any(|held| matches!(held, Held::Texels(..)))
@@ -1906,10 +1995,12 @@ impl<'a> Taken<'a> {
 
     /// Record the work into `command_buffer`, of a family of `family`'s queue flags: the
     /// buffers' fills with zeros, after every command before (memory other commands wrote, a
-    /// heap's included), then their copies of staged bytes, after the zeros, then a barrier
+    /// heap's included), then their copies of staged bytes, after the zeros, then the copies out
+    /// of the spans the moves keep ([`GpuKeep`]), after every command before, then a barrier
     /// carrying every image's move, after the fills (an image placed in a new heap moves after
-    /// the heap's fill), then the images' copies of zeros, then the barrier that makes every write
-    /// visible to every command after and to the host.
+    /// the heap's fill) and the copies out, then the copies of the kept spans back and the
+    /// images' copies of zeros, then the barrier that makes every write visible to every command
+    /// after and to the host.
     ///
     /// # Safety
     ///
@@ -1945,6 +2036,21 @@ impl<'a> Taken<'a> {
         };
         // SAFETY: the caller's contract.
         unsafe { record_fills((device, counts), command_buffer, &fills) };
+        let keeps: Vec<&GpuKeep> = moves().filter_map(|first| first.keep.as_ref()).collect();
+        if !keeps.is_empty() {
+            // The spans out, after every command before (the fills and staged copies above
+            // among them), each before its image's move, which the move's barrier orders.
+            // SAFETY: the caller's contract.
+            unsafe {
+                let flags = vk::DependencyFlags::empty();
+                device.cmd_pipeline_barrier(command_buffer, all, all, flags, &written(), &[], &[]);
+            }
+            exit_guard::called(Call::CmdPipelineBarrier);
+            for keep in &keeps {
+                // SAFETY: as above; the move holds both buffers.
+                unsafe { keep.record(device, command_buffer, false) };
+            }
+        }
         let images: Vec<vk::ImageMemoryBarrier<'_>> =
             moves().map(|first| first.barrier(family)).collect();
         if !images.is_empty() {
@@ -1964,6 +2070,14 @@ impl<'a> Taken<'a> {
             exit_guard::called(Call::CmdPipelineBarrier);
         }
         let mut copied = !fills.is_empty();
+        // The spans back through their buffers, after the moves, whose barrier makes the
+        // transitions' writes and the copies out visible to them.
+        for keep in &keeps {
+            // SAFETY: as above.
+            unsafe { keep.record(device, command_buffer, true) };
+            counts.first_move_kept(keep.length);
+            copied = true;
+        }
         for first in moves().filter(|first| first.writes()) {
             // SAFETY: as above; the image is in `GENERAL` now and has `TRANSFER_DST` usage where
             // it reads zero.

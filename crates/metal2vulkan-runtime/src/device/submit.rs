@@ -277,7 +277,7 @@ impl Device {
             Reach::Mine { after_other_queues } => after_other_queues,
         };
         // Every one: its work may reach any resource.
-        let waits = match after_other_queues {
+        let mut waits = match after_other_queues {
             true => {
                 let completed =
                     |point: Point| shared.queues[point.queue].completed_value() >= point.value;
@@ -285,6 +285,19 @@ impl Device {
             }
             false => Vec::new(),
         };
+        // And, where it took a move that keeps a buffer's bytes by copies around its transition
+        // (`texture/first_move.rs`'s `GpuKeep`), every earlier submission on the device's other
+        // `VkQueue`s not seen complete, whose commands may access those bytes while the
+        // transition rewrites them.
+        if taken.keeps() {
+            let others = (shared.queues.iter().enumerate().skip(1))
+                .filter(|(_, slot)| slot.submitted_value() > slot.completed_value())
+                .map(|(queue, slot)| Point {
+                    queue,
+                    value: slot.submitted_value(),
+                });
+            waits = last_of_each(waits.into_iter().chain(others));
+        }
         // SAFETY: the command buffer is not pending (every submission is waited for below) and
         // the internal lock is held; beginning it resets it (the pool resets command buffers).
         unsafe { raw.begin_command_buffer(objects.buffer, &begin) }.map_err(vulkan)?;

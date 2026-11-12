@@ -125,7 +125,7 @@ use crate::release;
 use ash::vk;
 use ash::vk::Handle;
 use decoded_twin::{Decoded, PassScratch};
-use first_move::{FirstMove, Fresh, Mine, Pattern, Patterned, TexelCopy, PATTERN_BYTES};
+use first_move::{FirstMove, Fresh, GpuKeep, Mine, Pattern, Patterned, TexelCopy, PATTERN_BYTES};
 use heap_tiled::{FreshDepth, FreshPattern};
 use heap_two_planes::TwoPlaneHeapLayout;
 use metal2vulkan::bind::{AstcDecode, EtcDecode, ImageViewDesc, PvrtcDecode, TextureFacts};
@@ -2948,11 +2948,12 @@ impl Device {
     ///   `PREINITIALIZED`, where it holds exactly Metal's texels there (`linear_plan::aliases`, and
     ///   the bytes `between` their rows lets it) in memory of the buffer's type; else a
     ///   `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch, made `UNDEFINED`, where the device makes
-    ///   one so and its check passed for its pooled memory ([`Device::pooled_pitched_image`]), but
-    ///   for rows whose bytes between them only the linear image keeps (`Between::Kept`), which
-    ///   that image's first move may discard. The device's check of its pooled memory makes no
-    ///   linear image: it measures the pitched one.
-    /// - Rows whose bytes between them only the linear image made `PREINITIALIZED` keeps
+    ///   one so and its check passed for its pooled memory ([`Device::pooled_pitched_image`]), or,
+    ///   for rows whose bytes between them only the device's ordered commands write
+    ///   (`Between::Kept`), whatever the check: that image's first move keeps the bytes it is
+    ///   bound to by copies around its transition (`texture/first_move.rs`'s `GpuKeep`). The
+    ///   device's check of its pooled memory makes no linear image: it measures the pitched one.
+    /// - Rows whose bytes between them only the device's ordered commands write
     ///   (`Between::Kept`), in memory allocated exportable (either kind below): no image, as one
     ///   there names the memory's handle type and so starts `UNDEFINED`.
     /// - In a block exported as an opaque file descriptor or a dma-buf (`exported_memory.rs`):
@@ -3022,14 +3023,14 @@ impl Device {
                 )));
             }
         };
-        // Bytes between the rows that the device's linear image, made `PREINITIALIZED`, alone
-        // keeps (`linear_plan::holding`): an image in memory allocated exportable names its handle
-        // type, and so starts `UNDEFINED`.
+        // Bytes between the rows that only the device's ordered commands write
+        // (`linear_plan::holding`): an image in memory allocated exportable names its handle
+        // type, and so starts `UNDEFINED`, whose first move may discard them.
         let kept = between == Between::Kept;
         if kept && (blocks || memory != ModifierMemory::Own) {
-            let why = "its rows lie with bytes between them that only the device's linear image \
-                       made PREINITIALIZED keeps, and an image in memory allocated exportable \
-                       names its handle type and starts UNDEFINED"
+            let why = "its rows lie with bytes between them that only the device's ordered \
+                       commands write, and an image in memory allocated exportable names its \
+                       handle type and starts UNDEFINED, whose first move may discard them"
                 .to_owned();
             let cause = ShadowCause::Refused(Refusal::Image, why.clone());
             return Ok(Err((why, cause)));
@@ -3094,21 +3095,18 @@ impl Device {
             Err(why) => format!("the device makes no linear image of the texture: {why}"),
         };
         let pitched = match (memory, blocks) {
-            // Its first move, out of `UNDEFINED`, may discard the bytes between the rows.
-            _ if kept => Err(ShadowCause::Refused(
-                Refusal::Pitch,
-                "its rows lie with bytes between them that a DRM_FORMAT_MOD_LINEAR image at \
-                 Metal's pitch, made UNDEFINED, may discard at its first move"
-                    .to_owned(),
-            )),
             (_, true) => Err(ShadowCause::Refused(
                 Refusal::Pitch,
                 "a block of the runtime's buffers allocated exportable takes no \
                  DRM_FORMAT_MOD_LINEAR image at Metal's pitch"
                     .to_owned(),
             )),
+            // Bytes between the rows that only the device's ordered commands write, in memory of
+            // the runtime's own (memory allocated exportable was refused above): its first move,
+            // out of `UNDEFINED`, keeps the bytes it is bound to by copies around it
+            // (`first_move.rs`'s `GpuKeep`).
             (ModifierMemory::Own, false) => {
-                self.pooled_pitched_image(plan, texels, usage, facts)?
+                self.pooled_pitched_image(plan, texels, (usage, kept), facts)?
             }
             (_, false) => (self.pitched_image(plan, &texels.layout, facts, memory)?)
                 .map_err(|(refusal, why)| ShadowCause::Refused(refusal, why)),
@@ -3307,7 +3305,10 @@ impl Device {
     /// policy and its check of the pooled class ([`PagesClass::Pooled`]) take each access the
     /// usage takes for texels that lie in its lines as these do (`in_place::in_place`; a pending
     /// verdict starts the check, and the texture is a shadow meanwhile); the check's own textures
-    /// whatever the verdicts. Why not.
+    /// whatever the verdicts; and, with `kept` (rows whose bytes between them only the device's
+    /// ordered commands write, `linear_plan::Between::Kept`), whatever the check, as for the
+    /// linear image over such rows: their image's first move keeps the bytes it is bound to by
+    /// copies around it (`texture/first_move.rs`'s `GpuKeep`). Why not.
     ///
     /// Vulkan lets such an image be bound to memory of no external handle type: an image of a DRM
     /// format modifier's tiling names its modifier and plane layout
@@ -3320,12 +3321,13 @@ impl Device {
     /// the Synchronization chapter says "If the old layout is VK_IMAGE_LAYOUT_UNDEFINED, the
     /// contents of that range may be discarded": the buffer's bytes stay only where the driver
     /// leaves them, which the device's check of the pooled class measures, as it measures the
-    /// moves of images over host pages (`in_place.rs`, "Relying on the driver, checked").
+    /// moves of images over host pages (`in_place.rs`, "Relying on the driver, checked"), or
+    /// where the move copies them out of that range before and back after (`kept`).
     fn pooled_pitched_image(
         &self,
         plan: &ImagePlan,
         texels: &Texels,
-        usage: TextureUsage,
+        (usage, kept): (TextureUsage, bool),
         facts: &ImageFacts<'_>,
     ) -> Result<Result<LinearMade, ShadowCause>, Error> {
         if !self.makes_modifier_images() {
@@ -3336,7 +3338,7 @@ impl Device {
                     .to_owned(),
             )));
         }
-        if !in_place::checking() {
+        if !kept && !in_place::checking() {
             let line = self.shared().in_place.line();
             let pages = (
                 PagesClass::Pooled,
@@ -3446,7 +3448,33 @@ impl Device {
                 });
             }
         };
-        let LinearMade { raw, initial, .. } = made;
+        let LinearMade {
+            raw,
+            initial,
+            requirements,
+            ..
+        } = made;
+        // A `DRM_FORMAT_MOD_LINEAR` image over rows whose bytes between them only the device's
+        // ordered commands write keeps what it is bound to through its first move, by copies
+        // through a scratch buffer of that length (`texture/first_move.rs`'s `GpuKeep`): from the
+        // texels' first byte, as `linear_plan::aliases` checked it binds, its memory's size, which
+        // lies in the buffer.
+        let keep = match pitched && between == Between::Kept {
+            false => None,
+            true => match self.scratch_buffer(requirements.size) {
+                Ok(scratch) => Some(GpuKeep::new(
+                    texels.buffer.clone(),
+                    texels.layout.offset,
+                    requirements.size,
+                    scratch,
+                )),
+                Err(error) => {
+                    // SAFETY: the image is live and unbound, and no command uses it.
+                    unsafe { release::object(raw_device, raw) };
+                    return Err(error);
+                }
+            },
+        };
         // SAFETY: the image is live and unbound; the memory is the buffer's, which outlives the
         // texture holding it, in a type the image takes, at an offset `aliases` checked against
         // the image's alignment and size.
@@ -3490,8 +3518,13 @@ impl Device {
         };
         // Leaving `PREINITIALIZED` keeps the bytes the image holds: the buffer's; leaving
         // `UNDEFINED`, as a `DRM_FORMAT_MOD_LINEAR` image and one over exported memory do, keeps
-        // them where the device's check of that memory showed it (`Device::alias_unbound`).
+        // them where the device's check of that memory showed it (`Device::alias_unbound`), or,
+        // over kept bytes, by the move's copies.
         let first = FirstMove::new(raw, image.plan().format, initial, None);
+        let first = match keep {
+            Some(keep) => first.kept(keep),
+            None => first,
+        };
         *lock(&image.first_move) = Some(first);
         let count = AliasCount {
             pitched,

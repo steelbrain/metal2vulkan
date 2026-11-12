@@ -264,7 +264,8 @@ degradations! {
         /// for a texture that renders nothing over a buffer only the device's ordered commands
         /// write, a `Private` one or a `Managed` one's own on a device without unified memory,
         /// whose linear image, made `PREINITIALIZED`, keeps them through its one layout
-        /// transition: docs/API.md); or no
+        /// transition, or whose `DRM_FORMAT_MOD_LINEAR` image at the buffer's pitch keeps them by
+        /// copies around its first move: docs/API.md); or no
         /// linear image of the device lays its texels out as Metal does in the buffer's memory,
         /// holding no byte past them; or the buffer is over the caller's `VkBuffer`, whose memory
         /// backs no image of the runtime's; or it is a tiled texture of more than one level

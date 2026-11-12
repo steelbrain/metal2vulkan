@@ -2833,6 +2833,8 @@ field	metal2vulkan-runtime::WorkCounts.fill_queue_waits_unused	pub fill_queue_wa
 field	metal2vulkan-runtime::WorkCounts.fills_recorded	pub fills_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.finales_apart	pub finales_apart: u64
 field	metal2vulkan-runtime::WorkCounts.finales_folded	pub finales_folded: u64
+field	metal2vulkan-runtime::WorkCounts.first_move_bytes_kept	pub first_move_bytes_kept: u64
+field	metal2vulkan-runtime::WorkCounts.first_moves_kept	pub first_moves_kept: u64
 field	metal2vulkan-runtime::WorkCounts.first_work_order_wait_nanos	pub first_work_order_wait_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.first_work_order_waits	pub first_work_order_waits: u64
 field	metal2vulkan-runtime::WorkCounts.first_work_waits	pub first_work_waits: u64

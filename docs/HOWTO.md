@@ -404,7 +404,10 @@ that renders nothing over a buffer whose bytes only the device's ordered command
 `Private` buffer, a `Managed` one's own on a device without unified memory) is the device's linear
 image at the pitch too, where the device lays one out so, made `PREINITIALIZED`, whose one layout
 transition keeps the bytes between its rows (`WorkCounts::kept_padding_aliases`; docs/API.md,
-`shadowed-texture`). The pitch at which a texture is that image is the driver's own for its width:
+`shadowed-texture`); at another pitch, a `DRM_FORMAT_MOD_LINEAR` image at the buffer's pitch where
+the driver lays one out so, whose first move keeps the bytes it is bound to by copies on the GPU
+around its layout transition, once (`WorkCounts::first_moves_kept`, `first_move_bytes_kept`). The
+pitch at which a texture is the linear image is the driver's own for its width:
 `Device::linear_texture_bytes_per_row` (a runtime extension) answers it for a descriptor, which a
 pitch rounded up to `Device::minimum_linear_texture_alignment_for_pixel_format`'s answer (an
 alignment of images over host pages) can miss.

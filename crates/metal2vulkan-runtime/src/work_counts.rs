@@ -573,6 +573,8 @@ pub(crate) struct Counters {
     feedback_loop_alias_images: AtomicU64,
     unobserved_padding_aliases: AtomicU64,
     kept_padding_aliases: AtomicU64,
+    first_moves_kept: AtomicU64,
+    first_move_bytes_kept: AtomicU64,
     pooled_pitched_images: AtomicU64,
     pooled_textures_moved_in_place: AtomicU64,
     pooled_texture_shadows_freed_after_move: AtomicU64,
@@ -4455,6 +4457,14 @@ impl Counters {
     /// write (`linear_plan::Between::Kept`, `Device::storage_over_buffer`).
     pub(crate) fn kept_padding_alias(&self) {
         self.kept_padding_aliases.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A first move kept `bytes` of a buffer by copies around its layout transition
+    /// (`texture/first_move.rs`'s `GpuKeep`).
+    pub(crate) fn first_move_kept(&self, bytes: u64) {
+        self.first_moves_kept.fetch_add(1, Ordering::Relaxed);
+        self.first_move_bytes_kept
+            .fetch_add(bytes, Ordering::Relaxed);
     }
 
     /// The device made a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch aliasing a buffer's bytes
@@ -8463,6 +8473,17 @@ pub struct WorkCounts {
     /// read alike (Memory Aliasing), where a buffer other writers reach makes the texture a shadow
     /// (`shadowed_textures`). One per image made.
     pub kept_padding_aliases: u64,
+    /// First moves of images aliasing a buffer's bytes that kept those bytes by copies on the
+    /// device around the move's layout transition: a `DRM_FORMAT_MOD_LINEAR` image at the
+    /// buffer's pitch over rows whose bytes between them only the device's ordered commands write
+    /// (`linear_plan::Between::Kept`), made `UNDEFINED`, whose first move may discard what it is
+    /// bound to. The move copies that span into a scratch buffer, moves the image to `GENERAL`, and
+    /// copies the span back through the buffer, after every earlier access to it on every
+    /// `VkQueue` and before every later one. One per move recorded. A runtime extension: Metal
+    /// has none.
+    pub first_moves_kept: u64,
+    /// The bytes those moves kept: each one's span, copied out and back once.
+    pub first_move_bytes_kept: u64,
     /// Images aliasing a buffer of the device's own memory that are `DRM_FORMAT_MOD_LINEAR` images
     /// at Metal's row pitch (`VK_EXT_image_drm_format_modifier`), made where the device's own
     /// linear image of the texture lays its rows out otherwise and the device's check of such
@@ -9718,6 +9739,8 @@ impl Device {
             feedback_loop_alias_images: counters.feedback_loop_alias_images.load(Ordering::Relaxed),
             unobserved_padding_aliases: counters.unobserved_padding_aliases.load(Ordering::Relaxed),
             kept_padding_aliases: counters.kept_padding_aliases.load(Ordering::Relaxed),
+            first_moves_kept: counters.first_moves_kept.load(Ordering::Relaxed),
+            first_move_bytes_kept: counters.first_move_bytes_kept.load(Ordering::Relaxed),
             pooled_pitched_images: counters.pooled_pitched_images.load(Ordering::Relaxed),
             pooled_textures_moved_in_place: (counters.pooled_textures_moved_in_place)
                 .load(Ordering::Relaxed),

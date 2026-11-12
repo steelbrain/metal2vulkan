@@ -1296,8 +1296,10 @@ pub(crate) enum Between {
     /// operations change them.
     Unobserved,
     /// The bytes between their rows and slices, which only the device's ordered commands write, of
-    /// a texture that renders nothing: the device's linear image made `PREINITIALIZED` alone holds
-    /// them, its one transition keeping them.
+    /// a texture that renders nothing: the device's linear image made `PREINITIALIZED` holds
+    /// them, its one transition keeping them, or a `DRM_FORMAT_MOD_LINEAR` image of the runtime's
+    /// own memory, made `UNDEFINED`, whose first move keeps them by copies around its transition
+    /// (`texture/first_move.rs`'s `GpuKeep`).
     Kept,
 }
 
@@ -1334,9 +1336,9 @@ impl Between {
 ///
 /// A copy and a shader's read or write of the image touch its texels alone (the Memory
 /// Model: "A memory operation must not affect memory at a memory location not within its set of
-/// memory locations"). But every image takes a first move, across which the host could keep the
-/// bytes only by reading them before it and writing them back after (`texture/first_move.rs`'s
-/// `Keep`), undoing a CPU write made to them meanwhile, where Metal keeps every one; and lavapipe's
+/// memory locations"). But every image takes a first move, across which the bytes are kept only by
+/// copying them out before it and back after, which undoes a write another agent makes to them
+/// meanwhile (the CPU's, where Metal keeps every one); and lavapipe's
 /// shader writes read the bytes its 4-texel blocks reach past a row's texels and write them back, a
 /// signaling NaN's bits quieted. So such a texture is a shadow, whose copies address its texels
 /// alone; but an image over its rows and slices may hold the bytes between them ([`Between`]):
@@ -1354,9 +1356,13 @@ impl Between {
 ///   both host-accessible subresources, which "interpret the contents of the memory in
 ///   consistent ways, and data written to one alias can be read by the other alias" (12.11, Memory
 ///   Aliasing). A shader's writes of the texture may change its rows' padding, as on the x86 Macs
-///   (`in_place::Padding::Free`); no render pass writes them back. An image made `UNDEFINED`, as a
-///   `DRM_FORMAT_MOD_LINEAR` one and one for external memory are, takes none of them: its first
-///   move may discard them.
+///   (`in_place::Padding::Free`); no render pass writes them back. An image made `UNDEFINED` for
+///   external memory takes none of them: its first move may discard them. A
+///   `DRM_FORMAT_MOD_LINEAR` one of the runtime's own memory, made `UNDEFINED` too
+///   (`PREINITIALIZED` is for linear tiling alone), takes them where its first move copies what it
+///   is bound to out before its transition and back after (`texture/first_move.rs`'s `GpuKeep`):
+///   only the device's ordered commands write those bytes, so no write is undone, and in `GENERAL`
+///   that image is a host-accessible subresource too (the Glossary's Linear Resource).
 pub(super) fn holding(
     layout: &BufferLayout,
     usage: TextureUsage,

@@ -680,6 +680,8 @@ impl CommandBufferShared {
         let every_fill = first_work.every_fill();
         // What owns the memory of the first work it took, its fills for the fill queue among it.
         let taken_owners = first_work.owners();
+        // Whether it took a move that keeps a buffer's bytes by copies around its transition.
+        let keeps = first_work.keeps();
         // Its buffers' fills go to the device's fill queue where it has one with a command buffer
         // free, in a submission of their own that the batch waits for (below,
         // `device/staging.rs`), where they write at least `FILL_QUEUE_LEAST` bytes in all: not
@@ -947,6 +949,21 @@ impl CommandBufferShared {
             wait_semaphores.push(shared.queues[point.queue].timeline);
             wait_values.push(point.value);
             wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
+        }
+        // And, where it took a move that keeps a buffer's bytes by copies around its transition
+        // (`texture/first_move.rs`'s `GpuKeep`), every earlier submission on the device's other
+        // `VkQueue`s not seen complete, whose commands may access those bytes while the
+        // transition rewrites them.
+        if keeps {
+            for (other, slot) in shared.queues.iter().enumerate() {
+                let value = slot.submitted_value();
+                if other != queue && value > slot.completed_value() {
+                    across = true;
+                    wait_semaphores.push(slot.timeline);
+                    wait_values.push(value);
+                    wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
+                }
+            }
         }
         // And the internal submission on the first `VkQueue` that did some, until it completed.
         if let Some((timeline, value)) = firsts.internal_wait().filter(|_| queue != 0) {

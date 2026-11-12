@@ -1898,8 +1898,17 @@ bound.
   host-accessible subresources, which "interpret the contents of the memory in consistent ways,
   and data written to one alias can be read by the other alias" (12.11, Memory Aliasing). A
   kernel's writes of such a texture may change those bytes as on the x86 Macs (section 10,
-  **Kernels**); no `DRM_FORMAT_MOD_LINEAR` image and no image over exportable memory holds them,
-  as each is made `UNDEFINED`, whose first move may discard them; or no linear image of the device lays its texels out as Metal
+  **Kernels**). Where that linear image's rows lie at another pitch, a `DRM_FORMAT_MOD_LINEAR`
+  image at the buffer's pitch holds them, where the driver makes one whose own report lays its rows
+  at that pitch from the texels' first byte within the buffer: it is made `UNDEFINED`
+  (`PREINITIALIZED` is for linear tiling alone, `VUID-VkImageCreateInfo-initialLayout-12478`), of
+  which Vulkan says "the contents of that range may be discarded" (7.1.1), so its first move copies
+  the bytes it is bound to into a scratch buffer before its transition and back through the buffer
+  after it, after every earlier access to them on every `VkQueue` and before every later one
+  (`WorkCounts::first_moves_kept`, `first_move_bytes_kept`); a `DRM_FORMAT_MOD_LINEAR` image is a
+  linear resource (the Glossary), so in `GENERAL` the two alias as above (12.11). No image over
+  exportable memory holds them, as one there names its handle type and is made `UNDEFINED`, whose
+  first move may discard them; or no linear image of the device lays its texels out as Metal
   does in the buffer's memory, holding no byte past them (among them a texture whose offset in the
   buffer misses the device's linear-image alignment, as one 32 bytes in does on RADV, whose
   images start on a multiple of 256: a buffer made with `BufferDescriptor::aligned_byte` at that
