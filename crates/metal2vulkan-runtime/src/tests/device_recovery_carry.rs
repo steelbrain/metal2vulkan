@@ -178,7 +178,7 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
     );
     // An object no recovery carries.
     let heap = HeapDescriptor::new(HeapType::Automatic, 1 << 16, ResourceOptions::shared());
-    let left = device.new_heap(&heap).unwrap();
+    let shared_heap = device.new_heap(&heap).unwrap();
     let event = device.new_shared_event().unwrap();
     event.set_signaled_value(5);
     let listener = SharedEventListener::new();
@@ -196,7 +196,7 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
         })
         .collect();
     drop(reused);
-    let before = left.device().work_counts_now();
+    let before = shared_heap.device().work_counts_now();
     let from = heard.lock().unwrap().len();
     device.recover_for_test().unwrap();
     let said = recovery_notices(&heard, from, "the device");
@@ -279,9 +279,9 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
         }
     }
     // What is left holds the lost `VkDevice`, which keeps no memory for work.
-    assert!(!left.device().generation_serves());
+    assert!(!shared_heap.device().generation_serves());
     assert_eq!(live_vk_devices(&device, 2), 2);
-    let after = left.device().work_counts_now();
+    let after = shared_heap.device().work_counts_now();
     let blocks =
         |counts: &crate::WorkCounts| counts.memory_blocks_live + counts.empty_memory_blocks_live;
     eprintln!(
@@ -300,7 +300,7 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
         blocks(&before)
     );
     assert!(after.memory_frees.teardown > before.memory_frees.teardown);
-    drop((pooled, beside, left));
+    drop((pooled, beside, shared_heap));
     assert_eq!(live_vk_devices(&device, 1), 1);
 }
 

@@ -62,7 +62,7 @@ fn clear(queue: &CommandQueue, texture: &Texture, unorm: f64) -> Result<(), Erro
     color.store_action = StoreAction::Store;
     color.clear_color = ClearColor::new(unorm, unorm, unorm, unorm);
     let command_buffer = queue.command_buffer()?;
-    let mut encoder = command_buffer.render_command_encoder(&pass)?;
+    let encoder = command_buffer.render_command_encoder(&pass)?;
     encoder.end_encoding()?;
     command_buffer.commit()?;
     assert_eq!(
