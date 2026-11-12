@@ -134,11 +134,12 @@
 //!   (`step_aside.rs`): it goes on once none is in progress and none ended for
 //!   `step_aside::QUIET`, at once while a call waits for its verdicts (`ANSWER_WAIT`,
 //!   `Device::settle_submit_checks`). Beside a program's burst of makings its verdicts so come
-//!   after the burst. Each step first waits as long as the thread's own allocations and frees
-//!   since the last one took (`step_aside::OwnCall`): NVIDIA's driver holds back every other
-//!   thread's `vkQueueSubmit` while it frees a pointer import, so the import tax's 32 frees in a
-//!   row held the device's submissions for their whole run, and a compositor's command buffers
-//!   beside long work waited up to 21 ms. Paced, the device's submissions go between them.
+//!   after the burst. Each step first waits until as long as the thread's own allocations and
+//!   frees since the last one took has passed since they ended (`step_aside::OwnCall`): NVIDIA's
+//!   driver holds back every other thread's `vkQueueSubmit` while it frees a pointer import, so
+//!   the import tax's 32 frees in a row held the device's submissions for their whole run, and a
+//!   compositor's command buffers beside long work waited up to 21 ms. Paced, the device's
+//!   submissions go between them.
 //! - **Its thread** holds nothing of the device, as the queue-switch check's does
 //!   (`queue_switch_check.rs`): only the parts of it the checks work with ([`Parts`]), never a
 //!   handle, so the device's last handle never goes on it. It reads the stop between its steps
