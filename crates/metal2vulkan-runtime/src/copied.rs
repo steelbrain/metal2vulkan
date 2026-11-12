@@ -363,6 +363,78 @@ struct CopyLog {
     merged: u64,
 }
 
+/// A test's clock of the copies' comparisons (`tests/copied_bandwidth_bench.rs`): the time each
+/// copy in, merge back and read back of a base's blocks took whole, and of every [`SAMPLE`]th
+/// block a comparison looked at, the time each of its phases took, in nanoseconds since the
+/// process began. Global: a benchmark reads it about calls it alone makes.
+///
+/// [`SAMPLE`]: clock::SAMPLE
+#[cfg(test)]
+pub(crate) mod clock {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Instant;
+
+    /// One block in this many is timed.
+    pub(crate) const SAMPLE: usize = 64;
+    /// [`WHOLE`]'s and [`PHASES`]' index of copies in.
+    pub(crate) const COPY_IN: usize = 0;
+    /// Their index of merges back.
+    pub(crate) const MERGE_BACK: usize = 1;
+    /// [`WHOLE`]'s index of reads back.
+    pub(crate) const READ_BACK: usize = 2;
+    /// Whole calls: copies in, merges back, reads back.
+    pub(crate) static WHOLE: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+    /// The sampled blocks' phases, of copies in and of merges back: finding that the block
+    /// changed (its tag, and its bytes read where it did), the other side's block (its bytes, its
+    /// tag, and the base's bytes where both changed), the stores of the bytes that changed, and
+    /// the base's taking of the block.
+    pub(crate) static PHASES: [[AtomicU64; 4]; 2] = [const { [const { AtomicU64::new(0) }; 4] }; 2];
+
+    /// Add the time since `since` to `WHOLE[which]`.
+    pub(crate) fn whole(which: usize, since: Instant) {
+        WHOLE[which].fetch_add(since.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    }
+
+    /// One block's phases, timed where it is sampled: each [`Lap::next`] ends one, and the drop
+    /// the last begun.
+    pub(crate) struct Lap {
+        of: usize,
+        phase: usize,
+        at: Option<Instant>,
+    }
+
+    impl Lap {
+        /// The phases of the block at `index` of a comparison `of`.
+        pub(crate) fn new(of: usize, index: usize) -> Lap {
+            Lap {
+                of,
+                phase: 0,
+                at: (index % SAMPLE == 0).then(Instant::now),
+            }
+        }
+
+        /// End the phase running.
+        pub(crate) fn next(&mut self) {
+            if let Some(at) = self.at {
+                let now = Instant::now();
+                let spent = (now - at).as_nanos() as u64;
+                PHASES[self.of][self.phase].fetch_add(spent, Ordering::Relaxed);
+                self.at = Some(now);
+            }
+            self.phase = (self.phase + 1).min(3);
+        }
+    }
+
+    impl Drop for Lap {
+        fn drop(&mut self) {
+            if let Some(at) = self.at {
+                let spent = at.elapsed().as_nanos() as u64;
+                PHASES[self.of][self.phase].fetch_add(spent, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
 /// The bytes a copy's merges back wrote since its last copy in from which its copy in asks the
 /// logs apart, for every writer's pages but its own (one more question of each log, which a
 /// consumer answers by a pass over its watches), rather than compare its own writes again
@@ -1210,6 +1282,8 @@ impl CopiedBuffers {
         if self.live.load(Ordering::Relaxed) == 0 {
             return Ok(());
         }
+        #[cfg(test)]
+        let began = std::time::Instant::now();
         let reaches = |entry: &Entry| used.meets(&entry.keys) || written.meets(&entry.keys);
         let in_flight = in_flight();
         let asked: Vec<Asked> = (lock(&self.entries).iter())
@@ -1307,6 +1381,8 @@ impl CopiedBuffers {
         counts.copied_bases(made, refused, read);
         counts.copied_base_blocks_read_back(read_back);
         counts.copied_compare_threads(started);
+        #[cfg(test)]
+        clock::whole(clock::COPY_IN, began);
         match refused {
             0 => Ok(()),
             _ => Err(NotCopied::OutOfHostMemory),
@@ -1346,6 +1422,8 @@ impl CopiedBuffers {
         if self.live.load(Ordering::Relaxed) == 0 {
             return;
         }
+        #[cfg(test)]
+        let began = std::time::Instant::now();
         let owed = self.owed.swap(false, Ordering::AcqRel);
         let (mut moved, mut dropped, mut read, mut read_back) = (0u64, 0u64, 0u64, 0u64);
         let (mut compared, mut skipped, mut started) = (0u64, 0u64, 0u64);
@@ -1410,6 +1488,8 @@ impl CopiedBuffers {
         counts.copied_bases(0, 0, read);
         counts.copied_base_blocks_read_back(read_back);
         counts.copied_compare_threads(started);
+        #[cfg(test)]
+        clock::whole(clock::MERGE_BACK, began);
     }
 
     /// Keep `kept`, the blocks of a base in the device's memory (`bytes`, of a copy of `length`
@@ -1916,10 +1996,14 @@ fn two_passes(sides: Sides<'_>, mut pass: impl FnMut(Fetch<'_>) -> Tally) -> Tal
     let deferred = &first.deferred[..];
     let (runs, at) = runs_of(deferred, sides.length);
     let bytes: usize = runs.iter().map(|run| run.end - run.start).sum();
+    #[cfg(test)]
+    let began = std::time::Instant::now();
     let back = match deferred.len() >= read_back_blocks() {
         true => sides.bytes.read_back(&runs),
         false => None,
     };
+    #[cfg(test)]
+    clock::whole(clock::READ_BACK, began);
     let back = back.filter(|back| back.len() == bytes);
     let mut second = match &back {
         Some(back) => pass(Fetch::ReadBack(
@@ -2064,6 +2148,8 @@ unsafe fn copy_in_blocks(
     let mut tally = Tally::default();
     let (mut now, mut was) = ([0u8; TAG_BLOCK], [0u8; TAG_BLOCK]);
     each_block(first, tags, fetch.deferred(), |index, agreed| {
+        #[cfg(test)]
+        let mut lap = clock::Lap::new(clock::COPY_IN, index);
         let at = index * TAG_BLOCK;
         let span = (sides.length - at).min(TAG_BLOCK);
         // SAFETY: `span` bytes at `at` lie in the pages (the caller's).
@@ -2078,6 +2164,8 @@ unsafe fn copy_in_blocks(
             // Written back since its tag was read.
             return;
         }
+        #[cfg(test)]
+        lap.next();
         // SAFETY: as above, in the copy.
         unsafe { read_block(copy.add(at), span, &mut was) };
         let copy_agrees = tag(&was) == *agreed;
@@ -2093,9 +2181,13 @@ unsafe fn copy_in_blocks(
             kept = kept.or(moved.as_ref().map(HostBlock::at));
             tally.read += 1;
         }
+        #[cfg(test)]
+        lap.next();
         // SAFETY: as above, in the copy.
         tally.written +=
             unsafe { merge_block(&now[..span], copy.add(at), &mut was[..span], false) };
+        #[cfg(test)]
+        lap.next();
         // The pages' block over the base's: the pages' own where the copy's agreed.
         *agreed = match copy_agrees {
             true => changed,
@@ -2141,6 +2233,8 @@ unsafe fn merge_blocks(
     let mut tally = Tally::default();
     let (mut now, mut was) = ([0u8; TAG_BLOCK], [0u8; TAG_BLOCK]);
     each_block(first, tags, fetch.deferred(), |index, agreed| {
+        #[cfg(test)]
+        let mut lap = clock::Lap::new(clock::MERGE_BACK, index);
         let at = index * TAG_BLOCK;
         let span = (sides.length - at).min(TAG_BLOCK);
         // SAFETY: `span` bytes at `at` lie in the copy (the caller's).
@@ -2154,6 +2248,8 @@ unsafe fn merge_blocks(
         if changed == *agreed {
             return;
         }
+        #[cfg(test)]
+        lap.next();
         // The agreed bytes: the pages' block, read once, where its tag still agrees (the CPU
         // did not change it since), else the base's (both sides changed it).
         // SAFETY: as above, in the pages.
@@ -2170,8 +2266,12 @@ unsafe fn merge_blocks(
             kept = kept.or(moved.as_ref().map(HostBlock::at));
             tally.read += 1;
         }
+        #[cfg(test)]
+        lap.next();
         // SAFETY: as above, in the pages.
         let merged = unsafe { merge_block(&now[..span], pages.add(at), &mut was[..span], true) };
+        #[cfg(test)]
+        lap.next();
         if merged > 0 {
             tally.wrote((at / SYNC_BLOCK * SYNC_BLOCK) as u64, sides.length);
         }

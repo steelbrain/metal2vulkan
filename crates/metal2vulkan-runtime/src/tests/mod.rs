@@ -74,6 +74,8 @@ mod compute;
 mod contexts;
 mod copied;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod copied_bandwidth_bench;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod copied_base_device;
 mod copied_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
