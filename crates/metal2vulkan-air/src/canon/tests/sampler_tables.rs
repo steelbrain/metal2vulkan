@@ -153,7 +153,7 @@ fn a_table_load_at_a_dynamic_index_is_a_select_chain() {
     assert_eq!(count(&text, " = load "), 1, "{text}");
 }
 
-/// A table of one element is that element; a table holding an element that is no constant
+/// A table of one element is that element's address; a table holding an element that is no constant
 /// address, and one past the pass's length, keep their load.
 #[test]
 fn a_table_load_is_read_only_where_every_element_is_known() {
@@ -161,7 +161,8 @@ fn a_table_load_is_read_only_where_every_element_is_known() {
     let one = body_text(&table_kernel(&[State(1)]).unwrap());
     assert_eq!(count(&one, " = select "), 0, "{one}");
     assert_eq!(count(&one, "getelementptr"), 0, "{one}");
-    assert_eq!(count(&one, " = load "), 1, "{one}");
+    // The element is the constant, so the index's load is read by nothing and dropped.
+    assert_eq!(count(&one, " = load "), 0, "{one}");
     let undefined = body_text(&table_kernel(&[State(0), Undef, State(2)]).unwrap());
     assert_eq!(count(&undefined, "getelementptr"), 1, "{undefined}");
     assert_eq!(count(&undefined, " = select "), 0, "{undefined}");
