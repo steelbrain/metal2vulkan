@@ -118,11 +118,13 @@ impl Groups<'_, '_> {
     }
 
     /// Node `to` takes leaf `k` of operand `v` (a generic pointer operand is its own leaf 0), at
-    /// instruction `at`.
+    /// instruction `at`: one group, and, where `flows`, the operand's nullness. A value that
+    /// shares only its type (an `insertvalue`'s leaf its inserted value replaces, and its
+    /// aggregate operand's) does not flow.
     fn operand(
         &mut self,
         to: usize,
-        (v, k): (Value, u32),
+        (v, k, flows): (Value, u32, bool),
         leaves: &mut Option<Leaves>,
         at: InstId,
         m: &mut Meter,
@@ -148,14 +150,19 @@ impl Groups<'_, '_> {
                     }
                     self.leaf(first, k)
                 };
-                self.takes(to, from, m)
+                if flows {
+                    self.takes(to, from, m)
+                } else {
+                    self.union(to, from);
+                    Ok(())
+                }
             }
             Value::Const(c) => {
                 let (s, z) = match leaves.as_mut() {
                     Some(l) => constant_leaf(cx, l, c, k, 0)?,
                     None => cx.constant(c, 0)?,
                 };
-                self.enter(to, s, z, at);
+                self.enter(to, s, z && flows, at);
                 Ok(())
             }
             Value::Arg(_) => {
@@ -247,7 +254,7 @@ pub(super) fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Optio
         // stores into a cell.
         if let InstKind::Store { val, .. } = inst.kind {
             if cx.is_generic(val) {
-                g.operand(i.index(), (val, 0), &mut leaves, i, m)?;
+                g.operand(i.index(), (val, 0, true), &mut leaves, i, m)?;
                 if let Some(Some(node)) = reach(&cells, i) {
                     let s = g.slot(node);
                     g.takes(s, i.index(), m)?;
@@ -293,7 +300,7 @@ pub(super) fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Optio
             | InstKind::Phi { .. }
             | InstKind::Select { .. } => {
                 for v in linked(&inst.kind) {
-                    g.operand(i.index(), (v, 0), &mut leaves, i, m)?;
+                    g.operand(i.index(), (v, 0, true), &mut leaves, i, m)?;
                 }
             }
             // A load from a cell's slot is in the slot's group.
@@ -316,13 +323,13 @@ pub(super) fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Optio
                 }
                 let ty = cx.ty(*agg).ok_or_else(|| invariant("an operand's type"))?;
                 let (lo, _, _) = range(&mut leaves, cx, ty, indices)?;
-                g.operand(i.index(), (*agg, lo), &mut leaves, i, m)?;
+                g.operand(i.index(), (*agg, lo, true), &mut leaves, i, m)?;
             }
             InstKind::ExtractElement { vec, .. } => {
                 if matches!(vec, Value::Const(_)) {
                     return Err(cx.refuse(GenericPointer::Aggregate, i));
                 }
-                g.operand(i.index(), (*vec, 0), &mut leaves, i, m)?;
+                g.operand(i.index(), (*vec, 0, true), &mut leaves, i, m)?;
             }
             InstKind::AtomicRmw { .. } | InstKind::CmpXchg { .. } => g.enter(
                 i.index(),
@@ -493,16 +500,17 @@ fn aggregate(
     let cx = g.cx;
     match kind {
         InstKind::InsertValue { agg, val, indices } => {
+            // Every leaf shares its aggregate operand's type; a leaf the inserted value replaces
+            // takes no other pointer from it.
             let (lo, hi, exact) = range(leaves, cx, ty, indices)?;
             for k in 0..count {
-                if !(exact && (lo..hi).contains(&k)) {
-                    let to = g.leaf(first, k);
-                    g.operand(to, (*agg, k), leaves, i, m)?;
-                }
+                let to = g.leaf(first, k);
+                let replaced = exact && (lo..hi).contains(&k);
+                g.operand(to, (*agg, k, !replaced), leaves, i, m)?;
             }
             for k in lo..hi {
                 let to = g.leaf(first, k);
-                g.operand(to, (*val, k - lo), leaves, i, m)?;
+                g.operand(to, (*val, k - lo, true), leaves, i, m)?;
             }
         }
         InstKind::ExtractValue { agg, indices } => {
@@ -513,7 +521,7 @@ fn aggregate(
             let (lo, _, _) = range(leaves, cx, from_ty, indices)?;
             for k in 0..count {
                 let to = g.leaf(first, k);
-                g.operand(to, (*agg, lo + k), leaves, i, m)?;
+                g.operand(to, (*agg, lo + k, true), leaves, i, m)?;
             }
         }
         InstKind::Phi { .. }
@@ -527,14 +535,14 @@ fn aggregate(
             for v in operands {
                 for k in 0..count {
                     let to = g.leaf(first, k);
-                    g.operand(to, (v, k), leaves, i, m)?;
+                    g.operand(to, (v, k, true), leaves, i, m)?;
                 }
             }
         }
         InstKind::InsertElement { vec, elt, .. } => {
             let to = g.leaf(first, 0);
-            g.operand(to, (*vec, 0), leaves, i, m)?;
-            g.operand(to, (*elt, 0), leaves, i, m)?;
+            g.operand(to, (*vec, 0, true), leaves, i, m)?;
+            g.operand(to, (*elt, 0, true), leaves, i, m)?;
         }
         _ => {
             let how = match kind {

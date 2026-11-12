@@ -5,9 +5,9 @@
 //! element (an index only the run knows picks any of them). Each leaf of each instruction whose
 //! value holds one is a union-find node, in the group of what it comes from:
 //!
-//! - an `insertvalue`'s leaves under its indices, the inserted value's; its others, its
-//!   aggregate operand's (all of them where an index steps into an array, whose elements share
-//!   leaves);
+//! - an `insertvalue`'s leaves under its indices, the inserted value's; every leaf, its aggregate
+//!   operand's, which is of its type (a null pointer the leaf replaces does not reach it, unless
+//!   an index steps into an array, whose elements share leaves);
 //! - an `extractvalue`'s leaves (or the generic pointer it extracts), its aggregate operand's
 //!   under its indices;
 //! - a `phi`'s, a `select`'s or a `freeze`'s leaves, its operands';
