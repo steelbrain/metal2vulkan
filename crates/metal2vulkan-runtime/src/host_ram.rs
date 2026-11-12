@@ -161,6 +161,7 @@ use super::device::lock;
 use super::dirty_pages::{hook, DirtyPages, DirtySource};
 use super::error::{internal, invalid, vulkan, Error, MemoryKind, Problem};
 use super::exit_guard;
+use super::host_aliases::Within;
 use super::host_memory::{
     binds_in, host_page, import_refused, not_importable, ImportWindow, Importer, KeepAlive,
     RunResolver,
@@ -945,6 +946,15 @@ impl RamOnDevice {
                 return Err(error);
             }
         };
+        // A chunk's pages a live import of a no-copy buffer's or heap's own held some of, at
+        // the RAM's own addresses: a page imported twice all the same (`host_aliases.rs`).
+        let bytes = (span.span.start, span.span.end - span.span.start);
+        if !matches!(
+            device.shared().aliases.within(bytes, importer.unit()),
+            Within::Free
+        ) {
+            device.shared().counts.churn.import_inside_live();
+        }
         let import = making.end(Some(Arc::clone(&chunk)));
         if by == By::Ahead {
             let shared = device.shared();
@@ -957,23 +967,23 @@ impl RamOnDevice {
     }
 
     /// The import an object over `run`, host pages inside chunk `slot`, is bound in
-    /// ([`Device::bind_in_chunk`]), never waiting for the chunk's: the chunk's import where it is
-    /// made; else, while the device's thread runs and has not failed the chunk, an import of the
-    /// run alone ([`RamOnDevice::run_alone`]), made now on the object's thread, which faults in
-    /// and pins the run's pages and no more, while the thread imports the chunk: first of its
-    /// window since this take ([`Window`]), or, on a device whose plan is [`Plan::listed`], as
-    /// the object asked it to ([`listed_chunks`]). The run's import is one more allocation, made
-    /// only where one more leaves the device the margin of its `maxMemoryAllocationCount` the
-    /// thread's imports leave (`Allocations::room_ahead`), and freed as its last holder goes, the
-    /// object or a command buffer that used it (`WorkCounts::run_imports_live`); a buffer's is
-    /// released while idle, and the buffer bound in the chunk at its next use where the chunk is
-    /// imported by then (`host_residency.rs`). Where the run is the whole chunk, the thread does
-    /// not run (never started, or ended: the use's end, the allocation limit's margin) or failed
-    /// the chunk, the device's allocations are within that margin, the device's barriers do not
-    /// order blits through two imports of the same pages
-    /// (`RuntimeDriverDefect::AliasedImportBlitsUnordered`: there every object over a chunk's
-    /// pages lies in its one import), or the run's import fails, the chunk's import, made here or
-    /// waited for ([`RamOnDevice::chunk`]).
+    /// ([`Device::bind_in_chunk`]): the chunk's import where it is made; else, on a device whose
+    /// runs are imported alone ([`RamOnDevice::runs_alone`]), while the device's thread runs and
+    /// has not failed the chunk, an import of the run alone ([`RamOnDevice::run_alone`]), made
+    /// now on the object's thread, which pins the run's pages and no more, while the thread
+    /// imports the chunk as the object asked it to ([`listed_chunks`]), so no making waits for
+    /// the chunk's. The run's import is one more allocation, made only where one more leaves the
+    /// device the margin of its `maxMemoryAllocationCount` the thread's imports leave
+    /// (`Allocations::room_ahead`), and freed as its last holder goes, the object or a command
+    /// buffer that used it (`WorkCounts::run_imports_live`); a buffer's is released while idle,
+    /// and the buffer bound in the chunk at its next use where the chunk is imported by then
+    /// (`host_residency.rs`). Where runs are not imported alone (the chunk's import is of its
+    /// host pointer), the run is the whole chunk, the thread does not run (never started, or
+    /// ended: the use's end, the allocation limit's margin) or failed the chunk, the device's
+    /// allocations are within that margin, the device's barriers do not order blits through two
+    /// imports of the same pages (`RuntimeDriverDefect::AliasedImportBlitsUnordered`), or the
+    /// run's import fails, the chunk's import, made here or waited for ([`RamOnDevice::chunk`]):
+    /// every object over the chunk's pages lies in its one import.
     fn for_object(
         &self,
         device: &Device,
@@ -983,7 +993,8 @@ impl RamOnDevice {
     ) -> Result<Arc<RamChunk>, Error> {
         let span = &self.slots[slot];
         let unordered = RuntimeDriverDefect::AliasedImportBlitsUnordered;
-        let alone = run != span.span
+        let alone = self.runs_alone()
+            && run != span.span
             && self.wake.running.load(Ordering::Relaxed)
             && !span.tried.load(Ordering::Relaxed)
             && device.shared().allocations.allocations.room_ahead()
@@ -993,6 +1004,27 @@ impl RamOnDevice {
         }
         (self.run_alone(device, importer, slot, run))
             .or_else(|_| self.chunk(device, importer, slot, By::Object))
+    }
+
+    /// Whether an object's run, or a copy's ranges, over a chunk not imported yet may be imported
+    /// alone while the chunk's import is made ([`RamOnDevice::run_alone`]): only on a device
+    /// whose plan is [`Plan::listed`], whose chunks and runs are each a dma-buf of the RAM's
+    /// source of its own pages (`Device::import_chunk`). Elsewhere a chunk's import is of its
+    /// host pointer, and `VK_EXT_external_memory_host` leaves the same host allocation imported
+    /// twice undefined (its issue 6): a run's import of its pointer would map pages the chunk's
+    /// maps, and be freed while the chunk's lives. There every object and copy over a chunk's
+    /// pages lies in its one import, made or waited for.
+    fn runs_alone(&self) -> bool {
+        self.plan.listed
+    }
+
+    /// Whether a chunk's import, made by now, holds any of the RAM's host bytes `runs`.
+    fn chunks_hold_any(&self, runs: &[Range<u64>]) -> bool {
+        (self.slots.iter()).any(|slot| {
+            let meets =
+                (runs.iter()).any(|run| run.start < slot.span.end && slot.span.start < run.end);
+            meets && matches!(*lock(&slot.import), Import::Made(_))
+        })
     }
 
     /// The imports a copy reads or writes the bytes `ranges` of the chunks it touches through
@@ -1079,7 +1111,8 @@ impl RamOnDevice {
         };
         let page = importer.page.max(1);
         let unordered = RuntimeDriverDefect::AliasedImportBlitsUnordered;
-        let alone = self.wake.running.load(Ordering::Relaxed)
+        let alone = self.runs_alone()
+            && self.wake.running.load(Ordering::Relaxed)
             && !span.tried.load(Ordering::Relaxed)
             && device.shared().allocations.allocations.room_ahead()
             && !device.properties().driver_defects.contains(&unordered);
@@ -1157,6 +1190,7 @@ impl RamOnDevice {
             start..end.min(span.span.end)
         });
         let alone = running
+            && self.runs_alone()
             && !device.properties().driver_defects.contains(&unordered)
             && ranges.len() <= copy::MOST_ALONE
             && !runs.any(|run| run == span.span);
@@ -1932,6 +1966,15 @@ impl Routed {
         }
     }
 
+    /// Whether a live chunk import holds any of the RAM pages of an object routed so, of `size`
+    /// bytes (`ObjectChurn::imports_over_ram_chunk_pages`).
+    pub(crate) fn chunks_hold_any(&self, size: u64) -> bool {
+        match self {
+            Routed::InChunk { ram, start, .. } => ram.chunks_hold_any(&[*start..*start + size]),
+            Routed::Runs { ram, runs } => ram.chunks_hold_any(runs),
+        }
+    }
+
     /// What binds a buffer routed so and bound at `placement` again once its import is released
     /// while idle (`host_residency.rs`), where that is an import of its own run alone
     /// ([`Imported::Run`]): its chunk was not imported at its making.
@@ -2368,6 +2411,13 @@ impl Device {
 }
 
 impl Device {
+    /// Whether a live import of a chunk of a guest RAM the device uses holds any of the host
+    /// bytes `bytes`, at the RAM's own addresses (`ObjectChurn::imports_inside_live`).
+    pub(crate) fn ram_chunks_hold_any(&self, bytes: Range<u64>) -> bool {
+        let rams = self.shared().host_ram.used();
+        (rams.iter()).any(|used| used.chunks_hold_any(std::slice::from_ref(&bytes)))
+    }
+
     /// Where `resolver` puts the pages of `window` (`HostMemory::with_runs`): asked once, here,
     /// with no lock of the runtime's held, where the device uses a RAM; `None` where it uses none
     /// or the resolver answers `None`. An answer that breaks the resolver's contract (runs that
@@ -2498,7 +2548,9 @@ impl Device {
     /// that first where the device's held pointer imports add to the cost of every submission
     /// (its submission checks' import tax, `submit_check.rs`), the pointer where that fails; the
     /// pointer first elsewhere, the dma-buf where the pointer is refused; the dma-buf alone where
-    /// the device imports no pointer. Counted:
+    /// the device imports no pointer, and for a run's import alone, which is never a second
+    /// import of host pages a chunk's pointer import maps (`RamOnDevice::runs_alone`): refused
+    /// for a RAM with no source. Counted:
     /// `WorkCounts::host_ram_dma_buf_imports` (each import of a dma-buf),
     /// `host_ram_dma_buf_imports_failed` (each that failed: a refusal that lasts, which the device
     /// then remembers, and no later span asks the source; memory that ran out, the span's alone)
@@ -2525,7 +2577,10 @@ impl Device {
             imported
         };
         let Some(source) = ram.dma_buf.as_ref() else {
-            return by_pointer(span);
+            return match of {
+                Imported::Run => Err(not_importable()),
+                Imported::Chunk | Imported::Runs => by_pointer(span),
+            };
         };
         let as_dma_buf = |span: Range<u64>| {
             // A chunk's or a run's import is dedicated to nothing: its objects' buffers are
@@ -2536,8 +2591,9 @@ impl Device {
             self.shared().counts.host_ram_dma_buf_imported();
             Ok(self.ram_chunk(ram, span, of, raw, placement))
         };
-        // A device that imports no pointer takes the dma-buf alone.
-        if importer.pointers().is_none() {
+        // A device that imports no pointer takes the dma-buf alone; so does a run's import alone,
+        // never a second import of a pointer the chunk's maps (`RamOnDevice::runs_alone`).
+        if importer.pointers().is_none() || of == Imported::Run {
             return as_dma_buf(span);
         }
         match self.pointer_imports_tax_submissions() {

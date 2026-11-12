@@ -665,24 +665,16 @@ submission, can give the device the guest's RAM once instead:
   the window or next to the chunk last taken. So a run of objects over consecutive RAM, up or down,
   as a VMM's 2 MiB heaps over fresh guest RAM are, finds its next chunks imported while it stays
   inside the window. An object over a chunk not imported yet (outside the window, past a burst's
-  reach, or the chunk the thread is importing) is bound in an import of its own run alone, made on
-  its own thread, which faults in and pins its own pages (2 MiB for such a heap), while the thread
-  imports the chunk; the objects over the chunk after that are bound in it
-  (`run_bound_buffers_made`). Each run's import goes with its object (`run_imports_live`); a
-  buffer's (not a heap's) that only blits have read is released after its idle window, as a
-  no-copy buffer's own import is (above), and the buffer is bound in the chunk at its next
-  blit. Its uses order against those of the objects over the same bytes in the chunk, and of the
-  copies of them (below), by their host addresses, as any two no-copy buffers over shared bytes
-  do. So no object's making waits for a chunk's fault-in. The price is up to one more allocation
-  and pin per object made while its chunk is not imported, for the life of a heap or of a buffer
-  whose address was handed out: a burst of heaps that outruns the thread takes one for each heap
-  over a chunk the thread has not imported yet. Where the thread
-  does not run (it stopped at the allocation limit's margin, below), failed the chunk or gave it
-  back, where the device's allocations are within that margin, where the object's run is the whole
-  chunk, or on a driver whose barriers do not order blits through two imports of the same pages
-  (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's and ANV's: there every object
-  over a chunk lies in its one import), the object imports the chunk as it is made, or waits for
-  the import of it under way. The thread faults in no more than the window past the objects, and never goes back for
+  reach, or the chunk the thread is importing) imports the chunk as it is made, or waits for the
+  import of it under way, and so does a copy over it that is not staged through the CPU (below):
+  every object over a chunk lies in its one import. Such a chunk's import is of its host pointer,
+  and `VK_EXT_external_memory_host` leaves the same host allocation imported twice into a device
+  undefined (its issue 6), so no object's run, nor a copy's range, is imported by its own pointer
+  beside the chunk's (`ObjectChurn::imports_inside_live` counts an import made over host
+  addresses a live import holds). The price is a making that waits for its chunk's import where
+  the window has not reached the chunk (the window bench below). Only a device whose chunks are dma-bufs
+  (`HostRam::with_dma_buf`, below) imports an object's run alone while its chunk's import is made,
+  as one more dma-buf. The thread faults in no more than the window past the objects, and never goes back for
   a chunk a take skipped. What an
   import costs is faulting in the chunk's fresh pages, not the pin. On an RTX 5080 laptop
   (NVIDIA 615.71.09, Linux 7.2), the import of 64 MiB already resident took 2 to 3 ms; the
@@ -694,13 +686,11 @@ submission, can give the device the guest's RAM once instead:
   every process on the host stalled on memory for 6.6 to 9.6 s (pressure stall information).
   With the window, 2 GiB of 2 MiB heaps made in bursts of four chunks had 36 chunks faulted in
   ahead, no heap after the first two imported its own chunk, and the host stalled on memory for
-  under 1 s; 16 heaps over scattered chunks had one chunk each faulted in ahead. With the runs'
-  imports and the window following the takes down the RAM, 256 2 MiB heaps over fresh RAM with
-  free memory holding whole huge pages (27 GB free), in two bursts of four chunks up, the same
-  down, and 256 scattered over 32 chunks 10 ms apart, had no making of 5 ms or more (the slowest
-  1.4, 1.5 and 3.7 ms), where without them 2, 8 and 15 makings each imported a chunk, the slowest
-  8.2 to 8.7 ms (`tests/host_ram_window_bench.rs`); 128 of the upward heaps, about 76 of the
-  downward and 20 of the scattered were bound in their own runs' imports. The thread is
+  under 1 s; 16 heaps over scattered chunks had one chunk each faulted in ahead. With the window
+  following the takes down the RAM, of 256 2 MiB heaps over fresh RAM with free memory holding
+  whole huge pages (27 GB free), in two bursts of four chunks up, the same down, and 256
+  scattered over 32 chunks 10 ms apart, 2, 8 and 15 makings each imported a chunk, the slowest
+  8.2 to 8.7 ms (`tests/host_ram_window_bench.rs`). The thread is
   paced: it runs as the system's batch work (`SCHED_BATCH` on Linux, the utility class on
   Apple's systems), never at a weight the system starves, since it holds a chunk's lock and, as
   it pins, the process's memory map lock; it yields between chunks; and on Linux it faults each

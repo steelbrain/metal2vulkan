@@ -165,10 +165,12 @@ pub(crate) struct ChurnCounters {
     /// By [`Recycled`]: the objects a making took from a recycler, parked there, and let go of
     /// past its bounds (`recycle.rs`).
     recycled: [[AtomicU64; 3]; 2],
-    /// No-copy buffers and heaps that imported their pages where a live import holds some.
+    /// Imports made over host addresses a live import holds some of.
     imports_inside_live: AtomicU64,
     /// No-copy buffers bound inside a live import's memory, with no import of their own.
     buffers_bound_in_import: AtomicU64,
+    /// Imports of a no-copy object's own pages whose guest RAM pages a live chunk import holds.
+    imports_over_ram_chunk_pages: AtomicU64,
     /// By [`KeepBy`], then cut or whole: the keeps, then their texels.
     keeps: [[AtomicU64; 4]; 3],
 }
@@ -179,7 +181,7 @@ impl ChurnCounters {
         self.owned[owned as usize].fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A no-copy buffer or heap imported its pages where a live import holds some of them.
+    /// An import was made over host addresses a live import holds some of.
     pub(crate) fn import_inside_live(&self) {
         self.imports_inside_live.fetch_add(1, Ordering::Relaxed);
     }
@@ -187,6 +189,12 @@ impl ChurnCounters {
     /// A no-copy buffer was bound inside a live import's memory, with no import of its own.
     pub(crate) fn buffer_bound_in_import(&self) {
         self.buffers_bound_in_import.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A no-copy object imported its own pages, some of whose guest RAM pages a live chunk
+    /// import holds.
+    pub(crate) fn import_over_ram_chunk_pages(&self) {
+        (self.imports_over_ram_chunk_pages).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A making took a parked object of `what`.
@@ -251,6 +259,9 @@ impl ChurnCounters {
                 buffers_evicted: recycled(Recycled::Buffer, 2),
                 imports_inside_live: self.imports_inside_live.load(Ordering::Relaxed),
                 buffers_bound_in_import: self.buffers_bound_in_import.load(Ordering::Relaxed),
+                imports_over_ram_chunk_pages: self
+                    .imports_over_ram_chunk_pages
+                    .load(Ordering::Relaxed),
                 release_sites: RELEASE_SITES.read(),
                 release_sites_dropped: RELEASE_SITES.dropped(),
             },
@@ -332,17 +343,30 @@ pub struct ObjectChurn {
     pub buffers_parked: u64,
     /// Parked buffers destroyed past the recycler's bounds.
     pub buffers_evicted: u64,
-    /// No-copy buffers and heaps that imported their pages where a live import of another held
-    /// some of them all the same (`host_aliases.rs`, "One page, one import"): two made at once
-    /// over them, each looking before the other's import was noted. A page imported twice, which
-    /// `VK_EXT_external_memory_host` leaves undefined; every other buffer over pages a live
-    /// import holds lies inside it (`buffers_bound_in_import`) or is a copy
-    /// (`WorkCounts::copied_over_live_imports`).
+    /// Imports made over host addresses a live import held some of all the same
+    /// (`host_aliases.rs`, "One page, one import"): a no-copy buffer's or heap's own import (a
+    /// heap's own buffer's among them) over a live import of another no-copy buffer or heap, or
+    /// over a live import of a guest RAM's chunk (`host_ram.rs`), and a chunk's import over a
+    /// live import of a no-copy buffer or heap. A page imported twice, which
+    /// `VK_EXT_external_memory_host` leaves undefined for a host pointer; every other buffer
+    /// over pages a live import holds lies inside it (`buffers_bound_in_import`, or a chunk's
+    /// `WorkCounts::chunk_bound_buffers_made`) or is a copy
+    /// (`WorkCounts::copied_over_live_imports`). Counted by host address, after each import is
+    /// made: two made at once over the same pages, each looking before the other's was noted,
+    /// count. A listed RAM's run imported alone while its chunk's import is made (two dma-bufs of
+    /// the same pages, `WorkCounts::run_imports_live`) does not.
     pub imports_inside_live: u64,
     /// No-copy buffers bound inside the memory of a live import that holds all their pages, at
     /// their offset, with no import of their own (`host_aliases.rs`, "One page, one import"):
     /// over part of another no-copy buffer's or heap's bytes.
     pub buffers_bound_in_import: u64,
+    /// Evidence, not a defect count: no-copy buffers' and heaps' own imports of their pages at
+    /// addresses other than their guest RAM's (a view of scattered runs, `HostMemory::with_runs`)
+    /// where a live import of one of the RAM's chunks held some of the same RAM pages at the
+    /// RAM's own addresses as the object's import was made. The same physical pages mapped for
+    /// the device twice, at two host addresses; counted at the object's import, not at a chunk's
+    /// import made later over the pages of a live view's.
+    pub imports_over_ram_chunk_pages: u64,
     /// The places that released the images, buffers, buffer views and memory counted above, each
     /// with its calls (`regions` unused): the first 32 the process met.
     pub release_sites: [CopySite; COPY_SITES],

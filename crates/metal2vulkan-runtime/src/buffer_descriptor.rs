@@ -1055,13 +1055,7 @@ impl Device {
                     };
                 let (buffer, memory, again) = match imported {
                     Ok(imported) => {
-                        // A page imported twice all the same: another buffer over them, made at
-                        // once, was noted after this one looked.
-                        let unit = importer.unit();
-                        let found = (shared.aliases).within((window.start, window.size), unit);
-                        if !matches!(found, Within::Free) {
-                            shared.counts.churn.import_inside_live();
-                        }
+                        self.count_import_over_live(&window, importer.unit(), routed.as_ref());
                         imported
                     }
                     // An import the device and the gate admitted that then failed, or pages the
@@ -1530,6 +1524,9 @@ impl Device {
                         (host, placement, Remade::default(), Some(copied))
                     }
                 };
+                if !chunk_bound && copied.is_none() {
+                    self.count_import_over_live(&window, unit, routed.as_ref());
+                }
                 // A copy lies at the offset it was laid out at: the old one where the bytes moved.
                 let offset = match copied {
                     Some(_) => copy_window.offset,
@@ -1775,6 +1772,24 @@ impl Device {
         match source {
             Some(source) => Ok(Err((source, refusal))),
             None => Err(refusal),
+        }
+    }
+
+    /// Count a no-copy buffer's or heap's own import of `window`'s pages, just made (in `unit`s),
+    /// where a live import held some of them all the same: another buffer's or heap's, made at
+    /// once and noted after this one looked, or a guest RAM's chunk's at the same addresses
+    /// (`ObjectChurn::imports_inside_live`). And, as evidence, where the object's pages are a
+    /// guest RAM's at other addresses (`routed`), some of which a live chunk import holds
+    /// (`ObjectChurn::imports_over_ram_chunk_pages`).
+    fn count_import_over_live(&self, window: &ImportWindow, unit: u64, routed: Option<&Routed>) {
+        let shared = self.shared();
+        let at_ram = self.ram_chunks_hold_any(window.start..window.start + window.size);
+        let found = (shared.aliases).within((window.start, window.size), unit);
+        if at_ram || !matches!(found, Within::Free) {
+            shared.counts.churn.import_inside_live();
+        }
+        if !at_ram && routed.is_some_and(|routed| routed.chunks_hold_any(window.size)) {
+            shared.counts.churn.import_over_ram_chunk_pages();
         }
     }
 

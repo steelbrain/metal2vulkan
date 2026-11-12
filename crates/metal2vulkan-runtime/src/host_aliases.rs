@@ -56,7 +56,9 @@
 //!   some of, and not all, and a heap whose pages a live import holds more of than its own bytes,
 //!   are a copy of the pages instead (`copied.rs`, `WorkCounts::copied_over_live_imports`).
 //!   `WorkCounts::object_churn.imports_inside_live` counts the imports made where one held some of
-//!   the pages all the same (two buffers made at once over them).
+//!   the pages all the same (two buffers made at once over them), a guest RAM's chunk's among
+//!   them (`host_ram.rs`, where a run is never imported alone by its pointer while its chunk's
+//!   import is made).
 //! - **Ownership stays the buffer's.** The added uses are hazard tracking's alone: what a command
 //!   holds and lists (`EncoderCore::touch`, rebind holds, `used_resources`) is named by the
 //!   command's own uses, each buffer by its own key.

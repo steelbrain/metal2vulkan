@@ -2296,6 +2296,7 @@ field	metal2vulkan-runtime::ObjectChurn.images_own_memory	pub images_own_memory:
 field	metal2vulkan-runtime::ObjectChurn.images_parked	pub images_parked: u64
 field	metal2vulkan-runtime::ObjectChurn.images_recycled	pub images_recycled: u64
 field	metal2vulkan-runtime::ObjectChurn.imports_inside_live	pub imports_inside_live: u64
+field	metal2vulkan-runtime::ObjectChurn.imports_over_ram_chunk_pages	pub imports_over_ram_chunk_pages: u64
 field	metal2vulkan-runtime::ObjectChurn.making_sites	pub making_sites: [CopySite; COPY_SITES]
 field	metal2vulkan-runtime::ObjectChurn.making_sites_dropped	pub making_sites_dropped: u64
 field	metal2vulkan-runtime::ObjectChurn.release_sites	pub release_sites: [CopySite; COPY_SITES]

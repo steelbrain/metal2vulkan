@@ -219,6 +219,10 @@ fn buffers_over_a_heaps_pages_lie_inside_its_import() {
         .iter()
         .all(|&byte| byte == 0x77));
     assert_eq!(imports(&device)[0], last[0], "no import since");
+    eprintln!(
+        "ONE-IMPORT: heap first, counts {:?} from {start:?}",
+        imports(&device)
+    );
     drop((placed, exact, inside, unaligned, across, heap));
 }
 
@@ -296,5 +300,9 @@ fn heaps_and_buffers_over_a_buffers_pages_lie_inside_its_import() {
         blit.fill_buffer(&in_copy, 0..4096, 0x7f).unwrap()
     });
     assert!(pages.bytes(2 << 20, 4096).iter().all(|&byte| byte == 0x7f));
+    eprintln!(
+        "ONE-IMPORT: buffer first, counts {:?} from {start:?}",
+        imports(&device)
+    );
     drop((in_copy, around, small, part, placed, over, first));
 }

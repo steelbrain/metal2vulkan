@@ -2158,6 +2158,14 @@ impl Gpu for Runtime {
                 "churn_imports_inside_live",
                 c.object_churn.imports_inside_live,
             ),
+            (
+                "churn_buffers_bound_in_import",
+                c.object_churn.buffers_bound_in_import,
+            ),
+            (
+                "churn_imports_over_ram_chunk_pages",
+                c.object_churn.imports_over_ram_chunk_pages,
+            ),
             ("keeps_render_cut", c.shadow_keeps.render_cut),
             ("keeps_render_cut_texels", c.shadow_keeps.render_cut_texels),
             ("keeps_render_whole", c.shadow_keeps.render_whole),
