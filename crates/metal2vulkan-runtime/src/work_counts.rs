@@ -344,6 +344,7 @@ pub(crate) struct Counters {
     host_import_releases_pending: AtomicU64,
     host_keep_alives_kept: AtomicU64,
     host_keep_alives_covered: AtomicU64,
+    host_releases_held_inside: AtomicU64,
     host_mappings_queried: AtomicU64,
     dma_buf_imports: AtomicU64,
     dma_buf_buffer_imports_dedicated: AtomicU64,
@@ -3231,6 +3232,14 @@ impl Counters {
     /// something else still holds and no other buffer lies in (`buffer.rs`).
     pub(crate) fn host_keep_alive_kept(&self) {
         self.host_keep_alives_kept.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A no-copy buffer was released while a buffer bound inside the import of its pages lived:
+    /// the import kept its keep-alive, or, given none, its deallocator waits for the free
+    /// (`buffer.rs`'s `Inside`).
+    pub(crate) fn host_release_held_inside(&self) {
+        self.host_releases_held_inside
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// The import that kept a keep-alive was freed, and dropped it.
@@ -7092,7 +7101,8 @@ pub struct WorkCounts {
     /// No-copy buffers and heaps released with a deallocator whose deallocator waited past the
     /// release (`host-deallocator-delayed`), counted at each wait: given no keep-alive, for the
     /// import of their pages, which something else held (a command buffer submitted before a
-    /// texture over them went, through the texture's image), until the import is freed, or, on a
+    /// texture over them went, through the texture's image, or a buffer bound inside the import,
+    /// `host_releases_held_inside`), until the import is freed, or, on a
     /// device whose driver has `RuntimeDriverDefect::FreedAddressMemoryFailsPendingWork`, for the
     /// batches submitted before the import's memory went, until they completed (with a keep-alive
     /// it runs at the release there); or, given none, for a live buffers' table that listed their
@@ -7110,15 +7120,27 @@ pub struct WorkCounts {
     pub host_import_releases_pending: u64,
     /// Keep-alives of no-copy buffers and heaps (`KeepAlive`) held now past their release: each
     /// by the import of its pages, whose last buffer it was while something else (a texture's
-    /// image a submitted command buffer may still read) held the import, or that a live buffers'
-    /// table a command buffer that may reach them unnamed holds listed as it was released, until
-    /// the import is freed. One per import at most: a later keep-alive over the same import is
-    /// dropped at its release (`host_keep_alives_covered`).
+    /// image a submitted command buffer may still read, or a buffer bound inside the import,
+    /// `host_releases_held_inside`) held the import, or that a live buffers' table a command
+    /// buffer that may reach them unnamed holds listed as it was released, until the import is
+    /// freed. One per import at most: a later keep-alive over the same import is dropped at its
+    /// release (`host_keep_alives_covered`).
     pub host_keep_alives_kept: u64,
     /// Keep-alives dropped at their buffer's release, after its deallocator ran, because the
     /// import of its pages stays mapped without them: another no-copy buffer made over the same
     /// bytes lies in it, or it keeps another's keep-alive already.
     pub host_keep_alives_covered: u64,
+    /// No-copy buffers released while a buffer bound inside the import of their pages lived
+    /// (`host_aliases.rs`, "One page, one import": a buffer over part of their bytes, or over
+    /// the same bytes as memory of another class, made while they lived, with no import of its
+    /// own, `ObjectChurn::buffers_bound_in_import`), so that the import outlived their release:
+    /// their keep-alive kept by the import (`host_keep_alives_kept`), their deallocator run at the
+    /// release, as Metal's; or, given no keep-alive, their deallocator waiting for the import's
+    /// free (`host_deallocators_delayed`), where Metal's runs at the release. Either goes once
+    /// that buffer, and everything else holding the import, went. One live import of a page at a
+    /// time: `VK_EXT_external_memory_host` leaves a host allocation imported twice into one
+    /// device undefined. Counted at each such release.
+    pub host_releases_held_inside: u64,
     /// The process's mappings the kernel was asked about, for their write permission, before a
     /// no-copy buffer's, heap's or rebind's own import of host pages, on Linux (one `PROCMAP_QUERY`
     /// each, or one line of `/proc/self/maps` where the kernel predates the query): one per mapping
@@ -9279,6 +9301,7 @@ impl Device {
                 .load(Ordering::Acquire),
             host_keep_alives_kept: counters.host_keep_alives_kept.load(Ordering::Relaxed),
             host_keep_alives_covered: counters.host_keep_alives_covered.load(Ordering::Relaxed),
+            host_releases_held_inside: (counters.host_releases_held_inside).load(Ordering::Relaxed),
             host_mappings_queried: counters.host_mappings_queried.load(Ordering::Relaxed),
             dma_buf_imports: counters.dma_buf_imports.load(Ordering::Relaxed),
             dma_buf_buffer_imports_dedicated: (counters.dma_buf_buffer_imports_dedicated)

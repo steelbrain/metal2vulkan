@@ -95,7 +95,11 @@
 //! - **A keep-alive** ([`KeepAlive`]). The import can outlive the buffer: a texture over the buffer
 //!   that a command buffer submitted before its release may still read through its resource ID
 //!   keeps its image, and the image the import, until that command buffer completes
-//!   (`heap_sets.rs`). Vulkan requires imported pages to stay mapped while the import lives, so
+//!   (`heap_sets.rs`); and a buffer made over part of its bytes, or over the same bytes as memory
+//!   of another class, while it lived is bound inside its import, holding it, until that buffer
+//!   goes (`host_aliases.rs`, "One page, one import": one live import of a page, as
+//!   `VK_EXT_external_memory_host` leaves a page imported twice undefined;
+//!   `WorkCounts::host_releases_held_inside`). Vulkan requires imported pages to stay mapped while the import lives, so
 //!   with no keep-alive the deallocator waits for the import's free, announced
 //!   (`host-deallocator-delayed`). With a keep-alive, which the caller's mapping lives in, the
 //!   deallocator runs at the release, as Metal's does, and the keep-alive is dropped once the

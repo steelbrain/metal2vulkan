@@ -1270,6 +1270,9 @@ impl HostPages {
                 false => {
                     // Counted before the free can take it.
                     counts.host_keep_alive_kept();
+                    if self.import.held_inside() {
+                        counts.host_release_held_inside();
+                    }
                     *kept = Some(keep_alive);
                     None
                 }
@@ -1318,6 +1321,8 @@ pub(super) struct HostImport {
     objects: ManuallyDrop<Objects>,
     /// The [`HostPages`] lying in it.
     lying: AtomicUsize,
+    /// The buffers bound inside its memory now, each with no import of its own ([`Inside`]).
+    inside: AtomicUsize,
     /// The reads other than a blit's that took it, a bit each ([`HostImport::note_read_apart`]):
     /// counted in `WorkCounts::host_imports_read_apart` and the gauge of each reason while it
     /// lives.
@@ -1521,6 +1526,7 @@ impl HostImport {
             shape: Shape::of(&pages),
             objects: ManuallyDrop::new(Objects::Fixed(Imported::new(device, pages))),
             lying: AtomicUsize::new(0),
+            inside: AtomicUsize::new(0),
             read_apart: AtomicU8::new(0),
             kept_because: because,
             unlisted: AtomicBool::new(unlisted),
@@ -1547,6 +1553,7 @@ impl HostImport {
                 device, pages, again, stand_in,
             ))),
             lying: AtomicUsize::new(0),
+            inside: AtomicUsize::new(0),
             read_apart: AtomicU8::new(0),
             kept_because: None,
             unlisted: AtomicBool::new(false),
@@ -1563,6 +1570,12 @@ impl HostImport {
         if self.unlisted.load(Ordering::Relaxed) && self.unlisted.swap(false, Ordering::Relaxed) {
             (self.device.shared().counts).host_import_rebound_unlisted(false);
         }
+    }
+
+    /// Whether a buffer bound inside its memory lives now ([`Inside`]): it holds the import past
+    /// the release of the pages lying in it.
+    fn held_inside(&self) -> bool {
+        self.inside.load(Ordering::Acquire) > 0
     }
 
     /// Its memory is a copy of the caller's pages, registered as `copied` (`copied.rs`), not
@@ -1917,6 +1930,28 @@ fn deallocator_delayed(device: &Device, length: u64) {
     });
 }
 
+/// A buffer's hold on the live import of host pages it is bound inside, with no import of its own
+/// (`host_aliases.rs`, "One page, one import"; `Placement::in_import`, whose clones share
+/// it): counted in the import's `inside` while it lives, so that a release of another buffer's
+/// pages that the import outlives for it is counted (`WorkCounts::host_releases_held_inside`)
+/// and named in its announcement.
+pub(super) struct Inside(Arc<HostImport>);
+
+impl Inside {
+    /// A hold on `import` for a buffer bound inside its memory.
+    pub(super) fn new(import: Arc<HostImport>) -> Inside {
+        import.inside.fetch_add(1, Ordering::AcqRel);
+        Inside(import)
+    }
+}
+
+impl Drop for Inside {
+    fn drop(&mut self) {
+        // Before the hold goes: the import may go with it.
+        self.0.inside.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// What goes once a host import's memory is freed: the keep-alive of the pages that went while it
 /// lived, and the deallocators that waited for the free, each panic caught. It waits with the
 /// memory where that waits for the batches in flight (`freed_memory.rs`).
@@ -1984,18 +2019,34 @@ impl Drop for HostPages {
             // where nothing else holds it; else later, announced.
             None => {
                 if release.deallocates() && Arc::strong_count(import) > 1 {
-                    import.device.shared().counts.host_deallocator_delayed();
+                    let counts = &import.device.shared().counts;
+                    counts.host_deallocator_delayed();
+                    let inside = import.held_inside();
+                    if inside {
+                        counts.host_release_held_inside();
+                    }
                     let length = release.length();
                     import
                         .device
                         .degrade_once(Degradation::HostDeallocatorDelayed, || {
+                            let held = match inside {
+                                true => {
+                                    "a buffer bound inside its pages' import, over part of its \
+                                     bytes or the same bytes as memory of another class, still \
+                                     lives as it is released (one live import of a page: \
+                                     VK_EXT_external_memory_host leaves a page imported twice \
+                                     undefined)"
+                                }
+                                false => {
+                                    "its pages' import is still held as it is released (a \
+                                     texture over them may still be read through its resource \
+                                     ID by a command buffer submitted before the texture's \
+                                     release)"
+                                }
+                            };
                             (
                                 format!("a no-copy buffer of {length} bytes"),
-                                "its pages' import is still held as it is released (a texture \
-                                 over them may still be read through its resource ID by a \
-                                 command buffer submitted before the texture's release), and \
-                                 the caller gave no keep-alive"
-                                    .to_owned(),
+                                format!("{held}, and the caller gave no keep-alive"),
                             )
                         });
                 }

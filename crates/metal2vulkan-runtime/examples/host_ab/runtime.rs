@@ -1846,6 +1846,7 @@ impl Gpu for Runtime {
             ),
             ("host_keep_alives_kept", c.host_keep_alives_kept),
             ("host_keep_alives_covered", c.host_keep_alives_covered),
+            ("host_releases_held_inside", c.host_releases_held_inside),
             ("host_mappings_queried", c.host_mappings_queried),
             ("dma_buf_imports", c.dma_buf_imports),
             ("dma_buf_memories_live", c.dma_buf_memories_live),

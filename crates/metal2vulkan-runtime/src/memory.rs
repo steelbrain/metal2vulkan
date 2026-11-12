@@ -1884,10 +1884,11 @@ pub(super) struct Placement {
 }
 
 /// A placement's hold on the live import of host pages it lies inside ([`Placement::in_import`]),
-/// and the external handle type that import's memory was imported as.
+/// one for the buffer however many clones of the placement share it, and the external handle
+/// type that import's memory was imported as.
 #[derive(Clone)]
 pub(super) struct InImport {
-    _import: Arc<crate::buffer::HostImport>,
+    _inside: Arc<crate::buffer::Inside>,
     handle: vk::ExternalMemoryHandleTypeFlags,
 }
 
@@ -1997,7 +1998,7 @@ impl Placement {
             dma_buf: within.dma_buf.clone(),
             ram_chunk: within.ram_chunk.clone(),
             in_import: Some(InImport {
-                _import: import,
+                _inside: Arc::new(crate::buffer::Inside::new(import)),
                 handle,
             }),
         }

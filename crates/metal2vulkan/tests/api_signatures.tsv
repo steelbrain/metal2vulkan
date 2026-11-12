@@ -2945,6 +2945,7 @@ field	metal2vulkan-runtime::WorkCounts.host_ram_staged_fills_gated	pub host_ram_
 field	metal2vulkan-runtime::WorkCounts.host_range_lookups	pub host_range_lookups: u64
 field	metal2vulkan-runtime::WorkCounts.host_rebind_imports_covered	pub host_rebind_imports_covered: u64
 field	metal2vulkan-runtime::WorkCounts.host_rebind_imports_made	pub host_rebind_imports_made: u64
+field	metal2vulkan-runtime::WorkCounts.host_releases_held_inside	pub host_releases_held_inside: u64
 field	metal2vulkan-runtime::WorkCounts.host_remaps_over_imports	pub host_remaps_over_imports: u64
 field	metal2vulkan-runtime::WorkCounts.host_remaps_reported	pub host_remaps_reported: u64
 field	metal2vulkan-runtime::WorkCounts.host_step_chunk_copies_put_off	pub host_step_chunk_copies_put_off: u64
