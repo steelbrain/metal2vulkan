@@ -5023,6 +5023,12 @@ each item named states the rule in full.
     or any bias where the device's portability subset withholds `samplerMipLodBias` (MoltenVK),
     none, announced (`capped-lod-bias`). A device that presents an Apple silicon Mac samples
     every level as with no bias, as an Apple M3 Max (Apple9) does.
+  - `maxThreadgroupMemoryLength` (`DeviceProperties::max_threadgroup_memory_length`) is the
+    device's `maxComputeSharedMemorySize` up to 65536 bytes, which an AMD Radeon Pro 5300M and an
+    Intel UHD 630 answer (the consumer's probes), where a device that presents an Apple silicon
+    Mac answers up to 32768, an Apple M3 Max's: RADV's 65536 bytes answer 65536, ANV's and
+    NVIDIA's 49152 answer 49152. A dispatch takes threadgroup memory up to the device's own limit
+    whatever the class, so every length answered runs.
 
   Metal leaves a new texture's contents undefined, and zero and a released texture's texels are
   both what such a Mac reads, so this trades no accuracy and no `DevicePolicy` switch fills the
