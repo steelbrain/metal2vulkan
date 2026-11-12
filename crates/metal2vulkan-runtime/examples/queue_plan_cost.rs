@@ -6,7 +6,7 @@
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-runtime --example queue_plan_cost -- \
-//!     [--rounds R] [--hold H] [--runtime] [--exhaust PROCESSES]
+//!     [--rounds R] [--hold H] [--runtime] [--exhaust PROCESSES] [--exhaust-only]
 //! ```
 //!
 //! Each shape is a count of graphics-family queues and of copy-family queues (none where the
@@ -27,7 +27,11 @@
 //!   driver logs, such as NVIDIA's `NV_ERR_NO_MEMORY` from `kchannelAllocMem`): for the plan's
 //!   shape and the least plan's, up to `P` processes, started one after another, each making
 //!   devices of the shape until the driver refuses one or it holds 6, all held until the last
-//!   process is done: how many devices, and so `VkQueue`s, the GPU held at once.
+//!   process is done: how many devices, and so `VkQueue`s, the GPU held at once, and each
+//!   refusal's `VkResult`. While they are held, one more process makes the runtime's own device
+//!   (`Device::system_default_with`, the plan): whether it came up (on its least plan where the
+//!   driver refused the plan, which it announces) or what it answered.
+//!   `--exhaust-only` skips the make and hold phases.
 
 use ash::vk;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -433,13 +437,14 @@ fn exhaust_phase(gpu: &Gpu, processes: usize) {
             let made: usize = (line.split_whitespace().nth(1))
                 .and_then(|n| n.parse().ok())
                 .unwrap_or(0);
-            counts.push(format!(
-                "{made}{}",
-                match line.contains("Some") {
-                    true => "r",
-                    false => "",
-                }
-            ));
+            // The refusal's `VkResult`, where the child's line names one (`Some(ERROR_...)`).
+            let refusal = (line.split_once("Some("))
+                .and_then(|(_, rest)| rest.split_once(')'))
+                .map(|(code, _)| code.to_owned());
+            counts.push(match refusal {
+                Some(code) => format!("{made}r({code})"),
+                None => made.to_string(),
+            });
             held += made;
             children.push(child);
             if made == 0 {
@@ -447,13 +452,21 @@ fn exhaust_phase(gpu: &Gpu, processes: usize) {
             }
         }
         let memory = smi_memory();
+        let runtime = Command::new(&exe)
+            .arg("--runtime-child")
+            // Its notices (the least plan's among them) go to this one's stderr.
+            .stderr(Stdio::inherit())
+            .output()
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+            .unwrap_or_else(|error| format!("not run: {error}"));
         for mut child in children {
             drop(child.stdin.take());
             child.wait().ok();
         }
         println!(
             "QUEUE-PLAN-COST exhaust {}+{} = {} queues: {held} devices ({} VkQueues) held at once \
-             by {} processes [{}] (r: refused), memory then {memory:?}",
+             by {} processes [{}] (r: refused), memory then {memory:?}; then the runtime's \
+             device: {runtime}",
             shape.0,
             shape.1,
             queues(shape),
@@ -465,8 +478,31 @@ fn exhaust_phase(gpu: &Gpu, processes: usize) {
     }
 }
 
+/// A child of the exhaust phase made while the others hold their devices: the runtime's own device
+/// of the plan, and what it answered (`RUNTIME made` or `RUNTIME refused: ...`). Where it took
+/// its least plan it says so on stderr (`metal2vulkan-degrade-least-queue-plan`).
+fn runtime_child() {
+    use metal2vulkan_runtime::{Device, DeviceKind, DeviceOptions};
+    let cache = std::env::temp_dir().join(format!("queue-plan-cost-{}", std::process::id()));
+    let mut options = DeviceOptions::default();
+    options.kinds = vec![DeviceKind::Discrete, DeviceKind::Integrated];
+    options.shader_cache = metal2vulkan_runtime::ShaderCacheOptions::in_directory(cache.clone());
+    match Device::system_default_with(&options) {
+        Ok(device) => {
+            println!("RUNTIME made");
+            drop(device);
+        }
+        Err(error) => println!("RUNTIME refused: {error:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&cache);
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--runtime-child") {
+        runtime_child();
+        return;
+    }
     let gpu = Gpu::new();
     if args.first().map(String::as_str) == Some("--child") {
         let shape = (args[1].parse().unwrap(), args[2].parse().unwrap());
@@ -482,8 +518,10 @@ fn main() {
         "QUEUE-PLAN-COST device {} ({}), graphics family {} of {} queues, copy family {:?}",
         gpu.name, gpu.driver, gpu.graphics, gpu.graphics_count, gpu.copy
     );
-    make_phase(&gpu, value("--rounds").unwrap_or(5));
-    hold_phase(&gpu, value("--hold").unwrap_or(4));
+    if !args.iter().any(|arg| arg == "--exhaust-only") {
+        make_phase(&gpu, value("--rounds").unwrap_or(5));
+        hold_phase(&gpu, value("--hold").unwrap_or(4));
+    }
     if args.iter().any(|arg| arg == "--runtime") {
         runtime_phase();
     }
