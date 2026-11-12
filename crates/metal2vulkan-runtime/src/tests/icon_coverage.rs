@@ -5,18 +5,21 @@
 //! back by a blit); its second color a new `RG16Float` texture of its size, `RenderTarget` usage
 //! alone, cleared to the icon's own value (or loaded `DontCare`) and stored `DontCare`; and a
 //! `Stencil8` texture of its size, loaded and stored `DontCare`. The pass draws a mark into both
-//! colors over the left half (`dcs_mark`), then a draw over the middle rows that fetches the second
-//! color into the first (`dcs_read`), then a flag into the first color over the top rows
-//! (`dcs_flag`).
+//! colors over the left half (`dcs_mark`); then, over the middle rows, a draw that fetches the
+//! second color and writes both from it (`con_fetch_coverage`: `w = c1.x / 2 + c1.y` into every
+//! channel of the first color, `(w, c1.y / 4)` into the second); a flag into the first color over
+//! the top rows (`dcs_flag`); and over the bottom rows a draw that fetches the second color into
+//! the first (`dcs_read`).
 //!
-//! A device that fetches through the pixel interlock leaves the second color out of the fetching
-//! draw's subpass while the others need it in theirs, so the pass runs as three render pass
-//! instances; where the second color's image lacks `STORAGE` (the M3), the fetching instance
+//! A device that fetches through the pixel interlock leaves the second color out of the subpass
+//! of the draws that write it so, while the others need it in theirs, so the pass runs as several
+//! render pass instances; where the second color's image lacks `STORAGE` (the M3), the pass
 //! renders it through a scratch, and the texture takes its storage form at a commit
 //! (`texture/storage_form.rs`). Each icon's first color holds the flag over the top rows; over the
-//! middle rows the mark's second color on the left and, on the right, the second color's clear
-//! (zero where it loads `DontCare`: Metal's answer for a `DontCare` load a pass does not store,
-//! `clear_reach.rs`); below them the mark on the left and the icon's clear on the right.
+//! middle rows `w` of the mark's second color on the left and of the second color's clear on the
+//! right (zero where it loads `DontCare`: Metal's answer for a `DontCare` load a pass does not
+//! store, `clear_reach.rs`); over the bottom rows the mark's second color on the left and the
+//! clear on the right, each `(c1.x, c1.y, 1, 1)`.
 //!
 //! Four forms of the render: every icon in one command buffer; each in its own, every one made
 //! before the first commits; each in its own, encoded and committed on several threads at once
@@ -26,7 +29,8 @@
 //! one over host pages a no-copy buffer imports, as a surface's texture lies.
 //!
 //! The functions are `dcs_rect`, `dcs_mark`, `dcs_read` and `dcs_flag` of the owned fixture
-//! `validation/fixtures/public/engine/dcs_dont_care_split.ll`.
+//! `validation/fixtures/public/engine/dcs_dont_care_split.ll`, and `con_fetch_coverage` of
+//! `validation/fixtures/public/engine/con_fetch_coverage.ll`.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -59,10 +63,12 @@ const ICONS: usize = 24;
 const ROUNDS: usize = 3;
 const THREADS: usize = 4;
 
-/// The draws' rectangles, in pixels (left, top, right, bottom): the mark, the fetch, the flag.
+/// The draws' rectangles, in pixels (left, top, right, bottom): the mark, the coverage, the
+/// flag, the read.
 const MARK: [u64; 4] = [0, 0, SIDE / 2, SIDE];
 const MIDDLE: [u64; 4] = [0, SIDE / 4, SIDE, SIDE * 3 / 4];
 const FLAG: [u64; 4] = [0, 0, SIDE, SIDE / 4];
+const BOTTOM: [u64; 4] = [0, SIDE * 3 / 4, SIDE, SIDE];
 
 /// A half's 1.0.
 const ONE: u16 = 0x3c00;
@@ -96,27 +102,31 @@ impl Home {
     }
 }
 
-/// The queue, the states, the target's size as `dcs_rect` takes it, and a read-back buffer.
+/// The queue, the states, the target's size as `dcs_rect` takes it, the coverage's tint, and a
+/// read-back buffer.
 struct Tools {
     queue: CommandQueue,
     mark: RenderPipelineState,
-    read: RenderPipelineState,
+    coverage: RenderPipelineState,
     flag: RenderPipelineState,
+    read: RenderPipelineState,
     size: Vec<u8>,
+    tint: Vec<u8>,
     back: Buffer,
 }
 
 impl Tools {
     /// The tools, or `None` where the device makes no state that fetches.
     fn new(device: &Device) -> Option<Tools> {
-        let library = library(device, "engine/dcs_dont_care_split.ll");
-        let function = |name: &str| {
+        let dcs = library(device, "engine/dcs_dont_care_split.ll");
+        let con = library(device, "engine/con_fetch_coverage.ll");
+        let function = |library: &crate::Library, name: &str| {
             let function = library.new_function_with_name(name).unwrap();
             StageSource::Function(function.function_descriptor())
         };
-        let state = |fragment: &str| {
-            let mut descriptor = RenderPipelineDescriptor::new(function("dcs_rect"));
-            descriptor.fragment = Some(function(fragment));
+        let state = |fragment: StageSource| {
+            let mut descriptor = RenderPipelineDescriptor::new(function(&dcs, "dcs_rect"));
+            descriptor.fragment = Some(fragment);
             descriptor.color_attachments[0] =
                 Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float));
             descriptor.color_attachments[1] =
@@ -126,10 +136,12 @@ impl Tools {
         };
         Some(Tools {
             queue: device.new_command_queue().unwrap(),
-            mark: state("dcs_mark").unwrap(),
-            read: state("dcs_read").ok()?,
-            flag: state("dcs_flag").unwrap(),
+            mark: state(function(&dcs, "dcs_mark")).unwrap(),
+            coverage: state(function(&con, "con_fetch_coverage")).ok()?,
+            flag: state(function(&dcs, "dcs_flag")).unwrap(),
+            read: state(function(&dcs, "dcs_read")).ok()?,
             size: bytes_of(&[SIDE as f32, SIDE as f32], f32::to_le_bytes),
+            tint: bytes_of(&[ONE; 4], u16::to_le_bytes),
             back: device
                 .new_buffer(ICON_BYTES * ICONS as u64, ResourceOptions::shared())
                 .unwrap(),
@@ -187,7 +199,15 @@ impl Tools {
         stencil_attachment.load_action = LoadAction::DontCare;
         stencil_attachment.store_action = StoreAction::DontCare;
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
-        for (state, rect) in [(&self.mark, MARK), (&self.read, MIDDLE), (&self.flag, FLAG)] {
+        encoder.set_fragment_bytes(&self.tint, 0).unwrap();
+        let draws = [
+            (&self.mark, MARK),
+            (&self.coverage, MIDDLE),
+            (&self.flag, FLAG),
+            (&self.coverage, MIDDLE),
+            (&self.read, BOTTOM),
+        ];
+        for (state, rect) in draws {
             encoder.set_render_pipeline_state(state).unwrap();
             let rect = bytes_of(&rect.map(|p| p as f32), f32::to_le_bytes);
             encoder.set_vertex_bytes(&rect, 0).unwrap();
@@ -261,18 +281,21 @@ fn half(value: f32) -> u16 {
 
 /// Icon `index`'s first color at `(x, y)`.
 fn expected(index: usize, (x, y): (u64, u64)) -> [u16; 4] {
-    let left = x < MARK[2];
+    // The second color there before the coverage draws: the mark's, or the clear (zero where it
+    // loads `DontCare`).
+    let [r, g] = match x < MARK[2] {
+        true => [0.25, 0.5],
+        false => clear(index).unwrap_or([0.0; 2]),
+    };
     if y < FLAG[3] {
         [ONE, 0, ONE, ONE]
-    } else if y < MIDDLE[3] && left {
-        [half(0.25), half(0.5), ONE, ONE]
     } else if y < MIDDLE[3] {
-        let [r, g] = clear(index).unwrap_or([0.0; 2]);
-        [half(r), half(g), ONE, ONE]
-    } else if left {
-        [0, half(0.5), 0, ONE]
+        // Two coverage draws: `w = c1.x / 2 + c1.y`, then `c1 = (w, c1.y / 4)`.
+        let first = r / 2.0 + g;
+        let second = half(first / 2.0 + g / 4.0);
+        [second; 4]
     } else {
-        [0; 4]
+        [half(r), half(g), ONE, ONE]
     }
 }
 
