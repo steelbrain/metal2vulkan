@@ -24,7 +24,6 @@ use super::encoder_holds::{bits, bytes_of, pass, render_state, words_of};
 use crate::error::{invalid, vulkan};
 use crate::pipeline::pool::held;
 use crate::render::{BATCH_CALLS, HANDED_BATCHES};
-use crate::submit_check::{Check, Verdict};
 use crate::StoreAction;
 use crate::{
     BlitOption, Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, Degradation,
@@ -1523,104 +1522,6 @@ fn a_draw_whose_pipeline_is_still_being_made_at_its_bound_runs_nothing() {
             break;
         }
         assert!(Instant::now() < deadline, "the making never landed");
-    }
-}
-
-/// How long the pool's test hold keeps the making of the draw of
-/// [`a_command_buffer_a_making_splits_is_timed_from_its_first_work_to_its_last`] after its command
-/// buffer's commit.
-const SPLIT_HOLD: Duration = Duration::from_millis(300);
-
-/// The bytes the fill before that draw's pass writes: GPU work that runs before the hold goes.
-const SPLIT_FILL: u64 = 16 << 20;
-
-/// A command buffer whose draw's pipeline is still being made at its commit, under
-/// `PipelineWaitPolicy::Exact`, goes as more than one submission: the fill before the draw's pass
-/// at once, the pass once the scheduler's host step recorded it, after the making landed (the
-/// pool's test hold, `pool::held`, dropped [`SPLIT_HOLD`] after the commit). Metal's
-/// `GPUStartTime` and `GPUEndTime` span the whole command buffer's GPU work: its start is the
-/// fill's, before the hold went, and its end the pass's and the copy's after it, after the hold
-/// went and before the wait returned; the rectangle is drawn. Run with the device's submission
-/// checks as found, then with the merge check forced to hold, so that its batches may wait in a
-/// group for one kernel submission (`CompletionPolicy::Grouped`, the default; `group.rs`).
-/// Printed (`GPU-TIMES-SPLIT`): the four times against the hold's end.
-#[test]
-fn a_command_buffer_a_making_splits_is_timed_from_its_first_work_to_its_last() {
-    for merge in [false, true] {
-        let scratch = Scratch::new("deferred-split-times");
-        let heard = Heard::default();
-        let device = waiting_device(&scratch.0, PipelineWaitPolicy::Exact, &heard);
-        let timing = &device.shared().timing;
-        if timing.clock().is_none() || timing.answers_from_host() {
-            eprintln!(
-                "GPU-TIMES-SPLIT {}: writes no timestamps, nothing to check",
-                device.name()
-            );
-            return;
-        }
-        if merge {
-            (device.shared().submit_checks).force(Check::Merge, Verdict::Holds);
-        }
-        let queue = device.new_command_queue().unwrap();
-        let target = target(&device);
-        let filled = device
-            .new_buffer(SPLIT_FILL, ResourceOptions::private())
-            .unwrap();
-        let hold = held::hold();
-        let state = rectangle_state(&device);
-        let command_buffer = queue.command_buffer().unwrap();
-        let mut blit = command_buffer.blit_command_encoder().unwrap();
-        blit.fill_buffer(&filled, 0..SPLIT_FILL, 0x5a).unwrap();
-        blit.end_encoding().unwrap();
-        let back = rectangle_pass(
-            &device,
-            &command_buffer,
-            (&state, &target),
-            PrimitiveType::Triangle,
-        );
-        let before = crate::host_time();
-        command_buffer.commit().unwrap();
-        std::thread::sleep(SPLIT_HOLD);
-        let released = crate::host_time();
-        drop(hold);
-        command_buffer.wait_until_completed_for(WAIT).unwrap();
-        let after = crate::host_time();
-        assert_eq!(command_buffer.error(), None);
-        assert!(
-            words_of(&back).iter().all(|&w| w == PACKED),
-            "the rectangle, drawn"
-        );
-        let (gpu_start, gpu_end) = (
-            command_buffer.gpu_start_time().unwrap(),
-            command_buffer.gpu_end_time().unwrap(),
-        );
-        let (kernel_start, kernel_end) = (
-            command_buffer.kernel_start_time(),
-            command_buffer.kernel_end_time(),
-        );
-        let at = |time: f64| (time - released) * 1e3;
-        eprintln!(
-            "GPU-TIMES-SPLIT {} (merge forced: {merge}): against the hold's end, in ms: the \
-             commit {:+.3}, kernel start {:+.3}, kernel end {:+.3}, gpu start {:+.3}, gpu end \
-             {:+.3}, the wait's return {:+.3}",
-            device.name(),
-            at(before),
-            at(kernel_start),
-            at(kernel_end),
-            at(gpu_start),
-            at(gpu_end),
-            at(after),
-        );
-        assert!(
-            gpu_start < released,
-            "merge forced {merge}: the GPU start {gpu_start}, at or after the hold's end \
-             {released}: not the fill's"
-        );
-        assert!(
-            released <= gpu_end && gpu_end <= after,
-            "merge forced {merge}: the GPU end {gpu_end}, outside the pass's run from the hold's \
-             end {released} to the wait's return {after}"
-        );
     }
 }
 

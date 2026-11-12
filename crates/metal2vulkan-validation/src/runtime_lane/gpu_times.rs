@@ -50,6 +50,11 @@
 //! its kernel end (or its queue's latest end) and its completion's host time, in Metal's order, one
 //! after another on its queue, and the device announces `Degradation::GpuTimesFromHost` once.
 //!
+//! A command buffer whose work goes as two submissions, a wait for an event the host signals
+//! between them, is timed from its first work to its last, as Metal's times span the whole command
+//! buffer's GPU work: its GPU start before the signal, its end after it, on the device as made
+//! and on one made with `gpu_times_from_host`, whose start is the first submission's call.
+//!
 //! A driver whose timestamps wait for every queue's (`DriverFact::TimestampsWaitForEveryQueue`:
 //! MoltenVK 1.4.1 on Apple's GPUs) answers from the host's clock with the default options too:
 //! there the tests of the timestamp pool's slots check that no command buffer takes one, and
@@ -655,16 +660,29 @@ fn start_behind_work(batch_order: BatchOrderPolicy) {
 /// [`BEHIND_LENGTH`] bytes, then a wait for a shared event the host signals once that time passed
 /// since the commit, then a fill after it. Metal's `GPUStartTime` and `GPUEndTime` span the whole
 /// command buffer's GPU work, whatever its submissions: its start is the first fill's, before the
-/// signal, and its end the second's, after it, each inside its life ([`within`]). Printed
-/// (`GPU-TIMES-SPLIT`): the four times against the signal.
+/// signal, and its end the second's, after it, each inside its life ([`within`]). On the device as
+/// made (where its family writes timestamps or its driver answers from the host), and on one made
+/// with `gpu_times_from_host`, whose start is the call of the first submission, where the first
+/// fill's work could begin. Printed (`GPU-TIMES-SPLIT`): the four times against the signal.
 #[test]
 fn a_command_buffer_of_two_submissions_is_timed_from_its_first_work_to_its_last() {
+    for from_host in [false, true] {
+        two_submissions(from_host);
+    }
+}
+
+/// [`a_command_buffer_of_two_submissions_is_timed_from_its_first_work_to_its_last`] on a device
+/// made with `gpu_times_from_host` as `from_host` says.
+fn two_submissions(from_host: bool) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.gpu_times_from_host = from_host;
+        })
+        .unwrap();
         let venue = Venue::of(&device);
-        if venue.bits == 0 || from_host_by_driver(&device) {
+        if venue.bits == 0 && !from_host && !from_host_by_driver(&device) {
             eprintln!(
                 "runtime gpu times: {}: writes no timestamps, nothing to check",
                 device.name()
@@ -691,12 +709,14 @@ fn a_command_buffer_of_two_submissions_is_timed_from_its_first_work_to_its_last(
         event.set_signaled_value(1);
         cb.wait_until_completed_for(WAIT).unwrap();
         let after = host_time();
-        within("two submissions", &cb, before, after);
+        let label = format!("two submissions, from the host {from_host}");
+        within(&label, &cb, before, after);
         let [gpu_start, gpu_end, kernel_start, kernel_end] = times(&cb);
         let from_signal = |at: f64| (at - signalled) * 1e3;
         eprintln!(
-            "GPU-TIMES-SPLIT {}: against the signal, in ms: the commit {:+.3}, kernel start {:+.3}, \
-             kernel end {:+.3}, gpu start {:+.3}, gpu end {:+.3}, the wait's return {:+.3}",
+            "GPU-TIMES-SPLIT {} (from the host {from_host}): against the signal, in ms: the commit \
+             {:+.3}, kernel start {:+.3}, kernel end {:+.3}, gpu start {:+.3}, gpu end {:+.3}, the \
+             wait's return {:+.3}",
             device.name(),
             from_signal(before),
             from_signal(kernel_start),
@@ -707,11 +727,12 @@ fn a_command_buffer_of_two_submissions_is_timed_from_its_first_work_to_its_last(
         );
         assert!(
             gpu_start < signalled,
-            "the GPU start {gpu_start}, at or after the signal {signalled}: not the first fill's"
+            "{label}: the GPU start {gpu_start}, at or after the signal {signalled}: not the \
+             first fill's"
         );
         assert!(
             gpu_end >= signalled - SLACK,
-            "the GPU end {gpu_end}, before the signal {signalled}: not the second fill's"
+            "{label}: the GPU end {gpu_end}, before the signal {signalled}: not the second fill's"
         );
     }
     layer_reported_nothing_at_all(&messages);
@@ -1174,7 +1195,8 @@ fn broken_rules(
 /// A command buffer's kernel end after its GPU start, as plain Metal answered on the M3 Max under
 /// macOS 27.0.1: a fill's `kernelEndTime` 121311.732792 s against its `GPUStartTime` .732711 and
 /// `GPUEndTime` .732714, another's .736230 against .733545 and .733550. Not Metal's rule there,
-/// so Metal's answers are not held to it: counted and printed. The runtime's answers keep it by construction
+/// so Metal's answers are not held to it: counted and printed. The runtime's answers keep it by
+/// construction for a command buffer whose work went as one submission, as every one here does
 /// (`gpu_time.rs`: the GPU start is its kernel end time or later).
 const LATE_KERNEL_END: &str = "a kernel end after the GPU start";
 
