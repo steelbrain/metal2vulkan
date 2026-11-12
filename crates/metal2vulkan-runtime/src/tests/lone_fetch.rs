@@ -43,6 +43,13 @@
 //! (`tracker.rs`), which is more than Metal promises for two buffers over one allocation
 //! (`host_aliases.rs`): the leg holds the runtime to its own order.
 //!
+//! And a surface made again: each round a new buffer over the pages and a texture over it,
+//! rendered by the lone passes and completed, then the texture dropped, and its buffer too (or
+//! kept while the next is made), and a new buffer and texture over the same pages, as a process
+//! that never rendered the surface makes its own of it, sampled: what the passes rendered must
+//! have reached the pages, whatever image of the runtime's they rendered through (a scratch, a
+//! shadow, an image in place), so the new texture and the CPU read it.
+//!
 //! The functions are `dcs_rect`, `dcs_flag` and `dcs_read` of the owned fixture
 //! `validation/fixtures/public/engine/dcs_dont_care_split.ll`, `fetch_ordered` of
 //! `fragment_fetch.ll` and `con_fetch_coverage` of `con_fetch_coverage.ll` there.
@@ -676,6 +683,106 @@ fn moved_placing(before: &WorkCounts, after: &WorkCounts) -> [u64; 2] {
     ]
 }
 
+/// The remade run: each round a new no-copy buffer over the host pages and a texture of `format`
+/// over it, its rows one after another, rendered by the lone passes in a command buffer of its
+/// own, which completes; the texture then dropped, and its buffer too unless `keep` (dropped once
+/// the round ends), and a new buffer over the same pages with a texture over it, as another
+/// process makes its own of a surface it never rendered, sampled: it must read what the passes
+/// left, and so must the CPU.
+fn run_remade(case: &str, format: PixelFormat, keep: bool) {
+    // Declared before the device, so dropped after it.
+    let host = Host::new();
+    let scratch = Scratch::new(&format!("lone-fetch-{case}"));
+    let device = device(&scratch.0);
+    let Some(tools) = Tools::new(&device, format) else {
+        eprintln!(
+            "LONE-FETCH {case} on {}: no framebuffer fetch: nothing to check",
+            device.name()
+        );
+        return;
+    };
+    let runs = Arc::new(AtomicUsize::new(0));
+    let pitch = SIDE * texel(format);
+    let surface = |bytes: &Buffer, usage: TextureUsage| {
+        let mut d = TextureDescriptor::texture_2d(format, SIDE, SIDE, false);
+        d.usage = usage;
+        d.resource_options = bytes.resource_options();
+        let plane = IoSurfacePlane::new(0, pitch, false);
+        bytes.new_texture_with_iosurface_plane(&d, plane).unwrap()
+    };
+    let mut failures = Vec::new();
+    let mut counts = Vec::new();
+    let mut churn = Vec::new();
+    for round in 0..ROUNDS {
+        let before = device.work_counts();
+        let Some(first) = over_host(&device, &host, &runs) else {
+            return;
+        };
+        let pages = first.contents().unwrap();
+        // SAFETY: the surface's bytes, which no command buffer uses now.
+        unsafe { std::ptr::write_bytes(pages.as_ptr(), 0, (pitch * SIDE) as usize) };
+        let drawn = surface(
+            &first,
+            TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
+        );
+        let command_buffer = tools.queue.command_buffer().unwrap();
+        tools.render(&command_buffer, &drawn);
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        drop(command_buffer);
+        drop(drawn);
+        let kept = match keep {
+            true => Some(first),
+            false => {
+                drop(first);
+                None
+            }
+        };
+        let Some(second) = over_host(&device, &host, &runs) else {
+            return;
+        };
+        let read = surface(&second, TextureUsage::SHADER_READ);
+        let after = tools.sampled(&read, format);
+        drop(kept);
+        let now = device.work_counts();
+        counts.push(moved(&before, &now));
+        churn.push([
+            now.host_pointer_imports_made - before.host_pointer_imports_made,
+            now.host_import_releases_posted - before.host_import_releases_posted,
+            now.host_textures_moved_in_place - before.host_textures_moved_in_place,
+            now.object_churn.images_recycled - before.object_churn.images_recycled,
+        ]);
+        tools.read_back(&[after], texel(format));
+        let checks = [
+            (
+                "the pages",
+                first_wrong((&second, pitch), format, 0, expected),
+            ),
+            (
+                "the new texture's read",
+                first_wrong((&tools.back, pitch), format, 0, expected),
+            ),
+        ];
+        for (what, wrong) in checks {
+            if let Some(first) = wrong {
+                failures.push(format!("round {round}: {what}: first wrong {first:x?}"));
+            }
+        }
+    }
+    eprintln!(
+        "LONE-FETCH {case} on {}: {} wrong reads of {}; per round (pointer imports made, import \
+         releases posted, textures moved in place, images recycled) {churn:?}; (instances, inline \
+         instances, interlocked splits, storage forms, variants made, shadowed textures, shadow \
+         copies) {counts:?}; first {:?}",
+        device.name(),
+        failures.len(),
+        ROUNDS * 2,
+        failures.first()
+    );
+    assert!(failures.is_empty(), "{case}: {failures:?}");
+}
+
 #[test]
 fn a_lone_fetched_rg16float_color_keeps_its_values() {
     run(
@@ -804,4 +911,19 @@ fn a_wider_buffer_read_on_another_queue_while_the_write_is_in_flight_reads_the_w
         Span::Wider,
         Follow::InFlight,
     );
+}
+
+#[test]
+fn a_surface_rendered_then_made_again_over_its_pages_reads_what_was_rendered() {
+    run_remade("remade", PixelFormat::RGBA16Float, false);
+}
+
+#[test]
+fn a_bgra8unorm_surface_rendered_then_made_again_over_its_pages_reads_what_was_rendered() {
+    run_remade("remade-bgra8unorm", PixelFormat::BGRA8Unorm, false);
+}
+
+#[test]
+fn a_surface_made_again_beside_its_live_buffer_reads_what_was_rendered() {
+    run_remade("remade-beside", PixelFormat::RGBA16Float, true);
 }
