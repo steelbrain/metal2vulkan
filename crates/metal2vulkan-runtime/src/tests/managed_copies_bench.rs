@@ -211,7 +211,7 @@ fn counted(before: &WorkCounts, after: &WorkCounts) -> String {
     )
 }
 
-/// Frames over `Managed` buffers of 64 KiB to 256 MiB, alone and beside the load, on the default
+/// Frames over `Managed` buffers of 4 KiB to 256 MiB, alone and beside the load, on the default
 /// device and on one without a fill queue (the module docs).
 #[test]
 #[ignore = "a release-mode benchmark"]
@@ -241,7 +241,16 @@ fn managed_copies_bench() {
         let output = device
             .new_buffer(READ * 4, ResourceOptions::shared())
             .unwrap();
-        for bytes in [64u64 << 10, 1 << 20, 64 << 20, 256 << 20] {
+        for bytes in [
+            4u64 << 10,
+            64 << 10,
+            128 << 10,
+            256 << 10,
+            512 << 10,
+            1 << 20,
+            64 << 20,
+            256 << 20,
+        ] {
             let options = ResourceOptions::new(
                 StorageMode::Managed,
                 CpuCacheMode::DefaultCache,
