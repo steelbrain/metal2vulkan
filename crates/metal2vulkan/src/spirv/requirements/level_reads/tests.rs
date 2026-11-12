@@ -403,3 +403,22 @@ fn the_highest_level_follows_the_bound_sampler() {
     };
     assert_eq!(at(&any, levels(0.0, 0.25, false, true)), None);
 }
+
+/// A NaN among a sampler's constant levels of detail stays the highest whatever comes after it,
+/// as `SampledLevels::level` reads a NaN at the sampler's `maxLod`: `f32::max` would drop it.
+#[test]
+fn constant_levels_of_detail_keep_a_nan() {
+    let mut found = super::Found::default();
+    let s = SamplerRef::Slot(0);
+    for c in [2.0, f32::NAN, 1.0] {
+        found.sample(s, Some(c));
+    }
+    let (highest, computed) = found.sampled[&s];
+    assert!(highest.is_some_and(f32::is_nan) && !computed);
+    let levels = SampledLevels {
+        sampler: s,
+        highest_lod_bits: highest.map(f32::to_bits),
+        computed,
+    };
+    assert_eq!(levels.level(self::levels(0.0, 3.0, false, true)), Some(3));
+}

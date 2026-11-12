@@ -68,9 +68,18 @@ impl Found {
     fn sample(&mut self, sampler: SamplerRef, lod: Option<f32>) {
         let (highest, computed) = self.sampled.entry(sampler).or_default();
         match lod {
-            Some(c) => *highest = Some(highest.map_or(c, |h: f32| h.max(c))),
+            Some(c) => *highest = Some(highest.map_or(c, |h| kept_nan(h, c, f32::max))),
             None => *computed = true,
         }
+    }
+}
+
+/// `pick` of `a` and `b`, or a NaN where either is one: `f32::max` and `f32::min` drop a NaN, whose
+/// level a sampler decides apart.
+fn kept_nan(a: f32, b: f32, pick: fn(f32, f32) -> f32) -> f32 {
+    match a.is_nan() || b.is_nan() {
+        true => f32::NAN,
+        false => pick(a, b),
     }
 }
 
