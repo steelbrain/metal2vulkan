@@ -149,12 +149,13 @@
 //!   read addresses may write every copy. Without a base, a page that agrees costs one read of each
 //!   side and a slice comparison; with one, a block that agrees costs one read of one side and its
 //!   tag (SSE2 on x86-64, about 55 GB/s over a block in the first-level cache on a Ryzen 7 7840HS).
-//!   A comparison of a copy with a base of at least twice `SPLIT_BYTES` (8 MiB) splits its blocks
-//!   into runs of at least that many, one for each of up to four threads, the calling one among
-//!   them: it starts at most three, each with a 256 KiB stack, and they end before it returns, so a
-//!   device's comparisons, which its copies' lock keeps one at a time, hold at most three more
-//!   threads at once (`WorkCounts::copied_compare_threads`; a copy without a base is compared on
-//!   the calling thread). On that host a 256 MiB copy with a base that agrees took 5.8-6.1 ms
+//!   A comparison of at least twice `SPLIT_BYTES` (8 MiB) of a copy, with a base or without (a
+//!   commit's copy in of every byte of a copy the GPU only reads, whose pages carry no log), splits
+//!   its blocks into runs of at least that many, one for each of up to four threads, the calling
+//!   one among them: it starts at most three, each with a 256 KiB stack, and they end before it
+//!   returns, so a device's comparisons, which its copies' lock keeps one at a time, hold at most
+//!   three more threads at once (`WorkCounts::copied_compare_threads`). On that host a 256 MiB
+//!   copy with a base that agrees took 5.8-6.1 ms
 //!   each way; where every byte changed on both sides 25.7-26.4 ms in and 25.9-27.3 ms back; where
 //!   every float of it was rewritten as `x + i` (the GPU's side alone), 25.5-27.5 ms back, and
 //!   40.1-47.4 ms without the host's masked stores; with other work running, 680 MiB of copies
@@ -1348,8 +1349,13 @@ impl CopiedBuffers {
                         unsafe { self.keep_on_host((agreed, on_host), length, tally.kept) };
                         tally.written
                     }
-                    // SAFETY: as above.
-                    None => unsafe { copy_in_untagged(pages, copy, bytes) },
+                    None => {
+                        // SAFETY: as above; the copy has no base, so no command buffer
+                        // committed writes it, and its copies in hold the copies' lock.
+                        let tally = unsafe { copy_in_untagged(pages, copy, bytes) };
+                        started += tally.started;
+                        tally.written
+                    }
                 };
                 compared += range.end - range.start;
             }
@@ -1693,22 +1699,58 @@ fn blocks(mut bytes: Vec<Range<u64>>, length: u64) -> Vec<Range<u64>> {
 /// and the unit a merge back reports its writes to a log in: a host page.
 pub(crate) const SYNC_BLOCK: usize = 4096;
 
+/// A copy's pages and the copy, both mapped, which a comparison with no base shares among its
+/// threads ([`copy_in_untagged`]).
+#[derive(Clone, Copy)]
+struct Ends {
+    pages: NonNull<u8>,
+    copy: NonNull<u8>,
+}
+
+// SAFETY: the pointers are an entry's, live while it is registered (`Entry`), and a comparison
+// holds the copies' lock until each thread it started has ended ([`in_threads`]); each thread
+// reads and writes only its own bytes of the copy.
+unsafe impl Send for Ends {}
+// SAFETY: as above.
+unsafe impl Sync for Ends {}
+
 /// A copy in of a copy with no base, which holds the bytes its pages and it agree on: write into
-/// `copy` each byte of `pages` that differs from it, in `bytes`. The bytes written.
-///
-/// Read a block of [`SYNC_BLOCK`] bytes of each at a time, compared whole (slice equality, which
-/// the compiler vectorizes); only a block that differs is looked into ([`merge_block`]), so no
-/// byte the comparison found equal is written.
+/// `copy` each byte of `pages` that differs from it, in `bytes` (from a multiple of
+/// [`SYNC_BLOCK`]), split across threads as a comparison with a base is ([`split`]): into at most
+/// one run for each of [`split_threads`], each a whole number of [`SYNC_BLOCK`]s of at least
+/// [`SPLIT_BYTES`] but the last, so `bytes` of less than twice [`SPLIT_BYTES`] are compared on the
+/// calling thread alone. The bytes written, and the threads started.
 ///
 /// # Safety
 ///
-/// `pages` and `copy` are mapped memory over `bytes`.
-pub(crate) unsafe fn copy_in_untagged(
-    pages: NonNull<u8>,
-    copy: NonNull<u8>,
-    bytes: Range<usize>,
-) -> u64 {
-    let (pages, copy) = (pages.as_ptr(), copy.as_ptr());
+/// `pages` and `copy` are mapped memory over `bytes`, and no other thread writes the copy's.
+unsafe fn copy_in_untagged(pages: NonNull<u8>, copy: NonNull<u8>, bytes: Range<usize>) -> Tally {
+    let ends = Ends { pages, copy };
+    let length = bytes.end - bytes.start;
+    let threads = (length / SPLIT_BYTES).clamp(1, split_threads());
+    // SAFETY: the caller's, for each run's own bytes.
+    let run = |run: Range<usize>| Tally {
+        written: unsafe { copy_in_run(ends, run) },
+        ..Tally::default()
+    };
+    if threads == 1 {
+        return run(bytes);
+    }
+    let each = length.div_ceil(threads).next_multiple_of(SYNC_BLOCK);
+    let runs = (bytes.clone().step_by(each)).map(|start| start..(start + each).min(bytes.end));
+    in_threads(threads, runs, run)
+}
+
+/// [`copy_in_untagged`] of the bytes `bytes`, on the calling thread: read a block of
+/// [`SYNC_BLOCK`] bytes of each side at a time, compared whole (slice equality, which the compiler
+/// vectorizes); only a block that differs is looked into ([`merge_block`]), so no byte the
+/// comparison found equal is written. The bytes written.
+///
+/// # Safety
+///
+/// As [`copy_in_untagged`]'s, and no other thread reaches these bytes of the copy.
+unsafe fn copy_in_run(ends: Ends, bytes: Range<usize>) -> u64 {
+    let (pages, copy) = (ends.pages.as_ptr(), ends.copy.as_ptr());
     let mut written = 0u64;
     let (mut now, mut was) = ([0u8; SYNC_BLOCK], [0u8; SYNC_BLOCK]);
     let mut at = bytes.start;
@@ -1728,16 +1770,16 @@ pub(crate) unsafe fn copy_in_untagged(
     written
 }
 
-/// The most threads one comparison of a copy with a base runs on ([`split`]), the calling thread
-/// among them.
+/// The most threads one comparison of a copy runs on ([`split`], [`copy_in_untagged`]), the
+/// calling thread among them.
 const SPLIT_THREADS: usize = 4;
 
-/// The fewest bytes of a copy each thread of a split comparison takes ([`split`]): a copy of
-/// less than twice as many is compared on the calling thread alone.
+/// The fewest bytes of a copy each thread of a split comparison takes ([`split`],
+/// [`copy_in_untagged`]): fewer than twice as many are compared on the calling thread alone.
 pub(crate) const SPLIT_BYTES: usize = 8 << 20;
 
-/// The stack of each thread a split comparison starts ([`split`]): a run's two blocks and its
-/// calls' frames.
+/// The stack of each thread a split comparison starts ([`in_threads`]): a run's two blocks and
+/// its calls' frames.
 const SPLIT_STACK: usize = 256 << 10;
 
 /// The memory one comparison of a copy with a base reaches, which [`split`] shares among its
@@ -2055,11 +2097,8 @@ fn split_threads() -> usize {
 
 /// Run `work` over the blocks of a copy whose tags are `tags`, from its block `first`, split into
 /// at most one run for each of [`split_threads`], each a whole number of [`SYNC_BLOCK`]s of at
-/// least [`SPLIT_BYTES`] but the last, which may be shorter. The calling thread takes runs, and
-/// so does each thread started for the others (`exit_guard::spawn_scoped`, raised to at least
-/// the user-initiated class), all ended before this returns; a thread the system does not start
-/// leaves its runs to the rest. `work` takes a run's first block and its tags. The runs' tallies,
-/// joined in order.
+/// least [`SPLIT_BYTES`] but the last, which may be shorter, on as many threads ([`in_threads`]).
+/// `work` takes a run's first block and its tags. The runs' tallies, joined in order.
 fn split(
     tags: &mut [Tag],
     first: usize,
@@ -2070,7 +2109,21 @@ fn split(
         return work(first, tags);
     }
     let each = (tags.len().div_ceil(threads)).next_multiple_of(SYNC_BLOCK / TAG_BLOCK);
-    let runs = Mutex::new(tags.chunks_mut(each).enumerate());
+    let runs = (tags.chunks_mut(each).enumerate()).map(|(index, run)| (first + index * each, run));
+    in_threads(threads, runs, |(first, run)| work(first, run))
+}
+
+/// Run `work` over each of `runs` on `threads` threads (two or more), the calling one among them:
+/// it takes runs, and so does each thread started for the others (`exit_guard::spawn_scoped`,
+/// raised to at least the user-initiated class), all ended before this returns; a thread the
+/// system does not start leaves its runs to the rest. The runs' tallies, joined in the runs'
+/// order, and the threads started ([`Tally::started`]).
+fn in_threads<R: Send>(
+    threads: usize,
+    runs: impl Iterator<Item = R> + Send,
+    work: impl Fn(R) -> Tally + Sync,
+) -> Tally {
+    let runs = Mutex::new(runs.enumerate());
     let tallies = Mutex::new(Vec::with_capacity(threads));
     let pull = || {
         loop {
@@ -2079,7 +2132,7 @@ fn split(
             let Some((index, run)) = next else {
                 return;
             };
-            let tally = work(first + index * each, run);
+            let tally = work(run);
             lock(&tallies).push((index, tally));
         }
     };

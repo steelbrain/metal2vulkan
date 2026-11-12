@@ -9,7 +9,7 @@
 
 use crate::copied::{
     merge_block, read_caller, runs_of, tag, BaseBytes, Copied, CopiedBuffers, CopiesReached,
-    FirstRead, Held, NotCopied, JOIN_GAP, READ_BACK_FROM, TAG_BLOCK,
+    FirstRead, Held, NotCopied, JOIN_GAP, READ_BACK_FROM, SPLIT_BYTES, TAG_BLOCK,
 };
 use crate::dirty_pages::DirtyTally;
 use crate::resource::ResourceKey;
@@ -1342,5 +1342,59 @@ fn a_copy_s_keys_are_those_of_the_pages_lying_in_it() {
     buffers.merge_back(&counts, &written);
     assert_eq!(pages[20], 1, "a key gone is not");
     assert_eq!(copied.keys(), 1);
+    drop(copied);
+}
+
+/// A copy in of a copy with no base (no command buffer that may write it was committed) of four
+/// times `SPLIT_BYTES` and more splits its bytes across threads where the host runs two or more
+/// at once (`WorkCounts::copied_compare_threads`), as a comparison with a base does, and answers
+/// as one thread does: the CPU's bytes in every run, the copy's last short page among them, are
+/// copied in, and no other.
+#[test]
+fn a_copy_in_with_no_base_splits_across_threads_and_answers_as_one_thread_does() {
+    let length = 4 * SPLIT_BYTES + 3 * 1024 + 5;
+    let mut pages: Vec<u8> = (0..length).map(|i| (i * 7 + 3) as u8).collect();
+    let mut copy = vec![0_u8; length];
+    let buffers = Arc::new(CopiedBuffers::default());
+    let counts = Counters::default();
+    // SAFETY: the copy and the pages are the test's, of `length` bytes, live past the answer.
+    let copied = unsafe {
+        add_reading(
+            &buffers,
+            at(&mut pages),
+            at(&mut copy),
+            length,
+            plain,
+            false,
+        )
+    };
+    let copied = copied.unwrap();
+    // One byte of every 33rd page, and the last byte, changed by the CPU.
+    let changed: Vec<usize> = (0..length)
+        .step_by(33 * 4096 + 1)
+        .chain([length - 1])
+        .collect();
+    for &byte in &changed {
+        pages[byte] ^= 0x5A;
+    }
+    commit_reading(&buffers, &counts);
+    assert!(copy == pages, "the CPU's bytes copied in");
+    let counted = counts.copied_tallies();
+    assert_eq!(
+        counted.copy_in_bytes,
+        changed.len() as u64,
+        "those bytes alone"
+    );
+    assert_eq!(
+        buffers.base_bytes(),
+        (0, 0),
+        "no base while the GPU only reads"
+    );
+    let parallel = std::thread::available_parallelism().map_or(1, |n| n.get()) > 1;
+    assert_eq!(
+        counted.compare_threads > 0,
+        parallel,
+        "split where the host runs threads at once"
+    );
     drop(copied);
 }
