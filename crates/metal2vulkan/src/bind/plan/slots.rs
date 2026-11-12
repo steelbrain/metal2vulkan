@@ -271,7 +271,7 @@ pub(crate) fn record_specialized(
 }
 
 /// Record in `resources`' template the value of each key a specialized note of `stages` tests that
-/// no constant and no push carries but the bound resources decide (`SpecKey::BoundSamplerWord`),
+/// no push carries but the bound resources decide (`SpecKey::BoundSamplerWord`),
 /// or what the command's handles can name (`SpecKey::HeapYCbCrTextures`,
 /// `SpecKey::HeapRawTextures` and `SpecKey::HeapNanFamilies`, through `reach`, the stages a used resource's render stages reach,
 /// as for the heap's members; `SpecKey::FilteringArgumentSampler`), which
@@ -352,8 +352,9 @@ fn heap_ycbcr(
 /// `stage` (as for [`heap_ycbcr`]), the bit `bind::heap::HELD` where one is a texture a heap holds
 /// by its raw texels alone (`bind::heap::heap_raw_form`), which the stage's `float` read, sample or
 /// gather decodes by the device's arithmetic, and the bit `bind::heap::FILTERED` where one such is
-/// of a form whose sample the function filters (not a bfloat one).
-fn heap_raw(
+/// of a form whose sample the function filters (not a bfloat one). Both the notes' value and the
+/// stage's constant, whose `HELD` bit gates its raw arms (`lower::texture::heap_raw_form`).
+pub(crate) fn heap_raw(
     shape: &BindShape,
     stage: Stage,
     reach: &dyn Fn(metal::RenderStages) -> Vec<Stage>,

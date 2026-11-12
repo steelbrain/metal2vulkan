@@ -453,14 +453,15 @@ impl SpecClause {
             .all(|t| matches!(t.key, SpecKey::BoundTexelFormat(_)))
     }
 
-    /// Whether a test reads a value no pipeline's key carries that a plan gives
-    /// (`BindingPlan::specialized_value`): one the function reads as data
+    /// Whether a test reads a value a plan gives (`BindingPlan::specialized_value`) that a
+    /// pipeline's key need not carry: one the function reads as data
     /// (`SpecKey::read_as_data`), the word of the sampler bound at a slot
     /// (`SpecKey::BoundSamplerWord`), or what the stage's handles can name
     /// (`SpecKey::HeapYCbCrTextures`, `SpecKey::HeapRawTextures`, `SpecKey::HeapNanFamilies`,
     /// `SpecKey::FilteringArgumentSampler`). A runtime reads such
     /// a clause at each draw or dispatch, from the values its plan gives
-    /// ([`StageModule::note_clauses_bound`]).
+    /// ([`StageModule::note_clauses_bound`]), or the key's where the stage declares the key as a
+    /// constant (`SpecKey::HeapRawTextures` gates the raw arms so).
     pub fn tests_bound_values(&self) -> bool {
         self.all.iter().any(|t| {
             t.key.read_as_data()

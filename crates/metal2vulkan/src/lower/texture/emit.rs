@@ -6,6 +6,7 @@ use crate::lower::arith::narrow;
 use crate::lower::emit::EmitCx;
 use crate::lower::sync::barrier::{memory_model, BarrierModel};
 use crate::pipeline::lower_inputs::StorageImageClass;
+use crate::pipeline::sym::Stage;
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopFn, LoopSpec, Merged};
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
@@ -2680,7 +2681,7 @@ fn heap_raw_texel(
     };
     let h = cx.operand(fb, handle)?;
     let flags = heap_flags(cx, fb, h)?;
-    let (form, member) = heap_raw_form(fb, flags)?;
+    let (form, member) = heap_raw_form(fb, cx.plan.stage, flags)?;
     let raw_arm: ArmFn<'_, EmitCx<'_>> = Box::new(move |fb, cx| {
         let img = heap_raw_image(cx, fb, group, h)?;
         let level = match r.level {
@@ -2752,11 +2753,16 @@ fn heap_raw_texel(
     }
 }
 
-/// The form heap handle flags `h` ([`heap_flags`]) name by their class index past the heap's own
-/// classes (`metal::texel_format::heap_extended_base`): its index in `ExtendedRange::HEAP_READ` (a
-/// `u32`, wrapped past the forms where it names none), and whether it names one (a `bool`).
+/// The form heap handle flags `h` ([`heap_flags`]) of a `stage` function name by their class index
+/// past the heap's own classes (`metal::texel_format::heap_extended_base`): its index in
+/// `ExtendedRange::HEAP_READ` (a `u32`, wrapped past the forms where it names none), and whether
+/// it names one (a `bool`) where a texture the stage's handles can name is held by its raw texels
+/// alone ([`raw_textures_held`]). Where none is, no handle the command names carries such an index
+/// (the binder gives a handle the class of the array that holds its texture, `bind::heap`), and
+/// the test is false throughout, so a driver drops each raw arm at pipeline creation.
 pub(crate) fn heap_raw_form(
     fb: &mut FunctionBuilder<'_>,
+    stage: Stage,
     HeapFlags(h): HeapFlags,
 ) -> BResult<(SValue, SValue)> {
     use crate::memory::handles::HANDLE_TEXEL_CLASS;
@@ -2775,8 +2781,43 @@ pub(crate) fn heap_raw_form(
         1,
         crate::metal::format::ExtendedRange::HEAP_READ.len() as u32,
     )?;
-    let member = fb.binary(BinOp::ULessThan, form, forms)?;
+    let named = fb.binary(BinOp::ULessThan, form, forms)?;
+    let held = raw_textures_held(fb, stage)?;
+    let member = fb.binary(BinOp::LogicalAnd, held, named)?;
     Ok((form, member))
+}
+
+/// Whether a texture `stage`'s handles can name is held by its raw texels alone: the
+/// `bind::heap::HELD` bit of `SpecKey::HeapRawTextures`, a `bool` fixed at pipeline creation,
+/// which a plan gives from the command's heap members (`bind::plan::slots::heap_raw`). It defaults
+/// to every bit set, the module's every arm live, where nothing specializes it.
+fn raw_textures_held(fb: &mut FunctionBuilder<'_>, stage: Stage) -> BResult<SValue> {
+    use crate::bind::heap::{FILTERED, HELD};
+    use crate::spirv::ir::SpecOp;
+    let u32_ = fb.module().ty(SType::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let bool_ = fb.module().ty(SType::Bool)?;
+    let word = fb.module().spec(
+        crate::pipeline::sym::SpecKey::HeapRawTextures(stage),
+        u32_,
+        ConstBits(u64::from(HELD | FILTERED)),
+    )?;
+    let k = |fb: &mut FunctionBuilder<'_>, v: u32| {
+        fb.module().constant(Constant::Scalar {
+            ty: u32_,
+            bits: ConstBits(u64::from(v)),
+        })
+    };
+    let (zero, held) = (k(fb, 0)?, k(fb, HELD)?);
+    let masked = fb
+        .module()
+        .spec_op(SpecOp::BitwiseAnd, u32_, &[word, held])?;
+    let set = fb
+        .module()
+        .spec_op(SpecOp::ULessThan, bool_, &[zero, masked])?;
+    fb.module().const_value(set)
 }
 
 /// The index heap handle flags `h` ([`heap_flags`]) carry in their class field
@@ -3298,7 +3339,7 @@ fn query(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, q: &QueryOp) -> BRes
             // A heap member of a form a heap reads is queried in the group's unsigned integer
             // class, which holds it: one arm with the unsigned integer members' where both are.
             if let Some((class, _)) = raw {
-                let (_, member) = heap_raw_form(fb, flags)?;
+                let (_, member) = heap_raw_form(fb, cx.plan.stage, flags)?;
                 let g = global(cx, class)?;
                 match arms.iter_mut().find(|(_, at)| *at == g) {
                     Some(arm) => arm.0 = fb.binary(BinOp::LogicalOr, arm.0, member)?,

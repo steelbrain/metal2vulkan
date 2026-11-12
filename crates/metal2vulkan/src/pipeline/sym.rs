@@ -850,8 +850,13 @@ pub enum SpecKey {
     /// where one such is of a form whose linear sample the function filters by the device's
     /// arithmetic (not a bfloat form, whose sample reads the nearest texel under either filter,
     /// `PrecisionNote::BicubicFilterArithmetic`): of the heap members of the command reaching the
-    /// stage, as for [`HeapYCbCrTextures`](Self::HeapYCbCrTextures), and read by a specialized
-    /// note's test alone, given by a plan, as that is.
+    /// stage, as for [`HeapYCbCrTextures`](Self::HeapYCbCrTextures), and given by a plan, as that
+    /// is. A stage whose `float` read, sample, gather or query of a heap may meet such a texture
+    /// declares it as a constant (default 3), whose bit 1 gates the raw arms
+    /// (`lower::texture::heap_raw_form`): where it is 0 they are dead code at pipeline creation,
+    /// exactly, since no handle the command names then carries a raw form's class. A pipeline's
+    /// key carries it there, and a specialized note's test reads it from the key; elsewhere such a
+    /// test reads the plan's value, as for [`HeapYCbCrTextures`](Self::HeapYCbCrTextures).
     HeapRawTextures(Stage),
     /// Four bits: the families of the float textures the stage's handles can name whose texel may
     /// hold a NaN a `half` write stores (`lower::texture::half_write_nans`), each a bit of

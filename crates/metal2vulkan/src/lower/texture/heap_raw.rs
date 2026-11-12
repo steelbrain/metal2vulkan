@@ -12,7 +12,10 @@
 //! form, it fetches the raw texel from that class's array at the same element and calls this
 //! module's routine, which decodes it as a slot's read does (`extended_range::decode`, its `half`
 //! rounding included) and selects Metal's out-of-bounds texel outside the texture: zero, alpha 1
-//! for a form without alpha.
+//! for a form without alpha. That test also reads the stage's `SpecKey::HeapRawTextures`
+//! constant, whose [`HELD`] bit a plan sets only where a texture the stage's handles can name is
+//! held so: where none is, no handle carries such an index, and the raw arms are dead code at
+//! pipeline creation, which a driver drops before it compiles.
 //!
 //! That decode is the device's arithmetic, as a slot's is (`ArithPlan::converts`), so a function
 //! that plans it ([`plan`]) records `PrecisionNote::DevicePackConversion`, specialized on a

@@ -62,8 +62,8 @@
 use super::resources::{separate_samplers, ResourcePlanner};
 use super::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
-    check_sparse_textures, cross_variant, cubic_variant, mark_disjoint, plan_buffer, psb_variant,
-    record_noted, record_specialized, srgb_variant, storage_view_variant, used_uses,
+    check_sparse_textures, cross_variant, cubic_variant, heap_raw, mark_disjoint, plan_buffer,
+    psb_variant, record_noted, record_specialized, srgb_variant, storage_view_variant, used_uses,
     ycbcr_in_place_variant, ycbcr_planes_sampled_variant,
 };
 use super::{
@@ -710,6 +710,11 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
                     .as_ref()
                     .and_then(|m| m.spec(c.key))
                     .ok_or_else(|| internal(format!("{:?} without its facts", c.key)))?
+            }
+            // What the kernel's handles can name: its raw arms drop where it names no texture
+            // held by its raw texels.
+            SpecKey::HeapRawTextures(stage) => {
+                u64::from(heap_raw(shape, stage, &|_| vec![Stage::Kernel]))
             }
             other => return Err(internal(format!("a compute specialization {other:?}"))),
         };

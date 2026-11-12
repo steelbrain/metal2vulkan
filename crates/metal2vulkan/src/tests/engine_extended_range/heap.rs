@@ -582,7 +582,10 @@ fn a_heap_sample_s_filter_note_follows_the_raw_texture_and_the_bound_sampler_wor
 /// where it is of a form the function filters (`BGRA10_XR`, not `RGBA16Bfloat`), and 0 where it
 /// makes none or only `RGBA8Unorm` or `RGBA16Float` ones resident; the stage's note holds under the
 /// plan's values exactly where bit 1 is set (`StageModule::precision_notes_bound`), and under no
-/// known value (a reading of the module alone).
+/// known value (a reading of the module alone). The stage declares the key as a constant (default
+/// 3, every raw arm live), which gates its raw arms (`lower::texture::heap_raw_form`), and the
+/// pipeline's key carries the plan's value, so a command that can name no raw texture compiles
+/// none of them.
 #[test]
 fn a_heap_decode_s_note_holds_where_its_command_can_name_a_raw_texture() {
     use crate::bind::{ResourceClass, UsedResource};
@@ -635,12 +638,22 @@ fn a_heap_decode_s_note_holds_where_its_command_can_name_a_raw_texture() {
             "{stem}: {:?}",
             p.stage.precision_notes
         );
+        let constant = (p.stage.specialization.constants.iter())
+            .find(|c| c.key == key)
+            .unwrap_or_else(|| panic!("{stem}: no {key:?} constant"));
+        assert_eq!(constant.default, 3, "{stem}");
         for (formats, value) in cases {
             let what = format!("{formats:?} on {stem}");
             let plan = p
                 .plan(&dev, &state(formats).shape())
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
             assert_eq!(plan.specialized_value(key), Some(value), "{what}");
+            let entry = (plan.specialization.entries.iter())
+                .find(|e| e.constant_id == constant.id)
+                .unwrap_or_else(|| panic!("{what}: the key does not carry {key:?}"));
+            let at = entry.offset as usize;
+            let given = &plan.specialization.data[at..at + entry.size as usize];
+            assert_eq!(given.first().copied().map(u64::from), Some(value), "{what}");
             let held = (p.stage)
                 .precision_notes_bound(&plan.specialization, &|k| plan.specialized_value(k))
                 .contains(&note);

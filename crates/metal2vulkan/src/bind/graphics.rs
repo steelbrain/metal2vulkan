@@ -321,9 +321,9 @@ use crate::bind::plan::compute::{internal, not_implemented, spec_key, tile_memor
 use crate::bind::plan::resources::{separate_samplers, ResourcePlanner};
 use crate::bind::plan::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
-    check_sparse_textures, cross_variant, cubic_variant, large_view_candidates, mark_disjoint,
-    plan_buffer, psb_variant, range_variant, record_noted, record_specialized, snapshot_forms,
-    srgb_variant, storage_view_variant, used_uses, ycbcr_in_place_variant,
+    check_sparse_textures, cross_variant, cubic_variant, heap_raw, large_view_candidates,
+    mark_disjoint, plan_buffer, psb_variant, range_variant, record_noted, record_specialized,
+    snapshot_forms, srgb_variant, storage_view_variant, used_uses, ycbcr_in_place_variant,
     ycbcr_planes_sampled_variant,
 };
 use crate::bind::plan::{
@@ -2336,6 +2336,9 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 .as_ref()
                 .and_then(|m| m.spec(c.key))
                 .ok_or_else(|| internal(format!("{:?} without its facts", c.key)))?,
+            // What a stage's handles can name: its raw arms drop where it names no texture held
+            // by its raw texels.
+            SpecKey::HeapRawTextures(stage) => u64::from(heap_raw(shape, stage, &heap_reach)),
             other => {
                 return Err(internal(format!(
                     "a render specialization constant {other:?}"
