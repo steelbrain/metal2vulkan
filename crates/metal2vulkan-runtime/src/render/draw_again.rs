@@ -703,7 +703,8 @@ impl RenderLowering {
         // the kept draw's, as no call came and no draw recorded since (`render/bound.rs`).
         unsafe {
             let raw = self.core.device().shared().vk();
-            super::record_draw_command(raw, kept.command_buffer, kept.command, None, None);
+            // A kept draw is a whole draw's (`DrawStates::Whole`), of no regions.
+            super::record_draw_command(raw, kept.command_buffer, kept.command, None, (None, None));
         }
         if let Some(execution) = &kept.execution {
             let pipeline = execution.pipeline.clone();

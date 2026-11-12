@@ -1392,6 +1392,7 @@ impl RenderLowering {
             state: &owned.state,
             extended: shared.extended_dynamic_state,
             mesh: shared.mesh_draws.as_ref(),
+            multi: shared.multi_draws.as_ref(),
             draw: owned.draw,
             pair: None,
         };

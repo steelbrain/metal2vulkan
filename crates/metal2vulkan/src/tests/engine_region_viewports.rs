@@ -5,8 +5,11 @@
 //! `engine/vertex_amplification` (a post-tessellation vertex function):
 //!
 //! - Under it the vertex function states `RuntimeFact::RegionViewports`, reads `DrawIndex` and
-//!   stores `ViewportIndex`, and passes L3 (`spirv-val` and requirements within the profile),
-//!   adding a bounded handful of words; compiled without it, it declares neither.
+//!   stores `ViewportIndex` (needing `shaderDrawParameters` and `shaderOutputViewportIndex`) while
+//!   its contract states no viewport selection, and passes L3 (`spirv-val` and requirements
+//!   within the profile), adding a bounded handful of words; compiled without it, it reads no
+//!   `DrawIndex` and stores no `ViewportIndex`. The variant's pipeline selects none of the encoder's viewports
+//!   (`GraphicsState::writes_viewport_index`), so a rate-mapped pass's plan admits it.
 //! - A fragment function compiled under it that reads `[[viewport_array_index]]` reads 0 and
 //!   declares no `ViewportIndex`.
 //! - A vertex function that selects its own viewport, a post-tessellation one, and one under
@@ -125,7 +128,16 @@ fn a_region_vertex_function_stores_its_draw_index_as_its_viewport() {
         let words = validate(&a, &p).len();
         assert!(a.facts.contains(&RuntimeFact::RegionViewports), "{stem}");
         assert!(declares(&a, StageBuiltin::DrawIndex), "{stem}");
-        assert!(declares(&a, StageBuiltin::ViewportIndex), "{stem}");
+        // Its `ViewportIndex` selects its region's viewport, none of the encoder's: the module
+        // stores it, needing the output, and the contract states no selection.
+        assert!(!declares(&a, StageBuiltin::ViewportIndex), "{stem}");
+        let needs = &a.requirements.features;
+        assert!(needs.contains(&F::ShaderOutputViewportIndex), "{stem}");
+        assert!(needs.contains(&F::ShaderDrawParameters), "{stem}");
+        assert!(!plain
+            .requirements
+            .features
+            .contains(&F::ShaderOutputViewportIndex));
         let added = words as i64 - plain_words as i64;
         println!("{stem} rfb_full: region viewports add {added} words to {plain_words}");
         assert!((1..=40).contains(&added), "{stem}: {added} words");
@@ -265,6 +277,8 @@ fn a_region_draw_runs_its_variant() {
                 .any(|x| x.fact == RuntimeFact::RegionViewports),
             "{stem}"
         );
+        // It selects none of the encoder's viewports: a rate-mapped pass's plan admits it.
+        assert!(!p.graphics.writes_viewport_index, "{stem}");
         let plan = p
             .plan(&dev, &state.shape())
             .unwrap_or_else(|e| panic!("{stem}: {e:?}"));

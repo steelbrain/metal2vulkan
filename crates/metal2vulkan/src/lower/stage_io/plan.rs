@@ -1294,13 +1294,10 @@ fn region_viewport(
         Shape::U32,
         StageBuiltin::DrawIndex,
     );
-    let viewport = builtin(
-        sp,
-        B::ViewportIndex,
-        IoDir::Output,
-        Shape::U32,
-        StageBuiltin::ViewportIndex,
-    );
+    // Not the contract's `ViewportIndex`: the function selects no viewport of the encoder's
+    // (`GraphicsState::writes_viewport_index` stays unset), its draw's index selecting its
+    // region's.
+    let viewport = builtin_object(sp, B::ViewportIndex, IoDir::Output, Shape::U32);
     sp.region_viewport = Some(super::RegionViewport {
         draw_index,
         viewport,
