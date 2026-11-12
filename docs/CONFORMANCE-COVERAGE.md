@@ -536,7 +536,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `carried` | 80 |
 | cases whose Metal answer is `never_returned` | 4 |
 | modules that loosen a measured value | 12 |
-| tolerances in all | 12 |
+| tolerances in all | 13 |
 | modules declaring a notice (loosening no value) | 131 |
 | loosenings used | `Unchecked`, `Absolute`, `AnyOf`, `Nonzero` |
 | justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
@@ -645,7 +645,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `pass_bound_pairs` | 1 | 1 | every field | 125 |
 | `pass_bytes` | 4 | 4 | every field | 26 |
 | `pass_sequence_actions` | 2 | 2 | every field | 140 |
-| `pass_start_reads` | 14 | 14 | 1 tolerance(s): `AcceptedDifference` | 130 |
+| `pass_start_reads` | 14 | 14 | 2 tolerance(s): `AcceptedDifference` | 130 |
 | `pipeline_descriptors` | 3 | 3 | every field | 77 |
 | `pipeline_facts` | 6 | 6 | every field | 77 |
 | `pipeline_functions` | 8 | 8 | every field | 9 |
