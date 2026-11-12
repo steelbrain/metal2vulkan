@@ -1984,6 +1984,8 @@ engine/not_mipmapped_anisotropic.air.ll	anisotropic_mipmapped_mixed	ok	ok	ok	ok	
 engine/not_mipmapped_anisotropic.ll	anisotropic_mixed_filters	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/not_mipmapped_anisotropic.ll	anisotropic_equal_filters	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/not_mipmapped_anisotropic.ll	anisotropic_mipmapped_mixed	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/nullable_private.air.ll	nullable_private	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/nullable_private.ll	nullable_private	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/ob1_buffer_atomic.air.ll	ob1_buffer_atomic	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/ob1_buffer_atomic.ll	ob1_buffer_atomic	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/ob1_device_address.air.ll	ob1_device_address	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
@@ -2036,6 +2038,14 @@ engine/pfx_fetch.ll	pfx_fetch_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	o
 engine/pfx_fetch.ll	pfx_fetch_fill	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/pfx_fetch.ll	pfx_fetch_read	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	ok
 engine/pfx_fetch.ll	pfx_fetch_read_half	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	ok
+engine/pooled_cells.air.ll	pooled_closures	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/pooled_cells.air.ll	pooled_bytes	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/pooled_cells.air.ll	pooled_spill	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}
+engine/pooled_cells.air.ll	pooled_context	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}	ok	ok	ok	ok	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}
+engine/pooled_cells.ll	pooled_closures	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/pooled_cells.ll	pooled_bytes	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/pooled_cells.ll	pooled_spill	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}	Unsupported{Lowering(Access); NotImplemented}
+engine/pooled_cells.ll	pooled_context	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}	ok	ok	ok	ok	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{DereferenceLoadedPointer; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}
 engine/primitive_ids.air.ll	pi_place	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/primitive_ids.air.ll	pi_points	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/primitive_ids.air.ll	pi_attrib	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
@@ -2936,6 +2946,8 @@ engine/tiny_products_flush.air.ll	tiny_products_flush	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/tiny_products_flush.ll	tiny_products_flush	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/tiny_products_flush_fast.air.ll	tiny_products_flush_fast	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/tiny_products_flush_fast.ll	tiny_products_flush_fast	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/tns_air29.air.ll	tns_air29	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/tns_air29.ll	tns_air29	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/tns_coop_layout.air.ll	tns_coop_layout	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/tns_coop_layout.ll	tns_coop_layout	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/tns_init.air.ll	tns_init	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
