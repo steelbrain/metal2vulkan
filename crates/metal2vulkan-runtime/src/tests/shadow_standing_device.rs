@@ -46,13 +46,14 @@ const PITCH: u64 = ROW + 64;
 const LENGTH: u64 = PITCH * HEIGHT;
 
 /// What the texture is read and written with: the kernel that reads it, the plain texture the
-/// kernel writes, the pipeline that draws into it, and a `Shared` buffer the buffer's bytes are
-/// read into.
+/// kernel writes, the pipelines that draw into it (a solid color, and the read of its own texel
+/// under each pixel), and a `Shared` buffer the buffer's bytes are read into.
 pub(super) struct Tools {
     queue: CommandQueue,
     invert: ComputePipelineState,
     inverted: Texture,
     solid: RenderPipelineState,
+    own: RenderPipelineState,
     read: Buffer,
 }
 
@@ -68,19 +69,22 @@ impl Tools {
         let inverted = device.new_texture(&plain).unwrap();
         let renders = library(device, "engine/tob_renders.ll");
         let vertex = renders.new_function_with_name("tob_rect").unwrap();
-        let fragment = renders.new_function_with_name("tob_solid").unwrap();
-        let mut descriptor =
-            RenderPipelineDescriptor::new(StageSource::Function(vertex.function_descriptor()));
-        descriptor.fragment = Some(StageSource::Function(fragment.function_descriptor()));
-        descriptor.color_attachments[0] =
-            Some(ColorAttachmentDescriptor::new(PixelFormat::BGRA8Unorm));
-        let solid = (device.new_render_pipeline_state(&descriptor, &options)).unwrap();
+        let pipeline = |name: &str| {
+            let fragment = renders.new_function_with_name(name).unwrap();
+            let mut descriptor =
+                RenderPipelineDescriptor::new(StageSource::Function(vertex.function_descriptor()));
+            descriptor.fragment = Some(StageSource::Function(fragment.function_descriptor()));
+            descriptor.color_attachments[0] =
+                Some(ColorAttachmentDescriptor::new(PixelFormat::BGRA8Unorm));
+            (device.new_render_pipeline_state(&descriptor, &options)).unwrap()
+        };
         let read = (device.new_buffer(LENGTH, ResourceOptions::shared())).unwrap();
         Tools {
             queue: device.new_command_queue().unwrap(),
             invert,
             inverted,
-            solid,
+            solid: pipeline("tob_solid"),
+            own: pipeline("tob_read"),
             read,
         }
     }
@@ -140,6 +144,46 @@ impl Tools {
         let after = device.work_counts();
         let merges = after.shadow_merge_dispatches_planned - before.shadow_merge_dispatches_planned;
         (merges, stood(&before, &after))
+    }
+
+    /// A compositor's layer pass over `texture`, in a command buffer of its own: it loads and
+    /// stores the texture, draws `value` (every channel) inside `drawn`, and then reads its own
+    /// target at each pixel inside `read` and writes the texel it read (a backdrop's read,
+    /// `texture/attached_reads.rs`). The counts it moved, and those of every texel copy in.
+    fn layer(
+        &self,
+        texture: &Texture,
+        value: u8,
+        (drawn, read): (ScissorRect, ScissorRect),
+    ) -> (Stood, u64) {
+        let device = self.queue.device();
+        let before = device.work_counts();
+        let command_buffer = self.queue.command_buffer().unwrap();
+        let mut pass = RenderPassDescriptor::new();
+        let attachment = &mut pass.color_attachments[0];
+        attachment.texture = Some(texture.clone());
+        attachment.load_action = LoadAction::Load;
+        attachment.store_action = StoreAction::Store;
+        let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
+        encoder.set_render_pipeline_state(&self.solid).unwrap();
+        encoder.set_scissor_rect(drawn).unwrap();
+        encoder.set_vertex_bytes(&corners, 0).unwrap();
+        let unorm = f32::from(value) / 255.0;
+        let color = bytes_of(&[unorm; 4], f32::to_le_bytes);
+        encoder.set_fragment_bytes(&color, 0).unwrap();
+        (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
+        encoder.set_render_pipeline_state(&self.own).unwrap();
+        encoder.set_scissor_rect(read).unwrap();
+        encoder.set_fragment_texture(Some(texture), 0).unwrap();
+        (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        let after = device.work_counts();
+        let copied = after.shadow_texels_copied_in - before.shadow_texels_copied_in;
+        (stood(&before, &after), copied)
     }
 
     /// `buffer`'s first `len` bytes, as a blit copy into the read buffer moves them.
@@ -472,4 +516,43 @@ fn a_render_target_over_host_pages_never_stands() {
         "the second read takes the CPU's write"
     );
     assert_eq!((counts.against, counts.skipped), (0, 0), "nothing stands");
+}
+
+/// A compositor's layer pass, command buffer after command buffer, over a plane nothing else
+/// writes: it loads the texture, draws into one rectangle and reads its own target at its pixels
+/// in another (a backdrop). Each pass leaves the bytes its draws wrote, the rest as they were; the
+/// counts of every pass's copies in are printed (`LAYER-STANDING`).
+#[test]
+fn a_layer_pass_reading_its_own_target_copies_in_command_buffer_after_command_buffer() {
+    let scratch = Scratch::new("shadow-standing-layer");
+    let plane = Plane::new(&device(&scratch.0));
+    let drawn = ScissorRect {
+        x: 0,
+        y: 0,
+        width: WIDTH,
+        height: 4,
+    };
+    let read = ScissorRect {
+        x: 8,
+        y: 8,
+        width: 16,
+        height: 4,
+    };
+    for frame in 0..4u8 {
+        let value = 0x40 + frame;
+        let (counts, copied) = plane.tools.layer(&plane.texture, value, (drawn, read));
+        eprintln!(
+            "LAYER-STANDING frame {frame}: {copied} texels copied in; copies in against the \
+             standing {}, skipped {} ({} texels); unskipped at {:?}, standing {:?}, never stood \
+             {:?}",
+            counts.against, counts.skipped, counts.texels, counts.at, counts.standing, counts.never
+        );
+        let bytes = plane.tools.bytes(&plane.buffer, LENGTH);
+        let row = ROW as usize;
+        for y in 0..HEIGHT as usize {
+            let at = y * PITCH as usize;
+            let want = if y < 4 { value } else { 0x11 };
+            assert!(all(&bytes[at..at + row], want), "frame {frame}: row {y}");
+        }
+    }
 }
