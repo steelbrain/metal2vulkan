@@ -49,6 +49,7 @@ mod caller_queue_writes;
 mod capabilities;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod carried_draws;
+mod churn_counts;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod clip_bursts;
 mod color_reformat;
