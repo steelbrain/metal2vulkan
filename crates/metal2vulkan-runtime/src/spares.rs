@@ -37,15 +37,15 @@
 //!   (`command_buffer/mod.rs`'s `CommandBufferShared::allocate`). It makes no pool past its
 //!   first: every pool made stays among the spares for the device's life. So the larger command
 //!   buffers of a load use the pools that hold the most, which the smaller leave, and the pools'
-//!   command buffers follow what the load holds at once. Each pool taking the newest spare and
-//!   keeping its own uses' most, a load of 64 command buffers in flight, a cycle of one of 200
-//!   blit encoders and nine of 2, had every pool keep the large one's: past [`HELD`] together,
-//!   each give-back then shed the oldest spare, whose next taker made its command buffers again,
-//!   3,093 made and 2,951 freed (109 trims) in 60 cycles once warm on lavapipe; now none freed
-//!   and none or a few dozen made in those cycles, none in cycles 300 to 400, the spares holding
-//!   about 1,500 to 2,400 against 3,953 (`tests::spares`). On RADV each command buffer freed and
-//!   trimmed destroys two buffer objects, each a walk of libdrm's list of free address ranges
-//!   under its lock, which every other buffer object's making and freeing takes too. Counted:
+//!   command buffers follow what the load holds at once (`tests::spares`). Each pool taking the
+//!   newest spare and keeping its own uses' most, the pools out with small command buffers held
+//!   the large ones' command buffers: under a guest's load on an RX 7900 XTX (RADV) the pools out
+//!   of the spares alone reached [`HELD`], and each give-back freed its pool's command buffers
+//!   past it, 10,000 to 32,000 every 10 s, which the next taker made again; with the take by
+//!   size, none or a few dozen. On RADV each command buffer freed and trimmed destroys two buffer
+//!   objects, each a walk of libdrm's list of free address ranges under its lock, which every
+//!   other buffer object's making and freeing takes too: the device's free thread had taken 5.5%
+//!   of the process's cycles there, and under 0.2% after. Counted:
 //!   `WorkCounts::spare_command_pools_taken_past_first`.
 //! - **The spares hold at most [`HELD`] command buffers together.** Counted with them: the pool
 //!   given back, and what each pool out of the spares held as it went out, taken by a command

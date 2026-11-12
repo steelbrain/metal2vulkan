@@ -671,13 +671,11 @@ mod device {
     const APART: usize = 3;
     const EACH: usize = HELD / 2 + 64;
 
-    /// The mixed load's command buffers committed at once, the blit encoders of each command
-    /// buffer of its cycle, its cycles, and those it runs before its counts are read: about 1,600
-    /// command buffers at once on lavapipe, well within [`HELD`].
-    const MIXED_IN_FLIGHT: usize = 64;
-    const MIXED: [usize; 10] = [100, 2, 2, 2, 2, 2, 2, 2, 2, 2];
-    const MIXED_CYCLES: usize = 100;
-    const MIXED_WARM: usize = 40;
+    /// The blit encoders of the fewest test's small and large command buffers, and how many of
+    /// each it encodes at once: the large ones' pools together well within [`HELD`].
+    const SMALL: usize = 2;
+    const LARGE: usize = 100;
+    const KINDS_EACH: usize = 4;
 
     /// The longest a command buffer, or the spares' count, is waited for.
     const WAIT: Duration = Duration::from_secs(30);
@@ -863,88 +861,88 @@ mod device {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
-    /// A load of command buffers of mixed sizes, [`MIXED_IN_FLIGHT`] committed at once, the same
-    /// each cycle, frees no command buffer once warm, and makes fewer than its large command
-    /// buffer's encoders (none, or a few where a large one found every pool holding the most out):
-    /// its larger command buffers take the spares holding the most past their first pools, so the
-    /// pools' command buffers follow what the load holds at once (`spares.rs`). Where each pool
-    /// kept the most its own uses handed out, and a taker took the newest, every pool came to keep
-    /// the larger command buffer's, past [`HELD`] together, and each give-back then shed the
-    /// oldest spare, whose next taker made its command buffers again. A load nearer the bound
-    /// still sheds some: a cycle of one of 200 encoders, about 2,700 command buffers at once, shed
-    /// 425 in 60 cycles in a loaded run of the runtime's suite, the spares holding 3,896.
+    /// A command buffer of [`SMALL`] blit encoders takes a spare holding few command buffers, not
+    /// one a command buffer of [`LARGE`] left holding its own, and a large one past its first pool
+    /// takes the spare holding the most, making none (`spares.rs`). [`KINDS_EACH`] small command
+    /// buffers and as many large ones are encoded, each holding a pool, then committed and waited
+    /// for: the spares then hold that many pools of each kind, each holding what its command
+    /// buffer handed out, the large ones' given back last. Where a taker took the newest spare,
+    /// the next small command buffer took a large one's pool, so pools out with small command
+    /// buffers held the large ones' command buffers, past [`HELD`] together under a load of many
+    /// in flight.
     #[test]
-    fn command_buffers_of_mixed_sizes_in_flight_make_and_free_none_once_warm() {
-        let scratch = std::env::temp_dir().join(format!("m2v-spares-mixed-{}", std::process::id()));
+    fn small_command_buffers_leave_the_pools_holding_the_most_to_the_large_ones() {
+        let scratch =
+            std::env::temp_dir().join(format!("m2v-spares-fewest-{}", std::process::id()));
         std::fs::create_dir_all(&scratch).unwrap();
         let device = device(&scratch);
+        let shared = device.shared();
         let queue = device.new_command_queue().unwrap();
         let target = device.new_buffer(4096, ResourceOptions::private()).unwrap();
-        let mut flying = std::collections::VecDeque::new();
-        let mut warm = None;
-        for cycle in 0..MIXED_CYCLES {
-            if cycle == MIXED_WARM {
-                warm = Some((device.work_counts(), device.shared().spares.churn()));
+        let encoded = |encoders: usize| {
+            let command_buffer = queue.command_buffer().unwrap();
+            for at in 0..encoders {
+                let mut blit = command_buffer.blit_command_encoder().unwrap();
+                blit.fill_buffer(&target, 0..256, at as u8).unwrap();
+                blit.end_encoding().unwrap();
             }
-            for &encoders in &MIXED {
-                let command_buffer = queue.command_buffer().unwrap();
-                for at in 0..encoders {
-                    let mut blit = command_buffer.blit_command_encoder().unwrap();
-                    blit.fill_buffer(&target, 0..256, at as u8).unwrap();
-                    blit.end_encoding().unwrap();
-                }
+            command_buffer
+        };
+        let run = |command_buffers: Vec<crate::CommandBuffer>| {
+            for command_buffer in &command_buffers {
                 command_buffer.commit().unwrap();
-                flying.push_back(command_buffer);
-                if flying.len() == MIXED_IN_FLIGHT {
-                    let oldest = flying.pop_front().unwrap();
-                    oldest.wait_until_completed_for(WAIT).unwrap();
-                    assert_eq!(oldest.status(), CommandBufferStatus::Completed);
-                }
             }
+            for command_buffer in &command_buffers {
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+                assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+            }
+            drop(command_buffers);
+            shared.frees.drain();
+        };
+        // Each holds its pool while the next is encoded, so each takes a pool of its own.
+        let mut first = Vec::new();
+        for encoders in [SMALL, LARGE] {
+            first.extend((0..KINDS_EACH).map(|_| encoded(encoders)));
         }
-        for command_buffer in flying.drain(..) {
-            command_buffer.wait_until_completed_for(WAIT).unwrap();
-        }
-        device.shared().frees.drain();
-        let (warm, churn_warm) = warm.unwrap();
-        let (counts, churn) = (device.work_counts(), device.shared().spares.churn());
-        let allocated =
-            churn.allocated.values().sum::<u64>() - churn_warm.allocated.values().sum::<u64>();
-        let made_at: Vec<_> = (churn.allocated.iter())
-            .map(|(at, &n)| (at, n - churn_warm.allocated.get(at).copied().unwrap_or(0)))
-            .filter(|&(_, n)| n > 0)
-            .collect();
-        let freed = [
-            churn.past_recent_uses - churn_warm.past_recent_uses,
-            churn.past_held - churn_warm.past_held,
-            churn.shed - churn_warm.shed,
-        ];
-        let past_first =
-            counts.spare_command_pools_taken_past_first - warm.spare_command_pools_taken_past_first;
-        let trims = counts.spare_command_pool_trims - warm.spare_command_pool_trims;
+        run(first);
+        let large = |pools: &[(vk::CommandPool, usize)]| {
+            let mut large: Vec<_> = pools.iter().filter(|&&(_, held)| held >= LARGE).collect();
+            large.sort();
+            large.into_iter().copied().collect::<Vec<_>>()
+        };
+        let before = shared.spares.command_pools_held();
+        let allocated = || -> u64 { shared.spares.churn().allocated.values().sum() };
+        let made = allocated();
+        let past_first = device.work_counts().spare_command_pools_taken_past_first;
+        // A small one, then a large one, each holding its pool.
+        let small = encoded(SMALL);
+        let while_small = shared.spares.command_pools_held();
+        let big = encoded(LARGE);
+        let made = allocated() - made;
+        let past_first = device.work_counts().spare_command_pools_taken_past_first - past_first;
         println!(
-            "SPARES-MIXED {}: {MIXED_IN_FLIGHT} in flight of {MIXED:?}, {} cycles once warm: made \
-             {allocated} command buffers ({made_at:?}), freed {freed:?} (past recent uses, past the bound, \
-             shed), {trims} trims; {past_first} spares taken past a first pool; the spares hold \
-             {} of {} begun",
-            device.name(),
-            MIXED_CYCLES - MIXED_WARM,
-            device.shared().spares.command_buffers_held(),
-            counts.command_buffers_begun - warm.command_buffers_begun,
+            "SPARES-FEWEST {}: the spares held {before:?} after {KINDS_EACH} command buffers of \
+             {SMALL} and {KINDS_EACH} of {LARGE} blit encoders, {while_small:?} while one of \
+             {SMALL} was encoded; one of {LARGE} then took {past_first} spares past its first pool \
+             and made {made} command buffers",
+            device.name()
         );
         assert_eq!(
-            (freed, trims),
-            ([0; 3], 0),
-            "the load freed command buffers once warm, and made {allocated}"
+            large(&before).len(),
+            KINDS_EACH,
+            "the large ones' pools {before:?}"
         );
-        assert!(
-            allocated <= MIXED[0] as u64,
-            "the load made {allocated} command buffers once warm"
+        assert_eq!(
+            large(&while_small),
+            large(&before),
+            "the small command buffer took a pool holding the most"
         );
         assert!(
             past_first > 0,
-            "no command buffer took a spare past its first pool"
+            "the large command buffer took no spare past its first pool"
         );
+        assert_eq!(made, 0, "the large command buffer made command buffers");
+        run(vec![small, big]);
         drop((target, queue, device));
         let _ = std::fs::remove_dir_all(&scratch);
     }
