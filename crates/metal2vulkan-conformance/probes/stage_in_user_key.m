@@ -19,7 +19,10 @@
 // 2 threadgroups, the stage-in region the grid. It prints each library's 12 words per thread and
 // whether the libraries' words are equal.
 //
-// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): see the runtime lane's test.
+// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): both libraries made their pipelines and wrote the
+// same words, thread t = 5y + x reading layout 1 at 24x and layout 2 at 8y (thread 1: 41300000
+// 41400000 41500000 3f800000 00000000 00000064 000000c8 0000ffff fffffff9 00003c01 00004001
+// 00000001), which are the words `runtime_lane::stage_in_strides` requires of the keyed form.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>
