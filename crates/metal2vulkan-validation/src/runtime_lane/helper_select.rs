@@ -21,7 +21,8 @@
 //! may be lost where the note is not recorded, and none written outside the triangle.
 //!
 //! The fence's GPU time is printed for a 1024x1024 pass whose every fragment picks the sum (each
-//! invocation, live ones too, runs the call and its fence), 32 draws a command buffer.
+//! invocation, live ones too, runs the call and its fence), 32 draws a command buffer, a texture
+//! barrier between each two.
 
 use super::buffer_with;
 use super::guarded_effects::{bytes, covered, texture, unpack, words, CORNERS, H, SENTINEL, W};
@@ -30,7 +31,7 @@ use super::WAIT;
 use crate::air_library::AirLibrary;
 use metal2vulkan::device::DriverWorkaround;
 use metal2vulkan::device::OpBits;
-use metal2vulkan::metal::{PrimitiveType, TextureUsage};
+use metal2vulkan::metal::{BarrierScope, PrimitiveType, RenderStages, TextureUsage};
 use metal2vulkan::pipeline::{PrecisionNote, RenderPipelineDescriptor, StageSource};
 use metal2vulkan::vk;
 use metal2vulkan::Budget;
@@ -261,8 +262,9 @@ fn a_write_after_a_helper_pick_is_lost_only_where_noted() {
 }
 
 /// The GPU time of `rch_select_arm` where every fragment picks the sum: a 1024x1024 pass, 32
-/// draws a command buffer, the least of five command buffers printed beside the fences the
-/// fragment takes. Every pixel must hold the sum.
+/// draws a command buffer, a texture barrier between each two (each draw writes every texel), the
+/// least of five command buffers printed beside the fences the fragment takes. Every pixel must
+/// hold the sum.
 #[test]
 fn a_fenced_pick_s_gpu_time() {
     let (messages, _cache, lane) = lane();
@@ -299,7 +301,13 @@ fn a_fenced_pick_s_gpu_time() {
         encoder.set_fragment_texture(Some(&noise), 0).unwrap();
         encoder.set_fragment_texture(Some(&coverage), 1).unwrap();
         encoder.set_fragment_texture(Some(&written), 2).unwrap();
-        for _ in 0..DRAWS {
+        // Two draws of one encoder that write one texel race, on Metal too, but where a barrier
+        // between them orders the first's writes before the second's fragments.
+        for draw in 0..DRAWS {
+            if draw > 0 {
+                let fragment = RenderStages::FRAGMENT;
+                encoder.memory_barrier_with_scope(BarrierScope::TEXTURES, fragment, fragment);
+            }
             encoder
                 .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
                 .unwrap();

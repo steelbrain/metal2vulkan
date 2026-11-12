@@ -14,8 +14,9 @@
 //! `MTLDrawIndexedPrimitivesIndirectArguments` of the same values), and as the one command of an
 //! indirect command buffer of draws executed in the encoder, and stores the M3's answer each way.
 
+use super::apart_writes::{layer_reported_nothing_but_apart_writes, NotedWrites};
 use super::degrade_notices::on_device_with;
-use super::{at_plan, buffer_with, read_buffer, WAIT};
+use super::{at_plan, buffer_with, read_buffer, Messages, WAIT};
 use crate::air_library::AirLibrary;
 use crate::case::{AuthoredCase, IndexType as CaseIndexType, OutputSelection, Primitive};
 use crate::store::CorpusStore;
@@ -80,8 +81,11 @@ fn words(device: &Device, words: &[u32]) -> Buffer {
     buffer_with(device, &bytes).unwrap()
 }
 
-/// The output bytes `case`'s draw stores when `issued`.
-fn drawn(device: &Device, case: &AuthoredCase, issued: Issued) -> Vec<u8> {
+/// The output bytes `case`'s draw stores when `issued`. An indexed indirect draw, which the index
+/// bounds pass bounds on a device that does not keep it on its range, writes `out` alone in its
+/// command buffer, so the layer's report of the pass's two draws passes
+/// ([`layer_reported_nothing_but_apart_writes`]).
+fn drawn(device: &Device, messages: &Messages, case: &AuthoredCase, issued: Issued) -> Vec<u8> {
     let draw = case.draw.as_ref().expect("a vertex case's draw");
     assert_eq!(draw.primitive, Primitive::Point, "{}", case.name);
     let initial = base64::engine::general_purpose::STANDARD
@@ -93,6 +97,7 @@ fn drawn(device: &Device, case: &AuthoredCase, issued: Issued) -> Vec<u8> {
         )
         .unwrap();
     let out = buffer_with(device, &initial).unwrap();
+    let mut writes = NotedWrites::new(messages);
     let OutputSelection::Buffer { offset, length, .. } = case.output else {
         panic!("{}: a buffer output", case.name)
     };
@@ -177,6 +182,7 @@ fn drawn(device: &Device, case: &AuthoredCase, issued: Issued) -> Vec<u8> {
         }
         // {indexCount, instanceCount, indexStart, baseVertex, baseInstance}.
         (Issued::Indirect, Some((indices, index_type, offset))) => {
+            writes.drew_bounded(&out, 0..out.length());
             let arguments = words(
                 device,
                 &[
@@ -237,6 +243,8 @@ fn drawn(device: &Device, case: &AuthoredCase, issued: Issued) -> Vec<u8> {
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None, "{} {issued:?}", case.name);
+    let claim = format!("{} {issued:?}", case.name);
+    layer_reported_nothing_but_apart_writes(messages, &claim, &writes);
     drop(held);
     read_buffer(&out, offset, length).unwrap()
 }
@@ -249,11 +257,11 @@ fn drawn(device: &Device, case: &AuthoredCase, issued: Issued) -> Vec<u8> {
 fn draws_read_metal_s_base_vertex_and_base_instance() {
     let cases = cases();
     assert_eq!(cases.len(), 4, "the fixture's committed cases");
-    on_device_with(at_plan, |device, _| {
+    on_device_with(at_plan, |device, messages| {
         for (case, metal) in &cases {
             for issued in [Issued::Direct, Issued::Indirect, Issued::Command] {
                 assert_eq!(
-                    drawn(device, case, issued),
+                    drawn(device, messages, case, issued),
                     *metal,
                     "{} {issued:?} on {}",
                     case.name,

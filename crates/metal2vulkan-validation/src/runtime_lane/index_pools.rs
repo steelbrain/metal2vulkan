@@ -34,6 +34,7 @@
 //!   other 15 rounds the submission returned before the allocation began and the handler ran
 //!   during it; in all 40 the handler ran 0.07 to 1.44 ms after the later of the two.
 
+use super::apart_writes::{layer_reported_nothing_but_apart_writes, NotedWrites};
 use super::{
     at_plan, buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages,
     ScratchCache, WAIT,
@@ -49,6 +50,7 @@ use metal2vulkan_runtime::{
     host_time, Buffer, CommandBuffer, CommandQueue, Device, PipelineOptions, RenderPassDescriptor,
     RenderPipelineState,
 };
+use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -82,14 +84,18 @@ fn words(words: &[u32]) -> Vec<u8> {
     words.iter().flat_map(|word| word.to_le_bytes()).collect()
 }
 
-/// The device, opened without the robustness features, the fixture's vertex-only pipeline state
-/// and the draw's buffers.
+/// The device, opened without the robustness features, the fixture's vertex-only pipeline state,
+/// the draw's buffers, and the list the device reports to with the draws' writes: each command
+/// buffer's one draw, which the index bounds pass bounds, writes `seen` alone in it, so the
+/// layer's report of the pass's two draws passes ([`Lane::claim`]).
 struct Lane {
     device: Device,
     pipeline: RenderPipelineState,
     seen: Buffer,
     indices: Buffer,
     arguments: Buffer,
+    messages: Messages,
+    writes: RefCell<NotedWrites>,
 }
 
 impl Lane {
@@ -125,11 +131,20 @@ impl Lane {
             seen,
             indices,
             arguments,
+            messages: messages.clone(),
+            writes: RefCell::new(NotedWrites::new(messages)),
         }
     }
 
     fn queue(&self) -> CommandQueue {
         self.device.new_command_queue().unwrap()
+    }
+
+    /// The layer reported nothing of the command buffers so far but the index bounds pass's
+    /// two draws of each ([`layer_reported_nothing_but_apart_writes`]).
+    fn claim(&self, claim: &str) {
+        let writes = self.writes.replace(NotedWrites::new(&self.messages));
+        layer_reported_nothing_but_apart_writes(&self.messages, claim, &writes);
     }
 
     /// A command buffer of `queue` with the draw, encoded: its pass leased the queue's block.
@@ -144,6 +159,10 @@ impl Lane {
         pass.render_target_height = 1;
         pass.default_raster_sample_count = 1;
         let command_buffer = queue.command_buffer().unwrap();
+        let mut writes = self.writes.borrow_mut();
+        writes.next_command_buffer();
+        writes.drew_bounded(&self.seen, 0..32);
+        drop(writes);
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
         encoder.set_render_pipeline_state(&self.pipeline).unwrap();
         encoder.set_vertex_buffer(Some(&self.seen), 0, 0).unwrap();
@@ -234,6 +253,7 @@ fn command_buffers_of_one_queue_share_one_pool_block() {
             2,
             "two command buffers held the block at once at most"
         );
+        lane.claim("the rounds' draws");
     }
     layer_reported_nothing_at_all(&messages);
 }
@@ -270,6 +290,7 @@ fn a_second_queue_takes_its_own_pool_block() {
         assert_eq!(lane.blocks(), (3, 1), "the later queue took the spare");
         lane.drawn(&queue);
         assert_eq!(lane.blocks(), (3, 1), "the first queue's block again");
+        lane.claim("the queues' draws");
     }
     layer_reported_nothing_at_all(&messages);
 }
@@ -319,6 +340,7 @@ fn a_pool_block_no_command_buffer_held_goes_after_the_quiet_period() {
         assert_eq!(lane.blocks(), (3, 1), "a queue that rested took the spare");
         lane.drawn(&idle);
         assert_eq!(lane.blocks(), (4, 1), "the other makes one again");
+        lane.claim("the queues' draws");
     }
     layer_reported_nothing_at_all(&messages);
 }
@@ -407,6 +429,7 @@ fn a_completed_handler_waits_for_no_pool_block_made_meanwhile() {
             assert_eq!(live(&lane), 2, "round {round}: the blocks left");
         }
         eprintln!("{told} of {MAKING_ROUNDS} rounds told");
+        lane.claim("the rounds' draws");
     }
     layer_reported_nothing_at_all(&messages);
 }

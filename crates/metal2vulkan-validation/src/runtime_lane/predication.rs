@@ -27,6 +27,7 @@
 //!   buffer up to, the heap's bytes past a buffer placed in a heap, and zero, announced, where
 //!   Metal reads memory unrelated to the buffer.
 
+use super::apart_writes::{layer_reported_nothing_but_apart_writes, NotedWrites};
 use super::host_memory::Seen;
 use super::rebind_reach::{buffer_len, buffer_over, deallocated, pages};
 use super::rebinds::rebind;
@@ -314,7 +315,12 @@ impl Streams {
 /// encodes a blit (the next command opens a serial encoder, as one with no encoder open does).
 /// The tags that ran, each once, and the answers, of a command buffer that completed.
 pub(crate) fn run(streams: &Streams, script: &str) -> (Vec<u32>, String) {
-    let ran = run_counted(streams, script);
+    completed(script, run_counted(streams, script), &streams.marks)
+}
+
+/// The tags that ran, each once, and the answers, of `script`'s run `ran` into `marks`, which
+/// completed with nothing refused.
+fn completed(script: &str, ran: Counted, marks: &Marks) -> (Vec<u32>, String) {
     if let Some(error) = ran.refused {
         panic!("{script}: refused {error:?}");
     }
@@ -323,7 +329,7 @@ pub(crate) fn run(streams: &Streams, script: &str) -> (Vec<u32>, String) {
         (CommandBufferStatus::Completed, None),
         "{script}"
     );
-    (streams.marks.ran(), ran.answers)
+    (marks.ran(), ran.answers)
 }
 
 /// What a stream's command buffer ran ([`run_counted`]).
@@ -335,6 +341,10 @@ struct Counted {
     answers: String,
     /// The first record the runtime refused, which recorded nothing.
     refused: Option<Error>,
+    /// The log word each dispatch the stream encodes writes, once per dispatch token, in order:
+    /// `prd_mark` adds 1 to word `offset + t`, `prd_put` writes word `offset`, where `offset` is
+    /// buffer 1's, in words.
+    written: Vec<u64>,
 }
 
 /// [`run`]'s stream, with these for loops that count, as the Metal probe's: `w<n>[@k]` starts a
@@ -350,7 +360,28 @@ fn run_counted(streams: &Streams, script: &str) -> Counted {
     let mut open: Option<ComputeCommandEncoder> = None;
     let mut answers = String::new();
     let mut refused = None;
+    // What a dispatch with the state set writes: whether it is `prd_put`'s, its bytes' value and
+    // buffer 1's offset in words ([`Counted::written`]).
+    let (mut puts, mut value, mut offset) = (false, 0u64, 0u64);
+    let mut written = Vec::new();
     for token in script.split_whitespace() {
+        let tagged = |token: &str| token[1..].parse::<u64>().ok();
+        match token {
+            "t" => written.push(if puts { offset } else { offset + value }),
+            _ if token.starts_with(['T', 'G', 'H', 'b']) => {
+                (puts, value, offset) = (false, tagged(token).unwrap_or(0), 0);
+                if !token.starts_with('b') {
+                    written.push(value);
+                }
+            }
+            _ if token.starts_with('Q') => {
+                (puts, value, offset) = (true, 0, tagged(token).unwrap_or(0));
+                written.push(offset);
+            }
+            _ if token.starts_with('y') => value = tagged(token).unwrap_or(0),
+            _ if token.starts_with('o') => offset = tagged(token).unwrap_or(0),
+            _ => {}
+        }
         match token {
             "|" | "%" => {
                 if let Some(encoder) = open.take() {
@@ -469,6 +500,7 @@ fn run_counted(streams: &Streams, script: &str) -> Counted {
         counts: marks.counts(),
         answers,
         refused,
+        written,
     }
 }
 
@@ -619,16 +651,25 @@ pub(crate) fn measured_streams() -> Vec<(&'static str, &'static str, Vec<u32>, &
 }
 
 /// Every measured stream runs the marks Metal ran, each once, and its Ends answer what Metal's
-/// answered.
+/// answered. Each dispatch token writes its own log word, where the stream names each word once
+/// ([`layer_reported_nothing_but_apart_writes`]: a concurrent encoder's dispatches, which Metal
+/// leaves unordered, writing words of one 16-byte block).
 #[test]
 fn streams_run_what_metal_ran() {
-    on_device(|device| {
+    on_device_noted(|device, messages| {
         let streams = Streams::new(device);
         let measured = measured_streams();
         assert!(measured.len() >= 600, "{}", measured.len());
         let mut wrong = Vec::new();
         for (name, script, ran, answers) in &measured {
-            let got = run(&streams, script);
+            let mut writes = NotedWrites::new(messages);
+            let counted = run_counted(&streams, script);
+            for word in &counted.written {
+                writes.dispatched(&streams.marks.log, 4 * word..4 * word + 4);
+            }
+            let claim = format!("{name} `{script}`");
+            layer_reported_nothing_but_apart_writes(messages, &claim, &writes);
+            let got = completed(script, counted, &streams.marks);
             if got != (ran.clone(), answers.to_string()) {
                 wrong.push(format!(
                     "{name} `{script}`: ran {:?} answered {:?}, Metal ran {ran:?} answered \

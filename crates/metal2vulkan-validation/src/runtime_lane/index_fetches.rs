@@ -45,6 +45,7 @@
 //! buffer, which mark 7 as Metal's read of them does. The padded copy and the index bounds pass
 //! read the same bytes.
 
+use super::apart_writes::{layer_reported_nothing_but_apart_writes, NotedWrites};
 use super::degrade_notices::{assert_made_once, assert_once};
 use super::shared_kinds;
 use super::{
@@ -118,15 +119,17 @@ impl Opened {
     }
 }
 
-/// The device's queue and the fixture's vertex-only pipeline state.
+/// The device's queue, the fixture's vertex-only pipeline state, and the list the device reports
+/// to.
 struct Lane {
     device: Device,
     queue: CommandQueue,
     pipeline: RenderPipelineState,
+    messages: Messages,
 }
 
 impl Lane {
-    fn new(device: Device) -> Lane {
+    fn new(device: Device, messages: &Messages) -> Lane {
         let bitcode = llvm_assemble(&engine_dir().join("ob3_index_buffer.ll")).unwrap();
         let library = device.new_library_with_air(&bitcode).unwrap();
         let function = library.new_function_with_name("ob3_index_buffer").unwrap();
@@ -140,6 +143,7 @@ impl Lane {
             queue: device.new_command_queue().unwrap(),
             device,
             pipeline,
+            messages: messages.clone(),
         }
     }
 
@@ -149,7 +153,10 @@ impl Lane {
         self.drawn_positions(indices, offset, indirect, POSITIONS)
     }
 
-    /// [`drawn`](Self::drawn) of `positions` positions.
+    /// [`drawn`](Self::drawn) of `positions` positions. An indirect draw, which the index bounds
+    /// pass bounds on a device that does not keep it on its range, writes `seen` alone in its
+    /// command buffer, so the layer's report of the pass's two draws passes
+    /// ([`layer_reported_nothing_but_apart_writes`]).
     fn drawn_positions(
         &self,
         indices: &Buffer,
@@ -158,6 +165,10 @@ impl Lane {
         positions: u32,
     ) -> Result<[u32; 8], Error> {
         let seen = buffer_with(&self.device, &[0; 32]).unwrap();
+        let mut writes = NotedWrites::new(&self.messages);
+        if indirect {
+            writes.drew_bounded(&seen, 0..32);
+        }
         let arguments: Vec<u8> = [positions, 1, 0, BASE_VERTEX as u32, 0]
             .iter()
             .flat_map(|word| word.to_le_bytes())
@@ -197,6 +208,8 @@ impl Lane {
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.error(), None);
+        let claim = format!("a draw from offset {offset}, indirect {indirect}");
+        layer_reported_nothing_but_apart_writes(&self.messages, &claim, &writes);
         drawn?;
         let bytes = read_buffer(&seen, 0, 32).unwrap();
         let mut words = [0u32; 8];
@@ -249,7 +262,7 @@ fn index_positions_past_the_buffer_draw_index_zero_plus_the_base_vertex() {
                     .contains(&DriverFact::RobustIndexFetchReadsZero);
             let name = device.name().to_owned();
             let shared = shared_kinds(&device);
-            let lane = Lane::new(device);
+            let lane = Lane::new(device, &messages);
             let placed = guarded_buffer(
                 &lane.device,
                 &bytes,
@@ -374,7 +387,7 @@ fn a_run_of_bounded_indirect_draws_draws_each_draws_metal_vertices() {
         .unwrap();
         let name = device.name().to_owned();
         let shared = shared_kinds(&device);
-        let lane = Lane::new(device);
+        let lane = Lane::new(device, &messages);
         let indices = buffer_with(&lane.device, &bytes).unwrap();
         let arguments: Vec<u8> = RUN
             .iter()
@@ -394,7 +407,10 @@ fn a_run_of_bounded_indirect_draws_draws_each_draws_metal_vertices() {
         let command_buffer = lane.queue.command_buffer().unwrap();
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
         encoder.set_render_pipeline_state(&lane.pipeline).unwrap();
+        // Each draw writes a `seen` of its own, alone in the command buffer.
+        let mut writes = NotedWrites::new(&messages);
         for (at, ((offset, _, _), seen)) in RUN.iter().zip(&seen).enumerate() {
+            writes.drew_bounded(seen, 0..32);
             encoder.set_vertex_buffer(Some(seen), 0, 0).unwrap();
             encoder
                 .draw_indexed_primitives_indirect(
@@ -411,6 +427,7 @@ fn a_run_of_bounded_indirect_draws_draws_each_draws_metal_vertices() {
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.error(), None, "on {name}");
+        layer_reported_nothing_but_apart_writes(&messages, "the run's draws", &writes);
         assert_eq!(
             lane.device.work_counts().bounded_run_draws - before,
             RUN.len() as u64,
@@ -472,7 +489,7 @@ fn an_indirect_draw_past_the_old_index_pool_draws_metals_vertices() {
         .unwrap();
         let name = device.name().to_owned();
         let unified = device.properties().has_unified_memory;
-        let lane = Lane::new(device);
+        let lane = Lane::new(device, &messages);
         let own = buffer_with(&lane.device, &bytes).unwrap();
         assert_eq!(
             lane.drawn_positions(&own, 0, true, PAST_OLD_POOL),

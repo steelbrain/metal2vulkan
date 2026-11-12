@@ -867,6 +867,8 @@ mod srgb_storage;
 mod stage_in_regions;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod stage_in_strides;
+#[cfg(test)]
+mod stage_races;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod staging_batches;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -1397,8 +1399,10 @@ fn dynamic_input_assembly(device: &Device) -> bool {
 ///   at submission by default: `syncval_submit_time_validation` (default on) through 1.4.357,
 ///   which 1.4.363 deprecates for `syncval_full_validation` (default on) and reports, when asked
 ///   for, as a settings warning, while an older layer reports the newer setting as unrecognized;
-///   so the lane asks for neither and takes the default every release has. With the shaders'
-///   accesses through descriptors
+///   so the lane asks for neither and takes the default every release has. Every report is made
+///   (`enable_message_limit` off, as the executor's devices have it: by default the layer reports
+///   each message ID ten times per instance, so a hazard past a test's tenth of its kind would
+///   go unread). With the shaders' accesses through descriptors
 ///   (`syncval_shader_accesses_heuristic`: the layer's default, off, sees no shader access at
 ///   all, only transfers, attachments and fixed-function reads). Even so, the layer sees no
 ///   access through a descriptor array of more than one element (the runtime's set 1, the heap
@@ -1493,16 +1497,20 @@ impl LaneChecks {
 
     /// The validation layer's settings the checks take.
     pub fn layer_settings(self) -> Vec<LayerSetting> {
-        let synchronization = [c"validate_sync", c"syncval_shader_accesses_heuristic"];
-        let load_after_store = [c"syncval_load_op_after_store_op_validation"];
-        let on = |names: &[&std::ffi::CStr]| -> Vec<LayerSetting> {
+        let synchronization = [
+            (c"enable_message_limit", false),
+            (c"validate_sync", true),
+            (c"syncval_shader_accesses_heuristic", true),
+        ];
+        let load_after_store = [(c"syncval_load_op_after_store_op_validation", true)];
+        let on = |names: &[(&std::ffi::CStr, bool)]| -> Vec<LayerSetting> {
             names
                 .iter()
-                .map(|name| {
+                .map(|(name, value)| {
                     LayerSetting::new(
                         VALIDATION_LAYER.to_owned(),
                         (*name).to_owned(),
-                        LayerSettingValue::Bool(true),
+                        LayerSettingValue::Bool(*value),
                     )
                 })
                 .collect()
@@ -1934,7 +1942,7 @@ mod lane_checks {
         let mut options = DeviceOptions::default();
         options.layers.push(VALIDATION_LAYER.to_owned());
         options.layer_settings = vec![
-            setting(c"enable_message_limit", LayerSettingValue::Bool(false)),
+            setting(c"enable_message_limit", LayerSettingValue::Bool(true)),
             setting(c"validate_sync", LayerSettingValue::Bool(false)),
         ];
         checks.apply(&mut options);

@@ -15,6 +15,7 @@
 //! (`render/tessellation_scan.rs`): the same marks, and the emulation announced once
 //! ([`EMULATED_TESSELLATION`]).
 
+use super::apart_writes::{layer_reported_nothing_but_apart_writes, NotedWrites};
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
     ScratchCache, WAIT,
@@ -83,8 +84,25 @@ pub(super) fn on_path_with(
     path: Path,
     check: impl FnOnce(Device, &str),
 ) {
+    noted_on_path_with(adjust, path, |device, name, _| check(device, name))
+}
+
+/// [`on_path`], `check` noting the writes of its patch draws, whose marks buffers the layer may
+/// report between the chunk draws of an emulated draw
+/// ([`layer_reported_nothing_but_apart_writes`]).
+pub(super) fn on_path_noted(path: Path, check: impl FnOnce(Device, &str, &mut NotedWrites)) {
+    noted_on_path_with(|_| {}, path, check)
+}
+
+/// [`on_path_noted`], `adjust` applied to the options of each device it makes.
+fn noted_on_path_with(
+    adjust: fn(&mut DeviceOptions),
+    path: Path,
+    check: impl FnOnce(Device, &str, &mut NotedWrites),
+) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
+    let mut writes = NotedWrites::new(&messages);
     let apple_tessellator;
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
@@ -96,8 +114,9 @@ pub(super) fn on_path_with(
         apple_tessellator =
             description.driver_id == Some(DriverId::MOLTENVK) && description.vendor_id == 0x106B;
         let name = device.name().to_owned();
-        check(device, &name);
+        check(device, &name, &mut writes);
     }
+    layer_reported_nothing_but_apart_writes(&messages, "the patch draws", &writes);
     let notices = messages.take_notices();
     let announced = |kind: Degradation| {
         notices
@@ -327,8 +346,8 @@ impl Lane {
         Ok(command_buffer)
     }
 
-    /// The cells `case` marked.
-    fn marked(&self, case: &Case) -> Result<Vec<u32>, Error> {
+    /// The cells `case` marked, its draw, in a command buffer of its own, noted in `writes`.
+    fn marked(&self, case: &Case, writes: &mut NotedWrites) -> Result<Vec<u32>, Error> {
         let pipeline = self.pipeline(case.step, case.scale_enabled)?;
         let marks = self.buffer(&vec![0; MARK_WORDS * 4]);
         let factors = match case.halves {
@@ -361,6 +380,8 @@ impl Lane {
                 ),
             }
         })?;
+        writes.drew_patches(&marks, 0..marks.length());
+        writes.next_command_buffer();
         Ok(cells(&marks))
     }
 }
@@ -976,11 +997,11 @@ fn emulated_patch_draws_read_their_factors_as_metal() {
 }
 
 fn read_their_factors_as_metal(path: Path) {
-    on_path(path, |device, name| {
+    on_path_noted(path, |device, name, writes| {
         let lane = Lane::new(device);
         let mut answers = Vec::new();
         for (case, metal) in cases() {
-            match lane.marked(&case) {
+            match lane.marked(&case, writes) {
                 Ok(cells) => {
                     assert_eq!(cells, metal, "{} on {name}: the marked cells", case.name);
                     answers.push(format!("{} Metal's", case.name));
@@ -1013,7 +1034,7 @@ fn emulated_a_scale_infinite_as_a_half_draws_the_maximum_factor() {
 }
 
 fn scale_infinite_draws_the_maximum(path: Path) {
-    on_path(path, |device, name| {
+    on_path_noted(path, |device, name, writes| {
         let lane = Lane::new(device);
         for scale in [64.0, 65504.0, 70000.0, f32::INFINITY] {
             let case = Case {
@@ -1021,7 +1042,7 @@ fn scale_infinite_draws_the_maximum(path: Path) {
                 scale: Some(scale),
                 ..Case::new("scale_maximum")
             };
-            match lane.marked(&case) {
+            match lane.marked(&case, writes) {
                 Ok(cells) => {
                     if let Some(unlike) = unlike(&cells, &maximum()) {
                         panic!("scale {scale} on {name}: {unlike}");
@@ -1053,7 +1074,7 @@ fn emulated_an_infinite_inside_factor_draws_the_maximum_inside() {
 }
 
 fn infinite_inside_draws_the_maximum(path: Path) {
-    on_path(path, |device, name| {
+    on_path_noted(path, |device, name, writes| {
         let lane = Lane::new(device);
         let case = Case {
             scale_enabled: true,
@@ -1061,7 +1082,7 @@ fn infinite_inside_draws_the_maximum(path: Path) {
             inside: Some(0x7c00),
             ..Case::new("inside_infinite")
         };
-        match lane.marked(&case) {
+        match lane.marked(&case, writes) {
             Ok(cells) => {
                 if let Some(unlike) = unlike(&cells, &cells_of(INSIDE_CELLS)) {
                     panic!("on {name}: {unlike}");
@@ -1090,8 +1111,9 @@ fn invalid(call: &'static str, problem: DrawProblem) -> Result<(), Error> {
 /// (Metal probes on an M4); a draw with other control points than the function's draws with its
 /// own, one of no patches or instances draws nothing, as does a draw of primitives with the
 /// tessellation pipeline, and indirect arguments and a patch index buffer at an offset that is not
-/// a multiple of 4 are read from the offset rounded down. Each pass draws only patch 0 of factors
-/// 2, so it marks what that patch marks.
+/// a multiple of 4 are read from the offset rounded down. Each draw that runs marks a buffer of
+/// its own (Metal orders no draw's vertex writes after another's in a pass) and draws only patch 0
+/// of factors 2, so together they mark what that patch marks.
 #[test]
 fn patch_draws_answer_as_plain_metal_and_refuse_the_rest() {
     answer_as_plain_metal(Path::Native);
@@ -1104,7 +1126,7 @@ fn emulated_patch_draws_answer_as_plain_metal_and_refuse_the_rest() {
 }
 
 fn answer_as_plain_metal(path: Path) {
-    on_path(path, |device, name| {
+    on_path_noted(path, |device, name, writes| {
         let lane = Lane::new(device);
         let pipeline = match lane.pipeline(TessellationFactorStepFunction::PerPatch, false) {
             Ok(pipeline) => pipeline,
@@ -1121,8 +1143,17 @@ fn answer_as_plain_metal(path: Path) {
         let index = lane.buffer(&[0; 8]);
         let draw =
             |e: &mut RenderCommandEncoder, points| e.draw_patches(points, 0, 1, None, 0, 1, 0);
-        let marks = lane.buffer(&vec![0; MARK_WORDS * 4]);
-        lane.pass(&pipeline, &marks, |e| {
+        // Each draw that runs marks a buffer of its own: Metal orders no draw's vertex writes after
+        // another's in a pass, so draws marking one buffer would race.
+        let mut drawn = Vec::new();
+        let mut fresh = |e: &mut RenderCommandEncoder| {
+            let marks = lane.buffer(&vec![0; MARK_WORDS * 4]);
+            e.set_vertex_buffer(Some(&marks), 0, 1)?;
+            drawn.push(marks);
+            Ok::<_, Error>(())
+        };
+        let refused = lane.buffer(&vec![0; MARK_WORDS * 4]);
+        lane.pass(&pipeline, &refused, |e| {
             let patches = "draw_patches";
             let indirect = "draw_patches_indirect";
             assert_eq!(
@@ -1146,23 +1177,31 @@ fn answer_as_plain_metal(path: Path) {
                 e.set_tessellation_factor_scale(taken);
             }
             for points in [0, 3] {
+                fresh(e)?;
                 assert_eq!(draw(e, points), Ok(()));
+                fresh(e)?;
                 assert_eq!(
                     e.draw_patches_indirect(points, None, 0, &arguments, 0),
                     Ok(())
                 );
             }
+            fresh(e)?;
             assert_eq!(e.draw_patches(1, 0, 1, None, 0, 0, 0), Ok(()));
+            fresh(e)?;
             assert_eq!(e.draw_patches(1, 0, 0, None, 0, 1, 0), Ok(()));
+            fresh(e)?;
             assert_eq!(e.draw_patches_indirect(1, None, 0, &arguments, 2), Ok(()));
             assert_eq!(
                 e.draw_patches_indirect(1, None, 0, &arguments, 4),
                 invalid(indirect, DrawProblem::IndirectBufferRange)
             );
+            fresh(e)?;
             assert_eq!(e.draw_primitives(PrimitiveType::Point, 0, 1, 1, 0), Ok(()));
             // A patch index buffer's offset off a multiple of 4 (read from 0, patch 0), and a
             // direct draw's indices past the buffer (Metal probes on an M4).
+            fresh(e)?;
             assert_eq!(e.draw_patches(1, 0, 1, Some(&index), 2, 1, 0), Ok(()));
+            fresh(e)?;
             assert_eq!(
                 e.draw_patches_indirect(1, Some(&index), 2, &arguments, 0),
                 Ok(())
@@ -1179,11 +1218,21 @@ fn answer_as_plain_metal(path: Path) {
                 )
             );
             // The factors stayed 2 at offset 0; patch 0 drawn through its index.
+            fresh(e)?;
             e.draw_patches(1, 0, 1, Some(&index), 4, 1, 0)?;
+            fresh(e)?;
             draw(e, 1)
         })
         .unwrap();
-        assert_eq!(cells(&marks), TWOS, "after the refusals on {name}");
+        assert!(cells(&refused).is_empty(), "the refused draws on {name}");
+        let mut marked: Vec<u32> = (drawn.iter())
+            .inspect(|marks| writes.drew_patches(marks, 0..marks.length()))
+            .flat_map(cells)
+            .collect();
+        writes.next_command_buffer();
+        marked.sort_unstable();
+        marked.dedup();
+        assert_eq!(marked, TWOS, "after the refusals on {name}");
         let marks = lane.buffer(&vec![0; MARK_WORDS * 4]);
         lane.pass(&plain, &marks, |e| {
             e.set_tessellation_factor_buffer(Some(&factors), 0, 0)?;

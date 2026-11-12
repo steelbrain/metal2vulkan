@@ -15,10 +15,11 @@
 //! rather than to nil, and a texture read only on pixels the draw never covers rather than behind
 //! a flag that is never set.
 
+use super::apart_writes::{layer_reported_nothing_but_apart_writes, NotedWrites};
 use super::attachment_reads::{corners, floats, function};
 use super::degrade_notices::on_device;
 use super::degrade_notices::on_device_with;
-use super::{at_plan, buffer_with, read_buffer, WAIT};
+use super::{at_plan, buffer_with, read_buffer, Messages, WAIT};
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{
     PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureType, TextureUsage,
@@ -355,8 +356,9 @@ enum Step {
 
 /// The sequence `steps` in one command buffer, each encoder with a mark of its own, then the
 /// queue's next: each encoder's mark, its own value where it ran and 0 where not, and the event's
-/// signaled value.
-fn sequence(device: &Device, steps: &[Step]) -> Ran {
+/// signaled value. A kernel's mark and a fill's lie apart in one 16-byte block, which the layer
+/// takes as the kernel's whole ([`layer_reported_nothing_but_apart_writes`]).
+fn sequence(device: &Device, messages: &Messages, steps: &[Step]) -> Ran {
     let store = kernel(device, "store_const", "store_const.ll");
     let writes = kernel(device, "tob_two_ways", "tob_renders.ll");
     let texture = memoryless(device, 1);
@@ -367,8 +369,14 @@ fn sequence(device: &Device, steps: &[Step]) -> Ran {
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let one = Size::new(1, 1, 1);
+    let mut noted = NotedWrites::new(messages);
     for (at, step) in steps.iter().enumerate() {
         let at = at as u64;
+        match step {
+            Step::Compute | Step::ComputeUses => noted.dispatched(&marks, at * 4..at * 4 + 4),
+            Step::Blit => noted.filled(&marks, at * 4..at * 4 + 4),
+            Step::BlitUses | Step::Signal => {}
+        }
         match step {
             Step::Compute | Step::ComputeUses => {
                 let mut compute = command_buffer.compute_command_encoder().unwrap();
@@ -395,7 +403,11 @@ fn sequence(device: &Device, steps: &[Step]) -> Ran {
                 .unwrap(),
         }
     }
-    ran(&queue, &command_buffer, &marks, words, &[&event])
+    // The next command buffer's fill of the last mark.
+    noted.filled(&marks, (words - 1) * 4..words * 4);
+    let ran = ran(&queue, &command_buffer, &marks, words, &[&event]);
+    layer_reported_nothing_but_apart_writes(messages, &format!("{steps:?}"), &noted);
+    ran
 }
 
 /// A copy of `texture`'s `side`² texels at its origin into `buffer`, tight rows.
@@ -425,7 +437,7 @@ fn copy_out(
 #[test]
 fn a_memoryless_use_fails_its_run_of_encoders_on() {
     use Step::{Blit, BlitUses, Compute, ComputeUses, Signal};
-    on_device_with(at_plan, |device, _messages| {
+    on_device_with(at_plan, |device, messages| {
         let (stored, filled, last) = (42, word(0x11), word(0x77));
         let cases: [(&str, &[Step], &[u32], u64); 7] = [
             ("CcC", &[Compute, ComputeUses, Compute], &[0, 0, 0], 0),
@@ -442,7 +454,7 @@ fn a_memoryless_use_fails_its_run_of_encoders_on() {
             ("CSc", &[Compute, Signal, ComputeUses], &[stored, 0, 0], 1),
         ];
         for (name, steps, marks, event) in cases {
-            let ran = sequence(device, steps);
+            let ran = sequence(device, messages, steps);
             assert_eq!((ran.status, ran.error), FAILED, "{name}");
             let mut want = marks.to_vec();
             want.push(last);
@@ -450,7 +462,7 @@ fn a_memoryless_use_fails_its_run_of_encoders_on() {
             assert_eq!(ran.events, [event], "{name}");
         }
         // Without a use: every encoder runs and the signal fires.
-        let ran = sequence(device, &[Blit, Signal, Compute]);
+        let ran = sequence(device, messages, &[Blit, Signal, Compute]);
         assert_eq!((ran.status, ran.error), COMPLETED);
         assert_eq!(ran.marks, [filled, 0, stored, last]);
         assert_eq!(ran.events, [1]);
@@ -465,7 +477,7 @@ fn a_memoryless_use_fails_its_run_of_encoders_on() {
 /// complete.
 #[test]
 fn memoryless_compute_and_blit_uses_fail_as_metal_s() {
-    on_device(|device, _messages| {
+    on_device(|device, messages| {
         let store = kernel(device, "store_const", "store_const.ll");
         let writes = kernel(device, "tob_two_ways", "tob_renders.ll");
         let texture = memoryless(device, 1);
@@ -582,7 +594,9 @@ fn memoryless_compute_and_blit_uses_fail_as_metal_s() {
         }
         type Compute<'a> = Box<dyn Fn(&mut ComputeCommandEncoder) + 'a>;
         let one = Size::new(1, 1, 1);
-        let computes: Vec<(&str, Compute, bool)> = vec![
+        // Each case, whether it fails its command buffer, and whether its kernel runs a thread,
+        // which stores into the mark bound at 4.
+        let computes: Vec<(&str, Compute, bool, bool)> = vec![
             (
                 "read",
                 Box::new(|c| {
@@ -591,6 +605,7 @@ fn memoryless_compute_and_blit_uses_fail_as_metal_s() {
                     c.set_bytes(&0u32.to_le_bytes(), 1).unwrap();
                     c.dispatch_threadgroups(one, one).unwrap();
                 }),
+                true,
                 true,
             ),
             (
@@ -602,6 +617,7 @@ fn memoryless_compute_and_blit_uses_fail_as_metal_s() {
                     c.dispatch_threadgroups(Size::new(0, 1, 1), one).unwrap();
                 }),
                 true,
+                false,
             ),
             (
                 "empty_threadgroup",
@@ -612,6 +628,7 @@ fn memoryless_compute_and_blit_uses_fail_as_metal_s() {
                     c.dispatch_threadgroups(one, Size::new(0, 0, 0)).unwrap();
                 }),
                 true,
+                false,
             ),
             (
                 "use_resource",
@@ -620,12 +637,14 @@ fn memoryless_compute_and_blit_uses_fail_as_metal_s() {
                     c.use_resource(texture.as_resource(), usage).unwrap();
                 }),
                 true,
+                false,
             ),
             (
                 "unused",
                 Box::new(|c| {
                     c.set_texture(Some(&texture), 0).unwrap();
                 }),
+                false,
                 false,
             ),
             (
@@ -635,10 +654,23 @@ fn memoryless_compute_and_blit_uses_fail_as_metal_s() {
                     c.memory_barrier_with_resources(&resources).unwrap();
                 }),
                 false,
+                false,
             ),
         ];
-        for (name, case, fails) in computes {
+        for (name, case, fails, stores) in computes {
             let marks = buffer_with(device, &[0u8; 20]).unwrap();
+            // The fills' and the kernels' marks, apart in the blocks the layer takes whole
+            // ([`layer_reported_nothing_but_apart_writes`]); a case's kernel that runs a thread
+            // stores into the mark bound at 4 too, and one of no thread stores nothing.
+            let mut noted = NotedWrites::new(messages);
+            noted.filled(&marks, 0..4);
+            noted.dispatched(&marks, 4..8);
+            if stores {
+                noted.dispatched(&marks, 4..8);
+            }
+            noted.dispatched(&marks, 8..12);
+            noted.filled(&marks, 12..16);
+            noted.filled(&marks, 16..20);
             let command_buffer = queue.command_buffer().unwrap();
             fill(&command_buffer, &marks, 0, 0x11);
             let mut compute = command_buffer.compute_command_encoder().unwrap();
@@ -652,6 +684,7 @@ fn memoryless_compute_and_blit_uses_fail_as_metal_s() {
             compute.end_encoding().unwrap();
             fill(&command_buffer, &marks, 3, 0x44);
             let ran = ran(&queue, &command_buffer, &marks, 5, &[]);
+            layer_reported_nothing_but_apart_writes(messages, name, &noted);
             let last = word(0x77);
             if fails {
                 assert_eq!((ran.status, ran.error), FAILED, "{name}");

@@ -13,7 +13,7 @@
 //! dispatches share one heap set per pipeline variant, so 2048 dispatches over textures of their
 //! own each read their own and the process stays small.
 
-use super::apart_writes::{layer_reported_nothing_but_apart_writes, DispatchWrites};
+use super::apart_writes::{layer_reported_nothing_but_apart_writes, NotedWrites};
 use super::kernel_textures::{absent_read_only, fresh_candidate, refusal};
 use super::{
     at_plan, bound_buffers, buffer_with, encode_case, layer_reported_nothing,
@@ -278,14 +278,14 @@ fn addresses_a_kernel_writes_reach_buffers_as_the_cpus_do() {
             let mut encoder = command_buffer.compute_command_encoder().unwrap();
             encoder.set_compute_pipeline_state(&copy).unwrap();
             encoder.set_buffer(Some(&address), 0, 0).unwrap();
-            let mut writes = DispatchWrites::default();
+            let mut writes = NotedWrites::new(messages);
             for word in [0, 4] {
                 encoder.set_buffer_offset(word, 0).unwrap();
                 let at = u64::from(field.1) + word;
                 encoder.set_buffer(Some(owner), at, 1).unwrap();
                 let one = Size::new(1, 1, 1);
                 encoder.dispatch_threads(one, one).unwrap();
-                writes.wrote(owner, at..at + 4);
+                writes.dispatched(owner, at..at + 4);
             }
             if !one_encoder {
                 encoder.end_encoding().unwrap();
@@ -406,7 +406,7 @@ fn resource_ids_a_kernel_writes_name_resources_as_the_cpus_do() {
             let mut encoder = command_buffer.compute_command_encoder().unwrap();
             encoder.set_compute_pipeline_state(&copy).unwrap();
             encoder.set_buffer(Some(&source), 0, 0).unwrap();
-            let mut writes = DispatchWrites::default();
+            let mut writes = NotedWrites::new(messages);
             for ((field, id), at) in ids.iter().zip((0u64..).step_by(8)) {
                 let owner = &buffers[&field.0];
                 assert_ne!(
@@ -420,7 +420,7 @@ fn resource_ids_a_kernel_writes_name_resources_as_the_cpus_do() {
                     encoder.set_buffer(Some(owner), to, 1).unwrap();
                     let one = Size::new(1, 1, 1);
                     encoder.dispatch_threads(one, one).unwrap();
-                    writes.wrote(owner, to..to + 4);
+                    writes.dispatched(owner, to..to + 4);
                 }
             }
             if !one_encoder {

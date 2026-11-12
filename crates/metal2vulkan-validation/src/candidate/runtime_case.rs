@@ -200,7 +200,9 @@ pub(crate) fn report_each_message() {
 /// What the validation layer reported that fails a run: every error, and every warning of the
 /// validation type (the rule the executor's own context applies); and, apart, the runtime's
 /// degrade notices (`DebugMessage::degradation`), which fail nothing. Bounded so a flood cannot
-/// grow without limit.
+/// grow without limit. While a test holds the layer's hazard reports
+/// ([`Messages::hold_hazards`]), each distinct one is kept once and its repeats counted, for the
+/// test's claim to judge.
 ///
 /// Four layer gaps pass, on the layer releases whose source was read with their cause in place:
 /// the layer's synchronization validation forgetting a semaphore chain once the host waited on a
@@ -253,6 +255,9 @@ struct Reported {
     /// put back (`Messages::restore_notices`): a device announces a kind once, so a later making
     /// or use of it announces nothing again.
     taken: BTreeMap<Degradation, usize>,
+    /// The layer's hazard reports held apart from `failing` while a test holds them
+    /// (`Messages::hold_hazards`): each distinct report once, with the times it came.
+    held: Option<Vec<(DebugMessage, usize)>>,
 }
 
 impl Default for Reported {
@@ -266,6 +271,7 @@ impl Default for Reported {
             unsupported_sets: false,
             unsupported_set_messages: 0,
             taken: BTreeMap::new(),
+            held: None,
             layers: layer_claim::LayerFacts::default(),
             test: std::thread::current()
                 .name()
@@ -305,6 +311,10 @@ impl Drop for Reported {
 /// (`DeviceOptions::queue_limits`) changed a placement from what its queue plan gives, which fails
 /// a run ([`Messages::sink`]).
 pub const QUEUE_LIMITS_REACHED: &str = "metal2vulkan-queue-limits-reached";
+
+/// The start of every id name the validation layer's synchronization validation reports a hazard
+/// by (`SYNC-HAZARD-WRITE-AFTER-WRITE`, ...).
+pub const HAZARD: &str = "SYNC-HAZARD-";
 
 /// The `specVersion` of the validation layer the runtime's loader offers, read once.
 static LAYER_VERSION: OnceLock<Option<u32>> = OnceLock::new();
@@ -356,12 +366,15 @@ impl Messages {
 
     /// The failing messages reported so far, removed, with the loader's own messages about a
     /// layer it could not provide that no device of this list explained, and without its reports
-    /// of driver manifests it ignored, each printed (`layer_claim`).
+    /// of driver manifests it ignored, each printed (`layer_claim`). Hazard reports still held
+    /// ([`Messages::hold_hazards`]) are among them, each once, and holding ends.
     pub fn take(&self) -> Vec<DebugMessage> {
         let mut reported = self.0.lock().unwrap_or_else(|p| p.into_inner());
         let mut unexplained = reported.layers.release();
         let mut failing = reported.failing.split_off(0);
         unexplained.append(&mut failing);
+        let held = reported.held.take().unwrap_or_default();
+        unexplained.extend(held.into_iter().map(|(message, _)| message));
         let ignored = layer_claim::IgnoredDrivers::of_messages(&unexplained);
         unexplained.retain(|message| {
             let host = ignored.explains(&message.id_name, &message.text);
@@ -376,6 +389,34 @@ impl Messages {
             !host
         });
         unexplained
+    }
+
+    /// Hold the layer's synchronization hazard reports (id names [`HAZARD`]`*`) apart from the
+    /// failing messages from here on, until [`Messages::take_held_hazards`] or
+    /// [`Messages::take`]: each distinct report (its id name and text) once, a repeat only
+    /// counted, so a claim that judges a report by those alone reads every report the layer
+    /// made, however often it repeats one (`runtime_lane::apart_writes`). Past `Messages::MAX`
+    /// distinct reports, a new one is a failing message as before.
+    pub fn hold_hazards(&self) {
+        let mut reported = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        reported.held.get_or_insert_with(Vec::new);
+    }
+
+    /// The hazard reports held since [`Messages::hold_hazards`], each with the times it came,
+    /// removed; holding ends.
+    pub fn take_held_hazards(&self) -> Vec<(DebugMessage, usize)> {
+        let mut reported = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        reported.held.take().unwrap_or_default()
+    }
+
+    /// Whether a device reporting here announced `kind`: a notice of it taken
+    /// ([`Messages::taken_kinds`]) or still to be taken.
+    pub fn announced(&self, kind: Degradation) -> bool {
+        let reported = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        reported.taken.contains_key(&kind)
+            || (reported.notices.iter())
+                .filter_map(|message| message.degradation.as_ref())
+                .any(|notice| notice.degradation == kind)
     }
 
     /// The degrade notices delivered so far, removed.
@@ -672,6 +713,22 @@ impl Messages {
                     message.text.replace('\n', " ")
                 );
             }
+            // A hazard report while a test holds them (`Messages::hold_hazards`): a repeat of
+            // one held is counted, a new one held, while there is room.
+            let hold = message.id_name.starts_with(HAZARD)
+                && match reported.held.as_mut() {
+                    None => false,
+                    Some(held) => {
+                        let repeat = (held.iter_mut()).find(|(kept, _)| {
+                            kept.id_name == message.id_name && kept.text == message.text
+                        });
+                        if let Some((_, times)) = repeat {
+                            *times += 1;
+                            return;
+                        }
+                        held.len() < Self::MAX
+                    }
+                };
             if ECHO.load(Ordering::Relaxed) {
                 use std::io::Write as _;
                 let _ = writeln!(
@@ -690,8 +747,13 @@ impl Messages {
                     message.text.replace('\n', " ")
                 );
             }
-            if reported.failing.len() < Self::MAX {
-                reported.failing.push(message);
+            match reported.held.as_mut() {
+                Some(held) if hold => held.push((message, 1)),
+                _ => {
+                    if reported.failing.len() < Self::MAX {
+                        reported.failing.push(message);
+                    }
+                }
             }
         })
     }

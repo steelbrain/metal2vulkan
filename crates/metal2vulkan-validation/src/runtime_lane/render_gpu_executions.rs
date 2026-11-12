@@ -27,6 +27,7 @@
 //! - a record past the descriptor's bind count sets the sticky encoding fault: nothing draws, and
 //!   the execution report says why.
 
+use super::apart_writes::{layer_reported_nothing_but_apart_writes, NotedWrites};
 use super::degrade_notices::on_device_with;
 use super::degrade_notices::{assert_made_once, on_device};
 use super::indirect_host_steps::{self, complete, HOST_STEPS};
@@ -439,7 +440,8 @@ fn facts_that_grow_before_the_batch_is_ready_take_the_host_step() {
 /// `commit` records from the CPU's records: `commit` calls it with each command of the range
 /// before it returns, where the CPU drew points and the check looks for them; where the CPU drew
 /// triangles alone, or the check looks for nothing, never. The commands draw the same each time,
-/// and no host step runs.
+/// and no host step runs. Each command's draw writes its own words of `out`
+/// ([`layer_reported_nothing_but_apart_writes`]).
 #[test]
 fn commit_checks_the_cpu_s_records_where_the_check_may_see_something() {
     on_device_with(at_plan, |device, messages| {
@@ -451,6 +453,10 @@ fn commit_checks_the_cpu_s_records_where_the_check_may_see_something() {
             (PrimitiveType::Point, nothing),
         ] {
             let setup = Setup::new(device);
+            let mut writes = NotedWrites::new(messages);
+            for window in 0..4 {
+                writes.drew(&setup.out, drawn(window, 0, 3).bytes());
+            }
             let icb = icb(device, &inheriting(1), 4);
             for index in 0..4 {
                 buffers(&setup, &icb, index, index as usize);
@@ -479,6 +485,7 @@ fn commit_checks_the_cpu_s_records_where_the_check_may_see_something() {
             let at_commit = seen.lock().unwrap().clone();
             indirect_host_steps::wait(&command_buffer);
             let at = format!("{primitive_type:?}, {needs:?}");
+            layer_reported_nothing_but_apart_writes(messages, &at, &writes);
             assert!(!icb.gpu_written(), "{at}");
             assert_eq!(read, 4, "{at}: the commit read each record");
             let every: Vec<u64> = match primitive_type == PrimitiveType::Point && needs == points {
@@ -499,12 +506,21 @@ fn commit_checks_the_cpu_s_records_where_the_check_may_see_something() {
 /// CPU draws 2 more vertices in command 1 after the commit, before the batch is submitted (it waits
 /// for an event the test signals after the write), the host step records the pass again from the
 /// records then (each record read again) and command 1 draws 5 vertices; without the write, the
-/// commit's recording draws 3. Nothing is announced.
+/// commit's recording draws 3. Nothing is announced. Each command's draw writes its own words of
+/// `out` ([`layer_reported_nothing_but_apart_writes`]).
 #[test]
 fn the_cpu_s_writes_after_the_commit_draw_where_the_batch_waits() {
     on_device_with(at_plan, |device, messages| {
         for write in [false, true] {
             let setup = Setup::new(device);
+            let count = |window: usize| match (write, window) {
+                (true, 1) => 5,
+                _ => 3,
+            };
+            let mut writes = NotedWrites::new(messages);
+            for window in 0..4 {
+                writes.drew(&setup.out, drawn(window, 0, count(window)).bytes());
+            }
             let icb = icb(device, &inheriting(1), 4);
             for index in 0..4 {
                 buffers(&setup, &icb, index, index as usize);
@@ -535,13 +551,10 @@ fn the_cpu_s_writes_after_the_commit_draw_where_the_batch_waits() {
                 event.set_signaled_value(1);
                 indirect_host_steps::wait(&command_buffer);
             });
+            layer_reported_nothing_but_apart_writes(messages, &format!("write {write}"), &writes);
             assert!(!icb.gpu_written(), "write {write}");
             let reads = if write { 8 } else { 4 };
             assert_eq!(read, reads, "write {write}: the records read");
-            let count = |window: usize| match (write, window) {
-                (true, 1) => 5,
-                _ => 3,
-            };
             let draws: Vec<Drawn> = (0..4)
                 .map(|window| drawn(window, 0, count(window)))
                 .collect();

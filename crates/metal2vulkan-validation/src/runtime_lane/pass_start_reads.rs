@@ -24,6 +24,7 @@ use super::degrade_notices::{
 use super::render_state::{
     quiet, validated, validated_checking_synchronization, Pipe, Probe, PASS, WHITE,
 };
+use super::stage_races::layer_reported_nothing_but_announced_stage_races;
 use super::{read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{
@@ -306,7 +307,8 @@ fn a_fragment_stage_touches_what_an_earlier_vertex_stage_of_its_pass_wrote_after
 
 /// A buffer a vertex stage of the pass wrote too (the fixture `icb_render_replay_template`,
 /// rasterizing nothing, writes words 0 and 1) is read in place, announced once
-/// (`in-place-vertex-reads`); the depth is the device's.
+/// (`in-place-vertex-reads`); the depth is the device's. The layer's report of that race passes
+/// as announced (`stage_races.rs`).
 #[test]
 fn a_vertex_stage_reads_in_place_what_another_stage_of_its_pass_wrote() {
     let (messages, _cache, probe) = validated();
@@ -342,6 +344,8 @@ fn a_vertex_stage_reads_in_place_what_another_stage_of_its_pass_wrote() {
         mark(e, &marker, &words);
         read(p, e, &words, 0);
     });
+    let claim = "the reader's in-place read of the marker's write";
+    layer_reported_nothing_but_announced_stage_races(&messages, claim, &[&words]);
     let reader = [WHITE.depth(PixelFormat::Depth32Float)];
     let first = forced_kinds(&probe, (false, true), &reader, false);
     assert_made_once(&messages, &IN_PLACE_VERTEX_READS, &first);
@@ -430,7 +434,7 @@ fn a_command_s_vertex_stage_reads_the_bytes_from_before_its_pass_s_fragment_writ
 /// nothing) is announced once (`fragments-before-geometry`). Metal runs the vertex function
 /// before the pass's fragments (an earlier fragment read a later vertex function's write, and its
 /// own write outlasted it), so the marker ORs bit 0 into the writer's 0.5; the device's order is
-/// printed.
+/// printed. The layer's report of that race passes as announced (`stage_races.rs`).
 #[test]
 fn a_vertex_stage_s_write_after_a_fragment_s_access_is_announced() {
     let (messages, _cache, probe) = validated();
@@ -465,6 +469,8 @@ fn a_vertex_stage_s_write_after_a_fragment_s_access_is_announced() {
         e.set_vertex_buffer(Some(&words), 0, 1).unwrap();
         e.draw_primitives(PrimitiveType::Point, 0, 1, 1, 0).unwrap();
     });
+    let claim = "the writer's write after the marker's access";
+    layer_reported_nothing_but_announced_stage_races(&messages, claim, &[&words]);
     let word = u32::from_le_bytes(read_buffer(&words, 0, 4).unwrap().try_into().unwrap());
     assert!(
         word == OLD || word == WRITTEN,

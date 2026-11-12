@@ -38,6 +38,7 @@
 //! each code and its maximum's reciprocal, not the device's conversion: it records the note on
 //! every profile where that product misses Metal's at some code, and is not drawn.
 
+use super::apart_writes::{layer_reported_nothing_but_apart_writes, NotedWrites};
 use super::degrade_notices::counts;
 use super::{
     buffer_with, half_within, layer_reported_nothing_at_all, read_buffer, validated_device,
@@ -354,9 +355,12 @@ fn descriptor(
 }
 
 /// The rows `descriptor`'s pipeline writes for `elements` records: per vertex one draw of a point
-/// per element, per instance one draw of one point per element at its base vertex and instance.
+/// per element, per instance one draw of one point per element at its base vertex and instance,
+/// each writing its own row of `out`, bound whole, which the layer takes as written by each
+/// ([`layer_reported_nothing_but_apart_writes`]).
 fn drawn(
     queue: &CommandQueue,
+    messages: &Messages,
     descriptor: &RenderPipelineDescriptor,
     records: &Buffer,
     elements: usize,
@@ -367,6 +371,7 @@ fn drawn(
         .new_render_pipeline_state(descriptor, &PipelineOptions::default())
         .unwrap();
     let out = buffer_with(device, &vec![0xCD; ROW * elements]).unwrap();
+    let mut writes = NotedWrites::new(messages);
     let mut pass = RenderPassDescriptor::new();
     pass.render_target_width = 1;
     pass.render_target_height = 1;
@@ -383,6 +388,8 @@ fn drawn(
                 encoder
                     .draw_primitives(PrimitiveType::Point, v, 1, 1, v)
                     .unwrap();
+                let row = (ROW as u64) * u64::from(v);
+                writes.drew(&out, row..row + ROW as u64);
             }
         }
         _ => encoder
@@ -393,6 +400,7 @@ fn drawn(
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    layer_reported_nothing_but_apart_writes(messages, "the format's draws", &writes);
     read_buffer(&out, 0, (ROW * elements) as u64)
         .unwrap()
         .as_chunks::<16>()
@@ -473,7 +481,7 @@ fn every_normalized_code_reads_metal_s_value() {
                     && (conversion
                         || notes.contains(&PrecisionNote::NativeHalfConversion)
                         || notes.contains(&PrecisionNote::NativeHalfQuantize));
-                let rows = drawn(&queue, &d, &records, elements, step);
+                let rows = drawn(&queue, &messages, &d, &records, elements, step);
                 let (mut off, mut most, mut first) = (0usize, 0u64, None);
                 for (v, got) in rows.iter().enumerate() {
                     let want = metal_row(coding, v, half);

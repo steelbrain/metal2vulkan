@@ -19,7 +19,8 @@
 //!
 //! Each test runs on the device's tessellation stages and on the emulation (`patches::Path`).
 
-use super::patches::{on_path, Path};
+use super::apart_writes::NotedWrites;
+use super::patches::{on_path_noted, Path};
 use super::{buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{
@@ -344,9 +345,15 @@ impl Lane {
         self.padded(&bytes, pad)
     }
 
-    /// Record `case` with `pipeline`, its buffers and factors bound, and return what it left in
-    /// the marks: `Err` for a refused draw, which ends the encoder unrecorded.
-    fn marks(&self, pipeline: &RenderPipelineState, case: &Case) -> Result<[u32; 4], Error> {
+    /// Record `case` with `pipeline`, its buffers and factors bound, in a command buffer of its
+    /// own noted in `writes`, and return what it left in the marks: `Err` for a refused draw,
+    /// which ends the encoder unrecorded.
+    fn marks(
+        &self,
+        pipeline: &RenderPipelineState,
+        case: &Case,
+        writes: &mut NotedWrites,
+    ) -> Result<[u32; 4], Error> {
         let points = self.words(&(0..12).collect::<Vec<u32>>(), 0);
         let tags = self.words(&(0..16).map(|p| 0xa0 + p).collect::<Vec<u32>>(), 0);
         let marks = self.words(&[0; 4], 0);
@@ -402,6 +409,10 @@ impl Lane {
         command_buffer.commit()?;
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        if drawn.is_ok() {
+            writes.drew_patches(&marks, 0..marks.length());
+        }
+        writes.next_command_buffer();
         drawn?;
         let bytes = read_buffer(&marks, 0, 16).unwrap();
         let mut words = [0; 4];
@@ -430,7 +441,7 @@ fn emulated_patch_index_buffers_name_patches_as_metal() {
 }
 
 fn name_patches_as_metal(path: Path) {
-    on_path(path, |device, name| {
+    on_path_noted(path, |device, name, writes| {
         let lane = Lane::new(device);
         for (case, metal) in cases() {
             let pipeline = match lane.pipeline(case.index_type()) {
@@ -442,7 +453,7 @@ fn name_patches_as_metal(path: Path) {
                 Err(error) => panic!("the pipeline on {name}: {error}"),
             };
             let marks = lane
-                .marks(&pipeline, &case)
+                .marks(&pipeline, &case, writes)
                 .unwrap_or_else(|e| panic!("{} on {name}: {e}", case.name));
             assert_eq!(
                 marks.map(|w| format!("{w:x}")),
@@ -479,7 +490,7 @@ fn emulated_control_point_index_buffers_are_refused_as_metal_refuses_them() {
 
 fn refused_as_metal_refuses_them(path: Path) {
     use TessellationControlPointIndexType as T;
-    on_path(path, |device, name| {
+    on_path_noted(path, |device, name, writes| {
         let lane = Lane::new(device);
         let short = REVERSED.split_at(5).0;
         let six = REVERSED.split_at(6).0;
@@ -596,7 +607,7 @@ fn refused_as_metal_refuses_them(path: Path) {
                 }
                 Err(error) => panic!("the pipeline on {name}: {error}"),
             };
-            let got = lane.marks(&pipeline, &case);
+            let got = lane.marks(&pipeline, &case, writes);
             match expected {
                 Ok(metal) => {
                     let marks = got.unwrap_or_else(|e| panic!("{} on {name}: {e}", case.name));
