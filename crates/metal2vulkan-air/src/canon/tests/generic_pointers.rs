@@ -377,6 +377,12 @@ fn a_generic_pointer_loaded_from_a_thread_slot_is_its_stores_space_s() {
                 .any(|l| l.contains("icmp ne") && l.contains("ptr addrspace(1) zeroinitializer")),
             "{held:?}: {text}"
         );
-        assert_eq!(stored(&e)[1..], [None, Some(0.0)], "{held:?}: {text}");
+        // The queries' words come last, after the slots' stores and `*p`'s.
+        let words = stored(&e);
+        assert_eq!(
+            words[words.len().saturating_sub(2)..],
+            [None, Some(0.0)],
+            "{held:?}: {text}"
+        );
     }
 }
