@@ -8278,6 +8278,7 @@ method	metal2vulkan-runtime::Device::imports_shared_host_pointers	pub fn imports
 method	metal2vulkan-runtime::Device::in_place_check_line	pub fn in_place_check_line(&self) -> u64
 method	metal2vulkan-runtime::Device::in_place_check_report	pub fn in_place_check_report(&self) -> Vec<String>
 method	metal2vulkan-runtime::Device::in_place_check_took	pub fn in_place_check_took(&self) -> Option<Duration>
+method	metal2vulkan-runtime::Device::linear_texture_bytes_per_row	pub fn linear_texture_bytes_per_row(&self, descriptor: &TextureDescriptor) -> Result<Option<u64>, Error>
 method	metal2vulkan-runtime::Device::metal_heap_texture_size_and_align	pub fn metal_heap_texture_size_and_align(&self, descriptor: &TextureDescriptor) -> Result<Option<SizeAndAlign>, Error>
 method	metal2vulkan-runtime::Device::minimum_linear_texture_alignment_for_pixel_format	pub fn minimum_linear_texture_alignment_for_pixel_format(&self, format: PixelFormat) -> Result<u64, Error>
 method	metal2vulkan-runtime::Device::name	pub fn name(&self) -> &str

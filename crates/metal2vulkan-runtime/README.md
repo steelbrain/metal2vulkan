@@ -955,6 +955,11 @@ packed and extended-range formats among them). A texture at a smaller
 multiple of 16 is still made, as a shadow where the device's images do not take its layout
 (`shadowed-texture`). The private `deviceLinearTextureAlignmentBytes` and
 `linearTextureAlignmentBytes` answer the largest of the formats' answers.
+`Device::linear_texture_bytes_per_row` (a runtime extension, no Metal counterpart) answers, for a
+2D texture's descriptor, the row pitch the driver lays its own linear image's rows at, which a
+texture over a buffer of the runtime's own memory must meet exactly to be that image, with no
+check of the device's: a pitch rounded up to the alignment above can miss it, as that alignment
+is where images over host pages lie.
 
 Where Metal's answers differ by macOS release (which pixel formats it describes, how a heap
 texture's blocks lie, its private device properties),

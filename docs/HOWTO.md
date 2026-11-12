@@ -404,7 +404,10 @@ that renders nothing over a buffer whose bytes only the device's ordered command
 `Private` buffer, a `Managed` one's own on a device without unified memory) is the device's linear
 image at the pitch too, where the device lays one out so, made `PREINITIALIZED`, whose one layout
 transition keeps the bytes between its rows (`WorkCounts::kept_padding_aliases`; docs/API.md,
-`shadowed-texture`).
+`shadowed-texture`). The pitch at which a texture is that image is the driver's own for its width:
+`Device::linear_texture_bytes_per_row` (a runtime extension) answers it for a descriptor, which a
+pitch rounded up to `Device::minimum_linear_texture_alignment_for_pixel_format`'s answer (an
+alignment of images over host pages) can miss.
 
 Such an image is bound at the buffer's memory offset plus the texture's offset, which must be a
 multiple of the device's linear-image alignment (`Device::minimum_linear_texture_alignment_for_pixel_format`

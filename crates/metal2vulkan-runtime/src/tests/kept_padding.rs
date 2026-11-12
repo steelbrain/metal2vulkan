@@ -12,6 +12,9 @@
 //!   never `BytesBetweenRows`. At least one pitch takes the image. A blit reads the texels the
 //!   buffer holds, and once that blit took the image's first move, the buffer read back holds
 //!   every byte it was given, the bytes between the rows among them.
+//! - **At the device's linear pitch.** At the pitch `Device::linear_texture_bytes_per_row` answers
+//!   for the texture, it is in place over a `Private` buffer; at each other of those pitches, a
+//!   shadow.
 //! - **A `Managed` texture changed in one row.** On a device without unified memory, over a
 //!   `Managed` no-copy buffer that is two copies (`managed_copy.rs`), at the first pitch the
 //!   device lays its linear rows at: in place, as over a `Private` buffer. The CPU writes one row
@@ -216,6 +219,40 @@ fn a_texture_over_a_private_buffer_holds_its_rows_padding_in_place_and_keeps_it(
         }
     }
     assert!(!in_place.is_empty(), "no pitch took the linear image");
+}
+
+#[test]
+fn a_texture_over_a_private_buffer_at_the_device_s_linear_pitch_is_in_place() {
+    let scratch = Scratch::new("kept-padding-pitch");
+    let device = device(&scratch.0);
+    for usage in [
+        TextureUsage::SHADER_READ,
+        TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
+    ] {
+        let d = descriptor(ResourceOptions::private(), usage);
+        let Some(pitch) = device.linear_texture_bytes_per_row(&d).unwrap() else {
+            panic!("{usage:?}: the device makes no linear image of the texture");
+        };
+        assert!(pitch >= ROW, "{usage:?}: rows of {pitch} bytes");
+        let buffer = device
+            .new_buffer(pitch * HEIGHT, ResourceOptions::private())
+            .unwrap();
+        let texture = buffer.new_texture(&d, 0, pitch).unwrap();
+        assert!(texture.aliases_buffer(), "{usage:?}: in place at {pitch}");
+        // At every other padded pitch it is a shadow: only the image at the device's own pitch
+        // holds the bytes between the rows.
+        for other in PITCHES.into_iter().filter(|&other| other != pitch) {
+            let buffer = device
+                .new_buffer(other * HEIGHT, ResourceOptions::private())
+                .unwrap();
+            let texture = buffer.new_texture(&d, 0, other).unwrap();
+            assert!(!texture.aliases_buffer(), "{usage:?}: in place at {other}");
+        }
+        eprintln!(
+            "KEPT-PADDING on {}: {usage:?}: the device's linear rows lie at {pitch} bytes",
+            device.name()
+        );
+    }
 }
 
 #[test]

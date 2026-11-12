@@ -38,9 +38,11 @@ use crate::capabilities::linear_alignment_rule;
 use crate::error::Error;
 use crate::image_plan::{plan_image, ImageFacts};
 use crate::in_place::DriverIdentity;
-use crate::linear_plan::{linear_alignment, BufferLayout, LINEAR_ALIGNMENT};
+use crate::linear_plan::{linear_alignment, linear_lack, BufferLayout, LINEAR_ALIGNMENT};
 use crate::shader_cache::store::{hex, Lookup};
-use crate::texture_descriptor::{texture_usage, TextureLayout, TextureSwizzleChannels};
+use crate::texture_descriptor::{
+    texture_usage, TextureDescriptor, TextureLayout, TextureSwizzleChannels,
+};
 use crate::{release, Device};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use sha2::{Digest, Sha256};
@@ -200,6 +202,57 @@ impl Device {
     ) -> Result<u64, Error> {
         linear_alignment_rule(format)?;
         Ok(self.current().linear_texture_alignment(format))
+    }
+
+    /// No Metal counterpart (a runtime extension): the `bytesPerRow` at which a texture of
+    /// `descriptor` over a buffer of the runtime's own memory (`Buffer::new_texture`, not over the
+    /// caller's pages) can be the device's own linear image over the buffer, made
+    /// `PREINITIALIZED`, which takes no check of the device's: the row pitch the driver lays that
+    /// image's rows at (`vkGetImageSubresourceLayout`'s `rowPitch`), which the texture's rows must
+    /// meet exactly. The texture's offset must meet the image's memory alignment too
+    /// (`BufferDescriptor::with_aligned_byte`), and rows with bytes between them hold those bytes
+    /// in the image only over a buffer that declares them unobserved
+    /// (`BufferDescriptor::with_padding_unobserved`) or, for a texture that renders nothing, one
+    /// that only the device's commands write (a `Private` buffer, a `Managed` one on a device
+    /// without unified memory): docs/API.md, `shadowed-texture`. `None` for a texture of more than
+    /// one level, sample or slice, or of another type than 2D, and where the device makes no
+    /// linear image of it that does all its optimal image does.
+    ///
+    /// It is the driver's pitch for that width, no alignment: a pitch rounded up to
+    /// [`minimum_linear_texture_alignment_for_pixel_format`](Self::minimum_linear_texture_alignment_for_pixel_format)'s
+    /// answer may miss it, as that answer is where images over host pages lie (where the driver
+    /// lays no linear one at a pitch, a `DRM_FORMAT_MOD_LINEAR` image at it), and Metal's 16 on a
+    /// device that imports no host pages. The image is made and released, never bound. Refused as
+    /// `Buffer::new_texture` refuses the descriptor's checks and its image's plan.
+    pub fn linear_texture_bytes_per_row(
+        &self,
+        descriptor: &TextureDescriptor,
+    ) -> Result<Option<u64>, Error> {
+        const CALL: &str = "linear_texture_bytes_per_row";
+        let layout = descriptor
+            .check(self.properties().texture_rules())
+            .map_err(|refused| refused.error(CALL))?;
+        let one = layout.texture_type == TextureType::Type2D
+            && (layout.levels, layout.layers, layout.samples) == (1, 1, 1);
+        if !one {
+            return Ok(None);
+        }
+        let facts = self
+            .shared()
+            .textures
+            .facts(self.compile_device().profile());
+        let (_, plan) = self.declared_plan(CALL, descriptor, &layout, &facts)?;
+        if linear_lack(&plan, &facts).is_some() {
+            return Ok(None);
+        }
+        Ok(match self.linear_image(&plan)? {
+            Ok(made) => {
+                // SAFETY: the image is live and unbound, and no command uses it.
+                unsafe { release::object(self.shared().vk(), made.raw) };
+                Some(made.report.row_pitch)
+            }
+            Err(_) => None,
+        })
     }
 
     /// The device's alignment of a texture of `pf`'s offset and rows in a buffer (the module
