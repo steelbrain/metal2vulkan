@@ -619,38 +619,38 @@ driver's. Each is open work.
   whole (the pages at a commit, the copy at a completion) and compares each 1 KiB block's tag with
   its base's (below), reading the other side's block only where the tag changed; either on up to
   eight threads for 4 MiB or more (`copied_compare_threads`). On a Ryzen 7 7840HS (the RTX 3090's
-  and RTX 2080's hosts) a 256 MiB copy that agrees takes 5.8-6.1 ms each way, 5.8-6.5 ms where 1% of its pages changed on one side
-  or both, and 25.7-26.4 ms in and 25.9-27.3 ms back where every byte changed on both sides (the
-  byte-for-byte snapshot this replaced, interleaved with them: 14.4-15.8, 15.0-16.4, 143-152 ms in
-  and 204-215 ms back; `tests/copied_bench.rs`); with other work running, 2,049 copies of 680 MiB
-  that agree take 29-30 ms each way, each on one thread. As long at each completion of a command
-  buffer whose functions read addresses and may store (which may write every copy; a draw whose
-  vertex and fragment functions store nothing writes none) or that executes an indirect command
-  buffer. Where
-  the pages' memory carries a log of their writes (`HostMemory::with_dirty_pages`,
-  `HostRam::with_dirty_pages`, a copy that drops the GPU's writes included), the commit compares
-  only the pages it reports written: 0.2 ms for 680 MiB where none changed, 4.2 ms where 1% did. A
-  completion whose command buffers' uses name the copies they write compares those alone. A copy is
-  made only where the caller's gate refuses an import, an admitted import fails, or the GPU's writes
-  to the pages must be dropped (pages the process cannot write, and memory of Metal's private option
-  bit 24 where the system maps no read-only view), never for other memory by default.
+  and RTX 2080's hosts), its comparisons on four threads, a 256 MiB copy that agrees took 5.8-6.1 ms
+  each way, 5.8-6.5 ms where 1% of its pages changed on one side or both, and 25.7-26.4 ms in and
+  25.9-27.3 ms back where every byte changed on both sides (the byte-for-byte snapshot this
+  replaced, interleaved with them: 14.4-15.8, 15.0-16.4, 143-152 ms in and 204-215 ms back;
+  `tests/copied_bench.rs`); with other work running, 2,049 copies of 680 MiB that agree take 29-30
+  ms each way, each on one thread. As long at each completion of a command buffer whose functions
+  read addresses and may store (which may write every copy; a draw whose vertex and fragment
+  functions store nothing writes none) or that executes an indirect command buffer. Where the pages'
+  memory carries a log of their writes (`HostMemory::with_dirty_pages`, `HostRam::with_dirty_pages`,
+  a copy that drops the GPU's writes included), the commit compares only the pages it reports
+  written: 0.2 ms for 680 MiB where none changed, 4.2 ms where 1% did. A completion whose command
+  buffers' uses name the copies they write compares those alone. A copy is made only where the
+  caller's gate refuses an import, an admitted import fails, or the GPU's writes to the pages must
+  be dropped (pages the process cannot write, and memory of Metal's private option bit 24 where the
+  system maps no read-only view), never for other memory by default.
 - **A kernel that rewrites a copied host buffer pays its merge back** (`copied.rs`,
   `tests/copied_pass_bench.rs`): a completion compares each 16 bytes of each block the GPU changed
   with the agreed bytes and stores only those the GPU changed and the CPU did not, so that no byte
   the CPU may be writing is stored over: all 16 in one store where every one is to be written, else
   in one masked store on a host with AVX-512BW, else in up to eight stores of 8, 4, 2 and 1 bytes. A
   float a kernel rewrites changes some of its bytes, so most of a rewritten buffer's 16s take the
-  masked or the smaller stores. On the 7840HS every float of 256 MiB changed as `x + i` (135 MB of
-  changed bytes) merges back in 25.5-27.5 ms (4.9-5.3 GB/s of changed bytes), and in 40.1-47.4 ms
-  (2.8-3.3 GB/s) without its masked stores (270-289 ms with the snapshot); on the RTX 5080 Laptop
-  GPU's host, an Intel Core Ultra 9 275HX without AVX-512, in 41.9-44.8 ms (3.0-3.2 GB/s; 389-423 ms
-  with the snapshot). One command buffer a pass of a kernel that reads and rewrites a copied buffer,
-  on the RTX 2080 host (an eGPU link of 2.7 GB/s each way): 64 MiB in 63.5-64.1 ms, its commit
-  1.8-1.9 ms, and 256 MiB in 240-250 ms, its commit 5.5-7.0 ms, where the device's own `Shared`
-  buffer takes 50.6 and 202 ms (137-165 and 526-632 ms with the snapshot); on the RTX 5080 Laptop
-  GPU's host 64 MiB in 15.0-15.5 ms, its commit 2.1 ms, and 256 MiB in 60.4-61.8 ms, its commit
-  8.3-8.5 ms, where its own `Shared` buffer takes 3.5 and 12.7-13.6 ms (69.6-70.8 and 287-307 ms
-  with the snapshot).
+  masked or the smaller stores. On the 7840HS, on four threads, every float of 256 MiB changed as
+  `x + i` (135 MB of changed bytes) merged back in 25.5-27.5 ms (4.9-5.3 GB/s of changed bytes), and
+  in 40.1-47.4 ms (2.8-3.3 GB/s) without its masked stores (270-289 ms with the snapshot); on the
+  RTX 5080 Laptop GPU's host, an Intel Core Ultra 9 275HX without AVX-512, in 41.9-44.8 ms (3.0-3.2
+  GB/s; 389-423 ms with the snapshot). One command buffer a pass of a kernel that reads and rewrites
+  a copied buffer, its comparisons on four threads, on the RTX 2080 host (an eGPU link of 2.7 GB/s
+  each way): 64 MiB in 63.5-64.1 ms, its commit 1.8-1.9 ms, and 256 MiB in 240-250 ms, its commit
+  5.5-7.0 ms, where the device's own `Shared` buffer takes 50.6 and 202 ms (137-165 and 526-632 ms
+  with the snapshot); on the RTX 5080 Laptop GPU's host 64 MiB in 15.0-15.5 ms, its commit 2.1 ms,
+  and 256 MiB in 60.4-61.8 ms, its commit 8.3-8.5 ms, where its own `Shared` buffer takes 3.5 and
+  12.7-13.6 ms (69.6-70.8 and 287-307 ms with the snapshot).
 - **A copied host buffer that a command buffer may write finds changed bytes by a keyed tag**
   (`copied.rs`'s `tag`, `copied-host-pages`): from the first commit whose command buffer may write
   the copy (its uses wrote one of the copy's keys, or it may write memory no use names), a
