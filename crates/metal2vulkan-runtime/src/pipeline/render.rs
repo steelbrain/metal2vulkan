@@ -1465,10 +1465,9 @@ impl GraphicsState {
         let _noted = NoteEntries(device);
         let requested = descriptor;
         let mut loaded = descriptor.clone();
-        let with_dependencies =
-            |stage: &StageSource| crate::dynamic_library::stage_with_dependencies(device, stage);
-        loaded.vertex = with_dependencies(&loaded.vertex);
-        loaded.fragment = loaded.fragment.as_ref().map(with_dependencies);
+        loaded.vertex = crate::dynamic_library::stage_with_dependencies(device, &loaded.vertex);
+        loaded.fragment = (loaded.fragment.as_ref())
+            .map(|stage| crate::dynamic_library::stage_with_dependencies(device, stage));
         let descriptor = &loaded;
         // Metal's descriptor validation stops an attachment in a format Metal describes none
         // of, first (`attachment_formats.rs`).
@@ -1863,11 +1862,11 @@ impl GraphicsState {
             IdPlacement::Any
         };
         let mut loaded = descriptor.clone();
-        let with_dependencies =
-            |stage: &StageSource| crate::dynamic_library::stage_with_dependencies(device, stage);
-        loaded.object = loaded.object.as_ref().map(with_dependencies);
-        loaded.mesh = with_dependencies(&loaded.mesh);
-        loaded.fragment = loaded.fragment.as_ref().map(with_dependencies);
+        loaded.object = (loaded.object.as_ref())
+            .map(|stage| crate::dynamic_library::stage_with_dependencies(device, stage));
+        loaded.mesh = crate::dynamic_library::stage_with_dependencies(device, &loaded.mesh);
+        loaded.fragment = (loaded.fragment.as_ref())
+            .map(|stage| crate::dynamic_library::stage_with_dependencies(device, stage));
         let descriptor = &loaded;
         // Under `FAIL_ON_BINARY_ARCHIVE_MISS`, refused naming the mesh function where no listed
         // archive holds the descriptor's key (`BinaryArchive::add_mesh_render_pipeline_functions`).
