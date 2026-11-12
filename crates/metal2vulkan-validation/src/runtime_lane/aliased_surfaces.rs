@@ -13,7 +13,12 @@
 //! - [`textures_over_one_surface_s_bytes_take_one_shadow`]: four textures (two of each format) over
 //!   one `Private` surface past the bound, where the device makes such images: the first is a
 //!   shadow of its linear cost, and every later one over the same bytes takes the image at Metal's
-//!   pitch (`WorkCounts::pooled_pitched_images`), so the textures hold one shadow's bytes, not four.
+//!   pitch (`WorkCounts::pooled_pitched_images`), so the textures hold one shadow's bytes, not four;
+//!   the first's shadow moves to its image at the next quiet commit
+//!   (`WorkCounts::pooled_textures_moved_in_place`), and a read through it then copies nothing.
+//! - [`textures_made_one_after_another_over_one_surface_s_bytes_take_one_shadow`]: the same four
+//!   made one after another, each written and released before the next is made, as a guest's
+//!   frames make them: the first is a shadow, every later one takes the image.
 //! - [`writes_through_one_texture_reach_every_texture_over_the_bytes`]: a kernel's write through
 //!   each of those textures in turn is what a kernel reads through every other one, in the same
 //!   command buffer and in the next, and what the surface's bytes hold: Metal's aliasing of
@@ -347,6 +352,114 @@ fn textures_over_one_surface_s_bytes_take_one_shadow() {
             "every later texture in place"
         );
         assert_eq!(shadow_bytes, width * height * 4, "one shadow's bytes");
+        // The first texture's shadow moves to its image at Metal's pitch at the next commit of the
+        // device's only uncommitted command buffer, and goes once that command buffer completed:
+        // a later command buffer that reads it copies nothing.
+        let kernels = Kernels::new(device);
+        let queue = device.new_command_queue().unwrap();
+        let out = device
+            .new_buffer(height * height * 16, ResourceOptions::shared())
+            .unwrap();
+        let read = |texture: &Texture| {
+            let command_buffer = queue.command_buffer().unwrap();
+            kernels.read(&command_buffer, texture, &out, height);
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.error(), None);
+        };
+        read(&textures[0]);
+        let moved = device.work_counts();
+        read(&textures[0]);
+        let again = device.work_counts();
+        eprintln!(
+            "ALIASED-SURFACE {}: the first texture's shadow moved in place {}, freed {}; the \
+             next read's shadow copies {}",
+            device.name(),
+            moved.pooled_textures_moved_in_place - after.pooled_textures_moved_in_place,
+            again.pooled_texture_shadows_freed_after_move
+                - after.pooled_texture_shadows_freed_after_move,
+            again.shadow_copies - moved.shadow_copies,
+        );
+        assert_eq!(
+            moved.pooled_textures_moved_in_place - after.pooled_textures_moved_in_place,
+            1,
+            "the first texture's shadow moved in place"
+        );
+        assert_eq!(
+            again.shadow_copies - moved.shadow_copies,
+            0,
+            "a read after the move copies nothing"
+        );
+    });
+}
+
+#[test]
+fn textures_made_one_after_another_over_one_surface_s_bytes_take_one_shadow() {
+    super::host_memory::on_device_with(in_place, |device| {
+        assert!(
+            device.settle_in_place_checks(CHECK_WAIT),
+            "the check settles"
+        );
+        if !takes_pitched(device) {
+            eprintln!(
+                "ALIASED-SURFACE {}: no DRM_FORMAT_MOD_LINEAR image at a {}-byte pitch: nothing \
+                 to check",
+                device.name(),
+                SMALL.2
+            );
+            return;
+        }
+        let kernels = Kernels::new(device);
+        let queue = device.new_command_queue().unwrap();
+        let surface = small_surface(device);
+        let (width, height, pitch) = SMALL;
+        let bytes = pitch * height;
+        let linear_cost = TexturePlacement::Shadow(TextureShadowReason::LinearCost { bytes });
+        let before = device.work_counts();
+        // Each texture made, written by a kernel, and released once its command buffer completed,
+        // before the next is made over the same bytes, as a guest's frames make them.
+        let answers: Vec<TexturePlacement> = FORMATS
+            .iter()
+            .enumerate()
+            .map(|(n, &format)| {
+                let (texture, answer) = surface_texture(&surface, format, (width, height, pitch));
+                let command_buffer = queue.command_buffer().unwrap();
+                kernels.fill(
+                    &command_buffer,
+                    &texture,
+                    0x0102_0304 * (n as u32 + 1),
+                    height,
+                );
+                command_buffer.commit().unwrap();
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+                assert_eq!(command_buffer.error(), None);
+                answer
+            })
+            .collect();
+        let after = device.work_counts();
+        let shadows = after.shadowed_textures - before.shadowed_textures;
+        let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
+        eprintln!(
+            "ALIASED-SURFACE {}: {} textures made one after another over one Private surface of \
+             {bytes} bytes, each released before the next: answers {answers:?}; {shadows} \
+             shadows, {pitched} images at Metal's pitch",
+            device.name(),
+            answers.len(),
+        );
+        assert_eq!(answers[0], linear_cost, "the first texture over the bytes");
+        for (answer, format) in answers.iter().zip(FORMATS).skip(1) {
+            assert_eq!(
+                *answer,
+                TexturePlacement::NotHostPages,
+                "a later {format:?} texture over bytes a released texture was made over"
+            );
+        }
+        assert_eq!(shadows, 1, "one shadow over the bytes");
+        assert_eq!(
+            pitched,
+            FORMATS.len() as u64 - 1,
+            "every later texture in place"
+        );
     });
 }
 
