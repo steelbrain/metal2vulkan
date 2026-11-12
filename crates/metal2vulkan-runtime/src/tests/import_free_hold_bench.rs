@@ -7,11 +7,11 @@
 //! buffer in fresh pages, `fresh_pages.rs`), [`PIECES`] dma-bufs of 512 KiB of a sealed `memfd`'s
 //! pages (udmabuf, where the device imports dma-bufs and `/dev/udmabuf` opens), each imported as
 //! a no-copy buffer's is (`memory::import_dma_buf`: for a buffer made for dma-bufs, dedicated to it
-//! where the driver takes no import dedicated to nothing), and, beside them,
-//! [`PIECES`] plain host-visible allocations of 512 KiB. Each kind runs [`ROUNDS`] rounds of each
-//! order, alternating: its frees in turn, one right after another, and paced, each after a wait
-//! as long as the frees before it took, less the time since the last ended (`step_aside::pace`,
-//! the runtime's own threads' rule). Printed (`IMPORT-FREE-HOLD`), per kind: the makes' spread;
+//! where the driver takes no import dedicated to nothing), and, beside them, [`PIECES`] plain
+//! host-visible allocations of 512 KiB and four of 64 MiB (what a buffer not in fresh pages
+//! allocates). Each kind runs [`ROUNDS`] rounds of each order, alternating: its frees in turn, one
+//! right after another, and paced, each after a wait as long as the frees before it took, less the
+//! time since the last ended (`step_aside::pace`, the runtime's own threads' rule). Printed (`IMPORT-FREE-HOLD`), per kind: the makes' spread;
 //! per kind and order: the frees' spread, the runs' lengths, and the spread of the pings whose
 //! commit to completion overlapped a run, beside those that overlapped no make or free. Ignored:
 //! run it in release under `--cfg m2v_gpu`, `cargo test --release -p metal2vulkan-runtime --lib
@@ -434,6 +434,7 @@ fn import_free_hold_bench() {
         (Source::Pointer, 64 << 20, 4),
         (Source::DmaBuf, 512 << 10, PIECES),
         (Source::Plain, 512 << 10, PIECES),
+        (Source::Plain, 64 << 20, 4),
     ]
     .map(|(source, bytes, count)| Kind {
         source,
