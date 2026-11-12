@@ -1196,6 +1196,37 @@ driver's. Each is open work.
   take 2 to 3 MiB of it (seven devices of one process took 18 MiB), where a block of 64 MiB
   made for room took 67 MiB a device and the heap held three. Metal's command buffers wait for no
   allocation. Not announced.
+- **On NVIDIA, each `vkFreeMemory` holds the device's other submissions while it runs, an import
+  of host pages' included, and a program's own release of a no-copy buffer frees its import
+  unpaced.** On an RTX 3090 (NVIDIA 620.70.06, Linux), `tests::import_free_hold_bench` commits a
+  one-word fill every 250 us on one thread and waits for it, while another thread frees runs of
+  32 imports of 512 KiB of host pages by their pointer, four of 64 MiB (a buffer in fresh pages),
+  32 dma-buf imports of 512 KiB (udmabuf, each dedicated to a buffer as a no-copy buffer's is),
+  and 32 plain host-visible allocations of 512 KiB and four of 64 MiB, eight runs of each. The
+  fill took 0.13 to 0.14 ms from commit to completion (median, two runs) beside no free. Beside
+  frees one right after another it took 0.46 to 0.50 ms beside the 512 KiB pointer imports (each
+  free 0.26 to 0.28 ms), 0.47 to 0.54 ms beside the dma-buf imports (0.27 to 0.39 ms), 2.6 to 2.9
+  ms beside the 64 MiB imports (2.2 to 2.4 ms), 1.2 to 1.6 ms beside the plain 512 KiB
+  allocations (1.1 to 1.2 ms) and 70 to 79 ms beside the plain 64 MiB ones (28 to 30 ms): a
+  submission that meets a run of frees waits for more than the one it meets. Paced, each free
+  after a wait as long as the frees before it took (`step_aside::pace`), it took 0.29 to 0.32,
+  0.23 to 0.25, 0.10 to 0.13, 0.17 to 0.22 and 0.15 to 0.19 ms, the runs taking 1.2 to 2.2 times
+  as long; one free still holds a submission that meets it for its whole length (p99 2.6 to 3.0
+  ms beside the 64 MiB imports, 18 to 22 ms beside the plain 64 MiB allocations). An RTX 2080 on
+  the same driver, on a host loaded by other jobs, freed the 512 KiB pointer imports in 0.10 to
+  0.12 ms and the dma-buf ones in 0.69 to 0.81 ms (median), and pacing lowered the fill's median
+  beside every kind's runs there too. A probe outside the runtime that freed 32 pointer imports of
+  512 KiB in turn beside one fill submitted 4,800 times a second measured 0.52 to 0.90 ms a free
+  on the RTX 3090, and the fills' latency (median) rose from 0.12 to 3.9 and 8.3 ms with the GPU
+  otherwise idle, and from 0.74 to 11.4 and 12.7 ms beside 30 ms command buffers on another queue.
+  The runtime's own threads pace their runs of frees so: the free thread (its blocks, a buffer's
+  fresh pages among them), the residency thread's releases of idle imports, a guest RAM's
+  give-backs and idle releases, and the submission checks' import tax (`step_aside.rs`,
+  `WorkCounts::memory_frees_paced`). A program's own release of a no-copy buffer frees its import
+  in the release, as Metal lets the buffer go there, so a program that releases many at once holds
+  the device's other submissions for as long as their frees take together; so does a completed
+  command buffer's handler that frees the imports its blits held last, unpaced, as a wait there
+  would delay the completed handlers behind it. Not announced.
 - **With unified memory, `Private` memory lies in the system heap's types before the device-local
   ones, its buffers' blocks there allocated exportable but for buffers that declare their padding
   unobserved: about 1 µs a submission for each such block held.** Where the device has unified memory and a heap that is not
