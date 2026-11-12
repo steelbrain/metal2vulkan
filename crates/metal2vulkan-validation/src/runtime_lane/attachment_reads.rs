@@ -40,7 +40,9 @@
 //!   nor a copy, and answers the same.
 //! - [`an_own_pixel_read_without_a_barrier_reads_the_texels_from_before_the_pass`]: with no
 //!   barrier, `tob_read` over A's block draws the red from before the pass (probe `selfsample`),
-//!   its copy the texels around the block alone.
+//!   its copy the texels around the block alone; or, where the runtime reads the target through a
+//!   snapshot (over a buffer's bytes, on a device with the snapshot route: `render/snapshot.rs`),
+//!   A's red, as an x86 Mac reads with no barrier (`docs/API.md`'s accepted differences).
 //! - [`a_pass_that_samples_no_attachment_copies_nothing`]: A, then `tob_read` of another texture:
 //!   no read through a copy, split, own-pixel read or shadow copy.
 //! - [`a_draw_after_a_barrier_at_the_pass_start_reads_the_clear`]: a pass that clears the target
@@ -54,10 +56,12 @@
 //!   with draw A between the barrier and the read reads A's red inside A's block, the clear
 //!   around it, and takes no cleared copy.
 //! - [`a_draw_after_a_clear_with_no_barrier_reads_the_texels_from_before_the_pass`]: the same with
-//!   no barrier reads the red from before the pass, with no split.
+//!   no barrier reads the red from before the pass, with no split; or the clear, where the
+//!   runtime reads `psb_read` over a buffer's bytes through a snapshot.
 //! - [`a_barrier_at_the_pass_start_costs_nothing_without_a_read_of_a_cleared_color`]: a pass that
 //!   loads the target and reads it after the barrier, or clears it and reads another texture,
-//!   splits nothing and begins as many instances and copies as the same pass with no barrier.
+//!   splits nothing and begins as many instances and takes as many copies and snapshots as the
+//!   same pass with no barrier.
 
 use super::degrade_notices::{assert_once, counts, on_device};
 use crate::air_library::AirLibrary;
@@ -270,9 +274,10 @@ fn moved(before: &WorkCounts, after: &WorkCounts) -> Moved {
 /// Hold `moved` to a pass whose draws C sample the target `name`, after `barriers` barriers, one
 /// before each, or none: through a copy, taken after a split where a barrier came first or
 /// cleared to the pass's clear where one came before any draw of a pass that clears the target,
-/// or a draw after a barrier that reads at its own pixel alone through a snapshot inside its
-/// instance (`snapshot_reads.rs`), where the pass renders the target itself; in place where it
-/// renders through a stand-in.
+/// or a draw that reads at its own pixel alone through a snapshot inside its instance
+/// (`snapshot_reads.rs`), after a barrier or, where the runtime takes one with none (a target over
+/// a buffer's bytes, on a device with the snapshot route: `render/snapshot.rs`), with no barrier,
+/// where the pass renders the target itself; in place where it renders through a stand-in.
 fn check(name: &str, moved: &Moved, barriers: u64) {
     eprintln!(
         "attachment reads, {name}, barriers {barriers}: splits {}, cleared copies {}, snapshotted \
@@ -296,9 +301,11 @@ fn check(name: &str, moved: &Moved, barriers: u64) {
         );
         return;
     }
+    // With no barrier, a snapshot takes no split's place.
+    let unordered = if barriers == 0 { moved.snapshotted } else { 0 };
     assert_eq!(
         moved.splits + moved.cleared + moved.snapshotted,
-        barriers,
+        barriers + unordered,
         "{name}: a split, a cleared copy or a snapshot for each read after a barrier"
     );
     if moved.snapshotted < barriers.max(1) {
@@ -462,17 +469,30 @@ fn an_own_pixel_read_without_a_barrier_reads_the_texels_from_before_the_pass() {
                     .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
                     .unwrap();
             });
-            for y in 0..SIDE {
-                for x in 0..SIDE {
-                    assert_eq!(red(&bytes, x, y), BEFORE, "{name}: pixel ({x}, {y})");
-                }
-            }
             let after = device.work_counts();
             let moved = moved(&counted, &after);
+            // Through the copy, the texels from before the pass; through a snapshot, which the
+            // runtime takes over a buffer's bytes alone here, what A wrote.
+            assert!(
+                moved.snapshotted == 0 || name == "over a buffer",
+                "{name}: a snapshot"
+            );
+            let read = if moved.snapshotted == 1 {
+                DRAWN
+            } else {
+                BEFORE
+            };
+            for y in 0..SIDE {
+                for x in 0..SIDE {
+                    let inside = (8..16).contains(&x) && (8..16).contains(&y);
+                    let want = if inside { read } else { BEFORE };
+                    assert_eq!(red(&bytes, x, y), want, "{name}: pixel ({x}, {y})");
+                }
+            }
             check(name, &moved, 0);
             let own = after.own_pixel_reads - counted.own_pixel_reads;
             eprintln!("own-pixel reads, {name}: {own}");
-            if !moved.apart {
+            if !moved.apart && moved.snapshotted == 0 {
                 assert_eq!(own, 1, "{name}: own-pixel reads");
                 // The full scissor, the whole target: its copy every texel at most, and over a
                 // buffer a shadowed attachment's own every texel more.
@@ -1070,8 +1090,10 @@ fn a_draw_after_a_barrier_at_the_pass_start_reads_the_clear() {
 }
 
 /// With no barrier, the draw of a pass that clears its target reads the texels from before the
-/// pass at its own pixel, Metal's answer there (probe `selfsample`; the M3 Max reads them after a
-/// barrier too), with no split.
+/// pass at its own pixel through the copy, the M3 Max's answer (probe `selfsample`; it reads them
+/// after a barrier too), with no split; or, where the runtime reads `psb_read` through a snapshot
+/// (over a buffer's bytes, on a device with the snapshot route), the clear, an x86 Mac's answer
+/// (`docs/API.md`'s accepted differences).
 #[test]
 fn a_draw_after_a_clear_with_no_barrier_reads_the_texels_from_before_the_pass() {
     on_device(|device, _messages| {
@@ -1088,8 +1110,17 @@ fn a_draw_after_a_clear_with_no_barrier_reads_the_texels_from_before_the_pass() 
                     (&state, &target),
                 );
                 let after = device.work_counts();
-                hold_area(&name, &bytes, reordered([BEFORE, 0, 0, 255]), CLEAR);
                 let moved = moved(&counted, &after);
+                assert!(
+                    moved.snapshotted == 0
+                        || (name.starts_with("over a buffer") && fragment == "psb_read"),
+                    "{name}: a snapshot"
+                );
+                let seen = match moved.snapshotted {
+                    0 => [BEFORE, 0, 0, 255],
+                    _ => CLEAR,
+                };
+                hold_area(&name, &bytes, reordered(seen), CLEAR);
                 check(&name, &moved, 0);
                 assert_eq!(instances(&counted, &after)[0], 0, "{name}: a split");
             }
@@ -1149,8 +1180,9 @@ fn a_draw_after_one_that_wrote_behind_a_pass_start_barrier_reads_what_it_wrote()
 /// A barrier at the start of a pass costs nothing where no draw after it samples a color the pass
 /// clears: a pass that loads its target, whose draw reads at its own pixel the texels from before
 /// the pass (what the load holds), and one that clears it, whose draw reads another texture. Each
-/// splits no instance, begins as many render pass instances and takes as many copies as the same
-/// pass with no barrier.
+/// splits no instance, begins as many render pass instances and takes as many copies and
+/// snapshots as the same pass with no barrier (a snapshot where the runtime reads the loaded
+/// target through one, over a buffer's bytes on a device with the snapshot route).
 #[test]
 fn a_barrier_at_the_pass_start_costs_nothing_without_a_read_of_a_cleared_color() {
     on_device(|device, _messages| {
@@ -1212,8 +1244,11 @@ fn a_barrier_at_the_pass_start_costs_nothing_without_a_read_of_a_cleared_color()
                         moved.copies, moved.snapshotted
                     );
                     assert_eq!(splits, 0, "{name}, {start:?}: a split");
-                    assert_eq!(moved.snapshotted, 0, "{name}, {start:?}: a snapshot");
-                    costs.push((begun, moved.copies));
+                    assert!(
+                        moved.snapshotted == 0 || name.starts_with("over a buffer, loaded"),
+                        "{name}, {start:?}: a snapshot"
+                    );
+                    costs.push((begun, moved.copies, moved.snapshotted));
                 }
                 assert_eq!(costs[0], costs[1], "{name}: the barrier cost something");
             }
