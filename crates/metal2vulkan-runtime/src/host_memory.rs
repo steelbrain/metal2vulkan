@@ -328,7 +328,8 @@ impl HostMemory {
     /// than one `udmabuf` takes) are refused.
     ///
     /// A no-copy buffer's own import of the chunks (not a heap's or a rebind's) may be released
-    /// while idle, because RADV lists every import in every submission. The release frees its
+    /// while idle, or past the 64 the device keeps resident, because RADV lists every import in
+    /// every submission. The release frees its
     /// `VkBuffer` and memory and keeps the chunks open: the runtime keeps a duplicate descriptor of
     /// each, within a quarter of the process's `RLIMIT_NOFILE` soft limit. The next blit imports
     /// them again, on the thread that encodes it, which costs time then. A buffer whose

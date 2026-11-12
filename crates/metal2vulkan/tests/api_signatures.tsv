@@ -2976,6 +2976,7 @@ field	metal2vulkan-runtime::WorkCounts.host_imports_rebound_unlisted	pub host_im
 field	metal2vulkan-runtime::WorkCounts.host_imports_refused_by_host	pub host_imports_refused_by_host: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_reimported	pub host_imports_reimported: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_released	pub host_imports_released: u64
+field	metal2vulkan-runtime::WorkCounts.host_imports_released_over_most	pub host_imports_released_over_most: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_remapped	pub host_imports_remapped: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_resident	pub host_imports_resident: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_unpinnable	pub host_imports_unpinnable: u64

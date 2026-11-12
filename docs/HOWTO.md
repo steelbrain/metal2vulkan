@@ -279,7 +279,11 @@ buffer object. So the runtime releases a no-copy buffer's own import that only b
 (copies and fills of the buffer, copies between it and a texture) and no pending command buffer
 holds, once it has stayed idle for its window (2 seconds at first, doubled at each import again, up
 to 64 seconds), and imports it again at the buffer's next blit, on the thread that encodes it,
-which pays that time. Nothing of Metal's observes the release: the buffer's bytes, its Metal
+which pays that time. On a device whose held imports cost every submission (its import tax
+check; RADV, ANV on i915) at most 64 such imports stay resident: past that, the least recently
+used that no pending command buffer holds are released whatever their windows
+(`WorkCounts::host_imports_released_over_most`), as a window kept every import used every few
+seconds listed, 1,000 to 1,470 of them under a guest's 3D benchmark on an RX 7900 XTX. Nothing of Metal's observes the release: the buffer's bytes, its Metal
 address and its pages stay, and the CPU's writes made meanwhile are read. Two kinds of import are
 released:
 

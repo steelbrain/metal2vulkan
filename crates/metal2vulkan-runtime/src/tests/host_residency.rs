@@ -19,6 +19,9 @@
 //! - that a buffer past the descriptors the device keeps (capped through
 //!   `Device::cap_kept_host_import_fds`) is made and stays imported, counted while it lives
 //!   (`host_imports_kept_for_fds`);
+//! - that past the most releasable imports the device keeps resident (capped through
+//!   `Device::keep_resident_host_imports`) the least recently read is released whatever its
+//!   window (`host_imports_released_over_most`), and its next blit reads its pages;
 //! - that a placement and an import of a pointer made while a no-copy buffer's dma-buf import is
 //!   held where the driver's import runs (the memory's test stand-in, `Memory::import_hold`) wait
 //!   for none of it, and how long the device's memory lock and placements wait beside real
@@ -883,6 +886,115 @@ fn the_residency_thread_releases_an_idle_import_after_its_window() {
             );
         }
         drop(buffer);
+    });
+}
+
+/// With the device keeping at most two releasable imports resident (the crate's hook,
+/// `Device::keep_resident_host_imports`, in place of `host_residency::RESIDENT_MOST`, the most of a
+/// device whose held imports cost every submission), three no-copy buffers over the file's pages,
+/// each read by a blit in turn, where the device imports dma-bufs of them:
+/// - the release past the most releases one, the least recently read, whatever its window, and
+///   none once two remain (`WorkCounts::host_imports_released_over_most`);
+/// - the other two are read with no import again;
+/// - the released one's next blit imports it again and reads its bytes, the file's writes made
+///   while it was released among them.
+///
+/// It prints how long the release's free took and the blit's import again: what a release past
+/// the most moves to the residency thread and the encoding thread.
+#[test]
+fn past_the_most_resident_the_least_recently_read_import_is_released() {
+    const TEST: &str = "dma-buf residency past the most";
+    const MOST: usize = 2;
+    on_device(TEST, |device| {
+        let page = host_page();
+        let len = 4 * page;
+        let queue = device.new_command_queue().unwrap();
+        let ram = Ram::new((MOST + 1) * len, 0, (MOST + 1) * len);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut buffers = Vec::new();
+        for index in 0..=MOST {
+            let bytes = counting(len, 7 + index);
+            ram.write_file(index * len, &bytes);
+            let (buffer, chunks) = no_copy(TEST, device, &ram, (index * len, len), &calls);
+            if chunks == 0 {
+                assert!(read(&queue, &buffer, len) == bytes, "{TEST}");
+                return;
+            }
+            buffers.push((buffer, bytes));
+        }
+        // Read in turn: the first is the least recently read.
+        for (buffer, bytes) in &buffers {
+            assert!(read(&queue, buffer, len) == *bytes, "{TEST}");
+        }
+        let before = device.work_counts();
+        assert_eq!(before.host_imports_resident, (MOST + 1) as u64, "{TEST}");
+        device.keep_resident_host_imports(MOST as u64);
+        // Released by the hook or the residency thread, whichever comes first, once the command
+        // buffers that read them let go (on the device's handler thread).
+        let start = Instant::now();
+        let mut freed = Duration::ZERO;
+        loop {
+            let counts = device.work_counts();
+            if counts.host_imports_released_over_most > before.host_imports_released_over_most {
+                break;
+            }
+            assert!(
+                start.elapsed() < SETTLE,
+                "{TEST}: none released past the most"
+            );
+            let began = Instant::now();
+            if device.release_host_imports_over_most() > 0 {
+                freed = began.elapsed();
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            device.release_host_imports_over_most(),
+            0,
+            "{TEST}: two remain"
+        );
+        let released = device.work_counts();
+        assert_eq!(
+            (
+                released.host_imports_released_over_most - before.host_imports_released_over_most,
+                released.host_imports_released - before.host_imports_released,
+                released.host_imports_resident,
+            ),
+            (1, 1, MOST as u64),
+            "{TEST}: one released past the most"
+        );
+        // The two most recently read: no import again.
+        for (buffer, bytes) in &buffers[1..] {
+            assert!(read(&queue, buffer, len) == *bytes, "{TEST}");
+        }
+        assert_eq!(
+            device.work_counts().host_imports_reimported,
+            before.host_imports_reimported,
+            "{TEST}: the two kept were imported again"
+        );
+        // The released one: the file's writes made meanwhile, read by its next blit, which
+        // imports it again.
+        let written = counting(len, 101);
+        ram.write_file(0, &written);
+        let (bytes, importing) = gpu_read(&queue, &buffers[0].0, len);
+        assert!(bytes == written, "{TEST}: the bytes written while released");
+        assert_eq!(
+            device.work_counts().host_imports_reimported,
+            before.host_imports_reimported + 1,
+            "{TEST}: the released one imported again"
+        );
+        assert_eq!(
+            calls.load(Ordering::Acquire),
+            MOST + 1,
+            "{TEST}: the source's calls"
+        );
+        eprintln!(
+            "{TEST}: on {}: one of {} released past the most; its free took {freed:?} on the \
+             releasing thread (0 where the residency thread released it), and the blit that \
+             imported it again {importing:?} to encode",
+            device.name(),
+            MOST + 1,
+        );
     });
 }
 
