@@ -401,15 +401,32 @@ pub(crate) struct SubmitChecks {
     /// whatever the driver answered: a device test's injection (`tests::submit_check_device`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) lost_at_wait: AtomicBool,
-    /// The next submission of the checks waits for this timeline semaphore to reach this value,
-    /// so its fence signals only once something signals that: a device test's submission that
-    /// never completes (`tests::submit_check_device`).
+    /// A device test's submission that never completes (`tests::submit_check_device`): the
+    /// next submission of the checks ([`Injected`]).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) wait_at_submit: Mutex<Option<(vk::Semaphore, u64)>>,
+    pub(crate) wait_at_submit: Mutex<Option<Injected>>,
+    /// The submissions of the fence alone after a refused call ([`Objects::idle`]): a device
+    /// test's count.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) idles: AtomicU64,
     /// The bound the checks' waits and the teardown's take in place of [`STALL`]: a device
     /// test's.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) stall: Mutex<Option<Duration>>,
+}
+
+/// A device test's injection into the next submission of the checks
+/// ([`SubmitChecks::wait_at_submit`]): its first `VkSubmitInfo` waits for `semaphore`, a timeline,
+/// to reach `value`, so the submission completes only once something signals that; where
+/// `refuse_second`, it is the next submission of several calls, and its second call answers
+/// `VK_ERROR_OUT_OF_HOST_MEMORY` unmade, so the checks wait for the first's work alone
+/// ([`Objects::idle`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+#[derive(Clone, Copy)]
+pub(crate) struct Injected {
+    pub(crate) semaphore: vk::Semaphore,
+    pub(crate) value: u64,
+    pub(crate) refuse_second: bool,
 }
 
 impl SubmitChecks {
@@ -442,6 +459,8 @@ impl SubmitChecks {
             lost_at_wait: AtomicBool::new(false),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             wait_at_submit: Mutex::new(None),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            idles: AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             stall: Mutex::new(None),
         };
@@ -1693,7 +1712,10 @@ impl Objects {
             let _busy = exit_guard::enter()?;
             let raw = parts.vk();
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-            let injected = lock(&parts.checks.wait_at_submit).take();
+            let injected = {
+                let mut slot = lock(&parts.checks.wait_at_submit);
+                slot.take_if(|injected| !injected.refuse_second || calls > 1)
+            };
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             let mut timeline = vk::TimelineSemaphoreSubmitInfo::default();
             let infos: Vec<vk::SubmitInfo<'_>> = (buffers.iter())
@@ -1705,7 +1727,9 @@ impl Objects {
             // its first info waits for the test's timeline semaphore.
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             let infos = match &injected {
-                Some((semaphore, value)) => {
+                Some(Injected {
+                    semaphore, value, ..
+                }) => {
                     let mut infos = infos;
                     timeline = timeline.wait_semaphore_values(std::slice::from_ref(value));
                     infos[0] = infos[0]
@@ -1742,6 +1766,12 @@ impl Objects {
                 };
                 let mut submitted = Ok(());
                 for (infos, fence) in calls {
+                    // A device test's refused second call ([`Injected`]), unmade.
+                    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                    if spent.len() == 1 && injected.is_some_and(|injected| injected.refuse_second) {
+                        submitted = Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY);
+                        break;
+                    }
                     let start = Instant::now();
                     submitted = raw.queue_submit(queue, infos, fence);
                     spent.push(i64::try_from(start.elapsed().as_nanos()).unwrap_or(i64::MAX));
@@ -1769,8 +1799,8 @@ impl Objects {
             }
             Err(_) => {
                 parts.loader_word.end_step(step, mark);
-                // A refused call among several: those before it, and so the fence, were not all
-                // submitted, so the device waits for its queue rather than the fence.
+                // A refused call among several: those before it were submitted, and the fence
+                // with none, so the checks wait for that work by a submission of the fence alone.
                 return match calls > 1 {
                     true => self.idle(parts).map(|_| None),
                     false => Some(None),
@@ -1839,32 +1869,70 @@ impl Objects {
         }
     }
 
-    /// Wait until the first `VkQueue` is idle and reset the fence, after a refused call: `None`
-    /// where the process is exiting.
+    /// Wait until the work the checks submitted to the first `VkQueue` before a refused call
+    /// completed: the fence, reset, submitted alone after it ("If `submitCount` is zero but
+    /// `fence` is not `VK_NULL_HANDLE`, the fence will still be submitted to the queue and will
+    /// become signaled when all work previously submitted to the queue has completed",
+    /// `vkQueueSubmit`), and waited for as each of their submissions is ([`Objects::wait`],
+    /// within [`STALL`]). Where that submission is refused too, it is made again each
+    /// [`WAIT_SLICE`] until [`STALL`] passed, and the work stalled then. `None` where the process
+    /// is exiting, the device was lost or the work stalled (the module docs, "A stalled
+    /// submission").
     fn idle(&self, parts: &Parts) -> Option<()> {
-        let (step, mark) = {
-            let _busy = exit_guard::enter()?;
-            let raw = parts.vk();
-            // SAFETY: the queue is used under its lock, inside a section. The device's word is
-            // held from the wait's return across the relay's mark after it, taken inside the
-            // queue's lock, and where it was found overwritten through the wait for the mark, as
-            // a submission's is (`loader_word.rs`).
-            let use_queue = |queue: vk::Queue| unsafe {
-                let _ = raw.queue_wait_idle(queue);
-                parts.loader_word.held()
+        let started = Instant::now();
+        loop {
+            let (submitted, step, mark) = {
+                let _busy = exit_guard::enter()?;
+                let raw = parts.vk();
+                // SAFETY: the refused call left the fence in no pending submission, and every
+                // call before it took none.
+                let _ = unsafe { raw.reset_fences(&[self.fence]) };
+                exit_guard::called(Call::ResetFences);
+                // SAFETY: the queue is used under its lock, inside a section; the fence is
+                // unsignaled and in no pending submission. The device's word is held across the
+                // call and the relay's mark after it, as a submission's is (`loader_word.rs`).
+                let use_queue = |queue: vk::Queue| unsafe {
+                    let held = parts.loader_word.held();
+                    (held, raw.queue_submit(queue, &[], self.fence))
+                };
+                let ((held, submitted), mark) = (parts.queue_uses()).use_queue_kept(
+                    0,
+                    By::Checks,
+                    Uses::Unknown,
+                    true,
+                    use_queue,
+                );
+                // SAFETY: the device is live while its checks run.
+                let step = unsafe { parts.loader_word.step_hold(Some(held)) };
+                exit_guard::called(Call::QueueSubmit);
+                parts.counts.submit_check_called(1);
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                parts.checks.idles.fetch_add(1, Ordering::Relaxed);
+                (submitted, step, mark)
             };
-            let (held, mark) =
-                (parts.queue_uses()).use_queue_kept(0, By::Checks, Uses::Unknown, true, use_queue);
-            exit_guard::called(Call::QueueWaitIdle);
-            // SAFETY: the device is live while its checks run.
-            (unsafe { parts.loader_word.step_hold(Some(held)) }, mark)
-        };
-        parts.loader_word.end_step(step, mark);
-        let _busy = exit_guard::enter()?;
-        // SAFETY: no submission of the fence is pending once the queue is idle.
-        let _ = unsafe { parts.vk().reset_fences(&[self.fence]) };
-        exit_guard::called(Call::ResetFences);
-        Some(())
+            match submitted {
+                Ok(()) => {
+                    let waited = self.wait(parts);
+                    // As a submission's (`Objects::submit`): a stalled one's mark is not waited
+                    // for.
+                    let step = step.filter(|_| !parts.checks.stalled());
+                    parts.loader_word.end_step(step, mark);
+                    return waited.map(|_| ());
+                }
+                Err(vk::Result::ERROR_DEVICE_LOST) => {
+                    parts.loader_word.end_step(step, mark);
+                    return None;
+                }
+                Err(_) => {
+                    parts.loader_word.end_step(step, mark);
+                    if started.elapsed() >= parts.checks.bound() {
+                        parts.stall(started.elapsed());
+                        return None;
+                    }
+                    std::thread::sleep(WAIT_SLICE);
+                }
+            }
+        }
     }
 
     /// Let the objects go, inside a section: whether it ran (`false` once the process is
