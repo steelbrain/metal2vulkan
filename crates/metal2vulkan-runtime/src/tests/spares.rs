@@ -617,6 +617,13 @@ mod device {
     const APART: usize = 3;
     const EACH: usize = HELD / 2 + 64;
 
+    /// The mixed load's command buffers committed at once, the blit encoders of each command
+    /// buffer of its cycle, its cycles, and those it runs before its counts are read.
+    const MIXED_IN_FLIGHT: usize = 64;
+    const MIXED: [usize; 10] = [200, 2, 2, 2, 2, 2, 2, 2, 2, 2];
+    const MIXED_CYCLES: usize = 100;
+    const MIXED_WARM: usize = 40;
+
     /// The longest a command buffer, or the spares' count, is waited for.
     const WAIT: Duration = Duration::from_secs(30);
 
@@ -796,6 +803,75 @@ mod device {
         assert_eq!(
             made, 0,
             "the steady workload made {made} command buffers once warm"
+        );
+        drop((target, queue, device));
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A load of command buffers of mixed sizes, [`MIXED_IN_FLIGHT`] committed at once, the same
+    /// each cycle, makes and frees no command buffer once warm: its larger command buffers take
+    /// the spares holding the most past their first pools, so the pools' command buffers follow
+    /// what the load holds at once (`spares.rs`). Where each pool kept the most its own uses
+    /// handed out, and a taker took the newest, every pool came to keep the larger command
+    /// buffer's, past [`HELD`] together, and each give-back then shed the oldest spare, whose next
+    /// taker made its command buffers again.
+    #[test]
+    fn command_buffers_of_mixed_sizes_in_flight_make_and_free_none_once_warm() {
+        let scratch = std::env::temp_dir().join(format!("m2v-spares-mixed-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let device = device(&scratch);
+        let queue = device.new_command_queue().unwrap();
+        let target = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+        let mut flying = std::collections::VecDeque::new();
+        let mut warm = None;
+        for cycle in 0..MIXED_CYCLES {
+            if cycle == MIXED_WARM {
+                warm = Some((device.work_counts(), device.shared().spares.churn()));
+            }
+            for &encoders in &MIXED {
+                let command_buffer = queue.command_buffer().unwrap();
+                for at in 0..encoders {
+                    let mut blit = command_buffer.blit_command_encoder().unwrap();
+                    blit.fill_buffer(&target, 0..256, at as u8).unwrap();
+                    blit.end_encoding().unwrap();
+                }
+                command_buffer.commit().unwrap();
+                flying.push_back(command_buffer);
+                if flying.len() == MIXED_IN_FLIGHT {
+                    let oldest = flying.pop_front().unwrap();
+                    oldest.wait_until_completed_for(WAIT).unwrap();
+                    assert_eq!(oldest.status(), CommandBufferStatus::Completed);
+                }
+            }
+        }
+        for command_buffer in flying.drain(..) {
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+        }
+        device.shared().frees.drain();
+        let (warm, churn_warm) = warm.unwrap();
+        let (counts, churn) = (device.work_counts(), device.shared().spares.churn());
+        let allocated =
+            churn.allocated.values().sum::<u64>() - churn_warm.allocated.values().sum::<u64>();
+        let freed = [
+            churn.past_recent_uses - churn_warm.past_recent_uses,
+            churn.past_held - churn_warm.past_held,
+            churn.shed - churn_warm.shed,
+        ];
+        let trims = counts.spare_command_pool_trims - warm.spare_command_pool_trims;
+        println!(
+            "SPARES-MIXED {}: {MIXED_IN_FLIGHT} in flight of {MIXED:?}, {} cycles once warm: made \
+             {allocated} command buffers, freed {freed:?} (past recent uses, past the bound, \
+             shed), {trims} trims; the spares hold \
+             {} of {} begun",
+            device.name(),
+            MIXED_CYCLES - MIXED_WARM,
+            device.shared().spares.command_buffers_held(),
+            counts.command_buffers_begun - warm.command_buffers_begun,
+        );
+        assert_eq!(
+            (allocated, freed, trims),
+            (0, [0; 3], 0),
+            "the load made and freed command buffers once warm"
         );
         drop((target, queue, device));
         let _ = std::fs::remove_dir_all(&scratch);
