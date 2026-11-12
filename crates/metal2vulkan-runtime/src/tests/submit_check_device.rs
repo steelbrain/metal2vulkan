@@ -22,6 +22,10 @@
 //!   `tests/pointer_residency.rs`). Each
 //!   verdict is printed, with what the checks measured: the evidence of which path the device
 //!   took.
+//! - **A stall ends them, and the teardown.** A submission of theirs that never completes stalls
+//!   them at their bound, and the device's teardown returns within it again, the device left to
+//!   the process's end
+//!   ([`a_submission_that_never_completes_stalls_the_checks_and_the_teardown_returns`]).
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
@@ -31,7 +35,7 @@ use crate::submit_check::{record_name, Check, Verdict, MERGED, TAX_IMPORTS};
 use crate::tests::SETTLE;
 use crate::{
     CommandBufferStatus, Device, DeviceKind, DeviceOptions, EventRef, LayerSetting,
-    LayerSettingValue, ResourceOptions, ShaderCacheOptions,
+    LayerSettingValue, MessageSink, ResourceOptions, ShaderCacheOptions,
 };
 use metal2vulkan::vk::DriverId;
 use std::path::Path;
@@ -41,7 +45,12 @@ use std::time::{Duration, Instant};
 
 /// The device the cfg selects, its shader cache in `cache`.
 fn device(cache: &Path) -> Device {
-    let options = DeviceOptions {
+    Device::system_default_with(&options(cache)).unwrap()
+}
+
+/// The options of the device the cfg selects, its shader cache in `cache`.
+fn options(cache: &Path) -> DeviceOptions {
+    DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
             false => vec![
@@ -55,8 +64,7 @@ fn device(cache: &Path) -> Device {
             ..ShaderCacheOptions::default()
         },
         ..DeviceOptions::default()
-    };
-    Device::system_default_with(&options).unwrap()
+    }
 }
 
 /// The files under `directory` named `name`.
@@ -305,6 +313,153 @@ fn a_loss_stops_the_checks_with_nothing_submitted_again_or_recorded() {
         found.is_empty(),
         "a lost device's checks recorded {found:?}"
     );
+}
+
+/// The bound the stall test gives the checks' waits and the teardown's, in place of `STALL`.
+const STALL_BOUND: Duration = Duration::from_secs(2);
+
+/// What the stall test allows past [`STALL_BOUND`] for the checks to settle, or the teardown to
+/// return, beside the device tests' load.
+const STALL_SLACK: Duration = Duration::from_secs(10);
+
+/// Signals the stall test's timeline semaphore to 1 as it goes, where the device's `VkDevice` is
+/// still live (held, or left to the process's end), so its queue drains: a failing assertion
+/// before the device's drop unblocks the submission the drop's teardown would wait for.
+struct Unblock {
+    raw: crate::device::functions::Vk,
+    semaphore: ash::vk::Semaphore,
+    lineage: Arc<crate::device::line::Lineage>,
+}
+
+impl Drop for Unblock {
+    fn drop(&mut self) {
+        if self.lineage.counts().0 == 0 {
+            return;
+        }
+        let signal = ash::vk::SemaphoreSignalInfo::default()
+            .semaphore(self.semaphore)
+            .value(1);
+        // SAFETY: the semaphore is the test's, a timeline at 0, of a live device.
+        let _ = unsafe { self.raw.signal_semaphore(&signal) };
+    }
+}
+
+/// A submission of the checks that never completes (injected: its first `VkSubmitInfo` waits for
+/// a timeline semaphore of the test's that nothing signals, `SubmitChecks::wait_at_submit`)
+/// stalls them at their bound (the test's [`STALL_BOUND`] in place of `STALL`,
+/// `SubmitChecks::stall`): they settle, no verdict pending, nothing submitted after it, nothing
+/// recorded, the sink told once (`metal2vulkan-submit-check-stalled`). The device's teardown then
+/// waits for that submission up to the bound again and returns, leaving its `VkDevice` live to
+/// the process's end (`WorkCounts::vk_devices_live`'s count, read on the line after the drop).
+/// Without the bound, the checks' wait and the teardown behind it never return. The test then
+/// signals the semaphore, so the queue drains.
+#[test]
+fn a_submission_that_never_completes_stalls_the_checks_and_the_teardown_returns() {
+    use crate::submit_check::STALLED_ID;
+    use ash::vk;
+    let scratch = Scratch::new("submit-check-stall");
+    let heard: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let mut options = options(&scratch.0);
+    let hears = Arc::clone(&heard);
+    options.messages = Some(MessageSink::new(move |message| {
+        if message.id_name == STALLED_ID {
+            hears.lock().unwrap().push(message.text.clone());
+        }
+    }));
+    let device = Device::system_default_with(&options).unwrap();
+    let checks = Arc::clone(&device.shared().submit_checks);
+    checks.held.hold();
+    let deadline = Instant::now() + WAIT;
+    while checks.held.waiting() == 0 && !device.settle_submit_checks(Duration::ZERO) {
+        assert!(
+            Instant::now() < deadline,
+            "the checks neither held nor ended"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    if checks.held.waiting() == 0 {
+        checks.held.release();
+        println!(
+            "SKIPPED {}: the device's submission checks ended before the hold",
+            device.name()
+        );
+        return;
+    }
+    let raw = device.shared().vk().clone();
+    let mut kind = vk::SemaphoreTypeCreateInfo::default()
+        .semaphore_type(vk::SemaphoreType::TIMELINE)
+        .initial_value(0);
+    let info = vk::SemaphoreCreateInfo::default().push_next(&mut kind);
+    // SAFETY: the device is live.
+    let semaphore = unsafe { raw.create_semaphore(&info, None) }.unwrap();
+    let lineage = Arc::clone(&device.shared().lineage);
+    // Made after the device, so a failing assertion unblocks the submission before the device
+    // goes.
+    let _unblock = Unblock {
+        raw: raw.clone(),
+        semaphore,
+        lineage: Arc::clone(&lineage),
+    };
+    *crate::device::lock(&checks.stall) = Some(STALL_BOUND);
+    *crate::device::lock(&checks.wait_at_submit) = Some((semaphore, 1));
+    let before = device.work_counts().submit_check_calls;
+    let released = Instant::now();
+    checks.held.release();
+    assert!(
+        device.settle_submit_checks(STALL_BOUND + STALL_SLACK),
+        "the checks never ended"
+    );
+    let settled = released.elapsed();
+    let counts = device.work_counts();
+    let calls = counts.submit_check_calls - before;
+    let answered = verdicts(&device);
+    let report = device.submit_check_report();
+    println!(
+        "{}: settled {settled:?} after the hold, {calls} calls, verdicts {answered:?}; {report}",
+        device.name()
+    );
+    assert!(checks.stalled(), "the checks took no submission as stalled");
+    assert!(
+        settled >= STALL_BOUND,
+        "the checks settled {settled:?} after the hold, before their bound"
+    );
+    assert!(
+        checks.left_to_teardown(),
+        "the stalled submission's objects were not left to the teardown"
+    );
+    // One use of the queue, the stalled one: its calls and, where the device relays its queues'
+    // failures, the relay's mark after them.
+    assert!(
+        (1..=MERGED as u64 + 1).contains(&calls),
+        "{calls} calls from the hold: the checks submitted again after the stall"
+    );
+    assert_eq!(counts.submit_checks_run, 0, "the checks ran to their end");
+    assert!(
+        !answered.contains(&Verdict::Pending),
+        "the stalled checks left {answered:?}"
+    );
+    let told = heard.lock().unwrap().clone();
+    assert_eq!(told.len(), 1, "the sink heard {told:?}");
+    // SAFETY: the semaphore is the test's, of a live device.
+    let value = unsafe { raw.get_semaphore_counter_value(semaphore) }.unwrap();
+    assert_eq!(value, 0, "the submission's wait was met");
+    let name = record_name(&device.driver_identity());
+    let (live, _, _) = lineage.counts();
+    let dropped = Instant::now();
+    drop(device);
+    let teardown = dropped.elapsed();
+    let (left, _, _) = lineage.counts();
+    println!("teardown {teardown:?}, VkDevices live {live} before it and {left} after");
+    assert!(
+        teardown >= STALL_BOUND && teardown < STALL_BOUND + STALL_SLACK,
+        "the teardown took {teardown:?}: it waited for the stalled submission up to {STALL_BOUND:?}"
+    );
+    assert_eq!(
+        left, live,
+        "the teardown destroyed the VkDevice of a submission still pending"
+    );
+    let found = files_named(&scratch.0, &name);
+    assert!(found.is_empty(), "stalled checks recorded {found:?}");
 }
 
 /// The paths the verdicts choose: grouped batches, fresh pages, releasable pointer imports.

@@ -1842,7 +1842,15 @@ pipeline it creates to ask whether a set-0 buffer binding of several variables m
 descriptor, `FAST-PATHS.md`) hands the sink one line saying so, with the driver's result and the
 messages it reported inside that creation (id name `metal2vulkan-self-check-refused`, `Info`
 severity), in place of those messages: they answer the runtime's own question and name none of the
-program's work (MoltenVK 1.4.2 reports two errors there). That text is for people, not a contract.
+program's work (MoltenVK 1.4.2 reports two errors there). A device's own checks of its
+submissions (whether `VkSubmitInfo`s that signal nothing merge into one, and whether a held
+host-pointer import adds to every submission's cost) that wait 10 s for one of their submissions of
+an empty command buffer stop there and say so (id name `metal2vulkan-submit-check-stalled`, `Info`
+severity): nothing is submitted again, each check that had not answered takes the form a device
+without its answer takes for the device's life, and nothing is recorded. Where that submission
+still has not completed after 10 s more of the device's teardown, the teardown leaves the device
+and its instance to the process's end rather than wait for its idle. That text is for people, not
+a contract.
 
 Each entry below gives the code, its category, the `Degradation` kind (or the `PrecisionNote`) and
 what triggers it; a runtime kind's cost follows. The kind's rustdoc states the trigger, cost and

@@ -157,6 +157,19 @@
 //!   `recorder::unrouted`); its allocations and releases are counted as the checks'
 //!   (`WorkCounts::device_checks`), not among the process's (`object_churn`). Its
 //!   submission calls hold the device's loader word (`loader_word.rs`).
+//! - **A stalled submission.** A wait for one of its submissions, empty command buffers, that
+//!   passes [`STALL`] takes the device as lost for the checks: nothing is submitted again, the
+//!   checks end unrecorded, what had not answered `Unchecked`, and the instance's sink hears it
+//!   (id name [`STALLED_ID`], `Info` severity). The submission's fence and command buffers are
+//!   still pending, so the checks' thread leaves them to the device's teardown
+//!   ([`SubmitChecks::stop`]), which waits for that fence up to [`STALL`] more and releases them
+//!   once it signalled. Where it still has not, the teardown leaves the device, its objects and
+//!   its instance to the process's end, as where the process began to exit: its wait for the
+//!   device's idle would never return. Seen on the RTX 3090 (NVIDIA, Linux): six processes
+//!   making their devices at once, the kernel logged a pushbuffer error on two of their channels
+//!   (Xid 69 and 32), and one process's checks waited on their fence with no end, its teardown
+//!   behind them. The checks' longest wait otherwise, in [`Device::submit_check_report`],
+//!   stays far below [`STALL`].
 
 use crate::allocations::Allocations;
 use crate::command_buffer::fences::Fences;
@@ -164,6 +177,7 @@ use crate::device::functions::{Functions, Vk};
 use crate::device::relay::{By, QueueUses};
 use crate::device::submit_stalls::Uses;
 use crate::device::{lock, Device, QueueSlot};
+use crate::driver_facts::inform_through;
 use crate::exit_guard::{self, Call};
 use crate::freed_memory::Parking;
 use crate::host_memory::{Importer, PointerImport};
@@ -173,6 +187,7 @@ use crate::recorder::{self, Command};
 use crate::release;
 use crate::shader_cache::store::{hex, Lookup, Store};
 use crate::work_counts::Counters;
+use crate::MessageSink;
 use ash::vk;
 use sha2::{Digest, Sha256};
 use std::cell::Cell;
@@ -254,6 +269,15 @@ pub(crate) const TAX_REPEATS: usize = 2;
 
 /// How long one wait for a fence lasts before it is repeated.
 const WAIT_SLICE: Duration = Duration::from_millis(100);
+
+/// The longest the checks wait for one of their submissions, empty command buffers on the
+/// device's first `VkQueue`, before they take it as stalled (the module docs, "A stalled
+/// submission"); and the longest the device's teardown waits for it again before it leaves the
+/// device to the process's end ([`SubmitChecks::stop`]).
+pub(crate) const STALL: Duration = Duration::from_secs(10);
+
+/// The id name of the message that tells of a stalled submission of the checks.
+pub(crate) const STALLED_ID: &str = "metal2vulkan-submit-check-stalled";
 
 /// The longest a making whose path the verdicts choose once for good waits for them (a guest RAM
 /// with a source of dma-bufs, `host_ram.rs`): their run takes milliseconds.
@@ -357,6 +381,15 @@ pub(crate) struct SubmitChecks {
     /// Whether the checks' thread runs, and what tells its end.
     running: Mutex<bool>,
     ending: Condvar,
+    /// The longest the checks waited for one of their submissions in this process, in
+    /// nanoseconds, a stalled one's wait included ([`STALL`]).
+    longest_wait: AtomicU64,
+    /// A submission of the checks did not complete within [`STALL`] (the module docs, "A stalled
+    /// submission").
+    stalled: AtomicBool,
+    /// The objects a stalled submission names, still pending, left to the device's teardown
+    /// ([`SubmitChecks::stop`]).
+    left: Mutex<Option<Objects>>,
     /// The crate's device tests' hold of the checks between their steps
     /// (`tests/teardown_threads.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -365,6 +398,15 @@ pub(crate) struct SubmitChecks {
     /// whatever the driver answered: a device test's injection (`tests::submit_check_device`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) lost_at_wait: AtomicBool,
+    /// The next submission of the checks waits for this timeline semaphore to reach this value,
+    /// so its fence signals only once something signals that: a device test's submission that
+    /// never completes (`tests::submit_check_device`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) wait_at_submit: Mutex<Option<(vk::Semaphore, u64)>>,
+    /// The bound the checks' waits and the teardown's take in place of [`STALL`]: a device
+    /// test's.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) stall: Mutex<Option<Duration>>,
 }
 
 impl SubmitChecks {
@@ -388,10 +430,17 @@ impl SubmitChecks {
             waiters: AtomicU32::new(0),
             running: Mutex::new(false),
             ending: Condvar::new(),
+            longest_wait: AtomicU64::new(0),
+            stalled: AtomicBool::new(false),
+            left: Mutex::new(None),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             held: Default::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             lost_at_wait: AtomicBool::new(false),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            wait_at_submit: Mutex::new(None),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            stall: Mutex::new(None),
         };
         if merge_assumed {
             checks.set(Check::Merge, Verdict::Holds);
@@ -470,16 +519,53 @@ impl SubmitChecks {
         }
     }
 
-    /// The device's teardown: the checks stop at their next step, and this waits until their
-    /// thread ended, its objects released. That thread holds no device handle (its [`Parts`]),
-    /// so it never runs this teardown.
-    pub(crate) fn stop(&self) {
+    /// The device's teardown, inside its section of the exit guard: the checks stop at their
+    /// next step, and this waits until their thread ended, its objects released; whether the
+    /// device's work may be waited for. That thread holds no device handle (its [`Parts`]), so it
+    /// never runs this teardown. Where a submission of theirs stalled, this waits for it up to
+    /// [`STALL`] more and releases the objects it names once it completed. Where it still has
+    /// not, or the process began to exit meanwhile, `false`: a wait for the device's idle would
+    /// wait for it, so the device and those objects are left to the process's end (the module
+    /// docs, "A stalled submission").
+    pub(crate) fn stop(&self, raw: &Vk) -> bool {
         self.stopping.store(true, Ordering::SeqCst);
-        let mut running = lock(&self.running);
-        while *running {
-            running =
-                (self.ending.wait(running)).unwrap_or_else(std::sync::PoisonError::into_inner);
+        {
+            let mut running = lock(&self.running);
+            while *running {
+                running =
+                    (self.ending.wait(running)).unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
         }
+        let left = lock(&self.left).take();
+        left.is_none_or(|left| left.release_once_complete(raw, self.bound()))
+    }
+
+    /// The longest the checks wait for one of their submissions, and the teardown for a stalled
+    /// one: [`STALL`], or a device test's bound.
+    fn bound(&self) -> Duration {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        if let Some(bound) = *lock(&self.stall) {
+            return bound;
+        }
+        STALL
+    }
+
+    /// A wait of the checks for one of their submissions took `waited`: the longest is kept.
+    fn waited(&self, waited: Duration) {
+        let nanos = u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX);
+        self.longest_wait.fetch_max(nanos, Ordering::Relaxed);
+    }
+
+    /// Whether a submission of the checks stalled ([`STALL`]).
+    pub(crate) fn stalled(&self) -> bool {
+        self.stalled.load(Ordering::Acquire)
+    }
+
+    /// Whether the objects a stalled submission names wait for the device's teardown: a device
+    /// test's.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn left_to_teardown(&self) -> bool {
+        lock(&self.left).is_some()
     }
 
     /// Let the tests' hold of the checks go once the device's teardown stopped them, or once it
@@ -923,10 +1009,21 @@ impl Device {
             true => " assumed",
             false => "",
         };
+        let longest = match checks.longest_wait.load(Ordering::Relaxed) {
+            0 => String::new(),
+            nanos => format!(
+                ", its longest wait for a submission {:.2} ms",
+                nanos as f64 / 1e6
+            ),
+        };
+        let stalled = match checks.stalled() {
+            true => ", a submission stalled",
+            false => "",
+        };
         format!(
             "merge {:?}{assumed} ({:.1} us in one call of {MERGED} against {:.1} us apart), import tax \
              {:?} ({:.1} us a submission with {} imports of {} MiB in all held against {:.1} us), \
-             {took}{split}{merge_unearned}{unearned}{short}{tax_tries} (floors)",
+             {took}{split}{merge_unearned}{unearned}{short}{tax_tries}{longest}{stalled} (floors)",
             checks.verdict(Check::Merge),
             us(m.merged),
             us(m.apart),
@@ -962,6 +1059,8 @@ struct Parts {
     identity: DriverIdentity,
     /// The commands the checks record their command buffers with.
     recording: Recording,
+    /// The instance's sink, which hears a stalled submission (the module docs).
+    sink: Option<MessageSink>,
 }
 
 /// The commands the checks record their own command buffers with, as the device's driver gave
@@ -1022,7 +1121,27 @@ impl Parts {
             type_flags,
             identity: device.driver_identity(),
             recording: Recording::of(shared),
+            sink: shared.instance.sink().cloned(),
         }
+    }
+
+    /// A submission of the checks did not complete within the bound after `waited` ([`STALL`]):
+    /// noted, and the sink told, outside every section of the exit guard.
+    fn stall(&self, waited: Duration) {
+        let checks = &*self.checks;
+        checks.waited(waited);
+        checks.stalled.store(true, Ordering::Release);
+        let text = format!(
+            "the device's submission checks waited {:.1} s for a submission of an empty command \
+             buffer on its first VkQueue (family {}), which did not complete: they stop, nothing \
+             is submitted again, each check not answered is Unchecked for the device's life, and \
+             nothing is recorded; the device's teardown waits for that submission up to {:.1} s \
+             more and, where it still has not completed, leaves the device to the process's end",
+            waited.as_secs_f64(),
+            self.queues[0].family,
+            checks.bound().as_secs_f64(),
+        );
+        inform_through(self.sink.as_ref(), STALLED_ID, text);
     }
 
     /// The device's functions.
@@ -1098,6 +1217,13 @@ fn run(parts: &Parts, made: Made) {
         return;
     };
     let ran = measure(parts, &objects);
+    if checks.stalled() {
+        // The stalled submission's fence and command buffers are still pending: they go with the
+        // device's teardown, once it sees it complete ([`SubmitChecks::stop`]).
+        *lock(&checks.left) = Some(objects);
+        checks.settle_unchecked();
+        return;
+    }
     parts.step();
     let released = objects.release(parts);
     let Some((measured, kept)) = ran.filter(|_| released) else {
@@ -1563,11 +1689,30 @@ impl Objects {
         let (submitted, step, mark) = {
             let _busy = exit_guard::enter()?;
             let raw = parts.vk();
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            let injected = lock(&parts.checks.wait_at_submit).take();
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            let mut timeline = vk::TimelineSemaphoreSubmitInfo::default();
             let infos: Vec<vk::SubmitInfo<'_>> = (buffers.iter())
                 .map(|buffer| {
                     vk::SubmitInfo::default().command_buffers(std::slice::from_ref(buffer))
                 })
                 .collect();
+            // A device test's submission that never completes (`SubmitChecks::wait_at_submit`):
+            // its first info waits for the test's timeline semaphore.
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            let infos = match &injected {
+                Some((semaphore, value)) => {
+                    let mut infos = infos;
+                    timeline = timeline.wait_semaphore_values(std::slice::from_ref(value));
+                    infos[0] = infos[0]
+                        .wait_semaphores(std::slice::from_ref(semaphore))
+                        .wait_dst_stage_mask(&[vk::PipelineStageFlags::ALL_COMMANDS])
+                        .push_next(&mut timeline);
+                    infos
+                }
+                None => infos,
+            };
             // SAFETY: the queue is used under its lock, inside a section; each command buffer is
             // recorded, ended and in no pending submission (each round waits for the last); the
             // fence is unsignaled and in no pending submission. The device's word is held across
@@ -1630,6 +1775,9 @@ impl Objects {
             }
         };
         let waited = self.wait(parts);
+        // A stalled submission's relay mark completes no sooner than it: a step held whole lets
+        // go of the device's word without waiting for the mark.
+        let step = step.filter(|_| !parts.checks.stalled());
         parts.loader_word.end_step(step, mark);
         if !waited? {
             return Some(None);
@@ -1650,28 +1798,38 @@ impl Objects {
     }
 
     /// Wait for the fence, a slice at a time, each a section, then reset it: whether it was
-    /// signalled. `None` where the process is exiting or the device was lost.
+    /// signalled. `None` where the process is exiting, the device was lost, or the submission
+    /// stalled: it did not complete within the checks' bound ([`STALL`]), and the checks take
+    /// the device as lost for them (the module docs, "A stalled submission").
     fn wait(&self, parts: &Parts) -> Option<bool> {
+        let checks = &*parts.checks;
+        let started = Instant::now();
         loop {
-            let _busy = exit_guard::enter()?;
+            let busy = exit_guard::enter()?;
             let raw = parts.vk();
             // SAFETY: the check's fence, signalled by a submission made.
             let waited =
                 unsafe { raw.wait_for_fences(&[self.fence], true, WAIT_SLICE.as_nanos() as u64) };
             exit_guard::called(Call::WaitForFences);
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-            let waited = match parts.checks.lost_at_wait.swap(false, Ordering::AcqRel) {
+            let waited = match checks.lost_at_wait.swap(false, Ordering::AcqRel) {
                 true => Err(vk::Result::ERROR_DEVICE_LOST),
                 false => waited,
             };
             match waited {
                 Ok(()) => {
+                    checks.waited(started.elapsed());
                     // SAFETY: the fence is signalled, in no pending submission.
                     let reset = unsafe { raw.reset_fences(&[self.fence]) };
                     exit_guard::called(Call::ResetFences);
                     return Some(reset.is_ok());
                 }
-                Err(vk::Result::TIMEOUT) => continue,
+                Err(vk::Result::TIMEOUT) if started.elapsed() < checks.bound() => continue,
+                Err(vk::Result::TIMEOUT) => {
+                    drop(busy);
+                    parts.stall(started.elapsed());
+                    return None;
+                }
                 Err(vk::Result::ERROR_DEVICE_LOST) => return None,
                 Err(_) => return Some(false),
             }
@@ -1720,6 +1878,33 @@ impl Objects {
             if self.fence != vk::Fence::null() {
                 release::object(raw, self.fence);
             }
+            release::object(raw, self.pool);
+        }
+        true
+    }
+
+    /// The objects a stalled submission names ([`SubmitChecks::stop`]), inside the device's
+    /// teardown's section: wait for its fence a slice at a time, up to `bound`, then release
+    /// them. Whether it completed: `false` where the bound passed or the process began to exit
+    /// meanwhile, the objects then left to the process's end with the device.
+    fn release_once_complete(self, raw: &Vk, bound: Duration) -> bool {
+        let started = Instant::now();
+        loop {
+            // SAFETY: the checks' fence, of the stalled submission made.
+            let waited =
+                unsafe { raw.wait_for_fences(&[self.fence], true, WAIT_SLICE.as_nanos() as u64) };
+            exit_guard::called(Call::WaitForFences);
+            match waited {
+                // Signalled, or the device lost, which Vulkan counts as the submission's
+                // completion.
+                Ok(()) | Err(vk::Result::ERROR_DEVICE_LOST) => break,
+                Err(vk::Result::TIMEOUT) if started.elapsed() < bound && !exit_guard::closed() => {}
+                Err(_) => return false,
+            }
+        }
+        // SAFETY: the submission that named them completed, and none other is pending.
+        unsafe {
+            release::object(raw, self.fence);
             release::object(raw, self.pool);
         }
         true

@@ -1027,8 +1027,10 @@ impl Drop for DeviceShared {
         // The queue-switch check holds nothing of the device either: it stops at its next step,
         // and its objects go before the wait returns (`queue_switch_check.rs`).
         self.queue_switch.stop();
-        // So do the submission checks (`submit_check.rs`).
-        self.submit_checks.stop();
+        // So do the submission checks (`submit_check.rs`). Where a submission of theirs stalled
+        // and still has not completed, the device's work cannot be waited for: the device is
+        // left to the process's end (below).
+        let checks_ended = self.submit_checks.stop(self.vk());
         // The watch of the program's marks and the releases of freed memory, posted to the
         // handler threads, hold nothing of the device: those that begin from here on call
         // nothing, and the threads' stop below waits for those running (`freed_memory.rs`).
@@ -1065,6 +1067,13 @@ impl Drop for DeviceShared {
         // progress (the wait for idle, and `vkDestroyDevice` above all, take long beside other
         // processes' work on the GPU).
         if exit_guard::closed() {
+            return;
+        }
+        // Likewise where a submission of the submission checks never completed: the wait for
+        // idle would never return, and its objects are still pending. The instance, which may
+        // not go before its devices, is kept to the process's end with the device.
+        if !checks_ended {
+            std::mem::forget(Arc::clone(&self.instance));
             return;
         }
         // SAFETY: the device is live; waiting for idle covers any work the consumer of an
