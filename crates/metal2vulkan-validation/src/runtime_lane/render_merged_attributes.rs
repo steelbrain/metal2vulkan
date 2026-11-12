@@ -339,7 +339,7 @@ fn pulled_attributes_of_executed_draws_draw_what_the_host_step_draws() {
                     .take(8)
                     .collect::<Vec<_>>()
             );
-            for (merged, gpu, read) in forms {
+            for &(merged, gpu, read) in &forms {
                 assert!(
                     merged == 0 && gpu == 0 && read >= COMMANDS,
                     "{kernel}: the host step {forms:?}"
