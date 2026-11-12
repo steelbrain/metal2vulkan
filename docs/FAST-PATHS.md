@@ -639,15 +639,15 @@ driver's. Each is open work.
   0, 256 and 32, and makes one at rows 256 bytes apart; its
   `minimumLinearTextureAlignmentForPixelFormat` answers 256. So an `RGBA16Float` 18x28 IOSurface
   plane at its 192-byte rows, and dma-buf planes at rows 384 or 1920 bytes apart, are shadows on
-  the Radeon 780M (Mesa 26.2.6), where lavapipe lays its linear rows at those pitches and makes
-  each explicit plane. The RTX 3090 (620.70.06) is alike at multiples of 128 bytes: it lays an
-  `A8Unorm` row of 100 texels 128 bytes apart, makes an explicit plane asked at rows 192 bytes
-  apart with its rows reported 256 apart (which the runtime takes for none), and its
-  `minimumLinearTextureAlignmentForPixelFormat` answers 128; glyph-sized `A8Unorm` textures at
-  rows 16, 32, 64, 112, 208 or 448 bytes apart over a `Shared` buffer are shadows there. The
-  surface or the dma-buf
-  sets the pitch, not the runtime: a consumer that lays out a surface of its own can lay its rows
-  at the alignment `Device::minimum_linear_texture_alignment_for_pixel_format` answers.
+  the Radeon 780M and the RX 7900 XTX (Mesa 26.2.6), where lavapipe lays its linear rows at those
+  pitches and makes each explicit plane. The RTX 3090 (620.70.06) is alike at multiples of 128
+  bytes: it lays an `A8Unorm` row of 100 texels 128 bytes apart, makes an explicit plane asked at
+  rows 192 bytes apart with its rows reported 256 apart (which the runtime takes for none), and
+  its `minimumLinearTextureAlignmentForPixelFormat` answers 128; glyph-sized `A8Unorm` textures
+  at rows 16, 32, 64, 112, 208 or 448 bytes apart over a `Shared` buffer are shadows there. The
+  surface or the dma-buf sets the pitch, not the runtime: a consumer that lays out a surface of
+  its own can lay its rows at the alignment
+  `Device::minimum_linear_texture_alignment_for_pixel_format` answers.
 - **On NVIDIA, a texture that renders over rows with bytes between them in memory only the
   device's ordered commands write is a shadow** (`shadowed-texture`, `BytesBetweenRows`): a
   `Private` buffer's, or a `Managed` one's own copy. Such a texture is in place where the
