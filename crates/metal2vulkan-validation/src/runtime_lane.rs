@@ -363,6 +363,8 @@ mod depth_costs;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod depth_denormals;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod depth_executions;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod depth_never;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod depth_stencil_churn;
