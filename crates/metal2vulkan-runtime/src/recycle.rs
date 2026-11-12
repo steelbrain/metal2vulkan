@@ -54,9 +54,11 @@
 //!   each making's parked objects (a hash of the making, not a search of every parked one).
 //! - **Bounded.** At most [`IMAGES`]' and [`BUFFERS`]' count and bytes parked, and none parked
 //!   longer than their time: one parked longer goes, as it went before (destroyed, its memory
-//!   freed). Past the count or bytes, the one parked earliest goes of those no take has handed out
-//!   before; one a take has handed out (its making came again while it was parked, as a frame's
-//!   textures of the same shapes do every frame) goes first only where such hold more than three
+//!   freed), at the next park or take, or within a second after on the device's idle sweep
+//!   (`idle_sweep.rs`) where none comes. Past the count or bytes, the one parked earliest goes of
+//!   those no take has handed out before; one a take has handed out (its making came again while
+//!   it was parked, as a frame's textures of the same shapes do every frame) goes first only
+//!   where such hold more than three
 //!   quarters of the count or bytes, or no other is parked. So a run of makings that never come
 //!   again (a window resized frame by frame) evicts its own, not the objects each frame takes,
 //!   and those still leave a quarter of the bounds to makings new to them. The memory a parked
@@ -80,7 +82,8 @@ use std::time::{Duration, Instant};
 pub(crate) struct Bounds {
     most: usize,
     most_bytes: u64,
-    /// The longest an object stays parked: one parked longer goes at the next park or take.
+    /// The longest an object stays parked: one parked longer goes at the next park or take, or on
+    /// the device's idle sweep where none comes (`idle_sweep.rs`).
     pub(crate) parked_for: Duration,
 }
 
@@ -327,6 +330,27 @@ impl<R: Copy + Eq + Hash, M: Clone + Eq + Hash> Recycler<R, M> {
         };
         let (order, parked) = segment.pop_first(None)?;
         Some(self.unindexed(order, parked))
+    }
+
+    /// The objects parked longer than the bounds' time at `now`, out of the recycler, to destroy,
+    /// for the device's idle sweep (`idle_sweep.rs`); and when the next still parked goes.
+    pub(crate) fn sweep(&mut self, now: Instant) -> (Gone<R>, Option<Instant>) {
+        let gone = self.stale(now);
+        (gone, self.due())
+    }
+
+    /// When the object parked earliest has stayed parked for the bounds' time: `None` where none
+    /// is parked.
+    pub(crate) fn due(&self) -> Option<Instant> {
+        let first = |segment: &Segment<R, M>| {
+            let (_, parked) = segment.parked.first_key_value()?;
+            Some(parked.since)
+        };
+        let since = first(&self.trial)
+            .into_iter()
+            .chain(first(&self.proven))
+            .min()?;
+        Some(since + self.bounds.parked_for)
     }
 
     /// The objects parked longer than the bounds' time at `now`, out of the recycler.

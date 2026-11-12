@@ -830,7 +830,7 @@ fn a_kept_empty_block_beyond_one_goes_after_its_quiet_period() {
     let second = pool.add(256, false, "second", 256);
     assert_eq!(pool.release(first, (0, 256), start, 0, |_| false), None);
     assert_eq!(
-        pool.stale(later),
+        pool.stale(later, true),
         None,
         "one kept block stays, however long"
     );
@@ -839,17 +839,17 @@ fn a_kept_empty_block_beyond_one_goes_after_its_quiet_period() {
         None
     );
     assert_eq!(
-        pool.stale(later - KEPT_EMPTY_FOR / 4),
+        pool.stale(later - KEPT_EMPTY_FOR / 4, true),
         None,
         "neither stayed empty so long"
     );
     assert_eq!(
-        pool.stale(later),
+        pool.stale(later, true),
         Some("first"),
         "the earliest emptied goes first"
     );
     assert_eq!(
-        pool.stale(later + KEPT_EMPTY_FOR),
+        pool.stale(later + KEPT_EMPTY_FOR, true),
         None,
         "the last kept block stays"
     );
@@ -860,12 +860,49 @@ fn a_kept_empty_block_beyond_one_goes_after_its_quiet_period() {
     let at = later + KEPT_EMPTY_FOR;
     assert_eq!(pool.release(second, (0, 256), at, 0, |_| false), None);
     assert_eq!(pool.release(third, (0, 256), at, 0, |_| false), None);
-    assert_eq!(pool.stale(at + KEPT_EMPTY_FOR / 2), None);
+    assert_eq!(pool.stale(at + KEPT_EMPTY_FOR / 2, true), None);
     let mut taken = pool.take_kept();
     taken.sort_unstable();
     assert_eq!(taken, ["second", "third"]);
     assert_eq!(pool.blocks(), 0);
     assert_eq!(pool.turnover(), (3, 3));
+}
+
+/// In a pool that keeps no room for the runtime's own resources, the last kept empty block goes
+/// too once it stayed empty for `KEPT_EMPTY_FOR`; in one that keeps room it stays. Each pool says
+/// when its next kept block may go (`Pool::stale_at`, what the device's idle sweep waits for), and
+/// nothing where none may go but at a change; a block added empty and never placed in stays.
+#[test]
+fn a_pool_without_room_lets_its_last_kept_block_go() {
+    let start = Instant::now();
+    let mut pool: Pool<&str> = Pool::default();
+    assert_eq!(pool.stale_at(false), None, "nothing kept");
+    let only = pool.add(256, false, "only", 256);
+    let fresh = pool.add(256, false, "fresh", 0);
+    assert_eq!(
+        pool.stale_at(false),
+        None,
+        "a block added empty is kept as long as it stays so"
+    );
+    assert_eq!(pool.release(only, (0, 256), start, 0, |_| false), None);
+    assert_eq!(pool.stale_at(false), Some(start + KEPT_EMPTY_FOR));
+    assert_eq!(
+        pool.stale(start + KEPT_EMPTY_FOR / 2, false),
+        None,
+        "not yet"
+    );
+    assert_eq!(pool.stale(start + KEPT_EMPTY_FOR, false), Some("only"));
+    assert_eq!(pool.stale_at(false), None);
+    // The block added empty, placed in and emptied: the last kept one of a pool with room stays.
+    assert_eq!(pool.place(256, 1), Some((fresh, 0)));
+    let at = start + KEPT_EMPTY_FOR;
+    assert_eq!(pool.release(fresh, (0, 256), at, 0, |_| false), None);
+    assert_eq!(pool.stale_at(true), None, "the room stays");
+    assert_eq!(pool.stale(at + 2 * KEPT_EMPTY_FOR, true), None);
+    assert_eq!(pool.stale_at(false), Some(at + KEPT_EMPTY_FOR));
+    assert_eq!(pool.stale(at + KEPT_EMPTY_FOR, false), Some("fresh"));
+    assert_eq!(pool.blocks(), 0);
+    assert_eq!(pool.turnover(), (2, 2));
 }
 
 #[test]
@@ -1021,8 +1058,12 @@ fn a_kept_dedicated_block_takes_the_next_dedicated_placement_it_fits() {
     assert_eq!(pool.place_dedicated(800), Some(long));
     assert_eq!(pool.kept_bytes(), 0);
     assert_eq!(pool.release(long, (0, 800), start, 4000, |_| true), None);
-    assert_eq!(pool.stale(start + KEPT_EMPTY_FOR / 2), None, "not yet");
-    assert_eq!(pool.stale(start + KEPT_EMPTY_FOR), Some("long"));
+    assert_eq!(
+        pool.stale(start + KEPT_EMPTY_FOR / 2, true),
+        None,
+        "not yet"
+    );
+    assert_eq!(pool.stale(start + KEPT_EMPTY_FOR, true), Some("long"));
     assert_eq!(pool.kept_bytes(), 0);
     assert_eq!(pool.turnover(), (0, 0), "no pooled block came or went");
 }

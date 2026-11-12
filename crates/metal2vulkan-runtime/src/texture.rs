@@ -221,7 +221,7 @@ pub(super) struct TextureState {
     /// The neutral images and samplers bindings take where nothing is bound (`neutral.rs`).
     pub(super) neutrals: Mutex<Neutrals>,
     /// Parked images, and the makings of the live recyclable ones (`recycle.rs`).
-    pub(super) recycled: Mutex<Recycler<vk::Image, ImageMaking>>,
+    pub(super) recycled: Arc<Mutex<Recycler<vk::Image, ImageMaking>>>,
     /// The placeholder images of the colors a render pass instance leaves out of its subpass for
     /// the pixel interlock (`storage_placeholder.rs`).
     pub(super) storage_placeholders: Mutex<Placeholders>,
@@ -284,7 +284,7 @@ impl TextureState {
                 &crate::driver_defects::of(description),
             ),
             neutrals: Mutex::new(Neutrals::default()),
-            recycled: Mutex::new(Recycler::new(recycle::IMAGES)),
+            recycled: Arc::new(Mutex::new(Recycler::new(recycle::IMAGES))),
             storage_placeholders: Mutex::new(Placeholders::default()),
             usage_answers: Mutex::new(UsageAnswers::default()),
             sample_moves: Mutex::new(Vec::new()),
@@ -1486,7 +1486,12 @@ impl Image {
                 match recycled.holds(raw) {
                     true if !detached && !shareable && self.form.placement().is_none() => {
                         let now = Instant::now();
-                        recycled.park(raw, placement.handed_over(), now).ok()
+                        let parked = recycled.park(raw, placement.handed_over(), now).ok();
+                        // Gone in time where no park or take comes (`idle_sweep.rs`).
+                        if let Some(due) = recycled.due() {
+                            shared.idle_sweep.by(due);
+                        }
+                        parked
                     }
                     true => {
                         recycled.forget(raw);

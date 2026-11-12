@@ -946,9 +946,16 @@ impl Drop for FixedPages {
         // and one whose resident set lists them holds them, until it completed.
         let placement = &self.pages.memory.placement;
         let parked = match self.owned {
-            true => (lock(&shared.recycled_buffers))
-                .park(self.pages.raw, placement.handed_over(), Instant::now())
-                .ok(),
+            true => {
+                let mut recycled = lock(&shared.recycled_buffers);
+                let now = Instant::now();
+                let parked = recycled.park(self.pages.raw, placement.handed_over(), now);
+                // Gone in time where no park or take comes (`idle_sweep.rs`).
+                if let Some(due) = recycled.due() {
+                    shared.idle_sweep.by(due);
+                }
+                parked.ok()
+            }
             false => None,
         };
         match parked {

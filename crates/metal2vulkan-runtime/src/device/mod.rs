@@ -330,7 +330,7 @@ pub(super) struct DeviceShared {
     pub(super) addresses: Arc<Mutex<AddressSpace>>,
     /// Parked buffers of the runtime's own memory, and the makings of the live recyclable ones
     /// (`recycle.rs`).
-    pub(super) recycled_buffers: Mutex<Recycler<vk::Buffer, BufferMaking>>,
+    pub(super) recycled_buffers: Arc<Mutex<Recycler<vk::Buffer, BufferMaking>>>,
     /// The resource IDs of textures and sampler states (`resource_ids.rs`).
     pub(super) resource_ids: Arc<Mutex<ResourceIds>>,
     /// The runtime's passing holds of the program's textures and sampler states, which a
@@ -613,6 +613,9 @@ pub(super) struct DeviceShared {
     /// them (`host_residency.rs`).
     #[cfg(unix)]
     pub(super) residency: super::host_residency::Sweeper,
+    /// What lets go of its kept empty memory blocks and parked objects once their time passed,
+    /// whether or not the program makes anything more, and its thread (`idle_sweep.rs`).
+    pub(super) idle_sweep: crate::idle_sweep::IdleSweep,
     /// How its command buffers are timed on the GPU (`gpu_time.rs`).
     pub(super) timing: Timing,
     /// Its Vulkan views may present an image in another component layout: it has no portability
@@ -1060,6 +1063,9 @@ impl Drop for DeviceShared {
         // What the residency thread releases holds the device: none is left.
         #[cfg(unix)]
         self.residency.stop();
+        // The idle sweep holds nothing of the device: it ends before the parked objects and the
+        // memory go below (`idle_sweep.rs`).
+        self.idle_sweep.stop();
         self.completion.stop();
         self.contexts.stop();
         // An exit that began meanwhile waits for this teardown (`exit_guard`): from here on the
@@ -1536,6 +1542,14 @@ impl Device {
             return;
         }
         let shared = self.shared();
+        // The idle sweep's thread, from the device's first such call on (`idle_sweep.rs`).
+        shared.idle_sweep.start(|| crate::idle_sweep::Swept {
+            memory: Arc::clone(&shared.memory),
+            images: Arc::clone(&shared.textures.recycled),
+            buffers: Arc::clone(&shared.recycled_buffers),
+            functions: Arc::clone(&shared.functions),
+            counts: Arc::clone(&shared.counts),
+        });
         let copies = || self.copies_color_on_the_host();
         let memory = &shared.memory;
         // The kind of block the runtime's own buffers take now (`buffer.rs`'s
@@ -2671,6 +2685,10 @@ impl Device {
         let functions = Arc::new(functions);
         let frees = Arc::new(crate::free_thread::FreeThread::new(Arc::clone(&functions)));
         memory.post_frees_to(Arc::clone(&frees));
+        // Its kept empty blocks go once their time passed, on its idle sweep's thread where no
+        // call of the program's comes (`idle_sweep.rs`).
+        let idle_sweep = crate::idle_sweep::IdleSweep::default();
+        memory.sweep_through(idle_sweep.due());
         (allocations.allocations).wait_for_frees_on(Arc::clone(&frees));
         // The device's line: a new one for a device made now, else the line this generation
         // recovers, whose address space, resource IDs, identifiers and counts it goes on with
@@ -2742,7 +2760,7 @@ impl Device {
                 limits.max_descriptor_set_storage_buffers_dynamic,
             ],
             memory: Arc::new(Mutex::new(memory)),
-            recycled_buffers: Mutex::new(Recycler::new(recycle::BUFFERS)),
+            recycled_buffers: Arc::new(Mutex::new(Recycler::new(recycle::BUFFERS))),
             resource_ids,
             passing_holds,
             keepers: Keepers::default(),
@@ -2852,6 +2870,7 @@ impl Device {
             carry: Default::default(),
             #[cfg(unix)]
             residency: Default::default(),
+            idle_sweep,
             timing,
             view_reinterpretation,
             generated_commands,

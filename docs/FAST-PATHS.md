@@ -1284,10 +1284,18 @@ driver's. Each is open work.
   (the row above has their times). A block that empties is kept for the next placements: past its
   pool's two pooled ones, while the empty blocks kept in its heap stay within an eighth of the
   heap, at most 2 GiB (`KEPT_EMPTY_BYTES`); a kept block of its own takes the next placement of its
-  pool at most a quarter shorter. Each goes once it stayed empty for 10 s (`KEPT_EMPTY_FOR`), but
-  one pooled block per pool, at a release in its pool or within a second at the device's next
-  creation call, and every kept block of a memory type goes before a block of that type fails to be
-  made. The cost is that memory, held from a working set's dip until 10 s after it, which other
+  pool at most a quarter shorter. Each goes once it stayed empty for 10 s (`KEPT_EMPTY_FOR`),
+  within a second after: at a release in its pool, at the device's next creation call, or, where
+  neither comes, on the device's idle sweep thread (`idle_sweep.rs`), which also lets go of the
+  images and buffers parked past their second (`recycle.rs`). One pooled block stays in each pool
+  the runtime keeps room in for its own encodings' and commits' resources (`memory.rs`'s
+  `keeps_room`), the room its next creation call would make again: at most one block (64 MiB in a
+  heap of 1 GiB or more; none in a smaller heap) for each such pool, a handful of pools (the best
+  memory type of `Private`, `WriteCombined` and `Shared` buffers in each kind of block the
+  runtime's own buffers take, and of `Private` color images), counted in
+  `WorkCounts::empty_memory_blocks_live`. Every kept block of a memory type goes before a block of
+  that type fails to be made. The cost is that memory, held from a working set's dip until 10 s
+  after it (that room for as long as the device lives), which other
   processes cannot use meanwhile: up to 2 GiB in each of the RTX 5080 Laptop GPU's heaps (its 16
   GiB of VRAM and its system heap), 512 MiB on a card of 4 GiB, 2 GiB across a Radeon 780M's
   heaps of 11 and 5.5 GiB (RADV), whose unified memory makes them one budget (`memory.rs`'s

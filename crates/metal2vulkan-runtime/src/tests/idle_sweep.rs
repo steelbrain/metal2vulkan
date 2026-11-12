@@ -9,7 +9,9 @@
 //! command buffers, then makes and releases nothing. Within [`IDLE`], no image or buffer is still
 //! parked, each pool keeps at most one empty pooled block, and the pooled blocks live and the
 //! bytes of the device's heaps are back to where they were before the program's resources, but
-//! those blocks: freed equal made, within the bound.
+//! those blocks: freed equal made, within the bound. The device's idle sweep's thread
+//! (`idle_sweep.rs`) did it, as no call of the program's came; without it the device kept every
+//! block, 32 images and 3 buffers parked (lavapipe).
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -175,6 +177,7 @@ fn an_idle_device_lets_go_of_what_its_released_resources_held() {
     drop(textures);
     // Idle: nothing made or released from here on.
     let idle = Instant::now();
+    let swept = device.shared().idle_sweep.sweeps();
     let mut now = held(&device);
     while !let_go(start, now, block) && idle.elapsed() < IDLE {
         std::thread::sleep(Duration::from_millis(200));
@@ -185,6 +188,12 @@ fn an_idle_device_lets_go_of_what_its_released_resources_held() {
         "{:.1} s idle, the device still holds what the released resources held: {now:?}, \
          from {start:?} before them ({block} bytes a block)",
         idle.elapsed().as_secs_f64(),
+    );
+    // The idle sweep's thread let go of them: no call of the program's came.
+    assert!(device.shared().idle_sweep.sweeps() > swept);
+    eprintln!(
+        "let go of in {:.1} s idle: {now:?}, from {start:?}, {made:?} with the resources",
+        idle.elapsed().as_secs_f64()
     );
     drop(queue);
 }

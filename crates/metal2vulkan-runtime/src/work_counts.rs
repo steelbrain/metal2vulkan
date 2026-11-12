@@ -5429,13 +5429,17 @@ pub struct WorkCounts {
     /// of its kernel submissions, beside its own buffer objects.
     pub memory_blocks_live: u64,
     /// Its live blocks with no placement, pooled or dedicated, kept for the next placements
-    /// (`memory.rs`'s `KEPT_EMPTY_BLOCKS` and `KEPT_EMPTY_BYTES`).
+    /// (`memory.rs`'s `KEPT_EMPTY_BLOCKS` and `KEPT_EMPTY_BYTES`). Once they stayed empty for
+    /// 10 s (`KEPT_EMPTY_FOR`), whether or not the program makes anything more
+    /// (`idle_sweep.rs`), at most one pooled block of each pool the runtime keeps room in for its
+    /// own resources stays (`memory.rs`'s `Memory::keeps_room`).
     pub empty_memory_blocks_live: u64,
     /// The pooled blocks it made so far (`memory.rs`), each a `vkAllocateMemory`.
     pub pooled_memory_blocks_made: u64,
     /// The pooled blocks it freed so far: emptied past what their pool and heap keep, kept empty
-    /// past their quiet period, or freed for a block of their type that failed to be made
-    /// (`memory.rs`'s `KEPT_EMPTY_BLOCKS`, `KEPT_EMPTY_BYTES` and `KEPT_EMPTY_FOR`).
+    /// past their quiet period (at a release, a creation call or the device's idle sweep,
+    /// `idle_sweep.rs`), or freed for a block of their type that failed to be made (`memory.rs`'s
+    /// `KEPT_EMPTY_BLOCKS`, `KEPT_EMPTY_BYTES` and `KEPT_EMPTY_FOR`).
     pub pooled_memory_blocks_freed: u64,
     /// Its live dedicated blocks with their placement: a placement larger than half a block, one
     /// placed apart, or an exportable buffer's dedicated allocation (`exported_memory.rs`).

@@ -94,8 +94,9 @@
 //!   with the last; the next starts once it ended. The bytes of the blocks made and not yet added,
 //!   and of those still to make, count against their heap's budget of kept empty blocks
 //!   (`Memory::kept_budget`); a pool's that stopped growing for `KEPT_EMPTY_FOR`, the pool having
-//!   room for three quarters of a block, go (`Memory::sweep_stale`). The device's teardown stops
-//!   a making that has not begun, joins every thread and frees their blocks. Its Vulkan calls run
+//!   room for three quarters of a block, go (`Memory::sweep_kept`, at a creation call or on the
+//!   device's idle sweep, `idle_sweep.rs`). The device's teardown stops a making that has not
+//!   begun, joins every thread and frees their blocks. Its Vulkan calls run
 //!   in a section of the exit guard (`exit_guard.rs`): once the process exits, no block is made.
 //! - **Counted** (`WorkCounts`): the blocks made ahead and added, by kind
 //!   (`buffer_blocks_made_ahead`, `image_blocks_made_ahead`; of them the host copies' pool's,

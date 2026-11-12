@@ -141,6 +141,7 @@ mod host_ram;
 mod host_residency;
 #[cfg(unix)]
 mod host_shared_pointers;
+mod idle_sweep;
 mod image_barrier;
 mod image_plan;
 mod in_place;

@@ -20,9 +20,12 @@
 //!   command buffer completes, and a video clip's buffers, textures and decoded pictures, released
 //!   at its end and made again at the next clip's start. On NVIDIA's driver each
 //!   `vkAllocateMemory` and `vkFreeMemory` holds every submission until it returns. Every kept
-//!   block goes once it stayed empty for [`KEPT_EMPTY_FOR`], but one pooled block per pool
-//!   ([`Pool::stale`]), and every one of a memory type goes before a block of that type fails to
-//!   be made ([`place`]).
+//!   block goes once it stayed empty for [`KEPT_EMPTY_FOR`], whether or not the program makes or
+//!   releases anything more (the device's idle sweep, `idle_sweep.rs`), but one pooled block in
+//!   each pool the runtime keeps room in for its own encodings' and commits' resources
+//!   ([`Memory::keeps_room`], [`Pool::stale`]): the room its next creation call would make again,
+//!   at most one block a pool of [`Memory::kept`]. Every kept block of a memory type goes before a
+//!   block of that type fails to be made ([`place`]).
 //! - **Entry point.** [`allocate`] with the resource's memory requirements and its
 //!   [`MemoryClass`]; [`Memory::free`] with the placement it gave. Buffers use it in step 1;
 //!   textures and heaps add their classes and callers in their own steps. Imported host memory
@@ -155,6 +158,7 @@ use super::fresh_pages::OwnPages;
 #[cfg(unix)]
 use super::handed_descriptor::Handed;
 use super::host_ram::RamChunk;
+use super::idle_sweep::Due;
 use super::memory_log::{self, MemoryLog};
 use super::range::RangeAllocator;
 use super::read_only_view::ReadOnlyView;
@@ -245,14 +249,15 @@ pub(super) fn kept_budget(sizes: &[u64], heap: usize, unified: bool) -> u64 {
     (size / KEPT_EMPTY_SHARE).min(KEPT_EMPTY_BYTES)
 }
 
-/// How long a kept empty block stays empty before it is freed, but its pool's last pooled one
-/// ([`Pool::stale`]): a frame's dip comes back well within it, and a guest's next video clip
-/// started 1 s after the last one ended.
+/// How long a kept empty block stays empty before it is freed, but the last pooled one of a pool
+/// that keeps room ([`Pool::stale`], [`Memory::keeps_room`]): a frame's dip comes back well
+/// within it, and a guest's next video clip started 1 s after the last one ended.
 pub(super) const KEPT_EMPTY_FOR: Duration = Duration::from_secs(10);
 
 /// How often the device's creation calls look for kept empty blocks past [`KEPT_EMPTY_FOR`] in
-/// every pool ([`Memory::sweep_stale`]), beside each release's look in its own pool: a kept block
-/// goes within this long of its quiet period's end wherever the program still makes resources.
+/// every pool ([`Memory::sweep_stale`]), beside each release's look in its own pool and the
+/// device's idle sweep, which looks once one comes due and at most as often (`idle_sweep.rs`): a
+/// kept block goes within this long of its quiet period's end.
 const KEPT_SWEEP_EVERY: Duration = Duration::from_secs(1);
 
 /// How much longer than a dedicated placement a kept dedicated block may be and still take it
@@ -1401,19 +1406,34 @@ impl<T> Pool<T> {
 
     /// At `now`, the payload of the kept empty block that emptied earliest, where it stayed empty
     /// for [`KEPT_EMPTY_FOR`], taken out to be freed: a dedicated one, or a pooled one while
-    /// another empty pooled block stays kept.
-    pub(super) fn stale(&mut self, now: Instant) -> Option<T> {
-        let pooled = (self.blocks.iter().flatten())
-            .filter(|block| block.kept())
-            .count();
-        let (index, _) = (self.blocks.iter().enumerate())
-            .filter_map(|(index, block)| {
-                let block = block.as_ref().filter(|block| block.empty())?;
-                (block.dedicated || pooled >= 2).then_some((index, block.emptied?))
-            })
+    /// another empty pooled block stays kept, or where the pool keeps no room (`keeps_room`
+    /// false, [`Memory::keeps_room`]) whatever stays.
+    pub(super) fn stale(&mut self, now: Instant, keeps_room: bool) -> Option<T> {
+        let (index, _) = (self.going(keeps_room))
             .filter(|&(_, at)| now.saturating_duration_since(at) >= KEPT_EMPTY_FOR)
             .min_by_key(|&(_, at)| at)?;
         self.take(index)
+    }
+
+    /// When the next of its kept empty blocks [`Pool::stale`] lets go may go: [`KEPT_EMPTY_FOR`]
+    /// after the earliest of them emptied; `None` where it lets go of none.
+    pub(super) fn stale_at(&self, keeps_room: bool) -> Option<Instant> {
+        let emptied = (self.going(keeps_room)).map(|(_, at)| at).min()?;
+        Some(emptied + KEPT_EMPTY_FOR)
+    }
+
+    /// The kept empty blocks [`Pool::stale`] lets go of once their time passed, with when each
+    /// emptied: the dedicated ones, and the pooled ones while two or more are kept or the pool
+    /// keeps no room. A block added empty and never placed in is kept as long as it stays so.
+    fn going(&self, keeps_room: bool) -> impl Iterator<Item = (usize, Instant)> + '_ {
+        let pooled = (self.blocks.iter().flatten())
+            .filter(|block| block.kept())
+            .count();
+        let goes = move |block: &PoolBlock<T>| block.dedicated || pooled >= 2 || !keeps_room;
+        (self.blocks.iter().enumerate()).filter_map(move |(index, block)| {
+            let block = block.as_ref().filter(|block| block.empty())?;
+            goes(block).then_some((index, block.emptied?))
+        })
     }
 
     /// Every kept empty block's payload, pooled and dedicated, taken out to be freed.
@@ -2293,7 +2313,7 @@ pub(super) struct Memory {
     pub(crate) in_place_bytes: std::collections::BTreeMap<u64, u64>,
     /// The blocks made ahead and freed unused ([`AheadBlocks::unused`]), for the reclaim bench:
     /// each one's pool and bytes, when it went, and how long before then its pool last grew or
-    /// was last given blocks to make ([`Memory::sweep_stale`]).
+    /// was last given blocks to make ([`Memory::sweep_kept`]).
     #[cfg(all(test, m2v_gpu, target_os = "linux"))]
     pub(crate) unused_frees: Vec<((Holds, u32), u64, Instant, Duration)>,
     /// The images placed ([`place`]), by their bytes and alignment as the driver asked them, since
@@ -2322,6 +2342,9 @@ pub(super) struct Memory {
     /// When the creation calls next look for stale kept blocks in every pool
     /// ([`Memory::sweep_stale`]).
     next_sweep: Instant,
+    /// The device's idle sweep, told when a block kept empty or made ahead may go, once set
+    /// ([`Memory::sweep_through`], `idle_sweep.rs`).
+    sweep: Option<Arc<Due>>,
     /// The device was lost and its recovery carried its objects on (`device/carry.rs`): it keeps
     /// no empty block for placements it never makes again ([`keep_none`]).
     keeps_none: bool,
@@ -2355,7 +2378,7 @@ pub(super) struct AheadBlocks {
     /// Of the blocks made ahead, those whose wait for a burst of submissions to end reached its
     /// bound (`ready::QUIET_MOST`).
     pub(super) past_quiet_wait: u64,
-    /// The blocks made ahead that went unused, their pool no longer growing ([`Memory::sweep_stale`]).
+    /// The blocks made ahead that went unused, their pool no longer growing ([`Memory::sweep_kept`]).
     pub(super) unused: u64,
     /// Of `waited_for`, the blocks of images, for the crate's tests: `WorkCounts` counts the waits
     /// of every pool.
@@ -2491,6 +2514,7 @@ impl Memory {
             host_copy_blocks: HostCopyBlocks::default(),
             ahead: AheadBlocks::default(),
             next_sweep: Instant::now() + KEPT_SWEEP_EVERY,
+            sweep: None,
             keeps_none: false,
             #[cfg(test)]
             import_hold: None,
@@ -2655,6 +2679,12 @@ impl Memory {
     /// Post the frees of the blocks that go from now on to `frees` (`free_thread.rs`).
     pub(super) fn post_frees_to(&mut self, frees: Arc<FreeThread>) {
         self.frees = Some(frees);
+    }
+
+    /// Tell `due`, the device's idle sweep, when each block kept empty or made ahead from now on
+    /// may go (`idle_sweep.rs`).
+    pub(super) fn sweep_through(&mut self, due: Arc<Due>) {
+        self.sweep = Some(due);
     }
 
     /// Memory type `type_index`'s properties and the size of its heap, for the crate's device
@@ -3078,6 +3108,7 @@ impl Memory {
             None => {
                 let started = ready::Readying::start(making, pool, lacking.into(), None);
                 self.readying.extend(started.map(|(readying, _)| readying));
+                self.readying_started();
             }
         }
     }
@@ -3104,6 +3135,7 @@ impl Memory {
                 let sizes = [least].into();
                 let (readying, waiter) = ready::Readying::start(making, pool, sizes, Some(least))?;
                 self.readying.push(readying);
+                self.readying_started();
                 waiter
             }
         }
@@ -3609,9 +3641,20 @@ impl Memory {
             .saturating_sub(self.kept_in_heap(heap));
         let half = self.block_bytes(type_index) / 2;
         let reusable = |block: &Block| block.reusable() && block.size > half;
+        let keeps_room = self.keeps_room(self.pool_at(holds, type_index));
         let pool = self.pool(holds, type_index);
+        let kept_before = pool.kept_bytes();
         let freed = pool.release(block, (offset, size), now, spare, reusable);
-        let stale = pool.stale(now);
+        // A block kept empty: the idle sweep lets go of what may go once its time passed, the
+        // program's calls or none (`idle_sweep.rs`).
+        let due = match freed.is_none() && pool.kept_bytes() > kept_before {
+            true => pool.stale_at(keeps_room),
+            false => None,
+        };
+        let stale = pool.stale(now, keeps_room);
+        if let (Some(sweep), Some(due)) = (&self.sweep, due) {
+            sweep.by(due);
+        }
         if let Some(stale) = stale {
             // SAFETY: nothing is placed in a kept empty block, and no command reads it.
             drop(unsafe { self.let_go(device, stale, FreeCause::KeptStale, None) });
@@ -3637,15 +3680,37 @@ impl Memory {
     }
 
     /// Free the kept empty blocks of every pool that stayed empty for [`KEPT_EMPTY_FOR`]
-    /// ([`Pool::stale`]), at most once every [`KEPT_SWEEP_EVERY`] (at `now`): a pool whose
-    /// resources no longer come and go keeps none past its quiet period but its last pooled one.
+    /// ([`Pool::stale`]), at most once every [`KEPT_SWEEP_EVERY`] (at `now`), as
+    /// [`Memory::sweep_kept`] does.
     fn sweep_stale(&mut self, device: &ash::Device, now: Instant) {
         if now < self.next_sweep {
             return;
         }
         self.next_sweep = now + KEPT_SWEEP_EVERY;
+        self.sweep_kept(device, now);
+    }
+
+    /// Whether the runtime keeps room for its own encodings' and commits' resources in pool `at`
+    /// ([`Memory::kept`], [`keep_room`]: none in a small heap's, [`Memory::small`]): its last
+    /// empty pooled block stays past [`KEPT_EMPTY_FOR`] ([`Pool::stale`]), the room the next
+    /// creation call would make again. Every other pool keeps none past it.
+    fn keeps_room(&self, at: usize) -> bool {
+        let type_index = (at % self.types.len().max(1)) as u32;
+        let mut kept = self.kept.iter().flat_map(|kept| kept.iter());
+        !self.small(type_index)
+            && kept.any(|&(holds, kept_type)| self.pool_at(holds, kept_type) == at)
+    }
+
+    /// At `now`, free the kept empty blocks of every pool that stayed empty for
+    /// [`KEPT_EMPTY_FOR`], but the last pooled one of a pool that keeps room
+    /// ([`Pool::stale`], [`Memory::keeps_room`]), and the blocks made ahead that went unused:
+    /// for the creation calls ([`Memory::sweep_stale`]) and the device's idle sweep
+    /// (`idle_sweep.rs`), so that a pool whose resources no longer come and go keeps none past
+    /// its quiet period but that room, whether or not the program makes anything more.
+    pub(super) fn sweep_kept(&mut self, device: &ash::Device, now: Instant) {
         for at in 0..self.pools.len() {
-            while let Some(stale) = self.pools[at].stale(now) {
+            let keeps_room = self.keeps_room(at);
+            while let Some(stale) = self.pools[at].stale(now, keeps_room) {
                 // SAFETY: nothing is placed in a kept empty block, and no command reads it.
                 drop(unsafe { self.let_go(device, stale, FreeCause::KeptStale, None) });
             }
@@ -3678,6 +3743,42 @@ impl Memory {
                 // SAFETY: nothing was placed in the block, and no command reads it.
                 drop(unsafe { self.let_go(device, block, FreeCause::KeptStale, None) });
             }
+        }
+    }
+
+    /// After [`Memory::sweep_kept`] at `now`, when the next of what it keeps may go
+    /// (`idle_sweep.rs`): a kept empty block [`KEPT_EMPTY_FOR`] after it emptied
+    /// ([`Pool::stale_at`]), a block made ahead as long after its pool last grew or was given
+    /// blocks to make, or a second from now where its making still runs. `None` where nothing may
+    /// go but at a change: a pool's room, and a block made ahead for a pool near its next block,
+    /// which stays as long as the pool stays so.
+    pub(super) fn sweep_due(&mut self, now: Instant) -> Option<Instant> {
+        let kept = (0..self.pools.len())
+            .filter_map(|at| self.pools[at].stale_at(self.keeps_room(at)))
+            .min();
+        let mut ahead = None;
+        for at in 0..self.readying.len() {
+            let (holds, type_index) = self.readying[at].pool();
+            let (started, finished) = (self.readying[at].started(), self.readying[at].finished());
+            let room = ahead_room(self.block_bytes(type_index));
+            let pool = self.pool(holds, type_index);
+            let since = pool.grew(None).map_or(started, |grew| grew.max(started));
+            let due = since + KEPT_EMPTY_FOR;
+            let due = match (due > now, finished) {
+                (true, _) => Some(due),
+                (false, false) => Some(now + KEPT_SWEEP_EVERY),
+                (false, true) => pool.has_room(room).then_some(now),
+            };
+            ahead = ahead.into_iter().chain(due).min();
+        }
+        kept.into_iter().chain(ahead).min()
+    }
+
+    /// A block's making ahead started ([`keep_room`], [`place`]): the idle sweep looks at it once
+    /// it may have gone unused ([`Memory::sweep_due`]).
+    fn readying_started(&self) {
+        if let Some(sweep) = &self.sweep {
+            sweep.by(Instant::now() + KEPT_EMPTY_FOR);
         }
     }
 
