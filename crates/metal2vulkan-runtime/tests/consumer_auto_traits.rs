@@ -12,16 +12,16 @@
 //! whose `where` clause names it: the environment differs, and rustc proves the object's bounds
 //! afresh there.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use metal2vulkan_runtime::{
     ArgumentEncoder, BinaryArchive, BlitCommandEncoder, Buffer, CommandBuffer, CommandBufferError,
     CommandQueue, ComputeCommandEncoder, ComputePipelineState, DegradeNotice, DepthStencilState,
-    Device, DynamicLibrary, Error, Event, Fence, Function, Heap, IndirectCommandBuffer,
-    IndirectComputeCommand, IndirectRenderCommand, Library, MessageSink, PipelineRecord,
-    RasterizationRateMap, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
-    ResourceStateCommandEncoder, SamplerState, SharedEvent, SharedEventHandle, SharedEventListener,
-    SharedTextureHandle, Texture, VisibleFunctionTable, WorkCounts,
+    Device, DynamicLibrary, Error, Event, ExecutedCommands, ExecutedCommandsHandler, Fence,
+    Function, Heap, IndirectCommandBuffer, IndirectComputeCommand, IndirectRenderCommand, Library,
+    MessageSink, PipelineRecord, RasterizationRateMap, RenderCommandEncoder, RenderPassDescriptor,
+    RenderPipelineState, ResourceStateCommandEncoder, SamplerState, SharedEvent, SharedEventHandle,
+    SharedEventListener, SharedTextureHandle, Texture, VisibleFunctionTable, WorkCounts,
 };
 
 /// `T` held as a program's crate holds it: the bound of reims-vgpu's `platform::Obj<T>`, one
@@ -87,4 +87,26 @@ held! {
     command_buffer_error: CommandBufferError;
     degrade_notice: DegradeNotice;
     work_counts: WorkCounts;
+}
+
+/// A handler that keeps the reports it is handed, as a program writes one: its coercion to the
+/// handler type proves `Send` and `Sync` of its capture, and so of the reports' indirect command
+/// buffers several types deeper than an object held alone (`IcbShared`'s impls end that walk).
+/// In a function of its own, whose `where` clause names the capture (the module docs).
+fn handler_keeping_reports()
+where
+    Arc<Mutex<Vec<ExecutedCommands>>>: Sized,
+{
+    let seen: Arc<Mutex<Vec<ExecutedCommands>>> = Arc::default();
+    let kept = Arc::clone(&seen);
+    let handler: ExecutedCommandsHandler = Arc::new(move |executed: &ExecutedCommands| {
+        kept.lock().unwrap().push(executed.clone());
+    });
+    drop(handler);
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_handler_keeps_the_reports_it_is_handed_at_the_default_recursion_limit() {
+    handler_keeping_reports();
 }

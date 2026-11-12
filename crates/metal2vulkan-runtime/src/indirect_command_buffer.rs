@@ -1115,6 +1115,68 @@ struct IcbShared {
     keeping: AtomicBool,
 }
 
+// SAFETY: every field of an `IcbShared` is `Send` and `Sync`; the constant below makes the
+// compiler prove that of each, naming every field (one added fails it until it is proved too), so
+// these impls claim nothing it does not check. Written out, they end the compiler's walk of an
+// indirect command buffer's fields where a program's crate proves its own objects' `Send` and
+// `Sync`: from a handler that keeps the reports it is handed (`ExecutedCommands`), the walk down
+// a buffer's fields ran past rustc's default recursion limit (`recursion_depth_exceeding_limit`),
+// which a program's crate keeps (`tests/consumer_auto_traits.rs`).
+unsafe impl Send for IcbShared {}
+// SAFETY: as for `Send` above.
+unsafe impl Sync for IcbShared {}
+
+// The compiler's proof of what `IcbShared`'s `Send` and `Sync` impls rest on: each field.
+const _: fn(&IcbShared) = |icb| {
+    fn shared<T: Send + Sync>(_: &T) {}
+    let IcbShared {
+        storage,
+        mapped,
+        id,
+        identifier,
+        descriptor,
+        records,
+        inheritance,
+        size,
+        options,
+        pipelines,
+        gpu_written,
+        gpu_writer,
+        unforeseen,
+        cpu_writes,
+        barriers,
+        nines,
+        overflow,
+        tail,
+        gpu_writes,
+        written,
+        kept,
+        keeping,
+    } = icb;
+    shared(storage);
+    shared(mapped);
+    shared(id);
+    shared(identifier);
+    shared(descriptor);
+    shared(records);
+    shared(inheritance);
+    shared(size);
+    shared(options);
+    shared(pipelines);
+    shared(gpu_written);
+    shared(gpu_writer);
+    shared(unforeseen);
+    shared(cpu_writes);
+    shared(barriers);
+    shared(nines);
+    shared(overflow);
+    shared(tail);
+    shared(gpu_writes);
+    shared(written);
+    shared(kept);
+    shared(keeping);
+};
+
 /// The buffer slots of each command past the 32 of a stage its record holds, below the
 /// descriptor's count of the stage, and a compute command's threadgroup lengths 31 to 37, past
 /// the 31 its record holds, and its words past the last command's lengths, in a host-visible
