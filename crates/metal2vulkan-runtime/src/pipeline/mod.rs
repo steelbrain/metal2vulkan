@@ -1047,6 +1047,13 @@ impl ComputePipelineState {
         &self.0.device
     }
 
+    /// What the layers' messages name the pipelines of the variant its creation compiled by
+    /// (`VariantObjects::pipeline_name`): the device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn pipeline_name(&self) -> String {
+        self.0.base.objects().pipeline_name(None)
+    }
+
     /// The kernel's name.
     pub(crate) fn function_name(&self) -> &str {
         self.0.function.function.info().name

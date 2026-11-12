@@ -798,3 +798,27 @@ fn walk(directory: &Path) -> Vec<PathBuf> {
     }
     files
 }
+
+/// A device whose instance reports messages names each pipeline it makes for the layers'
+/// messages, a program's by its Metal function's name (`VariantObjects::pipeline_name`,
+/// `DeviceShared::name_pipeline`); a device whose instance reports none works out no name.
+#[test]
+fn a_device_that_reports_messages_names_a_kernels_pipelines_by_its_function() {
+    let scratch = Scratch::new("pipeline-names");
+    let named = |heard: Option<&Arc<Heard>>| {
+        let device = device(&scratch.0, None, heard);
+        let (_, compute) = descriptors(&device);
+        let options = PipelineOptions::default();
+        let state = device
+            .new_compute_pipeline_state(&compute, &options)
+            .unwrap();
+        state.pipeline_name()
+    };
+    let heard = Arc::new(Heard::default());
+    assert_eq!(
+        named(Some(&heard)),
+        "scale_and_offset",
+        "named by its kernel's name"
+    );
+    assert_eq!(named(None), "", "no name worked out without messages");
+}
