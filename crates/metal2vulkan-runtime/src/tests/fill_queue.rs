@@ -3,8 +3,11 @@
 //! their own that the batch waits for, after the batches before it on its `VkQueue`.
 //!
 //! - **Where.** The fill queue is of a family whose flags hold transfers and no graphics or
-//!   compute work, and each command buffer below that took fills made one submission there
-//!   (`WorkCounts::fill_queue_submissions`); a device without one (lavapipe, RADV) made none.
+//!   compute work, and each command buffer below that took fills of at least
+//!   `FILL_QUEUE_LEAST` bytes made one submission there (`WorkCounts::fill_queue_submissions`);
+//!   a device without one (lavapipe, RADV) made none. A last command buffer, whose fills (a new
+//!   `Managed` buffer's zeros and its copy in, each 4 bytes short of half that) write fewer, made
+//!   none: they ran at its start.
 //! - **Bytes.** A `Managed` buffer's copy in after `did_modify_range`, a new `Private` buffer's
 //!   zeros and a `Private` buffer made with bytes read back exactly, through a blit into a
 //!   `Shared` buffer.
@@ -226,4 +229,35 @@ fn a_batch_s_fills_run_on_the_fill_queue_in_order_with_exact_bytes() {
         None => 0,
     };
     assert_eq!(submissions, expected, "{name}");
+    // Fills of fewer bytes than the fill queue takes stay at the start of their batch: a new
+    // `Managed` buffer's zeros and its copy in, which may go in one batch.
+    let few = crate::device::FILL_QUEUE_LEAST / 2 - 4;
+    let small = device
+        .new_buffer(
+            few,
+            ResourceOptions::new(
+                StorageMode::Managed,
+                CpuCacheMode::DefaultCache,
+                HazardTrackingMode::Default,
+            ),
+        )
+        .unwrap();
+    let third = pattern(0x7a11_0003, few);
+    let contents = small.contents().unwrap();
+    // SAFETY: the buffer's host copy, `few` bytes long; no command buffer reads it.
+    unsafe { std::ptr::copy_nonoverlapping(third.as_ptr(), contents.as_ptr(), third.len()) };
+    small.did_modify_range(0..few).unwrap();
+    let small_read = shared(few);
+    let last = queue.command_buffer().unwrap();
+    copy(&last, &small, &small_read);
+    last.commit().unwrap();
+    last.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(last.status(), CommandBufferStatus::Completed, "{name}");
+    assert!(
+        read(&small_read) == third,
+        "{name}: the last command buffer read other bytes"
+    );
+    let after_small = device.work_counts().fill_queue_submissions - counts.fill_queue_submissions;
+    eprintln!("FILL-QUEUE {name}: {few} bytes copied in, fill queue submissions {after_small}");
+    assert_eq!(after_small, 0, "{name}: {few} bytes went to the fill queue");
 }

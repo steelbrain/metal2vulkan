@@ -52,10 +52,11 @@
 //!   the one that holds the staged copies after it; an internal submission's one command buffer
 //!   -- waiting for what the submission waits for: MoltenVK runs each `VkSubmitInfo` as a Metal
 //!   command buffer of its own, so it adds none (`command_buffer/submit.rs`). On a device with a
-//!   fill queue (a copy engine's second queue, `device/staging.rs`), a batch's buffers' fills go
-//!   there instead ([`Taken::take_fills`]), in a submission of their own after the batches before
-//!   it on its `VkQueue` and what it waits for, which the batch waits for before any of its
-//!   commands; its moves and staged copies stay at its start, after them.
+//!   fill queue (a copy engine's second queue, `device/staging.rs`), a batch's buffers' fills of
+//!   at least `FILL_QUEUE_LEAST` bytes in all go there instead ([`Taken::take_fills`]), in a
+//!   submission of their own after the batches before it on its `VkQueue` and what it waits for,
+//!   which the batch waits for before any of its commands; its moves and staged copies stay at
+//!   its start, after them.
 //! - **Staged copies**. `replace_region` of a texture whose `VkImage` is its own for good (in
 //!   memory of its own, or a heap's own pages) and takes no host or staging-queue copies (those
 //!   are queued for the staging queue instead, whose submission of them every submission of the
@@ -751,6 +752,12 @@ impl FirstFill {
             staging: None,
             acquire: Some((source, target)),
         }
+    }
+
+    /// The bytes it writes: its copies' and its zeros'.
+    fn written(&self) -> u64 {
+        let copied: u64 = self.copies.iter().map(|copy| copy.size).sum();
+        copied + (self.filled.as_ref()).map_or(0, |range| range.end - range.start)
     }
 
     /// The barrier of its acquire, where it is one: no access of the device's before it (an
@@ -1626,13 +1633,20 @@ impl<'a> Taken<'a> {
 
     /// Its buffers' fills, taken out for the fill queue (`device/staging.rs`), in the order they
     /// were noted; the moves and staged copies stay, recorded after them in submission order.
-    /// `None` where it took no fill, or took an acquire from an external agent, whose barrier
-    /// names the device's family as its target and leads every fill (all stay then).
-    pub(crate) fn take_fills(&mut self) -> Option<Fills<'a>> {
+    /// `None` where it took no fill, its fills write fewer than `least` bytes in all, or it took
+    /// an acquire from an external agent, whose barrier names the device's family as its target
+    /// and leads every fill (all stay then).
+    pub(crate) fn take_fills(&mut self, least: u64) -> Option<Fills<'a>> {
         let fill = |held: &Held| matches!(held, Held::Fill(..));
         let acquire =
             |held: &Held| matches!(held, Held::Fill(_, _, fill) if fill.acquire.is_some());
-        if !self.held.iter().any(fill) || self.held.iter().any(acquire) {
+        let written: u64 = (self.held.iter())
+            .map(|held| match held {
+                Held::Fill(_, _, fill) => fill.written(),
+                _ => 0,
+            })
+            .sum();
+        if !self.held.iter().any(fill) || written < least || self.held.iter().any(acquire) {
             return None;
         }
         let (fills, rest): (Vec<Held>, Vec<Held>) = self.held.drain(..).partition(fill);

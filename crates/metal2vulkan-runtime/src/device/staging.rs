@@ -62,17 +62,24 @@
 //! second queue, where that family is of transfers alone (NVIDIA's copy engine). A batch's new
 //! buffers' fills (`texture/first_move.rs`: a new `Private` buffer's or a `Managed` buffer's
 //! device copy's zeros, a buffer's staged bytes, a `Managed` buffer's copies in after
-//! `did_modify_range`, a rebind's or a making's) run there, in a submission of their own the
-//! batch waits for ([`Device::submit_fills`]), rather than at the start of the batch's own work
-//! on its `VkQueue`.
+//! `did_modify_range`, a rebind's or a making's), where they write at least
+//! [`FILL_QUEUE_LEAST`] bytes in all, run there, in a submission of their own the batch waits
+//! for ([`Device::submit_fills`]), rather than at the start of the batch's own work on its
+//! `VkQueue`.
 //!
 //! - **Why.** A copy through a queue of the graphics family runs on the engine the program's
-//!   kernels run on. On an RTX 3090 (615.71.09), a 64 MiB `Managed` buffer copied in each frame
-//!   that way left another queue's kernels 20% of their rate alone, and at 256 MiB 11%
-//!   (`tests::managed_copies_bench`); in raw Vulkan on an RTX 5080 Laptop GPU (615.71.09), buffer
-//!   copies through the graphics family beside such kernels moved 13.5 GB/s and left them 52 to
-//!   56% of their rate, and through the copy engine 28.5 GB/s and 92 to 97%
+//!   kernels run on. Beside another queue's kernels, a frame that copied a `Managed` buffer's
+//!   1 MiB in took 3.53 to 3.57 ms (p50) at the start of the batch's work and 1.80 to 1.81 ms
+//!   through the fill queue on an RTX 3090 and an RTX 2080, and one of 64 MiB 40.6 to 48.9 ms and
+//!   35.9 to 36.2 ms (`tests::managed_copies_bench`); in raw Vulkan on an RTX 5080 Laptop GPU
+//!   (615.71.09), buffer copies through the graphics family beside such kernels moved 13.5 GB/s
+//!   and left them 52 to 56% of their rate, and through the copy engine 28.5 GB/s and 92 to 97%
 //!   (`examples/copy_engine.rs`).
+//! - **Its least.** Fills of fewer bytes stay at the batch's start. From 1 MiB up, the fill queue's
+//!   frames took at most 1.04 times as long as the others' alone and no longer beside the kernels,
+//!   on the RTX 3090, RTX 2080 and RTX 5080 Laptop GPU; under it, up to 2.0 times as long alone
+//!   (256 KiB on the RTX 2080) and 1.11 times beside the kernels (128 KiB there)
+//!   (`tests::managed_copies_bench`, docs/FAST-PATHS.md).
 //! - **Why not the staging queue.** A fill comes after the batches before its batch on that
 //!   batch's `VkQueue` (below); on the staging queue, which waits for no work in flight, every
 //!   staging copy behind it would wait for those batches too.
@@ -115,6 +122,10 @@ use std::any::Any;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
+
+/// The fewest bytes a batch's fills write in all for the fill queue to take them (the module
+/// docs): fewer stay at the start of the batch's own work.
+pub(crate) const FILL_QUEUE_LEAST: u64 = 1 << 20;
 
 /// How long one wait for a staging submission lasts before it is repeated.
 const WAIT_SLICE: Duration = Duration::from_millis(100);

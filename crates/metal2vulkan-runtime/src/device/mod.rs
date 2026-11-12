@@ -44,6 +44,7 @@ pub use create::{
 };
 pub use handles::{DeviceHandles, ExtraQueue, ReservedQueue};
 pub use properties::{DeviceKind, PhysicalDeviceIdentity};
+pub(crate) use staging::FILL_QUEUE_LEAST;
 pub(crate) use submit::OWN_TIMELINES;
 
 use super::address::AddressSpace;

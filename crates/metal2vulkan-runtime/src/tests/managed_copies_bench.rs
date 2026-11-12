@@ -6,14 +6,15 @@
 //! buffer's first floats (at most [`READ`]) into a `Shared` buffer, committed and waited for; its
 //! answer is checked, so the copy landed before the kernel read it. The load: another queue's
 //! command buffers, each [`LOAD_DISPATCHES`] dispatches of the same kernel over 64 MiB `Private`
-//! buffers, two in flight. Each size runs on two devices: the default one, whose copies in go to
-//! its fill queue where it has one (`device/staging.rs`), and one made with an extra queue of
-//! transfers that takes a copy engine's second queue, so it has no fill queue and its copies in
-//! run at the start of each batch's own work. Printed as `MANAGED-COPIES` lines: the frame's wall
-//! time from the `did_modify_range` call to the wait's return, the load's command buffers a second
-//! against the load alone, and the work counts that say where the copy ran, with each phase's
-//! span on the host's clock (`from`, `to`, Unix milliseconds) for a sampler's lines (`nvidia-smi
-//! dmon`); and each device's making time. Ignored: run it in release, under the GPU safety cfg.
+//! buffers, two in flight. Each size runs on two devices: the default one, whose copies in of
+//! `FILL_QUEUE_LEAST` bytes or more go to its fill queue where it has one (`device/staging.rs`),
+//! and one made with an extra queue of transfers that takes a copy engine's second queue, so it has
+//! no fill queue and its copies in run at the start of each batch's own work. Printed as
+//! `MANAGED-COPIES` lines: the frame's wall time from the `did_modify_range` call to the wait's
+//! return, the load's command buffers a second against the load alone, and the work counts that say
+//! where the copy ran, with each phase's span on the host's clock (`from`, `to`, Unix milliseconds)
+//! for a sampler's lines (`nvidia-smi dmon`); and each device's making time. Ignored: run it in
+//! release, under the GPU safety cfg.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects. A device with unified memory, whose `Managed` buffers are one copy,

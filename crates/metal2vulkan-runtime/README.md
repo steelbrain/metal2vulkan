@@ -365,7 +365,8 @@ after it, and 0 of 80 with the device dropped first
   `shared-in-system-memory`). On a device whose family of transfers alone has a second queue
   (NVIDIA's copy engine), the copies in after `did_modify_range`, and new buffers' zeros and
   staged bytes, run on that queue before the command buffer that takes them, rather than on the
-  queue its kernels run on (`WorkCounts::fill_queue_submissions`).
+  queue its kernels run on, where they come to 1 MiB or more
+  (`WorkCounts::fill_queue_submissions`).
 - **Past device-local memory.** Where no device-local memory type a `Private` buffer or heap, a
   texture's image or (without unified memory) a `Managed` buffer's own bytes takes has room, it
   lies in system memory, as Metal makes such resources past a discrete GPU's memory rather than refusing

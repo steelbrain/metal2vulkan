@@ -1157,10 +1157,10 @@ pub(crate) struct QueuePlan {
 /// on a Radeon 780M and 1.19 s on an RTX 3090), so where a texture's image has memory the host
 /// caches its copies stay on the host, and no such queue stages. Such a copy engine's second
 /// queue, where it has one, is reserved for the runtime's own copies from host memory into a
-/// resource's device memory that follow the work before them (`device/staging.rs`, the fill
-/// queue): on an RTX 3090 a `Managed` buffer's 64 MiB copy in through the graphics family's queue
-/// left another queue's kernels 20% of their rate alone, where a copy engine left them 82%
-/// (`tests::managed_copies_bench`, `examples/copy_engine.rs`). `None` where no family does
+/// resource's device memory that follow the work before them, a batch's of 1 MiB or more
+/// (`device/staging.rs`, the fill queue): beside another queue's kernels on an RTX 3090, a frame
+/// that copied a `Managed` buffer's 1 MiB in took 1.80 ms (p50) through it and 3.53 ms through
+/// the graphics family's queue (`tests::managed_copies_bench`). `None` where no family does
 /// graphics and compute work.
 pub(crate) fn queue_plan(
     families: &[vk::QueueFamilyProperties],
