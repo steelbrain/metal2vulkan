@@ -2259,9 +2259,10 @@ fn read_only_buffer(ty: vk::DescriptorType) -> bool {
 
 /// Whether `plan` binds a zero region of each command's own: at a writable buffer binding that
 /// nothing is bound to ([`read_only_buffer`]), a fresh region of the command buffer's upload
-/// arena at every draw (`write_info`). A draw rebound keeps the kept draw's set-0 writes at every
-/// slot but those that changed (`rebind_into`), so it would bind the kept draw's region, which
-/// that draw may have written: such a draw is not rebound (`render/draw_again/rebound.rs`).
+/// arena at every draw (`write_info`). A draw drawn again as it was kept, or rebound, keeps the
+/// kept draw's set-0 writes at every slot but those that changed (`rebind_into`), so it would
+/// bind the kept draw's region, which that draw may have written: such a draw is not kept
+/// (`render/draw_again.rs`), counted as one that may write (`WorkCounts::draws_unkept_writing`).
 pub(super) fn binds_own_zeros(plan: &BindingPlan) -> bool {
     plan.descriptors.iter().any(|write| {
         let neutral = matches!(

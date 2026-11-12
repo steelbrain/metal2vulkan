@@ -9,9 +9,8 @@
 //!   set the encoder's render state, what it decides derived again as the kept draw's
 //!   (`Kept::stated`, `restated.rs`), each table's changes since the kept draw read
 //!   it still listed (`argument_table::Changes`, at most [`SLOTS`] slots), where the kept draw kept
-//!   what this takes ([`KeptStorage`]: a draw whose set-0 writes hold no keeper and no zero region
-//!   of its own, `binding::binds_own_zeros`, of no use beyond its plan's and its draw's own, and of
-//!   a state that made no visible-function table); or the
+//!   what this takes ([`KeptStorage`]: a draw whose set-0 writes hold no keeper, of no use beyond
+//!   its plan's and its draw's own, and of a state that made no visible-function table); or the
 //!   kept draw of other arguments alone, of something to draw (below), after such calls or none.
 //!   The kept
 //!   bind state takes the changed slots (`ArgumentTable::refresh_changed`), and the draw goes on

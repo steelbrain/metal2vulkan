@@ -7208,7 +7208,8 @@ pub struct WorkCounts {
     pub draws_unkept_tables_writing: u64,
     /// Of `draws_unkept`, those that read their index buffer through a copy.
     pub draws_unkept_index_copied: u64,
-    /// Of `draws_unkept`, those with a use that writes memory or reads indirect arguments.
+    /// Of `draws_unkept`, those with a use that writes memory or reads indirect arguments, or that
+    /// bind a zero region of their own at a writable buffer binding nothing is bound to.
     pub draws_unkept_writing: u64,
     /// Of `draws_unkept_writing`, those with such a use among the uses of what their encoder made
     /// resident (`use_resource`, `use_heap`).

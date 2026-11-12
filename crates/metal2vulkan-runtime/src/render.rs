@@ -10989,7 +10989,11 @@ impl RenderLowering {
         let extended = |c: &render_pass::ColorTarget| {
             ExtendedRange::of(c.target.texture.pixel_format()).is_some()
         };
+        // A draw that binds a zero region of its own binds a new one at each step
+        // (`binding::binds_own_zeros`): kept, it would bind the region its kept draw had.
+        let own_zeros = binding::binds_own_zeros(&plan);
         let plain_but_heap = stepless
+            && !own_zeros
             && !barriered
             && !empty
             && !culled
@@ -11095,7 +11099,7 @@ impl RenderLowering {
                     || !commands.push_holes.is_empty()
                     || unlisted.is_some(),
                 index_copied: !index.is_none_or(DrawSource::in_place),
-                writing: !unwritten,
+                writing: !unwritten || own_zeros,
                 writing_resident: resident_writes,
                 tables_heap: heap.is_some(),
                 making: !matches!(draw_pipeline, DrawPipeline::Made(_)),
@@ -11109,9 +11113,9 @@ impl RenderLowering {
                 created: created.clone(),
             });
             // What a draw rebound takes of it (`render/draw_again/rebound.rs`), where its state made
-            // no visible-function table: set-0 writes that hold no keeper and no zero region of its
-            // own (`binding::binds_own_zeros`), its plan's uses alone, no push hole, and its one
-            // recording's parts (its variant and plan are the bind state's kept settle).
+            // no visible-function table: set-0 writes that hold no keeper, its plan's uses alone,
+            // no push hole, and its one recording's parts (its variant and plan are the bind
+            // state's kept settle).
             let recorded = match (&draw_states, &draw_pipeline, vk_draws) {
                 (DrawStates::Whole([state]), DrawPipeline::Made(made), [(index, _, command)]) => {
                     Some(draw_again::KeptRecording {
@@ -11130,8 +11134,7 @@ impl RenderLowering {
             let rebinds = function_tables.is_empty()
                 && uses.len() == plan_uses
                 && bound.holes.is_empty()
-                && writes.iter().all(|write| write.held.is_none())
-                && !binding::binds_own_zeros(&plan);
+                && writes.iter().all(|write| write.held.is_none());
             let recorded = recorded.filter(|_| rebinds);
             let rebinds = recorded.is_some();
             if let Some(recorded) = recorded {
