@@ -9,8 +9,9 @@
 //! dynamic state pool of 1 GiB, and a command buffer holds what its recording took until it is
 //! begun again, reset or freed. Here [`LIGHT_POOLS`] light command buffers at once leave as many
 //! spare command pools; then each round commits [`HEAVY_AT_ONCE`] heavy command buffers at once,
-//! each a pass of [`EXECUTIONS`] executions of the commands over a map of [`ZONES`] zones a side
-//! alternating between full and half quality, and waits for them. A taker takes a spare holding a
+//! each a pass of executions of the commands over a map of [`ZONES`] zones a side alternating
+//! between full and half quality, as many as record about [`REGION_DRAWS`] draws, and waits for
+//! them. A taker takes a spare holding a
 //! primary begun ahead first, then the one holding the fewest command buffers, and a settled pool
 //! begins one where no thread waits on its command buffer's gate as it completes: the light
 //! command buffers are polled to completion, so each of their pools begins one, and a thread
@@ -21,7 +22,9 @@
 use super::{buffer_with, open_device, WAIT};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::bind::{RateMapDescriptor, RateMapLayerDescriptor};
+use metal2vulkan::bind::{
+    RasterizationRateMap as CompiledMap, RateMapDescriptor, RateMapLayerDescriptor, RegionLimits,
+};
 use metal2vulkan::metal::{
     IndirectCommandType, PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureUsage,
 };
@@ -51,14 +54,16 @@ const HEAVY_AT_ONCE: usize = 2;
 /// The rounds.
 const ROUNDS: usize = 16;
 
-/// The executions of the commands in a heavy command buffer's rate-mapped pass.
-const EXECUTIONS: usize = 96;
+/// The draws a heavy command buffer's rate-mapped pass records, about: its executions' draws,
+/// each once per region of the map.
+const REGION_DRAWS: usize = 800_000;
 
-/// The map's zones on each axis, alternating between quality 1 and 0.5.
-const ZONES: usize = 32;
+/// The map's zones on each axis, alternating between quality 1 and 0.5: Metal's most samples an
+/// axis.
+const ZONES: usize = 9;
 
-/// The map's screen side, in pixels: 64 a zone.
-const SCREEN: u32 = 64 * ZONES as u32;
+/// The map's screen side, in pixels.
+const SCREEN: u32 = 2048;
 
 /// What the program made.
 struct Page {
@@ -186,8 +191,13 @@ impl Page {
     }
 
     /// A heavy command buffer, committed: a pass writes the commands, then a pass over `rate`
-    /// executes them [`EXECUTIONS`] times into `target`.
-    fn heavy(&self, target: &Texture, rate: &RasterizationRateMap) -> CommandBuffer {
+    /// executes them `executions` times into `target`.
+    fn heavy(
+        &self,
+        target: &Texture,
+        rate: &RasterizationRateMap,
+        executions: usize,
+    ) -> CommandBuffer {
         let command_buffer = self.queue.command_buffer().unwrap();
         let pass = |rate: Option<&RasterizationRateMap>| {
             let mut pass = RenderPassDescriptor::new();
@@ -225,7 +235,7 @@ impl Page {
         for entry in &self.entries {
             (encoder.use_resource(entry.as_resource(), ResourceUsage::READ, stages)).unwrap();
         }
-        for _ in 0..EXECUTIONS {
+        for _ in 0..executions {
             (encoder.execute_commands_in_buffer(&self.icb, 0..COMMANDS)).unwrap();
         }
         encoder.end_encoding().unwrap();
@@ -241,14 +251,25 @@ fn completed(command_buffer: &CommandBuffer) {
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
 }
 
-/// The map: [`ZONES`] zones a side, alternating between quality 1 and 0.5.
-fn map(device: &Device) -> RasterizationRateMap {
+/// The map's descriptor: [`ZONES`] zones a side, alternating between quality 1 and 0.5.
+fn descriptor() -> RateMapDescriptor {
     let qualities: Vec<f32> = (0..ZONES)
         .map(|zone| if zone % 2 == 0 { 1.0 } else { 0.5 })
         .collect();
     let mut descriptor = RateMapDescriptor::new([SCREEN, SCREEN]);
     descriptor.layers = vec![RateMapLayerDescriptor::new(qualities.clone(), qualities)];
-    device.new_rasterization_rate_map(&descriptor).unwrap()
+    descriptor
+}
+
+/// The regions a draw over the whole screen of the map records, by the compile layer's plan.
+fn regions() -> usize {
+    let limits = RegionLimits::new([16384, 16384], [-32768.0, 32767.0]);
+    let whole = [0.0, 0.0, f64::from(SCREEN), f64::from(SCREEN)];
+    let plan = CompiledMap::new(&descriptor()).unwrap();
+    plan.regions(0, whole, None, &limits)
+        .unwrap()
+        .regions()
+        .len()
 }
 
 /// The spares' and draws' counts a round reports.
@@ -271,7 +292,9 @@ fn line(counts: &WorkCounts) -> String {
 fn rate_mapped_recordings_in_spare_pools_leave_the_drivers_pools_room() {
     let device = open_device(TEST_DEVICE, DeviceOptions::default()).unwrap();
     let page = Page::new(&device);
-    let map = map(&device);
+    let map = device.new_rasterization_rate_map(&descriptor()).unwrap();
+    let regions = regions();
+    let executions = REGION_DRAWS.div_ceil(TEXTURES as usize * regions);
     let size = map.physical_size_for_layer(0);
     let mut descriptor =
         TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, size.width, size.height, false);
@@ -295,14 +318,15 @@ fn rate_mapped_recordings_in_spare_pools_leave_the_drivers_pools_room() {
     drop(lights);
     let start = Instant::now();
     eprintln!(
-        "RM-VOLUME physical {}x{}, before the rounds: {}",
+        "RM-VOLUME physical {}x{}, {regions} regions, {executions} executions a heavy pass, \
+         before the rounds: {}",
         size.width,
         size.height,
         line(&device.work_counts())
     );
     for round in 0..ROUNDS {
         let heavy: Vec<CommandBuffer> = (0..HEAVY_AT_ONCE)
-            .map(|_| page.heavy(&target, &map))
+            .map(|_| page.heavy(&target, &map, executions))
             .collect();
         std::thread::scope(|scope| {
             for command_buffer in &heavy {
