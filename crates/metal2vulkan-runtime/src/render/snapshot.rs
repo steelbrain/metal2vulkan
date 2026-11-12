@@ -214,6 +214,11 @@ pub(super) struct Wanted {
     /// The draw reads the slots' textures in place, drawn once, with no snapshot (the module
     /// docs' in place).
     pub(super) in_place: bool,
+    /// Without its snapshots the draw takes the split: it follows a barrier inside its
+    /// instance, or behind the pass's loads (`loads_ordered`) reads a color the pass clears.
+    /// Else it reads the copy taken before the pass (`texture/attached_reads.rs`), and gives up
+    /// its snapshots counted under no split reason.
+    pub(super) split_otherwise: bool,
 }
 
 /// The form `plan` keeps fragment texture slot `slot`'s snapshot in
@@ -447,14 +452,14 @@ impl RenderLowering {
         pipeline: &DrawingState,
         reformats: &[Reformat],
     ) -> Option<Wanted> {
-        // After a barrier before the pass's first draw alone (`loads_ordered`), a slot reads
-        // through a snapshot only where its texture's color is one the pass clears: one the pass
-        // loads holds the texels from before the pass, which its copy holds
-        // (`texture/attached_reads.rs`).
+        // With a barrier before it or not: a draw that reads with none reads what the draws
+        // before it wrote, as with one (`docs/API.md`'s accepted differences), where it would
+        // read the copy taken before the pass, the texels from before it.
         let ordered = self.current.barriers || self.barrier;
-        if self.replaying || self.rerouting || !(ordered || self.loads_ordered) {
+        if self.replaying || self.rerouting {
             return None;
         }
+        let mut split = ordered;
         let base = pipeline.base();
         let fragment = base
             .stages
@@ -465,17 +470,17 @@ impl RenderLowering {
             let Some(texture) = self.fragment.textures.get(&slot) else {
                 continue;
             };
-            if !texture.attached_in(&self.layout) || !(ordered || texture.cleared_in(&self.layout))
-            {
+            if !texture.attached_in(&self.layout) {
                 continue;
             }
+            split |= self.loads_ordered && texture.cleared_in(&self.layout);
             let Some(index) = texture.snapshot_color(&self.layout) else {
                 // On a device without the path no image takes the feedback loop usage.
                 let reason = match self.core.device().shared().color_write_masks.is_none() {
                     true => SplitReason::DeviceLacks,
                     false => SplitReason::NotInPlace,
                 };
-                return self.snapshot_fallback(reason);
+                return self.fallback_if(split, reason);
             };
             wanted.slots.insert(slot);
             wanted.feedback.0 |= 1 << index;
@@ -498,15 +503,16 @@ impl RenderLowering {
             }
             return None;
         }
+        wanted.split_otherwise = split;
         let device = self.core.device();
         if device.shared().color_write_masks.is_none() {
-            return self.snapshot_fallback(SplitReason::DeviceLacks);
+            return self.fallback_if(split, SplitReason::DeviceLacks);
         }
         if self.visibility.active() {
-            return self.snapshot_fallback(SplitReason::VisibilityQuery);
+            return self.fallback_if(split, SplitReason::VisibilityQuery);
         }
         if let Err(reason) = self.in_instance(pipeline, reformats, &mut wanted) {
-            return self.snapshot_fallback(reason);
+            return self.fallback_if(split, reason);
         }
         Some(wanted)
     }
@@ -683,10 +689,11 @@ impl RenderLowering {
             Some((key, texture)) => self.readers.measure(self.core.device(), &texture, key)?,
             None => None,
         };
+        let split = wanted.split_otherwise;
         let wanted = match (within, learned) {
             (true, _) => Some(wanted),
-            (false, Some(_)) => self.snapshot_fallback(SplitReason::Coverage),
-            (false, None) => self.snapshot_fallback(SplitReason::Area),
+            (false, Some(_)) => self.fallback_if(split, SplitReason::Coverage),
+            (false, None) => self.fallback_if(split, SplitReason::Area),
         };
         Ok((wanted, query))
     }
@@ -946,6 +953,16 @@ impl RenderLowering {
     pub(super) fn snapshot_fallback(&self, reason: SplitReason) -> Option<Wanted> {
         snapshot_fallback(self.core.device(), reason);
         None
+    }
+
+    /// [`snapshot_fallback`](Self::snapshot_fallback) where the draw takes the split without
+    /// its snapshots (`split`, [`Wanted::split_otherwise`]); else `None` alone, the draw reading
+    /// the copy taken before the pass.
+    fn fallback_if(&self, split: bool, reason: SplitReason) -> Option<Wanted> {
+        match split {
+            true => self.snapshot_fallback(reason),
+            false => None,
+        }
     }
 }
 

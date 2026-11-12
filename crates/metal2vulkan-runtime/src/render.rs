@@ -8396,9 +8396,9 @@ impl RenderLowering {
         // The encoder's kept bind state, brought to the draw's (`live_bind.rs`), held for the
         // draw: no draw of the encoder runs inside another past here.
         // A draw that reads its pass's texture at its own pixels and writes nothing of it reads
-        // it in place, with a barrier or without; else, after a barrier inside its instance, it
-        // reads it through a snapshot where it can (`render/snapshot.rs`): asked of the plan,
-        // kept where the plan reads so, else `None` and the copy or the split.
+        // it in place; else it reads it through a snapshot where it can (`render/snapshot.rs`),
+        // each with a barrier before it or without: asked of the plan, kept where the plan reads
+        // so, else `None` and the copy or the split.
         let mut snapshot = self
             .in_place_wanted(&pipeline, &reformats, &routed.settings)
             .or_else(|| self.snapshot_wanted(&pipeline, &reformats));
@@ -11683,12 +11683,15 @@ impl RenderLowering {
                 // the draw again (`LineRoute::refused`).
                 Err(refused) if settings.line.refused(&refused).is_some() => return Err(refused),
                 // A variant that reads through snapshots the compile or bind layer refuses: the
-                // draw takes the split (`render/snapshot.rs`).
+                // draw takes the split, or with no barrier before it the copy, counted under no
+                // split reason (`render/snapshot.rs`).
                 Err(Error::Unsupported(_) | Error::Bind(BindError::Unsupported(_)))
                     if snapshot.as_ref().is_some_and(|w| !w.in_place) =>
                 {
-                    let reason = snapshot::SplitReason::VariantRefused;
-                    snapshot::snapshot_fallback(self.core.device(), reason);
+                    if snapshot.as_ref().is_some_and(|w| w.split_otherwise) {
+                        let reason = snapshot::SplitReason::VariantRefused;
+                        snapshot::snapshot_fallback(self.core.device(), reason);
+                    }
                     *snapshot = None;
                     continue;
                 }
@@ -11721,10 +11724,11 @@ impl RenderLowering {
             }
             // A plan that does not read through every snapshot the draw asked for: the draw
             // takes the split, settled again without them. One that does not read in place as the
-            // draw asked takes the copy, counted under no split reason.
+            // draw asked, or through snapshots with no barrier before it, takes the copy, counted
+            // under no split reason.
             if let Some(wanted) = snapshot.as_ref() {
                 if let Err(reason) = self.snapshot_holds(&settled, wanted) {
-                    if !wanted.in_place {
+                    if wanted.split_otherwise {
                         snapshot::snapshot_fallback(self.core.device(), reason);
                     }
                     *snapshot = None;
