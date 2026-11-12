@@ -48,10 +48,11 @@
 //!   comparison compares bytes 16 at a time (8 off x86-64) with the bytes the pages and the copy
 //!   agreed on, and stores only those that changed and that the other side did not change since:
 //!   all 16 in one store where every one of them is to be written, else those alone in one masked
-//!   store on an x86-64 host with AVX-512BW, and elsewhere in the fewest stores of 8, 4, 2 and 1
-//!   bytes (of 8 and 1 off x86-64; `merge_block`), so no byte one side did not change is ever
-//!   written, and a byte the other side writes meanwhile is stored over only where the first side
-//!   changed it too, in the window between the comparison's read of it and its store. So a CPU
+//!   store on an x86-64 host with AVX-512BW, else on x86-64 in sixteen stores of a byte, each of
+//!   a byte not to be written aimed at the stack instead with no branch, and off x86-64 in stores
+//!   of 8 and 1 bytes (`merge_block`), so no byte one side did not change is ever written, and a
+//!   byte the other side writes meanwhile is stored over only where the first side changed it
+//!   too, in the window between the comparison's read of it and its store. So a CPU
 //!   write to the pages made before the completion reads its block is always kept; one made while
 //!   the merge runs is kept but for a byte the GPU also changed, which then keeps the CPU's or the
 //!   GPU's. Only a program that writes a byte of the buffer from the CPU that a command buffer
@@ -607,10 +608,10 @@ pub(crate) mod x86 {
     /// [`merge_block`](super::merge_block) 16 bytes at a time: the bytes that differ from `was`
     /// as a mask (`_mm_cmpeq_epi8`, `_mm_movemask_epi8`), and where `keep_to` those of `to` that
     /// still hold `was`'s; 16 in one store where every byte is to be written, else those the mask
-    /// sets in one masked store where the host has one ([`store_masked_avx512`]), else in the
-    /// fewest stores of 8, 4, 2 and 1 bytes ([`store_masked`]); `was` takes all 16 of `now` (the
-    /// bytes that did not change are the same). The rest past the last 16, 8 at a time
-    /// ([`merge_words`](super::merge_words)). The bytes written.
+    /// sets in one masked store where the host has one ([`store_masked_avx512`]), else in
+    /// sixteen stores of a byte, those not set aimed at the stack ([`store_masked`]); `was` takes
+    /// all 16 of `now` (the bytes that did not change are the same). The rest past the last 16, 8
+    /// at a time ([`merge_words`](super::merge_words)). The bytes written.
     ///
     /// # Safety
     ///
@@ -1721,8 +1722,12 @@ unsafe fn copy_in_untagged(pages: NonNull<u8>, copy: NonNull<u8>, bytes: Range<u
 
 /// [`copy_in_untagged`] of the bytes `bytes`, on the calling thread: read a block of
 /// [`SYNC_BLOCK`] bytes of each side at a time, compared whole (slice equality, which the compiler
-/// vectorizes); only a block that differs is looked into ([`merge_block`]), so no byte the
-/// comparison found equal is written. The bytes written.
+/// vectorizes); a block that differs takes the pages' block whole, in one copy. No command buffer
+/// committed writes a copy with no base (the first that may write it makes one, after its copy
+/// in), and its copies in hold the copies' lock, so nothing writes the copy's block meanwhile:
+/// its bytes that agree with the pages' are stored as they are, which changes nothing a reader
+/// of it sees, in place of the stores of the bytes that differ alone ([`merge_block`]). The bytes
+/// that differ.
 ///
 /// # Safety
 ///
@@ -1749,9 +1754,11 @@ unsafe fn copy_in_run(ends: Ends, bytes: Range<usize>) -> u64 {
             std::ptr::copy_nonoverlapping(pages.add(at), now.as_mut_ptr(), span);
             std::ptr::copy_nonoverlapping(copy.add(at), was.as_mut_ptr(), span);
         }
-        if now[..span] != was[..span] {
-            // SAFETY: as above.
-            written += unsafe { merge_block(&now[..span], copy.add(at), &mut was[..span], false) };
+        let (fresh, held) = (&now[..span], &was[..span]);
+        if fresh != held {
+            written += fresh.iter().zip(held).filter(|(a, b)| a != b).count() as u64;
+            // SAFETY: as above; nothing else writes the copy's bytes meanwhile (the caller's).
+            unsafe { std::ptr::copy_nonoverlapping(fresh.as_ptr(), copy.add(at), span) };
         }
         at += span;
     }
