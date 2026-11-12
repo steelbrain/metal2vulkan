@@ -528,6 +528,9 @@ pub(super) struct DeviceShared {
     /// Released variants' objects and `VkPipeline`s, kept for a state made again
     /// (`pipeline/kept.rs`).
     pub(super) kept: Mutex<crate::pipeline::kept::Kept>,
+    /// The region `VkPipeline`s its compute variants keep, a released variant's kept instance
+    /// included, under one bound (`pipeline/region_ledger.rs`).
+    pub(super) region_ledger: Arc<crate::pipeline::region_ledger::RegionLedger>,
     /// The variants' shader modules by their exact SPIR-V, shared device-wide
     /// (`pipeline/content_keyed.rs`).
     pub(super) shader_modules: Mutex<crate::pipeline::ShaderModules>,
@@ -2847,6 +2850,10 @@ impl Device {
             planes: Mutex::new(PlanesObjects::default()),
             interleave: Mutex::default(),
             kept: Mutex::default(),
+            region_ledger: Arc::new(crate::pipeline::region_ledger::RegionLedger::new(
+                crate::pipeline::region_ledger::DEVICE_REGION_PIPELINES,
+                Arc::clone(&carried.counts),
+            )),
             shader_modules: Mutex::default(),
             pipeline_layouts: Mutex::default(),
             flights: crate::pipeline::flight::Flights::default(),

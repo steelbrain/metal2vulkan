@@ -26,17 +26,82 @@
 //!   (`budget::Urgency`, `pool.rs`).
 
 use super::budget::{Asked, Urgency};
-use super::memo::{At, Evictions, Lru};
+use super::memo::{At, Lru, Watch};
 use super::pool::Place;
 use crate::device::lock;
 use crate::error::{internal, Error};
 use std::hash::Hash;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::Instant;
 
 /// A memo of objects made on demand, each made once at a time (the module docs).
 pub(crate) struct Making<K, V> {
     memo: Arc<Mutex<Lru<K, Entry<V>>>>,
+}
+
+/// What watches a memo's keys ([`Making::watched`]): told, under the memo's lock, of each key
+/// kept (a making begun, or an object kept), used and let go, with the object of one let go past
+/// the bound where it was made.
+pub(crate) trait KeyWatch<K, V>: Send + Sync {
+    /// `key` was kept.
+    fn kept(&self, key: &K);
+    /// `key`'s entry was used.
+    fn used(&self, key: &K);
+    /// `key`'s entry went past the memo's bound, with its object where it was made.
+    fn evicted(&self, key: &K, made: Option<&Arc<V>>);
+    /// `key`'s entry was removed: a failed making's, or one let go of
+    /// ([`WeakMaking::forget`]).
+    fn removed(&self, key: &K);
+}
+
+/// A memo named without holding it: what a watch is handed, to let go of one of its keys later
+/// ([`forget`](Self::forget)).
+pub(crate) struct WeakMaking<K, V>(Weak<Mutex<Lru<K, Entry<V>>>>);
+
+impl<K, V> Clone for WeakMaking<K, V> {
+    fn clone(&self) -> WeakMaking<K, V> {
+        WeakMaking(Weak::clone(&self.0))
+    }
+}
+
+impl<K: Clone + Eq + Hash, V> WeakMaking<K, V> {
+    /// Let go of `key`'s object where the memo lives and holds it made: the object, which its
+    /// other holders keep until they let go of it. A making in flight is left to finish.
+    pub(crate) fn forget(&self, key: &K) -> Option<Arc<V>> {
+        let memo = self.0.upgrade()?;
+        let mut memo = lock(&memo);
+        let made = match memo.peek(key)? {
+            Entry::Made(made) => Arc::clone(made),
+            Entry::Making(_) => return None,
+        };
+        memo.remove(key);
+        Some(made)
+    }
+}
+
+/// A [`KeyWatch`] as its memo's map's [`Watch`].
+struct EntryWatch<K, V>(Box<dyn KeyWatch<K, V>>);
+
+impl<K, V> Watch<K, Entry<V>> for EntryWatch<K, V> {
+    fn kept(&self, key: &K) {
+        self.0.kept(key);
+    }
+
+    fn used(&self, key: &K) {
+        self.0.used(key);
+    }
+
+    fn evicted(&self, key: &K, entry: &Entry<V>) {
+        let made = match entry {
+            Entry::Made(made) => Some(made),
+            Entry::Making(_) => None,
+        };
+        self.0.evicted(key, made);
+    }
+
+    fn removed(&self, key: &K) {
+        self.0.removed(key);
+    }
 }
 
 /// An entry: the object made, or the turn of its making.
@@ -206,14 +271,21 @@ impl<K: Clone + Eq + Hash, V> Making<K, V> {
         }
     }
 
-    /// An empty memo of at most `max_entries` entries, telling `evictions` how many it lets go
-    /// past that bound at each making it begins or keeps.
-    pub(crate) fn counted_evicting(max_entries: usize, evictions: Evictions) -> Making<K, V> {
-        Making {
-            memo: Arc::new(Mutex::new(
-                Lru::counted(max_entries).counting_evictions(evictions),
-            )),
-        }
+    /// An empty memo of at most `max_entries` entries, its keys watched by what `watch` makes of
+    /// the memo named without holding it.
+    pub(crate) fn watched(
+        max_entries: usize,
+        watch: impl FnOnce(WeakMaking<K, V>) -> Box<dyn KeyWatch<K, V>>,
+    ) -> Making<K, V>
+    where
+        K: Send + Sync + 'static,
+        V: Send + Sync + 'static,
+    {
+        let memo = Arc::new_cyclic(|memo| {
+            let watch = EntryWatch(watch(WeakMaking(Weak::clone(memo))));
+            Mutex::new(Lru::counted(max_entries).watched(Box::new(watch)))
+        });
+        Making { memo }
     }
 
     /// The object of `key`: from the memo, from the making in flight for it, or made now by

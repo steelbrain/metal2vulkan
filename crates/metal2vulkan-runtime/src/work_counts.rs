@@ -2224,8 +2224,9 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A compute variant's memo of region `VkPipeline`s let `evicted` of them go past its bound
-    /// (`pipeline/mod.rs`, `REGION_PIPELINES`).
+    /// `evicted` region `VkPipeline`s went past a bound: a compute variant's memo's
+    /// (`pipeline/mod.rs`, `REGION_PIPELINES`) or the device's across every compute variant
+    /// (`pipeline/region_ledger.rs`).
     pub(crate) fn region_pipelines_evicted(&self, evicted: u64) {
         self.region_pipelines_evicted
             .fetch_add(evicted, Ordering::Relaxed);
@@ -8951,9 +8952,11 @@ pub struct WorkCounts {
     /// device's pool and went on, rather than make it at the dispatch: each counted once per
     /// region it handed.
     pub dispatch_pipelines_pooled: u64,
-    /// Region `VkPipeline`s compute variants' memos let go past their bound, the least recently
-    /// used first (`pipeline/mod.rs`, `REGION_PIPELINES`): each one a dispatch takes again is made
-    /// again. None while each variant's dispatches take no more keys than the bound.
+    /// Region `VkPipeline`s let go past a bound, the least recently used first: a compute
+    /// variant's memo's own (`pipeline/mod.rs`, `REGION_PIPELINES`), or the device's across every
+    /// compute variant, released variants' kept ones included (`pipeline/region_ledger.rs`,
+    /// `DEVICE_REGION_PIPELINES`): each one a dispatch takes again is made again. None while the
+    /// dispatches take no more keys than the bounds.
     pub region_pipelines_evicted: u64,
     /// Render encoders' tile dispatches that handed the making of a region's `VkPipeline` to the
     /// device's pool and went on, their passes recorded once it is made, rather than make it at

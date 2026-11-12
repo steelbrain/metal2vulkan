@@ -587,6 +587,9 @@ pub(crate) struct RawPipeline {
     /// The variant instance whose layout made it and its place there, where its last release
     /// keeps it for that instance (`kept.rs`); `None` destroys it.
     pub(super) keep: Option<(Instance, Place)>,
+    /// Let go of by its memo past a bound ([`doom`](Self::doom)): its last release destroys it
+    /// where it would keep it.
+    pub(super) doomed: AtomicBool,
     /// Made at its state's creation, its specialized notices not announced yet: the first draw
     /// that takes it announces them, with what it binds (`RenderVariant::first_use`).
     pub(super) unannounced: AtomicBool,
@@ -602,7 +605,8 @@ impl Drop for RawPipeline {
         let Some(_busy) = exit_guard::enter() else {
             return;
         };
-        if let Some((instance, place)) = self.keep.clone() {
+        let doomed = self.doomed.load(Ordering::Acquire);
+        if let Some((instance, place)) = self.keep.clone().filter(|_| !doomed) {
             let shared = self.device.shared();
             let kept = KeptPipeline {
                 place,
@@ -634,9 +638,16 @@ impl RawPipeline {
             raw: kept.raw,
             created_in: std::time::Duration::ZERO,
             keep: Some((instance, kept.place)),
+            doomed: AtomicBool::new(false),
             unannounced: AtomicBool::new(kept.unannounced),
             linked: kept.linked,
         }
+    }
+
+    /// Its memo let go of it past a bound (`region_ledger.rs`): its last release destroys it,
+    /// where it would keep it for its instance, so a kept instance holds only what its memo held.
+    pub(crate) fn doom(&self) {
+        self.doomed.store(true, Ordering::Release);
     }
 
     /// Whether its specialized notices wait for this, its first draw: once true, then false.
@@ -653,6 +664,12 @@ impl RawPipeline {
 }
 
 impl VariantObjects {
+    /// The variant instance its objects are, where one keeps them (`kept.rs`): `None` in a warm
+    /// pass.
+    pub(super) fn instance(&self) -> Option<Instance> {
+        self.keep
+    }
+
     /// The shader modules of `stages` and the layouts of `layout`, a compiled pipeline's. Sets
     /// are numbered by position (the layout's set `n` is at index `n`), which the compile layer
     /// guarantees. Once they are made, the device announces what the stages record: their
@@ -1187,6 +1204,7 @@ impl VariantObjects {
             raw,
             created_in,
             keep: None,
+            doomed: AtomicBool::new(false),
             // Its notices wait for its first dispatch where its state's creation made it.
             unannounced: AtomicBool::new(matches!(c.notices, Notices::FirstDraw)),
             linked: None,

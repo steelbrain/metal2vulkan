@@ -61,6 +61,7 @@ pub(super) mod pool;
 mod predicted;
 mod raster_samples;
 pub(super) mod reaper;
+pub(super) mod region_ledger;
 mod render;
 pub(super) mod shared_layouts;
 mod sources;
@@ -214,7 +215,8 @@ const PLANS: usize = 64;
 /// The most `VkPipeline`s a render variant keeps, and a tile function's variant of its regions.
 const PIPELINES: usize = 32;
 /// The most region `VkPipeline`s a kernel's variant keeps, the least recently used going first
-/// (`WorkCounts::region_pipelines_evicted` counts those let go).
+/// (`WorkCounts::region_pipelines_evicted` counts those let go), within the device's bound across
+/// every variant (`region_ledger::DEVICE_REGION_PIPELINES`).
 ///
 /// A region's local size and `MultiRegion` are specializations, so a kernel takes a `VkPipeline`
 /// per threadgroup width its program's calls ask for, and with `dispatchThreads`, where the
@@ -228,8 +230,11 @@ const PIPELINES: usize = 32;
 ///
 /// What the bound costs where it is full, measured by `tests/region_widths.rs` across the 128
 /// makings of its one-store kernel: on lavapipe, whose pipelines are JIT-compiled code, about 650
-/// KiB of resident memory each (121,784 to 205,456 KiB), so up to about 160 MiB for a full memo. A
-/// variant whose dispatches take no more keys than they did holds no more than before.
+/// KiB of resident memory each (121,784 to 205,456 KiB), so up to about 160 MiB for a full memo;
+/// on RADV on a Radeon 780M (one run), GTT grew 66,048 KiB and resident memory 6,080 KiB, at most
+/// about 516 KiB and 48 KiB each with the driver's own allocations in the figure (a run that kept
+/// 32 saw GTT shrink 16,256 KiB over the same makings), so up to about 129 MiB of GTT for a full
+/// memo. A variant whose dispatches take no more keys than they did holds no more than before.
 const REGION_PIPELINES: usize = 256;
 /// The most variants besides the first a state keeps.
 const VARIANTS: usize = 8;
@@ -1876,20 +1881,29 @@ impl Variant {
         // takes the call's threadgroup and its grid's edges (`REGION_PIPELINES`).
         let tile = (pipeline.dependencies.iter()).any(|d| d.fact == RuntimeFact::TileFunction);
         let bound = if tile { PIPELINES } else { REGION_PIPELINES };
-        let counts = Arc::clone(&device.shared().counts);
-        let evicted = move |evicted| counts.region_pipelines_evicted(evicted);
+        // Listed in the device's ledger under the variant's instance (`region_ledger.rs`).
+        let instance = objects.instance();
+        let ledger = Arc::clone(&device.shared().region_ledger);
+        let watch = move |memo| {
+            Box::new(region_ledger::RegionWatch {
+                instance,
+                ledger,
+                memo,
+            }) as Box<dyn making::KeyWatch<RegionKey, RawPipeline>>
+        };
         let variant = Arc::new(Variant {
             key,
             pipeline,
             objects: Arc::new(objects),
             plans: Mutex::new(Lru::counted(PLANS)),
-            pipelines: making::Making::counted_evicting(bound, Box::new(evicted)),
+            pipelines: making::Making::watched(bound, watch),
         });
         for (place, made) in kept {
             if let kept::Place::Region(region) = place {
                 variant.pipelines.seed(region, made);
             }
         }
+        region_ledger::let_go(device.shared());
         // A warm pass's variant is no state's the program holds: the memo does not hand it out
         // (`warm/pass.rs`).
         if !crate::warm::warming() {
@@ -1966,7 +1980,9 @@ impl Variant {
                 .objects
                 .pipeline(&key, graphics::Notices::Now(Some(formats)))?;
             Ok(made.kept_at(&self.objects, kept::Place::Region(key.clone())))
-        })?;
+        });
+        region_ledger::let_go(self.objects.device.shared());
+        let made = made?;
         self.first_use(&made, &key, formats);
         Ok(made)
     }

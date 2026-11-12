@@ -1372,6 +1372,7 @@ impl VariantObjects {
             raw,
             created_in,
             keep: None,
+            doomed: AtomicBool::new(false),
             unannounced: AtomicBool::new(matches!(notices, Notices::FirstDraw)),
             linked,
         }

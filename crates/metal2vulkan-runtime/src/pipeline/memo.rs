@@ -34,9 +34,19 @@ use std::sync::{Arc, Mutex, Weak};
 /// The most entries the device's memo holds, whatever their sizes.
 pub(crate) const MEMO_ENTRIES: usize = 4096;
 
-/// What a map tells, at each insert that removed entries past its bounds, of how many it removed
-/// ([`Lru::counting_evictions`]).
-pub(crate) type Evictions = Box<dyn Fn(u64) + Send + Sync>;
+/// What watches a map's entries as they are kept, used and let go ([`Lru::watched`]): told under
+/// the lock that holds the map, so it takes no lock a holder of another such map's may wait for
+/// while holding its own.
+pub(crate) trait Watch<K, V>: Send + Sync {
+    /// `key` was kept, by an insert.
+    fn kept(&self, key: &K);
+    /// `key`'s entry was used, by a lookup.
+    fn used(&self, key: &K);
+    /// `key`'s entry went past the map's bounds, with its value.
+    fn evicted(&self, key: &K, value: &V);
+    /// `key`'s entry was removed by its key.
+    fn removed(&self, key: &K);
+}
 
 /// A map that keeps at most `max_weight` of its entries' weights and at most `max_entries`
 /// entries, removing the least recently used past either. A lookup or an insert is a use.
@@ -54,8 +64,8 @@ pub(crate) struct Lru<K, V> {
     weight: u64,
     max_weight: u64,
     max_entries: usize,
-    /// Told of the entries an insert removed past the bounds, where the map counts them.
-    evictions: Option<Evictions>,
+    /// Told of each entry kept, used and let go, where the map is watched.
+    watch: Option<Box<dyn Watch<K, V>>>,
     /// The uses that moved an entry in `order` ([`used`](Self::used)).
     #[cfg(test)]
     reordered: u64,
@@ -84,7 +94,7 @@ impl<K: Clone + Eq + Hash, V> Lru<K, V> {
             weight: 0,
             max_weight,
             max_entries,
-            evictions: None,
+            watch: None,
             #[cfg(test)]
             reordered: 0,
         }
@@ -95,10 +105,31 @@ impl<K: Clone + Eq + Hash, V> Lru<K, V> {
         Lru::new(u64::MAX, max_entries)
     }
 
-    /// The map, telling `evictions` how many entries each insert removes past its bounds.
-    pub(crate) fn counting_evictions(mut self, evictions: Evictions) -> Lru<K, V> {
-        self.evictions = Some(evictions);
+    /// The map, telling `watch` of each entry kept, used and let go.
+    pub(crate) fn watched(mut self, watch: Box<dyn Watch<K, V>>) -> Lru<K, V> {
+        self.watch = Some(watch);
         self
+    }
+
+    /// How many entries it holds.
+    pub(crate) fn count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Remove the least recently used entry, and hand it back: an eviction the caller makes, which
+    /// the watch is not told of.
+    pub(crate) fn pop_oldest(&mut self) -> Option<(K, V)> {
+        let (_, oldest) = self.order.pop_first()?;
+        let slot = self.entries.remove(&oldest)?;
+        self.numbers.remove(&slot.key);
+        self.weight -= slot.weight;
+        Some((slot.key, slot.value))
+    }
+
+    /// The value of `key`, its use left as it was.
+    pub(crate) fn peek(&self, key: &K) -> Option<&V> {
+        let number = self.numbers.get(key)?;
+        self.entries.get(number).map(|slot| &slot.value)
     }
 
     /// The value of `key`, now the most recently used.
@@ -130,6 +161,9 @@ impl<K: Clone + Eq + Hash, V> Lru<K, V> {
     /// would leave it.
     fn used(&mut self, number: u64) -> Option<&mut Slot<K, V>> {
         let slot = self.entries.get_mut(&number)?;
+        if let Some(watch) = self.watch.as_deref() {
+            watch.used(&slot.key);
+        }
         // The latest stamp given is the clock's last.
         if slot.used + 1 == self.clock {
             return Some(slot);
@@ -148,15 +182,21 @@ impl<K: Clone + Eq + Hash, V> Lru<K, V> {
 
     /// Keep `value` under `key` with `weight`, as the most recently used, replacing what `key`
     /// held; then remove the least recently used entries until both bounds hold. A value heavier
-    /// than the whole bound is not kept.
+    /// than the whole bound is not kept, and what `key` held is then removed.
     pub(crate) fn insert(&mut self, key: K, value: V, weight: u64) {
-        self.remove(&key);
+        let replaced = self.take(&key);
         if weight > self.max_weight || self.max_entries == 0 {
+            if let Some(watch) = self.watch.as_deref().filter(|_| replaced) {
+                watch.removed(&key);
+            }
             return;
         }
         let stamp = self.clock;
         self.clock += 1;
         self.numbers.insert(key.clone(), stamp);
+        if let Some(watch) = self.watch.as_deref() {
+            watch.kept(&key);
+        }
         let slot = Slot {
             key,
             value,
@@ -166,7 +206,6 @@ impl<K: Clone + Eq + Hash, V> Lru<K, V> {
         self.entries.insert(stamp, slot);
         self.order.insert(stamp, stamp);
         self.weight += weight;
-        let mut evicted = 0;
         while self.weight > self.max_weight || self.entries.len() > self.max_entries {
             let Some((_, oldest)) = self.order.pop_first() else {
                 break;
@@ -174,23 +213,33 @@ impl<K: Clone + Eq + Hash, V> Lru<K, V> {
             if let Some(slot) = self.entries.remove(&oldest) {
                 self.numbers.remove(&slot.key);
                 self.weight -= slot.weight;
-                evicted += 1;
+                if let Some(watch) = self.watch.as_deref() {
+                    watch.evicted(&slot.key, &slot.value);
+                }
             }
-        }
-        if let Some(evictions) = self.evictions.as_ref().filter(|_| evicted > 0) {
-            evictions(evicted);
         }
     }
 
     /// Remove `key`'s entry, if any.
     pub(crate) fn remove(&mut self, key: &K) {
-        let Some(number) = self.numbers.remove(key) else {
-            return;
-        };
-        if let Some(slot) = self.entries.remove(&number) {
-            self.order.remove(&slot.used);
-            self.weight -= slot.weight;
+        if self.take(key) {
+            if let Some(watch) = self.watch.as_deref() {
+                watch.removed(key);
+            }
         }
+    }
+
+    /// Remove `key`'s entry, if any, telling the watch nothing: whether there was one.
+    fn take(&mut self, key: &K) -> bool {
+        let Some(number) = self.numbers.remove(key) else {
+            return false;
+        };
+        let Some(slot) = self.entries.remove(&number) else {
+            return false;
+        };
+        self.order.remove(&slot.used);
+        self.weight -= slot.weight;
+        true
     }
 
     /// How many uses moved an entry in the order: none that used the latest used again.

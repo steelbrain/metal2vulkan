@@ -74,6 +74,7 @@ use super::making::{Begun, Pending, Ticket};
 use super::objects::RawPipeline;
 use super::piece_holds::PieceHolds;
 use super::pool::Place;
+use super::region_ledger;
 use super::{ComputePipelineState, RegionKey, Variant};
 use crate::degradation::{BoundFormats, Occurrence};
 use crate::error::Error;
@@ -141,7 +142,9 @@ impl Variant {
         formats: BoundFormats<'_>,
     ) -> RegionPipeline {
         let key = RegionKey::of(region);
-        match self.pipelines.begin(&key) {
+        let begun = self.pipelines.begin(&key);
+        region_ledger::let_go(self.objects.device.shared());
+        match begun {
             Begun::Made(made) => {
                 self.first_use(&made, &key, formats);
                 RegionPipeline::Made(made)
