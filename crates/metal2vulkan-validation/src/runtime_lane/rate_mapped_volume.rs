@@ -15,6 +15,7 @@
 //! Every round must complete without an error, after [`ROUNDS`] rounds.
 
 use super::{buffer_with, open_device, WAIT};
+use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::{RateMapDescriptor, RateMapLayerDescriptor};
 use metal2vulkan::metal::{
