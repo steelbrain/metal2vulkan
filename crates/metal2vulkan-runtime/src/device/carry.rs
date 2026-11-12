@@ -2,8 +2,9 @@
 //! uses of guest RAM, its no-copy buffers, the buffers of the runtime's memory whose bytes no
 //! pointer of the program's reaches or whose pages the runtime owns, and its `Private` heaps with
 //! the buffers placed in them, each the same object on the new `VkDevice`, as Metal keeps its
-//! objects across its GPU's recovery. A fence and a depth/stencil state, which hold no Vulkan
-//! object, are no generation's (`fence.rs`, `depth_stencil.rs`): nothing here carries them.
+//! objects across its GPU's recovery. A fence, a depth/stencil state, a library and a function,
+//! which hold no Vulkan object, are no generation's (`fence.rs`, `depth_stencil.rs`,
+//! `library.rs`): nothing here carries them.
 //!
 //! - **Kept as made.** Each event (`EventShared::new`) and heap (`Device::new_heap`) is kept here,
 //!   held weakly, by the generation it was made on; each buffer the program made of its own (`Device::visible`) is

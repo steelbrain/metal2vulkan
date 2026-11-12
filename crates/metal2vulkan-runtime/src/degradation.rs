@@ -2335,14 +2335,14 @@ degradations! {
         /// waits on), and where its new `VkDevice` could not be made (the device then answers as
         /// a lost one).
         DeviceRecovered = "device-recovered", Performance,
-            "the events, fences, depth/stencil states, uses of guest RAM, no-copy buffers, \
-             `Private` buffers, buffers in the runtime's own pages (fresh pages, and the blocks of \
-             pages the `Shared` and `Managed` buffers lie in where the device's checks found a \
-             held host-page import costs its submissions nothing and textures over such pages take \
-             what they take over its own memory) and `Private` heaps with the buffers placed in \
-             them made before it go on, a `Private` buffer's or heap's contents lost (it reads \
-             zero); the other objects made before it are refused (`MadeBeforeRecovery`), where \
-             Metal's go on; the calls during it wait for it";
+            "the events, fences, depth/stencil states, libraries, functions, uses of guest RAM, \
+             no-copy buffers, `Private` buffers, buffers in the runtime's own pages (fresh pages, \
+             and the blocks of pages the `Shared` and `Managed` buffers lie in where the device's \
+             checks found a held host-page import costs its submissions nothing and textures over \
+             such pages take what they take over its own memory) and `Private` heaps with the \
+             buffers placed in them made before it go on, a `Private` buffer's or heap's contents \
+             lost (it reads zero); the other objects made before it are refused \
+             (`MadeBeforeRecovery`), where Metal's go on; the calls during it wait for it";
         /// Apple's private device properties the device has no answer for
         /// (`private_properties.rs`): no document describes them and nothing the device reports
         /// maps to them. Announced once, when `Device::private_properties` is first read; the

@@ -832,10 +832,10 @@ meanwhile wait for it.
   second run could not have, runs on the new `VkDevice` where the loss came before it took them,
   and completes on the lost one where the loss came after, its object then one made before the
   recovery.
-- The recovery carries the events, the fences, the depth/stencil states, the uses of guest RAM
-  (`HostRamUse`), the no-copy buffers, the `Private` buffers, the buffers in the runtime's own
-  pages and the `Private` heaps with the buffers placed in them to the new `VkDevice`: the same
-  objects, at the same addresses.
+- The recovery carries the events, the fences, the depth/stencil states, the libraries and their
+  functions, the uses of guest RAM (`HostRamUse`), the no-copy buffers, the `Private` buffers, the
+  buffers in the runtime's own pages and the `Private` heaps with the buffers placed in them to the
+  new `VkDevice`: the same objects, at the same addresses.
   An event keeps the value the host saw and its listeners' notifications. A buffer in the
   runtime's own pages keeps its bytes and its `contents` pointer: a long host-visible buffer's
   fresh pages, and, on a device whose checks found that a held import of host pages costs its
@@ -857,9 +857,9 @@ meanwhile wait for it.
   mapping (on a device that imports no host pointer, or whose checks found that a held import
   costs its submissions or that textures over such pages take less, or had not answered; and a
   `Managed` buffer without unified memory), detached no-copy buffers, `Shared`, no-copy and
-  sparse heaps with the buffers placed in them, textures, pipeline states, libraries, buffers over
-  the caller's `VkBuffer`, and exportable memory or events. Make it again. Metal's objects go on.
-  The recovery's notice counts the buffers, heaps and events it carried and left, by kind.
+  sparse heaps with the buffers placed in them, textures, pipeline states, buffers over the
+  caller's `VkBuffer`, and exportable memory or events. Make it again. Metal's objects go on. The
+  recovery's notice counts the buffers, heaps and events it carried and left, by kind.
 - The lost `VkDevice` is destroyed once the objects left on it went and, where `Device::raw`
   answered its handles, a later `raw` call answered the new one's: `WorkCounts::vk_devices_live`
   reads 2 until then. A carried object holds nothing of it once none of its command buffers

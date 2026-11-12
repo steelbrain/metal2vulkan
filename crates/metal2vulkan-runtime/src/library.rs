@@ -9,7 +9,9 @@
 //! it with, as its stage or as a function the stage links ([`Function::linked_function`],
 //! `MTLLinkedFunctions`), and the options it was made with (`newFunctionWithDescriptor:`): one
 //! compiled to a binary is what Metal takes in a stage's `binaryFunctions` and adds to a made
-//! pipeline state.
+//! pipeline state. A library and its functions hold no Vulkan object, so they are no generation's
+//! (`device/line.rs`): they hold a root handle of their device and go on past the device's
+//! recovery, as Metal's do.
 
 use super::device::device_error;
 use super::error::{invalid, Problem, RuntimeGap};
@@ -31,6 +33,7 @@ use std::sync::{Arc, Mutex};
 /// A Metal library (`MTLLibrary`). Cheap to clone; `Send + Sync`.
 #[derive(Clone, Debug)]
 pub struct Library {
+    /// A root handle of the device (`device/line.rs`): of whatever generation serves.
     device: Device,
     library: metal2vulkan::library::Library,
     /// What the library holds of the sampler IDs its functions' pipeline states numbered, shared
@@ -53,6 +56,7 @@ pub struct Library {
 /// Cheap to clone; `Send + Sync`.
 #[derive(Clone, Debug)]
 pub struct Function {
+    /// A root handle of the device (`device/line.rs`), its library's.
     device: Device,
     function: metal2vulkan::library::Function,
     constants: FunctionConstantValues,
@@ -192,7 +196,7 @@ impl Device {
     ) -> Library {
         let holds = LibraryHolds::of(&self.shared().resource_ids, *library.content_hash());
         Library {
-            device: self.clone(),
+            device: self.root(),
             library,
             holds,
             reflections: Arc::default(),
@@ -201,7 +205,7 @@ impl Device {
 }
 
 impl Library {
-    /// `device`.
+    /// `device`: a root handle, whose calls go to the generation that serves (the module docs).
     pub fn device(&self) -> &Device {
         &self.device
     }
@@ -409,7 +413,7 @@ impl Library {
 }
 
 impl Function {
-    /// `device`.
+    /// `device`: a root handle, whose calls go to the generation that serves (the module docs).
     pub fn device(&self) -> &Device {
         &self.device
     }
