@@ -3,7 +3,7 @@
 
 use super::*;
 
-/// How [`kernel`]'s private array is reached.
+/// How [`tiles`]'s private array is reached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Case {
     /// Counters of 2 and 4 runs, a constant index, and a read at constant indices.
@@ -23,7 +23,7 @@ enum Case {
 /// `kernel k(device float* out, device uint* in)` with `float acc[32][32][4]`: for `i` below 2
 /// (or function constant 0) and `j` below 4, `acc[i][j][2] = float(i * 16 + j)`; then `out[0] =
 /// acc[1][3][2]` (its outer index `in[0]` in [`Case::Dynamic`]).
-fn kernel(case: Case) -> Result<Entry, Error> {
+fn tiles(case: Case) -> Result<Entry, Error> {
     let mut m = ModuleBuilder::new();
     let void = m.void();
     let i1 = m.int(1);
@@ -217,25 +217,25 @@ fn allocas(e: &Entry) -> Vec<Vec<u64>> {
 fn an_array_reached_by_counters_and_constants_is_allocated_as_far_as_they_reach() {
     // `i` reaches 0 and 1, `j` 0 to 3, the third level 2 (the stores) and 2 (the read): the
     // array is `float acc[2][4][3]`.
-    let e = kernel(Case::Counted).unwrap();
+    let e = tiles(Case::Counted).unwrap();
     assert_eq!(allocas(&e), [vec![2, 4, 3]], "{}", body_text(&e));
     // The outer counter's trip count a function constant gives: 3 runs reach 3 elements.
-    let e = kernel(Case::Constant(3)).unwrap();
+    let e = tiles(Case::Constant(3)).unwrap();
     assert_eq!(allocas(&e), [vec![3, 4, 3]], "{}", body_text(&e));
 }
 
 #[test]
 fn an_array_one_index_of_which_has_no_bound_keeps_its_declared_type() {
     // An outer index only the run knows may reach any of the 32.
-    let e = kernel(Case::Dynamic).unwrap();
+    let e = tiles(Case::Dynamic).unwrap();
     assert_eq!(allocas(&e), [vec![32, 32, 4]], "{}", body_text(&e));
     // An inner index past its level's 4 elements reaches into the next row.
-    let e = kernel(Case::Past).unwrap();
+    let e = tiles(Case::Past).unwrap();
     assert_eq!(allocas(&e), [vec![32, 32, 4]], "{}", body_text(&e));
     // An address that becomes an integer reaches the declared layout's bytes.
-    let e = kernel(Case::Escapes).unwrap();
+    let e = tiles(Case::Escapes).unwrap();
     assert_eq!(allocas(&e), [vec![32, 32, 4]], "{}", body_text(&e));
     // A load of the whole array at its own address reads every element.
-    let e = kernel(Case::Whole).unwrap();
+    let e = tiles(Case::Whole).unwrap();
     assert_eq!(allocas(&e), [vec![32, 32, 4]], "{}", body_text(&e));
 }
