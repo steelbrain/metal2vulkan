@@ -453,12 +453,23 @@ fn logged_lane(
     let texture = texture(device);
     let open = busy.then(|| tools.queue.command_buffer().unwrap());
     // The faces, made by the first read; then a logged pass that reads 0x50 inside the rectangle.
-    tools.pass(&texture, Some(0x10), Draw::Nothing);
-    tools.pass(&texture, None, Draw::Solid(0x40));
-    tools.pass(&texture, Some(0x20), Draw::Read);
-    tools.pass(&texture, None, Draw::Solid(0x50));
-    let logged = tools.pass(&texture, Some(0x30), Draw::Read);
-    tools.pass(&texture, None, Draw::Solid(0x62));
+    // Each pass takes its corners from the pages, as the command buffer behind the wait does:
+    // its draws' pipelines are made before that command buffer's commit, which a rebind refuses
+    // while one is still being made (`RebindProblem::EncodedUses`).
+    let corners_in = Some((&pages, CORNERS_AT));
+    let pass = |clear: Option<u8>, draw: Draw| {
+        let before = device.work_counts();
+        let command_buffer = tools.queue.command_buffer().unwrap();
+        tools.encode_over(&command_buffer, &texture, (clear, draw), corners_in);
+        Tools::run(&command_buffer);
+        Moved::of(&before, &device.work_counts())
+    };
+    pass(Some(0x10), Draw::Nothing);
+    pass(None, Draw::Solid(0x40));
+    pass(Some(0x20), Draw::Read);
+    pass(None, Draw::Solid(0x50));
+    let logged = pass(Some(0x30), Draw::Read);
+    pass(None, Draw::Solid(0x62));
     // Behind a wait: a blit of the texture into the pages, then a pass that clears it and reads
     // it, its corners from the pages. The rebind before the signal encodes both again.
     let before = device.work_counts();
@@ -466,7 +477,6 @@ fn logged_lane(
     let command_buffer = tools.queue.command_buffer().unwrap();
     (command_buffer.encode_wait_for_event(EventRef::Shared(&gate), 1)).unwrap();
     Tools::encode_read(&command_buffer, &texture, &pages);
-    let corners_in = Some((&pages, CORNERS_AT));
     tools.encode_over(
         &command_buffer,
         &texture,

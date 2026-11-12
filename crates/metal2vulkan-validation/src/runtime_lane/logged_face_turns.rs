@@ -110,14 +110,13 @@ impl Tools {
     }
 
     /// Encode into `command_buffer` a pass over `texture`, cleared to `clear` where it is given,
-    /// else loaded, that draws `draw`, its corners from `corners_in` (a buffer and the corners'
-    /// offset in it) where it is given, else from bytes.
+    /// else loaded, that draws `draw`, its corners from `buffer` at `offset`.
     fn encode(
         &self,
         command_buffer: &CommandBuffer,
         texture: &Texture,
         (clear, draw): (Option<u8>, Draw),
-        corners_in: Option<(&Buffer, u64)>,
+        (buffer, offset): (&Buffer, u64),
     ) {
         let mut pass = RenderPassDescriptor::new();
         let color = &mut pass.color_attachments[0];
@@ -144,24 +143,10 @@ impl Tools {
                 encoder.set_fragment_bytes(&rgba, 0).unwrap();
             }
         }
-        match corners_in {
-            Some((buffer, offset)) => encoder.set_vertex_buffer(Some(buffer), offset, 0),
-            None => encoder.set_vertex_bytes(&corners(), 0),
-        }
-        .unwrap();
+        (encoder.set_vertex_buffer(Some(buffer), offset, 0)).unwrap();
         encoder.set_scissor_rect(RECT).unwrap();
         (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
         encoder.end_encoding().unwrap();
-    }
-
-    /// A pass of [`encode`](Self::encode) in a command buffer of its own, run: what it moved.
-    fn pass(&self, texture: &Texture, clear: Option<u8>, draw: Draw) -> Moved {
-        let device = self.queue.device();
-        let before = device.work_counts();
-        let command_buffer = self.queue.command_buffer().unwrap();
-        self.encode(&command_buffer, texture, (clear, draw), None);
-        run(&command_buffer);
-        Moved::of(&before, &device.work_counts())
     }
 
     /// Encode into `command_buffer` a copy of `texture` into `into`, at its start.
@@ -275,17 +260,27 @@ fn lane(
     descriptor.resource_options = ResourceOptions::private();
     let texture = device.new_texture(&descriptor).unwrap();
     let open = busy.then(|| tools.queue.command_buffer().unwrap());
-    tools.pass(&texture, Some(0x10), Draw::Solid(0x40));
-    tools.pass(&texture, Some(0x20), Draw::Read);
-    tools.pass(&texture, None, Draw::Solid(0x50));
-    let logged = tools.pass(&texture, Some(0x30), Draw::Read);
-    tools.pass(&texture, None, Draw::Solid(0x62));
+    // Each pass takes its corners from the pages, as the command buffer behind the wait does:
+    // its draws' pipelines are made before that command buffer's commit, which a rebind refuses
+    // while one is still being made (`RebindProblem::EncodedUses`).
+    let corners_in = (&pages, CORNERS_AT);
+    let pass = |clear: Option<u8>, draw: Draw| {
+        let before = device.work_counts();
+        let command_buffer = tools.queue.command_buffer().unwrap();
+        tools.encode(&command_buffer, &texture, (clear, draw), corners_in);
+        run(&command_buffer);
+        Moved::of(&before, &device.work_counts())
+    };
+    pass(Some(0x10), Draw::Solid(0x40));
+    pass(Some(0x20), Draw::Read);
+    pass(None, Draw::Solid(0x50));
+    let logged = pass(Some(0x30), Draw::Read);
+    pass(None, Draw::Solid(0x62));
     let before = device.work_counts();
     let gate = device.new_shared_event().unwrap();
     let command_buffer = tools.queue.command_buffer().unwrap();
     (command_buffer.encode_wait_for_event(EventRef::Shared(&gate), 1)).unwrap();
     Tools::encode_read(&command_buffer, &texture, &pages);
-    let corners_in = Some((&pages, CORNERS_AT));
     tools.encode(
         &command_buffer,
         &texture,
