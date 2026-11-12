@@ -185,8 +185,8 @@ use super::work_counts::Counters;
 use ash::vk;
 use std::collections::BTreeSet;
 use std::ffi::{c_char, CStr, CString};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// The longest a device's calibration pair serves the completions after it.
@@ -238,7 +238,6 @@ pub(crate) fn host_nanos() -> u64 {
     }
     #[cfg(not(unix))]
     {
-        use std::sync::OnceLock;
         use std::time::Instant;
         static START: OnceLock<Instant> = OnceLock::new();
         START.get_or_init(Instant::now).elapsed().as_nanos() as u64
@@ -548,6 +547,10 @@ pub(crate) struct Timing {
     /// docs).
     host_reset: bool,
     pools: Mutex<Pools>,
+    /// Its command buffers note when their first batch became their queue's head and when the
+    /// submission of their last batch returned (`METAL2VULKAN_QUEUE_TIMES`, a default-off
+    /// diagnostic): [`KernelTimes::became_head`], [`KernelTimes::returned_at`].
+    queue_times: AtomicBool,
 }
 
 /// A device's timestamp pools, made as its command buffers in flight need them, and the most it
@@ -723,7 +726,22 @@ impl Timing {
                 (false, true) => Pools::new(None, PREFIXED),
                 (false, false) => Pools::new(None, PLAIN),
             }),
+            queue_times: AtomicBool::new(queue_times_asked()),
         }
+    }
+
+    /// Whether its command buffers note queue times (`METAL2VULKAN_QUEUE_TIMES`): when their
+    /// first batch became their queue's head and when the submission of their last batch
+    /// returned.
+    pub(crate) fn queue_times(&self) -> bool {
+        self.queue_times.load(Ordering::Relaxed)
+    }
+
+    /// A device test's: its command buffers note queue times from now on, whatever the
+    /// process's environment.
+    #[cfg(test)]
+    pub(crate) fn note_queue_times(&self) {
+        self.queue_times.store(true, Ordering::Relaxed);
     }
 
     /// Whether its slots hold the start a command buffer's first encoder writes as it opens (the
@@ -948,6 +966,13 @@ unsafe fn calibration(
     })
 }
 
+/// Whether the process asked for queue times (`METAL2VULKAN_QUEUE_TIMES`, a default-off
+/// diagnostic): read once.
+fn queue_times_asked() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(metal2vulkan::env_vars::queue_times)
+}
+
 /// A command buffer's kernel times, in nanoseconds of the host's clock, 0 until known: apart
 /// from its state, so a read waits for no submission in progress (the module docs). The start is
 /// shown with the end alone ([`shown_start`](Self::shown_start)), as Metal shows them.
@@ -957,6 +982,12 @@ pub(crate) struct KernelTimes {
     start: AtomicU64,
     /// The scheduler called the driver's submission of its last batch.
     end: AtomicU64,
+    /// Its first batch became the first of its queue's batches the scheduler had not taken,
+    /// where the device notes queue times ([`Timing::queue_times`]).
+    head: AtomicU64,
+    /// The driver's submission that carried its last batch returned, where the device notes
+    /// queue times.
+    returned: AtomicU64,
 }
 
 impl KernelTimes {
@@ -993,6 +1024,31 @@ impl KernelTimes {
     /// When the scheduler called the driver's submission of the last batch; 0 before.
     pub(crate) fn end(&self) -> u64 {
         self.end.load(Ordering::Acquire)
+    }
+
+    /// Its first batch is its queue's head in the scheduler's order now: noted once, where `on`
+    /// ([`Timing::queue_times`]); a batch put back at its place keeps the first time.
+    pub(crate) fn became_head(&self, on: bool) {
+        if on && self.head.load(Ordering::Relaxed) == 0 {
+            self.head.store(host_nanos(), Ordering::Relaxed);
+        }
+    }
+
+    /// The submission that carried its last batch returned at host time `at`.
+    pub(crate) fn returned_at(&self, at: u64) {
+        self.returned.store(at, Ordering::Relaxed);
+    }
+
+    /// When its first batch became its queue's head; 0 before, and where the device notes no
+    /// queue times.
+    pub(crate) fn head(&self) -> u64 {
+        self.head.load(Ordering::Relaxed)
+    }
+
+    /// When the submission that carried its last batch returned; 0 before, and where the device
+    /// notes no queue times.
+    pub(crate) fn returned(&self) -> u64 {
+        self.returned.load(Ordering::Relaxed)
     }
 }
 

@@ -7,12 +7,20 @@
 //! long before the pause does. With the kernel end taken once the call returned, it lay the pause
 //! past the GPU's end.
 //!
+//! The queue times (`METAL2VULKAN_QUEUE_TIMES`, a default-off diagnostic): with them noted, each
+//! of a queue's command buffers committed back to back became its queue's head no later than its
+//! kernel start and after the one before it did, and its submission returned after its kernel end
+//! and before the next one's kernel start; without them, each reads 0 and its kernel times as
+//! before.
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
 use crate::command_buffer::completion::trace;
 use crate::tests::SETTLE;
-use crate::{CommandBufferStatus, Device, DeviceKind, DeviceOptions, ResourceOptions};
+use crate::{
+    CommandBuffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, ResourceOptions,
+};
 use std::time::Duration;
 
 /// How long the scheduler pauses once each submission returned.
@@ -93,6 +101,75 @@ fn the_gpu_end_is_never_before_the_kernel_end_when_the_scheduler_pauses_after_th
         assert!(
             gpu_end >= kernel_end,
             "the GPU ended at {gpu_end}, before the kernel's end {kernel_end}"
+        );
+    }
+}
+
+/// `count` command buffers of one fill each on one queue, committed back to back and waited for:
+/// each one's kernel start and end, queue head time and submission's return.
+fn queue_times(device: &Device, count: u8) -> Vec<[f64; 4]> {
+    let queue = device.new_command_queue().unwrap();
+    let target = device.new_buffer(FILL, ResourceOptions::private()).unwrap();
+    let committed: Vec<CommandBuffer> = (0..count)
+        .map(|round| {
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.fill_buffer(&target, 0..FILL, round).unwrap();
+            blit.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer
+        })
+        .collect();
+    (committed.iter())
+        .map(|command_buffer| {
+            command_buffer.wait_until_completed().unwrap();
+            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+            [
+                command_buffer.queue_head_time(),
+                command_buffer.kernel_start_time(),
+                command_buffer.kernel_end_time(),
+                command_buffer.submit_returned_time(),
+            ]
+        })
+        .collect()
+}
+
+#[test]
+fn queue_times_are_noted_in_the_order_of_a_queue_s_submissions_and_only_where_asked() {
+    let device = device();
+    assert!(
+        device.settle_submit_checks(SETTLE),
+        "the submission checks never answered"
+    );
+    // Not asked (unless the process's environment asks for them): none noted.
+    if !metal2vulkan::env_vars::queue_times() {
+        for [head, start, end, returned] in queue_times(&device, 3) {
+            assert!(0.0 < start && start <= end, "kernel {start}..{end}");
+            assert_eq!((head, returned), (0.0, 0.0), "queue times noted unasked");
+        }
+    }
+    device.shared().timing.note_queue_times();
+    let times = queue_times(&device, 3);
+    let after = crate::host_time();
+    for [head, start, end, returned] in &times {
+        println!(
+            "QUEUE-TIMES {}: head {head:.6}, kernel {start:.6}..{end:.6}, returned {returned:.6} \
+             (in the driver {:.3} ms)",
+            device.name(),
+            (returned - end) * 1e3,
+        );
+        assert!(
+            0.0 < *head && head <= start && start <= end && end <= returned && *returned <= after,
+            "head {head}, kernel {start}..{end}, returned {returned}, read at {after}"
+        );
+    }
+    for pair in times.windows(2) {
+        let ([head, ..], [next_head, next_start, ..]) = (pair[0], pair[1]);
+        let returned = pair[0][3];
+        assert!(head <= next_head, "a later commit became head first");
+        assert!(
+            returned <= next_start,
+            "a later commit's submission began before the earlier one's returned"
         );
     }
 }

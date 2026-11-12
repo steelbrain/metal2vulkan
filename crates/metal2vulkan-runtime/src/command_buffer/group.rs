@@ -543,6 +543,9 @@ impl Group {
                 called = gpu_time::host_nanos();
                 raw.queue_submit(vk_queue, submits, fence.unwrap_or(vk::Fence::null()))
             });
+        // Where the device notes queue times, the call's return, for each command buffer a batch
+        // held ends (`CommandBuffer::submit_returned_time`).
+        let returned = shared.timing.queue_times().then(gpu_time::host_nanos);
         exit_guard::called(Call::QueueSubmit);
         self.events.clear();
         let several = count + usize::from(!alone) > 1;
@@ -552,6 +555,9 @@ impl Group {
                     self.spare.push(member.infos);
                     if member.submission.schedules() && !member.submission.scheduled() {
                         member.submission.buffer().kernel.end_at(called);
+                    }
+                    if let (true, Some(at)) = (member.submission.schedules(), returned) {
+                        member.submission.buffer().kernel.returned_at(at);
                     }
                     self.made.push(member.submission);
                 }

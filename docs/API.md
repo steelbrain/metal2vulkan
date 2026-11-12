@@ -1849,6 +1849,14 @@ stage at a draw; the watched textures among those it made resident, with their s
 it watched. A pass the same as one a line was printed of before, but for its counts of draw calls
 and resident textures, prints no line again, and a process prints at most 256. Empty or `0` is
 off; a value the runtime cannot read turns the log off and says why on stderr.
+With `METAL2VULKAN_QUEUE_TIMES` set, each command buffer also notes two host times beside its
+kernel times, in seconds of `host_time`'s clock: when its first batch became the first of its
+queue's batches the device's scheduler had not taken, the batch before it on its queue taken for
+submission (`CommandBuffer::queue_head_time`), and when the `vkQueueSubmit` that carried its last
+batch returned (`CommandBuffer::submit_returned_time`; its `kernelEndTime` is that call's start).
+From its commit to the first it waited behind its queue's earlier work, and from the first to its
+`kernelStartTime` it was held at its queue's head. Both read 0 where it is unset, and for a command
+buffer whose work went with no submission. It changes no work.
 With `METAL2VULKAN_PENDING_AUDIT` set (or `DeviceOptions::pending_audit`), a device checks, at each
 `vkBeginCommandBuffer`, each `vkResetCommandPool` of a spare command pool, each command pool given
 back to its spares and each submission of a command buffer submitted before (one not begun for

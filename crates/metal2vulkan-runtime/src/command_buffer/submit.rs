@@ -1277,6 +1277,11 @@ impl CommandBufferShared {
                 scheduler
                     .group
                     .submit(device, &mut scheduler.waited[queue], Some(after));
+            // Where the device notes queue times, the call's return, for the command buffer this
+            // batch ends (`CommandBuffer::submit_returned_time`).
+            if last && submitted.is_ok() && shared.timing.queue_times() {
+                self.kernel.returned_at(gpu_time::host_nanos());
+            }
             // A test's stand-in for a scheduler thread preempted once the call returned.
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             super::completion::trace::submit_returned();

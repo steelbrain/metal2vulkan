@@ -4253,6 +4253,28 @@ impl CommandBuffer {
         gpu_time::seconds(self.0.kernel.end())
     }
 
+    /// A diagnostic of the runtime's, no Metal call's: the host time, in seconds of
+    /// [`host_time`](super::host_time)'s clock, at which the command buffer's first batch became
+    /// the first of its queue's batches the device's scheduler had not taken (every batch
+    /// committed before it on its queue taken, and it taken in), where the process set
+    /// `METAL2VULKAN_QUEUE_TIMES`; 0 before, and where it did not. From its commit to this time
+    /// it waited behind its queue's earlier work; from this time to its
+    /// [`kernel_start_time`](Self::kernel_start_time) it was held at the head of its queue.
+    #[doc(hidden)]
+    pub fn queue_head_time(&self) -> f64 {
+        gpu_time::seconds(self.0.kernel.head())
+    }
+
+    /// A diagnostic of the runtime's, no Metal call's: the host time at which the driver's
+    /// submission that carried the command buffer's last batch returned, where the process set
+    /// `METAL2VULKAN_QUEUE_TIMES`; 0 before, where it did not, and where its work went with no
+    /// submission. Its [`kernel_end_time`](Self::kernel_end_time) is that call's start, so the
+    /// two bracket the driver's time in it.
+    #[doc(hidden)]
+    pub fn submit_returned_time(&self) -> f64 {
+        gpu_time::seconds(self.0.kernel.returned())
+    }
+
     /// The GPU start and end, in nanoseconds of the host's clock: placed from the command
     /// buffer's timestamps once it completed, then kept; 0 and 0 before, when it failed, or when
     /// the GPU wrote none. One that wrote no timestamps answers the times placed as it completed
@@ -4618,6 +4640,14 @@ impl CommandBufferShared {
     /// Whether the steps' thread holds batch `index`'s host step, handed to it and not ended.
     pub(crate) fn stepping(&self, index: usize) -> bool {
         self.stepping.load(Ordering::Acquire) == index as u64
+    }
+
+    /// Its first batch became the first of its queue's batches the scheduler has not taken:
+    /// noted where its device notes queue times (`METAL2VULKAN_QUEUE_TIMES`,
+    /// [`CommandBuffer::queue_head_time`]); else nothing, not even a read of the clock.
+    pub(crate) fn became_head(&self) {
+        self.kernel
+            .became_head(self.device.shared().timing.queue_times());
     }
 
     /// What the host step of batch `index` waits for ([`needs_host_step`](Self::needs_host_step)):

@@ -124,6 +124,16 @@ pub const REGISTRY: &[EnvVar] = &[
                  printed before but for its counts prints no line again, and at most 256 lines \
                  are printed; empty or 0 is off",
     },
+    EnvVar {
+        name: "METAL2VULKAN_QUEUE_TIMES",
+        default: "unset (off)",
+        effect: "metal2vulkan-runtime's diagnostics: each command buffer also notes the host \
+                 time its first batch became the first of its queue's batches the scheduler \
+                 had not taken, and the host time the vkQueueSubmit that carried its last batch \
+                 returned, which the consumer reads beside its kernel times \
+                 (CommandBuffer::queue_head_time, CommandBuffer::submit_returned_time); it \
+                 changes no work; set to anything but empty or 0",
+    },
 ];
 
 /// Multi-line `--help` block listing every registry var.
@@ -193,6 +203,15 @@ pub fn log_passes() -> Option<OsString> {
 /// empty nor `0`. A default-off diagnostic: it reads timelines and prints, and changes no work.
 pub fn pending_audit() -> bool {
     std::env::var_os("METAL2VULKAN_PENDING_AUDIT")
+        .is_some_and(|value| !value.is_empty() && value != "0")
+}
+
+/// Whether each metal2vulkan-runtime command buffer notes when its first batch became its queue's
+/// head in the scheduler's order and when the submission of its last batch returned
+/// (`REGISTRY`): set, and neither empty nor `0`. A default-off diagnostic: it reads the host's
+/// clock twice more a command buffer, and changes no work.
+pub fn queue_times() -> bool {
+    std::env::var_os("METAL2VULKAN_QUEUE_TIMES")
         .is_some_and(|value| !value.is_empty() && value != "0")
 }
 

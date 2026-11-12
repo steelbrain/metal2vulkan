@@ -8253,6 +8253,7 @@ method	metal2vulkan-runtime::CommandBuffer::kernel_end_time	pub fn kernel_end_ti
 method	metal2vulkan-runtime::CommandBuffer::kernel_start_time	pub fn kernel_start_time(&self) -> f64
 method	metal2vulkan-runtime::CommandBuffer::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::CommandBuffer::object_id	pub fn object_id(&self) -> ObjectId
+method	metal2vulkan-runtime::CommandBuffer::queue_head_time	pub fn queue_head_time(&self) -> f64
 method	metal2vulkan-runtime::CommandBuffer::refusal	pub fn refusal(&self) -> Option<Error>
 method	metal2vulkan-runtime::CommandBuffer::render_command_encoder	pub fn render_command_encoder(&self, descriptor: &RenderPassDescriptor) -> Result<RenderCommandEncoder, Error>
 method	metal2vulkan-runtime::CommandBuffer::resource_state_command_encoder	pub fn resource_state_command_encoder(&self) -> Result<ResourceStateCommandEncoder, Error>
@@ -8260,6 +8261,7 @@ method	metal2vulkan-runtime::CommandBuffer::set_label	pub fn set_label(&self, la
 method	metal2vulkan-runtime::CommandBuffer::set_protection_options	pub fn set_protection_options(&self, options: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::set_submission_check	pub fn set_submission_check(&self, check: SubmissionCheck) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::status	pub fn status(&self) -> CommandBufferStatus
+method	metal2vulkan-runtime::CommandBuffer::submit_returned_time	pub fn submit_returned_time(&self) -> f64
 method	metal2vulkan-runtime::CommandBuffer::used_resources	pub fn used_resources(&self) -> UsedResources
 method	metal2vulkan-runtime::CommandBuffer::uses	pub fn uses(&self, objects: &[ObjectId]) -> bool
 method	metal2vulkan-runtime::CommandBuffer::wait_until_completed	pub fn wait_until_completed(&self) -> Result<(), Error>

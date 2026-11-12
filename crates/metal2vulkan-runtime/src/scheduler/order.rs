@@ -307,6 +307,15 @@ impl<B> Order<B> {
         })
     }
 
+    /// The head of logical queue `queue`'s line, to update in place; `None` where the line holds
+    /// no batch.
+    pub(crate) fn head_mut_of(&mut self, queue: u64) -> Option<&mut B> {
+        (self.lines.iter_mut())
+            .find(|(line, _)| *line == queue)
+            .and_then(|(_, line)| line.front_mut())
+            .map(|(_, head)| head)
+    }
+
     /// Each line's head not `behind`, to update in place.
     pub(crate) fn heads_mut<'a>(
         &'a mut self,

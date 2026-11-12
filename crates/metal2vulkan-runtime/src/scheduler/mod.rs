@@ -1506,10 +1506,35 @@ fn take_in(state: &mut State, commits: &mut Vec<Committed>, spent: &mut Spent) -
             counted_held: false,
             held_since: None,
         });
+        // Where the device notes queue times, a command buffer committed to an empty line is
+        // its head as it is taken in.
+        let first =
+            (buffer.device().shared().timing.queue_times()) && order.head_mut_of(queue).is_none();
         order.push(queue, held);
+        if first {
+            note_head(order, queue);
+        }
         spent.push(buffer);
     }
     taken
+}
+
+/// Logical queue `queue`'s line has a new head, its earlier batches taken (or none committed
+/// before it), on a device that notes queue times (`METAL2VULKAN_QUEUE_TIMES`; the caller asks,
+/// [`notes_queue_times`]): where that batch begins its command buffer, the command buffer notes
+/// the time (`CommandBufferShared::became_head`).
+fn note_head(order: &mut Order<Held>, queue: u64) {
+    if let Some(head) = order.head_mut_of(queue) {
+        if head.index == 0 {
+            head.buffer.became_head();
+        }
+    }
+}
+
+/// Whether the device of `taken`, a batch the order gave, notes queue times: the batch after it
+/// on its line is then its line's new head ([`note_head`]). Else no line is looked up.
+fn notes_queue_times(taken: &Held) -> bool {
+    taken.buffer.device().shared().timing.queue_times()
 }
 
 /// A pass of the thread's: take `commits` into the order, in commit order, then submit what is
@@ -1672,6 +1697,11 @@ fn submit_ready(
         for sequence in memo.behind() {
             if let Some(held) = state.order.head_mut_at(sequence) {
                 held.held_for(HeldFor::EarlierCommit);
+            }
+        }
+        if let Some((queue, _, taken, _)) = &next {
+            if notes_queue_times(taken) {
+                note_head(&mut state.order, *queue);
             }
         }
         let Some((queue, sequence, mut held, waits)) = next else {
@@ -1966,6 +1996,9 @@ fn submit_plain_ready(
             drop(busy);
             return submitted;
         };
+        if notes_queue_times(&held) {
+            note_head(&mut state.order, queue);
+        }
         // A committing thread's submission, timed as its commit call's (`commit_times.rs`).
         let submit = || (held.buffer).submit_batch(held.index, held.last, &waits, true, state);
         let answer = commit_times::phase(Phase::Submit, submit);
