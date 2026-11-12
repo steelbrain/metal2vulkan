@@ -28,6 +28,7 @@
 use super::first_use_writes::CHECK_WAIT;
 use super::in_place_textures::in_place;
 use super::{validated_device_with, Messages, ScratchCache, WAIT};
+use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
