@@ -18,9 +18,10 @@
 //!   parameter, brings in a space only the run knows.
 //!
 //! A group that pointers of two spaces enter, or one a space only the run knows, is
-//! `Unsupported{AddressSpace(8)}`: no Vulkan pointer holds either. So is a generic pointer passed
-//! to a call other than a query (the callee's type names the generic space), returned, or held in
-//! an aggregate or a vector value.
+//! `Unsupported{GenericPointer(..)}` at the instruction where it does, naming how
+//! ([`GenericPointer`]): no Vulkan pointer holds either. So is a generic pointer passed to a call
+//! other than a query (the callee's type names the generic space) or returned (`Call`), or held
+//! in an aggregate or a vector value (`Aggregate`).
 //!
 //! Each generic pointer then is its group's pointer type, and a group that no space enters a
 //! thread pointer (it addresses nothing). A cast into the generic space is its operand. A cast
@@ -38,7 +39,7 @@
 //! bytes, and a pointer of every space is 64 bits.
 
 use crate::budget::Meter;
-use crate::error::{Error, Feature, Unsupported};
+use crate::error::{DiagName, Error, Feature, GenericPointer, Location, Unsupported};
 use crate::intrinsics::AirIntrinsic;
 use crate::ir::{AddrSpace, Body, Callee, CastOp, Const, ConstExpr, ConstId, Constant, FastMath};
 use crate::ir::{FuncId, Idx, InstId, InstKind, IntPredicate, ModuleParts, Type, TypeId, Value};
@@ -55,32 +56,50 @@ enum Space {
     Unseen,
     /// Pointers of this space.
     One(AddrSpace),
-    /// Pointers of two spaces, or of a space only the run knows.
-    Many,
+    /// Pointers of two spaces, or of a space only the run knows: how, and the instruction where
+    /// it entered, where one did.
+    Many(GenericPointer, Option<InstId>),
 }
 
 impl Space {
-    fn join(self, other: Space) -> Space {
+    /// The space of a group that both `self` and `other` enter, at instruction `at`.
+    fn join(self, other: Space, at: Option<InstId>) -> Space {
         match (self, other) {
             (Space::Unseen, s) | (s, Space::Unseen) => s,
             (Space::One(a), Space::One(b)) if a == b => Space::One(a),
-            _ => Space::Many,
+            (m @ Space::Many(..), _) | (_, m @ Space::Many(..)) => m,
+            _ => Space::Many(GenericPointer::TwoSpaces, at),
         }
     }
 }
 
-fn refused() -> Error {
-    Unsupported::not_implemented(Feature::AddressSpace(AddrSpace::Generic.raw())).into()
+/// A generic pointer refused for `how`, where no instruction locates it.
+fn refused(how: GenericPointer) -> Error {
+    Unsupported::not_implemented(Feature::GenericPointer(how)).into()
 }
 
-/// The entry's body and parameter types, and the module's tables.
+/// The entry's name, body and parameter types, and the module's tables.
 struct Cx<'a> {
+    name: &'a DiagName,
     body: &'a Body,
     parts: &'a ModuleParts,
     params: &'a [TypeId],
 }
 
 impl Cx<'_> {
+    /// A generic pointer refused for `how`, at instruction `at` of the entry.
+    fn refuse(&self, how: GenericPointer, at: InstId) -> Error {
+        let block = self
+            .body
+            .blocks
+            .iter()
+            .find(|(_, b)| b.start <= at && at < b.end)
+            .map(|(b, _)| b.raw());
+        Unsupported::not_implemented(Feature::GenericPointer(how))
+            .at(Location::function(self.name.clone(), block, Some(at.raw())))
+            .into()
+    }
+
     fn generic(&self, ty: TypeId) -> bool {
         matches!(
             self.parts.types.get(ty),
@@ -105,7 +124,7 @@ impl Cx<'_> {
     /// Whether `ty` holds a generic pointer below an aggregate or vector level.
     fn holds_generic(&self, ty: TypeId, depth: u32) -> Result<bool, Error> {
         if depth > DEPTH {
-            return Err(refused());
+            return Err(refused(GenericPointer::Aggregate));
         }
         Ok(match self.parts.types.get(ty) {
             Some(Type::Vector { elem, .. } | Type::Array { elem, .. }) => {
@@ -125,7 +144,7 @@ impl Cx<'_> {
     /// The space a generic constant brings in, and whether it is null.
     fn constant(&self, c: ConstId, depth: u32) -> Result<(Space, bool), Error> {
         if depth > DEPTH {
-            return Err(refused());
+            return Err(refused(GenericPointer::Integer));
         }
         let k = self
             .parts
@@ -155,14 +174,14 @@ impl Cx<'_> {
                             Some(Const::Null)
                         ),
                     ),
-                    _ => (Space::Many, false),
+                    _ => (Space::Many(GenericPointer::Integer, None), false),
                 }
             }
             Const::Expr(ConstExpr::Gep { ops, .. }) => match ops.first() {
                 Some(&base) => self.constant(base, depth + 1)?,
-                None => (Space::Many, false),
+                None => (Space::Many(GenericPointer::Integer, None), false),
             },
-            _ => (Space::Many, false),
+            _ => (Space::Many(GenericPointer::Integer, None), false),
         })
     }
 
@@ -240,7 +259,7 @@ impl Cx<'_> {
     fn operand(&self, v: Value) -> Result<(Space, bool), Error> {
         match v {
             Value::Const(c) => self.constant(c, 0),
-            Value::Arg(_) => Ok((Space::Many, false)),
+            Value::Arg(_) => Ok((Space::Many(GenericPointer::Call, None), false)),
             Value::Inst(_) => Ok((Space::Unseen, false)),
         }
     }
@@ -305,6 +324,7 @@ pub(super) fn resolve(
     body: Body,
     parts: &mut ModuleParts,
     func: FuncId,
+    name: &DiagName,
     m: &mut Meter,
 ) -> Result<(Body, bool), Error> {
     let params: Vec<TypeId> = match parts.funcs.get(func).and_then(|f| parts.types.get(f.ty)) {
@@ -313,6 +333,7 @@ pub(super) fn resolve(
     };
     let planned = scoped(m, |m, held| {
         let cx = Cx {
+            name,
             body: &body,
             parts,
             params: &params,
@@ -322,7 +343,9 @@ pub(super) fn resolve(
     let Some(plan) = planned else {
         return Ok((body, false));
     };
-    let edited = scoped(m, |m, held| rewrite(&body, parts, &params, &plan, m, held))?;
+    let edited = scoped(m, |m, held| {
+        rewrite(&body, parts, (name, &params), &plan, m, held)
+    })?;
     body.release(m);
     Ok((edited, plan.folds))
 }
@@ -365,7 +388,7 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
         let generic = cx.generic(inst.ty);
         // Generic values held where no group reaches: an aggregate or a vector.
         if !generic && cx.holds_generic(inst.ty, 0)? {
-            return Err(refused());
+            return Err(cx.refuse(GenericPointer::Aggregate, i));
         }
         match &inst.kind {
             InstKind::Call(call) => {
@@ -377,12 +400,14 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
                     }
                 );
                 if call.args.iter().any(|&a| cx.is_generic(a)) && !query {
-                    return Err(refused());
+                    return Err(cx.refuse(GenericPointer::Call, i));
                 }
                 folds |= query;
                 // A query's pointer is its own group's.
             }
-            InstKind::Ret(Some(v)) if cx.is_generic(*v) => return Err(refused()),
+            InstKind::Ret(Some(v)) if cx.is_generic(*v) => {
+                return Err(cx.refuse(GenericPointer::Call, i))
+            }
             _ => {}
         }
         if !generic {
@@ -409,7 +434,7 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
                         Value::Const(c) if matches!(cx.parts.consts.get(*c).map(|k| &k.value), Some(Const::Null))
                     );
                 }
-                _ => s = Space::Many,
+                _ => s = Space::Many(GenericPointer::Integer, Some(i)),
             },
             InstKind::Gep { .. }
             | InstKind::Cast {
@@ -421,15 +446,24 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
             | InstKind::Select { .. } => {
                 for v in linked(&inst.kind) {
                     let (vs, vz) = cx.operand(v)?;
-                    s = s.join(vs);
+                    s = s.join(vs, Some(i));
                     z |= vz;
                     if let Value::Inst(j) = v {
                         union(&mut parent, i.index(), j.index());
                     }
                 }
             }
-            // A load, a call, an `inttoptr`, an atomic or an aggregate's element.
-            _ => s = Space::Many,
+            InstKind::Load { .. } | InstKind::AtomicRmw { .. } | InstKind::CmpXchg { .. } => {
+                s = Space::Many(GenericPointer::Memory, Some(i));
+            }
+            InstKind::Call(_) => s = Space::Many(GenericPointer::Call, Some(i)),
+            InstKind::ExtractValue { .. }
+            | InstKind::ExtractElement { .. }
+            | InstKind::InsertValue { .. }
+            | InstKind::InsertElement { .. }
+            | InstKind::ShuffleVector { .. } => s = Space::Many(GenericPointer::Aggregate, Some(i)),
+            // An `inttoptr`: no other operation makes a pointer.
+            _ => s = Space::Many(GenericPointer::Integer, Some(i)),
         }
         if let Some(slot) = source.get_mut(i.index()) {
             *slot = s;
@@ -440,12 +474,12 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
     }
     // Each group's space: the join of what enters each of its members.
     let mut group: Vec<Space> = filled(m, held, n, Space::Unseen)?;
-    for k in 0..n {
+    for (i, _) in cx.body.insts.iter() {
         m.tick(1)?;
-        let r = find(&mut parent, k);
-        let s = source.get(k).copied().unwrap_or(Space::Unseen);
+        let r = find(&mut parent, i.index());
+        let s = source.get(i.index()).copied().unwrap_or(Space::Unseen);
         if let Some(slot) = group.get_mut(r) {
-            *slot = slot.join(s);
+            *slot = slot.join(s, Some(i));
         }
     }
     // An `icmp`'s constant sides enter its group too.
@@ -460,7 +494,7 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
                 let r = find(&mut parent, x.index());
                 let (s, _) = cx.operand(c)?;
                 if let Some(slot) = group.get_mut(r) {
-                    *slot = slot.join(s);
+                    *slot = slot.join(s, Some(x));
                 }
             }
         }
@@ -484,8 +518,8 @@ fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Option<Plan>, Er
             _ => find(&mut parent, i.index()),
         };
         let s = group.get(r).copied().unwrap_or(Space::Unseen);
-        if s == Space::Many {
-            return Err(refused());
+        if let Space::Many(how, at) = s {
+            return Err(cx.refuse(how, at.unwrap_or(i)));
         }
         if let Some(slot) = space.get_mut(i.index()) {
             *slot = s;
@@ -573,7 +607,7 @@ fn retyped(
     m: &mut Meter,
 ) -> Result<ConstId, Error> {
     if depth > DEPTH {
-        return Err(refused());
+        return Err(refused(GenericPointer::Integer));
     }
     let k = parts
         .consts
@@ -593,7 +627,8 @@ fn retyped(
                     space: AddrSpace::Generic,
                 }) => retyped(parts, interned, o, s, depth + 1, m),
                 Some(Type::Ptr { space }) if *space == s => Ok(o),
-                _ => Err(refused()),
+                Some(Type::Ptr { .. }) => Err(refused(GenericPointer::TwoSpaces)),
+                _ => Err(refused(GenericPointer::Integer)),
             };
         }
         Const::Expr(ConstExpr::Gep {
@@ -601,7 +636,9 @@ fn retyped(
             inbounds,
             ops,
         }) => {
-            let (&base, rest) = ops.split_first().ok_or_else(refused)?;
+            let (&base, rest) = ops
+                .split_first()
+                .ok_or_else(|| refused(GenericPointer::Integer))?;
             let base = retyped(parts, interned, base, s, depth + 1, m)?;
             let ops: Box<[ConstId]> = std::iter::once(base).chain(rest.iter().copied()).collect();
             Const::Expr(ConstExpr::Gep {
@@ -610,7 +647,7 @@ fn retyped(
                 ops,
             })
         }
-        _ => return Err(refused()),
+        _ => return Err(refused(GenericPointer::Integer)),
     };
     parts.consts.intern(Constant { ty, value }, m)
 }
@@ -626,7 +663,7 @@ fn taken(space: Space) -> AddrSpace {
 fn rewrite(
     body: &Body,
     parts: &mut ModuleParts,
-    params: &[TypeId],
+    (name, params): (&DiagName, &[TypeId]),
     plan: &Plan,
     m: &mut Meter,
     held: &mut usize,
@@ -688,12 +725,13 @@ fn rewrite(
                 // else poison.
                 let to = match parts.types.get(inst.ty) {
                     Some(Type::Ptr { space }) => *space,
-                    _ => return Err(refused()),
+                    _ => return Err(refused(GenericPointer::Integer)),
                 };
                 let group = match v {
                     Value::Inst(j) => plan.space.get(j.index()).copied().unwrap_or(Space::Unseen),
                     Value::Const(c) => {
                         Cx {
+                            name,
                             body,
                             parts,
                             params,
@@ -701,7 +739,7 @@ fn rewrite(
                         .constant(c, 0)?
                         .0
                     }
-                    Value::Arg(_) => return Err(refused()),
+                    Value::Arg(_) => return Err(refused(GenericPointer::Call)),
                 };
                 let value = match group {
                     // A pointer computed from no pointer, made a pointer of another space.
@@ -725,7 +763,7 @@ fn rewrite(
                         )?;
                         Value::Const(poison)
                     }
-                    Space::Many => return Err(refused()),
+                    Space::Many(how, _) => return Err(refused(how)),
                     _ => match v {
                         Value::Const(c) => {
                             Value::Const(retyped(parts, &mut interned, c, to, 0, m)?)
@@ -754,14 +792,16 @@ fn rewrite(
                         plan.null.get(j.index()).copied().unwrap_or(true),
                     ),
                     Value::Const(c) => Cx {
+                        name,
                         body,
                         parts,
                         params,
                     }
                     .constant(c, 0)?,
-                    Value::Arg(_) => return Err(refused()),
+                    Value::Arg(_) => return Err(refused(GenericPointer::Call)),
                 };
                 let decided = Cx {
+                    name,
                     body,
                     parts,
                     params,
@@ -809,7 +849,7 @@ fn rewrite(
                     (Space::Unseen, _) => {
                         edit.replace(i, Value::Const(boolean(parts, false, m)?));
                     }
-                    (Space::Many, _) => return Err(refused()),
+                    (Space::Many(how, _), _) => return Err(refused(how)),
                 }
                 continue;
             }
@@ -820,7 +860,7 @@ fn rewrite(
         inst.kind.for_each_value(|v| {
             constants |= matches!(v, Value::Const(_)) && generic_of(parts, v);
         });
-        let shared = result_generic || query_or_compare_in(parts, body, params, &inst.kind);
+        let shared = result_generic || query_or_compare_in(parts, body, (name, params), &inst.kind);
         if constants {
             let mut kind = inst.kind.clone();
             let mut failed = None;
@@ -832,17 +872,18 @@ fn rewrite(
                             taken(own)
                         } else {
                             match (Cx {
+                                name,
                                 body,
                                 parts,
                                 params,
                             })
                             .constant(c, 0)
                             {
-                                Ok((s, _)) if s != Space::Many => taken(s),
-                                Ok(_) => {
-                                    failed.get_or_insert(refused());
+                                Ok((Space::Many(how, _), _)) => {
+                                    failed.get_or_insert(refused(how));
                                     AddrSpace::Thread
                                 }
+                                Ok((s, _)) => taken(s),
                                 Err(e) => {
                                     failed.get_or_insert(e);
                                     AddrSpace::Thread
@@ -999,11 +1040,12 @@ fn retyped_null(
 fn query_or_compare_in(
     parts: &ModuleParts,
     body: &Body,
-    params: &[TypeId],
+    (name, params): (&DiagName, &[TypeId]),
     kind: &InstKind,
 ) -> bool {
     query_or_compare(
         &Cx {
+            name,
             body,
             parts,
             params,

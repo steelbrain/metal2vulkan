@@ -40,7 +40,7 @@
 //!    pointers**: then each pointer of MSL 4.1's generic address space becomes a pointer of the
 //!    one space every pointer it may hold comes from, its space queries answered, and SCCP runs
 //!    again where one was; a generic pointer of two spaces, or of one only the run knows, is
-//!    `Unsupported{AddressSpace(8)}` (`generic`). A call whose immediates were not constants where it was
+//!    `Unsupported{GenericPointer(..)}` (`generic`). A call whose immediates were not constants where it was
 //!    decoded (`Callee::Unbound`: an internal function's parameter passed on to the intrinsic) is
 //!    bound where they now are, each inlined copy with its own call site's constants. A value use of an unsupplied
 //!    constant that survives is `Error::NeedsInput(FunctionConstant)`. **Unrolling**: a loop whose
@@ -660,7 +660,7 @@ pub fn specialize_dynamic(
     };
     // MSL 4.1's generic pointers, each a pointer of the one space its pointers come from; SCCP
     // runs again over a body whose space queries that answered.
-    let (resolved, queried) = generic::resolve(body, &mut parts, func, m)?;
+    let (resolved, queried) = generic::resolve(body, &mut parts, func, &name, m)?;
     body = if queried {
         let solved = solve(&resolved, &mut parts, &fcs, &name, m)?;
         resolved.release(m);

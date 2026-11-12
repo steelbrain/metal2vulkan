@@ -27,7 +27,7 @@ Columns:
 
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 128 | 128 | 6 | 32 | 71 | 19 | 0 |
+| Translator and front-end refusals | 129 | 129 | 7 | 32 | 71 | 19 | 0 |
 | Runtime gaps | 78 | 78 | 1 | 9 | 46 | 22 | 0 |
 | Apple-only calls | 4 | 4 | 0 | 0 | 0 | 4 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
@@ -41,7 +41,7 @@ Columns:
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 48 | 57 | 0 | 0 | 23 |
+| Translator and front-end refusals | 0 | 0 | 0 | 48 | 58 | 0 | 0 | 23 |
 | Runtime gaps | 0 | 0 | 0 | 0 | 78 | 0 | 0 | 0 |
 | Apple-only calls | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
@@ -57,7 +57,7 @@ Columns:
 |---|---|---|---|---|---|
 | `LibraryKind` | A metallib of a kind the container does not read | - | `-` | via a helper: 2: `crates/metal2vulkan-air/src/container/mtlb.rs (parse)`, `crates/metal2vulkan/src/error/mod.rs (from)` | `none`: a metallib file type Apple's toolchain is not seen to write |
 | `Stage` | A function stage the model does not cover | - | `-` | via a helper: 2: `crates/metal2vulkan-air/src/abi/check.rs (unsupported_stage)`, `crates/metal2vulkan/src/error/mod.rs (from)` | `none`: a stage outside AIR's public stages |
-| `AddressSpace` | An LLVM address space the typed model does not define (it defines AIR's `thread` 0 through `threadgroup_imageblock` 4, `object_data` 6 and the... | every device (not implemented) | `ours` | 2: `crates/metal2vulkan-air/src/ir/types.rs (from_raw)`, `crates/metal2vulkan/src/memory/plan.rs (reprs)` | `none`: Apple's AGX library address spaces |
+| `AddressSpace` | An LLVM address space the typed model does not define (it defines AIR's `thread` 0 through `threadgroup_imageblock` 4, `object_data` 6, the mesh... | every device (not implemented) | `ours` | 2: `crates/metal2vulkan-air/src/ir/types.rs (from_raw)`, `crates/metal2vulkan/src/memory/plan.rs (reprs)` | `none`: Apple's AGX library address spaces |
 | `ModuleRecord` | A module-level record outside the accepted subset (alias, ifunc, comdat, …) | - | `-` | via a helper: 4: `crates/metal2vulkan-air/src/bitcode/module.rs (function)`, `crates/metal2vulkan-air/src/bitcode/module.rs (global)` (+2) | `none`: LLVM constructs AIR does not emit |
 | `Instruction` | An instruction record outside the closed instruction set | - | `-` | via a helper: 11: `crates/metal2vulkan-air/src/bitcode/function.rs (call, 2 sites)`, `crates/metal2vulkan-air/src/bitcode/function.rs (record, 8 sites)` (+1) | `none`: LLVM instructions AIR does not emit |
 | `Type` | A type outside the typed model | - | `-` | via a helper: 4: `crates/metal2vulkan-air/src/bitcode/types.rs (decode, 3 sites)`, `crates/metal2vulkan/src/error/mod.rs (from)` | `none`: LLVM types AIR does not emit |
@@ -180,6 +180,7 @@ Columns:
 | `PrivateRenderState` | A private fixed-function property of Metal's pipeline descriptor (Apple SPI, OpenGL on Metal's) set to a value whose effect the translation has... | devices without VkFeature::FragmentShaderPixelInterlock; devices without VkFeature::LogicOp; devices without VkFeature::RasterizationOrderColorAttachmentAccess; every device (not implemented) | `ours` | 7: `crates/metal2vulkan/src/bind/heap.rs (array)`, `crates/metal2vulkan/src/bind/plan/resources.rs (write_rounding)` (+5) | `none`: Apple-private pipeline fields of OpenGL on Metal (no public header) |
 | `ExtendedRangeBlend` | A blend the function computes in the shader, into an extended-range attachment (`BGRA10_XR`, `BGR10_XR`, `RGB10A8_2P_XR10` and their `_sRGB`... | every device (not implemented) | `ours` | 5: `crates/metal2vulkan/src/lower/arith/extended_range/blend.rs (refused)`, `crates/metal2vulkan/src/lower/fragment/fetch.rs (extended_range_output)` (+1) | `system`: an extended-range (XR10) attachment blended from an output other than four half or float lanes; a 16-bit float attachment's storage-form blend of a second-source factor or a one-color-channel mask under fast math; the consumer's guests blend RGB10A8_2P_XR10 attachments |
 | `ProgramScopeBinding` | A program-scope buffer binding of MSL 3.2 (macOS 15 and later), `constant T* constant p [[buffer(n)]];` in Apple's `!air.global_bindings` list,... | - | `-` | via a helper: 2: `crates/metal2vulkan-air/src/abi/module.rs (decode)`, `crates/metal2vulkan/src/error/mod.rs (from)` | `app`: MSL 3.2 program-scope buffer bindings (macOS 15 and later) |
+| `GenericPointer` | A generic pointer (MSL 4.1's `addrspace(8)`) that canonicalization cannot make a pointer of one address space, by how it comes to hold a space... | every device (not implemented) | `ours` | 2: `crates/metal2vulkan-air/src/canon/generic.rs (refuse)`, `crates/metal2vulkan-air/src/canon/generic.rs (refused)` | `system`: MSL 4.1 generic pointers held in memory or of two spaces (macOS 27 and later) |
 | `SeqCstFence` | A sequentially consistent fence (`seq_cst` `atomic_thread_fence`, an LLVM `fence seq_cst`, or a `seq_cst` barrier ordering device memory), whose... | devices short of a Vulkan feature the site names | `device` | 1: `crates/metal2vulkan/src/lower/sync/barrier.rs (require_seq_cst)` | `rare`: a seq_cst fence in a vertex or fragment stage without its stores and atomics |
 | `PostDepthCoverage` | The coverage after the depth and stencil tests (`[[sample_mask, post_depth_coverage]]`), read through `VK_EXT_post_depth_coverage` | devices short of a Vulkan extension the site names; devices without VkExtension::ExtPostDepthCoverage | `device` | 2: `crates/metal2vulkan-runtime/src/families/features.rs (state)`, `crates/metal2vulkan/src/lower/stage_io/plan.rs (param)` | `rare`: the coverage after early depth and stencil tests on a device without VK_EXT_post_depth_coverage |
 | `WideLines` | Lines at a width other than 1 (Apple's `setLineWidth:`), drawn by the device's own wide lines (`wideLines`) or as bands of triangles through... | devices without VkFeature::TessellationShader; devices without VkLimit::MaxTessellationEvaluationOutputComponents; every device (not implemented) | `ours` | 3: `crates/metal2vulkan/src/pipeline/link/band.rs (plan, 3 sites)` | `none`: a line under the Apple-private setLineWidth: at a width other than 1 drawn as the band, whose pipeline form the translator does not build (a selected slice or viewport, barycentric weights, multiview, synthesized geometry, too many stage outputs) |
@@ -702,6 +703,7 @@ Each refusal's sites, with the function that builds it.
 - `feature::PrivateRenderState`: `crates/metal2vulkan/src/bind/heap.rs (array)`; `crates/metal2vulkan/src/bind/plan/resources.rs (write_rounding)`; `crates/metal2vulkan/src/lower/sampler/select.rs (clamps_reference)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (alpha_test_refused)`; `crates/metal2vulkan/src/lower/texture/mod.rs (mode_rounded_write)`; `crates/metal2vulkan/src/pipeline/private_state.rs (logic_operation)`; `crates/metal2vulkan/src/pipeline/private_state.rs (refused)`
 - `feature::ExtendedRangeBlend`: `crates/metal2vulkan/src/lower/arith/extended_range/blend.rs (refused)`; `crates/metal2vulkan/src/lower/fragment/fetch.rs (extended_range_output)`; `crates/metal2vulkan/src/lower/fragment/fetch.rs (plan, 3 sites)`
 - `feature::ProgramScopeBinding`: `crates/metal2vulkan-air/src/abi/module.rs (decode)`; `crates/metal2vulkan/src/error/mod.rs (from)`
+- `feature::GenericPointer`: `crates/metal2vulkan-air/src/canon/generic.rs (refuse)`; `crates/metal2vulkan-air/src/canon/generic.rs (refused)`
 - `feature::SeqCstFence`: `crates/metal2vulkan/src/lower/sync/barrier.rs (require_seq_cst)`
 - `feature::PostDepthCoverage`: `crates/metal2vulkan-runtime/src/families/features.rs (state)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (param)`
 - `feature::WideLines`: `crates/metal2vulkan/src/pipeline/link/band.rs (plan, 3 sites)`

@@ -1526,6 +1526,15 @@ driver's. Each is open work.
 - **A direct call whose arguments do not line up with its callee's parameters** is refused with
   `InvalidInput(Canon(CallTypeMismatch))` (`canon::post_check`): LLVM leaves such a call undefined,
   and what Metal's back end makes of it is not documented, so no exact form is known.
+- **A generic pointer (MSL 4.1's `addrspace(8)`) that is no one address space's pointer** is
+  refused with `Unsupported(GenericPointer(..))` at the instruction where it gets that space
+  (`canon::generic`). The refusal names how it gets the space: `TwoSpaces` (a `select` or `phi`
+  between pointers of two spaces, such as a device and a thread pointer, as the run picks),
+  `Memory` (loaded from memory), `Aggregate` (held in a struct, array or vector value), `Call`
+  (passed across a call that stays a call) or `Integer` (`inttoptr`). Vulkan's logical
+  addressing has no pointer into either of two storage classes. A generic pointer that every
+  path gives one space becomes that space's pointer, and its space queries are answered as Metal
+  answers them, including no space for a null pointer (`runtime_lane::generic_pointers`).
 - **A loop that sums its counter fails to make through MoltenVK.** Apple's MSL front end rewrites a
   loop whose running sum adds its 32-bit counter (`1 + 2 + ... + n`) into a closed form in 33-bit
   integers, which the M3 Max's back end cannot legalize where it lands in the kernel's constant

@@ -1,8 +1,9 @@
 //! MSL 4.1's generic pointers become pointers of the one space every pointer they may hold comes
 //! from, their space queries answered; a generic pointer of two spaces, or of one only the run
-//! knows, is refused as `AddressSpace(8)`.
+//! knows, is refused as `GenericPointer`, naming how and at which instruction.
 
 use super::*;
+use crate::error::{DiagName, GenericPointer};
 
 /// What [`queried`]'s generic pointer `p` holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -217,8 +218,16 @@ fn stored(e: &Entry) -> Vec<Option<f32>> {
         .collect()
 }
 
-fn refused(e: Result<Entry, Error>) -> bool {
-    matches!(&e, Err(Error::Unsupported(u)) if u.feature == Feature::AddressSpace(8))
+/// Whether `e` refuses a generic pointer for `how`, at an instruction of the kernel.
+fn refused(e: Result<Entry, Error>, how: GenericPointer) -> bool {
+    match &e {
+        Err(Error::Unsupported(u)) => {
+            let at = u.location.as_ref().and_then(|l| l.in_function());
+            u.feature == Feature::GenericPointer(how)
+                && at.is_some_and(|(f, _, i)| *f == DiagName::new("k") && i.is_some())
+        }
+        _ => false,
+    }
 }
 
 #[test]
@@ -273,6 +282,6 @@ fn a_query_of_a_variable_or_null_is_the_condition_that_picks() {
 
 #[test]
 fn a_generic_pointer_of_two_spaces_or_of_memory_is_refused() {
-    assert!(refused(queried(Held::Mixed)));
-    assert!(refused(queried(Held::Loaded)));
+    assert!(refused(queried(Held::Mixed), GenericPointer::TwoSpaces));
+    assert!(refused(queried(Held::Loaded), GenericPointer::Memory));
 }

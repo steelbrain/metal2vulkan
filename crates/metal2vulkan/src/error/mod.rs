@@ -64,6 +64,8 @@ pub use crate::air::error::{
 pub use crate::air::error::{BudgetExceeded, InternalError, InternalKind, Limit, LinkProblem};
 // The constants-block records a refusal names (`Feature::Constant`).
 pub use crate::air::error::ConstantRecord;
+// How a refused generic pointer holds a space only the run knows (`Feature::GenericPointer`).
+pub use crate::air::error::GenericPointer;
 use crate::air::error::{MissingInput, RequestError};
 use crate::device::requirements::{
     ApiVersion, FormatUsage, VkExtension, VkFeature, VkLimit, VkProperty,
@@ -269,6 +271,7 @@ impl From<crate::air::error::Feature> for Feature {
             Air::GpuEncodedIndirectCommands => Feature::GpuEncodedIndirectCommands,
             Air::Imageblocks => Feature::Imageblocks,
             Air::ProgramScopeBinding => Feature::ProgramScopeBinding,
+            Air::GenericPointer(how) => Feature::GenericPointer(how),
         }
     }
 }
@@ -1167,10 +1170,10 @@ pub enum Feature {
     /// A function stage the model does not cover.
     Stage(u8),
     /// An LLVM address space the typed model does not define (it defines AIR's `thread` 0
-    /// through `threadgroup_imageblock` 4, `object_data` 6 and the mesh output handle's 7). The 5
-    /// of Apple's AGX ray-tracing and tessellation library modules has no established meaning and
-    /// stays refused; a pointer in 6 or 7 outside an object or mesh function's payload or mesh
-    /// handle is refused as this feature too, at analysis.
+    /// through `threadgroup_imageblock` 4, `object_data` 6, the mesh output handle's 7 and MSL
+    /// 4.1's generic 8). The 5 of Apple's AGX ray-tracing and tessellation library modules has no
+    /// established meaning and stays refused; a pointer in 6 or 7 outside an object or mesh
+    /// function's payload or mesh handle is refused as this feature too, at analysis.
     AddressSpace(u32),
     /// A module-level record outside the accepted subset (alias, ifunc, comdat, …).
     ModuleRecord {
@@ -1600,6 +1603,11 @@ pub enum Feature {
     /// [[buffer(n)]];` in Apple's `!air.global_bindings` list, valid AIR this version does not
     /// implement yet.
     ProgramScopeBinding,
+    /// A generic pointer (MSL 4.1's `addrspace(8)`) that canonicalization cannot make a pointer of
+    /// one address space, by how it comes to hold a space only the run knows
+    /// ([`GenericPointer`]). Vulkan's logical addressing has no pointer that may point into either
+    /// of two storage classes.
+    GenericPointer(GenericPointer),
     /// A sequentially consistent fence (`seq_cst` `atomic_thread_fence`, an LLVM `fence seq_cst`,
     /// or a `seq_cst` barrier ordering device memory), whose total order with the command
     /// buffer's other such fences the translation keeps through an atomic of the command buffer's

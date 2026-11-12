@@ -1147,6 +1147,7 @@ enum	metal2vulkan-air::error::ContainerError	#[derive(Clone, Debug, PartialEq, E
 enum	metal2vulkan-air::error::Error	#[derive(Clone, Debug, PartialEq, Eq)] pub enum Error
 enum	metal2vulkan-air::error::ErrorClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ErrorClass
 enum	metal2vulkan-air::error::Feature	#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Feature
+enum	metal2vulkan-air::error::GenericPointer	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum GenericPointer
 enum	metal2vulkan-air::error::InputErrorKind	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum InputErrorKind
 enum	metal2vulkan-air::error::InternalKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum InternalKind
 enum	metal2vulkan-air::error::IntrinsicError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum IntrinsicError
@@ -1484,6 +1485,7 @@ enum	metal2vulkan::error::Error	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exh
 enum	metal2vulkan::error::ErrorClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ErrorClass
 enum	metal2vulkan::error::ExtendedRangeBlend	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ExtendedRangeBlend
 enum	metal2vulkan::error::Feature	#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum Feature
+enum	metal2vulkan::error::GenericPointer	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum GenericPointer
 enum	metal2vulkan::error::InputErrorKind	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum InputErrorKind
 enum	metal2vulkan::error::InternalKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum InternalKind
 enum	metal2vulkan::error::IntrinsicError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum IntrinsicError
@@ -1908,6 +1910,7 @@ field	metal2vulkan-air::intrinsics::NumTy.lanes	pub lanes: u32
 field	metal2vulkan-air::intrinsics::Pack.dir	pub dir: PackDir
 field	metal2vulkan-air::intrinsics::Pack.format	pub format: PackFormat
 field	metal2vulkan-air::intrinsics::Pack.ty	pub ty: NumTy
+field	metal2vulkan-air::intrinsics::PointerSpace.space	pub space: AddrSpace
 field	metal2vulkan-air::intrinsics::Signature.ret	pub ret: Operand
 field	metal2vulkan-air::intrinsics::SimdgroupSize.ty	pub ty: Elem
 field	metal2vulkan-air::intrinsics::Texture.access	pub access: Option<Access>
@@ -7912,6 +7915,7 @@ method	metal2vulkan-air::intrinsics::NumTy::parse	pub fn parse(token: &str) -> O
 method	metal2vulkan-air::intrinsics::NumTy::scalar	pub const fn scalar(elem: Elem) -> NumTy
 method	metal2vulkan-air::intrinsics::NumTy::with_elem	pub const fn with_elem(self, elem: Elem) -> NumTy
 method	metal2vulkan-air::intrinsics::Pack::signature	pub fn signature(&self) -> Signature
+method	metal2vulkan-air::intrinsics::PointerSpace::signature	pub fn signature(&self) -> Signature
 method	metal2vulkan-air::intrinsics::ResultField::operand	pub const fn operand(self) -> Operand
 method	metal2vulkan-air::intrinsics::SamplerOp::signature	pub fn signature(&self) -> Signature
 method	metal2vulkan-air::intrinsics::Sign::parse	pub fn parse(token: &str) -> Option<Sign>
@@ -9981,6 +9985,7 @@ struct	metal2vulkan-air::intrinsics::Math	#[derive(Clone, Copy, Debug, PartialEq
 struct	metal2vulkan-air::intrinsics::MemFlags	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct MemFlags
 struct	metal2vulkan-air::intrinsics::NumTy	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct NumTy
 struct	metal2vulkan-air::intrinsics::Pack	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct Pack
+struct	metal2vulkan-air::intrinsics::PointerSpace	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct PointerSpace
 struct	metal2vulkan-air::intrinsics::Signature	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct Signature
 struct	metal2vulkan-air::intrinsics::SimdgroupSize	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct SimdgroupSize
 struct	metal2vulkan-air::intrinsics::Texture	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct Texture
@@ -11027,6 +11032,7 @@ variant	metal2vulkan-air::error::Feature::Constant	Constant { record: ConstantRe
 variant	metal2vulkan-air::error::Feature::DirectCall	DirectCall
 variant	metal2vulkan-air::error::Feature::DynamicCall	DynamicCall
 variant	metal2vulkan-air::error::Feature::FunctionConstantArgument	FunctionConstantArgument
+variant	metal2vulkan-air::error::Feature::GenericPointer	GenericPointer(GenericPointer)
 variant	metal2vulkan-air::error::Feature::GpuEncodedIndirectCommands	GpuEncodedIndirectCommands
 variant	metal2vulkan-air::error::Feature::Imageblocks	Imageblocks
 variant	metal2vulkan-air::error::Feature::InlineAsm	InlineAsm
@@ -11045,6 +11051,11 @@ variant	metal2vulkan-air::error::Feature::Tensors	Tensors
 variant	metal2vulkan-air::error::Feature::Tessellation	Tessellation
 variant	metal2vulkan-air::error::Feature::Type	Type { code: u32 }
 variant	metal2vulkan-air::error::Feature::UnknownIntrinsic	UnknownIntrinsic
+variant	metal2vulkan-air::error::GenericPointer::Aggregate	Aggregate
+variant	metal2vulkan-air::error::GenericPointer::Call	Call
+variant	metal2vulkan-air::error::GenericPointer::Integer	Integer
+variant	metal2vulkan-air::error::GenericPointer::Memory	Memory
+variant	metal2vulkan-air::error::GenericPointer::TwoSpaces	TwoSpaces
 variant	metal2vulkan-air::error::InputErrorKind::Abi	Abi(AbiError)
 variant	metal2vulkan-air::error::InputErrorKind::Bitcode	Bitcode(BitcodeError)
 variant	metal2vulkan-air::error::InputErrorKind::Bitstream	Bitstream(BitstreamError)
@@ -11141,6 +11152,7 @@ variant	metal2vulkan-air::intrinsics::AirIntrinsic::IsUniform	IsUniform(IsUnifor
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::Math	Math(Math)
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::Mesh	Mesh(Mesh)
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::Pack	Pack(Pack)
+variant	metal2vulkan-air::intrinsics::AirIntrinsic::PointerSpace	PointerSpace(PointerSpace)
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::Sampler	Sampler(SamplerOp)
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::SimdMatrix	SimdMatrix(SimdMatrix)
 variant	metal2vulkan-air::intrinsics::AirIntrinsic::SimdgroupSize	SimdgroupSize(SimdgroupSize)
@@ -11606,6 +11618,7 @@ variant	metal2vulkan-air::intrinsics::WorkItem::GlobalOffset	GlobalOffset
 variant	metal2vulkan-air::intrinsics::WorkItem::WorkDim	WorkDim
 variant	metal2vulkan-air::ir::AddrSpace::Constant	Constant = 2
 variant	metal2vulkan-air::ir::AddrSpace::Device	Device = 1
+variant	metal2vulkan-air::ir::AddrSpace::Generic	Generic = 8
 variant	metal2vulkan-air::ir::AddrSpace::MeshOutput	MeshOutput = 7
 variant	metal2vulkan-air::ir::AddrSpace::ObjectData	ObjectData = 6
 variant	metal2vulkan-air::ir::AddrSpace::Thread	Thread = 0
@@ -14049,6 +14062,7 @@ variant	metal2vulkan::error::Feature::Format	Format
 variant	metal2vulkan::error::Feature::FramebufferFetch	FramebufferFetch
 variant	metal2vulkan::error::Feature::FunctionConstantArgument	FunctionConstantArgument
 variant	metal2vulkan::error::Feature::GatherExtended	GatherExtended
+variant	metal2vulkan::error::Feature::GenericPointer	GenericPointer(GenericPointer)
 variant	metal2vulkan::error::Feature::GlobalBuiltinInFragment	GlobalBuiltinInFragment
 variant	metal2vulkan::error::Feature::GpuEncodedIndirectCommands	GpuEncodedIndirectCommands
 variant	metal2vulkan::error::Feature::GpuTimes	GpuTimes
@@ -14142,6 +14156,11 @@ variant	metal2vulkan::error::Feature::ViewportDepthRange	ViewportDepthRange
 variant	metal2vulkan::error::Feature::VulkanVersion	VulkanVersion
 variant	metal2vulkan::error::Feature::WideLines	WideLines
 variant	metal2vulkan::error::Feature::WideSwitchLiteral	WideSwitchLiteral
+variant	metal2vulkan::error::GenericPointer::Aggregate	Aggregate
+variant	metal2vulkan::error::GenericPointer::Call	Call
+variant	metal2vulkan::error::GenericPointer::Integer	Integer
+variant	metal2vulkan::error::GenericPointer::Memory	Memory
+variant	metal2vulkan::error::GenericPointer::TwoSpaces	TwoSpaces
 variant	metal2vulkan::error::InputErrorKind::Abi	Abi(AbiError)
 variant	metal2vulkan::error::InputErrorKind::Bitcode	Bitcode(BitcodeError)
 variant	metal2vulkan::error::InputErrorKind::Bitstream	Bitstream(BitstreamError)

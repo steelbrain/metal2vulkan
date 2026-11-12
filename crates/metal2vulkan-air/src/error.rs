@@ -719,8 +719,9 @@ pub enum Feature {
     /// A function stage the model does not cover.
     Stage(u8),
     /// An LLVM address space the typed model does not define (it defines AIR's `thread` 0
-    /// through `threadgroup_imageblock` 4). The 5 and 6 of Apple's AGX ray-tracing and
-    /// tessellation library modules have no established meaning and stay refused.
+    /// through `threadgroup_imageblock` 4, `object_data` 6, the mesh output handle's 7 and MSL
+    /// 4.1's generic 8). The 5 of Apple's AGX ray-tracing and tessellation library modules has no
+    /// established meaning and stays refused.
     AddressSpace(u32),
     /// A module-level record outside the accepted subset (alias, ifunc, comdat, …).
     ModuleRecord {
@@ -811,6 +812,31 @@ pub enum Feature {
     /// [[buffer(n)]];` in Apple's `!air.global_bindings` list, valid AIR this version does not
     /// implement yet.
     ProgramScopeBinding,
+    /// A generic pointer (MSL 4.1's `addrspace(8)`) that canonicalization cannot make a pointer of
+    /// one address space, by how it comes to hold a space only the run knows
+    /// ([`GenericPointer`]). Vulkan's logical addressing has no pointer that may point into either
+    /// of two storage classes.
+    GenericPointer(GenericPointer),
+}
+
+/// How a refused generic pointer comes to hold an address space only the run knows
+/// ([`Feature::GenericPointer`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum GenericPointer {
+    /// Pointers of two address spaces reach it: a `select` or `phi` of a device and a thread
+    /// pointer, as the run picks.
+    TwoSpaces,
+    /// It is loaded from memory, or is an atomic operation's old value.
+    Memory,
+    /// It is held in, or taken from, an aggregate or a vector value.
+    Aggregate,
+    /// It crosses a call: a call's argument or result (other than a space query's pointer), a
+    /// parameter, or the returned value.
+    Call,
+    /// It is made from an integer (`inttoptr`), or is a constant that is no address space's
+    /// pointer made generic.
+    Integer,
 }
 
 /// A constants-block record that LLVM defines (`LLVMBitCodes.h`'s `ConstantsCodes`, and

@@ -2,12 +2,13 @@
 //! on committed profiles: `generic_spaces` (generic pointers into the device, thread and
 //! threadgroup spaces, each of one space, read, written and asked their space) and `generic_null`
 //! (generic pointers the run may make null) compile; `generic_mixed` (one generic pointer into the
-//! thread or the device space as the run decides) is refused as a generic pointer of two spaces.
+//! thread or the device space as the run decides) is refused as a generic pointer of two spaces
+//! (`GenericPointer::TwoSpaces`).
 
 use crate::air::ir::print::print;
 use crate::budget::Budget;
 use crate::device::{Device, DevicePolicy};
-use crate::error::{Error, Feature};
+use crate::error::{Error, Feature, GenericPointer};
 use crate::library::{FunctionConstantValues, Library};
 use crate::pipeline::testing::{
     description, engine_dir, llvm_assemble, meter, profile, specialized_entry, AssembleError,
@@ -66,15 +67,16 @@ fn generic_pointers_of_one_space_compile() {
     }
 }
 
-/// A generic pointer into the thread or the device space as the run decides is refused, naming
-/// the generic space.
+/// A generic pointer into the thread or the device space as the run decides is refused as a
+/// generic pointer of two spaces.
 #[test]
 fn a_generic_pointer_of_two_spaces_is_refused() {
     let Some(bc) = fixture() else { return };
     let library = Library::from_air(&bc).expect("library");
     for stem in PROFILES {
         match compiled(&library, stem, "generic_mixed") {
-            Err(Error::Unsupported(u)) if u.feature == Feature::AddressSpace(8) => {}
+            Err(Error::Unsupported(u))
+                if u.feature == Feature::GenericPointer(GenericPointer::TwoSpaces) => {}
             other => panic!("{stem}: {other:?}"),
         }
     }

@@ -494,6 +494,8 @@ mod function_tables;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod generated_executions;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod generic_pointers;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod global_builtins;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod gpu_times;
