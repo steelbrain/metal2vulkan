@@ -2481,11 +2481,11 @@ pub(super) fn chosen_sampler_kernel(pick: &[usize], direct: Option<usize>) -> St
         )
     };
     let n = pick.len();
-    let mut choose = format!("  %m = urem i32 %gid, {n}\n");
+    let mut choose = format!("  %sel = urem i32 %gid, {n}\n");
     let mut chosen = format!("@s{}", pick[n - 1]);
     for (k, s) in pick[..n - 1].iter().enumerate().rev() {
         choose += &format!(
-            "  %c{k} = icmp eq i32 %m, {k}\n  %p{k} = select i1 %c{k}, ptr addrspace(2) @s{s}, ptr addrspace(2) {chosen}\n"
+            "  %c{k} = icmp eq i32 %sel, {k}\n  %p{k} = select i1 %c{k}, ptr addrspace(2) @s{s}, ptr addrspace(2) {chosen}\n"
         );
         chosen = format!("%p{k}");
     }
