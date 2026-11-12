@@ -88,17 +88,21 @@ impl Apart {
     }
 }
 
-/// What a frame drew, and the device's counts' change over it.
+/// What a frame drew, and the device's counts' change over it, but over the spans of it `left_out`
+/// (`before` and `after` each), which ran no command of the frame's.
 struct Frame {
     words: Vec<u32>,
     before: WorkCounts,
     after: WorkCounts,
+    left_out: Vec<(WorkCounts, WorkCounts)>,
 }
 
 impl Frame {
     /// How the count `of` changed over the frame.
     fn counted(&self, of: fn(&WorkCounts) -> u64) -> u64 {
-        of(&self.after) - of(&self.before)
+        let left_out = self.left_out.iter();
+        let left_out: u64 = left_out.map(|(before, after)| of(after) - of(before)).sum();
+        of(&self.after) - of(&self.before) - left_out
     }
 
     /// The carry's counts over the frame: carried, rebound carried, stopped stale, stopped
@@ -205,6 +209,7 @@ fn frame(queue: &CommandQueue, passes: &[Pass<'_>], apart: Apart) -> Frame {
         words: words_of(&back),
         before,
         after: device.work_counts(),
+        left_out: Vec::new(),
     }
 }
 
@@ -593,6 +598,7 @@ fn backdrop_frame(
         words: words_of(&back),
         before,
         after: device.work_counts(),
+        left_out: Vec::new(),
     }
 }
 
@@ -734,6 +740,7 @@ fn released_frame(queue: &CommandQueue, host: &Host, apart: Apart) -> Option<Fra
         .new_buffer(SIDE * SIDE * 4, ResourceOptions::shared())
         .unwrap();
     let before = device.work_counts();
+    let mut left_out = Vec::new();
     let mut queue = queue.clone();
     let mut command_buffer = apart.first(&mut queue);
     for at in 0..colors.len() {
@@ -748,12 +755,15 @@ fn released_frame(queue: &CommandQueue, host: &Host, apart: Apart) -> Option<Fra
                     let freed = || freed.load(Ordering::SeqCst) == 1;
                     until("the released index buffer freed", freed);
                 }
-                // Released, and made again once nothing holds the one released.
+                // Released, and made again once nothing holds the one released, its own pipeline
+                // made by runs on queues of their own, whose counts are left out.
                 3 => {
                     drop(solid.take());
                     committed.wait_until_completed_for(WAIT).unwrap();
                     let again = rect_state(device, "tob_solid");
+                    let warming = device.work_counts();
                     warm(device, |encoder| draw(encoder, &again, &second, at));
+                    left_out.push((warming, device.work_counts()));
                     solid = Some(again);
                 }
                 _ => {}
@@ -787,6 +797,7 @@ fn released_frame(queue: &CommandQueue, host: &Host, apart: Apart) -> Option<Fra
         words: words_of(&back),
         before,
         after: device.work_counts(),
+        left_out,
     })
 }
 
@@ -870,6 +881,7 @@ fn a_pass_of_another_layout_drops_the_carry() {
         words: Vec::new(),
         before,
         after: device.work_counts(),
+        left_out: Vec::new(),
     };
     assert_eq!(ran.carries(), [0, 0, 0, 0, 0, 0, 1, 0], "the counts");
 }
@@ -950,6 +962,7 @@ fn a_carried_draw_that_samples_its_attachment_stops() {
         words: words_of(&back),
         before,
         after: device.work_counts(),
+        left_out: Vec::new(),
     };
     assert_eq!(ran.carries(), [1, 0, 0, 1, 0, 0, 0, 0], "the counts");
     let (target_words, level_words) = ran.words.split_at((SIDE * SIDE) as usize);
