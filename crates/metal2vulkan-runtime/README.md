@@ -362,7 +362,10 @@ after it, and 0 of 80 with the device dropped first
   (`did_modify_range` and a blit's `synchronize_resource` move the bytes), a `Managed` no-copy
   buffer's included (its CPU copy the caller's pages; **Host memory without a copy**, below), and
   a `Shared` resource lies in host-cached system memory (announced once,
-  `shared-in-system-memory`).
+  `shared-in-system-memory`). On a device whose family of transfers alone has a second queue
+  (NVIDIA's copy engine), the copies in after `did_modify_range`, and new buffers' zeros and
+  staged bytes, run on that queue before the command buffer that takes them, rather than on the
+  queue its kernels run on (`WorkCounts::fill_queue_submissions`).
 - **Past device-local memory.** Where no device-local memory type a `Private` buffer or heap, a
   texture's image or (without unified memory) a `Managed` buffer's own bytes takes has room, it
   lies in system memory, as Metal makes such resources past a discrete GPU's memory rather than refusing
