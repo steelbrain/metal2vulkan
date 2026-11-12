@@ -126,6 +126,11 @@ const BEHIND_ROUNDS: usize = 4;
 /// pass of the scheduler as the first's, finds the first still running.
 const BEHIND_LENGTH: u64 = 64 << 20;
 
+/// How long [`a_command_buffer_of_two_submissions_is_timed_from_its_first_work_to_its_last`] waits
+/// after its commit before it signals the event its second submission waits for: the time its
+/// first fill runs in before the signal.
+const SPLIT_WAIT: Duration = Duration::from_millis(200);
+
 /// What the venue states of its timestamps.
 struct Venue {
     bits: u32,
@@ -642,6 +647,72 @@ fn start_behind_work(batch_order: BatchOrderPolicy) {
                  second"
             ),
         }
+    }
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// A command buffer whose work goes as two submissions, [`SPLIT_WAIT`] apart: a fill of
+/// [`BEHIND_LENGTH`] bytes, then a wait for a shared event the host signals once that time passed
+/// since the commit, then a fill after it. Metal's `GPUStartTime` and `GPUEndTime` span the whole
+/// command buffer's GPU work, whatever its submissions: its start is the first fill's, before the
+/// signal, and its end the second's, after it, each inside its life ([`within`]). Printed
+/// (`GPU-TIMES-SPLIT`): the four times against the signal.
+#[test]
+fn a_command_buffer_of_two_submissions_is_timed_from_its_first_work_to_its_last() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let venue = Venue::of(&device);
+        if venue.bits == 0 || from_host_by_driver(&device) {
+            eprintln!(
+                "runtime gpu times: {}: writes no timestamps, nothing to check",
+                device.name()
+            );
+            return;
+        }
+        let queue = device.new_command_queue().unwrap();
+        let buffer = device
+            .new_buffer(BEHIND_LENGTH, ResourceOptions::private())
+            .unwrap();
+        let event: SharedEvent = device.new_shared_event().unwrap();
+        let cb = queue.command_buffer().unwrap();
+        let mut blit = cb.blit_command_encoder().unwrap();
+        blit.fill_buffer(&buffer, 0..BEHIND_LENGTH, 0x11).unwrap();
+        blit.end_encoding().unwrap();
+        cb.encode_wait_for_event(EventRef::from(&event), 1).unwrap();
+        let mut blit = cb.blit_command_encoder().unwrap();
+        blit.fill_buffer(&buffer, 0..LENGTH, 0x22).unwrap();
+        blit.end_encoding().unwrap();
+        let before = host_time();
+        cb.commit().unwrap();
+        std::thread::sleep(SPLIT_WAIT);
+        let signalled = host_time();
+        event.set_signaled_value(1);
+        cb.wait_until_completed_for(WAIT).unwrap();
+        let after = host_time();
+        within("two submissions", &cb, before, after);
+        let [gpu_start, gpu_end, kernel_start, kernel_end] = times(&cb);
+        let from_signal = |at: f64| (at - signalled) * 1e3;
+        eprintln!(
+            "GPU-TIMES-SPLIT {}: against the signal, in ms: the commit {:+.3}, kernel start {:+.3}, \
+             kernel end {:+.3}, gpu start {:+.3}, gpu end {:+.3}, the wait's return {:+.3}",
+            device.name(),
+            from_signal(before),
+            from_signal(kernel_start),
+            from_signal(kernel_end),
+            from_signal(gpu_start),
+            from_signal(gpu_end),
+            from_signal(after),
+        );
+        assert!(
+            gpu_start < signalled,
+            "the GPU start {gpu_start}, at or after the signal {signalled}: not the first fill's"
+        );
+        assert!(
+            gpu_end >= signalled - SLACK,
+            "the GPU end {gpu_end}, before the signal {signalled}: not the second fill's"
+        );
     }
     layer_reported_nothing_at_all(&messages);
 }
