@@ -3,9 +3,11 @@
 //! block's free posted (`WorkCounts::memory_frees_posted`), and its pinned address and its
 //! forced resource ID take a new resource at once, the old block not yet freed; an allocation at
 //! `maxMemoryAllocationCount` waits for the posted frees, which still count, and is then made,
-//! where it would otherwise be refused; a block whose making would take its heap past the heap's
-//! size waits for the frees of that heap first; and the device's teardown returns only once every
-//! posted free ran and the thread ended (each `memory_free_waits` counting the wait).
+//! where it would otherwise be refused, the frees it waits for unpaced; a block whose making would
+//! take its heap past the heap's size waits for the frees of that heap first; a burst of posted
+//! frees runs paced, each after the frees before it (`step_aside::pace`,
+//! `WorkCounts::memory_frees_paced`); and the device's teardown returns only once every posted
+//! free ran and the thread ended (each `memory_free_waits` counting the wait).
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -165,9 +167,44 @@ fn an_allocation_at_the_limit_waits_for_the_posted_frees_and_is_made() {
         after.memory_allocations_refused_at_limit, before.memory_allocations_refused_at_limit,
         "nothing refused"
     );
+    assert_eq!(
+        after.memory_frees_paced, before.memory_frees_paced,
+        "no free paced while the allocation waited for them"
+    );
     eprintln!(
         "POSTED-FREES: an allocation at the limit waited for {} posted frees and was made",
         posted.memory_frees_posted - before.memory_frees_posted
+    );
+}
+
+/// Posted in a burst, the frees run one after another, each but the first after a wait as long
+/// as the free before it took, less the time since it ended, so that the device's other threads'
+/// submissions go between them (`step_aside::pace`).
+#[test]
+fn a_burst_of_posted_frees_runs_paced() {
+    let device = device();
+    let frees = Arc::clone(&device.shared().frees);
+    let buffers: Vec<_> = (0..3)
+        .map(|_| (device.new_buffer(dedicated(), ResourceOptions::private())).unwrap())
+        .collect();
+    let before = device.work_counts();
+    let hold = Hold::new(&frees);
+    drop(buffers);
+    frees.held().until_waiting(1, WAIT);
+    assert_eq!(frees.pending().0, 3, "the three frees wait");
+    drop(hold);
+    until("the posted frees", || frees.pending().0 == 0);
+    let after = device.work_counts();
+    let paced = after.memory_frees_paced - before.memory_frees_paced;
+    let nanos = after.memory_frees_paced_nanos - before.memory_frees_paced_nanos;
+    assert!(
+        (1..=2).contains(&paced),
+        "{paced} of the two frees behind another waited first"
+    );
+    assert!(nanos > 0, "the paced frees waited");
+    eprintln!(
+        "POSTED-FREES: {paced} of a burst's two frees behind another waited first, {:.3} ms in all",
+        nanos as f64 / 1e6
     );
 }
 

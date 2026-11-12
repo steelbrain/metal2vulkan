@@ -3034,6 +3034,8 @@ field	metal2vulkan-runtime::WorkCounts.memory_allocations_refused_at_limit	pub m
 field	metal2vulkan-runtime::WorkCounts.memory_blocks_live	pub memory_blocks_live: u64
 field	metal2vulkan-runtime::WorkCounts.memory_free_waits	pub memory_free_waits: u64
 field	metal2vulkan-runtime::WorkCounts.memory_frees	pub memory_frees: MemoryFrees
+field	metal2vulkan-runtime::WorkCounts.memory_frees_paced	pub memory_frees_paced: u64
+field	metal2vulkan-runtime::WorkCounts.memory_frees_paced_nanos	pub memory_frees_paced_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.memory_frees_posted	pub memory_frees_posted: u64
 field	metal2vulkan-runtime::WorkCounts.merged_draw_commands	pub merged_draw_commands: u64
 field	metal2vulkan-runtime::WorkCounts.mipmap_first_levels_fetched	pub mipmap_first_levels_fetched: u64
