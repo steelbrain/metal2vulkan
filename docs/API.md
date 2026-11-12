@@ -4271,8 +4271,10 @@ bound.
   `NoContraction`, among others) where only helper invocations (the quad helpers past a primitive's
   edges, or demoted invocations) may run it before a storage write, and keeping them out would not
   be exact (`spirv::helper_branches`): a derivative or subgroup operation reads what they compute
-  there or after, an arm leaves its selection otherwise than at its merge, or the call is in a loop
-  whose helper invocations may iterate alone; and no identity shuffle of the call's result can
+  there or after, an arm leaves its selection otherwise than at its merge, the call is in a loop
+  whose helper invocations may iterate alone, or it is in no branch at all but SPIRV-Cross writes
+  it in one (a `?:` arm, the right side of a `&&` or `||`, or a selection's arm, where its value
+  is read once); and no identity shuffle of the call's result can
   follow it, which keeps the writes where the module places one: the device has no fragment-stage
   subgroup shuffle, or the result is a 64-bit or `bool` lane, or an 8- or 16-bit one without
   `shaderSubgroupExtendedTypes`.
