@@ -2505,7 +2505,7 @@ fn a_one_row_dispatch_drops_the_lockstep_simdgroup_barriers() {
     assert_eq!(plan.dispatch_variant(&two_rows), Ok(VariantKey::new()));
     let f = Library::from_air(&bc)
         .ok()
-        .and_then(|lib| lib.function(name))
+        .and_then(|lib| lib.function(name).ok())
         .expect("kernel");
     let budget = Budget::standard();
     let compiled = dev
