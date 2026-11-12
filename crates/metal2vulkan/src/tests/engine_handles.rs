@@ -2457,17 +2457,21 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("L3: {e}"));
 }
 
-/// The words of a nearest constexpr sampler in normalized coordinates, every axis addressed by
-/// `address` (1 clamp to edge, 2 repeat, 3 mirrored repeat), no mip filter, with the fields Apple's
-/// compiler writes for the rest (as `LINEAR_EDGE`'s).
-pub(super) const fn nearest_sampler(address: u64) -> u64 {
-    0x007b_ff00_0008_0000 | address | address << 3 | address << 6
+/// The words of a constexpr sampler in normalized coordinates, every axis addressed by `address`
+/// (1 clamp to edge, 2 repeat, 3 mirrored repeat), minification and magnification `filter` (0
+/// nearest, 1 linear), no mip filter, with the fields Apple's compiler writes for the rest (as
+/// `LINEAR_EDGE`'s).
+pub(super) const fn chosen_sampler(address: u64, filter: u64) -> u64 {
+    0x007b_ff00_0008_0000 | address | address << 3 | address << 6 | filter << 9 | filter << 11
 }
 
-/// The constexpr samplers [`chosen_sampler_kernel`] lists, in order: clamped to the edge,
-/// repeating, and mirrored.
-pub(super) const CHOSEN_SAMPLERS: [u64; 3] =
-    [nearest_sampler(1), nearest_sampler(2), nearest_sampler(3)];
+/// The constexpr samplers [`chosen_sampler_kernel`] lists, in order: nearest clamped to the edge,
+/// nearest repeating, and linear mirrored (whose sample reads one texel where the others' do not).
+pub(super) const CHOSEN_SAMPLERS: [u64; 3] = [
+    chosen_sampler(1, 0),
+    chosen_sampler(2, 0),
+    chosen_sampler(3, 1),
+];
 
 /// A kernel `chosen` that samples the `texture2d<float>` its argument buffer (buffer 0) holds at
 /// level 0 and `(1.375, 0.5)` through the constexpr sampler its lane `gid` chooses,
@@ -2541,10 +2545,10 @@ declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr
     )
 }
 
-/// Constexpr samplers of consecutive handles that a lane chooses among beside a heap texture are
-/// one sampling through a set-0 array of their samplers (`ResourceKind::SamplerArray`, one element
-/// per candidate), indexed by the handle: one sampled image, where a switch over them makes one
-/// per candidate. Where the handles are not consecutive (a constexpr sampler between them sampled
+/// Constexpr samplers of consecutive handles that a lane chooses among beside a heap texture, nearest
+/// and linear, are one sampling through a set-0 array of their samplers
+/// (`ResourceKind::SamplerArray`, one element per candidate), indexed by the handle: one sampled
+/// image, where a switch over them makes one per candidate. Where the handles are not consecutive (a constexpr sampler between them sampled
 /// through apart), the switch stays: a sampled image per candidate and one for the sample apart.
 /// Every profile with the sampled heap compiles both and passes L3.
 #[test]

@@ -1,9 +1,11 @@
 //! A heap texture sampled through the constexpr sampler each lane chooses among three (the
 //! translator's constexpr sampler array, `ResourceKind::SamplerArray`) answers, lane by lane, what
 //! a kernel sampling it through that lane's sampler alone answers, and what Metal's address modes
-//! define: an `R32Float` texture four texels wide holding `10, 11, 12, 13`, sampled nearest at
-//! level 0 and `(1.375, 0.5)`, reads texel 3 clamped to the edge, texel 1 repeating, and texel 2
-//! mirrored.
+//! and filters define: an `R32Float` texture four texels wide holding `10, 11, 12, 13`, sampled at
+//! level 0 and `(1.375, 0.5)`, reads texel 3 nearest clamped to the edge, texel 1 nearest
+//! repeating, and texel 2 linear mirrored (the coordinate mirrors to texel 2's centre, which a
+//! linear filter reads alone). The samplers differ in their filter, so the array's element word
+//! decides how the sampling reads (`OneTexel::Table`, `heap_raw::State::Table`).
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The kernels are LLVM text written here
@@ -17,20 +19,20 @@ use crate::{
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 
-/// The constexpr samplers' words: nearest, normalized coordinates, no mip filter, every axis
-/// clamped to the edge, repeating, and mirrored, with the fields Apple's compiler writes for the
-/// rest.
+/// The constexpr samplers' words: normalized coordinates, no mip filter; nearest with every axis
+/// clamped to the edge, nearest repeating, and linear (minification and magnification) mirrored,
+/// with the fields Apple's compiler writes for the rest.
 const SAMPLERS: [u64; 3] = [
     0x007b_ff00_0008_0000 | 0o111,
     0x007b_ff00_0008_0000 | 0o222,
-    0x007b_ff00_0008_0000 | 0o333,
+    0x007b_ff00_0008_0000 | 0o333 | 0xa00,
 ];
 
 /// The texels of the texture's one row.
 const TEXELS: [f32; 4] = [10.0, 11.0, 12.0, 13.0];
 
 /// What each sampler reads at `(1.375, 0.5)`: texel 3 clamped to the edge, texel 1 repeating
-/// (`0.375`), texel 2 mirrored (`0.625`).
+/// (`0.375`), texel 2 mirrored (`0.625`, its centre).
 const READ: [f32; 3] = [13.0, 11.0, 12.0];
 
 /// The lanes of a dispatch: each sampler twice.

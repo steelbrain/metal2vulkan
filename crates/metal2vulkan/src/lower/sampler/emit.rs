@@ -760,6 +760,43 @@ pub(super) fn array_element(
     Ok((fb.select(named, i, zero)?, named))
 }
 
+/// The word (`metal::sampler::SamplerWord`) of the constexpr sampler at the element of sampling
+/// `s`'s constexpr sampler array its sampler handle names (`Source::HeapArray`):
+/// `ConstexprArray::words` selected at run time, element 0's where the handle names none (whose
+/// result the sampling makes zero).
+pub(super) fn array_word(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    s: &Sampling,
+) -> BResult<SValue> {
+    let Source::HeapArray { sampler, key, .. } = s.source else {
+        return Err(cx.fail("a sampler array's word outside a sampler array"));
+    };
+    let words = usize::try_from(key.array)
+        .ok()
+        .and_then(|a| cx.plan.families.sampler.arrays.get(a))
+        .map(|a| a.words.clone());
+    let Some(words) = words else {
+        return Err(cx.fail(format!("constexpr sampler array {key:?} is not planned")));
+    };
+    let (element, _) = array_element(cx, fb, sampler, key)?;
+    let mut word = None;
+    for (k, w) in (0u32..).zip(words) {
+        let w = fb.u32_const(w)?;
+        let w = fb.module().const_value(w)?;
+        word = Some(match word {
+            None => w,
+            Some(v) => {
+                let k = fb.u32_const(k)?;
+                let k = fb.module().const_value(k)?;
+                let is = fb.binary(BinOp::IEqual, element, k)?;
+                fb.select(is, w, v)?
+            }
+        });
+    }
+    word.ok_or_else(|| cx.fail("a sampler array without samplers"))
+}
+
 /// Where a sampling operation observes its residency on a slot with a sparse arm: the slot's
 /// `SparseTexture` specialization, and the combined binding, whose sampled image each arm makes (a
 /// sampled image is consumed in the block that makes it).
@@ -2191,6 +2228,7 @@ pub(super) fn sample_lanes(
         OneTexel::Never => return TexelLanes::Filtered.value(fb),
         OneTexel::Word(n) => sampler_word(cx, fb, Pixel::Spec(n))?,
         OneTexel::Heap(h) => sampler_word(cx, fb, Pixel::Heap(h))?,
+        OneTexel::Table(_) => array_word(cx, fb, s)?,
     };
     let one = word_reads_one(fb, word)?;
     let texel = TexelLanes::Texel.value(fb)?;

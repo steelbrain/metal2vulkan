@@ -284,6 +284,20 @@ pub struct ConstexprArray {
     pub first: u32,
     /// Each element's canonical state words (`SamplerRef::Constexpr`).
     pub samplers: Vec<[u64; 2]>,
+    /// Each element's sampler word (`metal::sampler::SamplerWord`), which a sampling reads where
+    /// the element's state decides what it does (`heap_raw::State::Table`,
+    /// `texture::OneTexel::Table`).
+    pub words: Vec<u32>,
+}
+
+/// The SPIR-V words of one element of a constexpr sampler array's word selection
+/// (`emit::array_word`): its comparison, its select, and their constants.
+const TABLE_ELEMENT_WORDS: u32 = 5 + 6 + 2 * 4;
+
+/// The SPIR-V words of a constexpr sampler array's word (`emit::array_word`) over `elements`
+/// elements: the element index, read again, and the word's selection.
+pub(crate) fn table_words(elements: u32) -> u32 {
+    ELEMENT_WORDS.saturating_add(TABLE_ELEMENT_WORDS.saturating_mul(elements))
 }
 
 /// The SPIR-V words of one reading of a constexpr sampler array's element index
@@ -1011,7 +1025,14 @@ impl Sampling {
         let heap = match self.source {
             Source::Combined(_) => 0,
             Source::Heap { .. } => 32,
-            Source::HeapArray { .. } => 32 + ARRAY_WORDS,
+            // A one-texel test the element's word decides reads that word.
+            Source::HeapArray { .. } => {
+                let table = match self.one_texel {
+                    crate::lower::texture::OneTexel::Table(n) => table_words(n),
+                    _ => 0,
+                };
+                32 + ARRAY_WORDS + table
+            }
             Source::HeapSampler { .. } => 56 + 2 * ENTRY_FIELD_WORDS + CUBIC_REACH_WORDS,
         };
         let residency = if self.residency {

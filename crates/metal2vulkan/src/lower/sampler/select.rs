@@ -554,12 +554,13 @@ fn select_heap_switch(
 /// `smp_handle`, as one sampling through an array of the candidates' samplers
 /// (`Source::HeapArray`): its element `smp_handle - first` is exactly the sampler of the candidate
 /// of that handle, and the raw emulation reads that element's state word
-/// (`heap_raw::State::Table`). Where every candidate is a constexpr sampler, their handles
-/// consecutive (`first..first + n`); the device indexes an array of samplers by a value that may
-/// differ between invocations (`shaderSampledImageArrayNonUniformIndexing`, which the heap's own
-/// image array already needs); the use is not tangled; and each candidate's sampling is the same
-/// but for its sampler and the state its raw emulation follows. `None` otherwise, and the switch
-/// over the candidates stays.
+/// (`heap_raw::State::Table`), as it states whether the sampling reads one texel where the
+/// candidates differ in that (`OneTexel::Table`). Where every candidate is a constexpr sampler,
+/// their handles consecutive (`first..first + n`); the device indexes an array of samplers by a
+/// value that may differ between invocations (`shaderSampledImageArrayNonUniformIndexing`, which
+/// the heap's own image array already needs); the use is not tangled; and each candidate's
+/// sampling is the same but for its sampler, the state its raw emulation follows, and whether it
+/// reads one texel. `None` otherwise, and the switch over the candidates stays.
 fn select_heap_array(
     cx: &mut SelectCx<'_>,
     call: Call<'_>,
@@ -604,7 +605,11 @@ fn select_heap_array(
             _ => return Ok(None),
         }
     }
-    // A candidate's sampling but for its sampler and its raw emulation's constant state.
+    use crate::lower::texture::OneTexel;
+    let elements = u32::try_from(arms.len())
+        .map_err(|_| cx.invariant("constexpr sampler candidates past u32"))?;
+    // A candidate's sampling but for its sampler, its raw emulation's constant state, and whether
+    // it reads one texel, which the element's word then states (`OneTexel::Table`).
     let shape = |x: &Sampling| -> Option<Sampling> {
         let mut y = x.clone();
         let Source::Heap { handle, key } = y.source else {
@@ -621,7 +626,10 @@ fn select_heap_array(
             if !matches!(raw.state, State::Constant { .. }) {
                 return None;
             }
-            raw.state = State::Table { words: Vec::new() };
+            raw.state = State::Table { elements };
+        }
+        if matches!(y.one_texel, OneTexel::Always | OneTexel::Never) {
+            y.one_texel = OneTexel::Table(elements);
         }
         Some(y)
     };
@@ -649,7 +657,15 @@ fn select_heap_array(
     for w in &samplers {
         words.push(super::constexpr::sampler_word(*w)?.0);
     }
-    let array = super::ConstexprArray { first, samplers };
+    let one_texel = match arms.first().map(|x| x.one_texel) {
+        Some(o) if arms.iter().all(|x| x.one_texel == o) => o,
+        _ => OneTexel::Table(elements),
+    };
+    let array = super::ConstexprArray {
+        first,
+        samplers,
+        words,
+    };
     let arrays = &mut cx.families.sampler.arrays;
     let index = match arrays.iter().position(|a| *a == array) {
         Some(i) => i,
@@ -674,9 +690,7 @@ fn select_heap_array(
         sampler: smp_handle,
         key,
     };
-    if let Some(raw) = &mut x.heap_raw {
-        raw.state = State::Table { words };
-    }
+    x.one_texel = one_texel;
     cx.families.sampler.heap = before;
     cx.families.sampler.heap_arrays.insert(key);
     Ok(Some(TextureStrategy::Sampling(Box::new(x))))

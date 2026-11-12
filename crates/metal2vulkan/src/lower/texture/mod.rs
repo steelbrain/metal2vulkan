@@ -1622,6 +1622,10 @@ pub enum OneTexel {
     /// Where an argument buffer's sampler's word, its table entry's flags for handle `h`, states
     /// one; no specialization decides it.
     Heap(ValueId),
+    /// Where the word of the constexpr sampler at the element of a constexpr sampler array (of
+    /// this many elements) that the sampling's sampler handle names
+    /// (`lower::sampler::Source::HeapArray`, `ConstexprArray::words`) states one.
+    Table(u32),
 }
 
 /// A read, gather, or sample of `image`, of shape `shape`, with a `half` result, a sample where
