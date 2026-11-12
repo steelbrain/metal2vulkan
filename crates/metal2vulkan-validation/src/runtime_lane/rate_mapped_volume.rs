@@ -7,19 +7,20 @@
 //! records hundreds of thousands of draws, each with its own viewport and scissor. ANV (Mesa
 //! 26.2.6, an Iris Xe) takes each such draw's viewport and scissor state from its device's
 //! dynamic state pool of 1 GiB, and a command buffer holds what its recording took until it is
-//! begun again, reset or freed. Here [`LIGHT_POOLS`] light command buffers at once leave as many
-//! spare command pools; then each round commits [`HEAVY_AT_ONCE`] heavy command buffers at once,
-//! each a pass of executions of the commands over a map of [`ZONES`] zones a side alternating
-//! between full and half quality, as many as record about [`REGION_DRAWS`] draws, and waits for
-//! them. A taker takes a spare holding a
-//! primary begun ahead first, then the one holding the fewest command buffers, and a settled pool
-//! begins one where no thread waits on its command buffer's gate as it completes: the light
-//! command buffers are polled to completion, so each of their pools begins one, and a thread
-//! waits on each heavy one's gate from its commit, so none of theirs does. Each round's heavy
-//! command buffers so take pools no heavy one used. Every round must complete without an error,
-//! after [`ROUNDS`] rounds. Printed (`RM-VOLUME`), per round: the spares' and draws' counts, and
-//! the process's DRM memory where the kernel reports it ([`drm_total`]), which holds the driver's
-//! state pools' buffer objects as they grew: ANV's never shrink.
+//! begun again, reset or freed. Here [`LIGHT_POOLS`] light command buffers, polled to
+//! completion, leave as many spare command pools, each holding a primary begun ahead; then each
+//! round commits [`HEAVY_AT_ONCE`] heavy command buffers at once, each a pass of executions of the
+//! commands over a map of [`ZONES`] zones a side alternating between full and half quality, as
+//! many as record about [`REGION_DRAWS`] draws, and waits for them. Every round
+//! must complete without an error, after [`ROUNDS`] rounds.
+//!
+//! Printed (`RM-VOLUME`), per round: the spares' and draws' counts, and the process's DRM memory
+//! where the kernel reports it ([`drm_total`]), which holds the buffer objects of the driver's
+//! state pools and batches as they grew: ANV's state pools never shrink. On an Iris Xe (Mesa
+//! 26.2.6) it stayed within 534 MiB, each heavy command buffer's pools freeing their command
+//! buffers as it gave them back (the spares' `RECORDED`). Where the spares kept them, each
+//! round's heavy command buffers took the pools of the round before, which held those
+//! recordings until then, and it reached 751 MiB.
 
 use super::{buffer_with, open_device, WAIT};
 use crate::air_library::AirLibrary;
