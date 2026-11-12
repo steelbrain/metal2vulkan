@@ -1002,11 +1002,11 @@ impl PartialEq for DrawState {
 /// The states a draw of `state` records a rate-mapped pass's `regions` with
 /// (`rate_mapped_pass.rs`), each region's viewport taking the depth range `depth` where the draw
 /// compensates it: one a region, or, `batch` the most one multi-draw takes
-/// (`VariantKey::region_viewports`), one per `k` regions in order, `k` the least of their count
-/// and `batch`. Such a state sets `k` viewports and scissors, its regions' at the indices of its
-/// draws (`DrawState::draws`, its regions' count), the last's past its regions repeating its
-/// first viewport through an empty scissor: every command of the draw sets the `k` its
-/// `VkPipeline` takes (`FixedState::viewports`), and draws its own regions alone.
+/// (`VariantKey::region_viewports`), one per `batch` regions in order. Such a state sets `batch`
+/// viewports and scissors, its regions' at the indices of its draws (`DrawState::draws`, its
+/// regions' count), past its regions repeating its first viewport through an empty scissor:
+/// every command of the draw sets the `batch` its `VkPipeline` takes (`FixedState::viewports`),
+/// whatever the map's regions, and draws its own regions alone.
 fn region_states(
     regions: &[(vk::Viewport, vk::Rect2D)],
     batch: Option<usize>,
@@ -1030,25 +1030,24 @@ fn region_states(
             })
             .collect();
     };
-    let k = regions.len().min(batch).max(1);
     regions
-        .chunks(k)
+        .chunks(batch)
         .filter_map(|chunk| {
             let &(first, _) = chunk.first()?;
             let viewports = (chunk.iter().map(|&(viewport, _)| viewport))
                 .chain(std::iter::repeat(first))
-                .take(k)
+                .take(batch)
                 .map(ranged)
                 .collect();
             let scissors = (chunk.iter().map(|&(_, scissor)| scissor))
                 .chain(std::iter::repeat(vk::Rect2D::default()))
-                .take(k)
+                .take(batch)
                 .collect();
             Some(DrawState {
                 viewports,
                 scissors,
                 fixed: FixedState {
-                    viewports: k as u32,
+                    viewports: batch as u32,
                     ..state.fixed
                 },
                 draws: chunk.len() as u32,
@@ -9718,10 +9717,10 @@ impl RenderLowering {
                     .collect::<Result<_, Error>>()?
             }),
         };
-        // Its `VkPipeline` takes as many viewports as each of its commands sets
-        // (`region_states`).
-        if let Some(first) = draw_states.iter_mut().next().filter(|_| batch.is_some()) {
-            fixed.viewports = first.fixed.viewports;
+        // Its `VkPipeline` takes as many viewports as each of its commands sets, whatever the
+        // map's regions (`region_states`).
+        if let Some(batch) = batch {
+            fixed.viewports = batch as u32;
         }
         // A draw that reaches no fragment runs its vertex function alone, through empty scissors,
         // and so do unsized points.
@@ -11465,12 +11464,13 @@ impl RenderLowering {
     /// Whether a draw of `pipeline` under `settings`, `direct` (not from an indirect buffer), asks
     /// to record its rate-mapped pass's regions several at a time, each one draw of a multi-draw
     /// through the viewport and scissor at its index (`rate_mapped_pass.rs`): where the device
-    /// has the multi-draw commands (`DeviceShared::multi_draws`), the pass's map may plan several
-    /// regions, the draw is direct and of one amplification, and its pipeline is a vertex and
-    /// fragment pipeline whose vertex function's `ViewportIndex` reaches the rasterizer as it
-    /// stores it: no stage after it, and no index, position compensation or band of its own. Not
-    /// a device replay's draw, whose commands record one at a time. The plan settles whether it
-    /// does (`VariantKey::region_viewports`).
+    /// has the multi-draw commands (`DeviceShared::multi_draws`), the pass has a map, the draw is
+    /// direct and of one amplification, and its pipeline is a vertex and fragment pipeline whose
+    /// vertex function's `ViewportIndex` reaches the rasterizer as it stores it: no stage after
+    /// it, and no index, position compensation or band of its own. Not a device replay's draw,
+    /// whose commands record one at a time. Whatever the map holds: a reset of it never changes
+    /// the variant its pass's encoding again draws with. The plan settles whether it does
+    /// (`VariantKey::region_viewports`).
     fn draws_region_batches(
         &self,
         pipeline: &DrawingState,
@@ -11486,10 +11486,7 @@ impl RenderLowering {
             )
         });
         self.core.device().shared().multi_draws.is_some()
-            && self
-                .rate_map
-                .as_ref()
-                .is_some_and(|pass| pass.regions_vary())
+            && self.rate_map.is_some()
             && self.replayed.is_none()
             && direct
             && settings.amplification.count == 1
