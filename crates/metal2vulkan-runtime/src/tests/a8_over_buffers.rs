@@ -142,11 +142,50 @@ fn features(device: &Device, format: ash::vk::Format) -> String {
         (handles.instance).get_physical_device_format_properties(handles.physical_device, format)
     };
     format!(
-        "format {}: linear {:?}, optimal {:?}",
+        "format {}: linear {:?}, optimal {:?}, DRM_FORMAT_MOD_LINEAR {}",
         format.as_raw(),
         named(properties.linear_tiling_features),
-        named(properties.optimal_tiling_features)
+        named(properties.optimal_tiling_features),
+        modifier_features(device, format)
     )
+}
+
+/// The device's features of `format`'s `DRM_FORMAT_MOD_LINEAR` modifier, as it reports them.
+fn modifier_features(device: &Device, format: ash::vk::Format) -> String {
+    if !device.makes_modifier_images() {
+        return "not asked (no VK_EXT_image_drm_format_modifier)".to_owned();
+    }
+    // SAFETY: the handles are used while the device lives.
+    let handles = unsafe { device.raw() };
+    let query = |list: &mut ash::vk::DrmFormatModifierPropertiesListEXT| {
+        let mut properties = ash::vk::FormatProperties2::default().push_next(list);
+        // SAFETY: the physical device is the instance's, whose device enables the extension; a
+        // list without entries asks the count alone, and one with entries holds as many as its
+        // count for the driver to write.
+        unsafe {
+            (handles.instance).get_physical_device_format_properties2(
+                handles.physical_device,
+                format,
+                &mut properties,
+            )
+        }
+    };
+    let mut list = ash::vk::DrmFormatModifierPropertiesListEXT::default();
+    query(&mut list);
+    let count = list.drm_format_modifier_count as usize;
+    let mut modifiers = vec![ash::vk::DrmFormatModifierPropertiesEXT::default(); count];
+    let mut list = ash::vk::DrmFormatModifierPropertiesListEXT::default()
+        .drm_format_modifier_properties(&mut modifiers);
+    query(&mut list);
+    let written = list.drm_format_modifier_count as usize;
+    let linear = (modifiers.iter().take(written)).find(|modifier| {
+        modifier.drm_format_modifier == crate::dma_buf::DRM_FORMAT_MOD_LINEAR
+            && modifier.drm_format_modifier_plane_count == 1
+    });
+    match linear {
+        Some(modifier) => format!("{:?}", named(modifier.drm_format_modifier_tiling_features)),
+        None => "not listed".to_owned(),
+    }
 }
 
 /// A texture over `buffer`'s first bytes, rows `WIDTH` apart, with what it read, whether it is a
