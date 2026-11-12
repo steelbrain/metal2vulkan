@@ -477,8 +477,9 @@ pub struct LevelReads {
     /// level 0), or the highest constant a level-count containment compares; `None` where none
     /// does.
     pub named: Option<u32>,
-    /// The lowest level a fetch, a size query or a gather reads, each a constant (a gather reads
-    /// level 0); `None` where none does. A level-count containment's comparison reads no level.
+    /// The lowest level whose texels a fetch or a gather reads, each a constant (a gather reads
+    /// level 0); `None` where none does. A size query reads no texel, nor does a level-count
+    /// containment's comparison: each raises `named` alone.
     pub lowest_read: Option<u32>,
     /// The slot's samples, by the sampler each reads through, sorted by sampler.
     pub sampled: Vec<SampledLevels>,
@@ -673,9 +674,9 @@ impl LevelReads {
     /// The lowest level, counted from the view's first, that the slot's reads may reach, where
     /// `sampled` answers for each of its samplers' samples the lowest level they may reach
     /// through the sampler the runtime binds ([`SampledLevels::lowest`]): 0 where a read may reach
-    /// any level ([`LevelReads::any`]); `None` where no read reaches a level (a size query
-    /// without one, a level-count containment's comparison). Over a view of the same first level
-    /// whose last level is lower, a read reaches that last level in its place.
+    /// any level ([`LevelReads::any`]); `None` where no read reaches a level's texels (a size
+    /// query, a level-count containment's comparison). Over a view of the same first level whose
+    /// last level is lower, a read reaches that last level in its place.
     pub fn lowest_level(&self, sampled: impl Fn(&SampledLevels) -> u32) -> Option<u32> {
         if self.any {
             return Some(0);

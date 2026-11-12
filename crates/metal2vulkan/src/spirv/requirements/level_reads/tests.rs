@@ -282,10 +282,10 @@ fn sampled(sampler: SamplerRef, lods: Option<(f32, f32)>, computed: bool) -> Sam
 
 /// Each read states the levels it reaches: a sample by its sampler, a constant level of detail
 /// or a computed one; a gather, a fetch and a size query the level they name, the lowering's
-/// containment of a constant included, as the highest and the lowest read (a comparison of the
-/// level count raises the highest alone); and a fetch or level at a computed level, a level count
-/// used otherwise, a level-of-detail query, a minimum level of detail and a storage write any
-/// level.
+/// containment of a constant included, as the highest and (but a size query, which reads no
+/// texel) the lowest read (a comparison of the level count raises the highest alone); and a fetch
+/// or level at a computed level, a level count used otherwise, a level-of-detail query, a minimum
+/// level of detail and a storage write any level.
 #[test]
 fn each_read_states_the_levels_it_reaches() {
     let runtime = SamplerRef::Slot(0);
@@ -333,7 +333,13 @@ fn each_read_states_the_levels_it_reaches() {
         (Read::FetchBase, reads(false, Some(0), Vec::new())),
         (Read::LevelsElsewhere, reads(true, None, Vec::new())),
         (Read::QueryLod, reads(true, None, Vec::new())),
-        (Read::SizeConstant, reads(false, Some(3), Vec::new())),
+        (
+            Read::SizeConstant,
+            LevelReads {
+                lowest_read: None,
+                ..reads(false, Some(3), Vec::new())
+            },
+        ),
         (Read::Size, reads(false, None, Vec::new())),
         (Read::Write, reads(true, None, Vec::new())),
     ] {

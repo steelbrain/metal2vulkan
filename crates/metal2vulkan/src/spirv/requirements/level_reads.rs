@@ -71,12 +71,13 @@ struct Lods {
 }
 
 impl Found {
-    /// A level-count containment's comparison of `level`: the view holds more levels than it.
+    /// A level-count containment's comparison of `level`, or a size query at it: the view holds
+    /// more levels than it.
     fn name(&mut self, level: u32) {
         self.named = Some(self.named.map_or(level, |n| n.max(level)));
     }
 
-    /// A read of `level`.
+    /// A read of `level`'s texels.
     fn read(&mut self, level: u32) {
         self.name(level);
         self.lowest_read = Some(self.lowest_read.map_or(level, |l| l.min(level)));
@@ -401,8 +402,10 @@ fn judge(
         inst if carried_on(inst) == Some(v) && result.is_some() => {}
         Inst::ImageQuery { query, image } if *image == v => match query {
             ImageQuery::Size | ImageQuery::Samples => {}
+            // A size query reads no texel: the view holds the level, which raises the highest
+            // alone.
             ImageQuery::SizeLod(l) => match contained.level(m, *l, slot)? {
-                Some(c) => f.read(c),
+                Some(c) => f.name(c),
                 None => f.any = true,
             },
             // Its uses are judged as the level count's (`level_reads`).
