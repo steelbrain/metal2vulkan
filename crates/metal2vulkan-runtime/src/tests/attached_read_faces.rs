@@ -25,19 +25,33 @@
 //! (`texture/faces.rs`, **Encoded again**). The same lane beside an open command buffer, where no
 //! pass turns and every read copies in, with no rebind, reads the same bytes.
 //!
+//! A third test executes an indirect command buffer before a pass that clears the texture, in the
+//! same command buffer: its command reads the texture through an argument buffer naming its
+//! resource ID. The commit records the command, binding the heap sets after the pass opened, so
+//! a turn there would have the command read the face the pass turned to, which holds texels two
+//! passes old. The pass turns nothing (`Unturned::Busy`) and copies in, and the command reads the
+//! texels from before the pass, Metal's answer.
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_rect`,
-//! `tob_solid` and `tob_read` of the owned fixture `validation/fixtures/public/engine/tob_renders.ll`.
+//! `tob_solid` and `tob_read` of the owned fixture `validation/fixtures/public/engine/tob_renders.ll`,
+//! and `rt_heap_zero` of `validation/fixtures/public/engine/kernel_read_through.ll`: `out[i]` is
+//! the argument buffer's texture read at `p[i].xy` and level `p[i].w`.
 
 use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::{
-    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, EventRef, LoadAction,
-    Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
-    ScissorRect, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
+    BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, EventRef,
+    IndirectCommandBufferDescriptor, LoadAction, Origin, PipelineOptions, RenderPassDescriptor,
+    RenderPipelineState, ResourceOptions, ScissorRect, Size, StoreAction, Texture,
+    TextureDescriptor, WorkCounts,
 };
-use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
-use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use metal2vulkan::metal::{
+    IndirectCommandType, PixelFormat, PrimitiveType, ResourceUsage, TextureUsage,
+};
+use metal2vulkan::pipeline::{
+    ColorAttachmentDescriptor, ComputePipelineDescriptor, RenderPipelineDescriptor, StageSource,
+};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
@@ -582,4 +596,96 @@ fn a_logged_pass_turns_and_its_encoding_again_meets_the_faces_as_first_met() {
         turned.after, copied.after,
         "the texture's bytes, turned and copied"
     );
+}
+
+/// The third test of the module docs: an execution of an indirect command buffer, then a pass
+/// that clears the texture and reads it, in one command buffer. The execution's command reads
+/// the texel at (12, 6), inside [`RECT`], and at (0, 0), outside it, through an argument buffer
+/// naming the texture's ID: 0x50 and 0x20, the texels from before the pass. The face the pass
+/// would turn to holds 0x40 and 0x10 there, what the first read copied in.
+#[test]
+fn an_execution_before_a_clearing_pass_reads_the_texels_from_before_it() {
+    let scratch = Scratch::new("attached-read-faces-execution");
+    let device = device(&scratch.0);
+    let tools = Tools::new(&device);
+    let texture = texture(&device);
+    // The faces, made by the first read, which copies 0x10 and 0x40 into the other face; then the
+    // texture's own face holds 0x20 and 0x50.
+    tools.pass(&texture, Some(0x10), Draw::Nothing);
+    tools.pass(&texture, None, Draw::Solid(0x40));
+    let moved = tools.pass(&texture, Some(0x20), Draw::Read);
+    assert_eq!(moved.made, 1, "the first read makes the faces");
+    tools.pass(&texture, None, Draw::Solid(0x50));
+    // The execution: one command of `rt_heap_zero`, two reads.
+    let function = library(&device, "engine/kernel_read_through.ll")
+        .new_function_with_name("rt_heap_zero")
+        .unwrap();
+    let mut descriptor =
+        ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
+    descriptor.support_indirect_command_buffers = true;
+    let state =
+        (device.new_compute_pipeline_state(&descriptor, &PipelineOptions::default())).unwrap();
+    let holding =
+        |bytes: &[u8]| (device.new_buffer_with_bytes(bytes, ResourceOptions::shared())).unwrap();
+    let argument = holding(&texture.gpu_resource_id().0.to_le_bytes());
+    let positions: Vec<u8> = ([12i32, 6, 0, 0, 0, 0, 0, 0].iter())
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    let positions = holding(&positions);
+    let out = holding(&[0; 32]);
+    let mut icb_descriptor = IndirectCommandBufferDescriptor::new();
+    icb_descriptor.command_types = IndirectCommandType::CONCURRENT_DISPATCH_THREADS;
+    icb_descriptor.max_kernel_buffer_bind_count = 3;
+    let icb = device
+        .new_indirect_command_buffer(&icb_descriptor, 1, ResourceOptions::shared())
+        .unwrap();
+    let command = icb.indirect_compute_command_at(0).unwrap();
+    command.set_compute_pipeline_state(&state).unwrap();
+    for (index, buffer) in (0..).zip([&positions, &out, &argument]) {
+        command.set_kernel_buffer(Some(buffer), 0, index).unwrap();
+    }
+    let threads = Size::new(2, 1, 1);
+    (command.concurrent_dispatch_threads(threads, threads)).unwrap();
+    let before = device.work_counts();
+    let command_buffer = tools.queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    let buffers = [
+        positions.as_resource(),
+        out.as_resource(),
+        argument.as_resource(),
+    ];
+    let usage = ResourceUsage::READ | ResourceUsage::WRITE;
+    encoder.use_resources(&buffers, usage).unwrap();
+    (encoder.use_resource(texture.as_resource(), ResourceUsage::READ)).unwrap();
+    encoder.execute_commands_in_buffer(&icb, 0..1).unwrap();
+    encoder.end_encoding().unwrap();
+    tools.encode(&command_buffer, &texture, Some(0x30), Draw::Read);
+    Tools::run(&command_buffer);
+    let moved = Moved::of(&before, &device.work_counts());
+    let read: Vec<f32> = {
+        let bytes = out.contents().unwrap().as_ptr();
+        // SAFETY: the buffer's 32 bytes, which no command writes now.
+        let bytes = unsafe { std::slice::from_raw_parts(bytes, 32) };
+        (bytes.as_chunks::<4>().0.iter())
+            .map(|word| f32::from_le_bytes(*word))
+            .collect()
+    };
+    let codes: Vec<u8> = read.iter().map(|v| (v * 255.0).round() as u8).collect();
+    eprintln!(
+        "ATTACHED-READ-FACES: an execution before a clearing pass: {moved:?}, read {codes:x?}"
+    );
+    assert_eq!(
+        codes,
+        [[0x50; 4], [0x20; 4]].concat(),
+        "the execution's reads: the texels from before the pass"
+    );
+    assert_eq!(
+        (moved.swaps, moved.busy),
+        (0, 1),
+        "the pass turns nothing after an execution"
+    );
+    let (got, _) = tools.bytes(&texture);
+    let want = image(0x30, 0x50);
+    let differ = (0..got.len()).filter(|&at| got[at] != want[at]).count();
+    assert_eq!(differ, 0, "the pass: {differ} bytes differ");
 }
