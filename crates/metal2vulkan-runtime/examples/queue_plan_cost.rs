@@ -42,8 +42,8 @@
 //!   (the copy family's queues kept), each made and destroyed at once where the driver makes it:
 //!   which counts the driver accepts beside what is held, and how long each `vkCreateDevice`
 //!   took, refused or made.
-//! - **overlap** (`--overlap K,...`): for the plan's shape and each step a refused device takes
-//!   (16 + 2, 9 + 2, 5 + 2 and 1 + 2 on NVIDIA), K processes each making one device at the same
+//! - **overlap** (`--overlap K,...`): for the plan's shape, two between (round robins of 7 and 3
+//!   with the two presenting) and the least plan's (16 + 2, 9 + 2, 5 + 2 and 1 + 2 on NVIDIA), K processes each making one device at the same
 //!   moment, `R` rounds (`--rounds`, 3 by default): each `vkCreateDevice`'s time, median, least and
 //!   most, and the time until all K were made, as when every device of a GPU is made again at once
 //!   (a device lost).
@@ -745,13 +745,12 @@ fn runtime_child() {
     let _ = std::fs::remove_dir_all(&cache);
 }
 
-/// The overlap phase (`--overlap K,...`, the module docs): for each shape of a refused device's
-/// steps and each count, `rounds` rounds of that many processes making one device each at once.
+/// The overlap phase (`--overlap K,...`, the module docs): for each of its shapes and each count, `rounds` rounds of that many processes making one device each at once.
 fn overlap_phase(gpu: &Gpu, counts: &[usize], rounds: usize) {
     let exe = std::env::current_exe().expect("this program");
     let [(_, copies), (most, _)] = gpu.least_and_plan();
     // The plan's (16 graphics-family queues on NVIDIA: 14 round robin and 2 presenting), the
-    // round robin halved twice with presenting's two, and the least plan's one.
+    // round robins of 7 and 3 with presenting's two, and the least plan's one.
     let mut shapes: Vec<Shape> = vec![(most, copies)];
     for graphics in [9, 5, 1] {
         if graphics < most {

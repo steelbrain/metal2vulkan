@@ -1396,6 +1396,15 @@ fn for_want_of_resources(result: vk::Result) -> bool {
 /// (`VK_ERROR_INITIALIZATION_FAILED`), the kernel logging that it could not allocate a channel's
 /// instance block; in one process it refused the eighth device with either plan, there and on an
 /// RTX 3090.
+///
+/// The least plan at once, not plans between it and the plan's: what one refused device takes the
+/// next is refused. One device per process (`examples/queue_plan_cost.rs`, `--runtime-fill`), an
+/// RTX 2080 on Thunderbolt made 11 devices of the plan and 3 of the least plan, where a round
+/// robin halved on each refusal (18, then 11, 7 and 3 `VkQueue`s) made the 12th with 11 and
+/// refused the 13th; an RTX 3090 made 58 of the plan and the 59th of the least plan either way,
+/// the steps adding 0.42 s to it and 0.21 s to the refused 60th. Beside 12 runtime devices, a
+/// refused `vkCreateDevice` of 7 to 15 `VkQueue`s took 237 to 270 ms on the RTX 2080, about what
+/// making one of 11 takes there alone (249 ms).
 pub(crate) fn made_within_resources<D>(
     device: &str,
     planned: PlacedQueues,
