@@ -271,7 +271,12 @@ after it, and 0 of 80 with the device dropped first
   of one image over the same bytes of one import of host pages, which share it), which over a
   no-copy buffer's or dma-buf host pages may be of `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`
   (`DRM_FORMAT_MOD_LINEAR`, its one memory plane at the texture's `bytes_per_row`): ask its layout
-  of memory plane 0.
+  of memory plane 0. An `A8Unorm` texture over a buffer that only reads (no render, shader write or
+  atomic usage; one level and one sample), on a device whose `A8_UNORM` image lacks a feature its
+  optimal one has in linear tiling or in `DRM_FORMAT_MOD_LINEAR` (the RTX 3090 lists that
+  modifier for no `A8_UNORM` image) and whose `R8_UNORM` image lacks none in either, has the image
+  an `R8Unorm` texture over the same bytes has, of `R8_UNORM`, which its bindings read through
+  `(0, 0, 0, R)` (`WorkCounts::alpha_textures_held_in_red`).
 - `CommandBuffer::encode_wait_for_vk_semaphore` and `encode_signal_vk_semaphore` order a command
   buffer against the consumer's own work.
 - An event's timeline semaphore, plain or shared, orders the consumer's submissions against
