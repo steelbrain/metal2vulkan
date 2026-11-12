@@ -2,10 +2,11 @@
 // a kernel encodes into an indirect command buffer and a render pass executes. Each kernel encodes
 // command `tid` from `draws[tid]`: vertex buffer 0 the vertices' pixel positions from byte
 // `xy_at` of `xy`, vertex buffer 1 the marks from byte `mark_at` of `marks`, vertex buffer 2 the
-// frame, then a triangle draw: `ima_draws` of `count` vertices from vertex `first`,
-// `ima_indexed` of `count` 32-bit indices from index `first` at base vertex `base_vertex`, and
-// `ima_strided` as `ima_draws` with vertex buffer 0 bound at attribute stride `stride`; each of
-// `instances` instances from base instance `base_instance`. The case's vertex descriptor places
+// frame, then a draw: `ima_draws` of triangles, `count` vertices from vertex `first`,
+// `ima_strips` the same as a triangle strip, `ima_indexed` of triangles, `count` 32-bit indices
+// from index `first` at base vertex `base_vertex`, and `ima_strided` as `ima_draws` with vertex
+// buffer 0 bound at attribute stride `stride`; each of `instances` instances from base instance
+// `base_instance`. The case's vertex descriptor places
 // attribute 0 (a `float2` pixel position) in layout 0 and attribute 1 (a `uint` mark) in layout 1.
 // Vertex `vid` of instance `iid` lies at its position moved down `iid` rows of `frame.z` pixels
 // (`frame` is the target's width, height and row stride in pixels) and carries its mark, `vid`
@@ -53,6 +54,21 @@ kernel void ima_draws(device const ImaCommands &encoder [[buffer(0)]],
     command.set_vertex_buffer(marks + d.mark_at, 1);
     command.set_vertex_buffer(frame, 2);
     command.draw_primitives(primitive_type::triangle, d.first, d.count, d.instances,
+                            d.base_instance);
+}
+
+kernel void ima_strips(device const ImaCommands &encoder [[buffer(0)]],
+                       device const ImaDraw *draws [[buffer(1)]],
+                       device const uchar *xy [[buffer(2)]],
+                       device const uchar *marks [[buffer(3)]],
+                       constant float4 *frame [[buffer(4)]],
+                       uint tid [[thread_position_in_grid]]) {
+    render_command command(encoder.commands, tid);
+    ImaDraw d = draws[tid];
+    command.set_vertex_buffer(xy + d.xy_at, 0);
+    command.set_vertex_buffer(marks + d.mark_at, 1);
+    command.set_vertex_buffer(frame, 2);
+    command.draw_primitives(primitive_type::triangle_strip, d.first, d.count, d.instances,
                             d.base_instance);
 }
 

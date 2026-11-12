@@ -605,6 +605,7 @@ surface! {
         fn draw_replay_primitive_type;
         fn draw_replay_slots;
         fn draw_replay_state;
+        fn draw_replay_vertex_layouts;
         enum DrawReplayRule N;
         const DRAW_REPLAY_WRITES;
         fn draw_merge_module;

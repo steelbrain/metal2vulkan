@@ -7,11 +7,14 @@
 //! the mark, `vid` and `iid` flat into a `RGBA32Uint` target, and writes no memory, and its
 //! fragment function reads no buffer.
 //!
-//! - Where every attribute is fetched in the shader (each layout's stride one fixed-function input
-//!   cannot align), draws and indexed draws of triangles draw what the host step draws of them,
-//!   which a barrier the CPU set and cleared sends them to: each vertex its command's own vertex
-//!   and instance, from its command's own buffers. The replay variant refuses a vertex function
-//!   that fetches attributes (`LoweringInputs::replay_bindings`), so both take the host step.
+//! A draw replay pulls every layout fixed-function input would fetch
+//! (`bind::draw_replay_vertex_layouts`), and a pulled attribute reads its command's buffer, so
+//! draws and indexed draws of triangles run as one merged draw and triangle strips as one draw
+//! per command, on the GPU alone, and draw what the host step draws of them (a barrier the CPU
+//! set and cleared sends them there): each vertex its command's own vertex and instance, from its
+//! command's own buffers. So do layouts whose strides fixed-function input cannot align, which
+//! the shader fetches anyway, and a per-instance layout of a step rate of 2. A layout whose stride
+//! is set per bind, which each command binds at its own, keeps the host step.
 
 use super::degrade_notices::{counts, on_device_with};
 use super::indirect_host_steps::{complete, HOST_STEPS};
@@ -29,8 +32,8 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    Buffer, ClearColor, ComputePipelineState, Device, IndirectCommandBufferDescriptor, Library,
-    LoadAction, PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState,
+    Buffer, ClearColor, ComputePipelineState, Degradation, Device, IndirectCommandBufferDescriptor,
+    Library, LoadAction, PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState,
     ResourceOptions, Size, StoreAction, Texture, TextureDescriptor,
 };
 use std::collections::BTreeSet;
@@ -41,9 +44,55 @@ const H: u64 = 48;
 const ROW: f32 = 8.0;
 /// The buffer's commands.
 const COMMANDS: u64 = 4;
-/// A stride of layout 0 (a `float2` position) and of layout 1 (a `uint` mark) that
-/// fixed-function input cannot align: the shader fetches both attributes.
-const PULLED_STRIDES: (u32, u32) = (10, 6);
+
+/// The state's vertex layouts and how the buffers lay their elements out.
+#[derive(Clone, Copy, Debug)]
+struct Layouts {
+    /// Layout 0's stride, a `float2` position (`None`: set per bind, which `ima_strided` binds at
+    /// `xy`).
+    positions: Option<u32>,
+    /// The bytes from one position to the next.
+    xy: u32,
+    /// Layout 1's stride, a `uint` mark per instance, and its step rate.
+    marks: u32,
+    rate: u32,
+}
+
+/// Strides fixed-function input cannot align: the shader fetches both attributes.
+const PULLED: Layouts = Layouts {
+    positions: Some(10),
+    xy: 10,
+    marks: 6,
+    rate: 1,
+};
+
+/// Strides fixed-function input fetches, marks at step rate `rate`.
+const fn fixed(rate: u32) -> Layouts {
+    Layouts {
+        positions: Some(8),
+        xy: 8,
+        marks: 4,
+        rate,
+    }
+}
+
+/// Positions at a stride each command binds at its own.
+const PER_BIND: Layouts = Layouts {
+    positions: None,
+    xy: 8,
+    marks: 4,
+    rate: 1,
+};
+
+/// A writer kernel: its name, the commands' type, whether it draws indexed, and whether its
+/// commands merge into one draw (a list type) or draw one draw each (a strip).
+type Kernel = (&'static str, IndirectCommandType, bool, bool);
+
+const KERNELS: [Kernel; 3] = [
+    ("ima_draws", IndirectCommandType::DRAW, false, true),
+    ("ima_strips", IndirectCommandType::DRAW, false, false),
+    ("ima_indexed", IndirectCommandType::DRAW_INDEXED, true, true),
+];
 
 /// A command's draw: first vertex (or first index), vertex (or index) count, instance count, base
 /// vertex, base instance, the byte offsets of its positions and its marks, and the stride its
@@ -71,14 +120,14 @@ fn writer(device: &Device, library: &Library, name: &str) -> ComputePipelineStat
         .unwrap()
 }
 
-/// The vertex descriptor of positions at stride `strides.0` and per-instance marks at stride
-/// `strides.1`, each at offset 0 of its layout.
-fn vertex_descriptor(strides: (u32, u32)) -> VertexDescriptor {
+/// The vertex descriptor of `layouts`, each attribute at offset 0 of its layout.
+fn vertex_descriptor(layouts: Layouts) -> VertexDescriptor {
     let mut v = VertexDescriptor::new();
     v.layouts
-        .insert(0, VertexBufferLayoutDescriptor::new(Some(strides.0)));
-    let mut marks = VertexBufferLayoutDescriptor::new(Some(strides.1));
+        .insert(0, VertexBufferLayoutDescriptor::new(layouts.positions));
+    let mut marks = VertexBufferLayoutDescriptor::new(Some(layouts.marks));
     marks.step_function = VertexStepFunction::PerInstance;
+    marks.step_rate = layouts.rate;
     v.layouts.insert(1, marks);
     v.attributes.insert(
         0,
@@ -89,15 +138,17 @@ fn vertex_descriptor(strides: (u32, u32)) -> VertexDescriptor {
     v
 }
 
-/// The descriptor of the commands' state, with `supportIndirectCommandBuffers`.
-fn state_descriptor(library: &Library, strides: (u32, u32)) -> RenderPipelineDescriptor {
+/// The commands' state of `layouts`, with `supportIndirectCommandBuffers`.
+fn state(device: &Device, library: &Library, layouts: Layouts) -> RenderPipelineState {
     let stage = |name: &str| StageSource::Function(function(library, name));
     let mut descriptor = RenderPipelineDescriptor::new(stage("ima_vertex"));
     descriptor.fragment = Some(stage("ima_fragment"));
     descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
-    descriptor.vertex_descriptor = Some(vertex_descriptor(strides));
+    descriptor.vertex_descriptor = Some(vertex_descriptor(layouts));
     descriptor.support_indirect_command_buffers = true;
-    descriptor
+    device
+        .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+        .unwrap()
 }
 
 /// Draws of `command_types` of three vertex buffers that inherit the encoder's state.
@@ -172,14 +223,63 @@ fn pixels(target: &Texture) -> Vec<[u32; 4]> {
         .collect()
 }
 
+/// The commands' rows: first vertex, count, instances, base vertex (indexed), base instance, the
+/// positions' element offset, the marks' element offset. Triangle 0; triangle 3 in two instances
+/// from 1; triangles 5 and 6 at instance 3; triangle 7 in two instances. Each command's positions
+/// and marks start at its own offset, so its first vertex, base vertex and base instance name
+/// elements past them; no two commands' pixels meet.
+const ROWS: [[u32; 7]; COMMANDS as usize] = [
+    [0, 3, 1, 0, 0, 0, 0],
+    [7, 3, 2, 4, 1, 2, 0],
+    [9, 6, 1, 0, 3, 6, 2],
+    [21, 3, 2, 6, 0, 0, 6],
+];
+
+/// The draws of [`ROWS`] laid out as `layouts` lays the buffers out. Indexed (`indexed`), the
+/// indices count from 0 and a command's first index and base vertex add to the vertex start of
+/// its draw without indices.
+fn draws(indexed: bool, layouts: Layouts) -> Vec<Draw> {
+    ROWS.iter()
+        .map(
+            |&[first, count, instances, base_vertex, base_instance, xy_at, mark_at]| {
+                let (first, base_vertex) = match indexed {
+                    true => (first - base_vertex, base_vertex),
+                    false => (first, 0),
+                };
+                [
+                    first,
+                    count,
+                    instances,
+                    base_vertex,
+                    base_instance,
+                    xy_at * layouts.xy,
+                    mark_at * layouts.marks,
+                    layouts.xy,
+                ]
+            },
+        )
+        .collect()
+}
+
+/// The marks [`ROWS`]' instances fetch at step rate `rate`: Metal's element `base + (instance -
+/// base) / rate` of each command's marks, mark `100 + j` at element `j` of the buffer.
+fn marks(rate: u32) -> BTreeSet<u32> {
+    ROWS.iter()
+        .flat_map(|&[_, _, instances, _, base, _, mark_at]| {
+            (0..instances).map(move |i| 100 + mark_at + base + i / rate)
+        })
+        .collect()
+}
+
 /// Run `writer` writing `draws` (of `command_types`) into a new buffer of [`COMMANDS`] commands (a
 /// barrier the CPU set and cleared in its last command where `host_step`), positions and marks
-/// laid out at `strides`, then a pass that executes all of them: the target's pixels, and the
-/// merged draws' commands, the GPU form's and the records the host read across the run.
+/// laid out as `layouts` lays them, then a pass of `state` that executes all of them: the
+/// target's pixels, and the merged draws' commands, the GPU form's and the records the host read
+/// across the run.
 fn run(
     device: &Device,
     (writer, state): (&ComputePipelineState, &RenderPipelineState),
-    (command_types, draws, strides, host_step): (IndirectCommandType, &[Draw], (u32, u32), bool),
+    (command_types, draws, layouts, host_step): (IndirectCommandType, &[Draw], Layouts, bool),
 ) -> (Vec<[u32; 4]>, (u64, u64, u64)) {
     let icb = icb(device, &inheriting(command_types), COMMANDS);
     if host_step {
@@ -192,8 +292,8 @@ fn run(
     let buffers: [Buffer; 6] = [
         buffer_with(device, &icb.gpu_resource_id().0.to_le_bytes()).unwrap(),
         buffer_with(device, &words(draws.iter().flatten().copied())).unwrap(),
-        buffer_with(device, &strided(positions, strides.0)).unwrap(),
-        buffer_with(device, &strided(marks, strides.1)).unwrap(),
+        buffer_with(device, &strided(positions, layouts.xy)).unwrap(),
+        buffer_with(device, &strided(marks, layouts.marks)).unwrap(),
         buffer_with(device, &floats([W as f32, H as f32, ROW, 0.0])).unwrap(),
         buffer_with(device, &words(0..48)).unwrap(),
     ];
@@ -244,109 +344,125 @@ fn run(
     (pixels(&target), counted)
 }
 
-/// The draws of [`run`]: triangle 0; triangle 3 in two instances from 1; triangles 5 and 6 at
-/// instance 3; triangle 7 in two instances. Each command's positions and marks start at its own
-/// offset, so its first vertex, base vertex and base instance name elements past them; no two
-/// commands' pixels meet. Indexed (`indexed`), the indices count from 0 and a command's first
-/// index and base vertex add to the vertex start of its draw without indices.
-fn draws(indexed: bool, strides: (u32, u32)) -> Vec<Draw> {
-    let (xy, mark) = strides;
-    // First vertex, count, instances, base vertex (indexed), base instance, the positions'
-    // element offset, the marks' element offset.
-    let rows: [[u32; 7]; COMMANDS as usize] = [
-        [0, 3, 1, 0, 0, 0, 0],
-        [7, 3, 2, 4, 1, 2, 0],
-        [9, 6, 1, 0, 3, 6, 2],
-        [21, 3, 2, 6, 0, 0, 6],
-    ];
-    rows.iter()
-        .map(
-            |&[first, count, instances, base_vertex, base_instance, xy_at, mark_at]| {
-                let (first, base_vertex) = match indexed {
-                    true => (first - base_vertex, base_vertex),
-                    false => (first, 0),
-                };
-                [
-                    first,
-                    count,
-                    instances,
-                    base_vertex,
-                    base_instance,
-                    xy_at * xy,
-                    mark_at * mark,
-                    xy,
-                ]
-            },
-        )
-        .collect()
+/// The marks the covered pixels of `drawn` carry.
+fn drawn_marks(drawn: &[[u32; 4]]) -> BTreeSet<u32> {
+    drawn.iter().map(|p| p[0]).filter(|&m| m != 0).collect()
 }
 
-/// The marks of [`draws`]' instances: element `base instance + instance` of each command's marks.
-const MARKS: [u32; 6] = [100, 101, 102, 105, 106, 107];
-
-/// Draws and indexed draws of triangles whose vertex function fetches both its attributes in the
-/// shader, positions per vertex and marks per instance (each layout's stride one fixed-function
-/// input cannot align, so no layout is bound in fixed function), draw what the host step draws of
-/// them: each vertex fetches its command's own vertex (its vertex start or its index plus its base
-/// vertex) and instance (its base instance plus the instance), from its command's own buffers.
-/// Both take the host step: the replay variant refuses a vertex function that fetches attributes.
-#[test]
-fn pulled_attributes_of_executed_draws_draw_what_the_host_step_draws() {
-    on_device_with(at_plan, |device, messages| {
-        let library = library(device);
-        let state = device
-            .new_render_pipeline_state(
-                &state_descriptor(&library, PULLED_STRIDES),
-                &PipelineOptions::default(),
-            )
-            .unwrap();
-        for (kernel, command_types, indexed) in [
-            ("ima_draws", IndirectCommandType::DRAW, false),
-            ("ima_indexed", IndirectCommandType::DRAW_INDEXED, true),
-        ] {
-            let writer = writer(device, &library, kernel);
-            let draws = draws(indexed, PULLED_STRIDES);
-            let mut outputs = Vec::new();
-            let mut forms = Vec::new();
-            for host_step in [false, true] {
-                let (drawn, counted) = run(
-                    device,
-                    (&writer, &state),
-                    (command_types, &draws, PULLED_STRIDES, host_step),
-                );
-                outputs.push(drawn);
-                forms.push(counted);
-            }
-            let marks: BTreeSet<u32> = outputs[1]
+/// Each of [`KERNELS`] under the state of `layouts` on `device`: its execution runs on the GPU
+/// alone (merged, or one draw per command), the host reading no record, and draws what the host
+/// step draws of it, each instance its own mark.
+fn replayed_as_the_host_step_draws(device: &Device, layouts: Layouts) {
+    let library = library(device);
+    let state = state(device, &library, layouts);
+    for (kernel, command_types, indexed, merges) in KERNELS {
+        let writer = writer(device, &library, kernel);
+        let draws = draws(indexed, layouts);
+        let mut outputs = Vec::new();
+        let mut forms = Vec::new();
+        for host_step in [false, true] {
+            let (drawn, counted) = run(
+                device,
+                (&writer, &state),
+                (command_types, &draws, layouts, host_step),
+            );
+            outputs.push(drawn);
+            forms.push(counted);
+        }
+        let what = format!("{kernel} {layouts:?}");
+        assert_eq!(
+            drawn_marks(&outputs[1]),
+            marks(layouts.rate),
+            "{what}: each instance's own mark in the host step"
+        );
+        assert!(
+            outputs[0] == outputs[1],
+            "{what}: the execution ({:?}) against the host step: {:?}",
+            forms[0],
+            outputs[0]
                 .iter()
-                .map(|p| p[0])
-                .filter(|&m| m != 0)
-                .collect();
-            assert_eq!(
-                marks,
-                BTreeSet::from(MARKS),
-                "{kernel}: each instance's own mark in the host step"
-            );
-            assert!(
-                outputs[0] == outputs[1],
-                "{kernel}: the execution ({:?}) against the host step: {:?}",
-                forms[0],
-                outputs[0]
-                    .iter()
-                    .zip(&outputs[1])
-                    .enumerate()
-                    .filter(|(_, (m, h))| m != h)
-                    .take(8)
-                    .collect::<Vec<_>>()
-            );
-            for &(merged, gpu, read) in &forms {
-                assert!(
-                    merged == 0 && gpu == 0 && read >= COMMANDS,
-                    "{kernel}: the host step {forms:?}"
-                );
-            }
+                .zip(&outputs[1])
+                .enumerate()
+                .filter(|(_, (m, h))| m != h)
+                .take(8)
+                .collect::<Vec<_>>()
+        );
+        let merged = if merges { COMMANDS } else { 0 };
+        assert_eq!(forms[0], (merged, COMMANDS, 0), "{what}: on the GPU alone");
+        let (merged, gpu, read) = forms[1];
+        assert!(
+            merged == 0 && gpu == 0 && read >= COMMANDS,
+            "{what}: the host step {:?}",
+            forms[1]
+        );
+    }
+}
+
+/// Draws, strips and indexed draws whose vertex function fetches both its attributes in the
+/// shader, positions per vertex and marks per instance (each layout's stride one fixed-function
+/// input cannot align), run on the GPU alone and draw what the host step draws of them: each
+/// vertex fetches its command's own vertex (its vertex start or its index plus its base vertex)
+/// and instance (its base instance plus the instance), from its command's own buffers, merged
+/// draws included, whose own vertex and instance indices count the merged draw's corners.
+#[test]
+fn pulled_attributes_of_executed_draws_fetch_their_commands_elements() {
+    on_device_with(at_plan, |device, messages| {
+        replayed_as_the_host_step_draws(device, PULLED);
+        let notices = counts(&messages.take_notices());
+        assert!(notices.contains_key(&HOST_STEPS[0]), "{notices:?}");
+    });
+}
+
+/// Layouts fixed-function input would fetch, marks at step rates 1 and 2, are pulled in a draw
+/// replay (`bind::draw_replay_vertex_layouts`) with no vertex buffer bound at the encoder: the
+/// executions run on the GPU alone and draw what the host step draws of them, a rate of 2
+/// dividing each command's instances from its base instance.
+#[test]
+fn fixed_function_layouts_of_executed_draws_are_pulled() {
+    on_device_with(at_plan, |device, messages| {
+        for rate in [1, 2] {
+            replayed_as_the_host_step_draws(device, fixed(rate));
         }
         let notices = counts(&messages.take_notices());
         assert!(notices.contains_key(&HOST_STEPS[0]), "{notices:?}");
+    });
+}
+
+/// A layout whose stride is set per bind, which each command binds at its own (`ima_strided`),
+/// keeps its execution from the GPU: the host step draws it, each instance its own mark, and the
+/// device's notice names the rule (`DrawReplayRule::VertexAttributes`).
+#[test]
+fn a_layout_of_a_stride_set_per_bind_keeps_the_host_step() {
+    on_device_with(at_plan, |device, messages| {
+        let library = library(device);
+        let state = state(device, &library, PER_BIND);
+        let writer = writer(device, &library, "ima_strided");
+        let draws = draws(false, PER_BIND);
+        let (drawn, (merged, gpu, read)) = run(
+            device,
+            (&writer, &state),
+            (IndirectCommandType::DRAW, &draws, PER_BIND, false),
+        );
+        assert!(
+            merged == 0 && gpu == 0 && read >= COMMANDS,
+            "the host step: {merged} {gpu} {read}"
+        );
+        assert_eq!(drawn_marks(&drawn), marks(1));
+        let notices = messages.take_notices();
+        let host_step = notices
+            .iter()
+            .find(|m| {
+                m.degradation
+                    .as_ref()
+                    .is_some_and(|d| d.degradation == Degradation::HostReplayedIndirectCommands)
+            })
+            .expect("the host step's notice");
+        assert!(
+            host_step
+                .text
+                .contains("vertex function fetches attributes at a stride set per bind"),
+            "{}",
+            host_step.text
+        );
     });
 }

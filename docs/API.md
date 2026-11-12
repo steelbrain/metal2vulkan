@@ -1563,7 +1563,12 @@ the device has it (`replay_preprocess_generated`). Draws of primitives under the
 pipeline replay on the device through `draw_replay_preprocess`: one indirect draw per command
 and primitive type the execution names, the pipeline compiled as its replay variant
 (`VariantKey::replay_bindings`), whose vertex and fragment functions read each command's buffers
-from the slot tables the preprocess writes. Draws of one list type or points whose fragment function
+from the slot tables the preprocess writes. The variant pulls every layout fixed-function vertex
+input would fetch (`draw_replay_vertex_layouts`, named in the shape's `far_vertex_buffers`: the
+pulled-vertex-buffer variant, no buffer bound there), so each attribute reads its command's buffer
+at the command's own vertex and instance; a layout whose stride is set per bind keeps an
+execution off the device (`DrawReplayRule::VertexAttributes`), since each command binds its own
+stride. Draws of one list type or points whose fragment function
 reads no buffer and no `[[primitive_id]]` may instead merge into one draw (`DrawReplay::merged`):
 two merge passes (`draw_merge_module`) write each command's first vertex in the merged draw, and
 the vertex function, compiled as its merged variant (`VariantKey::merged_draws`), finds its
@@ -4838,7 +4843,9 @@ each item named states the rule in full.
 - **Render commands the GPU may write run on the GPU alone** where the commit can tell from what
   the records may hold (`IndirectCommandBuffer::command_writes`) that every command is a draw of one
   primitive type under the encoder's pipeline state, which the buffer inherits with none of its
-  buffers: one indirect draw per command, in order, from what a preprocess wrote; and where the
+  buffers, and whose vertex function fetches no attribute of a layout whose stride is set per bind
+  (the commands bind their own buffers, which the GPU form fetches each attribute from in the
+  shader): one indirect draw per command, in order, from what a preprocess wrote; and where the
   commands draw points, lines or triangles, the state's vertex function writes no memory and its
   fragment function reads no buffer and no `[[primitive_id]]`, one merged draw for the whole range,
   in the commands' order, whatever its count (`WorkCounts::merged_draw_commands`). Otherwise, and

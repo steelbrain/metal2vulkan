@@ -5162,6 +5162,7 @@ fn	metal2vulkan::bind::draw_replay_preprocess	pub fn draw_replay_preprocess(devi
 fn	metal2vulkan::bind::draw_replay_primitive_type	pub fn draw_replay_primitive_type(command_types: IndirectCommandType, (inherit_pipeline_state, inherit_buffers): (bool, bool), written: CommandWrites) -> Result<PrimitiveType, DrawReplayRule>
 fn	metal2vulkan::bind::draw_replay_slots	pub fn draw_replay_slots(interface: &PipelineInterface) -> (u32, u32)
 fn	metal2vulkan::bind::draw_replay_state	pub fn draw_replay_state(graphics: &GraphicsState, merged: bool) -> Result<(), DrawReplayRule>
+fn	metal2vulkan::bind::draw_replay_vertex_layouts	pub fn draw_replay_vertex_layouts(input: &VertexInputState) -> Result<BTreeSet<u32>, DrawReplayRule>
 fn	metal2vulkan::bind::dynamic_views_module	pub fn dynamic_views_module(device: &Device) -> Result<DynamicViewsModule, Error>
 fn	metal2vulkan::bind::etc_decode_module	pub fn etc_decode_module(device: &Device, decode: EtcDecode, texels: EtcTexels) -> Result<BlockDecodeModule, Error>
 fn	metal2vulkan::bind::extended_canonical_module	pub fn extended_canonical_module(device: &Device) -> Result<ExtendedCanonicalModule, Error>
