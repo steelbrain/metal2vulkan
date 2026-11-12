@@ -38,8 +38,9 @@
 //!   operation over such values folds each choice of their members and is the set of the
 //!   answers; where they all agree it is that constant, so a branch on it is decided (a GL
 //!   shader's bit test of the texture unit a `switch` picked, true for every unit it can pick). A
-//!   PHI with an entry an instruction gives meets flat as before: two values of a loop's counter
-//!   meet as overdefined, so the deeper lattice adds no turn to a loop.
+//!   PHI with an entry an instruction gives meets flat as before, and takes a set entry as
+//!   overdefined: two values of a loop's counter meet as overdefined, so the deeper lattice adds
+//!   no turn to a loop.
 //!
 //! Afterwards unreachable blocks are deleted, branches on constants become unconditional, PHIs
 //! keep one entry per remaining edge, and instructions with a constant value are replaced by it.
@@ -241,10 +242,12 @@ fn read(reads: &mut BTreeSet<u32>, k: Undefined, m: &mut Meter) -> Result<(), Er
 
 /// What a PHI merges an entry as: an undefined value as `Bottom`. The rewrite makes the entry its
 /// type's zero on its own way, and a value a loop carries is each turn's from the last, not
-/// undefined again, so it must not settle on the undefined value.
+/// undefined again, so it must not settle on the undefined value. A set as `Bottom` too: only a
+/// PHI of literal constants, none of them a set, merges a few constants; any other PHI meets flat,
+/// and an entry that went from a constant to a set must meet as below that constant.
 fn merged(l: Lat) -> Lat {
     match l {
-        Lat::Fc(_) => Lat::Bottom,
+        Lat::Fc(_) | Lat::Set(_) => Lat::Bottom,
         l => l,
     }
 }
