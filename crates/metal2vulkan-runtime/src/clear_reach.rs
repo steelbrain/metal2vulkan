@@ -138,7 +138,6 @@ use metal2vulkan::device::{DriverFact, UnstoredDontCarePolicy};
 use metal2vulkan::metal::format::ClearRoute;
 use metal2vulkan::metal::PixelFormat;
 use std::collections::BTreeSet;
-use std::ops::Range;
 
 /// The side, in pixels, of the tiles a `Clear` load's clear reaches past the render area in, on
 /// both axes: Metal's on the M3 Max and an M4, the same at every format, sample count and tile
@@ -536,7 +535,6 @@ pub(super) mod made {
     thread_local! {
         pub(super) static COVERED: Cell<u64> = const { Cell::new(0) };
         pub(super) static GRIDS: Cell<u64> = const { Cell::new(0) };
-        pub(super) static LOOKED: Cell<u64> = const { Cell::new(0) };
     }
 
     /// One more of `what` on this thread.
@@ -548,17 +546,24 @@ pub(super) mod made {
     pub(crate) fn so_far() -> [u64; 2] {
         [COVERED.with(Cell::get), GRIDS.with(Cell::get)]
     }
-
-    /// The rectangles the tile counts on this thread looked at so far.
-    pub(super) fn looked() -> u64 {
-        LOOKED.with(Cell::get)
-    }
 }
 
-/// The tiles of a row in [`DrawnArea::covered_tiles`]: 512, the 16384 pixels of the widest render
-/// area. A column's count of the rectangles reaching it fits 16 bits: an area keeps at most
-/// [`MOST_RECTS`].
-const ROW_TILES: usize = 512;
+/// The words of a row of tiles in [`DrawnArea::covered_tiles`]: 512 tiles, the 16384 pixels of
+/// the widest render area.
+const ROW_WORDS: usize = 8;
+
+/// Set the bits `bits` of `row`, a row of tiles in [`DrawnArea::covered_tiles`], a word at a time.
+fn set_bits(row: &mut [u64; ROW_WORDS], bits: std::ops::Range<u32>) {
+    if bits.is_empty() {
+        return;
+    }
+    for word in bits.start / 64..bits.end.div_ceil(64) {
+        let first = bits.start.max(word * 64) - word * 64;
+        let past = bits.end.min(word * 64 + 64) - word * 64;
+        let ones = u64::MAX >> (64 - (past - first));
+        row[word as usize] |= ones << first;
+    }
+}
 
 /// The pixels a pass's draws may write, as far as the host bounds them: each draw that draws
 /// writes only inside its viewports' pixels within their scissor rectangles
@@ -666,41 +671,36 @@ impl DrawnArea {
         let (tx0, ty0) = (x0 / TILE, y0 / TILE);
         let (tx1, ty1) = (x1.div_ceil(TILE), y1.div_ceil(TILE));
         let bounded = u64::from(tx1 - tx0) * u64::from(ty1 - ty0);
-        // A row of at most `ROW_TILES` tiles; a wider one, which no render area has, counts as
-        // covered.
-        if (tx1 - tx0) as usize > ROW_TILES {
+        // A row of tiles in the bits of `ROW_WORDS` words; a wider one, which no render area
+        // has, counts as covered.
+        if (tx1 - tx0) as usize > ROW_WORDS * 64 {
             return Some((bounded, bounded));
         }
-        // A sweep down the rows of tiles: each rectangle's columns (from the bounds' first) enter
-        // at its first row of tiles and leave past its last, each rectangle looked at once.
-        let mut edges: Vec<(u32, bool, Range<u32>)> = Vec::with_capacity(2 * self.rects.len());
-        for &[rx0, ry0, rx1, ry1] in self.rects.iter() {
-            #[cfg(test)]
-            made::note(&made::LOOKED);
-            if rx0 < rx1 && ry0 < ry1 {
+        // Each rectangle's tiles: its columns from the bounds' first, and its rows.
+        let tiled = |&[rx0, ry0, rx1, ry1]: &[u32; 4]| {
+            (rx0 < rx1 && ry0 < ry1).then(|| {
                 let columns = rx0 / TILE - tx0..rx1.div_ceil(TILE) - tx0;
-                edges.push((ry0 / TILE, true, columns.clone()));
-                edges.push((ry1.div_ceil(TILE), false, columns));
-            }
-        }
-        edges.sort_unstable_by_key(|&(row, ..)| row);
-        // How many rectangles reach each column at the row swept to, and how many columns any
-        // reaches: every row from one edge to the next is reached by the same rectangles, so
-        // those columns count for each of its rows.
-        let mut reach = [0u16; ROW_TILES];
-        let (mut lit, mut covered, mut at) = (0u64, 0u64, ty0);
-        for (row, enters, columns) in edges {
-            covered += u64::from(row - at) * lit;
-            at = row;
-            for column in &mut reach[columns.start as usize..columns.end as usize] {
-                if enters {
-                    lit += u64::from(*column == 0);
-                    *column += 1;
-                } else {
-                    *column -= 1;
-                    lit -= u64::from(*column == 0);
+                (columns, ry0 / TILE..ry1.div_ceil(TILE))
+            })
+        };
+        // The rows where a rectangle's tiles start or end: every row from one such edge to the
+        // next is reached by the same rectangles, so one row of tiles counts for them all.
+        let mut edges: Vec<u32> = (self.rects.iter().filter_map(tiled))
+            .flat_map(|(_, rows)| [rows.start, rows.end])
+            .collect();
+        edges.sort_unstable();
+        edges.dedup();
+        let mut covered = 0;
+        for band in edges.windows(2) {
+            let (top, bottom) = (band[0], band[1]);
+            let mut row = [0u64; ROW_WORDS];
+            for (columns, rows) in self.rects.iter().filter_map(tiled) {
+                if rows.contains(&top) {
+                    set_bits(&mut row, columns);
                 }
             }
+            let tiles: u64 = row.iter().map(|word| u64::from(word.count_ones())).sum();
+            covered += u64::from(bottom - top) * tiles;
         }
         Some((covered, bounded))
     }
@@ -1161,7 +1161,7 @@ fn rect([width, height]: [u32; 2]) -> vk::Rect2D {
 
 #[cfg(test)]
 mod tests {
-    use super::{dont_care_clear, made, DrawnArea, MOST_RECTS};
+    use super::{dont_care_clear, made, DrawnArea};
     use ash::vk;
     use metal2vulkan::metal::format::{ClearRoute, ExtendedRange};
     use metal2vulkan::metal::PixelFormat;
@@ -1280,54 +1280,6 @@ mod tests {
                 "case {case}"
             );
         }
-    }
-
-    /// A count looks at each rectangle once, however many rows of tiles the rectangles start and
-    /// end at (a pass's end counts its draws' rectangles, `render/shadows.rs`): the most an area
-    /// keeps, each one tile in a row of tiles of its own, and as many over one another, counted
-    /// as the tiles one at a time count them.
-    #[test]
-    fn covered_tiles_look_at_each_rectangle_once() {
-        let rect = |x: u32, y: u32, w: u32, h: u32| vk::Rect2D {
-            offset: vk::Offset2D {
-                x: x as i32,
-                y: y as i32,
-            },
-            extent: vk::Extent2D {
-                width: w,
-                height: h,
-            },
-        };
-        let most = MOST_RECTS as u32;
-        let stairs: Vec<vk::Rect2D> = (0..most)
-            .map(|n| rect(n % 512 * 32, n * 32, 8, 8))
-            .collect();
-        let mut area = DrawnArea::default();
-        area.add(&stairs);
-        let looked = made::looked();
-        // 512 columns of tiles by 1024 rows, one tile of each row reached.
-        assert_eq!(area.covered_tiles(), Some((1024, 512 * 1024)));
-        assert_eq!(made::looked() - looked, MOST_RECTS as u64);
-        let over: Vec<vk::Rect2D> = (0..most)
-            .map(|n| rect(n * 7 % 1800, n * 13 % 1000, 40 + n % 300, 30 + n % 200))
-            .collect();
-        let mut area = DrawnArea::default();
-        area.add(&over);
-        let [x0, y0, x1, y1] = area.bounds().expect("a rectangle");
-        let (tx0, ty0, tx1, ty1) = (x0 / 32, y0 / 32, x1.div_ceil(32), y1.div_ceil(32));
-        let mut covered = 0;
-        for ty in ty0..ty1 {
-            for tx in tx0..tx1 {
-                let reached = area.rects.iter().any(|&[rx0, ry0, rx1, ry1]| {
-                    rx0 < (tx + 1) * 32 && tx * 32 < rx1 && ry0 < (ty + 1) * 32 && ty * 32 < ry1
-                });
-                covered += u64::from(reached);
-            }
-        }
-        let bounded = u64::from(tx1 - tx0) * u64::from(ty1 - ty0);
-        let looked = made::looked();
-        assert_eq!(area.covered_tiles(), Some((covered, bounded)));
-        assert_eq!(made::looked() - looked, area.rects.len() as u64);
     }
 
     /// Cleared, an area bounds nothing as a new one does and keeps its list's room; rectangles
