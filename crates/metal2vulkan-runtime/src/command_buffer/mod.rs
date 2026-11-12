@@ -734,6 +734,10 @@ pub(super) struct State {
     /// The pool every `VkCommandBuffer` of this command buffer comes from, with those made from
     /// it; `None` until the first, and once given back to the device's spares.
     pool: Option<CommandPool>,
+    /// The spare pools it took past `pool`, each once its pools handed out every
+    /// `VkCommandBuffer` of a level they held, which hand out theirs before `pool` makes one
+    /// (`spares.rs`); given back with `pool`.
+    pools_past_first: Vec<CommandPool>,
     /// The pool of a predicated loop's check while it records again the work its laying left
     /// apart (`rerun.rs`): every `VkCommandBuffer` the command buffer hands out meanwhile comes
     /// from it, and goes back to it for the next run again.
@@ -1920,6 +1924,13 @@ impl State {
         }
     }
 
+    /// Its command pools, taken out to go back to the device's spares: its first, then those it
+    /// took past it (`spares.rs`); none where it has no pool.
+    fn pools(&mut self) -> Vec<CommandPool> {
+        let past = self.pools_past_first.drain(..);
+        self.pool.take().into_iter().chain(past).collect()
+    }
+
     /// Give back every take of a copy taken at use its ended encoders and the recordings of
     /// their segments took (`shadow::Takes::give_back`): none of them runs.
     fn give_back_takes(&self) {
@@ -2221,10 +2232,10 @@ impl Drop for CommandBufferShared {
             if state.status == CommandBufferStatus::NotEnqueued {
                 state.give_back_takes();
             }
-            state.pool.take()
+            state.pools()
         };
-        if let Some(pool) = pool {
-            let shared = self.device.shared();
+        let shared = self.device.shared();
+        for pool in pool {
             shared.spares.give_command_pool(shared, pool, false);
         }
     }
@@ -2267,6 +2278,7 @@ impl CommandBuffer {
                 called_over_mutable_map: false,
                 committing: false,
                 pool: None,
+                pools_past_first: Vec::new(),
                 rerun_pool: None,
                 kept: None,
                 own_reached: 0,
@@ -2570,12 +2582,13 @@ impl CommandBuffer {
     /// one.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn give_pool_back_early(&self) -> bool {
-        let Some(pool) = self.state().pool.take() else {
-            return false;
-        };
+        let pools = self.state().pools();
         let shared = self.0.device.shared();
-        shared.spares.give_command_pool(shared, pool, false);
-        true
+        let held = !pools.is_empty();
+        for pool in pools {
+            shared.spares.give_command_pool(shared, pool, false);
+        }
+        held
     }
 
     /// Whether `waiting` holds this command buffer.
@@ -5002,18 +5015,48 @@ impl CommandBufferShared {
         self.allocate(state, level)
     }
 
-    /// A `VkCommandBuffer` of `level` from this command buffer's pool, made on first use: a
-    /// spare of the device's, or a new one. A command buffer the pool made before this command
-    /// buffer took it is handed out again before a new one is made; its begin resets it (the
-    /// pool's `VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT`, `spares.rs`). The caller holds
-    /// `state` (the pool is externally synchronized).
+    /// A `VkCommandBuffer` of `level` from this command buffer's pools, its first made on first
+    /// use: a spare of the device's, or a new one. A command buffer a pool made before this
+    /// command buffer took it is handed out again before a new one is made; its begin resets it
+    /// (the pool's `VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT`, `spares.rs`). Past
+    /// `ONE_POOL` handed out, once its pools handed out every one of `level` they held, it takes
+    /// the spare holding the most of them, up to `TAKEN_PAST_FIRST` past its first, and makes
+    /// what it lacks then in the last it took (`spares.rs`). The caller holds `state` (the pools
+    /// are externally synchronized).
     #[cfg_attr(test, track_caller)]
     fn allocate(
         &self,
         state: &mut State,
         level: vk::CommandBufferLevel,
     ) -> Result<vk::CommandBuffer, Error> {
-        hand_out(&self.device, self.pool(state)?, level)
+        let first = self.pool(state)?;
+        if let Some(buffer) = first.reuse(level) {
+            return Ok(buffer);
+        }
+        let mut handed = first.handed_out();
+        for pool in state.pools_past_first.iter_mut().rev() {
+            if let Some(buffer) = pool.reuse(level) {
+                return Ok(buffer);
+            }
+            handed += pool.handed_out();
+        }
+        // A section takes no spare, and makes no pool past its first (`spares.rs`).
+        let taken = state.pools_past_first.len();
+        let grows = handed >= crate::spares::ONE_POOL && !exit_guard::in_section();
+        if grows && taken < crate::spares::TAKEN_PAST_FIRST {
+            let shared = self.device.shared();
+            let family = shared.queue_family_of(self.queue.vk_queue());
+            let spare = shared.spares.command_pool_holding(shared, family, level)?;
+            let spare = match spare {
+                Some(spare) => spare,
+                None => command_pool(&self.device, family)?,
+            };
+            state.pools_past_first.push(spare);
+        }
+        match state.pools_past_first.last_mut() {
+            Some(last) => hand_out(&self.device, last, level),
+            None => hand_out(&self.device, self.pool(state)?, level),
+        }
     }
 
     /// [`CommandBuffer::encoder_primary`].
@@ -5779,15 +5822,19 @@ impl CommandBufferShared {
             // wait), so nothing of its pools is pending: its command pool goes to the device's
             // spares whatever its status, never released on this thread (`spares.rs`); its
             // descriptor pools go once its completed handlers ran (below).
-            if let Some(pool) = state.pool.take() {
-                // None of the pool's command buffers is recording where it completed and ended
-                // every one the pool handed out: a recording it left unused leaves one so.
+            let pools = state.pools();
+            if let Some(first) = pools.first() {
+                // None of the pools' command buffers is recording where it completed and ended
+                // every one the pools handed out: a recording it left unused leaves one so.
                 let ended = self.raws_ended.load(Ordering::Relaxed);
+                let handed: usize = pools.iter().map(CommandPool::handed_out).sum();
                 let settled = state.status == CommandBufferStatus::Completed
-                    && u64::try_from(pool.handed_out()).is_ok_and(|handed| handed == ended);
-                settled_pool = settled.then_some(pool.raw);
+                    && u64::try_from(handed).is_ok_and(|handed| handed == ended);
+                settled_pool = settled.then_some(first.raw);
                 let shared = self.device.shared();
-                shared.spares.give_command_pool(shared, pool, settled);
+                for pool in pools {
+                    shared.spares.give_command_pool(shared, pool, settled);
+                }
             }
             state.unplaced();
             parked = state.parked > 0;

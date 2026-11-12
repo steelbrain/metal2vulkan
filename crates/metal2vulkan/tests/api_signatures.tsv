@@ -3339,6 +3339,7 @@ field	metal2vulkan-runtime::WorkCounts.spare_command_buffers_shed	pub spare_comm
 field	metal2vulkan-runtime::WorkCounts.spare_command_pool_trims	pub spare_command_pool_trims: u64
 field	metal2vulkan-runtime::WorkCounts.spare_command_pools_reset	pub spare_command_pools_reset: u64
 field	metal2vulkan-runtime::WorkCounts.spare_command_pools_taken	pub spare_command_pools_taken: u64
+field	metal2vulkan-runtime::WorkCounts.spare_command_pools_taken_past_first	pub spare_command_pools_taken_past_first: u64
 field	metal2vulkan-runtime::WorkCounts.stage_entries_shared	pub stage_entries_shared: u64
 field	metal2vulkan-runtime::WorkCounts.stage_entries_specialized	pub stage_entries_specialized: u64
 field	metal2vulkan-runtime::WorkCounts.stage_tables_read	pub stage_tables_read: u64

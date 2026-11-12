@@ -60,6 +60,7 @@ pub(crate) struct Counters {
     commands: CommandTallies,
     command_pools_made: AtomicU64,
     spare_command_pools_taken: AtomicU64,
+    spare_command_pools_taken_past_first: AtomicU64,
     spare_command_pools_reset: AtomicU64,
     /// The command buffers the spare command pools freed, by why (`spares.rs`): past a pool's
     /// recent uses, past `HELD` of a pool given back, and shed by a spare; then the trims of
@@ -1891,6 +1892,13 @@ impl Counters {
     /// A command buffer took one of the device's spare command pools (`spares.rs`).
     pub(crate) fn spare_command_pool_taken(&self) {
         self.spare_command_pools_taken
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Of those, a command buffer took one past its first, its pools having handed out every
+    /// command buffer of a level they held (`spares.rs`).
+    pub(crate) fn spare_command_pool_taken_past_first(&self) {
+        self.spare_command_pools_taken_past_first
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -4975,6 +4983,10 @@ pub struct WorkCounts {
     /// where the command buffer that gave it back completed and ended every command buffer of it
     /// it was handed: each is reset as it is begun again.
     pub spare_command_pools_taken: u64,
+    /// Of `spare_command_pools_taken`, those a command buffer took past its first, once its pools
+    /// had handed out every `VkCommandBuffer` of a level they held: the spare holding the most of
+    /// that level, whose command buffers it hands out before it makes any (`spares.rs`).
+    pub spare_command_pools_taken_past_first: u64,
     /// The spare `VkCommandPool`s among those taken that were reset first, as one of their
     /// command buffers may still have been recording: the command buffer that gave the pool back
     /// failed, was dropped unsubmitted, or left a command buffer of it unended (a recording it did
@@ -8825,6 +8837,9 @@ impl Device {
             copy_sites: self.shared().vk().copy_sites(),
             copy_regions_split: self.shared().vk().copy_regions_split(),
             spare_command_pools_taken: counters.spare_command_pools_taken.load(Ordering::Relaxed),
+            spare_command_pools_taken_past_first: counters
+                .spare_command_pools_taken_past_first
+                .load(Ordering::Relaxed),
             spare_command_pools_reset: counters.spare_command_pools_reset.load(Ordering::Relaxed),
             spare_command_buffers_freed_past_recent_uses: counters.spare_command_buffers_freed[0]
                 .load(Ordering::Relaxed),

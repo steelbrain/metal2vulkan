@@ -5,8 +5,8 @@
 use crate::descriptor_arena::{Room, SetNeeds};
 use crate::spares::{
     keep_command_pool, keep_descriptor_pool, keep_idle_command_pool, past_held, take_command_pool,
-    take_descriptor_pool, take_idle, CommandPool, CommandPools, DescriptorPool, DESCRIPTORS,
-    DESCRIPTOR_POOLS, HELD, IDLE_FOR, RECENT_FOR, RECENT_USES,
+    take_command_pool_holding, take_descriptor_pool, take_idle, CommandPool, CommandPools,
+    DescriptorPool, DESCRIPTORS, DESCRIPTOR_POOLS, HELD, IDLE_FOR, RECENT_FOR, RECENT_USES,
 };
 use ash::vk::{self, Handle};
 use std::collections::VecDeque;
@@ -113,8 +113,8 @@ fn a_primary_begun_ahead_goes_to_the_first_encoder_alone() {
     assert_eq!(reset.reuse(primary), Some(vk::CommandBuffer::from_raw(20)));
 }
 
-/// A command buffer takes the newest spare command pool of its queue's family that holds a
-/// primary begun ahead, else the newest of that family.
+/// A command buffer takes a spare command pool of its queue's family that holds a primary begun
+/// ahead, else one of that family, the newest of those holding the fewest command buffers.
 #[test]
 fn a_spare_command_pool_holding_a_begun_primary_is_taken_first() {
     let mut pools = Vec::new();
@@ -132,6 +132,61 @@ fn a_spare_command_pool_holding_a_begun_primary_is_taken_first() {
             Some(vk::CommandPool::from_raw(expected))
         );
     }
+}
+
+/// A command buffer takes the spare holding the fewest command buffers of those holding a primary
+/// begun ahead, then of the rest; one past its first pool takes the spare holding the most of the
+/// level it lacks, one holding no primary begun ahead first, and any spare where none holds one.
+#[test]
+fn a_taker_takes_the_fewest_and_one_past_its_first_pool_the_most() {
+    let primary = vk::CommandBufferLevel::PRIMARY;
+    let secondary = vk::CommandBufferLevel::SECONDARY;
+    let mut pools = vec![
+        holding(1, 5, 1),
+        holding(2, 40, 1),
+        holding(3, 2, 1),
+        holding(4, 40, 0),
+        holding(5, 9, 1),
+    ];
+    pools[0].begun = Some(vk::CommandBuffer::from_raw(10));
+    pools[1].begun = Some(vk::CommandBuffer::from_raw(20));
+    let raws = |pools: &[CommandPool]| pools.iter().map(|p| p.raw.as_raw()).collect::<Vec<_>>();
+    let taken = |pool: Option<CommandPool>| pool.map(|pool| pool.raw.as_raw());
+    assert_eq!(
+        taken(take_command_pool_holding(&mut pools, 0, primary)),
+        Some(4)
+    );
+    assert_eq!(
+        taken(take_command_pool_holding(&mut pools, 0, primary)),
+        Some(2)
+    );
+    assert_eq!(
+        taken(take_command_pool_holding(&mut pools, 0, secondary)),
+        Some(5)
+    );
+    assert_eq!(
+        taken(take_command_pool_holding(&mut pools, 1, primary)),
+        None
+    );
+    assert_eq!(raws(&pools), [1, 3]);
+    let mut pools = vec![
+        holding(1, 5, 1),
+        holding(2, 40, 1),
+        holding(3, 2, 1),
+        holding(4, 0, 0),
+        holding(5, 9, 1),
+    ];
+    pools[0].begun = Some(vk::CommandBuffer::from_raw(10));
+    pools[1].begun = Some(vk::CommandBuffer::from_raw(20));
+    for expected in [1, 2, 4, 3, 5] {
+        assert_eq!(taken(take_command_pool(&mut pools, 0)), Some(expected));
+    }
+    let mut empty = vec![holding(6, 0, 0)];
+    assert_eq!(
+        taken(take_command_pool_holding(&mut empty, 0, secondary)),
+        Some(6),
+        "a spare to grow into"
+    );
 }
 
 /// A command buffer takes the newest spare command pool made for its queue's family, never one
@@ -442,8 +497,7 @@ fn a_steady_workload_makes_its_command_buffers_once() {
 
 /// The oldest spare no command buffer took for [`IDLE_FOR`] since it was given back, and that
 /// holds a command buffer, is taken out of the spares to shed them all, the primary begun ahead
-/// first, and goes back as the oldest, so that a taker takes a spare that still holds its command
-/// buffers first.
+/// first, and goes back as the oldest.
 #[test]
 fn a_spare_left_idle_sheds_its_command_buffers_and_goes_back_the_oldest() {
     let primary = vk::CommandBufferLevel::PRIMARY;
@@ -857,11 +911,13 @@ mod device {
             churn.past_held - churn_warm.past_held,
             churn.shed - churn_warm.shed,
         ];
+        let past_first =
+            counts.spare_command_pools_taken_past_first - warm.spare_command_pools_taken_past_first;
         let trims = counts.spare_command_pool_trims - warm.spare_command_pool_trims;
         println!(
             "SPARES-MIXED {}: {MIXED_IN_FLIGHT} in flight of {MIXED:?}, {} cycles once warm: made \
              {allocated} command buffers, freed {freed:?} (past recent uses, past the bound, \
-             shed), {trims} trims; the spares hold \
+             shed), {trims} trims; {past_first} spares taken past a first pool; the spares hold \
              {} of {} begun",
             device.name(),
             MIXED_CYCLES - MIXED_WARM,
@@ -872,6 +928,10 @@ mod device {
             (allocated, freed, trims),
             (0, [0; 3], 0),
             "the load made and freed command buffers once warm"
+        );
+        assert!(
+            past_first > 0,
+            "no command buffer took a spare past its first pool"
         );
         drop((target, queue, device));
         let _ = std::fs::remove_dir_all(&scratch);
