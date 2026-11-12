@@ -24,7 +24,7 @@ use std::collections::BTreeSet;
 
 use crate::budget::Meter;
 use crate::error::Error;
-use crate::ir::{Block, Body, Const, ConstId, Constant, FastMath, FuncId, Inst, InstId};
+use crate::ir::{Block, Body, Const, ConstId, Constant, FastMath, FuncId, Idx, Inst, InstId};
 use crate::ir::{InstKind, IntPredicate, ModuleParts, Type, TypeId, Value};
 
 use super::const_loads::{field_address, field_value, index, member_type};
