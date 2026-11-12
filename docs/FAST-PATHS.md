@@ -885,8 +885,8 @@ driver's. Each is open work.
 - **On a device with one graphics queue, a compositor's command buffers wait behind another
   queue's long batch**: RADV, ANV and lavapipe expose a single graphics `VkQueue`, so every command
   queue, `Device::new_command_queue_unshared`'s included, submits to it, in order
-  (`WorkCounts::unshared_queues_sharing_a_vk_queue` counts each unshared queue so placed). Other queues'
-  batches are held back to about 2 ms of expected work ahead of an unshared queue's
+  (`WorkCounts::unshared_queues_sharing_a_vk_queue` counts each unshared queue so placed). Other
+  queues' batches are held back to about 2 ms of expected work ahead of an unshared queue's
   (`unshared_isolation = UnsharedIsolationPolicy::Bounded`, above), but a batch already submitted
   runs to its end: a command buffer committed behind another queue's 200 ms one starts after it,
   where Metal runs the compositor's beside it, and one behind a batch longer than its queue's
