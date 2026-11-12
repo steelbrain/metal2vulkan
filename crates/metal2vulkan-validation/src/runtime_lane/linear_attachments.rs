@@ -1531,8 +1531,10 @@ fn cleared_1080p(device: &Device, queue: &CommandQueue) {
     assert!(
         contents
             .read(0..n)
-            .chunks_exact(TEXEL as usize)
-            .all(|texel| texel == CLEAR_BYTES),
+            .as_chunks::<{ TEXEL as usize }>()
+            .0
+            .iter()
+            .all(|&texel| texel == CLEAR_BYTES),
         "a clear did not reach the buffer"
     );
     drop((texture, buffer));
