@@ -1171,8 +1171,8 @@ fn sampling_pass(
 /// and over a private texture of the same bytes: its bytes hold the private texture's texels, so
 /// the draw after the barrier read the panel the pass drew. Where the texture is aliased by the
 /// rule the pass renders in place, loaded or cleared, announcing nothing; beside a stencil
-/// attachment apart, split at the barrier: the stand-in merged back (or, cleared, copied back) and
-/// copied in again before the reading draw. Where the device renders the texture's own image as any
+/// attachment apart, split at the barrier, announcing `linear-attachment-copies`: the stand-in
+/// merged back (or, cleared, copied back) and copied in again before the reading draw. Where the device renders the texture's own image as any
 /// other, the pass alone records both its instances inline, the reading draw's after the split
 /// (`WorkCounts::inline_split_instances`).
 fn sampling(start: usize, load: LoadAction, stencil: bool) {
@@ -1231,7 +1231,11 @@ fn sampling(start: usize, load: LoadAction, stencil: bool) {
             "the pass's way, in place and through copies"
         );
         let notices = counts(&messages.take_notices());
-        assert_eq!(notices.get(&Degradation::LinearAttachmentCopies), None);
+        assert_eq!(
+            notices.contains_key(&Degradation::LinearAttachmentCopies),
+            rule && stencil,
+            "announced linear-attachment-copies"
+        );
         drop((texture, buffer));
         drop(contents);
     });
