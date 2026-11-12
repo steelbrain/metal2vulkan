@@ -3630,7 +3630,9 @@ bound.
   (`GpuRecoveryVictim`), and every later call of the device and of its command queues goes to the
   new `VkDevice`; a queue's lent `VkQueue` (`CommandQueue::with_vk_queue`) comes with the
   `VkDevice` it belongs to, the new one from then on. Announced at each recovery, by the call that made it; the reason names the hang's
-  command buffer (an inference, said so, where two or more `VkQueue`s had work in flight), how
+  command buffer (an inference, said so, where two or more `VkQueue`s had work in flight) by its
+  label and its queue's, with its first 32 ended encoders' places, kinds and labels
+  (`CommandBuffer::set_label`, each encoder's `set_label`), how
   long the recovery took, and the objects it carried to the new `VkDevice` and left refused, by
   kind. Announced too, at most once each per recovery whatever an earlier
   recovery announced: where a call waited past 10 seconds for the recovery under way, where its

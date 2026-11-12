@@ -10,12 +10,12 @@ Every public item of the macOS 27.2 SDK (Xcode 27.2, 27B52)'s Metal headers, by 
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 980 | 36 |
-| missing | 806 | 27 |
+| implemented | 982 | 36 |
+| missing | 804 | 27 |
 | out of scope | 349 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 647; by the translator's values: 333. Missing by size: S 124, M 146, L 160, XL 376.
+Implemented by the runtime: 649; by the translator's values: 333. Missing by size: S 122, M 146, L 160, XL 376.
 
 ## Missing, in build order
 
@@ -23,7 +23,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Group | Size | Items | Examples |
 |---|---|---|---|
-| labels, debug groups and signposts | S | 17 | `MTLBuffer.addDebugMarker:range:`, `MTLBuffer.removeAllDebugMarkers`, `MTLCommandBuffer.label`, ... |
+| labels, debug groups and signposts | S | 15 | `MTLBuffer.addDebugMarker:range:`, `MTLBuffer.removeAllDebugMarkers`, `MTLCommandBuffer.pushDebugGroup:`, ... |
 | command buffer options (descriptor, unretained references, `enqueue`, encoder error status) | S/M | 12 | `MTLCommandBufferDescriptor`, `MTLCommandBufferDescriptor.retainedReferences`, `MTLCommandBufferDescriptor.errorOptions`, ... |
 | command queue descriptor | S | 3 | `MTLCommandQueueDescriptor`, `MTLCommandQueueDescriptor.maxCommandBufferCount`, `MTLDevice.newCommandQueueWithDescriptor:` |
 | compute, blit and resource-state pass descriptors | S | 10 | `MTLBlitPassDescriptor`, `MTLBlitPassDescriptor.blitPassDescriptor`, `MTLCommandBuffer.computeCommandEncoderWithDescriptor:`, ... |
@@ -1135,7 +1135,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLCommandBuffer.commandQueue` | property | implemented | `CommandBuffer::command_queue` (runtime) |
 | `MTLCommandBuffer.retainedReferences` | property | missing | S: YES for every runtime command buffer (it retains what it uses) |
 | `MTLCommandBuffer.errorOptions` | property | missing | M: encoder execution status (`MTLCommandBufferErrorOptionEncoderExecutionStatus`): which encoder faulted, in the error's `encoderInfos` |
-| `MTLCommandBuffer.label` | property | missing | S: a label a program sets and reads back |
+| `MTLCommandBuffer.label` | property | implemented | `CommandBuffer::label, CommandBuffer::set_label` (runtime) |
 | `MTLCommandBuffer.kernelStartTime` | property | implemented | `CommandBuffer::kernel_start_time` (runtime) |
 | `MTLCommandBuffer.kernelEndTime` | property | implemented | `CommandBuffer::kernel_end_time` (runtime) |
 | `MTLCommandBuffer.logs` | property | missing | M: shader logging |
@@ -1176,7 +1176,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 |---|---|---|---|
 | `MTLCommandEncoder` | protocol | implemented | `ComputeCommandEncoder` (runtime) |
 | `MTLCommandEncoder.device` | property | missing | S: every encoder's device |
-| `MTLCommandEncoder.label` | property | missing | S: every encoder's label |
+| `MTLCommandEncoder.label` | property | implemented | `BlitCommandEncoder::label, BlitCommandEncoder::set_label, ComputeCommandEncoder::label, ComputeCommandEncoder::set_label, RenderCommandEncoder::label, RenderCommandEncoder::set_label, ResourceStateCommandEncoder::label, ResourceStateCommandEncoder::set_label` (runtime) |
 | `MTLCommandEncoder.endEncoding` | method | implemented | `ComputeCommandEncoder::end_encoding` (runtime): each encoder's `end_encoding(self)` |
 | `MTLCommandEncoder.barrierAfterQueueStages:beforeStages:` | method | missing | M: a barrier between this encoder's stages and earlier work of the queue (macOS 26) |
 | `MTLCommandEncoder.insertDebugSignpost:` | method | missing | S: debug signposts: no effect on results |

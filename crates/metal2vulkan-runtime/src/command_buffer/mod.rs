@@ -42,6 +42,7 @@ pub(super) mod gate;
 mod group;
 pub(super) mod hang;
 pub(super) mod kept_barriers;
+mod labels;
 pub(super) mod own;
 mod protection;
 pub(super) mod rebound_use;
@@ -702,6 +703,11 @@ pub(super) struct State {
     error: Option<CommandBufferError>,
     /// An encoder is open.
     pub(super) encoder_open: bool,
+    /// Its label (`MTLCommandBuffer.label`), where the program set one (`labels.rs`).
+    label: Option<String>,
+    /// The label of its open encoder, where the program set one: the encoder's record takes it
+    /// as it ends (`labels.rs`).
+    open_label: Option<String>,
     /// An encoder was dropped without `end_encoding`.
     pub(super) abandoned: bool,
     /// A render encoder's end, which its call left to the device's lowering thread
@@ -1109,6 +1115,7 @@ impl State {
         let (event_waits_before, event_signals_before) = self.batches.events();
         self.ended.push(EncoderRecord {
             kind,
+            label: self.open_label.take(),
             event_waits_before,
             event_signals_before,
             keys,
@@ -1185,6 +1192,7 @@ impl State {
             .iter()
             .map(|record| ReadRecord {
                 kind: record.kind,
+                label: record.label.clone(),
                 event_waits_before: record.event_waits_before,
                 event_signals_before: record.event_signals_before,
                 keys: record.keys.clone(),
@@ -2308,6 +2316,8 @@ impl CommandBuffer {
                 status: CommandBufferStatus::NotEnqueued,
                 error: None,
                 encoder_open: false,
+                label: None,
+                open_label: None,
                 abandoned: false,
                 ending: None,
                 end_lowered: false,

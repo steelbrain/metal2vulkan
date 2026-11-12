@@ -890,9 +890,11 @@ impl Answers {
         };
         let buffer = &culprit.buffer;
         let failing = failed.iter().filter(|(_, batch)| batch.last).count();
+        let queue = buffer.queue.label();
+        let named = lock(&buffer.state).named(queue.as_deref());
         device.line().named(Culprit {
             queue: Arc::downgrade(buffer.queue.common()),
-            label: buffer.queue.label(),
+            named,
             inferred: fronts.len() > 1,
             victims: failing.saturating_sub(1),
         });

@@ -408,6 +408,19 @@ impl ResourceStateCommandEncoder {
         Ok(())
     }
 
+    /// `label`: the label [`set_label`](Self::set_label) gave it, or `None`, as Metal's is `nil`
+    /// until set.
+    pub fn label(&self) -> Option<String> {
+        self.open.command_buffer.open_encoder_label()
+    }
+
+    /// `setLabel:`: label it `label`, which its command buffer's ended encoders keep
+    /// ([`CommandBuffer::ended_encoders`](crate::CommandBuffer::ended_encoders)) and the
+    /// runtime's notices naming the command buffer state, as [`CommandBuffer::set_label`](crate::CommandBuffer::set_label)'s.
+    pub fn set_label(&mut self, label: &str) {
+        self.open.command_buffer.label_open_encoder(label);
+    }
+
     /// `endEncoding`: the updates go to the command buffer, in a batch that binds them before
     /// the encoders after this one.
     pub fn end_encoding(self) -> Result<(), Error> {

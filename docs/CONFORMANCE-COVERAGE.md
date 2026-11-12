@@ -32,12 +32,12 @@ Its limits, measured rather than asserted:
 
 | | |
 |---|---|
-| implemented Metal items | 979 |
+| implemented Metal items | 981 |
 | of those, unreachable: `objc2-metal` binds no name for them | 3 |
-| so reachable by some case | 976 |
+| so reachable by some case | 978 |
 | of the reachable, exercised by the suite's Metal leg | 815 |
-| of the reachable, not exercised | 161 |
-| share of the reachable exercised | 84% |
+| of the reachable, not exercised | 163 |
+| share of the reachable exercised | 83% |
 | of those exercised, no case reaching it loosens anything | 572 |
 | of those exercised, a case reaching it loosens some site | 243 |
 | case modules | 165 |
@@ -383,6 +383,8 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLSharedEventListener` | 2 | 0 | 0 | 2 |  |
 | `MTLAttributeDescriptorArray` | 3 | 0 | 2 | 1 | `attribute_formats`, `attribute_strides`, `blit_indirect_commands`, `indirect_command_depth`… |
 | `MTLBufferLayoutDescriptorArray` | 3 | 0 | 2 | 1 | `attribute_formats`, `attribute_strides`, `blit_indirect_commands`, `indirect_command_depth`… |
+| `MTLCommandBuffer` | 22 | 0 | 21 | 1 | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`… |
+| `MTLCommandEncoder` | 3 | 0 | 2 | 1 | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`… |
 | `MTLComputePipelineReflection` | 3 | 0 | 2 | 1 | `function_bindings`, `pipeline_option_reflection`, `pipeline_options` |
 | `MTLFunction` | 12 | 0 | 11 | 1 | `argument_encoder_crossings`, `argument_encoders`, `compute_pipeline_descriptors`, `function_facts`… |
 | `MTLFunctionConstantValues` | 5 | 0 | 4 | 1 | `function_facts`, `library_facts` |
@@ -410,8 +412,6 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLBlitCommandEncoder` | 22 | 0 | 22 | 0 | `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`… |
 | `MTLBufferBinding` | 6 | 0 | 6 | 0 | `fragment_imageblock_reflection`, `function_bindings`, `mesh_pipeline_reflection`, `pipeline_option_reflection`… |
 | `MTLBufferLayoutDescriptor` | 4 | 0 | 4 | 0 | `attribute_formats`, `attribute_strides`, `blit_indirect_commands`, `indirect_command_depth`… |
-| `MTLCommandBuffer` | 21 | 0 | 21 | 0 | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`… |
-| `MTLCommandEncoder` | 2 | 0 | 2 | 0 | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`… |
 | `MTLCommandQueue` | 4 | 0 | 4 | 0 | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`… |
 | `MTLComputePipelineDescriptor` | 16 | 0 | 16 | 0 | `attribute_formats`, `attribute_strides`, `binary_archives`, `blit_indirect_commands`… |
 | `MTLDepthStencilDescriptor` | 5 | 0 | 5 | 0 | `depth_resolve_pairs`, `depth_stencil_space`, `layered_targets`, `pass_sequence_actions`… |
@@ -484,6 +484,8 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 | `MTLVertexDescriptor.h` | 19 | 16 | 3 |
 | `MTLBuffer.h` | 6 | 4 | 2 |
 | `MTLIndirectCommandBuffer.h` | 26 | 24 | 2 |
+| `MTLCommandBuffer.h` | 22 | 21 | 1 |
+| `MTLCommandEncoder.h` | 3 | 2 | 1 |
 | `MTLFunctionConstantValues.h` | 5 | 4 | 1 |
 | `MTLPipeline.h` | 5 | 4 | 1 |
 | `MTLRenderPass.h` | 42 | 41 | 1 |
@@ -492,8 +494,6 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 | `MTLArgumentEncoder.h` | 23 | 23 | 0 |
 | `MTLBinaryArchive.h` | 10 | 10 | 0 |
 | `MTLBlitCommandEncoder.h` | 22 | 22 | 0 |
-| `MTLCommandBuffer.h` | 21 | 21 | 0 |
-| `MTLCommandEncoder.h` | 2 | 2 | 0 |
 | `MTLCommandQueue.h` | 4 | 4 | 0 |
 | `MTLDynamicLibrary.h` | 5 | 5 | 0 |
 | `MTLFunctionDescriptor.h` | 5 | 5 | 0 |
@@ -960,6 +960,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `MTLCommandBuffer` | yes | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_target_clears`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `command_buffer_facts`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_render_chains`, `compute_threadgroups`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `empty_command_buffers`, `etc_textures`, `event_orders`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `frame_chains`, `fresh_contents`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_detach`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `level_sizes`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pixel_downscales`, `pixel_samplers`, `primitive_type_crossings`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `scheduled_handlers`, `shader_stencil`, `shared_events`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `sparse_mappings`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `swizzled_storage`, `tessellation_crossings`, `tessellation_sweeps`, `texel_swizzles`, `texture_buffer_tails`, `texture_fills`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vertex_attribute_strides`, `vertex_fetch_reach`, `vertex_formats`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 884 |
 | `device` | yes | `command_buffer_facts` | 1 |
 | `commandQueue` | yes | `command_buffer_facts` | 1 |
+| `label` | no | — | — |
 | `kernelStartTime` | yes | `command_buffer_facts`, `empty_command_buffers` | 2 |
 | `kernelEndTime` | yes | `command_buffer_facts`, `empty_command_buffers` | 2 |
 | `GPUStartTime` | yes | `command_buffer_facts`, `empty_command_buffers` | 2 |
@@ -984,6 +985,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | item | exercised | families | cases Metal ran |
 |---|---|---|---|
 | `MTLCommandEncoder` | yes | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_target_clears`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `command_buffer_facts`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_render_chains`, `compute_threadgroups`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `empty_command_buffers`, `etc_textures`, `event_orders`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `frame_chains`, `fresh_contents`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_detach`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `level_sizes`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pixel_downscales`, `pixel_samplers`, `primitive_type_crossings`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `scheduled_handlers`, `shader_stencil`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `sparse_mappings`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `swizzled_storage`, `tessellation_crossings`, `tessellation_sweeps`, `texel_swizzles`, `texture_buffer_tails`, `texture_fills`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vertex_attribute_strides`, `vertex_fetch_reach`, `vertex_formats`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 882 |
+| `label` | no | — | — |
 | `endEncoding` | yes | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_target_clears`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `command_buffer_facts`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_render_chains`, `compute_threadgroups`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `empty_command_buffers`, `etc_textures`, `event_orders`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `frame_chains`, `fresh_contents`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_detach`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `level_sizes`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pixel_downscales`, `pixel_samplers`, `primitive_type_crossings`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `scheduled_handlers`, `shader_stencil`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `sparse_mappings`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `swizzled_storage`, `tessellation_crossings`, `tessellation_sweeps`, `texel_swizzles`, `texture_buffer_tails`, `texture_fills`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vertex_attribute_strides`, `vertex_fetch_reach`, `vertex_formats`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 882 |
 
 ### `MTLCommandQueue`

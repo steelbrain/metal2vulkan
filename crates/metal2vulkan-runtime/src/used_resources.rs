@@ -81,6 +81,8 @@ pub enum EncoderKind {
 pub struct EndedEncoder {
     /// Its kind.
     pub kind: EncoderKind,
+    /// Its label (`MTLCommandEncoder.label`) as it ended, where the program set one.
+    pub label: Option<String>,
     /// The event waits (`encode_wait_for_event`) the command buffer encoded before it, each
     /// call counted: one encoder has more than the encoder before it where a wait lies between
     /// them.
@@ -100,6 +102,8 @@ pub struct EndedEncoder {
 /// ([`CommandBuffer::ended_encoders`]).
 pub(super) struct EncoderRecord {
     pub(super) kind: EncoderKind,
+    /// Its label as it ended, where the program set one (`command_buffer/labels.rs`).
+    pub(super) label: Option<String>,
     pub(super) event_waits_before: usize,
     pub(super) event_signals_before: usize,
     /// The keys its commands' uses and bindings named, and its placed segments'.
@@ -503,6 +507,7 @@ impl Listing {
 /// (`State::read_ended`).
 pub(super) struct ReadRecord {
     pub(super) kind: EncoderKind,
+    pub(super) label: Option<String>,
     pub(super) event_waits_before: usize,
     pub(super) event_signals_before: usize,
     /// Every key its commands use and reach.
@@ -556,7 +561,7 @@ impl CommandBuffer {
     }
 
     /// Its ended encoders, in the order they ended (the numbering of
-    /// [`CommitFailure`](super::CommitFailure)'s encoders), each with its kind, the event waits
+    /// [`CommitFailure`](super::CommitFailure)'s encoders), each with its kind, its label, the event waits
     /// and signals encoded before it, and what its own commands use, listed as
     /// [`used_resources`](Self::used_resources) lists the command buffer's: a runtime extension,
     /// no Metal call (docs/API.md, "What a command buffer uses"). Metal splits a command buffer
@@ -576,6 +581,7 @@ impl CommandBuffer {
             .iter()
             .map(|record| EndedEncoder {
                 kind: record.kind,
+                label: record.label.clone(),
                 event_waits_before: record.event_waits_before,
                 event_signals_before: record.event_signals_before,
                 used_resources: record.listing(shared),

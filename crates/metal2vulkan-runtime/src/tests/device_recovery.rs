@@ -112,7 +112,9 @@ fn busy(device: &Device, queue: &CommandQueue) -> CommandBuffer {
         .new_buffer(BYTES, ResourceOptions::private())
         .unwrap();
     let command_buffer = queue.command_buffer().unwrap();
+    command_buffer.set_label("busy");
     let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.set_label("copies");
     for _ in 0..COPIES {
         blit.copy_from_buffer_to_buffer(&source, 0, &destination, 0, BYTES)
             .unwrap();
@@ -203,7 +205,8 @@ fn a_loss_holds_the_hang_s_queue_until_the_recovery() {
 /// A loss the driver reported before any fence could be read, as MoltenVK does under the
 /// program's own `MVK_CONFIG_RESUME_LOST_DEVICE` off (it marks the device lost first): the relay
 /// gives every batch in flight the loss's code (`device/relay.rs`), and the recovery's answers
-/// stand, the command buffer in flight failing as the hang its notice names, not as a victim.
+/// stand, the command buffer in flight failing as the hang its notice names, not as a victim:
+/// by its label and its queue's, with its encoder's kind and label.
 /// The M3 Max's GPU fault under that setting read `GpuRecoveryVictim` there in 25 of 25 runs
 /// (`runtime_lane::host_memory`'s `a_gpu_fault_fails_its_command_buffer_and_the_queue_runs_on`).
 #[test]
@@ -212,6 +215,7 @@ fn a_relayed_loss_leaves_the_recovery_s_hang() {
     let heard = Heard::default();
     let device = heard_device(&scratch.0, &heard);
     let queue = device.new_command_queue().unwrap();
+    queue.set_label("relayed");
     for _ in 0..ATTEMPTS {
         let from = heard.lock().unwrap().len();
         let in_flight = busy(&device, &queue);
@@ -230,7 +234,10 @@ fn a_relayed_loss_leaves_the_recovery_s_hang() {
             continue;
         }
         assert!(
-            made[0].contains("failed as the hang (`GpuHang`)"),
+            made[0].contains(
+                "command buffer `busy` of queue `relayed` (its 1 encoder: 0 blit `copies`) failed \
+                 as the hang (`GpuHang`)"
+            ),
             "{made:?}"
         );
         assert_eq!(

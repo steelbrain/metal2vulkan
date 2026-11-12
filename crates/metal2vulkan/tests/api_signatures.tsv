@@ -2180,6 +2180,7 @@ field	metal2vulkan-runtime::EncoderCall.selector	pub selector: &'static str
 field	metal2vulkan-runtime::EndedEncoder.event_signals_before	pub event_signals_before: usize
 field	metal2vulkan-runtime::EndedEncoder.event_waits_before	pub event_waits_before: usize
 field	metal2vulkan-runtime::EndedEncoder.kind	pub kind: EncoderKind
+field	metal2vulkan-runtime::EndedEncoder.label	pub label: Option<String>
 field	metal2vulkan-runtime::EndedEncoder.used_resources	pub used_resources: UsedResources
 field	metal2vulkan-runtime::ExecutedCommand.can_encode_indirect_commands	pub can_encode_indirect_commands: bool
 field	metal2vulkan-runtime::ExecutedCommand.index	pub index: u64
@@ -3397,8 +3398,8 @@ field	metal2vulkan-runtime::WorkCounts.slot_wait_nanos	pub slot_wait_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.slot_waits	pub slot_waits: u64
 field	metal2vulkan-runtime::WorkCounts.snapshot_inline_splits	pub snapshot_inline_splits: u64
 field	metal2vulkan-runtime::WorkCounts.spare_command_buffers_freed_past_held	pub spare_command_buffers_freed_past_held: u64
-field	metal2vulkan-runtime::WorkCounts.spare_command_buffers_freed_past_recorded	pub spare_command_buffers_freed_past_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.spare_command_buffers_freed_past_recent_uses	pub spare_command_buffers_freed_past_recent_uses: u64
+field	metal2vulkan-runtime::WorkCounts.spare_command_buffers_freed_past_recorded	pub spare_command_buffers_freed_past_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.spare_command_buffers_shed	pub spare_command_buffers_shed: u64
 field	metal2vulkan-runtime::WorkCounts.spare_command_pool_trims	pub spare_command_pool_trims: u64
 field	metal2vulkan-runtime::WorkCounts.spare_command_pools_reset	pub spare_command_pools_reset: u64
@@ -8161,12 +8162,14 @@ method	metal2vulkan-runtime::BlitCommandEncoder::fill_texture_color	pub fn fill_
 method	metal2vulkan-runtime::BlitCommandEncoder::generate_mipmaps	pub fn generate_mipmaps(&mut self, texture: &Texture) -> Result<(), Error>
 method	metal2vulkan-runtime::BlitCommandEncoder::invalidate_compressed_texture	pub fn invalidate_compressed_texture(&mut self, texture: &Texture) -> Result<(), Error>
 method	metal2vulkan-runtime::BlitCommandEncoder::invalidate_compressed_texture_slice	pub fn invalidate_compressed_texture_slice(&mut self, texture: &Texture, slice: u64, level: u64) -> Result<(), Error>
+method	metal2vulkan-runtime::BlitCommandEncoder::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::BlitCommandEncoder::optimize_contents_for_cpu_access	pub fn optimize_contents_for_cpu_access(&mut self, texture: &Texture) -> Result<(), Error>
 method	metal2vulkan-runtime::BlitCommandEncoder::optimize_contents_for_cpu_access_slice_level	pub fn optimize_contents_for_cpu_access_slice_level(&mut self, texture: &Texture, slice: u64, level: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::BlitCommandEncoder::optimize_contents_for_gpu_access	pub fn optimize_contents_for_gpu_access(&mut self, texture: &Texture) -> Result<(), Error>
 method	metal2vulkan-runtime::BlitCommandEncoder::optimize_contents_for_gpu_access_slice_level	pub fn optimize_contents_for_gpu_access_slice_level(&mut self, texture: &Texture, slice: u64, level: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::BlitCommandEncoder::optimize_indirect_command_buffer	pub fn optimize_indirect_command_buffer(&mut self, buffer: &IndirectCommandBuffer, range: Range<u64>) -> Result<(), Error>
 method	metal2vulkan-runtime::BlitCommandEncoder::reset_commands_in_buffer	pub fn reset_commands_in_buffer(&mut self, buffer: &IndirectCommandBuffer, range: Range<u64>) -> Result<(), Error>
+method	metal2vulkan-runtime::BlitCommandEncoder::set_label	pub fn set_label(&mut self, label: &str)
 method	metal2vulkan-runtime::BlitCommandEncoder::synchronize_resource	pub fn synchronize_resource(&mut self, resource: ResourceRef<'_>) -> Result<(), Error>
 method	metal2vulkan-runtime::BlitCommandEncoder::synchronize_texture	pub fn synchronize_texture(&mut self, texture: &Texture, slice: u64, level: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::BlitCommandEncoder::update_fence	pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error>
@@ -8244,10 +8247,12 @@ method	metal2vulkan-runtime::CommandBuffer::gpu_end_time	pub fn gpu_end_time(&se
 method	metal2vulkan-runtime::CommandBuffer::gpu_start_time	pub fn gpu_start_time(&self) -> Result<f64, Error>
 method	metal2vulkan-runtime::CommandBuffer::kernel_end_time	pub fn kernel_end_time(&self) -> f64
 method	metal2vulkan-runtime::CommandBuffer::kernel_start_time	pub fn kernel_start_time(&self) -> f64
+method	metal2vulkan-runtime::CommandBuffer::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::CommandBuffer::object_id	pub fn object_id(&self) -> ObjectId
 method	metal2vulkan-runtime::CommandBuffer::refusal	pub fn refusal(&self) -> Option<Error>
 method	metal2vulkan-runtime::CommandBuffer::render_command_encoder	pub fn render_command_encoder(&self, descriptor: &RenderPassDescriptor) -> Result<RenderCommandEncoder, Error>
 method	metal2vulkan-runtime::CommandBuffer::resource_state_command_encoder	pub fn resource_state_command_encoder(&self) -> Result<ResourceStateCommandEncoder, Error>
+method	metal2vulkan-runtime::CommandBuffer::set_label	pub fn set_label(&self, label: &str)
 method	metal2vulkan-runtime::CommandBuffer::set_protection_options	pub fn set_protection_options(&self, options: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::set_submission_check	pub fn set_submission_check(&self, check: SubmissionCheck) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::status	pub fn status(&self) -> CommandBufferStatus
@@ -8284,6 +8289,7 @@ method	metal2vulkan-runtime::ComputeCommandEncoder::execute_commands_in_buffer_c
 method	metal2vulkan-runtime::ComputeCommandEncoder::execute_commands_in_buffer_indirect	pub fn execute_commands_in_buffer_indirect(&mut self, icb: &IndirectCommandBuffer, range_buffer: &Buffer, offset: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::execute_commands_in_buffer_indirect_checked	pub fn execute_commands_in_buffer_indirect_checked(&mut self, icb: &IndirectCommandBuffer, range_buffer: &Buffer, offset: u64, check: IndirectCommandCheck, needs: IndirectCommandCheckNeeds) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::insert_compressed_texture_reinterpretation_flush	pub fn insert_compressed_texture_reinterpretation_flush(&mut self)
+method	metal2vulkan-runtime::ComputeCommandEncoder::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::ComputeCommandEncoder::memory_barrier_with_resources	pub fn memory_barrier_with_resources(&mut self, resources: &[ResourceRef<'_>]) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::memory_barrier_with_scope	pub fn memory_barrier_with_scope(&mut self, scope: BarrierScope)
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_buffer	pub fn set_buffer(&mut self, buffer: Option<&Buffer>, offset: u64, index: u32) -> Result<(), Error>
@@ -8296,6 +8302,7 @@ method	metal2vulkan-runtime::ComputeCommandEncoder::set_bytes	pub fn set_bytes(&
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_bytes_with_stride	pub fn set_bytes_with_stride(&mut self, bytes: &[u8], stride: u64, index: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_compute_pipeline_state	pub fn set_compute_pipeline_state(&mut self, state: &ComputePipelineState) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_imageblock_size	pub fn set_imageblock_size(&mut self, width: u64, height: u64) -> Result<(), Error>
+method	metal2vulkan-runtime::ComputeCommandEncoder::set_label	pub fn set_label(&mut self, label: &str)
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_sampler_state	pub fn set_sampler_state(&mut self, sampler: Option<&SamplerState>, index: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_sampler_state_with_lod_clamps	pub fn set_sampler_state_with_lod_clamps(&mut self, sampler: Option<&SamplerState>, lod_min_clamp: f32, lod_max_clamp: f32, index: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_sampler_states	pub fn set_sampler_states(&mut self, samplers: &[Option<&SamplerState>], first: u32) -> Result<(), Error>
@@ -8725,6 +8732,7 @@ method	metal2vulkan-runtime::RenderCommandEncoder::execute_commands_in_buffer	pu
 method	metal2vulkan-runtime::RenderCommandEncoder::execute_commands_in_buffer_checked	pub fn execute_commands_in_buffer_checked(&mut self, icb: &IndirectCommandBuffer, range: Range<u64>, check: IndirectCommandCheck, needs: IndirectCommandCheckNeeds) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::execute_commands_in_buffer_indirect	pub fn execute_commands_in_buffer_indirect(&mut self, icb: &IndirectCommandBuffer, range_buffer: &Buffer, offset: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::execute_commands_in_buffer_indirect_checked	pub fn execute_commands_in_buffer_indirect_checked(&mut self, icb: &IndirectCommandBuffer, range_buffer: &Buffer, offset: u64, check: IndirectCommandCheck, needs: IndirectCommandCheckNeeds) -> Result<(), Error>
+method	metal2vulkan-runtime::RenderCommandEncoder::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::RenderCommandEncoder::memory_barrier_with_resources	pub fn memory_barrier_with_resources(&mut self, resources: &[ResourceRef<'_>], after_stages: RenderStages, before_stages: RenderStages) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::memory_barrier_with_scope	pub fn memory_barrier_with_scope(&mut self, scope: BarrierScope, after_stages: RenderStages, before_stages: RenderStages)
 method	metal2vulkan-runtime::RenderCommandEncoder::set_alpha_test_reference_value	pub fn set_alpha_test_reference_value(&mut self, value: f32) -> Result<(), Error>
@@ -8751,6 +8759,7 @@ method	metal2vulkan-runtime::RenderCommandEncoder::set_fragment_textures	pub fn 
 method	metal2vulkan-runtime::RenderCommandEncoder::set_fragment_visible_function_table	pub fn set_fragment_visible_function_table(&mut self, table: Option<&VisibleFunctionTable>, index: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::set_fragment_visible_function_tables	pub fn set_fragment_visible_function_tables(&mut self, tables: &[Option<&VisibleFunctionTable>], first: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::set_front_facing_winding	pub fn set_front_facing_winding(&mut self, winding: Winding)
+method	metal2vulkan-runtime::RenderCommandEncoder::set_label	pub fn set_label(&mut self, label: &str)
 method	metal2vulkan-runtime::RenderCommandEncoder::set_line_width	pub fn set_line_width(&mut self, width: f32) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::set_mesh_buffer	pub fn set_mesh_buffer(&mut self, buffer: Option<&Buffer>, offset: u64, index: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::set_mesh_buffer_offset	pub fn set_mesh_buffer_offset(&mut self, offset: u64, index: u32) -> Result<(), Error>
@@ -8872,7 +8881,9 @@ method	metal2vulkan-runtime::ResourceOptions::raw	pub fn raw(self) -> u64
 method	metal2vulkan-runtime::ResourceOptions::shared	pub fn shared() -> ResourceOptions
 method	metal2vulkan-runtime::ResourceOptions::storage_mode	pub fn storage_mode(self) -> Result<StorageMode, Error>
 method	metal2vulkan-runtime::ResourceStateCommandEncoder::end_encoding	pub fn end_encoding(self) -> Result<(), Error>
+method	metal2vulkan-runtime::ResourceStateCommandEncoder::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::ResourceStateCommandEncoder::move_texture_mappings	pub fn move_texture_mappings(&mut self, source: &Texture, source_slice: u64, source_level: u64, source_origin: Origin, source_size: Size, destination: &Texture, destination_slice: u64, destination_level: u64, destination_origin: Origin) -> Result<(), Error>
+method	metal2vulkan-runtime::ResourceStateCommandEncoder::set_label	pub fn set_label(&mut self, label: &str)
 method	metal2vulkan-runtime::ResourceStateCommandEncoder::update_fence	pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error>
 method	metal2vulkan-runtime::ResourceStateCommandEncoder::update_texture_mapping	pub fn update_texture_mapping(&mut self, texture: &Texture, mode: TileMapping, region: Region, level: u64, slice: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::ResourceStateCommandEncoder::update_texture_mapping_indirect	pub fn update_texture_mapping_indirect(&mut self, texture: &Texture, mode: TileMapping, indirect_buffer: &Buffer, indirect_buffer_offset: u64) -> Result<(), Error>

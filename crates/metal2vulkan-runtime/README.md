@@ -822,7 +822,9 @@ meanwhile wait for it.
   nothing and completes with no error, as on Metal's hang's queue. One made before the recovery
   and committed after fails with `GpuRecoveryVictim`. A queue's second hang revokes it, as
   Metal's does: a command buffer committed on it from then on, before the recovery too, fails
-  with `AccessRevoked`.
+  with `AccessRevoked`. The recovery's notice (`DeviceRecovered`) names the hang's command buffer
+  by its label (`CommandBuffer::set_label`) and its queue's, with its ended encoders' kinds and
+  labels (each encoder's `set_label`, which `CommandBuffer::ended_encoders` reports too).
 - The `Device` and its `CommandQueue`s go on: what they make from then on is made on the new
   `VkDevice`. A `Device` call that the loss meets while it runs is not refused for it: it runs
   again on the new `VkDevice`. One that takes host memory, a deallocator or a range token, which a

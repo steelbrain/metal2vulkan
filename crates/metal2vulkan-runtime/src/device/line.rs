@@ -189,8 +189,9 @@ enum State {
 pub(crate) struct Culprit {
     /// Its command queue's part every generation of the queue shares (`queue.rs`).
     pub(crate) queue: Weak<crate::queue::QueueCommon>,
-    /// Its queue's label, where it has one.
-    pub(crate) label: Option<String>,
+    /// It as the notice names it: by its label and its queue's, with its ended encoders' kinds
+    /// and labels (`command_buffer/labels.rs`).
+    pub(crate) named: String,
     /// The queue was picked among two or more with work in flight: an inference, the queue whose
     /// oldest incomplete batch was submitted first.
     pub(crate) inferred: bool,
@@ -465,10 +466,7 @@ impl Line {
         next.degrade_recovered(|| {
             let culprit = match culprit {
                 Some(culprit) => {
-                    let label = culprit.label.map_or_else(
-                        || "a command buffer".to_owned(),
-                        |label| format!("a command buffer of queue `{label}`"),
-                    );
+                    let named = culprit.named;
                     let inferred = match culprit.inferred {
                         true => {
                             " (an inference: work was in flight on two or more `VkQueue`s, and \
@@ -477,7 +475,7 @@ impl Line {
                         false => "",
                     };
                     format!(
-                        "{label} failed as the hang (`GpuHang`){inferred}, and {} more in flight \
+                        "{named} failed as the hang (`GpuHang`){inferred}, and {} more in flight \
                          as its victims (`GpuRecoveryVictim`)",
                         culprit.victims
                     )

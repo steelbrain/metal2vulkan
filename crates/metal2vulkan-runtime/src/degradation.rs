@@ -2321,8 +2321,10 @@ degradations! {
         /// survives its GPU's recovery (`device/line.rs`): its command buffers in flight failed,
         /// the oldest incomplete one as the hang (`GpuHang`) and the rest as its victims
         /// (`GpuRecoveryVictim`); every later call goes to the new `VkDevice`. Announced at each
-        /// recovery, from the call that made it; the payload names the culprit (where two or more
-        /// `VkQueue`s had work in flight it is an inference, and says so) and the recovery's
+        /// recovery, from the call that made it; the payload names the culprit by its label and
+        /// its queue's, with its ended encoders' kinds and labels (`command_buffer/labels.rs`;
+        /// where two or more `VkQueue`s had work in flight it is an inference, and says so) and
+        /// the recovery's
         /// time, and the objects it carried to the new `VkDevice` and left refused, by kind
         /// (`device/carry.rs`). Announced as well, at most once each per recovery, whatever an
         /// earlier recovery announced: where a call waited past 10 seconds for the recovery under

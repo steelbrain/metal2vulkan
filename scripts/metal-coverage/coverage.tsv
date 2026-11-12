@@ -853,7 +853,7 @@ MTLCommandBuffer.h	MTLCommandBuffer	property	device		I	runtime	CommandBuffer::de
 MTLCommandBuffer.h	MTLCommandBuffer	property	commandQueue		I	runtime	CommandBuffer::command_queue			
 MTLCommandBuffer.h	MTLCommandBuffer	property	retainedReferences		M			YES for every runtime command buffer (it retains what it uses)	S	cmdbuf
 MTLCommandBuffer.h	MTLCommandBuffer	property	errorOptions		M			encoder execution status (`MTLCommandBufferErrorOptionEncoderExecutionStatus`): which encoder faulted, in the error's `encoderInfos`	M	cmdbuf
-MTLCommandBuffer.h	MTLCommandBuffer	property	label		M			a label a program sets and reads back	S	labels
+MTLCommandBuffer.h	MTLCommandBuffer	property	label		I	runtime	CommandBuffer::label, CommandBuffer::set_label			
 MTLCommandBuffer.h	MTLCommandBuffer	property	kernelStartTime		I	runtime	CommandBuffer::kernel_start_time			
 MTLCommandBuffer.h	MTLCommandBuffer	property	kernelEndTime		I	runtime	CommandBuffer::kernel_end_time			
 MTLCommandBuffer.h	MTLCommandBuffer	property	logs		M			shader logging	M	logging
@@ -889,7 +889,7 @@ MTLCommandBuffer.h	MTLCommandBuffer	method	useResidencySet:		M			residency sets	
 MTLCommandBuffer.h	MTLCommandBuffer	method	useResidencySets:count:		M			residency sets	M	residency
 MTLCommandEncoder.h	MTLCommandEncoder	protocol	MTLCommandEncoder		I	runtime	ComputeCommandEncoder			
 MTLCommandEncoder.h	MTLCommandEncoder	property	device		M			every encoder's device	S	labels
-MTLCommandEncoder.h	MTLCommandEncoder	property	label		M			every encoder's label	S	labels
+MTLCommandEncoder.h	MTLCommandEncoder	property	label		I	runtime	BlitCommandEncoder::label, BlitCommandEncoder::set_label, ComputeCommandEncoder::label, ComputeCommandEncoder::set_label, RenderCommandEncoder::label, RenderCommandEncoder::set_label, ResourceStateCommandEncoder::label, ResourceStateCommandEncoder::set_label			
 MTLCommandEncoder.h	MTLCommandEncoder	method	endEncoding		I	runtime	ComputeCommandEncoder::end_encoding	each encoder's `end_encoding(self)`		
 MTLCommandEncoder.h	MTLCommandEncoder	method	barrierAfterQueueStages:beforeStages:		M			a barrier between this encoder's stages and earlier work of the queue (macOS 26)	M	barriers
 MTLCommandEncoder.h	MTLCommandEncoder	method	insertDebugSignpost:		M			debug signposts: no effect on results	S	labels

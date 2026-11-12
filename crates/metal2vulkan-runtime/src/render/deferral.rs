@@ -742,6 +742,16 @@ impl RenderCommandEncoder {
         }
     }
 
+    /// Its command buffer: its lowering's, or, where its slot holds the lowering, the command
+    /// buffer the slot was taken for, which lives while the encoder is open.
+    pub(crate) fn command_buffer(&self) -> Option<CommandBuffer> {
+        match (&self.own, &self.logged) {
+            (Some(own), _) => Some(own.0.core.command_buffer().clone()),
+            (None, Some(logged)) => logged.command_buffer.upgrade(),
+            (None, None) => None,
+        }
+    }
+
     /// Whether the encoder lowers each call inside it (the module docs).
     pub(crate) fn lowers_at_call(&self) -> bool {
         self.logged.as_ref().is_none_or(|logged| logged.at_call)

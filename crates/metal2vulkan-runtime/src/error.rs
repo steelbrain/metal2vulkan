@@ -2456,7 +2456,8 @@ pub struct EncoderCall {
     /// and its kin name their full form, as the method's documentation does).
     pub selector: &'static str,
     /// The call's place among the encoder's calls, from 0: every call of the encoder's methods
-    /// counts, `end_encoding` and the queries (`tile_width`, `tile_height`) but none. The end of an
+    /// counts, `end_encoding`, `set_label` and the queries (`tile_width`, `tile_height`, `label`)
+    /// but none. The end of an
     /// encoder that logged its calls names its notices `endEncoding`, at the place after its last
     /// call. A commit whose own work, run after it returned, refused it is `commit` at 0
     /// (`CommandBuffer::commit`).
