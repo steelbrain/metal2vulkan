@@ -2206,9 +2206,8 @@ impl Device {
                 crate::recorder::through(recording.as_ref(), Command::CmdPushDescriptorSet, push)
             }
         });
-        // Its naming of an object, where its instance reports messages: a graphics pipeline that
-        // reads its input attachments in rasterization order is named for the layers' messages
-        // (`pipeline/graphics.rs`).
+        // Its naming of an object, where its instance reports messages: every pipeline is named
+        // for the layers' messages (`DeviceShared::name_pipeline`).
         let object_name = match instance.sink() {
             // SAFETY: as above; the instance enables `VK_EXT_debug_utils` where it reports
             // messages, and the loader serves `vkGetDeviceProcAddr` once the word is put back.

@@ -168,8 +168,8 @@ impl Vk {
         self.push_descriptor
     }
 
-    /// `vkSetDebugUtilsObjectNameEXT`, where the device's instance reports messages: what names a
-    /// graphics pipeline for the layers' messages (`pipeline/graphics.rs`).
+    /// `vkSetDebugUtilsObjectNameEXT`, where the device's instance reports messages: what names
+    /// every pipeline for the layers' messages (`DeviceShared::name_pipeline`).
     pub(crate) fn object_name(&self) -> Option<vk::PFN_vkSetDebugUtilsObjectNameEXT> {
         self.object_name
     }
