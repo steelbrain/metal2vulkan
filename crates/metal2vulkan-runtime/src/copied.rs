@@ -150,7 +150,7 @@
 //!   read addresses may write every copy. Without a base, a page that agrees costs one read of each
 //!   side and a slice comparison; with one, a block that agrees costs one read of one side and its
 //!   tag (SSE2 on x86-64, about 55 GB/s over a block in the first-level cache on a Ryzen 7 7840HS).
-//!   A comparison of at least twice `SPLIT_BYTES` (8 MiB) of a copy, with a base or without (a
+//!   A comparison of at least twice `SPLIT_BYTES` (2 MiB) of a copy, with a base or without (a
 //!   commit's copy in of every byte of a copy the GPU only reads, whose pages carry no log), splits
 //!   its blocks into runs of at least that many, one for each of up to four threads, the calling
 //!   one among them: it starts at most three, each with a 256 KiB stack, and they end before it
@@ -1771,7 +1771,7 @@ const SPLIT_THREADS: usize = 4;
 
 /// The fewest bytes of a copy each thread of a split comparison takes ([`split`],
 /// [`copy_in_untagged`]): fewer than twice as many are compared on the calling thread alone.
-pub(crate) const SPLIT_BYTES: usize = 8 << 20;
+pub(crate) const SPLIT_BYTES: usize = 2 << 20;
 
 /// The stack of each thread a split comparison starts ([`in_threads`]): a run's two blocks and
 /// its calls' frames.

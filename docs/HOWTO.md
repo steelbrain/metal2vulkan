@@ -565,8 +565,9 @@ the base's life, so a block both sides write at every frame crosses the bus once
 one copy into host memory on the device's staging queue, which waits for no work of the program's
 (`copied_base_blocks_read_back`); a base lies in the device's memory only on a device with one. A
 block whose tag agrees is taken as unchanged: a changed block is missed with a chance of at most
-2^-64 at each comparison. A comparison of a copy with a base of 16 MiB or more splits its blocks
-across up to four threads, the calling one among them, which end before it returns
+2^-64 at each comparison. A comparison of 4 MiB or more of a copy, with a base or without (a
+commit's copy in of a copy the GPU only reads, whose pages carry no log), splits its blocks across
+up to four threads, the calling one among them, which end before it returns
 (`copied_compare_threads`). A commit
 that finds no host memory for a base fails with `Error::OutOfMemory` and runs nothing
 (`copied_bases_refused`); the copy keeps none, and a later commit makes it. An event signal
