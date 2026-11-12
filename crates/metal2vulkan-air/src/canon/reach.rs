@@ -11,8 +11,11 @@
 //! - it allocates one object (the constant count 1) of an array type, whose arrays nested from the
 //!   outside in, down to the first element that is not an array, are its **levels**;
 //! - each use of it is the base of a `getelementptr` of its own type whose first index is the
-//!   constant 0 (an **address**), and each use of an address is the address of a plain load, or of
-//!   a plain store of another value, of exactly the type the address's indices name;
+//!   constant 0 (an **address**), or the address of an access at its own address; each use of an
+//!   address is the address of an access. An **access** is a plain load, or a plain store of
+//!   another value, of the type its address names, or of the type at that type's offset 0 (its
+//!   element 0 so many levels down, as where trailing zero indices were left out), which reaches
+//!   element 0 of those levels;
 //! - every index of every address after the first is **bounded** within the length of the array
 //!   it indexes (a struct's member index is a constant): a constant; a counter of a loop whose
 //!   header runs the bound constants decide, followed from its preheader's constants run by run as
@@ -22,8 +25,8 @@
 //!   of bounded values, where each bound stays among the non-negative values of its type, so no
 //!   step wraps.
 //!
-//! An address of fewer indices than the levels reaches every element of the levels below the ones
-//! it indexes, so those keep their length. Every access keeps its indices and its element; only
+//! An access of fewer indices than the levels (counting the zeros of the levels it passes down)
+//! reaches every element of the levels below, so those keep their length. Every access keeps its indices and its element; only
 //! the elements no access can reach are gone, so the program computes what it computed. An alloca
 //! that does not qualify keeps its type: an index with no bound may reach any element of it, and
 //! a use of another kind (a pointer stored, passed, merged or compared, a byte offset, a copy)
@@ -236,7 +239,9 @@ fn plan(
             array.addresses.push(i);
         }
     }
-    // Every use: an address's base, or an access through an address of the type it names.
+    // Every use: an address's base, or an access through an address of the type it names or of
+    // the type at its offset 0 (`zero`, per address: the fewest levels down).
+    let mut zero = filled(m, held, n, NONE)?;
     for (i, inst) in body.insts.iter() {
         m.tick(1)?;
         let mine = role.get(i.index()).copied().unwrap_or(NONE);
@@ -284,7 +289,15 @@ fn plan(
                     }) => named(parts, *src_ty, indices),
                     _ => None,
                 };
-                accessed.is_some() && accessed == at
+                // The access's type at offset 0 of the type the address names: its element 0
+                // that many levels down.
+                let z = at
+                    .zip(accessed)
+                    .and_then(|(t, x)| zero_depth(&parts.types, t, x));
+                if let (Some(z), Some(slot)) = (z, zero.get_mut(j.index())) {
+                    *slot = (*slot).min(u32::try_from(z).unwrap_or(NONE));
+                }
+                z.is_some()
             };
             if !allowed {
                 array.qualifies = false;
@@ -315,7 +328,7 @@ fn plan(
                 counted: filled(m, held, forest.len(), false)?,
                 held: 0,
             };
-            let r = reach(body, &mut arrays, &mut bounds, m);
+            let r = reach(body, (&mut arrays, &zero), &mut bounds, m);
             *held = held.saturating_add(bounds.held);
             r
         })();
@@ -345,11 +358,12 @@ fn plan(
     Ok(edits)
 }
 
-/// Each level's reach over `arrays`' addresses; an array an index of which has no bound within
-/// its array no longer qualifies.
+/// Each level's reach over `arrays`' addresses, each accessed `zero` levels below the type it
+/// names at the fewest (`NONE` for an address nothing accesses); an array an index of which has no
+/// bound within its array no longer qualifies.
 fn reach(
     body: &Body,
-    arrays: &mut [Array],
+    (arrays, zero): (&mut [Array], &[u32]),
     bounds: &mut Bounds<'_, '_>,
     m: &mut Meter,
 ) -> Result<(), Error> {
@@ -387,10 +401,20 @@ fn reach(
             if !array.qualifies {
                 break;
             }
-            // The levels an address does not index it reaches whole.
+            // An access element 0 of the levels below the ones the address indexes, and the
+            // levels below those whole.
             let indexed = indices.len().saturating_sub(1).min(depth);
-            for (r, &len) in array.reach.iter_mut().zip(&array.lens).skip(indexed) {
-                *r = len;
+            let below = match zero.get(g.index()).copied() {
+                Some(z) if z != NONE => usize::try_from(z).unwrap_or(usize::MAX),
+                _ => 0,
+            };
+            let whole = indexed.saturating_add(below);
+            for (level, (r, &len)) in array.reach.iter_mut().zip(&array.lens).enumerate() {
+                if level >= whole {
+                    *r = len;
+                } else if level >= indexed {
+                    *r = (*r).max(1);
+                }
             }
         }
         // An access at the alloca's own address reaches element 0 of the levels it passes
