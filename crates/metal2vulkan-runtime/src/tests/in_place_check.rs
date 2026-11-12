@@ -360,8 +360,9 @@ fn an_unchecked_verdict_is_checked_again_where_its_cause_may_pass_and_kept_where
 /// their pointer (`Device::host_shadowed` refuses it) or in its pooled memory (refused over the
 /// device's memory): each noted for the pitch, a cause that lasts, as before; and the dma-buf
 /// class's reads of rows that end inside lines (no shape of the check whose rows end inside
-/// lines has a height that is a multiple of 4) stay unchecked. Printed (`IN-PLACE-NOTE`): each
-/// such note.
+/// lines has a height that is a multiple of 4) stay unchecked. Printed once the check settled:
+/// each verdict (`IN-PLACE-VERDICT`) and each note (`IN-PLACE-NOTE`), what the check found
+/// changed where a verdict failed among them.
 #[test]
 fn the_in_place_checks_notes_say_in_words_why_it_made_no_image() {
     let scratch = Scratch::new("in-place-check-notes");
@@ -369,12 +370,15 @@ fn the_in_place_checks_notes_say_in_words_why_it_made_no_image() {
     assert!(device.settle_in_place_checks(WAIT), "the check answered");
     let mut report = device.in_place_check_report();
     let notes = report.split_off(crate::in_place::VERDICTS);
+    for verdict in &report {
+        eprintln!("IN-PLACE-VERDICT on {}: {verdict}", device.name());
+    }
+    for note in &notes {
+        eprintln!("IN-PLACE-NOTE on {}: {note}", device.name());
+    }
     let unmade: Vec<&String> = (notes.iter())
         .filter(|note| note.contains(" image of ") && note.contains(" bytes apart: "))
         .collect();
-    for note in &unmade {
-        eprintln!("IN-PLACE-NOTE on {}: {note}", device.name());
-    }
     eprintln!(
         "IN-PLACE-NOTES on {}: {} of shapes made no image of",
         device.name(),
