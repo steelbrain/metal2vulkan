@@ -14,8 +14,10 @@
 // (its outer loop runs `in[64]` times, here 2, a count only the run knows) and prints the
 // creation's answer and, where it made one, the same words.
 //
-// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): see the runtime lane's module docs, which hold
-// the words this probe printed.
+// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): `tiles` made its pipeline (status 4, completed),
+// and word `w < 32` of thread `t` was `2 * (120 + 16 t) * (w + 1) + w` (thread 0: 240 481 722 ...
+// 7711; thread 3: 336 673 1010 ... 10783). `rows` made no pipeline: "Compute function exceeds
+// available stack space".
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>

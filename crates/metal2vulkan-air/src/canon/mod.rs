@@ -40,7 +40,11 @@
 //!    constant that survives is `Error::NeedsInput(FunctionConstant)`. **Unrolling**: a loop whose
 //!    trip count SCCP made constant, and whose counter decides a branch of its body, is unrolled
 //!    within fixed ceilings, and SCCP runs again over the copies; the result is kept where it is
-//!    no larger than the loops it replaces (`unroll`). Before SCCP, each OpenCL C vector data load
+//!    no larger than the loops it replaces (`unroll`). **Private reach**: then each private array
+//!    of nested arrays whose every index the constants bound (constants, and the counters of loops
+//!    whose trip count they decide), and whose address reaches only element accesses, is allocated
+//!    as far as those indices reach; one index with no bound keeps its declared type (`reach`).
+//!    Before SCCP, each OpenCL C vector data load
 //!    or store becomes its element accesses (`vector_data`), and in OpenCL mode each operation of
 //!    a 1D image becomes the 2D texture's that Apple's OpenCL binds for it (`opencl_1d`).
 //! 8. **Post-check**: no unknown or unbound intrinsic, indirect call, or call to an undefined

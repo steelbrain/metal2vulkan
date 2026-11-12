@@ -20,14 +20,23 @@
 //!   compiles there, and records no note on a device not measured.
 //! - An array whose every index the constants bound counts only what they reach: the kernel
 //!   `reached` declares 256 KiB and reaches 128 bytes of it, which both devices hold with no note;
-//!   with one index unbounded it keeps the 256 KiB and is refused on both.
+//!   with one index unbounded it keeps the 256 KiB and is refused on both. So do the owned MSL
+//!   fixtures `engine/private_reach_tiles`'s kernels on the RX 7900 XTX: one whose tile sizes,
+//!   function constants, reach 128 bytes of its 256 KiB, and one whose loop a buffer word bounds.
 //!
 //! `llvm-as` assembles the functions; a missing tool skips visibly.
 
+use crate::budget::SPIRV_WORDS;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile, VkLimit};
 use crate::error::{Capability, Error, Feature, Unsupported};
+use crate::library::{FunctionConstantValue, FunctionConstantValues};
+use crate::lower::select::LowerInputs;
+use crate::metal::DataType;
 use crate::pipeline::artifact::PrecisionNote;
-use crate::pipeline::testing::{compile, link_and_validate, profile, AssembleError};
+use crate::pipeline::compile::{compile_bitcode_linked, EntryRef, LinkedSource};
+use crate::pipeline::testing::{
+    compile, engine_dir, link_and_validate, llvm_assemble, meter, profile, AssembleError,
+};
 
 /// The functions, `words`, `vwords` and `fwords` with a private array of `n` words.
 fn module(n: u32) -> Option<Vec<u8>> {
@@ -412,4 +421,61 @@ fn an_array_its_bounded_indices_reach_in_part_keeps_only_that_part() {
         let declared = compile(&unbounded, "reached", &p).map(|_| ());
         assert_eq!(declared, needs(64 * 64 * 16 * 4, available), "{stem}");
     }
+}
+
+/// The owned fixture `engine/{stem}`, assembled, or `None` (skipped) without `llvm-as`.
+fn fixture(stem: &str) -> Option<Vec<u8>> {
+    match llvm_assemble(&engine_dir().join(format!("{stem}.ll"))) {
+        Ok(b) => Some(b),
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            None
+        }
+        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected {stem}: {why}"),
+    }
+}
+
+/// The owned fixtures `engine/private_reach_tiles` (kernels written for their largest tile, each
+/// thread keeping `float acc[32][32][4][4][4]`, 256 KiB, and calling the visible function
+/// `postfix`) and `engine/private_reach_functions` (`postfix`), compiled from MSL by the Metal
+/// compiler. With the tile sizes 2 and 4 (function constants 0 and 1) `private_reach_tiles`
+/// reaches `acc[0..2][0..4][0..4][0][0]`: it holds 128 bytes a thread, which the RX 7900 XTX's 96
+/// KiB holds with no note, and validates. `private_reach_rows`, whose outer loop runs as often as
+/// a word of its input says, keeps the 256 KiB and is refused needing them.
+#[test]
+fn a_tile_kernel_holds_only_the_corner_its_tile_sizes_reach() {
+    let (Some(tiles), Some(functions)) = (
+        fixture("private_reach_tiles"),
+        fixture("private_reach_functions"),
+    ) else {
+        return;
+    };
+    let uint = |v: u32| FunctionConstantValue::new(DataType::UInt, v.to_le_bytes());
+    let sizes = FunctionConstantValues::defaults()
+        .with_index(0, uint(2))
+        .with_index(1, uint(4));
+    let none = FunctionConstantValues::defaults();
+    let linked = [LinkedSource::new("postfix", &functions, &none)];
+    let p = captured_as("amd-rdna3-radv", 0x744c);
+    let kernel = |name| {
+        compile_bitcode_linked(
+            &tiles,
+            EntryRef::Name(name),
+            (&sizes, &linked),
+            &p,
+            &LowerInputs::new(),
+            &mut meter(),
+            SPIRV_WORDS,
+        )
+    };
+    let a = kernel("private_reach_tiles").unwrap_or_else(|e| panic!("{e}"));
+    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("L3: {e}"));
+    assert_eq!(a.interface.private_bytes, 2 * 4 * 4 * 4);
+    assert!(
+        !a.precision.contains(&PrecisionNote::FunctionStorageAssumed),
+        "{:?}",
+        a.precision
+    );
+    let rows = kernel("private_reach_rows").map(|_| ());
+    assert_eq!(rows, needs(32 * 32 * 4 * 4 * 4 * 4, 96 * 1024));
 }
