@@ -1970,7 +1970,9 @@ impl Routed {
     /// bytes (`ObjectChurn::imports_over_ram_chunk_pages`).
     pub(crate) fn chunks_hold_any(&self, size: u64) -> bool {
         match self {
-            Routed::InChunk { ram, start, .. } => ram.chunks_hold_any(&[*start..*start + size]),
+            Routed::InChunk { ram, start, .. } => {
+                ram.chunks_hold_any(std::slice::from_ref(&(*start..*start + size)))
+            }
             Routed::Runs { ram, runs } => ram.chunks_hold_any(runs),
         }
     }
