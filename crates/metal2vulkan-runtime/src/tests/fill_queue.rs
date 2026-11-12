@@ -11,6 +11,8 @@
 //! - **Order.** A command buffer whose blit reads the `Managed` buffer behind a long run of
 //!   kernels, still in flight as the CPU writes the buffer again and a second command buffer of
 //!   the same queue takes the copy in: the first reads the first bytes, the second the new ones.
+//!   Where the device has unified memory (lavapipe), whose `Managed` buffer is one copy, the first
+//!   completes before the CPU writes again.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects.
@@ -151,7 +153,11 @@ fn a_batch_s_fills_run_on_the_fill_queue_in_order_with_exact_bytes() {
     behind.commit().unwrap();
     // The CPU writes the buffer again while that command buffer may still run, and a second
     // command buffer of the queue takes the copy in, with a new buffer's zeros and another's
-    // bytes.
+    // bytes. Where the device has unified memory the buffer is one copy, which the CPU's write
+    // would race, as on Metal: there the first command buffer completes first.
+    if device.properties().has_unified_memory {
+        behind.wait_until_completed_for(WAIT).unwrap();
+    }
     write(&second);
     let staged = pattern(0x5eed_0001, 1 << 20);
     let zeroed = device
