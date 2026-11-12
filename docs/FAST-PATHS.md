@@ -498,7 +498,12 @@ recorded here.
   the RTX 3090 and RTX 2080 and by +1 to +21 on the RTX 5080 Laptop GPU. A batch takes and waits
   on the GPU for the fills of memory its commands may reach alone (every one where a command may
   reach memory no use names), and internal submissions for the fill queue's last, until the host
-  saw it complete (`WorkCounts::fill_queue_waits_unused`).
+  saw it complete (`WorkCounts::fill_queue_waits_unused`). On the RTX 3090 a compositor's frame of
+  one dispatch, beside an app on another queue that makes two 4 MiB `Private` buffers before each
+  of its command buffers, takes 2.10 ms (p50; 2.21 p99), as when the app makes nothing, and none
+  of its frames waits for the app's fills; when every batch waited for the fill queue's last
+  submission it took 9.0 ms (p50), and 424 to 429 of its frames in 4 s waited for fills they reach
+  none of (`tests::fill_waits_bench`).
 - **A no-copy buffer's deallocator runs in its release.** On an M3 Max under macOS 27.0.1 an unused
   no-copy buffer's deallocator ran inside its final release, on the releasing thread, every time.
   So a release that frees the buffer's import while a deallocator waits for the free frees it
