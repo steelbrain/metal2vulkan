@@ -843,6 +843,37 @@ impl LostBuffer {
     }
 }
 
+/// A carried heap buffer's parts on its device's lost generation (`Buffer::carry_placed`): no
+/// Vulkan object of their own (their bytes are their heap's own buffer's, which its carry carried
+/// apart), their entry among the generation's live buffers, and the buffer's handle of the
+/// generation, let go of once none of its command buffers may record.
+struct LostPlaced {
+    buffer: Weak<BufferShared>,
+}
+
+impl LostParts for LostPlaced {
+    fn release(self: Box<Self>) {
+        // The buffer went: its drop on the generation let go of everything there.
+        let Some(buffer) = self.buffer.upgrade() else {
+            return;
+        };
+        {
+            let mut calls = lock(&buffer.calls);
+            if calls.under_way > 0 {
+                // The last call under way on them lets them go (`Buffer::held_parts`).
+                calls.waiting = Some(self);
+                return;
+            }
+        }
+        let shared = buffer.device.shared();
+        (shared.live_buffers).forget(buffer.address.0, buffer.object_id);
+        // SAFETY: no command buffer of the generation records, no call under way reads its parts
+        // there (`Buffer::held_parts`), and every other reach of the buffer goes to where it was
+        // carried (`Buffer::carried`).
+        unsafe { buffer.device.let_go() };
+    }
+}
+
 /// A carried no-copy buffer's parts on a lost generation (`Buffer::carry`): its hold there on the
 /// caller's pages (`cell`, its pages' import among them) and the buffer's handle of the
 /// generation, let go of once none of the generation's command buffers may record, as a buffer of
@@ -2255,8 +2286,10 @@ struct HeapBytes {
     /// The heap's own buffer.
     bytes: Buffer,
     offset: u64,
-    /// `makeAliasable` was called: an automatic heap's range is free for other resources.
-    aliasable: AtomicBool,
+    /// `makeAliasable` was called: an automatic heap's range is free for other resources. Shared
+    /// by the buffer's parts on each generation its device's recovery carried it to
+    /// (`Buffer::carry_placed`).
+    aliasable: Arc<AtomicBool>,
 }
 
 /// Who owns a buffer's bytes.
@@ -2331,7 +2364,8 @@ impl BufferShared {
         }
     }
 
-    /// Whether its parts on a lost generation went (`FixedPages::release_lost`, [`LostHost`]).
+    /// Whether its parts on a lost generation went (`FixedPages::release_lost`, [`LostHost`],
+    /// [`LostPlaced`]).
     fn freed(&self) -> bool {
         match &self.bytes {
             Bytes::Own(OwnBytes {
@@ -2342,7 +2376,7 @@ impl BufferShared {
                 lie: Lie::Host(cell),
                 ..
             }) => cell.freed.load(Ordering::Acquire),
-            Bytes::Heap(_) => false,
+            Bytes::Heap(_) => self.device.gone(),
         }
     }
 }
@@ -2374,10 +2408,14 @@ impl Drop for BufferShared {
         let own = match &mut self.bytes {
             Bytes::Own(own) => own,
             Bytes::Heap(bytes) => {
-                // An automatic heap's range goes back to it unless `makeAliasable` returned it.
-                bytes
-                    .heap
-                    .release(bytes.offset, self.length, &bytes.aliasable);
+                // An automatic heap's range goes back to it unless `makeAliasable` returned it:
+                // once, by the buffer's parts on the generation it was carried to last
+                // (`Buffer::carry_placed`), which go after these.
+                if self.next.get().is_none() {
+                    bytes
+                        .heap
+                        .release(bytes.offset, self.length, &bytes.aliasable);
+                }
                 let live = &self.device.shared().live_buffers;
                 live.forget(self.address.0, self.object_id);
                 return;
@@ -3714,7 +3752,7 @@ impl Heap {
                 bytes: heap_bytes.clone(),
                 offset,
                 // A placement heap's buffer answers aliasable from the start, as Metal's does.
-                aliasable: AtomicBool::new(self.heap_type() == HeapType::Placement),
+                aliasable: Arc::new(AtomicBool::new(self.heap_type() == HeapType::Placement)),
             }),
             held_by: HeldBy::default(),
             handed_out: Arc::default(),
@@ -5034,10 +5072,26 @@ impl Buffer {
     /// generation's command buffers may record. Left the lost generation's, refused where it meets
     /// the next (`RuntimeGap::MadeBeforeRecovery`): a buffer of pooled host-visible memory the
     /// device allocated, whose `contents` pointer is its block's mapping (or a `Managed` buffer's
-    /// host copy's), a no-copy
-    /// buffer, a heap's, one over the caller's `VkBuffer` or exportable memory, and one whose
+    /// host copy's), a detached no-copy buffer, a heap's (its heap's carry carries it,
+    /// `Heap::carry`), one over the caller's `VkBuffer` or in exportable memory, and one whose
     /// making there fails.
     pub(crate) fn carry(&self, to: &Device) -> Result<Contents, Left> {
+        self.carry_as(to, false)
+    }
+
+    /// [`Buffer::carry`] of a heap's own buffer (`heap.rs`), for its heap's carry
+    /// (`Heap::carry`): a `Private` one in new memory where the heap's textures can lie too
+    /// ([`Device::place_heap_buffer`]), its contents lost with the `VkDevice` (it reads zero),
+    /// kept among none of `to`'s program resources or live buffers, as it was among none of its
+    /// lost generation's. Left the lost generation's: a `Shared` one, of pooled host-visible
+    /// memory (a heap's own buffer never lies in the runtime's own pages), and one over the
+    /// caller's host memory.
+    pub(crate) fn carry_heap_bytes(&self, to: &Device) -> Result<Contents, Left> {
+        self.carry_as(to, true)
+    }
+
+    /// [`Buffer::carry`], of a heap's own buffer where `of_heap`.
+    fn carry_as(&self, to: &Device, of_heap: bool) -> Result<Contents, Left> {
         // The generation it was carried to last: a later recovery carries it on from there.
         let mut last = &self.0;
         while let Some(next) = last.next.get() {
@@ -5053,7 +5107,9 @@ impl Buffer {
         };
         let fixed = match (&own.owner, &own.lie) {
             (Owner::Runtime, Lie::Fixed(fixed)) => fixed,
-            (Owner::Caller, Lie::Host(cell)) => return self.carry_no_copy(last, own, cell, to),
+            (Owner::Caller, Lie::Host(cell)) if !of_heap => {
+                return self.carry_no_copy(last, own, cell, to)
+            }
             (Owner::Caller, _) => return Err(Left::NoCopy),
             (Owner::Vulkan, _) | (Owner::Runtime, Lie::Host(_)) => return Err(Left::Caller),
         };
@@ -5064,7 +5120,7 @@ impl Buffer {
         if !runtime_s && !placement.over_own_pages() && !placement.in_page_block() {
             // Exportable memory, which another API imports (`exported_memory.rs`). A block of the
             // runtime's own buffers allocated exportable is never exported (`Holds::FdBuffers`).
-            return Err(Left::Caller);
+            return Err(Left::Exported);
         }
         let modes = Modes::of(last.options).map_err(|_| Left::Failed)?;
         let class = buffer_class("carry", modes).map_err(|_| Left::Failed)?;
@@ -5093,7 +5149,8 @@ impl Buffer {
         } else if modes.storage == StorageMode::Private {
             // New memory, as a new buffer's: its contents went with the lost `VkDevice`. In a
             // plain block (`Device::place_buffer`), where any of the device's buffers may lie, as
-            // they do until its check of exportable blocks answered (`Holds::FdBuffers`).
+            // they do until its check of exportable blocks answered (`Holds::FdBuffers`); a
+            // heap's where its textures can lie too, as its making placed it.
             let shared = to.shared();
             let info = shared.sharing().buffer(
                 vk::BufferCreateInfo::default()
@@ -5104,7 +5161,11 @@ impl Buffer {
             let raw =
                 unsafe { crate::creation::buffer(shared.vk(), &info) }.map_err(|_| Left::Failed)?;
             shared.counts.buffer_made(info.usage);
-            match to.place_buffer(raw, length, class, at) {
+            let placed = match of_heap {
+                true => to.place_heap_buffer(raw, length, class, at),
+                false => to.place_buffer(raw, length, class, at),
+            };
+            match placed {
                 Ok((placement, _shared_range)) => (raw, placement, Contents::Lost(length)),
                 Err(_) => {
                     // SAFETY: the buffer is unused.
@@ -5218,9 +5279,62 @@ impl Buffer {
         last.carried.store(true, Ordering::Release);
         // Its parts on the lost generation go once none of its command buffers may record.
         from.carry.lost(from, Box::new(lost));
-        // The program's buffer is the next generation's from now on.
-        let _kept = to.visible(self.clone());
+        // The program's buffer is the next generation's from now on; a heap's own buffer is its
+        // heap's, among no program resources.
+        if !of_heap {
+            let _kept = to.visible(self.clone());
+        }
         Ok(contents)
+    }
+
+    /// Carry a buffer placed in a heap to `to`, the generation the heap's own buffer was carried
+    /// to (`Heap::carry`): the same buffer there (its `ObjectId`, Metal address, label and
+    /// purgeable state, and the aliasable state it shares with its parts on each generation),
+    /// at the same offset of the heap's bytes, which are its bytes there as they were here. Its
+    /// parts on the generation it leaves hold no Vulkan object of their own: their entry among
+    /// that generation's live buffers and their handle of it go once none of its command
+    /// buffers may record ([`LostPlaced`]). Nothing where it was carried there already.
+    pub(crate) fn carry_placed(&self, to: &Device) {
+        let mut last = &self.0;
+        while let Some(next) = last.next.get() {
+            last = &next.0;
+        }
+        let Bytes::Heap(placed) = &last.bytes else {
+            return;
+        };
+        if last.device.same(to) {
+            return;
+        }
+        let carried = Buffer(Arc::new(BufferShared {
+            device: MadeOn::new(to.clone()),
+            generation: std::ptr::from_ref(to.shared()).addr(),
+            object_id: last.object_id,
+            length: last.length,
+            options: last.options,
+            address: last.address,
+            attributes: last.attributes.carried(),
+            bytes: Bytes::Heap(HeapBytes {
+                heap: placed.heap.clone(),
+                bytes: placed.bytes.clone(),
+                offset: placed.offset,
+                aliasable: Arc::clone(&placed.aliasable),
+            }),
+            held_by: HeldBy::default(),
+            handed_out: Arc::default(),
+            padding_unobserved: AtomicBool::new(last.padding_unobserved.load(Ordering::Acquire)),
+            staged: AtomicBool::new(false),
+            next: OnceLock::new(),
+            carried: AtomicBool::new(false),
+            calls: Mutex::default(),
+        }));
+        let from = last.device.shared();
+        let _set = last.next.set(carried);
+        // Every link before it is carried already.
+        last.carried.store(true, Ordering::Release);
+        let lost = LostPlaced {
+            buffer: Arc::downgrade(last),
+        };
+        from.carry.lost(from, Box::new(lost));
     }
 }
 

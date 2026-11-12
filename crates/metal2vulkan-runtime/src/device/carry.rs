@@ -1,10 +1,11 @@
 //! What a device's recovery carries to its next generation (`line.rs`): the program's events, its
-//! uses of guest RAM, its no-copy buffers and the buffers of the runtime's memory whose bytes no
-//! pointer of the program's reaches or whose pages the runtime owns, each the same object on the
-//! new `VkDevice`, as Metal keeps its objects across its GPU's recovery.
+//! uses of guest RAM, its no-copy buffers, the buffers of the runtime's memory whose bytes no
+//! pointer of the program's reaches or whose pages the runtime owns, and its `Private` heaps with
+//! the buffers placed in them, each the same object on the new `VkDevice`, as Metal keeps its
+//! objects across its GPU's recovery.
 //!
-//! - **Kept as made.** Each event (`EventShared::new`) is kept here, held weakly, by the
-//!   generation it was made on; each buffer the program made of its own (`Device::visible`) is
+//! - **Kept as made.** Each event (`EventShared::new`) and heap (`Device::new_heap`) is kept here,
+//!   held weakly, by the generation it was made on; each buffer the program made of its own (`Device::visible`) is
 //!   kept among the generation's program resources already (`Owners::buffer`), which the
 //!   recovery reads ([`Carry::take`]), so making one costs a load of a flag more and no lock.
 //! - **Carried before the next generation serves.** The recovery takes the lost generation's live
@@ -15,8 +16,10 @@
 //!   generation (`Device::at_serving_taking`), and what it makes after the recovery took the
 //!   generation's objects its maker carries ([`Device::carry_late`]). The take names the buffers
 //!   it took under the registry's lock, which a maker that finds the generation taken asks
-//!   ([`Carry::late_buffer`]), and an event is kept under it, so each object is carried once, by
-//!   one or the other.
+//!   ([`Carry::late_buffer`]), and an event or heap is kept under it, so each object is carried
+//!   once, by one or the other. A buffer placed in a heap as the heap is carried finds its bytes
+//!   carried under the lock the heap's carry takes its buffers under, and carries itself
+//!   (`Heap::carry`).
 //! - **What each kind becomes.** An event: a new timeline semaphore at the value the host saw
 //!   (`EventShared::carry`). A `Private` buffer: new memory, its contents lost with the
 //!   `VkDevice` (it reads zero). A buffer in fresh pages (`fresh_pages.rs`): the same pages
@@ -31,7 +34,12 @@
 //!   and for its pages' import on each generation to be freed (`Release::carry_on`). A use of
 //!   guest RAM (`HostRamUse`), before the buffers: made again on the new device, the lost one's
 //!   let go of. Each buffer keeps its identity: its `ObjectId`, hazard key, Metal address (a
-//!   share of its range) and range token, its label and purgeable state.
+//!   share of its range) and range token, its label and purgeable state. A `Private` heap, after
+//!   the buffers: its own buffer in new memory where its textures can lie too, its contents lost
+//!   (it reads zero), its identity kept as a buffer's, registered there by its key; each buffer
+//!   placed in it that lives, the same buffer there at its offset in the heap's carried bytes,
+//!   its identity and aliasable state kept, its range in an automatic heap given back once, by its
+//!   parts on the generation it was carried to last (`Heap::carry`, `Buffer::carry_placed`).
 //! - **What stays the lost generation's**, refused where it meets the next
 //!   (`RuntimeGap::MadeBeforeRecovery`): a buffer of pooled host-visible memory (`Shared`, and
 //!   `Managed`) the device allocated, whose `contents` pointer is its block's mapping, which
@@ -40,10 +48,15 @@
 //!   costs its submissions, its check of fresh pages refused what a texture over such a buffer
 //!   takes, one of them has not answered, or no memory type of the buffer's class takes such
 //!   pages; and a `Managed` buffer's host copy without unified memory); a detached no-copy
-//!   buffer, or one whose last detach's deallocator waits
-//!   for its next rebind; a heap's buffer, one over the caller's `VkBuffer` or exported memory,
-//!   and an event whose semaphore was made exportable, whose importers hold the lost one. The recovery's notice counts those it kept by kind (`Degradation::DeviceRecovered`):
-//!   every one but a heap's buffer, which its heap holds.
+//!   buffer, or one whose last detach's deallocator waits for its next rebind; a `Shared` heap,
+//!   whose bytes are such pooled memory (a heap's own buffer lies where its textures can, never
+//!   in the runtime's own pages), a heap over the caller's memory and a sparse heap, each with
+//!   the buffers placed in it; every texture, a heap's too; a buffer over the caller's
+//!   `VkBuffer`, an object of the lost `VkDevice` that only the caller can make again on the
+//!   new one; a buffer in exported memory, and an event whose semaphore was made exportable,
+//!   whose importers hold the lost allocation or semaphore. The recovery's notice counts the
+//!   buffers, heaps and events it carried and left by kind (`Degradation::DeviceRecovered`): a
+//!   heap's buffers with their heap.
 //! - **Each generation's work reaches its own parts** (`NoticesFor::generation`). A command buffer of the
 //!   lost generation may still record once the recovery carried its objects: an encoder a
 //!   program's thread opened before the loss, a render encoder's end on the lowering thread.
@@ -79,6 +92,7 @@
 use super::{lock, Device, DeviceShared};
 use crate::buffer::Buffer;
 use crate::event::EventShared;
+use crate::heap::{Heap, WeakHeap};
 use crate::host_ram::RamUseCell;
 use crate::queue::Slots;
 use crate::resource::ObjectId;
@@ -121,6 +135,8 @@ struct State {
     /// The program's uses of guest RAM (`host_ram.rs`'s `HostRamUse`), held weakly: few, so their
     /// gone entries are dropped at each keeping.
     ram_uses: Vec<Weak<RamUseCell>>,
+    /// The program's heaps, held weakly: as `ram_uses`.
+    heaps: Vec<WeakHeap>,
     /// The size at which the next keeping drops the gone events' entries.
     prune_at: usize,
     /// The recovery took the generation's objects ([`Carry::take`]): what is kept from now on,
@@ -167,6 +183,7 @@ pub(crate) struct Taken {
     buffers: Vec<Buffer>,
     events: Vec<Arc<EventShared>>,
     ram_uses: Vec<Arc<RamUseCell>>,
+    heaps: Vec<Heap>,
 }
 
 impl Carry {
@@ -203,9 +220,17 @@ impl Carry {
         state.taken
     }
 
+    /// Keep `heap`, made on this generation: as [`ram_use`](Self::ram_use).
+    pub(crate) fn heap(&self, heap: &Heap) -> bool {
+        let mut state = lock(&self.state);
+        state.heaps.retain(WeakHeap::lives);
+        state.heaps.push(heap.downgrade());
+        state.taken
+    }
+
     /// The live objects of `shared`, this generation, for its recovery to carry: its events, its
-    /// uses of guest RAM and its program resources' buffers (`Owners::buffers`). From now on, each
-    /// one made is its maker's to carry.
+    /// uses of guest RAM, its heaps and its program resources' buffers (`Owners::buffers`). From
+    /// now on, each one made is its maker's to carry.
     fn take(&self, shared: &DeviceShared) -> Taken {
         let mut state = lock(&self.state);
         state.taken = true;
@@ -216,6 +241,7 @@ impl Carry {
             buffers,
             events: state.events.iter().filter_map(Weak::upgrade).collect(),
             ram_uses: state.ram_uses.iter().filter_map(Weak::upgrade).collect(),
+            heaps: state.heaps.iter().filter_map(WeakHeap::upgrade).collect(),
         }
     }
 
@@ -361,12 +387,41 @@ pub(crate) enum Left {
     /// A no-copy buffer detached from the caller's pages, or whose last detach's deallocator
     /// waits for its next rebind.
     NoCopy,
-    /// A heap's buffer.
+    /// A heap's buffer, which its heap's carry carries or leaves (`Heap::carry`).
     Heap,
-    /// Over the caller's `VkBuffer`, or memory another API imports (`exported_memory.rs`).
+    /// Over the caller's `VkBuffer` (`wrapped_buffer.rs`), which is an object of the lost
+    /// `VkDevice`, made by the caller.
     Caller,
+    /// In memory another API imports (`exported_memory.rs`), allocated exportable on the lost
+    /// `VkDevice`.
+    Exported,
     /// Its making on the new generation failed (out of memory, the driver's refusal).
     Failed,
+}
+
+/// Why a heap stays the lost generation's, with the buffers placed in it (`Heap::carry`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HeapLeft {
+    /// A `Shared` heap: its bytes are pooled host-visible memory, whose mapping its buffers'
+    /// `contents` pointers are, as a pooled buffer's ([`Left::Pooled`]).
+    Pooled,
+    /// A heap over the caller's host memory (`Device::new_heap_with_bytes_no_copy`).
+    NoCopy,
+    /// A sparse heap, whose textures' tiles the lost `VkDevice` bound.
+    Sparse,
+    /// Its making on the new generation failed.
+    Failed,
+}
+
+impl HeapLeft {
+    /// Why a heap stays, its own buffer's carry having answered `left`.
+    pub(crate) fn of(left: Left) -> HeapLeft {
+        match left {
+            Left::Pooled => HeapLeft::Pooled,
+            Left::NoCopy => HeapLeft::NoCopy,
+            Left::Heap | Left::Caller | Left::Exported | Left::Failed => HeapLeft::Failed,
+        }
+    }
 }
 
 /// What the carry of a buffer did with its contents ([`Buffer::carry`]).
@@ -391,7 +446,12 @@ pub(crate) struct Carried {
     /// The uses of guest RAM carried, and those the new generation refused.
     ram_uses: (u64, u64),
     /// The buffers left the lost generation's, by why.
-    left: [u64; 5],
+    left: [u64; 6],
+    /// The `Private` heaps carried, their bytes, which read zero, and the buffers placed in them
+    /// carried with them.
+    heaps: (u64, u64, u64),
+    /// The heaps left the lost generation's, by why.
+    heaps_left: [u64; 4],
 }
 
 impl Carried {
@@ -405,12 +465,24 @@ impl Carried {
             "pooled `Shared` or `Managed` buffers",
             "detached no-copy buffers",
             "heaps' buffers",
-            "buffers over the caller's or exportable memory",
+            "buffers over the caller's `VkBuffer`",
+            "buffers in exportable memory",
             "buffers whose making there failed",
+        ];
+        let heap_kinds = [
+            "`Shared` heaps",
+            "no-copy heaps",
+            "sparse heaps",
+            "heaps whose making there failed",
         ];
         let left = (kinds.iter().zip(self.left).enumerate())
             .filter(|&(at, (_, count))| at == Left::Pooled as usize || count > 0)
             .map(|(_, (kind, count))| format!("{count} {kind}"))
+            .chain(
+                (heap_kinds.iter().zip(self.heaps_left))
+                    .filter(|&(_, count)| count > 0)
+                    .map(|(kind, count)| format!("{count} {kind}")),
+            )
             .chain(
                 (self.events_left > 0)
                     .then(|| format!("{} events made exportable", self.events_left)),
@@ -425,10 +497,17 @@ impl Carried {
             0 => String::new(),
             _ => format!("{ram_uses} guest RAM uses, "),
         };
+        let heaps = match self.heaps {
+            (0, ..) => String::new(),
+            (heaps, bytes, buffers) => format!(
+                ", and {heaps} `Private` heaps ({bytes} bytes) with the {buffers} buffers placed \
+                 in them, whose contents were lost too"
+            ),
+        };
         format!(
             "it carried {} events, {ram}{} buffers with their contents and {lost} `Private` \
-             buffers ({lost_bytes} bytes) whose contents were lost (they read zero); left refused \
-             (`MadeBeforeRecovery`): {left}",
+             buffers ({lost_bytes} bytes) whose contents were lost (they read zero){heaps}; left \
+             refused (`MadeBeforeRecovery`): {left}",
             self.events, self.kept
         )
     }
@@ -442,6 +521,18 @@ impl Carried {
                 self.lost.1 += bytes;
             }
             Err(left) => self.left[left as usize] += 1,
+        }
+    }
+
+    /// One heap's carry: its bytes and the buffers placed in it carried, or why it was left.
+    fn heap(&mut self, carried: Result<(u64, u64), HeapLeft>) {
+        match carried {
+            Ok((bytes, buffers)) => {
+                self.heaps.0 += 1;
+                self.heaps.1 += bytes;
+                self.heaps.2 += buffers;
+            }
+            Err(left) => self.heaps_left[left as usize] += 1,
         }
     }
 
@@ -463,15 +554,16 @@ impl Carried {
 }
 
 impl Device {
-    /// Carry this generation's live events and buffers, lost, to `next`, the generation its
-    /// recovery made, before `next` serves (the module docs): what was carried and left, for the
-    /// recovery's notice.
+    /// Carry this generation's live events, buffers and heaps, lost, to `next`, the generation
+    /// its recovery made, before `next` serves (the module docs): what was carried and left, for
+    /// the recovery's notice.
     pub(super) fn carry_to(&self, next: &Device) -> Carried {
         let shared = self.shared();
         let Taken {
             buffers,
             events,
             ram_uses,
+            heaps,
         } = shared.carry.take(shared);
         let mut carried = Carried::default();
         for event in &events {
@@ -483,6 +575,9 @@ impl Device {
         }
         for buffer in &buffers {
             carried.buffer(buffer.carry(next));
+        }
+        for heap in &heaps {
+            carried.heap(heap.carry(next));
         }
         carried
     }

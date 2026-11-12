@@ -833,8 +833,8 @@ meanwhile wait for it.
   and completes on the lost one where the loss came after, its object then one made before the
   recovery.
 - The recovery carries the events, the uses of guest RAM (`HostRamUse`), the no-copy buffers, the
-  `Private` buffers and the buffers in the runtime's own pages to the new `VkDevice`: the same
-  objects, at the same addresses. An event keeps the value the host saw and its listeners'
+  `Private` buffers, the buffers in the runtime's own pages and the `Private` heaps with the
+  buffers placed in them to the new `VkDevice`: the same objects, at the same addresses. An event keeps the value the host saw and its listeners'
   notifications. A buffer in the runtime's own pages keeps its bytes and its `contents` pointer:
   a long host-visible buffer's fresh pages, and, on a device whose checks found that a held import
   of host pages costs its submissions nothing and that textures over such pages take in place
@@ -845,16 +845,19 @@ meanwhile wait for it.
   out is lost, as a `Private` buffer's contents are); its import gate, run
   resolver and dma-buf source are asked again, on the thread that recovers, and must not call
   into the device. Its deallocator runs at its release once no `VkDevice` imports its pages. A
-  `Private` buffer's contents are lost: it reads zero.
+  `Private` buffer's contents are lost: it reads zero. So are a `Private` heap's, whose buffers
+  placed before go on with it and in which buffers and textures are made again; the textures it
+  made before are refused, as every texture made before the recovery is.
 - Any other object made before the recovery is refused where it meets the new `VkDevice` (an
   encoder's bind, a pipeline made from its functions) and in its own calls that need its lost one:
   `Error::NotImplemented(RuntimeGap::MadeBeforeRecovery)`. That covers pooled `Shared` and
   `Managed` buffers in memory the device allocated, whose `contents` pointer is the lost memory's
   mapping (on a device that imports no host pointer, or whose checks found that a held import
   costs its submissions or that textures over such pages take less, or had not answered; and a
-  `Managed` buffer without unified memory), detached no-copy buffers, heaps, textures, pipeline
-  states, libraries and exportable memory or events. Make it again.
-  Metal's objects go on. The recovery's notice counts the buffers and events it carried and left.
+  `Managed` buffer without unified memory), detached no-copy buffers, `Shared`, no-copy and
+  sparse heaps with the buffers placed in them, textures, pipeline states, libraries, buffers over
+  the caller's `VkBuffer`, and exportable memory or events. Make it again. Metal's objects go on.
+  The recovery's notice counts the buffers, heaps and events it carried and left, by kind.
 - The lost `VkDevice` is destroyed once the objects left on it went and, where `Device::raw`
   answered its handles, a later `raw` call answered the new one's: `WorkCounts::vk_devices_live`
   reads 2 until then. A carried object holds nothing of it once none of its command buffers

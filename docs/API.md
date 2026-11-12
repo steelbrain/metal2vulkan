@@ -3669,19 +3669,24 @@ bound.
   kind. Announced too, at most once each per recovery whatever an earlier
   recovery announced: where a call waited past 10 seconds for the recovery under way, where its
   command buffers in flight took past 10 seconds to fail, and where its new `VkDevice` could not
-  be made, after which the device answers as a lost one. `Device::recover_for_test` runs the same recovery with no GPU fault. Cost: the events,
-  uses of guest RAM, no-copy buffers, `Private` buffers and buffers in the runtime's own pages
-  (fresh pages, and the blocks of pages the `Shared` and `Managed` buffers lie in where the
-  device's checks found a held host-page import costs its submissions nothing and textures over
-  such pages take what they take over its own memory) made before it go on, a `Private` buffer's
-  contents lost (it reads zero); the other objects made before it are
-  refused (`MadeBeforeRecovery`), where Metal's go on; the calls during it wait for it, and a
+  be made, after which the device answers as a lost one. `Device::recover_for_test` runs the
+  same recovery with no GPU fault. Cost: the events, uses of guest RAM, no-copy buffers,
+  `Private` buffers, buffers in the runtime's own pages (fresh pages, and the blocks of pages the
+  `Shared` and `Managed` buffers lie in where the device's checks found a held host-page import
+  costs its submissions nothing and textures over such pages take what they take over its own
+  memory) and `Private` heaps with the buffers placed in them made before it go on, a `Private`
+  buffer's or heap's contents lost (it reads zero); the other objects made before it are refused
+  (`MadeBeforeRecovery`), where Metal's go on; the calls during it wait for it, and a
   device call the loss met while it ran runs again after it. A no-copy buffer is made again over
   the same pages on the new `VkDevice`, as its making or last rebind made it, so the caller's
   import gate, resolver of guest RAM runs and dma-buf source are asked again, on the thread that
   recovers, before the new device serves; its deallocator runs at its release once no `VkDevice`'s
   import of its pages is left. A detached no-copy buffer, and a no-copy heap's buffers, are
-  refused.
+  refused. A `Private` heap is the same heap on the new `VkDevice` (its identity, address and
+  label), its bytes new memory that reads zero, with the buffers placed in it; buffers and
+  textures are made in it again, and the textures it made before are refused, as every texture
+  made before the recovery is. A `Shared` heap, whose bytes are pooled host-visible memory the
+  device allocated, is refused with its buffers, as a pooled buffer is.
 - `metal2vulkan-degrade-private-properties-unknown` (precision). `PrivatePropertiesUnknown`: Apple's
   private device properties the device has no answer for: no document describes them and nothing the
   device reports maps to them. Cost: the device gives no answer for them (`PrivateAnswer::value` is
