@@ -25,6 +25,11 @@
 //! `(w, c1.y / 4)` into the second (`con_fetch_coverage`): the interlock orders the overlapping
 //! fragments of the draw, so the first color holds `2^-LAYERS` in every channel.
 //!
+//! Two homes of the target: a `Private` texture, copied out by a blit, and a texture over host
+//! pages a no-copy buffer imports, as a shared surface's texture lies, which the CPU reads once
+//! the command buffer completed, its rows one after another or 64 bytes apart past that: the
+//! scratch's result must reach those pages by then.
+//!
 //! The functions are `dcs_rect`, `dcs_flag` and `dcs_read` of the owned fixture
 //! `validation/fixtures/public/engine/dcs_dont_care_split.ll`, `fetch_ordered` of
 //! `fragment_fetch.ll` and `con_fetch_coverage` of `con_fetch_coverage.ll` there.
@@ -32,7 +37,7 @@
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{device, over_host, Host, Scratch, BYTES, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::{
     BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, LoadAction, Origin,
@@ -41,6 +46,8 @@ use crate::{
 };
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 /// The targets' side, the targets each round renders, and the rounds.
 const SIDE: u64 = 192;
@@ -75,6 +82,16 @@ enum Shape {
     Bitmap,
     /// The accumulation's pass, one draw of [`LAYERS`] overlapping rectangles.
     Layers,
+}
+
+/// Where a target's texels lie.
+#[derive(Clone, Copy, PartialEq)]
+enum Home {
+    Private,
+    /// Host pages a no-copy buffer imports, as a shared surface's texture lies: its rows this
+    /// many bytes apart past one after another (a pitch a device's linear image may not take,
+    /// which shadows the texture).
+    HostPages(u64),
 }
 
 /// A pass's draws: each state, its rectangle and its instances.
@@ -247,23 +264,24 @@ fn expected((x, y): (u64, u64)) -> [f32; 4] {
     (if flagged { FLAG } else { CLEAR }).map(|c| c / 4.0)
 }
 
-/// Whether target `index`'s texels in the read-back buffer, of `format`, are each `expected` of
-/// its pixel; else the first wrong pixel and its bytes.
+/// Whether target `index`'s texels in `bytes` (the targets one after another, their rows `pitch`
+/// apart), of `format`, are each `expected` of its pixel; else the first wrong pixel and its
+/// bytes.
 fn first_wrong(
-    back: &Buffer,
+    (bytes, pitch): (&Buffer, u64),
     format: PixelFormat,
     index: usize,
     expected: impl Fn((u64, u64)) -> [f32; 4],
 ) -> Option<((u64, u64), Vec<u8>)> {
     let texel = texel(format);
-    let span = (SIDE * SIDE * texel) as usize;
-    let contents = back.contents().unwrap();
+    let span = (SIDE * pitch) as usize;
+    let contents = bytes.contents().unwrap();
     // SAFETY: bytes within the buffer, which no command buffer writes now.
     let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr().add(index * span), span) };
     (0..SIDE)
         .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
         .find_map(|(x, y)| {
-            let at = ((y * SIDE + x) * texel) as usize;
+            let at = (y * pitch + x * texel) as usize;
             let got = &bytes[at..at + texel as usize];
             let want = expected((x, y));
             let h = |i: usize| u16::from_le_bytes([got[2 * i], got[2 * i + 1]]);
@@ -289,20 +307,26 @@ fn texel(format: PixelFormat) -> u64 {
     }
 }
 
-/// The counts that say how the passes ran: render pass instances, splits for the interlocked
-/// writes, storage forms taken, variant pipelines made.
-fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
+/// The counts that say how the passes ran: render pass instances (and first instances recorded
+/// inline), splits for the interlocked writes, storage forms taken, variant pipelines made,
+/// textures over bytes shadowed, shadow copies.
+fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 7] {
     [
         after.render_passes_begun_instances - before.render_passes_begun_instances,
+        after.render_passes_begun_inline - before.render_passes_begun_inline,
         after.instance_splits_interlocked_writes - before.instance_splits_interlocked_writes,
         after.storage_forms_taken - before.storage_forms_taken,
         after.variant_pipelines_made - before.variant_pipelines_made,
+        after.shadowed_textures - before.shadowed_textures,
+        after.shadow_copies - before.shadow_copies,
     ]
 }
 
 /// The run of `shape` over targets of `format` (the bitmap's and the accumulation's
-/// `RGBA16Float`).
-fn run(case: &str, format: PixelFormat, shape: Shape) {
+/// `RGBA16Float`) lying at `home`.
+fn run(case: &str, format: PixelFormat, shape: Shape, home: Home) {
+    // Declared before the device, so dropped after it.
+    let host = Host::new();
     let scratch = Scratch::new(&format!("lone-fetch-{case}"));
     let device = device(&scratch.0);
     let Some(tools) = Tools::new(&device, format) else {
@@ -312,12 +336,35 @@ fn run(case: &str, format: PixelFormat, shape: Shape) {
         );
         return;
     };
+    let tight = SIDE * texel(format);
+    let (bytes, pitch) = match home {
+        Home::Private => (None, tight),
+        Home::HostPages(pad) => {
+            let Some(bytes) = over_host(&device, &host, &Arc::new(AtomicUsize::new(0))) else {
+                return;
+            };
+            (Some(bytes), tight + pad)
+        }
+    };
+    // As many targets as the host pages hold.
+    let count = TARGETS.min(BYTES / (pitch * SIDE) as usize);
     let mut failures = Vec::new();
     let mut counts = Vec::new();
     for round in 0..ROUNDS {
         let before = device.work_counts();
         let usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
-        let targets: Vec<Texture> = (0..TARGETS).map(|_| tools.target(format, usage)).collect();
+        let targets: Vec<Texture> = (0..count)
+            .map(|index| match &bytes {
+                None => tools.target(format, usage),
+                Some(bytes) => {
+                    let mut d = TextureDescriptor::texture_2d(format, SIDE, SIDE, false);
+                    d.usage = usage;
+                    d.resource_options = bytes.resource_options();
+                    let offset = index as u64 * pitch * SIDE;
+                    bytes.new_texture(&d, offset, pitch).unwrap()
+                }
+            })
+            .collect();
         let command_buffer = tools.queue.command_buffer().unwrap();
         for target in &targets {
             match shape {
@@ -336,16 +383,23 @@ fn run(case: &str, format: PixelFormat, shape: Shape) {
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.error(), None);
         counts.push(moved(&before, &device.work_counts()));
-        tools.read_back(&targets, texel(format));
-        for index in 0..TARGETS {
+        // The CPU reads targets over host pages in them; `Private` ones are copied out first.
+        let read = match &bytes {
+            Some(bytes) => (bytes, pitch),
+            None => {
+                tools.read_back(&targets, texel(format));
+                (&tools.back, pitch)
+            }
+        };
+        for index in 0..count {
             let wrong = match shape {
-                Shape::Lone => first_wrong(&tools.back, format, index, expected),
-                Shape::Bitmap => first_wrong(&tools.back, format, index, |_| {
-                    [SECOND[0], SECOND[1], 1.0, 1.0]
-                }),
-                Shape::Layers => first_wrong(&tools.back, format, index, |_| {
-                    [(-(LAYERS as f32)).exp2(); 4]
-                }),
+                Shape::Lone => first_wrong(read, format, index, expected),
+                Shape::Bitmap => {
+                    first_wrong(read, format, index, |_| [SECOND[0], SECOND[1], 1.0, 1.0])
+                }
+                Shape::Layers => {
+                    first_wrong(read, format, index, |_| [(-(LAYERS as f32)).exp2(); 4])
+                }
             };
             if let Some(first) = wrong {
                 failures.push(format!(
@@ -355,11 +409,12 @@ fn run(case: &str, format: PixelFormat, shape: Shape) {
         }
     }
     eprintln!(
-        "LONE-FETCH {case} on {}: {} of {} targets wrong; per round (instances, interlocked \
-         splits, storage forms, variants made) {counts:?}; first {:?}",
+        "LONE-FETCH {case} on {}: {} of {} targets wrong; per round (instances, inline \
+         instances, interlocked splits, storage forms, variants made, shadowed textures, shadow \
+         copies) {counts:?}; first {:?}",
         device.name(),
         failures.len(),
-        ROUNDS * TARGETS,
+        ROUNDS * count,
         failures.first()
     );
     assert!(failures.is_empty(), "{case}: {failures:?}");
@@ -367,20 +422,80 @@ fn run(case: &str, format: PixelFormat, shape: Shape) {
 
 #[test]
 fn a_lone_fetched_rg16float_color_keeps_its_values() {
-    run("rg16float", PixelFormat::RG16Float, Shape::Lone);
+    run(
+        "rg16float",
+        PixelFormat::RG16Float,
+        Shape::Lone,
+        Home::Private,
+    );
 }
 
 #[test]
 fn a_lone_fetched_bgra8unorm_color_keeps_its_values() {
-    run("bgra8unorm", PixelFormat::BGRA8Unorm, Shape::Lone);
+    run(
+        "bgra8unorm",
+        PixelFormat::BGRA8Unorm,
+        Shape::Lone,
+        Home::Private,
+    );
 }
 
 #[test]
 fn a_second_color_fetched_and_not_written_reads_its_clear() {
-    run("bitmap", PixelFormat::RGBA16Float, Shape::Bitmap);
+    run(
+        "bitmap",
+        PixelFormat::RGBA16Float,
+        Shape::Bitmap,
+        Home::Private,
+    );
 }
 
 #[test]
 fn the_overlapping_layers_of_one_fetching_draw_accumulate_in_order() {
-    run("layers", PixelFormat::RGBA16Float, Shape::Layers);
+    run(
+        "layers",
+        PixelFormat::RGBA16Float,
+        Shape::Layers,
+        Home::Private,
+    );
+}
+
+#[test]
+fn a_lone_fetched_color_over_host_pages_reaches_them() {
+    run(
+        "host-rgba16float",
+        PixelFormat::RGBA16Float,
+        Shape::Lone,
+        Home::HostPages(0),
+    );
+}
+
+#[test]
+fn a_lone_fetched_color_over_host_pages_padded_rows_reaches_them() {
+    run(
+        "host-rgba16float-padded",
+        PixelFormat::RGBA16Float,
+        Shape::Lone,
+        Home::HostPages(64),
+    );
+}
+
+#[test]
+fn a_lone_fetched_bgra8unorm_color_over_host_pages_reaches_them() {
+    run(
+        "host-bgra8unorm",
+        PixelFormat::BGRA8Unorm,
+        Shape::Lone,
+        Home::HostPages(0),
+    );
+}
+
+#[test]
+fn layers_fetched_over_host_pages_reach_them() {
+    run(
+        "host-layers",
+        PixelFormat::RGBA16Float,
+        Shape::Layers,
+        Home::HostPages(0),
+    );
 }
