@@ -14,7 +14,8 @@
 //! driver's `vkAllocateMemory` answers out of memory for every device-local type).
 //!
 //! It prints its findings (`EXPORT-AFTER-DMA-BUF`) and asserts that each export lies in a
-//! device-local memory type with the control's flags, no overflow counted. Where `/dev/udmabuf`
+//! memory type with the control's flags (device-local where the control's is), no overflow
+//! counted. Where `/dev/udmabuf`
 //! cannot be opened, or the device exports no such memory, it says so and passes.
 //!
 //! The driver's behaviour behind it, as evidence (`EXPORT-AFTER-DMA-BUF-RAW`, printed, not
@@ -429,8 +430,10 @@ fn the_driver_s_answers_after_each_kind_of_dma_buf_import() {
 }
 
 /// After the runtime's import of a dma-buf (the probe's), a `Private` buffer exportable as an
-/// opaque file descriptor and as a dma-buf lies in a device-local type, as on a device that
-/// imported none, with no overflow counted.
+/// opaque file descriptor and as a dma-buf lies in a type of the flags it takes on a device that
+/// imported none, with no overflow counted: a device-local one where that is (NVIDIA's RTX 3090,
+/// ANV), not where the control's is not (RADV on a Radeon 780M places it in type 2,
+/// `HOST_VISIBLE | HOST_COHERENT`, with no import made).
 #[test]
 fn a_private_exportable_buffer_after_a_dma_buf_import_lies_in_device_local_memory() {
     if !udmabuf_openable(TEST) {
@@ -475,7 +478,9 @@ fn a_private_exportable_buffer_after_a_dma_buf_import_lies_in_device_local_memor
             continue;
         };
         assert_eq!(found.1, control.1, "{export}: the control's type flags");
-        assert_ne!(found.1 & local, 0, "{export}: a device-local type");
+        if control.1 & local != 0 {
+            assert_ne!(found.1 & local, 0, "{export}: a device-local type");
+        }
         assert_eq!(found.3, 0, "{export}: no overflow");
     }
 }
