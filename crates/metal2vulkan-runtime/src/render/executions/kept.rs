@@ -612,7 +612,7 @@ impl RenderExecution {
         (storage, rendered): (PassStorage, &mut Rendered),
     ) -> Result<Recorded, Error> {
         let device = command_buffer.device().clone();
-        let (range, faults) = self.range.commands(self.icb.size())?;
+        let (range, faults) = self.range.commands(self.icb.size());
         found.faults = ReplayFaults(found.faults.0 | faults.0);
         let Keeping {
             mut key,
