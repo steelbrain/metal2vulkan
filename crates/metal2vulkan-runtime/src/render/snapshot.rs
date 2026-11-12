@@ -345,7 +345,15 @@ impl Pair {
             // execution dependency into the color output. Its writes too: the drawing draw's
             // function holds the snapshot's write, which it never runs, and a write the pipeline
             // holds is ordered as if it ran (the validation layer's synchronization checks count
-            // it so).
+            // it so). It holds the texture's fetch too, never run either ("Data races can only
+            // occur due to instructions that are actually executed", the memory model), which
+            // those checks count as a read with nothing after it: they report the pass's store
+            // of the color (`SYNC-HAZARD-WRITE-AFTER-READ` at `vkCmdEndRenderPass`), a false
+            // positive, as the reads that run, the snapshot draw's at its fragment's own pixel,
+            // `B2` orders before the color output, in which "Store operations for attachments
+            // with a color format execute" (Load and Store Operations; and 8.10.1: "store
+            // operations are guaranteed to operate after fragment shader execution for the set
+            // of samples the fragment covers").
             (Phase::Drawing, Some(steps)) => (
                 (fragment, vk::AccessFlags::SHADER_WRITE),
                 (
@@ -391,7 +399,10 @@ impl Pair {
     /// from its sampled reads of the colors it reads to the color writes after it, by the
     /// execution dependency alone ("Write-after-read hazards can be solved with just an
     /// execution dependency", Execution and Memory Dependencies): a later draw's color write of a
-    /// pixel the draw read comes after the read. A snapshot's two draws take none: the drawing
+    /// pixel the draw read comes after the read, and so does the pass's store of the color, the
+    /// draw's helper invocations' reads included, as "Store operations for attachments with a
+    /// color format execute in the VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT pipeline stage"
+    /// (Load and Store Operations). A snapshot's two draws take none: the drawing
     /// draw reads no color, and `B2` ordered the snapshot draw's reads before the color output.
     ///
     /// # Safety
