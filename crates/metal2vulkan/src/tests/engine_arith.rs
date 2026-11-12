@@ -66,16 +66,23 @@ fn of(name: &str, v: f32) -> String {
     )
 }
 
+/// `%name` = an `i32` with bits `b` that no pass folds: a volatile store of them to a private
+/// word and a volatile load back.
+fn word(name: &str, b: u32) -> String {
+    format!(
+        "  %{name}.p = alloca i32, align 4\n  store volatile i32 {}, ptr %{name}.p, align 4\n  \
+         %{name} = load volatile i32, ptr %{name}.p, align 4\n",
+        b as i32
+    )
+}
+
 /// `%name` = an opaque `i32` with bits `b`. A NaN or denormal pattern is not carried through
 /// `float` arithmetic, which answers Metal's canonical NaN and reads a denormal as the zero of its
-/// sign, but through `llvm.umin` with `-1`.
+/// sign, but through a volatile private word ([`word`]).
 fn oi(name: &str, b: u32) -> String {
     let f = f32::from_bits(b);
     if f.is_nan() || f.is_subnormal() {
-        return format!(
-            "  %{name} = call i32 @llvm.umin.i32(i32 {}, i32 -1)\n",
-            b as i32
-        );
+        return word(name, b);
     }
     format!(
         "{}  %{name} = bitcast float %{name}.f to i32\n",
@@ -1688,7 +1695,10 @@ fn every_profile() -> Vec<String> {
 #[test]
 fn a_fast_division_leaves_its_nans_to_the_device() {
     let bits = |name: &str, b: u32| {
-        format!("  %{name}.i = call i32 @llvm.umin.i32(i32 {b}, i32 -1)\n  %{name} = bitcast i32 %{name}.i to float\n")
+        format!(
+            "{}  %{name} = bitcast i32 %{name}.i to float\n",
+            word(&format!("{name}.i"), b)
+        )
     };
     let kernel = |name: &'static str, x: u32, y: u32, want: Option<u32>| Kernel {
         name,
@@ -1926,12 +1936,13 @@ fn fast_sincos_is_the_devices_sine_and_cosine() {
 /// arithmetic on none; `fast::atan2`, whose quotient is the device's division, records it off the
 /// deviation.
 /// None records `DeviceNanEncoding`: the NaN is Metal's, the device's where the profile states it
-/// and selected elsewhere. The operands come from bits (`llvm.umin` of constants, bitcast), not
+/// and selected elsewhere. The operands come from bits (volatile private words, bitcast), not
 /// from `float` arithmetic.
 #[test]
 fn device_float_environment_notes_follow_the_operations() {
     // 0x3fc03c00: a float near 1.5 whose low half is half 1.0.
-    let w = "  %w = call i32 @llvm.umin.i32(i32 1069562880, i32 2147483647)\n  %x = bitcast i32 %w to float\n";
+    let w = format!("{}  %x = bitcast i32 %w to float\n", word("w", 1069562880));
+    let w = w.as_str();
     let x = f32::from_bits(0x3FC0_3C00);
     let none = &[][..];
     let ks = [
@@ -1999,8 +2010,9 @@ fn device_float_environment_notes_follow_the_operations() {
 /// (`arith.fmod.fast`), with no `OpFRem`.
 #[test]
 fn a_float_remainder_is_the_devices_without_every_flag() {
-    let one = "  %w = call i32 @llvm.umin.i32(i32 1065353216, i32 2147483647)\n  %x = bitcast i32 %w to float\n";
-    let tenth = "  %v = call i32 @llvm.umin.i32(i32 1036831949, i32 2147483647)\n  %y = bitcast i32 %v to float\n";
+    let one = format!("{}  %x = bitcast i32 %w to float\n", word("w", 1065353216));
+    let tenth = format!("{}  %y = bitcast i32 %v to float\n", word("v", 1036831949));
+    let (one, tenth) = (one.as_str(), tenth.as_str());
     let ks = [
         k(
             "frem_precise",
@@ -3043,12 +3055,12 @@ fn a_fast_division_is_the_device_s_quotient() {
     }
 }
 
-/// `%x` = an opaque `float` with bits `b` (any pattern, NaNs included): `llvm.umin` of a constant
-/// and `-1`, bitcast.
+/// `%x` = an opaque `float` with bits `b` (any pattern, NaNs included): a volatile private word
+/// ([`word`]), bitcast.
 fn ob(name: &str, b: u32) -> String {
     format!(
-        "  %{name}.w = call i32 @llvm.umin.i32(i32 {}, i32 -1)\n  %{name} = bitcast i32 %{name}.w to float\n",
-        b as i32
+        "{}  %{name} = bitcast i32 %{name}.w to float\n",
+        word(&format!("{name}.w"), b)
     )
 }
 
@@ -3262,7 +3274,7 @@ fn a_float_nan_is_the_device_s_on_every_profile() {
 /// `MetalUnaryDenormals` (moltenvk-m3), which requires its property instead and reads them as the
 /// zero of their sign as Metal does. Flipping the fact changes the requirement and the note, never
 /// the module. The interpreter keeps denormals as
-/// lavapipe does. The operands are bits (`llvm.umin` of constants), so each kernel's float
+/// lavapipe does. The operands are bits (volatile private words), so each kernel's float
 /// operation is its only one.
 #[test]
 fn float_denormals_are_the_devices_and_noted_off_the_device_fact() {
@@ -3617,7 +3629,8 @@ fn a_nan_test_no_float_mode_folds() {
 /// `%name` = an opaque `half` with the bits `b`.
 fn oh(name: &str, b: u16) -> String {
     format!(
-        "  %{name}.w = call i32 @llvm.umin.i32(i32 {b}, i32 -1)\n  %{name}.t = trunc i32 %{name}.w to i16\n  %{name} = bitcast i16 %{name}.t to half\n"
+        "{}  %{name}.t = trunc i32 %{name}.w to i16\n  %{name} = bitcast i16 %{name}.t to half\n",
+        word(&format!("{name}.w"), u32::from(b))
     )
 }
 

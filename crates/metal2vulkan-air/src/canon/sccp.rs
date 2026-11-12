@@ -328,9 +328,11 @@ fn is_normalize(kind: &InstKind) -> bool {
     )
 }
 
-/// The integer `llvm.*` bit operation `kind` calls (`ctpop`, `bitreverse`, `bswap`), which SCCP
-/// folds over a constant operand. The other integer operations (minimum and maximum, the funnel
-/// shifts, saturating arithmetic) are computed where they run.
+/// The integer `llvm.*` operation `kind` calls that SCCP folds over constant operands: a bit
+/// operation (`ctpop`, `bitreverse`, `bswap`), or a scalar minimum or maximum (`umin`, `umax`,
+/// `smin`, `smax`), whose one answer a loop's trip count computed from the constants may need. The
+/// other integer operations (the funnel shifts, saturating arithmetic) are computed where they
+/// run.
 fn int_op(kind: &InstKind) -> Option<LlvmIntOp> {
     match kind {
         InstKind::Call(call) => match call.callee {
@@ -339,7 +341,13 @@ fn int_op(kind: &InstKind) -> Option<LlvmIntOp> {
                 ..
             } if matches!(
                 op,
-                LlvmIntOp::Ctpop | LlvmIntOp::BitReverse | LlvmIntOp::Bswap
+                LlvmIntOp::Ctpop
+                    | LlvmIntOp::BitReverse
+                    | LlvmIntOp::Bswap
+                    | LlvmIntOp::UMin
+                    | LlvmIntOp::UMax
+                    | LlvmIntOp::SMin
+                    | LlvmIntOp::SMax
             ) =>
             {
                 Some(op)
@@ -1124,12 +1132,13 @@ impl<'b> Solver<'b> {
                 },
                 None => Lat::Bottom,
             },
-            // An integer bit operation on a constant is its constant; on an undefined value, what
-            // the run computes, as any call's.
+            // An integer bit operation, minimum or maximum of constants is its constant; of an
+            // undefined value, what the run computes, as any call's.
             InstKind::Call(call) if int_op(&inst.kind).is_some() => {
                 let op = int_op(&inst.kind).ok_or_else(|| invariant("an integer operation"))?;
                 match self.pure(&call.args, cx, m, |f, c, m| match c {
                     [x] => f.int_unary(op, ty, *x, m),
+                    [x, y] => f.int_minmax(op, ty, *x, *y, m),
                     _ => Ok(None),
                 })? {
                     Lat::Fc(_) => Lat::Bottom,

@@ -2,6 +2,7 @@
 //! bound every index of it, and keeps its declared type where one index has no bound.
 
 use super::*;
+use crate::intrinsics::{LlvmIntOp, LlvmIntrinsic};
 
 /// How [`tiles`]'s private array is reached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -10,6 +11,9 @@ enum Case {
     Counted,
     /// The outer counter runs as often as function constant 0, supplied with this value.
     Constant(u32),
+    /// The outer counter runs `llvm.umax(c, 1)` times, `c` function constant 0 supplied with
+    /// this value: a trip count the constants decide through a maximum.
+    Clamped(u32),
     /// The read's outer index is a word of buffer 1, which only the run knows.
     Dynamic,
     /// The inner counter runs 6 times over the innermost level, of 4 elements.
@@ -21,7 +25,7 @@ enum Case {
 }
 
 /// `kernel k(device float* out, device uint* in)` with `float acc[32][32][4]`: for `i` below 2
-/// (or function constant 0) and `j` below 4, `acc[i][j][2] = float(i * 16 + j)`; then `out[0] =
+/// (or function constant 0, or its maximum with 1) and `j` below 4, `acc[i][j][2] = float(i * 16 + j)`; then `out[0] =
 /// acc[1][3][2]` (its outer index `in[0]` in [`Case::Dynamic`]).
 fn tiles(case: Case) -> Result<Entry, Error> {
     let mut m = ModuleBuilder::new();
@@ -37,6 +41,8 @@ fn tiles(case: Case) -> Result<Entry, Error> {
     let acc_ty = m.array(mid_ty, 32);
     let tiles = fc_global(&mut m, "tiles", i32t);
     let tiles_addr = m.global_addr(tiles);
+    let umax_ty = m.fn_ty(i32t, &[i32t, i32t]);
+    let umax = m.declare("llvm.umax.i32", umax_ty);
     let (zero, one, two, three, four, six, sixteen) = (
         m.const_int(i32t, 0),
         m.const_int(i32t, 1),
@@ -59,6 +65,14 @@ fn tiles(case: Case) -> Result<Entry, Error> {
     );
     let trips_i = match case {
         Case::Constant(_) => load(&mut f, i32t, tiles_addr),
+        Case::Clamped(_) => {
+            let c = load(&mut f, i32t, tiles_addr);
+            let op = LlvmIntrinsic::Int {
+                op: LlvmIntOp::UMax,
+                ty: NumTy::scalar(Elem::I32),
+            };
+            call(&mut f, i32t, Callee::Llvm { decl: umax, op }, &[c, one])
+        }
         _ => two,
     };
     let trips_j = if case == Case::Past { six } else { four };
@@ -186,7 +200,7 @@ fn tiles(case: Case) -> Result<Entry, Error> {
         vec![fc_decl(0, tiles, i32t)],
     );
     let constants: Vec<(u32, ConstValue)> = match case {
-        Case::Constant(n) => vec![(0, int(n))],
+        Case::Constant(n) | Case::Clamped(n) => vec![(0, int(n))],
         _ => vec![(0, int(2))],
     };
     specialize(module, &abi, &request(&constants), &mut meter())
@@ -222,6 +236,11 @@ fn an_array_reached_by_counters_and_constants_is_allocated_as_far_as_they_reach(
     // The outer counter's trip count a function constant gives: 3 runs reach 3 elements.
     let e = tiles(Case::Constant(3)).unwrap();
     assert_eq!(allocas(&e), [vec![3, 4, 3]], "{}", body_text(&e));
+    // A trip count of `max(c, 1)`: the maximum of constants is a constant, 3 and 1 alike.
+    let e = tiles(Case::Clamped(3)).unwrap();
+    assert_eq!(allocas(&e), [vec![3, 4, 3]], "{}", body_text(&e));
+    let e = tiles(Case::Clamped(0)).unwrap();
+    assert_eq!(allocas(&e), [vec![2, 4, 3]], "{}", body_text(&e));
 }
 
 #[test]
