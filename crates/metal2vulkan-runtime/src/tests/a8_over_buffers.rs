@@ -107,6 +107,32 @@ fn descriptor() -> TextureDescriptor {
     d
 }
 
+/// The features a texture that samples, filters and is copied asks of its image.
+const NAMED: [(ash::vk::FormatFeatureFlags, &str); 5] = [
+    (ash::vk::FormatFeatureFlags::SAMPLED_IMAGE, "sampled"),
+    (
+        ash::vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR,
+        "linear filter",
+    ),
+    (
+        ash::vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_MINMAX,
+        "minmax filter",
+    ),
+    (ash::vk::FormatFeatureFlags::TRANSFER_SRC, "transfer source"),
+    (
+        ash::vk::FormatFeatureFlags::TRANSFER_DST,
+        "transfer destination",
+    ),
+];
+
+/// The names of `NAMED`'s features `flags` holds.
+fn named(flags: ash::vk::FormatFeatureFlags) -> Vec<&'static str> {
+    (NAMED.iter())
+        .filter(|&&(feature, _)| flags.contains(feature))
+        .map(|&(_, name)| name)
+        .collect()
+}
+
 /// The device's linear and optimal tiling features of `format`, as it reports them.
 fn features(device: &Device, format: ash::vk::Format) -> String {
     // SAFETY: the handles are used while the device lives.
@@ -116,8 +142,10 @@ fn features(device: &Device, format: ash::vk::Format) -> String {
         (handles.instance).get_physical_device_format_properties(handles.physical_device, format)
     };
     format!(
-        "{format:?}: linear {:?}, optimal {:?}",
-        properties.linear_tiling_features, properties.optimal_tiling_features
+        "format {}: linear {:?}, optimal {:?}",
+        format.as_raw(),
+        named(properties.linear_tiling_features),
+        named(properties.optimal_tiling_features)
     )
 }
 

@@ -296,8 +296,9 @@ fn answers(
         "not asked (no VK_EXT_image_drm_format_modifier)".to_owned()
     };
     format!(
-        "{format:?} {}x{}: its linear image's rows {linear:?} apart; a DRM_FORMAT_MOD_LINEAR \
+        "format {} {}x{}: its linear image's rows {linear:?} apart; a DRM_FORMAT_MOD_LINEAR \
          image{} with its plane at offset {offset}, rows {pitch} apart: {explicit}",
+        format.as_raw(),
         extent[0],
         extent[1],
         if dma_buf { " for dma-bufs" } else { "" },
