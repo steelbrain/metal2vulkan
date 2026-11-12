@@ -811,7 +811,6 @@ impl Visibility {
                     range,
                     read: shader,
                     write: shader,
-                    aliased: false,
                 });
             }
         }

@@ -5,24 +5,23 @@
 //! the surface's pages (`Buffer::new_texture_with_iosurface_plane`), so two textures of one surface
 //! lay over two buffers. Metal orders two textures over one IOSurface as it orders one resource's
 //! accesses: in one encoder, in one command buffer and across one queue's command buffers (an M4,
-//! macOS 27.0.1, plain and under API validation; across queues only as
-//! the program orders them).
+//! macOS 27.0.1, plain and under API validation). Across queues, a command buffer committed after
+//! another and reaching the same surface through another texture ran after it, reading its
+//! writes, in every run on an M3 Max (macOS 27.0.1), a Radeon Pro 5300M and a UHD 630 (macOS
+//! 26.7.1) with both textures tracked, and with both untracked but once on the 5300M; a texture
+//! of another surface ran alongside (`metal2vulkan-conformance`'s
+//! `probes/cross_queue_surface_order.m`). The x86 Macs' GPUs took a later commit of another queue
+//! first now and then even over one tracked buffer, which is the order across queues the
+//! scheduler keeps (`scheduler/order.rs`).
 //!
 //! - **One memory, one key.** A no-copy buffer made over exactly the bytes a live one covers
 //!   (the same first byte and length; not a heap's own) joins it: the device notes the first such
 //!   buffer's key as the memory's ([`Alias`]), and each command's uses of a buffer that joined
 //!   carry a use of the memory's key too, of the same bytes and access ([`HostAliases::augment`],
 //!   `EncoderCore`). The tracker orders those as one resource's, inside an encoder, between
-//!   encoders and command buffers, and across queues as it orders any submitted batch. The first
-//!   buffer's own uses name the memory's key already, and its work from before the second buffer
-//!   was made is ordered against the second's.
-//! - **Not held across queues.** An added use is marked (`Use::aliased`), and the scheduler's
-//!   order across queues (`scheduler/order.rs`, `tracker::Footprint`) leaves it out: a batch the
-//!   runtime holds (for its pipelines' making, a host step, its checks) holds back no later commit
-//!   of another queue that meets it only over shared host bytes, as Metal orders two resources
-//!   over one IOSurface across queues only as the program orders them (above). Once both are
-//!   submitted, the tracker orders them in submission order. A use joined with one its command
-//!   named stays named, so two batches that both name a resource still wait in commit order.
+//!   encoders and command buffers, and across queues as it orders any. The first buffer's own
+//!   uses name the memory's key already, and its work from before the second buffer was made is
+//!   ordered against the second's.
 //! - **One memory, one import.** A buffer that joins a memory, of the memory class of a live
 //!   import of it, lies in that import's `VkBuffer` (`HostImport`, `Device::buffer_in_import`):
 //!   one resource to the driver, where the tracker's barriers are not all the ordering there is.
@@ -81,8 +80,11 @@
 //!   and a buffer whose GPU writes are dropped imports a read-only view of its own, or is a copy
 //!   of its own (a copy shared with it would take its writes): Metal orders no two
 //!   no-copy buffers over one allocation (the same probe's `host` cases read stale or mixed
-//!   texels), so the runtime's joining of the same range is the IOSurface's ordering, which a
-//!   race over plain no-copy buffers may also give. A rebound buffer leaves the memory it was
+//!   texels), and across queues neither: a later commit of another queue through a second
+//!   buffer over the allocation ran alongside the first on all three Macs above, reading stale
+//!   or mixed words (`probes/cross_queue_surface_order.m`'s `nocopy-two`). So the runtime's
+//!   joining of the same range is the IOSurface's ordering, which a race over plain no-copy
+//!   buffers may also give. A rebound buffer leaves the memory it was
 //!   made over, keeping the key it joined (`Device::rebind_host_pages`); its pages stay in the
 //!   import while commands recorded before the rebind hold them. Two buffers made at once over
 //!   the same memory may each import it (each joins after its import): they share the key, not
@@ -254,7 +256,6 @@ impl Takes {
         if let Some(key) = self.joined {
             add(Use {
                 key,
-                aliased: true,
                 ..used.clone()
             });
         }
@@ -265,7 +266,6 @@ impl Takes {
                     add(Use {
                         key,
                         range: UseRange::Bytes(shared),
-                        aliased: true,
                         ..used.clone()
                     });
                 }
@@ -828,7 +828,6 @@ pub(super) fn augmented(
                             add(Use {
                                 key,
                                 range: UseRange::Bytes(range),
-                                aliased: true,
                                 ..used.clone()
                             });
                         }

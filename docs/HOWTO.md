@@ -535,11 +535,7 @@ made over lies in that copy, of either storage mode, as a buffer over a live imp
 that import: no second copy, no read of the pages, the gate not asked
 (`copied_host_buffers_shared`). So textures of one surface over a new buffer each frame are one
 memory with the surface's other buffers while one of them lives, ordered as one resource's
-accesses in one command buffer and in one queue's, as Metal orders them. Across queues they run
-in the order they reach the GPU, which Metal leaves to the program's events: a command buffer
-the runtime holds (its pipelines' making, a host step) holds back no other queue's that meets it
-only through the surface's bytes, where it holds one that names the same buffer or texture until
-it goes, in commit order. A buffer made after the
+accesses in one command buffer and across queues, as Metal orders them; a buffer made after the
 last one over the bytes went makes a new copy. A rebind to such bytes lies in the copy where its
 textures were planned at the copy's offset (its first byte) and no image in place rides on it. A
 heap's own buffer, and memory whose GPU writes Metal's private option bit 24 drops, keep their own.

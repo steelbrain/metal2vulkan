@@ -2993,7 +2993,6 @@ fn bytes_use(
         range: UseRange::Bytes(range),
         read,
         write,
-        aliased: false,
     }
 }
 

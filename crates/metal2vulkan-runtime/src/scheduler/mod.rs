@@ -2533,13 +2533,10 @@ fn gate_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits: 
 /// function wrote them unnamed, an earlier one of the step's own command buffer or one of an
 /// earlier command buffer of any queue.
 ///
-/// Every batch that may write what the step reads through a resource the step's work names was
-/// submitted by then: an earlier batch of its line went before it, a batch of an earlier commit on
-/// another line that may write those bytes holds it behind until submitted (`is_behind`, whose
-/// footprints hold the step's reads, `ExecutionRange::host_reads`), and a later commit's that may
-/// write them waits behind it. A write of another queue's through another resource over the same
-/// host bytes is ordered with the step only as the program orders it, as Metal orders them
-/// (`host_aliases.rs`): where submitted by then, the gate covers it.
+/// Every batch that may write what the step reads was submitted by then: an earlier batch of its
+/// line went before it, a batch of an earlier commit on another line that may write those bytes
+/// holds it behind until submitted (`is_behind`, whose footprints hold the step's reads,
+/// `ExecutionRange::host_reads`), and a later commit's that may write them waits behind it.
 fn gate_of(
     buffer: &Hold<CommandBufferShared>,
     index: usize,

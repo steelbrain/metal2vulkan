@@ -339,7 +339,6 @@ pub(super) fn whole_use(buffer: &Buffer, read: Access, write: Access) -> Use<Res
         range: UseRange::Bytes(range),
         read,
         write,
-        aliased: false,
     }
 }
 

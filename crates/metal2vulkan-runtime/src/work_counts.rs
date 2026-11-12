@@ -6251,10 +6251,7 @@ pub struct WorkCounts {
     /// keeps its place and whose footprint runs in commit order with the head's
     /// (`scheduler/order.rs`): Metal tracks a resource across queues in the order it schedules
     /// the command buffers, so a batch the runtime holds for a reason of its own (its host step,
-    /// its pipelines' making, its submission checks) must not let a later commit's conflicting
-    /// batch go first. A conflict is on a resource both batches name: two resources over the same
-    /// host bytes (two textures over one IOSurface) hold nothing back here, as Metal orders them
-    /// across queues only as the program does (`host_aliases.rs`). This is
+    /// its submission checks) must not let a later commit's conflicting batch go first. This is
     /// the one hold that crosses logical queues and `VkQueue`s, and a batch whose uses are not
     /// all known yet (work a host step or its submission records, `tracker::ordered`'s `None`)
     /// conflicts with every batch that makes a tracked use or names a fence, but for a host

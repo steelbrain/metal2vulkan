@@ -451,7 +451,6 @@ impl Texture {
             range: UseRange::Bytes(range),
             read,
             write: Access::NONE,
-            aliased: false,
         })
     }
 

@@ -2167,7 +2167,6 @@ impl Texels {
                 range: copies.shadow_range.clone(),
                 read,
                 write,
-                aliased: false,
             };
         }
         let shader = &self.shader;
@@ -2178,7 +2177,6 @@ impl Texels {
             range: UseRange::Bytes(range),
             read,
             write,
-            aliased: false,
         }
     }
 

@@ -287,11 +287,6 @@ pub(super) struct Use<K> {
     pub(super) read: Access,
     /// The writes, empty when the use only reads.
     pub(super) write: Access,
-    /// Whether the device's host aliases added it for a use of another resource over the same
-    /// host bytes (`host_aliases.rs`), the resource a command named: the key is not one its
-    /// command named. Barriers take it as any use; the scheduler's order across queues does not
-    /// ([`Footprint`]). A use joined with one its command named is named.
-    pub(super) aliased: bool,
 }
 
 impl<K> Use<K> {
@@ -303,7 +298,6 @@ impl<K> Use<K> {
             range,
             read,
             write: Access::NONE,
-            aliased: false,
         }
     }
 
@@ -315,22 +309,12 @@ impl<K> Use<K> {
             range,
             read: Access::NONE,
             write,
-            aliased: false,
         }
     }
 
-    /// Join `other`'s reads and writes, of the same resource, into it: aliased only where both
-    /// are ([`aliased`](Self::aliased)).
-    fn join_access(&mut self, other: &Use<K>) {
-        self.read = self.read.union(other.read);
-        self.write = self.write.union(other.write);
-        self.aliased &= other.aliased;
-    }
-
     /// Whether this use of bytes holds `other`: of the same resource, tracking, reads and writes,
-    /// over a range holding `other`'s, and named where `other` is (an aliased use holds no named
-    /// one). Noting or gathering `other` after it changes nothing that takes uses by overlap (an
-    /// image's use holds none but its equal).
+    /// over a range holding `other`'s. Noting or gathering `other` after it changes nothing that
+    /// takes uses by overlap (an image's use holds none but its equal).
     pub(super) fn covers(&self, other: &Use<K>) -> bool
     where
         K: PartialEq,
@@ -344,7 +328,6 @@ impl<K> Use<K> {
             && self.tracked == other.tracked
             && self.read == other.read
             && self.write == other.write
-            && (!self.aliased || other.aliased)
             && self.range.contains(&other.range)
     }
 
@@ -1096,7 +1079,6 @@ pub(super) fn merge<S: Copy + Ord>(uses: &mut Vec<Use<S>>) {
                 let (read, write) = (uses[at].read, uses[at].write);
                 uses[k].read = uses[k].read.union(read);
                 uses[k].write = uses[k].write.union(write);
-                uses[k].aliased &= uses[at].aliased;
             }
             None => {
                 uses.swap(kept, at);
@@ -1323,7 +1305,10 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         {
             let ranges = part.tracked.entry(used.key).or_default();
             match ranges.iter_mut().find(|known| known.range == used.range) {
-                Some(known) => known.join_access(used),
+                Some(known) => {
+                    known.read = known.read.union(used.read);
+                    known.write = known.write.union(used.write);
+                }
                 // A resource used at a second range (a buffer whose draws move along it) takes
                 // room for every range it keeps before they merge, and the merge's own, at once.
                 None => ranges.push_with_room(used.clone(), ENTRIES_PER_KEY + 1),
@@ -2036,7 +2021,8 @@ fn coalesce_uses<K>(uses: &mut Vec<Use<K>>) {
                     let other = uses.swap_remove(next);
                     let merged = &mut uses[first];
                     merged.range = range;
-                    merged.join_access(&other);
+                    merged.read = merged.read.union(other.read);
+                    merged.write = merged.write.union(other.write);
                 }
                 None => next += 1,
             }
@@ -2065,7 +2051,6 @@ fn inside_uses<K: Copy + Ord>(
         range,
         read: used.read,
         write: used.write,
-        aliased: used.aliased,
     };
     into.clear();
     for used in uses {
@@ -2234,7 +2219,10 @@ fn join_use<K: Copy + PartialEq>(
     #[cfg(test)]
     JOIN_LOOKED_AT.with(|at| at.set(at.get() + (known.len() + added.len() - from) as u64));
     let key = used.key;
-    let into = |known: &mut Use<K>| known.join_access(&used);
+    let into = |known: &mut Use<K>| {
+        known.read = known.read.union(used.read);
+        known.write = known.write.union(used.write);
+    };
     let mut theirs = (known.iter_mut()).chain(added[from..].iter_mut());
     if let Some(same) = theirs.find(|known| known.key == key && known.range == used.range) {
         into(same);
@@ -2298,8 +2286,7 @@ impl<K> Summary<K> {
 
 /// What a batch's summaries make and wait for, as the scheduler compares a batch held for a
 /// reason of the runtime's own with one committed after it on another queue (`scheduler/order.rs`):
-/// its tracked uses, sorted by resource, those the host aliases added marked
-/// ([`Use::aliased`]), and the fences it waits for and updates.
+/// its tracked uses, sorted by resource, and the fences it waits for and updates.
 pub(super) struct Footprint<K> {
     uses: Vec<Use<K>>,
     waits: Vec<K>,
@@ -2363,19 +2350,8 @@ impl<K: Copy + Ord> Footprint<K> {
     }
 
     /// Whether `self`, committed first, and `later` must run in that order: a tracked use of
-    /// each, of a resource both named, shares its range and one of them writes it, or one updates
-    /// a fence the other waits for or updates.
-    ///
-    /// A use the host aliases added ([`Use::aliased`]) orders nothing here: it is another
-    /// resource's over the same host bytes (two no-copy buffers over one memory, two textures
-    /// over one IOSurface), and Metal orders such resources across queues only as the program
-    /// orders them, with events (`host_aliases.rs`, measured on an M4 under macOS 27.0.1). Inside
-    /// one queue, and on the GPU once both are submitted, the tracker still orders them as one
-    /// resource. A batch held for a reason of the runtime's own (its pipelines' making, a host
-    /// step, its checks) so holds no later commit of another queue that meets it only through
-    /// shared pages: one guest process's command buffer, its compute pipeline's cold making 3 s on
-    /// an Iris Xe, held the other processes' frames over a surface they shared, and the guest's
-    /// display with them.
+    /// each shares a resource's range and one of them writes it, or one updates a fence the
+    /// other waits for or updates.
     fn conflicts(&self, later: &Footprint<K>) -> bool {
         let fences = |updates: &[K], other: &Footprint<K>| {
             updates
@@ -2385,14 +2361,13 @@ impl<K: Copy + Ord> Footprint<K> {
         if fences(&self.updates, later) || fences(&later.updates, self) {
             return true;
         }
-        later.uses.iter().filter(|used| !used.aliased).any(|used| {
+        later.uses.iter().any(|used| {
             let first = self.uses.partition_point(|earlier| earlier.key < used.key);
             self.uses[first..]
                 .iter()
                 .take_while(|earlier| earlier.key == used.key)
                 .any(|earlier| {
-                    !earlier.aliased
-                        && earlier.range.overlaps(&used.range)
+                    earlier.range.overlaps(&used.range)
                         && !(earlier.write.is_empty() && used.write.is_empty())
                 })
         })
