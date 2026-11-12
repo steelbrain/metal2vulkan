@@ -15,9 +15,17 @@
 //!   `alv_level1` level 2: both read only levels before the attached one, through a view of them
 //!   (`render/attached_levels.rs`).
 //!
+//!
+//! Where level 0's pass also fetches its attachment in a raster order group (the fill drawn at
+//! twice its value, then halved), a device whose fetch needs `STORAGE` the image lacks (the M3)
+//! renders that pass through a scratch, and the icon takes its storage form at a commit
+//! (`texture/storage_form.rs`): the icons' own, or, where another command buffer was uncommitted
+//! as they committed, that one's.
+//!
 //! The functions are `tob_rect`, `tob_solid` and `tob_sample` of the owned fixture
-//! `validation/fixtures/public/engine/tob_renders.ll`, and `alv_rect`, `alv_implicit` and
-//! `alv_level1` of `validation/fixtures/public/engine/alv_levels.ll`.
+//! `validation/fixtures/public/engine/tob_renders.ll`, `alv_rect`, `alv_implicit` and
+//! `alv_level1` of `validation/fixtures/public/engine/alv_levels.ll`, and `fetch_ordered` of
+//! `validation/fixtures/public/engine/fragment_fetch.ll`.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -53,13 +61,33 @@ fn side(level: u64) -> u64 {
     (SIDE >> level).max(1)
 }
 
-/// A draw of a pass: its state, the vertex bytes and fragment bytes it takes, and the texture and
-/// sampler at fragment slot 0.
-type Draw<'a> = (
-    &'a RenderPipelineState,
-    Option<&'a [u8]>,
-    Option<(&'a Texture, &'a SamplerState)>,
-);
+/// What a draw's fragment function takes at slot 0.
+#[derive(Clone, Copy)]
+enum Fragment<'a> {
+    /// Bytes at buffer 0.
+    Bytes(&'a [u8]),
+    /// A texture and sampler at texture and sampler 0.
+    Sampled(&'a Texture, &'a SamplerState),
+    /// Nothing.
+    Nothing,
+}
+
+/// A draw of a pass: its state, the vertex bytes it takes, and what its fragment function takes.
+type Draw<'a> = (&'a RenderPipelineState, Option<&'a [u8]>, Fragment<'a>);
+
+/// How a run renders its icons.
+#[derive(Clone, Copy, Debug)]
+struct Shape {
+    /// The later levels read through the copy, else in place.
+    through_copy: bool,
+    /// Level 0's pass fetches its attachment after the fill (`fetch_ordered`, halving the fill
+    /// drawn at twice its value): the M3 renders it through a scratch and the texture takes its
+    /// storage form at a commit (`texture/storage_form.rs`).
+    fetch: bool,
+    /// The icons' command buffer commits while another is uncommitted, which commits after it
+    /// with nothing in it: a storage form rides on that later commit.
+    later_commit: bool,
+}
 
 /// The queue, the states and samplers, and a read-back buffer.
 struct Tools {
@@ -68,28 +96,39 @@ struct Tools {
     sample: RenderPipelineState,
     implicit: RenderPipelineState,
     level1: RenderPipelineState,
+    /// `fetch_ordered`, where the device fetches.
+    fetch: Option<RenderPipelineState>,
     /// Nearest filters and mip filter, unclamped, and clamped to level 0.
     sampler: SamplerState,
     level0: SamplerState,
-    /// `tob_rect`'s corners covering the whole target, and `tob_solid`'s color.
+    /// `tob_rect`'s corners covering the whole target, and `tob_solid`'s colors: the fill, and
+    /// twice it.
     whole: Vec<u8>,
     fill: Vec<u8>,
+    double: Vec<u8>,
     back: Buffer,
 }
 
 impl Tools {
     fn new(device: &Device) -> Tools {
+        let function = |fixture: &str, name: &str| {
+            let function = library(device, fixture)
+                .new_function_with_name(name)
+                .unwrap();
+            StageSource::Function(function.function_descriptor())
+        };
+        // The vertex function of `fixture`, or of `tob_renders.ll` for `tob_rect`, and the
+        // fragment function of `fixture`.
         let state = |fixture: &str, vertex: &str, fragment: &str| {
-            let library = library(device, fixture);
-            let function = |name: &str| {
-                let function = library.new_function_with_name(name).unwrap();
-                StageSource::Function(function.function_descriptor())
+            let vertex_fixture = match vertex {
+                "tob_rect" => "engine/tob_renders.ll",
+                _ => fixture,
             };
-            let mut descriptor = RenderPipelineDescriptor::new(function(vertex));
-            descriptor.fragment = Some(function(fragment));
+            let mut descriptor = RenderPipelineDescriptor::new(function(vertex_fixture, vertex));
+            descriptor.fragment = Some(function(fixture, fragment));
             descriptor.color_attachments[0] =
                 Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float));
-            (device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())).unwrap()
+            device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())
         };
         let sampler = |max_lod: f32| {
             let mut descriptor = SamplerDescriptor::new();
@@ -100,22 +139,29 @@ impl Tools {
         let (tob, alv) = ("engine/tob_renders.ll", "engine/alv_levels.ll");
         Tools {
             queue: device.new_command_queue().unwrap(),
-            solid: state(tob, "tob_rect", "tob_solid"),
-            sample: state(tob, "tob_rect", "tob_sample"),
-            implicit: state(alv, "alv_rect", "alv_implicit"),
-            level1: state(alv, "alv_rect", "alv_level1"),
+            solid: state(tob, "tob_rect", "tob_solid").unwrap(),
+            sample: state(tob, "tob_rect", "tob_sample").unwrap(),
+            implicit: state(alv, "alv_rect", "alv_implicit").unwrap(),
+            level1: state(alv, "alv_rect", "alv_level1").unwrap(),
+            fetch: state("engine/fragment_fetch.ll", "tob_rect", "fetch_ordered").ok(),
             sampler: sampler(f32::MAX),
             level0: sampler(0.0),
             whole: bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes),
             fill: bytes_of(&FILL, f32::to_le_bytes),
+            double: bytes_of(&FILL.map(|c| c * 2.0), f32::to_le_bytes),
             back: device
                 .new_buffer(SIDE * SIDE * TEXEL * LEVELS, ResourceOptions::shared())
                 .unwrap(),
         }
     }
 
-    /// A pass over `level` of `target`, cleared to zero and stored, drawing `draw` once.
-    fn pass(&self, command_buffer: &CommandBuffer, (target, level): (&Texture, u64), draw: Draw) {
+    /// A pass over `level` of `target`, cleared to zero and stored, drawing each of `draws` once.
+    fn pass(
+        &self,
+        command_buffer: &CommandBuffer,
+        (target, level): (&Texture, u64),
+        draws: &[Draw],
+    ) {
         let mut pass = RenderPassDescriptor::new();
         let color = &mut pass.color_attachments[0];
         color.texture = Some(target.clone());
@@ -124,25 +170,27 @@ impl Tools {
         color.clear_color = ClearColor::new(0.0, 0.0, 0.0, 0.0);
         color.store_action = StoreAction::Store;
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
-        let (state, vertex, sampled) = draw;
-        encoder.set_render_pipeline_state(state).unwrap();
-        if let Some(bytes) = vertex {
-            encoder.set_vertex_bytes(bytes, 0).unwrap();
-        }
-        match sampled {
-            Some((texture, sampler)) => {
-                encoder.set_fragment_texture(Some(texture), 0).unwrap();
-                (encoder.set_fragment_sampler_state(Some(sampler), 0)).unwrap();
+        for &(state, vertex, fragment) in draws {
+            encoder.set_render_pipeline_state(state).unwrap();
+            if let Some(bytes) = vertex {
+                encoder.set_vertex_bytes(bytes, 0).unwrap();
             }
-            None => encoder.set_fragment_bytes(&self.fill, 0).unwrap(),
+            match fragment {
+                Fragment::Sampled(texture, sampler) => {
+                    encoder.set_fragment_texture(Some(texture), 0).unwrap();
+                    (encoder.set_fragment_sampler_state(Some(sampler), 0)).unwrap();
+                }
+                Fragment::Bytes(bytes) => encoder.set_fragment_bytes(bytes, 0).unwrap(),
+                Fragment::Nothing => {}
+            }
+            (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
         }
-        (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
         encoder.end_encoding().unwrap();
     }
 
     /// A new icon, its levels' passes encoded in `command_buffer`, the later levels read through
     /// the copy or in place.
-    fn icon(&self, command_buffer: &CommandBuffer, through_copy: bool) -> Texture {
+    fn icon(&self, command_buffer: &CommandBuffer, shape: Shape) -> Texture {
         let device = self.queue.device();
         let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, SIDE, SIDE, true);
         d.mipmap_level_count = LEVELS;
@@ -150,14 +198,21 @@ impl Tools {
         d.resource_options = ResourceOptions::private();
         let icon = device.new_texture(&d).unwrap();
         let whole = Some(self.whole.as_slice());
-        self.pass(command_buffer, (&icon, 0), (&self.solid, whole, None));
+        let first: Vec<Draw> = match (shape.fetch, &self.fetch) {
+            (true, Some(fetch)) => vec![
+                (&self.solid, whole, Fragment::Bytes(&self.double)),
+                (fetch, whole, Fragment::Nothing),
+            ],
+            _ => vec![(&self.solid, whole, Fragment::Bytes(&self.fill))],
+        };
+        self.pass(command_buffer, (&icon, 0), &first);
         for level in 1..LEVELS {
-            let draw: Draw = match (through_copy, level) {
-                (true, _) => (&self.sample, whole, Some((&icon, &self.sampler))),
-                (false, 1) => (&self.implicit, None, Some((&icon, &self.level0))),
-                (false, _) => (&self.level1, None, Some((&icon, &self.sampler))),
+            let draw: Draw = match (shape.through_copy, level) {
+                (true, _) => (&self.sample, whole, Fragment::Sampled(&icon, &self.sampler)),
+                (false, 1) => (&self.implicit, None, Fragment::Sampled(&icon, &self.level0)),
+                (false, _) => (&self.level1, None, Fragment::Sampled(&icon, &self.sampler)),
             };
-            self.pass(command_buffer, (&icon, level), draw);
+            self.pass(command_buffer, (&icon, level), &[draw]);
         }
         icon
     }
@@ -169,8 +224,8 @@ impl Tools {
         d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
         d.resource_options = ResourceOptions::private();
         let target = device.new_texture(&d).unwrap();
-        let draw: Draw = (&self.implicit, None, Some((icon, &self.sampler)));
-        self.pass(command_buffer, (&target, 0), draw);
+        let draw: Draw = (&self.implicit, None, Fragment::Sampled(icon, &self.sampler));
+        self.pass(command_buffer, (&target, 0), &[draw]);
         target
     }
 
@@ -230,36 +285,51 @@ fn offset(level: u64) -> u64 {
     (0..level).map(|l| side(l) * side(l) * TEXEL).sum()
 }
 
-/// The counts that say which form the later levels' reads took.
-fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 3] {
+/// The counts that say which form the later levels' reads took, and the storage forms taken.
+fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
     [
         after.attachment_reads_through_copies - before.attachment_reads_through_copies,
         after.attached_read_slots_narrowed - before.attached_read_slots_narrowed,
         after.shadow_copies - before.shadow_copies,
+        after.storage_forms_taken - before.storage_forms_taken,
     ]
 }
 
-fn run(case: &str, through_copy: bool) {
+fn run(case: &str, shape: Shape) {
     let scratch = Scratch::new(&format!("icon-levels-{case}"));
     let device = device(&scratch.0);
     let tools = Tools::new(&device);
+    if shape.fetch && tools.fetch.is_none() {
+        eprintln!(
+            "ICON-LEVELS {case} on {}: no framebuffer fetch: nothing to check",
+            device.name()
+        );
+        return;
+    }
     let mut kept: Vec<Texture> = Vec::new();
     let mut failures = Vec::new();
-    let mut counts = [0; 3];
+    let mut counts = [0; 4];
     for round in 0..ROUNDS {
         // The round's icons, in one command buffer, as the server renders them.
         let before = device.work_counts();
         let command_buffer = tools.queue.command_buffer().unwrap();
+        let later = (shape.later_commit).then(|| tools.queue.command_buffer().unwrap());
         let icons: Vec<Texture> = (0..ICONS)
-            .map(|_| tools.icon(&command_buffer, through_copy))
+            .map(|_| tools.icon(&command_buffer, shape))
             .collect();
         command_buffer.commit().unwrap();
+        if let Some(later) = &later {
+            later.commit().unwrap();
+        }
         // The last round's icons go as the new ones are rendered.
         kept.clear();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.error(), None);
+        if let Some(later) = later {
+            later.wait_until_completed_for(WAIT).unwrap();
+        }
         let round_counts = moved(&before, &device.work_counts());
-        counts = [0, 1, 2].map(|i| counts[i] + round_counts[i]);
+        counts = [0, 1, 2, 3].map(|i| counts[i] + round_counts[i]);
         for (i, icon) in icons.iter().enumerate() {
             // Each icon drawn at each level's size in a later command buffer, then every level
             // of it read back; then the sampled targets.
@@ -296,7 +366,7 @@ fn run(case: &str, through_copy: bool) {
     }
     eprintln!(
         "ICON-LEVELS {case} on {}: {} of {} icons wrong; (reads through copies, slots narrowed, \
-         shadow copies) {counts:?}; first {:?}",
+         shadow copies, storage forms) {counts:?}; first {:?}",
         device.name(),
         failures.len(),
         ROUNDS * ICONS,
@@ -305,12 +375,31 @@ fn run(case: &str, through_copy: bool) {
     assert!(failures.is_empty(), "{case}: {failures:?}");
 }
 
+/// A shape of the icons' render.
+fn shape(through_copy: bool, fetch: bool, later_commit: bool) -> Shape {
+    Shape {
+        through_copy,
+        fetch,
+        later_commit,
+    }
+}
+
 #[test]
 fn an_icons_levels_drawn_through_the_copy_hold_its_fill_when_sampled_later() {
-    run("through-copy", true);
+    run("through-copy", shape(true, false, false));
 }
 
 #[test]
 fn an_icons_levels_drawn_in_place_hold_its_fill_when_sampled_later() {
-    run("in-place", false);
+    run("in-place", shape(false, false, false));
+}
+
+#[test]
+fn a_fetched_icons_levels_drawn_through_the_copy_hold_its_fill_when_sampled_later() {
+    run("fetched-through-copy", shape(true, true, false));
+}
+
+#[test]
+fn a_fetched_icons_levels_hold_its_fill_where_its_storage_form_rides_a_later_commit() {
+    run("fetched-later-commit", shape(true, true, true));
 }
