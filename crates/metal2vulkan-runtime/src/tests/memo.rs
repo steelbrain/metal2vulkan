@@ -110,7 +110,12 @@ impl Watch<u32, ()> for Log {
 fn a_watched_map_tells_each_keep_use_eviction_and_removal() {
     let told: Told = Arc::default();
     let mut lru: Lru<u32, ()> = Lru::new(10, 3).watched(Box::new(Log(Arc::clone(&told))));
-    let heard = || lock(&told).drain(..).collect::<Vec<_>>();
+    let heard = || {
+        let mut told = lock(&told);
+        let heard = told.clone();
+        told.clear();
+        heard
+    };
     for key in 0..3 {
         lru.insert(key, (), 1);
     }

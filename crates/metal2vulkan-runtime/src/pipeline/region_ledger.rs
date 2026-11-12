@@ -158,8 +158,12 @@ impl RegionLedger {
         if !self.due.swap(false, Ordering::AcqRel) {
             return;
         }
-        let past: Vec<_> = lock(&self.state).past.drain(..).collect();
-        for ((instance, key), memo) in past {
+        loop {
+            // One at a time, the ledger's lock let go before the memo's is taken.
+            let next = lock(&self.state).past.pop();
+            let Some(((instance, key), memo)) = next else {
+                break;
+            };
             if self.lists(instance, &key) {
                 continue;
             }
