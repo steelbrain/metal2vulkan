@@ -922,31 +922,31 @@ impl CommandBufferShared {
             wait_values.push(wait.at.value);
             wait_stages.push(wait.legacy_stages());
         }
-        // Every batch on another `VkQueue` that did new resources' first work, until it
-        // completed: any command may reach those resources unnamed.
+        // Every batch on another `VkQueue` that did new resources' first work whose memory its
+        // commands, or the first work it took, may reach, until it completed: memory a resource
+        // its encoders' uses name or make resident owns, every memory where a command may reach
+        // memory no use names or where that work's owner is unknown, and the memory of the first
+        // work it took, which comes after that work's. Counted (`WorkCounts::first_work_waits`).
         let completed = |point: Point| shared.queues[point.queue].completed_value() >= point.value;
-        let first_waits = firsts.waits(queue, completed);
-        for point in last_of_each(first_waits.iter().map(|&(point, _)| point)) {
+        let first_reaches = |owners: Option<&[ObjectId]>| match (owners, taken_owners.as_deref()) {
+            (Some(owners), Some(taken)) => {
+                owners.iter().any(|owner| taken.contains(owner))
+                    || state.parts_reach(shared, start..end, owners)
+            }
+            _ => true,
+        };
+        let first_waits: Vec<Point> = (firsts.waits(queue, completed).into_iter())
+            .filter(|(_, owners)| first_reaches(owners.as_deref()))
+            .map(|(point, _)| point)
+            .collect();
+        if !first_waits.is_empty() {
+            shared.counts.first_work_waited(true);
+        }
+        for point in last_of_each(first_waits) {
             across |= point.queue != queue;
             wait_semaphores.push(shared.queues[point.queue].timeline);
             wait_values.push(point.value);
             wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
-        }
-        // Whether its commands, or the first work it took, may reach what the work it waits for
-        // wrote, counted (`WorkCounts::first_work_waits`): memory a resource its encoders' uses
-        // name owns, every memory where a command may reach memory no use names, and the memory
-        // of the first work it took, which comes after that work's.
-        if !first_waits.is_empty() {
-            let first_reaches =
-                |owners: Option<&[ObjectId]>| match (owners, taken_owners.as_deref()) {
-                    (Some(owners), Some(taken)) => {
-                        owners.iter().any(|owner| taken.contains(owner))
-                            || state.parts_reach(shared, start..end, owners)
-                    }
-                    _ => true,
-                };
-            let reached = (first_waits.iter()).any(|(_, owners)| first_reaches(owners.as_deref()));
-            shared.counts.first_work_waited(reached);
         }
         // And the internal submission on the first `VkQueue` that did some, until it completed.
         if let Some((timeline, value)) = firsts.internal_wait().filter(|_| queue != 0) {

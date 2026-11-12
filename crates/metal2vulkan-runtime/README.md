@@ -395,7 +395,12 @@ after it, and 0 of 80 with the device dropped first
   Mac's fixed pattern of a compressed texture; a Mac with an Intel or AMD GPU's holds what its
   memory held, written by nothing (`WorkCounts::private_textures_unfilled`), or on an Apple GPU,
   whose own compressed texture would read Apple's pattern, zero
-  (`WorkCounts::private_textures_zero_filled`) (docs/API.md, accepted differences).
+  (`WorkCounts::private_textures_zero_filled`) (docs/API.md, accepted differences). A new
+  resource's first GPU work (its image's first layout, its zeros) runs at the start of the next
+  command buffer committed on any queue, or on the fill queue (above); a command buffer on
+  another queue waits for it only where its commands, or its own first work, may reach the new
+  resource's memory (`WorkCounts::first_work_waits_unused` counts those that waited for first
+  work they reach none of).
 - **The Metal address space.** Every buffer and heap has a `gpu_address`, and textures, samplers,
   pipeline states and indirect command buffers a `gpu_resource_id`. Translated shaders read both
   from argument buffers, as on Metal 3. A consumer may pin either (`AddressPlacement`,

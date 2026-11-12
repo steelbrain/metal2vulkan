@@ -88,9 +88,16 @@
 //!   copies of zeros, then a barrier that makes them visible to every later command and to the
 //!   host.
 //!   Commands after it on the same `VkQueue`, in this submission or a later one, see each image
-//!   in `GENERAL` and each fill done. On a device of several `VkQueue`s a submission on another
-//!   one waits for the batch that did it until that batch completed ([`FirstMoves::waits`]): any
-//!   of its commands may reach the resource unnamed. Fills made on the fill queue are waited for
+//!   in `GENERAL` and each fill done. On a device of several `VkQueue`s the batch that did it is
+//!   kept with what owns the memory its work wrote ([`Taken::owners`]) until it completed
+//!   ([`FirstMoves::waits`]), and a batch on another one waits for it where its commands, or the
+//!   first work it took, may reach that memory: memory a resource its encoders' uses name or make
+//!   resident owns, every memory where a command of it may reach memory no use names (a pointer
+//!   loaded from memory, work recorded on the GPU alone) or where that work's owner is unknown
+//!   (the device's own resources), and the memory of its own first work, which comes after that
+//!   work's (`command_buffer/submit.rs`, `WorkCounts::first_work_waits_unused` counting the
+//!   batches that waited for such work they reach none of). An internal submission waits for
+//!   every one. Fills made on the fill queue are waited for
 //!   by every later batch whose commands may reach what they filled, and every internal
 //!   submission, until the host saw them complete (`Device::fill_queue_wait_for`,
 //!   `Device::fill_queue_wait`).
