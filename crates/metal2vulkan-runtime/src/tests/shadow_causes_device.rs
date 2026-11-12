@@ -18,8 +18,9 @@
 //!   `minimumLinearTextureAlignmentForPixelFormat:`'s answer.
 //! - [`dma_buf_rows_the_device_lays_no_plane_at`]: on a device made without
 //!   `VK_EXT_external_memory_host`, whose no-copy buffers are imported as dma-bufs, `BGRA8Unorm`
-//!   textures of 96 x 8 texels, rows 384 bytes apart, at offsets 0, 256 and 32 of the buffer, and
-//!   an `R8Unorm` plane of 1920 x 4 texels at offset 32, rows 1920 bytes apart; with the driver's
+//!   textures of 96 x 8 texels, rows 384 bytes apart, at offsets 0, 256 and 32 of the buffer, an
+//!   `R8Unorm` plane of 1920 x 4 texels at offset 32, rows 1920 bytes apart, and `BGRA8Unorm`
+//!   textures of 64 x 8 texels, rows 256 bytes apart, at offsets 0, 256 and 32; with the driver's
 //!   answer for a dma-buf `DRM_FORMAT_MOD_LINEAR` image at each offset and pitch.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on Linux.
@@ -205,6 +206,36 @@ fn case(
     );
 }
 
+/// What the device reports of reading `format`'s texels through a uniform texel buffer over a
+/// buffer's bytes: the format's buffer features, `minTexelBufferOffsetAlignment`,
+/// `maxTexelBufferElements`, and `VkPhysicalDeviceTexelBufferAlignmentProperties`.
+fn texel_buffer_answers(device: &Device, format: vk::Format) -> String {
+    // SAFETY: the handles are used while the device lives.
+    let handles = unsafe { device.raw() };
+    // SAFETY: the physical device is the instance's.
+    let features = unsafe {
+        (handles.instance).get_physical_device_format_properties(handles.physical_device, format)
+    }
+    .buffer_features;
+    let uniform = features.contains(vk::FormatFeatureFlags::UNIFORM_TEXEL_BUFFER);
+    let mut alignment = vk::PhysicalDeviceTexelBufferAlignmentProperties::default();
+    let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut alignment);
+    // SAFETY: the physical device is the instance's; the chained structure is core in Vulkan 1.3.
+    unsafe {
+        (handles.instance).get_physical_device_properties2(handles.physical_device, &mut properties)
+    };
+    let limits = properties.properties.limits;
+    format!(
+        "format {}: uniform texel buffer {uniform}, minTexelBufferOffsetAlignment {}, \
+         maxTexelBufferElements {}, uniformTexelBufferOffsetAlignmentBytes {} (single texel {})",
+        format.as_raw(),
+        limits.min_texel_buffer_offset_alignment,
+        limits.max_texel_buffer_elements,
+        alignment.uniform_texel_buffer_offset_alignment_bytes,
+        alignment.uniform_texel_buffer_offset_single_texel_alignment,
+    )
+}
+
 /// What the driver reports of `format`'s images `extent` texels: the row pitch of its linear
 /// image, and the `DRM_FORMAT_MOD_LINEAR` image whose one plane lies at `offset`, rows `pitch`
 /// apart (for dma-bufs where `dma_buf`), laid out or refused.
@@ -327,6 +358,10 @@ fn rows_the_device_lays_no_linear_image_at() {
         let answer = answers(&device, format, [18, 28], (0, pitch), false);
         println!("{TEST} on {name}: answer: {answer}");
     }
+    println!(
+        "{TEST} on {name}: {}",
+        texel_buffer_answers(&device, format)
+    );
     let surface_bytes = counting(192 * 28, 5);
     for usage in [reads, renders] {
         let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, 18, 28, false);
@@ -414,7 +449,7 @@ fn dma_buf_rows_the_device_lays_no_plane_at() {
         "{TEST}: the check"
     );
     let queue = device.new_command_queue().unwrap();
-    let cases: [(PixelFormat, vk::Format, [u64; 2], u64, u64, u64); 5] = [
+    let cases: [(PixelFormat, vk::Format, [u64; 2], u64, u64, u64); 7] = [
         (
             PixelFormat::BGRA8Unorm,
             vk::Format::B8G8R8A8_UNORM,
@@ -452,6 +487,23 @@ fn dma_buf_rows_the_device_lays_no_plane_at() {
             vk::Format::B8G8R8A8_UNORM,
             [64, 8],
             0,
+            256,
+            4,
+        ),
+        // Rows at a multiple of 256 bytes, at offsets 256 and 32: what the offset alone does.
+        (
+            PixelFormat::BGRA8Unorm,
+            vk::Format::B8G8R8A8_UNORM,
+            [64, 8],
+            256,
+            256,
+            4,
+        ),
+        (
+            PixelFormat::BGRA8Unorm,
+            vk::Format::B8G8R8A8_UNORM,
+            [64, 8],
+            32,
             256,
             4,
         ),
