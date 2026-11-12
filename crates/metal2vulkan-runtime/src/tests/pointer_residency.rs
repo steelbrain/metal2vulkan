@@ -16,8 +16,8 @@
 //! The tests release imports at once through the crate's hook (`Device::release_idle_host_imports`)
 //! and check:
 //! - the counts that show the release and the import again ran (`WorkCounts::host_imports_released`,
-//!   `host_imports_reimported`, `host_imports_resident`, `host_imports_live`), and none of a
-//!   dma-buf's descriptors kept;
+//!   `host_imports_reimported`, `host_imports_resident`, `host_imports_held_for_good`,
+//!   `host_imports_live`), and none of a dma-buf's descriptors kept;
 //! - the bytes a blit reads and writes after a release, the CPU's writes made while released among
 //!   them;
 //! - that a released import, made again at its pointer, reads the pages a remap put there while
@@ -286,8 +286,10 @@ fn an_idle_pointer_import_is_released_and_imported_again_at_its_next_blit() {
         release(TEST, device, 1);
         let address = buffer.gpu_address();
         assert_ne!(address.0, 0, "{TEST}");
+        // It holds its memory as an import kept for good, no longer a releasable one.
         let counts = device.work_counts();
-        assert_eq!(residency(&counts), (3, 3, 1, 0), "{TEST}: exposed");
+        assert_eq!(residency(&counts), (3, 3, 0, 0), "{TEST}: exposed");
+        assert_eq!(counts.host_imports_held_for_good, 1, "{TEST}: exposed");
         assert_eq!(counts.host_imports_live, live, "{TEST}");
         assert!(read(&queue, &buffer, len) == filled, "{TEST}");
         assert_eq!(device.release_idle_host_imports(), 0, "{TEST}: exposed");

@@ -9,8 +9,8 @@
 //! (`Device::release_idle_host_imports`), except one that waits for the device's residency
 //! thread, and check:
 //! - the counts that show the release and the import again ran (`WorkCounts::host_imports_released`,
-//!   `host_imports_reimported`, `host_imports_resident`, `host_import_fds_kept`,
-//!   `dma_buf_memories_live`);
+//!   `host_imports_reimported`, `host_imports_resident`, `host_imports_held_for_good`,
+//!   `host_import_fds_kept`, `dma_buf_memories_live`);
 //! - the bytes a blit reads and writes after a release, the CPU's writes made while released among
 //!   them, and that the source is never called again;
 //! - the pages a release keeps across a remap of the buffer's addresses;
@@ -536,7 +536,9 @@ pub(super) fn residency(counts: &WorkCounts) -> (u64, u64, u64, u64) {
 ///   source;
 /// - released again, a GPU fill lands in the pages;
 /// - released again, its Metal address handed out imports it again at once and for good,
-///   closing the descriptors kept, and the hook releases it no more.
+///   closing the descriptors kept, counted as kept for good, no longer as releasable
+///   (`WorkCounts::host_imports_held_for_good`, `host_imports_resident`), and the hook releases
+///   it no more; gone, it leaves both gauges.
 ///
 /// Where the device imports the pointer, the hook releases nothing and the counts stay 0 unless a
 /// held pointer import costs the device's every submission (`tests/pointer_residency.rs`).
@@ -610,8 +612,10 @@ fn an_idle_dma_buf_import_is_released_and_imported_again_at_its_next_blit() {
         release(TEST, device, 1);
         let address = buffer.gpu_address();
         assert_ne!(address.0, 0, "{TEST}");
+        // It holds its memory as an import kept for good, no longer a releasable one.
         let counts = device.work_counts();
-        assert_eq!(residency(&counts), (3, 3, 1, 0), "{TEST}: exposed");
+        assert_eq!(residency(&counts), (3, 3, 0, 0), "{TEST}: exposed");
+        assert_eq!(counts.host_imports_held_for_good, 1, "{TEST}: exposed");
         assert_eq!(counts.dma_buf_memories_live, live, "{TEST}");
         assert!(read(&queue, &buffer, len) == filled, "{TEST}");
         assert_eq!(device.release_idle_host_imports(), 0, "{TEST}: exposed");
@@ -622,7 +626,7 @@ fn an_idle_dma_buf_import_is_released_and_imported_again_at_its_next_blit() {
         );
         drop(buffer);
         let gone = counts_once(TEST, device, "the import gone", |counts| {
-            counts.host_imports_resident == 0 && counts.dma_buf_memories_live == live - chunks
+            counts.host_imports_held_for_good == 0 && counts.dma_buf_memories_live == live - chunks
         });
         assert_eq!(residency(&gone), (3, 3, 0, 0), "{TEST}: gone");
         eprintln!(

@@ -396,6 +396,7 @@ pub(crate) struct Counters {
     host_imports_released_over_most: AtomicU64,
     host_imports_reimported: AtomicU64,
     host_imports_resident: AtomicU64,
+    host_imports_held_for_good: AtomicU64,
     host_imports_lost: AtomicU64,
     host_import_fds_kept: AtomicU64,
     host_imports_kept_for_fds: AtomicU64,
@@ -3564,11 +3565,25 @@ impl Counters {
         self.host_imports_reimported.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A releasable import holds its memory from now on (`resident`), or no longer.
+    /// A releasable import holds its memory from now on (`resident`), or no longer (released,
+    /// gone, or kept for good).
     pub(crate) fn host_import_resident(&self, resident: bool) {
         match resident {
             true => self.host_imports_resident.fetch_add(1, Ordering::Relaxed),
             false => self.host_imports_resident.fetch_sub(1, Ordering::Relaxed),
+        };
+    }
+
+    /// An import a read other than a blit's kept for good holds its memory from now on
+    /// (`held`), or no longer (gone).
+    pub(crate) fn host_import_held_for_good(&self, held: bool) {
+        match held {
+            true => self
+                .host_imports_held_for_good
+                .fetch_add(1, Ordering::Relaxed),
+            false => self
+                .host_imports_held_for_good
+                .fetch_sub(1, Ordering::Relaxed),
         };
     }
 
@@ -7757,8 +7772,17 @@ pub struct WorkCounts {
     /// Released imports imported again from the dma-bufs kept, each at the first blit that read
     /// the buffer after its release (on the encoding thread).
     pub host_imports_reimported: u64,
-    /// The imports the device may release that hold their memory now.
+    /// The releasable imports that hold their memory now: those no read but a blit's took, which
+    /// the device may release while idle, and releases past its most where a held import adds to
+    /// every submission's cost (`host_imports_released_over_most`). An import a read other than a
+    /// blit's took leaves it for `host_imports_held_for_good`.
     pub host_imports_resident: u64,
+    /// The imports that were releasable until a read other than a blit's took them (a binding, a
+    /// texture over the bytes, the Metal address or `VkBuffer` handed out, a second buffer lying
+    /// in the import: `host_imports_read_apart`), which hold their memory now: kept imported for
+    /// good, whatever the device's most, until their buffer goes. With `host_imports_resident`,
+    /// every import with a residency that holds its memory.
+    pub host_imports_held_for_good: u64,
     /// Reads other than a blit's that found an import released and the device unable to import
     /// it again: the device was lost then. None but out of memory.
     pub host_imports_lost: u64,
@@ -10125,6 +10149,8 @@ impl Device {
                 .load(Ordering::Relaxed),
             host_imports_reimported: counters.host_imports_reimported.load(Ordering::Relaxed),
             host_imports_resident: counters.host_imports_resident.load(Ordering::Relaxed),
+            host_imports_held_for_good: (counters.host_imports_held_for_good)
+                .load(Ordering::Relaxed),
             host_imports_used: counters.host_imports_used.load(Ordering::Relaxed),
             host_imports_read_apart: counters.host_imports_read_apart.load(Ordering::Relaxed),
             host_imports_read_apart_address: read_apart(ReadApart::Address),

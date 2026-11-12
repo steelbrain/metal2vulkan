@@ -101,10 +101,12 @@
 //!   it may be stale, and lists it again at its exposure). A read that keeps it imported finds it
 //!   released only where its address was never handed out: it imports it again first.
 //! - **Counted.** `WorkCounts::host_imports_released`, `host_imports_reimported`,
-//!   `host_imports_resident` (releasable imports holding their memory now),
-//!   `host_import_fds_kept`, and `host_imports_kept_for_fds` (imports kept as their descriptors
-//!   did not fit); the device's dma-buf memories (`dma_buf_memories_live`) and its
-//!   imports of host pages by their pointer (`host_imports_live`) fall as imports are released.
+//!   `host_imports_resident` (releasable imports holding their memory now, which the most above
+//!   bounds), `host_imports_held_for_good` (imports a read other than a blit's kept imported for
+//!   good, holding their memory now: never released, whatever the most), `host_import_fds_kept`,
+//!   and `host_imports_kept_for_fds` (imports kept as their descriptors did not fit); the
+//!   device's dma-buf memories (`dma_buf_memories_live`) and its imports of host pages by their
+//!   pointer (`host_imports_live`) fall as imports are released.
 
 use super::buffer::{FixedPages, HostImport, Imported, Pages, Shape};
 use super::device::lock;
@@ -385,11 +387,28 @@ impl Residency {
     }
 
     /// No longer releasable, under `state`'s lock: where it was and holds its memory, one fewer
-    /// releasable import does.
+    /// releasable import does, and one more kept for good.
     fn held_for_good(&self, state: &State) {
         let was = self.releasable.swap(false, Ordering::AcqRel);
         if was && state.held.is_some() {
-            self.device.shared().residency.resident(&self.device, false);
+            let shared = self.device.shared();
+            shared.counts.host_import_resident(false);
+            shared.residency.resident(&self.device, false);
+            shared.counts.host_import_held_for_good(true);
+        }
+    }
+
+    /// It came to hold its memory (`held`) or let go of it, under `state`'s lock: counted as a
+    /// releasable import (`WorkCounts::host_imports_resident`, and against the device's most)
+    /// while it is one, else as one kept for good (`WorkCounts::host_imports_held_for_good`).
+    fn holds_memory(&self, held: bool) {
+        let shared = self.device.shared();
+        match self.releasable.load(Ordering::Acquire) {
+            true => {
+                shared.counts.host_import_resident(held);
+                shared.residency.resident(&self.device, held);
+            }
+            false => shared.counts.host_import_held_for_good(held),
         }
     }
 
@@ -424,10 +443,8 @@ impl Residency {
             return None;
         }
         state.released_once = true;
-        let counts = &self.device.shared().counts;
-        counts.host_import_released();
-        counts.host_import_resident(false);
-        self.device.shared().residency.resident(&self.device, false);
+        self.device.shared().counts.host_import_released();
+        self.holds_memory(false);
         state.held.take()
     }
 
@@ -463,12 +480,8 @@ impl Residency {
         }
         state.held = Some(Arc::clone(&held));
         state.window = (2 * state.window).min(IDLE_MOST.as_millis() as u64);
-        let counts = &self.device.shared().counts;
-        counts.host_import_reimported();
-        counts.host_import_resident(true);
-        if self.releasable.load(Ordering::Acquire) {
-            self.device.shared().residency.resident(&self.device, true);
-        }
+        self.device.shared().counts.host_import_reimported();
+        self.holds_memory(true);
         Ok(held)
     }
 }
@@ -482,10 +495,7 @@ impl Residency {
     pub(super) fn let_go(&self) -> Option<Arc<Imported>> {
         let mut state = lock(&self.state);
         let held = state.held.take()?;
-        self.device.shared().counts.host_import_resident(false);
-        if self.releasable.load(Ordering::Acquire) {
-            self.device.shared().residency.resident(&self.device, false);
-        }
+        self.holds_memory(false);
         drop(state);
         Some(held)
     }
@@ -494,10 +504,7 @@ impl Residency {
 impl Drop for Residency {
     fn drop(&mut self) {
         if lock(&self.state).held.is_some() {
-            self.device.shared().counts.host_import_resident(false);
-            if self.releasable.load(Ordering::Acquire) {
-                self.device.shared().residency.resident(&self.device, false);
-            }
+            self.holds_memory(false);
         }
     }
 }

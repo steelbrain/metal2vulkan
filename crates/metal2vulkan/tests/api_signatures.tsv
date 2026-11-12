@@ -2957,6 +2957,7 @@ field	metal2vulkan-runtime::WorkCounts.host_holds_looked_up	pub host_holds_looke
 field	metal2vulkan-runtime::WorkCounts.host_import_fds_kept	pub host_import_fds_kept: u64
 field	metal2vulkan-runtime::WorkCounts.host_import_releases_pending	pub host_import_releases_pending: u64
 field	metal2vulkan-runtime::WorkCounts.host_import_releases_posted	pub host_import_releases_posted: u64
+field	metal2vulkan-runtime::WorkCounts.host_imports_held_for_good	pub host_imports_held_for_good: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_kept_for_fds	pub host_imports_kept_for_fds: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_kept_no_stand_in	pub host_imports_kept_no_stand_in: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_kept_of_heap	pub host_imports_kept_of_heap: u64

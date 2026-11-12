@@ -314,7 +314,9 @@ texture in place over a dma-buf import's bytes lies in an import of a dma-buf of
 asked of the buffer's source, and leaves the buffer's import releasable: on RADV a guest surface (a
 no-copy buffer and a texture in place over it) lists the texture's import alone in each kernel
 submission while the buffer is idle. `WorkCounts::host_imports_released`,
-`host_imports_reimported`, `host_imports_resident` and `host_import_fds_kept` count it. For imports
+`host_imports_reimported`, `host_imports_resident` (the releasable imports holding their memory)
+and `host_import_fds_kept` count it, and `host_imports_held_for_good` the imports that were
+releasable until a read other than a blit's kept them for good. For imports
 of either kind, `host_imports_read_apart` counts the live ones that a read other than a blit's keeps
 for good (the
 `host_imports_read_apart_*` gauges by reason: the Metal address, the `VkBuffer`, a binding, a

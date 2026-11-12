@@ -1863,6 +1863,7 @@ impl Gpu for Runtime {
             ("host_imports_released", c.host_imports_released),
             ("host_imports_reimported", c.host_imports_reimported),
             ("host_imports_resident", c.host_imports_resident),
+            ("host_imports_held_for_good", c.host_imports_held_for_good),
             ("host_imports_lost", c.host_imports_lost),
             ("host_import_fds_kept", c.host_import_fds_kept),
             ("host_imports_kept_for_fds", c.host_imports_kept_for_fds),
