@@ -949,10 +949,10 @@ place over host pages, read, rendered and written by a shader, at least the 16 b
 answers on an Apple GPU and at least the device's `nonCoherentAtomSize`, the line of memory its
 check of images in place measures. The runtime asks the driver for every format at the first
 query of any by making those images (none is bound), keeps those answers for the device's life,
-and writes them as one record per driver in the shader cache's content directory. The M3 Max's
-MoltenVK answers 16 for every format; RADV answers 256, and ANV and lavapipe 64, for
-each format whose texture over a buffer they can hold in place, and 16 for the rest (the
-two-plane YCbCr, packed and extended-range formats among them). A texture at a smaller multiple
+and writes them as one record per driver in the shader cache's content directory. ANV on an
+Iris Xe and lavapipe answer 64, and RADV on a Radeon RX 550 256 (512 and 1024 for the formats of
+8- and 16-byte texels), for each format whose texture over a buffer they can hold in place, and
+16 for the rest (the two-plane YCbCr, packed and extended-range formats among them). A texture at a smaller multiple
 of 16 is still made, as a shadow where the device's images do not take its layout
 (`shadowed-texture`). The answer does not put every texture in place: one whose rows' bytes are
 no multiple of the device's line keeps its padding in its rows' last line at any alignment, and

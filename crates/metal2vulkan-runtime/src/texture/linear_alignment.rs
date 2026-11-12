@@ -36,8 +36,9 @@
 //!   no linear image of it, or lays its rows at no power of two's pitch); and where a probe failed
 //!   (a Vulkan error).
 //! - **Every format at once, fixed for the device's life.** The first query of any format works
-//!   out every format a buffer backs (a probe of all 175 took 17 to 23 ms on an M3 Max, a Radeon
-//!   780M and lavapipe, and reading them again from the record 0.3 ms), and those answers are the device's for good
+//!   out every format a buffer backs (a probe of all 175 at the three usages took 43 ms on
+//!   lavapipe, 119 ms on a Radeon RX 550 and 124 ms on an Iris Xe in a debug build, and reading
+//!   them again from the record under 1 ms), and those answers are the device's for good
 //!   (`TextureState::linear_alignments`): a program lays its buffers out by the first answer it
 //!   gets, and two threads asking at once take the one set.
 //! - **Kept per driver.** The answers are written as one record in the shader cache's content
