@@ -136,7 +136,7 @@ impl RenderLowering {
     /// before the lowest attached one, or past the highest; else why the slot keeps its copy.
     fn levels_apart(
         &self,
-        parts: Parts<'_>,
+        parts: SlotParts<'_>,
         reads: &LevelReads,
         (attached, feedback): (&AttachedSpan, Feedback),
     ) -> Result<NarrowedLevels, AttachedLevels> {
@@ -210,7 +210,7 @@ impl RenderLowering {
     /// the slot of `parts`, reach through the samplers its draw binds with it (the module docs):
     /// the highest among the writes that pair them; `None` where none does, or where one may
     /// reach any level.
-    fn sampled_highest(&self, parts: Parts<'_>, sampled: &SampledLevels) -> Option<u32> {
+    fn sampled_highest(&self, parts: SlotParts<'_>, sampled: &SampledLevels) -> Option<u32> {
         let mut highest = None;
         let paired = self.bound_samplers(parts, sampled, |levels| match sampled.level(levels) {
             Some(level) => {
@@ -225,7 +225,7 @@ impl RenderLowering {
     /// The lowest level, counted from the view's first, that `sampled`, samples of the texture at
     /// the slot of `parts`, may reach through the samplers its draw binds with it (the module
     /// docs): the lowest among the writes that pair them; 0 where none does.
-    fn sampled_lowest(&self, parts: Parts<'_>, sampled: &SampledLevels) -> u32 {
+    fn sampled_lowest(&self, parts: SlotParts<'_>, sampled: &SampledLevels) -> u32 {
         let mut lowest = None;
         let paired = self.bound_samplers(parts, sampled, |levels| {
             let level = sampled.lowest(levels);
@@ -240,7 +240,7 @@ impl RenderLowering {
     /// write's sampler was known and `each` answered `true` for each.
     fn bound_samplers(
         &self,
-        (device, (plan, compiled), stages, slot): Parts<'_>,
+        (device, (plan, compiled), stages, slot): SlotParts<'_>,
         sampled: &SampledLevels,
         mut each: impl FnMut(SamplerLevels) -> bool,
     ) -> bool {
@@ -305,7 +305,7 @@ impl RenderLowering {
 
 /// What a slot's levels are worked out over: the device, the draw's plan and pipeline, the tables
 /// it binds, and the slot.
-type Parts<'a> = (
+type SlotParts<'a> = (
     &'a Device,
     (&'a BindingPlan, &'a RenderPipeline),
     &'a Stages<'a>,
