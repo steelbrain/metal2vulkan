@@ -17,7 +17,9 @@
 //! command buffers are polled to completion, so each of their pools begins one, and a thread
 //! waits on each heavy one's gate from its commit, so none of theirs does. Each round's heavy
 //! command buffers so take pools no heavy one used. Every round must complete without an error,
-//! after [`ROUNDS`] rounds.
+//! after [`ROUNDS`] rounds. Printed (`RM-VOLUME`), per round: the spares' and draws' counts, and
+//! the process's DRM memory where the kernel reports it ([`drm_total`]), which holds the driver's
+//! state pools' buffer objects as they grew: ANV's never shrink.
 
 use super::{buffer_with, open_device, WAIT};
 use crate::air_library::AirLibrary;
@@ -272,11 +274,47 @@ fn regions() -> usize {
         .len()
 }
 
-/// The spares' and draws' counts a round reports.
+/// The process's DRM memory, in MiB: `drm-total-*` of each DRM client its device files name
+/// (`/proc/self/fdinfo`), summed; `None` where none is reported.
+fn drm_total() -> Option<u64> {
+    let mut clients = std::collections::BTreeMap::new();
+    for entry in std::fs::read_dir("/proc/self/fdinfo").ok()?.flatten() {
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Some(client) = (text.lines()).find_map(|line| line.strip_prefix("drm-client-id:"))
+        else {
+            continue;
+        };
+        let mut kib = 0;
+        for (key, value) in text.lines().filter_map(|line| line.split_once(':')) {
+            let mut words = value.split_whitespace();
+            let (Some(number), unit) = (words.next(), words.next()) else {
+                continue;
+            };
+            let Ok(number) = number.parse::<u64>() else {
+                continue;
+            };
+            if key.starts_with("drm-total-") {
+                kib += match unit {
+                    Some("GiB") => number << 20,
+                    Some("MiB") => number << 10,
+                    Some("KiB") => number,
+                    _ => number >> 10,
+                };
+            }
+        }
+        clients.insert(client.trim().to_owned(), kib);
+    }
+    (!clients.is_empty()).then(|| clients.values().sum::<u64>() >> 10)
+}
+
+/// The spares' and draws' counts a round reports, and the process's DRM memory.
 fn line(counts: &WorkCounts) -> String {
+    let drm = drm_total().map_or("not reported".to_owned(), |mib| format!("{mib} MiB"));
     format!(
         "draw_indexed {} set_viewport {} taken {} freed past recent uses {} past held {} shed {} \
-         host steps {} freed past recorded {}",
+         host steps {} freed past recorded {} drm total {drm}",
         counts.commands_recorded.cmd_draw_indexed,
         counts.commands_recorded.cmd_set_viewport,
         counts.spare_command_pools_taken,
