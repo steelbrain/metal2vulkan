@@ -564,6 +564,8 @@ pub type Deallocator = Box<dyn FnOnce(NonNull<u8>, u64) + Send + 'static>;
 /// the same bytes as memory of another class, while it lived, bound inside the import, holds it
 /// until that buffer goes (`WorkCounts::host_releases_held_inside`); with none, the deallocator
 /// waits for the import (the module docs). Dropped on a runtime thread, possibly; a panic inside its drop is caught.
+/// The program's last drop of the device waits for such a drop on a runtime thread, so it must not
+/// wait for the thread that drops the device.
 /// Never dropped while the process exits: the pages stay imported to its end (`exit_guard`).
 /// Its drop is the moment the pages may be unmapped (docs/HOWTO.md, "Unmapping host memory"): a
 /// keep-alive that owns the mapping and unmaps it as it drops keeps the order Vulkan requires.

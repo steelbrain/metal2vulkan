@@ -233,7 +233,9 @@ and the same per-device choices as `DeviceOptions`. Dropping the runtime device 
 the runtime made. The program's last drop of the device and its objects, on a thread of the
 program's, returns once that is done: it stops the runtime's own background work on the device (its
 check of textures over host pages, its warm pass) and waits for it, at most a round of the check or
-the record the pass is making.
+the record the pass is making, and for the release a handler thread makes of a no-copy buffer's
+pages that a keep-alive alone waits for (their free, then the keep-alive's drop), so a keep-alive's
+drop must not wait for the thread that drops the device.
 
 **At the process's exit.** On NVIDIA's proprietary driver, drop the runtime's devices before the
 process exits. A device kept to the exit can end it with `SIGSEGV` inside the driver's own exit

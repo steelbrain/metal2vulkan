@@ -2422,7 +2422,10 @@ impl ExportedPages {
             }
         };
         Ok(ExportedPages {
-            device: device.clone(),
+            // A holder's handle (`device/holds.rs`): the pages are a no-copy buffer's keep-alive,
+            // which a handler thread drops once the buffer's import is freed, past the program's
+            // drop of the buffer; the program's last drop of the device waits for it then.
+            device: device.held_for_release(),
             memory,
             start,
             length,

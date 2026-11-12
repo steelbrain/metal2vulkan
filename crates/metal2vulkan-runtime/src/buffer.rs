@@ -1812,8 +1812,11 @@ impl Drop for HostImport {
             // until it completed (`rebind.rs`), one that may read a texture's image over them
             // holds the image, which holds the import (`heap_sets.rs`), and every buffer over them
             // let go of them.
-            Objects::Fixed(imported) => {
+            Objects::Fixed(mut imported) => {
                 imported.leave(left);
+                if posts {
+                    imported.hold_for_release();
+                }
                 Box::new(imported)
             }
             // Its objects go with their last holder, here or the last command buffer that read
@@ -1823,8 +1826,15 @@ impl Drop for HostImport {
             // unmapped.
             #[cfg(unix)]
             Objects::Releasable(residency) => match residency.let_go() {
-                Some(held) => {
+                Some(mut held) => {
                     held.leave(left);
+                    // Where a command buffer's blit holds them still, that command buffer holds
+                    // the device as the program's, and they go with it.
+                    if posts {
+                        if let Some(imported) = Arc::get_mut(&mut held) {
+                            imported.hold_for_release();
+                        }
+                    }
                     Box::new(held)
                 }
                 // Released: nothing to free.
@@ -1833,8 +1843,11 @@ impl Drop for HostImport {
         };
         if posts {
             shared.counts.host_import_release_posted();
-            // A tuple drops in order: the release, then its count.
-            let posted = (going, PostedDone(self.device.clone()));
+            // A tuple drops in order: the release, then its count. Every handle of the device it
+            // holds but the keep-alive's own is a holder's, which the program's last drop waits
+            // for (`device/holds.rs`): so a program that let go of such a buffer, then of the
+            // device, finds the device gone as that drop returns.
+            let posted = (going, PostedDone(self.device.held_for_release()));
             self.device.let_go_elsewhere(Box::new(posted));
         } else {
             drop(going);
@@ -1884,6 +1897,13 @@ impl Imported {
     /// Leave `left` to go once the memory is freed, the import going.
     fn leave(&self, left: AfterImport) {
         *lock(&self.after) = Some(left);
+    }
+
+    /// Hold the device through a handle the program's last drop waits for, in place of its own
+    /// ([`Device::held_for_release`]): the import going, these objects go in a release posted to
+    /// a handler thread.
+    fn hold_for_release(&mut self) {
+        self.device = self.device.held_for_release();
     }
 }
 

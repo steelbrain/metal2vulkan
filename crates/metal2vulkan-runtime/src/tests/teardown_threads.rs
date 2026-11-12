@@ -44,6 +44,11 @@
 //!   block waiting for that mark and the release of freed memory that a later command buffer's
 //!   completion posted, held too, as the program's wait for that command buffer returns. The
 //!   teardown frees the block and runs its deallocator, before the last drop returns.
+//! - **Not a handler thread after a keep-alive's release**: a no-copy buffer released with a
+//!   keep-alive alone posts its import's free and the keep-alive's drop to a handler thread
+//!   (`buffer.rs`), held in the keep-alive's drop. The release holds the device as a holder's, so
+//!   the program's drop of the device right after it waits for it and tears the device down on
+//!   the program's thread, its `VkDevice` gone as the drop returns.
 //! - **Not the queue-switch check's thread**: a device whose first command queue starts its check
 //!   of the GPU's idling between `VkQueue`s (`queue_switch_check.rs`), held between two of its
 //!   rounds, holds nothing of the device: the program's drops tear the device down on its own
@@ -73,7 +78,7 @@
 //! fixture `validation/fixtures/public/examples/runtime_examples.ll` (`llvm-as`).
 
 use super::dispatch_pending as pending;
-use super::freed_memory::{unused, Host, Runs};
+use super::freed_memory::{kept_alive, unused, Host, Runs};
 use super::layer_claim::Watched;
 use crate::device::holds::Holder;
 use crate::device::lock;
@@ -90,7 +95,7 @@ use crate::{
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -609,6 +614,87 @@ fn a_release_of_freed_memory_leaves_the_device_to_the_program_s_thread() {
     ending
         .watched
         .layer_reported_nothing("the teardown that freed the block left no object and used none");
+    drop(host);
+}
+
+/// A keep-alive whose drop says it began, then waits until the test lets it go.
+struct HeldKeepAlive {
+    began: mpsc::Sender<String>,
+    go: mpsc::Receiver<()>,
+}
+
+impl Drop for HeldKeepAlive {
+    fn drop(&mut self) {
+        let _ = self.began.send(program_thread());
+        let _ = self.go.recv_timeout(WAIT);
+    }
+}
+
+/// A no-copy buffer released with a keep-alive alone posts its import's free and the keep-alive's
+/// drop to a handler thread (`buffer.rs`), held here in the keep-alive's drop. The release holds
+/// the device as a holder's (`device/holds.rs`), so the program's last drop, right after it, stops
+/// the holds and waits for it: the device is torn down on the program's thread, its `VkDevice`
+/// gone as the drop returns. With the program's handles in the release, the drop returned at once
+/// with the `VkDevice` live, its last handle going on the handler thread, whose teardown a
+/// process's exit then left to the driver's exit (docs/FAST-PATHS.md, known gaps).
+#[test]
+fn a_keep_alive_s_posted_release_leaves_the_device_to_the_program_s_thread() {
+    let scratch = Scratch::new("keep-alive");
+    let host = Host::new();
+    let (device, ending) = watched(&scratch.0);
+    let (began, released) = mpsc::channel();
+    let (go, wait) = mpsc::channel();
+    let keep_alive = HeldKeepAlive { began, go: wait };
+    let Some(buffer) = kept_alive(&device, &host, Box::new(keep_alive)) else {
+        return;
+    };
+    let posted = device.work_counts().host_import_releases_posted;
+    drop(buffer);
+    let on = released
+        .recv_timeout(WAIT)
+        .expect("the keep-alive's drop began");
+    assert_eq!(
+        on, HANDLERS,
+        "the keep-alive was dropped off the handler threads"
+    );
+    assert_eq!(
+        device.work_counts().host_import_releases_posted,
+        posted + 1,
+        "the release posted its free"
+    );
+    let holds = Arc::clone(&device.shared().holds);
+    let lineage = Arc::clone(&device.shared().lineage);
+    // Lets the keep-alive go once the last drop stopped the holds, or once the drop returned
+    // without stopping them (it was not the program's last).
+    let returned = Arc::new(AtomicBool::new(false));
+    let releasing = std::thread::spawn({
+        let (holds, returned) = (Arc::clone(&holds), Arc::clone(&returned));
+        move || {
+            let began = Instant::now();
+            while !holds.stopping() && !returned.load(Ordering::SeqCst) && began.elapsed() < WAIT {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let _ = go.send(());
+        }
+    });
+    drop(device);
+    let live = lineage.counts().0;
+    let torn_down = ending.thread.try_recv();
+    returned.store(true, Ordering::SeqCst);
+    releasing.join().unwrap();
+    assert_eq!(live, 0, "the VkDevice outlived the program's last drop");
+    assert_eq!(
+        torn_down,
+        Ok(program_thread()),
+        "the device was not torn down on this thread before its last drop returned"
+    );
+    assert!(
+        holds.waited().is_some(),
+        "the last drop waited for the posted release"
+    );
+    ending.watched.layer_reported_nothing(
+        "the teardown after the keep-alive's release left no object and used none",
+    );
     drop(host);
 }
 

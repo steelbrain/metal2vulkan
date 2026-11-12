@@ -708,6 +708,35 @@ fn a_release_with_nothing_waiting_frees_its_import_before_it_returns() {
     );
 }
 
+/// A no-copy buffer over `host` with `keep_alive` and no deallocator, that no command uses; `None`,
+/// printed, where the device imports no host memory.
+pub(super) fn kept_alive(
+    device: &Device,
+    host: &Host,
+    keep_alive: KeepAlive,
+) -> Option<crate::Buffer> {
+    let contents = BufferContents::NoCopy {
+        // SAFETY: the memory outlives the buffer (dropped after the device), and nothing else
+        // uses it.
+        memory: unsafe { HostMemory::new(host.0) },
+        deallocator: None,
+        keep_alive: Some(keep_alive),
+    };
+    let made = device.new_buffer_with_descriptor(BufferDescriptor::new(
+        BYTES as u64,
+        ResourceOptions::default(),
+        contents,
+    ));
+    match made {
+        Ok(buffer) => Some(buffer),
+        Err(Error::Unsupported(gap)) => {
+            eprintln!("IMPORT-RELEASE: the device imports no host memory: {gap:?}");
+            None
+        }
+        Err(error) => panic!("new_buffer_with_descriptor: {error:?}"),
+    }
+}
+
 /// A keep-alive's drop (a runtime extension) tells the caller the pages may go.
 struct Dropped(Arc<Runs>);
 
@@ -727,26 +756,8 @@ fn a_release_with_a_keep_alive_alone_posts_its_free() {
     let host = Host::new();
     let device = device(&scratch.0);
     let runs = Arc::new(Runs::default());
-    let keep_alive: KeepAlive = Box::new(Dropped(Arc::clone(&runs)));
-    let contents = BufferContents::NoCopy {
-        // SAFETY: the memory outlives the buffer (dropped after the device), and nothing else
-        // uses it.
-        memory: unsafe { HostMemory::new(host.0) },
-        deallocator: None,
-        keep_alive: Some(keep_alive),
-    };
-    let made = device.new_buffer_with_descriptor(BufferDescriptor::new(
-        BYTES as u64,
-        ResourceOptions::default(),
-        contents,
-    ));
-    let buffer = match made {
-        Ok(buffer) => buffer,
-        Err(Error::Unsupported(gap)) => {
-            eprintln!("IMPORT-RELEASE: the device imports no host memory: {gap:?}");
-            return;
-        }
-        Err(error) => panic!("new_buffer_with_descriptor: {error:?}"),
+    let Some(buffer) = kept_alive(&device, &host, Box::new(Dropped(Arc::clone(&runs)))) else {
+        return;
     };
     let before = device.work_counts();
     drop(buffer);

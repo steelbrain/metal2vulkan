@@ -717,4 +717,10 @@ fn the_in_place_check_imports_its_dma_buf_pages_as_dma_bufs() {
     assert_eq!(in_place, reads == InPlaceVerdict::Passed, "{reads:?}");
     drop(texture);
     drop((pointer_first, only));
+    // Their imports' frees and keep-alives' drops go on a handler thread; the device's last drop
+    // waits for them and destroys the `VkDevice` before it returns (`device/holds.rs`), which a
+    // process exit right after needs on NVIDIA's driver (docs/FAST-PATHS.md, known gaps).
+    let lineage = Arc::clone(&device.shared().lineage);
+    drop(device);
+    assert_eq!(lineage.counts().0, 0, "the VkDevice outlived its last drop");
 }

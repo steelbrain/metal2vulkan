@@ -1,11 +1,18 @@
 //! The runtime's own holds of a device: its check of textures in place (`in_place_check.rs`) and
 //! its warm pass (`warm/pass.rs`), each on a thread of its own, which hold the device while they
-//! make objects on it and let it go between their steps.
+//! make objects on it and let it go between their steps; and a release it posts to a handler
+//! thread for the program, a host import's that a keep-alive alone waits for (`buffer.rs`).
 //!
 //! - **Two counts.** Every handle of the device is counted here, as the program's or as a
 //!   holder's. A handle a holder takes ([`WeakDevice::hold`]) is a holder's, and so is each handle
-//!   cloned from one (the device of every object the holder makes); every other is the program's
-//!   (the device's own, its objects', and a runtime thread's upgrade of a weak handle).
+//!   cloned from one (the device of every object the holder makes), and each handle a posted
+//!   release holds ([`Device::held_for_release`]); every other is the program's (the device's
+//!   own, its objects', and a runtime thread's upgrade of a weak handle). Measured: with the
+//!   program's handles in such a release, a test's drop of its device right after its no-copy
+//!   buffers with keep-alives returned with the `VkDevice` live in 31 of 32 runs on lavapipe and
+//!   12 of 12 on the Radeon 780M: the last handle went on the handler thread, and the process's
+//!   exit then left its teardown (`exit_guard.rs`), which on NVIDIA's driver can fault in the
+//!   driver's own exit handler (docs/FAST-PATHS.md, known gaps).
 //! - **The program's last drop tears the device down.** The drop that leaves the program no
 //!   handle stops the holds, and on a thread of the program's waits until the holders' handles
 //!   went, so the device goes with it, on that thread, before it returns. A consumer that adopted
@@ -16,7 +23,8 @@
 //! - **The wait is a step.** A holder reads the stop between its steps
 //!   ([`Device::holds_go_on`]): the check between its rounds, the warm pass between its records.
 //!   So the wait is at most the check's round in progress (and its release of its buffer), or the
-//!   record the pass is making. It happens only at teardown.
+//!   record the pass is making; a posted release is one step, which a handler thread runs at
+//!   once: the import's free and the keep-alive's drop. It happens only at teardown.
 //! - **Exact.** A holder's take and a holder's handle's clone and drop count under the registry's
 //!   lock; a holder's handle is counted gone only once its share of the device went ([`Share`]),
 //!   so the program's last drop, waiting for that, holds the device's last share. A program
@@ -182,6 +190,19 @@ impl Device {
         let _ = holder;
         // A lost generation's holders stop too: the generation serves nothing more (`line.rs`).
         !holds.stopping() && !shared.lost()
+    }
+
+    /// A handle of the device for a release the runtime posts to another thread for the program
+    /// (a host import's, where a keep-alive alone waits for its free, `buffer.rs`), held as a
+    /// holder's: the program's last drop waits for it as for the holders' (the module docs), so
+    /// that release runs before the device goes, on the thread of that drop. A holder's handle's
+    /// clone where this one is a holder's; the program's where the holds were stopped (a runtime
+    /// thread's upgrade past the last drop, whose device goes where it goes already).
+    pub(crate) fn held_for_release(&self) -> Device {
+        match &(self.1).0 {
+            Some(holds) => holder_clone(self, holds),
+            None => self.downgrade().hold().unwrap_or_else(|| self.clone()),
+        }
     }
 }
 
