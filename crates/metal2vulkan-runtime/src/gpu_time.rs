@@ -739,7 +739,7 @@ impl Timing {
 
     /// A device test's: its command buffers note queue times from now on, whatever the
     /// process's environment.
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn note_queue_times(&self) {
         self.queue_times.store(true, Ordering::Relaxed);
     }
