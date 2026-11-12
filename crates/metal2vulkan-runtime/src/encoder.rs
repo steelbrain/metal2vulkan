@@ -2165,11 +2165,23 @@ impl EncoderCore {
                     copy.uses_with(rows.as_ref()),
                 ),
             };
+            // Why the copy moves its texels whatever its shadow's standing across command buffers
+            // says (`shadow_standing.rs`), where it does: it is no copy in a standing may skip,
+            // a command of the encoder wrote what it reads, or one of an encoder of the command
+            // buffer that ended before it did, as its batch's submission would find
+            // (`submit.rs`'s `stands`), so it is recorded here, ungated, and splits no
+            // `VkCommandBuffer` there. `None` where the standing decides.
+            let unstood = match copy.left_to_standing() {
+                false => Some(Unskipped::Unstanding),
+                true if self.uses.written(&uses) => Some(Unskipped::AfterEncoderWrites),
+                true if self.ended_encoders_wrote(copy) => Some(Unskipped::CommandBuffer),
+                true => None,
+            };
             // A copy in over host pages a consumer logs takes the regions its gate decides as its
             // batch is submitted (`dirty_pages.rs`, `shadow::GatedCopyIn`); a command buffer's
             // first copy in of a shadow that may stand across command buffers, before any command
-            // of the encoder wrote what it reads, moves nothing where the image stands then
-            // (`shadow_standing.rs`).
+            // of the command buffer wrote what it reads, moves nothing where the image stands
+            // then (`shadow_standing.rs`).
             let gate = match &dispatched {
                 Some(_) => None,
                 None => match copy.gate_log(&device) {
@@ -2180,17 +2192,13 @@ impl EncoderCore {
                             dirty.gate((log, &copy.copies, texel), shadows),
                         ))
                     }
-                    None => (copy.left_to_standing() && !self.uses.written(&uses))
-                        .then_some(CopyGate::Standing),
+                    None => unstood.is_none().then_some(CopyGate::Standing),
                 },
             };
             // An encoder's first copy in of a shadow whose truth only the runtime's commands write
             // that no batch's submission decides moves the texels: counted by why.
             if gate.is_none() && copy.first_from_private_truth() {
-                let at = match copy.left_to_standing() {
-                    true => Unskipped::AfterEncoderWrites,
-                    false => Unskipped::Unstanding,
-                };
+                let at = unstood.unwrap_or(Unskipped::AfterEncoderWrites);
                 self.copy_in_unskipped(copy, at);
             }
             // A keep may copy the staging buffer its copy in filled only where that copy in
@@ -2308,6 +2316,19 @@ impl EncoderCore {
         // Refused only where the current `VkCommandBuffer` does not end, which abandons the
         // command buffer.
         let _abandoned = self.defer_into(next, work);
+    }
+
+    /// Whether a command of an encoder of the command buffer that ended before this one wrote the
+    /// truth of `copy`'s shadow, the memory it joined or its image (`ShadowCopies::standing_keys`),
+    /// which its batch's submission would find (`submit.rs`'s `stands`). `false` as an ended
+    /// encoder is encoded again (`replay.rs`), the encoders after it among those ended: its
+    /// batch's submission decides.
+    fn ended_encoders_wrote(&self, copy: &ShadowCopy) -> bool {
+        if self.replaying {
+            return false;
+        }
+        let keys = copy.copies.standing_keys();
+        (self.open.command_buffer.state()).ended_encoders_write_any(&keys)
     }
 
     /// Count `copy`, an encoder's first copy in of a shadow whose truth only the runtime's

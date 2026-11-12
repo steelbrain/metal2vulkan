@@ -1784,6 +1784,13 @@ impl State {
         self.end_encoder(command_buffer, recorded);
     }
 
+    /// Whether a command of an encoder that ended so far wrote one of `keys`: what its batch's
+    /// submission reads of the encoders before an encoder (`submit.rs`'s `stands`), read as the
+    /// next encoder records.
+    pub(super) fn ended_encoders_write_any(&self, keys: &[ResourceKey]) -> bool {
+        (self.recorded.iter()).any(|recorded| recorded.summary.writes_any(keys))
+    }
+
     /// An encoder of `command_buffer` ended with `recorded`: it joins the current batch, or a
     /// new one after the batch's signals. The tail before it ends: with its batch's end where
     /// that batch ended before this encoder ([`CommandBufferShared::close_tail`]).

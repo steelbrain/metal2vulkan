@@ -39,12 +39,16 @@
 //!   that writes the truth apart from the shadow (a pass whose color attachment renders the bytes
 //!   in place, read through the shadow by a draw of the pass, `texture/attached_reads.rs`), after
 //!   which the image holds the truth whole only where a later copy takes again what it wrote: that
-//!   copy moves what the command needs, as any other does. Made before any
-//!   command of its encoder wrote what it reads, it goes to its batch's submission
-//!   (`shadow::GatedCopyIn`), and copies nothing there where the shadow stands and no earlier
-//!   encoder of the command buffer wrote the truth or the image, and the command buffer reaches
-//!   nothing unnamed; where it stands stale inside a rectangle, the texels the copy would move
-//!   inside it alone. Every other copy is as the module `shadow.rs` states.
+//!   copy moves what the command needs, as any other does. Made before any command of its
+//!   encoder, or of an encoder of the command buffer that ended before it, wrote the truth or
+//!   the image, it goes to its batch's submission (`shadow::GatedCopyIn`), and copies nothing
+//!   there where the shadow stands and the command buffer reaches nothing unnamed; where it
+//!   stands stale inside a rectangle, the texels the copy would move inside it alone. Made after
+//!   one, it is recorded in its encoder, as the copies the standing never decides are, and the
+//!   submission records no `VkCommandBuffer` of its own for it: those encoders come before it
+//!   in its batch, so the submission would find the same writes. An encoder encoded again
+//!   (`replay.rs`) leaves the earlier encoders' writes to its batch's submission to find. Every
+//!   other copy is as the module `shadow.rs` states.
 //! - **Why a copy moved its texels.** Each command buffer's first copy in of a shadow whose truth
 //!   only the runtime's commands write that moved its texels is counted by where it was decided
 //!   ([`Unskipped`]) and, for a shadow that may stand, by what its standing held then
@@ -80,8 +84,9 @@ pub(super) enum Unskipped {
     /// Recorded whole as its encoder recorded it: inside a predicated loop's laying, or where no
     /// new `VkCommandBuffer` could be made.
     RecordedWhole,
-    /// At its batch's submission, where its command buffer may reach memory no use names, or an
-    /// earlier encoder of it wrote the truth or the image.
+    /// An earlier encoder of its command buffer wrote the truth or the image, found as its encoder
+    /// recorded it (or, encoded again, at its batch's submission); or, at its batch's submission,
+    /// its command buffer may reach memory no use names.
     CommandBuffer,
     /// At its batch's submission, where its standing was let go of ([`LetGo`]).
     LetGo,

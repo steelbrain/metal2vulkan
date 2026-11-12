@@ -7833,8 +7833,9 @@ pub struct WorkCounts {
     /// Recorded whole as its encoder recorded it: inside a predicated loop's laying, or where no
     /// new `VkCommandBuffer` could be made.
     pub shadow_texels_unskipped_recorded_whole: u64,
-    /// At its batch's submission, where its command buffer may reach memory no use names, or an
-    /// earlier encoder of it wrote the truth or the image.
+    /// An earlier encoder of its command buffer wrote the truth or the image, found as its encoder
+    /// recorded it (or, encoded again, at its batch's submission); or, at its batch's submission,
+    /// its command buffer may reach memory no use names.
     pub shadow_texels_unskipped_command_buffer: u64,
     /// At its batch's submission, where its standing was let go of.
     pub shadow_texels_unskipped_let_go: u64,

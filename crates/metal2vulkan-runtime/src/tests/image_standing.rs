@@ -2,7 +2,9 @@
 //! (`shadow_standing.rs`). A draw that samples the texture in the pass that renders it reads a
 //! copy (`texture/attached_reads.rs`); a later command buffer's copy for such a draw moves only the
 //! texels inside the rectangle bounding the scissors the pass before drew through, where no
-//! other command wrote the texture since, and every texel where one did.
+//! other command wrote the texture since, and every texel where one did. A copy for such a draw
+//! after an earlier pass of the same command buffer wrote the texture moves every texel, decided
+//! as its encoder records it, not at its batch's submission.
 //!
 //! And a chain of passes over a mipmapped texture, the dockicons guest's pattern: the first
 //! clears and stores level 0, each later one renders the next level while sampling the whole
@@ -144,14 +146,29 @@ impl Tools {
     /// A pass loading and storing `texture`, of `draws`, in a command buffer of its own: the
     /// work counts before and after it.
     fn pass(&self, texture: &Texture, draws: &[Draw]) -> (WorkCounts, WorkCounts) {
+        self.passes(texture, &[draws])
+    }
+
+    /// Passes loading and storing `texture`, one encoder each of its draws, in one command buffer
+    /// of their own: the work counts before and after it.
+    fn passes(&self, texture: &Texture, passes: &[&[Draw]]) -> (WorkCounts, WorkCounts) {
         let device = self.queue.device();
         let before = device.work_counts();
+        let command_buffer = self.queue.command_buffer().unwrap();
+        for draws in passes {
+            self.encode(&command_buffer, texture, draws);
+        }
+        completed(&command_buffer);
+        (before, device.work_counts())
+    }
+
+    /// Encode a pass loading and storing `texture`, of `draws`, into `command_buffer`.
+    fn encode(&self, command_buffer: &CommandBuffer, texture: &Texture, draws: &[Draw]) {
         let mut pass = RenderPassDescriptor::new();
         let color = &mut pass.color_attachments[0];
         color.texture = Some(texture.clone());
         color.load_action = LoadAction::Load;
         color.store_action = StoreAction::Store;
-        let command_buffer = self.queue.command_buffer().unwrap();
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
         let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
         for draw in draws {
@@ -174,8 +191,6 @@ impl Tools {
             (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
         }
         encoder.end_encoding().unwrap();
-        completed(&command_buffer);
-        (before, device.work_counts())
     }
 
     /// The red of each of `texture`'s texels, row by row.
@@ -295,6 +310,59 @@ fn a_copy_in_after_an_attached_read_moves_what_its_pass_drew_alone() {
         assert_eq!(
             wrong, None,
             "{between:?}: the first texel (at, red, Metal's red) wrong"
+        );
+    }
+}
+
+/// A texture cleared, then one command buffer of two passes: the first draws [`SOLID`] through
+/// [`SOLID_AT`], the second samples the texture over every pixel. The second pass's copy in
+/// reads what the first wrote, which its encoder finds as it records it: the copy moves every
+/// texel in the pass's own `VkCommandBuffer`, and none is left to the batch's submission
+/// (`WorkCounts::shadow_copies_in_against_standing`), which would record it in a
+/// `VkCommandBuffer` of its own, the pass going on in another. Every texel holds what Metal's
+/// draws leave: [`SOLID`] inside [`SOLID_AT`], [`CLEARED`] elsewhere. Twice, each over a new
+/// texture: the first makes what the draws' pipelines need.
+#[test]
+fn a_copy_in_after_an_earlier_pass_of_its_command_buffer_wrote_the_texture_is_decided_there() {
+    let scratch = Scratch::new("image-standing-earlier");
+    let device = device(&scratch.0);
+    let tools = Tools::new(&device);
+    for round in 0..2 {
+        let texture = tools.texture();
+        let passes: [&[Draw]; 2] = [&[Draw::Solid(SOLID_AT, SOLID)], &[Draw::Sample(WHOLE)]];
+        let (before, after) = tools.passes(&texture, &passes);
+        let delta = |count: fn(&WorkCounts) -> u64| count(&after) - count(&before);
+        let against = delta(|c| c.shadow_copies_in_against_standing);
+        let texels = delta(|c| c.shadow_texels_copied_in_images);
+        let skipped = delta(|c| c.shadow_texels_skipped_by_standing);
+        let command_buffer = delta(|c| c.shadow_texels_unskipped_command_buffer);
+        eprintln!(
+            "IMAGE-STANDING-EARLIER {} round {round}: {against} copies in against a standing,              {texels} texels copied in, {skipped} skipped, {command_buffer} decided by the              command buffer; VkCommandBuffers begun {}, batch work {}, continuations {},              submitted {}, submit infos {}",
+            device.name(),
+            delta(|c| c.command_buffers_begun),
+            delta(|c| c.command_buffers_begun_batch_work),
+            delta(|c| c.command_buffers_begun_continuations),
+            delta(|c| c.command_buffers_submitted),
+            delta(|c| c.submit_infos),
+        );
+        assert_eq!(
+            (against, texels, skipped, command_buffer),
+            (0, SIDE * SIDE, 0, SIDE * SIDE),
+            "round {round}: the copies in against a standing, the texels copied in, those              skipped, and those moved for the earlier pass's write"
+        );
+        let reds = tools.reds(&texture);
+        let wrong = (0..SIDE * SIDE).find_map(|at| {
+            let texel = (at % SIDE, at / SIDE);
+            let expected = match inside(SOLID_AT, texel) {
+                true => SOLID,
+                false => CLEARED,
+            };
+            let red = reds[at as usize];
+            (red != expected).then_some((texel, red, expected))
+        });
+        assert_eq!(
+            wrong, None,
+            "round {round}: the first texel (at, red, Metal's red) wrong"
         );
     }
 }
