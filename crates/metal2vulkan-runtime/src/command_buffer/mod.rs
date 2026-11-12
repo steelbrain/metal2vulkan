@@ -2661,7 +2661,7 @@ impl CommandBuffer {
         TurnPoint {
             owner: self.0.address(),
             part: state.recorded.len(),
-            bound_heaps: state.heaps.bound(),
+            bound_heaps: state.heaps.may_bind(),
         }
     }
 

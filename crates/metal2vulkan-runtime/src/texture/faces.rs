@@ -35,12 +35,15 @@
 //! - **When.** Only where nothing else can name the face presented until then: the opening command
 //!   buffer is the device's only uncommitted one, the scheduler holds no batch, no command buffer
 //!   that may read the heap sets is incomplete and this one bound none (as a storage form's switch,
-//!   `texture/storage_form.rs`), the texture turned in no command buffer whose turning pass has not
-//!   been submitted, and it turned in this one never yet. A new command buffer counts itself before
-//!   it reads the device's turning flag ([`Device::face_turn_wait`]), which is up from before the
-//!   turn reads the count until the face is stored, so it either stopped the turn or sees the new
-//!   face. The turn writes the texture's heap set elements again (`heap_sets::rewrite`): its ID
-//!   reads the face presented, and nothing pending reads the elements meanwhile.
+//!   `texture/storage_form.rs`), nor holds an execution of indirect commands, whose commands bind
+//!   them as the commit or a host step records them, after the turn, though they run before the
+//!   pass (`heap_sets::HeapUse::may_bind`), the texture turned in no command buffer whose turning
+//!   pass has not been submitted, and it turned in this one never yet. A new command buffer counts
+//!   itself before it reads the device's turning flag ([`Device::face_turn_wait`]), which is up
+//!   from before the turn reads the count until the face is stored, so it either stopped the turn
+//!   or sees the new face. The turn writes the texture's heap set elements again
+//!   (`heap_sets::rewrite`): its ID reads the face presented, and nothing pending reads the
+//!   elements meanwhile.
 //! - **A command buffer made meanwhile.** One made after the turn, before the turning command
 //!   buffer's pass is submitted, names the new face, which holds the truth only once that pass ran.
 //!   Where one of its batches is submitted first and names the new face (or binds the heap sets, or
@@ -158,8 +161,9 @@ pub(crate) enum Unturned {
     /// No attached read made its faces yet: the texture's first.
     First,
     /// Something else may name it meanwhile: another uncommitted command buffer, a batch the
-    /// scheduler holds, a heap ticket out, a heap set this command buffer bound, a turn whose
-    /// pass is not submitted, or a turn earlier in this command buffer.
+    /// scheduler holds, a heap ticket out, a heap set this command buffer bound or an execution
+    /// of indirect commands it holds may bind, a turn whose pass is not submitted, or a turn
+    /// earlier in this command buffer.
     Busy,
     /// The pass takes no turn of any texture: color groups, a rasterization-rate map, or an
     /// encoding again whose first encoding did not turn the texture (the module's **Encoded
@@ -184,7 +188,8 @@ pub(crate) struct Turned {
 /// Where a render pass opens in its command buffer, for its turns (`CommandBuffer::turn_point`):
 /// the command buffer's address, which names it while it lives; the place among its ended
 /// encoders' parts that the pass's encoder's first part takes; and whether a command of it bound a
-/// heap set.
+/// heap set, or an execution of indirect commands of it may as the commit or a host step records
+/// its commands (`heap_sets::HeapUse::may_bind`).
 pub(crate) struct TurnPoint {
     pub(crate) owner: usize,
     pub(crate) part: usize,

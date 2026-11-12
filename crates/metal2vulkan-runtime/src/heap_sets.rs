@@ -2475,6 +2475,9 @@ pub(super) fn retire(device: &Device, kept: Keeper) {
 #[derive(Default)]
 pub(super) struct HeapUse {
     versions: Vec<Arc<SetVersion>>,
+    /// An execution of indirect commands left to record later ([`HeapUse::executes_later`]): its
+    /// commands bind the heap sets as the commit or a host step records them.
+    later: bool,
     /// Its first submission takes a ticket: its commands, or its host steps', may read the heap.
     wants_ticket: bool,
     /// Its ticket was taken.
@@ -2485,6 +2488,20 @@ impl HeapUse {
     /// Whether a command bound a heap set.
     pub(super) fn bound(&self) -> bool {
         !self.versions.is_empty()
+    }
+
+    /// An encoder left an execution of indirect commands to record later (`indirect_execute.rs`,
+    /// `render/executions.rs`): the commit or a host step records its commands, which bind the
+    /// heap sets then.
+    pub(super) fn executes_later(&mut self) {
+        self.later = true;
+    }
+
+    /// Whether a command bound a heap set, or an execution left to record later may bind one as
+    /// it records: a texture's turn to its other face writes its elements again, which those
+    /// commands would read though they run before the turning pass (`texture/faces.rs`).
+    pub(super) fn may_bind(&self) -> bool {
+        self.bound() || self.later
     }
 
     /// A kept recording's run bound `versions` again ([`bound_again`]), as its commands' [`bind`]
@@ -2550,6 +2567,7 @@ impl HeapUse {
     pub(super) fn clear(&mut self) -> Vec<Arc<SetVersion>> {
         self.wants_ticket = false;
         self.ticketed = false;
+        self.later = false;
         std::mem::take(&mut self.versions)
     }
 }

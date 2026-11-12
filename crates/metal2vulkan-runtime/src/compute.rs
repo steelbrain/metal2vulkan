@@ -1479,6 +1479,8 @@ impl ComputeCommandEncoder {
         check: Option<(IndirectCommandCheck, IndirectCommandCheckNeeds)>,
     ) -> Result<(), Error> {
         self.sync_heaps();
+        // Its commands bind the heap sets as they record, later.
+        self.core.command_buffer().state().heaps.executes_later();
         // Its commands run the states their records name, where it inherits none.
         if !icb.descriptor().inherit_pipeline_state {
             self.core.routes.executed(icb);
