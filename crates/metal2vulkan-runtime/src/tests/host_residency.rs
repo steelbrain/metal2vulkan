@@ -53,6 +53,10 @@ const WAIT: Duration = Duration::from_secs(60);
 /// residency thread to release one.
 const SETTLE: Duration = Duration::from_secs(20);
 
+/// The longest a test waits for the device's in-place checks to answer, as the in-place check's
+/// own tests wait: on a loaded Iris Xe they took 47-56 s (m3-max-18134).
+const CHECKS: Duration = Duration::from_secs(120);
+
 /// How long the device leaves an import idle before its residency thread releases it the first
 /// time (`host_residency::IDLE`), less the residency clock's millisecond rounding.
 const FIRST_WINDOW: Duration = Duration::from_millis(1990);
@@ -683,7 +687,7 @@ fn a_texture_in_place_over_a_dma_buf_import_leaves_it_releasable() {
     in_place.policy.host_page_textures = HostPageTexturePolicy::InPlace;
     let device = &settled(Device::system_default_with(&in_place).unwrap());
     assert!(
-        device.settle_in_place_checks(SETTLE),
+        device.settle_in_place_checks(CHECKS),
         "{TEST}: the in-place checks never answered"
     );
     let page = host_page();
