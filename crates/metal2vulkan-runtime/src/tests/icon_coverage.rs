@@ -15,6 +15,8 @@
 //! before the first commits; each in its own, encoded and committed on several threads at once
 //! on one queue; and every icon in one command buffer with one second color kept across icons
 //! and rounds, so that its first pass renders through the scratch and its later ones in place.
+//! And three homes of the icon: a `Private` texture, a texture over a `Shared` buffer's bytes, and
+//! one over host pages a no-copy buffer imports, as a surface's texture lies.
 //!
 //! The functions are `dcs_rect`, `dcs_mark`, `dcs_read` and `dcs_flag` of the owned fixture
 //! `validation/fixtures/public/engine/dcs_dont_care_split.ll`.
@@ -22,7 +24,7 @@
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::{
     BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, LoadAction, Origin,
@@ -31,6 +33,8 @@ use crate::{
 };
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 /// The icon's side, and an `RGBA16Float` texel's bytes.
 const SIDE: u64 = 32;
@@ -57,6 +61,16 @@ enum Shape {
     OwnBuffers,
     Threads,
     KeptCoverage,
+}
+
+/// Where an icon's texels lie.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Home {
+    Private,
+    /// A `Shared` buffer's bytes.
+    Buffer,
+    /// Host pages a no-copy buffer imports.
+    HostPages,
 }
 
 /// The queue, the states, the target's size as `dcs_rect` takes it, and a read-back buffer.
@@ -107,6 +121,18 @@ impl Tools {
         d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
         d.resource_options = ResourceOptions::private();
         self.queue.device().new_texture(&d).unwrap()
+    }
+
+    /// Icon `index`'s new texture: `Private`, or over `bytes` at the icon's place in them.
+    fn icon(&self, bytes: Option<&Buffer>, index: usize) -> Texture {
+        let Some(bytes) = bytes else {
+            return self.target(PixelFormat::RGBA16Float);
+        };
+        let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, SIDE, SIDE, false);
+        d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+        d.resource_options = bytes.resource_options();
+        let at = index as u64 * SIDE * SIDE * TEXEL;
+        bytes.new_texture(&d, at, SIDE * TEXEL).unwrap()
     }
 
     /// Icon `index`'s pass into `icon`, beside `coverage` as its second color, encoded in
@@ -232,7 +258,9 @@ fn commit_all(command_buffers: Vec<CommandBuffer>) {
     }
 }
 
-fn run(case: &str, shape: Shape) {
+fn run(case: &str, shape: Shape, home: Home) {
+    // Declared before the device, so dropped after it.
+    let host = Host::new();
     let scratch = Scratch::new(&format!("icon-coverage-{case}"));
     let device = device(&scratch.0);
     let Some(tools) = Tools::new(&device) else {
@@ -242,13 +270,28 @@ fn run(case: &str, shape: Shape) {
         );
         return;
     };
+    let length = SIDE * SIDE * TEXEL * ICONS as u64;
+    let bytes = match home {
+        Home::Private => None,
+        Home::Buffer => Some(
+            device
+                .new_buffer(length, ResourceOptions::shared())
+                .unwrap(),
+        ),
+        Home::HostPages => {
+            let Some(bytes) = over_host(&device, &host, &Arc::new(AtomicUsize::new(0))) else {
+                return;
+            };
+            Some(bytes)
+        }
+    };
     let kept = tools.target(PixelFormat::RG16Float);
     let mut failures = Vec::new();
     let mut counts = Vec::new();
     for round in 0..ROUNDS {
         let before = device.work_counts();
         let icons: Vec<Texture> = (0..ICONS)
-            .map(|_| tools.target(PixelFormat::RGBA16Float))
+            .map(|index| tools.icon(bytes.as_ref(), index))
             .collect();
         let coverages: Vec<Texture> = (0..ICONS)
             .map(|_| match shape {
@@ -315,20 +358,35 @@ fn run(case: &str, shape: Shape) {
 
 #[test]
 fn icons_rendered_in_one_command_buffer_keep_their_fetched_second_colors_value() {
-    run("one-buffer", Shape::OneBuffer);
+    run("one-buffer", Shape::OneBuffer, Home::Private);
 }
 
 #[test]
 fn icons_rendered_in_command_buffers_of_their_own_keep_their_fetched_second_colors_value() {
-    run("own-buffers", Shape::OwnBuffers);
+    run("own-buffers", Shape::OwnBuffers, Home::Private);
 }
 
 #[test]
 fn icons_rendered_on_several_threads_keep_their_fetched_second_colors_value() {
-    run("threads", Shape::Threads);
+    run("threads", Shape::Threads, Home::Private);
 }
 
 #[test]
 fn icons_sharing_one_kept_second_color_keep_its_fetched_value() {
-    run("kept-coverage", Shape::KeptCoverage);
+    run("kept-coverage", Shape::KeptCoverage, Home::Private);
+}
+
+#[test]
+fn icons_over_a_buffers_bytes_keep_their_fetched_second_colors_value() {
+    run("over-buffer", Shape::OneBuffer, Home::Buffer);
+}
+
+#[test]
+fn icons_over_host_pages_keep_their_fetched_second_colors_value() {
+    run("over-host", Shape::OneBuffer, Home::HostPages);
+}
+
+#[test]
+fn icons_over_host_pages_rendered_on_several_threads_keep_their_fetched_second_colors_value() {
+    run("over-host-threads", Shape::Threads, Home::HostPages);
 }
