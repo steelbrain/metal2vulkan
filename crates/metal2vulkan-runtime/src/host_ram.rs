@@ -149,7 +149,7 @@
 //!
 //! [`Device::use_host_ram`]: crate::Device::use_host_ram
 
-use super::buffer::{usage, Pages};
+use super::buffer::usage;
 use super::buffer_descriptor::HostBuffer;
 use super::device::lock;
 use super::dirty_pages::{hook, DirtyPages, DirtySource};
