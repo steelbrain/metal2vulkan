@@ -14,6 +14,7 @@ use super::{
     at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with,
     Messages, ScratchCache, WAIT,
 };
+use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{SamplerMinMagFilter, SamplerMipFilter, TextureType};
