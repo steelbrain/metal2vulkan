@@ -1075,8 +1075,10 @@ degradations! {
         /// that image takes no Vulkan view of its format: a view of another component layout on
         /// a device whose Vulkan views reinterpret no image's components (a portability subset
         /// without `imageViewFormatReinterpretation`, or an adopted device whose consumer did not
-        /// say it enabled it), or a view of another format than the texture's own and its sRGB
-        /// twin's of a texture made without `PixelFormatView` usage (`texture/view_shadow.rs`).
+        /// say it enabled it), or a view of a texture made without `PixelFormatView` usage in
+        /// another format than the texture's own, its sRGB twin's and, where the texture renders
+        /// and is `RGBA8Unorm`, `BGRA8Unorm` or a twin of one, its channel-order sibling's and
+        /// that sibling's twin's (`texture/view_shadow.rs`).
         /// A view in other channels of its image's bits (an `A8Unorm` view of an `R8Unorm`
         /// texture) is the image itself to its bindings, through a swizzle, and takes a shadow
         /// only for a pass that renders into it: Vulkan views the image in no format of the

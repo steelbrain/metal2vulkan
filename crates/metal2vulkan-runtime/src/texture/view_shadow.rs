@@ -8,9 +8,10 @@
 //!   view's format (`view_plan.rs`).
 //! - **Another format of a texture made without `PixelFormatView` usage**: plain Metal makes the
 //!   view (its API validation stops it) and renders through it the same; the texture's image was
-//!   made mutable, if at all, only for its sRGB twin's formats (`image_plan.rs`), which keeps the
-//!   driver's compression of it, so a view of another format of its class (`BGRA8Unorm` of an
-//!   `RGBA8Unorm` texture) is not a view of that image.
+//!   made mutable, if at all, only for its sRGB twin's formats and, where it renders, its
+//!   channel-order sibling's and that sibling's twin's (`image_plan::reordered_views`), so a view
+//!   of another format of its class (`R32Uint` of an `RGBA8Unorm` texture, or `BGRA8Unorm` of one
+//!   that renders nothing) is not a view of that image.
 //!
 //! Such a view:
 //!

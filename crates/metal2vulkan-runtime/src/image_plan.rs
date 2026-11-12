@@ -390,6 +390,27 @@ pub(super) fn srgb_twin(pf: PixelFormat) -> Option<PixelFormat> {
     })
 }
 
+/// The other member of `pf`'s channel-order pair (`RGBA8Unorm` and `BGRA8Unorm`, and their sRGB
+/// twins), and that member's sRGB twin: views of a texture made without `PixelFormatView` usage.
+/// Apple documents the second as needing no such usage (`MTLTextureUsage.pixelFormatView`: "if
+/// your texture uses the `rgba8Unorm` pixel format and your texture view uses `bgra8Unorm_srgb`");
+/// plain Metal makes the first too and renders through it, which its API validation stops
+/// (`runtime_lane::view_attachments`). Empty for any other format.
+pub(super) fn reordered_views(pf: PixelFormat) -> Vec<PixelFormat> {
+    use PixelFormat as P;
+    let sibling = match pf {
+        P::RGBA8Unorm => P::BGRA8Unorm,
+        P::BGRA8Unorm => P::RGBA8Unorm,
+        P::RGBA8UnormSRGB => P::BGRA8UnormSRGB,
+        P::BGRA8UnormSRGB => P::RGBA8UnormSRGB,
+        _ => return Vec::new(),
+    };
+    [Some(sibling), srgb_twin(sibling)]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
 /// The member of `pf`'s compressed family that names it: block-compressed formats whose texels
 /// are the same blocks read as sRGB or linear, signed or unsigned, or HDR or LDR. Metal views a
 /// texture as another member of its family with `PixelFormatView` usage (`BC4_RUnorm` as
@@ -855,6 +876,7 @@ fn plan_held(
                 .filter(|&f| compatible(format, f, true) && Some(f) != twin_word),
         );
     }
+    views.extend(reordered_formats(pf, format, usage, usage_flags, profile));
     views.insert(format);
     // A usage the image's own format lacks, which a view format has (a storage alias, a sampled
     // twin, a word attachment), needs extended usage.
@@ -998,6 +1020,7 @@ fn word_samples(
                 .filter(|&f| compatible(format, f, true) && Some(f) != twin_word),
         );
     }
+    views.extend(reordered_formats(pf, format, usage, usage_flags, profile));
     let extended = [
         (ImageUsageFlags::SAMPLED, FormatUsage::SampledImage),
         (
@@ -1034,6 +1057,34 @@ fn word_samples(
         mapping,
         unavailable,
     })
+}
+
+/// The formats of the views of `pf`'s channel-order sibling and its twin ([`reordered_views`])
+/// that an image of `format` lists for a texture of Metal `usage` that renders (`RenderTarget`),
+/// planned with `usage_flags`: a pass renders into such a view, which Metal makes without
+/// `PixelFormatView` usage, through a Vulkan view of the image itself rather than a shadow
+/// (`texture/view_shadow.rs`), and its other uses view the image too. Not the view of a sibling's
+/// word (`WordAttachment`), as for the sRGB twin. None for a texture that renders nothing: its
+/// sibling's views present the image through a swizzle where they can.
+fn reordered_formats(
+    pf: PixelFormat,
+    format: Format,
+    usage: TextureUsage,
+    usage_flags: ImageUsageFlags,
+    profile: &DeviceProfile,
+) -> Vec<Format> {
+    if !usage.contains(TextureUsage::RENDER_TARGET) {
+        return Vec::new();
+    }
+    reordered_views(pf)
+        .into_iter()
+        .flat_map(|view| {
+            let word = WordAttachment::of(view, profile).map(|w| w.word_format());
+            view_formats(view, usage_flags, profile)
+                .into_iter()
+                .filter(move |&f| compatible(format, f, true) && Some(f) != word)
+        })
+        .collect()
 }
 
 /// The Vulkan usages [`view_formats`] reads: the views it lists follow these alone.

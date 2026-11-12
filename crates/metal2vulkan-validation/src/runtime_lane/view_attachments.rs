@@ -39,11 +39,11 @@ use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
     Attachment, BlitCommandEncoder, BlitOption, Buffer, ClearColor, CommandBuffer,
-    CommandBufferStatus, CommandQueue, CpuCacheMode, Device, Error, HazardTrackingMode,
-    HeapDescriptor, HeapType, Invalid, Library, LoadAction, Origin, PipelineOptions, Problem,
-    Region, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
-    ScissorRect, Size, StorageMode, StoreAction, Texture, TextureDescriptor, TextureProblem,
-    ViewProblem,
+    CommandBufferStatus, CommandQueue, CpuCacheMode, Degradation, Device, Error,
+    HazardTrackingMode, HeapDescriptor, HeapType, Invalid, Library, LoadAction, Origin,
+    PipelineOptions, Problem, Region, RenderCommandEncoder, RenderPassDescriptor,
+    RenderPipelineState, ResourceOptions, ScissorRect, Size, StorageMode, StoreAction, Texture,
+    TextureDescriptor, TextureProblem, ViewProblem,
 };
 use std::path::Path;
 
@@ -1495,6 +1495,44 @@ fn a_layered_pass_renders_a_line_s_slices() {
             );
         }
     });
+}
+
+/// An `RGBA8Unorm` texture that renders, made without `PixelFormatView` usage, renders into its
+/// `BGRA8Unorm` and `BGRA8Unorm_sRGB` views in place: its image lists their formats, so each is a
+/// view of the image (no `shadowed-texture-view`), and stores its format's bytes as Metal's does
+/// (the probe's `v_*` bytes, in the view's channel order). Apple documents the `bgra8Unorm_srgb`
+/// view as needing no `PixelFormatView` usage; plain Metal makes the `BGRA8Unorm` one too.
+#[test]
+fn a_render_target_s_reordered_views_render_in_place() {
+    const BGRA_UNORM: ([u8; 4], [u8; 4]) = ([0x99, 0x66, 0x33, 0xcc], [0xbf, 0x40, 0x80, 0xff]);
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let lane = Lane::new(&device);
+        for (pf, want, slack) in [
+            (PixelFormat::BGRA8Unorm, BGRA_UNORM, 0),
+            (PixelFormat::BGRA8UnormSRGB, BGRA_SRGB, 1),
+        ] {
+            let texture = lane.texture(PixelFormat::RGBA8Unorm, RT, PLAIN);
+            let viewed = texture.new_texture_view(pf).unwrap();
+            let pipeline = lane.solid(pf, 1, false);
+            lane.run(
+                &pass(&viewed, (0, 0), LoadAction::Clear, None),
+                |l, e, h| l.left(e, h, &pipeline, COLOR),
+            );
+            let what = format!("{}: a {pf:?} view", device.name());
+            check(&lane.bytes(&texture, 0, 0), &halves(want), slack, &what);
+        }
+        let notices = counts(&messages.take_notices());
+        assert_eq!(
+            notices.get(&Degradation::ShadowedTextureView),
+            None,
+            "{}: {notices:?}",
+            device.name()
+        );
+    }
+    layer_reported_nothing_at_all(&messages);
 }
 
 /// What a 2048x2048 `RGBA8Unorm` render target made without `PixelFormatView` usage costs the

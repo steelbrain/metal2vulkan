@@ -376,7 +376,10 @@ recorded here.
   3.0-6.1 and 4.6-8.6 ms. An ordinary buffer's packed rows avoid it.
 - **A view of another format without `PixelFormatView` usage** is a shadow image copied at each use
   (`shadowed-texture-view`): about 50 to 95 µs a command buffer for a 64x64 texture. Making the
-  texture with `PixelFormatView` usage avoids it. A view in other channels of its image's bits (an
+  texture with `PixelFormatView` usage avoids it. An `RGBA8Unorm` or `BGRA8Unorm` texture, or a
+  twin of one, that renders lists its channel-order sibling's formats and that sibling's twin's in
+  its image (`BGRA8Unorm` and `BGRA8Unorm_sRGB` of an `RGBA8Unorm` texture), so its views in those
+  formats are views of the image itself. A view in other channels of its image's bits (an
   `A8Unorm` view of an `R8Unorm` texture) binds the image itself through a swizzle, and only a pass
   that renders into it renders through a shadow.
 - **A pass that loads a texture over a buffer and does not store it** renders through an image its

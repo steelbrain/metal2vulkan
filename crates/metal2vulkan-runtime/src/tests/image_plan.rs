@@ -7,8 +7,8 @@ use super::super::copy_plan::{copy_unit, BlitOption, ImageRegion};
 use super::super::driver_defects;
 use super::super::image_plan::{
     block_family, check_image_limits, compatible, cube_compatible, holds_srgb_twin, plan_image,
-    sample_count, srgb_twin, view_formats, AnyViews, DepthImageFacts, ImageFacts, ImagePlan,
-    ImageRefusal, VIEWED_USAGES,
+    reordered_views, sample_count, srgb_twin, takes_views_of, view_formats, AnyViews,
+    DepthImageFacts, ImageFacts, ImagePlan, ImageRefusal, VIEWED_USAGES,
 };
 use super::super::memory::MemoryClass;
 use super::super::pvrtc::{holds_blocks, image_buffer_region, image_region, CARRIERS};
@@ -618,6 +618,53 @@ fn srgb_twins_share_one_mutable_image() {
                 | ImageUsageFlags::TRANSFER_DST,
             "{name}"
         );
+    }
+}
+
+/// A texture of an 8-bit four-channel format that renders lists the views of its channel-order
+/// sibling and the sibling's twin (`BGRA8Unorm` and `BGRA8Unorm_sRGB` of an `RGBA8Unorm` texture),
+/// which Metal makes without `PixelFormatView` usage, where the device renders them directly: its
+/// image takes them, and a pass renders into such a view through a view of the image itself. One
+/// that renders nothing takes none of them, nor does a format without a sibling.
+#[test]
+fn render_targets_take_their_channel_order_sibling_s_views() {
+    use PixelFormat as P;
+    let rt = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+    for (name, desc, device) in committed() {
+        let facts = facts(&desc, &device);
+        let profile = device.profile();
+        for (pf, sibling) in [
+            (P::RGBA8Unorm, P::BGRA8Unorm),
+            (P::BGRA8Unorm, P::RGBA8Unorm),
+            (P::RGBA8UnormSRGB, P::BGRA8UnormSRGB),
+            (P::BGRA8UnormSRGB, P::RGBA8UnormSRGB),
+        ] {
+            let what = format!("{name}: {pf:?}");
+            let views = reordered_views(pf);
+            assert_eq!(views, [sibling, srgb_twin(sibling).unwrap()], "{what}");
+            let l = layout(TextureType::Type2D, pf, 1, 1);
+            let Ok(plan) = plan_image(&l, rt, false, &facts) else {
+                continue;
+            };
+            check_plan(&name, pf, rt, &plan, &facts);
+            for &view in &views {
+                let direct = WordAttachment::of(view, profile).is_none();
+                let listed = view_formats(view, plan.usage, profile)
+                    .iter()
+                    .all(|&f| compatible(plan.format, f, true));
+                assert_eq!(
+                    takes_views_of(&plan, view, profile),
+                    direct && listed,
+                    "{what}: {view:?} -> {plan:?}"
+                );
+            }
+            let read = plan_image(&l, TextureUsage::SHADER_READ, false, &facts).expect(&what);
+            assert!(!takes_views_of(&read, sibling, profile), "{what}: {read:?}");
+        }
+        let l = layout(TextureType::Type2D, P::RGBA16Float, 1, 1);
+        assert!(reordered_views(P::RGBA16Float).is_empty());
+        let plan = plan_image(&l, rt, false, &facts).expect(&name);
+        assert!(plan.view_formats.is_empty(), "{name}: {plan:?}");
     }
 }
 
