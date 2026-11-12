@@ -323,10 +323,11 @@ fn work_that_completed_before_a_failed_wait_completes() {
 }
 
 /// A failed wait's drain of the device's queues (`Device::drain_queues`), taken while the
-/// device's queue-switch check is between the two submissions of a round on one `VkQueue`
-/// (`queue_switch_check.rs`), completes once the round goes on: the round holds its queue's lock
-/// until it signalled its gate, so the drain never waits under that lock for the round's first
-/// batch, held at the gate, while the check waits for that lock to make its second submission.
+/// device's queue-switch check is between the two batches' submissions of a round on one
+/// `VkQueue` (`queue_switch_check.rs`), completes once the round goes on: the round holds its
+/// queue's lock through its last submission, so the drain never waits under that lock while the
+/// check waits for it, and the round's batches submitted complete with no further call of the
+/// check's (their gate opens on the GPU).
 #[test]
 fn a_drain_beside_the_queue_switch_check_s_round_completes() {
     let scratch = Scratch::new();

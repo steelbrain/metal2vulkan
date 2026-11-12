@@ -104,7 +104,11 @@ fn isolated(
     options.policy.unshared_isolation = isolation;
     let device = Device::system_default_with(&options).unwrap();
     assert!(device.settle_queue_switch_check(WAIT), "the check settles");
-    println!("{queue_sharing:?}: {}", device.queue_switch_check_report());
+    println!(
+        "{queue_sharing:?}: {}; late rounds {}",
+        device.queue_switch_check_report(),
+        device.shared().queue_switch.late_rounds()
+    );
     device
 }
 

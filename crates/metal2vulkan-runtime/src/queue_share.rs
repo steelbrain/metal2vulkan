@@ -407,10 +407,15 @@ pub(crate) struct QueueSwitch {
     /// (`tests/teardown_threads.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) held: crate::freed_memory::held::Held,
-    /// The crate's device tests' hold of the check between the two submissions of a round on one
-    /// `VkQueue`, its queue's lock held (`tests/device_recovery.rs`).
+    /// The crate's device tests' hold of the check between the two batches' submissions of a
+    /// round on one `VkQueue`, its opening and first batch submitted and its queue's lock held
+    /// (`tests/device_recovery.rs`, `tests/queue_switch_gate.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) between: crate::freed_memory::held::Held,
+    /// The crate's device tests' count of the check's late rounds, whose gaps counted for nothing
+    /// (`queue_switch_check.rs`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    late_rounds: AtomicU64,
     /// The crate's device tests' timings of the check's last two steps, in nanoseconds: the
     /// release of its Vulkan objects, and the drop of its shares of the device's parts.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -441,6 +446,8 @@ impl QueueSwitch {
             held: Default::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             between: Default::default(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            late_rounds: AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             last_steps: Default::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -549,6 +556,18 @@ impl QueueSwitch {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn fences_waited(&self) -> u64 {
         self.fences_waited.load(Ordering::Relaxed)
+    }
+
+    /// Record a late round of the check: its gate open as its last submission returned.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn late_round(&self) {
+        self.late_rounds.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The check's late rounds so far ([`late_round`](Self::late_round)).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn late_rounds(&self) -> u64 {
+        self.late_rounds.load(Ordering::Relaxed)
     }
 
     /// How long the check's last two steps took ([`timed_step`](Self::timed_step)).
