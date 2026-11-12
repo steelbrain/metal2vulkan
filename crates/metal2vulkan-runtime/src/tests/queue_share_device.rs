@@ -543,7 +543,7 @@ fn over_a_churn_queues_take_the_least_held_vk_queue_and_unshared_ones_an_empty_o
         drop(live);
         // A second unshared queue: on a `VkQueue` no queue holds where one is free, else beside
         // another, counted, never the first unshared queue's but on a device of one.
-        let free = (device.round_robin_held().iter()).any(|&held| held == (0, false));
+        let free = device.round_robin_held().contains(&(0, false));
         let sharing = || device.work_counts().unshared_queues_sharing_a_vk_queue;
         let first = sharing();
         let second = placed(device, true);

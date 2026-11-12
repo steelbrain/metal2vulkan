@@ -288,23 +288,22 @@ fn a_new_queue_takes_the_least_held_vk_queue_free_of_unshared_ones_in_turn() {
 fn churn(place: &dyn Fn(u64, &[usize], Option<usize>) -> usize) -> (usize, usize) {
     const VK_QUEUES: usize = 14;
     let mut homes = [0usize; VK_QUEUES];
-    let mut made = 0u64;
     let mut live: Vec<(usize, u64)> = Vec::new();
     let mut together = 0;
     let mut most = 0;
     // The unshared one, on an empty VkQueue: the first.
     let unshared = 0;
     let mut seed = 0x2545_f491_4f6c_dd1du64;
-    for at in 0..354u64 {
+    // `made`: the queues made before this one, one a step.
+    for made in 0..354u64 {
         live.retain(|&(vk_queue, until)| {
-            let keep = until > at;
+            let keep = until > made;
             if !keep {
                 homes[vk_queue] -= 1;
             }
             keep
         });
         let vk_queue = place(made, &homes, Some(unshared));
-        made += 1;
         let empty = (0..VK_QUEUES).any(|index| homes[index] == 0 && index != unshared);
         if (homes[vk_queue] > 0 || vk_queue == unshared) && empty {
             together += 1;
@@ -313,11 +312,11 @@ fn churn(place: &dyn Fn(u64, &[usize], Option<usize>) -> usize) -> (usize, usize
         seed = seed
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
-        let lifetime = match at {
+        let lifetime = match made {
             0..3 => u64::MAX,
             _ => 1 + (seed >> 33) % 8,
         };
-        live.push((vk_queue, at.saturating_add(lifetime)));
+        live.push((vk_queue, made.saturating_add(lifetime)));
         most = most.max(live.len() + 1);
     }
     (together, most)
