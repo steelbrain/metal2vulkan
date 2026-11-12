@@ -1742,8 +1742,10 @@ pub(crate) struct RenderLowering {
     /// piece of the pass's submission (`rate_mapped_pass.rs`, **Pieces**).
     piece_split: bool,
     /// The work of the draws the encoder recorded of an execution's commands in a rate-mapped
-    /// pass since the execution's recording last read it (`rate_mapped_pass::region_work`).
+    /// pass since the execution's recording last read it (`rate_mapped_pass::draw_work`).
     piece_work: u64,
+    /// The region draws among it (`rate_mapped_pass::region_draws`).
+    piece_regions: u64,
     /// The encoder records an execution's commands and the command it draws holds a barrier,
     /// which orders its draw after every draw before it (`render/executions.rs`).
     command_barrier: bool,
@@ -2487,6 +2489,7 @@ impl RenderLowering {
                 run_barrier: false,
                 piece_split: false,
                 piece_work: 0,
+                piece_regions: 0,
                 command_barrier: false,
                 unordered: UnorderedWrites::new(),
                 zero_indices: None,
@@ -10883,6 +10886,7 @@ impl RenderLowering {
             // The work of what it records of an execution's commands in a rate-mapped pass
             // (`rate_mapped_pass.rs`, **Pieces**).
             let mut piece_work = 0u64;
+            let mut piece_regions = 0u64;
             let counts_work = self.replaying && self.rate_map.is_some();
             // A draw read through snapshots records its recordings twice: every snapshot draw,
             // then every drawing draw (`render/snapshot.rs`); one read in place, once.
@@ -10950,6 +10954,7 @@ impl RenderLowering {
                             if counts_work {
                                 let work = rate_mapped_pass::draw_work(&state.scissors, &draw);
                                 piece_work = piece_work.saturating_add(work);
+                                piece_regions += rate_mapped_pass::region_draws(&state.scissors);
                             }
                             if indirect.is_some()
                                 && phase != Some(snapshot::Phase::Snapshot)
@@ -11053,6 +11058,7 @@ impl RenderLowering {
             }
             draw_alone = states_recorded.draw_alone();
             self.piece_work = self.piece_work.saturating_add(piece_work);
+            self.piece_regions = self.piece_regions.saturating_add(piece_regions);
             states_recorded.count(self.core.counts());
             (self.core.command_buffer()).recorded(draws_recorded + states_recorded.states);
             if let Some((making, state, draws, query)) = split {

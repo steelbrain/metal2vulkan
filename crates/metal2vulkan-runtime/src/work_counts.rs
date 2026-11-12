@@ -220,6 +220,7 @@ pub(crate) struct Counters {
     render_passes_begun_by: [AtomicU64; PassBegun::COUNT],
     instance_splits_by: [AtomicU64; Split::COUNT],
     rate_map_pieces: AtomicU64,
+    rate_map_index_ranges: AtomicU64,
     rate_map_pieces_timed: AtomicU64,
     rate_map_piece_gpu_nanos: AtomicU64,
     rate_map_piece_gpu_nanos_most: AtomicU64,
@@ -2701,6 +2702,12 @@ impl Counters {
     /// `VkSubmitInfo` of its own (`rate_mapped_pass.rs`, **Pieces**).
     pub(crate) fn rate_map_pieces(&self, pieces: u64) {
         (self.rate_map_pieces).fetch_add(pieces, Ordering::Relaxed);
+    }
+
+    /// A command's draw in a rate-mapped pass was drawn as `ranges` more ranges of its indices
+    /// than one, each a draw of its own (`rate_mapped_pass.rs`, **Pieces**).
+    pub(crate) fn rate_map_index_ranges(&self, ranges: u64) {
+        (self.rate_map_index_ranges).fetch_add(ranges, Ordering::Relaxed);
     }
 
     /// A piece of a rate-mapped pass's submission ran for `nanos` of GPU time, read from its
@@ -6801,6 +6808,11 @@ pub struct WorkCounts {
     /// region draws' vertices and the draws themselves, reached a bound (`rate_mapped_pass.rs`,
     /// **Pieces**).
     pub rate_map_pieces: u64,
+    /// Ranges past the first that executed commands' draws in rate-mapped passes were drawn as,
+    /// each a range of the draw's indices drawn as a draw of its own, so a piece may begin between
+    /// them: a draw that alone would hold more than a piece's work (`rate_mapped_pass.rs`,
+    /// **Pieces**).
+    pub rate_map_index_ranges: u64,
     /// The pieces of passes recorded in several whose GPU time was read from timestamps written
     /// before and after each (none where the device writes no timestamps or answers GPU times
     /// from the host): every piece of such a pass, its first included.
@@ -9819,6 +9831,7 @@ impl Device {
             instance_splits_visibility: split(Split::Visibility),
             instance_splits_shape: split(Split::Shape),
             rate_map_pieces: counters.rate_map_pieces.load(Ordering::Relaxed),
+            rate_map_index_ranges: counters.rate_map_index_ranges.load(Ordering::Relaxed),
             rate_map_pieces_timed: counters.rate_map_pieces_timed.load(Ordering::Relaxed),
             rate_map_piece_gpu_nanos: counters.rate_map_piece_gpu_nanos.load(Ordering::Relaxed),
             rate_map_piece_gpu_nanos_most: (counters.rate_map_piece_gpu_nanos_most)

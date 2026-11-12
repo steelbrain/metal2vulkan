@@ -342,7 +342,7 @@ use cause::HostStepCause;
 use gpu::GpuForm;
 pub(super) use gpu::ReplayedDraws;
 use metal2vulkan::bind::indirect_commands::{Action, BufferStage, CommandRecord};
-use metal2vulkan::bind::{DrawCall, ReplayFaults, ViewSetup};
+use metal2vulkan::bind::{DrawCall, RateMapRegions, ReplayFaults, ViewSetup};
 use metal2vulkan::metal::{
     IndexType, IndirectCommandType, PrimitiveTopologyClass, PrimitiveType, VertexStepFunction,
 };
@@ -1045,6 +1045,63 @@ struct Found {
     /// That work reached the piece's (`rate_mapped_pass::piece_work`): the next command that
     /// draws begins the next piece.
     piece_due: bool,
+}
+
+impl Found {
+    /// Before a command's draw, or a range of its indices (`rate_mapped_pass.rs`, **Pieces**):
+    /// where the work before holds a piece's, the draw records into the execution's next run,
+    /// which begins the next piece; but where the run so far is one the execution began with
+    /// nothing in it, that run begins it.
+    fn piece_before(&self, encoder: &mut RenderLowering) {
+        if self.piece_due {
+            match encoder.current.recorded || encoder.earlier.is_empty() {
+                true => encoder.piece_split = true,
+                false => encoder.current.piece = true,
+            }
+        }
+    }
+
+    /// After it: its work added to the piece's, and the region draws its recordings made (0
+    /// outside a rate-mapped pass). A draw that recorded nothing leaves the next piece to the
+    /// next that draws.
+    fn piece_after(&mut self, encoder: &mut RenderLowering) -> u64 {
+        self.piece_due = encoder.piece_split;
+        self.piece_work = self.piece_work.saturating_add(encoder.piece_work);
+        encoder.piece_work = 0;
+        if self.piece_work >= rate_mapped_pass::piece_work() {
+            self.piece_due = true;
+            self.piece_work = 0;
+        }
+        let regions = encoder.piece_regions;
+        encoder.piece_regions = 0;
+        regions
+    }
+}
+
+/// The vertices of each primitive of `draw` of `pipeline`, where its indices may be drawn as
+/// consecutive ranges, each a draw of its own, as Metal draws the whole (`rate_mapped_pass.rs`,
+/// **Pieces**): a list of points, lines or triangles, which Metal never restarts, of one
+/// instance, whose pipeline reads no `[[primitive_id]]` and writes no memory. `None` for any
+/// other.
+fn index_ranges_of(pipeline: &RenderPipelineState, draw: &IndexedDraw) -> Option<u32> {
+    let RenderStateKind::Graphics(state) = pipeline.kind() else {
+        return None;
+    };
+    let graphics = &state.base().graphics;
+    if draw.instance_count != 1
+        || graphics.reads_primitive_id
+        || graphics.vertex_writes_memory
+        || graphics.fragment_writes_memory
+        || crate::tessellation::patches(graphics).is_some()
+    {
+        return None;
+    }
+    match draw.primitive_type {
+        DrawPrimitiveType::Public(PrimitiveType::Point) => Some(1),
+        DrawPrimitiveType::Public(PrimitiveType::Line) => Some(2),
+        DrawPrimitiveType::Public(PrimitiveType::Triangle) => Some(3),
+        _ => None,
+    }
 }
 
 /// An execution's recording: the encoder core back, with what the draws noted, retained and
@@ -2217,6 +2274,18 @@ impl RenderExecution {
         found: &mut Found,
     ) -> Result<(), Error> {
         let inherited = self.icb.descriptor().inherit_buffers;
+        // In a rate-mapped pass, the most region draws any draw's recordings made (each draws
+        // every index of the draw), which the next command's draw is cut into ranges of its
+        // indices by (`rate_mapped_pass.rs`, **Pieces**); before any, the most a plan holds. The
+        // encoder's viewport and scissor, which the regions follow, stand through the commands.
+        let mut measured: Option<u64> = None;
+        let mut note = |made: u64| {
+            if made > 0 {
+                measured = Some(measured.map_or(made, |most| most.max(made)));
+            }
+            measured.unwrap_or(RateMapRegions::MAX_REGIONS as u64)
+        };
+        let mut regions = note(0);
         for (record, own) in commands {
             // A command's barrier: its draw records into the execution's next run, which its
             // pass runs in a render pass instance of its own after a barrier from everything
@@ -2309,20 +2378,41 @@ impl RenderExecution {
                 encoder.mesh = table(BufferStage::Mesh, descriptor.max_mesh_buffer_bind_count);
             }
             // A command after the work its piece holds begins the next piece of a rate-mapped
-            // pass (`rate_mapped_pass.rs`, **Pieces**): its draw records into the execution's
-            // next run, which begins it; but where the run so far is one the execution began with
-            // nothing in it, that run begins it.
-            if found.piece_due {
-                match encoder.current.recorded || encoder.earlier.is_empty() {
-                    true => encoder.piece_split = true,
-                    false => encoder.current.piece = true,
-                }
-            }
+            // pass (`rate_mapped_pass.rs`, **Pieces**).
+            found.piece_before(encoder);
             match draw {
                 Draw::Primitives(assembly, draw) => {
                     encoder.draw(live, CALL, assembly, draw, DrawBuffers::default(), false)?
                 }
-                Draw::Indexed(draw, (buffer, offset)) => {
+                Draw::Indexed(mut draw, (buffer, mut offset)) => {
+                    // A draw that would hold more than a piece's work, drawn as consecutive ranges
+                    // of its indices, each a draw a piece may begin before; the last below.
+                    let per_primitive = (encoder.rate_map.is_some())
+                        .then(|| index_ranges_of(encoder.pipeline.as_ref()?, &draw))
+                        .flatten();
+                    if let Some(per_primitive) = per_primitive {
+                        let size = index_size(draw.index_type);
+                        let mut ranges = 0u64;
+                        loop {
+                            let most = rate_mapped_pass::index_range(regions, per_primitive);
+                            if draw.index_count <= most {
+                                break;
+                            }
+                            let range = IndexedDraw {
+                                index_count: most,
+                                ..draw
+                            };
+                            encoder.draw_indexed(live, CALL, range, &buffer, offset)?;
+                            regions = note(found.piece_after(encoder));
+                            found.piece_before(encoder);
+                            draw.index_count -= most;
+                            offset += u64::from(most) * size;
+                            ranges += 1;
+                        }
+                        if ranges > 0 {
+                            (encoder.core.device().shared().counts).rate_map_index_ranges(ranges);
+                        }
+                    }
                     encoder.draw_indexed(live, CALL, draw, &buffer, offset)?;
                 }
                 Draw::Mesh(grid, object, mesh) => {
@@ -2361,14 +2451,7 @@ impl RenderExecution {
                     encoder.draw_patch_range(live, CALL, draw, patch_indices, points)?;
                 }
             }
-            // A draw that recorded nothing leaves the next piece to the next command that draws.
-            found.piece_due = encoder.piece_split;
-            found.piece_work = found.piece_work.saturating_add(encoder.piece_work);
-            encoder.piece_work = 0;
-            if found.piece_work >= rate_mapped_pass::piece_work() {
-                found.piece_due = true;
-                found.piece_work = 0;
-            }
+            regions = note(found.piece_after(encoder));
         }
         Ok(())
     }
@@ -2592,6 +2675,7 @@ impl RenderExecution {
             run_barrier: false,
             piece_split: false,
             piece_work: 0,
+            piece_regions: 0,
             command_barrier: false,
             unordered: UnorderedWrites::new(),
             zero_indices: None,

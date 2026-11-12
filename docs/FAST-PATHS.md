@@ -577,6 +577,16 @@ driver's. Each is open work.
   buffer. What spare pools keep of such recordings is freed as they go
   back (`RECORDED`); what command buffers alive at once record is not bounded.
 
+- **A rate-mapped pass's work is cut into bounded pieces only between its executed commands'
+  draws, and between ranges of a draw's indices where the draw is cut so**
+  (`rate_mapped_pass.rs`, **Pieces**). A draw that rides whole holds all of its work in one piece,
+  however much: a strip, an instanced draw, a draw without indices, a mesh or patch draw, a draw
+  whose pipeline reads `[[primitive_id]]` or writes memory, and every draw the encoder itself
+  records in the pass, which is never cut. Drawn once per region of the map, one such draw can
+  run past amdgpu's job timeout (2 s by default), which resets the GPU, or past NVIDIA's
+  context-switch timeout (Xid 109), which bounds a stretch of work the GPU cannot switch away
+  from. The piece bound itself is a forecast in vertex invocations, not a measured time.
+
 - **A heap texture Metal keeps uncompressed lies in its driver's layout, not Metal's tiles, where
   its image fits the heap's answer in the heap's memory** (`texture/heap.rs`,
   `heap-texture-untiled-layout`). In a heap over the caller's host pages, its linear image bound

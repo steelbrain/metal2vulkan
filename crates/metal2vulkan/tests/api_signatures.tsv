@@ -3197,6 +3197,11 @@ field	metal2vulkan-runtime::WorkCounts.queue_switch_checks_recalled	pub queue_sw
 field	metal2vulkan-runtime::WorkCounts.queue_switch_checks_run	pub queue_switch_checks_run: u64
 field	metal2vulkan-runtime::WorkCounts.queues_gone_long	pub queues_gone_long: u64
 field	metal2vulkan-runtime::WorkCounts.queues_sharing_a_vk_queue	pub queues_sharing_a_vk_queue: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_index_ranges	pub rate_map_index_ranges: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_piece_gpu_nanos	pub rate_map_piece_gpu_nanos: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_piece_gpu_nanos_most	pub rate_map_piece_gpu_nanos_most: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_pieces	pub rate_map_pieces: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_pieces_timed	pub rate_map_pieces_timed: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_by_coverage	pub reading_draws_by_coverage: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_in_place	pub reading_draws_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_pinned	pub reading_draws_pinned: u64

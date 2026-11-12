@@ -150,27 +150,41 @@
 //! - **Pieces.** Drawn region by region, a pass's executed commands may hold more GPU work than a
 //!   driver lets one kernel submission run: amdgpu ends a job that runs past its timeout (2 s by
 //!   default) with a reset of the GPU, and the work is lost. So where an execution's commands
-//!   record inline, at commit or at the host step (`render/executions.rs`), each command's region
-//!   draws count their work as they record ([`draw_work`]: each region draw's vertices or indices
-//!   times its instances, and [`REGION_DRAW_WORK`] for the draw itself), across the pass's
-//!   executions; once it reaches [`PIECE_WORK`], the next command that draws begins the
-//!   execution's next run, in a render pass instance of its own after a barrier from everything
-//!   before, as a command's barrier begins one, and that run begins a *piece*: the pass's
-//!   recording ends its `VkCommandBuffer` before it and goes on in a new one
-//!   (`EncoderCore::cut_piece`), and its batch's submission submits each piece but the last as a
-//!   `VkSubmitInfo` of its own that signals its `VkQueue`'s timeline of pieces
-//!   (`command_buffer/submit.rs`). Vulkan defines no kernel submission; Mesa's common queue merges
-//!   a submission that signals nothing into the next one's (`command_buffer/group.rs`) and keeps
-//!   one that signals apart, so there each piece runs as a kernel submission of its own. The
+//!   record inline, at commit or at the host step (`render/executions.rs`; a rate-mapped pass's
+//!   executions always do), each command's region draws count their work as they record
+//!   ([`draw_work`]: each region draw's vertices or indices times its instances, and
+//!   [`REGION_DRAW_WORK`] for the draw itself), across the pass's executions. Once it reaches
+//!   [`PIECE_WORK`], the next command that draws begins the execution's next run, in a render pass
+//!   instance of its own after a barrier from everything before, as a command's barrier begins
+//!   one, and that run begins a *piece*: the pass's recording ends its `VkCommandBuffer` before it
+//!   and goes on in a new one (`EncoderCore::cut_piece`), and its batch's submission submits each
+//!   piece but the last as a `VkSubmitInfo` of its own that signals its `VkQueue`'s timeline of
+//!   pieces (`command_buffer/submit.rs`). Vulkan defines no kernel submission; Mesa's common queue
+//!   merges a submission that signals nothing into the next one's (`command_buffer/group.rs`) and
+//!   keeps one that signals apart, so there each piece runs as a kernel submission of its own. The
 //!   pixels are the uncut pass's: each run loads what the one before stored, and the commands keep
-//!   their order. Each cut costs a store and a load of the pass's attachments. The bound is a
-//!   forecast, not a measure: [`PIECE_WORK`] is about 56 ms of an Iris Xe's GPU at a trivial vertex
-//!   function, so a piece whose vertex function costs 30 times as much still runs well within 2 s.
-//!   Where the device writes timestamps each piece of a pass recorded in several is timed
-//!   (`WorkCounts::rate_map_piece_gpu_nanos_most`), and the pieces are counted
-//!   (`WorkCounts::rate_map_pieces`). An execution recorded on the GPU alone
-//!   (`render/executions/gpu.rs`), whose commands the host never reads, is not cut, nor are the
-//!   encoder's own draws.
+//!   their order. Each cut costs a store and a load of the pass's attachments.
+//!
+//!   A command's draw that alone would hold more than [`PIECE_WORK`] is drawn as consecutive
+//!   ranges of its indices, each a draw of its own that a piece may begin before
+//!   ([`index_range`]: as many indices as fit [`PIECE_WORK`] at the most region draws a draw of
+//!   the execution's commands made so far, or at the most a plan holds before any), where the
+//!   ranges draw what Metal's one draw does: an indexed draw of points, lines or triangles (a
+//!   list, which Metal never restarts, cut at a primitive's end), of one instance (a cut of
+//!   several would put an instance's later primitives before the next instance's earlier ones),
+//!   whose pipeline reads no `[[primitive_id]]` (each range counts its primitives from 0) and
+//!   writes no memory. Each range's vertices, instance and base vertex are the draw's
+//!   (`WorkCounts::rate_map_index_ranges`). Any other draw rides whole in the piece it begins in,
+//!   however much work it holds: a strip, an instanced draw, a draw without indices, a mesh or
+//!   patch draw, one of such a pipeline; and the encoder's own draws are not cut at all
+//!   (`docs/FAST-PATHS.md`, known gaps). So a piece of draws cut so holds less than twice
+//!   [`PIECE_WORK`].
+//!
+//!   The bound is a forecast, not a measure: twice [`PIECE_WORK`] is about 56 ms of an Iris Xe's
+//!   GPU at a trivial vertex function, so a piece whose vertex function costs 30 times as much
+//!   still runs within 2 s there. Where the device writes timestamps each piece of a pass recorded
+//!   in several is timed (`WorkCounts::rate_map_piece_gpu_nanos_most`), and the pieces are counted
+//!   (`WorkCounts::rate_map_pieces`).
 //! - **What the plan refuses** is `NotImplemented(RuntimeGap::RateMapRegions)`, naming the
 //!   compile layer's reason ([`RegionRefusal`]): a viewport of no extent or a flipped one, a
 //!   scissor as above, a plan past its bound or past the device's viewport limits, a pipeline whose
@@ -527,9 +541,9 @@ pub(super) fn reset_bound(taken: u32, now: u32) -> u32 {
 }
 
 /// The work a piece of a rate-mapped pass's recorded commands holds before the next command
-/// begins another (the module docs, **Pieces**), in vertex invocations: about 56 ms of an Intel
+/// begins another (the module docs, **Pieces**), in vertex invocations: about 28 ms of an Intel
 /// Iris Xe's GPU (ANV) at the 0.42 ns a vertex invocation of a trivial vertex function cost it.
-const PIECE_WORK: u64 = 1 << 27;
+const PIECE_WORK: u64 = 1 << 26;
 
 /// What one region's draw costs beyond its vertices, in vertex invocations (the module docs,
 /// **Pieces**): about 240 ns of an Iris Xe's GPU (ANV) per region drawn 16 at a time, the
@@ -550,10 +564,7 @@ pub(super) fn piece_work() -> u64 {
 /// one region draw for each scissor that holds a pixel (at least one), each of the draw's
 /// vertices or indices times its instances, an indirect or mesh draw's counted as none.
 pub(super) fn draw_work(scissors: &[vk::Rect2D], draw: &DrawCommand) -> u64 {
-    let regions = (scissors.iter())
-        .filter(|scissor| scissor.extent.width > 0 && scissor.extent.height > 0)
-        .count()
-        .max(1) as u64;
+    let regions = region_draws(scissors);
     let vertices = match *draw {
         DrawCommand::Draw {
             vertex_count,
@@ -572,6 +583,26 @@ pub(super) fn draw_work(scissors: &[vk::Rect2D], draw: &DrawCommand) -> u64 {
         | DrawCommand::DrawMeshTasksIndirectCount { .. } => 0,
     };
     regions.saturating_mul(vertices.saturating_add(REGION_DRAW_WORK))
+}
+
+/// The region draws a recording through `scissors` makes (the module docs, **Pieces**): one for
+/// each scissor that holds a pixel, at least one.
+pub(super) fn region_draws(scissors: &[vk::Rect2D]) -> u64 {
+    (scissors.iter())
+        .filter(|scissor| scissor.extent.width > 0 && scissor.extent.height > 0)
+        .count()
+        .max(1) as u64
+}
+
+/// The most indices of one range of a draw cut into ranges (the module docs, **Pieces**) whose
+/// recordings make `regions` region draws an index, of primitives of `per_primitive` vertices:
+/// what fits the piece work, whole primitives of an even count, so a 16-bit range starts 4-byte
+/// aligned as its draw does, at least two.
+pub(super) fn index_range(regions: u64, per_primitive: u32) -> u32 {
+    let step = 2 * u64::from(per_primitive);
+    let fits = (piece_work() / regions.max(1)).saturating_sub(REGION_DRAW_WORK);
+    let most = fits.min(u64::from(u32::MAX));
+    (most / step * step).max(step) as u32
 }
 
 /// The GPU times of a pass's pieces (the module docs, **Pieces**): a timestamp slot of the

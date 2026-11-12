@@ -495,6 +495,8 @@ mod queue_switch_gate;
 mod range;
 mod rate_map;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod rate_mapped_pieces;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod read_through_constant;
 mod reader_sizes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
