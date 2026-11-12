@@ -686,68 +686,27 @@ pub(crate) mod x86 {
     }
 
     /// Store the bytes of `now` (16) at `to` whose bits `stores` sets (not all 16), and no other
-    /// byte of `to`: each 8 whose bytes are all set in one store, and of the others each 4 bytes
-    /// in the fewest stores of 4, 2 and 1 bytes that write those set alone.
+    /// byte of `to`: sixteen stores of a byte, each of a byte `stores` sets at its place in `to`,
+    /// and each other into a block of the stack, the place picked with no branch
+    /// (`select_unpredictable`, a conditional move). The fewest stores of 8, 4, 2 and 1 bytes
+    /// that write the set bytes alone took a branch on each 4 bytes' pattern, which a GPU's
+    /// rewrite of floats leaves unpredictable: on a Core Ultra 9 275HX, the stores of a merge back
+    /// of 256 MiB that kept each float's top byte took 18 of its 38 ms that way.
     ///
     /// # Safety
     ///
     /// `to` is 16 bytes of mapped memory.
     #[target_feature(enable = "sse2")]
     unsafe fn store_masked(now: &[u8], to: *mut u8, stores: u32) {
-        let byte = |at: usize| {
-            // SAFETY: a byte of `to` (the caller's).
-            unsafe { to.add(at).write_volatile(now[at]) }
-        };
-        for half in [0, 8] {
-            if (stores >> half) & 0xFF == 0xFF {
-                // SAFETY: 8 bytes of `to` from `half`.
-                unsafe { store_run::<8>(now, to, half) };
-                continue;
-            }
-            for at in [half, half + 4] {
-                // SAFETY: bytes of `to` from `at`, of the 4 there.
-                unsafe {
-                    match (stores >> at) & 0xF {
-                        0 => {}
-                        0xF => store_run::<4>(now, to, at),
-                        0x3 => store_run::<2>(now, to, at),
-                        0x6 => store_run::<2>(now, to, at + 1),
-                        0xC => store_run::<2>(now, to, at + 2),
-                        0x7 => {
-                            store_run::<2>(now, to, at);
-                            byte(at + 2);
-                        }
-                        0xB => {
-                            store_run::<2>(now, to, at);
-                            byte(at + 3);
-                        }
-                        0xD => {
-                            byte(at);
-                            store_run::<2>(now, to, at + 2);
-                        }
-                        0xE => {
-                            byte(at + 1);
-                            store_run::<2>(now, to, at + 2);
-                        }
-                        bits => (0..4)
-                            .filter(|b| (bits >> b) & 1 == 1)
-                            .for_each(|b| byte(at + b)),
-                    }
-                }
-            }
+        let mut aside = [0u8; 16];
+        let aside = aside.as_mut_ptr();
+        for (at, &byte) in now[..16].iter().enumerate() {
+            let set = (stores >> at) & 1 == 1;
+            let place =
+                std::hint::select_unpredictable(set, to.wrapping_add(at), aside.wrapping_add(at));
+            // SAFETY: a byte of `to` (the caller's) or of `aside`, the stack's.
+            unsafe { place.write_volatile(byte) };
         }
-    }
-
-    /// Store `N` bytes of `now` from `at` at `to`'s `at`, in one store.
-    ///
-    /// # Safety
-    ///
-    /// `to` is mapped memory over `at..at + N`, which lies in `now`.
-    unsafe fn store_run<const N: usize>(now: &[u8], to: *mut u8, at: usize) {
-        let mut run = [0u8; N];
-        run.copy_from_slice(&now[at..at + N]);
-        // SAFETY: the caller's; an unaligned store.
-        unsafe { to.add(at).cast::<[u8; N]>().write_unaligned(run) };
     }
 }
 
