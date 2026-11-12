@@ -788,10 +788,11 @@ impl DeviceShared {
     /// (`VK_EXT_pipeline_creation_feedback`, counted in `driver_pipeline_hits` and `misses`): one
     /// found in a cache loaded from its record reads no data back and writes nothing, whatever
     /// bytes the driver's data holds after it. A program's compute pipelines and the runtime's
-    /// own kernels.
+    /// own kernels, each named `name`'s answer ([`name_pipeline`](Self::name_pipeline)).
     pub(crate) fn make_compute_pipeline(
         &self,
         making: Making,
+        name: impl FnOnce() -> String,
         info: vk::ComputePipelineCreateInfo<'_>,
     ) -> Result<vk::Pipeline, Error> {
         let reports = self.shader_cache.driver_reports();
@@ -812,7 +813,9 @@ impl DeviceShared {
             (made, found)
         });
         let made = made.ok_or(DeadlockCause::Exiting)?;
-        self.made_one(made, reports.then_some((&whole, &stage[..])))
+        let made = self.made_one(made, reports.then_some((&whole, &stage[..])))?;
+        self.name_pipeline(made, name);
+        Ok(made)
     }
 
     /// The graphics pipeline, or graphics pipeline library, of `info`, made and reported as
@@ -822,6 +825,7 @@ impl DeviceShared {
     pub(crate) fn make_graphics_pipeline(
         &self,
         making: Making,
+        name: impl FnOnce() -> String,
         info: vk::GraphicsPipelineCreateInfo<'_>,
     ) -> Result<vk::Pipeline, Error> {
         let reports = self.shader_cache.driver_reports();
@@ -848,7 +852,9 @@ impl DeviceShared {
             (made, found)
         });
         let made = made.ok_or(DeadlockCause::Exiting)?;
-        self.made_one(made, reports.then_some((&whole, &stages[..reported])))
+        let made = self.made_one(made, reports.then_some((&whole, &stages[..reported])))?;
+        self.name_pipeline(made, name);
+        Ok(made)
     }
 
     /// The one pipeline a making `made`, with what its driver reported of it, `reported`, counted
@@ -947,18 +953,28 @@ impl DeviceShared {
         allocated.map_err(super::error::vulkan)
     }
 
-    /// Name `pipeline`, just made and held by this thread alone, `name` for the layers' messages,
-    /// where the device's instance reports messages (`Vk::object_name`): the loader serves the
-    /// call and reads the device's loader word first ([`DeviceWord::restored`]). A failure to name it is
-    /// ignored: the name serves messages alone.
-    pub(crate) fn name_pipeline(&self, pipeline: vk::Pipeline, name: &std::ffi::CStr) {
+    /// Name `pipeline`, just made and held by this thread alone, for the layers' messages:
+    /// `name`'s answer, asked only where the device's instance reports messages
+    /// (`Vk::object_name`), so a device without them works out no name. Every `VkPipeline` the
+    /// runtime makes is named: a program's by its Metal functions' names
+    /// (`VariantObjects::pipeline_name`), the runtime's own `metal2vulkan: ` and its kernel or
+    /// step. The loader serves the call and reads the device's loader word first
+    /// ([`DeviceWord::restored`]). An empty name, one holding NUL, or a failure to name it leaves
+    /// it unnamed: the name serves messages alone, and nothing the runtime does reads it.
+    pub(crate) fn name_pipeline(&self, pipeline: vk::Pipeline, name: impl FnOnce() -> String) {
         let functions = self.vk();
         let Some(object_name) = functions.object_name() else {
             return;
         };
+        let Ok(name) = std::ffi::CString::new(name()) else {
+            return;
+        };
+        if name.is_empty() {
+            return;
+        }
         let info = vk::DebugUtilsObjectNameInfoEXT::default()
             .object_handle(pipeline)
-            .object_name(name);
+            .object_name(&name);
         // SAFETY: the device is live and `pipeline` its own, which no other thread holds yet; the
         // instance enables `VK_EXT_debug_utils` (it reports messages), and the function is the
         // device's.

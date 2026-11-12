@@ -581,7 +581,7 @@ fn resolve_pipeline(
         .layout(made.layout)
         .render_pass(made.render_pass)
         .subpass(0);
-    shared.make_graphics_pipeline(making, info)
+    shared.make_graphics_pipeline(making, || "metal2vulkan: color resolve".to_owned(), info)
 }
 
 /// The objects one pass's resolves hold until its command buffer completes, and, kept

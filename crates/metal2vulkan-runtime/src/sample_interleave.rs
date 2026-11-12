@@ -257,6 +257,7 @@ impl Device {
                 .layout(kernel.layout);
             kernel.pipeline = shared.make_compute_pipeline(
                 Making::new("interleave split").words(&module.spirv),
+                || "metal2vulkan: interleave split".to_owned(),
                 info,
             )?;
             Ok(())
@@ -466,7 +467,7 @@ fn merge_pipeline(
         .layout(shaders.layout)
         .render_pass(render_pass)
         .subpass(0);
-    shared.make_graphics_pipeline(making, info)
+    shared.make_graphics_pipeline(making, || "metal2vulkan: interleave merge".to_owned(), info)
 }
 
 /// A band's descriptor pool and framebuffer, held until the command buffer completes.

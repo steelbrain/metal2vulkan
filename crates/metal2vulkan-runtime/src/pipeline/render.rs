@@ -403,15 +403,8 @@ impl StateDescriptor {
     /// Its functions, in pipeline order.
     fn stages(&self) -> Vec<&StageSource> {
         match self {
-            StateDescriptor::Vertex(descriptor) => std::iter::once(&descriptor.vertex)
-                .chain(&descriptor.fragment)
-                .collect(),
-            StateDescriptor::Mesh(descriptor) => descriptor
-                .object
-                .iter()
-                .chain(std::iter::once(&descriptor.mesh))
-                .chain(&descriptor.fragment)
-                .collect(),
+            StateDescriptor::Vertex(descriptor) => vertex_stages(descriptor).collect(),
+            StateDescriptor::Mesh(descriptor) => mesh_stages(descriptor).collect(),
         }
     }
 
@@ -1712,7 +1705,9 @@ impl GraphicsState {
             ));
         }
         let stand_in = !key.storage_images.is_empty();
-        let base = RenderVariant::of(device, key, found)?;
+        let base = RenderVariant::of(device, key, found, || {
+            pipeline_names(vertex_stages(descriptor))
+        })?;
         if binary_archive::combines_stages(device, options, descriptor) {
             device.degrade(Degradation::CombinedArchiveStages, || {
                 (
@@ -1919,6 +1914,7 @@ impl GraphicsState {
             device,
             key,
             CompiledVariant::found(Remembered::Compiled(Arc::new(pipeline))),
+            || pipeline_names(mesh_stages(descriptor)),
         )?;
         let descriptor = StateDescriptor::Mesh(descriptor.clone());
         device.degrade_absent_reads(&base.shared_pipeline().dependencies, |stage| {
@@ -2593,7 +2589,8 @@ impl GraphicsState {
                 .map(|pipeline| CompiledVariant::found(Remembered::Compiled(Arc::new(pipeline)))),
         }
         .map_err(|error| compile_error(&self.0.device, error))?;
-        let variant = RenderVariant::of(&self.0.device, key.clone(), found)?;
+        let names = || pipeline_names(self.0.descriptor.stages());
+        let variant = RenderVariant::of(&self.0.device, key.clone(), found, names)?;
         others.insert(key.clone(), Arc::clone(&variant), 1);
         Ok(variant)
     }
@@ -2641,7 +2638,8 @@ fn group_bases(
         .map_err(|error| compile_error(device, error))?;
         key.color_group = group;
         let stand_in = !key.storage_images.is_empty();
-        Ok((RenderVariant::of(device, key, found)?, stand_in))
+        let names = || pipeline_names(vertex_stages(descriptor));
+        Ok((RenderVariant::of(device, key, found, names)?, stand_in))
     });
     std::iter::once(Ok((Arc::clone(base), stand_in)))
         .chain(later)
@@ -2686,7 +2684,10 @@ fn large_form(
         descriptor_key,
     )
     .ok()?;
-    RenderVariant::of(device, key, found).ok()
+    RenderVariant::of(device, key, found, || {
+        pipeline_names(vertex_stages(descriptor))
+    })
+    .ok()
 }
 
 /// Whether `answers` holds an answer to every linked-use question a creation of `descriptor`
@@ -2741,6 +2742,25 @@ fn blend_text(a: &ColorAttachmentDescriptor) -> String {
         ),
         false => format!("unblended, write mask {:?}", a.write_mask),
     }
+}
+
+/// The functions of a vertex render pipeline of `descriptor`, in pipeline order.
+fn vertex_stages(descriptor: &RenderPipelineDescriptor) -> impl Iterator<Item = &StageSource> {
+    std::iter::once(&descriptor.vertex).chain(&descriptor.fragment)
+}
+
+/// The functions of a mesh render pipeline of `descriptor`, in pipeline order.
+fn mesh_stages(descriptor: &MeshPipelineDescriptor) -> impl Iterator<Item = &StageSource> {
+    (descriptor.object.iter())
+        .chain(std::iter::once(&descriptor.mesh))
+        .chain(&descriptor.fragment)
+}
+
+/// What the layers' messages name the `VkPipeline`s of a state of the functions `stages` by
+/// (`VariantObjects::name_pipelines`): their names, in pipeline order, joined by ` + `.
+fn pipeline_names<'s>(stages: impl IntoIterator<Item = &'s StageSource>) -> String {
+    let names: Vec<String> = stages.into_iter().map(stage_name).collect();
+    names.join(" + ")
 }
 
 fn stage_name(source: &StageSource) -> String {
@@ -2949,11 +2969,13 @@ impl RenderVariant {
     }
 
     /// The variant of `key` of what the memo or a compile `found`: the live variant, or one made
-    /// of the pipeline, its objects made, which the memo then knows live.
+    /// of the pipeline, its objects made, which the memo then knows live, their `VkPipeline`s
+    /// named by `names` (its functions' names, `VariantObjects::name_pipelines`).
     fn of(
         device: &Device,
         key: VariantKey,
         compiled: CompiledVariant,
+        names: impl FnOnce() -> String,
     ) -> Result<Arc<RenderVariant>, Error> {
         let CompiledVariant {
             remembered,
@@ -2986,7 +3008,7 @@ impl RenderVariant {
         });
         // Where the creation log is on, the stages' SPIR-V it names hashed on a thread of its
         // own while the objects are made: the hash its first line reads, off the creation's path.
-        let (objects, kept) = std::thread::scope(|scope| {
+        let (mut objects, kept) = std::thread::scope(|scope| {
             if creation_log::enabled() && logged_spirv.get().is_none() {
                 // A thread that cannot be made leaves the hash to the log's first line.
                 let _ = crate::exit_guard::spawn_scoped(
@@ -3006,6 +3028,7 @@ impl RenderVariant {
                 digests.as_deref(),
             )
         })?;
+        objects.name_pipelines(names);
         let stages = handle_stages(&pipeline.layout, every_render_stage());
         let variant = Arc::new(RenderVariant {
             key,

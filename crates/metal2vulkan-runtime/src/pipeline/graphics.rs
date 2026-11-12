@@ -302,9 +302,10 @@ pub(crate) enum Notices<'a> {
 /// reads (the Framebuffer chapter, `VkPipelineColorBlendStateCreateFlagBits`). The validation
 /// layer's synchronization checks (1.4.357, and its main of 2026-10-18) do not read the flag and
 /// report such a read after an earlier draw's write; the name lets a reader tell those reports
-/// from others.
-pub(crate) const RASTER_ORDER_PIPELINE: &std::ffi::CStr =
-    c"metal2vulkan: a pipeline reading its input attachments in rasterization order";
+/// from others, and the validation crate's lanes match it whole, so it is the pipeline's name
+/// alone, in place of its functions' names (`VariantObjects::pipeline_name`).
+pub(crate) const RASTER_ORDER_PIPELINE: &str =
+    "metal2vulkan: a pipeline reading its input attachments in rasterization order";
 
 /// What one `VkPipeline` of a render variant is made of beside the variant's modules and layout,
 /// owned: each part's state, from which its create infos are built
@@ -1363,11 +1364,13 @@ impl VariantObjects {
         // and counted there, and taken here with no driver call.
         match made_here {
             true => {
-                if content.blend_flags.contains(
+                let raster_order = content.blend_flags.contains(
                     vk::PipelineColorBlendStateCreateFlags::RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXT,
-                ) {
-                    shared.name_pipeline(raw, RASTER_ORDER_PIPELINE);
-                }
+                );
+                shared.name_pipeline(raw, || match raster_order {
+                    true => RASTER_ORDER_PIPELINE.to_owned(),
+                    false => self.pipeline_name(None),
+                });
                 shared.counts.variant_pipeline_made();
             }
             false => shared.counts.linked_pipeline_shared(),
@@ -1455,8 +1458,11 @@ impl VariantObjects {
                 let made = match records.of(part) {
                     Some(record) => {
                         let _ = creation_log::take_record();
-                        let made = shared
-                            .make_graphics_pipeline(Making::new(part.kind()).digest(record), info);
+                        let made = shared.make_graphics_pipeline(
+                            Making::new(part.kind()).digest(record),
+                            || self.pipeline_name(Some(part.kind())),
+                            info,
+                        );
                         made_here = Some(creation_log::take_record());
                         made?
                     }
@@ -1470,10 +1476,11 @@ impl VariantObjects {
                                 None,
                             )
                         };
-                        made.map_err(|(_, error)| vulkan(error))?
-                            .first()
-                            .copied()
-                            .ok_or_else(|| internal("the driver made no pipeline library"))?
+                        let made = made.map_err(|(_, error)| vulkan(error))?;
+                        let made = (made.first().copied())
+                            .ok_or_else(|| internal("the driver made no pipeline library"))?;
+                        shared.name_pipeline(made, || self.pipeline_name(Some(part.kind())));
+                        made
                     }
                 };
                 shared.counts.pipeline_library_made(part);

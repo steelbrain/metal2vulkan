@@ -404,7 +404,11 @@ fn draw_pipeline(
         .layout(shaders.layout)
         .render_pass(render_pass)
         .subpass(0);
-    shared.make_graphics_pipeline(making, info)
+    shared.make_graphics_pipeline(
+        making,
+        || "metal2vulkan: depth/stencil resolve".to_owned(),
+        info,
+    )
 }
 
 /// Whether the draws can resolve `aspects` of `source` by `pick` into `into`, and their objects

@@ -196,6 +196,14 @@ pub(crate) const YCBCR_CONVERSION_CALLS: [Call; 1] = [Call::DestroySamplerYcbcrC
 const PRIMING_PIPELINE: &std::ffi::CStr =
     c"metal2vulkan: a priming pipeline that rasterizes nothing";
 
+/// The debug name of a compute pipeline that priming makes, as [`PRIMING_PIPELINE`].
+const PRIMING_KERNEL: &std::ffi::CStr = c"metal2vulkan: a priming kernel";
+
+/// The debug name of the indirect-bindable compute pipeline that priming makes for
+/// device-generated commands, as [`PRIMING_PIPELINE`].
+const PRIMING_GENERATED_KERNEL: &std::ffi::CStr =
+    c"metal2vulkan: a priming kernel of device-generated commands";
+
 /// The longest the priming submission is waited for: it holds two barriers.
 const LIMIT: Duration = Duration::from_secs(10);
 
@@ -568,6 +576,29 @@ impl Primer<'_> {
         self.calls = self.calls.with(call);
     }
 
+    /// Name `pipeline` `name`, where the instance reports messages ([`NAMING_CALLS`]), as a
+    /// making names its pipeline (`DeviceShared::name_pipeline`): the loader serves the call.
+    ///
+    /// # Safety
+    ///
+    /// `pipeline` is the device's, made by this priming, which no other thread holds.
+    unsafe fn name(&mut self, pipeline: vk::Pipeline, name: &std::ffi::CStr) {
+        let device = self.device;
+        let Some(object_name) = device.object_name() else {
+            return;
+        };
+        let info = vk::DebugUtilsObjectNameInfoEXT::default()
+            .object_handle(pipeline)
+            .object_name(name);
+        // SAFETY: the caller's; the instance enables `VK_EXT_debug_utils` (it reports messages),
+        // and the function is the device's.
+        let _ = unsafe {
+            self.loader_word
+                .restored(|| object_name(device.handle(), &info))
+        };
+        self.made(Call::SetDebugUtilsObjectName);
+    }
+
     /// The command buffer `vkAllocateCommandBuffers` allocates of `info`, the device's loader
     /// word put back first: the loader serves the call and reads the word, which MoltenVK 1.4.1
     /// overwrites whenever it names the device in a message, as this priming's own submission makes
@@ -887,6 +918,7 @@ impl Primer<'_> {
                 .create_compute_pipelines(vk::PipelineCache::null(), &[info], None)
                 .map_err(|(_, error)| vulkan(error))?[0];
             self.hold(pipeline);
+            self.name(pipeline, PRIMING_GENERATED_KERNEL);
             let pipelines = ExecutionSetPipelineInfo::new(pipeline, 1);
             let set = commands
                 .create_execution_set(&ExecutionSetCreateInfo::new(&pipelines))
@@ -1239,6 +1271,7 @@ impl Primer<'_> {
                 .map_err(|(_, error)| vulkan(error))?[0];
             self.made(Call::CreateComputePipelines);
             self.hold(pipeline);
+            self.name(pipeline, PRIMING_KERNEL);
             device.get_pipeline_cache_data(cache).map_err(vulkan)?;
             self.made(Call::GetPipelineCacheData);
 
@@ -1484,15 +1517,7 @@ impl Primer<'_> {
                 .map_err(|(_, error)| vulkan(error))?[0];
             self.made(Call::CreateGraphicsPipelines);
             self.hold(pipeline);
-            // Its debug name, where the instance reports messages, as a making names its pipeline
-            // (`pipeline/graphics.rs`): the loader serves the call.
-            if let Some(name) = device.object_name() {
-                let info = vk::DebugUtilsObjectNameInfoEXT::default()
-                    .object_handle(pipeline)
-                    .object_name(PRIMING_PIPELINE);
-                let _ = self.loader_word.restored(|| name(device.handle(), &info));
-                self.made(Call::SetDebugUtilsObjectName);
-            }
+            self.name(pipeline, PRIMING_PIPELINE);
 
             let allocate = vk::CommandBufferAllocateInfo::default()
                 .command_pool(commands)

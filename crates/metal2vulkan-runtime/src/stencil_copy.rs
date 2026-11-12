@@ -172,8 +172,11 @@ impl Device {
             let info = vk::ComputePipelineCreateInfo::default()
                 .stage(stage)
                 .layout(kernel.layout);
-            kernel.pipeline = shared
-                .make_compute_pipeline(Making::new("stencil split").words(&module.spirv), info)?;
+            kernel.pipeline = shared.make_compute_pipeline(
+                Making::new("stencil split").words(&module.spirv),
+                || "metal2vulkan: stencil split".to_owned(),
+                info,
+            )?;
             Ok(())
         })();
         match made {
@@ -425,7 +428,7 @@ fn plane_pipeline(
         .layout(shaders.layout)
         .render_pass(render_pass)
         .subpass(0);
-    shared.make_graphics_pipeline(making, info)
+    shared.make_graphics_pipeline(making, || "metal2vulkan: stencil plane".to_owned(), info)
 }
 
 /// The objects one copy holds until its command buffer completes: its descriptor set's pool and,

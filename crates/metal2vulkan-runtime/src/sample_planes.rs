@@ -467,8 +467,11 @@ impl Device {
             let info = vk::ComputePipelineCreateInfo::default()
                 .stage(stage)
                 .layout(kernel.layout);
-            kernel.pipeline = shared
-                .make_compute_pipeline(Making::new("planes split").words(&module.spirv), info)?;
+            kernel.pipeline = shared.make_compute_pipeline(
+                Making::new("planes split").words(&module.spirv),
+                || "metal2vulkan: planes split".to_owned(),
+                info,
+            )?;
             Ok(())
         })();
         match made {
@@ -687,7 +690,7 @@ fn merge_pipeline(
         .layout(shaders.layout)
         .render_pass(render_pass)
         .subpass(0);
-    shared.make_graphics_pipeline(making, info)
+    shared.make_graphics_pipeline(making, || "metal2vulkan: planes merge".to_owned(), info)
 }
 
 /// The objects one pass's planes steps hold until its command buffer completes: their

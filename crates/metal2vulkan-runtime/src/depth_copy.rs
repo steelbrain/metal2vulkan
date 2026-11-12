@@ -500,8 +500,11 @@ impl Device {
             let info = vk::ComputePipelineCreateInfo::default()
                 .stage(stage)
                 .layout(kernel.layout);
-            kernel.pipeline = shared
-                .make_compute_pipeline(Making::new("depth split").words(&module.spirv), info)?;
+            kernel.pipeline = shared.make_compute_pipeline(
+                Making::new("depth split").words(&module.spirv),
+                || "metal2vulkan: depth split".to_owned(),
+                info,
+            )?;
             Ok(())
         })();
         match made {
@@ -739,7 +742,7 @@ fn depth_pipeline(
         true => info,
         false => info.depth_stencil_state(&depth_stencil),
     };
-    shared.make_graphics_pipeline(making, info)
+    shared.make_graphics_pipeline(making, || "metal2vulkan: depth copy".to_owned(), info)
 }
 
 /// Make, where they are not yet made, the draw's objects for a destination of `format` at

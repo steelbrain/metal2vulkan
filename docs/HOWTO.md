@@ -1037,6 +1037,17 @@ For a claim about behavior, follow [VALIDATION.md](VALIDATION.md): a synthetic r
 the golden output hashes where output must not move, and an authored case run on Metal and Vulkan
 where it should.
 
+Where the instance reports messages (`VK_EXT_debug_utils`), every `VkPipeline` the runtime makes
+carries a debug name, which the validation layer prints after the pipeline's handle. A program's
+pipeline is named by its Metal functions' names in pipeline order, joined by ` + ` (vertex then
+fragment; a mesh pipeline's object, mesh and fragment; a kernel's own name), and a pipeline
+library by those names with its part after them in parentheses. The runtime's own pipelines are
+named `metal2vulkan: ` and the kernel or step, such as `metal2vulkan: PagesCopy(Gather)` (the
+guest RAM gather) or `metal2vulkan: color resolve`. A pipeline that reads its input attachments in
+rasterization order is named `metal2vulkan: a pipeline reading its input attachments in
+rasterization order` alone. Objects that two pipeline states share carry the names of the first.
+The names serve messages only: nothing the runtime does reads them.
+
 A host note: RADV under Ubuntu 26.04's stock kernel 7.0.0-38 with linux-firmware 20260319
 sometimes loses a GPU write into a newly made buffer under heavy multi-process GPU memory churn
 (about 1 in 10^4 to 10^5, with no error); kernel 7.2.6 with linux-firmware 20260916 loses none.

@@ -57,13 +57,15 @@ pub(super) fn record(
         let [region] = p.commands.regions.as_slice() else {
             return Err(internal("a replay variant of other than one region"));
         };
-        let made = Arc::new(VariantObjects::create(
+        let mut made = VariantObjects::create(
             &device,
             &replay.pipeline_layout,
             std::slice::from_ref(&p.variant.pipeline().stage),
             CompiledPipeline::Kernel(p.variant.pipeline()),
             None,
-        )?);
+        )?;
+        made.name_pipelines(|| p.variant.objects().pipeline_name(None));
+        let made = Arc::new(made);
         pipelines.push(made.indirect_bindable_pipeline(region)?);
         objects.push(made);
     }

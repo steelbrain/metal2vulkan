@@ -512,6 +512,10 @@ pub(crate) struct VariantObjects {
     /// A compute variant's kernel, kept for the pipeline creation log's lines while the log is on
     /// ([`VariantObjects::log_kernel`]).
     logged: Option<Box<creation_log::LoggedKernel>>,
+    /// Its Metal functions' names, which the `VkPipeline`s it makes are named by for the layers'
+    /// messages, where the device's instance reports messages
+    /// ([`VariantObjects::name_pipelines`]).
+    named: Option<String>,
 }
 
 /// The digests of a variant's layout and of each of its stages (its stage, entry point,
@@ -753,6 +757,7 @@ impl VariantObjects {
             words: Arc::clone(&words),
             parts_content: OnceLock::new(),
             logged: None,
+            named: None,
         };
         for (stage, words) in stages.iter().zip(words.iter()) {
             let entry = CString::new(stage.entry_point.as_str())
@@ -845,6 +850,7 @@ impl VariantObjects {
             words: back.objects.words,
             parts_content: OnceLock::new(),
             logged: None,
+            named: None,
         };
         let pipelines = back
             .pipelines
@@ -867,6 +873,27 @@ impl VariantObjects {
         stage: &StageModule,
     ) {
         self.logged = creation_log::compute_kernel(function, stage);
+    }
+
+    /// Name the `VkPipeline`s it makes for the layers' messages by `names`, its Metal functions'
+    /// names, asked only where the device's instance reports messages
+    /// (`DeviceShared::name_pipeline`). Objects that two pipeline states' variants share carry
+    /// the names of the first: the names serve messages alone.
+    pub(crate) fn name_pipelines(&mut self, names: impl FnOnce() -> String) {
+        if self.device.shared().vk().object_name().is_some() {
+            self.named = Some(names());
+        }
+    }
+
+    /// What the layers' messages name a `VkPipeline` it makes by: its Metal functions' names,
+    /// then `note` (what else the pipeline is: a library's part) in parentheses where there is
+    /// one.
+    pub(crate) fn pipeline_name(&self, note: Option<&str>) -> String {
+        match (self.named.as_deref(), note) {
+            (Some(named), Some(note)) => format!("{named} ({note})"),
+            (Some(named), None) => named.to_owned(),
+            (None, note) => note.unwrap_or_default().to_owned(),
+        }
     }
 
     /// The kinds its making may announce (`Kinds::of`), which a bind tests.
@@ -1191,7 +1218,7 @@ impl VariantObjects {
         let started = std::time::Instant::now();
         // With what the driver reports of the making: a pipeline found in its record's cache
         // reads no data back (`shader_cache/driver.rs`).
-        let raw = shared.make_compute_pipeline(making, info)?;
+        let raw = shared.make_compute_pipeline(making, || self.pipeline_name(None), info)?;
         let created_in = started.elapsed();
         if let Some(kernel) = &self.logged {
             creation_log::compute(&self.device, kernel, c.specialization, created_in);

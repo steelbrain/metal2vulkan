@@ -890,7 +890,7 @@ impl Device {
         };
         let kernel = make(
             self,
-            &spirv,
+            (&spirv, || format!("metal2vulkan: {which:?}")),
             bindings,
             (push_bytes, which.pushed(self)),
             baked,
@@ -903,14 +903,15 @@ impl Device {
     }
 }
 
-/// The objects of a kernel of `spirv` (entry point `main`) with `images` sampled images, then
-/// `storage_images` storage images and then `buffers` storage buffers in set 0, a push descriptor
-/// set's where `pushed`, and `push_bytes` of `COMPUTE` push constants. With `baked`, a sampler
+/// The objects of a kernel of `spirv` (entry point `main`), its pipeline named `name`'s answer
+/// (`DeviceShared::name_pipeline`), with `images` sampled images, then `storage_images` storage
+/// images and then `buffers` storage buffers in set 0, a push descriptor set's where `pushed`,
+/// and `push_bytes` of `COMPUTE` push constants. With `baked`, a sampler
 /// of a Y′CbCr conversion and the descriptors a combined image sampler of it takes, its first
 /// binding is that combined image sampler, the sampler immutable.
 fn make(
     device: &Device,
-    spirv: &[u32],
+    (spirv, name): (&[u32], impl FnOnce() -> String),
     (images, storage_images, buffers): (u32, u32, u32),
     (push_bytes, pushed): (u32, bool),
     baked: Option<(vk::Sampler, u32)>,
@@ -983,6 +984,7 @@ fn make(
                 push_bytes,
                 pushed,
             )),
+            name,
             info,
         )?;
         Ok(())

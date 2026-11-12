@@ -146,9 +146,11 @@ impl CheckDraw {
         let made =
             unsafe { raw.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None) };
         let made = made.map_err(|(_, error)| vulkan(error))?;
-        made.first()
-            .copied()
-            .ok_or_else(|| internal("the driver made no pipeline"))
+        let made =
+            (made.first().copied()).ok_or_else(|| internal("the driver made no pipeline"))?;
+        (self.device.shared())
+            .name_pipeline(made, || "metal2vulkan: in-place check draw".to_owned());
+        Ok(made)
     }
 
     /// The target of a draw into `image`, a 2D color image of `format` and `extent` with color

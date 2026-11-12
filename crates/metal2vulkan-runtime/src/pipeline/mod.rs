@@ -1878,6 +1878,7 @@ impl Variant {
             None,
         )?;
         objects.log_kernel(function, &pipeline.stage);
+        objects.name_pipelines(|| function.function.info().name.to_owned());
         // A tile function's dispatch is one region of its pass's threads per tile; a kernel's
         // takes the call's threadgroup and its grid's edges (`REGION_PIPELINES`).
         let tile = (pipeline.dependencies.iter()).any(|d| d.fact == RuntimeFact::TileFunction);
