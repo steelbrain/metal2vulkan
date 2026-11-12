@@ -19,9 +19,15 @@
 //! the second color and writes nothing to it (`dcs_read`): the first color holds the clear's
 //! `(x, y, 1, 1)`.
 //!
+//! A third: an accumulation's pass, the same attachments but the second color cleared to
+//! `(1, 0)`, whose one draw lays [`LAYERS`] copies of a rectangle over the whole target, each
+//! fragment fetching the second color and writing `w = c1.x / 2 + c1.y` into the first and
+//! `(w, c1.y / 4)` into the second (`con_fetch_coverage`): the interlock orders the overlapping
+//! fragments of the draw, so the first color holds `2^-LAYERS` in every channel.
+//!
 //! The functions are `dcs_rect`, `dcs_flag` and `dcs_read` of the owned fixture
-//! `validation/fixtures/public/engine/dcs_dont_care_split.ll` and `fetch_ordered` of
-//! `fragment_fetch.ll` there.
+//! `validation/fixtures/public/engine/dcs_dont_care_split.ll`, `fetch_ordered` of
+//! `fragment_fetch.ll` and `con_fetch_coverage` of `con_fetch_coverage.ll` there.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -53,16 +59,37 @@ const FLAG: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
 /// The bitmap pass's second color's clear, exact in a half.
 const SECOND: [f32; 2] = [0.375, 0.625];
 
-/// A pass's draws: each state and its rectangle.
-type Draws<'a> = &'a [(&'a RenderPipelineState, [u64; 4])];
+/// The accumulation's layers in its one draw: each halves the second color's red, so the last
+/// leaves `2^-LAYERS`, a normal half.
+const LAYERS: u64 = 12;
 
-/// The queue, the states, the target's size as `dcs_rect` takes it, and a read-back buffer.
+/// A half's 1.0.
+const ONE: u16 = 0x3c00;
+
+/// The pass shapes a run renders.
+#[derive(Clone, Copy, PartialEq)]
+enum Shape {
+    /// The three passes of the color alone.
+    Lone,
+    /// The bitmap's pass, whose draw reads the second color.
+    Bitmap,
+    /// The accumulation's pass, one draw of [`LAYERS`] overlapping rectangles.
+    Layers,
+}
+
+/// A pass's draws: each state, its rectangle and its instances.
+type Draws<'a> = &'a [(&'a RenderPipelineState, [u64; 4], u64)];
+
+/// The queue, the states, the target's size as `dcs_rect` takes it, the coverage's tint, and a
+/// read-back buffer.
 struct Tools {
     queue: CommandQueue,
     flag: RenderPipelineState,
     halve: RenderPipelineState,
     read: RenderPipelineState,
+    coverage: RenderPipelineState,
     size: Vec<u8>,
+    tint: Vec<u8>,
     back: Buffer,
 }
 
@@ -71,6 +98,7 @@ impl Tools {
     fn new(device: &Device, format: PixelFormat) -> Option<Tools> {
         let dcs = library(device, "engine/dcs_dont_care_split.ll");
         let fetch = library(device, "engine/fragment_fetch.ll");
+        let con = library(device, "engine/con_fetch_coverage.ll");
         let function = |library: &crate::Library, name: &str| {
             let function = library.new_function_with_name(name).unwrap();
             StageSource::Function(function.function_descriptor())
@@ -94,7 +122,9 @@ impl Tools {
             flag: state(function(&dcs, "dcs_flag"), false).unwrap(),
             halve: state(function(&fetch, "fetch_ordered"), false).ok()?,
             read: state(function(&dcs, "dcs_read"), true).ok()?,
+            coverage: state(function(&con, "con_fetch_coverage"), true).ok()?,
             size: bytes_of(&[SIDE as f32, SIDE as f32], f32::to_le_bytes),
+            tint: bytes_of(&[ONE; 4], u16::to_le_bytes),
             back: device
                 .new_buffer(SIDE * SIDE * 8 * TARGETS as u64, ResourceOptions::shared())
                 .unwrap(),
@@ -112,12 +142,13 @@ impl Tools {
     /// `draws` encoded into `command_buffer` in a pass of `pass`.
     fn pass(&self, command_buffer: &CommandBuffer, pass: &RenderPassDescriptor, draws: Draws) {
         let mut encoder = command_buffer.render_command_encoder(pass).unwrap();
-        for &(state, rect) in draws {
+        encoder.set_fragment_bytes(&self.tint, 0).unwrap();
+        for &(state, rect, instances) in draws {
             encoder.set_render_pipeline_state(state).unwrap();
             let rect = bytes_of(&rect.map(|p| p as f32), f32::to_le_bytes);
             encoder.set_vertex_bytes(&rect, 0).unwrap();
             encoder.set_vertex_bytes(&self.size, 1).unwrap();
-            (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
+            (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, instances, 0)).unwrap();
         }
         encoder.end_encoding().unwrap();
     }
@@ -134,41 +165,42 @@ impl Tools {
             color.store_action = StoreAction::Store;
             pass
         };
-        self.pass(
-            command_buffer,
-            &lone(LoadAction::Clear),
-            &[(&self.flag, LEFT)],
-        );
-        let draws = [(&self.flag, TOP), (&self.halve, WHOLE)];
+        let pass = lone(LoadAction::Clear);
+        self.pass(command_buffer, &pass, &[(&self.flag, LEFT, 1)]);
+        let draws = [(&self.flag, TOP, 1), (&self.halve, WHOLE, 1)];
         self.pass(command_buffer, &lone(LoadAction::Load), &draws);
-        self.pass(
-            command_buffer,
-            &lone(LoadAction::Load),
-            &[(&self.halve, WHOLE)],
-        );
+        let pass = lone(LoadAction::Load);
+        self.pass(command_buffer, &pass, &[(&self.halve, WHOLE, 1)]);
     }
 
-    /// The bitmap pass over `bitmap`, beside a new second color and stencil.
-    fn bitmap(&self, command_buffer: &CommandBuffer, bitmap: &Texture) {
-        let second = self.target(PixelFormat::RG16Float, TextureUsage::RENDER_TARGET);
+    /// A pass over `first`, cleared and stored, beside a new second color cleared to `second`
+    /// and not stored and a new stencil, of `draws`.
+    fn beside(
+        &self,
+        command_buffer: &CommandBuffer,
+        first: &Texture,
+        second: [f32; 2],
+        draws: Draws,
+    ) {
+        let coverage = self.target(PixelFormat::RG16Float, TextureUsage::RENDER_TARGET);
         let stencil = self.target(PixelFormat::Stencil8, TextureUsage::RENDER_TARGET);
         let mut pass = RenderPassDescriptor::new();
         let color = &mut pass.color_attachments[0];
-        color.texture = Some(bitmap.clone());
+        color.texture = Some(first.clone());
         color.load_action = LoadAction::Clear;
         color.clear_color = ClearColor::new(0.0, 0.0, 0.0, 0.0);
         color.store_action = StoreAction::Store;
-        let coverage = &mut pass.color_attachments[1];
-        coverage.texture = Some(second);
-        coverage.load_action = LoadAction::Clear;
-        let [x, y] = SECOND.map(f64::from);
-        coverage.clear_color = ClearColor::new(x, y, 0.0, 0.0);
-        coverage.store_action = StoreAction::DontCare;
+        let color = &mut pass.color_attachments[1];
+        color.texture = Some(coverage);
+        color.load_action = LoadAction::Clear;
+        let [x, y] = second.map(f64::from);
+        color.clear_color = ClearColor::new(x, y, 0.0, 0.0);
+        color.store_action = StoreAction::DontCare;
         let depth_stencil = &mut pass.stencil_attachment;
         depth_stencil.texture = Some(stencil);
         depth_stencil.load_action = LoadAction::DontCare;
         depth_stencil.store_action = StoreAction::DontCare;
-        self.pass(command_buffer, &pass, &[(&self.read, WHOLE)]);
+        self.pass(command_buffer, &pass, draws);
     }
 
     /// Every target copied into the read-back buffer, `texel` bytes a pixel.
@@ -268,8 +300,9 @@ fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
     ]
 }
 
-/// The run over targets of `format`; `bitmaps`: the bitmap pass, its first color `RGBA16Float`.
-fn run(case: &str, format: PixelFormat, bitmaps: bool) {
+/// The run of `shape` over targets of `format` (the bitmap's and the accumulation's
+/// `RGBA16Float`).
+fn run(case: &str, format: PixelFormat, shape: Shape) {
     let scratch = Scratch::new(&format!("lone-fetch-{case}"));
     let device = device(&scratch.0);
     let Some(tools) = Tools::new(&device, format) else {
@@ -287,9 +320,16 @@ fn run(case: &str, format: PixelFormat, bitmaps: bool) {
         let targets: Vec<Texture> = (0..TARGETS).map(|_| tools.target(format, usage)).collect();
         let command_buffer = tools.queue.command_buffer().unwrap();
         for target in &targets {
-            match bitmaps {
-                true => tools.bitmap(&command_buffer, target),
-                false => tools.render(&command_buffer, target),
+            match shape {
+                Shape::Lone => tools.render(&command_buffer, target),
+                Shape::Bitmap => {
+                    let draws = [(&tools.read, WHOLE, 1)];
+                    tools.beside(&command_buffer, target, SECOND, &draws);
+                }
+                Shape::Layers => {
+                    let draws = [(&tools.coverage, WHOLE, LAYERS)];
+                    tools.beside(&command_buffer, target, [1.0, 0.0], &draws);
+                }
             }
         }
         command_buffer.commit().unwrap();
@@ -298,11 +338,14 @@ fn run(case: &str, format: PixelFormat, bitmaps: bool) {
         counts.push(moved(&before, &device.work_counts()));
         tools.read_back(&targets, texel(format));
         for index in 0..TARGETS {
-            let wrong = match bitmaps {
-                true => first_wrong(&tools.back, format, index, |_| {
+            let wrong = match shape {
+                Shape::Lone => first_wrong(&tools.back, format, index, expected),
+                Shape::Bitmap => first_wrong(&tools.back, format, index, |_| {
                     [SECOND[0], SECOND[1], 1.0, 1.0]
                 }),
-                false => first_wrong(&tools.back, format, index, expected),
+                Shape::Layers => first_wrong(&tools.back, format, index, |_| {
+                    [(-(LAYERS as f32)).exp2(); 4]
+                }),
             };
             if let Some(first) = wrong {
                 failures.push(format!(
@@ -324,15 +367,20 @@ fn run(case: &str, format: PixelFormat, bitmaps: bool) {
 
 #[test]
 fn a_lone_fetched_rg16float_color_keeps_its_values() {
-    run("rg16float", PixelFormat::RG16Float, false);
+    run("rg16float", PixelFormat::RG16Float, Shape::Lone);
 }
 
 #[test]
 fn a_lone_fetched_bgra8unorm_color_keeps_its_values() {
-    run("bgra8unorm", PixelFormat::BGRA8Unorm, false);
+    run("bgra8unorm", PixelFormat::BGRA8Unorm, Shape::Lone);
 }
 
 #[test]
 fn a_second_color_fetched_and_not_written_reads_its_clear() {
-    run("bitmap", PixelFormat::RGBA16Float, true);
+    run("bitmap", PixelFormat::RGBA16Float, Shape::Bitmap);
+}
+
+#[test]
+fn the_overlapping_layers_of_one_fetching_draw_accumulate_in_order() {
+    run("layers", PixelFormat::RGBA16Float, Shape::Layers);
 }
