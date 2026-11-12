@@ -114,6 +114,7 @@ use super::{lock, Device, LoaderWord};
 use crate::error::{internal, vulkan, Error};
 use crate::exit_guard::{self, Call};
 use crate::release;
+use crate::resource::ObjectId;
 use crate::sharing::Sharing;
 use crate::texture::first_move::Fills;
 use crate::work_counts::Begun;
@@ -165,6 +166,11 @@ pub(super) struct StagingQueue {
     timeline: OnceLock<vk::Semaphore>,
     /// The value the last submission made signals, stored under `objects`' lock once it was made.
     submitted: AtomicU64,
+    /// The fill queue's submissions the host may not have seen complete, in the order they were
+    /// made, each with what owns the memory its fills write (`Fills::owners`; `None`: memory
+    /// any command may reach), stored under `objects`' lock: what a batch's commands may reach
+    /// of them ([`Device::fill_queue_reached`]). None on the staging queue.
+    filled: Mutex<Vec<(u64, Option<Vec<ObjectId>>)>>,
     /// The timeline as the host saw it complete.
     pub(super) done: OwnTimeline,
     /// The tests' hold on the submissions ([`Device::hold_staging_submissions`]): a timeline and
@@ -213,6 +219,7 @@ impl StagingQueue {
             objects: Mutex::new(Objects { queue, made: None }),
             timeline: OnceLock::new(),
             submitted: AtomicU64::new(0),
+            filled: Mutex::new(Vec::new()),
             done: OwnTimeline::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             held: Mutex::new(None),
@@ -561,6 +568,31 @@ impl Device {
     pub(crate) fn fill_queue_wait(&self) -> Option<(vk::Semaphore, u64)> {
         pending(self, self.shared().fill_queue.as_ref()?)
     }
+
+    /// The value of the last of the fill queue's submissions after `after` through `upto` that
+    /// the host may not have seen complete and whose fills a batch's commands may reach, as
+    /// `reaches` answers for what owns the memory each one's fills write (`None`: memory any
+    /// command may reach). Those the host saw complete are let go of first.
+    pub(crate) fn fill_queue_reached(
+        &self,
+        (after, upto): (u64, u64),
+        reaches: impl Fn(Option<&[ObjectId]>) -> bool,
+    ) -> Option<u64> {
+        let fill_queue = self.shared().fill_queue.as_ref()?;
+        // Asked with no lock of the queue's held: `reaches` reads the device's registries.
+        let candidates: Vec<(u64, Option<Vec<ObjectId>>)> = {
+            let mut filled = lock(&fill_queue.filled);
+            let seen = fill_queue.done.value();
+            filled.retain(|&(value, _)| value > seen);
+            (filled.iter())
+                .filter(|&&(value, _)| value > after && value <= upto)
+                .cloned()
+                .collect()
+        };
+        (candidates.iter().rev())
+            .find(|(_, owners)| reaches(owners.as_deref()))
+            .map(|&(value, _)| value)
+    }
 }
 
 /// A batch's fills submitted on the fill queue ([`Device::submit_fills`]): the timeline and value
@@ -572,6 +604,8 @@ pub(crate) struct FillSubmission {
     device: Device,
     pub(crate) timeline: vk::Semaphore,
     pub(crate) value: u64,
+    /// What owns the memory its fills write (`Fills::owners`).
+    pub(crate) owners: Option<Vec<ObjectId>>,
     _held: Vec<Box<dyn Any + Send + Sync>>,
 }
 
@@ -600,6 +634,7 @@ impl Device {
         };
         let shared = self.shared();
         let raw = shared.vk();
+        let owners = fills.owners();
         let value = fill_queue.submit_after(after, |_, command_buffer, _| {
             // SAFETY: recording for the fill queue's family, outside a render pass: fills of
             // buffers alone, each shared with that family, as their sources are (`sharing.rs`);
@@ -608,11 +643,13 @@ impl Device {
         })?;
         let timeline = *(fill_queue.staging.timeline.get())
             .ok_or_else(|| internal("a fill-queue submission made no timeline"))?;
+        lock(&fill_queue.staging.filled).push((value, owners.clone()));
         drop(fill_queue);
         Ok(Some(FillSubmission {
             device: self.clone(),
             timeline,
             value,
+            owners,
             _held: fills.submitted(),
         }))
     }

@@ -2274,6 +2274,17 @@ impl Filled for BufferShared {
         self.memory_hold()
             .map(|memory| Box::new(memory) as Box<dyn Any + Send + Sync>)
     }
+
+    /// A buffer placed in a heap: the heap. Else the buffer, kept among the program's resources
+    /// by its key (`Device::visible`), or the heap whose own buffer it is (`HeapKeys`).
+    fn owner(&self) -> Option<ObjectId> {
+        let key = match &self.bytes {
+            Bytes::Own(own) => own.identity.key,
+            Bytes::Heap(placed) => return Some(placed.heap.object_id()),
+        };
+        let shared = self.device.shared();
+        (shared.owners.id_of(key)).or_else(|| shared.heap_keys.id_of(key))
+    }
 }
 
 impl BufferShared {

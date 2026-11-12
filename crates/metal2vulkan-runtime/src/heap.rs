@@ -396,6 +396,12 @@ impl HeapKeys {
             .filter_map(|key| heaps.get(key))
             .any(|(heap, id)| objects.contains(id) && heap.strong_count() > 0)
     }
+
+    /// The identity of the heap whose own buffer's key is `key`, while it lives.
+    pub(super) fn id_of(&self, key: ResourceKey) -> Option<ObjectId> {
+        let heaps = lock(&self.heaps);
+        (heaps.get(&key)).and_then(|(heap, id)| (heap.strong_count() > 0).then_some(*id))
+    }
 }
 
 /// What a heap holds of the textures it made (`HeapShared::textures`): each that may still

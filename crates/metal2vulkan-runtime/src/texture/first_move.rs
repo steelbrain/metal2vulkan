@@ -137,7 +137,7 @@ use super::super::heap_sets::HeldSlots;
 use super::super::image_barrier::{image_barrier, ImageDst};
 use super::super::memory::{Memory, MemoryClass, Placement};
 use super::super::release;
-use super::super::resource::ResourceKey;
+use super::super::resource::{ObjectId, ResourceKey};
 use super::super::tracker::Point;
 use super::super::work_counts::Counters;
 use super::super::Device;
@@ -658,6 +658,9 @@ pub(crate) struct FirstFill {
     /// external memory; target), recorded in the barrier before every fill, in place of copies
     /// (none then).
     acquire: Option<(u32, u32)>,
+    /// What owns the memory it writes ([`Filled::owner`]), as the submission that took it last
+    /// found it.
+    owner: Option<ObjectId>,
 }
 
 impl FirstFill {
@@ -680,6 +683,7 @@ impl FirstFill {
             filled: None,
             staging: None,
             acquire: None,
+            owner: None,
         }
     }
 
@@ -706,6 +710,7 @@ impl FirstFill {
                 filled: Some(range),
                 staging: None,
                 acquire: None,
+                owner: None,
             });
         }
         let zeros = moves.zeros(device, 0)?;
@@ -737,6 +742,7 @@ impl FirstFill {
             filled: None,
             staging: Some(staging),
             acquire: None,
+            owner: None,
         }
     }
 
@@ -751,6 +757,7 @@ impl FirstFill {
             filled: None,
             staging: None,
             acquire: Some((source, target)),
+            owner: None,
         }
     }
 
@@ -843,6 +850,14 @@ pub(crate) trait Filled: Send + Sync {
     /// A hold on the memory the buffer lies in, kept and never read; `None` where it lies in
     /// none.
     fn memory(&self) -> Option<Box<dyn Any + Send + Sync>>;
+
+    /// The identity of what owns the memory the fill writes as the program's uses name it
+    /// (`used_resources.rs`): a buffer of the program's, or the heap whose bytes it is. `None`
+    /// for memory no use of the program's names (the runtime's own buffers, which its own
+    /// bindings reach), or one not yet kept among the program's resources.
+    fn owner(&self) -> Option<ObjectId> {
+        None
+    }
 }
 
 /// A resource whose first work waits.
@@ -1209,10 +1224,11 @@ impl FirstMoves {
                             held.push(Held::Moves(fresh, moves));
                         }
                     }
-                    Waiting::Fill(weak, fill) => {
+                    Waiting::Fill(weak, mut fill) => {
                         let Some(buffer) = weak.upgrade() else {
                             continue;
                         };
+                        fill.owner = buffer.owner();
                         // The submission holds the buffer's memory; the buffer goes as the
                         // program lets go of it, once the lock is free.
                         if let Some(memory) = buffer.memory() {
@@ -1966,6 +1982,21 @@ impl Fills<'_> {
             .collect();
         // SAFETY: the caller's contract; none is an acquire ([`Taken::take_fills`]).
         unsafe { record_fills(counted, command_buffer, &fills) };
+    }
+
+    /// What owns the memory the fills write ([`Filled::owner`]), each once; `None` where one
+    /// writes memory no use of the program's names, which any command may reach.
+    pub(crate) fn owners(&self) -> Option<Vec<ObjectId>> {
+        let mut owners = Vec::new();
+        for held in &self.held {
+            if let Held::Fill(_, _, fill) = held {
+                let owner = fill.owner?;
+                if !owners.contains(&owner) {
+                    owners.push(owner);
+                }
+            }
+        }
+        Some(owners)
     }
 
     /// The submission that records the fills was made: what it holds until it completes (each

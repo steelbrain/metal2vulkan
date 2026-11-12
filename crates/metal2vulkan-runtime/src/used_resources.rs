@@ -291,6 +291,12 @@ impl Owners {
         );
     }
 
+    /// The identity of what owns the memory under `key`, while it lives.
+    pub(super) fn id_of(&self, key: ResourceKey) -> Option<ObjectId> {
+        let registry = lock(&self.inner);
+        (registry.owners.get(&key)).and_then(|(owner, id)| owner.lives().then_some(*id))
+    }
+
     /// The live buffers the program made (`Device::visible`), for the device's recovery to carry
     /// (`device/carry.rs`).
     pub(super) fn buffers(&self) -> Vec<Buffer> {

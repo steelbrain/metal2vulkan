@@ -215,7 +215,7 @@ use crate::event_timeline::Signal;
 use crate::exit_guard::{self, Call};
 use crate::gpu_time;
 use crate::release;
-use crate::resource::ResourceKey;
+use crate::resource::{ObjectId, ResourceKey};
 use crate::scheduler;
 use crate::shadow::ShadowCopies;
 use crate::shadow_standing::{LetGo, Missed, Unskipped};
@@ -964,6 +964,20 @@ impl CommandBufferShared {
             wait_semaphores.push(filled.timeline);
             wait_values.push(filled.value);
             wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
+        }
+        // Whether its commands may reach what the fill-queue submissions it waits for filled,
+        // counted (`WorkCounts::fill_queue_waits`): its own, and those of the others' it waits
+        // for that the host may not have seen complete.
+        if fill_wait.is_some() || filled.is_some() {
+            let reaches = |owners: Option<&[ObjectId]>| {
+                owners.is_none_or(|owners| state.parts_reach(shared, start..end, owners))
+            };
+            let own = (filled.as_ref()).is_some_and(|filled| reaches(filled.owners.as_deref()));
+            let after = scheduler.waited[queue][fill_place];
+            let others = fill_wait.is_some_and(|(_, value)| {
+                device.fill_queue_reached((after, value), reaches).is_some()
+            });
+            shared.counts.fill_queue_waited(own || others);
         }
         let mut order_semaphores: Vec<vk::Semaphore> =
             order_waits.iter().map(|&(s, _)| s).collect();

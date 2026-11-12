@@ -202,6 +202,10 @@ mod fetch_composite;
 mod fill_queue;
 mod fill_value;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod fill_waits;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod fill_waits_bench;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod first_host_texture;
 mod first_moves;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

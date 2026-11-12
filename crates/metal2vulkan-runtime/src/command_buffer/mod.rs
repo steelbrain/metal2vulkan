@@ -1219,6 +1219,25 @@ impl State {
                 })
     }
 
+    /// Whether the commands of its recorded parts `parts` (a batch's) may reach memory one of
+    /// `objects` owns: every memory where a command of it may reach memory no use names
+    /// ([`reaches_unnamed`](Self::reaches_unnamed)) or a part's encoder has no record; else what
+    /// their encoders use, as [`uses`](Self::uses) answers.
+    pub(super) fn parts_reach(
+        &self,
+        shared: &super::device::DeviceShared,
+        parts: Range<usize>,
+        objects: &[ObjectId],
+    ) -> bool {
+        let encoders = (self.recorded.get(parts).into_iter().flatten()).map(|part| part.encoder);
+        let (Some(first), Some(last)) = (encoders.clone().min(), encoders.max()) else {
+            return false;
+        };
+        self.reaches_unnamed
+            || last >= self.ended.len()
+            || self.uses(shared, Some(first..last + 1), objects)
+    }
+
     /// What the commands of its ended encoders that `runs` (by their place among them) use and a
     /// command reaches unnamed only once used, gathered weakly under this lock ([`Reached`]): what
     /// their keys name, as [`read_ended`](Self::read_ended) reads them (each segment's recorded
