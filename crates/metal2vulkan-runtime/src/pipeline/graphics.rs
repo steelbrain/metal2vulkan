@@ -22,7 +22,7 @@ use super::creation_log;
 use super::interlocked_writes;
 use super::kept::Place;
 use super::libraries::{Linked, Part};
-use super::objects::{RawPipeline, VariantObjects};
+use super::objects::{RawPipeline, StageObject, VariantObjects};
 use crate::degradation::BoundFormats;
 use crate::error::{internal, vulkan, DeadlockCause, Error};
 use crate::render_target::{PassShape, RenderPassObject};
@@ -1012,6 +1012,25 @@ pub(crate) fn color_write_masks(
 }
 
 impl VariantObjects {
+    /// The SPIR-V words of the stages `part`'s library compiles (`compile_memory.rs`): the
+    /// fragment stage's for the fragment shader part, the others' for the pre-rasterization part.
+    fn part_words(&self, part: Part) -> usize {
+        let fragment = |stage: &&StageObject| stage.stage == vk::ShaderStageFlags::FRAGMENT;
+        match part {
+            Part::FragmentShader => self
+                .stages
+                .iter()
+                .filter(fragment)
+                .map(StageObject::words)
+                .sum(),
+            Part::PreRasterization => (self.stages.iter())
+                .filter(|stage| !fragment(stage))
+                .map(StageObject::words)
+                .sum(),
+            Part::VertexInput | Part::FragmentOutput => 0,
+        }
+    }
+
     /// The state of `pipeline`'s (the variant's compiled pipeline) `VkPipeline` for `key`
     /// ([`GraphicsContent`]): everything its making takes beside the variant's modules, layout
     /// and pass.
@@ -1298,6 +1317,12 @@ impl VariantObjects {
         if let Some(at) = awaited {
             creation_log::note(|| "turn".to_owned(), at.elapsed());
         }
+        // A large pipeline's words of the process's limit, waited for without the turn
+        // (`compile_memory.rs`); a linked one's libraries hold their own as each is made.
+        let words = match libraries {
+            None => shared.compile_memory(self.stages.iter().map(StageObject::words).sum()),
+            Some(_) => None,
+        };
         let started = std::time::Instant::now();
         let (created, withheld) = crate::driver_facts::expecting(expected, || {
             content.with_infos(self, render_pass.raw, |infos| match libraries {
@@ -1357,6 +1382,7 @@ impl VariantObjects {
         shared.counts.driver_diagnostics_withheld(withheld);
         let (raw, linked, made_here) = created?;
         let created_in = started.elapsed();
+        drop(words);
         let kept_at = split.then(std::time::Instant::now);
         drop(leader);
         drop(turn);
@@ -1458,6 +1484,8 @@ impl VariantObjects {
                 let made = match records.of(part) {
                     Some(record) => {
                         let _ = creation_log::take_record();
+                        // Its own stages' words (`compile_memory.rs`).
+                        let _words = shared.compile_memory(self.part_words(part));
                         let made = shared.make_graphics_pipeline(
                             Making::new(part.kind()).digest(record),
                             || self.pipeline_name(Some(part.kind())),

@@ -790,6 +790,21 @@ impl DeviceShared {
         })
     }
 
+    /// The words of the process's limit on large makings in flight that a making of `words`
+    /// SPIR-V words holds around its driver call (`pipeline/compile_memory.rs`): `None` where it
+    /// does not count. One that waited for them counts in
+    /// `WorkCounts::makings_held_for_compile_memory`, its wait in `compile_memory_held_nanos`.
+    pub(crate) fn compile_memory(
+        &self,
+        words: usize,
+    ) -> Option<crate::pipeline::compile_memory::Words<'static>> {
+        let (held, waited) = crate::pipeline::compile_memory::hold(words)?;
+        if let Some(waited) = waited {
+            self.counts.making_held_for_compile_memory(waited);
+        }
+        Some(held)
+    }
+
     /// The compute pipeline of `info`, made as
     /// [`make_pipelines_reported`](Self::make_pipelines_reported) makes one under the record
     /// `making` names, with what its driver reports of it where the device's makings report

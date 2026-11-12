@@ -65,6 +65,9 @@
 //! - **A helper's turn before its lock.** A helper pipeline made on its first use takes its turn
 //!   before its helper's lock ([`helper_turn`]), so no thread holds that lock waiting for a turn,
 //!   and the helper's other uses, made already, never wait behind the budget.
+//! - **Large makings by their words.** A making of a large module also holds its SPIR-V words of
+//!   the process's limit on large makings in flight around its driver call, lending its turn
+//!   while it waits for them (`compile_memory.rs`): two large makings never compile at once.
 //! - **Not counted:** the device's priming (`device/prime.rs`), which makes three pipelines of
 //!   trivial shaders on the creating thread before the device reaches the program, takes no turn:
 //!   a device's creation never waits behind the process's compiles.
@@ -171,6 +174,21 @@ pub(crate) fn waited_in_pool(waited: Duration) {
 pub(crate) fn holds_turn() -> bool {
     HELD.try_with(|held| held.borrow().is_some())
         .unwrap_or(false)
+}
+
+/// The rank of the turn this thread holds, raised to the rank something that came to wait for its
+/// piece asked since (`Place::hasten`), as a lent turn is taken again at ([`without_turn`]):
+/// what a wait for compile memory is ordered by (`compile_memory.rs`). `None` where it holds none.
+pub(crate) fn held_rank() -> Option<Rank> {
+    HELD.try_with(|held| {
+        held.borrow().as_ref().map(|held| {
+            let (given, ticket) = held.rank;
+            let raised = (held.asked.as_ref()).and_then(|asked| asked.get());
+            (raised.map_or(given, |raised| raised.min(given)), ticket)
+        })
+    })
+    .ok()
+    .flatten()
 }
 
 /// A new ticket: later than every ticket drawn before it.

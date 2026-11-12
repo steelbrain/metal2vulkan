@@ -41,6 +41,7 @@
 mod additions;
 mod attachment_formats;
 pub(super) mod budget;
+pub(super) mod compile_memory;
 pub(super) mod content_keyed;
 pub(super) mod creation_log;
 mod dispatch_making;

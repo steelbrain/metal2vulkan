@@ -850,7 +850,7 @@ impl Region {
 
 /// The name prefixes that put a count in [`Region::Translation`]: making a module, a layout or a
 /// pipeline.
-const TRANSLATION: [&str; 20] = [
+const TRANSLATION: [&str; 21] = [
     // The AIR decode and specialization a pipeline creation does for its stages, and the question
     // it asks about a linked function's uses. Translation work by definition -- an entry's
     // specialization depends on the functions and the constants, never on the pipeline state -- so
@@ -891,6 +891,7 @@ const TRANSLATION: [&str; 20] = [
     "tile_pipelines_pooled",
     "variants_taken_back",
     "flights_followed",
+    "makings_held_for_compile_memory",
     "residual_form_makings",
 ];
 

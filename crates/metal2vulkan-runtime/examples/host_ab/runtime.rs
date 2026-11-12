@@ -1530,6 +1530,11 @@ impl Gpu for Runtime {
             ("pipeline_layouts_made", c.pipeline_layouts_made),
             ("pipeline_layouts_shared", c.pipeline_layouts_shared),
             ("flights_followed", c.flights_followed),
+            (
+                "makings_held_for_compile_memory",
+                c.makings_held_for_compile_memory,
+            ),
+            ("compile_memory_held_nanos", c.compile_memory_held_nanos),
             ("predicated_loop_runs_again", c.predicated_loop_runs_again),
             ("variants_taken_back", c.variants_taken_back),
             (

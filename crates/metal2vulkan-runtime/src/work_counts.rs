@@ -111,6 +111,8 @@ pub(crate) struct Counters {
     pipeline_layouts_shared: AtomicU64,
     variant_pipelines_made: AtomicU64,
     flights_followed: AtomicU64,
+    makings_held_for_compile_memory: AtomicU64,
+    compile_memory_held_nanos: AtomicU64,
     predicated_loop_runs_again: AtomicU64,
     variants_taken_back: AtomicU64,
     unlisted_argument_sampler_buffers: AtomicU64,
@@ -2246,6 +2248,17 @@ impl Counters {
     /// A variant's making waited for its twin's in the air before its own (`pipeline/flight.rs`).
     pub(crate) fn flight_followed(&self) {
         self.flights_followed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A making waited `waited` for the words of the process's limit on large makings in flight
+    /// (`pipeline/compile_memory.rs`).
+    pub(crate) fn making_held_for_compile_memory(&self, waited: std::time::Duration) {
+        self.makings_held_for_compile_memory
+            .fetch_add(1, Ordering::Relaxed);
+        self.compile_memory_held_nanos.fetch_add(
+            u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
     }
 
     /// A predicated loop's check ran its laying again (`command_buffer/rerun.rs`).
@@ -5474,6 +5487,13 @@ pub struct WorkCounts {
     /// Of those, the makings that waited for a twin's making in the air, of the same functions
     /// and specialization, to land before their own (`pipeline/flight.rs`).
     pub flights_followed: u64,
+    /// Of those, the makings of a large module that waited for the large makings in flight before
+    /// their own, so that two never compile at once: each making whose stages hold 65,536 SPIR-V
+    /// words or more waits while the others in flight hold more than 4,194,304 words with its own
+    /// (`pipeline/compile_memory.rs`). No Metal counterpart.
+    pub makings_held_for_compile_memory: u64,
+    /// The time those makings waited, in nanoseconds, summed.
+    pub compile_memory_held_nanos: u64,
     /// The runs again of predicated loops' layings that a check submitted, the loop still running
     /// past its copies (`command_buffer/rerun.rs`).
     pub predicated_loop_runs_again: u64,
@@ -9375,6 +9395,10 @@ impl Device {
             shader_cache_off_thread_nanos: directory.off_thread_nanos,
             shader_cache_writes_on_thread: directory.writes_on_thread,
             flights_followed: counters.flights_followed.load(Ordering::Relaxed),
+            makings_held_for_compile_memory: counters
+                .makings_held_for_compile_memory
+                .load(Ordering::Relaxed),
+            compile_memory_held_nanos: counters.compile_memory_held_nanos.load(Ordering::Relaxed),
             predicated_loop_runs_again: counters.predicated_loop_runs_again.load(Ordering::Relaxed),
             variants_taken_back: counters.variants_taken_back.load(Ordering::Relaxed),
             unlisted_argument_sampler_buffers: counters

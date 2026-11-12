@@ -19,8 +19,8 @@
 //!   once it holds its turn of the process's budget, just before its driver call, and lands when
 //!   that returns ([`Leader`]); a twin waits for it holding no turn: a program's thread before it
 //!   asks for one, a pool's piece by giving its thread's back for the wait
-//!   (`budget::without_turn`). Every making in the air holds a turn and waits on nothing of ours,
-//!   so each wait ends.
+//!   (`budget::without_turn`). Every making in the air holds a turn, or waits for compile memory
+//!   holding none (`compile_memory.rs`), whose holders wait only for a turn: so each wait ends.
 //! - **Bounded.** The table holds one key per making in the air, at most the budget's turns.
 //! - **Counted.** A making that waited for a twin counts in `WorkCounts::flights_followed`.
 

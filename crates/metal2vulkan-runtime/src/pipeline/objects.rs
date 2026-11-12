@@ -266,6 +266,11 @@ impl StageObject {
     pub(super) fn module(&self) -> vk::ShaderModule {
         self.module.raw
     }
+
+    /// Its module's SPIR-V words (`compile_memory.rs`).
+    pub(super) fn words(&self) -> usize {
+        self.module.words
+    }
 }
 
 /// One `VkShaderModule`: the device's module of its SPIR-V, shared by every variant whose stage
@@ -278,6 +283,8 @@ impl StageObject {
 /// MSL once.
 pub(crate) struct ShaderModule {
     raw: vk::ShaderModule,
+    /// Its SPIR-V's words: what its makings weigh (`compile_memory.rs`).
+    words: usize,
 }
 
 impl Owned<DeviceShared> for ShaderModule {
@@ -403,7 +410,10 @@ pub(crate) fn shader_module(
         let info = vk::ShaderModuleCreateInfo::default().code(spirv);
         // SAFETY: the code is live SPIR-V words for the call.
         let raw = unsafe { shared.vk().create_shader_module(&info, None) }.map_err(vulkan)?;
-        Ok::<_, Error>(ShaderModule { raw })
+        Ok::<_, Error>(ShaderModule {
+            raw,
+            words: spirv.len(),
+        })
     });
     let gone = modules.sweep();
     drop(modules);
@@ -1218,11 +1228,15 @@ impl VariantObjects {
         if followed {
             shared.counts.flight_followed();
         }
+        // A large kernel's words of the process's limit, waited for without the turn
+        // (`compile_memory.rs`).
+        let words = shared.compile_memory(c.object.words());
         let started = std::time::Instant::now();
         // With what the driver reports of the making: a pipeline found in its record's cache
         // reads no data back (`shader_cache/driver.rs`).
         let raw = shared.make_compute_pipeline(making, || self.pipeline_name(None), info)?;
         let created_in = started.elapsed();
+        drop(words);
         if let Some(kernel) = &self.logged {
             creation_log::compute(&self.device, kernel, c.specialization, created_in);
         }
