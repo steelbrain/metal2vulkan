@@ -116,6 +116,7 @@ mod engine_places;
 mod engine_pointer_cells;
 mod engine_pointer_memory;
 mod engine_pointer_values;
+mod engine_pooled_cells;
 mod engine_primitive_ids;
 mod engine_private_memory;
 mod engine_private_render_state;
