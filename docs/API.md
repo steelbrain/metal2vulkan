@@ -1820,8 +1820,8 @@ With `METAL2VULKAN_PENDING_AUDIT` set (or `DeviceOptions::pending_audit`), a dev
 `vkBeginCommandBuffer`, each `vkResetCommandPool` of a spare command pool, each command pool given
 back to its spares and each submission of a command buffer submitted before (one not begun for
 simultaneous use), that the GPU completed every submission that carries the command buffers
-concerned: a batch's, the device's own and the staging queue's, to the timeline value each signals,
-and a secondary through each primary that executes it. It reads those timelines
+concerned: a batch's, the device's own and the staging and fill queues', to the timeline value each
+signals, and a secondary through each primary that executes it. It reads those timelines
 (`vkGetSemaphoreCounterValue`) and logs each command buffer found pending (id name
 `metal2vulkan-pending-audit`, `Info` severity): what was done, the thread, the command buffer, the
 timeline, its counter and the value, with the thread's backtrace for the first 8; and a line as the
@@ -3524,8 +3524,8 @@ bound.
   answering `VK_ERROR_INITIALIZATION_FAILED` or `VK_ERROR_OUT_OF_DEVICE_MEMORY`; on NVIDIA's driver,
   other devices of the GPU holding what it needs, such as its channels), made with those of its
   least plan: a round robin of one `VkQueue` and none reserved for presenting, beside the reserved,
-  extra and staging queues. Announced once, as the device is made, naming the `VkQueue`s of each
-  plan and the driver's answer; a device the driver refuses with the least plan too is refused,
+  extra, staging and fill queues. Announced once, as the device is made, naming the `VkQueue`s of
+  each plan and the driver's answer; a device the driver refuses with the least plan too is refused,
   `Error::DeviceRefused`. Cost: its command queues, presenting ones included, share one `VkQueue`,
   so one queue's command buffers wait behind another's whole command buffer where Metal's run beside
   each other; what each command buffer does is the same.

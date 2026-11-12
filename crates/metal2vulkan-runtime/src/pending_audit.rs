@@ -16,7 +16,8 @@
 //!   `VkQueue` or waits in the scheduler's group (`command_buffer/submit.rs`), to the queue's
 //!   timeline value it signals; a secondary command buffer through each primary that executes it
 //!   (each `vkCmdExecuteCommands` since that primary's last begin); the device's own submissions
-//!   and the staging queue's, to their own timelines (`device/submit.rs`, `device/staging.rs`). A
+//!   and the staging and fill queues', to their own timelines (`device/submit.rs`,
+//!   `device/staging.rs`). A
 //!   submission that fails is withdrawn. Other submissions carry nothing (the predicated loop's
 //!   runs again, at fences, `command_buffer/rerun.rs`; the device's checks as it is made).
 //! - **The answer is the GPU's.** At each check it reads each carrying timeline

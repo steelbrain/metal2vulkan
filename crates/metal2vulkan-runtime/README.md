@@ -183,7 +183,7 @@ Vulkan-side choices Metal has no counterpart for:
 | `optional_device_extensions` | Device extensions each device enables only where it can (it lists one, the instance has what it requires, and the device has its features), never refused for one; `Device::enables_extension` says which. A listed extension's feature structure is enabled with it where the runtime knows one (`VK_KHR_video_maintenance1` and `2`'s, `VK_KHR_unified_image_layouts`' with `unifiedImageLayoutsVideo` where the device has it), here and for `device_extensions`. |
 | `extra_queues` | Queues each device makes for the consumer beside its own, one per `VkQueueFlags` entry (a video decode queue, for example), of the first family whose flags contain the entry's; `DeviceHandles::extra_queues` returns them. A device with no queue for an entry is made all the same, says so (`metal2vulkan-extra-queues-absent`), and leaves it out. The runtime never submits to them. Empty by default. |
 | `reserved_queues` | How many queues of its own queue families each device reserves for the consumer out of the round robin its command queues share, which shrinks by each (on an RTX 5080, 13 `VkQueue`s rather than 14); `DeviceHandles::reserved_queues` returns them. The round robin keeps its first four and presenting its two, so a device with none to spare past those (MoltenVK's four families of one queue, lavapipe's one queue) reserves fewer, is made all the same, and says so (`metal2vulkan-reserved-queues-absent`). No command queue, presenting or not, and no internal copy ever submits to them. 0 by default. |
-| `queue_limits` | Fewer `VkQueue`s for each device than its queue plan takes (`QueueLimits`: the most for the round robin its command queues share, at least one, and for presenting queues), so making and dropping a device costs less: on an RTX 5080, whose plan takes 17 queues, a device took 445 ms to make and 110 ms to drop, and one limited to one round-robin queue and none for presenting (2 queues) 145 ms and 44 ms. Past the limits command queues share `VkQueue`s (one waits behind another's whole command buffer), and presenting and unshared ones may share. Where the limits change a placement from what the plan gives, the device says so in an informational message (`metal2vulkan-queue-limits-reached`), at the first such change alone, and counts each later one (`WorkCounts::queue_limits_reached_withheld`). A device with no queue to spare (RADV's, lavapipe's one graphics queue) takes its plan. `None` (the default) is the plan. For tests and tools that make many devices. |
+| `queue_limits` | Fewer `VkQueue`s for each device than its queue plan takes (`QueueLimits`: the most for the round robin its command queues share, at least one, and for presenting queues), so making and dropping a device costs less: on an RTX 5080, whose plan takes 18 queues, a device of 17 took 445 ms to make and 110 ms to drop, and one of 2 (one round-robin queue and the staging queue) 145 ms and 44 ms. Past the limits command queues share `VkQueue`s (one waits behind another's whole command buffer), and presenting and unshared ones may share. Where the limits change a placement from what the plan gives, the device says so in an informational message (`metal2vulkan-queue-limits-reached`), at the first such change alone, and counts each later one (`WorkCounts::queue_limits_reached_withheld`). A device with no queue to spare (RADV's, lavapipe's one graphics queue) takes its plan. `None` (the default) is the plan. For tests and tools that make many devices. |
 | `instance_api_version` | The instance's `apiVersion` (1.2 when unset); a version outside 1.2 to the loader's is refused, never clamped. |
 | `withheld_features`, `withheld_extensions`, `withhold_generated_commands`, `withhold_view_reinterpretation` | Parts of the recommended enables to leave off; the device then compiles for what is enabled. |
 | `messages` | A `MessageSink` for the validation layer's messages and the runtime's notices; without one, notices go to stderr. `MessageSink::with_least_severity` skips messages below a severity (never a degrade notice), and the runtime then formats none of its own lines it would skip. |
@@ -197,15 +197,16 @@ Vulkan-side choices Metal has no counterpart for:
 for want of its resources (`vkCreateDevice` answering `VK_ERROR_INITIALIZATION_FAILED` or
 `VK_ERROR_OUT_OF_DEVICE_MEMORY`: on NVIDIA's driver, other devices of the GPU, in this process or
 others, holding what it needs, such as its channels), the runtime asks once more with its least
-plan's: a round robin of one `VkQueue` and none reserved for presenting, the reserved, extra and
-staging queues kept (`queue_limits` of one and none, without that option's messages). A device made
-so announces `metal2vulkan-degrade-least-queue-plan` once, as it is made: its command queues share
-that one `VkQueue`. A device the driver refuses again, or whose least plan takes no fewer queues, is
-refused, `Error::DeviceRefused`. On an RTX 2080 with a 256 MiB BAR (NVIDIA 620.70.06), sixteen
-processes started 3 s apart, each making one device: seven devices were made with the plan's 17
-`VkQueue`s and two more with the least plan's 2. The driver refused the other seven with both plans,
-and the kernel logged that it could not allocate a channel's instance block. In one process, the
-driver refused the eighth device with either plan, on that RTX 2080 and on an RTX 3090.
+plan's: a round robin of one `VkQueue` and none reserved for presenting, the reserved, extra,
+staging and fill queues kept (`queue_limits` of one and none, without that option's messages). A
+device made so announces `metal2vulkan-degrade-least-queue-plan` once, as it is made: its command
+queues share that one `VkQueue`. A device the driver refuses again, or whose least plan takes no
+fewer queues, is refused, `Error::DeviceRefused`. On an RTX 2080 with a 256 MiB BAR (NVIDIA
+620.70.06), sixteen processes started 3 s apart, each making one device: seven devices were made
+with 17 `VkQueue`s and two more with 2 (one round-robin queue and the staging queue). The driver
+refused the other seven with both plans, and the kernel logged that it could not allocate a
+channel's instance block. In one process, the driver refused the eighth device with either plan, on
+that RTX 2080 and on an RTX 3090.
 
 While a handle lives, equal options give the same device for a physical device, as Metal has one
 `MTLDevice` per GPU. Nothing is read from the environment but the platform's default cache

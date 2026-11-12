@@ -6,10 +6,10 @@
 //! sink), as each process of a host's guests makes one. Printed as `MANY-DEVICES` lines.
 //!
 //! The driver refuses devices of one process past a count of its own (seven on an RTX 2080 and an
-//! RTX 3090, NVIDIA 620.70.06, the eighth with its least queue plan's two `VkQueue`s as with its
-//! plan's 17), so a second test makes one device, with a command queue, in a process of its own
-//! and holds it for [`HELD`]: a run starts it in several processes at once, as a host's guests
-//! are, each printing what it took as `ONE-DEVICE` lines.
+//! RTX 3090, NVIDIA 620.70.06, the eighth with two `VkQueue`s as with 17), so a second test makes
+//! one device, with a command queue, in a process of its own and holds it for [`HELD`]: a run
+//! starts it in several processes at once, as a host's guests are, each printing what it took as
+//! `ONE-DEVICE` lines.
 //!
 //! A GPU hazard: it makes devices up to the driver's limit (docs/VALIDATION.md), so on a GPU it
 //! compiles only under `m2v_gpu_hazards`; a CPU ICD has no BAR, and it does not compile there.

@@ -28,8 +28,10 @@
 //!   the commands before it on its `VkQueue` (`texture/first_move.rs`), which the call does not
 //!   wait for, so every command buffer committed after the call reads them, and none in flight on
 //!   that queue sees the copy land under it. A command buffer in flight on another queue that
-//!   reads the buffer meanwhile races the copy, as on Metal. Not on the staging queue
-//!   (`device/staging.rs`), which waits for no work in flight. From an import, the copy's source is
+//!   reads the buffer meanwhile races the copy, as on Metal. On a device with a fill queue (a copy
+//!   engine's second queue, `device/staging.rs`), a batch's copies in run there, before the batch,
+//!   which waits for them, after the batches before it on its `VkQueue`. Not on the staging queue,
+//!   which waits for no work in flight. From an import, the copy's source is
 //!   the import's `VkBuffer`, held (imported again where the device released it) until the
 //!   submission completed; from pages no import maps, the call copies the bytes on the CPU into
 //!   staging buffers of [`STAGED_CHUNK`] bytes at most, written once and freed once the

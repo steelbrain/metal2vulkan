@@ -2277,10 +2277,10 @@ degradations! {
         /// `VK_ERROR_OUT_OF_DEVICE_MEMORY`: on NVIDIA's driver, other devices of the GPU, in this
         /// process or others, holding what it needs, such as its channels), made with those of its
         /// least plan: a round robin of one `VkQueue` and none reserved for presenting, beside the
-        /// plan's reserved, extra and staging queues (`DeviceOptions::queue_limits` of one and
-        /// none, without its informational messages). Announced once, as the device is made; the
-        /// payload names the device, the `VkQueue`s of each plan and the driver's answer. A device
-        /// the driver refuses with its least plan too is refused (`Error::DeviceRefused`).
+        /// plan's reserved, extra, staging and fill queues (`DeviceOptions::queue_limits` of one
+        /// and none, without its informational messages). Announced once, as the device is made;
+        /// the payload names the device, the `VkQueue`s of each plan and the driver's answer. A
+        /// device the driver refuses with its least plan too is refused (`Error::DeviceRefused`).
         LeastQueuePlan = "least-queue-plan", Performance,
             "its command queues, presenting ones included, share one `VkQueue`, so one queue's \
              command buffers wait behind another's whole command buffer where Metal's run beside \

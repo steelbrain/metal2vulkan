@@ -51,7 +51,11 @@
 //!   first in the command buffer that leads the submission's `VkSubmitInfo` -- a batch's own, or
 //!   the one that holds the staged copies after it; an internal submission's one command buffer
 //!   -- waiting for what the submission waits for: MoltenVK runs each `VkSubmitInfo` as a Metal
-//!   command buffer of its own, so it adds none (`command_buffer/submit.rs`).
+//!   command buffer of its own, so it adds none (`command_buffer/submit.rs`). On a device with a
+//!   fill queue (a copy engine's second queue, `device/staging.rs`), a batch's buffers' fills go
+//!   there instead ([`Taken::take_fills`]), in a submission of their own after the batches before
+//!   it on its `VkQueue` and what it waits for, which the batch waits for before any of its
+//!   commands; its moves and staged copies stay at its start, after them.
 //! - **Staged copies**. `replace_region` of a texture whose `VkImage` is its own for good (in
 //!   memory of its own, or a heap's own pages) and takes no host or staging-queue copies (those
 //!   are queued for the staging queue instead, whose submission of them every submission of the
@@ -82,7 +86,8 @@
 //!   Commands after it on the same `VkQueue`, in this submission or a later one, see each image
 //!   in `GENERAL` and each fill done. On a device of several `VkQueue`s a submission on another
 //!   one waits for the batch that did it until that batch completed ([`FirstMoves::waits`]): any
-//!   of its commands may reach the resource unnamed.
+//!   of its commands may reach the resource unnamed. Fills made on the fill queue are waited for
+//!   by every later submission until the host saw them complete (`Device::fill_queue_wait`).
 //! - **Order**. Each submission holds its place in the order from its take until its submission was
 //!   made, whether or not it took anything: so no submission is made between another's take and its
 //!   submission (one that found nothing to take would otherwise run before the moves another took,

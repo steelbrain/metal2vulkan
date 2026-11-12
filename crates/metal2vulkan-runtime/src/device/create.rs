@@ -317,12 +317,13 @@ pub struct DeviceOptions {
     ///
     /// What it changes: how many `VkQueue`s the device makes, and so what making and dropping it
     /// cost. Each queue is made with the device and destroyed with it: on an RTX 5080 Laptop GPU
-    /// (NVIDIA 615.71.09), one device made and dropped at a time, the plan's 17 queues (14 for the
-    /// round robin, 2 for presenting and the staging queue) took 445 ms in `vkCreateDevice` and
-    /// 110 ms in `vkDestroyDevice`, and 2 queues (limits of one for the round robin and none for
-    /// presenting) 145 ms and 44 ms, about 20 ms a queue to make; and the driver makes devices
-    /// one at a time across processes. On a device whose families have no queue to spare (RADV's
-    /// and lavapipe's one graphics queue) the limits leave the plan as it is.
+    /// (NVIDIA 615.71.09), whose plan takes 18 queues (14 for the round robin, 2 for presenting,
+    /// the staging and fill queues), one device made and dropped at a time, a device of 17 (all but
+    /// the fill queue) took 445 ms in `vkCreateDevice` and 110 ms in `vkDestroyDevice`, and one of
+    /// 2 (one for the round robin and the staging queue) 145 ms and 44 ms, about 20 ms a queue to
+    /// make; and the driver makes devices one at a time across processes. On a device whose
+    /// families have no queue to spare (RADV's and lavapipe's one graphics queue) the limits leave
+    /// the plan as it is.
     ///
     /// What it costs a program: its command queues share `VkQueue`s past the limit, so one
     /// queue's command buffers wait behind another's whole command buffer where Metal's would not
@@ -1382,8 +1383,8 @@ fn for_want_of_resources(result: vk::Result) -> bool {
 /// device (`device`) and each attempt ([`Error::DeviceRefused`]), where the driver refuses the
 /// least plan's for want of resources too, or where the least plan takes no fewer; any other
 /// failure is the driver's ([`vulkan`]). On an RTX 2080 (NVIDIA 620.70.06), of sixteen processes
-/// started 3 s apart each making one device, seven made it with the plan's 17 `VkQueue`s, two with
-/// the least plan's 2, and the driver refused the rest with both
+/// started 3 s apart each making one device, seven made it with 17 `VkQueue`s, two with 2
+/// (one for the round robin and the staging queue), and the driver refused the rest with both
 /// (`VK_ERROR_INITIALIZATION_FAILED`), the kernel logging that it could not allocate a channel's
 /// instance block; in one process it refused the eighth device with either plan, there and on an
 /// RTX 3090.

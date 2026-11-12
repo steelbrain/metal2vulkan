@@ -57,6 +57,47 @@
 //!   has its own fills still waiting (a new `Private` buffer's zeros or staged bytes) made here,
 //!   in a submission of their own the call waits for (`Device::settle_mine`): every buffer of the
 //!   device's is shared with this queue's family (`sharing.rs`).
+//!
+//! The device's fill queue, where it has one (`create::queue_plan`): the staging queue's family's
+//! second queue, where that family is of transfers alone (NVIDIA's copy engine). A batch's new
+//! buffers' fills (`texture/first_move.rs`: a new `Private` buffer's or a `Managed` buffer's
+//! device copy's zeros, a buffer's staged bytes, a `Managed` buffer's copies in after
+//! `did_modify_range`, a rebind's or a making's) run there, in a submission of their own the
+//! batch waits for ([`Device::submit_fills`]), rather than at the start of the batch's own work
+//! on its `VkQueue`.
+//!
+//! - **Why.** A copy through a queue of the graphics family runs on the engine the program's
+//!   kernels run on. On an RTX 3090 (615.71.09), a 64 MiB `Managed` buffer copied in each frame
+//!   that way left another queue's kernels 20% of their rate alone, and at 256 MiB 11%
+//!   (`tests::managed_copies_bench`); in raw Vulkan on an RTX 5080 Laptop GPU (615.71.09), buffer
+//!   copies through the graphics family beside such kernels moved 13.5 GB/s and left them 52 to
+//!   56% of their rate, and through the copy engine 28.5 GB/s and 92 to 97%
+//!   (`examples/copy_engine.rs`).
+//! - **Why not the staging queue.** A fill comes after the batches before its batch on that
+//!   batch's `VkQueue` (below); on the staging queue, which waits for no work in flight, every
+//!   staging copy behind it would wait for those batches too.
+//! - **What it waits for.** The batches before the batch on its `VkQueue` (that queue's timeline at
+//!   the value before the batch's), what the batch waits for (events, semaphores, the earlier
+//!   work of other queues its plan orders it after, earlier first work and staging copies), and
+//!   each timeline's completed value, for visibility: what the fills waited for at the start of
+//!   the batch's work. A batch that a group of batches held (`command_buffer/group.rs`), whose
+//!   values are not submitted yet, waits for a binary semaphore (which its one wait consumes), or
+//!   took an acquire from an external agent keeps its fills at its start.
+//! - **What waits for it.** The batch, before any of its commands; and every other submission of
+//!   the device's, a batch or an internal one on any `VkQueue`, on the GPU until the host saw it
+//!   complete, as for the staging queue ([`Device::fill_queue_wait`]): any of their commands may
+//!   reach the buffers unnamed. The fills' writes are available once the submission's signal is
+//!   ("The first access scope includes all memory access performed by the device", the Vulkan
+//!   specification, 7.4.1 Semaphore Signaling) and visible to the commands after the wait. Every
+//!   buffer is concurrent among the device's families and this one (`sharing.rs`), so none
+//!   changes owner: "concurrent access to any range or image subresource of the object from
+//!   multiple queue families is supported" (`VK_SHARING_MODE_CONCURRENT`), where an exclusive one
+//!   would need "their ownership explicitly transferred" (7.7.6 Queue Family Ownership Transfer).
+//! - **What it holds.** Each buffer's memory and each fill's staging buffer, until the batch that
+//!   waited for the submission completed ([`FillSubmission`]).
+//! - **Not moved.** A texture's first move and zeros, host calls' staged texel copies and an
+//!   internal submission's fills stay where they were; encoders' copies of host shadows run in
+//!   the program's command buffers.
 
 use super::submit::OwnTimeline;
 use super::{lock, Device, LoaderWord};
