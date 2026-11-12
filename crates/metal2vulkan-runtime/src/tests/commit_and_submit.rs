@@ -136,6 +136,66 @@ fn a_submission_handler_runs_on_the_committing_thread_before_scheduled() {
     );
 }
 
+/// Each commit call is timed, phase by phase (`commit_times.rs`, `WorkCounts::commit_nanos` and
+/// kin): `commit_and_submit` calls whose passes submitted at commit, each with a submission handler
+/// that runs a while, time their lowering, lock wait, pass and submissions, and `commit` calls
+/// their lowering alone; neither records work left to the commit nor waits for a pipeline (a
+/// fill leaves none); and the phases sum to at most the calls' whole time.
+#[test]
+fn a_commit_call_is_timed_phase_by_phase_within_its_whole() {
+    let device = device();
+    let queue = device.new_command_queue().unwrap();
+    let target = device.new_buffer(256, ResourceOptions::private()).unwrap();
+    let before = device.work_counts();
+    for round in 0..ROUNDS {
+        let command_buffer = fill(&queue, &target, round as u8);
+        command_buffer
+            .add_submission_handler(Box::new(|_: &CommandBuffer| {
+                std::thread::sleep(Duration::from_micros(50));
+            }))
+            .unwrap();
+        match round % 2 {
+            0 => command_buffer.commit_and_submit().unwrap(),
+            _ => command_buffer.commit().unwrap(),
+        }
+        command_buffer.wait_until_completed().unwrap();
+    }
+    let after = device.work_counts();
+    let moved = |count: fn(&crate::WorkCounts) -> u64| count(&after) - count(&before);
+    let calls = moved(|c| c.commit_calls);
+    let whole = moved(|c| c.commit_nanos);
+    let phases = [
+        ("lowering", moved(|c| c.commit_lowering_nanos)),
+        ("recording", moved(|c| c.commit_recording_nanos)),
+        ("pipeline wait", moved(|c| c.commit_pipeline_wait_nanos)),
+        ("lock wait", moved(|c| c.commit_lock_wait_nanos)),
+        ("pass", moved(|c| c.commit_pass_nanos)),
+        ("submit", moved(|c| c.commit_submit_nanos)),
+    ];
+    let batches = moved(|c| c.batches_submitted_at_commit);
+    println!("{calls} commit calls, {whole} ns; {phases:?}; batches submitted at commit {batches}");
+    assert_eq!(calls, ROUNDS, "every commit call counted once");
+    let [lowering, recording, pipeline_wait, lock_wait, pass, submit] = phases.map(|(_, n)| n);
+    assert!(lowering > 0 && lock_wait > 0 && pass > 0, "{phases:?}");
+    assert_eq!(
+        (recording, pipeline_wait),
+        (0, 0),
+        "a fill leaves no work to the commit"
+    );
+    // A pass of the scheduler's thread under way at a commit takes it in instead: rarely, on an
+    // idle device. Each batch a pass at commit submitted ran its handler's 50 us inside the call.
+    assert!(batches > 0, "no batch submitted at commit");
+    assert!(
+        submit >= batches * 50_000,
+        "{submit} ns of submissions for {batches} batches"
+    );
+    let parts: u64 = phases.iter().map(|(_, n)| n).sum();
+    assert!(
+        parts <= whole,
+        "the phases' {parts} ns past the calls' {whole} ns"
+    );
+}
+
 /// Two threads commit 1000 command buffers to one queue, each in turn with `commit` and with
 /// `commit_and_submit`, their commits in one order (a lock held across each call): every
 /// submission handler runs in that order, some on a committing thread and some on the

@@ -585,7 +585,11 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   `batches_checked_at_commit`). Under `RenderLoweringPolicy::Worker`, one whose last render
   encoder's end the lowering thread has not lowered returns as `commit` does, and the thread that
   runs its commit once the end is lowered (the lowering thread, or one waiting for the command
-  buffer) makes that pass, its checks and handlers with it.
+  buffer) makes that pass, its checks and handlers with it. How long the program's `commit`,
+  `commit_and_submit` and `commit_failed` calls held its thread, and how much of it each phase
+  took (lowering, recording the work left to the commit, its pipeline waits, the scheduler lock's
+  wait, the pass, the submissions with their checks and handlers), each apart from the others:
+  `WorkCounts::commit_calls`, `commit_nanos` and the `commit_*_nanos` beside it.
 - `RenderCommandEncoder::set_color_resolve_target`, `set_depth_resolve_target` and
   `set_stencil_resolve_target` change where a pass resolves until it ends (the last target set
   wins), as Metal's private calls do.

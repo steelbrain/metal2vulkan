@@ -6,6 +6,7 @@
 
 use super::command_buffer::rerun::LoopCheck;
 use super::command_buffer::CommandBuffer;
+use super::commit_times::{self, Phase};
 use super::device::lock;
 use super::encoder::RecordedSegment;
 use super::error::{internal, Error};
@@ -399,7 +400,8 @@ impl Deferred {
             // they stand now waits for them first.
             Deferred::RenderPass(pass) => {
                 if pass.reads_at_commit() {
-                    pass.wait_made(command_buffer.making_deadline());
+                    let deadline = command_buffer.making_deadline();
+                    commit_times::phase(Phase::PipelineWait, || pass.wait_made(deadline));
                 }
                 if pass.making() || pass.failed() {
                     return Ok(Prepared {

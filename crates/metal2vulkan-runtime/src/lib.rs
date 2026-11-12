@@ -62,6 +62,7 @@ mod color_list;
 mod color_reformat;
 mod color_resolve;
 mod command_buffer;
+mod commit_times;
 mod compressed_blit;
 mod compute;
 mod contexts;

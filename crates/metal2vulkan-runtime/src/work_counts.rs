@@ -255,6 +255,14 @@ pub(crate) struct Counters {
     scheduler_passes_at_commit: AtomicU64,
     batches_submitted_at_commit: AtomicU64,
     batches_checked_at_commit: AtomicU64,
+    commit_calls: AtomicU64,
+    commit_nanos: AtomicU64,
+    commit_lowering_nanos: AtomicU64,
+    commit_recording_nanos: AtomicU64,
+    commit_pipeline_wait_nanos: AtomicU64,
+    commit_lock_wait_nanos: AtomicU64,
+    commit_pass_nanos: AtomicU64,
+    commit_submit_nanos: AtomicU64,
     footprints_built: AtomicU64,
     footprint_lock_waits: AtomicU64,
     command_buffer_wakes: AtomicU64,
@@ -3087,6 +3095,22 @@ impl Counters {
     pub(crate) fn untouched_pass_skipped(&self) {
         self.untouched_passes_skipped
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A program's commit call took `whole` nanoseconds on its thread, `phases` of them in its
+    /// phases, each apart from the others (`commit_times.rs`: lowering, recording, pipeline
+    /// waits, lock wait, pass, submissions).
+    pub(crate) fn commit_timed(&self, whole: u64, phases: &crate::commit_times::Times) {
+        let [lowering, recording, pipeline_wait, lock_wait, pass, submit] = *phases;
+        self.commit_calls.fetch_add(1, Ordering::Relaxed);
+        self.commit_nanos.fetch_add(whole, Ordering::Relaxed);
+        (self.commit_lowering_nanos).fetch_add(lowering, Ordering::Relaxed);
+        (self.commit_recording_nanos).fetch_add(recording, Ordering::Relaxed);
+        (self.commit_pipeline_wait_nanos).fetch_add(pipeline_wait, Ordering::Relaxed);
+        (self.commit_lock_wait_nanos).fetch_add(lock_wait, Ordering::Relaxed);
+        self.commit_pass_nanos.fetch_add(pass, Ordering::Relaxed);
+        self.commit_submit_nanos
+            .fetch_add(submit, Ordering::Relaxed);
     }
 
     /// A commit left its batches to the scheduler's thread (`scheduler/inbox.rs`).
@@ -6262,6 +6286,41 @@ pub struct WorkCounts {
     /// signal to land, or whose checks the scheduler's thread took first, is left to that thread,
     /// uncounted here, and holds back no later commit of another queue but those behind it.
     pub batches_checked_at_commit: u64,
+    /// The program's calls of `CommandBuffer::commit`, `commit_and_submit` and `commit_failed`,
+    /// which the commit times below sum over (`commit_times.rs`). A call a submission handler
+    /// makes inside another is one of them too, its time counted in both.
+    pub commit_calls: u64,
+    /// Nanoseconds those calls held the program's thread, each from its start to its return.
+    /// The phases below are parts of it, each timed apart from the others, so they sum to at
+    /// most this; the rest is the commit's checks and bookkeeping (its hazard and residency
+    /// lists, its copies in, its posting to the scheduler).
+    pub commit_nanos: u64,
+    /// Of `commit_nanos`, lowering on the calling thread the encoders' calls a render encoder
+    /// left to the device's lowering thread (`RenderLoweringPolicy::Worker`) and its end, and
+    /// letting go of the draw its last render encoder kept for the next: about nothing under
+    /// `RenderLoweringPolicy::AtCall`, which lowered each call inside it.
+    pub commit_lowering_nanos: u64,
+    /// Of `commit_nanos`, recording the work its encoders left to the commit, or settling it for
+    /// its host steps (`Deferred::prepare`): an indirect command buffer's execution, a render pass
+    /// whose draws' pipelines were being made, an indirect dispatch's variants. Its waits for
+    /// pipelines are `commit_pipeline_wait_nanos`, apart from this.
+    pub commit_recording_nanos: u64,
+    /// Of `commit_nanos`, that recording's waits for the pipelines being made of a render pass
+    /// whose executions read the CPU's records as they stand at the commit, up to the command
+    /// buffer's bound under `PipelineWaitPolicy::Bounded`.
+    pub commit_pipeline_wait_nanos: u64,
+    /// Of `commit_nanos`, `commit_and_submit`'s wait to take the scheduler's lock for its pass at
+    /// commit, and for each pass again after a submission check it ran. Where a pass is under way
+    /// the call makes none and waits for none: that pass takes the commit in.
+    pub commit_lock_wait_nanos: u64,
+    /// Of `commit_nanos`, `commit_and_submit`'s pass at commit under the scheduler's lock: taking
+    /// in what was posted, ordering it and picking what it submits (`Scheduler::submit_at_commit`),
+    /// its submissions apart.
+    pub commit_pass_nanos: u64,
+    /// Of `commit_nanos`, that pass's submissions (`CommandBufferShared::submit_batch`: the
+    /// batch's barriers and `vkQueueSubmit`), and the submission checks and submission handlers
+    /// the call ran for them, with the commits a handler made inside it.
+    pub commit_submit_nanos: u64,
     /// Footprints of batches the scheduler built to order them across queues
     /// (`scheduler/order.rs`), one each time: each batch's is built where a pass first compares
     /// it with another queue's and kept, and built again only where what it is built from
@@ -9390,6 +9449,14 @@ impl Device {
                 .batches_submitted_at_commit
                 .load(Ordering::Relaxed),
             batches_checked_at_commit: counters.batches_checked_at_commit.load(Ordering::Relaxed),
+            commit_calls: counters.commit_calls.load(Ordering::Relaxed),
+            commit_nanos: counters.commit_nanos.load(Ordering::Relaxed),
+            commit_lowering_nanos: counters.commit_lowering_nanos.load(Ordering::Relaxed),
+            commit_recording_nanos: counters.commit_recording_nanos.load(Ordering::Relaxed),
+            commit_pipeline_wait_nanos: counters.commit_pipeline_wait_nanos.load(Ordering::Relaxed),
+            commit_lock_wait_nanos: counters.commit_lock_wait_nanos.load(Ordering::Relaxed),
+            commit_pass_nanos: counters.commit_pass_nanos.load(Ordering::Relaxed),
+            commit_submit_nanos: counters.commit_submit_nanos.load(Ordering::Relaxed),
             wakes_completion_waiters: completion_wakes,
             completion_waiter_parks: completion_parks,
             completion_waiter_parks_timed_out: completion_parks_timed_out,

@@ -203,6 +203,7 @@ use super::command_buffer::kept_barriers::KeptBarriers;
 use super::command_buffer::BatchLists;
 use super::command_buffer::CommandBufferShared;
 use super::command_buffer::{Group, GroupEnd, Submitting, GROUP_BATCHES};
+use super::commit_times::{self, Phase};
 use super::device::functions::Functions;
 use super::device::lock;
 use super::device::submit_stalls::{IdleCounts, IdleStalls, IDLE_NANOS};
@@ -969,38 +970,22 @@ impl Scheduler {
     /// handler thread, as the thread's passes leave it.
     pub(crate) fn submit_at_commit(&self, device: &Device) {
         let shared = &*self.shared;
-        let passed = shared.inbox.pass_once_then(
-            |state, commits| {
-                let mut spent = Spent::new();
-                let taken = take_in(state, commits, &mut spent);
-                let pass = AtCommit::pass(state, spent, PASS_SUBMISSIONS);
-                shared.took_in(taken);
-                pass
-            },
-            |mut pass| {
-                let (mut submitted, mut alone, mut checked) = (0, 0, 0);
-                loop {
-                    submitted += pass.submitted;
-                    alone += pass.alone;
-                    let left_over = pass.left_over;
-                    // The completion turn a command buffer the pass took with no submission left
-                    // this thread, before the handlers and the check, as the scheduler's thread
-                    // makes it before its handlers ([`round`]).
-                    device.shared().completion.turn_owed();
-                    let Some(check) = pass.let_go(&shared.turns, device) else {
-                        return (submitted, alone, checked, left_over);
-                    };
-                    // None once the process is exiting, as the thread then runs nothing more.
-                    if !run_work(&self.shared, Kind::Check, check) {
-                        return (submitted, alone, checked, left_over);
-                    }
-                    checked += 1;
-                    let room = PASS_SUBMISSIONS.saturating_sub(submitted);
-                    pass = (shared.inbox)
-                        .pass_again(|state| AtCommit::pass(state, Spent::new(), room));
-                }
-            },
-        );
+        // Timed as the commit call's phases (`commit_times.rs`): the lock's wait, the pass under
+        // it, and the submissions, checks and handlers, each apart.
+        let passed = commit_times::phase(Phase::LockWait, || {
+            shared.inbox.pass_once_then(
+                |state, commits| {
+                    commit_times::phase(Phase::Pass, || {
+                        let mut spent = Spent::new();
+                        let taken = take_in(state, commits, &mut spent);
+                        let pass = AtCommit::pass(state, spent, PASS_SUBMISSIONS);
+                        shared.took_in(taken);
+                        pass
+                    })
+                },
+                |pass| commit_times::phase(Phase::Pass, || self.after_pass_at_commit(device, pass)),
+            )
+        });
         let Some((submitted, alone, checked, left_over)) = passed else {
             return;
         };
@@ -1010,6 +995,42 @@ impl Scheduler {
             self.wake_for(Woken::Host);
         } else if alone > 0 {
             self.wake_for(Woken::Commit);
+        }
+    }
+
+    /// [`submit_at_commit`](Self::submit_at_commit)'s work after its first pass, still counted as
+    /// the passer: the pass's submission handlers, the check it took and its pass again, and so
+    /// on. How many batches it submitted, alone, and checked, and whether it left any over.
+    fn after_pass_at_commit(
+        &self,
+        device: &Device,
+        mut pass: AtCommit,
+    ) -> (usize, usize, usize, bool) {
+        let shared = &*self.shared;
+        let (mut submitted, mut alone, mut checked) = (0, 0, 0);
+        loop {
+            submitted += pass.submitted;
+            alone += pass.alone;
+            let left_over = pass.left_over;
+            // The completion turn a command buffer the pass took with no submission left this
+            // thread, before the handlers and the check, as the scheduler's thread makes it before
+            // its handlers ([`round`]).
+            device.shared().completion.turn_owed();
+            let let_go = || pass.let_go(&shared.turns, device);
+            let Some(check) = commit_times::phase(Phase::Submit, let_go) else {
+                return (submitted, alone, checked, left_over);
+            };
+            // None once the process is exiting, as the thread then runs nothing more.
+            let ran = || run_work(&self.shared, Kind::Check, check);
+            if !commit_times::phase(Phase::Submit, ran) {
+                return (submitted, alone, checked, left_over);
+            }
+            checked += 1;
+            let room = PASS_SUBMISSIONS.saturating_sub(submitted);
+            let again = |state: &mut State| {
+                commit_times::phase(Phase::Pass, || AtCommit::pass(state, Spent::new(), room))
+            };
+            pass = commit_times::phase(Phase::LockWait, || shared.inbox.pass_again(again));
         }
     }
 
@@ -1941,9 +1962,9 @@ fn submit_plain_ready(
             drop(busy);
             return submitted;
         };
-        let answer = held
-            .buffer
-            .submit_batch(held.index, held.last, &waits, true, state);
+        // A committing thread's submission, timed as its commit call's (`commit_times.rs`).
+        let submit = || (held.buffer).submit_batch(held.index, held.last, &waits, true, state);
+        let answer = commit_times::phase(Phase::Submit, submit);
         // Its waits for values found reached go: it waits for none of them.
         if matches!(answer, Ok(Submitting::Submitted(_))) {
             held.hold_ended();

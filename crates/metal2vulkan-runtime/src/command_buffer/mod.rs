@@ -61,6 +61,7 @@ use rebound_use::{ReboundUse, Unlogged};
 pub(super) use submit::{BatchLists, Submitting};
 
 use super::apple_only::AppleOnly;
+use super::commit_times::{self, CommitClock, Phase};
 use super::compute::EncoderState;
 use super::contexts::{self, Run};
 use super::copied::CopiesReached;
@@ -2682,8 +2683,10 @@ impl CommandBuffer {
     /// [`settle_end`](Self::settle_end) at a commit: a kept draw carried is let go uncounted, as
     /// no render encoder of the command buffer comes after it.
     fn settle_end_committing(&self) {
-        self.settle_ended();
-        self.let_go_carried(None);
+        commit_times::phase(Phase::Lowering, || {
+            self.settle_ended();
+            self.let_go_carried(None);
+        });
     }
 
     /// [`settle_end`](Self::settle_end), but a kept draw the last render encoder carried stays
@@ -3168,6 +3171,7 @@ impl CommandBuffer {
     /// [`refusal`](Self::refusal) keeps the error): it completes in its queue's order, its
     /// completed handlers run.
     pub fn commit(&self) -> Result<(), Error> {
+        let _clock = CommitClock::start(&self.0.device);
         self.commit_as("commit", None, Hand::Wake)
     }
 
@@ -3217,12 +3221,14 @@ impl CommandBuffer {
     ///
     /// Refused, changing nothing, as [`commit`](Self::commit) is. Counted:
     /// `WorkCounts::scheduler_passes_at_commit`, `WorkCounts::batches_submitted_at_commit`,
-    /// `WorkCounts::batches_checked_at_commit`.
+    /// `WorkCounts::batches_checked_at_commit`; timed, phase by phase, as every commit call is:
+    /// `WorkCounts::commit_nanos` and kin.
     pub fn commit_and_submit(&self) -> Result<(), Error> {
         let device = &self.0.device;
         if exit_guard::serving_completion() {
             return self.commit();
         }
+        let _clock = CommitClock::start(device);
         self.commit_as("commit_and_submit", None, Hand::Pass)?;
         device.shared().scheduler.submit_at_commit(device);
         Ok(())
@@ -3253,6 +3259,7 @@ impl CommandBuffer {
     /// encoder past the ended ones (`Invalid`, `Problem::IndexOutOfRange`, its `limit` the
     /// number ended). (A code of 0 was refused, `Problem::UndefinedValue`.)
     pub fn commit_failed(&self, failure: CommitFailure) -> Result<(), Error> {
+        let _clock = CommitClock::start(&self.0.device);
         self.commit_as("commit_failed", Some(failure), Hand::Wake)
     }
 
@@ -3622,11 +3629,14 @@ impl CommandBuffer {
         let listing = Listing::new(device, used);
         // Recorded, or settled for their host steps, with the lock free: their dispatches take it,
         // and announce degradations.
-        let prepared: Result<Vec<_>, Error> = segments
-            .iter()
-            .zip(&places)
-            .map(|((work, host), _)| work.prepare(self, *host))
-            .collect();
+        let prepared: Result<Vec<_>, Error> = match segments.is_empty() {
+            true => Ok(Vec::new()),
+            false => commit_times::phase(Phase::Recording, || {
+                (segments.iter().zip(&places))
+                    .map(|((work, host), _)| work.prepare(self, *host))
+                    .collect()
+            }),
+        };
         let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
