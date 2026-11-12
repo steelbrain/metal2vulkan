@@ -1,7 +1,9 @@
 //! The order across queues of a batch that waits for a pipeline being made: Metal makes a render
 //! pipeline at `newRenderPipelineState`, so a batch of its draws never waits at its submission, and
-//! a batch committed after it on another queue runs at once unless the two share a resource one of
-//! them writes (`CommandBuffer::footprint`, `scheduler/order.rs`). The runtime makes a draw's
+//! a batch committed after it on another queue runs at once, even where the two share a resource
+//! one of them writes: the batch waiting for its pipeline goes after it, as an x86 Mac's GPU may
+//! take a later commit of another queue first (`scheduler/order.rs`, **Held batches give way**).
+//! The runtime makes a draw's
 //! `VkPipeline` on the device's pool (`pipeline/pool.rs`), whose test hold (`pool::held`) keeps
 //! every making waiting here. The state's creation makes the pipeline of a triangle list's draw
 //! (`pipeline/predicted.rs`), which a triangle strip shares where the topology is dynamic, so the
@@ -33,9 +35,6 @@ use std::time::{Duration, Instant};
 
 /// The longest a command buffer that runs may take.
 const WAIT: Duration = Duration::from_secs(60);
-
-/// How long a batch that waits for the pass is watched not to complete.
-const WATCHED: Duration = Duration::from_millis(500);
 
 /// The render target's side, and the texel the draw stores in its top row.
 const SIDE: u64 = 8;
@@ -170,10 +169,12 @@ fn a_hold_of_the_pool_lives_until_its_own_drop() {
 /// Queue A's pass, whose draw's `VkPipeline` the pool is held from making, waits for it; a batch
 /// committed after it on queue B that shares no resource with it (a copy into a texture over a
 /// no-copy buffer) completes meanwhile, and once its handles go its buffer's memory is freed,
-/// nothing holding the buffer or its import (the deallocator not delayed); a batch on queue B that reads the pass's target waits for the
-/// pass, and reads what it drew.
+/// nothing holding the buffer or its import (the deallocator not delayed); a batch on queue B that
+/// reads the pass's target completes meanwhile too, before the pass drew, counted as waiting
+/// behind no earlier commit, and the pass, once made, runs after it: a later copy reads what it
+/// drew.
 #[test]
-fn a_batch_waiting_for_a_pipeline_holds_only_the_batches_that_share_its_resources() {
+fn a_batch_waiting_for_a_pipeline_holds_back_no_batch_of_another_queue() {
     let scratch = Scratch::new();
     let device = device(&scratch.0);
     // The device's check of images over host pages (`in_place_check.rs`), which the texture over
@@ -279,15 +280,54 @@ fn a_batch_waiting_for_a_pipeline_holds_only_the_batches_that_share_its_resource
     );
     assert_ne!(drawing.status(), CommandBufferStatus::Completed);
 
-    // Queue B: a copy of the pass's target, which waits for the pass.
+    // Queue B: a copy of the pass's target, which goes before the pass.
+    let before = device.work_counts();
+    let (early, early_texels) = read_back(&device, &b, &target);
+    // The pool's hold is counted (`pool::held`): another test's drop never lets the pass's
+    // making go meanwhile, so the pass cannot have drawn while the hold lives.
+    early
+        .wait_until_completed_for(WAIT)
+        .expect("a batch that reads the pass's target goes while the pass waits for its pipeline");
+    assert_eq!(early.status(), CommandBufferStatus::Completed);
+    assert_eq!(
+        device.work_counts().heads_held_for_earlier_commits,
+        before.heads_held_for_earlier_commits,
+        "a batch that went before the pass was counted as waiting behind it"
+    );
+    assert_ne!(drawing.status(), CommandBufferStatus::Completed);
+    assert_ne!(
+        early_texels()[..4],
+        DRAWN_TEXEL,
+        "the copy that went first read what the pass drew"
+    );
+    drop(hold);
+    drawing.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(drawing.status(), CommandBufferStatus::Completed);
+    let (late, late_texels) = read_back(&device, &b, &target);
+    late.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(late.status(), CommandBufferStatus::Completed);
+    assert_eq!(
+        late_texels()[..4],
+        DRAWN_TEXEL,
+        "the pass, after the copy that went first, did not draw"
+    );
+}
+
+/// A command buffer on `queue` that copies `target` whole into a new `Shared` buffer: committed,
+/// with a reader of the buffer's texels once it completed.
+fn read_back(
+    device: &Device,
+    queue: &CommandQueue,
+    target: &Texture,
+) -> (CommandBuffer, impl Fn() -> Vec<u8>) {
     let row = SIDE * 4;
     let readback = device
         .new_buffer(row * SIDE, ResourceOptions::shared())
         .unwrap();
-    let conflicting = b.command_buffer().unwrap();
-    let mut blit = conflicting.blit_command_encoder().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.copy_from_texture_to_buffer(
-        &target,
+        target,
         0,
         0,
         Origin::new(0, 0, 0),
@@ -300,31 +340,13 @@ fn a_batch_waiting_for_a_pipeline_holds_only_the_batches_that_share_its_resource
     )
     .unwrap();
     blit.end_encoding().unwrap();
-    conflicting.commit().unwrap();
-    // The pool's hold is counted (`pool::held`): another test's drop never lets the pass's
-    // making go meanwhile, so the copy cannot complete while the hold lives, however long it is
-    // watched.
-    let early = conflicting.wait_until_completed_for(WATCHED).is_ok();
-    let drawn = drawing.status();
-    assert!(
-        !early,
-        "a batch that reads the pass's target waits for the pass (the pass is {drawn:?}: its \
-         making went while held where it completed, the copy missed its wait where not)"
-    );
-    assert_ne!(drawn, CommandBufferStatus::Completed);
-    drop(hold);
-    for command_buffer in [&drawing, &conflicting] {
-        command_buffer.wait_until_completed_for(WAIT).unwrap();
-        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-    }
-    let contents = readback.contents().unwrap();
-    // SAFETY: the buffer's bytes, which no command buffer writes now.
-    let texels = unsafe { std::slice::from_raw_parts(contents.as_ptr(), (row * SIDE) as usize) };
-    assert_eq!(
-        texels[..4],
-        DRAWN_TEXEL,
-        "the copy reads what the pass drew"
-    );
+    command_buffer.commit().unwrap();
+    let texels = move || {
+        let contents = readback.contents().unwrap();
+        // SAFETY: the buffer's bytes, which no command buffer writes once the copy completed.
+        unsafe { std::slice::from_raw_parts(contents.as_ptr(), (row * SIDE) as usize) }.to_vec()
+    };
+    (command_buffer, texels)
 }
 
 /// A command buffer on `queue` of one pass into a new target, whose line's `VkPipeline` of
