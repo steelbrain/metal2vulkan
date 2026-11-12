@@ -46,7 +46,9 @@ pub const REGISTRY: &[EnvVar] = &[
                  name, the SHA-256 of its bitcode and the constant values it was made with, each \
                  color attachment's format, blend and write mask, the depth and stencil formats \
                  and the raster samples), and the creation's time, split by the making's parts (the digests, each library made \
-                 with its record loaded or missed or another caller's, the link) and by \
+                 with its record loaded, missed or its cache shared with an earlier making, and \
+                 what its driver reported, found in that cache or compiled, or another caller's, \
+                 the link) and by \
                  MoltenVK's activities where its performance tracking is on \
                  (MVK_CONFIG_PERFORMANCE_TRACKING=1); and once per reason, why a draw \
                  that reads its own pass's color attachment after a barrier took the split rather \

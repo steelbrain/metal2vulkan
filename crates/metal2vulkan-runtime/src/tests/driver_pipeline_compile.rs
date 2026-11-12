@@ -52,6 +52,12 @@
 //! library of shaders, so nothing of its stages is converted or compiled again; and no making
 //! asks for a cache, so none is shared.
 //!
+//! **A pass's attachment formats name no record**: creations of one pair whose passes differ only
+//! in their colour format each make their libraries of shaders against their own pass, handed the
+//! first's caches, so a driver that keys a stage's compile without the format (ANV) finds it
+//! there; a format the translation reads changes the fragment module, which keeps a record of
+//! its own (`creations_over_colour_formats_take_the_first_s_records`).
+//!
 //! **A library of shaders reports what its driver found**, as a whole pipeline's making does: a
 //! later device over the directory an earlier one wrote counts one report per library of shaders
 //! it makes, and reads no data back for one found in its record
@@ -309,4 +315,107 @@ fn the_runtime_s_own_kernels_found_in_their_records_write_nothing() {
     if hits == made {
         assert_eq!(saves, 0, "kernels found in their records write nothing");
     }
+}
+
+/// Render creations of one function pair whose passes differ only in their colour attachment's
+/// format take the first creation's records: a pass's attachment formats reach no stage's
+/// conversion, so they name no record (`GraphicsContent::record_parts`), and each making of
+/// shaders is handed the cache the first made. Where the device links from libraries, each such
+/// creation makes its own pre-rasterization and fragment shader libraries, against its own pass,
+/// and both are handed the first's caches; a whole making is handed the first's one. A format
+/// the translation reads keeps a record of its own: under `TextureWriteRoundingMode::NearestEven`
+/// the fragment function rounds a half-float channel itself (`pipeline/color_writes.rs`), so its
+/// module for an `RGBA16Float` attachment is another, and only its pre-rasterization part, whose
+/// stages are the same, takes the first's.
+///
+/// The counts are this crate's own arrangement and hold on every device. What the driver
+/// reports it found is the driver's: ANV finds a fragment shader library of one module made
+/// against another format's pass in the shared cache (Mesa 26.2.6, Iris Xe:
+/// `APPLICATION_PIPELINE_CACHE_HIT`, where a cache of its own compiled it again, 3.3 to 3.7 s for
+/// a 203,016-word module), so the run prints it and asserts only that a reporting device reports
+/// one answer per making of shaders.
+#[test]
+fn creations_over_colour_formats_take_the_first_s_records() {
+    use metal2vulkan::metal::{PixelFormat, TextureWriteRoundingMode};
+    use metal2vulkan::pipeline::ColorAttachmentDescriptor;
+    let scratch = Scratch::new("driver-pipeline-formats");
+    let device = device(&scratch.0);
+    let base = descriptor(&device);
+    let options = PipelineOptions::default();
+    let links = device.shared().libraries.is_some();
+    let with = |format: PixelFormat, rounding: TextureWriteRoundingMode| {
+        let mut d = base.clone();
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(format));
+        d.texture_write_rounding_mode = rounding;
+        d
+    };
+    // What a creation of `d` did: the caches it was handed that an earlier making made, the
+    // libraries it made of a fragment shader, and what its driver reported.
+    let create = |d: &metal2vulkan::pipeline::RenderPipelineDescriptor| {
+        let shared_before = device.shared().shader_cache.caches_shared();
+        let before = device.shader_cache_statistics();
+        let counts_before = device.work_counts();
+        let state = device.new_render_pipeline_state(d, &options).unwrap();
+        let after = device.shader_cache_statistics();
+        let shared = device.shared().shader_cache.caches_shared() - shared_before;
+        let fragment_shaders = device.work_counts().fragment_shader_libraries_made
+            - counts_before.fragment_shader_libraries_made;
+        let hits = after.driver_pipeline_hits - before.driver_pipeline_hits;
+        let misses = after.driver_pipeline_misses - before.driver_pipeline_misses;
+        (state, shared, fragment_shaders, hits, misses)
+    };
+    let _first = create(&with(
+        PixelFormat::RGBA8Unorm,
+        TextureWriteRoundingMode::TowardZero,
+    ));
+    // Each making of shaders a creation over another format makes: where the device links, its
+    // two libraries of shaders, each against its own pass; else its one whole pipeline.
+    let makings = if links { 2 } else { 1 };
+    let mut kept = Vec::new();
+    for format in [PixelFormat::BGRA8Unorm, PixelFormat::RGBA16Float] {
+        let (state, shared, fragment_shaders, hits, misses) =
+            create(&with(format, TextureWriteRoundingMode::TowardZero));
+        println!(
+            "DRIVER-PIPELINE-FORMATS: {format:?}: {shared} of {makings} makings took an earlier \
+             making's cache, {fragment_shaders} fragment shader libraries made, {hits} hits and \
+             {misses} misses reported"
+        );
+        assert_eq!(
+            shared, makings,
+            "a creation whose pass differs from the first's only in its colour format ({format:?}) \
+             must be handed the first's cache for each of its {makings} makings of shaders, the \
+             format naming no record: {shared} were"
+        );
+        if links {
+            assert_eq!(
+                fragment_shaders, 1,
+                "a pass of another format takes a fragment shader library of its own"
+            );
+        }
+        if hits + misses > 0 {
+            assert_eq!(
+                hits + misses,
+                makings,
+                "a device that reports what it found reports one answer per making of shaders"
+            );
+        }
+        kept.push(state);
+    }
+    // A format the translation reads: the rounding module is another, so its fragment shader's
+    // making names a record of its own, and only the pre-rasterization part's, where the device
+    // links, takes the first's.
+    let (_rounded, shared, _, hits, misses) = create(&with(
+        PixelFormat::RGBA16Float,
+        TextureWriteRoundingMode::NearestEven,
+    ));
+    let expected = if links { 1 } else { 0 };
+    println!(
+        "DRIVER-PIPELINE-FORMATS: RGBA16Float rounded to nearest even: {shared} makings took an \
+         earlier making's cache, {hits} hits and {misses} misses reported"
+    );
+    assert_eq!(
+        shared, expected,
+        "a fragment module the format changes keeps a record of its own: {shared} makings took an \
+         earlier making's cache, {expected} expected"
+    );
 }

@@ -1762,9 +1762,13 @@ makes (id name `metal2vulkan-pipeline-creation`, `Info` severity): its kernel, i
 and its length), each specialization constant, the precision notes the stage holds under that
 specialization and the creation's time. And one line per render `VkPipeline` it makes (the same
 id name and severity), with where its time went: the
-wait for its turn, the digests that name its parts, each library (made by this making, from its
-driver cache record or not, or another caller's) and the link; a state's first line also names
-the descriptor it was made from (each function's name, the SHA-256 of its bitcode and the constant
+wait for its turn, the digests that name its parts, each library (made by this making, its
+driver cache record loaded, missed or shared with an earlier making in this process, and whether
+its driver found it in that cache or compiled it, or another caller's) and the link (a record
+names its pass by which attachments it has, its samples and its inputs, not their formats; a
+format a stage's translation reads names the record through that stage's module, so makings that
+differ only in formats no translation reads share one); a state's first line also names the
+descriptor it was made from (each function's name, the SHA-256 of its bitcode and the constant
 values it was made with, each color attachment's format, blend and write mask, the depth and
 stencil formats and the raster samples). With `METAL2VULKAN_DUMP_PIPELINES` naming a directory, a
 device writes each such pipeline's SPIR-V modules there, one file per module named by the hash

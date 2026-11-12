@@ -296,6 +296,48 @@ impl PassShape {
             && *locations == keyed.locations
     }
 
+    /// This shape as the record of the driver's data of a pipeline made against it names it
+    /// (`GraphicsContent::record` in `pipeline/graphics.rs`), to be read as `Debug` text: each
+    /// attachment's presence in place of its format (whether each color index and the
+    /// depth/stencil attachment has one), and the rest of the shape whole. Its resolves are left
+    /// out, as a key's shape holds none ([`keyed`](PassShape::keyed)).
+    ///
+    /// A stage's conversion reads no attachment format through the pass: a format the translation
+    /// reads (a channel it rounds itself, a fetch in its storage form) is in the stage's own
+    /// words and constants, which name its record too. So makings that differ only in an
+    /// attachment's format share one record and one `VkPipelineCache`, where the driver finds the
+    /// stages it compiled for the first: ANV's fragment shader library of a module of some
+    /// 200,000 words made against `RGBA8Unorm`, `RGBA16Float` and `BGRA8Unorm` passes, 3.3 to
+    /// 3.7 s each with a cache of its own, is found in the first's shared cache in under a
+    /// millisecond (Mesa 26.2.6, Iris Xe, its creation feedback `APPLICATION_PIPELINE_CACHE_HIT`).
+    /// A driver whose
+    /// conversion does read a format keys that making's entry apart in the one cache: a compile,
+    /// never another pipeline.
+    pub(super) fn without_formats(&self) -> impl std::fmt::Debug + '_ {
+        let PassShape {
+            colors,
+            depth_stencil,
+            samples,
+            color_resolves: _,
+            depth_stencil_resolve: _,
+            fetch_inputs,
+            no_inputs,
+            storage,
+            view_mask,
+            locations,
+        } = self;
+        (
+            colors.iter().map(Option::is_some).collect::<Vec<bool>>(),
+            depth_stencil.is_some(),
+            *samples,
+            *fetch_inputs,
+            no_inputs,
+            storage,
+            *view_mask,
+            locations,
+        )
+    }
+
     /// This shape with `storage` (ascending) left out of the draws' subpass; refused (an
     /// invariant) past a pass's color attachments.
     pub(super) fn with_storage(self, storage: &[u32]) -> Result<PassShape, Error> {

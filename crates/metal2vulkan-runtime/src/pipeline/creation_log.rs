@@ -143,9 +143,9 @@ thread_local! {
     /// The split of the making whose line this thread times now ([`Line::made`]), if any: each
     /// part noted, with how long it took.
     static SPLIT: RefCell<Option<Vec<(String, Duration)>>> = const { RefCell::new(None) };
-    /// Whether the cache the driver making this thread ran last was handed holds its record
-    /// ([`record_loaded`]), while a split is noted.
-    static RECORD: Cell<Option<bool>> = const { Cell::new(None) };
+    /// What the driver making this thread ran last noted of its record ([`record_handed`],
+    /// [`driver_found`]), while a split is noted.
+    static RECORD: Cell<Option<RecordNote>> = const { Cell::new(None) };
 }
 
 /// Whether this thread notes the split of a making's time now: its line is timed
@@ -166,18 +166,50 @@ pub(crate) fn note(part: impl FnOnce() -> String, took: Duration) {
     });
 }
 
-/// The cache the driver making this thread runs was handed was made from its record, or not
-/// (`shader_cache/driver.rs`): a making of a record whose cache the device already holds live says
-/// what the making that made it said. While a split is noted.
-pub(crate) fn record_loaded(loaded: bool) {
+/// What a driver making noted of its record (`shader_cache/driver.rs`): how the cache it was
+/// handed came to be, and what the driver reported it found there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RecordNote {
+    /// The cache was made from its record. A making handed a cache an earlier one made says what
+    /// that making said.
+    pub(crate) loaded: bool,
+    /// The device held the cache before this making: an earlier making of the record made it, so
+    /// what that making's driver compiled is there to find.
+    pub(crate) earlier: bool,
+    /// What the driver reported of the making (`shader_cache::found_in_cache`): found in the
+    /// cache, compiled, or `None`, unreported.
+    pub(crate) found: Option<bool>,
+}
+
+/// The driver making this thread runs was handed its record's cache: made from the record, or
+/// not (`loaded`), and held by the device before it, or not (`earlier`). While a split is noted.
+pub(crate) fn record_handed(loaded: bool, earlier: bool) {
     if splitting() {
-        RECORD.with(|record| record.set(Some(loaded)));
+        RECORD.with(|record| {
+            record.set(Some(RecordNote {
+                loaded,
+                earlier,
+                found: None,
+            }))
+        });
     }
 }
 
-/// What [`record_loaded`] last noted on this thread, read and reset: `None` where the making
-/// kept no record.
-pub(crate) fn take_record() -> Option<bool> {
+/// What the driver reported of the making [`record_handed`] noted last on this thread: found in
+/// the cache it was handed, compiled, or `None`, unreported. While a split is noted.
+pub(crate) fn driver_found(found: Option<bool>) {
+    if splitting() {
+        RECORD.with(|record| {
+            if let Some(note) = record.get() {
+                record.set(Some(RecordNote { found, ..note }));
+            }
+        });
+    }
+}
+
+/// What [`record_handed`] and [`driver_found`] last noted on this thread, read and reset: `None`
+/// where the making kept no record.
+pub(crate) fn take_record() -> Option<RecordNote> {
     RECORD.take()
 }
 
@@ -211,13 +243,24 @@ fn split_text(parts: &[(String, Duration)]) -> String {
     format!("; parts: {}", parts.join(", "))
 }
 
-/// How a part made through its record names it in the split.
-pub(crate) fn record_text(record: Option<bool>) -> &'static str {
-    match record {
-        Some(true) => ", record loaded",
-        Some(false) => ", record missed",
+/// How a part made through its record names it in the split: how its cache came to be (loaded
+/// from the record, made empty, or an earlier making's, shared), and what its driver reported
+/// (found in that cache, or compiled) where it reports.
+pub(crate) fn record_text(record: Option<RecordNote>) -> String {
+    let Some(note) = record else {
+        return String::new();
+    };
+    let cache = match (note.earlier, note.loaded) {
+        (true, _) => ", record's cache shared",
+        (false, true) => ", record loaded",
+        (false, false) => ", record missed",
+    };
+    let found = match note.found {
+        Some(true) => ", found in cache",
+        Some(false) => ", compiled",
         None => "",
-    }
+    };
+    format!("{cache}{found}")
 }
 
 /// The hash a line names a stage's SPIR-V `words` by: `DefaultHasher`'s (SipHash-1-3, its zero
@@ -878,15 +921,16 @@ fn find_statistics_function() -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        describe, elided, note, record_loaded, record_text, split_of, split_text, splitting,
-        take_record, Fields,
+        describe, driver_found, elided, note, record_handed, record_text, split_of, split_text,
+        splitting, take_record, Fields, RecordNote,
     };
     use std::collections::VecDeque;
     use std::time::Duration;
 
     /// A making's split holds the parts noted while its line is timed, in order, and nothing
     /// outside one; a line timed inside another keeps its own parts, and the enclosing line's
-    /// go on after it. A record's load is noted only while a split is.
+    /// go on after it. A record's load, and what the driver found, are noted only while a split
+    /// is.
     #[test]
     fn a_making_s_split_holds_its_own_parts_in_order() {
         assert!(!splitting());
@@ -894,13 +938,15 @@ mod tests {
             || panic!("a part is named where no line is timed"),
             Duration::ZERO,
         );
-        record_loaded(true);
+        record_handed(true, false);
+        driver_found(Some(true));
         assert_eq!(take_record(), None, "no record noted outside a split");
         let ((inner, record), outer) = split_of(|| {
             assert!(splitting());
             note(|| "content".to_owned(), Duration::from_micros(300));
             let inner = split_of(|| note(|| "link".to_owned(), Duration::from_millis(2)));
-            record_loaded(false);
+            record_handed(false, false);
+            driver_found(Some(false));
             let record = take_record();
             note(
                 || format!("fragment shader library (made{})", record_text(record)),
@@ -909,13 +955,46 @@ mod tests {
             (inner, record)
         });
         assert!(!splitting());
-        assert_eq!(record, Some(false));
+        assert_eq!(
+            record,
+            Some(RecordNote {
+                loaded: false,
+                earlier: false,
+                found: Some(false)
+            })
+        );
         assert_eq!(inner.1, [("link".to_owned(), Duration::from_millis(2))]);
         assert_eq!(
             split_text(&outer),
-            "; parts: content 0.3 ms, fragment shader library (made, record missed) 6812.0 ms"
+            "; parts: content 0.3 ms, fragment shader library (made, record missed, compiled) \
+             6812.0 ms"
         );
         assert_eq!(split_text(&[]), "");
+    }
+
+    /// A part made through its record names how its cache came to be and what the driver found
+    /// there: a library made against a pass that differs from an earlier making's only in a
+    /// format is handed that making's cache and found in it.
+    #[test]
+    fn a_record_s_text_names_its_cache_and_what_the_driver_found() {
+        let text = |loaded, earlier, found| {
+            record_text(Some(RecordNote {
+                loaded,
+                earlier,
+                found,
+            }))
+        };
+        assert_eq!(text(false, false, Some(false)), ", record missed, compiled");
+        assert_eq!(
+            text(true, false, Some(true)),
+            ", record loaded, found in cache"
+        );
+        assert_eq!(
+            text(false, true, Some(true)),
+            ", record's cache shared, found in cache"
+        );
+        assert_eq!(text(true, true, None), ", record's cache shared");
+        assert_eq!(record_text(None), "");
     }
 
     fn fields(pairs: &[(&str, &str)]) -> Fields {

@@ -484,6 +484,37 @@ impl<'a> Infos<'a> {
     }
 }
 
+/// What a part's digest names (`GraphicsContent::part_named`).
+#[derive(Clone, Copy)]
+enum Naming {
+    /// Its library (`libraries.rs`), made against the pass: the pass whole, and the depth bias the
+    /// content holds.
+    Library,
+    /// The record of the driver's data a making of its shaders is made under
+    /// (`GraphicsContent::record_parts`): the pass without its attachments' formats, and no depth
+    /// bias, neither of which reaches a stage's conversion.
+    Record,
+}
+
+/// The record names of a making's two parts that hold shaders
+/// (`GraphicsContent::record_parts`).
+pub(crate) struct PartRecords {
+    pre_rasterization: Hash256,
+    fragment_shader: Hash256,
+}
+
+impl PartRecords {
+    /// The record a library of `part` is made under; `None` for a part that holds no shader,
+    /// whose library is made with no cache.
+    fn of(&self, part: Part) -> Option<&Hash256> {
+        match part {
+            Part::PreRasterization => Some(&self.pre_rasterization),
+            Part::FragmentShader => Some(&self.fragment_shader),
+            Part::VertexInput | Part::FragmentOutput => None,
+        }
+    }
+}
+
 impl GraphicsContent {
     /// Whether its pipeline links from the four libraries: one with vertex input that rasterizes
     /// (a mesh pipeline, or one that discards every primitive, is made whole), and that reads no
@@ -506,37 +537,24 @@ impl GraphicsContent {
         pipeline: &RenderPipeline,
         key: &GraphicsKey,
     ) -> [Hash256; 4] {
-        self.named(objects, pipeline, key, Some(self.depth_bias))
+        Part::ALL.map(|part| self.part_named(part, objects, pipeline, key, Naming::Library))
     }
 
-    /// [`names`](Self::names), with `depth_bias` named in the pre-rasterization part's state in
-    /// place of this content's: a library names its own (`Some`), a record names none
-    /// (`None`, [`record`](Self::record)).
-    fn named(
-        &self,
-        objects: &VariantObjects,
-        pipeline: &RenderPipeline,
-        key: &GraphicsKey,
-        depth_bias: Option<bool>,
-    ) -> [Hash256; 4] {
-        Part::ALL.map(|part| self.part_named(part, objects, pipeline, key, depth_bias))
-    }
-
-    /// The digest of `part`'s state alone, as [`named`](Self::named) describes every part's: one
-    /// part, so a caller that wants two of the four names the two.
+    /// The digest of `part`'s state alone, as `naming` names it: as [`names`](Self::names)
+    /// describes every part's for its library, or for the record of a making of its shaders
+    /// ([`Naming::Record`]). One part, so a caller that wants two of the four names the two.
     ///
-    /// A record is two of them ([`record`](Self::record)) and computing all four cost it the two
-    /// it throws away -- six `Debug` formats of fifteen, the vertex input's and the colour
-    /// attachments' among them -- at every making of every pipeline. Each part's digest starts
-    /// its own [`Making`], so naming one says nothing about another and the two a record keeps
-    /// are byte for byte what the whole array held.
+    /// A record is two of them ([`record_parts`](Self::record_parts)) and computing all four
+    /// cost it the two it throws away -- six `Debug` formats of fifteen, the vertex input's and
+    /// the colour attachments' among them -- at every making of every pipeline. Each part's
+    /// digest starts its own [`Making`], so naming one says nothing about another.
     fn part_named(
         &self,
         part: Part,
         objects: &VariantObjects,
         pipeline: &RenderPipeline,
         key: &GraphicsKey,
-        depth_bias: Option<bool>,
+        naming: Naming,
     ) -> Hash256 {
         use metal2vulkan::vk::ShaderStage;
         let graphics = &pipeline.graphics;
@@ -585,10 +603,20 @@ impl GraphicsContent {
             )
         };
         let named = Making::new(part.kind()).text(&graphics.dynamic_states);
-        // The vertex input part takes no pass; the others are made against it.
-        let named = match part {
-            Part::VertexInput => named,
-            _ => named.text(&key.pass),
+        // The vertex input part takes no pass; the others are made against it, and a record
+        // names it without its attachments' formats, which reach no stage's conversion through
+        // it (`PassShape::without_formats`).
+        let named = match (part, naming) {
+            (Part::VertexInput, _) => named,
+            (_, Naming::Library) => named.text(&key.pass),
+            (_, Naming::Record) => named.text(&key.pass.without_formats()),
+        };
+        // A library names the depth bias it holds; a record names none ([`record_parts`]).
+        //
+        // [`record_parts`]: Self::record_parts
+        let depth_bias = match naming {
+            Naming::Library => Some(self.depth_bias),
+            Naming::Record => None,
         };
         match part {
             Part::VertexInput => named
@@ -634,28 +662,65 @@ impl GraphicsContent {
         }
     }
 
-    /// What names the record of a making of `pipeline` (the variant's compiled pipeline) for
-    /// `key` (`shader_cache/driver.rs`): everything that reaches the driver's conversion of one
-    /// of its stages, and nothing else.
+    /// The names of the records of its two parts that hold shaders, its pre-rasterization and
+    /// fragment shader parts ([`Naming::Record`]): what names the record a library of either is
+    /// made under, where the device links its pipelines (`link`), and with them the record of a
+    /// whole pipeline's making ([`record`](Self::record)).
     ///
-    /// That is the names of the two parts that hold shaders, its pre-rasterization and fragment
-    /// shader libraries ([`names`](Self::names)) -- each of them the layout's description, its own
-    /// stages' SPIR-V with the constants they declare and their values, the pass, the dynamic
-    /// states and its part's state -- with the vertex input, which reaches MoltenVK's conversion
-    /// configuration as its vertex stage's inputs, and whether the pipeline rasterizes points
-    /// ([`renders_points`], the one way the topology reaches that configuration).
+    /// Each is its part's name as its library's ([`names`](Self::names)) but for two things that
+    /// reach no stage's conversion. Each is the layout's description, its own stages' SPIR-V with
+    /// the constants they declare and their values, the dynamic states and its part's state, and
+    /// the pass without its attachments' formats (`PassShape::without_formats`): a format the
+    /// translation reads is in the stage's words and constants already. So a state's pipelines
+    /// over passes that differ only in an attachment's format share one record and one cache,
+    /// where each format's making compiled the stages again (3.3 to 3.7 s each for a 203,016-word
+    /// fragment module on ANV, the Iris Xe), and its library made against each pass is found in
+    /// that cache.
     ///
     /// The depth bias is left out of the pre-rasterization part's state here, where a library
     /// names it: Metal biases triangles alone, so a state's line pipeline has the bias off where
     /// its triangle sibling has it on, and the bias reaches no stage's conversion. So the two
     /// share one record and one cache, where naming it made the line pipeline convert its stages
     /// again (120 ms and more for a 271k-word fragment module).
+    fn record_parts(
+        &self,
+        objects: &VariantObjects,
+        pipeline: &RenderPipeline,
+        key: &GraphicsKey,
+    ) -> PartRecords {
+        PartRecords {
+            pre_rasterization: self.part_named(
+                Part::PreRasterization,
+                objects,
+                pipeline,
+                key,
+                Naming::Record,
+            ),
+            fragment_shader: self.part_named(
+                Part::FragmentShader,
+                objects,
+                pipeline,
+                key,
+                Naming::Record,
+            ),
+        }
+    }
+
+    /// What names the record of a whole making of `pipeline` (the variant's compiled pipeline)
+    /// for `key` (`shader_cache/driver.rs`), its parts' records `parts`
+    /// ([`record_parts`](Self::record_parts)): everything that reaches the driver's conversion of
+    /// one of its stages, and nothing else.
+    ///
+    /// That is the records of the two parts that hold shaders, with the vertex input, which
+    /// reaches MoltenVK's conversion configuration as its vertex stage's inputs, and whether the
+    /// pipeline rasterizes points ([`renders_points`], the one way the topology reaches that
+    /// configuration).
     ///
     /// So a state's sweep over blend factors, write masks, the logic operation, the fragment
-    /// output interface or the topology's class but points is one record and one cache: on
-    /// MoltenVK a cache per blend state converted every stage of every making, 64 over 32 states
-    /// of one vertex-and-fragment pair where one shared cache converts 2
-    /// (`shader_cache/driver.rs`). Each part's name still holds its part's own fixed-function
+    /// output interface, its attachments' formats or the topology's class but points is one
+    /// record and one cache: on MoltenVK a cache per blend state converted every stage of every
+    /// making, 64 over 32 states of one vertex-and-fragment pair where one shared cache converts
+    /// 2 (`shader_cache/driver.rs`). Each part's name still holds its part's own fixed-function
     /// state, cull mode and front face among it, which reaches no conversion either, so such a
     /// sweep keeps records apart where it need not: that costs a conversion, never a wrong
     /// pipeline, since the driver keys each pipeline by everything its creation reads.
@@ -664,16 +729,12 @@ impl GraphicsContent {
         objects: &VariantObjects,
         pipeline: &RenderPipeline,
         key: &GraphicsKey,
+        parts: &PartRecords,
     ) -> Making {
-        // Its two parts that hold shaders, and not the two it would throw away
-        // ([`part_named`](Self::part_named)).
-        let pre_rasterization =
-            self.part_named(Part::PreRasterization, objects, pipeline, key, None);
-        let fragment = self.part_named(Part::FragmentShader, objects, pipeline, key, None);
         objects
             .making("graphics")
-            .digest(&pre_rasterization)
-            .digest(&fragment)
+            .digest(&parts.pre_rasterization)
+            .digest(&parts.fragment_shader)
             .text(&(&pipeline.vertex_input, renders_points(key.topology)))
     }
 
@@ -1168,11 +1229,11 @@ impl VariantObjects {
         let mut stages = [vk::PipelineCreationFeedback::default(); REPORTED_STAGES];
         let mut reported_stages = 0;
         let driver_reports = shared.shader_cache.driver_reports() && libraries.is_none();
-        // Its record is named by what reaches the driver's conversion of one of its stages
-        // (`GraphicsContent::record`), so a sweep over blend state or the fragment output
-        // interface is one record and one cache.
+        // Its records are named by what reaches the driver's conversion of one of its stages
+        // (`GraphicsContent::record_parts`), so a sweep over blend state, the fragment output
+        // interface or the attachments' formats is one record and one cache.
         let named = split.then(std::time::Instant::now);
-        let making = content.record(self, pipeline, key);
+        let parts = content.record_parts(self, pipeline, key);
         if let Some(at) = named {
             creation_log::note(|| "record".to_owned(), at.elapsed());
         }
@@ -1210,10 +1271,11 @@ impl VariantObjects {
                     let names = content.names(self, pipeline, key);
                     let linked = claimed
                         .unwrap_or_else(|| libraries.claim(shared, &names, self.shared_layout()));
-                    self.linked(infos, &names, linked)
+                    self.linked(infos, &parts, linked)
                         .map(|(raw, linked, made)| (raw, Some(linked), made))
                 }
                 None => {
+                    let making = content.record(self, pipeline, key, &parts);
                     let info = infos.whole();
                     let count = info.stage_count as usize;
                     reported_stages = if count <= REPORTED_STAGES { count } else { 0 };
@@ -1306,15 +1368,15 @@ impl VariantObjects {
     }
 
     /// The pipeline of `infos` linked, without link-time optimization, from `linked`'s libraries,
-    /// those of its parts named `names`, with whether it was linked here: the device's linked
+    /// with whether it was linked here: the device's linked
     /// pipeline of that link (`libraries.rs`), linked here where no caller linked it or is
     /// linking it, else the one another variant of the same link linked, waited for. Linking it
-    /// makes each library where no caller made it or is making it, through the device's shader
-    /// cache under its name, else waits for it.
+    /// makes each library where no caller made it or is making it, a library of shaders through
+    /// the device's shader cache under its part's record in `records`, else waits for it.
     fn linked(
         &self,
         infos: &Infos<'_>,
-        names: &[Hash256; 4],
+        records: &PartRecords,
         linked: Linked,
     ) -> Result<(vk::Pipeline, Linked, bool), Error> {
         let split = creation_log::splitting();
@@ -1322,7 +1384,7 @@ impl VariantObjects {
         let mut made = false;
         let raw = linked.pipeline().made(|| {
             made = true;
-            self.link(infos, names, &linked)
+            self.link(infos, records, &linked)
         })?;
         if let (false, Some(at)) = (made, asked) {
             creation_log::note(|| "link (another caller's)".to_owned(), at.elapsed());
@@ -1330,21 +1392,21 @@ impl VariantObjects {
         Ok((raw, linked, made))
     }
 
-    /// Link the pipeline of `infos` from `linked`'s libraries, named `names`, as
-    /// [`linked`](Self::linked) says.
+    /// Link the pipeline of `infos` from `linked`'s libraries, those of shaders made under their
+    /// parts' records `records`, as [`linked`](Self::linked) says.
     fn link(
         &self,
         infos: &Infos<'_>,
-        names: &[Hash256; 4],
+        records: &PartRecords,
         linked: &Linked,
     ) -> Result<vk::Pipeline, Error> {
         let shared = self.device.shared();
         let split = creation_log::splitting();
         let mut raws = [vk::Pipeline::null(); 4];
-        for ((part, library), (raw, name)) in Part::ALL
+        for ((part, library), raw) in Part::ALL
             .into_iter()
             .zip(linked.parts())
-            .zip(raws.iter_mut().zip(names))
+            .zip(raws.iter_mut())
         {
             // The creation log's split: how long the part took, and whether this making made it.
             let asked = split.then(std::time::Instant::now);
@@ -1353,18 +1415,18 @@ impl VariantObjects {
                 let mut flag =
                     vk::GraphicsPipelineLibraryCreateInfoEXT::default().flags(part.flag());
                 let info = infos.part(part, &mut flag);
-                // A part with shaders is made through the device's shader cache, under a record
-                // of its own, with what its driver reports of it; one without holds nothing a
-                // record would keep.
-                let made = match part.holds_shaders() {
-                    true => {
+                // A part with shaders is made through the device's shader cache, under its
+                // part's record (`GraphicsContent::record_parts`), with what its driver reports
+                // of it; one without holds nothing a record would keep.
+                let made = match records.of(part) {
+                    Some(record) => {
                         let _ = creation_log::take_record();
                         let made = shared
-                            .make_graphics_pipeline(Making::new(part.kind()).digest(name), info);
+                            .make_graphics_pipeline(Making::new(part.kind()).digest(record), info);
                         made_here = Some(creation_log::take_record());
                         made?
                     }
-                    false => {
+                    None => {
                         made_here = Some(None);
                         // SAFETY: every pointer in `info` outlives the call.
                         let made = unsafe {
