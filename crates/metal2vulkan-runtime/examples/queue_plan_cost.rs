@@ -6,7 +6,8 @@
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-runtime --example queue_plan_cost -- \
-//!     [--rounds R] [--hold H] [--runtime] [--exhaust PROCESSES] [--exhaust-only]
+//!     [--rounds R] [--hold H] [--runtime] [--exhaust PROCESSES] [--exhaust-only] \
+//!     [--fills N,M,...]
 //! ```
 //!
 //! Each shape is a count of graphics-family queues and of copy-family queues (none where the
@@ -32,6 +33,9 @@
 //!   (`Device::system_default_with`, the plan): whether it came up (on its least plan where the
 //!   driver refused the plan, which it announces) or what it answered.
 //!   `--exhaust-only` skips the make and hold phases.
+//! - **fills** (`--fills N,M,...`): for each count, that many devices of the least plan's shape
+//!   held at once, then the runtime's device made beside them, as above: what the runtime's
+//!   device making answers where the plan's `vkCreateDevice` still fits but little more does.
 
 use ash::vk;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -395,12 +399,12 @@ fn runtime_phase() {
     let _ = std::fs::remove_dir_all(&cache);
 }
 
-/// A child of the exhaust phase: make devices of `shape` until refused or [`PER_PROCESS`], say
-/// how many (`HOLDING n`), hold them until stdin closes.
-fn child(gpu: &Gpu, shape: Shape) {
+/// A child of the exhaust phase: make devices of `shape` until refused or `most` (at most
+/// [`PER_PROCESS`]), say how many (`HOLDING n`), hold them until stdin closes.
+fn child(gpu: &Gpu, shape: Shape, most: usize) {
     let mut devices = Vec::new();
     let mut refusal = None;
-    while devices.len() < PER_PROCESS {
+    while devices.len() < most.min(PER_PROCESS) {
         match gpu.make(shape) {
             Ok((device, _)) => devices.push(device),
             Err(result) => {
@@ -419,63 +423,91 @@ fn child(gpu: &Gpu, shape: Shape) {
 }
 
 fn exhaust_phase(gpu: &Gpu, processes: usize) {
-    let exe = std::env::current_exe().expect("this program");
     for shape in gpu.least_and_plan() {
-        let mut children: Vec<Child> = Vec::new();
-        let mut held = 0;
-        let mut counts = Vec::new();
-        for _ in 0..processes {
-            let mut child = Command::new(&exe)
-                .args(["--child", &shape.0.to_string(), &shape.1.to_string()])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()
-                .expect("a child");
-            let stdout = child.stdout.take().expect("its stdout");
-            let mut line = String::new();
-            BufReader::new(stdout).read_line(&mut line).ok();
-            let made: usize = (line.split_whitespace().nth(1))
-                .and_then(|n| n.parse().ok())
-                .unwrap_or(0);
-            // The refusal's `VkResult`, where the child's line names one (`Some(ERROR_...)`).
-            let refusal = (line.split_once("Some("))
-                .and_then(|(_, rest)| rest.split_once(')'))
-                .map(|(code, _)| code.to_owned());
-            counts.push(match refusal {
-                Some(code) => format!("{made}r({code})"),
-                None => made.to_string(),
-            });
-            held += made;
-            children.push(child);
-            if made == 0 {
-                break;
-            }
-        }
-        let memory = smi_memory();
-        let runtime = Command::new(&exe)
-            .arg("--runtime-child")
-            // Its notices (the least plan's among them) go to this one's stderr.
-            .stderr(Stdio::inherit())
-            .output()
-            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
-            .unwrap_or_else(|error| format!("not run: {error}"));
-        for mut child in children {
-            drop(child.stdin.take());
-            child.wait().ok();
-        }
-        println!(
-            "QUEUE-PLAN-COST exhaust {}+{} = {} queues: {held} devices ({} VkQueues) held at once \
-             by {} processes [{}] (r: refused), memory then {memory:?}; then the runtime's \
-             device: {runtime}",
-            shape.0,
-            shape.1,
-            queues(shape),
-            held * queues(shape) as usize,
-            counts.len(),
-            counts.join(" ")
-        );
-        std::thread::sleep(Duration::from_secs(2));
+        held_beside_runtime(shape, processes, usize::MAX);
     }
+}
+
+/// The fill phase (`--fills N,M,...`): for each count, that many devices of the least plan's
+/// shape held at once (or as many as the driver gives), then the runtime's own device made
+/// beside them, as the exhaust phase makes it: where the plan's `vkCreateDevice` still fits but
+/// little else does.
+fn fill_phase(gpu: &Gpu, fills: &[usize]) {
+    for &fill in fills {
+        held_beside_runtime(
+            gpu.least_and_plan()[0],
+            fill.div_ceil(PER_PROCESS) + 1,
+            fill,
+        );
+    }
+}
+
+/// Up to `processes` processes, started one after another, each making devices of `shape` until
+/// refused or 6, `most` in all, held while one more makes the runtime's own device; printed.
+fn held_beside_runtime(shape: Shape, processes: usize, most: usize) {
+    let exe = std::env::current_exe().expect("this program");
+    let mut children: Vec<Child> = Vec::new();
+    let mut held = 0;
+    let mut counts = Vec::new();
+    for _ in 0..processes {
+        if held >= most {
+            break;
+        }
+        let mut child = Command::new(&exe)
+            .args([
+                "--child",
+                &shape.0.to_string(),
+                &shape.1.to_string(),
+                &(most - held).to_string(),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("a child");
+        let stdout = child.stdout.take().expect("its stdout");
+        let mut line = String::new();
+        BufReader::new(stdout).read_line(&mut line).ok();
+        let made: usize = (line.split_whitespace().nth(1))
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0);
+        // The refusal's `VkResult`, where the child's line names one (`Some(ERROR_...)`).
+        let refusal = (line.split_once("Some("))
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .map(|(code, _)| code.to_owned());
+        counts.push(match refusal {
+            Some(code) => format!("{made}r({code})"),
+            None => made.to_string(),
+        });
+        held += made;
+        children.push(child);
+        if made == 0 {
+            break;
+        }
+    }
+    let memory = smi_memory();
+    let runtime = Command::new(&exe)
+        .arg("--runtime-child")
+        // Its notices (the least plan's among them) go to this one's stderr.
+        .stderr(Stdio::inherit())
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        .unwrap_or_else(|error| format!("not run: {error}"));
+    for mut child in children {
+        drop(child.stdin.take());
+        child.wait().ok();
+    }
+    println!(
+        "QUEUE-PLAN-COST exhaust {}+{} = {} queues: {held} devices ({} VkQueues) held at once \
+         by {} processes [{}] (r: refused), memory then {memory:?}; then the runtime's \
+         device: {runtime}",
+        shape.0,
+        shape.1,
+        queues(shape),
+        held * queues(shape) as usize,
+        counts.len(),
+        counts.join(" ")
+    );
+    std::thread::sleep(Duration::from_secs(2));
 }
 
 /// A child of the exhaust phase made while the others hold their devices: the runtime's own device
@@ -506,7 +538,8 @@ fn main() {
     let gpu = Gpu::new();
     if args.first().map(String::as_str) == Some("--child") {
         let shape = (args[1].parse().unwrap(), args[2].parse().unwrap());
-        child(&gpu, shape);
+        let most = (args.get(3)).map_or(PER_PROCESS, |most| most.parse().unwrap());
+        child(&gpu, shape, most);
         return;
     }
     let value = |flag: &str| {
@@ -527,5 +560,15 @@ fn main() {
     }
     if let Some(processes) = value("--exhaust") {
         exhaust_phase(&gpu, processes);
+    }
+    let fills = (args.iter().position(|arg| arg == "--fills"))
+        .and_then(|at| args.get(at + 1))
+        .map(|list| {
+            list.split(',')
+                .filter_map(|n| n.parse().ok())
+                .collect::<Vec<usize>>()
+        });
+    if let Some(fills) = fills {
+        fill_phase(&gpu, &fills);
     }
 }
