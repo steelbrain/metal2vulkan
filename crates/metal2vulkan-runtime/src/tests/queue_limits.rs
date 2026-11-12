@@ -275,8 +275,9 @@ fn planned(families: &[vk::QueueFamilyProperties], options: &DeviceOptions) -> P
     (plan, extra)
 }
 
-/// A device the driver refuses for want of its resources (`VK_ERROR_INITIALIZATION_FAILED`,
-/// `VK_ERROR_OUT_OF_DEVICE_MEMORY`) with its queue plan's `VkQueue`s is asked for once more with
+/// A device the driver refuses for want of its resources (`VK_ERROR_TOO_MANY_OBJECTS`,
+/// `VK_ERROR_INITIALIZATION_FAILED`, `VK_ERROR_OUT_OF_DEVICE_MEMORY`,
+/// `VK_ERROR_OUT_OF_HOST_MEMORY`) with its queue plan's `VkQueue`s is asked for once more with
 /// its least plan's (the lane's limits: one for the round robin, none for presenting, the
 /// reserved, extra, staging and fill queues kept), and made with them, saying what it took; refused
 /// twice, it is refused naming both attempts, and where the least plan takes no fewer (RADV's and
@@ -321,7 +322,12 @@ fn a_device_refused_for_want_of_resources_is_asked_for_once_with_its_least_plan(
         )
     };
     assert_eq!(run(&[]), (Ok(("made", 19, None)), vec![19]));
-    for refusal in [FAILED, MEMORY] {
+    for refusal in [
+        vk::Result::ERROR_TOO_MANY_OBJECTS,
+        FAILED,
+        MEMORY,
+        vk::Result::ERROR_OUT_OF_HOST_MEMORY,
+    ] {
         let took = LeastPlanTaken {
             planned: 19,
             refusal,

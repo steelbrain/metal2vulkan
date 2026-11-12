@@ -194,9 +194,10 @@ Vulkan-side choices Metal has no counterpart for:
 | `record_executions` | Keep, per command buffer, which pipeline each dispatch and draw ran (`CommandBuffer::executions`). Off by default. |
 
 **A driver short of resources.** Where the driver refuses a device with its queue plan's `VkQueue`s
-for want of its resources (`vkCreateDevice` answering `VK_ERROR_INITIALIZATION_FAILED` or
-`VK_ERROR_OUT_OF_DEVICE_MEMORY`: on NVIDIA's driver, other devices of the GPU, in this process or
-others, holding what it needs, such as its channels), the runtime asks once more with its least
+for want of its resources (`vkCreateDevice` answering `VK_ERROR_TOO_MANY_OBJECTS`,
+`VK_ERROR_INITIALIZATION_FAILED`, `VK_ERROR_OUT_OF_DEVICE_MEMORY` or `VK_ERROR_OUT_OF_HOST_MEMORY`:
+on NVIDIA's driver, other devices of the GPU, in this process or others, holding what it needs,
+such as its channels), the runtime asks once more with its least
 plan's: a round robin of one `VkQueue` and none reserved for presenting, the reserved, extra,
 staging and fill queues kept (`queue_limits` of one and none, without that option's messages). A
 device made so announces `metal2vulkan-degrade-least-queue-plan` once, as it is made: its command
@@ -743,7 +744,7 @@ message text. The ones a consumer meets most:
 | `OutOfMemory`, `DeviceLost`, `Vulkan`, `NoDevice` | The device's own failures. `NoDevice`: the loader opened but found no usable device. A device holding `maxMemoryAllocationCount` allocations live has the next refused (`Vulkan`, `VK_ERROR_TOO_MANY_OBJECTS`) without a call of the driver, counted in `WorkCounts::memory_allocations_refused_at_limit`, once the frees its releases posted to its free thread (which count until they run) completed. |
 | `LoaderNotFound(LoaderNotFound)` | The Vulkan loader did not open; `tried` lists each path. |
 | `DriverSetting(DriverSetting)` | A driver setting the runtime cannot run under, such as MoltenVK with `MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS` off. |
-| `DeviceRefused(DeviceRefused)` | The driver refused to make the device for want of its resources (`VK_ERROR_INITIALIZATION_FAILED` or `VK_ERROR_OUT_OF_DEVICE_MEMORY`), with its queue plan's `VkQueue`s and then with its least plan's; `attempts` names each. Other devices of the GPU, in any process, hold what it lacks; once fewer are live it may be made. |
+| `DeviceRefused(DeviceRefused)` | The driver refused to make the device for want of its resources (`VK_ERROR_TOO_MANY_OBJECTS`, `VK_ERROR_INITIALIZATION_FAILED`, `VK_ERROR_OUT_OF_DEVICE_MEMORY` or `VK_ERROR_OUT_OF_HOST_MEMORY`), with its queue plan's `VkQueue`s and then with its least plan's; `attempts` names each. Other devices of the GPU, in any process, hold what it lacks; once fewer are live it may be made. |
 | `WaitWouldDeadlock(DeadlockCause)` | A command buffer wait that would deadlock, refused at once instead of hanging. |
 | `ShaderCache(...)` | The shader cache directory cannot be made or written. |
 

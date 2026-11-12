@@ -1366,13 +1366,18 @@ pub(crate) struct LeastPlanTaken {
     pub(crate) least: usize,
 }
 
-/// Whether `result` is a driver's refusal of a device for want of its resources:
-/// `VK_ERROR_INITIALIZATION_FAILED` (NVIDIA's driver, what it needs, such as its GPU's channels,
-/// held by other devices) or `VK_ERROR_OUT_OF_DEVICE_MEMORY`.
+/// Whether `result` is a driver's refusal of a device for want of its resources, of which a
+/// device of fewer `VkQueue`s needs less: `VK_ERROR_TOO_MANY_OBJECTS` (Vulkan's answer where the
+/// device-specific resources a logical device needs run out), `VK_ERROR_INITIALIZATION_FAILED`
+/// (NVIDIA's driver, what it needs, such as its GPU's channels, held by other devices),
+/// `VK_ERROR_OUT_OF_DEVICE_MEMORY` or `VK_ERROR_OUT_OF_HOST_MEMORY`.
 fn for_want_of_resources(result: vk::Result) -> bool {
     matches!(
         result,
-        vk::Result::ERROR_INITIALIZATION_FAILED | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
+        vk::Result::ERROR_TOO_MANY_OBJECTS
+            | vk::Result::ERROR_INITIALIZATION_FAILED
+            | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
+            | vk::Result::ERROR_OUT_OF_HOST_MEMORY
     )
 }
 

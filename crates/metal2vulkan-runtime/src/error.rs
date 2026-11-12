@@ -399,10 +399,11 @@ impl fmt::Display for DriverSetting {
 }
 
 /// A device the driver refused to make for want of its resources ([`Error::DeviceRefused`]):
-/// `vkCreateDevice` answered `VK_ERROR_INITIALIZATION_FAILED` or `VK_ERROR_OUT_OF_DEVICE_MEMORY`
-/// for the `VkQueue`s of the device's queue plan, and again for those of its least plan (a round
-/// robin of one `VkQueue` and none reserved for presenting, beside the plan's reserved, extra and
-/// staging queues), or the least plan takes no fewer and the device was asked for once. Other
+/// `vkCreateDevice` answered `VK_ERROR_TOO_MANY_OBJECTS`, `VK_ERROR_INITIALIZATION_FAILED`,
+/// `VK_ERROR_OUT_OF_DEVICE_MEMORY` or `VK_ERROR_OUT_OF_HOST_MEMORY` for the `VkQueue`s of the
+/// device's queue plan, and again for those of its least plan (a round robin of one `VkQueue` and
+/// none reserved for presenting, beside the plan's reserved, extra and staging queues), or the
+/// least plan takes no fewer and the device was asked for once. Other
 /// devices of the GPU, in this process or others, hold what the driver lacks, on NVIDIA's driver
 /// such as its channels, one or more a `VkQueue` (on an RTX 2080, NVIDIA 620.70.06, the kernel
 /// logged that it could not allocate a channel's instance block). Its counterpart, Metal's

@@ -3542,7 +3542,8 @@ bound.
   pipelines made are the same.
 - `metal2vulkan-degrade-least-queue-plan` (performance). `LeastQueuePlan`: A device the driver
   refused to make for want of its resources with the `VkQueue`s of its queue plan (`vkCreateDevice`
-  answering `VK_ERROR_INITIALIZATION_FAILED` or `VK_ERROR_OUT_OF_DEVICE_MEMORY`; on NVIDIA's driver,
+  answering `VK_ERROR_TOO_MANY_OBJECTS`, `VK_ERROR_INITIALIZATION_FAILED`,
+  `VK_ERROR_OUT_OF_DEVICE_MEMORY` or `VK_ERROR_OUT_OF_HOST_MEMORY`; on NVIDIA's driver,
   other devices of the GPU holding what it needs, such as its channels), made with those of its
   least plan: a round robin of one `VkQueue` and none reserved for presenting, beside the reserved,
   extra, staging and fill queues. Announced once, as the device is made, naming the `VkQueue`s of

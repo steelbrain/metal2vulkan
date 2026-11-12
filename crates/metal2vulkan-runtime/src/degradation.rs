@@ -2273,8 +2273,9 @@ degradations! {
              records, with whatever it writes to disk and holds in memory for it; the pipelines \
              made are the same";
         /// A device the driver refused to make for want of its resources with the `VkQueue`s of
-        /// its queue plan (`vkCreateDevice` answering `VK_ERROR_INITIALIZATION_FAILED` or
-        /// `VK_ERROR_OUT_OF_DEVICE_MEMORY`: on NVIDIA's driver, other devices of the GPU, in this
+        /// its queue plan (`vkCreateDevice` answering `VK_ERROR_TOO_MANY_OBJECTS`,
+        /// `VK_ERROR_INITIALIZATION_FAILED`, `VK_ERROR_OUT_OF_DEVICE_MEMORY` or
+        /// `VK_ERROR_OUT_OF_HOST_MEMORY`: on NVIDIA's driver, other devices of the GPU, in this
         /// process or others, holding what it needs, such as its channels), made with those of its
         /// least plan: a round robin of one `VkQueue` and none reserved for presenting, beside the
         /// plan's reserved, extra, staging and fill queues (`DeviceOptions::queue_limits` of one
