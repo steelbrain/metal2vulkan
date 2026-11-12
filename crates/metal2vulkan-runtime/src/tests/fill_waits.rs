@@ -74,10 +74,10 @@ fn scale(
     encoder.end_encoding().unwrap();
 }
 
-/// A blit of `source`, whole, into `target` at its start.
+/// A blit of the first `target.length()` bytes of `source` into `target`.
 fn copy(command_buffer: &CommandBuffer, source: &Buffer, target: &Buffer) {
     let mut blit = command_buffer.blit_command_encoder().unwrap();
-    (blit.copy_from_buffer_to_buffer(source, 0, target, 0, source.length())).unwrap();
+    (blit.copy_from_buffer_to_buffer(source, 0, target, 0, target.length())).unwrap();
     blit.end_encoding().unwrap();
 }
 
@@ -275,19 +275,23 @@ fn new_memory_reads_zero_through_every_reach() {
     );
     load.commit().unwrap();
     let first = busy.command_buffer().unwrap();
-    let first_read = shared(NEW_BYTES);
+    let first_read = shared(NEW_BYTES / 2);
     copy(&first, &new, &first_read);
     first.commit().unwrap();
     // By its name, from another queue.
     let by_name = named.command_buffer().unwrap();
-    let named_read = shared(NEW_BYTES);
+    let named_read = shared(NEW_BYTES / 2);
     copy(&by_name, &new, &named_read);
     by_name.commit().unwrap();
-    // Through a pointer loaded from memory, from a third: words 0 to 7 into `out`; the kernel
-    // stores into words 8 to 15, which nothing reads.
+    // Through a pointer loaded from memory, from a third: words 0 to 7 into `out`. The kernel
+    // also stores into the words its indices 8 to 15 name, in no order with the other queues'
+    // copies: those words lie in the buffer's second half, which neither copy reads.
     let through = pointed.command_buffer().unwrap();
     let out = shared(32);
-    let indices: Vec<u8> = (0..16u32).flat_map(u32::to_le_bytes).collect();
+    let half = u32::try_from(NEW_BYTES / 8).unwrap();
+    let indices: Vec<u8> = ((0..8).chain(half..half + 8))
+        .flat_map(u32::to_le_bytes)
+        .collect();
     let mut encoder = through.compute_command_encoder().unwrap();
     encoder.set_compute_pipeline_state(&pointer_state).unwrap();
     encoder.set_bytes(&indices, 0).unwrap();
