@@ -2710,13 +2710,19 @@ impl CommandBuffer {
         self.let_go_carried(CarryDropped::Between);
     }
 
-    /// [`settle_end`](Self::settle_end) at a commit: a kept draw carried is let go, counted as one
-    /// no render encoder of the command buffer comes after
-    /// (`WorkCounts::kept_draws_carry_dropped_commit`).
+    /// [`settle_end`](Self::settle_end) at a commit: a kept draw carried goes to the queue, for a
+    /// later command buffer's render encoder, and the one the queue held, which none took, is let
+    /// go (`render/carried.rs`, `WorkCounts::kept_draws_carry_dropped_commit`).
     fn settle_end_committing(&self) {
         commit_times::phase(Phase::Lowering, || {
             self.settle_ended();
-            self.let_go_carried(CarryDropped::Commit);
+            let carried = self.state().carried.take();
+            let earlier = carried.and_then(|carried| self.0.queue.hold_carried(carried.across()));
+            if let Some(earlier) = earlier {
+                let counts = &self.0.device.shared().counts;
+                counts.kept_draw_carry_dropped(CarryDropped::Commit);
+                earlier.let_go(&self.0.device);
+            }
         });
     }
 
@@ -2730,9 +2736,11 @@ impl CommandBuffer {
         }
     }
 
-    /// The kept draw the last render encoder carried for the next, taken (`render/carried.rs`).
+    /// The kept draw the last render encoder carried for the next, taken; where it holds none,
+    /// the one its queue holds from a command buffer committed on it (`render/carried.rs`).
     pub(crate) fn take_carried(&self) -> Option<Box<Carried>> {
-        self.state().carried.take()
+        let own = self.state().carried.take();
+        own.or_else(|| self.0.queue.take_carried())
     }
 
     /// Hold `carried`, the kept draw of a render encoder ending, for the next render encoder

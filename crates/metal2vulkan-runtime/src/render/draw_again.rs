@@ -83,7 +83,8 @@
 //! - **Carried to the next encoder.** An encoder that ends with a kept draw of its pass's first
 //!   instance carries it, with its bind state and settles and the kept draws set aside with the
 //!   states of up to three other pipeline states, into its command buffer's next render encoder
-//!   where nothing comes between and that encoder's pass is its pass's like
+//!   where nothing comes between, or past its commit into a render encoder of a later command
+//!   buffer of its queue, where that encoder's pass is its pass's like
 //!   (`render/carried.rs`): each draw is kept there as one after draws of other states, recorded
 //!   through no record, under another render state ([`Kept::carried`]), in the instance that
 //!   encoder opened with, so its state's first draw there is rebound (`rebound.rs`), bringing in
@@ -133,7 +134,7 @@ use crate::error::Error;
 use crate::execution::{ExecutedPipeline, Execution};
 use crate::live_bind::LiveBind;
 use crate::noted_apart::NotedInto;
-use crate::pipeline::{RenderPipelineState, RenderStateKind, WeakRenderPipelineState};
+use crate::pipeline::{RawPipeline, RenderPipelineState, RenderStateKind, WeakRenderPipelineState};
 use crate::resource::ResourceKey;
 use crate::tracker::{Use, UseRange};
 use crate::work_counts::{ArgumentsStop, UnlikeKept};
@@ -235,19 +236,38 @@ pub(crate) struct Kept {
     /// drawn it since (`render/carried.rs`): its tables' stamps are the encoder's tables' first
     /// ones, and its next draw is rebound as a carried draw is.
     pub(super) carried: bool,
+    /// Whether it was carried in from the last render encoder of a command buffer committed on
+    /// the queue (`render/carried.rs`), and not drawn since: its next draw retains into this
+    /// encoder's command buffer what every step retains beyond the tables' objects, which that
+    /// command buffer may hold no longer (`rebound.rs`).
+    pub(super) across: bool,
+    /// The `VkPipeline` it recorded through, held while it is kept: its recording names it by
+    /// handle, and a draw carried across retains it (`render/carried.rs`).
+    pub(super) made: KeptPipeline,
+}
+
+/// A kept draw's `VkPipeline` ([`Kept::made`]): the same where it is the same object.
+pub(crate) struct KeptPipeline(pub(super) Arc<RawPipeline>);
+
+impl PartialEq for KeptPipeline {
+    fn eq(&self, other: &KeptPipeline) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 impl Kept {
     /// Carry this draw into a render encoder of epoch `epoch` whose tables' stamps are `stamps`
     /// at its opening, whose `Under` is `under` there and whose first instance records into
-    /// `draws` (`render/carried.rs`).
+    /// `draws` (`render/carried.rs`): of a later command buffer than the one it was kept in where
+    /// `across` (a draw set aside, carried again before it is drawn, stays across).
     pub(super) fn carried_into(
         &mut self,
         epoch: Stamp,
         stamps: [Stamp; 4],
         under: Under,
-        draws: vk::CommandBuffer,
+        (draws, across): (vk::CommandBuffer, bool),
     ) {
+        self.across |= across;
         self.epoch = epoch;
         // A stamp no render state had: its first draw derives again what the encoder's render
         // state decides (`restated.rs`).
@@ -277,15 +297,24 @@ impl Kept {
     }
 
     /// Whether the draw, of its own, may be carried into the next render encoder
-    /// (`render/carried.rs`): it rebinds, with no sampled slot narrowed.
+    /// (`render/carried.rs`): it rebinds, with no sampled slot narrowed, under a depth/stencil
+    /// state that does not fail every fragment.
     pub(super) fn carries(&self) -> bool {
-        self.rebinds && !self.reads_attached()
+        self.carries_but_for_reads() && !self.reads_attached()
     }
 
     /// Whether the draw would carry of its own ([`carries`](Self::carries)) but for its reads of
     /// a texture an attachment of its pass renders (`WorkCounts::kept_draws_uncarried_attached`).
     pub(super) fn carries_but_attached(&self) -> bool {
-        self.rebinds && self.reads_attached()
+        self.carries_but_for_reads() && self.reads_attached()
+    }
+
+    /// Whether the draw rebinds under a depth/stencil state that does not fail every fragment.
+    /// One that fails every fragment holds that state (`DrawSettings::failing_state`), the
+    /// program's object, and takes every step once restated (`restated.rs`), as a carried draw
+    /// is: it does not carry, so a carry names the program's objects by key and handle alone.
+    fn carries_but_for_reads(&self) -> bool {
+        self.rebinds && self.settings.failing_state.is_none()
     }
 
     /// Whether the draw, set aside with its pipeline state's bind state, is carried with `last`,
@@ -971,8 +1000,8 @@ impl Checked {
             again.stated,
         );
         // A carried draw's every step began the pass's first instance, which its kept draw named
-        // before any did, and keeps a draw carried no more (`render/carried.rs`).
-        let (command_buffer, carried) = (again.command_buffer, again.carried);
+        // before any did, and keeps a draw carried no more, nor across (`render/carried.rs`).
+        let (command_buffer, carried, across) = (again.command_buffer, again.carried, again.across);
         assert!(
             draw_alone || rebound,
             "a draw again recorded a state command"
@@ -989,11 +1018,13 @@ impl Checked {
         (again.settled, again.between, again.stated) = (kept.settled, kept.between, kept.stated);
         if kept.carried {
             (again.command_buffer, again.carried) = (kept.command_buffer, kept.carried);
+            again.across = kept.across;
         }
         assert!(*again == kept, "a draw again kept another draw");
         (again.draw_alone, again.stamps, again.under) = (draw_alone, stamps, under);
         (again.settled, again.between, again.stated) = (settled, between, stated);
         (again.command_buffer, again.carried) = (command_buffer, carried);
+        again.across = across;
         encoder.again.hits = hits;
     }
 }

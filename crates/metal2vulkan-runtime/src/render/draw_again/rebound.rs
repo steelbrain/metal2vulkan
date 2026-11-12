@@ -127,7 +127,10 @@
 //!   otherwise), and keeps them for the encoder's next draw rebound to compare with. It begins its
 //!   pass's first instance as every step's first draw does (`RenderLowering::inline_begin`), and
 //!   records every state command it sets into that instance's command buffer, whose record holds
-//!   none (`WorkCounts::draws_rebound_carried`).
+//!   none (`WorkCounts::draws_rebound_carried`). One carried across a commit (`Kept::across`)
+//!   retains into its command buffer what every step retains beyond its tables' objects, which
+//!   that command buffer holds none of: its pipeline state, its variant's objects, its
+//!   `VkPipeline` and the call's index buffer.
 //! - **Checked in builds with debug assertions.** As a draw again is: the first rebound draw of a
 //!   kept draw and every second after it work out the rebind, then take every step instead, which
 //!   must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes, vertex
@@ -1089,6 +1092,22 @@ impl RenderLowering {
             .flatten();
         let unsettled = || crate::error::internal("a draw rebound unsettled");
         let objects = kept.ok_or_else(unsettled)?.settled().variant.objects();
+        // Of a draw carried across a commit (`render/carried.rs`), what every step retains beyond
+        // its tables' objects and index buffer, which its command buffer holds none of: its
+        // pipeline state, its variant's objects and the `VkPipeline` its recording names.
+        let kept_made = (self.again.kept.as_ref()).filter(|kept| kept.across);
+        let across = match (kept_made, self.pipeline.as_ref().map(|state| state.kind())) {
+            (None, _) => None,
+            (Some(kept), Some(RenderStateKind::Graphics(state))) => {
+                let made = Some(Arc::clone(&kept.made.0));
+                Some((state.clone(), Arc::clone(objects), made))
+            }
+            (Some(_), _) => {
+                return Err(crate::error::internal(
+                    "a draw carried without its pipeline state",
+                ))
+            }
+        };
         let narrowed = rebinding.narrowed;
         // Nothing recorded through the record since the kept draw, or the draw rebound before,
         // set the pipeline and dynamic states this draw sets (`Kept::settled`), nor bound or
@@ -1333,6 +1352,7 @@ impl RenderLowering {
         // its reads through copies and its shadows', which the next draw rebound compares.
         let carried = kept.carried;
         kept.carried = false;
+        kept.across = false;
         kept.command_buffer = self.current.draws;
         kept.through_copies = rebinding.through_copies;
         if carried {
@@ -1371,8 +1391,13 @@ impl RenderLowering {
         self.fragment.retain_exclusive(&mut self.core);
         self.object.retain_exclusive(&mut self.core);
         self.mesh.retain_exclusive(&mut self.core);
-        if let (true, Some(source)) = (rebinding.reindexed, buffers.index.as_ref()) {
+        // Its index buffer where it is another than the kept draw's, or the draw carried across.
+        let reindexed = rebinding.reindexed || across.is_some();
+        if let (true, Some(source)) = (reindexed, buffers.index.as_ref()) {
             self.core.retain_shared(source.buffer.held());
+        }
+        if let Some(retained) = across {
+            self.last_retained.retain_draw(&mut self.core, retained);
         }
         self.last_retained
             .retain_samplers(&mut self.core, &mut live.samplers);

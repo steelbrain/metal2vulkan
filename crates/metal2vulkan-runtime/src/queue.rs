@@ -106,6 +106,7 @@ use super::device::carry::RestWatch;
 use super::device::{lock, Device};
 use super::error::{Error, Invalid, Problem};
 use super::queue_share::Choice;
+use super::render::Carried;
 use super::texture::copy_images::CopyImages;
 use super::texture::kept_image::KeptImages;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
@@ -240,6 +241,12 @@ struct QueueShared {
     /// The expected run of its batches, where they are held back from a `VkQueue` an unshared
     /// queue holds (`unshared_hold.rs`).
     expected: Arc<crate::unshared_hold::Expected>,
+    /// The kept draws the last render encoder of its latest command buffer committed with one
+    /// carried, for the first render encoder of a later one that holds none of its own
+    /// (`render/carried.rs`). One at most: it names the program's objects by key and handle
+    /// alone, and holds the runtime's own its recording names (settles' variants, `VkPipeline`s).
+    /// A leaf lock.
+    carried: Mutex<Option<Box<Carried>>>,
 }
 
 /// A queue's slots: one per uncompleted command buffer, at most `max`.
@@ -608,6 +615,7 @@ impl Device {
             copy_images: CopyImages::default(),
             hangs: Arc::default(),
             expected: Arc::default(),
+            carried: Mutex::new(None),
         }))
     }
 }
@@ -743,6 +751,17 @@ impl QueueGen {
     /// (`Device::generation_serves`).
     fn serves(&self) -> bool {
         self.0.device.generation_serves()
+    }
+
+    /// Hold `carried`, of a command buffer committing, for a later command buffer's render
+    /// encoder (`render/carried.rs`): the one held before, which none took, comes back.
+    pub(crate) fn hold_carried(&self, carried: Box<Carried>) -> Option<Box<Carried>> {
+        lock(&self.0.carried).replace(carried)
+    }
+
+    /// The kept draws held for a later command buffer's render encoder, taken.
+    pub(crate) fn take_carried(&self) -> Option<Box<Carried>> {
+        lock(&self.0.carried).take()
     }
 
     /// What every place of the queue shares: its identity across the device's recoveries

@@ -313,6 +313,7 @@ pub(crate) struct Counters {
     inline_passes_split: AtomicU64,
     encoders_barriered_at_open: AtomicU64,
     kept_draws_carried: AtomicU64,
+    kept_draws_carried_across: AtomicU64,
     kept_draws_carry_dropped: [AtomicU64; CarryDropped::COUNT],
     kept_draws_carried_aside: AtomicU64,
     kept_draws_carry_capped: AtomicU64,
@@ -835,7 +836,8 @@ pub(crate) enum CarryDropped {
     /// What the kept draw read that changes with no call: a no-copy buffer moved, the device's
     /// sampler IDs' slots changed, or the next encoder's residency is of another generation.
     Under,
-    /// The command buffer was committed: no render encoder of it comes after.
+    /// Its queue held it from a command buffer's commit, and a later commit handed the queue
+    /// another: no render encoder took it between.
     Commit,
 }
 
@@ -3049,9 +3051,15 @@ impl Counters {
     }
 
     /// A render encoder opened from the kept draw its command buffer's last render encoder
-    /// carried (`render/carried.rs`, `WorkCounts::kept_draws_carried`).
-    pub(crate) fn kept_draw_carried(&self) {
+    /// carried, or where `across`, the last render encoder of a command buffer committed on its
+    /// queue (`render/carried.rs`, `WorkCounts::kept_draws_carried`,
+    /// `WorkCounts::kept_draws_carried_across`).
+    pub(crate) fn kept_draw_carried(&self, across: bool) {
         self.kept_draws_carried.fetch_add(1, Ordering::Relaxed);
+        if across {
+            self.kept_draws_carried_across
+                .fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// A kept draw carried into its command buffer's next render encoder was let go for `why`
@@ -6597,18 +6605,25 @@ pub struct WorkCounts {
     /// (`render/inline_first.rs`).
     pub inline_passes: u64,
     /// Render encoders that opened from the kept draw their command buffer's last render encoder
-    /// carried into them, with that encoder's bind state and settle (`render/carried.rs`): the
-    /// encoder's first draw of it is rebound (`draws_rebound_carried`). An encoder ended with a
-    /// kept draw of its pass's first instance carries it, with those of other pipeline states it
-    /// set aside (`kept_draws_carried_aside`), a draw that reads the texture of a color attachment
-    /// of its pass through its copy among them (`texture/attached_reads.rs`), but not one that
-    /// reads it through a slot narrowed to levels apart from the attached ones
-    /// (`kept_draws_uncarried_attached`).
+    /// carried into them, with that encoder's bind state and settle (`render/carried.rs`), or,
+    /// where they hold none, the last render encoder of a command buffer committed on their queue
+    /// (`kept_draws_carried_across`): the encoder's first draw of it is rebound
+    /// (`draws_rebound_carried`). An encoder ended with a kept draw of its pass's first instance
+    /// carries it, with those of other pipeline states it set aside (`kept_draws_carried_aside`),
+    /// a draw that reads the texture of a color attachment of its pass through its copy among
+    /// them (`texture/attached_reads.rs`), but not one that reads it through a slot narrowed to
+    /// levels apart from the attached ones (`kept_draws_uncarried_attached`), nor one whose
+    /// depth/stencil state fails every fragment.
     pub kept_draws_carried: u64,
+    /// Those of them that opened from the last render encoder of a command buffer committed on
+    /// their queue, which the queue held for the first render encoder of a later command buffer
+    /// that held none of its own (`render/carried.rs`): the first draw of each of its states is
+    /// rebound, and retains into its command buffer what every step retains.
+    pub kept_draws_carried_across: u64,
     /// Kept draws carried that were let go before a render encoder started from them because
     /// another call of the command buffer came first: another encoder's opening, an event, or
-    /// any other call that settles the last render encoder's end, but the commit
-    /// (`kept_draws_carry_dropped_commit`).
+    /// any other call that settles the last render encoder's end, but the commit, which hands it
+    /// to the queue (`kept_draws_carry_dropped_commit`).
     pub kept_draws_carry_dropped_between: u64,
     /// Kept draws carried that were let go because the next render encoder's pass is another's:
     /// another shape or compatible render pass, another kind of attachment, memoryless colors, a
@@ -6619,8 +6634,8 @@ pub struct WorkCounts {
     /// changed: a no-copy buffer moved, the device's sampler IDs' slots changed, or the next
     /// encoder's residency is of another generation.
     pub kept_draws_carry_dropped_under: u64,
-    /// Kept draws carried that were let go at their command buffer's commit: its last render
-    /// encoder's, which no render encoder of the command buffer comes after.
+    /// Kept draws carried that their queue held from a command buffer's commit and let go at a
+    /// later command buffer's commit, which handed it another: no render encoder took it between.
     pub kept_draws_carry_dropped_commit: u64,
     /// Kept draws of other pipeline states than the last draw's that render encoders opened from
     /// a carried kept draw took with it (`kept_draws_carried`, `render/carried.rs`): each set
@@ -9614,6 +9629,7 @@ impl Device {
             inline_passes: counters.inline_passes.load(Ordering::Relaxed),
             encoders_barriered_at_open: counters.encoders_barriered_at_open.load(Ordering::Relaxed),
             kept_draws_carried: counters.kept_draws_carried.load(Ordering::Relaxed),
+            kept_draws_carried_across: counters.kept_draws_carried_across.load(Ordering::Relaxed),
             kept_draws_carry_dropped_between: carry_dropped(CarryDropped::Between),
             kept_draws_carry_dropped_layout: carry_dropped(CarryDropped::Layout),
             kept_draws_carry_dropped_under: carry_dropped(CarryDropped::Under),

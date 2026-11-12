@@ -11106,7 +11106,9 @@ impl RenderLowering {
             };
             self.core.counts().draw_unkept(unkept);
         }
-        if let (true, Some(drawn_by)) = (keeps, drawn_by) {
+        // A draw kept is plain: its pipeline made ahead.
+        if let (true, Some(drawn_by), DrawPipeline::Made(made)) = (keeps, drawn_by, &draw_pipeline)
+        {
             let execution = records.then(|| draw_again::KeptExecution {
                 pipeline: ExecutedPipeline::Render(Arc::clone(variant.shared_pipeline())),
                 shape: Arc::clone(&shape),
@@ -11168,6 +11170,8 @@ impl RenderLowering {
                 rebinds,
                 settled: through_record,
                 carried: false,
+                across: false,
+                made: draw_again::KeptPipeline(Arc::clone(made)),
             };
             self.again.keep(kept);
         }

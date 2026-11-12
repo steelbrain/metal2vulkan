@@ -52,9 +52,10 @@
 //!   shape and forms alone). Only a draw that recorded keeps it, so its encoder holds its pipeline
 //!   state (and the command buffer the variant's objects); it goes as the encoder ends
 //!   ([`SpareLiveBinds::give`]), so a spare state holds nothing alive, but where the encoder
-//!   carries its kept draws into its command buffer's next render encoder, which takes the state
-//!   with its settles and the kept draws set aside that carry ([`LiveBind::carry_aside`],
-//!   `render/carried.rs`, [`LiveBind::end_carried`]).
+//!   carries its kept draws into its command buffer's next render encoder (or, past the commit,
+//!   its queue holds them for a later command buffer's), which takes the state with its settles
+//!   and the kept draws set aside that carry ([`LiveBind::carry_aside`], `render/carried.rs`,
+//!   [`LiveBind::end_carried`]): the variants' objects are the runtime's own.
 //! - **Kept from one encoder to the next.** An encoder that ends gives its state, with its shape,
 //!   to its device ([`SpareLiveBinds`]), and the next render encoder opened starts from it, as a
 //!   draw starts from the draw before it: its first draw brings it in place, so a pass that binds
