@@ -388,6 +388,7 @@ pub(crate) struct Counters {
     dma_buf_memories_live: AtomicU64,
     dma_buf_image_memories_live: AtomicU64,
     host_imports_released: AtomicU64,
+    host_imports_released_over_most: AtomicU64,
     host_imports_reimported: AtomicU64,
     host_imports_resident: AtomicU64,
     host_imports_lost: AtomicU64,
@@ -3528,6 +3529,12 @@ impl Counters {
     /// A releasable import was released while idle (`host_residency.rs`).
     pub(crate) fn host_import_released(&self) {
         self.host_imports_released.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Of those, one released as the device kept more resident than its most
+    /// (`host_residency::RESIDENT_MOST`).
+    pub(crate) fn host_import_released_over_most(&self) {
+        (self.host_imports_released_over_most).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A released import was imported again.
@@ -7705,6 +7712,11 @@ pub struct WorkCounts {
     /// Metal's observes (`HostMemory::with_dma_buf` documents it). Their chunks leave
     /// `dma_buf_memories_live`.
     pub host_imports_released: u64,
+    /// Of `host_imports_released`, those released while more releasable imports held their memory
+    /// than the device keeps at most, 64 where a held import adds to every submission's cost (its
+    /// import tax check: RADV, ANV on i915), the least recently used first, whatever their idle
+    /// windows (`host_residency.rs`). 0 on every other device.
+    pub host_imports_released_over_most: u64,
     /// Released imports imported again from the dma-bufs kept, each at the first blit that read
     /// the buffer after its release (on the encoding thread).
     pub host_imports_reimported: u64,
@@ -10062,6 +10074,8 @@ impl Device {
                 .dma_buf_image_memories_live
                 .load(Ordering::Relaxed),
             host_imports_released: counters.host_imports_released.load(Ordering::Relaxed),
+            host_imports_released_over_most: (counters.host_imports_released_over_most)
+                .load(Ordering::Relaxed),
             host_imports_reimported: counters.host_imports_reimported.load(Ordering::Relaxed),
             host_imports_resident: counters.host_imports_resident.load(Ordering::Relaxed),
             host_imports_used: counters.host_imports_used.load(Ordering::Relaxed),
