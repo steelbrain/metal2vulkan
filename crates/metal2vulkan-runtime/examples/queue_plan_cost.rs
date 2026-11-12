@@ -44,9 +44,9 @@
 //!   took, refused or made.
 //! - **overlap** (`--overlap K,...`): for the plan's shape, two between (round robins of 7 and 3
 //!   with the two presenting) and the least plan's (16 + 2, 9 + 2, 5 + 2 and 1 + 2 on NVIDIA), K
-//!   processes each making one device at the same moment, `R` rounds (`--rounds`, 3 by default): each `vkCreateDevice`'s time, median, least and
-//!   most, and the time until all K were made, as when every device of a GPU is made again at once
-//!   (a device lost).
+//!   processes each making one device at the same moment, `R` rounds (`--rounds`, 3 by default):
+//!   each `vkCreateDevice`'s time, median, least and most, and the time until all K were made, as
+//!   when every device of a GPU is made again at once (a device lost).
 //! - **runtime rooms** (`--runtime-rooms N,...`, opt-in as the exhaust phase is): as the rooms
 //!   phase, beside N of the runtime's own devices (as the runtime fill phase makes them) instead
 //!   of bare ones: a runtime device holds more of what the driver gives than a bare device of its
