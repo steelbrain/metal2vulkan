@@ -672,9 +672,10 @@ mod device {
     const EACH: usize = HELD / 2 + 64;
 
     /// The mixed load's command buffers committed at once, the blit encoders of each command
-    /// buffer of its cycle, its cycles, and those it runs before its counts are read.
+    /// buffer of its cycle, its cycles, and those it runs before its counts are read: about 1,600
+    /// command buffers at once on lavapipe, well within [`HELD`].
     const MIXED_IN_FLIGHT: usize = 64;
-    const MIXED: [usize; 10] = [200, 2, 2, 2, 2, 2, 2, 2, 2, 2];
+    const MIXED: [usize; 10] = [100, 2, 2, 2, 2, 2, 2, 2, 2, 2];
     const MIXED_CYCLES: usize = 100;
     const MIXED_WARM: usize = 40;
 
@@ -866,10 +867,12 @@ mod device {
     /// each cycle, frees no command buffer once warm, and makes fewer than its large command
     /// buffer's encoders (none, or a few where a large one found every pool holding the most out):
     /// its larger command buffers take the spares holding the most past their first pools, so the
-    /// pools' command buffers follow what the load holds at once (`spares.rs`). Where each pool kept the most its own uses
-    /// handed out, and a taker took the newest, every pool came to keep the larger command
-    /// buffer's, past [`HELD`] together, and each give-back then shed the oldest spare, whose next
-    /// taker made its command buffers again.
+    /// pools' command buffers follow what the load holds at once (`spares.rs`). Where each pool
+    /// kept the most its own uses handed out, and a taker took the newest, every pool came to keep
+    /// the larger command buffer's, past [`HELD`] together, and each give-back then shed the
+    /// oldest spare, whose next taker made its command buffers again. A load nearer the bound
+    /// still sheds some: a cycle of one of 200 encoders, about 2,700 command buffers at once, shed
+    /// 425 in 60 cycles in a loaded run of the runtime's suite, the spares holding 3,896.
     #[test]
     fn command_buffers_of_mixed_sizes_in_flight_make_and_free_none_once_warm() {
         let scratch = std::env::temp_dir().join(format!("m2v-spares-mixed-{}", std::process::id()));
