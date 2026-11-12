@@ -2707,15 +2707,16 @@ impl CommandBuffer {
     /// counted as one another call came before (`WorkCounts::kept_draws_carry_dropped_between`).
     pub(crate) fn settle_end(&self) {
         self.settle_ended();
-        self.let_go_carried(Some(CarryDropped::Between));
+        self.let_go_carried(CarryDropped::Between);
     }
 
-    /// [`settle_end`](Self::settle_end) at a commit: a kept draw carried is let go uncounted, as
-    /// no render encoder of the command buffer comes after it.
+    /// [`settle_end`](Self::settle_end) at a commit: a kept draw carried is let go, counted as one
+    /// no render encoder of the command buffer comes after
+    /// (`WorkCounts::kept_draws_carry_dropped_commit`).
     fn settle_end_committing(&self) {
         commit_times::phase(Phase::Lowering, || {
             self.settle_ended();
-            self.let_go_carried(None);
+            self.let_go_carried(CarryDropped::Commit);
         });
     }
 
@@ -2745,13 +2746,11 @@ impl CommandBuffer {
     }
 
     /// Let go of the kept draw the last render encoder carried, where it holds one, to the
-    /// device's spares, counted as `why` says where it says (`render/carried.rs`).
-    fn let_go_carried(&self, why: Option<CarryDropped>) {
+    /// device's spares, counted as `why` says (`render/carried.rs`).
+    fn let_go_carried(&self, why: CarryDropped) {
         let carried = self.state().carried.take();
         if let Some(carried) = carried {
-            if let Some(why) = why {
-                self.0.device.shared().counts.kept_draw_carry_dropped(why);
-            }
+            self.0.device.shared().counts.kept_draw_carry_dropped(why);
             carried.let_go(&self.0.device);
         }
     }

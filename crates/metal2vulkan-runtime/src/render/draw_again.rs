@@ -266,11 +266,23 @@ impl Kept {
         (under.moved, under.residency, under.samplers) == (moved, residency, samplers)
     }
 
+    /// Whether the draw read a texture an attachment of its pass renders: through its copy, or
+    /// through a sampled slot narrowed to levels apart from the attached ones.
+    fn reads_attached(&self) -> bool {
+        self.through_copies != (false, false) || !self.narrowed.is_empty()
+    }
+
     /// Whether the draw, of its own, may be carried into the next render encoder
     /// (`render/carried.rs`): it rebinds, through no copy of an attachment's texture and with no
     /// sampled slot narrowed.
     pub(super) fn carries(&self) -> bool {
-        self.rebinds && self.through_copies == (false, false) && self.narrowed.is_empty()
+        self.rebinds && !self.reads_attached()
+    }
+
+    /// Whether the draw would carry of its own ([`carries`](Self::carries)) but for its reads of
+    /// a texture an attachment of its pass renders (`WorkCounts::kept_draws_uncarried_attached`).
+    pub(super) fn carries_but_attached(&self) -> bool {
+        self.rebinds && self.reads_attached()
     }
 
     /// Whether the draw, set aside with its pipeline state's bind state, is carried with `last`,
@@ -278,10 +290,22 @@ impl Kept {
     /// own ([`carries`](Self::carries)), and having read what changes with no call as `last`
     /// read it, but what it was noted into, so the next encoder's check of `last`'s holds for it.
     pub(super) fn carries_with(&self, last: &Kept) -> bool {
+        self.read_as(last) && self.carries()
+    }
+
+    /// Whether the draw, set aside, would be carried with `last` ([`carries_with`]) but for its
+    /// reads of a texture an attachment of its pass renders.
+    ///
+    /// [`carries_with`]: Self::carries_with
+    pub(super) fn carries_with_but_attached(&self, last: &Kept) -> bool {
+        self.read_as(last) && self.carries_but_attached()
+    }
+
+    /// Whether the draw was kept under `last`'s epoch, having read what changes with no call as
+    /// `last` read it, but what it was noted into.
+    fn read_as(&self, last: &Kept) -> bool {
         let under = &last.under;
-        self.epoch == last.epoch
-            && self.carries()
-            && self.carried_under(under.moved, under.residency, under.samplers)
+        self.epoch == last.epoch && self.carried_under(under.moved, under.residency, under.samplers)
     }
 }
 
@@ -551,6 +575,9 @@ impl RenderLowering {
         checked: &mut Option<Checked>,
     ) -> Again {
         let Some(kept) = self.again.kept.as_ref() else {
+            if !self.replaying && !self.rerouting {
+                self.core.counts().draw_none_kept();
+            }
             return Again::No;
         };
         let index = buffers.index.as_ref().map(KeptIndex::of);

@@ -666,7 +666,7 @@ impl LiveBind {
     pub(super) fn carry_aside(
         &mut self,
         most: usize,
-        carries: impl Fn(&DrawKept, bool) -> bool,
+        mut carries: impl FnMut(&DrawKept, bool) -> bool,
     ) -> u64 {
         let mut latest_first: [usize; SET_ASIDE] = std::array::from_fn(|at| at);
         latest_first.sort_unstable_by_key(|&at| std::cmp::Reverse(self.set_aside[at].at));

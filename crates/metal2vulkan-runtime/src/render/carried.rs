@@ -25,9 +25,10 @@
 //! - **Let go.** Any call of the command buffer that settles its last render encoder's end
 //!   (`CommandBuffer::settle_end`: another encoder's opening, an event, a semaphore, the commit)
 //!   lets it go to the device's spares, counted where it comes between
-//!   (`WorkCounts::kept_draws_carry_dropped_between`): only the opening of a render encoder takes
-//!   it. That encoder takes it ([`carried_fits`]) where its pass is the ended one's in everything
-//!   the kept draw's settle and recording read: the same [`PassShape`] (formats, samples,
+//!   (`WorkCounts::kept_draws_carry_dropped_between`) and at the commit
+//!   (`kept_draws_carry_dropped_commit`): only the opening of a render encoder takes it. That
+//!   encoder takes it ([`carried_fits`]) where its pass is the ended one's in everything the
+//!   kept draw's settle and recording read: the same [`PassShape`] (formats, samples,
 //!   resolves, input attachments, view mask) and layers, no memoryless color, visibility buffer,
 //!   custom sample positions, extended-range color, rasterization-rate map, color groups or
 //!   encoding of an ended encoder again (`kept_draws_carry_dropped_layout`); and where what the
@@ -140,8 +141,7 @@ impl RenderLowering {
     /// every other set aside let go (the module docs).
     fn carried_out(&mut self, live: &mut LiveBind) -> Option<Kept> {
         let kept = self.again_kept()?;
-        let carries = kept.carries()
-            && live.settled.is_some()
+        let ends = live.settled.is_some()
             && self.earlier.is_empty()
             && self.grouped.is_none()
             && self.rate_map.is_none()
@@ -162,14 +162,20 @@ impl RenderLowering {
             && !self.current.shadow
             && !self.current.shader_tests
             && self.current.shape.storage.is_empty();
-        if !carries {
+        let counts = &self.core.device().shared().counts;
+        if !(ends && kept.carries()) {
+            if ends && kept.carries_but_attached() {
+                counts.kept_draws_uncarried_attached(1);
+            }
             return None;
         }
+        let mut attached = 0;
         let capped = live.carry_aside(CARRIED_STATES - 1, |aside, settled| {
+            attached += u64::from(settled && aside.carries_with_but_attached(kept));
             settled && aside.carries_with(kept)
         });
-        let counts = &self.core.device().shared().counts;
         counts.kept_draws_carry_capped(capped);
+        counts.kept_draws_uncarried_attached(attached);
         self.take_kept()
     }
 
