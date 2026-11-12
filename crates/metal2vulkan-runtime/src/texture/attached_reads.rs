@@ -169,7 +169,7 @@ use crate::binding_view::{binding_view, VkView};
 use crate::command_buffer::CommandBuffer;
 use crate::error::Error;
 use crate::image_plan::ImagePlan;
-use crate::render_pass::{ColorTarget, PassLayout};
+use crate::render_pass::{PassLayout, MAX_COLOR_ATTACHMENTS};
 use crate::render_values::LoadAction;
 use crate::resource::ResourceKey;
 use crate::texture::view_error;
@@ -187,6 +187,49 @@ use metal2vulkan::vk::{
     ImageViewType, SampleCountFlags,
 };
 use std::ops::Range;
+
+/// The color attachments of a render pass instance as the textures a draw samples meet them, each
+/// read once ([`AttachedColors::of`]), by color index: a draw asks of each texture it samples
+/// whether one renders it ([`Texture::attached_among`]), and so reads each attachment's image once
+/// a draw, not once a texture it samples.
+pub(crate) struct AttachedColors([Option<AttachedColor>; MAX_COLOR_ATTACHMENTS]);
+
+/// A color attachment as [`AttachedColors`] holds it.
+#[derive(Clone)]
+struct AttachedColor {
+    /// The key of the image its texture renders.
+    image: ResourceKey,
+    /// The level it renders.
+    level: u32,
+    /// The layers it renders.
+    layers: Range<u32>,
+    /// Its load action clears it.
+    clears: bool,
+}
+
+impl AttachedColors {
+    /// The color attachments of `layout`: those whose texture has an image (not a texture
+    /// buffer).
+    pub(crate) fn of(layout: &PassLayout) -> AttachedColors {
+        let mut colors = layout.colors.iter();
+        AttachedColors(std::array::from_fn(|_| {
+            let color = colors.next()?.as_ref()?;
+            let target = &color.target;
+            let image = target.texture.image().ok()?;
+            Some(AttachedColor {
+                image: image.identity.key,
+                level: target.level,
+                layers: target.layer..target.layer + target.layers,
+                clears: color.load == LoadAction::Clear,
+            })
+        }))
+    }
+
+    /// Whether the pass has a color attachment with an image: else no texture is attached in it.
+    pub(crate) fn any(&self) -> bool {
+        self.0.iter().any(Option::is_some)
+    }
+}
 
 /// The levels of a texture that the color attachments of a render pass instance render
 /// ([`Texture::attached_span`]), each counted from the texture's own first level.
@@ -237,7 +280,7 @@ impl Texture {
     /// instance renders: the same image, and an overlapping level and layer (every layer of a 3D
     /// image, which has one, its depth planes the attachment's layers).
     pub(crate) fn attached_in(&self, layout: &PassLayout) -> bool {
-        self.attached_where(layout, |_| true)
+        self.attached_among(&AttachedColors::of(layout))
     }
 
     /// Whether the texture presents a level and layer that a color attachment of `layout`'s
@@ -245,7 +288,19 @@ impl Texture {
     /// what a draw after a memory barrier before the pass's first draw reads of it is the clear
     /// (the module docs).
     pub(crate) fn cleared_in(&self, layout: &PassLayout) -> bool {
-        self.attached_where(layout, |color| color.load == LoadAction::Clear)
+        self.cleared_among(&AttachedColors::of(layout))
+    }
+
+    /// [`attached_in`](Self::attached_in) of the pass whose color attachments `colors` read.
+    pub(crate) fn attached_among(&self, colors: &AttachedColors) -> bool {
+        self.attached_levels(colors, |_| true).next().is_some()
+    }
+
+    /// [`cleared_in`](Self::cleared_in) of the pass whose color attachments `colors` read.
+    pub(crate) fn cleared_among(&self, colors: &AttachedColors) -> bool {
+        (self.attached_levels(colors, |color| color.clears))
+            .next()
+            .is_some()
     }
 
     /// The copy a sampled slot binding of the texture by the draw `call` reads, and the clear it
@@ -307,17 +362,12 @@ impl Texture {
         Some((copies.shadow_key, color.clear))
     }
 
-    /// [`attached_in`](Self::attached_in) of the color attachments of `layout` that `keep`
-    /// keeps.
-    fn attached_where(&self, layout: &PassLayout, keep: impl Fn(&ColorTarget) -> bool) -> bool {
-        self.attached_levels(layout, keep).next().is_some()
-    }
-
     /// The levels of the texture, counted from its own first level, that the color attachments of
     /// `layout` render at a layer it presents, as [`attached_in`](Self::attached_in) tells; `None`
     /// where none does.
     pub(crate) fn attached_span(&self, layout: &PassLayout) -> Option<AttachedSpan> {
-        let mut attached = self.attached_levels(layout, |_| true);
+        let colors = AttachedColors::of(layout);
+        let mut attached = self.attached_levels(&colors, |_| true);
         let (color, level) = attached.next()?;
         let first = AttachedSpan {
             lowest: level,
@@ -381,33 +431,31 @@ impl Texture {
         image.view(&view)
     }
 
-    /// The color attachments of `layout` that `keep` keeps that render the texture at a layer it
+    /// The color attachments of `colors` that `keep` keeps that render the texture at a layer it
     /// presents, each by its index and the level it renders, counted from the texture's own first
     /// level: of its image, at one of its levels, and at one of its layers (any layer of a 3D
     /// image's).
     fn attached_levels<'s>(
         &'s self,
-        layout: &'s PassLayout,
-        keep: impl Fn(&ColorTarget) -> bool + 's,
+        colors: &'s AttachedColors,
+        keep: impl Fn(&AttachedColor) -> bool + 's,
     ) -> impl Iterator<Item = (usize, u32)> + 's {
         let image = self.image().ok();
         let record = &self.0.record;
         let levels = record.base_level..record.base_level + record.level_count;
         let layers = record.base_layer..record.base_layer + record.layer_count;
         let volume = image.is_some_and(|image| image.plan().image_type == ImageType::TYPE_3D);
-        let colors = image.map(|_| layout.colors.iter().enumerate());
+        let key = image.map(|image| image.identity.key);
+        let colors = key.map(|_| colors.0.iter().enumerate());
         (colors.into_iter().flatten())
             .filter_map(|(index, color)| color.as_ref().map(|color| (index, color)))
             .filter(move |(_, c)| keep(c))
             .filter_map(move |(index, color)| {
-                let target = &color.target;
-                let same = (target.texture.image())
-                    .is_ok_and(|other| image.is_some_and(|i| other.identity.key == i.identity.key));
-                let rendered = target.layer..target.layer + target.layers;
+                let rendered = &color.layers;
                 let presented =
                     volume || (rendered.start < layers.end && layers.start < rendered.end);
-                (same && levels.contains(&target.level) && presented)
-                    .then(|| (index, target.level - record.base_level))
+                (Some(color.image) == key && levels.contains(&color.level) && presented)
+                    .then(|| (index, color.level - record.base_level))
             })
     }
 }

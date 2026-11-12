@@ -348,7 +348,7 @@ use super::sparse::emulated::Scrub;
 use super::tessellation::{FactorBuffer, Factors};
 use super::texture::faces::Unturned;
 use super::texture::held_depth;
-use super::texture::Texture;
+use super::texture::{AttachedColors, Texture};
 use super::tracker::{self, Access, Barrier, GeometryWrites, IndirectReads, UnorderedWrites, Use};
 use super::used_resources::EncoderKind;
 use super::versioned::Versioned;
@@ -7507,14 +7507,16 @@ impl RenderLowering {
 
     /// Whether a draw of a plan of `facts` samples, at a slot of its tables, a texture that
     /// presents a color attachment of the pass (`texture/attached_reads.rs`) as `presents` tells
-    /// (`Texture::attached_in`, or `Texture::cleared_in` for one the pass clears): a sampled image
-    /// or combined image sampler binding, not a storage one.
+    /// (`Texture::attached_among`, or `Texture::cleared_among` for one the pass clears): a
+    /// sampled image or combined image sampler binding, not a storage one. The pass's color
+    /// attachments are read once for every texture (`AttachedColors`).
     fn samples_attachment(
         &self,
         facts: &PlanFacts,
-        presents: fn(&Texture, &PassLayout) -> bool,
+        presents: fn(&Texture, &AttachedColors) -> bool,
     ) -> bool {
-        (self.sampled_textures(facts)).any(|texture| presents(texture, &self.layout))
+        let colors = AttachedColors::of(&self.layout);
+        colors.any() && (self.sampled_textures(facts)).any(|texture| presents(texture, &colors))
     }
 
     /// The textures a draw of a plan of `facts` samples at slots of its tables: through a
@@ -9029,9 +9031,10 @@ impl RenderLowering {
         // pass's first, which runs the clear, and the copy is taken between.
         let attached = !self.replaying
             && snapshot.is_none()
-            && self.samples_attachment(&facts, Texture::attached_in);
-        let behind_loads =
-            attached && self.loads_ordered && self.samples_attachment(&facts, Texture::cleared_in);
+            && self.samples_attachment(&facts, Texture::attached_among);
+        let behind_loads = attached
+            && self.loads_ordered
+            && self.samples_attachment(&facts, Texture::cleared_among);
         // Such a draw keeps nothing to draw again: its copy's clear, or its split, is its own
         // (`render/draw_again.rs`).
         let reads_clear = behind_loads;

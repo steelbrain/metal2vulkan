@@ -198,7 +198,7 @@ pub(crate) use decoded_twin::TwinRead;
 pub(crate) use ycbcr_image::{KeptImage, PlanesInPlace};
 pub(crate) use ycbcr_planes::KeptTexels;
 
-pub(crate) use attached_reads::{feedback_candidate, AttachedSpan};
+pub(crate) use attached_reads::{feedback_candidate, AttachedColors, AttachedSpan};
 pub use shared::SharedTextureHandle;
 pub use wrapped::{VkImageLayouts, WrappedImageProblem};
 

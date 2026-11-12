@@ -886,9 +886,11 @@ impl RenderLowering {
         // plan writes is a color attachment's (a draw that does records apart), and no
         // extended-range texture is bound through a shadow (`LiveBind`'s state), as for the kept
         // draw.
-        let attached = self.samples_attachment(facts, Texture::attached_in);
+        let attached = self.samples_attachment(facts, Texture::attached_among);
         let images = changed.images();
-        if (attached && self.loads_ordered && self.samples_attachment(facts, Texture::cleared_in))
+        if (attached
+            && self.loads_ordered
+            && self.samples_attachment(facts, Texture::cleared_among))
             || (images
                 && (self.storage_colors(facts) != 0 || !live.state.extended_shadows.is_empty()))
         {
