@@ -331,8 +331,9 @@ fn draw(
             host.set(COLORS_AT as usize / 4, &bits(&COLOR.repeat(3)));
             if leg == Leg::VertexBuffersRebound {
                 // The same triangle from another buffer first, then the no-copy buffer's at the
-                // same indices, then again: the second draw's retain takes the no-copy buffer,
-                // and the third's looks at nothing, the encoder holding it as it was bound.
+                // same indices, then the no-copy buffer bound again at another index: the second
+                // draw's retain takes the no-copy buffer, and the third's looks at nothing, the
+                // encoder holding it as it was bound.
                 let mut words = vec![0; (COLORS_AT / 4) as usize];
                 words[..triangle.len()].copy_from_slice(&triangle);
                 words.extend(bits(&COLOR.repeat(3)));
@@ -356,7 +357,9 @@ fn draw(
                 .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
                 .unwrap();
             if leg == Leg::VertexBuffersRebound {
-                encoder.set_vertex_buffer(Some(no_copy), 0, 0).unwrap();
+                // At an index the function does not read: bound at the same index and offset, it
+                // would change nothing, and the draw would draw again, retaining nothing.
+                encoder.set_vertex_buffer(Some(no_copy), 0, 2).unwrap();
                 encoder
                     .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
                     .unwrap();
