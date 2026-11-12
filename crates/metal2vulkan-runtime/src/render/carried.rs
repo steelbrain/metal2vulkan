@@ -1,8 +1,8 @@
-//! A render encoder's kept draw carried into the next render encoder of its command buffer
+//! A render encoder's kept draws carried into the next render encoder of its command buffer
 //! (`WorkCounts::kept_draws_carried`): that encoder starts from the ended encoder's bind state, its
-//! settle and its kept draw (`render/draw_again.rs`), so that its first draw of the same pipeline
-//! state is rebound (`render/draw_again/rebound.rs`, `WorkCounts::draws_rebound_carried`) instead
-//! of taking every step.
+//! settles and its kept draws (`render/draw_again.rs`), so that its first draw of each pipeline
+//! state carried is rebound (`render/draw_again/rebound.rs`, `WorkCounts::draws_rebound_carried`)
+//! instead of taking every step.
 //!
 //! - **What carries.** Where an encoder ends with a kept draw that rebinds (`Kept::rebinds`),
 //!   recorded into its pass's first instance (no split, no executed commands or tile dispatches,
@@ -10,10 +10,18 @@
 //!   state whose settle it holds (`LiveBind::settled`), that read no texture an attachment of its
 //!   pass renders, in a pass of no color groups, rasterization-rate map or replay, its command
 //!   buffer holds the bind state, with the settle, and the kept draw ([`Carried`]) in place of
-//!   giving the state to its device's spares (`live_bind::SpareLiveBinds`). The shadows' copies it
-//!   listed and the heap parts it kept go as they go at any end (`LiveBind::end_carried`): they
-//!   are the residency's, which is the encoder's. The settle holds its variant's objects, which
-//!   the command buffer holds already, so the carry keeps nothing alive past the command buffer.
+//!   giving the state to its device's spares (`live_bind::SpareLiveBinds`). With it go the kept
+//!   draws its bind state set aside with the states of other pipeline states (`LiveBind::select`)
+//!   that are kept still (under the encoder's epoch), carry as it does of their own
+//!   (`Kept::carries`) through a state that holds its settle, and read what changes with no call
+//!   as it did (`Kept::carries_with`), so the next encoder's check of it holds for each: those of
+//!   the [`CARRIED_STATES`] states drawn most lately, its own among them
+//!   (`LiveBind::carry_aside`, `WorkCounts::kept_draws_carried_aside`); the rest it lets go
+//!   (`WorkCounts::kept_draws_carry_capped`, those past the bound that would carry). The shadows'
+//!   copies it listed and the heap parts it kept go as they go at any end
+//!   (`LiveBind::end_carried`): they are the residency's, which is the encoder's. The settles hold
+//!   their variants' objects, which the command buffer holds already, so the carry keeps nothing
+//!   alive past the command buffer.
 //! - **Let go.** Any call of the command buffer that settles its last render encoder's end
 //!   (`CommandBuffer::settle_end`: another encoder's opening, an event, a semaphore, the commit)
 //!   lets it go to the device's spares, counted where it comes between
@@ -27,21 +35,25 @@
 //!   sampler IDs' slots as they were, and its residency of the generation the ended encoder's
 //!   had (`kept_draws_carry_dropped_under`). Else it lets it go, counted, and starts from a
 //!   spare, as any encoder.
-//! - **Taken.** The encoder starts from the carried bind state, and keeps the carried draw under
-//!   its own epoch ([`Kept::carried`]): after draws of no other state (`Kept::between`), recorded
-//!   through no record (`Kept::settled`), under a render state of another stamp (`Kept::stated`),
-//!   so its first draw of it derives again what the encoder's render state decides
-//!   (`restated.rs`) and records every state command it sets into the encoder's command buffer,
-//!   which holds none. Its tables' stamps are the encoder's tables' first ones: a new encoder
-//!   inherits no binding, so its first draw brings in every slot its calls bound since the
-//!   opening (`argument_table::Changes`), and its rebind stops where the bind state holds a slot
-//!   bound that none of them bound (`WorkCounts::draws_carry_stopped_stale`): the state is the
-//!   ended encoder's there, not this one's. Its uses are made again whole, and it stops where it
-//!   samples a texture an attachment of its pass renders (`draws_carry_stopped_attached`). It
-//!   begins its pass's first instance as every step's first draw begins it
-//!   (`render/inline_first.rs`). What it compares at a draw again is the encoder's: the command
-//!   buffer its instance records into, and what it read that changes with no call (`Under`), as
-//!   of the opening.
+//! - **Taken.** The encoder starts from the carried bind state, and keeps the carried draws under
+//!   its own epoch ([`Kept::carried`]), each beside its state as the ended encoder left it: after
+//!   draws of other states (`Kept::between`), recorded through no record (`Kept::settled`), under
+//!   a render state of another stamp (`Kept::stated`), so its state's first draw derives again
+//!   what the encoder's render state decides (`restated.rs`) and records every state command it
+//!   sets into the instance's command buffer. That instance is the one the encoder opened with,
+//!   the pass's first: a carried draw is kept only while it is (`RenderLowering::select_kept`),
+//!   and records into its command buffer as it stands, which a draw of another state before it
+//!   may have begun, each such draw kept, drawn again or rebound under the epoch, as every draw
+//!   between a kept draw and its next is. Its tables' stamps are the encoder's tables' first
+//!   ones: a new encoder inherits no binding, so its first draw brings in every slot its calls
+//!   bound since the opening (`argument_table::Changes`), and its rebind stops where the bind
+//!   state holds a slot bound that none of them bound (`WorkCounts::draws_carry_stopped_stale`):
+//!   the state is the ended encoder's there, not this one's. Its uses are made again whole, and
+//!   it stops where it samples a texture an attachment of its pass renders
+//!   (`draws_carry_stopped_attached`). It begins its pass's first instance as every step's draw
+//!   begins it (`render/inline_first.rs`), where no draw before it began it. What it compares at
+//!   a draw again is the encoder's: the command buffer its instance records into, and what it
+//!   read that changes with no call (`Under`), as of the opening.
 //! - **Checked in builds with debug assertions.** As a draw rebound is: the first carried draw of a
 //!   command buffer's encoders and every second one after it takes every step instead, which must
 //!   keep the same draw, with the same commands, writes, offsets, push bytes, vertex buffers, uses
@@ -53,6 +65,14 @@ use crate::device::Device;
 use crate::live_bind::LiveBind;
 use crate::render_target::PassShape;
 use crate::work_counts::CarryDropped;
+
+/// The most pipeline states whose kept draws a render encoder carries into its command buffer's
+/// next render encoder: its last draw's and those of the three drawn most lately before it, of the
+/// states its bind state sets aside (`LiveBind::select`), so an encoder whose draws switch between
+/// up to four states finds each one's first draw carried (a window compositor's pass draws
+/// through three). The kept draw of a state drawn before those, which would carry, is let go
+/// (`WorkCounts::kept_draws_carry_capped`): an opening converts at most this many.
+const CARRIED_STATES: usize = 4;
 
 /// A render encoder's bind state, its settle and its kept draw, carried by its command buffer for
 /// the next render encoder of it (the module docs).
@@ -113,12 +133,12 @@ fn carried_fits(carried: &Carried, opening: &Opening, samplers: u64) -> Result<(
 
 impl RenderLowering {
     /// The kept draw this encoder, ending with its bind state `live`, carries into its command
-    /// buffer's next render encoder, taken from it where it does (the module docs).
-    fn carried_out(&mut self, live: &LiveBind) -> Option<Kept> {
+    /// buffer's next render encoder, taken from it where it does, with those set aside with the
+    /// states of the [`CARRIED_STATES`] pipeline states drawn most lately that carry with it,
+    /// every other set aside let go (the module docs).
+    fn carried_out(&mut self, live: &mut LiveBind) -> Option<Kept> {
         let kept = self.again_kept()?;
-        let carries = kept.rebinds
-            && kept.through_copies == (false, false)
-            && kept.narrowed.is_empty()
+        let carries = kept.carries()
             && live.settled.is_some()
             && self.earlier.is_empty()
             && self.grouped.is_none()
@@ -140,18 +160,36 @@ impl RenderLowering {
             && !self.current.shadow
             && !self.current.shader_tests
             && self.current.shape.storage.is_empty();
-        carries.then(|| self.take_kept()).flatten()
+        if !carries {
+            return None;
+        }
+        let capped = live.carry_aside(CARRIED_STATES - 1, |aside, settled| {
+            settled && aside.carries_with(kept)
+        });
+        let counts = &self.core.device().shared().counts;
+        counts.kept_draws_carry_capped(capped);
+        self.take_kept()
     }
 
-    /// Start from `kept`, the kept draw the command buffer's last render encoder carried, of
-    /// `carries` kept draws carried in before it (the module docs).
-    fn carried_in(&mut self, kept: Kept, #[cfg(debug_assertions)] carries: u64) {
+    /// Start from `kept`, the kept draw the command buffer's last render encoder carried, and
+    /// those `live`, its bind state, set aside with it, of `carries` kept draws carried in before
+    /// it (the module docs).
+    fn carried_in(
+        &mut self,
+        mut kept: Kept,
+        live: &mut LiveBind,
+        #[cfg(debug_assertions)] carries: u64,
+    ) {
         let (stamps, under, draws) = (self.table_stamps(), self.under(), self.current.draws);
         let epoch = self.again_epoch();
-        self.keep_carried(kept.carried_into(epoch, stamps, under, draws));
+        kept.carried_into(epoch, stamps, under, draws);
+        self.keep_carried(kept);
+        let aside = live.carried_aside(|kept| kept.carried_into(epoch, stamps, under, draws));
         #[cfg(debug_assertions)]
         self.set_carries(carries);
-        self.core.device().shared().counts.kept_draw_carried();
+        let counts = &self.core.device().shared().counts;
+        counts.kept_draw_carried();
+        counts.kept_draws_carried_aside(aside);
     }
 }
 
@@ -164,7 +202,7 @@ impl Lowering {
             mut lowering,
             mut live,
         } = self;
-        let Some(kept) = lowering.carried_out(&live) else {
+        let Some(kept) = lowering.carried_out(&mut live) else {
             lowering.core.device().shared().live_binds.give(live);
             return lowering;
         };
@@ -186,18 +224,21 @@ impl Lowering {
     /// The lowering of an encoder, `lowering`, starting from `start` (the module docs): a
     /// carried bind state, and its kept draw, or a spare one.
     pub(super) fn starting_from(mut lowering: Box<RenderLowering>, start: Start) -> Lowering {
-        let carried = match start {
+        let Carried {
+            mut live,
+            kept,
+            #[cfg(debug_assertions)]
+            carries,
+            ..
+        } = match start {
             Start::Carried(carried) => *carried,
             Start::Spare(live) => return Lowering { lowering, live },
         };
         #[cfg(debug_assertions)]
-        lowering.carried_in(carried.kept, carried.carries);
+        lowering.carried_in(kept, &mut live, carries);
         #[cfg(not(debug_assertions))]
-        lowering.carried_in(carried.kept);
-        Lowering {
-            lowering,
-            live: carried.live,
-        }
+        lowering.carried_in(kept, &mut live);
+        Lowering { lowering, live }
     }
 }
 

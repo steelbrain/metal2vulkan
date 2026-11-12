@@ -296,6 +296,8 @@ pub(crate) struct Counters {
     encoders_barriered_at_open: AtomicU64,
     kept_draws_carried: AtomicU64,
     kept_draws_carry_dropped: [AtomicU64; CarryDropped::COUNT],
+    kept_draws_carried_aside: AtomicU64,
+    kept_draws_carry_capped: AtomicU64,
     inline_split_instances: AtomicU64,
     inline_memoryless_write_splits: AtomicU64,
     passes_not_inline: [AtomicU64; NotInline::COUNT],
@@ -3016,6 +3018,25 @@ impl Counters {
     /// (`WorkCounts::kept_draws_carry_dropped_*`).
     pub(crate) fn kept_draw_carry_dropped(&self, why: CarryDropped) {
         self.kept_draws_carry_dropped[why as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A render encoder opened from a carried kept draw took `count` kept draws of other pipeline
+    /// states carried with it (`render/carried.rs`, `WorkCounts::kept_draws_carried_aside`).
+    pub(crate) fn kept_draws_carried_aside(&self, count: u64) {
+        if count > 0 {
+            self.kept_draws_carried_aside
+                .fetch_add(count, Ordering::Relaxed);
+        }
+    }
+
+    /// A render encoder that carried its kept draw let go of `count` kept draws of pipeline
+    /// states drawn before the most it carries (`render/carried.rs`,
+    /// `WorkCounts::kept_draws_carry_capped`).
+    pub(crate) fn kept_draws_carry_capped(&self, count: u64) {
+        if count > 0 {
+            self.kept_draws_carry_capped
+                .fetch_add(count, Ordering::Relaxed);
+        }
     }
 
     /// A render pass's first instance did not record inline, for `why` (`NotInline`).
@@ -6428,7 +6449,8 @@ pub struct WorkCounts {
     /// Render encoders that opened from the kept draw their command buffer's last render encoder
     /// carried into them, with that encoder's bind state and settle (`render/carried.rs`): the
     /// encoder's first draw of it is rebound (`draws_rebound_carried`). An encoder ended with a
-    /// kept draw of its pass's first instance that read no attachment of its pass carries it.
+    /// kept draw of its pass's first instance that read no attachment of its pass carries it,
+    /// with those of other pipeline states it set aside (`kept_draws_carried_aside`).
     pub kept_draws_carried: u64,
     /// Kept draws carried that were let go before a render encoder started from them because
     /// another call of the command buffer came first: another encoder's opening, an event, a
@@ -6443,6 +6465,18 @@ pub struct WorkCounts {
     /// changed: a no-copy buffer moved, the device's sampler IDs' slots changed, or the next
     /// encoder's residency is of another generation.
     pub kept_draws_carry_dropped_under: u64,
+    /// Kept draws of other pipeline states than the last draw's that render encoders opened from
+    /// a carried kept draw took with it (`kept_draws_carried`, `render/carried.rs`): each set
+    /// aside with its state's bind state in the ended encoder, kept there still, carrying as the
+    /// last draw's does and having read what changes with no call as it did; the encoder's first
+    /// draw of each state is rebound against its own (`draws_rebound_carried`). An encoder
+    /// carries those of the three states drawn most lately before its last draw's
+    /// (`kept_draws_carry_capped`).
+    pub kept_draws_carried_aside: u64,
+    /// Kept draws that would carry with their encoder's last one (`kept_draws_carried_aside`) let
+    /// go because their pipeline state was drawn before the three drawn most lately before the
+    /// last draw's: the most states an encoder carries is four (`render/carried.rs`).
+    pub kept_draws_carry_capped: u64,
     /// Those of them that ended with more than one instance.
     pub inline_passes_split: u64,
     /// The instances after a split of such passes that recorded their draws inline too, in the
@@ -7061,11 +7095,12 @@ pub struct WorkCounts {
     /// reach and its index buffer's bind, which it records with its draw, its index buffer held
     /// where it is another (`render/draw_again/rebound.rs`).
     pub draws_rebound_arguments: u64,
-    /// Of `draws_rebound`, render encoders' first draws of the kept draw their command buffer's
-    /// last render encoder carried into them (`kept_draws_carried`, `render/carried.rs`): each
-    /// derived again what the encoder's render state decides of it, brought in every slot the
-    /// encoder's calls bound, made its uses whole, began its pass's first instance as every step
-    /// begins it, and recorded every state command it sets into the encoder's command buffer.
+    /// Of `draws_rebound`, render encoders' first draws of a kept draw their command buffer's
+    /// last render encoder carried into them (`kept_draws_carried`, `kept_draws_carried_aside`,
+    /// `render/carried.rs`): each derived again what the encoder's render state decides of it,
+    /// brought in every slot the encoder's calls bound, made its uses whole, began its pass's
+    /// first instance as every step begins it where no draw before it began it, and recorded
+    /// every state command it sets into the instance's command buffer.
     pub draws_rebound_carried: u64,
     /// Render encoders' first draws of a carried kept draw whose rebind stopped, so that they took
     /// every step: each counted in one of the counts below.
@@ -9296,6 +9331,8 @@ impl Device {
             kept_draws_carry_dropped_between: carry_dropped(CarryDropped::Between),
             kept_draws_carry_dropped_layout: carry_dropped(CarryDropped::Layout),
             kept_draws_carry_dropped_under: carry_dropped(CarryDropped::Under),
+            kept_draws_carried_aside: counters.kept_draws_carried_aside.load(Ordering::Relaxed),
+            kept_draws_carry_capped: counters.kept_draws_carry_capped.load(Ordering::Relaxed),
             inline_passes_split: counters.inline_passes_split.load(Ordering::Relaxed),
             inline_split_instances: counters.inline_split_instances.load(Ordering::Relaxed),
             inline_memoryless_write_splits: (counters.inline_memoryless_write_splits)

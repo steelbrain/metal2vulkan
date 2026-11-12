@@ -81,11 +81,13 @@
 //!   draw state's dynamic states against what its record holds, where what it derived leaves
 //!   its pipeline, plan, shape and push bytes the kept draw's; else it takes every step.
 //! - **Carried to the next encoder.** An encoder that ends with a kept draw of its pass's first
-//!   instance carries it, with its bind state and settle, into its command buffer's next render
-//!   encoder where nothing comes between and that encoder's pass is its pass's like
-//!   (`render/carried.rs`): the draw is kept there as one after draws of other states, recorded
-//!   through no record, under another render state ([`Kept::carried`]), so its first draw there
-//!   is rebound (`rebound.rs`), bringing in every slot that encoder's calls bound.
+//!   instance carries it, with its bind state and settles and the kept draws set aside with the
+//!   states of up to three other pipeline states, into its command buffer's next render encoder
+//!   where nothing comes between and that encoder's pass is its pass's like
+//!   (`render/carried.rs`): each draw is kept there as one after draws of other states, recorded
+//!   through no record, under another render state ([`Kept::carried`]), in the instance that
+//!   encoder opened with, so its state's first draw there is rebound (`rebound.rs`), bringing in
+//!   every slot that encoder's calls bound.
 //! - **What a kept draw left holds for the next.** Each of its steps adds to what the encoder
 //!   holds, and adding the same again changes nothing: its drawn area and coverage (rectangles
 //!   and boxes, `clear_reach::DrawnArea`, `linear_attachment::Coverage`), the pass's reads
@@ -157,6 +159,11 @@ pub(super) struct DrawAgain {
     /// instead (`render/carried.rs`).
     #[cfg(debug_assertions)]
     carries: u64,
+    /// The version of the instance the encoder opened with (`Versioned::version` of its shape),
+    /// where it started from kept draws carried in (`render/carried.rs`): while the current
+    /// instance is that one, as it was, it is the pass's first, which a kept draw carried in
+    /// records into, whichever draw began it. `None` where none was carried in.
+    opened: Option<u64>,
 }
 
 /// What a kept draw was, what it read, and what a draw again repeats of it (the module docs).
@@ -229,29 +236,26 @@ pub(crate) struct Kept {
 }
 
 impl Kept {
-    /// This draw, carried into a render encoder of epoch `epoch` whose tables' stamps are
-    /// `stamps` at its opening, whose `Under` is `under` there and whose first instance records
-    /// into `draws` (`render/carried.rs`).
+    /// Carry this draw into a render encoder of epoch `epoch` whose tables' stamps are `stamps`
+    /// at its opening, whose `Under` is `under` there and whose first instance records into
+    /// `draws` (`render/carried.rs`).
     pub(super) fn carried_into(
-        self,
+        &mut self,
         epoch: Stamp,
         stamps: [Stamp; 4],
         under: Under,
         draws: vk::CommandBuffer,
-    ) -> Kept {
-        Kept {
-            epoch,
-            // A stamp no render state had: its first draw derives again what the encoder's
-            // render state decides (`restated.rs`).
-            stated: Stamp::fresh(),
-            between: true,
-            stamps,
-            under,
-            command_buffer: draws,
-            settled: None,
-            carried: true,
-            ..self
-        }
+    ) {
+        self.epoch = epoch;
+        // A stamp no render state had: its first draw derives again what the encoder's render
+        // state decides (`restated.rs`).
+        self.stated = Stamp::fresh();
+        self.between = true;
+        self.stamps = stamps;
+        self.under = under;
+        self.command_buffer = draws;
+        self.settled = None;
+        self.carried = true;
     }
 
     /// Whether what the draw read that changes with no call is as it was, but what it was noted
@@ -260,6 +264,24 @@ impl Kept {
     pub(super) fn carried_under(&self, moved: u64, residency: u64, samplers: u64) -> bool {
         let under = &self.under;
         (under.moved, under.residency, under.samplers) == (moved, residency, samplers)
+    }
+
+    /// Whether the draw, of its own, may be carried into the next render encoder
+    /// (`render/carried.rs`): it rebinds, through no copy of an attachment's texture and with no
+    /// sampled slot narrowed.
+    pub(super) fn carries(&self) -> bool {
+        self.rebinds && self.through_copies == (false, false) && self.narrowed.is_empty()
+    }
+
+    /// Whether the draw, set aside with its pipeline state's bind state, is carried with `last`,
+    /// its encoder's last kept draw (`render/carried.rs`): kept under its epoch, carrying of its
+    /// own ([`carries`](Self::carries)), and having read what changes with no call as `last`
+    /// read it, but what it was noted into, so the next encoder's check of `last`'s holds for it.
+    pub(super) fn carries_with(&self, last: &Kept) -> bool {
+        let under = &last.under;
+        self.epoch == last.epoch
+            && self.carries()
+            && self.carried_under(under.moved, under.residency, under.samplers)
     }
 }
 
@@ -451,9 +473,10 @@ impl RenderLowering {
     }
 
     /// Keep `kept`, a draw carried in from the command buffer's last render encoder
-    /// (`render/carried.rs`), as the last direct draw's.
+    /// (`render/carried.rs`), as the last direct draw's, in the instance the encoder opened with.
     pub(super) fn keep_carried(&mut self, kept: Kept) {
         self.again.kept = Some(kept);
+        self.again.opened = Some(self.current.shape.version());
     }
 
     /// The kept draws carried in since the command buffer's first render encoder
@@ -474,7 +497,11 @@ impl RenderLowering {
     /// drew through another: the last draw's kept draw set aside with the bind state `live` holds
     /// for that state, and the bind state of this one selected (`LiveBind::select`), with the
     /// draw kept beside it where one is, kept under the encoder's epoch still. Such a draw drew
-    /// before draws of other states recorded: it is [`Kept::between`].
+    /// before draws of other states recorded: it is [`Kept::between`]. One carried in from the
+    /// command buffer's last render encoder (`render/carried.rs`) is kept while the current
+    /// instance is the one the encoder opened with, the pass's first, which the draws since
+    /// recorded into or began (each a draw kept, drawn again or rebound, under the epoch): it
+    /// records into that instance's command buffer as it is now.
     pub(super) fn select_kept(&mut self, live: &mut LiveBind) {
         let Some(RenderStateKind::Graphics(pipeline)) = self.pipeline.as_ref().map(|p| p.kind())
         else {
@@ -486,10 +513,15 @@ impl RenderLowering {
         live.set_aside_kept(self.again.kept.take());
         live.select(pipeline);
         let epoch = self.again.epoch;
-        self.again.kept =
-            (live.take_kept()).filter(|kept| kept.epoch == epoch && kept.pipeline.is(pipeline));
+        let opened = self.again.opened == Some(self.current.shape.version());
+        self.again.kept = (live.take_kept()).filter(|kept| {
+            kept.epoch == epoch && kept.pipeline.is(pipeline) && (opened || !kept.carried)
+        });
         if let Some(kept) = self.again.kept.as_mut() {
             kept.between = true;
+            if kept.carried {
+                kept.command_buffer = self.current.draws;
+            }
         }
     }
 

@@ -248,6 +248,60 @@ fn passes_of_the_same_state_rebind_the_carried_draw() {
     );
 }
 
+/// Passes that each draw through three pipeline states, each pass after the first starting from a
+/// state its encoder's last draw did not draw: every state's kept draw carries with the encoder's
+/// last one (`kept_draws_carried_aside`), and the next encoder's first draw of each state is
+/// rebound against its own (`draws_rebound_carried`), the later ones after a draw of another
+/// state began the pass's instance, with no draw unlike its kept draw or stopped, and the pixels
+/// of the same passes in command buffers of their own. Passes of five states, more than an encoder
+/// carries (four), let go of the kept draw of the state drawn longest before the last
+/// (`kept_draws_carry_capped`), whose next draw takes every step; the other four are rebound.
+#[test]
+fn passes_of_several_states_rebind_each_state_s_carried_draw() {
+    let scratch = Scratch::new("carried-states");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let queue = device.new_command_queue().unwrap();
+    let states: [RenderPipelineState; 5] = std::array::from_fn(|_| adding_state(&device));
+    let color = colors(&device, &[[1.0 / 64.0; 4]]);
+    let draw = |encoder: &mut RenderCommandEncoder, order: &[usize]| {
+        for &at in order {
+            rectangle(encoder, &states[at], (&color, 0));
+        }
+    };
+    let first = |encoder: &mut RenderCommandEncoder| draw(encoder, &[0, 1, 2]);
+    let turned = |encoder: &mut RenderCommandEncoder| draw(encoder, &[1, 2, 0]);
+    let five = |encoder: &mut RenderCommandEncoder| draw(encoder, &[0, 1, 2, 3, 4]);
+    warm(&device, five);
+    let aside = |frame: &Frame| frame.counted(|c| c.kept_draws_carried_aside);
+    let capped = |frame: &Frame| frame.counted(|c| c.kept_draws_carry_capped);
+    let missed = |c: &WorkCounts| c.draws_unlike_kept + c.draws_rebind_stopped;
+    // Two carried passes of three states: each state's first draw rebound.
+    let passes: [Pass<'_>; 3] = [&first, &turned, &turned];
+    let together = frame(&queue, &passes, Apart::Together);
+    let alone = frame(&queue, &passes, Apart::CommandBuffers);
+    let mut expected = rebound(2 * 3);
+    expected[0] = 2;
+    assert_eq!(together.carries(), expected, "three states: the counts");
+    assert_eq!(
+        (aside(&together), capped(&together)),
+        (2 * 2, 0),
+        "three states"
+    );
+    assert_eq!(together.counted(missed), 0, "three states: no draw missed");
+    assert_eq!(together.words, alone.words, "three states: the pixels");
+    // A carried pass of five states: four rebound, the fifth (drawn first, longest before the
+    // last) let go at each pass's end.
+    let passes: [Pass<'_>; 2] = [&five, &five];
+    let together = frame(&queue, &passes, Apart::Together);
+    let alone = frame(&queue, &passes, Apart::CommandBuffers);
+    let mut expected = rebound(4);
+    expected[0] = 1;
+    assert_eq!(together.carries(), expected, "five states: the counts");
+    assert_eq!((aside(&together), capped(&together)), (3, 2), "five states");
+    assert_eq!(together.words, alone.words, "five states: the pixels");
+}
+
 /// The next encoder binds the same state and buffers but for one slot's value: the same buffer at
 /// another offset, or another buffer. Its carried draw is rebound with the value its own call
 /// bound, which the pixels show: each pass adds the color it bound, in a channel of its own. Each

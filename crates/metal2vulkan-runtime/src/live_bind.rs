@@ -52,8 +52,9 @@
 //!   shape and forms alone). Only a draw that recorded keeps it, so its encoder holds its pipeline
 //!   state (and the command buffer the variant's objects); it goes as the encoder ends
 //!   ([`SpareLiveBinds::give`]), so a spare state holds nothing alive, but where the encoder
-//!   carries its kept draw into its command buffer's next render encoder, which takes the state
-//!   with its settle (`render/carried.rs`, [`LiveBind::end_carried`]).
+//!   carries its kept draws into its command buffer's next render encoder, which takes the state
+//!   with its settles and the kept draws set aside that carry ([`LiveBind::carry_aside`],
+//!   `render/carried.rs`, [`LiveBind::end_carried`]).
 //! - **Kept from one encoder to the next.** An encoder that ends gives its state, with its shape,
 //!   to its device ([`SpareLiveBinds`]), and the next render encoder opened starts from it, as a
 //!   draw starts from the draw before it: its first draw brings it in place, so a pass that binds
@@ -551,10 +552,11 @@ impl LiveBind {
         self.end_carried();
     }
 
-    /// Its encoder ended, carrying its kept draw into its command buffer's next render encoder
+    /// Its encoder ended, carrying its kept draws into its command buffer's next render encoder
     /// (`render/carried.rs`): as [`end_encoder`](Self::end_encoder), but what its draws settled
-    /// stays, which the command buffer holds the variants' objects of. The shadows' copies listed
-    /// and the heap parts kept go: they are its residency's, which is the encoder's.
+    /// stays, which the command buffer holds the variants' objects of, with the kept draws set
+    /// aside that carry ([`carry_aside`](Self::carry_aside)). The shadows' copies listed and the
+    /// heap parts kept go: they are its residency's, which is the encoder's.
     pub(super) fn end_carried(&mut self) {
         self.shadows.let_go();
         self.heap.let_go();
@@ -653,6 +655,43 @@ impl LiveBind {
     /// The kept draw set aside with the state in place, taken.
     pub(super) fn take_kept(&mut self) -> Option<DrawKept> {
         self.draw_kept.take()
+    }
+
+    /// Of the kept draws set aside with the states of other pipeline states, keep for the next
+    /// render encoder of its encoder's command buffer (`render/carried.rs`) those that `carries`
+    /// tells carry (given each and whether its state holds its settle), of the `most` states set
+    /// aside most lately, and let go of every other: how many that carry were let go past `most`.
+    pub(super) fn carry_aside(
+        &mut self,
+        most: usize,
+        carries: impl Fn(&DrawKept, bool) -> bool,
+    ) -> u64 {
+        let mut latest_first: [usize; SET_ASIDE] = std::array::from_fn(|at| at);
+        latest_first.sort_unstable_by_key(|&at| std::cmp::Reverse(self.set_aside[at].at));
+        let (mut kept, mut past) = (0, 0);
+        for at in latest_first {
+            let aside = &mut self.set_aside[at];
+            let settled = aside.settled.is_some();
+            let carry = (aside.draw_kept.as_ref()).is_some_and(|draw| carries(draw, settled));
+            if carry && kept < most {
+                kept += 1;
+                continue;
+            }
+            past += u64::from(carry);
+            aside.draw_kept = None;
+        }
+        past
+    }
+
+    /// Carry each kept draw set aside into the render encoder that starts from this state
+    /// (`render/carried.rs`) by `carry`: how many.
+    pub(super) fn carried_aside(&mut self, mut carry: impl FnMut(&mut DrawKept)) -> u64 {
+        let mut carried = 0;
+        for draw in (self.set_aside.iter_mut()).filter_map(|aside| aside.draw_kept.as_mut()) {
+            carry(draw);
+            carried += 1;
+        }
+        carried
     }
 
     /// What the state's last recorded draw settled, where it drew `pipeline` in `forms` and its
