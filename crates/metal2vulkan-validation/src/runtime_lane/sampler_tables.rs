@@ -4,10 +4,10 @@
 //! buffer) answer what the M3 Max answers (`sampler_table.m`).
 //!
 //! The texture is 4 by 1 `RGBA8Unorm`: red, green, blue, white. Thread `i = 4c + s` samples at
-//! `x = X[c]` (texel units -0.5, 0.75, 3.75, 4.5 and 2.5: outside the texture on both sides, and
-//! a quarter of the way between texel centers) through `samplers[s]` (repeat nearest, clamp
-//! nearest, repeat linear, clamp linear), so each thread's texel says which sampler sampled. Every
-//! answer is a multiple of a quarter, which a linear filter's weights of a quarter give exactly.
+//! `x = X[c]` (texel units -0.5, 4.5, -1.5, 2.5 and 5.5: outside the texture on both sides, and
+//! inside it) through `samplers[s]`, all nearest (repeat, clamp to edge, mirrored repeat, clamp to
+//! zero), so each thread's texel says which sampler sampled. A nearest sample is a texel or zero,
+//! which every device answers exactly.
 
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
@@ -28,36 +28,24 @@ use std::path::Path;
 const THREADS: usize = 20;
 
 /// The coordinates, in normalized units.
-const X: [f32; 5] = [-0.125, 0.1875, 0.9375, 1.125, 0.625];
+const X: [f32; 5] = [-0.125, 1.125, -0.375, 0.625, 1.375];
 
 const ONE: u32 = 0x3f80_0000;
 const ZERO: u32 = 0;
-const QUARTER: u32 = 0x3e80_0000;
-const THREE_QUARTERS: u32 = 0x3f40_0000;
+const RED: [u32; 4] = [ONE, ZERO, ZERO, ONE];
+const GREEN: [u32; 4] = [ZERO, ONE, ZERO, ONE];
+const BLUE: [u32; 4] = [ZERO, ZERO, ONE, ONE];
+const WHITE: [u32; 4] = [ONE, ONE, ONE, ONE];
+const NONE: [u32; 4] = [ZERO, ZERO, ZERO, ZERO];
 
 /// What the M3 Max answers (macOS 27.0.1), thread by thread, as words: both kernels alike.
 #[rustfmt::skip]
 const METAL: [[u32; 4]; THREADS] = [
-    [ONE, ONE, ONE, ONE],
-    [ONE, ZERO, ZERO, ONE],
-    [ONE, ONE, ONE, ONE],
-    [ONE, ZERO, ZERO, ONE],
-    [ONE, ZERO, ZERO, ONE],
-    [ONE, ZERO, ZERO, ONE],
-    [THREE_QUARTERS, QUARTER, ZERO, ONE],
-    [THREE_QUARTERS, QUARTER, ZERO, ONE],
-    [ONE, ONE, ONE, ONE],
-    [ONE, ONE, ONE, ONE],
-    [ONE, THREE_QUARTERS, THREE_QUARTERS, ONE],
-    [ONE, ONE, ONE, ONE],
-    [ONE, ZERO, ZERO, ONE],
-    [ONE, ONE, ONE, ONE],
-    [ONE, ZERO, ZERO, ONE],
-    [ONE, ONE, ONE, ONE],
-    [ZERO, ZERO, ONE, ONE],
-    [ZERO, ZERO, ONE, ONE],
-    [ZERO, ZERO, ONE, ONE],
-    [ZERO, ZERO, ONE, ONE],
+    WHITE, RED, RED, NONE,
+    RED, WHITE, WHITE, NONE,
+    BLUE, RED, GREEN, NONE,
+    BLUE, BLUE, BLUE, BLUE,
+    GREEN, WHITE, BLUE, NONE,
 ];
 
 /// The fixture's `entry`, made into a pipeline.

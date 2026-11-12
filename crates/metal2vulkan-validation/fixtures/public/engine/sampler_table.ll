@@ -12,8 +12,8 @@ target triple = "air64_v28-apple-macosx26.0.0"
 @_ZL8samplers = internal unnamed_addr addrspace(2) constant %"struct.metal::array" { [4 x %"struct.metal::sampler"] [%"struct.metal::sampler" { ptr addrspace(2) @__air_sampler_state }, %"struct.metal::sampler" { ptr addrspace(2) @__air_sampler_state.1 }, %"struct.metal::sampler" { ptr addrspace(2) @__air_sampler_state.2 }, %"struct.metal::sampler" { ptr addrspace(2) @__air_sampler_state.3 }] }, align 8
 @__air_sampler_state = internal addrspace(2) constant [2 x i64] [i64 34901797601018002, i64 0], align 8
 @__air_sampler_state.1 = internal addrspace(2) constant [2 x i64] [i64 34901797601017929, i64 0], align 8
-@__air_sampler_state.2 = internal addrspace(2) constant [2 x i64] [i64 34901797601020562, i64 0], align 8
-@__air_sampler_state.3 = internal addrspace(2) constant [2 x i64] [i64 34901797601020489, i64 0], align 8
+@__air_sampler_state.2 = internal addrspace(2) constant [2 x i64] [i64 34901797601018075, i64 0], align 8
+@__air_sampler_state.3 = internal addrspace(2) constant [2 x i64] [i64 34901797601017856, i64 0], align 8
 
 ; Function Attrs: convergent mustprogress nofree nounwind willreturn
 define void @sampler_table_slot(ptr addrspace(1) %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %2, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %3, i32 noundef %4) local_unnamed_addr #0 {

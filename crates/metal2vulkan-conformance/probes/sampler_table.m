@@ -13,7 +13,10 @@
 // and y = 0.5 through samplers[s] (repeat, clamp to edge, mirrored repeat, clamp to zero, all
 // nearest). Each kernel prints each thread's four floats as words.
 //
-// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): to be run.
+// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): both kernels completed (status 4) with the same
+// texels. By coordinate, through repeat, clamp to edge, mirrored repeat and clamp to zero: -0.5
+// white, red, red, zero; 4.5 red, white, white, zero; -1.5 blue, red, green, zero; 2.5 blue
+// four times; 5.5 green, white, blue, zero.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>
