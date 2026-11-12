@@ -1,7 +1,7 @@
 //! What a device's recovery carries of its heaps (`Heap::carry`, `device/carry.rs`): a `Private`
 //! heap goes on as the same heap, its bytes new memory that reads zero, with the buffers placed
 //! in it before; buffers and textures made in it after the recovery serve, and the textures it
-//! made before stay refused, as every texture made before a recovery does.
+//! made before stay refused, as a heap's textures made before a recovery do.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). No GPU fault: the loss is marked (`Device::recover_for_test`).

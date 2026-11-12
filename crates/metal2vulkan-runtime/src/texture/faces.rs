@@ -270,8 +270,8 @@ impl Texture {
     /// Whether the texture may take faces (the module's **Which textures**): and no binding beyond
     /// its usage made it a shadow of its own before an attached read could.
     pub(super) fn faces_fit(&self) -> bool {
-        let shared = &self.0;
-        let Storage::Image(image) = &shared.storage else {
+        let (shared, parts) = (&self.0, self.s());
+        let Storage::Image(image) = &parts.storage else {
             return false;
         };
         let own = matches!(
@@ -290,8 +290,8 @@ impl Texture {
         let private = matches!(image.options.storage_mode(), Ok(StorageMode::Private));
         own && shared.parent.is_none()
             && shared.heap.is_none()
-            && shared.moved.get().is_none()
-            && shared.planes_in_place.is_none()
+            && parts.moved.get().is_none()
+            && parts.planes_in_place.is_none()
             && private
             && image.identity.tracked
             && plan.image_type == ImageType::TYPE_2D
@@ -308,12 +308,12 @@ impl Texture {
             && !image.handed_out()
             && image.form.plan().is_none()
             && image.objects.count() == 1
-            && shared.usage_shadow.get().is_none()
+            && parts.usage_shadow.get().is_none()
     }
 
     /// Whether the texture has faces (the module docs).
     pub(crate) fn has_faces(&self) -> bool {
-        self.0.faces.get().is_some()
+        self.s().faces.get().is_some()
     }
 
     /// Why the texture may not take faces now, where it may not
@@ -333,7 +333,8 @@ impl Texture {
     /// The texture's faces, made now (the module docs): its second image, and the copies between
     /// the two. The attached reads' shadow while the texture presents its own image.
     pub(super) fn make_faces(&self) -> Result<Arc<UsageShadow>, Error> {
-        let Storage::Image(own) = &self.0.storage else {
+        let parts = self.s();
+        let Storage::Image(own) = &parts.storage else {
             return Err(crate::error::internal(
                 "faces of a texture without an image",
             ));
@@ -375,7 +376,7 @@ impl Texture {
                 .other_image()
                 .map_or(own.identity.key, |o| o.identity.key),
         ];
-        if self.0.faces.set(faces).is_err() {
+        if parts.faces.set(faces).is_err() {
             return Err(crate::error::internal("a texture's faces made twice"));
         }
         (device.shared().face_swaps).faced(keys, Arc::downgrade(&self.0));
@@ -386,13 +387,13 @@ impl Texture {
     /// The face the texture presents: 0 its own image (a texture without faces too), 1 its
     /// second; to an encoder encoded again, as its first encoding met it ([`with_faces_as_of`]).
     pub(crate) fn face(&self) -> u8 {
-        (self.0.faces.get()).map_or(0, |faces| faces.face() as u8)
+        (self.s().faces.get()).map_or(0, |faces| faces.face() as u8)
     }
 
     /// End the texture's turns, where it has faces (the module's **Frozen**): it presents the
     /// face it presents now for good.
     pub(crate) fn freeze_faces(&self) {
-        if let Some(faces) = self.root().0.faces.get() {
+        if let Some(faces) = self.root().s().faces.get() {
             let _turning = lock(&faces.turning);
             faces.frozen.store(true, Ordering::Release);
         }
@@ -402,7 +403,8 @@ impl Texture {
     /// command buffer (the module's **The turn** and **When**); the caller checked the pass. The
     /// shadow the pass's first instance reads without a copy in, or why it did not turn.
     pub(crate) fn turn_face(&self, point: &TurnPoint) -> Result<Turned, Unturned> {
-        let Some(faces) = self.0.faces.get() else {
+        let parts = self.s();
+        let Some(faces) = parts.faces.get() else {
             return Err(match self.faces_fit() {
                 true => Unturned::First,
                 false => Unturned::Storage,
@@ -431,7 +433,7 @@ impl Texture {
         let to = 1 - from;
         let image = |face: usize| -> Arc<Image> {
             let storage = match face {
-                0 => &self.0.storage,
+                0 => &parts.storage,
                 _ => &faces.other,
             };
             match storage {
@@ -470,7 +472,7 @@ impl Texture {
     /// the texture still presents the face that turn turned to, the shadow the pass's first
     /// instance reads without a copy in, the face from before the turn; else `None`.
     pub(crate) fn retake_turn(&self) -> Option<Turned> {
-        let faces = self.0.faces.get()?;
+        let faces = self.s().faces.get()?;
         let (owner, parts) = encoding_again()?;
         let swaps = &self.device().shared().face_swaps;
         let from = swaps.turned_in(&self.0, owner, &parts)?;
@@ -483,7 +485,7 @@ impl Texture {
     /// The copies of the attached reads' shadow of each face, where the texture has faces: a
     /// command buffer's carry of either goes at a turn (`render/face_swap.rs`).
     pub(crate) fn face_copies(&self) -> Option<[Arc<ShadowCopies>; 2]> {
-        let faces = self.0.faces.get()?;
+        let faces = self.s().faces.get()?;
         Some([
             Arc::clone(faces.shadows[0].copies()),
             Arc::clone(faces.shadows[1].copies()),
@@ -707,8 +709,8 @@ impl FaceSwaps {
             .filter(|record| record.owner == owner && record.part >= part)
             .filter(|record| !record.stale.load(Ordering::Acquire))
             .filter_map(|record| {
-                let texture = record.texture.upgrade()?;
-                let faces = texture.faces.get()? as *const Faces as usize;
+                let texture = Texture::upgrade(&record.texture)?;
+                let faces = texture.s().faces.get()? as *const Faces as usize;
                 Some((faces, record.from))
             })
             .collect()

@@ -837,8 +837,9 @@ meanwhile wait for it.
 - The recovery carries the events, the fences, the depth/stencil states, the libraries and their
   functions, the address pools (`AddressPool`, whose slots take buffers after it as before), the
   uses of guest RAM (`HostRamUse`), the no-copy buffers, the `Private` buffers, the buffers in the
-  runtime's own pages and the `Private` heaps with the buffers placed in them to the new
-  `VkDevice`: the same objects, at the same addresses.
+  runtime's own pages, the `Private` heaps with the buffers placed in them, the textures of
+  `new_texture`, the textures over the buffers it carried and the views of either to the new
+  `VkDevice`: the same objects, at the same addresses and resource IDs.
   An event keeps the value the host saw and its listeners' notifications. A buffer in the
   runtime's own pages keeps its bytes and its `contents` pointer: a long host-visible buffer's
   fresh pages, and, on a device whose checks found that a held import of host pages costs its
@@ -852,7 +853,11 @@ meanwhile wait for it.
   into the device. Its deallocator runs at its release once no `VkDevice` imports its pages. A
   `Private` buffer's contents are lost: it reads zero. So are a `Private` heap's, whose buffers
   placed before go on with it and in which buffers and textures are made again; the textures it
-  made before are refused, as every texture made before the recovery is.
+  made before are refused. A texture of `new_texture` is made again in new memory, so its
+  contents are lost (it reads as a new texture of its descriptor: refill one filled once and
+  kept); one over a carried buffer is made again over the buffer's bytes, and reads them; a view
+  views its parent there. Their images on the lost `VkDevice` stay with them, and keep it alive,
+  until they go.
 - Any other object made before the recovery is refused where it meets the new `VkDevice` (an
   encoder's bind, a pipeline made from its functions) and in its own calls that need its lost one:
   `Error::NotImplemented(RuntimeGap::MadeBeforeRecovery)`. That covers pooled `Shared` and
@@ -860,13 +865,16 @@ meanwhile wait for it.
   mapping (on a device that imports no host pointer, or whose checks found that a held import
   costs its submissions or that textures over such pages take less, or had not answered; and a
   `Managed` buffer without unified memory), detached no-copy buffers, `Shared`, no-copy and
-  sparse heaps with the buffers placed in them, textures, pipeline states, buffers over the
-  caller's `VkBuffer`, and exportable memory or events. Make it again. Metal's objects go on. The
-  recovery's notice counts the buffers, heaps and events it carried and left, by kind.
+  sparse heaps with the buffers placed in them, heaps' textures, textures over the caller's
+  `VkImage`, sparse and shareable textures, textures over buffers left and their views, pipeline
+  states, buffers over the caller's `VkBuffer`, and exportable memory or events. Make it again.
+  Metal's objects go on. The recovery's notice counts the buffers, heaps, textures and events it
+  carried and left, by kind.
 - The lost `VkDevice` is destroyed once the objects left on it went and, where `Device::raw`
   answered its handles, a later `raw` call answered the new one's: `WorkCounts::vk_devices_live`
-  reads 2 until then. A carried object holds nothing of it once none of its command buffers
-  records. `vk_devices_made` and `device_recoveries` count the rest.
+  reads 2 until then. A carried object but a texture holds nothing of it once none of its
+  command buffers records; a carried texture holds it until the texture goes. `vk_devices_made`
+  and `device_recoveries` count the rest.
 - An object's `device` is a generation handle: of the `VkDevice` it was made on, else of the one
   a recovery carried it to last. A handle taken of it before the recovery keeps meaning the lost
   `VkDevice`: its `raw` answers that one's handles, kept alive while the consumer holds the

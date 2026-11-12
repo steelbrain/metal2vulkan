@@ -158,6 +158,7 @@ use wrapped::WrappedImage;
 
 mod attached_reads;
 mod attributes;
+pub(crate) mod carry;
 pub(super) mod copy_images;
 pub(crate) mod decoded_twin;
 pub(crate) mod faces;
@@ -437,6 +438,12 @@ pub struct Texture(Arc<TextureShared>, Option<Arc<Retain>>);
 /// thread it runs.
 pub(super) struct Retain(Weak<TextureShared>);
 
+/// A texture object. Its storage and what is made of it (`storage`, `moved`, `pending_move`,
+/// `usage_shadow`, `usage_shadow_making`, `faces`, `snapshot`, `kept_backings`, `render_shadow`,
+/// `facts` and `planes_in_place`) are its parts on the generation it was made on; where its
+/// device's recovery carried it (`texture/carry.rs`), its handles reach those of the generation
+/// the work at hand is on through [`Texture::s`], each generation's in a texture of the
+/// runtime's own there (`next`). The rest is the texture object's own, whatever generation serves.
 pub(super) struct TextureShared {
     storage: Storage,
     /// The [`Retain`] the texture's handles hold, while one does.
@@ -502,6 +509,18 @@ pub(super) struct TextureShared {
     /// (`texture/ycbcr_image.rs`): a slot of a function that reads it only so binds them, not the
     /// image. `None` for every other texture, a view of one among them.
     planes_in_place: Option<PlanesInPlace>,
+    /// The generation it was made on: the address of its `DeviceShared`, as
+    /// `NoticesFor::generation` names a command buffer's.
+    generation: usize,
+    /// How a recovery makes a program's texture again on the generation it makes
+    /// (`texture/carry.rs`), set as the texture is made by a call a recovery makes again.
+    remake: OnceLock<carry::Remake>,
+    /// Its parts on the generation a recovery carried it to (`texture/carry.rs`): a texture of the
+    /// runtime's own there, made as the texture was, which may itself hold the next generation's.
+    next: OnceLock<Texture>,
+    /// A recovery carried it (`next` is set): its handles reach its parts through `next`
+    /// ([`Texture::s`]).
+    carried: AtomicBool,
 }
 
 impl Drop for TextureShared {
@@ -542,13 +561,26 @@ impl Drop for TextureShared {
 impl TextureShared {
     /// Leave the texture's slot as it goes: the device's texture table no longer names it, and its
     /// image waits for the command buffers that may still read it through its ID
-    /// (`heap_sets::gone`). Nothing where it holds no ID.
+    /// (`heap_sets::gone`). On the generation it was made on, and on each a recovery carried it to
+    /// (`texture/carry.rs`), whose table names it with its parts there. Nothing where it holds no
+    /// ID.
     fn leave_slot(&self) {
         let id = self.id.id().0;
         if id == 0 {
             return;
         }
-        let (device, keeper): (&Device, Option<Box<dyn Any + Send + Sync>>) = match &self.storage {
+        let mut link = Some(self);
+        while let Some(shared) = link {
+            let (device, keeper) = shared.slot_keeper();
+            heap_sets::gone(device, id, self.id.serial(), keeper);
+            link = shared.next.get().map(|next| &*next.0);
+        }
+    }
+
+    /// The device of the texture's parts on their generation, and what keeps their image while a
+    /// command buffer that bound its ID there may read it ([`leave_slot`](Self::leave_slot)).
+    fn slot_keeper(&self) -> (&Device, Option<Box<dyn Any + Send + Sync>>) {
+        match &self.storage {
             Storage::Image(image)
             | Storage::Alias { image, .. }
             | Storage::Shadow { image, .. } => {
@@ -565,8 +597,7 @@ impl TextureShared {
                 (&image.device, Some(Box::new((Arc::clone(image), moved))))
             }
             Storage::Texels(texels) => (texels.buffer.device(), None),
-        };
-        heap_sets::gone(device, id, self.id.serial(), keeper);
+        }
     }
 }
 
@@ -1890,7 +1921,11 @@ impl Device {
         let id_use = IdUse::Program(descriptor.placement);
         let texture = self.texture_as(CALL, descriptor, (id_use, Initial::AsMetal))?;
         self.take_device_sampler();
-        Ok(texture)
+        let remake = carry::Remake::Own {
+            descriptor: *descriptor,
+            initial: Initial::AsMetal,
+        };
+        Ok(self.kept_texture(texture, remake))
     }
 
     /// [`Device::new_texture`] with `token` (a runtime extension), dropped once the runtime frees
@@ -4873,7 +4908,7 @@ pub(super) fn texel_units(
 
 /// How a new texture of the program's starts ([`Device::new_texture_image`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Initial {
+pub(crate) enum Initial {
     /// As Metal's new texture of its storage mode starts on the Mac the device presents.
     AsMetal,
     /// Zero in every texel, in every storage mode but `Memoryless`: a texture over an IOSurface
@@ -5249,6 +5284,10 @@ impl Texture {
                 heap,
                 facts: OnceLock::new(),
                 planes_in_place,
+                generation: std::ptr::from_ref(device.shared()).addr(),
+                remake: OnceLock::new(),
+                next: OnceLock::new(),
+                carried: AtomicBool::new(false),
             }
         });
         let texture = Texture(shared, retain);
@@ -5274,6 +5313,8 @@ impl Texture {
             if texture.0.parent.is_none() {
                 device.shared().owners.texture(&texture);
             }
+            // Kept for the generation's recovery to carry or leave (`texture/carry.rs`).
+            device.shared().carry.texture(&texture);
             // An `Outside` texture has no ID, so no slot (`IdHold::take`).
             if placement != IdPlacement::Outside {
                 texture
@@ -5306,10 +5347,41 @@ impl Texture {
     /// before its pages' in-place verdict moved to (`TextureShared::moved`), or the second of its
     /// faces where it presents that one (`texture/faces.rs`).
     fn storage(&self) -> &Storage {
-        if let Some(presented) = self.0.faces.get().and_then(faces::Faces::presented) {
+        let shared = self.s();
+        if let Some(presented) = shared.faces.get().and_then(faces::Faces::presented) {
             return presented;
         }
-        self.0.moved.get().unwrap_or(&self.0.storage)
+        shared.moved.get().unwrap_or(&shared.storage)
+    }
+
+    /// The texture's parts (its storage and what is made of it, `TextureShared`) as the work at
+    /// hand reaches them: its own, where its device's recovery never carried it, at one load
+    /// (`texture/carry.rs`). Where it did, inside a command buffer's work
+    /// (`NoticesFor::generation`) those of that command buffer's generation where the texture
+    /// has some, so the lost generation's command buffers record its own images alone; else
+    /// those of the generation it was carried to last.
+    #[inline]
+    fn s(&self) -> &TextureShared {
+        match self.0.carried.load(Ordering::Relaxed) {
+            false => &self.0,
+            true => self.carried(),
+        }
+    }
+
+    /// [`s`](Self::s) of a texture its device's recovery carried.
+    #[cold]
+    fn carried(&self) -> &TextureShared {
+        let records = crate::degradation::NoticesFor::generation();
+        let mut shared = &*self.0;
+        loop {
+            if records == Some(shared.generation) {
+                return shared;
+            }
+            match shared.next.get() {
+                Some(next) => shared = &*next.0,
+                None => return shared,
+            }
+        }
     }
 
     /// The texture object `shared` names, while it lives (a slot's holder, `resource_ids.rs`),
@@ -5340,7 +5412,7 @@ impl Texture {
 
     /// The memoryless backings it keeps (`attachment_stand_in::kept_backing`).
     pub(super) fn kept_backings(&self) -> &Mutex<Vec<KeptBacking>> {
-        &self.0.kept_backings
+        &self.s().kept_backings
     }
 
     /// A texture over `texels`, presenting `record` of them, its ID as `id_use` says.
@@ -5958,7 +6030,7 @@ impl Texture {
     /// The facts a binding plan reads of the texture, worked out once and kept
     /// (`TextureShared::facts`).
     pub(super) fn facts(&self) -> TextureFacts {
-        *self.0.facts.get_or_init(|| self.worked_out_facts())
+        *self.s().facts.get_or_init(|| self.worked_out_facts())
     }
 
     /// The facts a binding plan reads of the texture, worked out from what it was made with.
@@ -5967,7 +6039,7 @@ impl Texture {
         let mut facts = texture_facts(&record);
         facts.sparse = self.is_sparse();
         // A two-plane YCbCr texture whose planes a function may read in place.
-        facts.ycbcr_in_place = self.0.planes_in_place.as_ref().map(|p| match p.image {
+        facts.ycbcr_in_place = self.s().planes_in_place.as_ref().map(|p| match p.image {
             Some(_) => p.words.with_planes_image(),
             None => p.words,
         });
@@ -6550,19 +6622,39 @@ impl Texture {
         })
     }
 
+    /// The view of `request` that `call` makes, its resource ID at `placement`, kept for a
+    /// recovery to make again (`texture/carry.rs`).
     fn view(
         &self,
         call: &'static str,
         request: &ViewRequest,
         placement: IdPlacement,
     ) -> Result<Texture, Error> {
-        self.check_viewable(call)?;
-        self.device().check_texture_placement(
+        let view = self.view_as(call, request, IdUse::Program(placement))?;
+        let remake = carry::Remake::View {
             call,
-            placement,
-            self.0.record.usage,
-            request.texture_type,
-        )?;
+            request: request.clone(),
+        };
+        Ok(self.device().kept_texture(view, remake))
+    }
+
+    /// [`view`](Self::view), its resource ID as `id_use` says: the runtime's own for a view a
+    /// recovery makes again (`texture/carry.rs`).
+    fn view_as(
+        &self,
+        call: &'static str,
+        request: &ViewRequest,
+        id_use: IdUse,
+    ) -> Result<Texture, Error> {
+        self.check_viewable(call)?;
+        if let IdUse::Program(placement) = id_use {
+            self.device().check_texture_placement(
+                call,
+                placement,
+                self.0.record.usage,
+                request.texture_type,
+            )?;
+        }
         let profile = self.device().compile_device().profile();
         let record = check_view(&self.0.record, request, profile)
             .map_err(|refusal| view_error(call, refusal))?;
@@ -6656,7 +6748,6 @@ impl Texture {
             self.reinterpreted(call, &record)?
         };
         let parent = Some(self.clone());
-        let id_use = IdUse::Program(placement);
         Ok(Texture::made(
             self.device(),
             storage,

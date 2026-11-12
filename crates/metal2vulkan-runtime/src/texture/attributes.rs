@@ -82,6 +82,15 @@ impl Texture {
         })
     }
 
+    /// Give `link`, the texture's parts on the generation its device's recovery carries it to
+    /// (`texture/carry.rs`), the purgeable state its own parts keep, where both keep one.
+    pub(super) fn carry_purgeable_state(&self, link: &Texture) {
+        if let (Some(Kept::Image(from)), Some(Kept::Image(to))) = (self.kept(), link.kept()) {
+            let state = *lock(from);
+            *lock(to) = state;
+        }
+    }
+
     /// Where the texture's purgeable state is kept: `None` for a texture Metal answers
     /// `NonVolatile` for (the module docs).
     fn kept(&self) -> Option<Kept<'_>> {
@@ -90,8 +99,9 @@ impl Texture {
         }
         // A texture with two faces keeps its state with its own image, whichever face it
         // presents (`texture/faces.rs`).
-        let storage = match self.0.faces.get() {
-            Some(_) => &self.0.storage,
+        let parts = self.s();
+        let storage = match parts.faces.get() {
+            Some(_) => &parts.storage,
             None => self.storage(),
         };
         match storage {

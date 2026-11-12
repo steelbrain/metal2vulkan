@@ -73,6 +73,7 @@ use super::shadow_copy_back::WordView;
 use super::shadow_merge::ScratchSpares;
 use super::shadow_merge::UnormView;
 use super::shadow_standing::StandingAcross;
+use super::texture::carry::Remake;
 use super::texture::surface_two_planes;
 use super::texture::{IdUse, Texture};
 use super::texture_descriptor::{
@@ -850,7 +851,36 @@ impl Buffer {
         if let Some(heap) = self.heap() {
             heap.hold_texture(&texture);
         }
-        Ok(texture)
+        if whose == Whose::Runtime {
+            return Ok(texture);
+        }
+        let remake = Remake::Over {
+            buffer: self.clone(),
+            call,
+            descriptor: *descriptor,
+            offset,
+            bytes_per_row,
+            form,
+            ycbcr: ycbcr_surface,
+        };
+        let device = texture.device().clone();
+        Ok(device.kept_texture(texture, remake))
+    }
+
+    /// The texture over the buffer that `call` made through `form`, of `descriptor` at `over`
+    /// (its offset and bytes per row), over a surface of `ycbcr_surface`'s facts where given, made
+    /// again as the runtime's own, which takes no ID: a program's texture over the buffer, on
+    /// the generation a recovery carried the buffer to (`texture/carry.rs`).
+    pub(super) fn texture_over_again(
+        &self,
+        call: &'static str,
+        descriptor: &TextureDescriptor,
+        (offset, bytes_per_row): (u64, u64),
+        form: BufferTextureCall,
+        ycbcr_surface: Option<IoSurfaceYCbCr>,
+    ) -> Result<Texture, Error> {
+        let made = (form, Whose::Runtime);
+        self.texture_over(call, descriptor, offset, bytes_per_row, made, ycbcr_surface)
     }
 
     /// [`texture_over`](Self::texture_over)'s texture, at `offset` with `bytes_per_row` (`over`),

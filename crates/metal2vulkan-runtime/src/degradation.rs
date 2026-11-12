@@ -2310,10 +2310,12 @@ degradations! {
              of guest RAM, no-copy buffers, `Private` buffers, buffers in the runtime's own pages \
              (fresh pages, and the blocks of pages the `Shared` and `Managed` buffers lie in where \
              the device's checks found a held host-page import costs its submissions nothing and \
-             textures over such pages take what they take over its own memory) and `Private` \
-             heaps with the buffers placed in them made before it go on, a `Private` buffer's or \
-             heap's contents lost (it reads zero); the other objects made before it are refused \
-             (`MadeBeforeRecovery`), where Metal's go on; the calls during it wait for it";
+             textures over such pages take what they take over its own memory), `Private` heaps \
+             with the buffers placed in them, textures of `new_texture`, textures over the \
+             buffers carried and views of them made before it go on, the contents of a `Private` \
+             buffer or heap lost (it reads zero) and of a texture of `new_texture` (it reads as a \
+             new one); the other objects made before it are refused (`MadeBeforeRecovery`), \
+             where Metal's go on; the calls during it wait for it";
         /// Apple's private device properties the device has no answer for
         /// (`private_properties.rs`): no document describes them and nothing the device reports
         /// maps to them. Announced once, when `Device::private_properties` is first read; the

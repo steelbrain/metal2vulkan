@@ -545,7 +545,7 @@ impl Texture {
         let format = form.format();
         let pixel_format = snapshot_pixel_format(format)
             .ok_or_else(|| crate::error::internal("a snapshot form of no snapshot's format"))?;
-        let mut held = crate::device::lock(&owner.0.snapshot);
+        let mut held = crate::device::lock(&owner.s().snapshot);
         if let Some(made) = held.iter().find(|t| t.pixel_format() == pixel_format) {
             return Ok(made.clone());
         }

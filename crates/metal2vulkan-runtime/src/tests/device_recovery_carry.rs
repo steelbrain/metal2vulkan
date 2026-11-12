@@ -12,8 +12,8 @@ use super::device_recovery::{
 };
 use crate::fresh_pages::FRESH_PAGES_PAST;
 use crate::{
-    Buffer, CommandBufferStatus, CommandQueue, Device, Error, EventRef, ResourceOptions,
-    RuntimeGap, SharedEvent, SharedEventListener, TextureDescriptor,
+    Buffer, CommandBufferStatus, CommandQueue, Device, Error, EventRef, HeapDescriptor, HeapType,
+    ResourceOptions, RuntimeGap, SharedEvent, SharedEventListener, TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::sync::mpsc;
@@ -106,7 +106,7 @@ pub(super) fn live_vk_devices(device: &Device, live: u64) -> u64 {
 /// GPU signal after it), as its notice counts. Two pooled `Shared` buffers of one block it carries
 /// as the one in fresh pages where they lie in a block of the runtime's own pages (`memory.rs`'s
 /// `Holds::PageBuffers`), in one import of its pages again, else leaves refused. What is left
-/// (those buffers, and a texture, which no recovery carries) keeps the lost `VkDevice`, but
+/// (those buffers, and a `Shared` heap, which no recovery carries) keeps the lost `VkDevice`, but
 /// nothing it kept for reuse: the memory of buffers the program let go of before the loss (their
 /// `VkBuffer`s parked, or a block kept empty) is freed, and no empty block is left. The lost
 /// `VkDevice` goes with what is left.
@@ -177,9 +177,8 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
         "the pooled buffers lie in two blocks"
     );
     // An object no recovery carries.
-    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
-    descriptor.usage = TextureUsage::SHADER_READ;
-    let texture = device.new_texture(&descriptor).unwrap();
+    let heap = HeapDescriptor::new(HeapType::Automatic, 1 << 16, ResourceOptions::shared());
+    let left = device.new_heap(&heap).unwrap();
     let event = device.new_shared_event().unwrap();
     event.set_signaled_value(5);
     let listener = SharedEventListener::new();
@@ -197,7 +196,7 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
         })
         .collect();
     drop(reused);
-    let before = texture.device().work_counts_now();
+    let before = left.device().work_counts_now();
     let from = heard.lock().unwrap().len();
     device.recover_for_test().unwrap();
     let said = recovery_notices(&heard, from, "the device");
@@ -280,9 +279,9 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
         }
     }
     // What is left holds the lost `VkDevice`, which keeps no memory for work.
-    assert!(!texture.device().generation_serves());
+    assert!(!left.device().generation_serves());
     assert_eq!(live_vk_devices(&device, 2), 2);
-    let after = texture.device().work_counts_now();
+    let after = left.device().work_counts_now();
     let blocks =
         |counts: &crate::WorkCounts| counts.memory_blocks_live + counts.empty_memory_blocks_live;
     eprintln!(
@@ -301,7 +300,7 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
         blocks(&before)
     );
     assert!(after.memory_frees.teardown > before.memory_frees.teardown);
-    drop((pooled, beside, texture));
+    drop((pooled, beside, left));
     assert_eq!(live_vk_devices(&device, 1), 1);
 }
 
@@ -392,10 +391,10 @@ fn a_call_under_way_keeps_the_parts_it_read_past_the_lost_generation_s_rest() {
         vec![6; BYTES as usize]
     );
     go.send(()).unwrap();
-    // The call completed on the generation it began on: its texture is that one's, where the
-    // lost device made one.
+    // The call completed on the generation it began on, and its maker carried the texture it
+    // made there to the next (`texture/carry.rs`): it serves, where the lost device made one.
     let made = call.join().unwrap();
-    assert!(!matches!(made, Ok(true)), "{made:?}");
+    assert!(!matches!(made, Ok(false)), "{made:?}");
     assert!(buffer.first_parts_freed());
 }
 

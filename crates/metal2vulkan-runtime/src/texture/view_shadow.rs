@@ -219,7 +219,7 @@ impl Texture {
     /// into such a view (probe `a8write`: an `A8Unorm` view of an `R8Unorm` texture stores the
     /// fragment's alpha). Refused as the shadow's image is.
     pub(crate) fn view_render_shadow(&self, call: &'static str) -> Result<Texture, Error> {
-        let mut held = lock(&self.0.render_shadow);
+        let mut held = lock(&self.s().render_shadow);
         if let Some(shadow) = held.as_ref() {
             return Ok(shadow.clone());
         }

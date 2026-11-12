@@ -408,7 +408,7 @@ impl Texture {
     /// The uniform texel buffer view of the texture's planes read in place (the module docs), made
     /// at its first bind and kept with the texels. Internal for a texture whose planes are not.
     pub(crate) fn planes_view(&self) -> Result<vk::BufferView, Error> {
-        let (Some(p), Some(texels)) = (&self.0.planes_in_place, self.buffer_texels()) else {
+        let (Some(p), Some(texels)) = (&self.s().planes_in_place, self.buffer_texels()) else {
             return Err(internal(
                 "a planes view of a texture without planes in place",
             ));
@@ -438,7 +438,7 @@ impl Texture {
     /// them makes, through their texel buffer or their image (the module docs). Internal for a
     /// texture whose planes are not.
     pub(crate) fn planes_use(&self, read: Access) -> Result<Use<ResourceKey>, Error> {
-        let (Some(p), Some(texels)) = (&self.0.planes_in_place, self.buffer_texels()) else {
+        let (Some(p), Some(texels)) = (&self.s().planes_in_place, self.buffer_texels()) else {
             return Err(internal(
                 "a planes use of a texture without planes in place",
             ));
@@ -728,7 +728,7 @@ impl Texture {
     /// texels are no conversion of planes, none of whose stores is measured; as `new_texture`
     /// refuses the image.
     pub(crate) fn ycbcr_render_shadow(&self, call: &'static str) -> Result<Texture, Error> {
-        let mut held = lock(&self.0.render_shadow);
+        let mut held = lock(&self.s().render_shadow);
         if let Some(shadow) = held.as_ref() {
             return Ok(shadow.clone());
         }

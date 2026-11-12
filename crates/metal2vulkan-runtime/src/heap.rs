@@ -1173,7 +1173,7 @@ impl Heap {
     /// the heap is the same heap there, registered by its key, and each buffer placed in it that
     /// lives is the same buffer there, at its offset ([`Buffer::carry_placed`]), listed among the
     /// generation's live buffers where a command buffer's commands used the heap already. The
-    /// textures it made stay the lost generation's, as every texture does: they are refused where
+    /// textures it made stay the lost generation's, as a heap's textures do: they are refused where
     /// they meet the next generation (`RuntimeGap::MadeBeforeRecovery`), and no use of the heap
     /// there makes them resident; those it makes there are that generation's, numbered after
     /// them. The bytes carried, and the buffers placed in it carried with them; or why the heap

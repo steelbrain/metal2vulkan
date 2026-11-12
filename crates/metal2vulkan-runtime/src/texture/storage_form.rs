@@ -638,12 +638,13 @@ impl Texture {
     /// texels is made as the texture's would have been had its pages' verdicts been known as it
     /// was made.
     fn move_wanted(&self) -> Option<Wanted> {
-        let Storage::Shadow { image, texels, .. } = &self.0.storage else {
+        let shared = self.s();
+        let Storage::Shadow { image, texels, .. } = &shared.storage else {
             return None;
         };
-        let mut pending = lock(&self.0.pending_move);
+        let mut pending = lock(&shared.pending_move);
         let wanted = pending.as_ref().and_then(|pending| {
-            if self.0.moved.get().is_some() || self.shadowed_again() {
+            if shared.moved.get().is_some() || self.shadowed_again() {
                 return None;
             }
             let checks = &image.device.shared().in_place;
@@ -690,9 +691,10 @@ impl Texture {
                 copied.then_some(Kind::Form { plan, swapped })
             }
             Made::Move { storage, counted } => {
-                let moves = self.0.moved.get().is_none() && !self.shadowed_again();
+                let shared = self.s();
+                let moves = shared.moved.get().is_none() && !self.shadowed_again();
                 if !moves {
-                    *lock(&self.0.pending_move) = None;
+                    *lock(&shared.pending_move) = None;
                 }
                 let pooled = matches!(counted, MoveCount::Pooled(_));
                 moves.then(|| Kind::Move {
@@ -702,7 +704,7 @@ impl Texture {
                 })
             }
             Made::Refused => {
-                *lock(&self.0.pending_move) = None;
+                *lock(&self.s().pending_move) = None;
                 None
             }
         };
@@ -795,7 +797,7 @@ impl Texture {
     /// queues with its own fences and events.
     fn shadow_goes_after_move(&self, core: &mut EncoderCore, pooled: bool) -> Arc<AtomicBool> {
         let moved = Arc::new(AtomicBool::new(false));
-        let Storage::Shadow { image, copies, .. } = &self.0.storage else {
+        let Storage::Shadow { image, copies, .. } = &self.s().storage else {
             return moved;
         };
         if !image.identity.tracked {
@@ -823,14 +825,15 @@ impl Texture {
     /// docs).
     fn shadowed_again(&self) -> bool {
         let usage = (self.usage_shadow_copies()).is_some_and(|copies| !copies.copies_bytes());
-        usage || lock(&self.0.render_shadow).is_some()
+        usage || lock(&self.s().render_shadow).is_some()
     }
 
     /// Wait, a shadow over host pages (or the device's pooled memory) made before its class's
     /// in-place verdicts, to move in place once they pass (the module docs): `pending` what it
     /// moves with.
     pub(crate) fn wait_to_move_in_place(&self, pending: in_place::PendingMove) {
-        let Storage::Shadow { texels, .. } = &self.0.storage else {
+        let shared = self.s();
+        let Storage::Shadow { texels, .. } = &shared.storage else {
             return;
         };
         let wait = MoveWait {
@@ -841,7 +844,7 @@ impl Texture {
             usage: pending.usage,
             texel: texels.texel_bytes(),
         };
-        *lock(&self.0.pending_move) = Some(pending);
+        *lock(&shared.pending_move) = Some(pending);
         let device = self.device();
         let forms = &device.shared().textures.storage_forms;
         lock(&forms.moves).push(wait);
@@ -934,7 +937,8 @@ impl Prepared {
         let Kind::Move { storage, moved, .. } = &self.kind else {
             return false;
         };
-        let Storage::Shadow { image: shadow, .. } = &texture.0.storage else {
+        let shared = texture.s();
+        let Storage::Shadow { image: shadow, .. } = &shared.storage else {
             return false;
         };
         if texture.shadowed_again() {
@@ -943,9 +947,9 @@ impl Prepared {
         let Some(storage) = lock(storage).take() else {
             return false;
         };
-        *lock(&texture.0.pending_move) = None;
+        *lock(&shared.pending_move) = None;
         let views = lock(&shadow.views);
-        let swapped = texture.0.moved.set(storage).is_ok();
+        let swapped = shared.moved.set(storage).is_ok();
         if swapped {
             shadow.views_go();
         }

@@ -1,13 +1,15 @@
 //! What a device's recovery carries to its next generation (`line.rs`): the program's events, its
 //! uses of guest RAM, its no-copy buffers, the buffers of the runtime's memory whose bytes no
-//! pointer of the program's reaches or whose pages the runtime owns, and its `Private` heaps with
-//! the buffers placed in them, each the same object on the new `VkDevice`, as Metal keeps its
-//! objects across its GPU's recovery. A fence, a depth/stencil state, a library, a function and
-//! an address pool hold no Vulkan object (`fence.rs`, `depth_stencil.rs`, `library.rs`,
+//! pointer of the program's reaches or whose pages the runtime owns, its `Private` heaps with
+//! the buffers placed in them, and its textures made by a call the recovery makes again
+//! (`texture/carry.rs`), each the same object on the new `VkDevice`, as Metal keeps its objects
+//! across its GPU's recovery. A fence, a depth/stencil state, a library, a function and an
+//! address pool hold no Vulkan object (`fence.rs`, `depth_stencil.rs`, `library.rs`,
 //! `address_pool.rs`): the recovery carries their handle of the device alone ([`LineDevice`]).
 //!
-//! - **Kept as made.** Each event (`EventShared::new`) and heap (`Device::new_heap`) is kept here,
-//!   held weakly, by the generation it was made on; each buffer the program made of its own (`Device::visible`) is
+//! - **Kept as made.** Each event (`EventShared::new`), heap (`Device::new_heap`) and texture of
+//!   the program's (`Texture::made`) is kept here, held weakly, by the generation it was made on;
+//!   each buffer the program made of its own (`Device::visible`) is
 //!   kept among the generation's program resources already (`Owners::buffer`), which the
 //!   recovery reads ([`Carry::take`]), so making one costs a load of a flag more and no lock.
 //! - **Carried before the next generation serves.** The recovery takes the lost generation's live
@@ -19,7 +21,8 @@
 //!   generation's objects its maker carries ([`Device::carry_late`]). The take names the buffers
 //!   it took under the registry's lock, which a maker that finds the generation taken asks
 //!   ([`Carry::late_buffer`]), and an event or heap is kept under it, so each object is carried
-//!   once, by one or the other. A buffer placed in a heap as the heap is carried finds its bytes
+//!   once, by one or the other; a texture's maker sets how it is made again before it asks
+//!   ([`Carry::late_texture`]), and a texture carried already is carried no more. A buffer placed in a heap as the heap is carried finds its bytes
 //!   carried under the lock the heap's carry takes its buffers under, and carries itself
 //!   (`Heap::carry`).
 //! - **What each kind becomes.** An event: a new timeline semaphore at the value the host saw
@@ -41,7 +44,11 @@
 //!   (it reads zero), its identity kept as a buffer's, registered there by its key; each buffer
 //!   placed in it that lives, the same buffer there at its offset in the heap's carried bytes,
 //!   its identity and aliasable state kept, its range in an automatic heap given back once, by its
-//!   parts on the generation it was carried to last (`Heap::carry`, `Buffer::carry_placed`).
+//!   parts on the generation it was carried to last (`Heap::carry`, `Buffer::carry_placed`). A
+//!   texture, after the heaps: its call made again there as a texture of the runtime's own, which
+//!   holds its parts there, a view's after its parent's; a texture of its own image's contents
+//!   lost, one over a carried buffer reading the buffer's bytes; its identity, resource ID,
+//!   label and purgeable state kept (`Texture::carry`).
 //! - **What stays the lost generation's**, refused where it meets the next
 //!   (`RuntimeGap::MadeBeforeRecovery`): a buffer of pooled host-visible memory (`Shared`, and
 //!   `Managed`) the device allocated, whose `contents` pointer is its block's mapping, which
@@ -53,18 +60,20 @@
 //!   buffer, or one whose last detach's deallocator waits for its next rebind; a `Shared` heap,
 //!   whose bytes are such pooled memory (a heap's own buffer lies where its textures can, never
 //!   in the runtime's own pages), a heap over the caller's memory and a sparse heap, each with
-//!   the buffers placed in it; every texture, a heap's too; a buffer over the caller's
+//!   the buffers placed in it; a heap's texture or one over a heap's buffer, a texture over the
+//!   caller's `VkImage`, a sparse or shareable texture, one over a buffer left, and a view of
+//!   each (`texture/carry.rs`); a buffer over the caller's
 //!   `VkBuffer`, an object of the lost `VkDevice` that only the caller can make again on the
 //!   new one; a buffer in exported memory, and an event whose semaphore was made exportable,
 //!   whose importers hold the lost allocation or semaphore. The recovery's notice counts the
-//!   buffers, heaps and events it carried and left by kind (`Degradation::DeviceRecovered`): a
-//!   heap's buffers with their heap.
+//!   buffers, heaps, textures and events it carried and left by kind
+//!   (`Degradation::DeviceRecovered`): a heap's buffers with their heap.
 //! - **Each generation's work reaches its own parts** (`NoticesFor::generation`). A command buffer of the
 //!   lost generation may still record once the recovery carried its objects: an encoder a
 //!   program's thread opened before the loss, a render encoder's end on the lowering thread.
-//!   Inside a command buffer's work, a carried buffer answers its parts of that command buffer's
-//!   generation while it has them there; elsewhere, those of the generation it was carried to
-//!   last. Such a command buffer fails as its device's lost one does. A carried event answers
+//!   Inside a command buffer's work, a carried buffer or texture answers its parts of that
+//!   command buffer's generation while it has them there; elsewhere, those of the generation it
+//!   was carried to last. Such a command buffer fails as its device's lost one does. A carried event answers
 //!   the generation it was carried to last everywhere: a command buffer of the lost generation
 //!   that waits for or signals it after the carry refuses it, as its device is the next
 //!   generation (`Device::foreign`). A call outside command buffers' work that reaches a buffer's
@@ -86,7 +95,8 @@
 //!   still valid. Those objects must still be destroyed before their parents or the device can be
 //!   destroyed" (vkspec 5.2.3, "Lost Device"). Its device-level objects of work, what it keeps
 //!   for reuse and its kept empty blocks go then too, and no command buffer is made on it again
-//!   (`DeviceShared::keep_nothing`). So a carried object holds nothing of the lost generation:
+//!   (`DeviceShared::keep_nothing`). A carried texture keeps its parts there until it goes
+//!   (`texture/carry.rs`). So a carried object but a texture holds nothing of the lost generation:
 //!   the lost `VkDevice` goes with the last object left on it (a pooled buffer, a pipeline state,
 //!   a texture), through the teardown every generation's goes through, and holds its own objects
 //!   alone meanwhile (`WorkCounts::vk_devices_live`).
@@ -98,6 +108,8 @@ use crate::heap::{Heap, WeakHeap};
 use crate::host_ram::RamUseCell;
 use crate::queue::Slots;
 use crate::resource::ObjectId;
+use crate::texture::carry::{Remade, TextureLeft, WeakTexture};
+use crate::texture::Texture;
 use crate::Error;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
@@ -140,11 +152,16 @@ struct State {
     ram_uses: Vec<Weak<RamUseCell>>,
     /// The program's heaps, held weakly: as `ram_uses`.
     heaps: Vec<WeakHeap>,
+    /// The program's textures and views (`texture/carry.rs`), held weakly, in the order they were
+    /// kept: a view after the texture it was made from.
+    textures: Vec<WeakTexture>,
     /// The handles of the device that the objects holding no Vulkan object answer
     /// ([`LineDevice`]), held weakly.
     links: Vec<Weak<GenerationLink>>,
     /// The size at which the next keeping drops the gone events' entries.
     prune_at: usize,
+    /// The size at which the next keeping drops the gone textures' entries.
+    textures_prune_at: usize,
     /// The size at which the next keeping drops the gone handles' entries.
     links_prune_at: usize,
     /// The recovery took the generation's objects ([`Carry::take`]): what is kept from now on,
@@ -192,6 +209,7 @@ pub(crate) struct Taken {
     events: Vec<Arc<EventShared>>,
     ram_uses: Vec<Arc<RamUseCell>>,
     heaps: Vec<Heap>,
+    textures: Vec<Texture>,
     links: Vec<Arc<GenerationLink>>,
 }
 
@@ -237,6 +255,26 @@ impl Carry {
         state.taken
     }
 
+    /// Keep `texture`, a program's texture or view on this generation, as it is made or carried
+    /// here (`texture/carry.rs`): as [`event`](Self::event), its gone entries dropped as the
+    /// registry grows.
+    pub(crate) fn texture(&self, texture: &Texture) -> bool {
+        let mut state = lock(&self.state);
+        if state.textures.len() >= state.textures_prune_at {
+            state.textures.retain(WeakTexture::lives);
+            state.textures_prune_at = (2 * state.textures.len()).max(PRUNE_FLOOR);
+        }
+        state.textures.push(WeakTexture::of(texture));
+        state.taken
+    }
+
+    /// Whether the recovery took the generation's objects, read under the lock the take sets it
+    /// under: a texture whose way to be made again was set before this read was in the take, its
+    /// way read there; one set after, its maker carries (`Device::kept_texture`).
+    pub(crate) fn late_texture(&self) -> bool {
+        lock(&self.state).taken
+    }
+
     /// Keep `link`, this generation's handle of the device an object holding no Vulkan object
     /// answers ([`LineDevice`]): as [`event`](Self::event), its gone entries dropped as the
     /// registry grows.
@@ -264,6 +302,9 @@ impl Carry {
             events: state.events.iter().filter_map(Weak::upgrade).collect(),
             ram_uses: state.ram_uses.iter().filter_map(Weak::upgrade).collect(),
             heaps: state.heaps.iter().filter_map(WeakHeap::upgrade).collect(),
+            textures: (state.textures.iter())
+                .filter_map(WeakTexture::upgrade)
+                .collect(),
             links: state.links.iter().filter_map(Weak::upgrade).collect(),
         }
     }
@@ -475,6 +516,10 @@ pub(crate) struct Carried {
     heaps: (u64, u64, u64),
     /// The heaps left the lost generation's, by why.
     heaps_left: [u64; 4],
+    /// The textures carried, by what was made again ([`Remade`]).
+    textures: [u64; 3],
+    /// The textures left the lost generation's, by why.
+    textures_left: [u64; 7],
 }
 
 impl Carried {
@@ -498,11 +543,25 @@ impl Carried {
             "sparse heaps",
             "heaps whose making there failed",
         ];
+        let texture_kinds = [
+            "heaps' textures",
+            "textures over the caller's `VkImage`",
+            "sparse textures",
+            "shareable textures",
+            "textures over the buffers left",
+            "textures whose making there failed",
+            "textures of calls no recovery makes again",
+        ];
         let left = (kinds.iter().zip(self.left).enumerate())
             .filter(|&(at, (_, count))| at == Left::Pooled as usize || count > 0)
             .map(|(_, (kind, count))| format!("{count} {kind}"))
             .chain(
                 (heap_kinds.iter().zip(self.heaps_left))
+                    .filter(|&(_, count)| count > 0)
+                    .map(|(kind, count)| format!("{count} {kind}")),
+            )
+            .chain(
+                (texture_kinds.iter().zip(self.textures_left))
                     .filter(|&(_, count)| count > 0)
                     .map(|(kind, count)| format!("{count} {kind}")),
             )
@@ -527,10 +586,17 @@ impl Carried {
                  in them, whose contents were lost too"
             ),
         };
+        let textures = match self.textures {
+            [0, 0, 0] => String::new(),
+            [own, over, views] => format!(
+                ", and {own} textures whose contents were lost too (they read as new ones), \
+                 {over} textures over the buffers carried and {views} texture views"
+            ),
+        };
         format!(
             "it carried {} events, {ram}{} buffers with their contents and {lost} `Private` \
-             buffers ({lost_bytes} bytes) whose contents were lost (they read zero){heaps}; left \
-             refused (`MadeBeforeRecovery`): {left}",
+             buffers ({lost_bytes} bytes) whose contents were lost (they read zero){heaps}\
+             {textures}; left refused (`MadeBeforeRecovery`): {left}",
             self.events, self.kept
         )
     }
@@ -556,6 +622,15 @@ impl Carried {
                 self.heaps.2 += buffers;
             }
             Err(left) => self.heaps_left[left as usize] += 1,
+        }
+    }
+
+    /// One texture's carry: what was made again, or why it was left.
+    fn texture(&mut self, carried: Result<Option<Remade>, TextureLeft>) {
+        match carried {
+            Ok(Some(remade)) => self.textures[remade as usize] += 1,
+            Ok(None) => {}
+            Err(left) => self.textures_left[left as usize] += 1,
         }
     }
 
@@ -587,6 +662,7 @@ impl Device {
             events,
             ram_uses,
             heaps,
+            textures,
             links,
         } = shared.carry.take(shared);
         for link in &links {
@@ -605,6 +681,11 @@ impl Device {
         }
         for heap in &heaps {
             carried.heap(heap.carry(next));
+        }
+        // After the buffers, which textures lie over; the textures before the views of them, as
+        // they were kept (a view's carry carries its parent where it was not).
+        for texture in &textures {
+            carried.texture(texture.carry(next));
         }
         carried
     }
