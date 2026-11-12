@@ -261,7 +261,7 @@ fn make(
             let bits =
                 unsafe { importer.dma_buf_types(raw, fd.as_fd()) }.map_err(|e| e.to_string())?;
             let type_index = coherent(properties, bits)
-                .or_else(|| (bits != 0).then(|| bits.trailing_zeros()))
+                .or((bits != 0).then_some(bits.trailing_zeros()))
                 .ok_or("no type")?;
             let fd = fd.into_raw_fd();
             let mut import = vk::ImportMemoryFdInfoKHR::default()
@@ -456,7 +456,7 @@ fn import_free_hold_bench() {
             spread(lengths(spans.makes.iter()))
         );
         for order in [Order::InTurn, Order::Paced] {
-            let of = |list: &'_ [(Order, Range<Instant>)]| -> Vec<Range<Instant>> {
+            let of = |list: &[(Order, Range<Instant>)]| -> Vec<Range<Instant>> {
                 (list.iter())
                     .filter(|(each, _)| *each == order)
                     .map(|(_, span)| span.clone())
