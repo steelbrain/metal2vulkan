@@ -3428,8 +3428,10 @@ fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
     // asks for the pulled-vertex-buffer variant, whose replay forms' plans state themselves.
     let layouts = crate::bind::draw_replay_vertex_layouts(&base.vertex_input).expect("layouts");
     assert_eq!(layouts, std::collections::BTreeSet::from([0]));
-    let mut shape = crate::bind::BindShape::default();
-    shape.far_vertex_buffers = layouts.clone();
+    let shape = crate::bind::BindShape {
+        far_vertex_buffers: layouts.clone(),
+        ..Default::default()
+    };
     let plan = base
         .plan(&dev, &shape)
         .expect("the base plan, no buffer bound");

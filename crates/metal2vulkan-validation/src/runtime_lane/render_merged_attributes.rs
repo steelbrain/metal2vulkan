@@ -286,8 +286,8 @@ fn run(
     (writer, state): (&ComputePipelineState, &RenderPipelineState),
     (command_types, draws, layouts, host_step): (IndirectCommandType, &[Draw], Layouts, bool),
 ) -> (Vec<[u32; 4]>, (u64, u64, u64)) {
-    let strided = layouts.positions.is_none();
-    let icb = icb(device, &inheriting(command_types, strided), COMMANDS);
+    let per_bind = layouts.positions.is_none();
+    let icb = icb(device, &inheriting(command_types, per_bind), COMMANDS);
     if host_step {
         let command = icb.indirect_render_command_at(COMMANDS - 1).unwrap();
         command.set_barrier().unwrap();
