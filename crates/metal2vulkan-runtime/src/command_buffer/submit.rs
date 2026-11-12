@@ -652,15 +652,17 @@ impl CommandBufferShared {
         // writes until its submission was made (`heap_sets::hold`).
         let firsts = &shared.textures.first_moves;
         let mut first_work = firsts.take_holding(|_| true, || crate::heap_sets::hold(device));
-        // Its buffers' fills go to the device's fill queue where it has one, in a submission of
-        // their own that the batch waits for (below, `device/staging.rs`): not where a group holds
-        // batches of this `VkQueue`, whose values that submission would wait for before their
-        // signals were submitted, nor where the batch waits for a binary semaphore, which its one
-        // wait consumes.
-        let fills =
-            (device.has_fill_queue() && !scheduler.group.holds() && binary_waits.is_empty())
-                .then(|| first_work.take_fills())
-                .flatten();
+        // Its buffers' fills go to the device's fill queue where it has one with a command buffer
+        // free, in a submission of their own that the batch waits for (below,
+        // `device/staging.rs`): not where a group holds batches of this `VkQueue`, whose values
+        // that submission would wait for before their signals were submitted, nor where the batch
+        // waits for a binary semaphore, which its one wait consumes.
+        let fills = (!scheduler.group.holds()
+            && binary_waits.is_empty()
+            && first_work.has_first()
+            && device.fill_queue_has_room())
+        .then(|| first_work.take_fills())
+        .flatten();
         // The copies queued for the staging queue, submitted there first, which the batch waits
         // for on the GPU (below), holding what they copied until it completed
         // (`texture/staging_copy.rs`).

@@ -82,7 +82,9 @@
 //!   each timeline's completed value, for visibility: what the fills waited for at the start of
 //!   the batch's work. A batch that a group of batches held (`command_buffer/group.rs`), whose
 //!   values are not submitted yet, waits for a binary semaphore (which its one wait consumes), or
-//!   took an acquire from an external agent keeps its fills at its start.
+//!   took an acquire from an external agent keeps its fills at its start; so does one that finds
+//!   every command buffer of the fill queue's pending ([`Device::fill_queue_has_room`]), as a wait
+//!   on the host for one may wait for work that waits for the caller.
 //! - **What waits for it.** The batch, before any of its commands; and every other submission of
 //!   the device's, a batch or an internal one on any `VkQueue`, on the GPU until the host saw it
 //!   complete, as for the staging queue ([`Device::fill_queue_wait`]): any of their commands may
@@ -472,10 +474,24 @@ impl Device {
         self.shared().staging.is_some()
     }
 
-    /// Whether the device reserved a fill queue (the module docs): a second queue of a staging
-    /// queue's family of transfers alone.
-    pub(crate) fn has_fill_queue(&self) -> bool {
-        self.shared().fill_queue.is_some()
+    /// Whether the device has a fill queue (the module docs) with a command buffer a submission
+    /// may record into now, with no wait on the host: one whose last submission the host saw
+    /// complete, or room for another of [`BUFFERS`]. A submission there may wait for work that
+    /// waits for the caller (a signal it reserved, `Event::reserve_vk_signal`), so the batch that
+    /// finds none keeps its fills at its start rather than wait under the scheduler's lock.
+    pub(crate) fn fill_queue_has_room(&self) -> bool {
+        let Some(fill_queue) = self.shared().fill_queue.as_ref() else {
+            return false;
+        };
+        let objects = lock(&fill_queue.objects);
+        let Some(made) = objects.made.as_ref() else {
+            return true;
+        };
+        let seen = fill_queue.done.value();
+        made.buffers.len() < BUFFERS
+            || (made.buffers.iter()).any(|&(_, value)| {
+                value <= seen || reached(self, fill_queue, value, 0).unwrap_or(false)
+            })
     }
 
     /// The sharing of an image that copies on the staging queue: concurrent among the device's
