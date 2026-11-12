@@ -8,18 +8,17 @@
 //! reads them to find out where the time went.
 //!
 //! The hold that crosses queues is the one behind an earlier commit (`scheduler/order.rs`): Metal
-//! tracks a resource across queues in the order it schedules the command buffers, so a batch the
-//! runtime holds for a reason of its own must not let a later commit's conflicting batch go
-//! first. `a_head_that_shares_a_buffer_with_a_held_batch_waits_behind_it` holds one batch by its
-//! pipeline's making (the device's pool's test hold, so a making is as slow as the test makes
-//! it) and shows both sides of the question: a command buffer of another queue that shares
-//! nothing with it goes and is counted as waiting for nothing, and one that writes the buffer its
-//! dispatch writes waits behind it and is counted.
-//! `a_head_over_the_same_host_bytes_through_another_buffer_goes_while_a_batch_is_held` shows the
-//! line the hold stops at: two no-copy buffers over the same host bytes are two resources, which
-//! Metal orders across queues only as the program orders them (`host_aliases.rs`), so a command
-//! buffer of another queue that writes those bytes through the other buffer goes while the
-//! dispatch's making holds it.
+//! tracks a resource across queues in the order the GPU takes the command buffers, so a batch the
+//! runtime holds for its checks, or for a host step whose gate was taken, must not let a later
+//! commit's conflicting batch go first, and one held for its pipelines' making gives way
+//! (**Held batches give way**). Each test holds one batch by its pipeline's making (the device's
+//! pool's test hold, so a making is as slow as the test makes it):
+//! `a_head_that_shares_a_buffer_with_a_batch_held_for_its_making_goes_first` and
+//! `a_head_over_the_same_host_bytes_through_another_buffer_goes_while_a_batch_is_held` show a
+//! command buffer of another queue that writes what the held dispatch writes going first,
+//! through the same buffer or through another over the same host pages, and the dispatch running
+//! after it; `a_head_that_waits_for_a_fence_a_batch_held_for_its_making_updates_waits_behind_it`
+//! shows the line that stops at: a fence the two share keeps commit order.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The kernel is `scale_and_offset` of the
@@ -27,7 +26,7 @@
 //! `dispatch_pending.rs` runs it.
 
 use super::blit_holds::{device, exact_waits_device, Host, Scratch, BYTES, WAIT};
-use super::dispatch_pending::{dispatch, state, Buffers, Grid};
+use super::dispatch_pending::{dispatch, dispatch_updating, state, Buffers, Grid};
 use crate::pipeline::pool::held;
 use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, EventRef, ResourceOptions,
@@ -63,19 +62,21 @@ fn eventually(within: Duration, done: impl Fn() -> bool) -> bool {
     done()
 }
 
-/// A dispatch whose pipeline's making the pool is held from finishing keeps its place in the
-/// scheduler's order: its host step has not run, and every wait of its own is satisfied. A
-/// command buffer committed after it **on another queue** that shares nothing with it goes, and
-/// nothing counts it as waiting; one that writes the buffer its dispatch writes waits behind it,
-/// counted, and so is the dispatch's own hold for its host step. Each batch a look found held is
-/// counted once as it goes, with the nanoseconds it waited.
+/// A dispatch whose pipeline's making the pool is held from finishing gives way in the
+/// scheduler's order (`scheduler/order.rs`, **Held batches give way**): a command buffer committed
+/// after it **on another queue** that writes the buffer its dispatch writes goes while the making
+/// holds it, as an x86 Mac's GPU may take a later commit of another queue first, and no look
+/// counts it as waiting behind an earlier commit; the dispatch's own hold for its host step is
+/// counted, once as it goes, with the nanoseconds it waited. Released, the dispatch runs after the
+/// fill: its words are over the fill's. (A cold compute pipeline's making of 3 s on an Iris Xe held
+/// a guest's compositor frames behind another process's command buffer in commit order.)
 #[test]
-fn a_head_that_shares_a_buffer_with_a_held_batch_waits_behind_it() {
-    let scratch = Scratch::new("behind");
-    let device = device(&scratch.0);
+fn a_head_that_shares_a_buffer_with_a_batch_held_for_its_making_goes_first() {
+    let scratch = Scratch::new("first");
+    // Its recordings wait for the making until it is made: a bound passed would drop the dispatch.
+    let device = exact_waits_device(&scratch.0);
     let state = state(&device);
     let buffers = Buffers::new(&device);
-    let apart = device.new_buffer(64, ResourceOptions::shared()).unwrap();
     let (a, b) = (
         device.new_command_queue().unwrap(),
         device.new_command_queue().unwrap(),
@@ -85,30 +86,16 @@ fn a_head_that_shares_a_buffer_with_a_held_batch_waits_behind_it() {
     let before = device.work_counts();
     pending.commit().unwrap();
 
-    let alone = fill(&b, &apart, None);
-    alone.commit().unwrap();
-    alone
+    let sharing = fill(&b, buffers.output(), None);
+    sharing.commit().unwrap();
+    sharing
         .wait_until_completed_for(WAIT)
-        .expect("a batch of another queue that shares nothing with the held one runs meanwhile");
-    assert_eq!(alone.status(), CommandBufferStatus::Completed);
+        .expect("a batch writing the buffer the dispatch held for its making writes waited for it");
+    assert_eq!(sharing.status(), CommandBufferStatus::Completed);
     assert_eq!(
         device.work_counts().heads_held_for_earlier_commits,
         before.heads_held_for_earlier_commits,
-        "a batch that shares nothing with the held one was counted as waiting behind it"
-    );
-
-    let sharing = fill(&b, buffers.output(), None);
-    sharing.commit().unwrap();
-    assert!(
-        sharing.wait_until_completed_for(WATCHED).is_err(),
-        "a batch writing the buffer the held dispatch writes did not wait behind it"
-    );
-    assert!(
-        eventually(WAIT, || {
-            device.work_counts().heads_held_for_earlier_commits
-                > before.heads_held_for_earlier_commits
-        }),
-        "the hold behind an earlier commit on another queue was not counted"
+        "a batch that went before the held one was counted as waiting behind it"
     );
     assert!(
         device.work_counts().heads_held_for_host_steps > before.heads_held_for_host_steps,
@@ -117,7 +104,73 @@ fn a_head_that_shares_a_buffer_with_a_held_batch_waits_behind_it() {
     assert_ne!(pending.status(), CommandBufferStatus::Completed);
 
     drop(hold);
-    for command_buffer in [&pending, &sharing] {
+    pending.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(
+        pending.status(),
+        CommandBufferStatus::Completed,
+        "{:?} {:?}",
+        pending.error(),
+        pending.failed_pipeline()
+    );
+    assert!(
+        buffers.written(THREADS),
+        "the dispatch, after the fill, did not write what Metal's writes"
+    );
+    let after = device.work_counts();
+    assert!(
+        after.batches_held_past_a_look > before.batches_held_past_a_look,
+        "the held dispatch was not counted as it went"
+    );
+    assert!(
+        after.batch_hold_nanos > before.batch_hold_nanos,
+        "the hold was counted as taking no time"
+    );
+}
+
+/// A dispatch whose pipeline's making the pool is held from finishing updates a fence, and a
+/// command buffer committed after it on another queue waits for that fence before a fill of a
+/// buffer of its own: the fence keeps commit order where the held batch gives way on resources
+/// (`scheduler/order.rs`, **Held batches give way**), so the fill waits behind the dispatch,
+/// counted, and both complete once the making ends.
+#[test]
+fn a_head_that_waits_for_a_fence_a_batch_held_for_its_making_updates_waits_behind_it() {
+    let scratch = Scratch::new("fence");
+    let device = exact_waits_device(&scratch.0);
+    let state = state(&device);
+    let buffers = Buffers::new(&device);
+    let apart = device.new_buffer(64, ResourceOptions::shared()).unwrap();
+    let fence = device.new_fence();
+    let (a, b) = (
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
+    );
+    let hold = held::hold();
+    let grid = Grid::One(Size::new(THREADS, 1, 1));
+    let pending = dispatch_updating(&a, &state, &buffers, grid, &fence);
+    let before = device.work_counts();
+    pending.commit().unwrap();
+
+    let waiting = b.command_buffer().unwrap();
+    let mut blit = waiting.blit_command_encoder().unwrap();
+    blit.wait_for_fence(&fence).unwrap();
+    blit.fill_buffer(&apart, 0..64, 7).unwrap();
+    blit.end_encoding().unwrap();
+    waiting.commit().unwrap();
+    assert!(
+        waiting.wait_until_completed_for(WATCHED).is_err(),
+        "a batch waiting for a fence the held dispatch updates did not wait behind it"
+    );
+    assert!(
+        eventually(WAIT, || {
+            device.work_counts().heads_held_for_earlier_commits
+                > before.heads_held_for_earlier_commits
+        }),
+        "the hold behind an earlier commit on another queue was not counted"
+    );
+    assert_ne!(pending.status(), CommandBufferStatus::Completed);
+
+    drop(hold);
+    for command_buffer in [&pending, &waiting] {
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(
             command_buffer.status(),
@@ -127,17 +180,7 @@ fn a_head_that_shares_a_buffer_with_a_held_batch_waits_behind_it() {
             command_buffer.failed_pipeline()
         );
     }
-    let after = device.work_counts();
-    assert!(
-        after.batches_held_past_a_look >= before.batches_held_past_a_look + 2,
-        "the two batches a look found held were not both counted as they went: {} to {}",
-        before.batches_held_past_a_look,
-        after.batches_held_past_a_look
-    );
-    assert!(
-        after.batch_hold_nanos > before.batch_hold_nanos,
-        "the holds were counted as taking no time"
-    );
+    assert!(buffers.written(THREADS), "the dispatch did not write");
 }
 
 /// A `Shared` no-copy buffer of `device` over all of `host`'s pages.
@@ -155,13 +198,12 @@ fn over(device: &Device, host: &Host) -> Buffer {
 /// A dispatch whose pipeline's making the pool is held from finishing writes host pages through
 /// one no-copy buffer, and a command buffer committed after it on another queue fills the same
 /// bytes through a second no-copy buffer over exactly those pages, which joins the first's memory
-/// (`host_aliases.rs`). The two are two resources: Metal orders two resources over one memory
-/// across queues only as the program orders them (an M4 under macOS 27.0.1, `host_aliases.rs`),
-/// so the fill goes while the dispatch's making holds it, and no look counts it as waiting behind
-/// an earlier commit. It had waited for the making (a guest's compositor frames behind another
-/// process's command buffer over a shared surface's pages, frozen for a cold compile's 3 s).
-/// Released, the dispatch runs after the fill, which went to the GPU first, so its words are what
-/// Metal's dispatch writes.
+/// (`host_aliases.rs`), so the two meet as one resource's uses do. The dispatch gives way
+/// (`scheduler/order.rs`, **Held batches give way**), so the fill goes while the dispatch's making
+/// holds it, and no look counts it as waiting behind an earlier commit. It had waited for the
+/// making (a guest's compositor frames behind another process's command buffer over a shared
+/// surface's pages, frozen for a cold compile's 3 s). Released, the dispatch runs after the fill,
+/// which went to the GPU first, so its words are what Metal's dispatch writes.
 #[test]
 fn a_head_over_the_same_host_bytes_through_another_buffer_goes_while_a_batch_is_held() {
     let host = Host::new();

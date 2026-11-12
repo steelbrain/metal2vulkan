@@ -16,8 +16,10 @@
 //! - **When it records.** `commit` records it where its pipelines are made by then; otherwise
 //!   the scheduler's host step records it once they are made (`scheduler`), its batch held in
 //!   its queue's order meanwhile, with no wait for the GPU: the batches committed after it on its
-//!   queue complete after it, as Metal's do, and a batch of another queue waits for it only
-//!   where the two share a resource one of them writes (`scheduler/order.rs`).
+//!   queue complete after it, as Metal's do, and a batch of another queue committed after it
+//!   waits for it only where the two share a fence: one that writes a resource it uses, or uses
+//!   one it writes, goes first and it after, as an x86 Mac's GPU may take a later commit of
+//!   another queue first (`scheduler/order.rs`, **Held batches give way**).
 //! - **A failed making.** A making that failed, or that its state's release stopped
 //!   (`piece_holds.rs`), is made again by the recording, as a caller after a failed making does
 //!   (`making.rs`), on the scheduler's thread; where that fails too, the command buffer completes

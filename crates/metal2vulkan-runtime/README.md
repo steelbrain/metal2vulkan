@@ -794,7 +794,10 @@ draw) whose pipeline the driver is still making `DevicePolicy::pipeline_commit_w
 default) after its command buffer's commit runs nothing too (`PipelineWaitPolicy::Bounded`, the
 default; a render or compute state's creation likewise waits `DevicePolicy::pipeline_creation_wait`,
 4.5 s by default, at most for the pipeline it hands to the runtime's pool), its command buffer
-running on, and the command buffers after it draw and dispatch with the pipeline once made. One
+running on, and the command buffers after it draw and dispatch with the pipeline once made.
+While it waits, another queue's command buffer committed after it goes first, even over a tracked
+resource the two share, and the waiting one runs after it, as an x86 Mac's GPU may take a later
+commit of another queue first; a fence the two share keeps commit order. One
 call so waits for the driver's makings at most: a state's creation, its creation wait; a `commit`,
 until its commit plus its commit wait (its commands share that one deadline, and the commit records
 there only what it can, an execution of render commands the CPU writes among them); neither waits

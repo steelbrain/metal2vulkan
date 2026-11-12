@@ -68,10 +68,13 @@
 //!   semaphores is ready once every signal of it that a command buffer of this device committed
 //!   before is submitted; a signal from the caller was submitted before the commit.
 //! - **Tracking** ([`Tracker`]). Each batch is planned as it is submitted, against the device's
-//!   hazard state, in this order: the order Metal follows across queues. A batch held for its host
-//!   step or its checks keeps its place among the tracked accesses: a later commit's batch on
-//!   another queue that conflicts with it waits behind it, its own host step and checks too
-//!   ([`Order::is_behind`]).
+//!   hazard state, in this order: the order Metal follows across queues. A batch held for its
+//!   checks, or for a host step whose gate was taken, keeps its place among the tracked accesses:
+//!   a later commit's batch on another queue that conflicts with it waits behind it, its own host
+//!   step and checks too ([`Order::is_behind`]). One held for its pipelines' making, or for a step
+//!   that has not taken its gate, gives way but to a later commit that shares a fence with it:
+//!   that commit goes first and the held batch after it, as an x86 Mac's GPU may take a later
+//!   commit of another queue first (`order.rs`, **Held batches give way**).
 //! - **Many logical queues on few `VkQueue`s.** A logical queue keeps its `VkQueue` from a
 //!   command buffer's making to its completion, and moves only where it holds no other
 //!   uncompleted one (`queue_share.rs`); each `VkQueue` signals its own timeline semaphore with
@@ -221,7 +224,7 @@ use binary::{BinarySignals, Needs};
 use inbox::Inbox;
 use left::{work_through, Kind, Left};
 use metal2vulkan::error::RuntimeDriverDefect;
-use order::{Behind, Order};
+use order::{Behind, Order, Place};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{fence, AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
@@ -307,7 +310,8 @@ pub(crate) enum HeldFor {
     /// An event value it waits for that neither a submitted signal nor the host reaches.
     EventValue,
     /// A batch of an earlier commit on another logical queue that keeps its place and whose
-    /// footprint runs in commit order with its own ([`Order::is_behind`]).
+    /// footprint runs in commit order with its own, or that gives way and shares a fence with it
+    /// ([`Order::is_behind`]).
     EarlierCommit,
     /// Other queues' work enough is in flight on its `VkQueue`, which an unshared queue holds
     /// (`unshared_hold.rs`).
@@ -2533,10 +2537,13 @@ fn gate_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits: 
 /// function wrote them unnamed, an earlier one of the step's own command buffer or one of an
 /// earlier command buffer of any queue.
 ///
-/// Every batch that may write what the step reads was submitted by then: an earlier batch of its
-/// line went before it, a batch of an earlier commit on another line that may write those bytes
-/// holds it behind until submitted (`is_behind`, whose footprints hold the step's reads,
-/// `ExecutionRange::host_reads`), and a later commit's that may write them waits behind it.
+/// Every batch that may write what the step reads was submitted by then, or goes after the step's
+/// batch: an earlier batch of its line went before it, a batch of an earlier commit on another
+/// line that may write those bytes and keeps its place holds it behind until submitted
+/// (`is_behind`, whose footprints hold the step's reads, `ExecutionRange::host_reads`), and one
+/// that gives way goes after it; a later commit's that may write them waits behind it from the
+/// gate on, the step's batch keeping its place once its gate is taken (`order.rs`, **Held batches
+/// give way**), and before it went first, so the gate covers it.
 fn gate_of(
     buffer: &Hold<CommandBufferShared>,
     index: usize,
@@ -2559,9 +2566,11 @@ fn gate_of(
 }
 
 /// Whether the head of commit sequence number `sequence` waits behind a batch committed before it
-/// that keeps its place ([`Order::is_behind`]): one whose binary semaphores' signals are submitted
-/// and whose event values are reached, as is every batch before it on its line, and whose footprint
-/// and the head's run in commit order ([`tracker::ordered`]). `memo` holds what this pass found.
+/// ([`Order::is_behind`]) whose binary semaphores' signals are submitted and whose event values
+/// are reached, as are every batch's before it on its line: one that keeps its place, whose
+/// footprint and the head's run in commit order ([`tracker::ordered`]), or one that gives way
+/// ([`place_of`]), whose footprint and the head's share a fence ([`tracker::fenced`]). `memo`
+/// holds what this pass found.
 fn is_behind(
     order: &Order<Held>,
     binary: &BinarySignals<vk::Semaphore>,
@@ -2572,14 +2581,31 @@ fn is_behind(
         sequence,
         memo,
         (
-            &mut |held: &Held| binary.ready(&held.binary_needs) && events_reachable(held),
+            &mut |held: &Held| place_of(held, binary),
             &mut |held: &Held| held.buffer.footprint(held.index),
             &|earlier: &Option<Arc<Footprint<ResourceKey>>>,
-              later: &Option<Arc<Footprint<ResourceKey>>>| {
-                tracker::ordered(earlier.as_deref(), later.as_deref())
+              later: &Option<Arc<Footprint<ResourceKey>>>,
+              gives_way| match gives_way {
+                false => tracker::ordered(earlier.as_deref(), later.as_deref()),
+                true => tracker::fenced(earlier.as_deref(), later.as_deref()),
             },
         ),
     )
+}
+
+/// Where `held` stands in the order across queues (`order.rs`'s **Held batches give way**): it
+/// waits for the program while a binary semaphore's signal it needs is not submitted or an event
+/// value it waits for is not reached; it gives way while it holds segments whose host step has
+/// not taken its gate (its pipelines being made, or a step that reads nothing the GPU writes),
+/// so the step reads what a later commit that goes first writes; else it keeps its place.
+fn place_of(held: &Held, binary: &BinarySignals<vk::Semaphore>) -> Place {
+    if !binary.ready(&held.binary_needs) || !events_reachable(held) {
+        return Place::Stops;
+    }
+    if held.segments && held.gate.is_none() && held.buffer.needs_host_step(held.index) {
+        return Place::GivesWay;
+    }
+    Place::Keeps
 }
 
 /// Whether every event value `held` waits for is reached by a submitted signal or the host:

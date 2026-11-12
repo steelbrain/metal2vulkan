@@ -192,7 +192,13 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   `dispatch-dropped-still-making`, the first named by `CommandBuffer::dropped_draw` with
   `VK_TIMEOUT`, counted `WorkCounts::draws_dropped_still_making` and
   `dispatches_dropped_still_making`), and later command buffers draw and dispatch with the
-  pipeline once made. Both bounds are 4.5 s by default. What one call waits for the driver's
+  pipeline once made. Meanwhile it holds back only its own queue's later command buffers: one of
+  another queue committed after it goes first, even where the two touch one tracked resource
+  that one of them writes, and the waiting one runs after it, as an x86 Mac's GPU may take a
+  later commit of another queue first (`metal2vulkan-conformance`'s
+  `probes/cross_queue_surface_order.m`: a Radeon Pro 5300M and a UHD 630 under macOS 26.7.1;
+  an M3 Max kept commit order); a fence the two share keeps commit order. Both bounds are 4.5 s
+  by default. What one call waits for the driver's
   makings: a state's creation, its creation wait at most; a `commit`, until its own deadline at
   most (it records there what it can, an execution of render commands the CPU writes among
   them; every other recording runs on the runtime's scheduler thread, which no call waits for). A

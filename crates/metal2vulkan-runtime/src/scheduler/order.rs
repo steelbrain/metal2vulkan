@@ -8,21 +8,39 @@
 //! ready holds back its own line, and the heads of other lines committed after it that it
 //! conflicts with:
 //!
-//! - **Tracked order across queues is commit order.** Metal tracks a resource across queues in
-//!   the order it schedules the command buffers, which is their commit order unless one waits
-//!   for an event (its tracking across queues). The runtime's tracker plans each batch as it is
-//!   submitted, so a batch held for a reason of the runtime's own (its host step, its submission
-//!   checks) must not let a later commit's batch that conflicts with it (a tracked resource's range
-//!   that one of them writes, or a fence) go before it: such a head is [`behind`](Order::is_behind)
-//!   it, and waits.
+//! - **Tracked order across queues is the order the batches go.** Metal tracks a resource across
+//!   queues in the order the GPU takes the command buffers, which need not be their commit order:
+//!   a command buffer committed after another on another queue, writing or reading one tracked
+//!   buffer the first writes, ran before it now and then on a Radeon Pro 5300M and a UHD 630
+//!   (macOS 26.7.1), and in commit order on an M3 Max (macOS 27.0.1)
+//!   (`metal2vulkan-conformance`'s `probes/cross_queue_surface_order.m`, its `nocopy-one`
+//!   control). The runtime's tracker plans each batch as it is submitted, so the batches it
+//!   submits run in submission order wherever they conflict, and the order picks which goes
+//!   first: a batch held for a reason of the runtime's own that keeps its place (its submission
+//!   checks; below) must not let a later commit's batch that conflicts with it (a tracked
+//!   resource's range that one of them writes, or a fence) go before it: such a head is
+//!   [`behind`](Order::is_behind) it, and waits.
+//! - **Held batches give way.** A batch held unsubmitted for its host step before the step read
+//!   anything the GPU writes ([`Place::GivesWay`]: its pipelines being made, or a step that reads
+//!   nothing of the GPU's) does not keep its place: a later commit of another queue that
+//!   conflicts with it goes, as an x86 Mac's GPU may take it first, and the held batch is
+//!   submitted after it, so the tracker orders the two that way; the batches after it on its line
+//!   give way with it. A head still waits behind such a batch where the two share a fence (one
+//!   updates a fence the other waits for or updates, or a batch whose uses are not known yet and
+//!   one that names a fence): a batch is never moved after a fence update it waits for. A step
+//!   whose gate was taken keeps its place: what it reads stands from its gate on, and a later
+//!   write going first would land after the step read. (A cold compute pipeline's making of 3 s
+//!   on an Iris Xe held one guest process's command buffer, and with it every other process's
+//!   frames over a surface they shared: the guest's display froze for 3.1 s.)
 //! - **Which batches keep their place.** Every batch of a line up to the first that waits for
 //!   an event value not yet reached by a submitted signal or the host, or for a binary
 //!   semaphore whose signal is not yet submitted. That one and those after it wait for the
 //!   program's signal, as Metal schedules them after it, so a later commit may go first: Metal
 //!   follows the event.
-//! - **No deadlock.** A head waits behind batches committed before it that keep their place
-//!   only; the first of those waits for no batch but its line's earlier ones, or for the runtime
-//!   (a host step's gate or pipelines, its checks), which never waits for a later commit.
+//! - **No deadlock.** A head waits behind batches committed before it that keep their place, or
+//!   that give way but share a fence with it, only; the first of those waits for no batch but its
+//!   line's earlier ones, or for the runtime (a host step's gate or pipelines, its checks), which
+//!   never waits for a later commit.
 //! - **Heads put first.** The caller may put heads first ([`next`](Order::next)'s `first`): a
 //!   ready one goes before the others, still behind any batch it conflicts with that keeps its
 //!   place, as every head. The scheduler puts first an unshared queue's head on a `VkQueue` whose
@@ -120,19 +138,20 @@ impl<B> Order<B> {
     }
 
     /// Whether the line head of commit sequence number `sequence` waits behind a batch committed
-    /// before it on another line: one that keeps its place there (`keeps` holds for it and for
-    /// every batch before it on its line), whose footprint (`footprint`) and the head's `ordered`
-    /// says run in commit order. `memo` keeps, for one pass over an unchanged order, each answer,
-    /// each line's batches found to keep their place, and each footprint taken. False for a
-    /// sequence number no head has.
+    /// before it on another line: one that keeps its place there or gives way (`keeps` answers
+    /// [`Place::Keeps`] or [`Place::GivesWay`] for it and for every batch before it on its line,
+    /// one after a batch that gives way giving way too), whose footprint (`footprint`) and the
+    /// head's `ordered` says run in commit order, given whether the earlier gives way. `memo`
+    /// keeps, for one pass over an unchanged order, each answer, each line's batches found to keep
+    /// their place, and each footprint taken. False for a sequence number no head has.
     pub(crate) fn is_behind<F>(
         &self,
         sequence: u64,
         memo: &mut Behind<F>,
         (keeps, footprint, ordered): (
-            &mut impl FnMut(&B) -> bool,
+            &mut impl FnMut(&B) -> Place,
             &mut impl FnMut(&B) -> F,
-            &impl Fn(&F, &F) -> bool,
+            &impl Fn(&F, &F, bool) -> bool,
         ),
     ) -> bool {
         if let Some(&answer) = memo.answers.get(&sequence) {
@@ -149,9 +168,9 @@ impl<B> Order<B> {
         sequence: u64,
         memo: &mut Behind<F>,
         (keeps, footprint, ordered): (
-            &mut impl FnMut(&B) -> bool,
+            &mut impl FnMut(&B) -> Place,
             &mut impl FnMut(&B) -> F,
-            &impl Fn(&F, &F) -> bool,
+            &impl Fn(&F, &F, bool) -> bool,
         ),
     ) -> bool {
         if self.lines.len() < 2 {
@@ -175,23 +194,34 @@ impl<B> Order<B> {
                 if *first > sequence {
                     break;
                 }
-                // Whether it and every batch before it on its line keep their place, each asked
-                // once a pass.
+                // Whether it and every batch before it on its line keep their place or give way,
+                // each asked once a pass.
                 let kept = &mut memo.kept[other];
                 if index >= kept.scanned {
-                    if kept.stopped || !keeps(batch) {
-                        kept.stopped = true;
+                    if kept.stopped {
                         break;
+                    }
+                    match keeps(batch) {
+                        Place::Stops => {
+                            kept.stopped = true;
+                            break;
+                        }
+                        Place::GivesWay => {
+                            kept.gives_way.get_or_insert(index);
+                        }
+                        Place::Keeps => {}
                     }
                     kept.scanned = index + 1;
                 }
+                let gives_way = kept.gives_way.is_some_and(|from| index >= from);
                 memo.footprints
                     .entry(*first)
                     .or_insert_with(|| footprint(batch));
                 memo.footprints
                     .entry(sequence)
                     .or_insert_with(|| footprint(head));
-                if ordered(&memo.footprints[first], &memo.footprints[&sequence]) {
+                let (earlier, later) = (&memo.footprints[first], &memo.footprints[&sequence]);
+                if ordered(earlier, later, gives_way) {
                     return true;
                 }
             }
@@ -383,10 +413,25 @@ impl<F> Default for Behind<F> {
     }
 }
 
-/// How far one line's batches were found to keep their place: the first `scanned` do, and, where
-/// `stopped`, the next does not.
+/// How far one line's batches were found to keep their place: the first `scanned` do or give way,
+/// those from `gives_way` on giving way, and, where `stopped`, the next does neither.
 #[derive(Clone, Copy, Default)]
 struct Kept {
     scanned: usize,
+    gives_way: Option<usize>,
     stopped: bool,
+}
+
+/// Where a batch stands in the order across queues ([`Order::is_behind`], the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Place {
+    /// It keeps its place: a later commit of another line that conflicts with it waits.
+    Keeps,
+    /// It is held unsubmitted for its host step before the step read anything the GPU writes:
+    /// a later commit of another line goes ahead of it, but where the two share a fence, and so
+    /// do the batches after it on its line (**Held batches give way**).
+    GivesWay,
+    /// It waits for the program (an event value or a binary semaphore's signal): it and the
+    /// batches after it on its line keep no place.
+    Stops,
 }

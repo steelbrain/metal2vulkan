@@ -13,7 +13,7 @@
 use crate::pipeline::pool::held;
 use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Device,
-    DeviceKind, DeviceOptions, PipelineOptions, ResourceOptions, ShaderCacheOptions, Size,
+    DeviceKind, DeviceOptions, Fence, PipelineOptions, ResourceOptions, ShaderCacheOptions, Size,
 };
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -149,6 +149,28 @@ pub(super) fn dispatch(
     buffers: &Buffers,
     grid: Grid,
 ) -> CommandBuffer {
+    encoded(queue, state, buffers, grid, None)
+}
+
+/// [`dispatch`], its encoder updating `fence` after the dispatch (`hold_sites.rs`).
+pub(super) fn dispatch_updating(
+    queue: &CommandQueue,
+    state: &ComputePipelineState,
+    buffers: &Buffers,
+    grid: Grid,
+    fence: &Fence,
+) -> CommandBuffer {
+    encoded(queue, state, buffers, grid, Some(fence))
+}
+
+/// [`dispatch`], its encoder updating `fence` after the dispatch where one is given.
+fn encoded(
+    queue: &CommandQueue,
+    state: &ComputePipelineState,
+    buffers: &Buffers,
+    grid: Grid,
+    fence: Option<&Fence>,
+) -> CommandBuffer {
     let command_buffer = queue.command_buffer().unwrap();
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
     encoder.set_compute_pipeline_state(state).unwrap();
@@ -160,6 +182,9 @@ pub(super) fn dispatch(
         Grid::One(threads) => encoder.dispatch_threadgroups(Size::new(1, 1, 1), threads),
     }
     .unwrap();
+    if let Some(fence) = fence {
+        encoder.update_fence(fence).unwrap();
+    }
     encoder.end_encoding().unwrap();
     command_buffer
 }

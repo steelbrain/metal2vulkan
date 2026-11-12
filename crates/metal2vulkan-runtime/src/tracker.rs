@@ -2353,12 +2353,7 @@ impl<K: Copy + Ord> Footprint<K> {
     /// each shares a resource's range and one of them writes it, or one updates a fence the
     /// other waits for or updates.
     fn conflicts(&self, later: &Footprint<K>) -> bool {
-        let fences = |updates: &[K], other: &Footprint<K>| {
-            updates
-                .iter()
-                .any(|fence| other.waits.contains(fence) || other.updates.contains(fence))
-        };
-        if fences(&self.updates, later) || fences(&later.updates, self) {
+        if self.fences_meet(later) {
             return true;
         }
         later.uses.iter().any(|used| {
@@ -2371,6 +2366,21 @@ impl<K: Copy + Ord> Footprint<K> {
                         && !(earlier.write.is_empty() && used.write.is_empty())
                 })
         })
+    }
+
+    /// Whether one of `self` and `other` updates a fence the other waits for or updates.
+    fn fences_meet(&self, other: &Footprint<K>) -> bool {
+        let fences = |updates: &[K], other: &Footprint<K>| {
+            updates
+                .iter()
+                .any(|fence| other.waits.contains(fence) || other.updates.contains(fence))
+        };
+        fences(&self.updates, other) || fences(&other.updates, self)
+    }
+
+    /// Whether it waits for or updates a fence.
+    fn names_a_fence(&self) -> bool {
+        !self.waits.is_empty() || !self.updates.is_empty()
     }
 }
 
@@ -2385,6 +2395,22 @@ pub(super) fn ordered<K: Copy + Ord>(
     match (earlier, later) {
         (Some(earlier), Some(later)) => earlier.conflicts(later),
         (None, Some(known)) | (Some(known), None) => !known.is_empty(),
+        (None, None) => true,
+    }
+}
+
+/// Whether a batch whose footprint is `earlier`, committed first and held unsubmitted for its host
+/// step (`scheduler/order.rs`'s **Held batches give way**), and one whose footprint is `later`
+/// must still run in that order across queues: one updates a fence the other waits for or
+/// updates. `None` is a batch whose uses are not known yet, which may name any fence the other
+/// names.
+pub(super) fn fenced<K: Copy + Ord>(
+    earlier: Option<&Footprint<K>>,
+    later: Option<&Footprint<K>>,
+) -> bool {
+    match (earlier, later) {
+        (Some(earlier), Some(later)) => earlier.fences_meet(later),
+        (None, Some(known)) | (Some(known), None) => known.names_a_fence(),
         (None, None) => true,
     }
 }
