@@ -2558,6 +2558,11 @@ fn record(
                     RegionPipeline::Making(_) => None,
                 })
                 .collect();
+            // A direct dispatch whose pipelines were not all made: the state's to record, for a
+            // later process's warm pass (`pipeline/dispatch_record.rs`).
+            if let (None, Some(direct)) = (&made, &direct) {
+                pipeline.record_dispatch(direct, state);
+            }
             match made {
                 Some(made) if !apart_samplers(&device, &objects) => {
                     // Kept with the entry, which the next dispatch of its inputs takes, and with

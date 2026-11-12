@@ -2557,6 +2557,7 @@ field	metal2vulkan-runtime::VkHostMemory.size	pub size: u64
 field	metal2vulkan-runtime::VkHostMemory.type_index	pub type_index: u32
 field	metal2vulkan-runtime::VkImageLayouts.home	pub home: ImageLayout
 field	metal2vulkan-runtime::VkImageLayouts.initial	pub initial: ImageLayout
+field	metal2vulkan-runtime::WarmStatistics.dispatch_pipelines_warmed	pub dispatch_pipelines_warmed: u64
 field	metal2vulkan-runtime::WarmStatistics.libraries_kept	pub libraries_kept: u64
 field	metal2vulkan-runtime::WarmStatistics.pipeline_bytes	pub pipeline_bytes: u64
 field	metal2vulkan-runtime::WarmStatistics.records_failed	pub records_failed: u64

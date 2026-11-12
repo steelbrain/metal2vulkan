@@ -44,6 +44,7 @@ pub(super) mod budget;
 pub(super) mod content_keyed;
 pub(super) mod creation_log;
 mod dispatch_making;
+mod dispatch_record;
 pub(super) mod flight;
 mod graphics;
 mod indirect_arguments;
@@ -348,6 +349,9 @@ pub(super) struct Program {
     /// What its latest direct dispatches that planned planned ([`Planned`]), the latest used
     /// first, [`PLANNED`] at most.
     planned: Mutex<VecDeque<Arc<Planned>>>,
+    /// Its creation and the dispatches it recorded, where the device hands pipeline records over
+    /// (`dispatch_record.rs`): set by the creation, once.
+    dispatch_records: OnceLock<dispatch_record::DispatchRecords>,
 }
 
 /// What a direct dispatch of a compute state planned (`compute::settle_dispatch`): the variant
@@ -754,11 +758,20 @@ impl ComputePipelineState {
             added_unsupported,
         )?;
         // The creation's record, as the program asked for it (`warm/record.rs`); a binary
-        // archive's add makes none.
+        // archive's add makes none. The state keeps the creation for its dispatches' records
+        // (`dispatch_record.rs`).
         if used.is_none() {
             device.record_pipeline(|| {
-                crate::warm::Pipeline::Compute(requested.clone(), added_unsupported)
+                crate::warm::Pipeline::Compute(requested.clone(), added_unsupported, Vec::new())
             });
+            if device.records_pipelines() {
+                let creation = (requested.clone(), added_unsupported);
+                state
+                    .0
+                    .program
+                    .dispatch_records
+                    .get_or_init(|| dispatch_record::DispatchRecords::new(creation));
+            }
         }
         Ok(state)
     }
@@ -932,6 +945,7 @@ impl ComputePipelineState {
                 pieces,
                 at_bind_views,
                 planned: Mutex::new(VecDeque::with_capacity(PLANNED)),
+                dispatch_records: OnceLock::new(),
             };
             StateShared {
                 id,
@@ -948,15 +962,25 @@ impl ComputePipelineState {
 /// So its translations reach the shader cache and its `VkPipeline`s the driver's caches under the
 /// very keys and records the program's creation of the same descriptor asks for; what the program
 /// would see of it (an ID, an identifier, sampler numbers, notices, the kept variants' order, a
-/// neutral's memory) each of those paths leaves out on a warm pass's threads. `false` for a mesh
-/// render pipeline, which it does not make: that creation keeps no translation on disk and makes
-/// no `VkPipeline` (`GraphicsState::create_mesh`), so nothing of it outlives the state.
-pub(crate) fn warm(device: &Device, pipeline: &crate::warm::Pipeline) -> Result<bool, Error> {
+/// neutral's memory) each of those paths leaves out on a warm pass's threads. A compute record's
+/// dispatches then make their regions' `VkPipeline`s on the state (`dispatch_record.rs`): the
+/// count made. `None` for a mesh render pipeline, which it does not make: that creation keeps no
+/// translation on disk and makes no `VkPipeline` (`GraphicsState::create_mesh`), so nothing of it
+/// outlives the state.
+pub(crate) fn warm(
+    device: &Device,
+    pipeline: &crate::warm::Pipeline,
+) -> Result<Option<u64>, Error> {
     use crate::warm::Pipeline;
     let options = PipelineOptions::default();
     match pipeline {
-        Pipeline::Compute(descriptor, added) => {
-            ComputePipelineState::create_adding(device, descriptor, &options, None, *added)?;
+        Pipeline::Compute(descriptor, added, dispatches) => {
+            let state =
+                ComputePipelineState::create_adding(device, descriptor, &options, None, *added)?;
+            let made = (dispatches.iter())
+                .map(|dispatch| state.warm_dispatch(dispatch))
+                .sum();
+            return Ok(Some(made));
         }
         Pipeline::Render(descriptor, added) => {
             GraphicsState::create_adding(device, descriptor, &options, None, *added)?;
@@ -964,9 +988,9 @@ pub(crate) fn warm(device: &Device, pipeline: &crate::warm::Pipeline) -> Result<
         Pipeline::Tile(descriptor, added) => {
             TileState::create_adding(device, descriptor, &options, None, *added)?;
         }
-        Pipeline::Mesh(_) => return Ok(false),
+        Pipeline::Mesh(_) => return Ok(None),
     }
-    Ok(true)
+    Ok(Some(0))
 }
 
 /// The first name `functions` repeats, where plain Metal's pipeline creation fails ("error:

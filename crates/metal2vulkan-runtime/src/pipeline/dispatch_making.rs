@@ -381,7 +381,7 @@ fn predicted_threads(required: Option<[u32; 3]>) -> Option<[u32; 3]> {
 /// What the predicted first dispatch of `pipeline`'s kernel binds (the module docs): Metal's
 /// default sampler (`MTLSamplerDescriptor`'s defaults) at each runtime sampler slot that does not
 /// compare, and nothing else.
-fn predicted_bindings(pipeline: &ComputePipeline) -> BindState {
+pub(super) fn predicted_bindings(pipeline: &ComputePipeline) -> BindState {
     let mut state = BindState::default();
     for (slot, used) in &pipeline.interface.slots {
         if let SlotInterface::Sampler(sampler) = used {

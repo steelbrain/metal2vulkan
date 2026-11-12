@@ -687,7 +687,10 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
 - `DeviceOptions::pipeline_records` (and `RawDevice::pipeline_records`) is called once per
   pipeline state creation (compute, render, mesh and tile, and each
   `*_with_additional_binary_functions`) with a `PipelineRecord`: the creation's descriptor, every
-  field, its libraries named by content hash and kept once in the shader cache directory.
+  field, its libraries named by content hash and kept once in the shader cache directory. A
+  compute state's direct dispatch of a new shape whose `VkPipeline`s it made (its threadgroup,
+  its grid's ragged edge and its threadgroup memory lengths) hands it one more record, the
+  creation's descriptor with that dispatch, at most 16 per state.
   `PipelineRecord::to_bytes` and `from_bytes` carry it to a later process; `from_bytes` answers
   `None` for a record of another format, so a consumer keeps records across updates and drops
   those. Equal creations make equal records.
@@ -696,7 +699,8 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   on macOS, its pipeline makings ranked after every other making of the process), makes what each
   record's creation makes, in order: its translations into the shader cache and its predicted
   `VkPipeline`s' data into the driver's records, so the program's later creation of the same
-  descriptor finds them. It stops once the driver's pipeline cache data its makings added reaches
+  descriptor finds them, and for a dispatch's record that dispatch's `VkPipeline`s, planned with
+  nothing bound, so the program's later dispatch of that shape finds their data. It stops once the driver's pipeline cache data its makings added reaches
   `byte_budget` bytes; data a making finds in the directory already adds nothing, so over the
   directory whose creations made the records the budget binds only where a making writes new
   data. It takes no identifier, resource ID or sampler number, makes no neutral,
@@ -708,7 +712,7 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   `metal2vulkan-warm-record-unread`, and a failed creation is counted and dropped. A mesh render
   pipeline's record is not made (its creation keeps nothing past the state), and a layout that
   bakes an immutable sampler is translated only. `Device::warm_statistics` counts the records
-  made, each record's outcome and the driver bytes added.
+  made, each record's outcome, the dispatches' `VkPipeline`s made and the driver bytes added.
 
 [docs/API.md section 10](../../docs/API.md#10-accepted-differences) lists where the runtime
 answers otherwise than Metal on purpose.

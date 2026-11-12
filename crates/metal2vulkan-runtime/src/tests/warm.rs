@@ -1,13 +1,15 @@
 //! Pipeline records (`warm/record.rs`) and the warm pass (`warm/pass.rs`): a device with a record
-//! hook hands it one record per pipeline state creation that made its state; a device handed the
-//! records an earlier process's device made over the same shader cache directory makes their
-//! translations and `VkPipeline`s before the program creates them, takes nothing the program sees,
-//! stops at its byte budget, and announces a record it cannot read and goes on.
+//! hook hands it one record per pipeline state creation that made its state, and one per compute
+//! dispatch shape whose pipelines a dispatch made; a device handed the records an earlier
+//! process's device made over the same shader cache directory makes their translations and
+//! `VkPipeline`s (a dispatch record's too) before the program asks for them, takes nothing the
+//! program sees, stops at its byte budget, and announces a record it cannot read and goes on.
 //!
 //! # What is counted, and why counts
 //!
 //! Every assertion is a count of the structure (records handed over and warmed, libraries
-//! written, stages decoded, functions translated, identifiers taken, messages heard), never a
+//! written, stages decoded, functions translated, driver caches handed over, identifiers taken,
+//! messages heard), never a
 //! time: a count holds on any host under any load. The times the cross-process test prints (the
 //! creations on a warmed device, on an unwarmed one over the same directory, and on a cold one)
 //! are figures of this host, printed and not asserted.
@@ -29,9 +31,10 @@
 
 use super::blit_holds::Scratch;
 use super::descriptor_key_once::descriptor;
+use super::dispatch_pending::{self, dispatch, Buffers, Grid};
 use crate::{
-    BinaryArchiveDescriptor, Device, DeviceKind, DeviceOptions, MessageSink, PipelineOptions,
-    PipelineRecord, ShaderCacheOptions, WarmStatistics,
+    BinaryArchiveDescriptor, CommandBuffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions,
+    MessageSink, PipelineOptions, PipelineRecord, ShaderCacheOptions, Size, WarmStatistics,
 };
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, RenderPipelineDescriptor, StageSource};
 use std::path::{Path, PathBuf};
@@ -626,6 +629,137 @@ fn an_unread_record_is_announced_and_the_pass_goes_on() {
         heard.named(crate::warm::UNREAD),
         1,
         "the device's first unread record is announced, once"
+    );
+}
+
+/// The threads [`dispatch_pending`]'s buffers hold, and a grid of the same ragged edge in
+/// threadgroups of [`GROUP`] (one threadgroup and the edge of 40).
+const THREADS: u64 = 1000;
+const SAME_EDGE: u64 = 104;
+const GROUP: u64 = 64;
+
+/// Commit `command_buffer` and wait for it to complete.
+fn run(command_buffer: CommandBuffer) {
+    command_buffer.commit().unwrap();
+    command_buffer
+        .wait_until_completed_for(Duration::from_secs(60))
+        .unwrap();
+    assert_eq!(
+        command_buffer.status(),
+        CommandBufferStatus::Completed,
+        "{:?}",
+        command_buffer.error()
+    );
+}
+
+/// What the program's first dispatch of [`THREADS`] threads in threadgroups of [`GROUP`] over a
+/// state of `dispatch_pending`'s kernel cost `device`, the state created before: its makings that
+/// were handed a driver cache the device held (`ShaderCache::caches_shared`), the `VkPipeline`s
+/// it made, the functions it translated, and the driver's reported hits and misses.
+fn first_dispatch(device: &Device) -> [u64; 5] {
+    let state = dispatch_pending::state(device);
+    let buffers = Buffers::new(device);
+    let queue = device.new_command_queue().unwrap();
+    let shared = device.shared().shader_cache.caches_shared();
+    let before = (device.work_counts(), device.shader_cache_statistics());
+    let grid = Grid::Threads(Size::new(THREADS, 1, 1), Size::new(GROUP, 1, 1));
+    run(dispatch(&queue, &state, &buffers, grid));
+    let after = (device.work_counts(), device.shader_cache_statistics());
+    assert!(
+        buffers.written(THREADS),
+        "the dispatch wrote what Metal's writes"
+    );
+    [
+        device.shared().shader_cache.caches_shared() - shared,
+        after.0.variant_pipelines_made - before.0.variant_pipelines_made,
+        after.0.functions_translated - before.0.functions_translated,
+        after.1.driver_pipeline_hits - before.1.driver_pipeline_hits,
+        after.1.driver_pipeline_misses - before.1.driver_pipeline_misses,
+    ]
+}
+
+/// A compute state whose descriptor requires no threadgroup makes its regions' `VkPipeline`s at
+/// its first dispatch of each shape (`pipeline/dispatch_making.rs`), and that dispatch hands the
+/// hook a record of the creation and the dispatch: once, since the same dispatch again and a grid
+/// of the same ragged edge make nothing and hand nothing over. A warm pass over that record makes
+/// those `VkPipeline`s, so on the warmed device each making of the program's own first dispatch
+/// of the shape is handed the driver cache the pass's making of its record filled
+/// (`ShaderCache::caches_shared`), and translates nothing: the driver's compile of each was paid by
+/// the pass. The program's state shares no live object with the pass's (`warm/pass.rs`), so its
+/// dispatch still makes its `VkPipeline`s, out of that cache. A device warmed with the creation's
+/// record alone makes none of them on its pass and shares no cache at the dispatch, so the counts
+/// that moved are the dispatch record's. What the driver reports of each making is printed.
+#[test]
+fn a_warm_pass_makes_the_pipelines_of_the_dispatches_its_records_name() {
+    let scratch = Scratch::new("warm-dispatch");
+    let hook = Arc::new(Mutex::new(Vec::new()));
+    let recording = device(&scratch.0, Some(&hook), None);
+    let state = dispatch_pending::state(&recording);
+    assert_eq!(hook.lock().unwrap().len(), 1, "the creation's record");
+    let buffers = Buffers::new(&recording);
+    let queue = recording.new_command_queue().unwrap();
+    let grid = |threads: u64| Grid::Threads(Size::new(threads, 1, 1), Size::new(GROUP, 1, 1));
+    let made = || recording.work_counts().variant_pipelines_made;
+    let made_before = made();
+    run(dispatch(&queue, &state, &buffers, grid(THREADS)));
+    let regions = made() - made_before;
+    assert!(
+        regions > 0,
+        "the first dispatch made its regions' pipelines"
+    );
+    assert_eq!(hook.lock().unwrap().len(), 2, "the first dispatch's record");
+    run(dispatch(&queue, &state, &buffers, grid(THREADS)));
+    run(dispatch(&queue, &state, &buffers, grid(SAME_EDGE)));
+    assert_eq!(
+        (made() - made_before, hook.lock().unwrap().len()),
+        (regions, 2),
+        "the same dispatch again, and a grid of the same edge, make and record nothing"
+    );
+    assert_eq!(recording.warm_statistics().records_made, 2);
+    drop((state, buffers, queue));
+    drop(recording);
+    // Carried as bytes, as a later process holds them.
+    let records: Vec<PipelineRecord> = (hook.lock().unwrap().iter())
+        .map(|record| PipelineRecord::from_bytes(&record.to_bytes()).unwrap())
+        .collect();
+
+    let warm = device(&scratch.0, None, None);
+    warm.warm(records.clone(), u64::MAX);
+    let s = warmed(&warm, 2);
+    assert_eq!(
+        (s.records_warmed, s.dispatch_pipelines_warmed),
+        (2, regions),
+        "both records warmed, the dispatch's {regions} pipeline(s) made: {s:?}"
+    );
+    let warmed_dispatch = first_dispatch(&warm);
+    drop(warm);
+
+    let control = device(&scratch.0, None, None);
+    control.warm(records[..1].to_vec(), u64::MAX);
+    let s = warmed(&control, 1);
+    assert_eq!(
+        (s.records_warmed, s.dispatch_pipelines_warmed),
+        (1, 0),
+        "the creation's record makes no dispatch's pipeline: {s:?}"
+    );
+    let control_dispatch = first_dispatch(&control);
+    drop(control);
+
+    println!(
+        "the program's first dispatch, as [makings handed a held driver cache, pipelines made, \
+         functions translated, driver hits, driver misses]: {warmed_dispatch:?} on the device \
+         warmed with the dispatch's record, {control_dispatch:?} on the one warmed with the \
+         creation's alone"
+    );
+    assert_eq!(
+        warmed_dispatch[..3],
+        [regions, regions, 0],
+        "each of the dispatch's makings takes the cache the pass filled, and nothing translates"
+    );
+    assert_eq!(
+        control_dispatch[..3],
+        [0, regions, 0],
+        "without the dispatch's record no making finds a cache, or the warmed count is vacuous"
     );
 }
 

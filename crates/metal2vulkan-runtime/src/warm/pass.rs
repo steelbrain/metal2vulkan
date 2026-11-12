@@ -18,6 +18,12 @@
 //!   `VkPipeline`s' data in the driver's records under the very names the program's creation of the
 //!   same descriptor asks for. A mesh render pipeline is not made: its creation keeps nothing past
 //!   the state.
+//! - **And a compute record's dispatches** (`pipeline/dispatch_record.rs`). Once a compute
+//!   record's state is created, each dispatch the record names is planned as a creation's
+//!   prediction plans its first one, with the record's threadgroup memory lengths, and each of its
+//!   regions' `VkPipeline`s made on the pass's thread
+//!   ([`WarmStatistics::dispatch_pipelines_warmed`]): their data lands in the driver's records
+//!   under the names the program's dispatch of that shape asks for.
 //! - **The guest sees nothing.** On the pass's threads ([`warming`]) a creation takes no
 //!   identifier, no resource ID and no sampler number, makes no neutral and keeps no room, takes
 //!   nothing back from and gives nothing to the kept variants, makes no immutable sampler (a
@@ -152,6 +158,8 @@ struct Counts {
     not_warmable: AtomicU64,
     not_run: AtomicU64,
     pipeline_bytes: AtomicU64,
+    /// The `VkPipeline`s the passes made for the dispatches compute records name.
+    dispatch_pipelines: AtomicU64,
     /// The device's first unread record was announced ([`UNREAD`]).
     said_unread: AtomicBool,
 }
@@ -161,7 +169,8 @@ pub(crate) const UNREAD: &str = "metal2vulkan-warm-record-unread";
 
 /// What became of one record.
 enum Outcome {
-    Warmed,
+    /// Made, with the `VkPipeline`s made for the dispatches it names.
+    Warmed(u64),
     Translated,
     Failed,
     /// Not read, for the reason given.
@@ -181,6 +190,7 @@ impl Warmer {
         statistics.records_not_warmable = read(&counts.not_warmable);
         statistics.records_not_run = read(&counts.not_run);
         statistics.pipeline_bytes = read(&counts.pipeline_bytes);
+        statistics.dispatch_pipelines_warmed = read(&counts.dispatch_pipelines);
     }
 
     /// Count `outcome`, a record's on `device`; the device's first unread record is announced
@@ -188,7 +198,10 @@ impl Warmer {
     fn count(&self, device: &Device, outcome: Outcome) {
         let counts = &self.counts;
         let counter = match outcome {
-            Outcome::Warmed => &counts.warmed,
+            Outcome::Warmed(dispatch_pipelines) => {
+                (counts.dispatch_pipelines).fetch_add(dispatch_pipelines, Ordering::Relaxed);
+                &counts.warmed
+            }
             Outcome::Translated => &counts.translated,
             Outcome::Failed => &counts.failed,
             Outcome::Unread(why) => {
@@ -376,8 +389,8 @@ fn warm_record(
         return Outcome::Unread("its libraries do not hold what it names, or it is damaged");
     };
     match crate::pipeline::warm(device, &pipeline) {
-        Ok(true) => Outcome::Warmed,
-        Ok(false) => Outcome::NotWarmable,
+        Ok(Some(dispatch_pipelines)) => Outcome::Warmed(dispatch_pipelines),
+        Ok(None) => Outcome::NotWarmable,
         Err(_) if pass.translation_only.load(Ordering::Relaxed) => Outcome::Translated,
         Err(_) => Outcome::Failed,
     }

@@ -11,6 +11,11 @@
 //!   factor-scaling form, `GraphicsState::single_sample`), on the thread that makes it: its
 //!   translations are the program's too. A creation that fails, a binary archive's add, and a
 //!   state a warm pass makes ([`Device::warm`]) hand it nothing. Without a hook no record is made.
+//! - **And once per new dispatch of a compute state.** A compute state's direct dispatch whose
+//!   regions' pipelines were not all made hands the hook a record of the creation's descriptor and
+//!   that dispatch, on the thread that encodes it: each dispatch once per state, up to a bound
+//!   (`pipeline/dispatch_record.rs`). A warm pass makes its creation and that dispatch's
+//!   pipelines.
 //! - **What it holds.** The creation's descriptor as the program gave it, every field, with each
 //!   stage's function by its library and table index, its constants as supplied, its linked
 //!   functions and its dynamic libraries; and how many of each stage's last binary functions were
@@ -37,7 +42,9 @@ use std::sync::Arc;
 /// ([`Device::warm`]). Opaque; cheap to clone; `Send + Sync`.
 ///
 /// It holds the creation's descriptor and its stages' functions, constants, linked functions and
-/// dynamic libraries; its libraries are named by their content hash, their bytes kept in the
+/// dynamic libraries, and for a compute state's dispatch the dispatch too (its threadgroup, its
+/// grid's ragged edge, its threadgroup memory lengths); its libraries are named by their content
+/// hash, their bytes kept in the
 /// device's shader cache directory, so a record warms only on a device over the same directory.
 /// [`to_bytes`](Self::to_bytes) and [`from_bytes`](Self::from_bytes) carry it between processes;
 /// equal records have equal bytes, so a consumer may keep each once.
@@ -139,8 +146,15 @@ impl Recording {
 }
 
 impl Device {
-    /// Hand the device's hook the record of `pipeline`, a creation that made its state (the
-    /// module docs): nothing where the device has no hook or the warm pass made the state.
+    /// Whether the device hands records over: it has a hook, and this thread works for no warm
+    /// pass.
+    pub(crate) fn records_pipelines(&self) -> bool {
+        !super::warming() && self.shared().pipeline_recording.hook.is_some()
+    }
+
+    /// Hand the device's hook the record of `pipeline`, a creation that made its state or a
+    /// compute state's new dispatch (the module docs): nothing where the device has no hook or
+    /// the warm pass made the state.
     /// `pipeline` is asked for only where a record is made.
     pub(crate) fn record_pipeline(&self, pipeline: impl FnOnce() -> Pipeline) {
         if super::warming() {

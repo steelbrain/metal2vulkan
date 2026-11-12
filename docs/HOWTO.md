@@ -117,14 +117,16 @@ second process does not translate it again. It cannot be turned off.
   `Device::shader_cache_statistics` counts the entries queued, those a creation wrote itself past
   the queue's bound, and the bytes written.
 - **Pipeline records and warming.** A device with `DeviceOptions::pipeline_records` set hands
-  that hook a `PipelineRecord` at each pipeline state creation, and keeps each library a record
+  that hook a `PipelineRecord` at each pipeline state creation (and at each compute state's first
+  direct dispatch of a shape whose `VkPipeline`s it made, up to 16 a state), and keeps each
+  library a record
   names in the directory once, named by its content hash, beside the driver's data: a record holds
   the descriptor and the libraries' hashes, not their bytes, so its size is the descriptor's. The
   libraries count against `capacity` with everything else; a record whose library was evicted
   names one the directory no longer holds. Keep a VM's records in the order they came
   (`to_bytes`), and at its next boot hand them to `Device::warm(records, byte_budget)` on a device
   over the same directory: one background thread makes their translations and predicted
-  `VkPipeline`s before the guest asks, below every other making, until the driver data it added
+  `VkPipeline`s, and the recorded dispatches' `VkPipeline`s, before the guest asks, below every other making, until the driver data it added
   reaches the budget, and the guest sees nothing of it. Data a making finds in the directory adds
   nothing: where the boot before wrote every record's data, the pass adds 0 bytes and the budget
   does not bind. What it makes is what the guest's own
@@ -134,8 +136,8 @@ second process does not translate it again. It cannot be turned off.
   `RUNTIME_VERSION`. A record it cannot read is counted and dropped, the device's first said once
   as the `Warning` `metal2vulkan-warm-record-unread`; nothing it meets fails or ends the run.
   `Device::warm_statistics` counts the records made, those that could not be (a stage the compile
-  layer compiled already), the libraries written, each warmed record's outcome and the driver
-  bytes added.
+  layer compiled already), the libraries written, each warmed record's outcome, the dispatches'
+  `VkPipeline`s made and the driver bytes added.
 - **When it fills or a write fails.** Each device says so once, through its `MessageSink` (or on
   stderr) as a `Warning`: `id_name` `metal2vulkan-shader-cache-evicted` when the directory reaches
   its cap, and the degrade notice

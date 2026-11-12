@@ -1182,9 +1182,15 @@ driver's. Each is open work.
     and hands them to a later process's `Device::warm` has that device make the same translations
     and predicted `VkPipeline`s on a thread of its own, below every other making
     (`warm/pass.rs`): after a driver update, the cold makings run there, not at the program's
-    calls. A record is a state's creation, so the pass makes what a creation predicts: a compute
-    state whose descriptor states no `requiredThreadsPerThreadgroup` predicts no pipeline, and
-    its dispatches' pipelines (the kernel's 12 variants above) are made at their first dispatch.
+    calls. A record is a state's creation, and the pass makes what a creation predicts; a compute
+    state whose descriptor states no `requiredThreadsPerThreadgroup` predicts no pipeline, so
+    each direct dispatch of a new shape whose pipelines its program made (a threadgroup, a
+    grid's ragged edge, its threadgroup memory lengths: up to 16 a state) hands the hook one more
+    record, and the pass makes that dispatch's pipelines too (`pipeline/dispatch_record.rs`,
+    `WarmStatistics::dispatch_pipelines_warmed`), planned with nothing bound. A dispatch whose
+    bindings specialize its pipelines otherwise (a bound texture's format a variant reads), and
+    an indirect dispatch or one of a threadgroup range, still makes its own at its first
+    dispatch.
   - **No call waits the whole making.** Under `PipelineWaitPolicy::Bounded` (the default) a
     creation waits `pipeline_creation_wait` (4.5 s) at most for its predicted making and returns
     with it in flight, a committed command buffer waits for its commands' makings until its commit
