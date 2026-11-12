@@ -2702,6 +2702,7 @@ field	metal2vulkan-runtime::WorkCounts.commit_refusals_held	pub commit_refusals_
 field	metal2vulkan-runtime::WorkCounts.commit_submit_nanos	pub commit_submit_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.commits_handed_off	pub commits_handed_off: u64
 field	metal2vulkan-runtime::WorkCounts.commits_taken_in	pub commits_taken_in: u64
+field	metal2vulkan-runtime::WorkCounts.compile_memory_held_nanos	pub compile_memory_held_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.completed_waits	pub completed_waits: u64
 field	metal2vulkan-runtime::WorkCounts.completed_where_seen	pub completed_where_seen: u64
 field	metal2vulkan-runtime::WorkCounts.completion_arms	pub completion_arms: u64
@@ -3112,6 +3113,7 @@ field	metal2vulkan-runtime::WorkCounts.linked_pipelines_shared	pub linked_pipeli
 field	metal2vulkan-runtime::WorkCounts.linked_use_questions_asked	pub linked_use_questions_asked: u64
 field	metal2vulkan-runtime::WorkCounts.live_tables_uploaded	pub live_tables_uploaded: u64
 field	metal2vulkan-runtime::WorkCounts.long_queue_settles	pub long_queue_settles: u64
+field	metal2vulkan-runtime::WorkCounts.makings_held_for_compile_memory	pub makings_held_for_compile_memory: u64
 field	metal2vulkan-runtime::WorkCounts.managed_bytes_copied_in	pub managed_bytes_copied_in: u64
 field	metal2vulkan-runtime::WorkCounts.managed_bytes_copied_out	pub managed_bytes_copied_out: u64
 field	metal2vulkan-runtime::WorkCounts.managed_bytes_modified	pub managed_bytes_modified: u64
