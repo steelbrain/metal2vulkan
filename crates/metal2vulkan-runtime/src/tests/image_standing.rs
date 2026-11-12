@@ -201,7 +201,9 @@ impl Tools {
         // SAFETY: the read-back buffer's bytes, which no command writes now.
         let bytes = unsafe { std::slice::from_raw_parts(bytes, (SIDE * SIDE * 4) as usize) };
         // `RGBA8Unorm`'s red is its first byte.
-        bytes.chunks_exact(4).map(|texel| texel[0]).collect()
+        (bytes.as_chunks::<4>().0.iter())
+            .map(|texel| texel[0])
+            .collect()
     }
 }
 
@@ -544,10 +546,10 @@ fn a_chain_of_passes_over_a_texture_s_levels_reads_what_the_passes_before_wrote(
                 let read = chain.sampled(&texture, function, sampler);
                 assert_eq!(all(&read, CHAINED), None, "{case}: level {level} sampled");
             }
-            for level in 0..MIP_LEVELS {
+            for (level, made) in MADE.iter().enumerate() {
                 let expected = match level {
                     0..=2 => CHAINED,
-                    _ => MADE[level],
+                    _ => *made,
                 };
                 let bytes = chain.level(&texture, level as u64);
                 assert_eq!(
