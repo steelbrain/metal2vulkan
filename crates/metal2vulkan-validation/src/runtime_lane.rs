@@ -769,6 +769,8 @@ mod raster_sample_counts;
 mod rate_mapped_layers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod rate_mapped_passes;
+#[cfg(all(test, m2v_gpu_hazards, any(m2v_gpu, m2v_cpu_icd)))]
+mod rate_mapped_volume;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod rate_maps;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
