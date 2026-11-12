@@ -25,7 +25,7 @@ pub const DRAW_REPLAY_WRITES: u32 = CommandWrites::DRAW
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DrawReplayRule {
-    /// The buffer's command types are not draws of primitives alone.
+    /// The buffer's command types are not draws of primitives and indexed draws alone.
     CommandTypes,
     /// The buffer's commands set their own pipeline states.
     OwnPipelineStates,
@@ -93,7 +93,7 @@ impl fmt::Display for DrawReplayRule {
                 )
             }
             DrawReplayRule::CommandTypes => {
-                "the buffer's command types are not draws of primitives alone"
+                "the buffer's command types are not draws of primitives and indexed draws alone"
             }
             DrawReplayRule::OwnPipelineStates => {
                 "the buffer's commands set their own pipeline states"
@@ -166,7 +166,8 @@ pub fn draw_replay_primitive_type(
     (inherit_pipeline_state, inherit_buffers): (bool, bool),
     written: CommandWrites,
 ) -> Result<PrimitiveType, DrawReplayRule> {
-    if command_types != IndirectCommandType::DRAW {
+    let draws = IndirectCommandType::DRAW | IndirectCommandType::DRAW_INDEXED;
+    if command_types.is_empty() || !draws.contains(command_types) {
         return Err(DrawReplayRule::CommandTypes);
     }
     if !inherit_pipeline_state {
@@ -175,11 +176,11 @@ pub fn draw_replay_primitive_type(
     if inherit_buffers {
         return Err(DrawReplayRule::InheritedBuffers);
     }
-    let past = written.operations & !DRAW_REPLAY_WRITES;
+    let past = written.operations & !(DRAW_REPLAY_WRITES | CommandWrites::DRAW_INDEXED);
     if past != 0 {
         return Err(DrawReplayRule::Operations(past));
     }
-    if !written.may(CommandWrites::DRAW) {
+    if !written.may(CommandWrites::DRAW) && !written.may(CommandWrites::DRAW_INDEXED) {
         return Err(DrawReplayRule::NoDraws);
     }
     let one = match written.primitive_types.count_ones() {
@@ -187,6 +188,12 @@ pub fn draw_replay_primitive_type(
         _ => None,
     };
     one.ok_or(DrawReplayRule::PrimitiveTypes(written.primitive_types))
+}
+
+/// Whether records that may hold `written` may hold indexed draws (`DrawReplay::indexed`), which
+/// a merged draw replay alone runs.
+pub fn draw_replay_indexed(written: CommandWrites) -> bool {
+    written.may(CommandWrites::DRAW_INDEXED)
 }
 
 /// Whether draws of `primitive_type` merge into one draw (`DrawReplay::merged`): a list type or
@@ -248,7 +255,9 @@ pub fn draw_replay_draw(
         PushHole::RootTableAddress { stages, .. } => {
             !merged && (stages == vertex || stages == fragment)
         }
-        PushHole::MergedDrawAddress { stages, .. } => merged && stages == vertex,
+        PushHole::MergedDrawAddress { stages, .. } => {
+            merged && !stages.is_empty() && (vertex | fragment).contains(stages)
+        }
         _ => true,
     });
     let header =

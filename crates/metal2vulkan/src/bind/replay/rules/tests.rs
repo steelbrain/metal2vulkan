@@ -8,9 +8,10 @@ fn writes(operations: u32, primitive_types: u8) -> CommandWrites {
     }
 }
 
-/// A draw replay takes draws of one primitive type under the inherited state with the commands'
-/// own buffers, whose records hold draws, buffers, resets and cleared barriers alone; each other
-/// buffer or record breaks the first rule it meets, which names it.
+/// A draw replay takes draws and indexed draws of one primitive type under the inherited state
+/// with the commands' own buffers, whose records hold draws, buffers, resets and cleared barriers
+/// alone; each other buffer or record breaks the first rule it meets, which names it. Indexed
+/// draws among the writes are a replay's indexed draws.
 #[test]
 fn a_draw_replay_takes_draws_of_one_primitive_type_with_their_own_buffers() {
     let draws = IndirectCommandType::DRAW;
@@ -25,9 +26,24 @@ fn a_draw_replay_takes_draws_of_one_primitive_type_with_their_own_buffers() {
         Ok(PrimitiveType::Line)
     );
     let indexed = IndirectCommandType::DRAW | IndirectCommandType::DRAW_INDEXED;
+    let indexed_triangles = writes(CommandWrites::DRAW_INDEXED | CommandWrites::BUFFER, 1 << 3);
+    for types in [indexed, IndirectCommandType::DRAW_INDEXED] {
+        assert_eq!(
+            draw_replay_primitive_type(types, (true, false), indexed_triangles),
+            Ok(PrimitiveType::Triangle)
+        );
+    }
+    assert!(draw_replay_indexed(indexed_triangles) && !draw_replay_indexed(triangles));
+    let patches = IndirectCommandType::DRAW | IndirectCommandType::DRAW_PATCHES;
     let cases = [
         (
-            indexed,
+            patches,
+            (true, false),
+            triangles,
+            DrawReplayRule::CommandTypes,
+        ),
+        (
+            IndirectCommandType::empty(),
             (true, false),
             triangles,
             DrawReplayRule::CommandTypes,

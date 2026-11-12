@@ -1086,7 +1086,7 @@ const-value	metal2vulkan::bind::MAX_REPLAY_SLOTS	16384
 const-value	metal2vulkan::bind::MAX_REPLAY_VARIANTS	64
 const-value	metal2vulkan::bind::MAX_SCREEN_EXTENT	1 <<16
 const-value	metal2vulkan::bind::MERGED_CHUNK	(1 <<31) - 2
-const-value	metal2vulkan::bind::MERGED_HEADER_BYTES	48
+const-value	metal2vulkan::bind::MERGED_HEADER_BYTES	56
 const-value	metal2vulkan::bind::MERGED_REST_FIRST	1 <<31
 const-value	metal2vulkan::bind::METAL_MESH_GRID_AXIS	65_535
 const-value	metal2vulkan::bind::METAL_MESH_GRID_TOTAL	1_048_575
@@ -3647,6 +3647,7 @@ field	metal2vulkan::bind::DrawReplay.capacity	pub capacity: u32
 field	metal2vulkan::bind::DrawReplay.count	pub count: u32
 field	metal2vulkan::bind::DrawReplay.first	pub first: u32
 field	metal2vulkan::bind::DrawReplay.fragment_slots	pub fragment_slots: u32
+field	metal2vulkan::bind::DrawReplay.indexed	pub indexed: bool
 field	metal2vulkan::bind::DrawReplay.inheritance	pub inheritance: Inheritance
 field	metal2vulkan::bind::DrawReplay.merged	pub merged: bool
 field	metal2vulkan::bind::DrawReplay.parent	pub parent: Bindings
@@ -3760,6 +3761,7 @@ field	metal2vulkan::bind::MergedLayout.block_commands	pub block_commands: u32
 field	metal2vulkan::bind::MergedLayout.blocks	pub blocks: u32
 field	metal2vulkan::bind::MergedLayout.draws_offset	pub draws_offset: u64
 field	metal2vulkan::bind::MergedLayout.header_offset	pub header_offset: u64
+field	metal2vulkan::bind::MergedLayout.indices_offset	pub indices_offset: u64
 field	metal2vulkan::bind::MergedLayout.prefix_offset	pub prefix_offset: u64
 field	metal2vulkan::bind::MergedLayout.sums_offset	pub sums_offset: u64
 field	metal2vulkan::bind::MeshArguments.form	pub form: MeshArgumentsForm
@@ -5114,6 +5116,7 @@ fn	metal2vulkan::bind::depth_stencil_copy_modules	pub fn depth_stencil_copy_modu
 fn	metal2vulkan::bind::depth_stencil_resolve_modules	pub fn depth_stencil_resolve_modules(device: &Device, draw: DepthStencilResolveDraw, feature: Feature) -> Result<DepthStencilResolveModules, Error>
 fn	metal2vulkan::bind::draw_merge_module	pub fn draw_merge_module(device: &Device, phase: MergePhase) -> Result<DrawMergeModule, Error>
 fn	metal2vulkan::bind::draw_replay_draw	pub fn draw_replay_draw(commands: &DrawCommands, (plan, key): (&BindingPlan, &VariantKey), merged: bool) -> Result<(), DrawReplayRule>
+fn	metal2vulkan::bind::draw_replay_indexed	pub fn draw_replay_indexed(written: CommandWrites) -> bool
 fn	metal2vulkan::bind::draw_replay_merges	pub fn draw_replay_merges(primitive_type: PrimitiveType) -> bool
 fn	metal2vulkan::bind::draw_replay_module	pub fn draw_replay_module(device: &Device) -> Result<DrawReplayModule, Error>
 fn	metal2vulkan::bind::draw_replay_preprocess	pub fn draw_replay_preprocess(device: &Device, state: &BindState, replay: &DrawReplay) -> Result<DrawReplayPreprocess, BindError>
@@ -9736,6 +9739,7 @@ method	metal2vulkan::pipeline::TileRenderPipelineDescriptor::slot_writes	pub fn 
 method	metal2vulkan::pipeline::VaryingKey::attribute	pub fn attribute(index: u32) -> VaryingKey
 method	metal2vulkan::pipeline::VaryingKey::barycentric	pub fn barycentric(perspective: bool) -> VaryingKey
 method	metal2vulkan::pipeline::VaryingKey::color	pub fn color(attachment: u32, index: u32) -> VaryingKey
+method	metal2vulkan::pipeline::VaryingKey::merged_command	pub fn merged_command() -> VaryingKey
 method	metal2vulkan::pipeline::VaryingKey::primitive_id	pub fn primitive_id() -> VaryingKey
 method	metal2vulkan::pipeline::VaryingKey::render_target_array_index	pub fn render_target_array_index() -> VaryingKey
 method	metal2vulkan::pipeline::VaryingKey::selected_layer	pub fn selected_layer() -> VaryingKey
@@ -13033,6 +13037,7 @@ variant	metal2vulkan::bind::RegionError::ViewportDimensions	ViewportDimensions {
 variant	metal2vulkan::bind::RegionError::ViewportNotFinite	ViewportNotFinite { viewport: [f64; 4] }
 variant	metal2vulkan::bind::ReplayRefusal::DrawPrimitiveTypes	DrawPrimitiveTypes
 variant	metal2vulkan::bind::ReplayRefusal::GeneratedCommands	GeneratedCommands { reason: GeneratedRefusal }
+variant	metal2vulkan::bind::ReplayRefusal::IndexedApart	IndexedApart
 variant	metal2vulkan::bind::ReplayRefusal::InvalidParent	InvalidParent
 variant	metal2vulkan::bind::ReplayRefusal::InvalidVariant	InvalidVariant { index: usize }
 variant	metal2vulkan::bind::ReplayRefusal::KernelBufferBound	KernelBufferBound

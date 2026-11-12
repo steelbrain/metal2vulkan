@@ -274,8 +274,8 @@ pub use replay::{
     MERGED_HEADER_BYTES, MERGED_REST_FIRST,
 };
 pub use replay::{
-    draw_replay_draw, draw_replay_merges, draw_replay_primitive_type, draw_replay_slots,
-    draw_replay_state, DrawReplayRule, DRAW_REPLAY_WRITES,
+    draw_replay_draw, draw_replay_indexed, draw_replay_merges, draw_replay_primitive_type,
+    draw_replay_slots, draw_replay_state, DrawReplayRule, DRAW_REPLAY_WRITES,
 };
 pub use replay::{
     draw_replay_module, draw_replay_preprocess, DrawReplay, DrawReplayLayout, DrawReplayModule,
@@ -288,7 +288,7 @@ pub use replay::{
     ReplayPreprocessModule, ReplayRefusal, ReplayVariant, MAX_REPLAY_DISPATCHES,
     MAX_REPLAY_REGIONS, MAX_REPLAY_SLOTS, MAX_REPLAY_VARIANTS,
 };
-pub(crate) use replay::{merged_vertex, MergedVertex};
+pub(crate) use replay::{merged_fragment_table, merged_vertex, MergedVertex};
 pub use replay::{
     predication_step_module, PredicationCompare, PredicationOp, PredicationStep,
     PredicationStepForm, PredicationStepModule,

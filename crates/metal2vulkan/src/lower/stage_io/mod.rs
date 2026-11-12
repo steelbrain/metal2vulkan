@@ -486,6 +486,11 @@ pub struct StageIoPlan {
     /// A vertex function compiled under `LoweringInputs::merged_draws` finds its corner's command
     /// at entry ([`MergedRead`]).
     pub merged: Option<MergedRead>,
+    /// A fragment function compiled under `LoweringInputs::merged_draws` that reads a command's
+    /// buffers reads its command's fragment slot table at entry, from the header at
+    /// `PushField::MergedDrawAddress` and its flat `IoRole::MergedCommand` input, this object
+    /// (`bind::merged_fragment_table`).
+    pub merged_fragment: Option<usize>,
     /// A vertex function compiled under `LoweringInputs::primitive_id_varying` writes the
     /// primitive ID of each vertex's primitive to its varying ([`PrimitiveIdStore`]).
     pub primitive_id: Option<PrimitiveIdStore>,
@@ -497,10 +502,13 @@ pub struct StageIoPlan {
 /// `PushField::MergedDrawAddress` (`bind::replay`'s `merged.rs`, `bind::merged_vertex`). Its
 /// `[[vertex_id]]`, `[[instance_id]]`, `[[base_vertex]]` and `[[base_instance]]` read the
 /// command's ([`Source::Merged`]), and its `RootTableAddress` is the command's vertex slot table.
+/// It writes the command's index to its flat `IoRole::MergedCommand` output, the object
+/// `command`, wherever it returns its outputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct MergedRead {
     pub vertex: usize,
     pub instance: usize,
+    pub command: usize,
 }
 
 /// Which of a merged draw's command's values a vertex function reads ([`Source::Merged`]).
@@ -515,8 +523,14 @@ pub enum MergedValue {
 /// The words a merged draw's vertex function adds at entry: the two input builtins' variables,
 /// decorations and interface entries and their loads, the header's loads, the corner's 64-bit
 /// arithmetic, the search's loop (its variables, test, halving, load and selection), the
-/// command's draw's loads, the division and remainder, and the slot table's address.
-pub(super) const MERGED_WORDS: u64 = 600;
+/// command's draw's loads, the division and remainder, the slot table's address, the index
+/// entry's loads and the index read, and the command's output and its stores.
+pub(super) const MERGED_WORDS: u64 = 900;
+
+/// The words a merged draw's fragment function adds at entry: the command's input, its
+/// decorations and interface entry and its load, and the header's loads and the slot table's
+/// address arithmetic.
+pub(super) const MERGED_FRAGMENT_WORDS: u64 = 150;
 
 /// How a vertex function compiled under `LoweringInputs::primitive_id_varying` writes the
 /// primitive ID a fragment function reads from its varying on a device without a fragment
@@ -1243,6 +1257,16 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
         };
         cx.merged_draw = Some(crate::bind::merged_vertex(fb, header, (vertex, instance))?);
     }
+    // A merged draw's fragment function finds its command's fragment slot table before the body,
+    // at the command its vertex wrote, which every read of the command's buffers follows.
+    if let Some(object) = cx.plan.families.stage_io.merged_fragment {
+        let header = cx.push_field(fb, PushField::MergedDrawAddress)?;
+        let g = global(cx, object)?;
+        let p = fb.module().global_value(g)?;
+        let command = fb.load(p, MemAccess::default())?;
+        let table = crate::bind::merged_fragment_table(fb, header, command)?;
+        cx.merged_fragment_table = Some(table);
+    }
     let pulled: Vec<(u32, fetch::PulledRead)> = cx
         .plan
         .families
@@ -1887,6 +1911,24 @@ pub fn emit_return(
     // outputs.
     if let (Some(_), Some(p)) = (v, primitive_id) {
         store_primitive_id(cx, fb, p)?;
+    }
+    // A merged draw's command, wherever the function returns its outputs.
+    if let (Some(_), Some(m)) = (v, cx.plan.families.stage_io.merged) {
+        let Some(draw) = cx.merged_draw else {
+            return Err(cx.fail("a merged draw's vertex returned before its entry found it"));
+        };
+        let link = Link {
+            object: m.command,
+            place: Place::Whole,
+            form: Form {
+                held: Held::Int {
+                    bits: 32,
+                    container: 32,
+                },
+                lanes: 1,
+            },
+        };
+        store(cx, fb, &link, draw.command)?;
     }
     // The indices a draw of one amplification stores though the function writes none.
     let amplified = cx.plan.families.stage_io.amplified.clone();

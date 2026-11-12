@@ -599,6 +599,7 @@ surface! {
         const DRAW_ARGUMENT_BYTES;
         const MAX_DRAW_REPLAY_TYPES;
         fn draw_replay_draw;
+        fn draw_replay_indexed;
         fn draw_replay_merges;
         fn draw_replay_primitive_type;
         fn draw_replay_slots;

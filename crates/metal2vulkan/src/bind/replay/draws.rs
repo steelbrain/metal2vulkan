@@ -2,7 +2,8 @@
 //! on the GPU as one indirect draw per command, in the commands' order, without the records ever
 //! returning to the host.
 //!
-//! - **What it runs.** Draws of primitives (`draw_primitives`) under the pipeline state the
+//! - **What it runs.** Draws of primitives (`draw_primitives`), and in a merged replay indexed
+//!   draws (`draw_indexed_primitives`, [`DrawReplay::indexed`]), under the pipeline state the
 //!   executing encoder set (the commands inherit it), each drawing with its own vertex and
 //!   fragment buffers, or the encoder's where the commands inherit those. The state's vertex and
 //!   fragment functions are its replay variant (`VariantKey::replay_bindings`): every buffer they
@@ -40,6 +41,15 @@
 //!   nothing and reports nothing; where the location lies past the size, or `location + length`
 //!   passes `2^32 - 1` (Metal's GPU then faults the command buffer, or hangs), no command draws and
 //!   the replay reports `RANGE`, as the host's step does.
+//! - **Indexed draws** ([`DrawReplay::indexed`], merged alone). The command's index buffer
+//!   address resolves in the resident set as a buffer's does, its offset rounded down to a
+//!   multiple of the index size, as the host's step reads it; the preprocess writes the command's
+//!   index entry (the indices' device address, how many of them lie inside the buffer, and the
+//!   index size; `merged.rs`), and its arguments hold the index count as the vertex count and
+//!   Metal's base vertex as the first vertex. An address no resident allocation holds draws
+//!   nothing and counts as a resident miss, as the host's step's; an index type Metal has no
+//!   value for, or no index buffer (which ends Metal's process), is a record the host's decode
+//!   refuses (`RECORD`).
 //! - **What it does not run** draws nothing and sets [`StatusBits::REPLAY_FAULT`] with its
 //!   reasons ([`ReplayFaults`]) in the command buffer's `ExecutionStatus`: a record the host's
 //!   decode refuses (`RECORD`, `ENCODING`), a draw of a primitive type the execution does not
@@ -67,8 +77,8 @@
 use std::sync::Arc;
 
 use super::merged::{
-    block_commands, corners_per_primitive, header as merged_header, MergedLayout, MERGED_CHUNK,
-    MERGED_HEADER_BYTES,
+    block_commands, corners_per_primitive, header as merged_header, MergedLayout,
+    DRAW_INDEX_ENTRY_BYTES, MERGED_CHUNK, MERGED_HEADER_BYTES,
 };
 use super::{
     at, count_loop, counter, flag, k32, k64, load32, load64, refused, report, section, store32,
@@ -84,8 +94,8 @@ use crate::device::requirements::Requirements;
 use crate::device::Device;
 use crate::error::{BindError, Error, Feature, InternalError, InternalKind, Unsupported};
 use crate::indirect_commands::{
-    layout, Bindings, BufferBinding, BufferStage, CommandRecord, Inheritance, StateSource,
-    BINDING_COUNT, COMMAND_BUFFER_HEADER_BYTES, COMMAND_BYTES, DRAW, DYNAMIC_STRIDE,
+    layout, Bindings, BufferBinding, BufferStage, CommandRecord, DrawKind, Inheritance,
+    StateSource, BINDING_COUNT, COMMAND_BUFFER_HEADER_BYTES, COMMAND_BYTES, DYNAMIC_STRIDE,
 };
 use crate::memory::roots;
 use crate::pipeline::layout::{PipelineLayout, PushConstantRange};
@@ -95,8 +105,8 @@ use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::Value;
 use crate::spirv::ir::{
-    AtomicOp, BinOp, ExecMode, ExecModel, IoDir, MemAccess, Scope, Semantics, Type, TypedModule,
-    UnOp,
+    AtomicOp, BinOp, ConvOp, ExecMode, ExecModel, IoDir, MemAccess, Scope, Semantics, Type,
+    TypedModule, UnOp,
 };
 use crate::vk;
 
@@ -105,8 +115,10 @@ pub const DRAW_ARGUMENT_BYTES: u64 = 16;
 /// The most primitive types one draw replay names: a list type and its strip.
 pub const MAX_DRAW_REPLAY_TYPES: usize = 2;
 
-/// The action tag of a record's draw of primitives (`CommandRecord::encode_into`).
+/// The action tags of a record's draw of primitives and its indexed draw
+/// (`CommandRecord::encode_into`).
 const DRAW_ACTION: u32 = 3;
+const DRAW_INDEXED_ACTION: u32 = 4;
 
 /// The parameters' words (`u32` each, from `resident - PARAMS_BYTES`).
 const P_FIRST: u64 = 0;
@@ -126,11 +138,18 @@ const P_TYPE: u64 = 36;
 /// The range a replay that reads one reads (`location`, then `length`), which the consumer
 /// copies there ([`DrawReplayLayout::range_offset`]).
 const P_RANGE: u64 = 48;
+/// `indices - resident`: a merged replay's index entries ([`MergedLayout::indices_offset`]).
+const P_INDICES_AT: u64 = 56;
 
 /// The parameters' flag bit: the commands inherit the encoder's buffers.
 const INHERIT_BUFFERS: u32 = 1;
 /// The parameters' flag bit: the replay reads its range at `P_RANGE` ([`DrawReplay::range_read`]).
 const RANGE_READ: u32 = 2;
+/// The parameters' flag bit: the records may hold indexed draws ([`DrawReplay::indexed`]).
+const INDEXED: u32 = 4;
+/// The parameters' flag bit: the replay is merged ([`DrawReplay::merged`]), and writes each
+/// command's index entry at `P_INDICES_AT`.
+const MERGED: u32 = 8;
 
 /// What one device replay of GPU-encoded draws runs: commands `first .. first + count` of an
 /// indirect command buffer of `capacity` commands, under the encoder's pipeline state, each
@@ -150,14 +169,16 @@ pub struct DrawReplay {
     pub primitive_types: Vec<u32>,
     pub vertex_slots: u32,
     pub fragment_slots: u32,
-    /// Draw every command in one merged draw (`merged.rs`), its vertex function the merged
-    /// variant (`VariantKey::merged_draws`), rather than one draw per command: for one list type
-    /// or points (`primitive_types`), where no fragment function reads a command's buffers
-    /// (`fragment_slots` 0).
+    /// Draw every command in one merged draw (`merged.rs`), its functions the merged variant
+    /// (`VariantKey::merged_draws`), rather than one draw per command: for one list type or
+    /// points (`primitive_types`).
     pub merged: bool,
     /// The commands run are those of the range the GPU reads as the preprocess runs (the module
     /// docs): `first` 0 and `count` the capacity, merged into one draw.
     pub range_read: bool,
+    /// The records may hold indexed draws (`draw_indexed_primitives`, the module docs), which a
+    /// merged replay alone runs.
+    pub indexed: bool,
 }
 
 impl DrawReplay {
@@ -181,6 +202,7 @@ impl DrawReplay {
             fragment_slots: BINDING_COUNT as u32,
             merged: false,
             range_read: false,
+            indexed: false,
         }
     }
 }
@@ -319,7 +341,7 @@ pub fn draw_replay_preprocess(
     }
     let corners = match (replay.merged, replay.primitive_types.as_slice()) {
         (false, _) => None,
-        (true, &[t]) if replay.fragment_slots == 0 => match corners_per_primitive(t) {
+        (true, &[t]) => match corners_per_primitive(t) {
             Some(c) => Some(c),
             None => return Err(refused(ReplayRefusal::DrawPrimitiveTypes)),
         },
@@ -328,6 +350,9 @@ pub fn draw_replay_preprocess(
     let whole = replay.first == 0 && replay.count == replay.capacity;
     if replay.range_read && (corners.is_none() || !whole) {
         return Err(refused(ReplayRefusal::RangeRead));
+    }
+    if replay.indexed && corners.is_none() {
+        return Err(refused(ReplayRefusal::IndexedApart));
     }
     let most = BINDING_COUNT as u32;
     if replay.vertex_slots > most || replay.fragment_slots > most {
@@ -365,11 +390,13 @@ pub fn draw_replay_preprocess(
     let merged = corners.map(|_| {
         let block_commands = block_commands(replay.count);
         let blocks = replay.count.div_ceil(block_commands);
-        let prefix_offset = arguments_end;
+        let indices_offset = arguments_end;
+        let prefix_offset = section(indices_offset + DRAW_INDEX_ENTRY_BYTES * commands);
         let sums_offset = section(prefix_offset + 8 * commands);
         let draws_offset = section(sums_offset + 8 * u64::from(blocks));
         MergedLayout {
             header_offset,
+            indices_offset,
             prefix_offset,
             sums_offset,
             draws_offset,
@@ -416,6 +443,16 @@ pub fn draw_replay_preprocess(
     if replay.range_read {
         flags |= RANGE_READ;
     }
+    if replay.indexed {
+        flags |= INDEXED;
+    }
+    let indices_at = match &layout.merged {
+        Some(m) => {
+            flags |= MERGED;
+            as_param(m.indices_offset - resident_offset)?
+        }
+        None => 0,
+    };
     let mut words = vec![
         replay.first,
         replay.count,
@@ -432,6 +469,8 @@ pub fn draw_replay_preprocess(
     for (w, out) in words.iter().zip(params.as_chunks_mut::<4>().0.iter_mut()) {
         out.copy_from_slice(&w.to_le_bytes());
     }
+    let at = P_INDICES_AT as usize;
+    params[at..at + 4].copy_from_slice(&indices_at.to_le_bytes());
     let compute = vk::ShaderStageFlags::COMPUTE;
     Ok(DrawReplayPreprocess {
         layout,
@@ -555,13 +594,126 @@ fn resolved(
     (resident, view): (Value, &roots::ResidentView),
     guest: Value,
 ) -> BResult<(Value, Value, Value)> {
+    let (root, offset, hit, _) = resolved_extent(fb, (resident, view), guest)?;
+    Ok((root, offset, hit))
+}
+
+/// [`resolved`], with the root's unpadded extent.
+fn resolved_extent(
+    fb: &mut FunctionBuilder<'_>,
+    (resident, view): (Value, &roots::ResidentView),
+    guest: Value,
+) -> BResult<(Value, Value, Value, Value)> {
     let (root, offset) = roots::resolve(fb, resident, guest)?;
     let null = k64(fb, roots::NULL_ROOT)?;
     let found = fb.binary(BinOp::INotEqual, root, null)?;
     let extent = roots::extent_of(fb, view, root, found)?;
     let inside = fb.binary(BinOp::ULessThan, offset, extent)?;
     let hit = fb.binary(BinOp::LogicalAnd, found, inside)?;
-    Ok((root, offset, hit))
+    Ok((root, offset, hit, extent))
+}
+
+/// `*var += c ? 1 : 0` on the `u32` function variable `var`.
+fn flag_add(fb: &mut FunctionBuilder<'_>, var: Value, c: Value) -> BResult<()> {
+    let one = k32(fb, 1)?;
+    let zero = k32(fb, 0)?;
+    let add = fb.select(c, one, zero)?;
+    let v = fb.load(var, MemAccess::default())?;
+    let v = fb.binary(BinOp::IAdd, v, add)?;
+    fb.store(var, v, MemAccess::default())
+}
+
+/// An invocation's index entry (`merged.rs`) as it is found, in function variables: the device
+/// address of its draw's first index, the whole indices from there to the buffer's end, and the
+/// index size, all zero for a draw without indices; and whether its indices missed the resident
+/// set (`u32`, 0 or 1).
+#[derive(Clone, Copy)]
+struct IndexEntry {
+    address: Value,
+    limit: Value,
+    size: Value,
+    missed: Value,
+}
+
+impl IndexEntry {
+    /// The variables, each zero.
+    fn new(fb: &mut FunctionBuilder<'_>, t: Types) -> BResult<IndexEntry> {
+        let address = fb.local_var(t.u64_, None)?;
+        let address = fb.var_ptr(address)?;
+        let zero = k64(fb, 0)?;
+        fb.store(address, zero, MemAccess::default())?;
+        Ok(IndexEntry {
+            address,
+            limit: counter(fb, t, 0)?,
+            size: counter(fb, t, 0)?,
+            missed: counter(fb, t, 0)?,
+        })
+    }
+
+    /// The entry of an indexed draw of index type `index_type` whose index buffer address
+    /// resolved to `root` at `offset` (a `hit` inside its unpadded `extent`) in the resident set
+    /// the resident root table at `resident` names: the offset rounded down to a multiple of the
+    /// index size, as the host's step reads it, and the whole indices from there to the extent,
+    /// at most `2^32 - 1`. A miss sets `missed` alone.
+    fn resolve(
+        self,
+        fb: &mut FunctionBuilder<'_>,
+        t: Types,
+        resident: Value,
+        (root, offset, hit, extent): (Value, Value, Value, Value),
+        index_type: Value,
+    ) -> BResult<ArmEnd> {
+        let missed = fb.unary(UnOp::LogicalNot, hit)?;
+        flag(fb, self.missed, missed, 1)?;
+        let found: ArmFn<'_, ()> = Box::new(move |fb, _| {
+            let one = k32(fb, 1)?;
+            let wide_index = fb.binary(BinOp::IEqual, index_type, one)?;
+            let (two, four) = (k32(fb, 2)?, k32(fb, 4)?);
+            let size = fb.select(wide_index, four, two)?;
+            let size64 = wide(fb, t, size)?;
+            let left = fb.binary(BinOp::UMod, offset, size64)?;
+            let rounded = fb.binary(BinOp::ISub, offset, left)?;
+            let host = roots::entry_field(fb, resident, root, roots::HOST)?;
+            let address = fb.binary(BinOp::IAdd, host, rounded)?;
+            // The extent lies past the offset, a hit.
+            let span = fb.binary(BinOp::ISub, extent, rounded)?;
+            let whole = fb.binary(BinOp::UDiv, span, size64)?;
+            let most = k64(fb, u64::from(u32::MAX))?;
+            let past = fb.binary(BinOp::UGreaterThan, whole, most)?;
+            let whole = fb.select(past, most, whole)?;
+            let limit = fb.convert(ConvOp::UConvert, whole, t.u32_)?;
+            fb.store(self.address, address, MemAccess::default())?;
+            fb.store(self.limit, limit, MemAccess::default())?;
+            fb.store(self.size, size, MemAccess::default())?;
+            Ok(ArmEnd::FallThrough(Vec::new()))
+        });
+        fb.if_(&mut (), hit, found, None)?;
+        Ok(ArmEnd::FallThrough(Vec::new()))
+    }
+
+    /// Write the entry of invocation `s` at `indices_at` past the resident root table at
+    /// `resident`.
+    fn write(
+        self,
+        fb: &mut FunctionBuilder<'_>,
+        t: Types,
+        (resident, indices_at, s): (Value, Value, Value),
+    ) -> BResult<()> {
+        let at_ = wide(fb, t, indices_at)?;
+        let indices = fb.binary(BinOp::IAdd, resident, at_)?;
+        let s64 = wide(fb, t, s)?;
+        let bytes = k64(fb, DRAW_INDEX_ENTRY_BYTES)?;
+        let rel = fb.binary(BinOp::IMul, s64, bytes)?;
+        let entry = fb.binary(BinOp::IAdd, indices, rel)?;
+        let address = fb.load(self.address, MemAccess::default())?;
+        store64(fb, t, entry, address)?;
+        let limit = fb.load(self.limit, MemAccess::default())?;
+        let limit_at = at(fb, entry, 8)?;
+        store32(fb, t, limit_at, limit)?;
+        let size = fb.load(self.size, MemAccess::default())?;
+        let size_at = at(fb, entry, 12)?;
+        store32(fb, t, size_at, size)
+    }
 }
 
 /// The range a replay reads ([`DrawReplay::range_read`]) at `range_param` of the parameters,
@@ -688,6 +840,7 @@ pub fn typed_module() -> BResult<TypedModule> {
     let vertex_slots = param(fb, P_VERTEX_SLOTS)?;
     let fragment_slots = param(fb, P_FRAGMENT_SLOTS)?;
     let types = param(fb, P_TYPES)?;
+    let indices_at = param(fb, P_INDICES_AT)?;
 
     // An invocation past the range does nothing.
     let past = fb.binary(BinOp::UGreaterThanEqual, s, count)?;
@@ -757,15 +910,26 @@ pub fn typed_module() -> BResult<TypedModule> {
 
     // The action: empty, or a draw of primitives the descriptor holds; anything else is a record
     // the host's decode refuses (a render descriptor of draws of primitives holds no other).
+    // A draw of primitives where a kind the descriptor allows holds one, and an indexed draw
+    // where one holds that and the replay takes them (`INDEXED`).
     let action_at = at(fb, rec, layout::ACTION)?;
     let action = load32(fb, t, action_at)?;
     let empty = fb.binary(BinOp::IEqual, action, zero32)?;
-    let draw_tag = k32(fb, DRAW_ACTION)?;
-    let draw = fb.binary(BinOp::IEqual, action, draw_tag)?;
-    let draw_bit = k32(fb, DRAW)?;
-    let held_bits = fb.binary(BinOp::BitwiseAnd, policy, draw_bit)?;
-    let draws_held = fb.binary(BinOp::INotEqual, held_bits, zero32)?;
-    let draw = fb.binary(BinOp::LogicalAnd, draw, draws_held)?;
+    let held_by = |fb: &mut FunctionBuilder<'_>, tag: u32, kind: DrawKind| -> BResult<Value> {
+        let tag = k32(fb, tag)?;
+        let is = fb.binary(BinOp::IEqual, action, tag)?;
+        let holders = k32(fb, kind.holders())?;
+        let held_bits = fb.binary(BinOp::BitwiseAnd, policy, holders)?;
+        let held = fb.binary(BinOp::INotEqual, held_bits, zero32)?;
+        fb.binary(BinOp::LogicalAnd, is, held)
+    };
+    let plain = held_by(fb, DRAW_ACTION, DrawKind::Primitives)?;
+    let indexed = held_by(fb, DRAW_INDEXED_ACTION, DrawKind::Indexed)?;
+    let indexed_bit = k32(fb, INDEXED)?;
+    let indexed_bits = fb.binary(BinOp::BitwiseAnd, flags, indexed_bit)?;
+    let takes_indexed = fb.binary(BinOp::INotEqual, indexed_bits, zero32)?;
+    let indexed = fb.binary(BinOp::LogicalAnd, indexed, takes_indexed)?;
+    let draw = fb.binary(BinOp::LogicalOr, plain, indexed)?;
     let held = fb.binary(BinOp::LogicalOr, empty, draw)?;
     let mut malformed = fb.unary(UnOp::LogicalNot, held)?;
     let barrier_at = at(fb, rec, layout::BARRIER)?;
@@ -886,13 +1050,21 @@ pub fn typed_module() -> BResult<TypedModule> {
     malformed = fb.binary(BinOp::LogicalOr, malformed, bad)?;
     flag(fb, fault, malformed, ReplayFaults::RECORD.0)?;
 
-    // The draw's arguments, and whether its primitive type is one the execution names.
-    let mut word = [zero32; 5];
+    // The draw's arguments, and whether its primitive type is one the execution names: a draw
+    // of primitives' primitive type, vertex start, vertex count, instance count and base
+    // instance; an indexed draw's primitive type, index count, index type, instance count, the
+    // index buffer's address (two words), base vertex and base instance
+    // (`layout::DRAW_ARGUMENT_WORDS`). An indexed draw's first vertex is its base vertex.
+    let mut word = [zero32; 8];
     for (i, w) in word.iter_mut().enumerate() {
         let a = at(fb, rec, layout::ARGUMENTS + 4 * i as u64)?;
         *w = load32(fb, t, a)?;
     }
-    let [primitive_type, vertex_start, vertex_count, instance_count, base_instance] = word;
+    let [primitive_type, w1, w2, instance_count, w4, w5, w6, w7] = word;
+    let vertex_start = fb.select(indexed, w6, w1)?;
+    let vertex_count = fb.select(indexed, w1, w2)?;
+    let base_instance = fb.select(indexed, w7, w4)?;
+    let (index_type, index_low, index_high) = (w2, w4, w5);
     let named = counter(fb, t, 0)?;
     count_loop(fb, t, types, |fb, k| {
         let k64_ = wide(fb, t, k)?;
@@ -909,6 +1081,18 @@ pub fn typed_module() -> BResult<TypedModule> {
     let unnamed = fb.unary(UnOp::LogicalNot, named)?;
     let other_type = fb.binary(BinOp::LogicalAnd, draw, unnamed)?;
     flag(fb, fault, other_type, ReplayFaults::ACTION.0)?;
+    // An indexed draw of an index type Metal has no value for, or of no index buffer (which ends
+    // Metal's process), is a record the host's decode refuses.
+    let bad_type = fb.binary(BinOp::UGreaterThan, index_type, one32)?;
+    let index_low64 = wide(fb, t, index_low)?;
+    let index_high64 = wide(fb, t, index_high)?;
+    let thirty_two = k64(fb, 32)?;
+    let index_high64 = fb.binary(BinOp::ShiftLeftLogical, index_high64, thirty_two)?;
+    let index_guest = fb.binary(BinOp::BitwiseOr, index_high64, index_low64)?;
+    let no_indices = fb.binary(BinOp::IEqual, index_guest, zero64)?;
+    let bad_indices = fb.binary(BinOp::LogicalOr, bad_type, no_indices)?;
+    let bad_indices = fb.binary(BinOp::LogicalAnd, indexed, bad_indices)?;
+    flag(fb, fault, bad_indices, ReplayFaults::RECORD.0)?;
 
     // The slot tables, vertex then fragment: the null entry, then the sink entry naming the
     // shared resident set; each of the stage's buffers from its source (the record, or the
@@ -1012,6 +1196,30 @@ pub fn typed_module() -> BResult<TypedModule> {
             Ok(())
         })?;
     }
+    // An indexed draw's indices: their address resolved in the resident set, the offset rounded
+    // down to a multiple of the index size; one no resident allocation holds draws nothing and
+    // counts as a miss. A merged replay writes every command's index entry.
+    let index_live = fb.binary(BinOp::LogicalAnd, runs, indexed)?;
+    let entry = IndexEntry::new(fb, t)?;
+    let resolve: ArmFn<'_, ()> = Box::new(move |fb, _| {
+        let (root, offset, hit, extent) = resolved_extent(fb, (resident, &view), index_guest)?;
+        entry.resolve(fb, t, resident, (root, offset, hit, extent), index_type)
+    });
+    fb.if_(&mut (), index_live, resolve, None)?;
+    let index_missed = fb.load(entry.missed, MemAccess::default())?;
+    let index_missed = fb.binary(BinOp::INotEqual, index_missed, zero32)?;
+    flag_add(fb, misses, index_missed)?;
+    let drawn = fb.unary(UnOp::LogicalNot, index_missed)?;
+    let drawn = fb.binary(BinOp::LogicalAnd, runs, drawn)?;
+    let merged_bit = k32(fb, MERGED)?;
+    let merged_bits = fb.binary(BinOp::BitwiseAnd, flags, merged_bit)?;
+    let merged = fb.binary(BinOp::INotEqual, merged_bits, zero32)?;
+    let write: ArmFn<'_, ()> = Box::new(move |fb, _| {
+        entry.write(fb, t, (resident, indices_at, s))?;
+        Ok(ArmEnd::FallThrough(Vec::new()))
+    });
+    fb.if_(&mut (), merged, write, None)?;
+
     // The misses, counted as a resident miss of the command buffer, as the host's step counts
     // an address no resident allocation holds.
     let missed = fb.load(misses, MemAccess::default())?;
@@ -1042,7 +1250,7 @@ pub fn typed_module() -> BResult<TypedModule> {
         let a = fb.binary(BinOp::IAdd, at_type, rel)?;
         let ty = load32(fb, t, a)?;
         let same = fb.binary(BinOp::IEqual, ty, primitive_type)?;
-        let drawn = fb.binary(BinOp::LogicalAnd, runs, same)?;
+        let drawn = fb.binary(BinOp::LogicalAnd, drawn, same)?;
         let bytes = k64(fb, DRAW_ARGUMENT_BYTES)?;
         let rel = fb.binary(BinOp::IMul, k64_, bytes)?;
         let out = fb.binary(BinOp::IAdd, args, rel)?;

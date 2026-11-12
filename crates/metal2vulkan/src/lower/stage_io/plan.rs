@@ -2855,7 +2855,17 @@ fn merged(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         Shape::U32,
         StageBuiltin::InstanceIndex,
     );
-    sp.merged = Some(MergedRead { vertex, instance });
+    let command = flat_uint(
+        sp,
+        VaryingKey::merged_command(),
+        IoRole::MergedCommand,
+        IoDir::Output,
+    )?;
+    sp.merged = Some(MergedRead {
+        vertex,
+        instance,
+        command,
+    });
     sp.words = sp.words.saturating_add(super::MERGED_WORDS);
     cx.push.insert(PushField::MergedDrawAddress);
     cx.facts.insert(RuntimeFact::MergedDraws);
@@ -2882,9 +2892,10 @@ fn merged_param(
 
 /// The push fields of a function compiled under `LoweringInputs::merged_draws`, once every family
 /// planned its own: a vertex function reads its command's slot table from the header
-/// ([`MergedRead`]), so `RootTableAddress` is no push field of it; a fragment function reads no
-/// command's buffer, which a merged draw does not keep per command, and one that does is
-/// `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`.
+/// ([`MergedRead`]), and a fragment function that reads a command's buffers its command's
+/// fragment slot table, at its flat `IoRole::MergedCommand` input (`StageIoPlan::merged_fragment`),
+/// so `RootTableAddress` is no push field of either; the fragment function's is the header's
+/// address, `PushField::MergedDrawAddress`.
 pub(crate) fn finish_merged(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if !cx.inputs.merged_draws {
         return Ok(());
@@ -2893,8 +2904,17 @@ pub(crate) fn finish_merged(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         Stage::Vertex => {
             cx.push.remove(&PushField::RootTableAddress);
         }
-        Stage::Fragment if cx.push.contains(&PushField::RootTableAddress) => {
-            return Err(Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into());
+        Stage::Fragment if cx.push.remove(&PushField::RootTableAddress) => {
+            cx.push.insert(PushField::MergedDrawAddress);
+            let sp = &mut cx.families.stage_io;
+            let object = flat_uint(
+                sp,
+                VaryingKey::merged_command(),
+                IoRole::MergedCommand,
+                IoDir::Input,
+            )?;
+            sp.merged_fragment = Some(object);
+            sp.words = sp.words.saturating_add(super::MERGED_FRAGMENT_WORDS);
         }
         _ => {}
     }

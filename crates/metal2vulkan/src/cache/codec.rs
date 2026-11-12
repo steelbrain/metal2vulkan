@@ -1177,7 +1177,7 @@ codec_enum! {
         Attribute { index }, Varying { user, interpolation },
         Color { attachment, index },
         ViewportIndex, RenderTargetArrayIndex, PrimitiveVarying { user }, WindowDepth,
-        Barycentric { perspective }, SelectedLayer, SelectedViewport, PrimitiveId,
+        Barycentric { perspective }, SelectedLayer, SelectedViewport, PrimitiveId, MergedCommand,
     }
     IoInterpolation { Flat, Smooth { sampling, perspective } }
     IoSampling { Center, Centroid, Sample, Interpolant { center, centroid, sample } }

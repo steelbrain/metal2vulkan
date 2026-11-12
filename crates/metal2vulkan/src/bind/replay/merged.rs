@@ -30,7 +30,21 @@
 //!   instance and the vertex: Metal's `[[vertex_id]]` is the command's vertex start plus the
 //!   vertex, `[[instance_id]]` its base instance plus the instance, `[[base_instance]]` and
 //!   `[[base_vertex]]` its base instance and vertex start, as the per-command draws of a draw
-//!   replay give them; its buffers are in the command's vertex slot table.
+//!   replay give them; its buffers are in the command's vertex slot table. It writes the
+//!   command's index to a flat `uint` varying (`IoRole::MergedCommand`), the same at every vertex
+//!   of a primitive.
+//! - **Indexed commands** (`DrawReplay::indexed`). A command's index entry
+//!   ([`DRAW_INDEX_ENTRY_BYTES`], which the preprocess writes) holds the device address of its
+//!   first index, the whole indices from there to its index buffer's end and the index size (0 for
+//!   a draw without indices). An indexed command's vertex is the index at the vertex's position
+//!   plus its base vertex, wrapping as `u32`s (`[[base_vertex]]` is the base vertex); a position
+//!   past the buffer's whole indices reads index 0, as the encoder's indexed draw does. Its
+//!   corners are its index count's whole primitives in each instance. A list does not restart at
+//!   the all-ones index (a strip, which Metal restarts, is not merged), so nothing else reads
+//!   the indices.
+//! - **The fragment variant** of a fragment function that reads a command's buffers reads its
+//!   slot table from the header: the command's tables at its flat `IoRole::MergedCommand`
+//!   varying, its fragment table past the vertex table (`LoweringInputs::merged_draws`).
 //! - **Order.** Vulkan rasterizes one draw's primitives in instance order, then in the order
 //!   within an instance ("Primitive Order", the Vulkan specification's rasterization chapter), so
 //!   the merged draw's order is the commands' order, then each command's instances, then its
@@ -42,14 +56,15 @@
 //! - **The scratch** is the draw replay's ([`DrawReplayLayout::merged`]): the header
 //!   ([`MERGED_HEADER_BYTES`], uploaded with the parameters,
 //!   [`DrawReplayPreprocess::header`](super::DrawReplayPreprocess::header)),
-//!   then the prefix (a `u64` per command), the block sums (a `u64` per block) and the two draws,
-//!   which the passes write.
+//!   then the index entries, which the preprocess writes, and the prefix (a `u64` per command),
+//!   the block sums (a `u64` per block) and the two draws, which the passes write.
 //! - **Recording** (consumer): the preprocess, then each pass in order, each after the previous
 //!   one's `SHADER_WRITE` (`COMPUTE_SHADER`, `SHADER_READ | SHADER_WRITE`), the draws after the
 //!   last pass's (`DRAW_INDIRECT`, `INDIRECT_COMMAND_READ`; `VERTEX_SHADER`, `SHADER_READ`). Each
 //!   pass is dispatched [`MergedLayout::group_count`] with the header's address and the
-//!   `ExecutionStatus` buffer's in its push constants ([`DrawMergeModule`]); the vertex variant's
-//!   `MergedDrawAddress` hole takes the header's address.
+//!   `ExecutionStatus` buffer's in its push constants ([`DrawMergeModule`]); the variant's
+//!   `MergedDrawAddress` hole (the vertex function's, and the fragment function's where it reads
+//!   a command's buffers) takes the header's address.
 //! - **Where it runs.** Profile A, as the draw replay. Elsewhere [`draw_merge_module`] names what
 //!   is missing (`GpuEncodedIndirectCommands`).
 
@@ -82,7 +97,11 @@ pub const MERGED_CHUNK: u32 = (1 << 31) - 2;
 /// leave: a `VertexIndex` at or past it is the second draw's.
 pub const MERGED_REST_FIRST: u32 = 1 << 31;
 /// Bytes of a merged draw's header.
-pub const MERGED_HEADER_BYTES: u64 = 48;
+pub const MERGED_HEADER_BYTES: u64 = 56;
+/// Bytes of one command's index entry (the module docs): the device address of its first index
+/// (`u64`), the whole indices from there to its index buffer's end (`u32`) and the index size
+/// (`u32`: 2, 4, or 0 for a draw without indices).
+pub(super) const DRAW_INDEX_ENTRY_BYTES: u64 = 16;
 
 // The header's words, in bytes from its start. The consumer writes all but `H_CHUNKS`, which the
 // last pass writes; every `*_AT` is an offset from the header.
@@ -109,6 +128,10 @@ const H_TABLES_AT: u64 = 36;
 const H_TABLE_STRIDE: u64 = 40;
 /// The merged draw's two `VkDrawIndirectCommand`s.
 const H_DRAWS_AT: u64 = 44;
+/// The commands' index entries.
+const H_INDICES_AT: u64 = 48;
+/// The bytes from a command's vertex slot table to its fragment slot table.
+const H_FRAGMENT_TABLE: u64 = 52;
 
 /// Where a merged draw replay's sections lie in the scratch, in bytes from its start.
 #[non_exhaustive]
@@ -118,6 +141,8 @@ pub struct MergedLayout {
     /// vertex variant's `MergedDrawAddress` and the passes' push constants take the scratch's
     /// address plus this.
     pub header_offset: u64,
+    /// Each command's index entry (16 bytes), which the preprocess writes.
+    pub indices_offset: u64,
     /// Each command's first corner (a `u64`).
     pub prefix_offset: u64,
     /// Each block's corners (a `u64`).
@@ -175,6 +200,10 @@ pub(super) fn header(
             .vertex_table_offset(1)
             .wrapping_sub(layout.vertex_table_offset(0)) as u32,
         rel(m.draws_offset),
+        rel(m.indices_offset),
+        layout
+            .fragment_table_offset(0)
+            .wrapping_sub(layout.vertex_table_offset(0)) as u32,
     ];
     let mut out = vec![0u8; MERGED_HEADER_BYTES as usize];
     for (w, o) in words.iter().zip(out.as_chunks_mut::<4>().0.iter_mut()) {
@@ -356,8 +385,9 @@ fn whole_vertices(fb: &mut FunctionBuilder<'_>, vertices: Value, corners: Value)
 }
 
 /// What a merged draw's vertex variant runs for one invocation ([`merged_vertex`]): Metal's
-/// `[[vertex_id]]`, `[[instance_id]]`, `[[base_instance]]` and `[[base_vertex]]` (`u32`s), and its
-/// command's vertex slot table's device address (`u64`).
+/// `[[vertex_id]]`, `[[instance_id]]`, `[[base_instance]]` and `[[base_vertex]]` (`u32`s), its
+/// command's vertex slot table's device address (`u64`), and the command's index (`u32`), which
+/// it writes to its `IoRole::MergedCommand` varying.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MergedVertex {
     pub(crate) vertex: Value,
@@ -365,6 +395,7 @@ pub(crate) struct MergedVertex {
     pub(crate) base_instance: Value,
     pub(crate) base_vertex: Value,
     pub(crate) table: Value,
+    pub(crate) command: Value,
 }
 
 /// The vertex an invocation of a merged draw's vertex variant runs (the module docs), from the
@@ -472,13 +503,91 @@ pub(crate) fn merged_vertex(
     let stride = wide(fb, t, stride)?;
     let rel = fb.binary(BinOp::IMul, command64, stride)?;
     let table = fb.binary(BinOp::IAdd, tables, rel)?;
+
+    // The command's indices: an indexed command's vertex is the index at the vertex's position
+    // plus its base vertex, the first vertex of its arguments; a position past its whole indices
+    // reads 0. A `u16` index is read from the aligned word that holds it.
+    let indices = section(fb, H_INDICES_AT)?;
+    let entry_bytes = k64(fb, DRAW_INDEX_ENTRY_BYTES)?;
+    let rel = fb.binary(BinOp::IMul, command64, entry_bytes)?;
+    let entry = fb.binary(BinOp::IAdd, indices, rel)?;
+    let address = load64(fb, t, entry)?;
+    let limit_at = at(fb, entry, 8)?;
+    let limit = load32(fb, t, limit_at)?;
+    let size_at = at(fb, entry, 12)?;
+    let size = load32(fb, t, size_at)?;
+    let zero = k32(fb, 0)?;
+    let indexed = fb.binary(BinOp::INotEqual, size, zero)?;
+    let inside = fb.binary(BinOp::ULessThan, vertex, limit)?;
+    let reads = fb.binary(BinOp::LogicalAnd, indexed, inside)?;
+    let raw = counter(fb, t, 0)?;
+    let read: ArmFn<'_, ()> = Box::new(move |fb, _| {
+        let vertex64 = wide(fb, t, vertex)?;
+        let size64 = wide(fb, t, size)?;
+        let rel = fb.binary(BinOp::IMul, vertex64, size64)?;
+        let byte = fb.binary(BinOp::IAdd, address, rel)?;
+        let low = k64(fb, !3)?;
+        let word_at = fb.binary(BinOp::BitwiseAnd, byte, low)?;
+        let w = load32(fb, t, word_at)?;
+        let three = k64(fb, 3)?;
+        let within = fb.binary(BinOp::BitwiseAnd, byte, three)?;
+        let within = fb.convert(ConvOp::UConvert, within, u32_)?;
+        let eight = k32(fb, 8)?;
+        let shift = fb.binary(BinOp::IMul, within, eight)?;
+        let w = fb.binary(BinOp::ShiftRightLogical, w, shift)?;
+        let four = k32(fb, 4)?;
+        let whole = fb.binary(BinOp::IEqual, size, four)?;
+        let (all, half) = (k32(fb, u32::MAX)?, k32(fb, 0xFFFF)?);
+        let mask = fb.select(whole, all, half)?;
+        let index = fb.binary(BinOp::BitwiseAnd, w, mask)?;
+        fb.store(raw, index, MemAccess::default())?;
+        Ok(ArmEnd::FallThrough(Vec::new()))
+    });
+    fb.if_(&mut (), reads, read, None)?;
+    let raw = fb.load(raw, MemAccess::default())?;
+    let position = fb.select(indexed, raw, vertex)?;
     Ok(MergedVertex {
-        vertex: fb.binary(BinOp::IAdd, vertex_start, vertex)?,
+        vertex: fb.binary(BinOp::IAdd, vertex_start, position)?,
         instance: fb.binary(BinOp::IAdd, base_instance, instance)?,
         base_instance,
         base_vertex: vertex_start,
         table,
+        command,
     })
+}
+
+/// The device address of the fragment slot table of the command whose index is `command` (a
+/// `u32`, the fragment variant's flat `IoRole::MergedCommand` input), from the header at `header`
+/// (`u64`), in the open block (the module docs).
+pub(crate) fn merged_fragment_table(
+    fb: &mut FunctionBuilder<'_>,
+    header: Value,
+    command: Value,
+) -> BResult<Value> {
+    let u32_ = fb.module().ty(Type::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let u64_ = fb.module().ty(Type::Int {
+        width: 64,
+        signed: false,
+    })?;
+    let t = Types { u32_, u64_ };
+    let word = |fb: &mut FunctionBuilder<'_>, offset: u64| -> BResult<Value> {
+        let a = at(fb, header, offset)?;
+        load32(fb, t, a)
+    };
+    let tables = word(fb, H_TABLES_AT)?;
+    let tables = wide(fb, t, tables)?;
+    let tables = fb.binary(BinOp::IAdd, header, tables)?;
+    let stride = word(fb, H_TABLE_STRIDE)?;
+    let stride = wide(fb, t, stride)?;
+    let command = wide(fb, t, command)?;
+    let rel = fb.binary(BinOp::IMul, command, stride)?;
+    let table = fb.binary(BinOp::IAdd, tables, rel)?;
+    let fragment = word(fb, H_FRAGMENT_TABLE)?;
+    let fragment = wide(fb, t, fragment)?;
+    fb.binary(BinOp::IAdd, table, fragment)
 }
 
 /// The pass `phase` ([`draw_merge_module`]; the module docs).

@@ -145,6 +145,7 @@ fn check_roles(stage: Stage, io: &StageIo) -> Result<(), Error> {
                             | IoRole::SelectedLayer
                             | IoRole::SelectedViewport
                             | IoRole::PrimitiveId
+                            | IoRole::MergedCommand
                     )
                 })
         }
@@ -161,6 +162,7 @@ fn check_roles(stage: Stage, io: &StageIo) -> Result<(), Error> {
                             | IoRole::WindowDepth
                             | IoRole::Barycentric { .. }
                             | IoRole::PrimitiveId
+                            | IoRole::MergedCommand
                     )
                 })
                 && io
@@ -489,7 +491,8 @@ fn varyings<'a>(
         | IoRole::RenderTargetArrayIndex
         | IoRole::SelectedLayer
         | IoRole::SelectedViewport
-        | IoRole::PrimitiveId => Some(Interpolation::Flat),
+        | IoRole::PrimitiveId
+        | IoRole::MergedCommand => Some(Interpolation::Flat),
         // The window depth is read without perspective, at the centre and at a sample.
         IoRole::WindowDepth => Some(Interpolation::Smooth {
             sampling: crate::pipeline::stage_io::Sampling::Center,

@@ -13,10 +13,11 @@
 //!   there (`IndirectCommandCheckNeeds`: no draw of points, a primitive type the writes do not
 //!   state counting as one, where it looks for them; the encoder's state encodes no indirect
 //!   commands, where it looks for such states), so it is never called; of a buffer of draws of
-//!   primitives alone (`IndirectCommandType::DRAW`) that inherits the encoder's pipeline state
-//!   and not its buffers, and whose records the CPU and every route of a command buffer that made
-//!   it resident for writing (`write_routes.rs`) may fill with draws of one primitive type,
-//!   buffers, resets and cleared barriers alone; in a pass whose fragment stages wrote no bytes before the call (no copy of them is
+//!   primitives and indexed draws alone (`IndirectCommandType::DRAW`, `DRAW_INDEXED`) that
+//!   inherits the encoder's pipeline state and not its buffers, and whose records the CPU and
+//!   every route of a command buffer that made it resident for writing (`write_routes.rs`) may
+//!   fill with draws and indexed draws of one primitive type, buffers, resets and cleared
+//!   barriers alone, where indexed draws among them merge (below); in a pass whose fragment stages wrote no bytes before the call (no copy of them is
 //!   read, `render/pass_start_reads.rs`), with no tile threadgroup memory argument set, and where
 //!   the pass has a shadowed texture, whose command buffer made resident past the call nothing
 //!   that meets a shadowed texture's truth (`shadows::meets_truths`), as the host step's rule.
@@ -47,14 +48,18 @@
 //!   encoder's draw does, and the later ones drawing with its tables.
 //! - **Merged** (`bind::DrawReplay::merged`), where the commands draw points, lines or triangles
 //!   (a list type), the vertex function writes no memory, and the state's merged variant
-//!   (`VariantKey::merged_draws`) compiles with a fragment function that reads no buffer and no
-//!   `[[primitive_id]]`: the preprocess, then the two merge passes (`bind::draw_merge_module`,
+//!   (`VariantKey::merged_draws`) compiles with a fragment function that reads no
+//!   `[[primitive_id]]` (Metal counts each command's primitives; such an execution takes the host
+//!   step): the preprocess, then the two merge passes (`bind::draw_merge_module`,
 //!   owned kernels), each after a barrier from everything before, write each command's first
 //!   vertex in one merged draw and its two `VkDrawIndirectCommand`s; the pass draws them, the
 //!   first through the encoder's draw (`BufferForms::Merged`), and the vertex function finds its
-//!   command, vertex and instance (`bind::replay`'s merged docs), in the commands' order. One
-//!   draw call for the whole range, whatever its count. Otherwise one draw per command, as
-//!   above.
+//!   command, vertex and instance (`bind::replay`'s merged docs), in the commands' order. An
+//!   indexed command's vertex function reads its vertex from the command's indices, which the
+//!   preprocess resolved in the resident set, and a fragment function that reads a command's
+//!   buffers finds its command's fragment slot table at the command its vertex wrote to a flat
+//!   varying. One draw call for the whole range, whatever its count. Otherwise one draw per
+//!   command, as above: commands that may draw indexed take the host step there.
 //! - **A range read from a buffer** (`execute_commands_in_buffer_indirect`), merged alone: the
 //!   GPU reads it as the preprocess runs, a copy of its 8 bytes, where the encoder read them
 //!   (`indirect_execute::range_from`), into the scratch's parameters
@@ -107,10 +112,10 @@ use crate::Device;
 use crate::RenderPipelineState;
 use ash::vk;
 use metal2vulkan::bind::{
-    draw_replay_draw, draw_replay_merges, draw_replay_preprocess, draw_replay_primitive_type,
-    draw_replay_slots, draw_replay_state, BindState, DrawCall, DrawMergeModule, DrawReplay,
-    DrawReplayLayout, DrawReplayPreprocess, IndirectRef, MergePhase, NeutralResource, PushHole,
-    DRAW_ARGUMENT_BYTES,
+    draw_replay_draw, draw_replay_indexed, draw_replay_merges, draw_replay_preprocess,
+    draw_replay_primitive_type, draw_replay_slots, draw_replay_state, BindState, DrawCall,
+    DrawMergeModule, DrawReplay, DrawReplayLayout, DrawReplayPreprocess, IndirectRef, MergePhase,
+    NeutralResource, PushHole, DRAW_ARGUMENT_BYTES,
 };
 use metal2vulkan::metal::PrimitiveType;
 use metal2vulkan::pipeline::CommandWrites;
@@ -300,12 +305,18 @@ impl RenderExecution {
             Ok(commands) => commands,
             Err(cause) => return (core, Err(cause)),
         };
-        // A range read from a buffer is read on the GPU by the merged form alone.
+        // A range read from a buffer, and indexed draws, run on the GPU in the merged form alone.
         let reads_range = self.range.indirect();
         if reads_range && !draw_replay_merges(primitive_type) {
             let rule = "the execution reads its range from a buffer, and its commands draw strips";
             return (core, Err(HostStepCause::Rule(rule)));
         }
+        let indexed = draw_replay_indexed(decided);
+        if indexed && !draw_replay_merges(primitive_type) {
+            let rule = "the execution's commands may draw indexed strips";
+            return (core, Err(HostStepCause::Rule(rule)));
+        }
+        let merged_alone = reads_range || indexed;
         let Some(pipeline) = &self.pipeline else {
             return (
                 core,
@@ -332,7 +343,7 @@ impl RenderExecution {
             core = back;
             match form {
                 Ok(form) => return (core, Ok(form)),
-                Err(cause) if reads_range => return (core, Err(cause)),
+                Err(cause) if merged_alone => return (core, Err(cause)),
                 Err(_) => {}
             }
         }
@@ -456,6 +467,7 @@ impl RenderExecution {
         replay.fragment_slots = fragment_slots;
         replay.merged = merged;
         replay.range_read = self.range.indirect();
+        replay.indexed = draw_replay_indexed(decided);
         let pre = draw_replay_preprocess(device.compile_device(), &state, &replay)
             .map_err(|error| HostStepCause::Refused(error.to_string()))?;
         Ok(GpuForm {

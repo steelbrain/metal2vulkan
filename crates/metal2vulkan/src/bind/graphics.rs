@@ -1711,8 +1711,10 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 PushField::CaptureIndexAddress | PushField::CaptureLayout
                     if stage == Stage::Vertex => {}
                 PushField::BaseVertexInstance if stage == Stage::Vertex => {}
-                // A merged draw replay's header: the consumer's hole.
-                PushField::MergedDrawAddress if stage == Stage::Vertex => {}
+                // A merged draw replay's header, which its vertex function and a fragment
+                // function that reads a command's buffers read: the consumer's hole.
+                PushField::MergedDrawAddress
+                    if matches!(stage, Stage::Vertex | Stage::Fragment) => {}
                 // The draw's vertices per primitive, which instantiation writes from its
                 // primitive type.
                 PushField::VerticesPerPrimitive if stage == Stage::Vertex => {}

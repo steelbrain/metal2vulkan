@@ -14,7 +14,7 @@ use super::*;
 use crate::bind::state::{ResourceClass, UsedResource};
 use crate::bind::status::{ExecutionStatus, StatusReport};
 use crate::device::{DeviceDescription, DevicePolicy};
-use crate::indirect_commands::{Action, BufferBinding, INHERIT_PIPELINE, RENDER};
+use crate::indirect_commands::{Action, BufferBinding, DRAW, INHERIT_PIPELINE, RENDER};
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
 use crate::spirv::testing::assert_valid;
 
@@ -182,6 +182,9 @@ fn preprocess_over(
     let dev = device();
     let pre = draw_replay_preprocess(&dev, &state(), replay).expect("preprocess");
     let mut policy = RENDER | DRAW | INHERIT_PIPELINE;
+    if replay.indexed {
+        policy |= crate::indirect_commands::DRAW_INDEXED;
+    }
     if header.inherit_buffers {
         policy |= crate::indirect_commands::INHERIT_BUFFERS;
     }
@@ -545,9 +548,9 @@ use crate::bind::{draw_merge_module, DrawMergeModule, MERGED_REST_FIRST};
 
 const OUT: u64 = 0x0000_0040_0000_0000;
 const REST_OUT: u64 = 0x0000_0041_0000_0000;
-/// Bytes of one decoded corner: Metal's vertex, instance, base vertex and base instance, and the
-/// slot table's address.
-const DECODED: usize = 24;
+/// Bytes of one decoded corner: Metal's vertex, instance, base vertex and base instance, the
+/// slot table's address, and the command's index (then padding).
+const DECODED: usize = 32;
 
 /// `ran`'s scratch after the merged replay's header (its chunk replaced by `chunk`) and both
 /// merge passes, in both scheduling orders, and the status the passes left.
@@ -663,6 +666,8 @@ fn decoding_module(chunk: u32) -> TypedModule {
     }
     let a = at(fb, at_slot, 16).expect("at");
     store64(fb, t, a, v.table).expect("store");
+    let a = at(fb, at_slot, 24).expect("at");
+    store32(fb, t, a, v.command).expect("store");
     fb.ret(None).expect("ret");
     let id = f.finish().expect("finish");
     b.entry(ExecModel::Vertex, id, Vec::new()).expect("entry");
@@ -670,12 +675,23 @@ fn decoding_module(chunk: u32) -> TypedModule {
 }
 
 /// What one corner of a merged draw runs: Metal's vertex, instance, base vertex and base
-/// instance, and the command's vertex slot table's address.
-type Corner = (u32, u32, u32, u32, u64);
+/// instance, the command's vertex slot table's address, and the command's index.
+type Corner = (u32, u32, u32, u32, u64, u32);
 
 /// Every corner the merged draws of `scratch` run (both draws, in their order), decoded by
 /// `merged_vertex` with chunks of `chunk` vertices.
 fn decoded(ran: &Ran, scratch: &[u8], chunk: u32) -> Vec<Corner> {
+    decoded_over(ran, scratch, chunk, None)
+}
+
+/// [`decoded`], with `memory` (`(address, bytes)`: the indices the commands' index entries name)
+/// beside the scratch.
+fn decoded_over(
+    ran: &Ran,
+    scratch: &[u8],
+    chunk: u32,
+    memory: Option<(u64, &[u8])>,
+) -> Vec<Corner> {
     let m = ran.pre.layout.merged.expect("merged");
     let draw = |i: u32| -> [u32; 4] {
         let at = m.draw_offset(i) as usize;
@@ -709,19 +725,27 @@ fn decoded(ran: &Ran, scratch: &[u8], chunk: u32) -> Vec<Corner> {
         if count == 0 {
             continue;
         }
+        let mut buffers = vec![
+            Buffer {
+                slot: None,
+                address: Some(SCRATCH),
+                bytes: scratch.to_vec(),
+            },
+            Buffer {
+                slot: None,
+                address: Some(out),
+                bytes: vec![0; count * DECODED],
+            },
+        ];
+        if let Some((address, bytes)) = memory {
+            buffers.push(Buffer {
+                slot: None,
+                address: Some(address),
+                bytes: bytes.to_vec(),
+            });
+        }
         let res = Resources {
-            buffers: vec![
-                Buffer {
-                    slot: None,
-                    address: Some(SCRATCH),
-                    bytes: scratch.to_vec(),
-                },
-                Buffer {
-                    slot: None,
-                    address: Some(out),
-                    bytes: vec![0; count * DECODED],
-                },
-            ],
+            buffers,
             push: push.clone(),
             spec: Default::default(),
         };
@@ -739,6 +763,7 @@ fn decoded(ran: &Ran, scratch: &[u8], chunk: u32) -> Vec<Corner> {
                 word(c, 8),
                 word(c, 12),
                 u64::from_le_bytes(c[16..24].try_into().expect("u64")),
+                word(c, 24),
             ));
         }
     }
@@ -757,7 +782,7 @@ fn metal_corners(ran: &Ran, draws: &[Option<[u32; 4]>], per: u32) -> Vec<Corner>
         let table = SCRATCH + ran.pre.layout.vertex_table_offset(c as u32);
         for i in 0..instances {
             for v in 0..count - count % per {
-                out.push((start + v, base + i, start, base, table));
+                out.push((start + v, base + i, start, base, table, c as u32));
             }
         }
     }
@@ -877,6 +902,124 @@ fn a_replay_that_reads_its_range_draws_the_commands_inside_it() {
     part.fragment_slots = 0;
     assert_eq!(pre(&part), refused);
     assert!(pre(&replay).is_ok());
+}
+
+/// An indexed draw's record: `count` indices of `index_type` (0 `u16`, 1 `u32`) at `indices`, in
+/// `instances[0]` instances from base instance `instances[1]`, from base vertex `base_vertex`.
+fn indexed(
+    index_type: u32,
+    indices: u64,
+    count: u32,
+    instances: [u32; 2],
+    base_vertex: i32,
+) -> Action {
+    Action::DrawIndexedPrimitives {
+        primitive_type: 3,
+        index_count: count,
+        index_type,
+        index_buffer: indices,
+        instance_count: instances[0],
+        base_vertex,
+        base_instance: instances[1],
+    }
+}
+
+/// A merged replay of indexed commands beside a draw of primitives draws each command's whole
+/// triangles in order, an indexed command's vertices its indices plus its base vertex (wrapping),
+/// from its index buffer's offset rounded down to a multiple of the index size, a position past
+/// the buffer's whole indices reading index 0, as the host's step and the encoder's draw read
+/// them. An index buffer no resident allocation holds draws nothing and counts as a resident
+/// miss; an index type Metal has no value for, or no index buffer, is a refused record. Each
+/// corner carries its command's index, which the vertex variant writes for the fragment variant.
+#[test]
+fn a_merged_replay_draws_indexed_commands_from_their_indices() {
+    // `A`'s bytes: the `u16` at byte `2k` is `100 + k`.
+    let memory: Vec<u8> = (0..A.2 / 2)
+        .flat_map(|k| (100 + k as u16).to_le_bytes())
+        .collect();
+    let u16_at = |byte: u64| {
+        u32::from(u16::from_le_bytes([
+            memory[byte as usize],
+            memory[byte as usize + 1],
+        ]))
+    };
+    let u32_at = |byte: u64| {
+        u32::from_le_bytes(
+            memory[byte as usize..byte as usize + 4]
+                .try_into()
+                .expect("u32"),
+        )
+    };
+    let records = [
+        record(indexed(0, A.0 + 3, 3, [1, 0], 10), &[], &[]),
+        record(draw(3, 4, 3, [1, 2]), &[], &[]),
+        record(indexed(1, A.0 + 65, 6, [2, 5], -1), &[], &[]),
+        record(indexed(1, A.0 + 248, 3, [1, 0], 0), &[], &[]),
+        record(indexed(0, AWAY, 3, [1, 0], 0), &[], &[]),
+        record(indexed(2, A.0, 3, [1, 0], 0), &[], &[]),
+        record(indexed(0, 0, 3, [1, 0], 0), &[], &[]),
+    ];
+    let mut replay = DrawReplay::new(7, 0, 7, vec![3]);
+    replay.merged = true;
+    replay.indexed = true;
+    replay.vertex_slots = 0;
+    replay.fragment_slots = 0;
+    let ran = preprocess(&replay, &records, clean(7));
+    assert_eq!(ran.status.replay_faults, ReplayFaults::RECORD);
+    assert_eq!(ran.status.resident_misses, 1, "the missing index buffer");
+    let m = ran.pre.layout.merged.expect("merged");
+    let entry = |c: u64| {
+        let at = (m.indices_offset + 16 * c) as usize;
+        let address = u64::from_le_bytes(ran.scratch[at..at + 8].try_into().expect("u64"));
+        (
+            address,
+            word(&ran.scratch, at + 8),
+            word(&ran.scratch, at + 12),
+        )
+    };
+    assert_eq!(
+        entry(0),
+        (A.1 + 2, 127, 2),
+        "rounded down to a multiple of 2"
+    );
+    assert_eq!(entry(1), (0, 0, 0), "a draw of primitives");
+    assert_eq!(
+        entry(2),
+        (A.1 + 64, 48, 4),
+        "rounded down to a multiple of 4"
+    );
+    assert_eq!(entry(3), (A.1 + 248, 2, 4), "two whole indices left");
+    for c in 4..7 {
+        assert_eq!(entry(c), (0, 0, 0), "command {c} draws nothing");
+    }
+    assert_eq!(ran.args(0, 0), [3, 1, 10, 0]);
+    assert_eq!(ran.args(1, 0), [3, 1, 4, 2]);
+    assert_eq!(ran.args(2, 0), [6, 2, u32::MAX, 5]);
+    for c in 4..7 {
+        assert_eq!(ran.args(c, 0), [0; 4], "command {c} draws nothing");
+    }
+    let (scratch, status) = merge(&ran, 6);
+    assert!(!status.replay_fault, "{status:?}");
+    let table = |c: u32| SCRATCH + ran.pre.layout.vertex_table_offset(c);
+    let mut expected = Vec::new();
+    for v in 0..3 {
+        expected.push((u16_at(2 + 2 * v) + 10, 0, 10, 0, table(0), 0));
+    }
+    for v in 0..3 {
+        expected.push((4 + v, 2, 4, 2, table(1), 1));
+    }
+    for i in 0..2 {
+        for v in 0..6u64 {
+            let raw = u32_at(64 + 4 * v);
+            expected.push((raw.wrapping_sub(1), 5 + i, u32::MAX, 5, table(2), 2));
+        }
+    }
+    for v in 0..3u64 {
+        let raw = if v < 2 { u32_at(248 + 4 * v) } else { 0 };
+        expected.push((raw, 0, 0, 0, table(3), 3));
+    }
+    let corners = decoded_over(&ran, &scratch, 6, Some((A.1, &memory)));
+    assert_eq!(corners, expected);
 }
 
 /// Points and lines merge as triangles do, a corner per point and two per line.
@@ -1015,12 +1158,38 @@ fn merged_replays_are_set_up_for_one_list_type_or_points() {
     let refused = Err(BindError::InvalidReplay {
         reason: ReplayRefusal::DrawPrimitiveTypes,
     });
-    for (types, fragment_slots) in [(vec![2], 0), (vec![4], 0), (vec![3, 4], 0), (vec![3], 1)] {
+    for types in [vec![2], vec![4], vec![3, 4]] {
         let mut r = DrawReplay::new(4, 0, 4, types.clone());
         r.merged = true;
-        r.fragment_slots = fragment_slots;
-        assert_eq!(pre(&r), refused, "{types:?} {fragment_slots}");
+        r.fragment_slots = 0;
+        assert_eq!(pre(&r), refused, "{types:?}");
     }
+    // A merged replay's fragment variant reads its command's fragment table, which the header
+    // places past the vertex table.
+    let mut r = DrawReplay::new(4, 0, 4, vec![3]);
+    r.merged = true;
+    r.vertex_slots = 2;
+    r.fragment_slots = 1;
+    let p = pre(&r).expect("fragment slots");
+    let m = p.layout.merged.expect("layout");
+    let header_word = |at: usize| word(&p.header, at);
+    assert_eq!(
+        u64::from(header_word(52)),
+        p.layout.fragment_table_offset(0) - p.layout.vertex_table_offset(0)
+    );
+    assert_eq!(
+        u64::from(header_word(48)),
+        m.indices_offset - m.header_offset
+    );
+    // An indexed replay is merged alone.
+    let mut r = DrawReplay::new(4, 0, 4, vec![3]);
+    r.indexed = true;
+    assert_eq!(
+        pre(&r),
+        Err(BindError::InvalidReplay {
+            reason: ReplayRefusal::IndexedApart,
+        })
+    );
     let mut r = DrawReplay::new(10, 0, 10, vec![1]);
     r.merged = true;
     r.fragment_slots = 0;

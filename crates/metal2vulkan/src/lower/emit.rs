@@ -210,6 +210,10 @@ pub struct EmitCx<'a> {
     /// `stage_io::emit_entry` finds before the body (`stage_io::MergedRead`): defined in the
     /// function's straight-line entry, so every later block of the function may read them.
     pub(crate) merged_draw: Option<crate::bind::MergedVertex>,
+    /// A merged draw's fragment function's command's fragment slot table, which
+    /// `stage_io::emit_entry` finds before the body (`stage_io::StageIoPlan::merged_fragment`),
+    /// defined in the function's straight-line entry.
+    pub(crate) merged_fragment_table: Option<SValue>,
     /// The texel of each storage-form color attachment a fragment function reads, by Metal
     /// color index, at the invocation's pixel (and sample), which `fragment::emit_entry` reads
     /// before the body: defined in the function's straight-line entry, inside the interlock, so
@@ -266,6 +270,7 @@ impl<'a> EmitCx<'a> {
             fault: None,
             sampling: Default::default(),
             merged_draw: None,
+            merged_fragment_table: None,
             fetched: Vec::new(),
         }
     }
@@ -449,6 +454,14 @@ impl<'a> EmitCx<'a> {
                     Some(m) => Ok(m.table),
                     None => Err(self.fail("a merged draw's slot table read before its entry")),
                 };
+            }
+            // A merged draw's fragment function reads its command's fragment slot table.
+            PushField::RootTableAddress
+                if self.plan.families.stage_io.merged_fragment.is_some() =>
+            {
+                return self.merged_fragment_table.ok_or_else(|| {
+                    self.fail("a merged draw's fragment slot table read before its entry")
+                });
             }
             PushField::SlotGuestBase(slot) if self.plan.families.access.replay => {
                 return access::replay_guest_base(self, fb, slot)
@@ -686,6 +699,7 @@ impl<'a> Emitter<'a> {
                 fault: None,
                 sampling: Default::default(),
                 merged_draw: None,
+                merged_fragment_table: None,
                 fetched: Vec::new(),
             },
             vars: None,

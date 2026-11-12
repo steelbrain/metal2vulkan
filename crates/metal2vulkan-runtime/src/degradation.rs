@@ -688,9 +688,11 @@ degradations! {
         /// records such an execution on the CPU then where the GPU cannot run it alone. A render
         /// execution: where its records may hold, at the commit or as its batch is ready, more
         /// than draws of one primitive type under the encoder's state, or what its check looks for,
-        /// and, with its range read from a buffer, where its commands do not merge into one draw or
-        /// the CPU alone writes its records (`render/executions/gpu.rs`); its notice names the
-        /// first rule that kept it from the GPU alone. A compute execution: with a caller's check (`execute_commands_in_buffer_checked`)
+        /// and, with its range read from a buffer or indexed draws among its records, where its
+        /// commands do not merge into one draw (a strip type, a `[[primitive_id]]` its fragment
+        /// function reads, or another rule of the merged form), or, for a range read from a
+        /// buffer, the CPU alone writes its records (`render/executions/gpu.rs`); its notice names
+        /// the first rule that kept it from the GPU alone. A compute execution: with a caller's check (`execute_commands_in_buffer_checked`)
         /// that may see what it looks for (`IndirectCommandCheckNeeds`: a state that may encode
         /// indirect commands, the encoder's where the buffer inherits it, else one its records may
         /// name), at the commit or as its batch is ready; with its range read from a buffer; of a

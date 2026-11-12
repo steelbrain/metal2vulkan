@@ -843,6 +843,7 @@ fn reads_flat_inputs(io: &StageIo) -> bool {
             } | IoRole::ViewportIndex
                 | IoRole::RenderTargetArrayIndex
                 | IoRole::PrimitiveId
+                | IoRole::MergedCommand
         )
     });
     flat || io

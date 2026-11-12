@@ -156,7 +156,7 @@ pub use merged::{
     draw_merge_module, DrawMergeModule, MergePhase, MergedLayout, MERGED_CHUNK,
     MERGED_HEADER_BYTES, MERGED_REST_FIRST,
 };
-pub(crate) use merged::{merged_vertex, MergedVertex};
+pub(crate) use merged::{merged_fragment_table, merged_vertex, MergedVertex};
 mod predication;
 mod rules;
 pub use predication::{
@@ -164,8 +164,8 @@ pub use predication::{
     PredicationStepForm, PredicationStepModule,
 };
 pub use rules::{
-    draw_replay_draw, draw_replay_merges, draw_replay_primitive_type, draw_replay_slots,
-    draw_replay_state, DrawReplayRule, DRAW_REPLAY_WRITES,
+    draw_replay_draw, draw_replay_indexed, draw_replay_merges, draw_replay_primitive_type,
+    draw_replay_slots, draw_replay_state, DrawReplayRule, DRAW_REPLAY_WRITES,
 };
 
 /// The most commands one device replay runs: Metal's indirect command buffer holds at most 16,384
@@ -392,12 +392,14 @@ pub enum ReplayRefusal {
     OwnPipelines,
     /// A draw replay's primitive types are not one of Metal's five, or a list type and its strip:
     /// draws one pipeline's topology class holds ([`DrawReplay::primitive_types`]); or a merged
-    /// replay's ([`DrawReplay::merged`]) are not one list type or points, or its fragment slot
-    /// tables hold slots.
+    /// replay's ([`DrawReplay::merged`]) are not one list type or points.
     DrawPrimitiveTypes,
     /// A draw replay that reads its range from a buffer ([`DrawReplay::range_read`]) is not
     /// merged into one draw, or does not run over every command of the buffer.
     RangeRead,
+    /// A draw replay whose records may hold indexed draws ([`DrawReplay::indexed`]) is not merged
+    /// into one draw.
+    IndexedApart,
 }
 
 /// Where each part of a device replay's scratch lies, in bytes from its start.

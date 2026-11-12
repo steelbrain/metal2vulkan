@@ -3238,8 +3238,10 @@ fn a_fragment_reads_the_viewport_index_its_vertex_function_wrote() {
 /// A merged draw replay's vertex function (`VariantKey::merged_draws`) reads its command's slot
 /// table from the header at its `MergedDrawAddress`, a hole of the vertex stage, in place of a
 /// `RootTableAddress`, and its plan states the variant. A fragment function that reads a buffer
-/// or `[[primitive_id]]`, which a merged draw does not keep per command, is refused, as is a
-/// merged key without replay bindings.
+/// reads its command's fragment slot table from the header too, at the command its vertex wrote
+/// (`IoRole::MergedCommand`): `MergedDrawAddress` is its push field, `RootTableAddress` none. One
+/// that reads `[[primitive_id]]`, which Metal counts per command, is refused, as is a merged key
+/// without replay bindings.
 #[test]
 fn a_merged_draw_reads_its_command_s_table_from_its_header() {
     use crate::cache::VariantKey;
@@ -3307,27 +3309,36 @@ fn a_merged_draw_reads_its_command_s_table_from_its_header() {
         .fields
         .iter()
         .any(|f| f.field == PushField::MergedDrawAddress)));
-    for (vertex, fragment) in [
-        (
-            ("primitive_ids", "pi_place"),
-            ("primitive_ids", "pi_ids", metal::PixelFormat::RGBA32Uint),
-        ),
-        (
-            ("a8r_targets", "a8r_vertex"),
-            ("a8r_targets", "a8r_fill", metal::PixelFormat::RGBA8Unorm),
-        ),
-    ] {
-        compile(vertex, Some(fragment), &VariantKey::new())
-            .expect("fixture")
-            .expect("plain");
-        let refused = compile(vertex, Some(fragment), &key)
-            .expect("fixture")
-            .expect_err("a fragment's command values under a merged draw");
-        assert!(
-            format!("{refused:?}").contains("GpuEncodedIndirectCommands"),
-            "{fragment:?}: {refused:?}"
-        );
-    }
+    let (vertex, fragment) = (
+        ("primitive_ids", "pi_place"),
+        ("primitive_ids", "pi_ids", metal::PixelFormat::RGBA32Uint),
+    );
+    compile(vertex, Some(fragment), &VariantKey::new())
+        .expect("fixture")
+        .expect("plain");
+    let refused = compile(vertex, Some(fragment), &key)
+        .expect("fixture")
+        .expect_err("a fragment's primitive ID under a merged draw");
+    assert!(
+        format!("{refused:?}").contains("GpuEncodedIndirectCommands"),
+        "{fragment:?}: {refused:?}"
+    );
+    let (vertex, fragment) = (
+        ("a8r_targets", "a8r_vertex"),
+        ("a8r_targets", "a8r_fill", metal::PixelFormat::RGBA8Unorm),
+    );
+    let buffered = compile(vertex, Some(fragment), &key)
+        .expect("fixture")
+        .expect("a fragment's buffer under a merged draw");
+    let fragment_fields: Vec<PushField> = (buffered.interface.push.iter())
+        .filter(|p| p.stage == crate::pipeline::sym::Stage::Fragment)
+        .flat_map(|p| p.fields.iter().map(|f| f.field))
+        .collect();
+    assert!(
+        fragment_fields.contains(&PushField::MergedDrawAddress)
+            && !fragment_fields.contains(&PushField::RootTableAddress),
+        "{fragment_fields:?}"
+    );
 }
 
 /// A render pipeline compiled as a device-replay variant (`VariantKey::replay_bindings`) reads
