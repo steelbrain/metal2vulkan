@@ -14,8 +14,9 @@
 //!   one `Private` surface past the bound, where the device makes such images: the first is a
 //!   shadow of its linear cost, and every later one over the same bytes takes the image at Metal's
 //!   pitch (`WorkCounts::pooled_pitched_images`), so the textures hold one shadow's bytes, not four;
-//!   the first's shadow moves to its image at the next quiet commit
-//!   (`WorkCounts::pooled_textures_moved_in_place`), and a read through it then copies nothing.
+//!   the first's shadow moves to its image at the next quiet commit that takes storage forms (a
+//!   blit's, here, as `in_place_textures`' move checks commit;
+//!   `WorkCounts::pooled_textures_moved_in_place`), and a read through it then copies nothing.
 //! - [`textures_made_one_after_another_over_one_surface_s_bytes_take_one_shadow`]: the same four
 //!   made one after another, each written and released before the next is made, as a guest's
 //!   frames make them: the first is a shadow, every later one takes the image.
@@ -41,9 +42,9 @@ use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
-    Buffer, BufferContents, BufferDescriptor, CommandBuffer, ComputePipelineState, Device,
-    IoSurfacePlane, PipelineOptions, ResourceOptions, Size, Texture, TextureDescriptor,
-    TexturePlacement, TextureShadowReason, WorkCounts,
+    BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBuffer, ComputePipelineState,
+    Device, IoSurfacePlane, Origin, PipelineOptions, ResourceOptions, Size, Texture,
+    TextureDescriptor, TexturePlacement, TextureShadowReason, WorkCounts,
 };
 
 /// The kernels: `fill_float` and `fill_uint` write constant buffer 0's value at every thread's
@@ -353,16 +354,31 @@ fn textures_over_one_surface_s_bytes_take_one_shadow() {
         );
         assert_eq!(shadow_bytes, width * height * 4, "one shadow's bytes");
         // The first texture's shadow moves to its image at Metal's pitch at the next commit of the
-        // device's only uncommitted command buffer, and goes once that command buffer completed:
-        // a later command buffer that reads it copies nothing.
-        let kernels = Kernels::new(device);
+        // device's only uncommitted command buffer that takes storage forms (a blit's), and goes
+        // once that command buffer completed: a later command buffer that reads it copies
+        // nothing.
         let queue = device.new_command_queue().unwrap();
+        let row = width * 4;
         let out = device
-            .new_buffer(height * height * 16, ResourceOptions::shared())
+            .new_buffer(row * height, ResourceOptions::shared())
             .unwrap();
         let read = |texture: &Texture| {
             let command_buffer = queue.command_buffer().unwrap();
-            kernels.read(&command_buffer, texture, &out, height);
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.copy_from_texture_to_buffer(
+                texture,
+                0,
+                0,
+                Origin::new(0, 0, 0),
+                Size::new(width, height, 1),
+                &out,
+                0,
+                row,
+                row * height,
+                BlitOption::None,
+            )
+            .unwrap();
+            blit.end_encoding().unwrap();
             command_buffer.commit().unwrap();
             command_buffer.wait_until_completed_for(WAIT).unwrap();
             assert_eq!(command_buffer.error(), None);
