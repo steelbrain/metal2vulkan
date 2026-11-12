@@ -560,8 +560,8 @@ fn unknown_and_unsupported_records_are_typed() {
         Some(&Feature::CallingConvention(9))
     );
     // A global in an address space outside AIR's.
-    let e = with_body(|w| w.unabbrev(7, &[0, 1, 0, 2 | (8 << 2), 0, 0, 0, 0])).unwrap_err();
-    assert_eq!(unsupported_feature(&e), Some(&Feature::AddressSpace(8)));
+    let e = with_body(|w| w.unabbrev(7, &[0, 1, 0, 2 | (9 << 2), 0, 0, 0, 0])).unwrap_err();
+    assert_eq!(unsupported_feature(&e), Some(&Feature::AddressSpace(9)));
 }
 
 fn types_only(records: &[(u64, Vec<u64>)]) -> Result<ModuleTables, Error> {
