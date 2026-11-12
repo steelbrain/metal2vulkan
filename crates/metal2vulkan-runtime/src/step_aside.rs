@@ -98,6 +98,20 @@ thread_local! {
     /// How long its own allocations and frees took since its last step, owed to its next
     /// ([`OwnCall`]), and when the last of them ended.
     static OWED: Cell<(Duration, Option<Instant>)> = const { Cell::new((Duration::ZERO, None)) };
+    /// The crate's device tests' stand-in for how long each of its own calls takes, whatever it
+    /// measures ([`own_calls_take`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    static TAKES: Cell<Option<Duration>> = const { Cell::new(None) };
+}
+
+/// Count each of this thread's own calls from here on ([`OwnCall`]) as taking `took`, whatever
+/// it measures; `None` measures them again. The crate's device tests' stand-in for a device's
+/// frees (`tests/posted_frees.rs`): a free quicker than the time to the thread's next pace owes
+/// that pace nothing, so how many paces wait would follow the device's speed and the host's
+/// scheduling.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn own_calls_take(took: Option<Duration>) {
+    TAKES.with(|takes| takes.set(took));
 }
 
 /// Whose counts a check's thread's makings, releases and submissions are.
@@ -151,6 +165,8 @@ impl OwnCall {
 impl Drop for OwnCall {
     fn drop(&mut self) {
         let took = self.0.elapsed();
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        let took = TAKES.with(Cell::get).unwrap_or(took);
         let ended = Instant::now();
         OWED.with(|owed| owed.set((owed.get().0.saturating_add(took), Some(ended))));
     }

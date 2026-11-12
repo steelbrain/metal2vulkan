@@ -86,6 +86,10 @@ struct Shared {
     /// (`tests/posted_frees.rs`, `tests/spares.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     held: crate::freed_memory::held::Held,
+    /// The crate's device tests' stand-in for how long each block's free takes
+    /// ([`FreeThread::frees_take`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    takes: Mutex<Option<std::time::Duration>>,
 }
 
 #[derive(Default)]
@@ -163,6 +167,8 @@ impl FreeThread {
                 paced_nanos: AtomicU64::new(0),
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 held: crate::freed_memory::held::Held::default(),
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                takes: Mutex::new(None),
             }),
             thread: Mutex::new(None),
         }
@@ -326,6 +332,13 @@ impl FreeThread {
         &self.shared.held
     }
 
+    /// Count each block's free from here on as taking `took`, owed so to the thread's next pace
+    /// whatever the free measures (`step_aside::own_calls_take`); `None` measures them again.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn frees_take(&self, took: Option<std::time::Duration>) {
+        *lock(&self.shared.takes) = took;
+    }
+
     /// The frees posted and not yet run, and whether the thread was started and not yet joined.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn pending(&self) -> (usize, bool) {
@@ -374,6 +387,8 @@ fn run(shared: &Shared) {
                 }
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 shared.held.pass();
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                crate::step_aside::own_calls_take(*lock(&shared.takes));
                 // The free is a section of the exit guard: while the process exits, the block,
                 // and the pages it was imported from, stay to its end (`exit_guard`).
                 match exit_guard::enter() {

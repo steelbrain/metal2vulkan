@@ -137,6 +137,9 @@ fn an_allocation_at_the_limit_waits_for_the_posted_frees_and_is_made() {
         .map(|_| (device.new_buffer(dedicated(), ResourceOptions::private())).unwrap())
         .collect();
     let before = device.work_counts();
+    // Each free owes its next pace the longest a pace waits ([`FreeThread::frees_take`]), so
+    // that the frees' running unpaced below is the waiting allocation's doing.
+    frees.frees_take(Some(Duration::MAX));
     let hold = Hold::new(&frees);
     drop(buffers);
     frees.held().until_waiting(1, WAIT);
@@ -178,8 +181,11 @@ fn an_allocation_at_the_limit_waits_for_the_posted_frees_and_is_made() {
 }
 
 /// Posted in a burst, the frees run one after another, each but the first after a wait as long
-/// as the free before it took, less the time since it ended, so that the device's other threads'
-/// submissions go between them (`step_aside::pace`).
+/// as the free before it took, less the time since it ended, at most `step_aside::MOST_ASIDE`, so
+/// that the device's other threads' submissions go between them (`step_aside::pace`). A device's
+/// free may end sooner than the thread reaches its next pace, which then owes nothing, so each
+/// free here counts as taking longer than any pace waits ([`FreeThread::frees_take`]): each of
+/// the two behind another waits the longest a pace waits.
 #[test]
 fn a_burst_of_posted_frees_runs_paced() {
     let device = device();
@@ -187,21 +193,25 @@ fn a_burst_of_posted_frees_runs_paced() {
     let buffers: Vec<_> = (0..3)
         .map(|_| (device.new_buffer(dedicated(), ResourceOptions::private())).unwrap())
         .collect();
-    let before = device.work_counts();
+    frees.frees_take(Some(Duration::MAX));
     let hold = Hold::new(&frees);
     drop(buffers);
     frees.held().until_waiting(1, WAIT);
     assert_eq!(frees.pending().0, 3, "the three frees wait");
+    // Counted from here: the first free's pace, owed what the thread freed before the burst,
+    // went before its hold.
+    let before = device.work_counts();
     drop(hold);
     until("the posted frees", || frees.pending().0 == 0);
     let after = device.work_counts();
     let paced = after.memory_frees_paced - before.memory_frees_paced;
     let nanos = after.memory_frees_paced_nanos - before.memory_frees_paced_nanos;
-    assert!(
-        (1..=2).contains(&paced),
+    assert_eq!(
+        paced, 2,
         "{paced} of the two frees behind another waited first"
     );
-    assert!(nanos > 0, "the paced frees waited");
+    let most = u64::try_from(crate::step_aside::MOST_ASIDE.as_nanos()).unwrap();
+    assert_eq!(nanos, 2 * most, "each waited the longest a pace waits");
     eprintln!(
         "POSTED-FREES: {paced} of a burst's two frees behind another waited first, {:.3} ms in all",
         nanos as f64 / 1e6
