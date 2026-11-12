@@ -170,7 +170,7 @@ pub(crate) fn drew(device: &Device, compiled: &RenderPipeline, stages: &[(Stage,
             let text = format!(
                 "metal2vulkan: shadow: the first draw that binds the {:?} texture of {}x{} and {} \
                  levels, object {id}, through {kind}, at {stage:?} texture {index}: its function \
-                 {} it{samples}",
+                 {} it{samplers}",
                 texture.pixel_format(),
                 texture.width(),
                 texture.height(),
