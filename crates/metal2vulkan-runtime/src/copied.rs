@@ -2051,14 +2051,23 @@ fn each_block(
     }
 }
 
+/// A test's switch that sets the most threads a comparison runs on ([`split_threads`]) in place
+/// of [`SPLIT_THREADS`] where not zero: a benchmark's measure of another count.
+#[cfg(test)]
+pub(crate) static SPLIT_THREADS_FROM: AtomicUsize = AtomicUsize::new(0);
+
 /// The threads a comparison may run on: [`SPLIT_THREADS`], or as many as the host runs at once
 /// where fewer.
 fn split_threads() -> usize {
-    static THREADS: OnceLock<usize> = OnceLock::new();
-    *THREADS.get_or_init(|| {
-        let host = std::thread::available_parallelism().map_or(1, |threads| threads.get());
-        host.min(SPLIT_THREADS)
-    })
+    static HOST: OnceLock<usize> = OnceLock::new();
+    let host = *HOST
+        .get_or_init(|| std::thread::available_parallelism().map_or(1, |threads| threads.get()));
+    #[cfg(test)]
+    match SPLIT_THREADS_FROM.load(Ordering::Relaxed) {
+        0 => {}
+        threads => return host.min(threads),
+    }
+    host.min(SPLIT_THREADS)
 }
 
 /// Run `work` over the blocks of a copy whose tags are `tags`, from its block `first`, split into

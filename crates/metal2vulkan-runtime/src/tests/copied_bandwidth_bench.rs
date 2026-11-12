@@ -13,10 +13,12 @@
 //! - `cpu-then-read`: the CPU rewrites every float of the pages, then the kernel reads them;
 //! - `both-write`: the CPU writes a word of every 16th page, then the kernel rewrites in place.
 //!
-//! Each runs over a copy with no log of its pages' writes, over one with a log the CPU's writes
-//! are told to (`copied_log::TestLog`, as a guest RAM's dirty log), and, as the control, over a
-//! `Shared` buffer of the device's own (host memory the GPU reaches across the bus). Printed as
-//! the median of the passes after the first two (`COPIED-BW`): the buffer's bytes a second over
+//! Each runs over a copy with no log of its pages' writes, over the same with its comparisons on
+//! up to eight threads (`copied-t8`, `copied::SPLIT_THREADS_FROM`), over one with a log the CPU's
+//! writes are told to (`copied_log::TestLog`, as a guest RAM's dirty log), and, as the control,
+//! over a `Shared` buffer of the device's own (host memory the GPU reaches across the bus).
+//! Printed as the median of the passes after the first two (`COPIED-BW`): the buffer's bytes a
+//! second over
 //! the pass's wall time (the GB/s a test that times its command buffers reports), its commit and
 //! the copy in in it, the GPU's time, the completion's merge back and its reads back of a base's
 //! blocks, and the rest of the wait (the latency of the GPU's start and of the completion's
@@ -32,7 +34,7 @@
 //! of device the cfg selects. A device that imports no host memory says so and passes.
 
 use super::copied_log::TestLog;
-use crate::copied::clock;
+use crate::copied::{self, clock};
 use crate::{Buffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Device};
 use crate::{DeviceKind, DeviceOptions, HostMemory, ImportGate, PipelineOptions};
 use crate::{ResourceOptions, Size, WorkCounts};
@@ -87,8 +89,9 @@ impl Pattern {
 /// What a row's buffer is.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Subject {
-    /// A copied host buffer over pages of the bench's own, logged or not.
-    Copied { logged: bool },
+    /// A copied host buffer over pages of the bench's own, logged or not, its comparisons on at
+    /// most `threads` threads (`copied::SPLIT_THREADS_FROM`; 0: the runtime's own count).
+    Copied { logged: bool, threads: usize },
     /// A `Shared` buffer of the device's own.
     Own,
 }
@@ -96,8 +99,15 @@ enum Subject {
 impl Subject {
     fn name(self) -> &'static str {
         match self {
-            Subject::Copied { logged: false } => "copied",
-            Subject::Copied { logged: true } => "copied-logged",
+            Subject::Copied {
+                logged: false,
+                threads: 0,
+            } => "copied",
+            Subject::Copied {
+                logged: false,
+                threads: _,
+            } => "copied-t8",
+            Subject::Copied { logged: true, .. } => "copied-logged",
             Subject::Own => "own-shared",
         }
     }
@@ -295,7 +305,7 @@ fn row(
     let log = Arc::new(TestLog::default());
     let pages = Pages::new(length);
     let buffer = match subject {
-        Subject::Copied { logged } => {
+        Subject::Copied { logged, .. } => {
             fill(pages.pointer, floats, |i| i as f32);
             let refuse: ImportGate = Arc::new(|_| false);
             // SAFETY: the pages outlive the buffer (dropped after it), and only its commands and
@@ -327,7 +337,10 @@ fn row(
         }
     };
     let contents = buffer.contents().unwrap();
-    let logged = matches!(subject, Subject::Copied { logged: true }).then_some(&*log);
+    let logged = matches!(subject, Subject::Copied { logged: true, .. }).then_some(&*log);
+    if let Subject::Copied { threads, .. } = subject {
+        copied::SPLIT_THREADS_FROM.store(threads, Ordering::Relaxed);
+    }
     let (mut walls, mut commits, mut gpus, mut waits) = (vec![], vec![], vec![], vec![]);
     let (mut copy_ins, mut merges, mut reads_back) = (vec![], vec![], vec![]);
     let mut phases = [0u64; 8];
@@ -436,6 +449,7 @@ fn row(
             subject.name()
         );
     }
+    copied::SPLIT_THREADS_FROM.store(0, Ordering::Relaxed);
     drop(buffer);
     drop(pages);
 }
@@ -456,8 +470,18 @@ fn copied_bandwidth_bench() {
         .unwrap();
     let queue = device.new_command_queue().unwrap();
     let subjects = [
-        Subject::Copied { logged: false },
-        Subject::Copied { logged: true },
+        Subject::Copied {
+            logged: false,
+            threads: 0,
+        },
+        Subject::Copied {
+            logged: false,
+            threads: 8,
+        },
+        Subject::Copied {
+            logged: true,
+            threads: 0,
+        },
         Subject::Own,
     ];
     for length in LENGTHS {
