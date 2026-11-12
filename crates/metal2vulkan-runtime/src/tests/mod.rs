@@ -195,6 +195,8 @@ mod exported_textures;
 mod families;
 mod fences;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod fetch_composite;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod fill_queue;
 mod fill_value;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -278,6 +280,8 @@ mod host_settable_event_waits;
 mod host_shadow;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_step_neutrals;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod icon_levels;
 mod image_barriers;
 mod image_plan;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
