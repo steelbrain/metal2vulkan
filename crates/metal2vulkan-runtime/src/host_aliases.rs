@@ -13,9 +13,16 @@
 //!   buffer's key as the memory's ([`Alias`]), and each command's uses of a buffer that joined
 //!   carry a use of the memory's key too, of the same bytes and access ([`HostAliases::augment`],
 //!   `EncoderCore`). The tracker orders those as one resource's, inside an encoder, between
-//!   encoders and command buffers, and across queues as it orders any. The first buffer's own
-//!   uses name the memory's key already, and its work from before the second buffer was made is
-//!   ordered against the second's.
+//!   encoders and command buffers, and across queues as it orders any submitted batch. The first
+//!   buffer's own uses name the memory's key already, and its work from before the second buffer
+//!   was made is ordered against the second's.
+//! - **Not held across queues.** An added use is marked (`Use::aliased`), and the scheduler's
+//!   order across queues (`scheduler/order.rs`, `tracker::Footprint`) leaves it out: a batch the
+//!   runtime holds (for its pipelines' making, a host step, its checks) holds back no later commit
+//!   of another queue that meets it only over shared host bytes, as Metal orders two resources
+//!   over one IOSurface across queues only as the program orders them (above). Once both are
+//!   submitted, the tracker orders them in submission order. A use joined with one its command
+//!   named stays named, so two batches that both name a resource still wait in commit order.
 //! - **One memory, one import.** A buffer that joins a memory, of the memory class of a live
 //!   import of it, lies in that import's `VkBuffer` (`HostImport`, `Device::buffer_in_import`):
 //!   one resource to the driver, where the tracker's barriers are not all the ordering there is.
@@ -247,6 +254,7 @@ impl Takes {
         if let Some(key) = self.joined {
             add(Use {
                 key,
+                aliased: true,
                 ..used.clone()
             });
         }
@@ -257,6 +265,7 @@ impl Takes {
                     add(Use {
                         key,
                         range: UseRange::Bytes(shared),
+                        aliased: true,
                         ..used.clone()
                     });
                 }
@@ -819,6 +828,7 @@ pub(super) fn augmented(
                             add(Use {
                                 key,
                                 range: UseRange::Bytes(range),
+                                aliased: true,
                                 ..used.clone()
                             });
                         }

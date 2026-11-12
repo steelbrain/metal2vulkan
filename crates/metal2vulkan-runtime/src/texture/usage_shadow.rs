@@ -244,6 +244,7 @@ impl Texture {
             range: shadow.copies.shadow_range.clone(),
             read,
             write,
+            aliased: false,
         })
     }
 

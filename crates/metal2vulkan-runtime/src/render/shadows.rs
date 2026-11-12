@@ -990,6 +990,7 @@ mod tests {
             range: UseRange::Bytes(range),
             read,
             write: written,
+            aliased: false,
         }
     }
 

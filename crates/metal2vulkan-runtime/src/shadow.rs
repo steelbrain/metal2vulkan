@@ -2155,6 +2155,7 @@ impl ShadowCopy {
                         range,
                         read,
                         write,
+                        aliased: false,
                     },
                     c,
                 ),

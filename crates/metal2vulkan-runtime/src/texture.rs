@@ -5996,6 +5996,7 @@ impl Texture {
             },
             read,
             write,
+            aliased: false,
         }
     }
 

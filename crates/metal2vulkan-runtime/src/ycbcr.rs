@@ -928,6 +928,7 @@ impl YCbCrConversion {
                     vk::PipelineStageFlags2::TRANSFER | vk::PipelineStageFlags2::COMPUTE_SHADER,
                     vk::AccessFlags2::TRANSFER_WRITE | vk::AccessFlags2::SHADER_STORAGE_WRITE,
                 ),
+                aliased: false,
             },
             image,
         ]
@@ -1233,6 +1234,7 @@ impl YCbCrWriteBack {
                     both,
                     vk::AccessFlags2::TRANSFER_WRITE | vk::AccessFlags2::SHADER_STORAGE_WRITE,
                 ),
+                aliased: false,
             },
             Use::reads(
                 copies.shadow_key,

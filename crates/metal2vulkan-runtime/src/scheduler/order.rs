@@ -12,9 +12,12 @@
 //!   the order it schedules the command buffers, which is their commit order unless one waits
 //!   for an event (its tracking across queues). The runtime's tracker plans each batch as it is
 //!   submitted, so a batch held for a reason of the runtime's own (its host step, its submission
-//!   checks) must not let a later commit's batch that conflicts with it (a tracked resource's range
-//!   that one of them writes, or a fence) go before it: such a head is [`behind`](Order::is_behind)
-//!   it, and waits.
+//!   checks, its pipelines' making) must not let a later commit's batch that conflicts with it (a
+//!   tracked resource's range that one of them writes, or a fence) go before it: such a head is
+//!   [`behind`](Order::is_behind) it, and waits. A resource both name, not two over the same host
+//!   bytes: Metal orders two textures over one IOSurface across queues only as the program
+//!   orders them (`host_aliases.rs`), so a later commit that meets a held batch only through
+//!   shared pages goes (`tracker::Footprint`), and the tracker orders the two in submission order.
 //! - **Which batches keep their place.** Every batch of a line up to the first that waits for
 //!   an event value not yet reached by a submitted signal or the host, or for a binary
 //!   semaphore whose signal is not yet submitted. That one and those after it wait for the

@@ -1121,6 +1121,7 @@ impl ShadowMerge {
                 range: UseRange::Bytes(self.merged.written.clone()),
                 read,
                 write,
+                aliased: false,
             },
         ]
     }

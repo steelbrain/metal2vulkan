@@ -28,6 +28,14 @@ fn write(key: ResourceKey, bytes: std::ops::Range<u64>) -> Use<ResourceKey> {
     Use::writes(key, true, UseRange::Bytes(bytes), copy())
 }
 
+/// `used`, as the aliases add it for a use of another key (`Use::aliased`).
+fn added(used: Use<ResourceKey>) -> Use<ResourceKey> {
+    Use {
+        aliased: true,
+        ..used
+    }
+}
+
 /// A buffer made over exactly the bytes a live one covers joins it, and keeps the key it joined
 /// while the first lives or not; one over other bytes, overlapping or inside, does not.
 #[test]
@@ -84,11 +92,11 @@ fn a_joined_buffers_uses_carry_its_memorys_key() {
     let uses = [write(second, 0..64), untracked.clone(), write(apart, 0..64)];
     let augmented = aliases.augment(&uses).unwrap();
     let mut want = uses.to_vec();
-    want.push(write(first, 0..64));
-    want.push(Use {
+    want.push(added(write(first, 0..64)));
+    want.push(added(Use {
         key: first,
         ..untracked
-    });
+    }));
     assert_eq!(augmented, want);
     aliases.forget(second);
     assert_eq!(aliases.augment(&uses), None);
@@ -583,13 +591,13 @@ fn keys_over_one_range_share_the_first_placed_there() {
     let uses = [sample(second, 0..0x7e_9000)];
     assert_eq!(
         aliases.augment(&uses),
-        Some(vec![uses[0].clone(), sample(first, 0..0x7e_9000)])
+        Some(vec![uses[0].clone(), added(sample(first, 0..0x7e_9000))])
     );
     assert_eq!(aliases.augment(&[write(first, 0..0x7e_9000)]), None);
     aliases.forget(first);
     assert_eq!(
         aliases.augment(&uses),
-        Some(vec![uses[0].clone(), sample(first, 0..0x7e_9000)])
+        Some(vec![uses[0].clone(), added(sample(first, 0..0x7e_9000))])
     );
     aliases.forget(second);
     aliases.place(third, surface);
@@ -613,7 +621,7 @@ fn a_use_takes_the_keys_of_the_ranges_its_bytes_meet_clipped() {
         Some(vec![
             uses[0].clone(),
             uses[1].clone(),
-            write(b, 0x1000..0x3000)
+            added(write(b, 0x1000..0x3000))
         ])
     );
     // b's untracked read of its first page meets a's last.
@@ -622,11 +630,11 @@ fn a_use_takes_the_keys_of_the_ranges_its_bytes_meet_clipped() {
         aliases.augment(std::slice::from_ref(&untracked)),
         Some(vec![
             untracked.clone(),
-            Use {
+            added(Use {
                 key: a,
                 range: UseRange::Bytes(0x4000..0x5000),
                 ..untracked.clone()
-            }
+            })
         ])
     );
     assert_eq!(aliases.augment(&[write(a, 0..0x1000)]), None);
@@ -635,7 +643,7 @@ fn a_use_takes_the_keys_of_the_ranges_its_bytes_meet_clipped() {
     assert_eq!(aliases.augment(&[write(a, 0x5000..0x7000)]), None);
     assert_eq!(
         aliases.augment(&[write(c, 0..0x1000)]),
-        Some(vec![write(c, 0..0x1000), write(b, 0..0x800)])
+        Some(vec![write(c, 0..0x1000), added(write(b, 0..0x800))])
     );
     aliases.unplace(b);
     assert_eq!(aliases.augment(&[write(c, 0..0x1000)]), None);
@@ -701,8 +709,8 @@ fn a_use_reads_the_ranges_its_range_keeps_while_few() {
     let carried = vec![
         uses[0].clone(),
         uses[1].clone(),
-        sample(whole, 0x100..0x200),
-        sample(whole, 0x1000..0x3000),
+        added(sample(whole, 0x100..0x200)),
+        added(sample(whole, 0x1000..0x3000)),
     ];
     for _ in 0..100 {
         assert_eq!(aliases.augment(&uses), Some(carried.clone()));
@@ -711,8 +719,8 @@ fn a_use_reads_the_ranges_its_range_keeps_while_few() {
     let all = [write(whole, 0..0x3000)];
     let met = vec![
         all[0].clone(),
-        write(indices, 0..0x1000),
-        write(rects, 0..0x2000),
+        added(write(indices, 0..0x1000)),
+        added(write(rects, 0..0x2000)),
     ];
     assert_eq!(aliases.augment(&all), Some(met));
     assert_eq!(aliases.range_lookups(), 0);
@@ -726,8 +734,8 @@ fn a_use_reads_the_ranges_its_range_keeps_while_few() {
         aliases.augment(&[write(whole, 0x1800..0x1c00)]),
         Some(vec![
             write(whole, 0x1800..0x1c00),
-            write(quarters[3], 0..0x400),
-            write(rects, 0x800..0xc00),
+            added(write(quarters[3], 0..0x400)),
+            added(write(rects, 0x800..0xc00)),
         ])
     );
     assert_eq!(aliases.range_lookups(), 1);
@@ -735,8 +743,8 @@ fn a_use_reads_the_ranges_its_range_keeps_while_few() {
         aliases.augment(&[sample(quarters[1], 0..0x400)]),
         Some(vec![
             sample(quarters[1], 0..0x400),
-            sample(indices, 0x800..0xc00),
-            sample(whole, 0x800..0xc00),
+            added(sample(indices, 0x800..0xc00)),
+            added(sample(whole, 0x800..0xc00)),
         ])
     );
     assert_eq!(aliases.range_lookups(), 1);
@@ -784,7 +792,7 @@ fn model_sharing(
         return taken;
     }
     if range_key != key {
-        taken.push(write(range_key, bytes.clone()));
+        taken.push(added(write(range_key, bytes.clone())));
     }
     let (from, to) = (own.0 + bytes.start.min(own.1), own.0 + bytes.end.min(own.1));
     let mut others: Vec<(&(u64, u64), &(ResourceKey, usize, bool))> =
@@ -793,7 +801,7 @@ fn model_sharing(
     for (other, (other_key, _, _)) in others {
         let (lo, hi) = (from.max(other.0), to.min(other.0 + other.1));
         if lo < hi {
-            taken.push(write(*other_key, lo - other.0..hi - other.0));
+            taken.push(added(write(*other_key, lo - other.0..hi - other.0)));
         }
     }
     taken
@@ -933,7 +941,7 @@ fn a_quiet_key_is_looked_up_again_once_a_buffer_moves_or_joins() {
         let crowded = [write(second, bytes.clone())];
         assert_eq!(
             augment(&crowded),
-            Some(vec![crowded[0].clone(), write(first, bytes)])
+            Some(vec![crowded[0].clone(), added(write(first, bytes))])
         );
     }
     assert_eq!(
@@ -945,7 +953,7 @@ fn a_quiet_key_is_looked_up_again_once_a_buffer_moves_or_joins() {
     aliases.place(moved, (0x40_0800, 0x1000));
     assert_eq!(
         augment(&used),
-        Some(vec![used[0].clone(), write(moved, 0..0x40)])
+        Some(vec![used[0].clone(), added(write(moved, 0..0x40))])
     );
     // A key found quiet, then joining a live buffer's memory.
     let (owner, joining) = (ResourceKey::new(), ResourceKey::new());
@@ -958,7 +966,7 @@ fn a_quiet_key_is_looked_up_again_once_a_buffer_moves_or_joins() {
     );
     assert_eq!(
         augment(&joined),
-        Some(vec![joined[0].clone(), write(owner, 0..0x40)])
+        Some(vec![joined[0].clone(), added(write(owner, 0..0x40))])
     );
 }
 
@@ -975,7 +983,7 @@ fn an_ended_encoder_s_keys_go_to_the_next_while_nothing_changes() {
     aliases.place(second, (0x10_0000, 0x1000));
     aliases.place(alone, (0x40_0000, 0x1000));
     let (quiet_use, crowded_use) = ([write(alone, 0x800..0x840)], [write(second, 0x80..0xc0)]);
-    let crowded_takes = vec![crowded_use[0].clone(), write(first, 0x80..0xc0)];
+    let crowded_takes = vec![crowded_use[0].clone(), added(write(first, 0x80..0xc0))];
     // An encoder with nothing given back looks its two keys up, once each.
     let mut encoder = aliases.quiet();
     assert!(!aliases.augment_into(&quiet_use, &mut all, Some(&mut encoder)));
@@ -1002,7 +1010,10 @@ fn an_ended_encoder_s_keys_go_to_the_next_while_nothing_changes() {
     aliases.place(moved, (0x40_0800, 0x1000));
     let mut encoder = aliases.quiet();
     assert!(aliases.augment_into(&quiet_use, &mut all, Some(&mut encoder)));
-    assert_eq!(all, vec![quiet_use[0].clone(), write(moved, 0..0x40)]);
+    assert_eq!(
+        all,
+        vec![quiet_use[0].clone(), added(write(moved, 0..0x40))]
+    );
     assert_eq!(
         aliases.lookups(),
         3,

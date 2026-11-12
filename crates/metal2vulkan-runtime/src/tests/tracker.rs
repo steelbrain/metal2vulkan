@@ -1910,6 +1910,46 @@ fn a_batch_conflicts_with_an_earlier_one_where_a_shared_range_is_written() {
     assert!(ordered(Some(&level0), Some(&both)));
 }
 
+/// A use the host aliases added for another resource over the same host bytes (`Use::aliased`,
+/// `host_aliases.rs`) orders no batch across queues: Metal orders two resources over one memory
+/// (two textures over one IOSurface) across queues only as the program orders them. Two batches
+/// that both name a resource still run in commit order, and a named use joined with an added one
+/// of the same range in one encoder stays named.
+#[test]
+fn a_use_the_host_aliases_added_orders_no_batch_across_queues() {
+    let added = |used: Use<Key>| Use {
+        aliased: true,
+        ..used
+    };
+    // Buffers 1 and 3 joined buffer 2's memory: their uses carry an added use of 2's key.
+    let through_one = footprint(&[one(&[
+        writes(1, bytes(0..64), copy_write()),
+        added(writes(2, bytes(0..64), copy_write())),
+    ])]);
+    let through_three = footprint(&[one(&[
+        reads(3, bytes(0..64), shader_read()),
+        added(reads(2, bytes(0..64), shader_read())),
+    ])]);
+    let two = footprint(&[one(&[writes(2, bytes(0..64), shader_write())])]);
+    assert!(!ordered(Some(&through_one), Some(&two)));
+    assert!(!ordered(Some(&two), Some(&through_one)));
+    assert!(!ordered(Some(&through_one), Some(&through_three)));
+    assert!(!ordered(Some(&through_three), Some(&through_one)));
+    // Buffer 1 named on both sides: commit order, the added uses beside it changing nothing.
+    let one_again = footprint(&[one(&[
+        reads(1, bytes(0..4), shader_read()),
+        added(reads(2, bytes(0..4), shader_read())),
+    ])]);
+    assert!(ordered(Some(&through_one), Some(&one_again)));
+    // A command naming 2 beside another's use the aliases added of the same bytes: named.
+    let named = footprint(&[encoder(&[
+        &[added(reads(2, bytes(0..64), shader_read()))],
+        &[reads(2, bytes(0..64), shader_read())],
+    ])]);
+    assert!(ordered(Some(&two), Some(&named)));
+    assert!(ordered(Some(&named), Some(&two)));
+}
+
 /// A fence one batch updates orders it with a batch that waits for or updates it, whatever the
 /// resources; a batch whose uses are not known yet conflicts with any that uses a tracked
 /// resource or names a fence, and with none that does neither.
