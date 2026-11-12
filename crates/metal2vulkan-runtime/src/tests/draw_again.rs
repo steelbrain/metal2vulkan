@@ -1385,6 +1385,77 @@ fn draws_after_texture_and_sampler_changes_rebind_what_every_step_binds() {
     }
 }
 
+/// Calls that bind each of their slots as it is bound already change nothing
+/// (`argument_table::Stamp`): draws of `tob_sample`'s rectangle after calls that bind the same
+/// vertex buffer at the same offset, the same texture and the same sampler state with the same
+/// clamps draw again (`WorkCounts::draws_as_before`), with the same commands of every kind and
+/// the same pixels as the same draws after a call that changes nothing for them, each of which
+/// takes every step. The same sampler state set again with other clamps at each draw is a change:
+/// those draws do not draw again.
+#[test]
+fn draws_after_calls_that_bind_as_bound_draw_again() {
+    let scratch = Scratch::new("draw-again-bound-as-bound");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = state(&device, "engine/tob_renders.ll", ("tob_rect", "tob_sample"));
+    let rectangles = rectangles_from_columns(&device);
+    let textures = textures(&device);
+    let sampler = sampler_addressing(&device, SamplerAddressMode::ClampToEdge, f32::MAX);
+    let draws = |encoder: &mut RenderCommandEncoder,
+                 between: &dyn Fn(&mut RenderCommandEncoder)| {
+        encoder.set_render_pipeline_state(&state).unwrap();
+        encoder.set_vertex_buffer(Some(&rectangles), 0, 0).unwrap();
+        encoder.set_fragment_texture(Some(&textures[0]), 0).unwrap();
+        encoder
+            .set_fragment_sampler_state(Some(&sampler), 0)
+            .unwrap();
+        for at in 0..DRAWS {
+            if at > 0 {
+                between(encoder);
+            }
+            rectangle(encoder);
+        }
+    };
+    let as_bound = |encoder: &mut RenderCommandEncoder| {
+        encoder.set_vertex_buffer(Some(&rectangles), 0, 0).unwrap();
+        encoder
+            .set_fragment_textures(&[Some(&textures[0])], 0)
+            .unwrap();
+        encoder
+            .set_fragment_sampler_states(&[Some(&sampler)], None, 0)
+            .unwrap();
+    };
+    let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
+    // Clamps of levels [0, 1000] and [0, 2000] in turn, which the 4x4 texture's one level meets
+    // alike.
+    let clamp = std::cell::Cell::new(0.0f32);
+    let clamped = |encoder: &mut RenderCommandEncoder| {
+        clamp.set(3000.0 - clamp.get());
+        let clamps: (&[f32], &[f32]) = (&[0.0], &[clamp.get()]);
+        encoder
+            .set_fragment_sampler_states(&[Some(&sampler)], Some(clamps), 0)
+            .unwrap();
+    };
+    for between in [
+        &as_bound as &dyn Fn(&mut RenderCommandEncoder),
+        &forgets,
+        &clamped,
+    ] {
+        warm(&device, |encoder| draws(encoder, between));
+    }
+    let as_before = |counts: &WorkCounts| counts.draws_as_before;
+    let again = run(&device, |encoder| draws(encoder, &as_bound));
+    let every = run(&device, |encoder| draws(encoder, &forgets));
+    assert_eq!(again.counted(as_before), drawn_alone(HITS));
+    assert_eq!(every.counted(as_before), 0);
+    assert_eq!(again.commands, every.commands);
+    assert_eq!(again.commands["cmd_draw"], DRAWS);
+    assert_eq!(again.words, every.words, "the pixels of the draws");
+    let reclamped = run(&device, |encoder| draws(encoder, &clamped));
+    assert_eq!(reclamped.counted(as_before), 0);
+    assert_eq!(reclamped.words, every.words, "the pixels of the draws");
+}
+
 /// What each of `draws` draws of `state`'s rectangles from `rectangles` (as
 /// [`offset_rectangles`]' in one color, the `at`th of the rectangle `at` modulo [`DRAWS`], and
 /// `between(at)` called before the `at`th draw but the first) changed of the device's counts `of`

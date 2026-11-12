@@ -330,7 +330,8 @@ impl Clone for ArgumentTable {
 /// What an argument table binds, named by a number drawn afresh for each new table (a copy
 /// included) and at each call that may change what it binds, which no other table of the process
 /// takes ([`ArgumentTable::stamp`]): while a table's stamp holds, it binds what it bound, by
-/// identity. A table made for one command (an execution's own buffers) is filled in place before
+/// identity. A call that binds each of its slots as it is bound already (the same object, offset,
+/// per-bind stride and clamps) changes nothing and draws none. A table made for one command (an execution's own buffers) is filled in place before
 /// any command reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Stamp(u64);
@@ -687,6 +688,16 @@ fn set_bare_handle<T: Clone + PartialEq>(
     }
 }
 
+/// Whether a setter of `values` from index `first` binds each index as it is bound already, as
+/// `held(at, index, value)` tells of the value at place `at`: such a call changes nothing, and
+/// the table keeps its stamp ([`ArgumentTable::changed`]).
+fn binds_as<T>(values: &[T], first: u32, held: impl Fn(usize, u32, &T) -> bool) -> bool {
+    (values.iter().enumerate()).all(|(at, value)| {
+        let index = u32::try_from(at).ok().and_then(|at| first.checked_add(at));
+        index.is_some_and(|index| held(at, index, value))
+    })
+}
+
 /// `buffer` bound at `offset`, read at `attribute_stride`, as the bind layer reads it
 /// ([`ArgumentTable::stage_table`]), or `None` where it is bound past its length.
 fn bound_buffer(
@@ -784,7 +795,8 @@ impl ArgumentTable {
 
     /// A call that may change the slots of `class` at `indices` (before its checks: a refused one
     /// may have changed nothing, which a reader then reads again): a fresh stamp, and the slots
-    /// noted ([`Changes`]).
+    /// noted ([`Changes`]). A call that binds each slot as it is bound already ([`binds_as`])
+    /// takes none.
     fn changed(&mut self, class: SlotClass, indices: Range<u32>) {
         self.changed_as(class, indices, false);
     }
@@ -804,6 +816,24 @@ impl ArgumentTable {
     fn binds_buffer(&self, index: u32, buffer: &Buffer) -> bool {
         (self.buffers.get(&index)).is_some_and(|(bound, _)| bound == buffer)
             && !self.function_tables.contains_key(&index)
+    }
+
+    /// Whether buffer slot `index` holds what a buffer setter leaves there binding `buffer` at
+    /// `offset` with the per-bind stride `stride`: that buffer at that offset, or no buffer where
+    /// `buffer` is `None`, that stride, and no function table, null table or bytes. Such a call
+    /// changes nothing.
+    fn holds_buffer(
+        &self,
+        index: u32,
+        (buffer, offset): (Option<&Buffer>, u64),
+        stride: Option<u32>,
+    ) -> bool {
+        let bound = (self.buffers.get(&index)).map(|(bound, at)| (bound, *at));
+        bound == buffer.map(|buffer| (buffer, offset))
+            && self.attribute_strides.get(&index).copied() == stride
+            && !self.function_tables.contains_key(&index)
+            && !self.null_tables.contains(&index)
+            && !self.bytes.contains_key(&index)
     }
 
     /// A call through `core` binds `object`: where `core` does not hold it (from a retain of its
@@ -883,8 +913,11 @@ impl ArgumentTable {
         stride: Option<u32>,
         index: u32,
     ) -> Result<(), Error> {
-        let same = buffer.is_some_and(|buffer| self.binds_buffer(index, buffer));
-        self.changed_as(SlotClass::Buffer, index..index.saturating_add(1), same);
+        // A call that binds the slot as it is bound already changes nothing.
+        if !self.holds_buffer(index, (buffer, offset), stride) {
+            let same = buffer.is_some_and(|buffer| self.binds_buffer(index, buffer));
+            self.changed_as(SlotClass::Buffer, index..index.saturating_add(1), same);
+        }
         check_index(call, index, BUFFER_SLOTS)?;
         if let Some(buffer) = buffer {
             self.check_buffer(core, call, buffer, offset)?;
@@ -927,7 +960,20 @@ impl ArgumentTable {
         strides: Option<&[u64]>,
         first: u32,
     ) -> Result<(), Error> {
-        self.changed(SlotClass::Buffer, span(first, buffers.len()));
+        let held = binds_as(buffers, first, |at, index, buffer| {
+            let offset = offsets.get(at).copied();
+            let stride = strides.map(|strides| strides.get(at).copied().map(per_bind_stride));
+            match (offset, stride) {
+                (Some(offset), None) => self.holds_buffer(index, (*buffer, offset), None),
+                (Some(offset), Some(Some(stride))) => {
+                    self.holds_buffer(index, (*buffer, offset), Some(stride))
+                }
+                _ => false,
+            }
+        });
+        if !held {
+            self.changed(SlotClass::Buffer, span(first, buffers.len()));
+        }
         if buffers.len() != offsets.len() || strides.is_some_and(|s| s.len() != buffers.len()) {
             return Err(invalid(call, Problem::LengthMismatch));
         }
@@ -1169,7 +1215,13 @@ impl ArgumentTable {
         textures: &[Option<&Texture>],
         first: u32,
     ) -> Result<(), Error> {
-        self.changed(SlotClass::Texture, span(first, textures.len()));
+        // A call that binds each slot as it is bound already changes nothing.
+        let held = binds_as(textures, first, |_, index, texture| {
+            self.textures.get(&index) == *texture
+        });
+        if !held {
+            self.changed(SlotClass::Texture, span(first, textures.len()));
+        }
         check_range(call, first, textures.len(), TEXTURE_SLOTS)?;
         for texture in textures.iter().flatten() {
             core.check_device(call, texture.device())?;
@@ -1227,7 +1279,22 @@ impl ArgumentTable {
         clamps: Option<(&[f32], &[f32])>,
         first: u32,
     ) -> Result<(), Error> {
-        self.changed(SlotClass::Sampler, span(first, samplers.len()));
+        // A call that binds each slot as it is bound already, with the same clamps, changes
+        // nothing.
+        let held = binds_as(samplers, first, |at, index, sampler| {
+            let clamp = match clamps {
+                Some((min, max)) => match (min.get(at), max.get(at)) {
+                    (Some(&min), Some(&max)) => Some([min, max]),
+                    _ => return false,
+                },
+                None => None,
+            };
+            let bound = self.samplers.get(&index);
+            bound.map(|(state, held)| (state, *held)) == sampler.map(|state| (state, clamp))
+        });
+        if !held {
+            self.changed(SlotClass::Sampler, span(first, samplers.len()));
+        }
         if let Some((min, max)) = clamps {
             if min.len() != samplers.len() || max.len() != samplers.len() {
                 return Err(invalid(call, Problem::LengthMismatch));
