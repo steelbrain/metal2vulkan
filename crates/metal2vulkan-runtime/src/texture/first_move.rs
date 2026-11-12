@@ -1890,10 +1890,7 @@ unsafe fn record_fills(
 }
 
 /// `held`, which no submission made, given back to `moves`, still to be done.
-fn give_back(moves: &FirstMoves, held: Vec<Held>) {
-    if held.is_empty() {
-        return;
-    }
+fn give_back(moves: &FirstMoves, held: impl Iterator<Item = Held>) {
     let mut given = Vec::new();
     for held in held {
         match held {
@@ -1909,13 +1906,14 @@ fn give_back(moves: &FirstMoves, held: Vec<Held>) {
             }
         }
     }
-    lock(&moves.waiting).extend(given);
+    if !given.is_empty() {
+        lock(&moves.waiting).extend(given);
+    }
 }
 
 impl Drop for Taken<'_> {
     fn drop(&mut self) {
-        let held: Vec<Held> = self.held.drain(..).collect();
-        give_back(self.moves, held);
+        give_back(self.moves, self.held.drain(..));
     }
 }
 
@@ -1965,8 +1963,7 @@ impl Fills<'_> {
 
 impl Drop for Fills<'_> {
     fn drop(&mut self) {
-        let held: Vec<Held> = self.held.drain(..).collect();
-        give_back(self.moves, held);
+        give_back(self.moves, self.held.drain(..));
     }
 }
 
