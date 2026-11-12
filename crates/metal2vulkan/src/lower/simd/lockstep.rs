@@ -513,10 +513,13 @@ fn apart(
         }
         // A difference `n * g + e`, `|e| <= l`, lies between `down` and `up` (both excluded)
         // only for a multiple `n * g` strictly between `down - l` and `up + l`: none where the
-        // first multiple above `down - l` is at least `up + l`.
-        (Some(Spread::Lattice { low, granule }), Some(t)) if xa == Some(t) => {
-            let (l, g) = (i128::from(low), i128::from(granule));
-            g > 0 && ((down - l).div_euclid(g) + 1) * g >= up + l
+        // first multiple above `down - l` is at least `up + l`. Each fact holds, so either
+        // keeps the bytes apart.
+        (Some(Spread::Lattice { facts }), Some(t)) if xa == Some(t) => {
+            facts.iter().any(|&(low, granule)| {
+                let (l, g) = (i128::from(low), i128::from(granule));
+                g > 0 && ((down - l).div_euclid(g) + 1) * g >= up + l
+            })
         }
         _ => false,
     }
@@ -688,10 +691,17 @@ struct Decision {
 }
 
 /// Order the threadgroup-memory and device-memory accesses of kernel `e` that only Apple's
-/// simdgroup lockstep orders, by inserting barriers into its body (see the module documentation), for a device of
-/// profile `p`. An entry of another stage, or a kernel without such a pair, is returned
-/// unchanged.
-pub fn order(mut e: Entry, p: &DeviceProfile, m: &mut Meter) -> Result<Entry, Error> {
+/// simdgroup lockstep orders, by inserting barriers into its body (see the module
+/// documentation), for a device of profile `p`. Where `one_row` (the kernel's one-row variant,
+/// `LoweringInputs::one_row`) and each simdgroup lying within one row orders no pair a
+/// simdgroup barrier would ([`Lockstep::rows`]), only the threadgroup barriers are inserted.
+/// An entry of another stage, or a kernel without such a pair, is returned unchanged.
+pub fn order(
+    mut e: Entry,
+    p: &DeviceProfile,
+    one_row: bool,
+    m: &mut Meter,
+) -> Result<Entry, Error> {
     if !matches!(e.ep.stage, AbiStage::Kernel { .. }) {
         return Ok(e);
     }
@@ -710,7 +720,7 @@ pub fn order(mut e: Entry, p: &DeviceProfile, m: &mut Meter) -> Result<Entry, Er
             Ok(Tier::Direct | Tier::Cluster32)
         );
     let before = m.ledger();
-    let decided = decide(&e, (device, tangle), m);
+    let decided = decide(&e, (device, tangle), one_row, m);
     let spent = usize::try_from(m.ledger().saturating_sub(before)).unwrap_or(usize::MAX);
     m.release(spent);
     let Some((d, rows)) = decided? else {
@@ -740,6 +750,7 @@ pub fn order(mut e: Entry, p: &DeviceProfile, m: &mut Meter) -> Result<Entry, Er
 fn decide(
     e: &Entry,
     (device, tangle): (bool, bool),
+    one_row: bool,
     m: &mut Meter,
 ) -> Result<Option<(Decision, bool)>, Error> {
     let Some(body) = e.module.func(e.func).and_then(|f| f.body.as_ref()) else {
@@ -783,8 +794,8 @@ fn decide(
     }
     // The same pairs where each simdgroup lies within one row of its threadgroup, so that two of
     // its threads' positions differ in `x` and are equal in `y` and `z` (`AddrFacts::new`'s
-    // `rows`): where none conflicts, a
-    // dispatch of such threadgroups needs none of the barriers. Only a kernel whose subgroup
+    // `rows`): where none that conflicts wants more than a threadgroup barrier, a dispatch of
+    // such threadgroups needs none of the simdgroup barriers. Only a kernel whose subgroup
     // barriers keep a 32-lane tier asks (`tangle`, without the device's own lockstep).
     drop(af);
     let mut rows = tangle && !device;
@@ -801,10 +812,18 @@ fn decide(
                 &mut found,
                 m,
             )?;
-            if !found.is_empty() {
+            if found.iter().any(|w| w.order != Order::Threadgroup) {
                 rows = false;
                 break;
             }
+        }
+    }
+    // The one-row variant keeps the threadgroup barriers alone: in a threadgroup whose simdgroups
+    // each lie within one row, no pair a simdgroup barrier orders meets.
+    if one_row && rows {
+        wants.retain(|w| w.order == Order::Threadgroup);
+        if wants.is_empty() {
+            return Ok(None);
         }
     }
     let term = spaces

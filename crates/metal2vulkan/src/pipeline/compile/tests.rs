@@ -670,6 +670,7 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
             inputs_encoding(&inputs),
             derived
                 .replace(", emulated_simdgroups: false", "")
+                .replace(", one_row: false", "")
                 .replace(", dropped_vertex_layer: false", "")
                 .replace(", stage_input: None", "")
                 .replace(", storage_view_slots: {}", "")

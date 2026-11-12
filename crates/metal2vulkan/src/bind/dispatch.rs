@@ -44,6 +44,14 @@
 //! simdgroups lie within the row, where no pair meets, so it runs whatever its width, without
 //! `REQUIRE_FULL_SUBGROUPS`.
 //!
+//! **One row**. A dispatch of such a kernel whose every region is one row (`y` and `z` 1) asks
+//! for the kernel's one-row variant (`VariantKey::one_row`): its simdgroups lie within their rows,
+//! so the variant leaves the lockstep simdgroup barriers out and keeps the threadgroup ones, and,
+//! with no simdgroup semantics left, its tier pins no subgroup size and flattens no local size.
+//! The planned pipeline still runs such a dispatch. The variant's plan runs every dispatch of
+//! one-row regions, and a dispatch with a region of more rows on it is `BindError::NeedsVariant`
+//! for the variant without it.
+//!
 //! **Push bytes.** Each region's push write covers the stage's whole push range, so every
 //! statically used push byte is written (VUID-vkCmdDispatch-maintenance4-08602): the
 //! `DispatchRegion` bytes (`lower::dispatch::region_bytes`) in every region, `MultiRegion` or
@@ -437,6 +445,15 @@ fn product(pieces: [Vec<Piece>; 3], force_multi: bool) -> Result<Vec<Region>, Bi
     Ok(out)
 }
 
+/// Whether a region of `planned` has more than one row (`y` or `z` above 1), where a simdgroup
+/// may span two rows.
+fn multi_row(planned: &Planned) -> bool {
+    planned
+        .regions
+        .iter()
+        .any(|r| r.local[1] > 1 || r.local[2] > 1)
+}
+
 /// The regions of a dispatch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Planned {
@@ -730,6 +747,12 @@ impl BindingPlan {
                 variant: Box::new(self.emulated_variant()),
             });
         }
+        // The one-row variant runs one-row threadgroups only.
+        if self.variant.one_row && multi_row(&planned) {
+            return Err(BindError::NeedsVariant {
+                variant: Box::new(self.one_row_variant(false)),
+            });
+        }
         // A folded variant's region reads its record.
         if self.variant.folded_groups {
             for r in &mut planned.regions {
@@ -782,7 +805,10 @@ impl BindingPlan {
     /// [`variant`](BindingPlan::variant), with `emulated_simdgroups` when a threadgroup of the
     /// dispatch has a partial simdgroup the kernel's flattened simd tier cannot run (its
     /// `threads_per_threadgroup`, or a `dispatchThreads` edge region, is not a multiple of the
-    /// tier's subgroup size). A pure function of the plan and the dispatch, so a consumer can
+    /// tier's subgroup size); else with `one_row` when every region of the dispatch is one row of
+    /// a kernel whose lockstep simdgroup barriers order only pairs meeting across rows
+    /// (`RuntimeFact::RowLockstep`), and without it on the one-row variant's plan when a region
+    /// has more rows. A pure function of the plan and the dispatch, so a consumer can
     /// compile the variant before it binds. It reports the dispatch's local-size refusals as
     /// [`BindingPlan::instantiate_dispatch`] does, each region checked against the limits of the
     /// pipeline the result names: a result names a variant whose plan, for the same shape, states
@@ -791,19 +817,31 @@ impl BindingPlan {
     /// only the variant's compile knows.
     pub fn dispatch_variant(&self, dispatch: &Dispatch) -> Result<VariantKey, BindError> {
         let t = self.compute_template("dispatch_variant")?;
-        Ok(
-            if regions(&t.local, dispatch, self.variant.flat_grid)?.emulated {
-                self.emulated_variant()
-            } else {
-                self.variant.clone()
-            },
-        )
+        let planned = regions(&t.local, dispatch, self.variant.flat_grid)?;
+        Ok(if planned.emulated {
+            self.emulated_variant()
+        } else if t.local.rows && !planned.regions.is_empty() && !multi_row(&planned) {
+            // Each simdgroup lies within its row, where no pair the lockstep simdgroup barriers
+            // order meets: the variant without them.
+            self.one_row_variant(true)
+        } else if self.variant.one_row && multi_row(&planned) {
+            self.one_row_variant(false)
+        } else {
+            self.variant.clone()
+        })
     }
 
     /// The plan's variant with emulated simdgroups.
     fn emulated_variant(&self) -> VariantKey {
         let mut v = self.variant.clone();
         v.emulated_simdgroups = true;
+        v
+    }
+
+    /// The plan's variant with or without `one_row`.
+    fn one_row_variant(&self, one_row: bool) -> VariantKey {
+        let mut v = self.variant.clone();
+        v.one_row = one_row;
         v
     }
 

@@ -131,6 +131,7 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::CallStackDepth { depth: 8 },
         RuntimeFact::OpenClMode,
         RuntimeFact::RowLockstep,
+        RuntimeFact::OneRow,
         RuntimeFact::FlatGrid,
         RuntimeFact::SparseTextureWrites {
             slot,
@@ -380,6 +381,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::RowLockstep => 92,
         RuntimeFact::BorderTexels { .. } => 93,
         RuntimeFact::HeapResidency { .. } => 94,
+        RuntimeFact::OneRow => 95,
     }
 }
 
@@ -387,7 +389,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..95).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..96).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -456,6 +458,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::SrgbTexture { .. }
                 | RuntimeFact::CrossClassReads { .. }
                 | RuntimeFact::FlatGrid
+                | RuntimeFact::OneRow
                 | RuntimeFact::AmplificationDraws { .. }
                 | RuntimeFact::ViewportCompensation { .. }
                 | RuntimeFact::FoldedGroups

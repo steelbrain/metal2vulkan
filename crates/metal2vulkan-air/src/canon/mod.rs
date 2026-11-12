@@ -315,12 +315,17 @@ pub struct Lockstep {
     /// make exact, left out because the device's lockstep orders their pairs as Apple's does. The
     /// module then requires the property. 0 elsewhere.
     pub device: u32,
-    /// Every inserted barrier orders only pairs whose threads meet where a simdgroup spans two
-    /// rows of its threadgroup (two of its threads then share their position's `x`, or hold
-    /// different `y`s or `z`s): in a threadgroup whose simdgroups each lie within one row (a single row, or rows of a
-    /// multiple of 32 threads) no pair conflicts. Decided where a subgroup barrier keeps a 32-lane
-    /// tier (maximal reconvergence on 32-lane subgroups, without the device's own lockstep);
-    /// `false` elsewhere and where no barrier is inserted.
+    /// Every inserted simdgroup barrier orders only pairs whose threads meet where a simdgroup
+    /// spans two rows of its threadgroup (two of its threads then share their position's `x`, or
+    /// hold different `y`s or `z`s): in a threadgroup whose simdgroups each lie within one row (a
+    /// single row, or rows of a multiple of 32 threads) no pair a simdgroup barrier orders
+    /// conflicts. The inserted threadgroup barriers may order pairs that meet there too; a
+    /// threadgroup barrier stands where the whole threadgroup runs together, orders every pair a
+    /// simdgroup barrier at its place would, and needs no subgroup size, so a pipeline for such
+    /// threadgroups keeps them and leaves out only the simdgroup barriers, and with them the
+    /// subgroup size they pinned: an exact removal. Decided where a subgroup barrier keeps a
+    /// 32-lane tier (maximal reconvergence on 32-lane subgroups, without the device's own
+    /// lockstep); `false` elsewhere and where no barrier is inserted.
     pub rows: bool,
 }
 

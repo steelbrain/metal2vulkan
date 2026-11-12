@@ -1549,7 +1549,7 @@ impl ComputePipelineState {
     /// Make the variants a dispatch of a bind state of `shape` in `forms` may run on, whatever
     /// its threadgroup size, each with its plan for `shape`: its plan's variant in that form, and
     /// that variant with emulated simdgroups where a threadgroup that is not whole simdgroups
-    /// asks for it. In the large-buffer form every other bind shape of the same bound textures and
+    /// asks for it, or as the one-row variant where a threadgroup of one row asks for that. In the large-buffer form every other bind shape of the same bound textures and
     /// samplers settles on one of them; in the bound form, a dispatch of `shape` whose size its
     /// host step reads (`indirect_dispatch.rs`) does.
     pub(super) fn prepare(
@@ -1574,12 +1574,12 @@ impl ComputePipelineState {
             groups: [1, 1, 1],
             threads_per_group: [1, 1, 1],
         };
-        if plan
-            .dispatch_variant(&partial)
-            .map_err(Error::Bind)?
-            .emulated_simdgroups
-        {
+        let asked = plan.dispatch_variant(&partial).map_err(Error::Bind)?;
+        if asked.emulated_simdgroups {
             key.emulated_simdgroups = true;
+            keys.push(key);
+        } else if asked.one_row {
+            key.one_row = true;
             keys.push(key);
         }
         let mut prepared = Vec::with_capacity(keys.len());

@@ -562,6 +562,10 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
             cx.facts.insert(RuntimeFact::RowLockstep);
         }
     }
+    // A kernel compiled as its one-row variant states it, so its plans name the variant.
+    if cx.inputs.one_row && cx.stage == crate::pipeline::sym::Stage::Kernel {
+        cx.facts.insert(RuntimeFact::OneRow);
+    }
     // A flat grid reads the grid's size whatever builtins it reads, and so does a folded
     // variant its group counts; the plans of both state their variant.
     if multi_region || flat_grid || folded_groups {

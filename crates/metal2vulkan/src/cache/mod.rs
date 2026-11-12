@@ -167,6 +167,15 @@ pub struct VariantKey {
     /// `BindError::NeedsVariant`), and the plan of a pipeline compiled under it states it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub emulated_simdgroups: bool,
+    /// Every threadgroup of the dispatch is one row, so each of its simdgroups lies within the
+    /// row: a kernel whose lockstep simdgroup barriers order only pairs that meet where a
+    /// simdgroup spans two rows (`RuntimeFact::RowLockstep`) runs without them, keeping its
+    /// threadgroup ones, and without the subgroup size they pinned (`LoweringInputs::one_row`).
+    /// A dispatch whose every region is one row asks for it (`BindingPlan::dispatch_variant`),
+    /// and the plan of a pipeline compiled under it states it and asks another dispatch for the
+    /// variant without it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub one_row: bool,
     /// The vertex function's `[[render_target_array_index]]` output is not written: in a pass of at
     /// most one layer (`BindShape::render_target_array_length` 0 or 1) every index renders slice 0,
     /// so a pipeline whose vertex function chooses its slice runs on this variant there, and only
@@ -532,6 +541,7 @@ impl VariantKey {
             && self.psb_slots.is_empty()
             && self.pulled_vertex_buffers.is_empty()
             && !self.emulated_simdgroups
+            && !self.one_row
             && !self.dropped_vertex_layer
             && self.storage_view_slots.is_empty()
             && self.srgb_textures.is_empty()
@@ -603,6 +613,7 @@ impl VariantKey {
             .collect();
         out.emulated_simdgroups =
             self.emulated_simdgroups && stage == crate::pipeline::sym::Stage::Kernel;
+        out.one_row = self.one_row && stage == crate::pipeline::sym::Stage::Kernel;
         out.flat_grid = self.flat_grid && stage == crate::pipeline::sym::Stage::Kernel;
         out.folded_groups = self.folded_groups && stage == crate::pipeline::sym::Stage::Kernel;
         out.replay_bindings = self.replay_bindings

@@ -105,8 +105,10 @@ pub(super) enum Spread {
     /// anchor.
     Apart { min: u64, max: u64, same: bool },
     /// The threads' anchors differ by a multiple of `granule` (a power of two) plus at most
-    /// `low` bytes either way ([`AddrFacts::lattice`]); they may be one anchor.
-    Lattice { low: u64, granule: u64 },
+    /// `low` bytes either way, for each of two such `(low, granule)` facts at once
+    /// ([`AddrFacts::lattice`]: the finest the anchor's terms give, and the coarsest); they may be
+    /// one anchor.
+    Lattice { facts: [(u64, u64); 2] },
 }
 
 /// How a GEP index extends its core to the pointer's index width.
@@ -2644,11 +2646,67 @@ impl<'a> AddrFacts<'a> {
         })
     }
 
+    /// Whether integer `v` holds a thread's place among the linear threads of its threadgroup in
+    /// its bits from the fifth up, which the 32 threads of a simdgroup then share (a simdgroup is
+    /// 32 consecutive linear threads from a multiple of 32): a thread's index in its threadgroup,
+    /// and, where each simdgroup lies within one row of its threadgroup (`rows`: a single row,
+    /// whose `x` is the linear index, or rows of a multiple of 32 threads, whose `x` is the linear
+    /// index less a multiple of 32), the `x` of its position in the threadgroup (never of its
+    /// position in the grid, whose threadgroup origin need not be a multiple of 32); through
+    /// zero extensions, truncations to 5 bits or more and freezes, at most [`MAX_FIXED`] deep.
+    fn aligned(&self, v: Value, depth: u32) -> bool {
+        if depth >= MAX_FIXED {
+            return false;
+        }
+        let builtin = |a: u32| {
+            self.e
+                .ep
+                .params
+                .iter()
+                .find(|p| p.param == a)
+                .and_then(|p| match p.role {
+                    ParamRole::Builtin(b) => Some(b),
+                    _ => None,
+                })
+        };
+        match v {
+            Value::Arg(a) => match builtin(a.raw()) {
+                Some(Builtin::ThreadIndexInThreadgroup) => true,
+                Some(Builtin::ThreadPositionInThreadgroup) => self.rows,
+                _ => false,
+            },
+            _ => match self.kind(v) {
+                Some(InstKind::ExtractElement {
+                    vec: Value::Arg(a),
+                    idx: Value::Const(c),
+                }) => {
+                    self.rows
+                        && builtin(a.raw()) == Some(Builtin::ThreadPositionInThreadgroup)
+                        && const_int(self.e, *c) == Some(0)
+                }
+                Some(
+                    InstKind::Cast {
+                        op: CastOp::ZExt,
+                        v: x,
+                    }
+                    | InstKind::Freeze(x),
+                ) => self.aligned(*x, depth + 1),
+                Some(InstKind::Cast {
+                    op: CastOp::Trunc,
+                    v: x,
+                }) => self.width(v).is_some_and(|w| w >= 5) && self.aligned(*x, depth + 1),
+                _ => false,
+            },
+        }
+    }
+
     /// Whether `v` is one value in every thread of a simdgroup at one dynamic instance: uniform
     /// among them, a size query of one texture (`get_width`, `get_num_samples` and the others,
     /// which read only the texture and the level they name), or, where each simdgroup lies within
-    /// one row of its threadgroup (`rows`), a `y` or `z` component of a position (the row's), and
-    /// any integer operation or cast of such values, at most [`MAX_FIXED`] operations deep.
+    /// one row of its threadgroup (`rows`), a `y` or `z` component of a position (the row's), a
+    /// place among the threadgroup's linear threads ([`AddrFacts::aligned`]) with its low five
+    /// bits cleared (`& -32`) or shifted out (`>> 5`), and any integer operation or cast of such
+    /// values, at most [`MAX_FIXED`] operations deep.
     fn fixed(&self, v: Value, depth: u32, m: &mut Meter) -> Result<bool, Error> {
         if self.uniform(v) {
             return Ok(true);
@@ -2680,6 +2738,20 @@ impl<'a> AddrFacts<'a> {
                     && self.is_position(a.raw())
                     && const_int(self.e, *c).is_some_and(|i| i != 0)
             }
+            // The simdgroup's first thread's place ([`AddrFacts::aligned`]): its low five bits
+            // cleared by a mask, or shifted out.
+            Some(InstKind::BinOp {
+                op: BinOp::And,
+                a,
+                b: Value::Const(c),
+                ..
+            }) if const_int(self.e, *c).is_some_and(|k| k & 31 == 0) && self.aligned(*a, 0) => true,
+            Some(InstKind::BinOp {
+                op: BinOp::LShr,
+                a,
+                b: Value::Const(c),
+                ..
+            }) if const_int(self.e, *c).is_some_and(|k| k >= 5) && self.aligned(*a, 0) => true,
             Some(InstKind::BinOp { a, b, .. }) => {
                 self.fixed(*a, depth + 1, m)? && self.fixed(*b, depth + 1, m)?
             }
@@ -2827,14 +2899,17 @@ impl<'a> AddrFacts<'a> {
     /// How a GEP over `src_ty` from `base` by `indices` differs between two threads of a
     /// simdgroup as a lattice ([`Spread::Lattice`]), where the walk down its bases (through
     /// bitcasts and GEPs, at most [`MAX_CHAIN`] steps) ends at an address uniform in the
-    /// simdgroup. Each index that is not uniform adds a term, its stride times the index, with
-    /// their low zero bits together ([`AddrFacts::low_zeros`], at most `bits`, the index width)
-    /// and, where the index's range is known and its values are not negative as a signed index,
-    /// the bytes that range spans. For the largest power of two `g` whose terms with fewer zero
-    /// bits all have spans, summing to `l` below half of `g`, the address is the uniform base,
-    /// plus a multiple of `g` (`g` divides `2^bits`, so a wrap at the index width keeps the
-    /// multiple), plus a part within `l` bytes of one value: two threads' addresses differ by a
-    /// multiple of `g` plus at most `l` either way.
+    /// simdgroup. Each index that is not one value in every thread of the simdgroup
+    /// ([`AddrFacts::fixed`]) adds a term, its stride times the index, with their low zero bits
+    /// together ([`AddrFacts::low_zeros`], at most `bits`, the index width) and, where the
+    /// index's range is known and its values are not negative as a signed index, the bytes that
+    /// range spans. For the largest power of two `g` whose terms with fewer zero bits all have
+    /// spans, summing to `l` below half of `g`, the address is the base, plus a multiple of `g`
+    /// (`g` divides `2^bits`, so a wrap at the index width keeps the multiple), plus a part
+    /// within `l` bytes of one value: two threads' addresses differ by a multiple of `g` plus at
+    /// most `l` either way. And where every term has a span, summing to `l`, the addresses differ
+    /// by at most `l` but for a multiple of `2^bits` (`g` is then `2^min(bits, 62)`, which divides
+    /// it). The spread holds both where both are.
     fn lattice(
         &self,
         src_ty: TypeId,
@@ -2850,7 +2925,7 @@ impl<'a> AddrFacts<'a> {
         'walk: for _ in 0..MAX_CHAIN {
             m.tick(1)?;
             for (at, &k) in idx.iter().enumerate() {
-                if self.uniform(k) {
+                if self.fixed(k, 0, m)? {
                     continue;
                 }
                 let (Some(stride), Some(w)) = (self.stride_at(ty, idx, at), self.width(k)) else {
@@ -2892,26 +2967,35 @@ impl<'a> AddrFacts<'a> {
                 _ => break,
             }
         }
-        let mut best: Option<(u32, u64)> = None;
+        // The spans of the terms with fewer than `z` zero bits, summed, if all have one.
+        let low = |z: u32| {
+            terms
+                .iter()
+                .filter(|&&(z2, _)| z2 < z)
+                .try_fold(0u64, |s, &(_, span)| span.and_then(|w| s.checked_add(w)))
+        };
+        let mut fine: Option<(u64, u64)> = None;
+        let mut whole: Option<(u64, u64)> = None;
         if ended {
             for &(z, _) in &terms {
-                if z == 0 || z >= 63 || best.is_some_and(|(bz, _)| bz >= z) {
+                if z == 0 || z >= 63 || fine.is_some_and(|(_, g)| g >= 1u64 << z) {
                     continue;
                 }
-                let low = terms
-                    .iter()
-                    .filter(|&&(z2, _)| z2 < z)
-                    .try_fold(0u64, |s, &(_, span)| span.and_then(|w| s.checked_add(w)));
-                if let Some(low) = low.filter(|&l| l < (1u64 << z) / 2) {
-                    best = Some((z, low));
+                if let Some(l) = low(z).filter(|&l| l < (1u64 << z) / 2) {
+                    fine = Some((l, 1u64 << z));
                 }
             }
+            let top = bits.min(62);
+            whole = low(64)
+                .filter(|&l| top >= 1 && l < (1u64 << top) / 2)
+                .map(|l| (l, 1u64 << top));
         }
         m.release(crate::budget::vec_bytes(&terms));
-        Ok(best.map(|(z, low)| Spread::Lattice {
-            low,
-            granule: 1u64 << z,
-        }))
+        Ok(match (fine, whole) {
+            (Some(f), Some(w)) => Some(Spread::Lattice { facts: [f, w] }),
+            (Some(x), None) | (None, Some(x)) => Some(Spread::Lattice { facts: [x, x] }),
+            (None, None) => None,
+        })
     }
 
     /// The injectivity of GEP index `k` in the index width `bits`: its core's

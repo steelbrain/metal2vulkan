@@ -1243,6 +1243,7 @@ codec_enum! {
         CallStackDepth { depth },
         OpenClMode,
         RowLockstep,
+        OneRow,
         FlatGrid,
         SparseTextureWrites { slot, atomic },
         TileThreadgroupMemory { index },

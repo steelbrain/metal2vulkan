@@ -341,7 +341,14 @@ pub enum RuntimeFact {
     /// where a simdgroup spans two rows of its threadgroup (`Lockstep::rows`). A dispatch region
     /// of one row runs on the planned pipeline whatever its width, without whole subgroups, where
     /// no pair meets; any other region keeps the tier's whole subgroups or emulated simdgroups.
+    /// A dispatch whose every region is one row asks for the kernel's one-row variant
+    /// (`VariantKey::one_row`), which has none of those barriers.
     RowLockstep,
+    /// The kernel was compiled under `VariantKey::one_row` (`LoweringInputs::one_row`): it runs
+    /// threadgroups whose simdgroups each lie within one row, without the lockstep simdgroup
+    /// barriers its `RowLockstep` plan had (its threadgroup ones kept). Its plans state the
+    /// variant, and a dispatch with a region of more than one row asks for the variant without it.
+    OneRow,
     /// The kernel was compiled under `VariantKey::flat_grid` (`LoweringInputs::flat_grid`): it
     /// runs any grid in threadgroups of its own size, reading the grid from the 32-byte region
     /// record at its `PushField::ReplayRegionAddress`, which a preprocess writes beside the

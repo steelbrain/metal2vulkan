@@ -230,6 +230,15 @@ impl<'a> InputsFrom<'a> {
         }
     }
 
+    /// Whether the stage compiles as a kernel's one-row variant (`LoweringInputs::one_row`): the
+    /// given inputs' say; a render pipeline's stage never does.
+    fn one_row(&self) -> bool {
+        match self {
+            InputsFrom::Given(i) => i.one_row,
+            InputsFrom::Vertex(..) | InputsFrom::Fragment(..) => false,
+        }
+    }
+
     /// Whether the stage compiles as the kernel of a compute pipeline of OpenCL mode
     /// (`LoweringInputs::open_cl_mode`): the given inputs' say; a render pipeline's stage never
     /// does.
@@ -2639,7 +2648,7 @@ fn ordered_entry(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Sp
         spec,
         before,
     } = specialize_one(r, m)?;
-    let spec = crate::lower::simd::lockstep::order(spec, p, m)?;
+    let spec = crate::lower::simd::lockstep::order(spec, p, r.inputs.one_row(), m)?;
     Ok(Specialized {
         air_hash,
         entry,

@@ -39,6 +39,14 @@ pub struct LoweringInputs {
     /// kernel has simdgroups this emulates; a vertex or fragment function compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub emulated_simdgroups: bool,
+    /// A kernel runs threadgroups whose simdgroups each lie within one row
+    /// (`VariantKey::one_row`): the lockstep barriers it takes are its threadgroup ones alone
+    /// where, so dispatched, no pair a simdgroup barrier orders meets (`air::Lockstep::rows`), and
+    /// with no simdgroup barrier it takes no simd class and pins no subgroup for them. A kernel
+    /// compiled under it depends on `RuntimeFact::OneRow`. Any other function compiles as without
+    /// it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub one_row: bool,
     /// A vertex function does not write its `[[render_target_array_index]]` output
     /// (`VariantKey::dropped_vertex_layer`): the variant a pass of at most one layer runs on, where
     /// every index renders slice 0. A vertex function that writes the output depends on

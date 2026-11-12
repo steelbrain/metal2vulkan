@@ -32,7 +32,7 @@ use crate::bind::{BindState, BoundBuffer, Dispatch, StageTable};
 use crate::budget::Budget;
 use crate::cache::VariantKey;
 use crate::device::profile::DeviceProfile;
-use crate::device::subgroup::{SubgroupRequirement, Tier};
+use crate::device::subgroup::{OpBits, SimdClass, SubgroupRequirement, Tier};
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{BindError, Error, Feature};
 use crate::library::Library;
@@ -1660,6 +1660,12 @@ fn emulated_key() -> VariantKey {
     key
 }
 
+fn one_row_key() -> VariantKey {
+    let mut key = VariantKey::new();
+    key.one_row = true;
+    key
+}
+
 /// `kernel` of `bc` on `DIRECT`: its own tier is `Direct` with a multiple-of-32 constraint, and
 /// under the emulated-simdgroups input the `Emulated` tier, which depends on the variant, passes
 /// L3 without a subgroup instruction, and gives the reading (a partial simdgroup's active lanes are
@@ -2157,12 +2163,13 @@ fn two_buffers() -> BindState {
 /// A kernel whose only simdgroup semantics are the barrier its lockstep order took, between a
 /// read and a write of `b[gid]` that two threads of one simdgroup meet at only where the
 /// simdgroup spans two rows of its threadgroup (the shape of OpenCL C's `if (i < n) b[i] *= k`),
-/// keeps the RTX 5080's `Direct` tier, records `RowLockstep`, and runs a threadgroup of one row
-/// (1, 16 or 48 threads) on its one compiled pipeline, without whole subgroups: no
-/// emulated-simdgroups variant is compiled, so none is announced. A threadgroup of two rows that
-/// is not whole subgroups still asks for the variant. The same kernel at `b[gid >> 1]` (two
-/// threads of a row meet) or reading its simdgroup lane keeps every partial threadgroup on the
-/// variant.
+/// keeps the RTX 5080's `Direct` tier and records `RowLockstep`. A threadgroup of one row (1, 16
+/// or 48 threads, or a whole 32) asks for its one-row variant (`VariantKey::one_row`), and the
+/// planned pipeline still runs one without whole subgroups: no emulated-simdgroups variant is
+/// compiled, so none is announced. A threadgroup of two rows that is not whole subgroups still
+/// asks for the emulated variant. The same kernel at `b[gid >> 1]` (two threads of a row meet) or
+/// reading its simdgroup lane keeps every partial threadgroup on the emulated variant and a whole
+/// one on its pinned pipeline.
 #[test]
 fn a_row_of_a_lockstep_only_kernel_takes_one_compile() {
     let x = "%x = zext i32 %gid to i64";
@@ -2200,10 +2207,18 @@ fn a_row_of_a_lockstep_only_kernel_takes_one_compile() {
         let base = pipeline(&dev, &bc, name);
         let plan = base.plan(&dev, &shape).expect("plan");
         for n in [1, 16, 48] {
+            let want = if rows { one_row_key() } else { emulated_key() };
+            assert_eq!(
+                plan.dispatch_variant(&threads(n)),
+                Ok(want),
+                "{name} at {n}"
+            );
+        }
+        for n in [32, 64] {
             let want = if rows {
-                VariantKey::new()
+                one_row_key()
             } else {
-                emulated_key()
+                VariantKey::new()
             };
             assert_eq!(
                 plan.dispatch_variant(&threads(n)),
@@ -2236,6 +2251,313 @@ fn a_row_of_a_lockstep_only_kernel_takes_one_compile() {
                 .stage_flags
                 .contains(vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS));
         }
+    }
+}
+
+/// `kernel void name(device uint *out [[buffer(0)]], uint2 tid [[thread_position_in_threadgroup]],
+/// uint t [[thread_index_in_threadgroup]])`, a tile's shape as a compiler spells it:
+///
+/// - every thread stores `t` at word `t` of `@nb`, and after a barrier reads word `t ^ 8` and
+///   overwrites its own with 100 in the same interval, in workgroup-uniform flow (a pair the
+///   lockstep pass orders with a threadgroup barrier, in every threadgroup shape);
+/// - then, where `run` holds (`x >= 32` in row 0, `x < 16` in row 1, where only some threads of a
+///   simdgroup run), it stores `t << 4 | k` at word `(x & 31) + 4 (x & -32) + 32 k` of `@grid`
+///   and `t << 4 | 8 | k` 512 words on, `k` below 4. Two threads' anchors differ by a multiple of
+///   128 words plus at most 31: the rows `k` never meet, and the halves meet only where two
+///   threads of one simdgroup share a lane and lie 128 apart in `x`, as in a threadgroup 144 wide
+///   and 2 tall (row 0's `x` 128 to 143 and row 1's 0 to 15 are simdgroup 4), a pair a simdgroup
+///   barrier orders and no row of a threadgroup holds;
+/// - after a barrier, `out[t]` is its own word `k = 0` of the tile where it ran (0 elsewhere),
+///   with what it read from `@nb` 20 bits up.
+///
+/// `extra` and `decl` add an instruction to the entry and its declaration.
+fn row_tile_kernel(name: &str, extra: &str, decl: &str) -> String {
+    format!(
+        r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+@grid = internal unnamed_addr addrspace(3) global [2048 x i32] undef, align 4
+@nb = internal unnamed_addr addrspace(3) global [512 x i32] undef, align 4
+
+define void @{name}(ptr addrspace(1) %out, <2 x i32> %tid, i32 %t) #0 {{
+entry:
+  {extra}
+  %tz = zext i32 %t to i64
+  %own = getelementptr inbounds [512 x i32], ptr addrspace(3) @nb, i64 0, i64 %tz
+  store i32 %t, ptr addrspace(3) %own, align 4
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  %t8 = xor i32 %t, 8
+  %t8z = zext i32 %t8 to i64
+  %other = getelementptr inbounds [512 x i32], ptr addrspace(3) @nb, i64 0, i64 %t8z
+  %nv = load i32, ptr addrspace(3) %other, align 4
+  store i32 100, ptr addrspace(3) %own, align 4
+  %x = extractelement <2 x i32> %tid, i64 0
+  %y = extractelement <2 x i32> %tid, i64 1
+  %lane = and i32 %x, 31
+  %high = and i32 %x, -32
+  %l = zext i32 %lane to i64
+  %h4 = shl nuw nsw i32 %high, 2
+  %h = zext i32 %h4 to i64
+  %col = getelementptr inbounds i32, ptr addrspace(3) @grid, i64 %l
+  %at = getelementptr inbounds i32, ptr addrspace(3) %col, i64 %h
+  %row0 = icmp eq i32 %y, 0
+  %right = icmp uge i32 %x, 32
+  %left = icmp ult i32 %x, 16
+  %run = select i1 %row0, i1 %right, i1 %left
+  br i1 %run, label %fill, label %done
+fill:
+  %v0 = shl i32 %t, 4
+  store i32 %v0, ptr addrspace(3) %at, align 4
+  %a1 = getelementptr inbounds i32, ptr addrspace(3) %at, i64 32
+  %v1 = or i32 %v0, 1
+  store i32 %v1, ptr addrspace(3) %a1, align 4
+  %a2 = getelementptr inbounds i32, ptr addrspace(3) %at, i64 64
+  %v2 = or i32 %v0, 2
+  store i32 %v2, ptr addrspace(3) %a2, align 4
+  %a3 = getelementptr inbounds i32, ptr addrspace(3) %at, i64 96
+  %v3 = or i32 %v0, 3
+  store i32 %v3, ptr addrspace(3) %a3, align 4
+  %b0 = getelementptr inbounds i32, ptr addrspace(3) %at, i64 512
+  %w0 = or i32 %v0, 8
+  store i32 %w0, ptr addrspace(3) %b0, align 4
+  %b1 = getelementptr inbounds i32, ptr addrspace(3) %at, i64 544
+  %w1 = or i32 %v0, 9
+  store i32 %w1, ptr addrspace(3) %b1, align 4
+  %b2 = getelementptr inbounds i32, ptr addrspace(3) %at, i64 576
+  %w2 = or i32 %v0, 10
+  store i32 %w2, ptr addrspace(3) %b2, align 4
+  %b3 = getelementptr inbounds i32, ptr addrspace(3) %at, i64 608
+  %w3 = or i32 %v0, 11
+  store i32 %w3, ptr addrspace(3) %b3, align 4
+  br label %done
+done:
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  br i1 %run, label %read, label %write
+read:
+  %got = load i32, ptr addrspace(3) %at, align 4
+  br label %write
+write:
+  %word = phi i32 [ %got, %read ], [ 0, %done ]
+  %up = shl i32 %nv, 20
+  %both = or i32 %word, %up
+  %o = getelementptr inbounds i32, ptr addrspace(1) %out, i64 %tz
+  store i32 %both, ptr addrspace(1) %o, align 4
+  ret void
+}}
+
+declare void @air.wg.barrier(i32, i32) #1
+{decl}
+
+attributes #0 = {{ convergent mustprogress nounwind willreturn }}
+attributes #1 = {{ convergent mustprogress nounwind willreturn }}
+
+!air.kernel = !{{!0}}
+!air.version = !{{!6}}
+!air.language_version = !{{!7}}
+
+!0 = !{{ptr @{name}, !1, !2}}
+!1 = !{{}}
+!2 = !{{!3, !4, !5}}
+!3 = !{{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}}
+!4 = !{{i32 1, !"air.thread_position_in_threadgroup", !"air.arg_type_name", !"uint2", !"air.arg_name", !"tid"}}
+!5 = !{{i32 2, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}}
+!6 = !{{i32 2, i32 8, i32 0}}
+!7 = !{{!"Metal", i32 4, i32 0, i32 0}}
+"#
+    )
+}
+
+/// The words [`row_tile_kernel`] leaves in one threadgroup of `local` threads, as an Apple M3
+/// Max runs it: a thread where it ran reads its own tile word, but in row 0 at `x` 128 to 143 of
+/// a threadgroup of two rows, where row 1's thread `x - 128` (one simdgroup with it) stores its
+/// second half there one instruction later, which lockstep leaves; each reads `t ^ 8` from
+/// `@nb` before its neighbour overwrites it.
+fn row_tile_words(local: [u32; 3]) -> Vec<u32> {
+    let w = local[0];
+    (0..local[0] * local[1])
+        .map(|t| {
+            let (x, y) = (t % w, t / w);
+            let run = if y == 0 { x >= 32 } else { x < 16 };
+            let word = if !run {
+                0
+            } else if y == 0 && local[1] > 1 && (128..144).contains(&x) {
+                ((w + x - 128) << 4) | 8
+            } else {
+                t << 4
+            };
+            word | ((t ^ 8) << 20)
+        })
+        .collect()
+}
+
+/// Every word of buffer 0 after one threadgroup of `local` threads ran `m` (planned as `plan`)
+/// with `lanes`-wide subgroups, in both scheduling orders, its local size also flattened (the
+/// pinned tiers' Vulkan workgroup).
+fn run_local(plan: &Plan, m: &TypedModule, local: [u32; 3], lanes: SubgroupSize) -> Vec<u32> {
+    let mut spec = BTreeMap::new();
+    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip(local) {
+        spec.insert(SpecKey::LocalSize(a), u64::from(v));
+    }
+    let n: u32 = local.iter().product();
+    spec.insert(SpecKey::FlatLocalSize, u64::from(n));
+    let res = Resources {
+        buffers: vec![Buffer {
+            slot: Some(ResourceSlot {
+                stage: Stage::Kernel,
+                kind: ResourceKind::Buffer,
+                index: 0,
+            }),
+            address: None,
+            bytes: vec![0; n as usize * 4],
+        }],
+        push: vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)],
+        spec,
+    };
+    words(&run_orders(m, lanes, &res)[0])
+}
+
+/// A threadgroup of one row runs a tile whose halves meet only across rows without its lockstep
+/// simdgroup barrier ([`row_tile_kernel`], on the Iris Xe, whose maximal reconvergence on
+/// 32-lane subgroups makes that barrier a tangle barrier). Its own pipeline keeps the barrier,
+/// takes `CrossLane(BASIC)` and `Direct` (32 lanes pinned), records `RowLockstep`, and leaves
+/// Metal's words in a threadgroup 144 wide and 2 tall, which runs on it, the shared lane's word
+/// included. A dispatch of one row (128 or 48 threads) asks for the one-row variant, which keeps
+/// the threadgroup barrier the `@nb` pair takes, has no simdgroup barrier, no simd class and no
+/// pinned subgroup, states `OneRow`, and leaves Metal's words at every width; its plan sends a
+/// threadgroup of two rows back. The same kernel with a simdgroup sum keeps its pinned pipeline
+/// for every threadgroup of whole simdgroups, one row or not.
+#[test]
+fn a_one_row_dispatch_drops_the_lockstep_simdgroup_barriers() {
+    let dev = device("intel-irisxe-rplp-anv");
+    let p = dev.profile();
+    let name = "row_tile";
+    let Some(bc) = assemble_text(name, &row_tile_kernel(name, "", "")) else {
+        return;
+    };
+    let wide = [144, 2, 1];
+
+    // The kernel's own pipeline.
+    let (own, m) = typed_module(&bc, name, p).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let uses = |plan: &Plan, k: &str| plan.census().get(k).map_or(0, |u| u.0);
+    assert!(
+        uses(&own, "barrier.lockstep.simdgroup") > 0,
+        "{:?}",
+        own.census()
+    );
+    assert_eq!(
+        uses(&own, "barrier.lockstep.threadgroup"),
+        1,
+        "{:?}",
+        own.census()
+    );
+    assert_eq!(
+        own.simd,
+        (SimdClass::CrossLane(OpBits::BASIC), Tier::Direct)
+    );
+    assert!(own.facts.contains(&RuntimeFact::RowLockstep));
+    assert!(!own.facts.contains(&RuntimeFact::OneRow));
+    assert_eq!(
+        run_local(&own, &m, wide, SubgroupSize::W32),
+        row_tile_words(wide)
+    );
+
+    // The one-row variant.
+    let mut inputs = LoweringInputs::new();
+    inputs.one_row = true;
+    let (row, rm) =
+        typed_module_with(&bc, name, p, &inputs).unwrap_or_else(|e| panic!("{name}: {e}"));
+    assert_eq!(
+        uses(&row, "barrier.lockstep.simdgroup"),
+        0,
+        "{:?}",
+        row.census()
+    );
+    assert_eq!(
+        uses(&row, "barrier.lockstep.threadgroup"),
+        1,
+        "{:?}",
+        row.census()
+    );
+    assert_eq!(row.simd, (SimdClass::None, Tier::NoSubgroup));
+    assert_eq!(row.subgroup, SubgroupRequirement::NONE);
+    assert!(row.facts.contains(&RuntimeFact::OneRow));
+    assert!(!row.facts.contains(&RuntimeFact::RowLockstep));
+    for local in [[128, 1, 1], [48, 1, 1]] {
+        for lanes in [SubgroupSize::W8, SubgroupSize::W16, SubgroupSize::W32] {
+            assert_eq!(
+                run_local(&row, &rm, local, lanes),
+                row_tile_words(local),
+                "{local:?} at {lanes:?}"
+            );
+        }
+    }
+
+    // The binder's choice.
+    let state = bind_state(None);
+    let shape = state.shape();
+    let plan = pipeline(&dev, &bc, name).plan(&dev, &shape).expect("plan");
+    let two_rows = Dispatch::Threadgroups {
+        groups: [1, 1, 1],
+        threads_per_group: wide,
+    };
+    assert_eq!(plan.dispatch_variant(&threads(128)), Ok(one_row_key()));
+    assert_eq!(plan.dispatch_variant(&threads(48)), Ok(one_row_key()));
+    assert_eq!(plan.dispatch_variant(&two_rows), Ok(VariantKey::new()));
+    let f = Library::from_air(&bc)
+        .ok()
+        .and_then(|lib| lib.function(name))
+        .expect("kernel");
+    let budget = Budget::standard();
+    let compiled = dev
+        .compile_function(
+            &FunctionDescriptor::new(f),
+            &one_row_key().lowering_inputs(Stage::Kernel),
+            &budget,
+        )
+        .expect("variant");
+    let variant = dev
+        .compile_compute_pipeline(
+            &ComputePipelineDescriptor::new(StageSource::Compiled(compiled)),
+            &budget,
+        )
+        .expect("variant pipeline");
+    assert_eq!(variant.stage.required_subgroup_size, None);
+    let vplan = variant.plan(&dev, &shape).expect("variant plan");
+    assert_eq!(
+        vplan.variant,
+        one_row_key(),
+        "the variant's plan states its key"
+    );
+    assert_eq!(vplan.dispatch_variant(&threads(128)), Ok(one_row_key()));
+    assert!(vplan.instantiate_dispatch(&state, &threads(48)).is_ok());
+    assert_eq!(vplan.dispatch_variant(&two_rows), Ok(VariantKey::new()));
+    assert_eq!(
+        vplan.instantiate_dispatch(&state, &two_rows),
+        Err(BindError::NeedsVariant {
+            variant: Box::new(VariantKey::new())
+        })
+    );
+
+    // With a simdgroup operation of its own the kernel keeps its pinned pipeline.
+    let summed = "row_tile_sum";
+    let Some(bc) = assemble_text(
+        summed,
+        &row_tile_kernel(
+            summed,
+            "%s = tail call i32 @air.simd_sum.u.i32(i32 %t)",
+            "declare i32 @air.simd_sum.u.i32(i32) #1",
+        ),
+    ) else {
+        return;
+    };
+    let (own, _) = typed_module(&bc, summed, p).unwrap_or_else(|e| panic!("{summed}: {e}"));
+    assert_eq!(own.simd.1, Tier::Direct);
+    assert!(!own.facts.contains(&RuntimeFact::RowLockstep));
+    let plan = pipeline(&dev, &bc, summed)
+        .plan(&dev, &shape)
+        .expect("plan");
+    for d in [threads(32), threads(128), two_rows] {
+        assert_eq!(plan.dispatch_variant(&d), Ok(VariantKey::new()), "{d:?}");
     }
 }
 
