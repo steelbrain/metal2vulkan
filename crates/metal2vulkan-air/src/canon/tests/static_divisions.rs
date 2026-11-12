@@ -95,7 +95,11 @@ fn a_static_division_by_zero_is_undefined() {
     // way, as an unsupplied constant's would. No constant is undefined, so none is read.
     for op in [BinOp::UDiv, BinOp::SDiv, BinOp::URem, BinOp::SRem] {
         let e = divided(op, 1).unwrap_or_else(|e| panic!("{op:?}: {e:?}"));
-        assert_eq!(stores(&e), ["store i32 0, %a0, align 4"], "{op:?}");
+        assert_eq!(
+            stores(&e),
+            ["store i32 zeroinitializer, %a0, align 4"],
+            "{op:?}"
+        );
         assert!(e.undefined_reads.is_empty(), "{op:?}");
     }
 }
