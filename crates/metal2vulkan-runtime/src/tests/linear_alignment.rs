@@ -47,11 +47,18 @@ fn the_answer_is_the_usages_largest_and_at_least_the_line() {
         );
         assert_eq!(placed_answer(&[None, None, None], line), 16, "{stem}");
     }
+    // Every profile that states its line (a requirements profile may state none: roadmap-2022).
+    let mut stated = 0;
     for (stem, _) in committed_descriptions() {
-        let line = line(&stem);
+        let Some(line) = profile_value(&stem, "nonCoherentAtomSize").and_then(|v| v.as_u64())
+        else {
+            continue;
+        };
+        stated += 1;
         assert!(line.is_power_of_two() && line <= 256, "{stem}: {line}");
         assert_eq!(placed_answer(&[Some(16)], line), line.max(16), "{stem}");
     }
+    assert!(stated >= 18, "{stated} profiles state their line");
 }
 
 fn identity() -> DriverIdentity {
