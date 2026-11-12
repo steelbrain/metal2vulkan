@@ -60,7 +60,12 @@
 //!   the dma-bufs and the caller's release stay. The crate's device tests release them at once,
 //!   whatever their windows (`tests/host_residency.rs`, `tests/pointer_residency.rs`). The doubling
 //!   bounds the churn whatever the program's pattern: an import is made again at most five times
-//!   before its window reaches [`IDLE_MOST`], and at most once per such window after.
+//!   before its window reaches [`IDLE_MOST`], and at most once per such window after. A sweep
+//!   that releases several paces them (`step_aside::pace`): before each, it waits until as long as
+//!   its frees before it took has passed since the last ended, so that the device's other
+//!   threads' submissions go between them, as NVIDIA's driver holds every one while it frees an
+//!   import (docs/FAST-PATHS.md, known gaps). Not while the device's teardown waits for the
+//!   thread.
 //! - **The import going** (its last buffer released) lets go of its objects, and the caller's
 //!   keep-alive and deallocators go once their memory is freed: as the import goes (in the
 //!   release, or on a handler thread where a keep-alive alone waits for the free, `buffer.rs`), or
@@ -568,6 +573,7 @@ impl Sweeper {
 
 /// The thread's loop: a sweep every [`TICK`] until stopped.
 fn run(shared: &Shared) {
+    crate::step_aside::mark_a_paced_thread();
     loop {
         {
             let state = lock(&shared.state);
@@ -585,19 +591,28 @@ fn run(shared: &Shared) {
 
 /// Release the noted imports idle now (`force`: whatever their windows), forgetting those gone:
 /// how many. Each import and its objects are let go of with no lock held: either may be its
-/// device's last holder.
+/// device's last holder. On the residency thread, each is paced after the frees before it
+/// (`step_aside::pace`), holding none of the imports while it waits: a buffer the program releases
+/// meanwhile frees its import in that release.
 fn sweep(shared: &Shared, force: bool) -> usize {
-    let imports: Vec<Arc<HostImport>> = {
+    let imports: Vec<Weak<HostImport>> = {
         let mut state = lock(&shared.state);
         state.imports.retain(|import| import.strong_count() > 0);
-        state.imports.iter().filter_map(Weak::upgrade).collect()
+        state.imports.clone()
     };
     let now = now_ms();
     let mut released = 0;
     for import in imports {
-        let objects = import
-            .residency()
-            .and_then(|residency| residency.release_if_idle(now, force));
+        let waited = crate::step_aside::pace(|| lock(&shared.state).stopping);
+        let Some(import) = import.upgrade() else {
+            continue;
+        };
+        let residency = import.residency();
+        if let (Some(waited), Some(residency)) = (waited, residency) {
+            let counts = &residency.device.shared().counts;
+            counts.memory_free_paced(waited);
+        }
+        let objects = residency.and_then(|residency| residency.release_if_idle(now, force));
         released += usize::from(objects.is_some());
         drop(objects);
         drop(import);

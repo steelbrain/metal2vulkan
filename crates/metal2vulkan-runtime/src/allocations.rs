@@ -180,6 +180,12 @@ impl Allocations {
         self.made();
     }
 
+    /// Whether an allocation at the limit waits for a give-back under way now: its thread's
+    /// frees do not pace then (`host_ram.rs`).
+    pub(crate) fn give_back_awaited(&self) -> bool {
+        self.giving_back.waiting.load(Ordering::Acquire) > 0
+    }
+
     /// Give back what was allocated ahead with `give_back` from now on.
     pub(crate) fn give_back_with(&self, give_back: Box<dyn Fn(GiveBack) + Send + Sync>) {
         let _ = self.give_back.set(give_back);
@@ -235,6 +241,8 @@ struct GivingBack {
     under_way: Mutex<u32>,
     /// The last one under way ended.
     ended: Condvar,
+    /// The allocations waiting for them now.
+    waiting: AtomicU32,
     /// The waits for one.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     waits: std::sync::atomic::AtomicU64,
@@ -255,9 +263,11 @@ impl GivingBack {
         }
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         self.waits.fetch_add(1, Ordering::Relaxed);
+        self.waiting.fetch_add(1, Ordering::AcqRel);
         while *under_way > 0 {
             under_way = (self.ended.wait(under_way)).unwrap_or_else(PoisonError::into_inner);
         }
+        self.waiting.fetch_sub(1, Ordering::AcqRel);
         true
     }
 }
@@ -362,7 +372,7 @@ pub(crate) fn freed(allocations: Option<&Allocations>) {
 /// An allocation or free of the device of `allocations` in progress on this thread, counted for
 /// its checks to step aside for (`step_aside.rs`) until this goes: none where the device is not
 /// registered or this is a check's thread, whose own call on a registered device is owed to its
-/// next step instead ([`OwnCall`]).
+/// next step instead ([`OwnCall`]), as a paced thread's is to its next pace.
 pub(crate) struct Busy<'a>(Option<&'a Allocations>, Option<OwnCall>);
 
 impl<'a> Busy<'a> {
@@ -379,7 +389,7 @@ impl Drop for Busy<'_> {
         if let Some(allocations) = self.0 {
             allocations.activity.end();
         }
-        // A check's own call ends: its length is owed now.
+        // A check's or a paced thread's own call ends: its length is owed now.
         drop(self.1.take());
     }
 }

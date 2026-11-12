@@ -413,6 +413,8 @@ pub(crate) struct Counters {
     host_ram_chunks_faulted_ahead: AtomicU64,
     host_ram_chunks_given_back: AtomicU64,
     host_ram_chunks_released: AtomicU64,
+    memory_frees_paced: AtomicU64,
+    memory_frees_paced_nanos: AtomicU64,
     host_ram_chunk_bytes: AtomicU64,
     host_ram_chunks_live: AtomicU64,
     chunk_bound_buffers_made: AtomicU64,
@@ -3486,6 +3488,15 @@ impl Counters {
         (self.host_ram_chunks_faulted_ahead).fetch_add(1, Ordering::Relaxed);
     }
 
+    /// A free of one of the device's own threads that free in runs waited `waited` first
+    /// (`step_aside::pace`): the residency thread's or a guest RAM's.
+    pub(crate) fn memory_free_paced(&self, waited: std::time::Duration) {
+        self.memory_frees_paced.fetch_add(1, Ordering::Relaxed);
+        let nanos = u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX);
+        self.memory_frees_paced_nanos
+            .fetch_add(nanos, Ordering::Relaxed);
+    }
+
     /// The device let go of a chunk of a guest RAM its thread imported ahead and no object took,
     /// its allocations near the device's limit (`host_ram.rs`, `allocations.rs`).
     pub(crate) fn host_ram_chunk_given_back(&self) {
@@ -5430,6 +5441,13 @@ pub struct WorkCounts {
     /// `maxMemoryAllocationCount`, a block whose making would take its heap past the heap's size,
     /// or one that failed for room (`free_thread.rs`).
     pub memory_free_waits: u64,
+    /// The frees of the device's own threads that free in runs that first waited as long as the
+    /// thread's own frees before them took, less the time since they ended (`step_aside::pace`):
+    /// the free thread's, the residency thread's and a guest RAM thread's, so that the device's
+    /// other threads' submissions go between them. A program's own release never waits so.
+    pub memory_frees_paced: u64,
+    /// The nanoseconds those frees waited, in all.
+    pub memory_frees_paced_nanos: u64,
     /// The `VkDeviceMemory` allocations the runtime refused without calling the driver, the
     /// device holding `maxMemoryAllocationCount` of them live (`allocations.rs`): its blocks, its
     /// imports of host memory and of dma-bufs, counted together.
@@ -8484,6 +8502,7 @@ impl Device {
             )
         };
         let (frees_posted, frees_queue_full, free_waits) = self.shared().frees.counts();
+        let (frees_paced, frees_paced_nanos) = self.shared().frees.paced();
         let dirty = self.shared().dirty.tally();
         let (vk_devices_live, vk_devices_made, device_recoveries) = self.shared().lineage.counts();
         WorkCounts {
@@ -9317,6 +9336,9 @@ impl Device {
             memory_frees_posted: frees_posted,
             free_thread_queue_full: frees_queue_full,
             memory_free_waits: free_waits,
+            memory_frees_paced: counters.memory_frees_paced.load(Ordering::Relaxed) + frees_paced,
+            memory_frees_paced_nanos: counters.memory_frees_paced_nanos.load(Ordering::Relaxed)
+                + frees_paced_nanos,
             host_ram_chunk_bytes: counters.host_ram_chunk_bytes.load(Ordering::Relaxed),
             host_ram_chunks_live: counters.host_ram_chunks_live.load(Ordering::Relaxed),
             chunk_bound_buffers_made: counters.chunk_bound_buffers_made.load(Ordering::Relaxed),

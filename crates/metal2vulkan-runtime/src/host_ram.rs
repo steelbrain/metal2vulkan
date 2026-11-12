@@ -1514,10 +1514,12 @@ fn import_ahead(device: WeakDevice, ram: Weak<RamOnDevice>, wake: Arc<Wake>) {
 /// for once one more import would leave the device less than a quarter of its
 /// `maxMemoryAllocationCount` (`allocations.rs`). It ends once the use ended, the device went or
 /// was lost, or the process exits, and holds the device and the RAM weakly between chunks and
-/// while it waits. Paced as [`import_ahead`] is ([`pace`], [`fault_in`]).
+/// while it waits. Paced as [`import_ahead`] is ([`pace`], [`fault_in`]), and the chunks and lists
+/// it releases are let go of in turn ([`let_go_paced`]) but once the use ended.
 fn listed_chunks(device: WeakDevice, ram: Weak<RamOnDevice>, wake: Arc<Wake>) {
     let _ends = Ends(Arc::clone(&wake));
     pace();
+    crate::step_aside::mark_a_paced_thread();
     loop {
         if wake.ended.load(Ordering::Acquire) {
             return;
@@ -1556,14 +1558,14 @@ fn listed_chunks(device: WeakDevice, ram: Weak<RamOnDevice>, wake: Arc<Wake>) {
             for _ in &gone {
                 shared.counts.host_ram_chunk_released();
             }
-            drop(gone);
+            let_go_paced(&device, gone, || wake.ended.load(Ordering::Acquire));
         }
         // The lists kept past their copies that no copy took for the idle window and no
         // command buffer holds, freed with no lock held.
         let idle = lock(&ram.kept).idle(Instant::now(), host_residency::IDLE, |list| {
             Arc::strong_count(list) > 1
         });
-        drop(idle);
+        let_go_paced(&device, idle, || wake.ended.load(Ordering::Acquire));
         drop((ram, device));
         wake.wait_for(host_residency::TICK);
     }
@@ -1714,8 +1716,10 @@ impl Device {
 }
 
 /// [`Device::give_back_ahead_near_the_limit`]'s thread: every RAM's untaken chunks out of their
-/// slots, then let go of, each freed as its last holder goes.
+/// slots, then let go of in turn, each freed as its last holder goes, paced ([`let_go_paced`])
+/// but while an allocation at the limit waits for the give-back.
 fn give_back_untaken(device: WeakDevice) {
+    crate::step_aside::mark_a_paced_thread();
     let Some(device) = device.upgrade() else {
         return;
     };
@@ -1728,7 +1732,21 @@ fn give_back_untaken(device: WeakDevice) {
     for _ in &gone {
         shared.counts.host_ram_chunk_given_back();
     }
-    drop(gone);
+    let allocations = &shared.allocations.allocations;
+    let_go_paced(&device, gone, || allocations.give_back_awaited());
+}
+
+/// Let go of each of `gone` in turn, on one of the device's guest RAM threads, each after the
+/// frees before it (`step_aside::pace`) unless `hurry` says a caller waits for the thread, so
+/// that the device's other threads' submissions go between the frees: NVIDIA's driver holds every
+/// one while it frees an import (docs/FAST-PATHS.md, known gaps). Each wait is counted.
+fn let_go_paced<T>(device: &Device, gone: Vec<T>, hurry: impl Fn() -> bool) {
+    for one in gone {
+        if let Some(waited) = crate::step_aside::pace(&hurry) {
+            device.shared().counts.memory_free_paced(waited);
+        }
+        drop(one);
+    }
 }
 
 /// A device's import of one chunk of a RAM (`VK_EXT_external_memory_host`), or of one object's

@@ -33,6 +33,12 @@
 //!   pool's among them), then asks again; a block whose making would take its heap past the heap's size while frees of that
 //!   heap wait, waits for them first, as one whose making failed for room does (`memory.rs`'s
 //!   `place`). Each such wait is counted (`WorkCounts::memory_free_waits`).
+//! - **Paced.** Before each block it frees, the thread waits until as long as its frees before
+//!   it took has passed since the last of them ended (`step_aside::pace`): NVIDIA's driver holds
+//!   every other thread's `vkQueueSubmit` while it frees memory (docs/FAST-PATHS.md, known gaps),
+//!   so a run of posted frees back to back would hold the program's submissions for the whole
+//!   run. Never while a caller waits for the posted frees ([`FreeThread::wait`], the device's
+//!   teardown). Counted: `WorkCounts::memory_frees_paced`, `memory_frees_paced_nanos`.
 //! - **Holds nothing of the device.** The thread holds its queue, a share of the device's
 //!   functions and of its spare command pools. The device's teardown waits for the frees posted
 //!   before it releases the spares ([`FreeThread::drain`]), and for every free posted and joins the
@@ -72,6 +78,10 @@ struct Shared {
     full: AtomicU64,
     /// The waits for posted frees: an allocation at the count's limit or past its heap's size.
     waits: AtomicU64,
+    /// The frees that waited first for those before them (`step_aside::pace`), and the
+    /// nanoseconds they waited.
+    paced: AtomicU64,
+    paced_nanos: AtomicU64,
     /// The crate's device tests' hold of each free as it begins (`tests/posted_frees.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     held: crate::freed_memory::held::Held,
@@ -84,6 +94,8 @@ struct State {
     pending: usize,
     /// Per memory heap, the bytes posted and not yet freed.
     heap_bytes: [u64; vk::MAX_MEMORY_HEAPS],
+    /// Callers waiting for every free posted: the thread's frees do not pace then.
+    waiting: usize,
     stopping: bool,
 }
 
@@ -146,6 +158,8 @@ impl FreeThread {
                 posted: AtomicU64::new(0),
                 full: AtomicU64::new(0),
                 waits: AtomicU64::new(0),
+                paced: AtomicU64::new(0),
+                paced_nanos: AtomicU64::new(0),
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 held: crate::freed_memory::held::Held::default(),
             }),
@@ -277,9 +291,11 @@ impl FreeThread {
         if counted {
             self.shared.waits.fetch_add(1, Ordering::Relaxed);
         }
+        state.waiting += 1;
         while state.pending > 0 {
             state = (self.shared.done.wait(state)).unwrap_or_else(PoisonError::into_inner);
         }
+        state.waiting -= 1;
         true
     }
 
@@ -291,6 +307,15 @@ impl FreeThread {
             shared.posted.load(Ordering::Relaxed),
             shared.full.load(Ordering::Relaxed),
             shared.waits.load(Ordering::Relaxed),
+        )
+    }
+
+    /// The frees that waited first for those before them, and the nanoseconds they waited.
+    pub(crate) fn paced(&self) -> (u64, u64) {
+        let shared = &*self.shared;
+        (
+            shared.paced.load(Ordering::Relaxed),
+            shared.paced_nanos.load(Ordering::Relaxed),
         )
     }
 
@@ -320,6 +345,7 @@ impl FreeThread {
 
 /// The thread's loop: run each free posted, in turn, until stopped with none left.
 fn run(shared: &Shared) {
+    crate::step_aside::mark_a_paced_thread();
     loop {
         let work = {
             let mut state = lock(&shared.state);
@@ -336,6 +362,15 @@ fn run(shared: &Shared) {
         let freed = match work {
             Work::Block(posted) => {
                 let (heap, size) = (posted.heap, posted.size);
+                let hurry = || {
+                    let state = lock(&shared.state);
+                    state.stopping || state.waiting > 0
+                };
+                if let Some(waited) = crate::step_aside::pace(hurry) {
+                    shared.paced.fetch_add(1, Ordering::Relaxed);
+                    let nanos = u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX);
+                    shared.paced_nanos.fetch_add(nanos, Ordering::Relaxed);
+                }
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 shared.held.pass();
                 // The free is a section of the exit guard: while the process exits, the block,
