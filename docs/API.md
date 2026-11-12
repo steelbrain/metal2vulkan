@@ -5639,7 +5639,8 @@ each item named states the rule in full.
   direct draw of a vertex pipeline records as many regions as the least of its `maxViewports` and
   one below its `maxMultiDrawCount` in one `vkCmdDrawMultiEXT` or `vkCmdDrawMultiIndexedEXT`, its
   vertex function's variant storing `ViewportIndex` as `DrawIndex` (`BindState::region_viewports`,
-  `VariantKey::region_viewports`): the same pixels in fewer commands.
+  `VariantKey::region_viewports`): the same pixels in fewer commands. A region whose scissor, cut
+  to the guest's viewport and the render area, holds no pixel is not recorded.
 - **A pass over a map of a zero screen extent is refused**, `RegionError::RegionExtent` on that
   axis: the layer has no physical pixel there, so no attachment of the map's physical size can be
   made, and what Metal rasterizes in such a pass is not measured.

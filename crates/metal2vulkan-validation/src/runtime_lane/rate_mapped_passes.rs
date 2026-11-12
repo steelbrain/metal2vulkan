@@ -1106,13 +1106,23 @@ const BATCHED_SCREEN: u32 = 256;
 /// A quality falling from 1 at the centre to 0.3 at the edges, the consumer's.
 const FALLING: [f32; 5] = [0.3, 0.6, 1.0, 0.6, 0.3];
 
+/// A map of a [`BATCHED_SCREEN`] screen at [`FALLING`] quality on both axes.
+fn falling(device: &Device) -> RasterizationRateMap {
+    let mut map = RateMapDescriptor::new([BATCHED_SCREEN; 2]);
+    map.layers = vec![RateMapLayerDescriptor::new(
+        FALLING.to_vec(),
+        FALLING.to_vec(),
+    )];
+    device.new_rasterization_rate_map(&map).unwrap()
+}
+
 /// The case's triangle drawn into `target` over `map`: from an indirect buffer where `indirect`,
-/// through `indices` where `indexed`; the draw commands the device recorded for it, `[plain,
-/// multi-draw, indirect]`.
+/// through `indices` where `indexed`, through `viewport` where one is given; the draw commands the
+/// device recorded for it, `[plain, multi-draw, indirect]`.
 fn counted_draw(
     fixture: &Fixture,
     (map, target): (&RasterizationRateMap, &Texture),
-    (indirect, indexed): (bool, bool),
+    (indirect, indexed, viewport): (bool, bool, Option<Viewport>),
     indices: &Buffer,
 ) -> [u64; 3] {
     let device = &fixture.device;
@@ -1134,6 +1144,9 @@ fn counted_draw(
     encoder
         .set_fragment_buffer(Some(&fixture.screen), 0, 0)
         .unwrap();
+    if let Some(viewport) = viewport {
+        encoder.set_viewport(viewport).unwrap();
+    }
     let triangle = PrimitiveType::Triangle;
     let u16 = IndexType::UInt16;
     match (indirect, indexed) {
@@ -1188,12 +1201,7 @@ fn texel_bytes(target: &Texture) -> Vec<u8> {
 fn regions_drawn_several_at_a_time_shade_as_region_by_region() {
     fresh(|fixture, _| {
         let device = &fixture.device;
-        let mut map = RateMapDescriptor::new([BATCHED_SCREEN; 2]);
-        map.layers = vec![RateMapLayerDescriptor::new(
-            FALLING.to_vec(),
-            FALLING.to_vec(),
-        )];
-        let map = device.new_rasterization_rate_map(&map).unwrap();
+        let map = falling(device);
         let physical = map.physical_size_for_layer(0);
         let enabled = &device.enabled().features;
         let route = [
@@ -1212,9 +1220,14 @@ fn regions_drawn_several_at_a_time_shade_as_region_by_region() {
         for indexed in [false, true] {
             let side = u64::from(BATCHED_SCREEN);
             let (direct, from_buffer) = (fixture.target(side), fixture.target(side));
-            let direct_counts = counted_draw(fixture, (&map, &direct), (false, indexed), &indices);
-            let indirect_counts =
-                counted_draw(fixture, (&map, &from_buffer), (true, indexed), &indices);
+            let direct_counts =
+                counted_draw(fixture, (&map, &direct), (false, indexed, None), &indices);
+            let indirect_counts = counted_draw(
+                fixture,
+                (&map, &from_buffer),
+                (true, indexed, None),
+                &indices,
+            );
             // A draw a region (its arguments read on the CPU where nothing bounds an indexed
             // draw's index fetch, `DrawCommands::indirect_needs_arguments`).
             let [plain, multi, from_arguments] = indirect_counts;
@@ -1241,5 +1254,51 @@ fn regions_drawn_several_at_a_time_shade_as_region_by_region() {
                  draw's"
             );
         }
+    });
+}
+
+/// A draw whose viewport reaches part of the screen records only the regions whose pixels it
+/// reaches: over a [`BATCHED_SCREEN`] screen at [`FALLING`] quality, a viewport over the screen's
+/// left quarter draws fewer regions than the whole screen's, region by region from an indirect
+/// buffer, and the direct draw shades bit for bit what that draw shades, inside the left half of
+/// the physical columns.
+#[test]
+fn a_viewport_over_part_of_the_screen_draws_only_the_regions_it_reaches() {
+    fresh(|fixture, _| {
+        let device = &fixture.device;
+        let map = falling(device);
+        let physical = map.physical_size_for_layer(0);
+        let indices = buffer_with(device, &[0u8; 8]).unwrap();
+        let side = u64::from(BATCHED_SCREEN);
+        let screen = f64::from(BATCHED_SCREEN);
+        let quarter = Viewport::new(0.0, 0.0, screen / 4.0, screen, 0.0, 1.0);
+        let whole = fixture.target(side);
+        let [plain, _, from_arguments] =
+            counted_draw(fixture, (&map, &whole), (true, false, None), &indices);
+        let regions = plain + from_arguments;
+        let (direct, from_buffer) = (fixture.target(side), fixture.target(side));
+        counted_draw(
+            fixture,
+            (&map, &direct),
+            (false, false, Some(quarter)),
+            &indices,
+        );
+        let [plain, _, from_arguments] = counted_draw(
+            fixture,
+            (&map, &from_buffer),
+            (true, false, Some(quarter)),
+            &indices,
+        );
+        let reached = plain + from_arguments;
+        eprintln!("the left quarter's viewport: {reached} of {regions} regions drawn");
+        assert!(reached > 0 && reached < regions, "{reached} of {regions}");
+        let (count, [x0, y0, x1, y1], _) = shaded(&direct);
+        assert!(count > 0, "the quarter shades");
+        assert_eq!([x0, y0, y1], [0, 0, physical.height - 1]);
+        assert!(x1 < physical.width / 2, "the quarter shades to column {x1}");
+        assert!(
+            texel_bytes(&direct) == texel_bytes(&from_buffer),
+            "the direct draw's pixels differ from the region by region draw's"
+        );
     });
 }

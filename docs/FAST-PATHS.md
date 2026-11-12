@@ -568,8 +568,9 @@ driver's. Each is open work.
   the buffer lay in when it was encoded** (`managed_copy.rs`), not to the new ones.
 - **On ANV, command buffers whose own recordings fill the driver's dynamic state pool crash the
   process inside the driver** (`spares.rs`). A rate-mapped pass records each draw once per region
-  of its map, each with its own viewport and scissor, and ANV (Mesa 26.2.6, an Iris Xe) takes
-  that state from a device-wide pool of 1 GiB, about 110 bytes a region draw. Measured with one
+  of its map that the draw's viewport reaches, each with its own viewport and scissor, and ANV
+  (Mesa 26.2.6, an Iris Xe) takes that state from a device-wide pool of 1 GiB, about 110 bytes a
+  region draw. Measured with one
   draw recorded per region: a guest's command buffer of two such passes, each replaying an
   indirect command buffer, held 184 to 224 MiB of it, so about five alive at once fill it, and
   ANV then writes through a null state inside `vkCmdDraw*` instead of failing the command

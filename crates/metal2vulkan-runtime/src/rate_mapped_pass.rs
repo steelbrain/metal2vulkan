@@ -29,11 +29,14 @@
 //!   plan (`RasterizationRateMap::regions`) of the layer below, each with its composed viewport and
 //!   its scissor of physical pixels, cut to the pixels whose centres lie inside its viewport, its
 //!   left and top edges in and its right and bottom edges out (Metal's implicit scissor), and to
-//!   the render area ([`RateMappedPass::draws`]). A composed viewport's edge falls between pixel
-//!   centres, and a driver need not clip a primitive there: RADV on an AMD 780M (Mesa 26.2.4)
-//!   shaded the column past such an edge where the scissor held the pixels the viewport only
-//!   overlaps. The lines are this crate's tiles', so a pass over a map that is not the identity is
-//!   a near-equivalent within the bound; the map's creation announced it
+//!   the render area ([`RateMappedPass::draws`]). A region the cut leaves no pixel is not recorded:
+//!   it would shade nothing, and a plan of several regions has no vertex function that writes
+//!   memory. Where the cut leaves no region a pixel, the first alone is recorded, through its empty
+//!   scissor, so the vertex function runs as Metal's does. A composed viewport's edge falls
+//!   between pixel centres, and a driver need not clip a primitive there: RADV on an AMD 780M
+//!   (Mesa 26.2.4) shaded the column past such an edge where the scissor held the pixels the
+//!   viewport only overlaps. The lines are this crate's tiles', so a pass over a map that is not
+//!   the identity is a near-equivalent within the bound; the map's creation announced it
 //!   (`rasterization-rate-map`).
 //! - **Regions several at a time.** Where the device enables `multiDraw` (`VK_EXT_multi_draw`),
 //!   `multiViewport`, `shaderOutputViewportIndex` and `shaderDrawParameters`, a direct draw of one
@@ -305,8 +308,8 @@ impl RateMappedPass {
 
     /// The `(viewport, scissor)` each recording of a draw of `graphics` takes, one per region of
     /// the plan for the encoder's first `viewport` and `scissor`, within `limits`, its scissor
-    /// cut to the pixels whose centres lie inside its viewport and to the render area `extent`
-    /// (the module docs). `slice` is the one slice of the pass the recording renders (a draw of
+    /// cut to the pixels whose centres lie inside its viewport and to the render area `extent`:
+    /// the regions the cut leaves a pixel, else the first alone (the module docs). `slice` is the one slice of the pass the recording renders (a draw of
     /// one amplification, or one its view mapping moves), whose map layer is the plan's, or
     /// `None` where its primitives choose their slices (a vertex function that writes it, or a
     /// multiview draw's views), which only a map of layers alike plans.
@@ -414,18 +417,26 @@ impl RateMappedPass {
             );
             return Ok(vec![on_device(region, viewport, extent)]);
         }
-        Ok(plan
-            .regions()
-            .iter()
-            .map(|region| {
-                let r = (
-                    region.viewport(),
-                    region.scissor_offset(),
-                    region.scissor_extent(),
-                );
-                on_device(r, viewport, extent)
-            })
-            .collect())
+        let all = plan.regions().iter().map(|region| {
+            let r = (
+                region.viewport(),
+                region.scissor_offset(),
+                region.scissor_extent(),
+            );
+            on_device(r, viewport, extent)
+        });
+        // A region the cut leaves no pixel shades nothing, and its vertex function may repeat
+        // nothing (a plan of several regions refuses one that writes memory): it is not drawn.
+        // Where no region holds a pixel the first is drawn alone, through its empty scissor, so
+        // the vertex function still runs.
+        let first = all.clone().take(1);
+        let drawn: Vec<_> = all
+            .filter(|(_, scissor)| scissor.extent.width > 0 && scissor.extent.height > 0)
+            .collect();
+        Ok(match drawn.is_empty() {
+            true => first.collect(),
+            false => drawn,
+        })
     }
 }
 

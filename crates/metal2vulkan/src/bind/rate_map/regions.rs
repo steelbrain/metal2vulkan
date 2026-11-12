@@ -23,7 +23,8 @@
 //!   primitive order, as one draw's do: blending, depth and stencil tests, and framebuffer reads
 //!   see what they see in Metal's pass.
 //! - **The cost** is draws: each draw of the pass is recorded once per region
-//!   ([`RateMapRegions::regions`]), so the vertex stage runs once per region. A vertex function
+//!   ([`RateMapRegions::regions`]) whose pixels its viewport reaches (a region it does not reach
+//!   shades nothing), so the vertex stage runs once per such region. A vertex function
 //!   with side effects (device writes or atomics) would repeat them:
 //!   [`RateMapRegions::admits`] refuses such a pipeline in a pass of more than one region. The
 //!   vertex stage's resident-set misses repeat too: the `ExecutionStatus` miss count
