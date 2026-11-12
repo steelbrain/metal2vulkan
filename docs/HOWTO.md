@@ -827,7 +827,11 @@ submission, can give the device the guest's RAM once instead:
   `length` their total. A source that fails, or answers a dma-buf of another length, leaves the
   copy to the chunk.
 - Any other answer (several runs, one run crossing a chunk's end, `None`) takes the paths above:
-  the gate, then the import or the copy. The runs are kept with the object.
+  the gate, then the import or the copy. The runs are kept with the object. Where a live chunk
+  import holds some of the object's pages at the RAM's own addresses (a run crossing the end of a
+  chunk imported on both sides), the object is a copy of its pages, the gate not asked
+  (`copied-host-pages`, `copied_over_live_imports`): an import of its own would import those
+  pages a second time.
 - Elsewhere the chunks are never released while idle. Once the use is dropped, each is freed when
   nothing holds it (no buffer bound in it, no command buffer that used one), and the RAM's
   keep-alive is dropped after the last.

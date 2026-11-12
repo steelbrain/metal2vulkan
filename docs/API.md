@@ -3364,7 +3364,10 @@ bound.
   pages and not all (across its edge, or around it), or a heap's pages and more, so that importing
   them would import a page twice, which `VK_EXT_external_memory_host` leaves undefined
   (`copied_over_live_imports`, the gate not asked; a buffer whose pages a live import holds all of
-  lies inside that import instead, `ObjectChurn::buffers_bound_in_import`). The gate is asked
+  lies inside that import instead, `ObjectChurn::buffers_bound_in_import`); or a live import of a
+  guest RAM's chunk holds some of the pages at the RAM's own addresses and no chunk binds them
+  (they cross a chunk's end with the chunks on both sides imported, or no run resolver routed
+  them; `copied_over_live_imports` too). The gate is asked
   before the pages' write permission, where the pointer would be imported. A copy of pages the process maps read-only drops the GPU's writes, as Metal drops
   them: each batch's completion takes them back out of the copy and writes nothing to the pages
   (`copied_dropped_bytes`; the detail says so). The detail names which cause it was; for a failed

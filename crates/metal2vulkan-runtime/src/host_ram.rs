@@ -1975,7 +1975,9 @@ pub(crate) enum Routed {
         start: u64,
     },
     /// More than one run, or one crossing a chunk's end: the object takes the gate's path, the
-    /// runs kept with it.
+    /// runs kept with it, or is a copy where a live chunk import holds some of its pages at the
+    /// RAM's own addresses (`CopiedBecause::OverRamChunk`): one crossing the end of a chunk
+    /// imported on both sides.
     Runs {
         ram: Arc<RamOnDevice>,
         runs: Vec<Range<u64>>,

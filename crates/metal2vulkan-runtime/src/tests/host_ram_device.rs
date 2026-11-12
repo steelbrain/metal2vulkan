@@ -2128,6 +2128,95 @@ fn a_chunk_a_live_import_made_before_the_use_holds_waits_for_it_to_go() {
     assert!(settles(&dropped));
 }
 
+/// A no-copy heap whose bytes cross the end of a chunk, the chunks on both sides imported (the
+/// consumer's 2 MiB heap from 0x3f22000 into a 64 MiB chunk): no chunk binds it, and an import of
+/// its own would import pages both chunks' imports hold, so it is a copy of its pages
+/// (`CopiedBecause::OverRamChunk`), the gate not asked, whose bytes go from the CPU to the GPU and
+/// back across the chunks' end. Nothing is imported over pages a live import holds
+/// (`imports_inside_live`).
+#[test]
+fn a_heap_across_two_imported_chunks_is_a_copy_and_imports_nothing() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start, dropped) = new_ram();
+    let used = device.use_host_ram(&ram).unwrap();
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    let memory_at = |at: u64| {
+        // SAFETY: the RAM's bytes, mapped until its keep-alive goes, after every device let go.
+        unsafe { HostMemory::new(NonNull::new(at as *mut u8).unwrap()) }
+            .with_runs(resolver(&runs, itself))
+            .with_import_gate(gate(&gates, true))
+    };
+    let start_counts = device.work_counts();
+    // A buffer in each chunk imports it.
+    let in_chunk = |at: u64| {
+        // SAFETY: as above.
+        unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                memory_at(at),
+                4 * page,
+                ResourceOptions::default(),
+                None,
+            )
+        }
+        .unwrap()
+    };
+    let chunks = (
+        in_chunk(start + 16 * page),
+        in_chunk(start + 64 * MIB + 16 * page),
+    );
+    let before = device.work_counts();
+    assert_eq!(
+        before.chunk_bound_buffers_made - start_counts.chunk_bound_buffers_made,
+        2,
+        "both chunks imported"
+    );
+    // The heap: 2 MiB from 0xde000 (in whole pages) before the first chunk's end.
+    const HEAP: u64 = 2 * MIB;
+    let before_end = 0xde000 / page * page;
+    let at = start + 64 * MIB - before_end;
+    fill_pattern(at..at + HEAP);
+    let descriptor = HeapDescriptor::new(HeapType::Placement, HEAP, ResourceOptions::default());
+    // SAFETY: as above.
+    let heap =
+        unsafe { device.new_heap_with_bytes_no_copy(memory_at(at), &descriptor, None, None) }
+            .unwrap();
+    let after = device.work_counts();
+    assert_eq!(
+        (
+            after.copied_over_live_imports - before.copied_over_live_imports,
+            after.host_pointer_imports_made - before.host_pointer_imports_made,
+            after.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
+            after.object_churn.imports_inside_live - start_counts.object_churn.imports_inside_live,
+        ),
+        (1, 0, 0, 0),
+        "a copy, no import of its own, none over a live one's pages"
+    );
+    assert!(gates.lock().unwrap().is_empty(), "the gate was not asked");
+    // A buffer placed across the chunks' end reads the RAM's bytes there, and a fill through it
+    // reaches them.
+    let offset = before_end - 2 * page;
+    let placed = heap
+        .new_buffer_at_offset(4 * page, ResourceOptions::default(), offset)
+        .unwrap();
+    let bytes_at = at + offset..at + offset + 4 * page;
+    assert_eq!(
+        gpu_bytes(&device, &placed, 4 * page),
+        bytes(bytes_at.clone())
+    );
+    blit(&device, |encoder| {
+        encoder.fill_buffer(&placed, 0..4 * page, 0xA5).unwrap();
+    });
+    assert!(
+        bytes(bytes_at).iter().all(|&byte| byte == 0xA5),
+        "the fill reached the pages on both sides of the chunks' end"
+    );
+    drop((placed, heap, chunks, used, ram));
+    assert!(settles(&dropped));
+}
+
 #[test]
 fn other_answers_take_the_gates_path_and_broken_ones_are_refused() {
     let Some(device) = device() else {

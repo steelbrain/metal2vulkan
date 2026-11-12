@@ -3389,7 +3389,9 @@ impl Counters {
             CopiedBecause::Moved => &self.copied_rebind_pages_moved,
             CopiedBecause::ReadOnly => &self.copied_read_only_memory,
             CopiedBecause::Unwritable => &self.copied_unwritable_pages,
-            CopiedBecause::OverImport => &self.copied_over_live_imports,
+            CopiedBecause::OverImport | CopiedBecause::OverRamChunk => {
+                &self.copied_over_live_imports
+            }
         }
         .fetch_add(1, Ordering::Relaxed);
     }
@@ -7261,10 +7263,12 @@ pub struct WorkCounts {
     pub copied_unwritable_pages: u64,
     /// Of `copied_host_buffers_made`: no-copy buffers and heaps whose pages a live import of
     /// another held some of, and not all (a buffer's bytes across the edge of another's or a
-    /// heap's), or a heap whose pages one held more of than the heap's own bytes, made over a
-    /// copy so that no page is imported twice (`host_aliases.rs`, "One page, one import"):
-    /// `VK_EXT_external_memory_host` leaves a host allocation imported twice into a device
-    /// undefined. Their import is never tried, their gate never asked.
+    /// heap's), or a heap whose pages one held more of than the heap's own bytes, and those whose
+    /// pages a live import of a guest RAM's chunk held some of at the RAM's own addresses where no
+    /// chunk bound them (their bytes across a chunk's end, or routed by no run resolver), made
+    /// over a copy so that no page is imported twice (`host_aliases.rs`, "One page, one import";
+    /// `host_ram.rs`): `VK_EXT_external_memory_host` leaves a host allocation imported twice into
+    /// a device undefined. Their import is never tried, their gate never asked.
     pub copied_over_live_imports: u64,
     /// Of the copies made, those a rebind gave a buffer as its new pages
     /// (`Buffer::rebind_bytes_no_copy`), in `copied_host_buffers_made` and its kin too.
@@ -9792,4 +9796,8 @@ pub(crate) enum CopiedBecause {
     /// A live import of another buffer or heap holds some of the pages and not all, or more than
     /// a heap's own bytes: a second import would pin them twice (`host_aliases.rs`).
     OverImport,
+    /// A live import of a guest RAM's chunk holds some of the pages, at the RAM's own addresses,
+    /// and no chunk binds the buffer (its bytes cross a chunk's end, or no run resolver routed
+    /// them): a second import would pin them twice (`host_ram.rs`).
+    OverRamChunk,
 }

@@ -915,6 +915,11 @@ impl Device {
             _ => None,
         };
         let over_import = inside.is_none() && !matches!(within, Within::Free);
+        // Pages a guest RAM's live chunk import holds some of, at the RAM's own addresses, that
+        // no chunk binds the buffer in (its bytes cross a chunk's end, or no run resolver routed
+        // them): a copy too, never a second import of them (`host_ram.rs`).
+        let over_chunk = (in_chunk.is_none() && inside.is_none() && !drops_writes)
+            && self.ram_chunks_hold_any(window.start..window.start + window.size);
         let (buffer, memory, again) = match (in_chunk, inside) {
             // A buffer (not a heap) bound in an import of its own run alone, its chunk not
             // imported yet, is released while idle and bound in the chunk's import at its next
@@ -959,11 +964,13 @@ impl Device {
                     });
                 }
                 // Pages a live import holds some of: a copy, the gate unasked and no page pinned.
-                if over_import {
-                    // SAFETY: the caller's contract.
-                    let copied = unsafe {
-                        self.copied_buffer(copy, release, dirty, CopiedFor::OverImport, naming)
+                if over_import || over_chunk {
+                    let why = match over_import {
+                        true => CopiedFor::OverImport,
+                        false => CopiedFor::OverRamChunk,
                     };
+                    // SAFETY: the caller's contract.
+                    let copied = unsafe { self.copied_buffer(copy, release, dirty, why, naming) };
                     return copied.map(|buffer| noted(kept(buffer, log, kept_runs, made_of)));
                 }
                 let refused_by_host = copyable
@@ -1324,6 +1331,11 @@ impl Device {
                     },
                     _ => None,
                 };
+                // And new pages a guest RAM's live chunk import holds some of at the RAM's own
+                // addresses, which no chunk binds (`host_ram.rs`), as at a buffer's making.
+                let over_chunk =
+                    (in_chunk.is_none() && inside.is_none() && !moved && !drops_writes)
+                        && self.ram_chunks_hold_any(window.start..window.start + window.size);
                 let over_import = inside.is_none() && !matches!(within, Within::Free);
                 let in_chunk = in_chunk.or(inside);
                 let chunk_bound = in_chunk.is_some();
@@ -1346,6 +1358,7 @@ impl Device {
                         && !moved
                         && !chunk_bound
                         && !over_import
+                        && !over_chunk
                 });
                 let refused_by_host = match gate {
                     Some(gate) => {
@@ -1370,8 +1383,12 @@ impl Device {
                 // Only pages imported here are pinned, and so have their writability asked; pages
                 // the process cannot write are a copy whose GPU writes are dropped
                 // ([`unwritable_pages`]).
-                let imports =
-                    !chunk_bound && !refused_by_host && !moved && !read_only_copy && !over_import;
+                let imports = !chunk_bound
+                    && !refused_by_host
+                    && !moved
+                    && !read_only_copy
+                    && !over_import
+                    && !over_chunk;
                 let unwritable = imports && unwritable_pages(&host, writable, &shared.counts)?;
                 let imports = imports && !unwritable;
                 // The heap's images bound to its bytes, and the images in place over the bytes,
@@ -1517,6 +1534,7 @@ impl Device {
                             (false, None) if read_only_copy => CopiedBecause::ReadOnly,
                             (false, None) if unwritable => CopiedBecause::Unwritable,
                             (false, None) if over_import => CopiedBecause::OverImport,
+                            (false, None) if over_chunk => CopiedBecause::OverRamChunk,
                             (false, None) => CopiedBecause::Refused,
                         };
                         let (host, placement, copied) = copy(failed.as_ref())?;
@@ -2164,6 +2182,12 @@ impl Device {
                      their pages and not all (or more than a heap's own bytes), and \
                      VK_EXT_external_memory_host leaves pages imported twice undefined"
                 }
+                CopiedBecause::OverRamChunk => {
+                    "a live import of a guest RAM's chunk holds some of their pages at the \
+                     RAM's own addresses, and no chunk binds them (they cross a chunk's end, or \
+                     no run resolver routed them), and VK_EXT_external_memory_host leaves pages \
+                     imported twice undefined"
+                }
             };
             let dropped = match (drops, cause) {
                 (true, CopiedBecause::ReadOnly | CopiedBecause::Unwritable) => {
@@ -2258,6 +2282,7 @@ impl Device {
             CopiedFor::ReadOnly => (CopiedBecause::ReadOnly, None),
             CopiedFor::Unwritable => (CopiedBecause::Unwritable, None),
             CopiedFor::OverImport => (CopiedBecause::OverImport, None),
+            CopiedFor::OverRamChunk => (CopiedBecause::OverRamChunk, None),
         };
         let shared = self.shared();
         let raw_device = shared.vk();
@@ -2676,6 +2701,10 @@ enum CopiedFor {
     /// than a heap's own bytes (`host_aliases.rs`, "One page, one import"): no page is imported
     /// twice.
     OverImport,
+    /// A live import of a guest RAM's chunk holds some of them, at the RAM's own addresses, and no
+    /// chunk binds the buffer: its bytes cross a chunk's end (the chunks on both sides imported),
+    /// or no run resolver routed them (`host_ram.rs`). No page is imported twice.
+    OverRamChunk,
 }
 
 /// An import of a no-copy object's pages that the device and the gate admitted and that failed
