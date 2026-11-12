@@ -55,7 +55,7 @@ use super::work_counts::Counting;
 use ash::vk;
 use metal2vulkan::bind::{BindState, BoundBuffer, BoundSampler, BoundTexture, StageTable};
 use metal2vulkan::pipeline::{
-    BufferKind, PipelineInterface, SlotClass, SlotInterface, SlotRef, Stage,
+    BufferKind, PipelineInterface, RenderPipeline, SlotClass, SlotInterface, SlotRef, Stage,
 };
 use std::any::Any;
 use std::collections::btree_map::Entry;
@@ -96,6 +96,8 @@ pub(crate) struct AtBindViews {
     slots: [AtomicU64; VIEW_STAGES.len()],
     /// The device's view base alignment (`BindState::view_base_alignment_of`).
     alignment: u32,
+    /// The slots of its tables the state's bind state holds ([`ReadSlots`]).
+    read: ReadSlots,
 }
 
 impl AtBindViews {
@@ -103,13 +105,26 @@ impl AtBindViews {
     /// alignment of `device`: on every device, so a command's shape and its plan are the ones the
     /// translator makes of its binds there. On a device that reads every uniform view at its
     /// residual (`pipeline::reads_views_at_bind`) only the key the plan gives takes its residual
-    /// form (`RenderVariant::plan`, `Variant::keyed_regions`).
-    pub(crate) fn new(device: &Device, interface: &PipelineInterface) -> AtBindViews {
+    /// form (`RenderVariant::plan`, `Variant::keyed_regions`). The state's bind state holds the
+    /// slots `read` holds.
+    pub(crate) fn new(
+        device: &Device,
+        interface: &PipelineInterface,
+        read: ReadSlots,
+    ) -> AtBindViews {
         let limits = device.compile_device().profile().limits();
         AtBindViews {
             slots: VIEW_STAGES.map(|stage| AtomicU64::new(interface.uniform_view_buffers(stage))),
             alignment: BindState::view_base_alignment_of(limits),
+            read,
         }
+    }
+
+    /// That `variant`, a pipeline a draw of the state settled, reads no slot the state's bind
+    /// state leaves out (`ReadSlots::check_variant`; builds with debug assertions).
+    #[cfg(debug_assertions)]
+    pub(crate) fn check_variant(&self, variant: &RenderPipeline) {
+        self.read.check_variant(variant);
     }
 
     /// The device's view base alignment, which a bind state states
@@ -131,6 +146,151 @@ impl AtBindViews {
     fn of(&self, stage: Stage) -> Option<&AtomicU64> {
         let at = VIEW_STAGES.iter().position(|s| *s == stage)?;
         Some(&self.slots[at])
+    }
+}
+
+/// The render stages whose slots [`ReadSlots`] tells apart, in its order.
+const READ_STAGES: [Stage; 4] = [Stage::Vertex, Stage::Fragment, Stage::Object, Stage::Mesh];
+
+/// The slots of one stage's tables a bind state holds ([`ReadSlots`]), bit `i` for index `i` of
+/// each table: as wide as Metal's tables ([`BUFFER_SLOTS`], [`TEXTURE_SLOTS`], [`SAMPLER_SLOTS`]).
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct StageReads {
+    buffers: u32,
+    textures: u128,
+    samplers: u16,
+}
+
+impl StageReads {
+    /// Hold `class`'s slot `index`: whether it lies inside the class's table.
+    fn add(&mut self, class: SlotClass, index: u32) -> bool {
+        match class {
+            SlotClass::Buffer if index < BUFFER_SLOTS => self.buffers |= 1 << index,
+            SlotClass::Texture if index < TEXTURE_SLOTS => self.textures |= 1 << index,
+            SlotClass::Sampler if index < SAMPLER_SLOTS => self.samplers |= 1 << index,
+            _ => return false,
+        }
+        true
+    }
+
+    /// Whether it holds `class`'s slot `index`.
+    fn holds(&self, class: SlotClass, index: u32) -> bool {
+        match class {
+            SlotClass::Buffer => index < BUFFER_SLOTS && self.buffers >> index & 1 != 0,
+            SlotClass::Texture => index < TEXTURE_SLOTS && self.textures >> index & 1 != 0,
+            SlotClass::Sampler => index < SAMPLER_SLOTS && self.samplers >> index & 1 != 0,
+        }
+    }
+}
+
+/// The slots of its tables a pipeline state's bind state holds (`ArgumentTable::refresh_reading`,
+/// `refresh_changed`): of a render pipeline state none of whose functions resolves texture or
+/// sampler handles, translates pointers or reaches an indirect command buffer
+/// (`PipelineInterface::needs_handle_translation`, `needs_pointer_translation`,
+/// `reaches_command_buffers`), the slots its functions statically use (`PipelineInterface::slots`)
+/// and the buffers its vertex descriptor's layouts fetch or pull (`VertexInputState`), the only
+/// slots a plan of it reads (checked against each variant its draws settle in builds with debug
+/// assertions: [`check_variant`](Self::check_variant)); of any other, every slot. A handle table
+/// holds the textures bound at any slot, and a root table every bound buffer, so a state whose
+/// functions read either holds them all.
+///
+/// A slot it leaves out is no part of the bind state: a bind there changes neither its shape nor
+/// its plan, as it changes none of the state's commands. So draws of a state whose functions
+/// sample one texture keep their shape and their kept draw (`render/draw_again.rs`) while draws
+/// of another state between them bind other textures at a slot it leaves unread, and its kept
+/// draw carried into the next encoder is not stale for such a slot left unbound there
+/// (`render/carried.rs`).
+pub(crate) struct ReadSlots(Option<[StageReads; READ_STAGES.len()]>);
+
+impl ReadSlots {
+    /// Every slot: a compute state's, whose bind state is read whole.
+    pub(crate) fn every() -> ReadSlots {
+        ReadSlots(None)
+    }
+
+    /// The slots a render pipeline state of `pipeline`, its base, holds (the type's docs).
+    pub(crate) fn of(pipeline: &RenderPipeline) -> ReadSlots {
+        let interface = &pipeline.interface;
+        if interface.needs_handle_translation
+            || interface.needs_pointer_translation
+            || interface.reaches_command_buffers
+        {
+            return ReadSlots(None);
+        }
+        let mut stages = [StageReads::default(); READ_STAGES.len()];
+        let mut add = |slot: SlotRef| {
+            let at = READ_STAGES.iter().position(|stage| *stage == slot.stage);
+            at.is_some_and(|at| stages[at].add(slot.class, slot.index))
+        };
+        let vertex_buffer = |index: u32| SlotRef {
+            stage: Stage::Vertex,
+            class: SlotClass::Buffer,
+            index,
+        };
+        let input = &pipeline.vertex_input;
+        let fetched = (input.bindings.iter()).map(|binding| vertex_buffer(binding.buffer_index));
+        let pulled = (input.pulled.iter()).map(|attribute| vertex_buffer(attribute.buffer_index));
+        let variant = input
+            .variant_pulled
+            .iter()
+            .map(|&index| vertex_buffer(index));
+        let all = (interface.slots.keys().copied())
+            .chain(fetched)
+            .chain(pulled)
+            .chain(variant);
+        // A slot of another stage, or past its table, is held whole.
+        for slot in all {
+            if !add(slot) {
+                return ReadSlots(None);
+            }
+        }
+        ReadSlots(Some(stages))
+    }
+
+    /// Whether the bind state holds `stage`'s slot of `class` at `index`: every slot of a stage
+    /// it does not tell apart.
+    fn reads(&self, stage: Stage, class: SlotClass, index: u32) -> bool {
+        let Some(stages) = &self.0 else {
+            return true;
+        };
+        match READ_STAGES.iter().position(|of| *of == stage) {
+            Some(at) => stages[at].holds(class, index),
+            None => true,
+        }
+    }
+
+    /// That `variant`, a pipeline a draw of the state settled (a variant of its base), reads no
+    /// slot it leaves out (builds with debug assertions): its functions resolve no handle,
+    /// translate no pointer and reach no indirect command buffer, and every slot its interface
+    /// uses and its vertex descriptor fetches or pulls is held.
+    #[cfg(debug_assertions)]
+    fn check_variant(&self, variant: &RenderPipeline) {
+        if self.0.is_none() {
+            return;
+        }
+        let interface = &variant.interface;
+        assert!(
+            !interface.needs_handle_translation
+                && !interface.needs_pointer_translation
+                && !interface.reaches_command_buffers,
+            "a variant reads handles, pointers or command buffers its base reads none of"
+        );
+        let input = &variant.vertex_input;
+        let vertex = (input.bindings.iter().map(|binding| binding.buffer_index))
+            .chain(input.pulled.iter().map(|attribute| attribute.buffer_index))
+            .chain(input.variant_pulled.iter().copied());
+        for index in vertex {
+            assert!(
+                self.reads(Stage::Vertex, SlotClass::Buffer, index),
+                "a variant fetches vertex buffer {index}, which its base's bind state leaves out"
+            );
+        }
+        for slot in interface.slots.keys() {
+            assert!(
+                self.reads(slot.stage, slot.class, slot.index),
+                "a variant uses {slot:?}, which its base's bind state leaves out"
+            );
+        }
     }
 }
 
@@ -1268,9 +1428,16 @@ impl ArgumentTable {
     ) -> StageTable {
         let mut table = self.stage_table();
         table.at_bind_views = self.at_bind_views(stage, views);
+        let read = |class, index| views.read.reads(stage, class, index);
+        table.buffers.retain(|&index, _| {
+            read(SlotClass::Buffer, index) && !self.reads_unbound((stage, interface), index)
+        });
         table
-            .buffers
-            .retain(|&index, _| !self.reads_unbound((stage, interface), index));
+            .textures
+            .retain(|&index, _| read(SlotClass::Texture, index));
+        table
+            .samplers
+            .retain(|&index, _| read(SlotClass::Sampler, index));
         table
     }
 
@@ -1343,8 +1510,11 @@ impl ArgumentTable {
         // read.
         reshape.field(&mut kept.at_bind_views, self.at_bind_views(stage, views));
         let alignment = views.alignment;
+        // The slots the state holds alone (`ReadSlots`).
+        let held = |class, index| views.read.reads(stage, class, index);
         kept.buffers.retain(|&index, _| {
-            let bound = !self.reads_unbound(read, index)
+            let bound = held(SlotClass::Buffer, index)
+                && !self.reads_unbound(read, index)
                 && (self.bytes.contains_key(&index)
                     || self
                         .buffers
@@ -1356,7 +1526,8 @@ impl ArgumentTable {
             bound
         });
         for (&index, (buffer, offset)) in &self.buffers {
-            if self.bytes.contains_key(&index) || self.reads_unbound(read, index) {
+            let unheld = !held(SlotClass::Buffer, index);
+            if unheld || self.bytes.contains_key(&index) || self.reads_unbound(read, index) {
                 continue;
             }
             let stride = self.attribute_strides.get(&index).copied();
@@ -1366,19 +1537,22 @@ impl ArgumentTable {
             }
         }
         for (&index, bytes) in &self.bytes {
-            if !self.reads_unbound(read, index) {
+            if held(SlotClass::Buffer, index) && !self.reads_unbound(read, index) {
                 let a = kept.class_alignment(index, alignment);
                 reshape.slot(&mut kept.buffers, index, bound_bytes(bytes), |b| b.shape(a));
             }
         }
-        kept.textures.retain(|index, _| {
-            let bound = self.textures.contains_key(index);
+        kept.textures.retain(|&index, _| {
+            let bound = held(SlotClass::Texture, index) && self.textures.contains_key(&index);
             if !bound {
                 reshape.unbound();
             }
             bound
         });
         for (&index, texture) in &self.textures {
+            if !held(SlotClass::Texture, index) {
+                continue;
+            }
             reshape.slot(
                 &mut kept.textures,
                 index,
@@ -1386,14 +1560,17 @@ impl ArgumentTable {
                 BoundTexture::shape,
             );
         }
-        kept.samplers.retain(|index, _| {
-            let bound = self.samplers.contains_key(index);
+        kept.samplers.retain(|&index, _| {
+            let bound = held(SlotClass::Sampler, index) && self.samplers.contains_key(&index);
             if !bound {
                 reshape.unbound();
             }
             bound
         });
         for (&index, (sampler, clamps)) in &self.samplers {
+            if !held(SlotClass::Sampler, index) {
+                continue;
+            }
             let slot = SlotRef {
                 stage,
                 class: SlotClass::Sampler,
@@ -1461,6 +1638,10 @@ impl ArgumentTable {
             ..
         } in changed
         {
+            // A slot the state does not hold, which it never took in (`ReadSlots`).
+            if !views.read.reads(stage, class, index) {
+                continue;
+            }
             match class {
                 SlotClass::Buffer if offset && bit(index) != 0 && whole & bit(index) == 0 => {
                     let read = (stage, interface);
@@ -1647,8 +1828,9 @@ impl ArgumentTable {
         }
         // A buffer slot as `stage_table_reading` reads it: inline bytes where they are bound,
         // else the buffer within its length, and nothing where the function reads it unbound.
+        let held = |class, index| views.read.reads(stage, class, index);
         let buffer = |index: u32| {
-            if self.reads_unbound(read, index) {
+            if !held(SlotClass::Buffer, index) || self.reads_unbound(read, index) {
                 return None;
             }
             match self.bytes.get(&index) {
@@ -1679,13 +1861,17 @@ impl ArgumentTable {
             );
         }
         for (&index, bound) in &kept.textures {
-            let whole = self.textures.get(&index).map(bound_texture);
+            let whole = (self.textures.get(&index))
+                .filter(|_| held(SlotClass::Texture, index))
+                .map(bound_texture);
             assert!(
                 whole.as_ref() == Some(bound),
                 "{DIFFERS}: {stage:?} texture {index} kept as {bound:?}, read whole as {whole:?}"
             );
         }
-        for (&index, texture) in &self.textures {
+        let held_textures = self.textures.iter();
+        for (&index, texture) in held_textures.filter(|(&index, _)| held(SlotClass::Texture, index))
+        {
             assert!(
                 kept.textures.contains_key(&index),
                 "{DIFFERS}: {stage:?} texture {index} not kept, read whole as {:?}",
@@ -1693,7 +1879,11 @@ impl ArgumentTable {
             );
         }
         let sampler = |index: u32| {
-            self.samplers.get(&index).map(|(sampler, clamps)| {
+            let bound = self
+                .samplers
+                .get(&index)
+                .filter(|_| held(SlotClass::Sampler, index));
+            bound.map(|(sampler, clamps)| {
                 let slot = SlotRef {
                     stage,
                     class: SlotClass::Sampler,
@@ -1711,7 +1901,7 @@ impl ArgumentTable {
                 "{DIFFERS}: {stage:?} sampler {index} kept as {bound:?}, read whole as {whole:?}"
             );
         }
-        for &index in self.samplers.keys() {
+        for &index in (self.samplers.keys()).filter(|&&index| held(SlotClass::Sampler, index)) {
             assert!(
                 kept.samplers.contains_key(&index),
                 "{DIFFERS}: {stage:?} sampler {index} not kept, read whole as {:?}",

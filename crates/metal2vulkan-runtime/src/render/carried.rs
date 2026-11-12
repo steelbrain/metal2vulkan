@@ -48,7 +48,9 @@
 //!   ones: a new encoder inherits no binding, so its first draw brings in every slot its calls
 //!   bound since the opening (`argument_table::Changes`), and its rebind stops where the bind
 //!   state holds a slot bound that none of them bound (`WorkCounts::draws_carry_stopped_stale`):
-//!   the state is the ended encoder's there, not this one's. Its uses are made again whole, and
+//!   the state is the ended encoder's there, not this one's. A slot its pipeline state does not
+//!   read is no part of that state (`argument_table::ReadSlots`), so one the new encoder leaves
+//!   unbound stops nothing. Its uses are made again whole, and
 //!   it stops where it samples a texture an attachment of its pass renders
 //!   (`draws_carry_stopped_attached`). It begins its pass's first instance as every step's draw
 //!   begins it (`render/inline_first.rs`), where no draw before it began it. What it compares at

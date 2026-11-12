@@ -112,7 +112,8 @@
 //!   one (`render/carried.rs`), is rebound as one after draws of other states and calls that set
 //!   the render state, through no record: its tables' stamps are the encoder's first ones, so it
 //!   brings in every slot the encoder's calls bound since its opening, whatever table its bind
-//!   state was read from. It stops where that state holds a slot none of them bound, or a
+//!   state was read from. It stops where that state holds a slot none of them bound (it holds
+//!   only the slots its pipeline state reads: `argument_table::ReadSlots`), or a
 //!   threadgroup memory length or acceleration structure (`WorkCounts::draws_carry_stopped_stale`:
 //!   a new encoder inherits no binding), where it samples a texture an attachment of its pass
 //!   renders (`draws_carry_stopped_attached`), or at any other stop (`draws_carry_stopped_other`).

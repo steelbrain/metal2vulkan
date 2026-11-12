@@ -941,6 +941,50 @@ fn draws_switching_pipeline_states_rebind_each_state_s_last_draw() {
     assert_eq!(words_of(&counter), [counted as u32]);
 }
 
+/// Draws that switch between two pipeline states, with a texture bound before each draw but the
+/// first at fragment texture 1, which neither state's functions read (another texture each time):
+/// a bind state holds no slot its state does not read (`argument_table::ReadSlots`), so every draw
+/// after each state's first is still rebound (`WorkCounts::draws_rebound`), none unlike its kept
+/// draw or stopped, with the same commands of every kind and pixels as the same draws each taking
+/// every step.
+#[test]
+fn draws_rebind_over_binds_at_a_slot_no_function_reads() {
+    let scratch = Scratch::new("draw-again-unread");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let (first, second) = (adding_state(&device), adding_state(&device));
+    let columns = rectangles_from_columns(&device);
+    let pair = [&first, &second];
+    let states = (&pair[..], &columns);
+    let textures = textures(&device);
+    let bound = std::cell::Cell::new(0);
+    let unread = |encoder: &mut RenderCommandEncoder| {
+        let texture = &textures[bound.replace(bound.get() + 1) % textures.len()];
+        encoder.set_fragment_texture(Some(texture), 1).unwrap();
+    };
+    let forgets = |encoder: &mut RenderCommandEncoder| {
+        unread(encoder);
+        encoder.set_tessellation_factor_scale(1.0);
+    };
+    let drawn = |encoder: &mut RenderCommandEncoder, _| rectangle(encoder);
+    warm(&device, |encoder| {
+        switching_rectangles(encoder, states, unread, drawn)
+    });
+    let rebound_count = |counts: &WorkCounts| counts.draws_rebound;
+    let rebound = run(&device, |encoder| {
+        switching_rectangles(encoder, states, unread, drawn)
+    });
+    let every = run(&device, |encoder| {
+        switching_rectangles(encoder, states, forgets, drawn)
+    });
+    assert_eq!(rebound.counted(rebound_count), drawn_alone(DRAWS - 2));
+    assert_eq!(every.counted(rebound_count), 0);
+    assert_eq!(rebound.commands, every.commands);
+    assert_eq!(rebound.words, every.words, "the pixels of the draws");
+    let missed = |counts: &WorkCounts| counts.draws_unlike_kept + counts.draws_rebind_stopped;
+    assert_eq!(rebound.counted(missed), 0);
+}
+
 /// [`DRAWS`] rectangles of the columns [`rectangles_from_columns`] holds, each as the six points of
 /// its two triangles (`tob_triangle`'s, in `tob_rect`'s order), [`POINTS`] bytes each.
 fn rectangle_points(device: &Device) -> Buffer {

@@ -65,7 +65,8 @@
 //!   on. Exact for the reason a draw's is:
 //!   every field of the state a render encoder's draw binds is derived again at each draw (its
 //!   slots, by `ArgumentTable::refresh_reading`, which unbinds every slot the encoder's tables do
-//!   not bind; every other field, by `RenderCommandEncoder::settle_draw` and
+//!   not bind, and every slot the pipeline state does not read (`argument_table::ReadSlots`);
+//!   every other field, by `RenderCommandEncoder::settle_draw` and
 //!   `refresh_bind_state`), and none other is ever set: a render encoder's state holds no compute
 //!   or tile field (`stage_in_region`, `kept_imageblock_bytes`, `resident_ranges`, a stage's
 //!   acceleration structures), which a tile dispatch binds in a state of its own. The state names

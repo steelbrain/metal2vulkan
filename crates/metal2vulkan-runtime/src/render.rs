@@ -11539,6 +11539,9 @@ impl RenderLowering {
                 }
                 settled => settled?,
             };
+            // The variant reads no slot the state's bind state leaves out (`ReadSlots`).
+            #[cfg(debug_assertions)]
+            (pipeline.at_bind_views()).check_variant(settled.variant.pipeline());
             // Vulkan takes no `InterpolateAtSample` in a pipeline made with custom sample
             // locations (`VUID-VkGraphicsPipelineCreateInfo-sampleLocationsEnable-01524`), where
             // Metal's answer is not measured.

@@ -112,7 +112,7 @@ use super::families::GpuFamily;
 use super::library::Function;
 use super::values::Size;
 use super::Device;
-use crate::argument_table::AtBindViews;
+use crate::argument_table::{AtBindViews, ReadSlots};
 use crate::binary_archive::Used;
 use crate::degradation::{CompiledPipeline, Occurrence};
 use crate::released_programs::KeptProgram;
@@ -912,7 +912,8 @@ impl ComputePipelineState {
                 indirect,
             )?),
         };
-        let at_bind_views = AtBindViews::new(device, &base.shared_pipeline().interface);
+        let interface = &base.shared_pipeline().interface;
+        let at_bind_views = AtBindViews::new(device, interface, ReadSlots::every());
         Ok(ComputePipelineState(Arc::new_cyclic(|state| {
             // The state holds its ID's slot, which lists it among the states an indirect
             // command's record can name (`indirect_states`).

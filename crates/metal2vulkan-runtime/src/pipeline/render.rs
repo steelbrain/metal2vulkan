@@ -50,7 +50,7 @@ use super::tile::TileState;
 use super::BufferForms;
 use super::NoteEntries;
 use super::{compile_error, stand_in, PipelineOptions, PIPELINES, PLANS, VARIANTS};
-use crate::argument_table::AtBindViews;
+use crate::argument_table::{AtBindViews, ReadSlots};
 use crate::binary_archive::{self, Used};
 use crate::color_reformat::Routing;
 use crate::degradation::{BoundFormats, CompiledPipeline, Degradation, Occurrence};
@@ -2008,7 +2008,8 @@ impl GraphicsState {
             )?),
         };
         let samplers = descriptor.number_samplers(device, &base.shared_pipeline().interface);
-        let at_bind_views = AtBindViews::new(device, &base.shared_pipeline().interface);
+        let read = ReadSlots::of(base.shared_pipeline());
+        let at_bind_views = AtBindViews::new(device, &base.shared_pipeline().interface, read);
         let log = match warming {
             true => None,
             false => StateLog::new(label.as_deref(), &descriptor.function_names(), || {

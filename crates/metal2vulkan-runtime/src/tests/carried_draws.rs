@@ -1,8 +1,8 @@
 //! A render encoder's kept draw carried into the next render encoder of its command buffer
 //! (`render/carried.rs`): the next encoder's first draw of the same state is rebound against it
 //! (`WorkCounts::draws_rebound_carried`), with the pixels of the same passes drawn every step, the
-//! values its own calls bound; it stops where the bind state holds a slot the new encoder did not
-//! bind (`draws_carry_stopped_stale`) or where the draw samples an attachment of its pass
+//! values its own calls bound, a slot its state does not read left unbound there stopping
+//! nothing; it stops where the draw samples an attachment of its pass
 //! (`draws_carry_stopped_attached`); and the carry is let go where a call comes between the
 //! encoders (`kept_draws_carry_dropped_between`) or the next pass is of another layout
 //! (`kept_draws_carry_dropped_layout`). In builds with debug assertions the first carried draw of
@@ -341,12 +341,12 @@ fn a_carried_draw_rebinds_the_values_its_encoder_bound() {
 }
 
 /// The next encoder binds every slot its draw reads but leaves unbound one the encoder before
-/// bound (fragment buffer 1, which no function reads): the carried draw's bind state holds a slot
-/// that encoder's calls did not bind, so its rebind stops (stale) and the draw takes every step,
-/// with the pixels of the passes in command buffers of their own.
+/// bound (fragment buffer 1, which no function reads): the carried draw's bind state holds no
+/// slot its state does not read (`argument_table::ReadSlots`), so nothing in it is stale and the
+/// carried draw is rebound, with the pixels of the passes in command buffers of their own.
 #[test]
-fn a_slot_the_next_encoder_leaves_unbound_stops_the_carry() {
-    let scratch = Scratch::new("carried-stale");
+fn a_slot_no_function_reads_left_unbound_keeps_the_carry() {
+    let scratch = Scratch::new("carried-unread");
     let heard = Heard::default();
     let device = device(&scratch.0, &[], &heard);
     let queue = device.new_command_queue().unwrap();
@@ -362,8 +362,7 @@ fn a_slot_the_next_encoder_leaves_unbound_stops_the_carry() {
     let passes: [Pass<'_>; 2] = [&with_extra, &without];
     let together = frame(&queue, &passes, Apart::Together);
     let alone = frame(&queue, &passes, Apart::CommandBuffers);
-    // The second pass's draw took every step and keeps itself, which the read back lets go.
-    assert_eq!(together.carries(), [1, 0, 1, 0, 0, 1, 0, 0], "the counts");
+    assert_eq!(together.carries(), rebound(1), "the counts");
     assert_eq!(together.words, alone.words, "the pixels");
     let pixel = channels(together.words[0]);
     assert!(
