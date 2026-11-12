@@ -95,20 +95,22 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
     descriptor.resource_options = ResourceOptions::shared();
     // Where the making's time went, on this thread: on a CPU, waiting for one, or neither
     // (blocked: on a lock, the GPU or the kernel); and what it made.
-    let scheduled_before = scheduled();
+    let queued_before = queued();
     let makings_before = crate::churn_counts::this_thread_makings();
+    let cpu_before = thread_cpu();
     let made = Instant::now();
     let texture = device.new_texture(&descriptor).unwrap();
     let took = made.elapsed();
+    let cpu = thread_cpu().saturating_sub(cpu_before);
+    let queued_after = queued();
     let status = busy.status();
-    let split = match (scheduled_before, scheduled()) {
-        (Some([cpu, queued]), Some([cpu_after, queued_after])) => {
-            let cpu = Duration::from_nanos(cpu_after - cpu);
-            let queued = Duration::from_nanos(queued_after - queued);
+    let split = match (queued_before, queued_after) {
+        (Some(before), Some(after)) => {
+            let queued = Duration::from_nanos(after - before);
             let blocked = took.saturating_sub(cpu + queued);
             format!("on a CPU {cpu:?}, waiting for one {queued:?}, blocked {blocked:?}")
         }
-        _ => "its thread's times unread".to_owned(),
+        _ => format!("on a CPU {cpu:?}"),
     };
     let makings = crate::churn_counts::this_thread_makings();
     let makings: Vec<u64> = (makings.iter().zip(makings_before))
@@ -174,14 +176,23 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
     busy.wait_until_completed().unwrap();
 }
 
-/// This thread's time so far on a CPU and waiting on a run queue for one, in nanoseconds (Linux's
-/// `/proc/thread-self/schedstat`); `None` where it is unread.
-fn scheduled() -> Option<[u64; 2]> {
+/// This thread's time so far waiting on a run queue for a CPU, in nanoseconds (Linux's
+/// `/proc/thread-self/schedstat`, as of the thread's last switch onto a CPU); `None` where it is
+/// unread.
+fn queued() -> Option<u64> {
     let text = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
-    let mut fields = text
-        .split_whitespace()
-        .map(|field| field.parse::<u64>().ok());
-    Some([fields.next()??, fields.next()??])
+    text.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// This thread's CPU time so far (`CLOCK_THREAD_CPUTIME_ID`).
+fn thread_cpu() -> Duration {
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: a clock every platform the tests run on has, into a value of the call's type.
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut now) };
+    Duration::new(now.tv_sec as u64, now.tv_nsec as u32)
 }
 
 /// The side of each texture [`many_shared_textures_made_in_turn_take_pooled_blocks`] makes.
