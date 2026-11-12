@@ -1123,8 +1123,9 @@ driver's. Each is open work.
   GPU, once per cold cache; states that share the module then take 13 to 16 ms, and a warm cache
   2 ms. The module inlines a few sampling helpers five or six times each; keeping one copy of each
   would cut it. It is not built.
-- **A cold making of a compositing fragment module of some 200,000 words takes its driver
-  seconds, once per module.** Its fragment shader library, cold with the driver's disk cache off
+- **A cold making of a large module takes its driver up to seconds, once per module and
+  driver.** A compositing fragment module's fragment shader library, cold with the driver's disk
+  cache off
   (203,016 words, macOS 26.7.2's fixed-function compositing shader, which a uniform buffer's state
   drives): ANV on the Iris Xe (Mesa 26.2.6) 3.3 to 3.7 s at a load of about 16, its program 29,101
   SIMD8 instructions with 34 spills; RADV on the Radeon 780M 1.3 to 3.0 s; the RTX 3090's driver
@@ -1135,8 +1136,50 @@ driver's. Each is open work.
   instructions (29,110, 36 spills), its time within the run's noise, and holding `half` values in
   16 bits across moves, phis and selects adds spills (103).
   `VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT` leaves ANV's program and time, and the 3090's
-  time, as they were; RADV takes 0.9 to 1.0 s with it, at a draw cost not measured. Nothing is
-  built around it.
+  time, as they were; RADV takes 0.9 to 1.0 s with it, at a draw cost not measured. A convolution
+  kernel a macOS 12.7.6 guest dispatches at login is the compute case: its dispatches' 12
+  variants (22,874 to 29,651 words, `float` arithmetic) each compile on ANV into one SIMD8 program
+  of 6,222 to 8,925 instructions with 70 to 221 spills, the driver unrolling every loop (1,280
+  fused multiply-adds, 340 threadgroup loads, 116 barriers) with its accumulators live at once.
+  Made alone with the driver's disk cache off, the 23,108-word variant takes 0.27 to 0.34 s, and
+  11 variants made at once 0.31 to 0.53 s each, about 0.5 s for all 11; the 138,047-word
+  compositing fragment module of the same login takes 2.0 to 2.4 s alone, 2.4 to 2.5 s each two
+  at once and 2.7 to 3.3 s each four at once. The driver's time grows with the host's load: on
+  the same Iris Xe's host (20 logical CPUs), 20 threads kept busy beside it take that fragment
+  making to 6.3 s and 30 to 7.9 s, and the 11 kernel makings at once to 0.8 to 1.4 s each; a
+  cold login on that host while it ran other work (a load of 31 at the login's start) made the
+  fragment module in 4.87 s and the kernels in 1.5 to 4.2 s each, 10 or 11 at once. What is built
+  around the driver's time:
+  - **Each making once per driver.** A making's pipeline cache data is kept as its record
+    (`shader_cache/driver.rs`), and a later process over the same content directory finds the
+    pipeline in it: the consumer's warm boot of the 26.7.2 guest made the 203,016-word module's
+    state in 3.1 ms. A record is named by the driver's identity (vendor, device, driver version
+    and `pipelineCacheUUID`) besides the making's own content, so a driver update, another device
+    or a removed content directory makes every making cold again; Vulkan's cache data is the
+    driver's own and holds the compiled shaders, so no machine's records serve another's.
+  - **Made again before the program asks.** A consumer that keeps the pipeline records
+    (`DeviceOptions::pipeline_records`, descriptors and the libraries they name, not driver data)
+    and hands them to a later process's `Device::warm` has that device make the same translations
+    and predicted `VkPipeline`s on a thread of its own, below every other making
+    (`warm/pass.rs`): after a driver update, the cold makings run there, not at the program's
+    calls. A record is a state's creation, so the pass makes what a creation predicts: a compute
+    state whose descriptor states no `requiredThreadsPerThreadgroup` predicts no pipeline, and
+    its dispatches' pipelines (the kernel's 12 variants above) are made at their first dispatch.
+  - **No call waits the whole making.** Under `PipelineWaitPolicy::Bounded` (the default) a
+    creation waits `pipeline_creation_wait` (4.5 s) at most for its predicted making and returns
+    with it in flight, a committed command buffer waits for its commands' makings until its commit
+    plus `pipeline_commit_wait` (4.5 s) at most, and a dispatch hands its pipeline's making to the
+    device's pool and goes on (the ledger's `pipeline_waits` row, `pipeline/dispatch_making.rs`).
+  - **Off the guest's command path.** The consumer creates a guest's states on a compile thread
+    of its own: in the 12.7.6 login above, the guest's context recorded 1 to 197 command buffers
+    a second through the fragment module's 4.87 s making, and another state was created and made
+    meanwhile.
+
+  A making with no record still costs its driver's time once per module and driver: no
+  unoptimized first form shortens it where the driver ignores
+  `VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT`, and a state's pipeline is linked from its
+  libraries with no link-time optimization already (the link takes 0.0 ms of the fragment
+  module's 4.87 s).
 - **On NVIDIA, a command buffer submitted while the runtime makes or frees a GPU pool block
   completes as that call ends.** A queue's first lease of an index or mesh records pool makes its
   block as the command buffer encodes where the device holds no spare of that kind, a block
