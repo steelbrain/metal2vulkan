@@ -348,6 +348,7 @@ pub(crate) struct Counters {
     resident_textures_looked_at: AtomicU64,
     resident_resources_joined: AtomicU64,
     resident_address_indexes_made: AtomicU64,
+    resident_kept_keys_listed: AtomicU64,
     root_table_ranges_noted: AtomicU64,
     heap_tables_worked_out: AtomicU64,
     argument_samplers_taken: AtomicU64,
@@ -3228,6 +3229,13 @@ impl Counters {
     pub(crate) fn resident_address_index_made(&self) {
         self.resident_address_indexes_made
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A residency listed its `count` resources for the kept key of the executions that take it
+    /// (`Residency::kept_key`).
+    pub(crate) fn resident_kept_keys_listed(&self, count: u64) {
+        self.resident_kept_keys_listed
+            .fetch_add(count, Ordering::Relaxed);
     }
 
     /// A root table's own resident set listed `count` ranges, noted for its command buffer's
@@ -6849,6 +6857,13 @@ pub struct WorkCounts {
     /// the first look after a resource was made resident into a residency holding a buffer or a
     /// heap, however many addresses the commands name.
     pub resident_address_indexes_made: u64,
+    /// Resources a residency listed for the kept key of the indirect command buffer executions
+    /// that take it, each listing every one (`Residency::kept_key`): one listing for what a
+    /// residency holds, shared by its copies, so by every execution of a command buffer's, at its
+    /// commit and at its host step, and listed again only where a no-copy buffer moved, an image
+    /// let its views go or an indirect command buffer's hold on its ID's slot changed since.
+    /// None for an execution whose residency's listing holds, however many resources it holds.
+    pub resident_kept_keys_listed: u64,
     /// Ranges the root tables of draws and dispatches listed of their own resident sets
     /// (`metal2vulkan::bind::RootTable::resident_ranges`), noted for their command buffer's
     /// resident set, which the commit points every table at: each table's bound buffers with
@@ -9558,6 +9573,7 @@ impl Device {
             root_table_ranges_noted: (counters.root_table_ranges_noted).load(Ordering::Relaxed),
             resident_address_indexes_made: (counters.resident_address_indexes_made)
                 .load(Ordering::Relaxed),
+            resident_kept_keys_listed: (counters.resident_kept_keys_listed).load(Ordering::Relaxed),
             heap_tables_worked_out: counters.heap_tables_worked_out.load(Ordering::Relaxed),
             argument_samplers_taken: counters.argument_samplers_taken.load(Ordering::Relaxed),
             bind_views_worked_out: commands(|counts| &counts.bind_views_worked_out),

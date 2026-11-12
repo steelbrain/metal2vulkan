@@ -8,7 +8,9 @@
 //! returns them with its command's tint into a `RGBA32Uint` target. They draw on the GPU alone,
 //! in one merged draw, each vertex its command's index plus its base vertex and each fragment its
 //! own command's tint: the same pixels as the host step's, which a barrier the CPU set and
-//! cleared sends them to.
+//! cleared sends them to. Executed again and again through the host step under a heap's textures
+//! made resident, their recordings' keys list what the command buffer made resident once a
+//! frame, however many executions take it.
 
 use super::degrade_notices::{assert_made_once, counts, made_compute_kinds, on_device_with};
 use super::indirect_host_steps::{complete, HOST_STEPS};
@@ -24,9 +26,10 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    Buffer, ClearColor, ComputePipelineState, Device, IndirectCommandBufferDescriptor, Library,
-    LoadAction, PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState,
-    ResourceOptions, Size, StoreAction, Texture, TextureDescriptor,
+    Buffer, ClearColor, ComputePipelineState, Device, HeapDescriptor, HeapType,
+    IndirectCommandBufferDescriptor, Library, LoadAction, PipelineOptions, Region,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction, Texture,
+    TextureDescriptor,
 };
 use std::collections::BTreeSet;
 
@@ -286,5 +289,126 @@ fn merged_indexed_draws_draw_what_the_host_step_draws() {
                 "{size}: the merged draw against the host step"
             );
         }
+    });
+}
+
+/// The textures a heap of the device's holds, which the frames of
+/// [`a_host_step_lists_its_residency_once_for_every_execution`] make resident.
+const HEAP_TEXTURES: u64 = 64;
+
+/// The executions of the buffer's commands in each frame's pass.
+const EXECUTIONS: u64 = 4;
+
+/// A frame's command buffer whose pass executes the commands a kernel writes, a barrier the CPU
+/// set and cleared sending them to the host step, [`EXECUTIONS`] times, both encoders using a
+/// heap of [`HEAP_TEXTURES`] textures: from its second frame on, its executions keep their
+/// commands' recordings (`render/executions/kept.rs`), each keyed by what the command buffer made
+/// resident, which its residency lists once for all of them (`Residency::kept_key`), not once an
+/// execution: the listing costs the resources a frame, not the resources times the executions.
+#[test]
+fn a_host_step_lists_its_residency_once_for_every_execution() {
+    on_device_with(at_plan, |device, _messages| {
+        let library = library(device);
+        let state = device
+            .new_render_pipeline_state(&state_descriptor(&library), &PipelineOptions::default())
+            .unwrap();
+        let writer = writer(device, &library, 32);
+        let draws: Vec<Draw> = vec![[0, 3, 1, 0, 0], [3, 6, 2, 0, 1], [9, 4, 1, 0, 0]];
+        let icb = icb(device, &inheriting(), COMMANDS);
+        let command = icb.indirect_render_command_at(COMMANDS - 1).unwrap();
+        command.set_barrier().unwrap();
+        command.clear_barrier().unwrap();
+        let buffers: [Buffer; 7] = [
+            buffer_with(device, &icb.gpu_resource_id().0.to_le_bytes()).unwrap(),
+            buffer_with(device, &words(draws.iter().flatten().copied())).unwrap(),
+            buffer_with(device, &words((0..COMMANDS as u32).map(|c| 100 + c))).unwrap(),
+            buffer_with(device, &floats([W as f32, H as f32, ROW, 0.0])).unwrap(),
+            buffer_with(device, &floats(triangles().into_iter().flatten())).unwrap(),
+            buffer_with(device, &words((0..COMMANDS as u32).map(|c| 200 + c))).unwrap(),
+            buffer_with(device, &words(indices())).unwrap(),
+        ];
+        let heap = device
+            .new_heap(&HeapDescriptor::new(
+                HeapType::Placement,
+                4 << 20,
+                ResourceOptions::private(),
+            ))
+            .unwrap();
+        let mut placed = Vec::new();
+        let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 64, 64, false);
+        descriptor.usage = TextureUsage::SHADER_READ;
+        descriptor.resource_options = ResourceOptions::private();
+        let fit = device.heap_texture_size_and_align(&descriptor).unwrap();
+        let stride = fit.size.next_multiple_of(fit.align);
+        for at in 0..HEAP_TEXTURES {
+            placed.push(
+                heap.new_texture_at_offset(&descriptor, at * stride)
+                    .unwrap(),
+            );
+        }
+        let target = target(device);
+        let queue = device.new_command_queue().unwrap();
+        let mut listed = Vec::new();
+        for _ in 0..4 {
+            let command_buffer = queue.command_buffer().unwrap();
+            let before = device.work_counts();
+            let mut encoder = command_buffer.compute_command_encoder().unwrap();
+            encoder
+                .use_resource(icb.as_resource(), ResourceUsage::WRITE)
+                .unwrap();
+            encoder.use_heap(&heap).unwrap();
+            encoder.set_compute_pipeline_state(&writer).unwrap();
+            for (index, buffer) in buffers.iter().enumerate() {
+                encoder.set_buffer(Some(buffer), 0, index as u32).unwrap();
+            }
+            let grid = Size::new(draws.len() as u64, 1, 1);
+            encoder.dispatch_threads(grid, grid).unwrap();
+            encoder.end_encoding().unwrap();
+            let mut pass = RenderPassDescriptor::new();
+            let color = &mut pass.color_attachments[0];
+            color.texture = Some(target.clone());
+            color.load_action = LoadAction::Clear;
+            color.store_action = StoreAction::Store;
+            let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+            encoder
+                .use_heap(&heap, RenderStages::VERTEX | RenderStages::FRAGMENT)
+                .unwrap();
+            encoder.set_render_pipeline_state(&state).unwrap();
+            for (buffer, stages) in [
+                (&buffers[2], RenderStages::VERTEX),
+                (&buffers[3], RenderStages::VERTEX),
+                (&buffers[4], RenderStages::VERTEX),
+                (&buffers[6], RenderStages::VERTEX),
+                (&buffers[5], RenderStages::FRAGMENT),
+            ] {
+                encoder
+                    .use_resource(buffer.as_resource(), ResourceUsage::READ, stages)
+                    .unwrap();
+            }
+            for _ in 0..EXECUTIONS {
+                encoder
+                    .execute_commands_in_buffer(&icb, 0..COMMANDS)
+                    .unwrap();
+            }
+            encoder.end_encoding().unwrap();
+            complete(&command_buffer);
+            let after = device.work_counts();
+            assert!(
+                after.host_steps_recorded > before.host_steps_recorded,
+                "the frame's executions take the host step"
+            );
+            listed.push(after.resident_kept_keys_listed - before.resident_kept_keys_listed);
+        }
+        // What the command buffer made resident: the heap and its textures, the indirect command
+        // buffer and the five buffers.
+        let resident = 1 + HEAP_TEXTURES + 1 + 5;
+        for (frame, &listed) in listed.iter().enumerate().skip(1) {
+            assert!(
+                listed > 0 && listed <= 2 * resident,
+                "frame {frame}: {listed} listed of {resident} resident, {EXECUTIONS} executions \
+                 ({listed:?})"
+            );
+        }
+        drop(placed);
     });
 }

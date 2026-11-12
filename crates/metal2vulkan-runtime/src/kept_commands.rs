@@ -47,14 +47,14 @@ use crate::encoder::ResidentPart;
 use crate::error::Error;
 use crate::execution::Execution;
 use crate::heap_sets::{self, SetVersion};
-use crate::residency::Residency;
+use crate::residency::{KeptListing, Residency};
 use crate::resource::ResourceKey;
 use crate::spares::CommandPool;
 use crate::tracker::Summary;
 use crate::upload::Uploads;
 use crate::work_counts::Counters;
 use ash::vk;
-use metal2vulkan::bind::{ReplayFaults, UsedResource};
+use metal2vulkan::bind::ReplayFaults;
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -259,21 +259,21 @@ pub(super) fn resolutions(
 }
 
 /// The resources an execution's encoders made resident, as the key of a chunk it records holds
-/// them (`Residency::kept_key`): one list an execution, which the chunks it records share, so a
-/// later execution compares its own with a kept chunk's whole once a list ([`ResidentMet`]) and
-/// by pointer after.
+/// them (`Residency::kept_key`): one list a residency's content, which the executions that take
+/// it and the chunks they record share, so a later execution compares its own with a kept
+/// chunk's whole once a list ([`ResidentMet`]) and by pointer after.
 #[derive(Clone)]
-pub(super) struct ResidentKey(Arc<(Vec<UsedResource>, Vec<ResourceKey>)>);
+pub(super) struct ResidentKey(Arc<KeptListing>);
 
 impl ResidentKey {
     /// The key of `resident`, an execution's (`Residency::kept_key`).
-    pub(super) fn new(resident: (Vec<UsedResource>, Vec<ResourceKey>)) -> ResidentKey {
-        ResidentKey(Arc::new(resident))
+    pub(super) fn new(resident: Arc<KeptListing>) -> ResidentKey {
+        ResidentKey(resident)
     }
 
-    /// The resources' keys, in token order.
-    pub(super) fn keys(&self) -> &[ResourceKey] {
-        &self.0 .1
+    /// Whether `key` is one of the resources' keys.
+    pub(super) fn holds_key(&self, key: &ResourceKey) -> bool {
+        self.0.holds_key(key)
     }
 }
 

@@ -132,7 +132,6 @@ use crate::sample_positions::Sixteenths;
 use metal2vulkan::bind::indirect_commands::{BufferStage, CommandRecord};
 use metal2vulkan::bind::ReplayFaults;
 use metal2vulkan::metal::IndirectCommandType;
-use std::collections::BTreeSet;
 use std::ops::Range;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -492,16 +491,17 @@ impl RenderExecution {
         // Read before the chunks are recorded: a sampler state made meanwhile leaves a key no later
         // execution's equals.
         let samplers = command_buffer.generation().sampler_slots_changed();
-        let resident = ResidentKey::new(residency.kept_key());
+        let resident = ResidentKey::new(residency.kept_key(command_buffer.device()));
         // An attachment is among them as a texture made resident, or in a heap or over a buffer
         // made resident.
-        let keys: BTreeSet<ResourceKey> = resident.keys().iter().copied().collect();
         let attached = colors
             .map(|color| &color.target.texture)
             .chain(layout.depth_stencil.as_ref().map(|ds| &ds.target.texture))
             .filter(|texture| {
-                keys.contains(&texture.use_key())
-                    || texture.bytes_key().is_some_and(|key| keys.contains(&key))
+                resident.holds_key(&texture.use_key())
+                    || texture
+                        .bytes_key()
+                        .is_some_and(|key| resident.holds_key(&key))
             })
             .map(|texture| texture.use_key())
             .collect();

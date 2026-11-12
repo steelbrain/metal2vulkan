@@ -87,7 +87,7 @@ impl Execute {
         let key = ComputeKey {
             pipeline: self.pipeline.clone(),
             ordered: self.ordered,
-            resident: ResidentKey::new(residency.kept_key()),
+            resident: ResidentKey::new(residency.kept_key(command_buffer.device())),
         };
         Some(Keeping { key, kept, read_at })
     }
