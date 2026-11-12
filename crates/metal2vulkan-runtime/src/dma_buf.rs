@@ -37,10 +37,9 @@
 //! - **The bytes.** The runtime never maps a dma-buf: `contents` stays the caller's pointer, and
 //!   the CPU's writes through it and the GPU's through the imports meet in the same pages with no
 //!   flush or invalidate (the types are host-coherent).
-//! - **Textures** placed in a heap over such pages (and their views) that Metal does not tile
-//!   there (one it keeps losslessly compressed, one of a format or shape whose tiles are not
-//!   measured: `texture/heap.rs`; one Metal tiles is a shadow of its elements in Metal's tiles),
-//!   where the device also lists
+//! - **Textures** placed in a heap over such pages (and their views), whatever Metal's layout of
+//!   them there (one Metal tiles is a shadow of its elements in Metal's tiles only where no such
+//!   image serves: `texture/heap.rs`), where the device also lists
 //!   `VK_EXT_image_drm_format_modifier` and `VK_EXT_queue_family_foreign` (enabled beside the
 //!   route, `create.rs`'s `dma_buf_image_names`), are each an image of `DRM_FORMAT_MOD_LINEAR` made
 //!   for dma-bufs and bound to a dedicated import (`VkMemoryDedicatedAllocateInfo`) of the one

@@ -546,15 +546,18 @@ driver's. Each is open work.
   the buffer lay in when it was encoded** (`managed_copy.rs`), not to the new ones.
 
 - **A heap texture Metal keeps uncompressed lies in its driver's layout, not Metal's tiles, where
-  its image fits Metal's answer in the heap's memory** (`texture/heap.rs`,
-  `heap-texture-untiled-layout`): on every driver whose colour images are not measured to lie as
+  its image fits the heap's answer in the heap's memory** (`texture/heap.rs`,
+  `heap-texture-untiled-layout`). In a heap over the caller's host pages, its linear image bound
+  to the pages, in the driver's rows, wherever one serves: Apple documents a texture's layout in
+  a heap's bytes as Metal's own, and the shadow of Metal's tiles there is a fallback. In a heap
+  over the device's memory, on every driver whose colour images are not measured to lie as
   Metal's heap textures (`DriverFact::ColorImagesLieAsMetalHeapTextures`: every one but MoltenVK
   on the M3 Max), its optimal image, or on ANV the route a driver that hides aliased writes takes
   (host-transfer usage, a linear image, or the optimal image, `heap-texture-host-transfer`,
   `heap-texture-linear`, `heap-texture-hides-aliased-writes`), is bound in the heap's bytes as
   it is. A buffer or another texture over those bytes then meets its texels where the driver
   lays them, where Metal's tiles place them on Metal (`texture/heap_tiled.rs`). Only where
-  that image does not fit Metal's answer does a shadow of Metal's tiles, or a linear image that
+  that image does not fit the answer does a shadow of Metal's tiles, or a linear image that
   lays every element there, take its place (the costs above).
 
 - **On RADV, the first submission after the GPU idled into runtime suspend waits for the kernel to

@@ -3098,7 +3098,10 @@ bound.
   layout, where Metal tiles them: a buffer or texture over them meets the blocks at other bytes than
   on Metal.
 - `metal2vulkan-degrade-heap-texture-untiled-layout` (precision). `HeapTextureUntiledLayout`: A
-  texture made in a heap over host pages that Metal lays out tiled where the runtime does not: a
+  texture made in a heap over host pages that Metal lays out tiled where the runtime does not: its
+  linear image bound to the pages, in the driver's rows with no copy, wherever one serves (Apple
+  documents a texture's layout in a heap's bytes as Metal's own, so the runtime keeps no shadow of
+  Metal's tiles there but as a fallback); a
   layout not measured (a format whose layout in Metal's heaps is not probed), an image that holds
   other bytes than Metal's elements, moves past the device's limits, or a multisample texture whose
   samples the device does not move to and from a buffer (a 16-bit depth where its multisampled

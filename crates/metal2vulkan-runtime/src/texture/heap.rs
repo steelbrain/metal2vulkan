@@ -567,8 +567,9 @@ pub(crate) enum AliasRoute {
     /// (`heap_two_planes.rs`): a shadow of them (`shadowed-texture`; `heap-two-plane-layout` for
     /// a mipmapped one, whose later levels lie in the image alone, and a 1D array).
     Planes,
-    /// A texture Metal tiles in the heap's bytes (`heap_tiled.rs`) in a heap over host pages, or
-    /// in any heap one that no image bound there serves as Metal's (a depth or stencil image the
+    /// A texture Metal tiles in the heap's bytes (`heap_tiled.rs`) in a heap over host pages where
+    /// no image over the pages serves (`Device::host_heap_plan`), or in a copied one, or in any
+    /// heap one that no image bound there serves as Metal's (a depth or stencil image the
     /// driver lays apart from its memory or keeps GPU-optimized, one the heap's memory takes no
     /// image of, a multisample one held otherwise in memory of its own): its optimal image in
     /// memory of its own, whose elements (a multisample texture's samples) the encoders move from
@@ -3005,13 +3006,16 @@ impl Device {
     /// bytes and alignment fit the answer ([`dma_buf_heap_plan`](Self::dma_buf_heap_plan)); else,
     /// and where it is not made after all as the texture is, the shadow, counted and announced.
     ///
-    /// A texture of a plain format Metal lays out tiled (`HeapLayout::Tiled`) is a shadow of its
-    /// elements tiled in the heap's bytes (`AliasRoute::Tiled`, `heap_tiled.rs`), where its optimal
-    /// image takes copies and the moves fit the device; elsewhere it takes the routes above,
-    /// announced untiled when it is made. One Metal keeps losslessly compressed, whose bytes on
-    /// Metal are no layout of its texels, takes the image over the pages above where one serves
-    /// (in the driver's rows, with no copy), and the shadow of its uncompressed tiles planned for
-    /// it (`HeapLayout::Uncompressed`) in a copied heap or where none serves; announced
+    /// A texture of a plain format Metal lays out tiled (`HeapLayout::Tiled`) takes the image over
+    /// the pages above too, in the driver's rows with no copy, announced untiled
+    /// (`Untiled::LINEAR`): Apple documents a texture's layout in a heap's bytes as Metal's own,
+    /// so the bytes there are the device's layout. Where none serves, or in a copied heap, it is a
+    /// shadow of its elements tiled in the heap's bytes (`AliasRoute::Tiled`, `heap_tiled.rs`),
+    /// where its optimal image takes copies and the moves fit the device; elsewhere the shadow
+    /// above, announced untiled when it is made. One Metal keeps losslessly compressed, whose
+    /// bytes on Metal are no layout of its texels, likewise takes the image over the pages where
+    /// one serves, and the shadow of its uncompressed tiles planned for it
+    /// (`HeapLayout::Uncompressed`) in a copied heap or where none serves; announced
     /// `heap-texture-lossless-layout` either way.
     ///
     /// A multisample texture is a shadow of its samples in Metal's tiles (`AliasRoute::Tiled`, a
@@ -3062,36 +3066,92 @@ impl Device {
             };
             return Ok(HeapPlan { image, ..p });
         }
-        // A shadow of Metal's tiles serves it over host pages as in any heap. One of the tiles a
-        // texture Metal keeps losslessly compressed lays out in uncompressed
-        // (`HeapLayout::Uncompressed`: Metal's bytes are no layout of its texels) serves it in a
-        // copied heap, and where no image over the pages does (below); one that does serves it
-        // with no copy, its rows no less Metal's layout than those tiles.
-        let uncompressed = matches!(p.metal_layout, HeapLayout::Uncompressed(_));
-        if p.image.route == AliasRoute::Tiled && (!uncompressed || bytes.copied()) {
-            return Ok(p);
-        }
         // A copied heap's bytes the GPU uses lie in a copy of the caller's pages (`copied.rs`),
-        // to which no image is bound: a shadow of them, as over pages no image takes, unless its
-        // route is one in memory of its own already.
+        // to which no image is bound: a shadow of them, of Metal's tiles where the route planned
+        // one (as in any heap) or in memory of its own already, else of the bytes in rows.
+        let in_own_memory = matches!(
+            p.image.route,
+            AliasRoute::Shadow
+                | AliasRoute::MemoryShadow
+                | AliasRoute::Unaliased
+                | AliasRoute::Planes
+        );
+        let facts = self
+            .shared()
+            .textures
+            .facts(self.compile_device().profile());
         if bytes.copied() {
-            if matches!(
-                p.image.route,
-                AliasRoute::Shadow
-                    | AliasRoute::MemoryShadow
-                    | AliasRoute::Unaliased
-                    | AliasRoute::Planes
-            ) {
+            if in_own_memory || p.image.route == AliasRoute::Tiled {
                 return Ok(p);
             }
-            let facts = self
-                .shared()
-                .textures
-                .facts(self.compile_device().profile());
             let linear = plan_image(&p.layout, descriptor.image_usage(), false, &facts)
                 .map_err(|refusal| image_error(call, refusal))?;
             let image = self.memory_shadow(linear, &p)?;
             return Ok(HeapPlan { image, ..p });
+        }
+        // Over the caller's pages the texture lies in an image bound to them, in the driver's
+        // layout, wherever one serves, whatever layout Metal gives its bytes: Apple documents a
+        // texture's layout in a heap's bytes as private to Metal, so the shadow of Metal's tiles
+        // below is a fallback alone. A texture Metal tiles there is announced untiled
+        // (`Untiled::LINEAR`); one Metal keeps losslessly compressed, whose bytes on Metal are no
+        // layout of its texels, as such.
+        let linear = plan_image(&p.layout, descriptor.image_usage(), false, &facts)
+            .map_err(|refusal| image_error(call, refusal))?;
+        let untiled = |p: &mut HeapPlan| {
+            if matches!(p.metal_layout, HeapLayout::Tiled(_)) {
+                p.metal_layout = HeapLayout::Untiled(Untiled::LINEAR);
+            }
+        };
+        // Why an image of the driver's `DRM_FORMAT_MOD_LINEAR` layout over dma-buf pages does not
+        // serve, where the pages are such.
+        let mut dma_buf_why = None;
+        if !in_own_memory {
+            let type_index = bytes.pages_type_index();
+            let SizeAndAlign { size, align } = p.size_and_align;
+            // A driver that lays depth and stencil images apart from their memory makes no linear
+            // one over it (MoltenVK: Metal makes no depth texture over a buffer).
+            let driver = &self.properties().driver_facts;
+            let apart =
+                !colour(&linear) && driver.contains(&DriverFact::DepthStencilImagesLieApart);
+            // Over pages imported as dma-buf memory (`dma_buf.rs`), an image of the driver's
+            // `DRM_FORMAT_MOD_LINEAR` layout, bound to a dedicated import of a dma-buf of its own
+            // pages as the texture is made (`heap_texture_at`), where it fits the answer; else
+            // the shadow below, counted and announced.
+            if !apart && bytes.over_dma_buf() {
+                match self.dma_buf_heap_plan(linear.clone(), &p, &facts)? {
+                    Ok(image) => {
+                        untiled(&mut p);
+                        return Ok(HeapPlan { image, ..p });
+                    }
+                    Err(why) => dma_buf_why = Some(why),
+                }
+            } else if !apart && linear_lack(&linear, &facts).is_none() {
+                let tiling = vk::ImageTiling::LINEAR;
+                if let Some(requirements) = self.host_image_requirements(&linear)? {
+                    if requirements.memory_type_bits & (1 << type_index) != 0
+                        && requirements.alignment <= align
+                        && requirements.size <= size
+                    {
+                        let image = HeapImage {
+                            plan: linear,
+                            tiling,
+                            requirements,
+                            route: AliasRoute::Direct,
+                            moves: None,
+                        };
+                        untiled(&mut p);
+                        return Ok(HeapPlan { image, ..p });
+                    }
+                }
+            }
+        }
+        // Where no image over the pages serves: the shadow of Metal's tiles the route planned (of
+        // a plain texture's, or of the uncompressed tiles of one Metal keeps losslessly
+        // compressed), or one of a plain texture's tiles where its optimal image takes copies and
+        // the moves fit the device; else a route in memory of its own already, or a shadow of the
+        // bytes in rows.
+        if p.image.route == AliasRoute::Tiled {
+            return Ok(p);
         }
         if let HeapLayout::Tiled(tiled) = &p.metal_layout {
             match self.tiled_heap_image(call, &p, tiled, descriptor)? {
@@ -3102,60 +3162,13 @@ impl Device {
                 }
             }
         }
-        if matches!(
-            p.image.route,
-            AliasRoute::Shadow
-                | AliasRoute::MemoryShadow
-                | AliasRoute::Unaliased
-                | AliasRoute::Planes
-        ) {
+        if in_own_memory {
             return Ok(p);
         }
-        let type_index = bytes.pages_type_index();
-        let facts = self
-            .shared()
-            .textures
-            .facts(self.compile_device().profile());
-        let linear = plan_image(&p.layout, descriptor.image_usage(), false, &facts)
-            .map_err(|refusal| image_error(call, refusal))?;
-        let SizeAndAlign { size, align } = p.size_and_align;
-        // A driver that lays depth and stencil images apart from their memory makes no linear
-        // one over it (MoltenVK: Metal makes no depth texture over a buffer).
-        let driver = &self.properties().driver_facts;
-        let apart = !colour(&linear) && driver.contains(&DriverFact::DepthStencilImagesLieApart);
-        // Over pages imported as dma-buf memory (`dma_buf.rs`), an image of the driver's
-        // `DRM_FORMAT_MOD_LINEAR` layout, bound to a dedicated import of a dma-buf of its own
-        // pages as the texture is made (`heap_texture_at`), where it fits the answer; else the
-        // shadow below, counted and announced.
-        let dma_buf = bytes.over_dma_buf();
-        if !apart && dma_buf {
-            let image = self.dma_buf_heap_plan(linear, &p, &facts)?;
-            return Ok(HeapPlan { image, ..p });
-        }
-        if !apart && linear_lack(&linear, &facts).is_none() {
-            let tiling = vk::ImageTiling::LINEAR;
-            if let Some(requirements) = self.host_image_requirements(&linear)? {
-                if requirements.memory_type_bits & (1 << type_index) != 0
-                    && requirements.alignment <= align
-                    && requirements.size <= size
-                {
-                    let image = HeapImage {
-                        plan: linear,
-                        tiling,
-                        requirements,
-                        route: AliasRoute::Direct,
-                        moves: None,
-                    };
-                    return Ok(HeapPlan { image, ..p });
-                }
-            }
-        }
-        // Where no linear image serves: the shadow of the uncompressed tiles planned, else one
-        // of the bytes in rows.
-        if p.image.route == AliasRoute::Tiled {
-            return Ok(p);
-        }
-        let image = self.memory_shadow(linear, &p)?;
+        let image = match dma_buf_why {
+            Some(why) => self.dma_buf_heap_shadow(linear, &p, why)?,
+            None => self.memory_shadow(linear, &p)?,
+        };
         Ok(HeapPlan { image, ..p })
     }
 
@@ -3163,49 +3176,49 @@ impl Device {
     /// (`dma_buf.rs`), `linear` its plan: an image of the driver's `DRM_FORMAT_MOD_LINEAR` layout
     /// ([`Device::dma_buf_natural_layout`]) at the texture's offset, made and bound to a dedicated
     /// import of a dma-buf of its own pages as the texture is made (`heap_texture_at`), where the
-    /// device makes one of the plan and its bytes fit the heap's answer; else a shadow of the
-    /// heap's bytes ([`dma_buf_heap_shadow`](Self::dma_buf_heap_shadow)). Its memory's alignment
-    /// binds no offset of the heap's: the import is the image's own, bound at its start, its
-    /// plane at the texels' offset in their first page, which the driver takes or refuses as the
-    /// texture is made (RADV: a multiple of 256 bytes), the shadow taken where it refuses.
+    /// device makes one of the plan and its bytes fit the heap's answer; else why not, for the
+    /// shadow the caller takes ([`dma_buf_heap_shadow`](Self::dma_buf_heap_shadow)). Its memory's
+    /// alignment binds no offset of the heap's: the import is the image's own, bound at its start,
+    /// its plane at the texels' offset in their first page, which the driver takes or refuses as
+    /// the texture is made (RADV: a multiple of 256 bytes), the shadow taken where it refuses.
     #[cfg(unix)]
     fn dma_buf_heap_plan(
         &self,
         linear: ImagePlan,
         p: &HeapPlan,
         facts: &crate::image_plan::ImageFacts<'_>,
-    ) -> Result<HeapImage, Error> {
+    ) -> Result<Result<HeapImage, String>, Error> {
         let size = p.size_and_align.size;
-        let why = match self.dma_buf_natural_layout(&linear, facts)? {
-            Ok(natural) if natural.size <= size => {
-                return Ok(HeapImage {
-                    plan: linear,
-                    tiling: vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
-                    // The optimal image's, which its shadow takes where none is made.
-                    requirements: p.image.requirements,
-                    route: AliasRoute::Direct,
-                    moves: None,
-                });
-            }
-            Ok(natural) => format!(
+        Ok(match self.dma_buf_natural_layout(&linear, facts)? {
+            Ok(natural) if natural.size <= size => Ok(HeapImage {
+                plan: linear,
+                tiling: vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
+                // The optimal image's, which its shadow takes where none is made.
+                requirements: p.image.requirements,
+                route: AliasRoute::Direct,
+                moves: None,
+            }),
+            Ok(natural) => Err(format!(
                 "the driver's DRM_FORMAT_MOD_LINEAR image of it takes {} bytes, past the {size} \
                  the heap answers",
                 natural.size
-            ),
-            Err(why) => why,
-        };
-        self.dma_buf_heap_shadow(linear, p, why)
+            )),
+            Err(why) => Err(why),
+        })
     }
 
-    /// No pages are imported as dma-bufs on this system: the shadow, as before.
+    /// No pages are imported as dma-bufs on this system: never reached, as no heap's pages are
+    /// such.
     #[cfg(not(unix))]
     fn dma_buf_heap_plan(
         &self,
-        linear: ImagePlan,
-        p: &HeapPlan,
+        _linear: ImagePlan,
+        _p: &HeapPlan,
         _facts: &crate::image_plan::ImageFacts<'_>,
-    ) -> Result<HeapImage, Error> {
-        self.memory_shadow(linear, p)
+    ) -> Result<Result<HeapImage, String>, Error> {
+        Err(internal(
+            "a heap texture over dma-buf pages on a system of none",
+        ))
     }
 
     /// The image of a texture of plan `p` whose route is a `DRM_FORMAT_MOD_LINEAR` image over
