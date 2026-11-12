@@ -88,12 +88,12 @@ fn corners([x0, y0, x1, y1]: [u64; 4]) -> Vec<u8> {
 /// The bits of `value` as a half, for the values the test writes (exact in a half).
 fn half(value: f64) -> u16 {
     match value {
-        v if v == 1.0 => 0x3c00,
-        v if v == 0.75 => 0x3a00,
-        v if v == 0.5 => 0x3800,
-        v if v == 0.375 => 0x3600,
-        v if v == 0.25 => 0x3400,
-        v if v == 0.125 => 0x3000,
+        1.0 => 0x3c00,
+        0.75 => 0x3a00,
+        0.5 => 0x3800,
+        0.375 => 0x3600,
+        0.25 => 0x3400,
+        0.125 => 0x3000,
         v => panic!("no half for {v}"),
     }
 }
