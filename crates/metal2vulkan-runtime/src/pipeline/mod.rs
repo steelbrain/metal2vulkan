@@ -226,10 +226,10 @@ const PIPELINES: usize = 32;
 /// in 146 s, every such dispatch's command buffer waiting for a making on the pool. 256 holds that
 /// working set twice over (`tests/region_widths.rs` makes each of the 128 once).
 ///
-/// What the bound costs where it is full: a compute `VkPipeline` of a small kernel is its shader
-/// binary in the driver's arena and the driver's own records of it, a few KiB each
-/// (`tests/region_widths.rs` prints the process's memory across 128 makings); a variant whose
-/// dispatches take no more keys than they did holds no more than before.
+/// What the bound costs where it is full, measured by `tests/region_widths.rs` across the 128
+/// makings of its one-store kernel: on lavapipe, whose pipelines are JIT-compiled code, about 650
+/// KiB of resident memory each (121,784 to 205,456 KiB), so up to about 160 MiB for a full memo. A
+/// variant whose dispatches take no more keys than they did holds no more than before.
 const REGION_PIPELINES: usize = 256;
 /// The most variants besides the first a state keeps.
 const VARIANTS: usize = 8;
