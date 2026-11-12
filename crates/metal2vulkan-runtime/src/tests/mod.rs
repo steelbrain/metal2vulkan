@@ -337,6 +337,8 @@ mod linear_runs;
 mod linked_pipelines_shared;
 mod listed_extensions;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod lone_fetch;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod mac_class;
 mod making;
 mod managed;
