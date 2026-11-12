@@ -204,6 +204,11 @@ pub(super) struct Made {
     pub(super) waited: Option<Waited>,
     /// A call waited for a block as it was made.
     pub(super) waited_for: bool,
+    /// What its making had the driver make, by `churn_counts::VkMaking` (its memory, and where
+    /// its buffers take device addresses a buffer of them and its binding): counted on the
+    /// thread of the call that waited for it, where one did (`ObjectChurn`'s `_this_thread`
+    /// counts).
+    pub(super) makings: [u64; 6],
     /// How long its making took once its wait for a burst's end was over (its allocation, and
     /// the reads of its pages until a call waited), for the crate's tests.
     #[cfg(test)]
@@ -467,6 +472,7 @@ fn spawn(
             };
             #[cfg(test)]
             let began = Instant::now();
+            let before = crate::churn_counts::this_thread_makings();
             let block = ready(
                 &maker,
                 &functions,
@@ -475,6 +481,7 @@ fn spawn(
                 (&shared.reading, &wanted),
             );
             let waited_for = shared.waiting.load(Ordering::SeqCst) > 0;
+            let after = crate::churn_counts::this_thread_makings();
             let mut state = lock(&shared.state);
             state.making = None;
             let Some(block) = block else {
@@ -484,6 +491,7 @@ fn spawn(
                 block,
                 waited: waited.take(),
                 waited_for,
+                makings: std::array::from_fn(|at| after[at] - before[at]),
                 #[cfg(test)]
                 making: began.elapsed(),
             });

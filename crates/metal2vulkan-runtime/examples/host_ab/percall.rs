@@ -406,14 +406,25 @@ pub fn group<G: Gpu, S>(
 /// its image is linear because the device's optimal image takes none of the heap's memory types;
 /// on macOS the first lock of each of its mutexes allocates too (std's). A path that inherently
 /// makes more of a count is held to its own measure there ([`HELD_ON_PATH`]).
+///
+/// A driver making (`rt_vk_<count>_this_thread`) is held as the calling thread's: what the call
+/// made, and a block of the runtime's memory pool it waited for, which the pool's thread made
+/// (`ObjectChurn`'s `_this_thread` counts). A block that thread makes ahead while no call waits
+/// for it is no call's making: it waits for a pause in the device's queue uses, at most 50 ms
+/// (`memory/ready.rs`), and lands in whichever group's window runs then, where the process's
+/// count (`rt_vk_<count>`) shows it.
 const HELD: [(&str, &str, f64); 47] = [
     // A draw records exactly one draw command, at the call, and makes no driver object: the cost
     // it pays there is planning and recording, which is settled work and nothing a driver
     // charges for.
     ("draw_strip", "rt_draws_at_call", 1.0),
-    ("draw_strip", "rt_vk_images_made_at_call", 0.0),
-    ("draw_strip", "rt_vk_buffers_made_at_call", 0.0),
-    ("draw_strip", "rt_vk_memory_allocations_at_call", 0.0),
+    ("draw_strip", "rt_vk_images_made_this_thread_at_call", 0.0),
+    ("draw_strip", "rt_vk_buffers_made_this_thread_at_call", 0.0),
+    (
+        "draw_strip",
+        "rt_vk_memory_allocations_this_thread_at_call",
+        0.0,
+    ),
     ("draw_triangles", "rt_draws_at_call", 1.0),
     ("draw_indexed", "rt_recorded_cmd_draw_indexed_at_call", 1.0),
     // And it allocates about once in twenty draws (0.049 measured), nothing a draw of its own.
@@ -428,7 +439,7 @@ const HELD: [(&str, &str, f64); 47] = [
     // Ending the encoding begins its render pass once, at the call, and makes no driver object.
     // Its 24 allocations are the largest counted quantity on the path.
     ("end_render", "rt_render_passes_begun_at_call", 1.0),
-    ("end_render", "rt_vk_images_made_at_call", 0.0),
+    ("end_render", "rt_vk_images_made_this_thread_at_call", 0.0),
     ("end_render", "allocs", 24.0),
     ("end_compute", "allocs", 7.0),
     ("end_blit", "allocs", 7.0),
@@ -438,18 +449,38 @@ const HELD: [(&str, &str, f64); 47] = [
     ("dispatch", "allocs", 6.2),
     // A heap texture's image takes its storage from the heap: one image and one binding, and no
     // allocation of memory of its own.
-    ("heap_texture_256", "rt_vk_images_made_at_call", 1.0),
-    ("heap_texture_256", "rt_vk_image_bindings_at_call", 1.0),
-    ("heap_texture_256", "rt_vk_memory_allocations_at_call", 0.0),
+    (
+        "heap_texture_256",
+        "rt_vk_images_made_this_thread_at_call",
+        1.0,
+    ),
+    (
+        "heap_texture_256",
+        "rt_vk_image_bindings_this_thread_at_call",
+        1.0,
+    ),
+    (
+        "heap_texture_256",
+        "rt_vk_memory_allocations_this_thread_at_call",
+        0.0,
+    ),
     ("heap_texture_256", "allocs", 17.25),
     // A Shared texture likewise, and it starts its image on the host once; or it takes one parked
     // image, made and bound before, where the device stages its copies.
-    ("texture_256_shared", "rt_vk_images_made_at_call", 1.0),
-    ("texture_256_shared", "rt_images_recycled_at_call", 1.0),
-    ("texture_256_shared", "rt_vk_image_bindings_at_call", 1.0),
     (
         "texture_256_shared",
-        "rt_vk_memory_allocations_at_call",
+        "rt_vk_images_made_this_thread_at_call",
+        1.0,
+    ),
+    ("texture_256_shared", "rt_images_recycled_at_call", 1.0),
+    (
+        "texture_256_shared",
+        "rt_vk_image_bindings_this_thread_at_call",
+        1.0,
+    ),
+    (
+        "texture_256_shared",
+        "rt_vk_memory_allocations_this_thread_at_call",
         0.0,
     ),
     (
@@ -461,35 +492,75 @@ const HELD: [(&str, &str, f64); 47] = [
     // A render target of a shape the runtime has seen takes a parked image: it makes no image at
     // all, which is why it costs what Metal's does. Losing the recycler here would cost 20 us a
     // call and this row is what would say so.
-    ("texture_1024_target", "rt_vk_images_made_at_call", 0.0),
     (
         "texture_1024_target",
-        "rt_vk_memory_allocations_at_call",
+        "rt_vk_images_made_this_thread_at_call",
+        0.0,
+    ),
+    (
+        "texture_1024_target",
+        "rt_vk_memory_allocations_this_thread_at_call",
         0.0,
     ),
     // A texture over a buffer's bytes makes its image at the call, bound in the buffer's memory:
     // one image and one binding, no memory of its own, and no view at the call.
-    ("buffer_texture_256", "rt_vk_images_made_at_call", 1.0),
-    ("buffer_texture_256", "rt_vk_image_bindings_at_call", 1.0),
     (
         "buffer_texture_256",
-        "rt_vk_memory_allocations_at_call",
+        "rt_vk_images_made_this_thread_at_call",
+        1.0,
+    ),
+    (
+        "buffer_texture_256",
+        "rt_vk_image_bindings_this_thread_at_call",
+        1.0,
+    ),
+    (
+        "buffer_texture_256",
+        "rt_vk_memory_allocations_this_thread_at_call",
         0.0,
     ),
-    ("buffer_texture_256", "rt_vk_image_views_made_at_call", 0.0),
+    (
+        "buffer_texture_256",
+        "rt_vk_image_views_made_this_thread_at_call",
+        0.0,
+    ),
     // A buffer comes out of the runtime's memory pool: no `vkCreateBuffer`, no `vkAllocateMemory`.
-    ("buffer_4k", "rt_vk_buffers_made_at_call", 0.0),
-    ("buffer_4k", "rt_vk_memory_allocations_at_call", 0.0),
-    ("buffer_1m", "rt_vk_buffers_made_at_call", 0.0),
-    ("buffer_1m", "rt_vk_memory_allocations_at_call", 0.0),
+    ("buffer_4k", "rt_vk_buffers_made_this_thread_at_call", 0.0),
+    (
+        "buffer_4k",
+        "rt_vk_memory_allocations_this_thread_at_call",
+        0.0,
+    ),
+    ("buffer_1m", "rt_vk_buffers_made_this_thread_at_call", 0.0),
+    (
+        "buffer_1m",
+        "rt_vk_memory_allocations_this_thread_at_call",
+        0.0,
+    ),
     // A no-copy buffer imports its pages once: one buffer, one import, one binding. A walk of the
     // memory types that tried several would read as more than one allocation here.
-    ("buffer_no_copy_1m", "rt_vk_buffers_made_at_call", 1.0),
-    ("buffer_no_copy_1m", "rt_vk_memory_allocations_at_call", 1.0),
-    ("buffer_no_copy_1m", "rt_vk_buffer_bindings_at_call", 1.0),
+    (
+        "buffer_no_copy_1m",
+        "rt_vk_buffers_made_this_thread_at_call",
+        1.0,
+    ),
+    (
+        "buffer_no_copy_1m",
+        "rt_vk_memory_allocations_this_thread_at_call",
+        1.0,
+    ),
+    (
+        "buffer_no_copy_1m",
+        "rt_vk_buffer_bindings_this_thread_at_call",
+        1.0,
+    ),
     // Residency is our own bookkeeping: no driver call, and no allocation a resource (16 for 256
     // of them).
-    ("use_resources_read_256", "rt_vk_buffers_made_at_call", 0.0),
+    (
+        "use_resources_read_256",
+        "rt_vk_buffers_made_this_thread_at_call",
+        0.0,
+    ),
     ("use_resources_read_256", "allocs", 16.0),
     // One Metal command buffer carrying one dispatch is submitted as two of Vulkan's.
     (

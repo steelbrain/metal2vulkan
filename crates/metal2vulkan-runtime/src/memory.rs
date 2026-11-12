@@ -3057,6 +3057,11 @@ impl Memory {
         let bytes = made.block.size;
         self.add_block(pool, made.block, bytes, false, 0);
         self.ahead.made_ahead(pool.0, made.waited_for, made.waited);
+        // A block a call waited for is that call's making, on its thread (`ObjectChurn`'s
+        // `_this_thread` counts); one made ahead of the call is the ready thread's alone.
+        if made.waited_for {
+            crate::churn_counts::count_on_this_thread(made.makings);
+        }
         #[cfg(test)]
         if made.waited_for {
             self.ahead.waited_making += made.making;

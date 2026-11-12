@@ -155,6 +155,16 @@ fn a_growing_pool_s_new_blocks_its_first_growth_s_among_them_are_made_ahead_and_
         "only {ahead} of the blocks were made ahead"
     );
     assert_eq!(waited_for, 0, "a call waited for a making that had ended");
+    // The blocks made ahead are the ready thread's makings and no call's: the process's count of
+    // memory allocations has them, and this thread's, whose calls waited for none, does not.
+    let churn = (&counts.object_churn, &before.object_churn);
+    let process = churn.0.vk_memory_allocations - churn.1.vk_memory_allocations;
+    let mine =
+        churn.0.vk_memory_allocations_this_thread - churn.1.vk_memory_allocations_this_thread;
+    assert!(
+        process - mine >= ahead,
+        "of {process} allocations, {mine} this thread's: the {ahead} blocks made ahead among them"
+    );
 }
 
 /// The pool of exportable buffers grows as the runtime's own pools do: once it grew, each new
@@ -440,19 +450,21 @@ fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allo
             .ahead_blocks()
             .waited_making
     };
-    // A creation call: its time, and the time of the makings it waited for (their own work, once
-    // their waits for quiet were over).
+    let mine = || (device.work_counts().object_churn).vk_memory_allocations_this_thread;
+    // A creation call: its time, the time of the makings it waited for (their own work, once
+    // their waits for quiet were over), and the memory allocations counted as this thread's.
     let new_buffer = |held: &mut Vec<Buffer>| {
         assert!(
             held.len() < MOST,
             "the pool never needed its block made ahead"
         );
-        let making = waited_making();
+        let (making, allocated) = (waited_making(), mine());
         let made = Instant::now();
         let buffer = device.new_buffer(BUFFER_BYTES, ResourceOptions::private());
         let took = made.elapsed();
         held.push(buffer.unwrap());
-        (took, waited_making().saturating_sub(making))
+        let making = waited_making().saturating_sub(making);
+        (took, making, mine() - allocated)
     };
     // The buffers' pool's first growth, made for the creation call that needs it; the next
     // creation starts its next block's making, which waits for a pause the held use never leaves.
@@ -486,9 +498,9 @@ fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allo
             if hurries(&counts) > 0 || past(&counts) > attempt {
                 break;
             }
-            let (took, making) = new_buffer(&mut held);
+            let (took, making, allocated) = new_buffer(&mut held);
             match hurries(&device.work_counts()) > hurries(&counts) {
-                true => hurrying = Some((took, making)),
+                true => hurrying = Some((took, making, allocated)),
                 false => longest = longest.max(took),
             }
         }
@@ -496,7 +508,7 @@ fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allo
     let after = device.work_counts();
     drop(in_use);
     let hurried = after.blocks_ahead_hurried - before.blocks_ahead_hurried;
-    let (hurrying, making) = hurrying.unwrap_or_default();
+    let (hurrying, making, allocated) = hurrying.unwrap_or_default();
     let beside = hurrying.saturating_sub(making);
     println!(
         "BLOCKS-AHEAD {}: with a use of the queues held open, the creation call that hurried a \
@@ -510,6 +522,12 @@ fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allo
         after.buffer_blocks_made_in_place - before.buffer_blocks_made_in_place,
     );
     assert_eq!(hurried, 1, "no making a call waited for was cut short");
+    // The block the call waited for is its making, made on the ready thread: its memory counted
+    // as this thread's (`ObjectChurn`'s `_this_thread` counts).
+    assert!(
+        allocated >= 1,
+        "the creation call that waited for its block counted none of the block's memory as its own"
+    );
     assert!(
         beside < QUIET_MOST / 2,
         "the creation call that hurried a making waited {beside:?} beside the making's own \

@@ -15,13 +15,19 @@
 //!   `vkBindBufferMemory` calls of the whole process, by entry point and by the place in the
 //!   runtime that asked for one (`creation.rs`, their one door). What a texture or buffer
 //!   creation made the driver do is then a count of that call's own work, not an inference from a
-//!   driver floor timed apart, and a count holds under any load where a time does not.
+//!   driver floor timed apart, and a count holds under any load where a time does not. Each is
+//!   also counted for the thread that made it, and a pooled block made ahead for the thread of
+//!   the call that waited for it, where one did (`ObjectChurn`'s `_this_thread` counts): the
+//!   device's thread that makes blocks ahead (`memory/ready.rs`) makes them when the device's
+//!   queue uses pause, so the process's counts over a call take whatever such making fell
+//!   within it.
 //! - **Shadow keeps.** The keeps of merged-back shadows (`shadow_merge.rs`) by the encoder that
 //!   planned them (a render pass's attachments, a compute dispatch's bindings, a blit), cut to a
 //!   rectangle or of every texel, and the texels they copy.
 
 use crate::step_aside::counted_apart;
 use crate::work_counts::{CopySite, CopySites, COPY_SITES};
+use std::cell::Cell;
 use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
@@ -85,6 +91,12 @@ pub(crate) fn vk_released(what: VkRelease, at: &Location<'static>) {
     RELEASE_SITES.count(command, at, 0);
 }
 
+thread_local! {
+    /// Of [`VK_MAKINGS`], those this thread made, and those another thread made for a call of
+    /// this thread that waited for them ([`count_on_this_thread`]).
+    static THIS_THREAD: [Cell<u64>; 6] = const { [const { Cell::new(0) }; 6] };
+}
+
 /// A making of `what` (`creation.rs`), called `at`: a check's where a device's check made it
 /// ([`CHECK_MAKINGS`]).
 pub(crate) fn vk_made(what: VkMaking, at: &Location<'static>) {
@@ -93,7 +105,26 @@ pub(crate) fn vk_made(what: VkMaking, at: &Location<'static>) {
         return;
     }
     VK_MAKINGS[what as usize].fetch_add(1, Ordering::Relaxed);
+    THIS_THREAD.with(|counts| {
+        let count = &counts[what as usize];
+        count.set(count.get() + 1);
+    });
     MAKING_SITES.count(what.command(), at, 0);
+}
+
+/// This thread's makings so far, by [`VkMaking`] ([`THIS_THREAD`]).
+pub(crate) fn this_thread_makings() -> [u64; 6] {
+    THIS_THREAD.with(|counts| counts.each_ref().map(Cell::get))
+}
+
+/// Count `makings` (by [`VkMaking`]), which another thread made while a call of this one waited
+/// for them (a pooled block made ahead, `memory/ready.rs`), as this thread's.
+pub(crate) fn count_on_this_thread(makings: [u64; 6]) {
+    THIS_THREAD.with(|counts| {
+        for (count, made) in counts.iter().zip(makings) {
+            count.set(count.get() + made);
+        }
+    });
 }
 
 /// The process's devices' checks' makings of `what` so far.
@@ -233,6 +264,8 @@ impl ChurnCounters {
         let owned = |o: Owned| self.owned[o as usize].load(Ordering::Relaxed);
         let vk = |r: VkRelease| VK_RELEASES[r as usize].load(Ordering::Relaxed);
         let made = |m: VkMaking| VK_MAKINGS[m as usize].load(Ordering::Relaxed);
+        let this_thread = this_thread_makings();
+        let mine = |m: VkMaking| this_thread[m as usize];
         let keep = |by: KeepBy, at: usize| self.keeps[by as usize][at].load(Ordering::Relaxed);
         let recycled =
             |what: Recycled, at: usize| self.recycled[what as usize][at].load(Ordering::Relaxed);
@@ -248,6 +281,12 @@ impl ChurnCounters {
                 vk_memory_allocations: made(VkMaking::Memory),
                 vk_image_bindings: made(VkMaking::ImageBinding),
                 vk_buffer_bindings: made(VkMaking::BufferBinding),
+                vk_images_made_this_thread: mine(VkMaking::Image),
+                vk_buffers_made_this_thread: mine(VkMaking::Buffer),
+                vk_image_views_made_this_thread: mine(VkMaking::ImageView),
+                vk_memory_allocations_this_thread: mine(VkMaking::Memory),
+                vk_image_bindings_this_thread: mine(VkMaking::ImageBinding),
+                vk_buffer_bindings_this_thread: mine(VkMaking::BufferBinding),
                 making_sites: MAKING_SITES.read(),
                 making_sites_dropped: MAKING_SITES.dropped(),
                 images_own_memory: owned(Owned::ImageOwnMemory),
@@ -322,6 +361,24 @@ pub struct ObjectChurn {
     pub vk_image_bindings: u64,
     /// `vkBindBufferMemory` calls of the process.
     pub vk_buffer_bindings: u64,
+    /// Of `vk_images_made`, those of the thread that read these counts: its own calls', and
+    /// those another thread made while a call of it waited for them (a pooled block made ahead
+    /// that a creation call found none of and waited for, `memory/ready.rs`), counted on the
+    /// thread that took the block. What that thread's calls had the driver make, without what
+    /// the device's other threads made meanwhile, such as a block made ahead for a pool that
+    /// grew, which no call waited for. Each thread reads its own.
+    pub vk_images_made_this_thread: u64,
+    /// As `vk_images_made_this_thread`, of `vk_buffers_made` (a block of buffers made ahead
+    /// carries one where its buffers take device addresses).
+    pub vk_buffers_made_this_thread: u64,
+    /// As `vk_images_made_this_thread`, of `vk_image_views_made`.
+    pub vk_image_views_made_this_thread: u64,
+    /// As `vk_images_made_this_thread`, of `vk_memory_allocations` (a block made ahead is one).
+    pub vk_memory_allocations_this_thread: u64,
+    /// As `vk_images_made_this_thread`, of `vk_image_bindings`.
+    pub vk_image_bindings_this_thread: u64,
+    /// As `vk_images_made_this_thread`, of `vk_buffer_bindings`.
+    pub vk_buffer_bindings_this_thread: u64,
     /// The device's images that went, of memory of their own.
     pub images_own_memory: u64,
     /// Linear images in buffers' memory.
@@ -482,6 +539,51 @@ mod tests {
             checks(),
             before_checks,
             "the checks' counts took the device's work"
+        );
+    }
+
+    /// A thread's makings are counted for it alone: another thread's, such as a block the ready
+    /// thread makes ahead while a call runs, move the process's counts and not the call's
+    /// thread's; and a making counted on this thread for a call that waited for it moves this
+    /// thread's alone, the process having counted it where it was made.
+    #[test]
+    fn a_thread_s_makings_are_its_own_and_those_it_waited_for() {
+        let snapshot = || ChurnCounters::default().snapshot().0;
+        let process = |c: &ObjectChurn| c.vk_memory_allocations;
+        let mine = |c: &ObjectChurn| {
+            (
+                c.vk_memory_allocations_this_thread,
+                c.vk_buffers_made_this_thread,
+                c.vk_buffer_bindings_this_thread,
+            )
+        };
+        let start = snapshot();
+        std::thread::spawn(|| {
+            vk_made(VkMaking::Memory, Location::caller());
+            vk_made(VkMaking::Buffer, Location::caller());
+        })
+        .join()
+        .unwrap();
+        let other = snapshot();
+        assert_eq!(process(&other), process(&start) + 1, "the process's count");
+        assert_eq!(mine(&other), mine(&start), "another thread's making");
+
+        vk_made(VkMaking::Memory, Location::caller());
+        let own = snapshot();
+        assert_eq!(process(&own), process(&other) + 1);
+        assert_eq!(mine(&own).0, mine(&other).0 + 1, "this thread's making");
+
+        let mut waited = [0; 6];
+        waited[VkMaking::Memory as usize] = 1;
+        waited[VkMaking::Buffer as usize] = 1;
+        waited[VkMaking::BufferBinding as usize] = 1;
+        count_on_this_thread(waited);
+        let after = snapshot();
+        assert_eq!(process(&after), process(&own), "counted where it was made");
+        assert_eq!(
+            mine(&after),
+            (mine(&own).0 + 1, mine(&own).1 + 1, mine(&own).2 + 1),
+            "a making a call of this thread waited for"
         );
     }
 }
