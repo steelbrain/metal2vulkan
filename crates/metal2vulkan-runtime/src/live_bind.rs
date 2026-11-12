@@ -719,6 +719,30 @@ impl LiveBind {
         shape.is_some_and(|shape| self.settled(pipeline, shape, forms).is_some())
     }
 
+    /// Take `settled`, what a draw of `pipeline` in `forms` settled for the state's shape now
+    /// (`GraphicsState::settle_shape`), as the kept settle, where it is the kept settle's variant
+    /// and plan, by identity, for the same program and forms: whether it took it. A draw rebound
+    /// after slots that reshaped the state goes on only then (`render/draw_again/rebound.rs`): the
+    /// plan, and all a rebind reads of the settle, are the kept draw's, its shape the new one.
+    pub(super) fn settle_again(
+        &mut self,
+        pipeline: &GraphicsState,
+        forms: BufferForms,
+        settled: Settled,
+    ) -> bool {
+        let Some(here) = self.settled.as_mut() else {
+            return false;
+        };
+        let same = here.forms == forms
+            && pipeline.runs(&here.program)
+            && Arc::ptr_eq(&here.settled.variant, &settled.variant)
+            && Arc::ptr_eq(&here.settled.plan, &settled.plan);
+        if same {
+            here.settled = settled;
+        }
+        same
+    }
+
     /// Let go of every state's kept settle, as their encoder ends.
     fn forget_settles(&mut self) {
         self.settled = None;

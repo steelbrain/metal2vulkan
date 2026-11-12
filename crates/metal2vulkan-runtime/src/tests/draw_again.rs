@@ -1457,6 +1457,62 @@ fn draws_after_calls_that_bind_as_bound_draw_again() {
     assert_eq!(reclamped.words, every.words, "the pixels of the draws");
 }
 
+/// Draws after calls that bound, in turn, textures of one level and of three at the slot their
+/// fragment function only samples (`tob_sample`) reshape their bind state, but settle to the kept
+/// draw's variant and plan, which read no level count there (`BindShape::for_plan`): they rebind
+/// (`WorkCounts::draws_rebound`, none stopped), with the same commands of every kind and the
+/// same pixels as the same draws after a call between each that changes nothing for them, each
+/// of which takes every step.
+#[test]
+fn draws_after_textures_of_other_level_counts_rebind() {
+    let scratch = Scratch::new("draw-again-reshaped-levels");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = state(&device, "engine/tob_renders.ll", ("tob_rect", "tob_sample"));
+    let rectangles = rectangles_from_columns(&device);
+    let mut textures = textures(&device);
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, true);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::shared();
+    let levels = device.new_texture(&descriptor).unwrap();
+    let texels: Vec<u8> = (0..16u8)
+        .flat_map(|texel| [40, 2 * (texel % 4 + 1), 0, 1])
+        .collect();
+    let whole = Region::new_2d(0, 0, 4, 4);
+    levels.replace_region(whole, 0, 0, &texels, 16, 0).unwrap();
+    textures[1] = levels;
+    let samplers = [sampler_addressing(
+        &device,
+        SamplerAddressMode::ClampToEdge,
+        f32::MAX,
+    )];
+    let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
+    let drawn = (&state, &rectangles);
+    let bound = (&textures[..], &samplers[..]);
+    let alternate = |at| at as usize % 2;
+    let first = |_| 0;
+    let chosen = (
+        &alternate as &dyn Fn(u64) -> usize,
+        &first as &dyn Fn(u64) -> usize,
+    );
+    warm(&device, |encoder| {
+        sampled_rectangles(encoder, drawn, bound, chosen, |_| {})
+    });
+    let rebound = run(&device, |encoder| {
+        sampled_rectangles(encoder, drawn, bound, chosen, |_| {});
+    });
+    let every = run(&device, |encoder| {
+        sampled_rectangles(encoder, drawn, bound, chosen, forgets);
+    });
+    let rebound_count = |counts: &WorkCounts| counts.draws_rebound;
+    assert_eq!(rebound.counted(rebound_count), drawn_alone(HITS));
+    assert_eq!(rebound.counted(|counts| counts.draws_rebind_stopped), 0);
+    assert_eq!(every.counted(rebound_count), 0);
+    assert_eq!(rebound.commands, every.commands);
+    assert_eq!(rebound.commands["cmd_draw"], DRAWS);
+    assert_eq!(rebound.words, every.words, "the pixels of the draws");
+}
+
 /// What each of `draws` draws of `state`'s rectangles from `rectangles` (as
 /// [`offset_rectangles`]' in one color, the `at`th of the rectangle `at` modulo [`DRAWS`], and
 /// `between(at)` called before the `at`th draw but the first) changed of the device's counts `of`

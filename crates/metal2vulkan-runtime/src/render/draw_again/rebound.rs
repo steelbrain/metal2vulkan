@@ -148,7 +148,7 @@
 //!   recorded into the instance they began.
 
 use ash::vk;
-use metal2vulkan::bind::{DescriptorRange, DrawCall};
+use metal2vulkan::bind::{BindShape, DescriptorRange, DrawCall};
 use metal2vulkan::pipeline::{SlotClass, SlotRef, Stage};
 use std::sync::Arc;
 
@@ -285,6 +285,9 @@ struct Changed {
     moved: bool,
     /// Whether one of the slots is a texture or sampler slot.
     images: bool,
+    /// The bind state's shape, where the slots reshaped it and it settled as the kept draw did
+    /// ([`RenderLowering::bring_in`]): the kept draw's execution record takes it.
+    shape: Option<Arc<BindShape>>,
 }
 
 impl Changed {
@@ -302,6 +305,7 @@ impl Changed {
             whole: 0,
             moved: true,
             images: false,
+            shape: None,
         }
     }
 
@@ -422,6 +426,14 @@ impl RenderLowering {
             Ok(changed) => changed,
             Err(why) => return stopped(self, (why, CarryStop::Other)),
         };
+        // Reshaped and settled as the kept draw: its execution record names the new shape, as
+        // every step's does.
+        let kept = self.again.kept.as_mut();
+        if let (Some(shape), Some(execution)) =
+            (&changed.shape, kept.and_then(|k| k.execution.as_mut()))
+        {
+            execution.shape = Arc::clone(shape);
+        }
         let mut stop = (ArgumentsStop::Other, CarryStop::Other);
         let drawn = (draw, buffers, (reargued, reindexed, carried));
         let Some(rebinding) = self.rebind(call, live, &changed, drawn, &mut stop) else {
@@ -750,10 +762,20 @@ impl RenderLowering {
         counts.tables_read_in_part(read);
         let reshaped = reshape.may_reshape();
         live.reshaped(reshape);
-        match reshaped {
-            true => Err(ArgumentsStop::Reshaped),
-            false => Ok(changed),
+        // Slots that may have reshaped the state: its shape found or made, and settled, as every
+        // step finds and settles it (`RenderLowering::settle_draw`); the draw goes on where that
+        // settles to the kept draw's variant and plan, which are all a rebind works out of.
+        if reshaped {
+            let shape = live.shape(counts, |state| pipeline.kept_shape(state));
+            let settled = pipeline.settle_shape(&shape, self.forms);
+            let same =
+                settled.is_ok_and(|settled| live.settle_again(pipeline, self.forms, settled));
+            if !same {
+                return Err(ArgumentsStop::Reshaped);
+            }
+            changed.shape = Some(shape);
         }
+        Ok(changed)
     }
 
     /// Work out again in `live` what the slots `changed` decide of the kept draw, `draw` of
