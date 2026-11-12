@@ -2610,6 +2610,173 @@ fn a_rebind_onto_runs_a_live_chunk_holds_is_a_copy_the_gate_not_asked() {
     assert!(settles(&dropped));
 }
 
+/// A handshake between a test's paused step and the test: the step says it is paused
+/// (`reached`) and waits until the test lets it go on (`go`).
+struct Handshake {
+    reached: std::sync::mpsc::Sender<()>,
+    go: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl Handshake {
+    /// The handshake, the test's end of its `reached` and the test's end of its `go`.
+    fn new() -> (
+        Arc<Handshake>,
+        std::sync::mpsc::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+    ) {
+        let (reached, reached_rx) = std::sync::mpsc::channel();
+        let (go_tx, go) = std::sync::mpsc::channel();
+        let handshake = Handshake {
+            reached,
+            go: Mutex::new(go),
+        };
+        (Arc::new(handshake), reached_rx, go_tx)
+    }
+
+    /// Say the step is paused, and wait to go on.
+    fn pause(&self) {
+        self.reached.send(()).ok();
+        self.go.lock().unwrap().recv_timeout(WAIT).ok();
+    }
+}
+
+/// An object over two runs inside a chunk (bound in no chunk) made while the chunk's import is
+/// in flight, marked made by the chunk's first object and held there by the test
+/// (`RamSource::making_pause`): no page is imported twice (`imports_inside_live`), whatever the
+/// object then is, and its bytes are the RAM's.
+#[test]
+fn an_object_over_a_chunk_whose_import_is_in_flight_imports_none_of_its_pages_again() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start, dropped) = new_ram();
+    let used = device.use_host_ram(&ram).unwrap();
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    let length = 4 * page;
+    let (first, second) = (start + 2 * page, start + 20 * page);
+    fill_pattern(first..first + length);
+    fill_pattern(second..second + length);
+    let (handshake, reached, go) = Handshake::new();
+    let paused = Arc::clone(&handshake);
+    *device.shared().host_ram.making_pause.lock().unwrap() =
+        Some(Arc::new(move |_span| paused.pause()));
+    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    let before = device.work_counts();
+    let (bound, object) = std::thread::scope(|scope| {
+        // The chunk's first object: its import of the chunk, paused in flight.
+        let bound = scope.spawn(|| {
+            buffer(
+                &device,
+                first,
+                length,
+                resolver(&runs, itself),
+                gate(&gates, true),
+            )
+        });
+        reached
+            .recv_timeout(WAIT)
+            .expect("the chunk's import paused");
+        let object = buffer(
+            &device,
+            second,
+            length,
+            resolver(&runs, halves),
+            gate(&gates, true),
+        );
+        *device.shared().host_ram.making_pause.lock().unwrap() = None;
+        go.send(()).unwrap();
+        (bound.join().unwrap().unwrap(), object.unwrap())
+    });
+    let after = device.work_counts();
+    eprintln!(
+        "HOST-RAM-IN-FLIGHT: an object made while its chunk's import was in flight: {:?}; \
+         pointer imports {}, copies over live imports {}, imports inside live ones {}",
+        object.host_backing(),
+        after.host_pointer_imports_made - before.host_pointer_imports_made,
+        after.copied_over_live_imports - before.copied_over_live_imports,
+        after.object_churn.imports_inside_live - before.object_churn.imports_inside_live,
+    );
+    assert_eq!(bound.host_backing(), Some(HostBacking::InHostRam));
+    assert_eq!(
+        after.object_churn.imports_inside_live - before.object_churn.imports_inside_live,
+        0,
+        "no page imported twice"
+    );
+    assert_eq!(
+        gpu_bytes(&device, &object, length),
+        bytes(second..second + length)
+    );
+    drop((object, bound, used, ram));
+    assert!(settles(&dropped));
+}
+
+/// The reverse: a buffer over one run of a chunk not imported yet, made while an object over two
+/// other runs inside the chunk is between its checks and its own import (its gate, asked there,
+/// held by the test): no page is imported twice (`imports_inside_live`), whatever either then
+/// is, and both read the RAM's bytes.
+#[test]
+fn a_chunk_imported_while_an_object_s_own_import_is_in_flight_imports_none_of_its_pages_again() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start, dropped) = new_ram();
+    let used = device.use_host_ram(&ram).unwrap();
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    let length = 4 * page;
+    let (first, second) = (start + 2 * page, start + 20 * page);
+    fill_pattern(first..first + length);
+    fill_pattern(second..second + length);
+    let (handshake, reached, go) = Handshake::new();
+    let paused = Arc::clone(&handshake);
+    let held_gate: ImportGate = Arc::new(move |_request| {
+        paused.pause();
+        true
+    });
+    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    let before = device.work_counts();
+    let (object, bound) = std::thread::scope(|scope| {
+        // The object: its gate, asked after its checks and before its import, holds it.
+        let object =
+            scope.spawn(|| buffer(&device, second, length, resolver(&runs, halves), held_gate));
+        reached.recv_timeout(WAIT).expect("the object's gate asked");
+        let bound = buffer(
+            &device,
+            first,
+            length,
+            resolver(&runs, itself),
+            gate(&gates, true),
+        );
+        go.send(()).unwrap();
+        (object.join().unwrap().unwrap(), bound.unwrap())
+    });
+    let after = device.work_counts();
+    eprintln!(
+        "HOST-RAM-IN-FLIGHT: a chunk's first object made while an object's own import was in \
+         flight: the object {:?}, the chunk's object {:?}; chunks imported {}, pointer imports \
+         {}, imports inside live ones {}",
+        object.host_backing(),
+        bound.host_backing(),
+        after.host_ram_chunks_imported - before.host_ram_chunks_imported,
+        after.host_pointer_imports_made - before.host_pointer_imports_made,
+        after.object_churn.imports_inside_live - before.object_churn.imports_inside_live,
+    );
+    assert_eq!(
+        after.object_churn.imports_inside_live - before.object_churn.imports_inside_live,
+        0,
+        "no page imported twice"
+    );
+    assert_eq!(
+        gpu_bytes(&device, &object, length),
+        bytes(second..second + length)
+    );
+    assert_eq!(
+        gpu_bytes(&device, &bound, length),
+        bytes(first..first + length)
+    );
+    drop((object, bound, used, ram));
+    assert!(settles(&dropped));
+}
+
 /// Whether `device`'s driver breaks its later allocations as it fails an import of pages the
 /// kernel cannot pin (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`, NVIDIA's).
 #[cfg(target_os = "linux")]

@@ -938,6 +938,13 @@ impl RamOnDevice {
             slot: span,
             ended: false,
         };
+        // A test's pause of the import, marked in flight, before it is made.
+        #[cfg(test)]
+        let pause = lock(&device.shared().host_ram.making_pause).clone();
+        #[cfg(test)]
+        if let Some(pause) = pause {
+            pause(span.span.clone());
+        }
         let started = Instant::now();
         // SAFETY: the span is pages of the RAM's ranges, which stay mapped, readable and
         // writable, while a chunk holds the RAM (`HostRam::new`).
@@ -2067,6 +2074,10 @@ fn place_runs(
     Ok((run.end <= spans[slot].end).then_some(slot))
 }
 
+/// A test's pause in a chunk's import ([`RamSource::making_pause`]), given the chunk's span.
+#[cfg(test)]
+pub(crate) type MakingPause = Arc<dyn Fn(Range<u64>) + Send + Sync>;
+
 /// The RAMs a device uses ([`Device::use_host_ram`]).
 #[derive(Default)]
 pub(crate) struct RamSource {
@@ -2079,6 +2090,10 @@ pub(crate) struct RamSource {
     /// ([`Device::count_host_ram_imports_against`]); 0 for the heaps'.
     #[cfg(test)]
     import_heaps: std::sync::atomic::AtomicU64,
+    /// The tests' pause in a chunk's import, called with the chunk's span once the import is
+    /// marked in flight (`Import::Making`) and before it is made ([`RamOnDevice::chunk`]).
+    #[cfg(test)]
+    pub(crate) making_pause: Mutex<Option<MakingPause>>,
     /// Whether the driver refused a dma-buf a RAM's source made of a span or a list of its pages
     /// for a cause that lasts (`Device::ram_span_as_dma_buf`, `ram_runs_as_dma_buf`): from then
     /// on, for the device's life, no span or list asks a source, and no RAM's plan is
