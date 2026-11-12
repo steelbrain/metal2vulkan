@@ -5937,6 +5937,73 @@ fn a_helper_call_no_shuffle_can_follow_keeps_the_note() {
     }
 }
 
+/// SPIRV-Cross moves an expression read once into what reads it, so an `optnone` call outside
+/// every branch, whose value a select picks on a condition that is not draw-uniform, runs in the
+/// `?:` arm SPIRV-Cross writes, where only helper invocations may make it. The owned fixture
+/// `rch_helper_select` (no fast math: every float operation is `NoContraction`, which SPIRV-Cross
+/// writes through its `optnone` `spvFAdd`) picks a sum, with no branch, where the coverage it reads
+/// is not 1, and writes a texture after it. On `moltenvk-m3`, `rch_select_arm` (the sum a select's
+/// value operand) and `rch_select_and` (the sum's comparison the right side of a `&&`) are
+/// fenced: an identity shuffle of the sum follows the call, census `fragment.helper-fence`.
+/// `rch_select_sampled`, whose implicit-LOD sample reads the picked sum after the call, and
+/// `rch_select_uniform`, which picks on a constant block's flag, are not. Nothing is guarded and
+/// none records `PrecisionNote::HelperBranchDropsSimdgroupStores`; with the fragment stage's
+/// `SHUFFLE` taken out of its subgroup model, the two fenced functions record it instead. A device
+/// without the defect (`intel-arl-anv`) fences nothing. Every module passes L3.
+#[test]
+fn a_helper_call_a_select_picks_is_fenced() {
+    let Some(bc) = fixture("rch_helper_select") else {
+        return;
+    };
+    let mvk = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let anv = profile("intel-arl-anv", DevicePolicy::default()).expect("profile");
+    let mut no_shuffle = mvk.clone();
+    no_shuffle
+        .edit(|f| f.subgroup.fragment.ops = OpBits(f.subgroup.fragment.ops.0 & !OpBits::SHUFFLE.0));
+    let noted = PrecisionNote::HelperBranchDropsSimdgroupStores;
+    // (entry, fenced on `moltenvk-m3`)
+    let cases = [
+        ("rch_select_arm", true),
+        ("rch_select_and", true),
+        ("rch_select_sampled", false),
+        ("rch_select_uniform", false),
+    ];
+    let inputs = LoweringInputs::new();
+    for (entry, picked) in cases {
+        // (profile, fenced, noted)
+        for (stem, p, fenced, note) in [
+            ("moltenvk-m3", &mvk, picked, false),
+            ("moltenvk-m3 without SHUFFLE", &no_shuffle, false, picked),
+            ("intel-arl-anv", &anv, false, false),
+        ] {
+            let what = format!("{entry} on {stem}");
+            let (_, m) =
+                typed_module_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
+            let a = compile_with(&bc, entry, p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
+            let fences = helper_fences(&m);
+            let counted = a
+                .strategies
+                .entries
+                .get("fragment.helper-fence")
+                .map(|u| u.uses);
+            let noted_here = a.precision.contains(&noted);
+            eprintln!(
+                "observed: {what}: guards {}, fences {fences} ({counted:?}), note {noted_here}",
+                helper_guards(&m)
+            );
+            assert_eq!(helper_guards(&m), 0, "{what}: guards");
+            assert_eq!(fences > 0, fenced, "{what}: {fences} fences");
+            assert_eq!(
+                counted.map(|c| c as usize),
+                fenced.then_some(fences),
+                "{what}: the fence census"
+            );
+            assert_eq!(noted_here, note, "{what}: the note");
+            link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        }
+    }
+}
+
 /// The opcodes of every instruction in `words`, and the capabilities it declares.
 fn opcodes_and_capabilities(words: &[u32]) -> (Vec<u32>, Vec<u32>) {
     let (mut ops, mut caps) = (Vec::new(), Vec::new());

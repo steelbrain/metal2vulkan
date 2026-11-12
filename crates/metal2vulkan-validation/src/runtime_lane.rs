@@ -534,6 +534,8 @@ mod heap_textures;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod heaps;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod helper_select;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod helper_tangle;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod hidden_depth;
