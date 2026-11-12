@@ -17,7 +17,8 @@
 //!   the scheduler's host step records it once they are made (`scheduler`), its batch held in
 //!   its queue's order meanwhile, with no wait for the GPU: the batches committed after it on its
 //!   queue complete after it, as Metal's do, and a batch of another queue waits for it only
-//!   where the two share a resource one of them writes (`scheduler/order.rs`).
+//!   where both name a resource one of them writes (`scheduler/order.rs`): not where they meet
+//!   only through two resources over the same host bytes (`host_aliases.rs`).
 //! - **A failed making.** A making that failed, or that its state's release stopped
 //!   (`piece_holds.rs`), is made again by the recording, as a caller after a failed making does
 //!   (`making.rs`), on the scheduler's thread; where that fails too, the command buffer completes
