@@ -1740,7 +1740,7 @@ fn finish(
             cx.body,
             cx.values,
             &sel.strategy,
-            p.set,
+            p,
         ));
     }
     let access = access::routine_words(&cx.families.access);
@@ -1770,8 +1770,9 @@ fn finish(
             .map_or(0, access::tile::TilePlan::words_estimate),
     );
 
+    let (entry, body) = (cx.entry, cx.body);
     let (precision, specialized) = resolve_notes(&cx.families, cx.precision, cx.specialized);
-    Ok(Plan {
+    let mut plan = Plan {
         stage,
         values: cx.values,
         strategy: sel.strategy,
@@ -1791,7 +1792,30 @@ fn finish(
         specialized,
         estimate,
         private_bytes: cx.memory.private_bytes,
-    })
+    };
+    let walk = match &plan.families.simd.predication {
+        Some(p) => walk_construct_words(entry, body, &plan, p, m)?,
+        None => 0,
+    };
+    plan.estimate.add(walk);
+    Ok(plan)
+}
+
+/// The words the predicated walk of `plan` adds for the constructs of its structured tree
+/// (`structurize::emit::construct_words`): the tree emission builds from the same view, here
+/// built, measured and released before emission.
+fn walk_construct_words(
+    entry: &Entry,
+    body: &Body,
+    plan: &Plan,
+    p: &simd::divergent::Predication,
+    m: &mut Meter,
+) -> Result<u64, Error> {
+    let view = crate::lower::view::EntryView::new(entry, body, plan);
+    let s = crate::structurize::structurize(&view, m)?;
+    let words = crate::structurize::emit::construct_words(&s.tree, |b| p.syncs(b), m);
+    s.release(m);
+    words
 }
 
 /// The constant a [`NoteTest`] reads: a sampler slot's `SamplerState` word or its

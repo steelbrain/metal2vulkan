@@ -46,7 +46,7 @@ use std::cell::Cell;
 
 use super::{emit_loop, list, CodeEmitter, Cx};
 use crate::air::ir::BlockId;
-use crate::budget::CONSTRUCT_NESTING;
+use crate::budget::{Meter, CONSTRUCT_NESTING};
 use crate::error::{Error, Limit};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopCtx, LoopFn, LoopSpec};
 use crate::spirv::builder::FunctionBuilder;
@@ -104,13 +104,23 @@ impl Facts {
     }
 }
 
-/// The facts of `tree` (children precede parents in the arena), and its construct nesting depth,
-/// refused above half of `Limit::ConstructNesting`.
+/// The facts of the tree of `cx` ([`facts_of`]).
 fn facts<E: CodeEmitter>(cx: &mut Cx<'_, E>) -> Result<Facts, Error> {
-    let tree = cx.tree;
+    let c = &*cx.c;
+    facts_of(cx.tree, |b| c.syncs(b), cx.meter)
+}
+
+/// The facts of `tree` (children precede parents in the arena) whose blocks synchronize where
+/// `syncs` holds, and its construct nesting depth, refused above half of
+/// `Limit::ConstructNesting`. The facts stay charged to `meter` ([`Facts::bytes`]).
+fn facts_of(
+    tree: &StructTree,
+    syncs: impl Fn(BlockId) -> bool,
+    meter: &mut Meter,
+) -> Result<Facts, Error> {
     let n = tree.len();
     let bytes = n.saturating_mul(3 + 4);
-    cx.meter.charge(bytes)?;
+    meter.charge(bytes)?;
     let r = (|| {
         let mut f = Facts {
             hot: vec![false; n],
@@ -118,10 +128,10 @@ fn facts<E: CodeEmitter>(cx: &mut Cx<'_, E>) -> Result<Facts, Error> {
             ends: vec![false; n],
         };
         for (id, st) in tree.stmts() {
-            cx.meter.tick(1)?;
+            meter.tick(1)?;
             let any = |v: &[bool]| st.children().any(|c| Facts::get(v, c));
             let hot = match st {
-                Stmt::Code(b) => cx.c.syncs(*b),
+                Stmt::Code(b) => syncs(*b),
                 _ => any(&f.hot),
             };
             let leaves = match st {
@@ -147,7 +157,7 @@ fn facts<E: CodeEmitter>(cx: &mut Cx<'_, E>) -> Result<Facts, Error> {
         // Construct nesting, parents first.
         let mut depth = vec![0u32; n];
         for (id, st) in tree.stmts().rev() {
-            cx.meter.tick(1)?;
+            meter.tick(1)?;
             let d = depth.get(id.index()).copied().unwrap_or(0);
             let inner = d.saturating_add(u32::from(super::is_construct(st)));
             if u64::from(inner) > CONSTRUCT_NESTING / 2 {
@@ -164,14 +174,111 @@ fn facts<E: CodeEmitter>(cx: &mut Cx<'_, E>) -> Result<Facts, Error> {
     match r {
         Ok(f) => {
             // The depth table is gone; the facts stay charged until the walk ends.
-            cx.meter.release(bytes - f.bytes());
+            meter.release(bytes - f.bytes());
             Ok(f)
         }
         Err(e) => {
-            cx.meter.release(bytes);
+            meter.release(bytes);
             Err(e)
         }
     }
+}
+
+/// A bound of the SPIR-V words the predicated walk of `tree` (whose blocks synchronize where
+/// `syncs` holds) emits for its statements beyond what the plain walk emits for them, each the
+/// worst case of the code below that emits it. The walk's `Code` statements, one per AIR block,
+/// are charged with the plan (`lower::simd::divergent::extra_words`). The walk visits what
+/// [`walk`] visits: the statements of a sequence and of a one-arm dispatch, and the arms and body
+/// of a statement that synchronizes or escapes; any other statement runs as the plain walk emits
+/// it ([`plain`]), so only its guard counts.
+///
+/// - A statement run as it is ([`plain`]), not a block: its `live` load and `if live` selection.
+/// - `SetSel`, `SetPending`, `ClearPending`: [`W::store_live`]'s `live` load, old value load and
+///   select beside the plain store.
+/// - `Break`, `Continue`: the flag's [`W::store_live`] and the store clearing `live`.
+/// - `Return`, `Unreachable` in a divergent position: the store clearing `live`.
+/// - `If`, `GuardPending`, `Switch`, a dispatch of several arms: the reload of an `If`'s condition
+///   or a `Switch`'s selector (`lower::emit`'s `cond` and `selector`, after a guarded block),
+///   [`matches`]'s literal constants, comparisons and disjunctions, the negation, and
+///   [`branches_opt`]'s `live` load, per arm the select of its condition and either its `if` (no
+///   synchronization) or its `live` store and reload and their disjunction (with one), and the
+///   final `live` store.
+/// - `Loop`: [`predicated_loop`]'s two flag variables, their first stores and the `live` load, per
+///   iteration the `cont` load, the `live` and `cont` stores, the workgroup vote
+///   (`lower::simd::workgroup::vote`: a scratch access chain, the atomic clear, set and read, three
+///   barriers, the select and the comparison), the negation and the `if` leaving the loop, and
+///   after it the `brk` load and the `live` store.
+pub(crate) fn construct_words(
+    tree: &StructTree,
+    syncs: impl Fn(BlockId) -> bool,
+    meter: &mut Meter,
+) -> Result<u64, Error> {
+    use crate::lower::simd::divergent::{IF, LOAD, STORE};
+    const SELECT: u64 = 6;
+    const NOT: u64 = 4;
+    const OR: u64 = 5;
+    const EQUAL: u64 = 5;
+    const CONSTANT: u64 = 4;
+    const VARIABLE: u64 = 4;
+    const BRANCH: u64 = 2;
+    const STORE_LIVE: u64 = LOAD + LOAD + SELECT;
+    const ARM: u64 = SELECT
+        + if IF > STORE + LOAD + OR {
+            IF
+        } else {
+            STORE + LOAD + OR
+        };
+    const LITERAL: u64 = CONSTANT + EQUAL + OR;
+    const VOTE: u64 = (4 + 2) + 5 + 3 * 4 + SELECT + 7 + 6 + EQUAL;
+    const LOOP: u64 = 2 * VARIABLE
+        + LOAD
+        + 2 * STORE
+        + (LOAD + 2 * STORE + VOTE + NOT + IF + BRANCH)
+        + LOAD
+        + STORE;
+    let f = facts_of(tree, syncs, meter)?;
+    let r = (|| -> Result<u64, Error> {
+        let mut words = 0u64;
+        let mut stack = vec![tree.root()];
+        while let Some(id) = stack.pop() {
+            meter.tick(1)?;
+            let st = tree.stmt(id)?;
+            let walked = f.hot(id) || f.escapes(id);
+            let branches = |arms: u64| LOAD + arms * ARM + STORE;
+            let (own, descend) = match st {
+                Stmt::Seq(_) | Stmt::Code(_) => (0, true),
+                Stmt::Dispatch { arms, .. } if arms.len() == 1 => (0, true),
+                Stmt::SetSel { .. } | Stmt::SetPending(_) | Stmt::ClearPending(_) => {
+                    (STORE_LIVE, false)
+                }
+                Stmt::Break | Stmt::Continue => (STORE_LIVE + STORE + STORE, false),
+                Stmt::Return(_) | Stmt::Unreachable => (STORE, false),
+                _ if !walked => (LOAD + IF, false),
+                // The walk refuses these (`ControlRule::NoCurrentBlock`).
+                Stmt::Block { .. } | Stmt::Jump(_) => (0, true),
+                Stmt::If { .. } => (LOAD + NOT + branches(2), true),
+                Stmt::GuardPending(_) => (NOT + branches(2), true),
+                Stmt::Switch { cases, .. } => {
+                    let literals: u64 = cases.iter().map(|(l, _)| l.len() as u64).sum();
+                    let n = cases.len() as u64;
+                    let lits = LITERAL * literals + OR * n + NOT;
+                    (LOAD + lits + branches(n + 1), true)
+                }
+                Stmt::Dispatch { arms, .. } => {
+                    let n = arms.len() as u64;
+                    ((LITERAL + OR) * n + NOT + branches(n), true)
+                }
+                Stmt::Loop { .. } => (LOOP, true),
+            };
+            words = words.saturating_add(own);
+            if descend {
+                stack.extend(st.children());
+            }
+        }
+        Ok(words)
+    })();
+    meter.release(f.bytes());
+    r
 }
 
 /// The flags and exits of the innermost walked loop.
