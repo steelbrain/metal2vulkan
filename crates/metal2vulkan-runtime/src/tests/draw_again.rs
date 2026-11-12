@@ -1489,8 +1489,8 @@ fn draws_after_textures_of_other_level_counts_rebind() {
     let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
     let drawn = (&state, &rectangles);
     let bound = (&textures[..], &samplers[..]);
-    let alternate = |at| at as usize % 2;
-    let first = |_| 0;
+    let alternate = |at: u64| at as usize % 2;
+    let first = |_: u64| 0usize;
     let chosen = (
         &alternate as &dyn Fn(u64) -> usize,
         &first as &dyn Fn(u64) -> usize,
