@@ -8,11 +8,15 @@
 //! attribute, no fragment function, a `Depth32Float` attachment), sets a depth/stencil state and a
 //! depth bias, and executes the commands through the range the kernel wrote
 //! (`execute_commands_in_buffer_indirect`). The depth the pass stores is each visible chunk's quad
-//! at its depth, and the clear depth elsewhere, into a 2D texture and into slice 1 of a 2D array.
+//! at its depth, and the clear depth elsewhere: into a 2D texture, into slice 1 of a 2D array,
+//! beside a later encoder of the command buffer that makes a shadowed texture resident, and over a
+//! rasterization rate map.
 
 use super::degrade_notices::on_device;
+use super::rate_maps::descriptor as descriptor_of_rate_map;
 use super::render_state::texels;
 use super::{buffer_with, WAIT};
+use crate::air_library::AirLibrary;
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{
     CompareFunction, IndirectCommandType, PixelFormat, RenderStages, ResourceUsage, TextureType,
@@ -176,10 +180,33 @@ fn depths(texture: &Texture, slice: u64) -> Vec<f32> {
         .collect()
 }
 
+/// What a run varies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Variant {
+    /// A 2D target.
+    Plain,
+    /// Slice 1 of a 2D array of 3, as a shadow cascade's.
+    Slice,
+    /// A 2D target, and a later encoder of the command buffer that makes a shadowed texture
+    /// resident, as a pass after the depth prepass makes its textures resident.
+    LaterShadow,
+    /// A 2D target over a rasterization rate map of half quality.
+    RateMap,
+}
+
+/// A shadowed texture: an 8 by 8 `RGBA8Unorm` texture over a buffer whose rows lie 48 bytes
+/// apart, 16 bytes past each row's texels.
+fn shadowed(device: &Device) -> Texture {
+    let truth = buffer_with(device, &[0; 8 * 48]).unwrap();
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 8, 8, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    truth.new_texture(&descriptor, 0, 48).unwrap()
+}
+
 /// The commands a kernel encodes run from the range it wrote, each drawing its chunk's quad with
 /// the buffers it set onto the encoder's depth-only state: the depth the pass stores is each kept
-/// chunk's, and the clear depth where the kernel kept none, in a 2D texture and in slice 1 of a 2D
-/// array.
+/// chunk's, and the clear depth where the kernel kept none, in a 2D texture, in slice 1 of a 2D
+/// array, beside a later encoder's shadowed texture, and over a rate map.
 #[test]
 fn a_kernel_s_depth_only_commands_draw_through_the_range_it_wrote() {
     on_device(|device, _| {
@@ -204,7 +231,17 @@ fn a_kernel_s_depth_only_commands_draw_through_the_range_it_wrote() {
         let visible = buffer_with(device, &VISIBLE.to_le_bytes()).unwrap();
         let range = buffer_with(device, &[0xFF; 8]).unwrap();
         let queue = device.new_command_queue().unwrap();
-        for (slices, slice) in [(None, 0), (Some(3), 1)] {
+        let mut runs = Vec::new();
+        for variant in [
+            Variant::Plain,
+            Variant::Slice,
+            Variant::LaterShadow,
+            Variant::RateMap,
+        ] {
+            let (slices, slice) = match variant {
+                Variant::Slice => (Some(3), 1),
+                _ => (None, 0),
+            };
             let target = target(device, slices);
             let command_buffer = queue.command_buffer().unwrap();
             let mut blit = command_buffer.blit_command_encoder().unwrap();
@@ -234,6 +271,11 @@ fn a_kernel_s_depth_only_commands_draw_through_the_range_it_wrote() {
             pass.depth_attachment.load_action = LoadAction::Clear;
             pass.depth_attachment.clear_depth = 1.0;
             pass.depth_attachment.store_action = StoreAction::Store;
+            if variant == Variant::RateMap {
+                let map = descriptor_of_rate_map(SIZE as u32, SIZE as u32, &[(0.5, 0.5)]);
+                pass.rasterization_rate_map =
+                    Some(device.new_rasterization_rate_map(&map).unwrap());
+            }
             let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
             encoder.set_render_pipeline_state(&state).unwrap();
             encoder.set_depth_stencil_state(&less).unwrap();
@@ -251,14 +293,34 @@ fn a_kernel_s_depth_only_commands_draw_through_the_range_it_wrote() {
                 .execute_commands_in_buffer_indirect(&icb, &range, 0)
                 .unwrap();
             encoder.end_encoding().unwrap();
+            let later = (variant == Variant::LaterShadow).then(|| shadowed(device));
+            if let Some(texture) = &later {
+                let mut after = command_buffer.compute_command_encoder().unwrap();
+                after
+                    .use_resource(texture.as_resource(), ResourceUsage::READ)
+                    .unwrap();
+                after.end_encoding().unwrap();
+            }
             command_buffer.commit().unwrap();
             command_buffer.wait_until_completed_for(WAIT).unwrap();
-            assert_eq!(
-                (command_buffer.status(), command_buffer.refusal()),
-                (CommandBufferStatus::Completed, None),
-                "slices {slices:?}"
+            let run = (
+                variant,
+                command_buffer.status(),
+                command_buffer.refusal(),
+                depths(&target, slice),
             );
-            assert_eq!(depths(&target, slice), expected(), "slices {slices:?}");
+            eprintln!("{run:?}");
+            runs.push(run);
+        }
+        for (variant, status, refusal, depths) in runs {
+            assert_eq!(
+                (status, refusal),
+                (CommandBufferStatus::Completed, None),
+                "{variant:?}"
+            );
+            if variant != Variant::RateMap {
+                assert_eq!(depths, expected(), "{variant:?}");
+            }
         }
     });
 }
