@@ -33,7 +33,11 @@
 //!   command buffers hold their last recordings all the same. A give-back that leaves more takes
 //!   the oldest spares that hold any out, each to free every command buffer it holds as a spare
 //!   left idle does, until they hold at most that many; where that leaves more, the pool given
-//!   back frees its last made past them, a secondary kept ([`past_held`]). A command buffer
+//!   back frees its last made past them ([`past_held`]): secondaries first, one kept, then
+//!   primaries, then that secondary and its primary begun ahead, so that a pool given back while
+//!   the pools out of the spares count the bound keeps none. A begin ahead that makes its
+//!   primary (a pool holding none) makes it only where the bound leaves room for it, counted
+//!   with the pool as it goes out ([`CommandPools::take_to_begin`]). A command buffer
 //!   holds what its recording took of the driver's device-wide pools until it is begun again,
 //!   reset or freed, and a pool's recent uses bound only its own. ANV below Xe-HP (Mesa 26.2.4
 //!   and 26.2.6, `anv_device.c`) takes a 64 KiB block of a 1 GiB binding-table pool for each
@@ -127,7 +131,8 @@
 //!   as it opens (`render.rs`); taken from a pool that had served only passes recorded inline,
 //!   it would be made there, on the thread that encodes: on the M3 Max (MoltenVK, macOS 27.0.1),
 //!   0 to 5 of a run's 4020 pass opens made one, 16 allocations each against 14. A making that
-//!   fails is left to that open.
+//!   fails is left to that open, and one the bound leaves no room for is freed with the rest
+//!   past it.
 //! - **A settled pool given back holds a primary already begun.** The thread that completed its
 //!   command buffer begins one of its primaries once the completed handlers ran
 //!   (`ONE_TIME_SUBMIT`, as every encoder begins its own; recording nothing), inside a section of
@@ -151,7 +156,8 @@
 //!   it: the primaries every other path makes (segments, continuations, a batch's barriers) are
 //!   never the begun one. A pool whose taker resets it (one given back unsettled) resets the begun
 //!   primary with the rest, which is then an ordinary one again. A pool given back unsettled, or
-//!   while a thread waited, or whose begin fails, holds none. A taker takes the newest spare
+//!   while a thread waited, or whose begin fails, holds none; nor does one holding no primary
+//!   where the spares hold [`HELD`] command buffers. A taker takes the newest spare
 //!   holding one first ([`take_command_pool`]). Counted: `WorkCounts::primaries_begun_ahead`, and
 //!   those encoders took, `WorkCounts::encoder_primaries_begun_ahead`.
 //! - **Descriptor pools are reset by the taker**, on the thread that encodes: the program's own, or
@@ -343,16 +349,21 @@ impl CommandPool {
     }
 
     /// Its command buffers past `keep` in all, the last made, taken out of it to be freed:
-    /// secondaries first, one kept, then primaries; never the primary begun ahead (the module
-    /// docs).
+    /// secondaries first, one kept, then primaries, then that secondary, then the primary begun
+    /// ahead, so that it holds at most `keep` (the module docs).
     pub(super) fn past(&mut self, keep: usize) -> Vec<vk::CommandBuffer> {
         let mut over = self.held().saturating_sub(keep);
         let mut past = Vec::new();
-        for (at, least) in [(level_index(vk::CommandBufferLevel::SECONDARY), 1), (0, 0)] {
+        let secondary = level_index(vk::CommandBufferLevel::SECONDARY);
+        for (at, least) in [(secondary, 1), (0, 0), (secondary, 0)] {
             let made = &mut self.made[at];
             let from = made.len() - over.min(made.len().saturating_sub(least));
             over -= made.len() - from;
             past.extend(made.drain(from..));
+        }
+        // Past every one made, only the primary begun ahead is left over.
+        if over > 0 {
+            past.extend(self.begun.take());
         }
         past
     }
@@ -454,10 +465,16 @@ impl CommandPool {
         !self.recording && self.begun.is_none()
     }
 
+    /// The command buffers its begin ahead makes: one where it holds no primary to begin.
+    fn begin_makes(&self) -> usize {
+        usize::from(self.made[level_index(vk::CommandBufferLevel::PRIMARY)].is_empty())
+    }
+
     /// Begin one of the pool's primaries ahead, where it [`begins_ahead`](Self::begins_ahead): one
-    /// it made, which its begin resets, or a new one. Inside a section of the exit guard, on a
-    /// pool taken out of the spares; nothing where the guard is closing, and none begun where the
-    /// making or the begin fails. Whether it began one.
+    /// it made, which its begin resets, or a new one, counted out with the pool as it was taken
+    /// ([`CommandPools::take_to_begin`]). Inside a section of the exit guard, on a pool taken out
+    /// of the spares; nothing where the guard is closing, and none begun where the making or the
+    /// begin fails. Whether it began one.
     fn begin_ahead(&mut self, device: &DeviceShared) -> bool {
         if !self.begins_ahead() {
             return false;
@@ -513,7 +530,7 @@ pub(super) struct CommandPools {
     pub(super) spares: Vec<CommandPool>,
     /// The command buffers the pools out of the spares held as each went out: taken by a command
     /// buffer, out to free command buffers on the device's free thread, or to begin a primary
-    /// ahead (the module docs).
+    /// ahead, with the primary that begin makes (the module docs).
     pub(super) out: usize,
 }
 
@@ -528,6 +545,29 @@ impl CommandPools {
     pub(super) fn came_back(&mut self, pool: &mut CommandPool) {
         self.out -= pool.out;
         pool.out = 0;
+    }
+
+    /// The command buffers the spares hold, with those the pools out of them count.
+    fn held(&self) -> usize {
+        self.out + self.spares.iter().map(CommandPool::held).sum::<usize>()
+    }
+
+    /// The spare command pool `raw`, taken out to begin a primary ahead in
+    /// ([`Spares::begin_ahead`]), where it is still among the spares and may begin one
+    /// ([`CommandPool::begins_ahead`]), and where its begin makes the primary, only while that
+    /// leaves the spares holding at most [`HELD`] command buffers: counted out with the one it
+    /// makes, so that a give-back meanwhile keeps the bound with it (the module docs).
+    pub(super) fn take_to_begin(&mut self, raw: vk::CommandPool) -> Option<CommandPool> {
+        let at = (self.spares.iter()).rposition(|pool| pool.raw == raw && pool.begins_ahead())?;
+        let makes = self.spares[at].begin_makes();
+        if makes > 0 && self.held() + makes > HELD {
+            return None;
+        }
+        let mut pool = self.spares.remove(at);
+        self.went_out(&mut pool);
+        pool.out += makes;
+        self.out += makes;
+        Some(pool)
     }
 }
 
@@ -751,19 +791,24 @@ impl Spares {
             .sum()
     }
 
+    /// The spare command pools, oldest first, each with the command buffers it holds, for the
+    /// crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn command_pools_held(&self) -> Vec<(vk::CommandPool, usize)> {
+        let pools = lock(&self.command_pools);
+        (pools.spares.iter())
+            .map(|pool| (pool.raw, pool.held()))
+            .collect()
+    }
+
     /// Begin a primary ahead in the spare command pool `raw` of `device`, where it is still a
-    /// spare, settled, and holds none begun (the module docs): taken out of the spares under
-    /// their lock, begun with no lock held, so a taker meanwhile takes another spare rather than
-    /// wait for the begin, and kept again, the newest. Counted (`WorkCounts::primaries_begun_ahead`)
-    /// once it is kept again, so a taker that saw the count finds the pool among the spares.
+    /// spare, settled, and holds none begun, and where the bound leaves room for the primary it
+    /// makes, if it holds none (the module docs): taken out of the spares under their lock,
+    /// begun with no lock held, so a taker meanwhile takes another spare rather than wait for the
+    /// begin, and kept again, the newest. Counted (`WorkCounts::primaries_begun_ahead`) once it is
+    /// kept again, so a taker that saw the count finds the pool among the spares.
     pub(super) fn begin_ahead(&self, device: &DeviceShared, raw: vk::CommandPool) {
-        let taken = {
-            let mut pools = lock(&self.command_pools);
-            take_to_begin(&mut pools.spares, raw).map(|mut pool| {
-                pools.went_out(&mut pool);
-                pool
-            })
-        };
+        let taken = lock(&self.command_pools).take_to_begin(raw);
         let Some(mut pool) = taken else {
             return;
         };
@@ -971,17 +1016,6 @@ pub(super) fn take_command_pool(pools: &mut Vec<CommandPool>, family: u32) -> Op
         .iter()
         .rposition(|pool| of_family(pool) && pool.begun.is_some()))
     .or_else(|| pools.iter().rposition(of_family))?;
-    Some(pools.remove(at))
-}
-
-/// The spare command pool `raw` of `pools`, taken out to begin a primary ahead in
-/// ([`Spares::begin_ahead`]), where it is still among them and may begin one
-/// ([`CommandPool::begins_ahead`]).
-pub(super) fn take_to_begin(
-    pools: &mut Vec<CommandPool>,
-    raw: vk::CommandPool,
-) -> Option<CommandPool> {
-    let at = (pools.iter()).rposition(|pool| pool.raw == raw && pool.begins_ahead())?;
     Some(pools.remove(at))
 }
 

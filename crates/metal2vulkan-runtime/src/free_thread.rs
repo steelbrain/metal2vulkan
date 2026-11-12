@@ -82,7 +82,8 @@ struct Shared {
     /// nanoseconds they waited.
     paced: AtomicU64,
     paced_nanos: AtomicU64,
-    /// The crate's device tests' hold of each free as it begins (`tests/posted_frees.rs`).
+    /// The crate's device tests' hold of each free as it begins, a block's or a spare pool's
+    /// (`tests/posted_frees.rs`, `tests/spares.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     held: crate::freed_memory::held::Held,
 }
@@ -387,6 +388,8 @@ fn run(shared: &Shared) {
                 Some((heap, size))
             }
             Work::Pool(frees) => {
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                shared.held.pass();
                 // As a block's: while the process exits, the command buffers stay to its end.
                 if let Some(busy) = exit_guard::enter() {
                     // SAFETY: `post_pool`'s contract.
