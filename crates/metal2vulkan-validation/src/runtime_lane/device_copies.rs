@@ -24,6 +24,13 @@
 //!   runtime made, then a `synchronize_texture` of it: the buffer's `contents` (the pages, the
 //!   host copy) and the texture's `get_bytes` hold the rows once the command buffer completed,
 //!   the copy out counted for the pages with two copies.
+//! - [`a_did_modify_range_reaches_the_bytes_the_next_commit_finds`], under the validation layer:
+//!   the five steps of the oracle (an AMD Radeon Pro 5300M and an Intel UHD Graphics 630, macOS
+//!   26.7.1) of a `Managed` buffer over pages and of one the runtime made, each behind busy work on
+//!   the GPU: CPU writes of a range, its `did_modify_range`, and a command buffer that copies the
+//!   range out, encoded and committed in their orders. With two copies the command buffer reads the
+//!   bytes as its commit found them, a write after the commit not; with one, the memory as the CPU
+//!   wrote it last.
 //! - [`a_surface_without_a_log_is_placed_as_one_with`], under the validation layer: the same
 //!   surface over pages without a log is two copies without unified memory, else in place or a
 //!   shadow; no device copy either way.
@@ -37,6 +44,7 @@
 //!   and with one: the median and fastest GPU time of a frame's command buffer
 //!   (`DEVICE-COPY-COST`).
 
+use super::first_use::{read_mark, release, scheduled, Busy};
 use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{counting, Mapping, GUEST_PAGE};
 use super::in_place_textures::{in_place, passed, sampled};
@@ -465,6 +473,113 @@ fn a_synchronize_texture_copies_the_texels_out() {
         );
     }
     drop((surface, own, source));
+    drop(mapping);
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// One step of a CPU's writes of a range of a `Managed` buffer against a command buffer that
+/// copies the range out ([`a_did_modify_range_reaches_the_bytes_the_next_commit_finds`]).
+#[derive(Clone, Copy, Debug)]
+enum Act {
+    /// The CPU writes the range with a byte.
+    Write(u8),
+    /// `did_modify_range` of the range.
+    Modify,
+    /// The command buffer is made and its blit encoded.
+    Encode,
+    /// The command buffer is committed and submitted.
+    Commit,
+}
+
+#[test]
+fn a_did_modify_range_reaches_the_bytes_the_next_commit_finds() {
+    use Act::{Commit, Encode, Modify, Write};
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let busy = Busy::new(&device, &queue);
+    let len = GUEST_PAGE;
+    let mapping = Mapping::anonymous(len);
+    mapping.write(0, &counting(len, 5));
+    let surface = over(&device, &mapping, len, None);
+    let own = device.new_buffer(len as u64, managed()).unwrap();
+    let range = 256u64..768u64;
+    let size = range.end - range.start;
+    let two = two_copies(&device);
+    // The steps of the oracle (an AMD Radeon Pro 5300M, two copies, and an Intel UHD Graphics 630,
+    // one, macOS 26.7.1), each with what the command buffer read there: `a` written first, `b`
+    // second.
+    let (a, b) = (0xa1u8, 0xb2u8);
+    let steps: [(&[Act], u8, u8); 5] = [
+        (&[Write(a), Modify, Encode, Commit], a, a),
+        (&[Encode, Write(a), Modify, Write(b), Commit], b, b),
+        (&[Write(a), Modify, Write(b), Encode, Commit], b, b),
+        // `b` written after the commit, while the GPU is still busy before the command buffer.
+        (&[Write(a), Modify, Encode, Commit, Write(b)], a, b),
+        (&[Write(a), Modify, Write(b), Modify, Encode, Commit], b, b),
+    ];
+    for (name, buffer) in [("over pages", &surface), ("the runtime's", &own)] {
+        let write = |byte: u8| {
+            let contents = buffer.contents().unwrap();
+            // SAFETY: the range lies in the buffer's bytes, its host copy (the pages, or the
+            // runtime's), which nothing else writes meanwhile.
+            unsafe {
+                std::ptr::write_bytes(
+                    contents.as_ptr().add(range.start as usize),
+                    byte,
+                    size as usize,
+                )
+            };
+        };
+        for (at, &(acts, on_two, on_one)) in steps.iter().enumerate() {
+            let out = device.new_buffer(size, ResourceOptions::shared()).unwrap();
+            // The GPU busy before the command buffer: its work runs once the busy work ends.
+            let (work, words) = busy.commit(&device, &queue);
+            let mut made = None;
+            for &act in acts {
+                match act {
+                    Write(byte) => write(byte),
+                    Modify => buffer.did_modify_range(range.clone()).unwrap(),
+                    Encode => {
+                        let command_buffer = queue.command_buffer().unwrap();
+                        let mut blit = command_buffer.blit_command_encoder().unwrap();
+                        blit.copy_from_buffer_to_buffer(buffer, range.start, &out, 0, size)
+                            .unwrap();
+                        blit.end_encoding().unwrap();
+                        made = Some(command_buffer);
+                    }
+                    Commit => {
+                        let command_buffer = made.as_ref().unwrap();
+                        command_buffer.commit().unwrap();
+                        scheduled(command_buffer);
+                    }
+                }
+            }
+            let step = at + 1;
+            assert_eq!(
+                read_mark(&words),
+                0,
+                "{name}, step {step}: the busy work ended first"
+            );
+            release(&words);
+            let command_buffer = made.unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            work.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.error(), None);
+            let contents = out.contents().unwrap();
+            // SAFETY: the buffer's `size` bytes, which no command writes any longer.
+            let read = unsafe { std::slice::from_raw_parts(contents.as_ptr(), size as usize) };
+            let want = if two { on_two } else { on_one };
+            assert!(
+                read.iter().all(|&byte| byte == want),
+                "{name}, step {step} {acts:?}: the command buffer read {want:02x} (two copies \
+                 {two}): {:02x?}",
+                &read[..8]
+            );
+        }
+    }
+    drop((surface, own));
     drop(mapping);
     layer_reported_nothing_at_all(&messages);
 }
