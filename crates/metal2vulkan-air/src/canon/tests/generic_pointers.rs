@@ -13,6 +13,10 @@ enum Held {
     Joined,
     /// `in` or null as word 0 of `in` decides.
     Nullable,
+    /// The thread's own array or null as word 0 of `in` decides; only queried (`out[0] = 0`).
+    LocalOrNull,
+    /// Null or the thread's own array as word 0 of `in` decides; only queried (`out[0] = 0`).
+    NullOrLocal,
     /// `in` or the thread's own array as word 0 of `in` decides.
     Mixed,
     /// A generic pointer stored to the thread's array and loaded back.
@@ -117,6 +121,14 @@ fn queried(held: Held) -> Result<Entry, Error> {
             pick(&mut f, input, other)
         }
         Held::Nullable => pick(&mut f, input, null),
+        Held::LocalOrNull => {
+            let mine = cast(&mut f, local);
+            pick(&mut f, mine, null)
+        }
+        Held::NullOrLocal => {
+            let mine = cast(&mut f, local);
+            pick(&mut f, null, mine)
+        }
         Held::Mixed => {
             let mine = cast(&mut f, local);
             pick(&mut f, input, mine)
@@ -126,7 +138,10 @@ fn queried(held: Held) -> Result<Entry, Error> {
             load(&mut f, generic, local)
         }
     };
-    let x = load(&mut f, f32t, p);
+    let x = match held {
+        Held::LocalOrNull | Held::NullOrLocal => no,
+        _ => load(&mut f, f32t, p),
+    };
     store(&mut f, x, arg(0));
     for (k, callee) in queries.into_iter().enumerate() {
         let b = call(&mut f, i1, callee, &[p]);
@@ -234,6 +249,26 @@ fn a_query_of_a_pointer_a_null_may_reach_asks_whether_it_is_null() {
     );
     // The device query is the run's; the thread query is false.
     assert_eq!(stored(&e)[1..], [None, Some(0.0)], "{text}");
+}
+
+/// A thread pointer or null, as a condition picks, is not null exactly where the condition picks
+/// the thread pointer: the thread query is that condition, and the pointer select, read by the
+/// queries alone, goes.
+#[test]
+fn a_query_of_a_variable_or_null_is_the_condition_that_picks() {
+    for held in [Held::LocalOrNull, Held::NullOrLocal] {
+        let e = queried(held).unwrap_or_else(|e| panic!("{held:?}: {e}"));
+        let text = body_text(&e);
+        assert!(!names_generic(&e), "{held:?}: {text}");
+        assert!(
+            !text
+                .lines()
+                .any(|l| l.contains("select") && l.contains("ptr")),
+            "{held:?}: {text}"
+        );
+        // The device query is false; the thread query is the run's condition.
+        assert_eq!(stored(&e), [Some(0.0), Some(0.0), None], "{held:?}: {text}");
+    }
 }
 
 #[test]

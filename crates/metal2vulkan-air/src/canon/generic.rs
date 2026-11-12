@@ -29,14 +29,19 @@
 //! keeps its operation, its generic constants those of its group's type. A query is false for
 //! another space; for the group's own space it is true, or, where a null constant may reach the
 //! pointer, whether the pointer is not null, as Metal answers no space for a null generic
-//! pointer. Aggregate types that hold generic pointers (an `alloca`'s or a `getelementptr`'s
-//! source type) keep them: they lay out bytes, and a pointer of every space is 64 bits.
+//! pointer. That answer is the pointer's structure's where it decides it: a variable's or a
+//! global's address, a cast of one or an in-bounds step from one is not null, a null constant is,
+//! and a `select` between two such pointers is not null where its condition picks the one that
+//! is not. Else it is a comparison with the null pointer of the group's space. A generic pointer
+//! that only answered queries read goes, with what only it reads. Aggregate types that hold
+//! generic pointers (an `alloca`'s or a `getelementptr`'s source type) keep them: they lay out
+//! bytes, and a pointer of every space is 64 bits.
 
 use crate::budget::Meter;
 use crate::error::{Error, Feature, Unsupported};
 use crate::intrinsics::AirIntrinsic;
-use crate::ir::{AddrSpace, Body, Callee, CastOp, Const, ConstExpr, ConstId, Constant, FuncId};
-use crate::ir::{Idx, InstKind, IntPredicate, ModuleParts, Type, TypeId, Value};
+use crate::ir::{AddrSpace, Body, Callee, CastOp, Const, ConstExpr, ConstId, Constant, FastMath};
+use crate::ir::{FuncId, Idx, InstId, InstKind, IntPredicate, ModuleParts, Type, TypeId, Value};
 
 use super::rewrite::{apply, filled, invariant, scoped, BodyEdit};
 
@@ -161,6 +166,75 @@ impl Cx<'_> {
         })
     }
 
+    /// Whether pointer `v` (of any space) is not null where its structure decides it: a variable's
+    /// or a global's address, a cast of one, or an in-bounds step from one is not null; a null,
+    /// undefined or poison constant points nowhere. `None` where only the run knows.
+    fn nonnull(&self, v: Value, depth: u32) -> Option<bool> {
+        if depth > DEPTH {
+            return None;
+        }
+        match v {
+            Value::Const(c) => self.nonnull_constant(c, depth),
+            Value::Arg(_) => None,
+            Value::Inst(i) => match &self.body.insts.get(i)?.kind {
+                InstKind::Alloca { .. } => Some(true),
+                InstKind::Gep {
+                    base,
+                    inbounds: true,
+                    ..
+                } => self.nonnull(*base, depth + 1),
+                InstKind::Cast {
+                    op: CastOp::Bitcast | CastOp::AddrSpaceCast,
+                    v,
+                }
+                | InstKind::Freeze(v) => self.nonnull(*v, depth + 1),
+                _ => None,
+            },
+        }
+    }
+
+    /// [`Cx::nonnull`] of constant `c`.
+    fn nonnull_constant(&self, c: ConstId, depth: u32) -> Option<bool> {
+        if depth > DEPTH {
+            return None;
+        }
+        match &self.parts.consts.get(c)?.value {
+            Const::Null | Const::Undef | Const::Poison => Some(false),
+            Const::GlobalAddr(_) => Some(true),
+            Const::Expr(ConstExpr::Cast {
+                op: CastOp::AddrSpaceCast | CastOp::Bitcast,
+                ops: [o],
+            }) => self.nonnull_constant(*o, depth + 1),
+            Const::Expr(ConstExpr::Gep {
+                inbounds: true,
+                ops,
+                ..
+            }) => self.nonnull_constant(*ops.first()?, depth + 1),
+            _ => None,
+        }
+    }
+
+    /// Whether generic pointer `p` is not null, as far as its structure decides it: by itself, or
+    /// as a `select` between two pointers it decides.
+    fn not_null(&self, p: Value) -> NotNull {
+        if let Some(b) = self.nonnull(p, 0) {
+            return NotNull::Is(b);
+        }
+        if let Value::Inst(i) = p {
+            if let Some(InstKind::Select { c, t, f, .. }) = self.body.insts.get(i).map(|x| &x.kind)
+            {
+                if let (Some(t), Some(f)) = (self.nonnull(*t, 0), self.nonnull(*f, 0)) {
+                    return if t == f {
+                        NotNull::Is(t)
+                    } else {
+                        NotNull::When { c: *c, t }
+                    };
+                }
+            }
+        }
+        NotNull::Run
+    }
+
     /// The space and nullness a generic operand brings in by itself: a constant's, `Many` for a
     /// parameter, nothing for an instruction (its group carries it).
     fn operand(&self, v: Value) -> Result<(Space, bool), Error> {
@@ -170,6 +244,17 @@ impl Cx<'_> {
             Value::Inst(_) => Ok((Space::Unseen, false)),
         }
     }
+}
+
+/// Whether a generic pointer is not null.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NotNull {
+    /// Its structure decides it.
+    Is(bool),
+    /// A `select` on `c` decides it: `t` where `c` holds, the other answer where not.
+    When { c: Value, t: bool },
+    /// Only the run knows.
+    Run,
 }
 
 /// The generic operands of `kind` that share the result's group (or, for an `icmp`, each other's).
@@ -676,8 +761,32 @@ fn rewrite(
                     .constant(c, 0)?,
                     Value::Arg(_) => return Err(refused()),
                 };
-                match s {
-                    Space::One(s) if s == q.space && nullable => {
+                let decided = Cx {
+                    body,
+                    parts,
+                    params,
+                }
+                .not_null(p);
+                match (s, decided) {
+                    (Space::One(s), NotNull::Is(b)) if s == q.space && nullable => {
+                        edit.replace(i, Value::Const(boolean(parts, b, m)?));
+                    }
+                    (Space::One(s), NotNull::When { c, t: true }) if s == q.space && nullable => {
+                        edit.replace(i, c);
+                    }
+                    (Space::One(s), NotNull::When { c, t: false }) if s == q.space && nullable => {
+                        let (t, f) = (boolean(parts, false, m)?, boolean(parts, true, m)?);
+                        edit.rewrite.insert(
+                            i,
+                            InstKind::Select {
+                                c,
+                                t: Value::Const(t),
+                                f: Value::Const(f),
+                                fmf: FastMath::NONE,
+                            },
+                        );
+                    }
+                    (Space::One(s), _) if s == q.space && nullable => {
                         let null = Value::Const(retyped_null(parts, &mut interned, s, m)?);
                         let a = match p {
                             Value::Const(c) => {
@@ -694,11 +803,13 @@ fn rewrite(
                             },
                         );
                     }
-                    Space::One(s) => {
+                    (Space::One(s), _) => {
                         edit.replace(i, Value::Const(boolean(parts, s == q.space, m)?));
                     }
-                    Space::Unseen => edit.replace(i, Value::Const(boolean(parts, false, m)?)),
-                    Space::Many => return Err(refused()),
+                    (Space::Unseen, _) => {
+                        edit.replace(i, Value::Const(boolean(parts, false, m)?));
+                    }
+                    (Space::Many, _) => return Err(refused()),
                 }
                 continue;
             }
@@ -767,7 +878,104 @@ fn rewrite(
             edit.retype.insert(i, t);
         }
     }
+    sweep(body, parts, &mut edit, m, held)?;
     apply(body, &edit, &|c| c, m)
+}
+
+/// Delete the generic pointers `edit` leaves without a use: those only answered queries read, and
+/// what only those read. Each computes an address and nothing else (a `getelementptr`, a cast, a
+/// `freeze`, a `phi` or a `select`).
+fn sweep(
+    body: &Body,
+    parts: &ModuleParts,
+    edit: &mut BodyEdit,
+    m: &mut Meter,
+    held: &mut usize,
+) -> Result<(), Error> {
+    let n = body.insts.len();
+    let mut candidate: Vec<bool> = filled(m, held, n, false)?;
+    for (i, inst) in body.insts.iter() {
+        m.tick(1)?;
+        let generic = matches!(
+            parts.types.get(inst.ty),
+            Some(Type::Ptr {
+                space: AddrSpace::Generic
+            })
+        );
+        let address = matches!(
+            inst.kind,
+            InstKind::Gep { .. }
+                | InstKind::Cast {
+                    op: CastOp::Bitcast | CastOp::AddrSpaceCast,
+                    ..
+                }
+                | InstKind::Freeze(_)
+                | InstKind::Phi { .. }
+                | InstKind::Select { .. }
+        );
+        let replaced = edit.replace.get(i.index()).is_some_and(Option::is_some);
+        if let Some(slot) = candidate.get_mut(i.index()) {
+            *slot = generic && address && !replaced;
+        }
+    }
+    // Live: what a surviving instruction that is no candidate reads, and what a live candidate
+    // reads; each candidate enters the stack once.
+    let mut live: Vec<bool> = filled(m, held, n, false)?;
+    let mut stack: Vec<InstId> = filled(m, held, n, InstId::new(0))?;
+    stack.clear();
+    let mut failed = None;
+    let mut mark = |v: Value, live: &mut Vec<bool>, stack: &mut Vec<InstId>| {
+        let mut v = v;
+        for _ in 0..=n {
+            let Value::Inst(j) = v else { return };
+            match edit.replace.get(j.index()).copied().flatten() {
+                Some(next) => v = next,
+                None => {
+                    if candidate.get(j.index()).copied().unwrap_or(false)
+                        && !live.get(j.index()).copied().unwrap_or(true)
+                    {
+                        if let Some(slot) = live.get_mut(j.index()) {
+                            *slot = true;
+                        }
+                        stack.push(j);
+                    }
+                    return;
+                }
+            }
+        }
+        failed.get_or_insert_with(|| invariant("instruction replacements form a cycle"));
+    };
+    for (i, inst) in body.insts.iter() {
+        m.tick(1)?;
+        let gone = edit.replace.get(i.index()).is_some_and(Option::is_some)
+            || edit.delete.get(i.index()).copied().unwrap_or(false)
+            || candidate.get(i.index()).copied().unwrap_or(false);
+        if gone {
+            continue;
+        }
+        let kind = edit.rewrite.get(&i).unwrap_or(&inst.kind);
+        kind.for_each_value(|v| mark(v, &mut live, &mut stack));
+    }
+    while let Some(j) = stack.pop() {
+        m.tick(1)?;
+        let inst = body
+            .insts
+            .get(j)
+            .ok_or_else(|| invariant("instruction out of range"))?;
+        let kind = edit.rewrite.get(&j).unwrap_or(&inst.kind);
+        kind.for_each_value(|v| mark(v, &mut live, &mut stack));
+    }
+    if let Some(e) = failed {
+        return Err(e);
+    }
+    for k in 0..n {
+        if candidate.get(k).copied().unwrap_or(false) && !live.get(k).copied().unwrap_or(true) {
+            edit.delete(InstId::new(
+                u32::try_from(k).map_err(|_| invariant("instruction ids past u32"))?,
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// A null pointer of space `s`.
