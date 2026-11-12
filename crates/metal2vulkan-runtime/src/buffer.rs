@@ -1612,6 +1612,12 @@ impl HostImport {
         self.copied.get().is_some()
     }
 
+    /// Whether it is an import of dma-bufs of the pages (`dma_buf.rs`), not of their pointer nor
+    /// a copy of them.
+    pub(super) fn over_dma_buf(&self) -> bool {
+        self.shape.over_dma_buf && !self.copied()
+    }
+
     /// Whether its memory is a copy of the caller's pages that drops the GPU's writes, as the
     /// process cannot write them (`copied.rs`).
     pub(super) fn copy_drops_writes(&self) -> bool {

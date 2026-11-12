@@ -3433,9 +3433,14 @@ bound.
   GPU's writes (`copied_unwritable_pages`), with or without a dma-buf source, which is never
   called for them; or a live import of another no-copy buffer's or heap's pages holds some of the
   pages and not all (across its edge, or around it), or a heap's pages and more, so that importing
-  them would import a page twice, which `VK_EXT_external_memory_host` leaves undefined
-  (`copied_over_live_imports`, the gate not asked; a buffer whose pages a live import holds all of
-  lies inside that import instead, `ObjectChurn::buffers_bound_in_import`); or an import of a
+  them would import a page twice, which `VK_EXT_external_memory_host` leaves undefined where
+  either import is of a host pointer (`copied_over_live_imports`, the gate not asked; a buffer
+  whose pages a live import holds all of lies inside that import instead,
+  `ObjectChurn::buffers_bound_in_import`; pages with a source the device imports, beside live
+  imports that are all of dma-bufs, import their own dma-bufs instead, never their pointer, as
+  Vulkan aliases any two imports of external memory, `ObjectChurn::dma_buf_imports_beside_live`,
+  but on a device whose barriers do not order blits through two imports of the same pages,
+  `RuntimeDriverDefect::AliasedImportBlitsUnordered`); or an import of a
   guest RAM's chunk, made or in flight, holds some of the pages at the RAM's own addresses and no
   chunk binds them (they cross a chunk's end with the chunks on both sides imported, or no run
   resolver routed them; `copied_over_live_imports` too). The gate is asked

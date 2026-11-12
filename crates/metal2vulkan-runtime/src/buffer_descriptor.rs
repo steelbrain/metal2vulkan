@@ -42,6 +42,7 @@ use super::work_counts::{CopiedBecause, Counters};
 use super::Device;
 use crate::release;
 use ash::vk;
+use metal2vulkan::error::RuntimeDriverDefect;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -901,7 +902,9 @@ impl Device {
         // live import of another buffer's or heap's holds all of is bound inside that import's
         // memory, with no import of its own, no pin and no gate; pages a live import holds some
         // of, and not all, and a heap's pages one holds more of, are a copy below, never imported
-        // again. A buffer whose GPU writes are dropped imports a read-only view of its own.
+        // again, but where they and every live import that holds some of them are dma-bufs
+        // ([`Device::imports_beside`]), which import their own. A buffer whose GPU writes are
+        // dropped imports a read-only view of its own.
         let within = match (&in_chunk, drops_writes) {
             (None, false) => (shared.aliases).within((window.start, window.size), importer.unit()),
             _ => Within::Free,
@@ -914,7 +917,14 @@ impl Device {
             },
             _ => None,
         };
-        let over_import = inside.is_none() && !matches!(within, Within::Free);
+        let held = inside.is_none() && !matches!(within, Within::Free);
+        let beside = held && self.imports_beside(&within, &host);
+        let over_import = held && !beside;
+        // Imported beside dma-bufs as dma-bufs alone: never by the pointer, nor the gate asked.
+        let host = HostWindow {
+            by_pointer: host.by_pointer && !beside,
+            ..host
+        };
         // Pages a guest RAM's chunk import, made or in flight, holds some of, at the RAM's own
         // addresses, that no chunk binds the buffer in (its bytes cross a chunk's end, or no run
         // resolver routed them): a copy too, never a second import of them (`host_ram.rs`).
@@ -1065,13 +1075,15 @@ impl Device {
                     };
                 let (buffer, memory, again) = match imported {
                     Ok(imported) => {
-                        self.count_import_over_live(&window, importer.unit(), routed.as_ref());
+                        let unit = importer.unit();
+                        self.count_import_over_live(&window, unit, routed.as_ref(), beside);
                         imported
                     }
                     // An import the device and the gate admitted that then failed, or pages the
-                    // runtime refused for the driver that no dma-buf of them served: a copy,
-                    // announced with the failure.
-                    Err((failed, _)) if copyable && copies_after(&failed.error) => {
+                    // runtime refused for the driver that no dma-buf of them served, or any failed
+                    // import of dma-bufs beside live ones (pages a copy where none is tried): a
+                    // copy, announced with the failure.
+                    Err((failed, _)) if copyable && (beside || copies_after(&failed.error)) => {
                         // SAFETY: the caller's contract.
                         let copied = unsafe {
                             self.copied_buffer(
@@ -1325,7 +1337,8 @@ impl Device {
                 // One page, one import (`host_aliases.rs`), as at a buffer's making: new pages a
                 // live import holds all of are bound inside it (a buffer's, not a heap's own),
                 // and pages one holds some of, or a heap's it holds all of, are a copy, the gate
-                // unasked.
+                // unasked, but where they and every live import that holds some of them are
+                // dma-bufs ([`Device::imports_beside`]), which import their own.
                 let within = match (&in_chunk, moved || drops_writes) {
                     (None, false) => (shared.aliases).within((window.start, window.size), unit),
                     _ => Within::Free,
@@ -1344,7 +1357,14 @@ impl Device {
                 let claim = (in_chunk.is_none() && inside.is_none() && !moved && !drops_writes)
                     .then(|| self.claim_ram_pages(window.start..window.start + window.size));
                 let over_chunk = matches!(claim, Some(None));
-                let over_import = inside.is_none() && !matches!(within, Within::Free);
+                let held = inside.is_none() && !matches!(within, Within::Free);
+                let beside = held && self.imports_beside(&within, &host);
+                let over_import = held && !beside;
+                // Imported beside dma-bufs as dma-bufs alone, as at a buffer's making.
+                let host = HostWindow {
+                    by_pointer: host.by_pointer && !beside,
+                    ..host
+                };
                 let in_chunk = in_chunk.or(inside);
                 let chunk_bound = in_chunk.is_some();
                 let kept_runs = routed.as_ref().map(Routed::kept);
@@ -1507,9 +1527,10 @@ impl Device {
                                 }
                             }
                             // An import of the caller's dma-bufs the gate admitted that then
-                            // failed, or that served pages the runtime refused for the driver: a
-                            // copy, as where the pointer's fails.
-                            Err(error) if copyable && copies_after(&error) => {
+                            // failed, or that served pages the runtime refused for the driver, or
+                            // any failed import of dma-bufs beside live ones: a copy, as where the
+                            // pointer's fails.
+                            Err(error) if copyable && (beside || copies_after(&error)) => {
                                 Err(Some(FailedImport {
                                     error,
                                     sourced: true,
@@ -1551,7 +1572,7 @@ impl Device {
                     }
                 };
                 if !chunk_bound && copied.is_none() {
-                    self.count_import_over_live(&window, unit, routed.as_ref());
+                    self.count_import_over_live(&window, unit, routed.as_ref(), beside);
                 }
                 // A copy lies at the offset it was laid out at: the old one where the bytes moved.
                 let offset = match copied {
@@ -1815,19 +1836,58 @@ impl Device {
     /// Count a no-copy buffer's or heap's own import of `window`'s pages, just made (in `unit`s),
     /// where a live import held some of them all the same: another buffer's or heap's, made at
     /// once and noted after this one looked, or a guest RAM's chunk's at the same addresses
-    /// (`ObjectChurn::imports_inside_live`). And, as evidence, where the object's pages are a
-    /// guest RAM's at other addresses (`routed`), some of which a live chunk import holds
+    /// (`ObjectChurn::imports_inside_live`), but where it was made of dma-bufs beside live imports
+    /// of dma-bufs, as `beside` says ([`Device::imports_beside`],
+    /// `ObjectChurn::dma_buf_imports_beside_live`). And, as evidence, where the object's pages
+    /// are a guest RAM's at other addresses (`routed`), some of which a live chunk import holds
     /// (`ObjectChurn::imports_over_ram_chunk_pages`).
-    fn count_import_over_live(&self, window: &ImportWindow, unit: u64, routed: Option<&Routed>) {
+    fn count_import_over_live(
+        &self,
+        window: &ImportWindow,
+        unit: u64,
+        routed: Option<&Routed>,
+        beside: bool,
+    ) {
         let shared = self.shared();
         let at_ram = self.ram_chunks_hold_any(window.start..window.start + window.size);
         let found = (shared.aliases).within((window.start, window.size), unit);
-        if at_ram || !matches!(found, Within::Free) {
-            shared.counts.churn.import_inside_live();
+        match (at_ram, matches!(found, Within::Free), beside) {
+            (true, _, _) | (false, false, false) => shared.counts.churn.import_inside_live(),
+            (false, false, true) => shared.counts.churn.dma_buf_import_beside_live(),
+            (false, true, _) => {}
         }
         if !at_ram && routed.is_some_and(|routed| routed.chunks_hold_any(window.size)) {
             shared.counts.churn.import_over_ram_chunk_pages();
         }
+    }
+
+    /// Whether pages that live imports hold some of (`within`: not all, or a heap's) take an
+    /// import of their own all the same: where every one of those imports is of dma-bufs, the
+    /// new pages come with a source of dma-bufs the device imports (`host`), and the device's
+    /// barriers order blits through two imports of the same pages (no
+    /// `RuntimeDriverDefect::AliasedImportBlitsUnordered`). They are then imported from that
+    /// source alone, never by their pointer. Elsewhere they are a copy (`CopiedBecause::OverImport`).
+    ///
+    /// `VK_EXT_external_memory_host`'s undefined double import is of a host pointer: "Some
+    /// platforms do not allow locking the same physical pages for device access multiple times"
+    /// (its issue 6), so no page an import of its pointer holds is imported again, and no page a
+    /// live import holds is imported by its pointer. Two imports of dma-bufs of the same pages
+    /// are no such lock: each is a `VkDeviceMemory` aliasing memory "by binding the memory to
+    /// resources in multiple Vulkan instances or external APIs using external memory handle
+    /// export and import mechanisms", whose aliases "interpret the contents of the memory in
+    /// consistent ways, and data written to one alias can be read by the other alias", where "use
+    /// of an overlapping range by two aliases must be separated by a memory dependency" (Vulkan
+    /// 1.4, 12.11 Memory Aliasing). `VK_EXT_external_memory_dma_buf` adds no rule against
+    /// importing two dma-bufs of the same pages. The tracker orders every use of a buffer's bytes
+    /// against those of every key over bytes they meet, whichever import each lies in
+    /// (`host_aliases.rs`, "Ordered by the bytes they lie over now"), with global memory
+    /// barriers, which hold every range; a guest RAM's run imported beside its chunk's
+    /// (`host_ram.rs`) is the same two dma-bufs of the same pages.
+    fn imports_beside(&self, within: &Within<HostImport>, host: &HostWindow) -> bool {
+        let unordered = RuntimeDriverDefect::AliasedImportBlitsUnordered;
+        host.source.is_some()
+            && within.held_by().iter().all(|import| import.over_dma_buf())
+            && !self.properties().driver_defects.contains(&unordered)
     }
 
     /// The `VkBuffer` of a no-copy buffer of `length` bytes over `window`, whose pages all lie
@@ -2198,8 +2258,10 @@ impl Device {
                 }
                 CopiedBecause::OverImport => {
                     "a live import of another no-copy buffer's or heap's pages holds some of \
-                     their pages and not all (or more than a heap's own bytes), and \
-                     VK_EXT_external_memory_host leaves pages imported twice undefined"
+                     their pages and not all (or more than a heap's own bytes), and a second \
+                     import of a page is undefined where either is of a host pointer \
+                     (VK_EXT_external_memory_host), and unordered by this device's barriers \
+                     where both are dma-bufs"
                 }
                 CopiedBecause::OverRamChunk => {
                     "an import of a guest RAM's chunk, made or in flight, holds some of their \
@@ -2717,8 +2779,8 @@ enum CopiedFor {
     /// writes, as Metal drops them.
     Unwritable,
     /// A live import of another buffer's or heap's pages holds some of them and not all, or more
-    /// than a heap's own bytes (`host_aliases.rs`, "One page, one import"): no page is imported
-    /// twice.
+    /// than a heap's own bytes (`host_aliases.rs`, "One page, one import"), and no import of
+    /// dma-bufs of them beside it is made ([`Device::imports_beside`]): no page is imported twice.
     OverImport,
     /// An import of a guest RAM's chunk, made or in flight, holds some of them, at the RAM's own
     /// addresses, and no chunk binds the buffer: its bytes cross a chunk's end (the chunks on both

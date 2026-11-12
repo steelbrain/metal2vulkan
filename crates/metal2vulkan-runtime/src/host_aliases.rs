@@ -63,8 +63,14 @@
 //!   .buffers_bound_in_import`), which keeps the import imported for good while it lives (no
 //!   residency release, `host_residency.rs`). A buffer or heap whose pages a live import holds
 //!   some of, and not all, and a heap whose pages a live import holds more of than its own bytes,
-//!   are a copy of the pages instead (`copied.rs`, `WorkCounts::copied_over_live_imports`).
-//!   A guest RAM's chunk is not imported while a live import of an object's own holds some of its
+//!   are a copy of the pages instead (`copied.rs`, `WorkCounts::copied_over_live_imports`), but
+//!   where every such import is of dma-bufs and the new pages come with a source of dma-bufs:
+//!   they then import the source's dma-bufs, never their pointer, on a device whose barriers
+//!   order blits through two imports of the same pages (`Device::imports_beside`,
+//!   `WorkCounts::object_churn.dma_buf_imports_beside_live`). The clause above is of host
+//!   pointers; two imports of dma-bufs of the same pages are two aliases of external memory,
+//!   which Vulkan's memory aliasing rules define (Vulkan 1.4, 12.11), their uses ordered by the
+//!   bytes they lie over (below). A guest RAM's chunk is not imported while a live import of an object's own holds some of its
 //!   pages, and a run is never imported alone by its pointer while its chunk's import is made
 //!   (`host_ram.rs`). `WorkCounts::object_churn.imports_inside_live` counts the imports made where
 //!   one held some of the pages all the same (two buffers made at once over them, or an object's
@@ -162,9 +168,23 @@ pub(super) enum Within<I> {
     Free,
     /// A live import holds all of them: a buffer over them is bound inside its memory.
     Inside(Arc<I>),
-    /// A live import holds some of them, none all: a buffer over them is a copy of them, so
-    /// that no page is imported twice.
-    Meets,
+    /// Live imports hold some of them, none all: these, each live import of the memories whose
+    /// bytes meet them. A new import of them would import a page twice: of the pages' pointer,
+    /// or beside an import of their pointer, it is a copy of them instead; of dma-bufs beside
+    /// imports of dma-bufs alone, it is made (`Device::imports_beside`).
+    Meets(Vec<Arc<I>>),
+}
+
+impl<I> Within<I> {
+    /// The live imports that hold some of the pages: none where they are free, the one they lie
+    /// inside, or those that meet them.
+    pub(super) fn held_by(&self) -> &[Arc<I>] {
+        match self {
+            Within::Free => &[],
+            Within::Inside(import) => std::slice::from_ref(import),
+            Within::Meets(met) => met,
+        }
+    }
 }
 
 /// The device's no-copy buffers by the host memory they were made over (the module docs), and
@@ -412,23 +432,27 @@ impl<I> HostAliases<I> {
     /// What the live imports noted hold of the pages `window` (the first byte's host address and
     /// the length of whole import units, `unit` bytes each, a new import's window): an import of
     /// any class, not a copy, whose bytes rounded out to `unit` hold them all, which a buffer over
-    /// them lies inside ([`Within::Inside`]); else whether one holds some of them
-    /// ([`Within::Meets`]), which a new import would pin a second time; else none
-    /// ([`Within::Free`]). One live import of a page at a time: `VK_EXT_external_memory_host`
-    /// leaves a host allocation imported twice into a device undefined ("Some platforms do not
-    /// allow locking the same physical pages for device access multiple times"), and the
-    /// runtime's imports by pointer and of dma-bufs are kept to one per page alike.
+    /// them lies inside ([`Within::Inside`]); else the live imports that hold some of them
+    /// ([`Within::Meets`]), beside which a new import would hold a page a second time; else none
+    /// ([`Within::Free`]). `VK_EXT_external_memory_host` leaves a host allocation imported twice
+    /// into a device undefined ("Some platforms do not allow locking the same physical pages for
+    /// device access multiple times"), so no page an import of its pointer holds is imported
+    /// again, nor by its pointer beside any import; two imports of dma-bufs of the same pages are
+    /// two aliases of external memory (`Device::imports_beside`).
     pub(super) fn within(&self, window: (u64, u64), unit: u64) -> Within<I> {
         let inner = lock(&self.inner);
         let unit = unit.max(1);
         let (start, end) = (window.0, window.0.saturating_add(window.1));
-        let mut meets = false;
+        let mut met = Vec::new();
         for at in inner.memories.overlapping(start, end) {
-            let Some(import) = inner.memories.get(at).and_then(|noted| {
-                (noted.imports.iter())
-                    .filter(|(made, _)| matches!(made, Kind::Import(_)))
-                    .find_map(|(_, import)| import.upgrade())
-            }) else {
+            let Some(noted) = inner.memories.get(at) else {
+                continue;
+            };
+            let mut live = (noted.imports.iter())
+                .filter(|(made, _)| matches!(made, Kind::Import(_)))
+                .filter_map(|(_, import)| import.upgrade())
+                .peekable();
+            let Some(first) = live.peek() else {
                 continue;
             };
             let from = at.0 - at.0 % unit;
@@ -437,13 +461,13 @@ impl<I> HostAliases<I> {
                     .div_ceil(unit)
                     .saturating_mul(unit);
             if from <= start && end <= to {
-                return Within::Inside(import);
+                return Within::Inside(Arc::clone(first));
             }
-            meets = true;
+            met.extend(live);
         }
-        match meets {
-            true => Within::Meets,
-            false => Within::Free,
+        match met.is_empty() {
+            true => Within::Free,
+            false => Within::Meets(met),
         }
     }
 

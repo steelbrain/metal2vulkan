@@ -200,6 +200,8 @@ pub(crate) struct ChurnCounters {
     swapped_out_forgotten: AtomicU64,
     /// Imports made over host addresses a live import holds some of.
     imports_inside_live: AtomicU64,
+    /// Imports of dma-bufs made beside live imports of dma-bufs of some of the same pages.
+    dma_buf_imports_beside_live: AtomicU64,
     /// No-copy buffers bound inside a live import's memory, with no import of their own.
     buffers_bound_in_import: AtomicU64,
     /// Imports of a no-copy object's own pages whose guest RAM pages a live chunk import holds.
@@ -217,6 +219,11 @@ impl ChurnCounters {
     /// An import was made over host addresses a live import holds some of.
     pub(crate) fn import_inside_live(&self) {
         self.imports_inside_live.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An import of dma-bufs was made beside live imports of dma-bufs of some of its pages.
+    pub(crate) fn dma_buf_import_beside_live(&self) {
+        (self.dma_buf_imports_beside_live).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A no-copy buffer was bound inside a live import's memory, with no import of its own.
@@ -306,6 +313,8 @@ impl ChurnCounters {
                 buffers_parked: recycled(Recycled::Buffer, 1),
                 buffers_evicted: recycled(Recycled::Buffer, 2),
                 imports_inside_live: self.imports_inside_live.load(Ordering::Relaxed),
+                dma_buf_imports_beside_live: (self.dma_buf_imports_beside_live)
+                    .load(Ordering::Relaxed),
                 buffers_bound_in_import: self.buffers_bound_in_import.load(Ordering::Relaxed),
                 imports_over_ram_chunk_pages: self
                     .imports_over_ram_chunk_pages
@@ -423,12 +432,20 @@ pub struct ObjectChurn {
     /// page imported twice, which
     /// `VK_EXT_external_memory_host` leaves undefined for a host pointer; every other buffer
     /// over pages a live import holds lies inside it (`buffers_bound_in_import`, or a chunk's
-    /// `WorkCounts::chunk_bound_buffers_made`) or is a copy
+    /// `WorkCounts::chunk_bound_buffers_made`), imports dma-bufs of its own beside imports of
+    /// dma-bufs (`dma_buf_imports_beside_live`), or is a copy
     /// (`WorkCounts::copied_over_live_imports`). Counted by host address, after each import is
     /// made: two made at once over the same pages, each looking before the other's was noted,
     /// count. A listed RAM's run imported alone while its chunk's import is made (two dma-bufs of
     /// the same pages, `WorkCounts::run_imports_live`) does not.
     pub imports_inside_live: u64,
+    /// No-copy buffers' and heaps' own imports of dma-bufs of their pages, made where live
+    /// imports of another no-copy buffer's or heap's pages, each of dma-bufs, held some of them
+    /// (`host_aliases.rs`, "One page, one import"): two dma-bufs of the same pages, which Vulkan
+    /// aliases as any two imports of external memory, on a device whose barriers order blits
+    /// through two imports of the same pages (no `RuntimeDriverDefect::AliasedImportBlitsUnordered`).
+    /// Each made where the pages were a copy before (`WorkCounts::copied_over_live_imports`).
+    pub dma_buf_imports_beside_live: u64,
     /// No-copy buffers bound inside the memory of a live import that holds all their pages, at
     /// their offset, with no import of their own (`host_aliases.rs`, "One page, one import"):
     /// over part of another no-copy buffer's or heap's bytes.

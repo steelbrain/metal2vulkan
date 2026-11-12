@@ -196,7 +196,7 @@ fn within(aliases: &Aliases, window: (u64, u64)) -> Option<Option<u32>> {
     match aliases.within(window, PAGE) {
         Within::Free => None,
         Within::Inside(import) => Some(Some(*import)),
-        Within::Meets => Some(None),
+        Within::Meets(_) => Some(None),
     }
 }
 
@@ -240,6 +240,10 @@ fn a_page_a_live_import_holds_is_never_imported_again() {
     // Across either edge, or around it whole: it meets, and no new import is made.
     for window in [(0xff000, 0x2000), (0x2ff000, 0x2000), (0xf0000, 0x300000)] {
         assert_eq!(within(&aliases, window), Some(None), "{window:x?}");
+        // Naming the live import that meets it, whose kind decides a new import beside it.
+        let met = aliases.within(window, PAGE);
+        let met: Vec<u32> = met.held_by().iter().map(|import| **import).collect();
+        assert_eq!(met, [7], "{window:x?}");
     }
     // Beside it: free.
     assert_eq!(within(&aliases, (0x300000, 0x1000)), None);

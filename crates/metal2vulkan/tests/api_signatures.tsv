@@ -2295,6 +2295,7 @@ field	metal2vulkan-runtime::ObjectChurn.buffers_bound_in_import	pub buffers_boun
 field	metal2vulkan-runtime::ObjectChurn.buffers_evicted	pub buffers_evicted: u64
 field	metal2vulkan-runtime::ObjectChurn.buffers_parked	pub buffers_parked: u64
 field	metal2vulkan-runtime::ObjectChurn.buffers_recycled	pub buffers_recycled: u64
+field	metal2vulkan-runtime::ObjectChurn.dma_buf_imports_beside_live	pub dma_buf_imports_beside_live: u64
 field	metal2vulkan-runtime::ObjectChurn.images_evicted	pub images_evicted: u64
 field	metal2vulkan-runtime::ObjectChurn.images_in_buffers	pub images_in_buffers: u64
 field	metal2vulkan-runtime::ObjectChurn.images_in_heaps	pub images_in_heaps: u64

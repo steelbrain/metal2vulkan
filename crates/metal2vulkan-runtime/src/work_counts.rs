@@ -7811,7 +7811,11 @@ pub struct WorkCounts {
     /// resolver), made
     /// over a copy so that no page is imported twice (`host_aliases.rs`, "One page, one import";
     /// `host_ram.rs`): `VK_EXT_external_memory_host` leaves a host allocation imported twice into
-    /// a device undefined. Their import is never tried, their gate never asked.
+    /// a device undefined. Their import is never tried, their gate never asked. Pages with a
+    /// source of dma-bufs beside live imports of another's that are all of dma-bufs import their
+    /// own instead (`ObjectChurn::dma_buf_imports_beside_live`), but on a device whose barriers
+    /// do not order blits through two imports of the same pages
+    /// (`RuntimeDriverDefect::AliasedImportBlitsUnordered`).
     pub copied_over_live_imports: u64,
     /// Of the copies made, those a rebind gave a buffer as its new pages
     /// (`Buffer::rebind_bytes_no_copy`), in `copied_host_buffers_made` and its kin too.
@@ -10565,7 +10569,9 @@ pub(crate) enum CopiedBecause {
     /// on Linux keeps out of them: the copy drops them.
     Unwritable,
     /// A live import of another buffer or heap holds some of the pages and not all, or more than
-    /// a heap's own bytes: a second import would pin them twice (`host_aliases.rs`).
+    /// a heap's own bytes: a second import would pin them twice where either is of a host
+    /// pointer, or be unordered by the device's barriers where both are dma-bufs
+    /// (`host_aliases.rs`).
     OverImport,
     /// An import of a guest RAM's chunk, made or in flight, holds some of the pages, at the RAM's
     /// own addresses, and no chunk binds the buffer (its bytes cross a chunk's end, or no run
