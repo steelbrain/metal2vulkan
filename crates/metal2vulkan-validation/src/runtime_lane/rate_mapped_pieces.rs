@@ -4,17 +4,17 @@
 //!
 //! The workload is one execution of the shape of the consumer's (macOS guests over the runtime):
 //! a map of one layer over a [`SCREEN`] screen whose quality falls from 1 at the centre to 0.3 at
-//! the edges on both axes ([`QUALITY`]), 2,074 regions; a pass into a target of the map's
+//! the edges on both axes ([`QUALITY`]); a pass into a target of the map's
 //! physical size; and an indirect command buffer's [`COUNTS`] commands executed over a range read
 //! from a buffer, each indexed triangles of one of the index counts a guest's executed commands
 //! drew (their 10th, 50th, 90th and 99th percentiles, their mean and their most), drawn from a
-//! grid of small triangles over the screen (`tob_triangle`, `tob_solid`). That holds about
-//! 1.9 G region-indices of work, 28 times the piece work: about 0.8 s of an Iris Xe's GPU at its
-//! trivial vertex function, under a second, so a device that cut nothing would still not reach
-//! amdgpu's 2 s job timeout. Printed as a `RATE-MAP-PIECES` line: the frame's GPU time, the
-//! pieces and ranges it was cut into, and its pieces' GPU times where the device times them.
-//! Checked: the frame was cut into pieces and its largest command into ranges, and no piece ran
-//! past [`PIECE_LIMIT`].
+//! grid of small triangles over the screen (`tob_triangle`, `tob_solid`). Its command buffer
+//! runs well under a second, so a device that cut nothing would still not reach amdgpu's 2 s
+//! job timeout: 504 ms of an Iris Xe's GPU, in 20 pieces of at most 31 ms, and 307 ms of a Radeon
+//! 780M's, in 20 pieces of at most 36 ms (Mesa 26.2.6). Printed as a `RATE-MAP-PIECES` line: the
+//! map's regions, the command buffer's GPU time, the pieces and ranges it was cut into, and its
+//! pieces' GPU times where the device times them. Checked: the command buffer was cut into
+//! pieces and its largest command into ranges, and no piece ran past [`PIECE_LIMIT`].
 //!
 //! Ignored by default: a measurement on a GPU, far too slow on a CPU device. Run it by name with
 //! `--run-ignored all`. The fixture's text is compiled in, so the binary also runs on a machine
@@ -23,7 +23,9 @@
 use super::{buffer_with, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::bind::{RateMapDescriptor, RateMapLayerDescriptor};
+use metal2vulkan::bind::{
+    RasterizationRateMap as CompiledMap, RateMapDescriptor, RateMapLayerDescriptor, RegionLimits,
+};
 use metal2vulkan::metal::{
     IndexType, IndirectCommandType, PixelFormat, PrimitiveType, TextureUsage,
 };
@@ -176,6 +178,14 @@ fn rate_mapped_pieces() {
         QUALITY.to_vec(),
         QUALITY.to_vec(),
     )];
+    // The regions a draw over the whole screen records, by the compile layer's plan.
+    let limits = RegionLimits::new([16384, 16384], [-32768.0, 32767.0]);
+    let whole = [0.0, 0.0, f64::from(SCREEN[0]), f64::from(SCREEN[1])];
+    let regions = (CompiledMap::new(&map).unwrap())
+        .regions(0, whole, None, &limits)
+        .unwrap()
+        .regions()
+        .len();
     let map = device.new_rasterization_rate_map(&map).unwrap();
     let size = map.physical_size_for_layer(0);
     let mut target =
@@ -209,9 +219,10 @@ fn rate_mapped_pieces() {
     let indices: u64 = draws.iter().map(|&count| u64::from(count)).sum();
     let mean = Duration::from_nanos(nanos / timed.max(1));
     eprintln!(
-        "RATE-MAP-PIECES {name}: screen {}x{}, physical {}x{}, {spread} commands of {indices} \
-         indices: the command buffer {:.1} ms of GPU time, {} pieces ({ranges} index ranges past \
-         the first); {timed} pieces timed, the longest {:.2} ms, the mean {:.2} ms",
+        "RATE-MAP-PIECES {name}: screen {}x{}, physical {}x{}, {regions} regions, {spread} \
+         commands of {indices} indices: the command buffer {:.1} ms of GPU time, {} pieces \
+         ({ranges} index ranges past the first); {timed} pieces timed, the longest {:.2} ms, the \
+         mean {:.2} ms",
         SCREEN[0],
         SCREEN[1],
         size.width,
