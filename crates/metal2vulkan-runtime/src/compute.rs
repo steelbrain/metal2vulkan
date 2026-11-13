@@ -47,11 +47,17 @@
 //!
 //! A dispatch of an inert kernel (`ComputePipelineState::inert`: its module holds no loop and
 //! writes nothing but its invocations' own and its threadgroups' memory) records no Vulkan
-//! dispatch, direct, indirect or an indirect command buffer's alike (`record`), after Metal's
-//! checks of step 1: nothing it does outlasts it, so nothing later reads it, and the runtime
-//! samples no counter that would count its threads (`RuntimeGap::CounterSampleBuffers`). Its
-//! reads take no hazard tracking. The encoder's barriers, fences and the command buffer's events
-//! and completion stay as they are (`WorkCounts::dispatches_skipped_inert`).
+//! dispatch, direct, indirect or an indirect command buffer's alike (`record`): nothing it does
+//! outlasts it, so nothing later reads it, and the runtime samples no counter that would count its
+//! threads (`RuntimeGap::CounterSampleBuffers`). Everything else of a dispatch's steps 1 to 3
+//! stays: it is checked and planned as any, and the command buffer uses what it binds, as Metal's
+//! does (`EncoderCore::name_uses`). Its uses are named, so the commit copies in the ranges
+//! `did_modify_range` noted of the `Managed` buffers it binds and its batch makes their fills and
+//! first work, where a program that dispatches an empty kernel over its buffers to upload them
+//! ahead of its timed work wants them; and a detached or rebound buffer among them fails the
+//! command buffer. Its uses take no hazard tracking and note no write. The encoder's barriers,
+//! fences and the command buffer's events and completion stay as they are
+//! (`WorkCounts::dispatches_skipped_inert`).
 
 use super::address_map::{self, SamplerMaps};
 use super::argument_table::{check_index, ArgumentTable, Stamp};
@@ -931,9 +937,10 @@ impl ComputeCommandEncoder {
     /// 32 bits is taken modulo `2^32`, and one that is 0 runs nothing. A dispatch of an inert
     /// kernel (no loop, and no write but to its threads' own and its threadgroups' memory) records
     /// no Vulkan dispatch: what it computes ends with it, and Metal's counter sampling, which
-    /// could count its threads, is the runtime's gap (`RuntimeGap::CounterSampleBuffers`); the
-    /// encoder's barriers and fences stay as they are. Refused: no pipeline state set (plain
-    /// Metal faults).
+    /// could count its threads, is the runtime's gap (`RuntimeGap::CounterSampleBuffers`). The
+    /// command buffer still uses what it binds, as Metal's does (the `Managed` buffers' copies in
+    /// among it), and the encoder's barriers and fences stay as they are. Refused: no pipeline
+    /// state set (plain Metal faults).
     pub fn dispatch_threadgroups(&mut self, groups: Size, threads: Size) -> Result<(), Error> {
         self.logged(
             |_| ComputeCall::Threadgroups(groups, threads),
@@ -2340,8 +2347,8 @@ impl DispatchMemo {
 /// direct one takes what its last dispatch settled where it has the same inputs
 /// ([`DispatchMemo`]). And one whose `VkPipeline`s are not made yet hands their making to the
 /// device's pool and records later (`pending_dispatch.rs`): an execution's or a host step's
-/// dispatch waits for them. A dispatch of an inert kernel records nothing and answers `Ok(true)`,
-/// taken (the module docs).
+/// dispatch waits for them. A dispatch of an inert kernel is planned and its uses made as any,
+/// then named alone, recording nothing, and answers `Ok(true)`, taken (the module docs).
 fn record(
     core: &mut EncoderCore,
     tables: &DispatchTables<'_>,
@@ -2350,10 +2357,6 @@ fn record(
     own: Option<(usize, &mut LiveDispatch)>,
 ) -> Result<bool, Error> {
     let pipeline = tables.pipeline;
-    if pipeline.inert() {
-        core.counts().dispatch_skipped_inert();
-        return Ok(true);
-    }
     let (direct, gpu) = match counts {
         Counts::Direct(dispatch) => (Some(dispatch), None),
         Counts::Flat(gpu) => (None, Some(gpu)),
@@ -2617,6 +2620,14 @@ fn record(
         .filter(|key| !uses.resident().contains(key));
     if core.skips(named) {
         tables.table.retain(core);
+        return Ok(true);
+    }
+    // A dispatch of an inert kernel records nothing; the command buffer uses what it binds, as
+    // Metal's does (the module docs).
+    if pipeline.inert() {
+        core.name_uses(uses, uses.resident());
+        tables.table.retain(core);
+        core.counts().dispatch_skipped_inert();
         return Ok(true);
     }
     let device = core.device().clone();

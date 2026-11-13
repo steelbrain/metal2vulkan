@@ -8226,7 +8226,8 @@ pub struct WorkCounts {
     /// invocations' own and its threadgroups' memory) that recorded no Vulkan dispatch, direct,
     /// indirect and an indirect command buffer's alike (`compute::record`): nothing such a
     /// dispatch does outlasts it, and the runtime samples no counter that would count its
-    /// threads. Not counted in `dispatches_settled_as_before`.
+    /// threads. Each is planned as any dispatch (`dispatches_settled_as_before` counts it where
+    /// its memo held), and its uses are named, as Metal's command buffer uses what it binds.
     pub dispatches_skipped_inert: u64,
     /// Direct dispatches that settled their bind state again (another table, another residency,
     /// another encoder) into one of the shape their pipeline state's last direct dispatch that

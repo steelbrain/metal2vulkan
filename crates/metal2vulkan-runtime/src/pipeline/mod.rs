@@ -1375,7 +1375,8 @@ impl ComputePipelineState {
     /// ([`ModuleStats::inert`](metal2vulkan::pipeline::ModuleStats::inert)): it holds no loop and
     /// writes nothing but its invocations' own and its threadgroups' memory, so a dispatch of it
     /// ends and leaves nothing a later command or the program can read. A compute encoder records
-    /// no Vulkan dispatch of it (`compute::record`). The base variant answers for every variant:
+    /// no Vulkan dispatch of it, and names what the dispatch binds alone (`compute::record`). The
+    /// base variant answers for every variant:
     /// they bind and partition the kernel otherwise, and store what it stores. A tile function's
     /// state is never inert: its threadgroup memory is the render pass's imageblock.
     pub(super) fn inert(&self) -> bool {

@@ -90,6 +90,13 @@ path = "examples/managed_bandwidth.rs"
 name = "managed_sync_out"
 path = "examples/managed_sync_out.rs"
 
+# Not a consumer's example: which command buffer copies `Managed` buffers' CPU writes in when the
+# first one to bind them only dispatches an empty kernel, and what the next one that reads them
+# costs (examples/inert_uploads.rs).
+[[example]]
+name = "inert_uploads"
+path = "examples/inert_uploads.rs"
+
 # Not a consumer's example: the GPU's bandwidth through 256 MiB buffers of the runtime's own memory,
 # made after other buffers went (examples/private_bandwidth.rs).
 [[example]]

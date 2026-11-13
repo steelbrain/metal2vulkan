@@ -1600,6 +1600,22 @@ impl EncoderCore {
         }
     }
 
+    /// Name `uses`, of which those of the keys `resident` reach their buffers through the resident
+    /// set alone, as a recorded command's are named (`touch_reaching`), for a command that records
+    /// nothing on the GPU and writes nothing (a dispatch of an inert kernel, `compute.rs`): the
+    /// command buffer uses what it binds, as Metal's does. Its keys are kept, so the commit takes
+    /// the ranges `did_modify_range` noted of the `Managed` buffers among them and the batch makes
+    /// their fills and first work (`managed.rs`, `texture/first_move.rs`), and the buffers over
+    /// host pages among them are held and named as a recorded command's (`rebind.rs`). No hazard
+    /// is tracked and no write is noted. Call it once [`skips`](Self::skips) passed.
+    pub(super) fn name_uses(
+        &mut self,
+        uses: &[Use<ResourceKey>],
+        resident: &BTreeSet<ResourceKey>,
+    ) {
+        self.touch_reaching(uses, resident);
+    }
+
     /// Keep `keys`, those of resources a command uses (its own uses', or its bindings', which
     /// it may not read), holding each buffer over host pages among them as `touch` does.
     pub(super) fn touch_keys(&mut self, keys: impl IntoIterator<Item = ResourceKey>) {

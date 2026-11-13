@@ -797,8 +797,11 @@ assert!(stats.reachable_blocks <= stats.blocks);
   invocation's own and its workgroup's (`Function`, `Private` and `Workgroup` storage), writes an
   image, or emits or drops an output of its stage. Every invocation of such a module ends and
   leaves nothing behind, so a dispatch of an inert kernel computes nothing anyone can read:
-  `metal2vulkan-runtime` records no Vulkan dispatch of it. An instruction the check does not
-  classify as reading or computing alone (an interlock, a ray query) makes a module not inert.
+  `metal2vulkan-runtime` records no Vulkan dispatch of it. The command buffer still uses what the
+  dispatch binds, as Metal's does: a `Managed` buffer's ranges named by `did_modify_range` are
+  copied in by that command buffer, not by the next one that reads them. An instruction the
+  check does not classify as reading or computing alone (an interlock, a ray query) makes a
+  module not inert.
 
 The counts are of the module `spirv` holds: the verifier counts the module it checked, and
 serialization and relocation assign link numbers without adding or removing an instruction. They

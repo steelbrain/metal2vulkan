@@ -13,6 +13,11 @@
 //! - **Events.** A command buffer whose only dispatch is skipped waits for a shared event's value
 //!   and signals the next, on a queue of its own, and a third command buffer that waits for that
 //!   value reads what the first wrote; the three are committed in reverse order.
+//! - **Uses.** The command buffer uses what a skipped dispatch binds, as Metal's does. A `Managed`
+//!   buffer the CPU wrote and named with `did_modify_range` is copied in by the command buffer of
+//!   the skipped dispatch that binds it, not by the next one that reads it, which copies nothing
+//!   in and waits for no fill-queue submission. A `Shared` no-copy buffer detached before a
+//!   skipped dispatch binds it fails that command buffer (`DetachedBacking`).
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The module is LLVM text written here
@@ -21,10 +26,11 @@
 use super::blit_holds::{device, Scratch, WAIT};
 use super::opencl_mode::{words, words_buffer};
 use crate::{
-    Buffer, CommandBufferStatus, ComputePipelineState, Device, EventRef, HazardTrackingMode,
-    PipelineOptions, ResourceOptions, Size,
+    Buffer, CommandBufferError, CommandBufferStatus, ComputePipelineState, CpuCacheMode, Device,
+    EventRef, HazardTrackingMode, HostMemory, PipelineOptions, ResourceOptions, Size, StorageMode,
 };
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
+use std::ptr::NonNull;
 
 /// Five kernels of buffers `a` (index 0) and `b` (index 1) and the thread's grid position:
 /// `empty` does nothing; `tg_only` stores to threadgroup memory; `loop_tg` stores `a[0]` times to
@@ -293,4 +299,167 @@ fn events_around_a_skipped_dispatch_order_a_later_read_of_an_earlier_write() {
         assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
     }
     assert_eq!(words(&y), doubled_fill());
+}
+
+/// The bytes of the uses tests' no-copy buffers: past the fill queue's least
+/// (`device::staging::FILL_QUEUE_LEAST`), so a device with a fill queue copies the `Managed` one in
+/// there.
+const PAGES: u64 = 2 << 20;
+
+/// Anonymous private pages of the test's own, holding `byte` in each, unmapped when dropped:
+/// declared before the device, so dropped after every buffer over them.
+struct Pages(NonNull<u8>);
+
+impl Pages {
+    fn new(byte: u8) -> Pages {
+        // SAFETY: a fresh private anonymous mapping, unmapped in `drop`.
+        let at = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                PAGES as usize,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(at, libc::MAP_FAILED);
+        let pages = Pages(NonNull::new(at.cast()).unwrap());
+        pages.write(byte);
+        pages
+    }
+
+    /// Write `byte` over every byte, as the CPU, while no command buffer uses them.
+    fn write(&self, byte: u8) {
+        // SAFETY: the mapping's bytes, which no command buffer uses meanwhile.
+        unsafe { std::ptr::write_bytes(self.0.as_ptr(), byte, PAGES as usize) };
+    }
+
+    /// A no-copy buffer of `storage` over them whole.
+    fn buffer(&self, device: &Device, storage: StorageMode) -> Buffer {
+        let options = ResourceOptions::new(
+            storage,
+            CpuCacheMode::DefaultCache,
+            HazardTrackingMode::Default,
+        );
+        // SAFETY: the pages outlive every buffer over them (declared before the device).
+        unsafe {
+            device.new_buffer_with_bytes_no_copy(HostMemory::new(self.0), PAGES, options, None)
+        }
+        .unwrap()
+    }
+}
+
+impl Drop for Pages {
+    fn drop(&mut self) {
+        // SAFETY: the mapping `new` made, which no buffer lies in any more.
+        unsafe { libc::munmap(self.0.as_ptr().cast(), PAGES as usize) };
+    }
+}
+
+/// A command buffer of `queue` whose one encoder dispatches `state` over `a` (index 0) and `b`
+/// (index 1), `grid` threads in threadgroups of `group`, committed and waited for: its status and
+/// error.
+fn dispatched(
+    queue: &crate::CommandQueue,
+    state: &ComputePipelineState,
+    (a, b): (&Buffer, &Buffer),
+    (grid, group): (u64, u64),
+) -> (CommandBufferStatus, Option<CommandBufferError>) {
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(state).unwrap();
+    encoder.set_buffer(Some(a), 0, 0).unwrap();
+    encoder.set_buffer(Some(b), 0, 1).unwrap();
+    encoder
+        .dispatch_threads(Size::new(grid, 1, 1), Size::new(group, 1, 1))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    (command_buffer.status(), command_buffer.error())
+}
+
+/// A `Managed` no-copy buffer the CPU wrote and named whole with `did_modify_range`, bound by a
+/// skipped dispatch in one command buffer and read by `twice` in the next: on a device without
+/// unified memory, the first command buffer's commit takes the range
+/// (`WorkCounts::managed_bytes_copied_in` counts its bytes there) and the second copies nothing
+/// in and waits for no fill-queue submission. `twice` reads the CPU's words on every device.
+#[test]
+fn a_skipped_dispatch_s_command_buffer_copies_in_the_managed_buffers_it_binds() {
+    let pages = Pages::new(0x11);
+    let scratch = Scratch::new("inert-copies-in");
+    let device = device(&scratch.0);
+    let (empty, twice) = (state(&device, "empty"), state(&device, "twice"));
+    let managed = pages.buffer(&device, StorageMode::Managed);
+    let out = words_buffer(&device, &[0; N as usize]);
+    let queue = device.new_command_queue().unwrap();
+    let two_copies = !device.properties().has_unified_memory;
+    // The buffer's making copies its pages in with the next submission: this one.
+    let read = dispatched(&queue, &twice, (&managed, &out), (u64::from(N), 64));
+    assert_eq!(read, (CommandBufferStatus::Completed, None));
+    assert_eq!(words(&out), vec![0x2222_2222; N as usize]);
+    pages.write(0x21);
+    managed.did_modify_range(0..PAGES).unwrap();
+    let (before, skipped_before) = (device.work_counts(), skipped(&device));
+    let bound = dispatched(&queue, &empty, (&managed, &out), (1, 1));
+    assert_eq!(bound, (CommandBufferStatus::Completed, None));
+    let between = device.work_counts();
+    assert_eq!(
+        skipped(&device) - skipped_before,
+        1,
+        "the empty kernel's dispatch"
+    );
+    let read = dispatched(&queue, &twice, (&managed, &out), (u64::from(N), 64));
+    assert_eq!(read, (CommandBufferStatus::Completed, None));
+    let after = device.work_counts();
+    assert_eq!(words(&out), vec![0x4242_4242; N as usize]);
+    let copied = |from: &crate::WorkCounts, to: &crate::WorkCounts| {
+        to.managed_bytes_copied_in - from.managed_bytes_copied_in
+    };
+    let waits = |from: &crate::WorkCounts, to: &crate::WorkCounts| {
+        to.fill_queue_waits - from.fill_queue_waits
+    };
+    eprintln!(
+        "INERT-COPIES-IN {}: two copies {two_copies}; copied in by the skipped dispatch's command \
+         buffer {}, by the reader's {}; fill-queue submissions {} and {}, waits {} and {}",
+        device.name(),
+        copied(&before, &between),
+        copied(&between, &after),
+        between.fill_queue_submissions - before.fill_queue_submissions,
+        after.fill_queue_submissions - between.fill_queue_submissions,
+        waits(&before, &between),
+        waits(&between, &after),
+    );
+    if two_copies {
+        assert_eq!(
+            (copied(&before, &between), copied(&between, &after)),
+            (PAGES, 0),
+            "the bytes copied in by the skipped dispatch's command buffer and by the reader's"
+        );
+        assert_eq!(waits(&between, &after), 0, "the reader's fill-queue waits");
+    }
+}
+
+/// A `Shared` no-copy buffer detached before a skipped dispatch binds it: the dispatch's command
+/// buffer fails as one whose recorded command names the buffer does (`DetachedBacking`), as
+/// Metal's command buffer uses what its commands bind.
+#[test]
+fn a_skipped_dispatch_over_a_detached_buffer_fails_its_command_buffer() {
+    let pages = Pages::new(0x11);
+    let scratch = Scratch::new("inert-detached");
+    let device = device(&scratch.0);
+    let empty = state(&device, "empty");
+    let shared = pages.buffer(&device, StorageMode::Shared);
+    let out = words_buffer(&device, &[0; N as usize]);
+    let queue = device.new_command_queue().unwrap();
+    assert_eq!(shared.detach_backing(), Ok(true));
+    let outcome = dispatched(&queue, &empty, (&shared, &out), (1, 1));
+    assert_eq!(
+        outcome,
+        (
+            CommandBufferStatus::Error,
+            Some(CommandBufferError::DetachedBacking)
+        )
+    );
 }
