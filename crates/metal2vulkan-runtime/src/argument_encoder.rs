@@ -74,6 +74,7 @@
 //! compute state's is.
 
 use super::buffer::Buffer;
+use super::device::carry::LineDevice;
 use super::device::device_error;
 use super::error::{internal, invalid, nil, Error, Problem};
 use super::function_table::VisibleFunctionTable;
@@ -166,7 +167,10 @@ fn layout_error(call: &'static str, error: ArgumentLayoutError) -> Error {
 /// Cheap to clone (the layout is shared); `Send + Sync`.
 #[derive(Clone, Debug)]
 pub struct ArgumentEncoder {
-    device: Device,
+    /// Its device: a handle a recovery carries (`device/carry.rs`), as the encoder holds no
+    /// Vulkan object, so an encoder made before a recovery writes the arguments of what is made
+    /// or carried after it.
+    device: LineDevice,
     layout: Arc<ArgumentBufferLayout>,
     /// The argument buffer and the offset of the arguments in it.
     target: Option<(Buffer, u64)>,
@@ -323,16 +327,19 @@ pub(super) fn buffer_word(buffer: Option<(u64, u64)>, offset: u64) -> Result<u64
 impl ArgumentEncoder {
     fn new(device: &Device, layout: Arc<ArgumentBufferLayout>) -> ArgumentEncoder {
         ArgumentEncoder {
-            device: device.clone(),
+            device: LineDevice::new(device),
             layout,
             target: None,
             label: None,
         }
     }
 
-    /// `device`.
-    pub fn device(&self) -> &Device {
-        &self.device
+    /// `device`: a generation handle of the device, owned, as Metal's `device` answers a retained
+    /// device: of the generation the encoder was made on, then of each one the device's
+    /// recoveries carried it to. The handle is the caller's: it keeps meaning that generation
+    /// while held.
+    pub fn device(&self) -> Device {
+        self.device.generation().clone()
     }
 
     /// `label`: `None` until one is set.
@@ -400,8 +407,8 @@ impl ArgumentEncoder {
             self.target = None;
             return Ok(());
         };
-        if !buffer.generation().same(&self.device) {
-            return Err(buffer.generation().foreign(call, &self.device));
+        if !buffer.generation().same(self.device.generation()) {
+            return Err(buffer.generation().foreign(call, self.device.generation()));
         }
         if buffer.storage_mode() == StorageMode::Private || buffer.mapped_contents().is_none() {
             return Err(invalid(call, Problem::StorageMode));
@@ -509,10 +516,10 @@ impl ArgumentEncoder {
 
     /// Refuse an object of another device.
     fn check_device(&self, call: &'static str, device: &Device) -> Result<(), Error> {
-        if device.same(&self.device) {
+        if device.same(self.device.generation()) {
             Ok(())
         } else {
-            Err(device.foreign(call, &self.device))
+            Err(device.foreign(call, self.device.generation()))
         }
     }
 
@@ -848,6 +855,6 @@ impl ArgumentEncoder {
                 let problem = ArgumentEncoderProblem::NoNestedArgumentBuffer { index };
                 nil(CALL, Problem::ArgumentEncoder(problem))
             })?;
-        Ok(ArgumentEncoder::new(&self.device, nested))
+        Ok(ArgumentEncoder::new(self.device.generation(), nested))
     }
 }

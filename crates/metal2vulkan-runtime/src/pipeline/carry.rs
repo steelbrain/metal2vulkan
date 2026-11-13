@@ -29,8 +29,8 @@
 
 use super::memo::Remembered;
 use super::{
-    piece_holds, AtBindViews, ComputePipelineState, Kernel, Lru, Program, ReadSlots, Variant,
-    PLANNED, VARIANTS,
+    piece_holds, AtBindViews, ComputePipelineState, ComputeProgram, Kernel, Lru, Program,
+    ReadSlots, Variant, PLANNED, VARIANTS,
 };
 use crate::degradation::NoticesFor;
 use crate::device::carry::{LetGo, LostParts, PartsCalls};
@@ -250,6 +250,17 @@ impl ComputePipelineState {
             false => Ok(&self.0.device),
             true => Err(Error::NotImplemented(RuntimeGap::RemadeAfterRecoveryFailed)),
         }
+    }
+}
+
+impl ComputeProgram {
+    /// This program made again on `to`, the generation a recovery made ([`Program::made_again`]):
+    /// a released state's, which an indirect command buffer the recovery carries runs
+    /// (`indirect_command_buffer/carry.rs`).
+    pub(crate) fn made_again(&self, to: &Device) -> Result<ComputeProgram, Error> {
+        self.0
+            .made_again(to)
+            .map(|program| ComputeProgram(Arc::new(program)))
     }
 }
 

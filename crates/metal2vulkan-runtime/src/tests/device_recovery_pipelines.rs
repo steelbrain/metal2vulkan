@@ -167,7 +167,7 @@ fn a_recovery_carries_a_compute_state() {
 
 /// A drawing state of `tob_rect` and `tob_solid` of `library` into `RGBA8Unorm`, blending by
 /// `factors` (source, destination) where given, labelled `label`.
-fn drawing_state(
+pub(super) fn drawing_state(
     device: &Device,
     library: &Library,
     factors: Option<(BlendFactor, BlendFactor)>,
@@ -195,13 +195,13 @@ fn drawing_state(
 }
 
 /// The library of `tob_rect` and `tob_solid`, on `device`.
-fn drawing_library(device: &Device) -> Library {
+pub(super) fn drawing_library(device: &Device) -> Library {
     library(device, "engine/tob_renders.ll")
 }
 
 /// `state` drawing a rectangle over a [`SIDE`]-square target in [`COLOR`], as `queue`'s GPU work
 /// runs it, completed: the target's texels' words. Refused as the encoding refuses the state.
-fn draw(
+pub(super) fn draw(
     device: &Device,
     queue: &CommandQueue,
     state: &RenderPipelineState,
@@ -241,7 +241,7 @@ fn draw(
 }
 
 /// What [`draw`] reads back.
-fn drawn() -> Vec<u32> {
+pub(super) fn drawn() -> Vec<u32> {
     vec![PACKED; (SIDE * SIDE) as usize]
 }
 

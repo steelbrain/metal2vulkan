@@ -2133,8 +2133,8 @@ pub enum RuntimeGap {
     /// announced as `Degradation::DeviceRecovered`; `Device::recover_for_test` runs the same
     /// recovery). The recovery carries the events, the fences, the depth/stencil states, the
     /// libraries and their functions, the dynamic libraries, the binary archives, the address
-    /// pools and the rasterization rate maps (their handle of the device alone: they hold no Vulkan
-    /// object), the uses of guest RAM,
+    /// pools, the rasterization rate maps and the argument encoders (their handle of the device
+    /// alone: they hold no Vulkan object), the uses of guest RAM,
     /// the no-copy buffers (made again over the same pages), the `Private` buffers (their contents
     /// lost: they read zero), the buffers in the runtime's own pages (their contents and `contents`
     /// pointer kept): a long host-visible buffer's fresh pages, and the blocks of pages the
@@ -2151,20 +2151,24 @@ pub enum RuntimeGap {
     /// either; and the pipeline states (their base
     /// variants made again there from what their creations compiled; a bind of one whose making
     /// there failed is refused, `RemadeAfterRecoveryFailed`); and the sampler states (their
-    /// `VkSampler`s made there as their binds need them). Every other object's Vulkan objects
+    /// `VkSampler`s made there as their binds need them); and the indirect command buffers (their
+    /// records kept where they lie in the runtime's own pages, else lost: every command reset; the
+    /// programs their commands run made there) and the visible function tables (their entries
+    /// kept). Every other object's Vulkan objects
     /// are the lost `VkDevice`'s, which serves nothing more: a pooled `Shared` or `Managed` buffer
     /// in memory the device allocated, whose `contents` pointer is its lost memory's mapping, a
     /// detached no-copy buffer, a `Shared`, sparse or detached no-copy heap and the buffers and
     /// textures placed in it, a texture over the caller's `VkImage`, a sparse
-    /// or shareable texture, a texture over a buffer left, a view of any of them, an indirect
-    /// command buffer, a buffer over the caller's `VkBuffer`, a `Shared` or `Managed` buffer in
+    /// or shareable texture, a texture over a buffer left, a view of any of them, a visible
+    /// function table of a pipeline state left, a buffer over the caller's `VkBuffer`, a `Shared`
+    /// or `Managed` buffer in
     /// exportable memory or one in an opaque descriptor's dedicated allocation (Vulkan defines no
     /// buffer of another device identical to its own, `VUID-VkMemoryDedicatedAllocateInfo-buffer-01879`),
     /// and an event made exportable. A call that meets such an object with the new generation (an
     /// encoder's bind, a pipeline's making from its functions, a buffer or texture placed in its
     /// heap) or that needs its own lost `VkDevice` (its placements, its imports again, its event
     /// signals) is refused, where Metal's object goes on; the recovery's notice counts the buffers,
-    /// heaps, textures and events it left. The same object made again on the device serves; a
+    /// heaps, textures, events, indirect command buffers and visible function tables it left. The same object made again on the device serves; a
     /// command buffer made before the recovery fails as its victim (`GpuRecoveryVictim`).
     MadeBeforeRecovery,
     /// `Device::recover_for_test` on a device the consumer made (`Device::from_raw`): the runtime

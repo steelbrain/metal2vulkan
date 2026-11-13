@@ -3721,18 +3721,20 @@ bound.
   which of the two, and was parked: never destroyed, its queues never waited for
   (`Device::is_parked`). `Device::recover_for_test` runs the
   same recovery with no GPU fault. Cost: the events, fences, depth/stencil states, libraries,
-  functions, dynamic libraries, binary archives, address pools, rasterization rate maps, uses of
-  guest RAM, no-copy
+  functions, dynamic libraries, binary archives, address pools, rasterization rate maps, argument
+  encoders, uses of guest RAM, no-copy
   buffers, `Private` buffers, buffers in the runtime's own pages (fresh pages, and the blocks of
   pages the `Shared` and `Managed` buffers lie in where the device's checks found a held host-page
   import costs its submissions nothing and textures over such pages take what they take over its
   own memory), `Private` heaps and heaps over the caller's memory with the buffers and textures
   placed in them, textures of `new_texture`, textures over the buffers carried and views of them,
-  and pipeline and sampler states made before it go on, the contents of a `Private` buffer or heap
+  pipeline and sampler states, indirect command buffers and visible function tables made before it
+  go on, the contents of a `Private` buffer or heap
   lost (it reads zero) but an exportable buffer's, re-imported over its own memory, which keeps
   whatever that memory holds, and of a texture of `new_texture` or of a `Private` heap of any
   storage mode (it reads as a new one) but a texture buffer over its texels' buffer carried, a
-  heap over the caller's memory and what is placed in it reading the same pages; the other objects
+  heap over the caller's memory and what is placed in it reading the same pages, and of an indirect
+  command buffer's records outside the runtime's own pages (every command reset); the other objects
   made before it are refused (`MadeBeforeRecovery`), where Metal's go on; the calls during it wait
   for it, and a device call the loss met while it ran runs again after it. A no-copy buffer is
   made again over

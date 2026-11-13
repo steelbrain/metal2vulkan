@@ -18,7 +18,7 @@ use metal2vulkan::metal::{IndirectCommandType, ResourceUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 
 /// The floats an indirect command's dispatch writes, `i` each.
-const WORDS: u64 = 64;
+pub(super) const WORDS: u64 = 64;
 
 /// `scale_and_offset` of `device`'s example library, for indirect command buffers.
 pub(super) fn indirect_state(device: &Device) -> ComputePipelineState {

@@ -7,8 +7,12 @@
 //! (`sampler.rs`), each the same object on the new `VkDevice`, as Metal keeps its objects across its GPU's recovery. A fence, a depth/stencil state, a library, a function, an address
 //! pool, a dynamic library, a binary archive and a rasterization rate map hold no Vulkan object
 //! (`fence.rs`, `depth_stencil.rs`, `library.rs`, `address_pool.rs`, `dynamic_library.rs`,
-//! `binary_archive`, `rate_map.rs`): the recovery carries their handle of the device alone
-//! ([`LineDevice`]), and the device's note that it released a map of layers.
+//! `binary_archive`, `rate_map.rs`), and an argument encoder (`argument_encoder.rs`): the
+//! recovery carries their handle of the device alone ([`LineDevice`]), and the device's note
+//! that it released a map of layers. After the pipeline states, its indirect command buffers
+//! (`indirect_command_buffer/carry.rs`) and its visible function tables
+//! (`function_table/carry.rs`), each the same object there, their records and words buffers of
+//! the runtime's own carried as such (`Buffer::carry_runtime`).
 //!
 //! - **Kept as made.** Each event (`EventShared::new`), heap (`Device::new_heap`) and texture of
 //!   the program's (`Texture::made`) is kept here, held weakly, by the generation it was made on;
@@ -102,8 +106,9 @@
 //!   memory's mapping, and a buffer in an opaque descriptor's dedicated allocation, whose import
 //!   is dedicated to a buffer "identical to the buffer associated with the imported memory"
 //!   (`VUID-VkMemoryDedicatedAllocateInfo-buffer-01879`), which Vulkan defines no buffer of another
-//!   device to be (`exported_memory.rs`); and an event whose semaphore was made exportable,
-//!   whose importers hold the lost semaphore. The recovery's notice counts the
+//!   device to be (`exported_memory.rs`); an event whose semaphore was made exportable,
+//!   whose importers hold the lost semaphore; and a visible function table whose pipeline state
+//!   stays the lost generation's (`function_table/carry.rs`). The recovery's notice counts the
 //!   buffers, heaps, textures and events it carried and left by kind
 //!   (`Degradation::DeviceRecovered`): a heap's buffers with their heap.
 //! - **Each generation's work reaches its own parts** (`NoticesFor::generation`). A command buffer of the
@@ -146,8 +151,12 @@
 use super::{lock, Device, DeviceShared};
 use crate::buffer::Buffer;
 use crate::event::EventShared;
+use crate::function_table::carry::WeakFunctionTable;
+use crate::function_table::VisibleFunctionTable;
 use crate::heap::{Heap, WeakHeap};
 use crate::host_ram::RamUseCell;
+use crate::indirect_command_buffer::carry::WeakIndirectCommandBuffer;
+use crate::indirect_command_buffer::IndirectCommandBuffer;
 use crate::pipeline::carry::{compiles_alike, StateCarried};
 use crate::pipeline::{
     ComputePipelineState, GraphicsState, WeakComputePipelineState, WeakRenderPipelineState,
@@ -213,6 +222,12 @@ struct State {
     render_states: Vec<WeakRenderPipelineState>,
     /// The program's sampler states (`sampler.rs`), held weakly.
     samplers: Vec<Weak<SamplerShared>>,
+    /// The program's indirect command buffers (`indirect_command_buffer/carry.rs`), held weakly:
+    /// few, so their gone entries are dropped at each keeping.
+    indirect_command_buffers: Vec<WeakIndirectCommandBuffer>,
+    /// The program's visible function tables (`function_table/carry.rs`), held weakly: as
+    /// `indirect_command_buffers`.
+    function_tables: Vec<WeakFunctionTable>,
     /// The size at which the next keeping drops the gone events' entries.
     prune_at: usize,
     /// The size at which the next keeping drops the gone textures' entries.
@@ -275,6 +290,8 @@ pub(crate) struct Taken {
     compute_states: Vec<ComputePipelineState>,
     render_states: Vec<GraphicsState>,
     samplers: Vec<SamplerState>,
+    indirect_command_buffers: Vec<IndirectCommandBuffer>,
+    function_tables: Vec<VisibleFunctionTable>,
 }
 
 impl Carry {
@@ -380,6 +397,24 @@ impl Carry {
         state_list.taken
     }
 
+    /// Keep `icb`, an indirect command buffer made or carried here
+    /// (`indirect_command_buffer/carry.rs`): as [`ram_use`](Self::ram_use).
+    pub(crate) fn indirect_command_buffer(&self, icb: &IndirectCommandBuffer) -> bool {
+        let mut state = lock(&self.state);
+        (state.indirect_command_buffers).retain(WeakIndirectCommandBuffer::lives);
+        state.indirect_command_buffers.push(icb.downgrade());
+        state.taken
+    }
+
+    /// Keep `table`, a visible function table made or carried here (`function_table/carry.rs`):
+    /// as [`ram_use`](Self::ram_use).
+    pub(crate) fn function_table(&self, table: &VisibleFunctionTable) -> bool {
+        let mut state = lock(&self.state);
+        state.function_tables.retain(WeakFunctionTable::lives);
+        state.function_tables.push(table.downgrade());
+        state.taken
+    }
+
     /// Keep `link`, this generation's handle of the device an object holding no Vulkan object
     /// answers ([`LineDevice`]): as [`event`](Self::event), its gone entries dropped as the
     /// registry grows.
@@ -419,6 +454,12 @@ impl Carry {
                 .collect(),
             samplers: (state.samplers.iter())
                 .filter_map(SamplerState::upgrade)
+                .collect(),
+            indirect_command_buffers: (state.indirect_command_buffers.iter())
+                .filter_map(WeakIndirectCommandBuffer::upgrade)
+                .collect(),
+            function_tables: (state.function_tables.iter())
+                .filter_map(WeakFunctionTable::upgrade)
                 .collect(),
         }
     }
@@ -654,6 +695,11 @@ pub(crate) struct Carried {
     states: (u64, u64),
     /// The sampler states carried, and those left the lost generation's: it compiles otherwise.
     samplers: (u64, u64),
+    /// The indirect command buffers carried with their records, those whose records were lost,
+    /// and those left the lost generation's.
+    indirect_command_buffers: (u64, u64, u64),
+    /// The visible function tables carried, and those left the lost generation's.
+    function_tables: (u64, u64),
 }
 
 impl Carried {
@@ -715,6 +761,18 @@ impl Carried {
                     self.samplers.1
                 )
             }))
+            .chain((self.indirect_command_buffers.2 > 0).then(|| {
+                format!(
+                    "{} indirect command buffers whose making there failed",
+                    self.indirect_command_buffers.2
+                )
+            }))
+            .chain((self.function_tables.1 > 0).then(|| {
+                format!(
+                    "{} visible function tables of states left or whose making there failed",
+                    self.function_tables.1
+                )
+            }))
             .collect::<Vec<_>>()
             .join(", ");
         let ram = match ram_uses {
@@ -757,10 +815,23 @@ impl Carried {
             0 => String::new(),
             carried => format!(", and {carried} sampler states"),
         };
+        let icbs = match self.indirect_command_buffers {
+            (0, 0, _) => String::new(),
+            (kept, lost, _) => format!(
+                ", and {} indirect command buffers, {lost} of them whose records were lost (every \
+                 command reset)",
+                kept + lost
+            ),
+        };
+        let tables = match self.function_tables.0 {
+            0 => String::new(),
+            carried => format!(", and {carried} visible function tables with their entries"),
+        };
         format!(
             "it carried {} events, {ram}{} buffers with their contents and {lost} `Private` \
              buffers ({lost_bytes} bytes) whose contents were lost (they read zero){heaps}\
-             {host_heaps}{textures}{states}{samplers}; left refused (`MadeBeforeRecovery`): \
+             {host_heaps}{textures}{states}{samplers}{icbs}{tables}; left refused \
+             (`MadeBeforeRecovery`): \
              {left}",
             self.events, self.kept
         )
@@ -813,6 +884,23 @@ impl Carried {
         }
     }
 
+    /// One indirect command buffer's carry.
+    fn indirect_command_buffer(&mut self, carried: Result<Contents, Left>) {
+        match carried {
+            Ok(Contents::Kept) => self.indirect_command_buffers.0 += 1,
+            Ok(Contents::Lost(_)) => self.indirect_command_buffers.1 += 1,
+            Err(_) => self.indirect_command_buffers.2 += 1,
+        }
+    }
+
+    /// One visible function table's carry.
+    fn function_table(&mut self, carried: Result<Contents, Left>) {
+        match carried {
+            Ok(_) => self.function_tables.0 += 1,
+            Err(_) => self.function_tables.1 += 1,
+        }
+    }
+
     /// One sampler state's carry.
     fn sampler(&mut self, carried: Option<bool>) {
         match carried {
@@ -855,6 +943,8 @@ impl Device {
             compute_states,
             render_states,
             samplers,
+            indirect_command_buffers,
+            function_tables,
         } = shared.carry.take(shared);
         for link in &links {
             link.carry(next);
@@ -904,6 +994,13 @@ impl Device {
         // (`pipeline/render/carry.rs`).
         for state in &render_states {
             carried.state(state.carry(next));
+        }
+        // After the states: the programs their commands run, and the tables' states, are there.
+        for icb in &indirect_command_buffers {
+            carried.indirect_command_buffer(icb.carry(next));
+        }
+        for table in &function_tables {
+            carried.function_table(table.carry(next));
         }
         carried
     }
@@ -1071,7 +1168,7 @@ impl Drop for CallHold<'_> {
 
 /// The device of an object that holds no Vulkan object (a fence, a depth/stencil state, a library
 /// and its functions, an address pool, a dynamic library, a binary archive, a rasterization rate
-/// map), which a recovery carries as its handle of the device
+/// map, an argument encoder), which a recovery carries as its handle of the device
 /// alone: a root handle, which the object's own calls and checks go through
 /// ([`root`](Self::root): of whatever generation serves, matched by its line), and the generation
 /// handle its `device` answers ([`generation`](Self::generation)): the generation it was made on,

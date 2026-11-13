@@ -19,8 +19,8 @@ use super::super::carry::{
 };
 use super::{
     lock, pipeline_names, AtBindViews, CompiledVariant, GraphicsState, KeptShapes, Lru, PieceHolds,
-    Program, ReadSlots, Remembered, RenderVariant, StateDescriptor, StateLog, TextureAccessMemo,
-    LAST_PIPELINES, SETTLED, VARIANTS,
+    Program, ReadSlots, Remembered, RenderProgram, RenderVariant, StateDescriptor, StateLog,
+    TextureAccessMemo, LAST_PIPELINES, SETTLED, VARIANTS,
 };
 use crate::degradation::NoticesFor;
 use crate::error::{Error, RuntimeGap};
@@ -100,6 +100,17 @@ impl GraphicsState {
             false => Ok(self.device()),
             true => Err(Error::NotImplemented(RuntimeGap::RemadeAfterRecoveryFailed)),
         }
+    }
+}
+
+impl RenderProgram {
+    /// This program made again on `to`, the generation a recovery made ([`Program::made_again`]):
+    /// a released state's, which an indirect command buffer the recovery carries runs
+    /// (`indirect_command_buffer/carry.rs`).
+    pub(crate) fn made_again(&self, to: &Device) -> Result<RenderProgram, Error> {
+        self.0
+            .made_again(to)
+            .map(|program| RenderProgram(Arc::new(program)))
     }
 }
 

@@ -287,7 +287,7 @@ define float @_Z9dyl_scalef(float %x) {
 ";
 
 /// A dynamic library exporting one function, made on `device`, its install name a file in `dir`.
-fn dynamic_library(device: &Device, dir: &Path) -> DynamicLibrary {
+pub(super) fn dynamic_library(device: &Device, dir: &Path) -> DynamicLibrary {
     let module = llvm_assemble_text(DYLIB_MODULE).unwrap();
     let name = dir.join("libdyl.metallib").to_string_lossy().into_owned();
     let function = MtlbFunction {

@@ -8181,7 +8181,7 @@ method	metal2vulkan-runtime::AppleOnlyCall::check	pub fn check(self) -> Result<(
 method	metal2vulkan-runtime::AppleOnlyCall::selector	pub fn selector(self) -> &'static str
 method	metal2vulkan-runtime::ArgumentEncoder::alignment	pub fn alignment(&self) -> u64
 method	metal2vulkan-runtime::ArgumentEncoder::constant_data	pub fn constant_data(&self, index: u32) -> Result<NonNull<u8>, Error>
-method	metal2vulkan-runtime::ArgumentEncoder::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::ArgumentEncoder::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::ArgumentEncoder::encoded_length	pub fn encoded_length(&self) -> u64
 method	metal2vulkan-runtime::ArgumentEncoder::label	pub fn label(&self) -> Option<&str>
 method	metal2vulkan-runtime::ArgumentEncoder::layout	pub fn layout(&self) -> &ArgumentBufferLayout

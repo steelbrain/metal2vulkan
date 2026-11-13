@@ -70,6 +70,8 @@ use metal2vulkan::metal::RenderStages;
 use metal2vulkan::pipeline::{LinkedFunction, LinkedFunctions, Stage};
 use std::sync::{Arc, Mutex};
 
+pub(crate) mod carry;
+
 /// A table's options: `Shared`, the default CPU cache mode, tracked (Metal's 512).
 fn table_options() -> ResourceOptions {
     ResourceOptions::new(
@@ -153,12 +155,12 @@ pub struct FunctionHandle {
 /// The pipeline state that gives a handle or makes a table, and which of its functions' linked
 /// functions number the handles: a compute state's kernel's (a tile state's, its tile
 /// function's), or a drawing state's function of one stage; or a render state's stage it has no
-/// function of, which numbers none, on its device.
+/// function of, which numbers none, on the state's device.
 #[derive(Clone)]
 enum Maker {
     Compute(ComputePipelineState),
     Render(GraphicsState, Stage),
-    Unlinked(Device),
+    Unlinked(RenderPipelineState),
 }
 
 impl Maker {
@@ -178,7 +180,7 @@ impl Maker {
         match self {
             Maker::Compute(state) => state.generation(),
             Maker::Render(state, _) => state.device(),
-            Maker::Unlinked(device) => device,
+            Maker::Unlinked(state) => state.generation(),
         }
     }
 
@@ -191,7 +193,7 @@ impl Maker {
                 let _held = state.hold();
                 state.device().clone()
             }
-            Maker::Unlinked(device) => device.clone(),
+            Maker::Unlinked(state) => state.device(),
         }
     }
 
@@ -340,7 +342,7 @@ impl Maker {
             state: self,
             words,
             count: size,
-            writes: Mutex::new(()),
+            writes: Mutex::new(vec![0; (length / 4) as usize]),
             id: IdHold::take(
                 &device.shared().resource_ids,
                 IdSpace::FunctionTable,
@@ -356,6 +358,10 @@ impl Maker {
         // The ID was free, so a table the registry still names under it is gone.
         lock(&device.shared().function_tables)
             .insert(table.gpu_resource_id().0, Arc::downgrade(&table.0));
+        // Kept for a recovery to carry (`function_table/carry.rs`).
+        if device.shared().carry.function_table(&table) {
+            device.carry_late(|serving| table.carry(serving));
+        }
         if let Maker::Render(state, _) = &table.0.state {
             state.made_a_table();
         }
@@ -549,7 +555,7 @@ impl RenderPipelineState {
         ];
         stages
             .contains(&stage)
-            .then(|| Maker::Unlinked(self.device()))
+            .then(|| Maker::Unlinked(self.clone()))
     }
 }
 
@@ -675,11 +681,13 @@ pub(super) struct TableShared {
     /// The state (and a drawing state's stage) that made the table: the only one whose handles
     /// it takes.
     state: Maker,
-    /// The table's words: bound, its size, its entries.
+    /// The table's words: bound, its size, its entries. A buffer of the runtime's own, carried
+    /// with the table (`function_table/carry.rs`).
     words: Buffer,
     count: u32,
-    /// Held while the CPU writes a word.
-    writes: Mutex<()>,
+    /// The words as the CPU wrote them, held while it writes one: what a recovery's carry to new
+    /// memory writes there (`function_table/carry.rs`).
+    writes: Mutex<Vec<u32>>,
     id: IdHold,
 }
 
@@ -702,9 +710,12 @@ impl Eq for VisibleFunctionTable {}
 impl VisibleFunctionTable {
     /// Write the word `value` at byte `offset` of the table's buffer.
     fn write(&self, offset: u64, value: u32) {
-        let contents = self.0.words.mapped_contents();
-        let _writing = lock(&self.0.writes);
-        if let Some(contents) = contents {
+        let mut written = lock(&self.0.writes);
+        if let Some(word) = written.get_mut((offset / 4) as usize) {
+            *word = value;
+        }
+        // Under `writes`, which a recovery's carry holds: the mapping of the parts it writes.
+        if let Some(contents) = self.0.words.mapped_contents() {
             // SAFETY: the table's buffer is `Shared` and mapped for its life, and holds
             // `FunctionTableWords::byte_len(count)` bytes; every caller writes a word of its
             // header or of an entry below `count`, at a multiple of 4 of the mapping, whose start

@@ -32,6 +32,7 @@
 use super::device::lock;
 use super::pipeline::{ComputePipelineState, ComputeProgram, RenderPipelineState, RenderProgram};
 use super::resource_ids::PIPELINE_HOLDERS;
+use super::Device;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -56,6 +57,20 @@ impl KeptProgram {
         match self {
             KeptProgram::Render(program) => Some(program.state()),
             KeptProgram::Compute(_) => None,
+        }
+    }
+
+    /// The program made again on `to`, the generation a recovery made, for a buffer it carries
+    /// (`indirect_command_buffer/carry.rs`); this one where its making there fails, refused where
+    /// bound (`RuntimeGap::MadeBeforeRecovery`).
+    fn made_again(&self, to: &Device) -> KeptProgram {
+        match self {
+            KeptProgram::Compute(program) => {
+                KeptProgram::Compute(program.made_again(to).unwrap_or_else(|_| program.clone()))
+            }
+            KeptProgram::Render(program) => {
+                KeptProgram::Render(program.made_again(to).unwrap_or_else(|_| program.clone()))
+            }
         }
     }
 }
@@ -99,6 +114,16 @@ impl KeptPrograms {
     /// The IDs it keeps programs of.
     pub(super) fn ids(&self) -> impl Iterator<Item = u64> + '_ {
         self.0.keys().copied()
+    }
+
+    /// Each program it keeps made again on `to`, the generation a recovery made, for the buffer
+    /// it carries ([`KeptProgram::made_again`]).
+    pub(super) fn carry(&mut self, to: &Device) {
+        for kept in self.0.values_mut() {
+            for (_, program) in kept.iter_mut() {
+                *program = program.made_again(to);
+            }
+        }
     }
 
     /// How many programs it keeps.

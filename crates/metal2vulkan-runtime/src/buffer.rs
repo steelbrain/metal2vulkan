@@ -3796,6 +3796,18 @@ enum NewBufferOf {
     Check(Holds),
 }
 
+/// What a buffer's carry carries ([`Buffer::carry`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CarryOf {
+    /// A buffer of the program's, kept among the next generation's program resources.
+    Program,
+    /// A heap's own buffer (`Buffer::carry_heap_bytes`).
+    Heap,
+    /// A buffer of the runtime's own whose `contents` pointer no program holds
+    /// (`Buffer::carry_runtime`).
+    Runtime,
+}
+
 /// Where [`Device::placed_new_buffer`] lays a long host-visible buffer of the runtime's own in
 /// fresh pages (`fresh_pages.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5209,7 +5221,7 @@ impl Buffer {
     /// memory or one in an opaque descriptor's dedicated allocation, and one whose making there
     /// fails.
     pub(crate) fn carry(&self, to: &Device) -> Result<Contents, Left> {
-        self.carry_as(to, false)
+        self.carry_as(to, CarryOf::Program)
     }
 
     /// [`Buffer::carry`] of a heap's own buffer (`heap.rs`), for its heap's carry
@@ -5221,11 +5233,23 @@ impl Buffer {
     /// `Shared` one, of pooled host-visible memory (a heap's own buffer never lies in the
     /// runtime's own pages), and one over the caller's memory a no-copy buffer's carry leaves.
     pub(crate) fn carry_heap_bytes(&self, to: &Device) -> Result<Contents, Left> {
-        self.carry_as(to, true)
+        self.carry_as(to, CarryOf::Heap)
     }
 
-    /// [`Buffer::carry`], of a heap's own buffer where `of_heap`.
-    fn carry_as(&self, to: &Device, of_heap: bool) -> Result<Contents, Left> {
+    /// [`Buffer::carry`] of a buffer of the runtime's own whose `contents` pointer no program
+    /// holds, which its owner reads again after the carry (an indirect command buffer's records,
+    /// a visible function table's words), kept among none of `to`'s program resources or live
+    /// buffers: in the runtime's own pages, the same pages there, its contents and pointer as
+    /// they were; in pooled host-visible memory, new memory of its class there, its contents lost
+    /// with the `VkDevice` (it reads zero) and its pointer that memory's mapping, where a
+    /// program's buffer stays the lost generation's ([`Left::Pooled`]).
+    pub(crate) fn carry_runtime(&self, to: &Device) -> Result<Contents, Left> {
+        self.carry_as(to, CarryOf::Runtime)
+    }
+
+    /// [`Buffer::carry`] of a buffer of `of`.
+    fn carry_as(&self, to: &Device, of: CarryOf) -> Result<Contents, Left> {
+        let of_heap = of == CarryOf::Heap;
         // The generation it was carried to last: a later recovery carries it on from there.
         let mut last = &self.0;
         while let Some(next) = last.next.get() {
@@ -5301,11 +5325,14 @@ impl Buffer {
             }
             mirror = Some(HostCopy::Caller(Arc::new(carried)));
             (raw, placement, Contents::Kept)
-        } else if modes.storage == StorageMode::Private {
+        } else if modes.storage == StorageMode::Private
+            || (of == CarryOf::Runtime && !placement.over_own_pages() && !placement.in_page_block())
+        {
             // New memory, as a new buffer's: its contents went with the lost `VkDevice`. In a
             // plain block (`Device::place_buffer`), where any of the device's buffers may lie, as
             // they do until its check of exportable blocks answered (`Holds::FdBuffers`); a
-            // heap's where its textures can lie too, as its making placed it.
+            // heap's where its textures can lie too, as its making placed it. A runtime buffer of
+            // pooled host-visible memory too: no program holds its `contents` pointer.
             let shared = to.shared();
             let info = shared.sharing().buffer(
                 vk::BufferCreateInfo::default()
@@ -5439,7 +5466,7 @@ impl Buffer {
         from.carry.lost(from, Box::new(lost));
         // The program's buffer is the next generation's from now on; a heap's own buffer is its
         // heap's, among no program resources.
-        if !of_heap {
+        if of == CarryOf::Program {
             let _kept = to.visible(self.clone());
         }
         Ok(contents)

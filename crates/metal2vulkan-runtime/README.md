@@ -846,19 +846,23 @@ meanwhile wait for it.
   recovery.
 - The recovery carries the events, the fences, the depth/stencil states, the libraries and their
   functions, the dynamic libraries, the binary archives, the address pools (`AddressPool`, whose slots take buffers after it as before), the
-  rasterization rate maps, the
+  rasterization rate maps, the argument encoders, the
   uses of guest RAM (`HostRamUse`), the no-copy buffers, the `Private` buffers (exportable ones
   among them), the buffers in the runtime's own pages, the `Private` heaps and the heaps over the
   caller's memory with the buffers and textures placed in them, the textures of
   `new_texture`, the textures over the buffers it carried and the views of either, the compute,
-  tile, drawing and mesh pipeline states, and the sampler states to the new `VkDevice`: the same
+  tile, drawing and mesh pipeline states, the sampler states, the indirect command buffers and the
+  visible function tables to the new `VkDevice`: the same
   objects, at the same addresses and resource IDs. A pipeline state's base variant is made again there from what its creation
   compiled, with no translation, and the `VkPipeline` its creation predicted is queued with no
   wait; a bind of one whose making there failed is refused
   (`RuntimeGap::RemadeAfterRecoveryFailed`). Its objects on the lost `VkDevice` go once none of
   that device's command buffers may record. A sampler state is placed there as at its making, so an argument
   buffer naming its resource ID reads it, and an equal request gets it; its `VkSampler`s are made
-  there as its binds need them.
+  there as its binds need them. An indirect command buffer keeps its records where they lie in the
+  runtime's own pages; elsewhere they are lost and every command reads as reset (the notice counts
+  these); the programs of the states its commands name are made there, a released state's too. A
+  visible function table keeps its entries.
   An event keeps the value the host saw and its listeners' notifications. A buffer in the
   runtime's own pages keeps its bytes and its `contents` pointer: a long host-visible buffer's
   fresh pages, and, on a device whose checks found that a held import of host pages costs its
@@ -897,9 +901,10 @@ meanwhile wait for it.
   `VkImage`, sparse and shareable textures, textures over buffers left and their views, buffers
   over the caller's `VkBuffer`, `Shared` and `Managed` buffers in exportable memory, buffers in an
   opaque descriptor's dedicated allocation (Vulkan defines no buffer of another device identical to
-  its own) and exportable events. Make it again.
+  its own), exportable events and the visible function tables of pipeline states left. Make it
+  again.
   Metal's objects go on. The recovery's notice counts the buffers, heaps, textures and events it
-  carried and left, by kind.
+  carried and left, by kind, and the indirect command buffers and visible function tables.
 - The lost `VkDevice` is destroyed once the objects left on it went and, where `Device::raw`
   answered its handles, a later `raw` call answered the new one's: `WorkCounts::vk_devices_live`
   reads 2 until then. A carried object but a texture holds nothing of it once none of its

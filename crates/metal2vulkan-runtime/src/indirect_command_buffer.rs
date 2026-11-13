@@ -63,7 +63,7 @@
 //!   command sets as its vertex and fragment buffers; a buffer of either mesh kind holds both mesh
 //!   draws, as Metal's does.
 
-use super::address::{AddressPlacement, Place, RecordsId};
+use super::address::{AddressPlacement, AddressSpace, Place, RecordsId};
 use super::buffer::{Buffer, Modes};
 use super::degradation::{Degradation, NoticesFor};
 use super::depth_stencil::DepthStencilState;
@@ -105,8 +105,11 @@ use std::borrow::{Borrow, Cow};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 use std::ops::Range;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
+
+pub(crate) mod carry;
 
 /// The threadgroup lengths a fresh descriptor binds, as Metal's answers.
 const DEFAULT_THREADGROUP_LENGTHS: u32 = 31;
@@ -597,7 +600,7 @@ impl Device {
             .take_records_id(placed)
             .ok_or(Error::OutOfMemory(MemoryKind::Device))?;
         let id = RecordsHold {
-            device: self.clone(),
+            addresses: Arc::clone(&self.shared().addresses),
             held,
         };
         let identifier = UniqueIdentifier::buffer(
@@ -633,16 +636,15 @@ impl Device {
             }
             _ => None,
         };
-        let mapped = storage
-            .mapped_contents()
-            .ok_or_else(|| internal("an indirect command buffer's records are not mapped"))?
-            .as_ptr()
-            .expose_provenance();
+        if storage.mapped_contents().is_none() {
+            return Err(internal(
+                "an indirect command buffer's records are not mapped",
+            ));
+        }
         let options =
             ResourceOptions::new(modes.storage, modes.cache, storage.hazard_tracking_mode());
         let icb = IndirectCommandBuffer(Arc::new(IcbShared {
             storage,
-            mapped,
             id,
             identifier,
             descriptor: *descriptor,
@@ -665,6 +667,10 @@ impl Device {
             keeping: AtomicBool::new(false),
         }));
         icb.initialize()?;
+        // Kept for a recovery to carry (`indirect_command_buffer/carry.rs`).
+        if self.shared().carry.indirect_command_buffer(&icb) {
+            self.carry_late(|serving| icb.carry(serving));
+        }
         self.take_device_sampler();
         self.make_texture_pool();
         Ok(icb)
@@ -1053,11 +1059,9 @@ impl RenderLayout {
 pub struct IndirectCommandBuffer(Arc<IcbShared>);
 
 struct IcbShared {
-    /// The header and the records.
+    /// The header and the records: host-visible on every generation it lies on, carried with
+    /// the buffer (`indirect_command_buffer/carry.rs`).
     storage: Buffer,
-    /// The address of `storage`'s contents, exposed ([`bytes`](IndirectCommandBuffer::bytes)): a
-    /// buffer of the runtime's own memory keeps its mapping for its life.
-    mapped: usize,
     /// Its ID, held while the buffer lives.
     id: RecordsHold,
     /// Its `uniqueIdentifier` (`unique_identifier.rs`), held while the buffer lives.
@@ -1132,7 +1136,6 @@ const _: fn(&IcbShared) = |icb| {
     fn shared<T: Send + Sync>(_: &T) {}
     let IcbShared {
         storage,
-        mapped,
         id,
         identifier,
         descriptor,
@@ -1155,7 +1158,6 @@ const _: fn(&IcbShared) = |icb| {
         keeping,
     } = icb;
     shared(storage);
-    shared(mapped);
     shared(id);
     shared(identifier);
     shared(descriptor);
@@ -1516,15 +1518,17 @@ pub(super) struct OverflowRuns {
     pub(super) clears: Vec<(u64, u64)>,
 }
 
-/// An indirect command buffer's records ID, given back as the buffer goes (`address.rs`).
+/// An indirect command buffer's records ID, given back as the buffer goes (`address.rs`), to
+/// the address space every generation of the device's line goes on with: a carried buffer's ID
+/// is the same on each (`device/line.rs`'s `Carried`), and its hold keeps no generation.
 struct RecordsHold {
-    device: Device,
+    addresses: Arc<Mutex<AddressSpace>>,
     held: RecordsId,
 }
 
 impl Drop for RecordsHold {
     fn drop(&mut self) {
-        lock(&self.device.shared().addresses).give_records_id(self.held);
+        lock(&self.addresses).give_records_id(self.held);
     }
 }
 
@@ -1552,23 +1556,33 @@ impl std::hash::Hash for IndirectCommandBuffer {
 }
 
 impl IndirectCommandBuffer {
-    /// The records' bytes: the header, then each command's record, mapped for the buffer's life.
+    /// The records' bytes: the header, then each command's record, as the storage's mapping
+    /// holds them: on the generation of the command buffer whose work reads them, else on the one
+    /// the storage was carried to last (`Buffer::mapped_contents`). Host-visible on each, as made
+    /// and as carried (`indirect_command_buffer/carry.rs`), so never null.
     fn bytes(&self) -> *mut u8 {
-        std::ptr::with_exposed_provenance_mut(self.0.mapped)
+        (self.0.storage.mapped_contents()).map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 
     /// Write the header and reset every command.
     fn initialize(&self) -> Result<(), Error> {
         let _writing = lock(&self.0.pipelines);
+        self.write_header()
+    }
+
+    /// [`initialize`](Self::initialize), under the caller's hold of `pipelines`.
+    fn write_header(&self) -> Result<(), Error> {
         let length = storage_length(self.0.size) as usize;
-        // SAFETY: the storage is host-visible and mapped for its life, `length` bytes from its
-        // start; nothing else reaches it before the buffer is returned.
+        // SAFETY: the storage is host-visible and mapped, `length` bytes from its start; the
+        // caller holds `pipelines`, so no other CPU write reaches it meanwhile.
         let bytes = unsafe { std::slice::from_raw_parts_mut(self.bytes(), length) };
         CommandBuffer::initialize(bytes, self.0.size, &self.0.records, self.0.inheritance)
             .map_err(|_| internal("an indirect command buffer's header was refused"))
     }
 
-    /// The bytes of command `index`'s record (below the size), as they are now.
+    /// The bytes of command `index`'s record (below the size), as they are now. A host read
+    /// outside a command buffer's work holds the storage's parts it reads, or `pipelines`, which a
+    /// recovery's carry of the buffer holds ([`read_record`](Self::read_record), `carry.rs`).
     fn record_now(&self, index: u32) -> [u8; COMMAND_BYTES] {
         (self.generation().shared().counts).indirect_record_bytes_copied(COMMAND_BYTES as u64);
         let mut bytes = [0; COMMAND_BYTES];
@@ -1598,7 +1612,10 @@ impl IndirectCommandBuffer {
         read: impl FnOnce(&RecordView<'_>) -> T,
     ) -> Result<T, Error> {
         self.generation().shared().counts.indirect_records_read(1);
-        let bytes = self.record_now(index);
+        let bytes = {
+            let _parts = self.0.storage.held_parts();
+            self.record_now(index)
+        };
         let view = RecordView::new(&bytes).map_err(|_| undecodable())?;
         Ok(read(&view))
     }
