@@ -745,7 +745,7 @@ degradations! {
         /// (`DeviceOptions::gpu_times_from_host`, `RawDevice::gpu_times_from_host`), or whose
         /// driver's timestamps wait for every queue's (`DriverFact::TimestampsWaitForEveryQueue`:
         /// MoltenVK 1.4.1 on Apple's GPUs, 1.4.2 on the M3 Max), which writes no GPU timestamps
-        /// (`gpu_time.rs`). Every
+        /// of its own (`gpu_time.rs`). Every
         /// answer is one Metal could give: seconds of Metal's clock (`mach_absolute_time`'s, on
         /// macOS); its commit, kernel start, kernel end, GPU start, GPU end and the moment its
         /// completion is observable in that order, but for one whose work went as several

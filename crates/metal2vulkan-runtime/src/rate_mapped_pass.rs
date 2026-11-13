@@ -183,7 +183,10 @@
 //!   The bound is a forecast, not a measure: twice [`PIECE_WORK`] is about 56 ms of an Iris Xe's
 //!   GPU at a trivial vertex function, so a piece whose vertex function costs 30 times as much
 //!   still runs within 2 s there. Where the device writes timestamps each piece of a pass recorded
-//!   in several is timed (`WorkCounts::rate_map_piece_gpu_nanos_most`), and the pieces are counted
+//!   in several is timed (`WorkCounts::rate_map_piece_gpu_nanos_most`), also on a device asked to
+//!   answer command buffers' GPU times from the host (`DeviceOptions::gpu_times_from_host`), but
+//!   not where its driver's timestamps wait for every queue's
+//!   (`DriverFact::TimestampsWaitForEveryQueue`), and the pieces are counted
 //!   (`WorkCounts::rate_map_pieces`).
 //! - **Fan-out.** Drawn region by region, a draw runs its vertex function once per region of the
 //!   plan, which may hold thousands. Where a host step records an execution's commands
@@ -223,7 +226,7 @@ use super::degradation::Degradation;
 use super::device::functions::Vk;
 use super::error::{internal, invalid, Error, Problem, RuntimeGap};
 use super::exit_guard::{self, Call};
-use super::gpu_time::Slot;
+use super::gpu_time::{FromHost, Slot};
 use super::rate_map::{MapState, RasterizationRateMap};
 use super::render_pass::{PassLayout, RenderPassDescriptor, RenderPassProblem};
 use super::render_values::{ScissorRect, Viewport};
@@ -659,7 +662,8 @@ pub(super) struct PieceTimes {
 impl PieceTimes {
     /// Slots for the `pieces` pieces of a pass recorded on `device`, reset on the host where the
     /// device resets them there; `None` where it has fewer than two, the device writes no
-    /// timestamps or answers GPU times from the host, or a slot cannot be had.
+    /// timestamps or its driver's timestamps wait for every queue's (a device asked to answer
+    /// command buffers' GPU times from the host still times pieces), or a slot cannot be had.
     pub(super) fn take(device: &Device, pieces: usize) -> Option<PieceTimes> {
         if pieces < 2 {
             return None;
@@ -676,7 +680,8 @@ impl PieceTimes {
     /// `pieces` slots of `device`'s, a probe's where `probe` says.
     fn slots(device: &Device, pieces: usize, probe: bool) -> Option<PieceTimes> {
         let shared = device.shared();
-        if shared.timing.answers_from_host() {
+        // Timestamps that wait for every queue's would serialize the device's queues.
+        if shared.timing.host_clock_reason() == Some(FromHost::Driver) {
             return None;
         }
         let raw = shared.vk();

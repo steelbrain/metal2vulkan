@@ -141,7 +141,9 @@
 //! - **From the host, where the device is told to** (`DeviceOptions::gpu_times_from_host`,
 //!   `RawDevice::gpu_times_from_host`; off by default), **or where its driver's timestamps wait
 //!   for every queue's** (`DriverFact::TimestampsWaitForEveryQueue`: MoltenVK 1.4.1 on Apple's
-//!   GPUs, whatever the options say). No command buffer writes timestamps. One with work answers as
+//!   GPUs, whatever the options say). No command buffer writes timestamps for its own times (where
+//!   only the options say so, a rate-mapped pass recorded in pieces and a host step's probe still
+//!   time theirs, `rate_mapped_pass.rs`). One with work answers as
 //!   its GPU start the host time the scheduler called the first driver's submission that carried
 //!   its work ([`KernelTimes::first_submitted`]: its kernel end time where one submission carried
 //!   it all), or its queue's latest GPU end before it where later, and as its GPU end the host time
@@ -710,8 +712,8 @@ impl Drop for Slot {
 impl Timing {
     /// The timing of a device whose runtime queue family has `valid_bits` timestamp bits, ticking
     /// every `period` nanoseconds, calibrated by `calibration` where it has one ([`calibrated`]).
-    /// With `from_host`, it answers GPU times from the host and writes no timestamps (the module
-    /// docs), for that reason. With `scarce_pools`
+    /// With `from_host`, it answers GPU times from the host and writes no timestamps for command
+    /// buffers' own times (the module docs), for that reason. With `scarce_pools`
     /// (`DriverFact::TimestampPoolsAreCounterSampleBuffers`) it makes one timestamp pool at most,
     /// else as many as its command buffers in flight need until the device refuses one. With
     /// `prefixed`, a slot also holds the start its command buffer's first encoder writes
@@ -817,8 +819,8 @@ impl Timing {
         self.clock.as_ref()
     }
 
-    /// Whether the device answers GPU times from the host, writing no timestamps (the module
-    /// docs).
+    /// Whether the device answers GPU times from the host, writing no timestamps for command
+    /// buffers' own times (the module docs).
     pub(crate) fn answers_from_host(&self) -> bool {
         self.from_host.is_some()
     }

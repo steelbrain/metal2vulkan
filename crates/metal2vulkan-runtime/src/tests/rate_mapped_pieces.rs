@@ -4,14 +4,18 @@
 //! encoder, whose draws are never cut, and of the execution under the default piece work, which
 //! cuts nothing here. Each command draws a grid of triangles twice over the target, blended at
 //! half alpha in its own colour, through 32-bit indices or 16-bit ones from an offset: a range
-//! lost, drawn twice or out of order, or a piece out of order, changes the pixels.
+//! lost, drawn twice or out of order, or a piece out of order, changes the pixels. A device asked
+//! to answer GPU times from the host's clock (`DeviceOptions::gpu_times_from_host`) times every
+//! piece of the cut frame all the same, where its driver's timestamps do not wait for every
+//! queue's.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_triangle` and
 //! `tob_solid` of the owned fixture `validation/fixtures/public/engine/tob_renders.ll`
 //! (`llvm-as`).
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{device, options, Scratch, WAIT};
+use crate::gpu_time::FromHost;
 use crate::rate_mapped_pass::set_piece_work;
 use crate::{
     Buffer, ClearColor, CommandBufferStatus, CommandQueue, Device, IndirectCommandBuffer,
@@ -291,5 +295,34 @@ fn executed_commands_cut_into_pieces_and_ranges_draw_the_uncut_pixels() {
     assert!(
         cut == uncut,
         "the cut execution's pixels differ from the uncut one's"
+    );
+}
+
+/// A device asked to answer command buffers' GPU times from the host's clock still times every
+/// piece of a pass recorded in pieces, where its queue family writes timestamps and its driver's
+/// do not wait for every queue's (the piece timer's: `rate_mapped_pass.rs`, **Pieces**).
+#[test]
+fn a_device_answering_gpu_times_from_the_host_times_its_pieces() {
+    let scratch = Scratch::new("rate-mapped-pieces-host-times");
+    let mut asked = options(&scratch.0);
+    asked.gpu_times_from_host = true;
+    let workload = Workload::new(Device::system_default_with(&asked).unwrap());
+    let timing = &workload.device.shared().timing;
+    assert!(
+        timing.answers_from_host(),
+        "the device answers from the host"
+    );
+    set_piece_work(Some(SMALL_WORK));
+    let (_, before, after) = workload.frame(true);
+    set_piece_work(None);
+    let pieces = after.rate_map_pieces - before.rate_map_pieces;
+    let timed = after.rate_map_pieces_timed - before.rate_map_pieces_timed;
+    eprintln!("RATE-MAP-PIECES from the host: pieces {pieces} timed {timed}");
+    assert!(pieces > 0, "the frame was not cut");
+    let times = timing.clock().is_some() && timing.host_clock_reason() == Some(FromHost::Asked);
+    assert_eq!(
+        timed,
+        if times { pieces + 1 } else { 0 },
+        "{pieces} pieces past the first, {timed} timed"
     );
 }

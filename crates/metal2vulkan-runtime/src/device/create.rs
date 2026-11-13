@@ -160,7 +160,9 @@ pub struct DeviceOptions {
     /// (`Error::InstanceApiVersion`); the runtime never clamps it.
     pub instance_api_version: Option<ApiVersion>,
     /// Answer command buffers' `GPUStartTime` and `GPUEndTime` from the host's clock instead of
-    /// GPU timestamps, which no command buffer then writes. Off by default: Metal's answer,
+    /// GPU timestamps, which no command buffer then writes for its own times (a rate-mapped pass
+    /// recorded in pieces, and a host step's probe, still time theirs:
+    /// `WorkCounts::rate_map_piece_gpu_nanos`). Off by default: Metal's answer,
     /// except on a driver whose timestamps wait for every queue's
     /// (`DriverFact::TimestampsWaitForEveryQueue`: MoltenVK 1.4.1 on Apple's GPUs), which answers
     /// from the host's clock whatever this says. There, a command buffer with work answers as its

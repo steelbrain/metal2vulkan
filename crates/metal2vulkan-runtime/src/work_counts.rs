@@ -6892,8 +6892,8 @@ pub struct WorkCounts {
     /// **Pieces**).
     pub rate_map_index_ranges: u64,
     /// The pieces of passes recorded in several whose GPU time was read from timestamps written
-    /// before and after each (none where the device writes no timestamps or answers GPU times
-    /// from the host): every piece of such a pass, its first included.
+    /// before and after each (none where the device writes no timestamps or its driver's
+    /// timestamps wait for every queue's): every piece of such a pass, its first included.
     pub rate_map_pieces_timed: u64,
     /// Their GPU time, in nanoseconds.
     pub rate_map_piece_gpu_nanos: u64,
@@ -6905,7 +6905,7 @@ pub struct WorkCounts {
     /// (`rate_mapped_pass.rs`, **Fan-out**; `RateMapRegionPolicy::FanOut`).
     pub rate_map_probes: u64,
     /// Their GPU time, in nanoseconds, read from timestamps written around each (none where the
-    /// device writes no timestamps or answers GPU times from the host).
+    /// device writes no timestamps or its driver's timestamps wait for every queue's).
     pub rate_map_probe_gpu_nanos: u64,
     /// The draws they probed that they flagged, each drawn region by region: a triangle crosses
     /// `w = 0` or touches more regions than the fan-out's copies.

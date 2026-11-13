@@ -1906,7 +1906,8 @@ pub(super) struct Parts {
     pub(super) extensions: Vec<std::ffi::CString>,
     /// The form of `VK_KHR_calibrated_timestamps` it enables, outside `enabled`'s vocabulary.
     pub(super) calibration: Option<gpu_time::Extension>,
-    /// It answers GPU times from the host, writing no timestamps (`gpu_time.rs`).
+    /// It answers GPU times from the host, writing no timestamps for command buffers' own times
+    /// (`gpu_time.rs`).
     pub(super) gpu_times_from_host: bool,
     /// The class of Mac it presents, as the consumer declared it (`None`: its GPU's,
     /// `capabilities.rs`).

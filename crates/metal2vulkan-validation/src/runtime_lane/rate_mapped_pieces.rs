@@ -27,6 +27,12 @@
 //! ranges, so only the region-by-region frames are checked for ranges and pieces, and a
 //! fanned-out frame for its probe and its fanned-out draws.
 //!
+//! At a guest frame's scale ([`GUEST_SCALE`] times the commands, about the 126 pieces a frame of
+//! the consumer's was recorded in on an RTX 3090), the host step's frame is
+//! `rate_mapped_pieces_guest_scale` (fanned out) and `rate_mapped_pieces_guest_scale_exact`: a GPU
+//! hazard, whose command buffer may run for a second or more, compiled only under
+//! `m2v_gpu_hazards`. They print the same line and check the same bounds.
+//!
 //! Ignored by default: a measurement on a GPU, far too slow on a CPU device. Run it by name with
 //! `--run-ignored all`. The fixture's text is compiled in, so the binary also runs on a machine
 //! other than the one that built it.
@@ -63,6 +69,11 @@ const COUNTS: [(u32, u32); 6] = [
     (161_820, 1),
 ];
 
+/// The commands of a guest frame's scale, as many times [`COUNTS`]': about the 126 pieces a frame
+/// of the consumer's was recorded in (`rate_map_pieces`) on an RTX 3090.
+#[cfg(m2v_gpu_hazards)]
+const GUEST_SCALE: u32 = 6;
+
 /// The grid's quads on a side: its triangles' indices hold the most indices a command draws.
 const GRID: u32 = 165;
 
@@ -90,7 +101,7 @@ fn counts(work: &WorkCounts) -> [u64; 9] {
 #[test]
 #[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
 fn rate_mapped_pieces() {
-    pieces_frame(false, RateMapRegionPolicy::FanOut);
+    pieces_frame(false, RateMapRegionPolicy::FanOut, 1);
 }
 
 /// One frame of the commands, their records ones the GPU may write, cut into pieces at the host
@@ -98,7 +109,7 @@ fn rate_mapped_pieces() {
 #[test]
 #[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
 fn rate_mapped_pieces_host_step() {
-    pieces_frame(true, RateMapRegionPolicy::FanOut);
+    pieces_frame(true, RateMapRegionPolicy::FanOut, 1);
 }
 
 /// One frame of the commands at the host step, every draw drawn region by region and cut into
@@ -106,13 +117,31 @@ fn rate_mapped_pieces_host_step() {
 #[test]
 #[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
 fn rate_mapped_pieces_host_step_exact() {
-    pieces_frame(true, RateMapRegionPolicy::Exact);
+    pieces_frame(true, RateMapRegionPolicy::Exact, 1);
 }
 
-/// One frame of the commands, recorded at the host step where a blit encoder may write their
-/// records before the pass (`step`), else at `commit`, the device's draws reaching the regions as
-/// `policy` says.
-fn pieces_frame(step: bool, policy: RateMapRegionPolicy) {
+/// The host step's frame at a guest frame's scale, fanned out: printed and bounded (the module
+/// docs). A GPU hazard.
+#[cfg(m2v_gpu_hazards)]
+#[test]
+#[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
+fn rate_mapped_pieces_guest_scale() {
+    pieces_frame(true, RateMapRegionPolicy::FanOut, GUEST_SCALE);
+}
+
+/// The host step's frame at a guest frame's scale, every draw region by region: printed and
+/// bounded (the module docs). A GPU hazard.
+#[cfg(m2v_gpu_hazards)]
+#[test]
+#[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
+fn rate_mapped_pieces_guest_scale_exact() {
+    pieces_frame(true, RateMapRegionPolicy::Exact, GUEST_SCALE);
+}
+
+/// One frame of the commands, `scale` times [`COUNTS`]', recorded at the host step where a blit
+/// encoder may write their records before the pass (`step`), else at `commit`, the device's draws
+/// reaching the regions as `policy` says.
+fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
@@ -179,7 +208,7 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy) {
     // The commands in an order that spreads the large ones, each its counts' indices from a
     // place of the grid, a whole quad's, and its own colour.
     let mut draws: Vec<u32> = (COUNTS.iter())
-        .flat_map(|&(count, commands)| std::iter::repeat_n(count, commands as usize))
+        .flat_map(|&(count, commands)| std::iter::repeat_n(count, (commands * scale) as usize))
         .collect();
     let spread = draws.len();
     draws = (0..spread).map(|k| draws[k * 37 % spread]).collect();
