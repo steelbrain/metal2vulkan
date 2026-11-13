@@ -26,6 +26,15 @@
 //!   at once added pools and filled them: on RADV each command buffer holds 96 KiB of GTT (buffer
 //!   objects of 80 and 16 KiB) until its pool is trimmed. Kept by the last [`RECENT_USES`] uses
 //!   alone, a pool freed what a use took again a few dozen uses later, and made it again then.
+//!   With spans of 1 s, a guest's walk on an RX 7900 XTX (RADV) freed 60 to 110 command buffers a
+//!   second past their pools' recent uses, the pools trimmed after, and made them again: its
+//!   profile had about 43 ms a second in `DeviceShared::allocate_command_buffers` and 39 ms a
+//!   second in the free thread's frees and trims. A frame's count of command buffers varies over
+//!   seconds, and with it what each pool it takes hands out. Spans of 5 s keep a use's command
+//!   buffers 5 to 10 s. `tests::spares_walk` (a frame of 47 to 141 passes about 41 times a second
+//!   beside about 1,600 small command buffers a second, on lavapipe): spans of 1 s allocated 2.6 to
+//!   7.4 command buffers a second and freed 5.2 to 7.2; spans of 5 s allocated 0 to 0.4 and freed
+//!   none; the spares held 355 to 451 command buffers at a run's start and end, against 342 to 760.
 //!   Counted: `Spares::command_buffers_held` and `Spares::churn` (the crate's tests).
 //! - **A command buffer past one pool takes the spares holding the most.** A taker takes the
 //!   spare holding a primary begun ahead and the fewest command buffers, else the one holding the
@@ -258,8 +267,8 @@ pub(super) const RECENT_USES: usize = 8;
 /// The spans of a command pool's uses whose command buffers it keeps besides its last
 /// [`RECENT_USES`]: given back, it keeps of each level as many as the most one of its uses in this
 /// span and the one before handed out, so that one a use takes again within one to two spans
-/// stays (the module docs).
-pub(super) const RECENT_FOR: Duration = Duration::from_secs(1);
+/// stays: 5 s, as a frame's count of command buffers varies over seconds (the module docs).
+pub(super) const RECENT_FOR: Duration = Duration::from_secs(5);
 
 /// How long a spare command pool stays untaken before every command buffer it holds is freed (the
 /// module docs).
