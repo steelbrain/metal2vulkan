@@ -349,8 +349,10 @@ fn work_held_unsubmitted_at_a_loss_fails_as_its_victims_in_queue_order() {
         }
     }
     device.recover_for_test().unwrap();
+    // A buffer of the new generation: a pooled `Shared` buffer made before may be left there.
+    let after = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
     for (at, queue) in queues.iter().enumerate() {
-        let later = filled_by(queue, &filled);
+        let later = filled_by(queue, &after);
         handled(at, 2, &later);
         later.commit().unwrap();
         assert_eq!(outcome(&later), (CommandBufferStatus::Completed, None));
