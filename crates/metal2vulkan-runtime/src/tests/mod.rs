@@ -305,6 +305,8 @@ mod host_image_room;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_import_counts;
 mod host_memory;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod host_pages_placement;
 #[cfg(m2v_gpu)]
 mod host_ram_copy_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
