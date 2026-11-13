@@ -146,6 +146,8 @@ mod device_recovery_no_copy;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device_recovery_pipelines;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod device_recovery_samplers;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device_recovery_states;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device_recovery_textures;
