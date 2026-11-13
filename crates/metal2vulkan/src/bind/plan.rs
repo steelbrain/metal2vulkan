@@ -703,8 +703,8 @@ pub enum WriteSource {
     /// (`BindState::region_fan_out`) before the draw, where the draw writes 1 into the first for
     /// a triangle it cannot fan out, adds into the counts after it the copies it would emit of
     /// the others, marks those after them for a triangle too wide for few copies, and for a
-    /// flagged triangle raises its first's and last's words and adds one into its flagged count
-    /// (`GraphicsState::region_fan_out`); bound whole.
+    /// flagged triangle raises its first's and last's words, adds one into its flagged count and
+    /// sets its block's bit (`GraphicsState::region_fan_out`); bound whole.
     RateMapFlags,
     /// The top-level structure of the acceleration structure bound at buffer slot `slot`
     /// (`setAccelerationStructure:atBufferIndex:`): the bound instance structure itself when

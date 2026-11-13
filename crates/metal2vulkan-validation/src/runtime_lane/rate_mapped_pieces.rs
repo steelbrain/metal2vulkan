@@ -32,8 +32,9 @@
 //! triangles out to the regions (`RateMapRegionPolicy::FanOut`, `rate_mapped_pass.rs`,
 //! **Fan-out**), after a probe; under `Exact` (`rate_mapped_pieces_host_step_exact`) every draw
 //! is drawn region by region, as at `commit`. The line then states the probes, the draws they
-//! flagged, the draws fanned out, the flagged ones drawn in parts and their triangles drawn
-//! region by region (`rate_map_parted_draws`, `rate_map_parted_region_triangles`) and how many
+//! flagged, the draws fanned out, the flagged ones drawn in parts, their triangles drawn region
+//! by region and the runs of blocks those were drawn in (`rate_map_parted_draws`,
+//! `rate_map_parted_region_triangles`, `rate_map_region_runs`, at least one a draw) and how many
 //! of those the probe flagged (`rate_map_flagged_triangles`), and the
 //! probes' GPU time and the host's wait for them (`rate_map_probe_wait_nanos`); fanned out, a
 //! draw is never cut into ranges, so only the region-by-region frames are checked for ranges and
@@ -114,8 +115,8 @@ const PIECE_LIMIT: Duration = Duration::from_secs(1);
 /// timed, their GPU time and the longest's; the probes, the draws they flagged, the draws fanned
 /// out and the probes' GPU time; the host step's time and making; the fan-out's pipelines; the
 /// draws of few copies; the draws in parts and their triangles drawn region by region; the
-/// host's wait for the probes; the triangles the probes flagged.
-fn counts(work: &WorkCounts) -> [u64; 19] {
+/// host's wait for the probes; the triangles the probes flagged; their runs drawn region by region.
+fn counts(work: &WorkCounts) -> [u64; 20] {
     [
         work.rate_map_pieces,
         work.rate_map_index_ranges,
@@ -136,6 +137,7 @@ fn counts(work: &WorkCounts) -> [u64; 19] {
         work.rate_map_parted_region_triangles,
         work.rate_map_probe_wait_nanos,
         work.rate_map_flagged_triangles,
+        work.rate_map_region_runs,
     ]
 }
 
@@ -392,6 +394,7 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32, triangles: 
         let [stepped, made, made_nanos, ready, waited] = [9, 10, 11, 12, 13].map(delta);
         let few = delta(14);
         let [parted, by_regions, probe_wait, flagged_triangles] = [15, 16, 17, 18].map(delta);
+        let runs = delta(19);
         let most = Duration::from_nanos(after[4]);
         let indices: u64 = draws.iter().map(|&count| u64::from(count)).sum();
         let mean = Duration::from_nanos(nanos / timed.max(1));
@@ -408,8 +411,8 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32, triangles: 
              time, {} pieces ({ranges} index ranges past the first); {timed} pieces timed, the \
              longest {:.2} ms, the mean {:.2} ms; {probes} probes of {:.2} ms, waited for {:.2} ms, \
              {flagged} draws flagged, {fanned} fanned out ({few} of few copies), {parted} drawn in \
-             parts ({by_regions} triangles region by region, {flagged_triangles} of them \
-             flagged); the host step {:.1} ms, \
+             parts ({by_regions} triangles region by region in {runs} runs, {flagged_triangles} of \
+             them flagged); the host step {:.1} ms, \
              {made} pipelines made there, \
              {:.1} ms creating render pipelines; the fan-out's pipelines {ready} ready at the \
              step, {waited} waited for; the commit {:.1} ms",
@@ -441,6 +444,10 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32, triangles: 
                 assert!(
                     flagged_triangles <= by_regions,
                     "{flagged_triangles} triangles flagged of {by_regions} region by region"
+                );
+                assert!(
+                    runs >= parted,
+                    "{runs} runs region by region of {parted} draws in parts"
                 );
                 assert!(
                     probe_wait > 0,

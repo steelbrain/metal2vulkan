@@ -41,16 +41,31 @@
 /// for the draw of index `i`, each zero before the probe. The consumer sums a draw's counts,
 /// draws a draw none of whose wide words is marked through its variant of few copies
 /// (`RegionFanOut::DrawFew`), takes the first and the last flagged primitive of a flagged draw
-/// from the least of the third set and the greatest of the fourth, and sums the fifth for its
-/// flagged triangles.
+/// from the least of the third set and the greatest of the fourth, sums the fifth for its
+/// flagged triangles, and reads the sixth as the bits of its blocks that hold a flagged one,
+/// which it draws region by region.
 pub const PROBE_DRAW_WORDS: u32 = 1 + PROBE_SETS * PROBE_COUNT_WORDS;
 
 /// The sets of [`PROBE_COUNT_WORDS`] after a probed draw's flag ([`PROBE_DRAW_WORDS`]), in
 /// order: the counts its triangles add their copies into; the marks of its triangles that it
 /// does not flag and that reach more than [`FEW_COPIES`] pairs of segments; the greatest
 /// `u32::MAX − PrimitiveId` of its flagged triangles; the greatest `PrimitiveId + 1` of them;
-/// and the counts its flagged triangles add one each into.
-pub const PROBE_SETS: u32 = 5;
+/// the counts its flagged triangles add one each into; and the bits of its blocks of
+/// [`BLOCK_TRIANGLES`] that hold a flagged triangle, block `b` bit `b mod 32` of word `b / 32`
+/// ([`PROBE_BLOCKS`] of them, the last also every triangle past them).
+pub const PROBE_SETS: u32 = 6;
+
+/// The triangles of a probed draw's block (`PrimitiveId / BLOCK_TRIANGLES`; [`PROBE_SETS`]):
+/// [`PROBE_BLOCKS`] of them cover 65,536 triangles, more than a command of the pieces lane draws
+/// (161,820 indices, 53,940 triangles), and a block drawn region by region for one flagged
+/// triangle draws at most 63 others so.
+pub const BLOCK_TRIANGLES: u32 = 64;
+
+/// The blocks of a probed draw whose bits its last set holds ([`PROBE_SETS`]): one a bit.
+pub const PROBE_BLOCKS: u32 = 32 * PROBE_COUNT_WORDS;
+
+// A block is a shift of the primitive's index.
+const _: () = assert!(BLOCK_TRIANGLES.is_power_of_two());
 
 /// The words a probed draw's triangles add their copies into, and in each of the other sets of
 /// its words ([`PROBE_DRAW_WORDS`]) as many, a triangle the one of each set its `PrimitiveId`

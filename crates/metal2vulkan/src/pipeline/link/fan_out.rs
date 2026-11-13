@@ -32,14 +32,16 @@
 //!   as many after those, which mark the draw one its variant of few copies cannot draw; and for
 //!   a triangle it flags, raises the word its `PrimitiveId` picks of the as many after those to
 //!   `u32::MAX − PrimitiveId`, and of the as many after them to `PrimitiveId + 1`, so the
-//!   consumer finds the draw's first and last flagged triangle, and adds one into the word it
-//!   picks of the last set ([`PROBE_SETS`](crate::bind::fan_out::PROBE_SETS)), so the
-//!   consumer counts them. Its writes need
+//!   consumer finds the draw's first and last flagged triangle, adds one into the word it
+//!   picks of the fifth set, so the consumer counts them, and sets the bit of its block of
+//!   [`BLOCK_TRIANGLES`] in the last ([`PROBE_SETS`]), so the consumer draws only the blocks that
+//!   hold a flagged triangle region by region. Its writes need
 //!   `vertexPipelineStoresAndAtomics`.
 
 use super::geometry::{array, kf, ku, scalar, GeometryStages};
 use crate::bind::fan_out::{
-    clip_entry, line_entry, FEW_COPIES, MAX_SEGMENTS, PROBE_COUNT_WORDS, PROBE_DRAW_WORDS,
+    clip_entry, line_entry, BLOCK_TRIANGLES, FEW_COPIES, MAX_SEGMENTS, PROBE_BLOCKS,
+    PROBE_COUNT_WORDS, PROBE_DRAW_WORDS, PROBE_SETS,
 };
 use crate::pipeline::graphics::RegionFanOut;
 use crate::pipeline::stage_io::IoNumeric;
@@ -418,6 +420,20 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
             let most_id = ku(&mut fb, u32::MAX)?;
             let first = fb.binary(BinOp::ISub, most_id, id)?;
             let last = fb.binary(BinOp::IAdd, id, one)?;
+            // Its block's bit, in the last set: the block of its `PrimitiveId`, the last for one
+            // past the blocks.
+            let shift = ku(&mut fb, BLOCK_TRIANGLES.ilog2())?;
+            let block = fb.binary(BinOp::ShiftRightLogical, id, shift)?;
+            let most_block = ku(&mut fb, PROBE_BLOCKS - 1)?;
+            let block = fb.glsl(GlslOp::UMin, &[block, most_block])?;
+            let five = ku(&mut fb, 5)?;
+            let block_word = fb.binary(BinOp::ShiftRightLogical, block, five)?;
+            let blocks = ku(&mut fb, 1 + (PROBE_SETS - 1) * PROBE_COUNT_WORDS)?;
+            let block_at = fb.binary(BinOp::IAdd, flag_at, blocks)?;
+            let block_at = fb.binary(BinOp::IAdd, block_at, block_word)?;
+            let low = ku(&mut fb, 31)?;
+            let bit = fb.binary(BinOp::BitwiseAnd, block, low)?;
+            let bit = fb.binary(BinOp::ShiftLeftLogical, one, bit)?;
             let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
                 let ptr = word_ptr(fb, flag_at)?;
                 let one = ku(fb, 1)?;
@@ -434,6 +450,8 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
                 }
                 let ptr = word_ptr(fb, flagged_at)?;
                 fb.atomic(AtomicOp::IAdd, ptr, Scope::Device, Semantics::RELAXED, one)?;
+                let ptr = word_ptr(fb, block_at)?;
+                fb.atomic(AtomicOp::Or, ptr, Scope::Device, Semantics::RELAXED, bit)?;
                 Ok(ArmEnd::FallThrough(Vec::new()))
             });
             fb.if_(&mut ctx, flagged, arm, None)?;

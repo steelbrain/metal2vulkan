@@ -242,6 +242,7 @@ pub(crate) struct Counters {
     rate_map_fanned_few_draws: AtomicU64,
     rate_map_parted_draws: AtomicU64,
     rate_map_parted_region_triangles: AtomicU64,
+    rate_map_region_runs: AtomicU64,
     rate_map_fan_out_pipelines_ready: AtomicU64,
     rate_map_fan_out_pipelines_waited: AtomicU64,
     rate_map_fan_tables_uploaded: AtomicU64,
@@ -2901,10 +2902,11 @@ impl Counters {
     }
 
     /// A draw the probe flagged was drawn in parts (`render/fan_out.rs`, **Parts**), of which
-    /// `by_regions` triangles region by region.
-    pub(crate) fn rate_map_drawn_in_parts(&self, by_regions: u64) {
+    /// `by_regions` triangles region by region, in `runs` parts.
+    pub(crate) fn rate_map_drawn_in_parts(&self, by_regions: u64, runs: u64) {
         (self.rate_map_parted_draws).fetch_add(1, Ordering::Relaxed);
         (self.rate_map_parted_region_triangles).fetch_add(by_regions, Ordering::Relaxed);
+        (self.rate_map_region_runs).fetch_add(runs, Ordering::Relaxed);
     }
 
     /// A command's draw in a rate-mapped pass was drawn once, fanned out to its regions, through
@@ -7209,8 +7211,8 @@ pub struct WorkCounts {
     pub rate_map_flagged_draws: u64,
     /// Their triangles the probes flagged, each of each instance once: against
     /// [`rate_map_parted_region_triangles`](Self::rate_map_parted_region_triangles), how many
-    /// of the triangles a draw in parts draws region by region, from its first flagged one to
-    /// its last, are flagged themselves (a flagged draw drawn whole region by region counts
+    /// of the triangles a draw in parts draws region by region, its runs of blocks that hold a
+    /// flagged one, are flagged themselves (a flagged draw drawn whole region by region counts
     /// its flagged triangles here, its triangles there not).
     pub rate_map_flagged_triangles: u64,
     /// Executed commands' draws in rate-mapped passes drawn once, fanned out to the regions their
@@ -7219,11 +7221,15 @@ pub struct WorkCounts {
     /// Of them, those the probe marked no triangle of too wide for few copies, drawn through the
     /// variant of `bind::fan_out::FEW_COPIES` copies (`RegionFanOut::DrawFew`).
     pub rate_map_fanned_few_draws: u64,
-    /// Flagged draws drawn in parts: the triangles from the first the probe flagged to the last
-    /// region by region, those before and after fanned out (`render/fan_out.rs`, **Parts**).
+    /// Flagged draws drawn in parts: their runs of blocks that hold a triangle the probe flagged
+    /// region by region, the triangles before, between and after them fanned out
+    /// (`render/fan_out.rs`, **Parts**).
     pub rate_map_parted_draws: u64,
     /// Their triangles drawn region by region.
     pub rate_map_parted_region_triangles: u64,
+    /// Their parts drawn region by region, each a run of blocks, at most
+    /// four a draw: each records the plan's region draws.
+    pub rate_map_region_runs: u64,
     /// `VkPipeline`s of probes' and fanned-out draws' variants that `commit` began making on the
     /// device's pool, settling what the host step that records the pass compiles, and that a
     /// host step fanning the pass out found made already (`rate_mapped_pass.rs`, **Fan-out**).
@@ -10385,6 +10391,7 @@ impl Device {
             rate_map_parted_draws: (counters.rate_map_parted_draws).load(Ordering::Relaxed),
             rate_map_parted_region_triangles: (counters.rate_map_parted_region_triangles)
                 .load(Ordering::Relaxed),
+            rate_map_region_runs: counters.rate_map_region_runs.load(Ordering::Relaxed),
             rate_map_fan_out_pipelines_ready: (counters.rate_map_fan_out_pipelines_ready)
                 .load(Ordering::Relaxed),
             rate_map_fan_out_pipelines_waited: (counters.rate_map_fan_out_pipelines_waited)

@@ -3,17 +3,19 @@
 //! command but five draws a grid of small triangles, twice, blended at half alpha in its own
 //! colour; one between them draws a triangle over the whole target, which touches more regions
 //! than the fan-out's copies, another a triangle over the whole target one of whose corners lies
-//! behind the eye (`w` of -1), and two the grid with one of its triangles, [`WIDE_AT`], over half
-//! the target, one with indices and one without, so the probe flags these four; and another a
-//! triangle over four tiles a side, which touches more regions than few copies
-//! (`bind::fan_out::FEW_COPIES`) and no more than the copies. Under `FanOut` the probe runs once,
-//! the grid commands are fanned out, and the four it flagged are drawn in parts
-//! (`render/fan_out.rs`, **Parts**), each in its place: each grid with the wide triangle in three,
-//! the triangles before it and after it fanned out and it region by region, and each single
-//! triangle region by region; under `Exact` no probe runs and every
-//! command is drawn region by region. Either way the target's bytes are those of the same
-//! commands drawn on the encoder, region by region: a command or a triangle lost, drawn twice or
-//! out of order, or a copy drawn into another region or left out of its own, changes the pixels.
+//! behind the eye (`w` of -1), and two the grid with two of its triangles far apart, [`WIDE_AT`]
+//! and [`WIDE_FAR`], each over half the target, one with indices and one without, so the probe
+//! flags these four; and another a triangle over four tiles a side, which touches more regions
+//! than few copies (`bind::fan_out::FEW_COPIES`) and no more than the copies. Under `FanOut` the
+//! probe runs once, the grid commands are fanned out, and the four it flagged are drawn in parts
+//! (`render/fan_out.rs`, **Parts**), each in its place: each grid with the wide triangles in five,
+//! the blocks of `bind::fan_out::BLOCK_TRIANGLES` that hold them region by region, from each wide
+//! triangle to its block's end and from its block's start, and the triangles before, between and
+//! after them fanned out; and each single triangle region by region; under `Exact` no probe runs
+//! and every command is drawn region by region. Either way the target's bytes are those of the
+//! same commands drawn on the encoder, region by region as `Exact` draws them: a command or a
+//! triangle lost, drawn twice or out of order, or a copy drawn into another region or left out of
+//! its own, changes the pixels.
 //! The
 //! probe's and the fanned-out draws' pipelines are begun at commit (`RenderExecution::settle`):
 //! the host step takes them made or waits for them, and makes no more pipelines itself than it
@@ -42,8 +44,8 @@ use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor
 use std::path::Path;
 
 /// The grid's quads on a side, the commands, the one that draws the large triangle, the medium
-/// one, the one across `w = 0`, and the grid with a wide triangle without indices and with
-/// them, the triangle it replaces.
+/// one, the one across `w = 0`, and the grid with wide triangles without indices and with
+/// them, the triangles they replace, in blocks far apart.
 const GRID: u32 = 16;
 const COMMANDS: u32 = 8;
 const FLAT: u32 = 0;
@@ -52,6 +54,7 @@ const MEDIUM: u32 = 5;
 const BEHIND: u32 = 6;
 const MIXED: u32 = 7;
 const WIDE_AT: u32 = 300;
+const WIDE_FAR: u32 = 900;
 /// A grid command's indices: the grid's triangles, twice.
 const INDICES: u32 = 2 * GRID * GRID * 6;
 /// The map's screen side, and its quality samples on both axes.
@@ -162,10 +165,17 @@ impl Workload {
             .collect();
         let twice = [&triangles[..], &triangles[..]].concat();
         let grid_indices: Vec<u8> = twice.iter().flat_map(|i| i.to_le_bytes()).collect();
-        // The grid with triangle `WIDE_AT` over the target's lower left half.
+        // The grid with triangle `WIDE_AT` over the target's lower left half, and `WIDE_FAR` over
+        // its upper right half.
         let mut mixed = twice.clone();
         let wide = 3 * WIDE_AT as usize;
         mixed[wide..wide + 3].copy_from_slice(&[corner(0, 0), corner(GRID, 0), corner(0, GRID)]);
+        let far = 3 * WIDE_FAR as usize;
+        mixed[far..far + 3].copy_from_slice(&[
+            corner(GRID, GRID),
+            corner(0, GRID),
+            corner(GRID, 0),
+        ]);
         let mixed_indices: Vec<u8> = mixed.iter().flat_map(|i| i.to_le_bytes()).collect();
         let mixed_vertices: Vec<u8> = (mixed.iter())
             .flat_map(|&i| [at(i % (GRID + 1)), at(i / (GRID + 1))])
@@ -382,10 +392,12 @@ fn differing<'a>(a: &'a [u8], b: &'a [u8]) -> (usize, Option<(usize, &'a [u8], &
 }
 
 /// Under `FanOut` the host step probes once, fans the grid commands out and draws the four it
-/// flagged in parts between them, their one wide triangle each region by region, with the
-/// pipelines `commit` began: the fan-out's and the regions variant's, so the step makes none. The grid commands are drawn through the variant of few copies and the medium one
-/// through the most copies'. Its probe and its fanned-out draws each upload the region table
-/// once, the commit's settle none. The pixels are the encoder's region-by-region draws'.
+/// flagged in parts between them, each grid's two wide triangles in runs of their own blocks
+/// region by region and the triangles between them fanned out, with the pipelines `commit` began:
+/// the fan-out's and the regions variant's, so the step makes none. The grid commands are drawn
+/// through the variant of few copies and the medium one through the most copies'. Its probe and
+/// its fanned-out draws each upload the region table once, the commit's settle none. The pixels
+/// are the encoder's region-by-region draws', `Exact`'s.
 #[test]
 fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     let scratch = Scratch::new("rate-mapped-fan-out");
@@ -404,12 +416,13 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
         after.rate_map_parted_region_triangles - before.rate_map_parted_region_triangles;
     let wait = after.rate_map_probe_wait_nanos - before.rate_map_probe_wait_nanos;
     let flagged = after.rate_map_flagged_triangles - before.rate_map_flagged_triangles;
+    let runs = after.rate_map_region_runs - before.rate_map_region_runs;
     eprintln!(
         "RATE-MAP-FAN-OUT counts {counts:?} probe_gpu_nanos {probe_nanos}, waited {wait} ns; \
          {flagged} flagged triangles; \
          fan-out pipelines {ready} ready, {waited} waited for; {made} made at the step; {tables} \
          region tables uploaded; {few} drawn of few copies; {by_regions} triangles of draws in \
-         parts region by region"
+         parts region by region, in {runs} runs"
     );
     assert_eq!(made, 0, "pipelines the host step made");
     match fans_out(&workload.device) {
@@ -421,11 +434,19 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
                 "the commit began no probe or draw pipeline"
             );
             assert_eq!(few, u64::from(COMMANDS - 5), "draws of few copies");
+            // Each single triangle, and in each grid from each wide triangle to its block's end and
+            // from the far one's block's start to it.
+            let block = metal2vulkan::bind::fan_out::BLOCK_TRIANGLES;
+            let near = WIDE_AT.next_multiple_of(block) - WIDE_AT;
+            let far = WIDE_FAR + 1 - WIDE_FAR / block * block;
+            let grid_runs = u64::from(near + far);
             assert_eq!(
-                by_regions, 4,
+                by_regions,
+                2 + 2 * grid_runs,
                 "triangles of draws in parts region by region"
             );
-            assert_eq!(flagged, 4, "the triangles the probe flagged");
+            assert_eq!(runs, 6, "runs region by region");
+            assert_eq!(flagged, 6, "the triangles the probe flagged");
             assert!(wait > 0, "the host's wait for the probe");
         }
         false => assert_eq!(counts, [0; 4]),

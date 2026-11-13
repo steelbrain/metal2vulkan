@@ -148,7 +148,8 @@ fn instructions(words: &[u32], op: crate::spv::Op) -> Vec<&[u32]> {
 /// [`PROBE_COUNT_WORDS`](crate::bind::fan_out::PROBE_COUNT_WORDS) that its `PrimitiveId` picks
 /// (masked by their number less one), whether or not the fragment function reads the primitive's
 /// index: no one word takes every triangle's add. A flagged triangle raises its draw's first's and
-/// last's words once each, and adds one into its flagged count once.
+/// last's words once each, adds one into its flagged count once, and sets its block's bit once,
+/// the block its primitive's index shifted by the block's triangles picks.
 #[test]
 fn a_probe_adds_a_triangle_s_copies_into_the_count_its_primitive_picks() {
     use crate::spv::{BuiltIn, Decoration, Op};
@@ -171,6 +172,16 @@ fn a_probe_adds_a_triangle_s_copies_into_the_count_its_primitive_picks() {
         assert_eq!(instructions(words, Op::AtomicStore).len(), 2, "two stores");
         // A flagged triangle's raise of the first's and the last's words.
         assert_eq!(instructions(words, Op::AtomicUMax).len(), 2, "two raises");
+        // A flagged triangle's block bit.
+        assert_eq!(instructions(words, Op::AtomicOr).len(), 1, "one block bit");
+        let shift = crate::bind::fan_out::BLOCK_TRIANGLES.ilog2();
+        let shifts: Vec<u32> = (instructions(words, Op::Constant).into_iter())
+            .filter(|c| c.get(2) == Some(&shift))
+            .map(|c| c[1])
+            .collect();
+        let blocked = (instructions(words, Op::ShiftRightLogical).into_iter())
+            .any(|a| a[3..].iter().any(|operand| shifts.contains(operand)));
+        assert!(blocked, "the primitive's index shifted to its block");
         let primitive = (instructions(words, Op::Decorate).into_iter())
             .filter(|d| d[1..] == [Decoration::BuiltIn as u32, BuiltIn::PrimitiveId as u32])
             .count();

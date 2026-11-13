@@ -5817,10 +5817,13 @@ each item named states the rule in full.
   each triangle for each region it touches (`VariantKey::region_fan_out`), a pixel centre within a
   rounding error of an edge possibly covered otherwise (`docs/FAST-PATHS.md`). A draw the probe
   flags, a list of triangles of one instance whose pipeline reads no `[[primitive_id]]` and
-  writes no memory, is drawn in parts in its place: its triangles from the first the probe
-  flagged to the last region by region, those before and after fanned out
-  (`WorkCounts::rate_map_parted_draws`, and of those triangles the ones the probe flagged
-  `rate_map_flagged_triangles`); another flagged draw is drawn region by region. The
+  writes no memory, is drawn in parts in its place: its runs of blocks of 64 triangles that hold
+  a triangle the probe flagged region by region, cut to the first and the last flagged one, runs
+  fewer than 170 triangles apart joined and at most four a draw, the triangles before, between
+  and after them fanned out (`WorkCounts::rate_map_parted_draws`, the runs
+  `rate_map_region_runs`, their triangles `rate_map_parted_region_triangles` and of those the
+  ones the probe flagged `rate_map_flagged_triangles`); another flagged draw is drawn region by
+  region. The
   probe costs the host step a submission it waits for before the pass, which runs each probed
   draw's vertex function and geometry stage once and shades nothing (`WorkCounts::rate_map_probes`,
   `rate_map_probe_gpu_nanos`, the host's wait `rate_map_probe_wait_nanos`); a fanned-out draw

@@ -824,9 +824,11 @@ surface! {
         mod indirect_commands;
     }
     "bind::fan_out" => metal2vulkan::bind::fan_out {
+        const BLOCK_TRIANGLES;
         const FEW_COPIES;
         const HEADER_ENTRIES;
         const MAX_SEGMENTS;
+        const PROBE_BLOCKS;
         const PROBE_COUNT_WORDS;
         const PROBE_DRAW_WORDS;
         const PROBE_SETS;

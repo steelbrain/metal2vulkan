@@ -6,18 +6,21 @@
 //!
 //! **Parts.** A draw the probe flagged, a list of triangles of one instance whose pipeline reads
 //! no `[[primitive_id]]` and writes no memory (`render/executions.rs`, `in_parts`), is drawn in
-//! up to three parts in its place ([`parts`]): its triangles before the first the probe flagged,
-//! fanned out; those from it to the last it flagged, region by region; and those after, fanned
-//! out. Each part is a draw of a range of the draw's vertices or indices, so each triangle keeps
-//! its vertices, its `vertex_id`s and its place among the draw's: a pixel takes the draw's
-//! fragments in the draw's order. A flagged draw of any other kind is drawn region by region
-//! whole.
+//! parts in its place ([`parts`]): its runs of blocks (`bind::fan_out::BLOCK_TRIANGLES`) that
+//! hold a triangle the probe flagged, region by region, the first cut to the first flagged
+//! triangle and the last to the last, runs fewer than `rate_mapped_pass::RUN_GAP` triangles apart
+//! joined and at most [`MOST_RUNS`] of them, the nearest joined first; and the triangles before,
+//! between and after them, fanned out. Each part is a draw of a range of the draw's vertices or
+//! indices, so each triangle keeps its vertices, its `vertex_id`s and its place among the draw's:
+//! a pixel takes the draw's fragments in the draw's order. A flagged draw of any other kind is
+//! drawn region by region whole.
 
 use super::executions::Command;
+use crate::rate_mapped_pass::RUN_GAP;
 use crate::render_values::{ScissorRect, Viewport};
 use crate::Device;
 use ash::vk;
-use metal2vulkan::bind::fan_out::PROBE_COUNT_WORDS;
+use metal2vulkan::bind::fan_out::{BLOCK_TRIANGLES, PROBE_BLOCKS, PROBE_COUNT_WORDS};
 use metal2vulkan::bind::ReplayFaults;
 use metal2vulkan::device::{RateMapRegionPolicy, VkFeature};
 use metal2vulkan::pipeline::RegionFanOut;
@@ -49,21 +52,31 @@ pub(super) struct FanOutDraw {
     /// A draw's: the copies of its triangles the probe counted, which its work counts
     /// (`rate_mapped_pass::fan_out_work`).
     pub(super) copies: u32,
-    /// A draw the probe flagged: the first and the last of its triangles it flagged, between
-    /// which its parts are drawn region by region (the module docs, **Parts**).
-    pub(super) flagged: Option<(u32, u32)>,
+    /// A draw the probe flagged: its flagged triangles, whose blocks its parts draw region by
+    /// region (the module docs, **Parts**).
+    pub(super) flagged: Option<Flagged>,
+}
+
+/// The triangles the probe flagged of a draw (`bind::fan_out::PROBE_SETS`): the first and the
+/// last, and the bits of its blocks of `bind::fan_out::BLOCK_TRIANGLES` that hold one, block `b`
+/// bit `b mod 32` of word `b / 32`, the last block also every triangle past the bits' blocks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Flagged {
+    pub(super) first: u32,
+    pub(super) last: u32,
+    pub(super) blocks: [u32; PROBE_COUNT_WORDS as usize],
 }
 
 /// What the probe found of a draw it probed, from its words (`bind::fan_out::PROBE_DRAW_WORDS`):
 /// the copies its triangles emit (its counts summed), whether a triangle it does not flag is too
-/// wide for few copies (`bind::fan_out::FEW_COPIES`, a wide word marked), the first and the
-/// last of its triangles it flagged, where it flagged one, and how many it flagged (its flagged
-/// counts summed), each of each instance once.
+/// wide for few copies (`bind::fan_out::FEW_COPIES`, a wide word marked), the triangles it
+/// flagged, where it flagged one, and how many it flagged (its flagged counts summed), each of
+/// each instance once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Probed {
     pub(super) copies: u32,
     pub(super) wide: bool,
-    pub(super) flagged: Option<(u32, u32)>,
+    pub(super) flagged: Option<Flagged>,
     pub(super) flagged_triangles: u32,
 }
 
@@ -74,11 +87,18 @@ impl Probed {
         let set = |k: usize| words.iter().skip(1 + k * lanes).take(lanes).copied();
         let first = set(2).max().unwrap_or(0);
         let last = set(3).max().unwrap_or(0);
+        let mut blocks = [0u32; PROBE_COUNT_WORDS as usize];
+        for (bits, word) in blocks.iter_mut().zip(set(5)) {
+            *bits = word;
+        }
         Probed {
             copies: set(0).fold(0u32, u32::saturating_add),
             wide: set(1).any(|w| w != 0),
-            flagged: (words.first().is_some_and(|&flag| flag != 0))
-                .then(|| (u32::MAX - first, last.saturating_sub(1))),
+            flagged: (words.first().is_some_and(|&flag| flag != 0)).then(|| Flagged {
+                first: u32::MAX - first,
+                last: last.saturating_sub(1),
+                blocks,
+            }),
             flagged_triangles: set(4).fold(0u32, u32::saturating_add),
         }
     }
@@ -93,33 +113,85 @@ pub(super) struct Part {
     pub(super) fanned: bool,
 }
 
-/// The parts of a draw of `triangles` triangles whose triangles from `first` to `last` the probe
-/// flagged (the module docs, **Parts**): those before `first` fanned out, those from it to `last`
-/// region by region, and those after fanned out, an empty part left out. Where `even` (a list of
-/// 16-bit indices, whose ranges start 4-byte aligned as the draw's do) each part begins at an even
-/// triangle, the part drawn region by region widened to one. A flag past the triangles draws
-/// every triangle region by region.
-pub(super) fn parts((first, last): (u32, u32), triangles: u32, even: bool) -> Vec<Part> {
+/// The most runs of a flagged draw's blocks drawn region by region ([`parts`]): each records the
+/// plan's region draws, so a flagged draw records at most this many times the region draws one
+/// run from its first flagged triangle to its last records, the nearest runs joined first.
+pub(super) const MOST_RUNS: usize = 4;
+
+/// The parts of a draw of `triangles` triangles the probe `flagged` (the module docs, **Parts**):
+/// its runs of blocks that hold a flagged triangle region by region, the first cut to the first
+/// flagged triangle and the last to the last, those fewer than `RUN_GAP` triangles apart joined,
+/// the nearest joined first while more than [`MOST_RUNS`] stand; and the triangles before, between
+/// and after them fanned out, an empty part left out. Where `even` (a list of 16-bit indices, whose
+/// ranges start 4-byte aligned as the draw's do) each part begins at an even triangle, a run
+/// widened to one. A flag past the triangles, or with no block's bit, draws every triangle region
+/// by region.
+pub(super) fn parts(flagged: &Flagged, triangles: u32, even: bool) -> Vec<Part> {
+    let Flagged {
+        first,
+        last,
+        blocks,
+    } = *flagged;
+    let whole = vec![Part {
+        first: 0,
+        count: triangles,
+        fanned: false,
+    }];
     if first > last || last >= triangles {
-        return vec![Part {
-            first: 0,
-            count: triangles,
-            fanned: false,
-        }];
+        return whole;
     }
-    let (from, to) = match even {
-        true => (first & !1, (last + 1).next_multiple_of(2).min(triangles)),
-        false => (first, last + 1),
-    };
-    [(0, from, true), (from, to, false), (to, triangles, true)]
-        .into_iter()
-        .filter(|&(start, end, _)| end > start)
-        .map(|(start, end, fanned)| Part {
-            first: start,
-            count: end - start,
-            fanned,
-        })
-        .collect()
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    for block in 0..PROBE_BLOCKS {
+        if blocks[(block / 32) as usize] >> (block % 32) & 1 == 0 {
+            continue;
+        }
+        let end = match block + 1 < PROBE_BLOCKS {
+            true => (block + 1) * BLOCK_TRIANGLES,
+            false => triangles,
+        };
+        let (mut start, mut end) = ((block * BLOCK_TRIANGLES).max(first), end.min(last + 1));
+        if even {
+            start &= !1;
+            end = end.next_multiple_of(2).min(triangles);
+        }
+        if start >= end {
+            continue;
+        }
+        match runs.last_mut() {
+            Some(run) if start.saturating_sub(run.1) < RUN_GAP => run.1 = run.1.max(end),
+            _ => runs.push((start, end)),
+        }
+    }
+    if runs.is_empty() {
+        return whole;
+    }
+    while runs.len() > MOST_RUNS {
+        let at = (1..runs.len())
+            .min_by_key(|&at| runs[at].0 - runs[at - 1].1)
+            .unwrap_or(1);
+        let (_, end) = runs.remove(at);
+        runs[at - 1].1 = end;
+    }
+    let mut parts = Vec::with_capacity(2 * runs.len() + 1);
+    let mut at = 0;
+    for (start, end) in runs.into_iter().chain([(triangles, triangles)]) {
+        if start > at {
+            parts.push(Part {
+                first: at,
+                count: start - at,
+                fanned: true,
+            });
+        }
+        if end > start {
+            parts.push(Part {
+                first: start,
+                count: end - start,
+                fanned: false,
+            });
+        }
+        at = end;
+    }
+    parts
 }
 
 /// An encoder's run of an execution's commands where its host step fans the pass's triangles

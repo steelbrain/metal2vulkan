@@ -191,49 +191,49 @@
 //! - **Fan-out.** Drawn region by region, a draw runs its vertex function once per region of the
 //!   plan, which may hold thousands. Where a host step records an execution's commands
 //!   (`render/executions.rs`), under `RateMapRegionPolicy::FanOut` (the default) on a device that
-//!   enables `geometryShader`, `shaderClipDistance` and `vertexPipelineStoresAndAtomics`, a draw
-//!   of triangles filled, of one amplification, without a compensation or a band, whose pipeline
-//!   chooses no slice or viewport, over a map whose layers are alike and whose plan is a grid of
-//!   at most 128 columns and rows (`bind::fan_out::table`), is drawn once instead: its variant's
-//!   geometry stage (`VariantKey::region_fan_out`) emits a copy of each triangle for each region
-//!   it touches, through one viewport over the render area, each copy's window coordinates its
-//!   region viewport's and four clip distances keeping it to its region's pixels. Before the
-//!   pass, the step records the commands' draws once more as a probe whose geometry stage emits
-//!   nothing: for each draw it flags a triangle that crosses `w = 0` or touches more regions than
-//!   the fan-out's copies (each region widened by an eighth of a pixel), with the first and the
-//!   last triangle it flags, and counts the copies of the others. The probe is submitted on its
-//!   own and waited for (`WorkCounts::rate_map_probes`, its GPU time
+//!   enables `geometryShader`, `shaderClipDistance` and `vertexPipelineStoresAndAtomics`, a draw of
+//!   triangles filled, of one amplification, without a compensation or a band, whose pipeline
+//!   chooses no slice or viewport, over a map whose layers are alike and whose plan is a grid of at
+//!   most 128 columns and rows (`bind::fan_out::table`), is drawn once instead: its variant's
+//!   geometry stage (`VariantKey::region_fan_out`) emits a copy of each triangle for each region it
+//!   touches, through one viewport over the render area, each copy's window coordinates its region
+//!   viewport's and four clip distances keeping it to its region's pixels. Before the pass, the
+//!   step records the commands' draws once more as a probe whose geometry stage emits nothing: for
+//!   each draw it flags a triangle that crosses `w = 0` or touches more regions than the fan-out's
+//!   copies (each region widened by an eighth of a pixel), with the first and the last triangle it
+//!   flags and the blocks that hold one, and counts the copies of the others. The probe is
+//!   submitted on its own and waited for (`WorkCounts::rate_map_probes`, its GPU time
 //!   `WorkCounts::rate_map_probe_gpu_nanos`, the host's wait `rate_map_probe_wait_nanos`); then a
 //!   flagged draw (`WorkCounts::rate_map_flagged_draws`, its flagged triangles
-//!   `rate_map_flagged_triangles`) is drawn in parts where it is a list of
-//!   triangles of one instance whose pipeline reads no `[[primitive_id]]` and writes no memory
-//!   (`render/fan_out.rs`, **Parts**, `WorkCounts::rate_map_parted_draws`): its triangles from the
-//!   first flagged to the last region by region (`rate_map_parted_region_triangles`), those
-//!   before and after fanned out; another flagged draw is drawn region by region whole; and the
-//!   others are fanned out (`WorkCounts::rate_map_fanned_draws`), each in its command's place, so
-//!   a pixel's fragments keep their order: a pixel lies in one region. The probe also marks a draw
-//!   a triangle of which it does not flag touches more regions than few copies
-//!   (`bind::fan_out::FEW_COPIES`); a draw it marks none of is drawn, and so are a flagged
-//!   draw's parts fanned out, through the variant of that many copies (`RegionFanOut::DrawFew`;
+//!   `rate_map_flagged_triangles`) is drawn in parts where it is a list of triangles of one
+//!   instance whose pipeline reads no `[[primitive_id]]` and writes no memory (`render/fan_out.rs`,
+//!   **Parts**, `WorkCounts::rate_map_parted_draws`): its runs of blocks of 64 triangles that hold
+//!   a flagged one region by region, cut to the first and the last flagged triangle, at most four
+//!   (`rate_map_parted_region_triangles`, the runs `rate_map_region_runs`), the triangles before,
+//!   between and after them fanned out; another flagged draw is drawn region by region whole; and
+//!   the others are fanned out (`WorkCounts::rate_map_fanned_draws`), each in its command's place,
+//!   so a pixel's fragments keep their order: a pixel lies in one region. The probe also marks a
+//!   draw a triangle of which it does not flag touches more regions than few copies
+//!   (`bind::fan_out::FEW_COPIES`); a draw it marks none of is drawn, and so are a flagged draw's
+//!   parts fanned out, through the variant of that many copies (`RegionFanOut::DrawFew`;
 //!   `WorkCounts::rate_map_fanned_few_draws` counts the draws), whose geometry stage declares the
-//!   output of fewer vertices. A fanned-out draw's work is its vertices, its
-//!   triangles' geometry stage and three vertices per copy ([`fan_out_work`]), and it is never
-//!   cut into ranges. The probe stops at a command's barrier, and after a draw whose pipeline
-//!   writes memory, as it runs before every draw of the pass: the later commands are drawn region
-//!   by region. A pass whose attachments are memoryless or that uses a shadowed texture is not
-//!   probed, nor an execution whose commands record as several runs. `commit`'s settle of the
-//!   pass (`RenderExecution::settle`) begins the probe's and the fanned-out draws' variants and
+//!   output of fewer vertices. A fanned-out draw's work is its vertices, its triangles' geometry
+//!   stage and three vertices per copy ([`fan_out_work`]), and it is never cut into ranges. The
+//!   probe stops at a command's barrier, and after a draw whose pipeline writes memory, as it runs
+//!   before every draw of the pass: the later commands are drawn region by region. A pass whose
+//!   attachments are memoryless or that uses a shadowed texture is not probed, nor an execution
+//!   whose commands record as several runs. `commit`'s settle of the pass
+//!   (`RenderExecution::settle`) begins the probe's and the fanned-out draws' variants and
 //!   `VkPipeline`s on the device's pool beside the draws' own, so the step takes them made, or
 //!   waits for them (`WorkCounts::rate_map_fan_out_pipelines_ready`,
-//!   `rate_map_fan_out_pipelines_waited`), and makes none itself for the states the settle
-//!   foresaw, the regions variant a flagged draw takes included. The probe and the fanned-out
-//!   draws each upload the region table to the command buffer as they first bind it
-//!   (`WorkCounts::rate_map_fan_tables_uploaded`); the settle, which records nothing, uploads
-//!   none. A copy's window coordinates are computed in the geometry stage, so a pixel centre
-//!   within a rounding error of a triangle's edge may be covered by one route and not by the
-//!   other. The encoder's own draws,
-//!   and the commands `commit` records, are drawn region by region (`docs/FAST-PATHS.md`, known
-//!   gaps).
+//!   `rate_map_fan_out_pipelines_waited`), and makes none itself for the states the settle foresaw,
+//!   the regions variant a flagged draw takes included. The probe and the fanned-out draws each
+//!   upload the region table to the command buffer as they first bind it
+//!   (`WorkCounts::rate_map_fan_tables_uploaded`); the settle, which records nothing, uploads none.
+//!   A copy's window coordinates are computed in the geometry stage, so a pixel centre within a
+//!   rounding error of a triangle's edge may be covered by one route and not by the other. The
+//!   encoder's own draws, and the commands `commit` records, are drawn region by region
+//!   (`docs/FAST-PATHS.md`, known gaps).
 //! - **What the plan refuses** is `NotImplemented(RuntimeGap::RateMapRegions)`, naming the
 //!   compile layer's reason ([`RegionRefusal`]): a viewport of no extent or a flipped one, a
 //!   scissor as above, a plan past its bound or past the device's viewport limits, a pipeline whose
@@ -598,6 +598,11 @@ const PIECE_WORK: u64 = 1 << 26;
 /// **Pieces**): about 240 ns of an Iris Xe's GPU (ANV) per region drawn 16 at a time, the
 /// viewports' and scissors' setting among it.
 const REGION_DRAW_WORK: u64 = 512;
+
+/// The fewest triangles between two runs of a flagged draw drawn region by region that keep them
+/// apart (`render/fan_out.rs`, **Parts**): fewer cost each region less as vertices drawn with the
+/// runs, three a triangle, than the region draw a run of their own takes ([`REGION_DRAW_WORK`]).
+pub(super) const RUN_GAP: u32 = (REGION_DRAW_WORK / 3) as u32;
 
 /// The work a piece holds before the next command begins another ([`PIECE_WORK`]; a device
 /// test's own where it set one, [`set_piece_work`]).

@@ -2651,16 +2651,16 @@ impl RenderExecution {
             if !probing {
                 found.piece_before(encoder);
             }
-            // A draw the probe flagged: drawn in parts where it can be, its triangles from the
-            // first it flagged to the last region by region and the others fanned out, each part
-            // a draw a piece may begin before; else region by region whole (`render/fan_out.rs`,
+            // A draw the probe flagged: drawn in parts where it can be, its runs of blocks that
+            // hold a flagged triangle region by region and the others fanned out, each part a draw
+            // a piece may begin before; else region by region whole (`render/fan_out.rs`,
             // **Parts**).
             let fan = encoder.fan_out;
             let parts = match fan.and_then(|fan| fan.flagged) {
                 Some(flagged) => {
                     let parts = (encoder.pipeline.as_ref())
                         .and_then(|pipeline| in_parts(pipeline, &draw))
-                        .map(|(triangles, even)| fan_out::parts(flagged, triangles, even));
+                        .map(|(triangles, even)| fan_out::parts(&flagged, triangles, even));
                     if parts.is_none() {
                         encoder.fan_out = None;
                     }
@@ -2792,11 +2792,13 @@ impl RenderExecution {
                 run.end(place, fanned, writes);
                 let counts = &encoder.core.device().shared().counts;
                 match parts.is_some() {
-                    true => counts.rate_map_drawn_in_parts(
-                        (drawn.iter().filter(|(_, fanned)| !fanned))
-                            .map(|&(triangles, _)| u64::from(triangles))
-                            .sum(),
-                    ),
+                    true => {
+                        let by_regions = drawn.iter().filter(|(_, fanned)| !fanned);
+                        counts.rate_map_drawn_in_parts(
+                            by_regions.clone().map(|&(t, _)| u64::from(t)).sum(),
+                            by_regions.count() as u64,
+                        )
+                    }
                     false if fanned && !probing => {
                         let few =
                             (encoder.fan_out).is_some_and(|fan| fan.mode == RegionFanOut::DrawFew);
