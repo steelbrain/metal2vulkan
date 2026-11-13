@@ -78,6 +78,8 @@ mod completion_seen;
 mod completion_wakes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod compute;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod compute_create_bench;
 mod contexts;
 mod copied;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
