@@ -47,6 +47,16 @@ const READ_AT: ScissorRect = ScissorRect {
 };
 const READ_TEXELS: u64 = 10 * 6;
 
+/// The rows `rows` of the plane, every column, as a scissor.
+const fn rows(rows: std::ops::Range<u64>) -> ScissorRect {
+    ScissorRect {
+        x: 0,
+        y: rows.start,
+        width: WIDTH,
+        height: rows.end - rows.start,
+    }
+}
+
 /// The pipelines a pass draws with: a solid color over the plane, and the read of the plane's
 /// texel under each pixel.
 struct Tools {
@@ -93,10 +103,14 @@ impl Tools {
     }
 
     /// A pass loading and storing `texture`, in a command buffer of its own: where `solid` is
-    /// given, a draw of it (every channel) over the whole texture and a barrier over the render
-    /// targets; then a draw over the whole texture through [`READ_AT`] that writes the texture's
-    /// texel under each pixel, as it reads it. The work counts before and after it.
-    fn pass(&self, texture: &Texture, solid: Option<u8>) -> (WorkCounts, WorkCounts) {
+    /// given, a draw of its value (every channel) through its scissor and a barrier over the
+    /// render targets; then a draw over the whole texture through [`READ_AT`] that writes the
+    /// texture's texel under each pixel, as it reads it. The work counts before and after it.
+    fn pass(
+        &self,
+        texture: &Texture,
+        solid: Option<(u8, ScissorRect)>,
+    ) -> (WorkCounts, WorkCounts) {
         let device = self.queue.device();
         let before = device.work_counts();
         let mut pass = RenderPassDescriptor::new();
@@ -107,8 +121,9 @@ impl Tools {
         let command_buffer = self.queue.command_buffer().unwrap();
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
         let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
-        if let Some(value) = solid {
+        if let Some((value, scissor)) = solid {
             encoder.set_render_pipeline_state(&self.solid).unwrap();
+            encoder.set_scissor_rect(scissor).unwrap();
             encoder.set_vertex_bytes(&corners, 0).unwrap();
             let unorm = f32::from(value) / 255.0;
             let rgba = bytes_of(&[unorm; 4], f32::to_le_bytes);
@@ -148,11 +163,12 @@ impl Tools {
 struct Read {
     /// `WorkCounts::shadow_texels_copied_in`.
     copied_in: u64,
-    /// `WorkCounts::own_pixel_reads`, `attachment_reads_through_copies` and
-    /// `attachment_read_splits`.
+    /// `WorkCounts::own_pixel_reads`, `attachment_reads_through_copies`,
+    /// `attachment_read_splits` and `attachment_read_splits_spared`.
     own_pixel: u64,
     through_copies: u64,
     splits: u64,
+    spared: u64,
 }
 
 fn read((before, after): (WorkCounts, WorkCounts)) -> (Read, u64) {
@@ -162,6 +178,7 @@ fn read((before, after): (WorkCounts, WorkCounts)) -> (Read, u64) {
         own_pixel: delta(|c| c.own_pixel_reads),
         through_copies: delta(|c| c.attachment_reads_through_copies),
         splits: delta(|c| c.attachment_read_splits),
+        spared: delta(|c| c.attachment_read_splits_spared),
     };
     (read, delta(|c| c.reading_draws_snapshotted))
 }
@@ -207,12 +224,14 @@ fn a_reader_of_its_own_pass_s_target_over_private_bytes_copies_in_what_it_reads(
         own_pixel: 1,
         through_copies: 1,
         splits: 0,
+        spared: 0,
     };
     let snapshot = Read {
         copied_in: 0,
         own_pixel: 0,
         through_copies: 0,
         splits: 0,
+        spared: 0,
     };
     // With no barrier: the copy in, or a snapshot (the module docs).
     let unordered = |snapshotted: u64| match snapshotted {
@@ -242,7 +261,7 @@ fn a_reader_of_its_own_pass_s_target_over_private_bytes_copies_in_what_it_reads(
         "the read took the fill"
     );
     // A draw of 0x99 over every texel, a barrier, and the read: the draw's texels everywhere.
-    let (moved, snapshotted) = read(tools.pass(&texture, Some(0x99)));
+    let (moved, snapshotted) = read(tools.pass(&texture, Some((0x99, rows(0..HEIGHT)))));
     eprintln!(
         "ATTACHED-READ-STANDING: after a draw and a barrier: {moved:?}, snapshotted {snapshotted}"
     );
@@ -257,5 +276,89 @@ fn a_reader_of_its_own_pass_s_target_over_private_bytes_copies_in_what_it_reads(
     assert!(
         rows_hold(&tools.bytes(&buffer), |_| 0x99),
         "the read took the draw's texels"
+    );
+}
+
+/// A read after a draw and a barrier inside its instance, where the draw drew none of the texels
+/// the read reads (rows 10 to 16, the read's rows 3 to 9 with its helpers'), stays in the
+/// instance and reads the copy taken before it, which holds them as a split's copy would
+/// (`WorkCounts::attachment_read_splits_spared`); one where the draw drew some of them (rows 6 to
+/// 12) splits the pass and reads the draw's texels there. Each reads through a snapshot, with no
+/// copy or split, where the device reads so.
+#[test]
+fn a_reader_after_a_barrier_of_texels_its_instance_never_drew_spares_the_split() {
+    let scratch = Scratch::new("attached-read-spared");
+    let device = device(&scratch.0);
+    let settled = device.settle_in_place_checks(Duration::from_secs(120));
+    let tools = Tools::new(&device);
+    let buffer = device
+        .new_buffer(LENGTH, ResourceOptions::private())
+        .unwrap();
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, WIDTH, HEIGHT, false);
+    descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+    let plane = IoSurfacePlane::new(0, ROW, true);
+    let texture = (buffer.new_texture_with_iosurface_plane(&descriptor, plane)).unwrap();
+    assert!(
+        texture.shadow().is_none(),
+        "the plane's image aliases its bytes (in-place checks settled: {settled})"
+    );
+    // Row `y` holds the byte 0x20 + y in every channel.
+    let first = |y: u64| 0x20 + y as u8;
+    for y in 0..HEIGHT {
+        tools.fill(&buffer, y * ROW..(y + 1) * ROW, first(y));
+    }
+    let snapshot = Read {
+        copied_in: 0,
+        own_pixel: 0,
+        through_copies: 0,
+        splits: 0,
+        spared: 0,
+    };
+    let (moved, snapshotted) = read(tools.pass(&texture, Some((0x99, rows(10..HEIGHT)))));
+    eprintln!("ATTACHED-READ-SPARED: apart from the draw: {moved:?}, snapshotted {snapshotted}");
+    let apart = match snapshotted {
+        0 => Read {
+            copied_in: READ_TEXELS,
+            own_pixel: 1,
+            through_copies: 1,
+            splits: 0,
+            spared: 1,
+        },
+        _ => snapshot,
+    };
+    assert_eq!(
+        moved, apart,
+        "the read apart from the draw stays in its instance"
+    );
+    let drawn = |y: u64| match y >= 10 {
+        true => 0x99,
+        false => first(y),
+    };
+    assert!(
+        rows_hold(&tools.bytes(&buffer), drawn),
+        "the read took the texels from before the pass, the draw wrote its rows"
+    );
+    let (moved, snapshotted) = read(tools.pass(&texture, Some((0x55, rows(6..12)))));
+    eprintln!("ATTACHED-READ-SPARED: over the draw: {moved:?}, snapshotted {snapshotted}");
+    let over = match snapshotted {
+        0 => Read {
+            copied_in: READ_TEXELS,
+            own_pixel: 1,
+            through_copies: 1,
+            splits: 1,
+            spared: 0,
+        },
+        _ => snapshot,
+    };
+    assert_eq!(moved, over, "the read over the draw splits the pass");
+    let drawn = |y: u64| match y {
+        6..12 => 0x55,
+        12.. => 0x99,
+        _ => first(y),
+    };
+    assert!(
+        rows_hold(&tools.bytes(&buffer), drawn),
+        "the read took the draw's texels over its rows, those from before the pass elsewhere"
     );
 }

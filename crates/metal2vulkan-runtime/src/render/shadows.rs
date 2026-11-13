@@ -430,6 +430,21 @@ impl InstanceShadows {
         self.clears.iter().any(|&(cleared, _)| cleared == key)
     }
 
+    /// Whether its draws may have changed the truth of `copies` other than as a color attachment
+    /// of the pass: a draw wrote through a shadowed texture, or wrote bytes or an image that meet
+    /// the truth ([`ShadowCopies::meets`]), through the device's aliases of them too.
+    pub(super) fn writes_truth(&self, device: &Device, copies: &ShadowCopies) -> bool {
+        if self.shadows.iter().any(|shadow| shadow.writes) {
+            return true;
+        }
+        let writes: Vec<Use<ResourceKey>> = (self.uses())
+            .filter(|used| !used.write.is_empty())
+            .collect();
+        let augmented = device.shared().aliases.augment(&writes);
+        let writes = augmented.as_deref().unwrap_or(&writes);
+        writes.iter().any(|used| copies.meets(used))
+    }
+
     /// How many uses [`uses`](Self::uses) gives.
     fn uses_len(&self) -> usize {
         let bytes: usize = self.held().iter().map(|(_, ranges)| ranges.len()).sum();
@@ -631,8 +646,16 @@ pub(super) fn attachments_shadowed(layout: &PassLayout) -> bool {
 /// fragment's samples outside the scissor rectangle "will have their coverage set to 0" (the
 /// Fragment Operations chapter's Scissor Test).
 fn bounded_color(color: &ColorTarget, layout: &PassLayout) -> bool {
+    color.load == LoadAction::Load && drawn_alone(color, layout)
+}
+
+/// Whether a render pass instance of a pass of `layout` that loads `color` (as the encoder set it
+/// in the pass's first instance; every later instance loads it, `render_target`'s `load_at`)
+/// changes a texel of it only inside its draws' scissors, at the texel of the pixel: as
+/// [`bounded_color`], a single-sampled color it resolves nowhere and renders itself, the whole of
+/// a one-level, one-slice 2D texture.
+pub(super) fn drawn_alone(color: &ColorTarget, layout: &PassLayout) -> bool {
     layout.samples == 1
-        && color.load == LoadAction::Load
         && color.resolve.is_none()
         && color.copied_resolve.is_none()
         && color.stand_in.is_none()

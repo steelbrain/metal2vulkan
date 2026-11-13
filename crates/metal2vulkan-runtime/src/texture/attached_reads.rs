@@ -62,7 +62,15 @@
 //!   (`render_target::between_draws`), so a draw after it that samples the texture records into
 //!   a new instance (`render.rs`, `WorkCounts::attachment_read_splits`), before which the copy
 //!   is taken: it holds every texel the draws before the barrier wrote, and those of the draws
-//!   between the barrier and it, which Metal does not order before it.
+//!   between the barrier and it, which Metal does not order before it. Not where the instance
+//!   drew none of the texels the draw reads (`render.rs`'s `reads_what_the_instance_drew`,
+//!   `WorkCounts::attachment_read_splits_spared`): in an instance of draws alone, each color the
+//!   texture presents one the instance loads and changes inside its draws' scissors alone
+//!   (`render/shadows.rs`'s `drawn_alone`), no other write of the texture's truth among its
+//!   draws, and no rectangle its draws drew meeting the texels the draw reads (those around its
+//!   scissors where it reads the texture at its fragments' own pixels alone, below; else every
+//!   one). The copy taken before the instance then holds each of them as the split's would, and
+//!   the draw stays in the instance and reads it.
 //! - **After a memory barrier before the pass's first draw.** Such a barrier orders the pass's
 //!   load actions before the draws after it (`fence.rs`): a draw after it that samples the
 //!   texture of a color the pass clears ([`Texture::cleared_in`]) reads the clear on a Mac2 GPU,
@@ -315,6 +323,16 @@ impl Texture {
     /// [`attached_in`](Self::attached_in) of the pass whose color attachments `colors` read.
     pub(crate) fn attached_among(&self, colors: &AttachedColors) -> bool {
         self.attached_levels(colors, |_| true).next().is_some()
+    }
+
+    /// The indices of the color attachments among `colors` that render the texture at a level
+    /// and layer it presents, as [`attached_among`](Self::attached_among) tells.
+    pub(crate) fn attached_colors<'s>(
+        &'s self,
+        colors: &'s AttachedColors,
+    ) -> impl Iterator<Item = usize> + 's {
+        self.attached_levels(colors, |_| true)
+            .map(|(index, _)| index)
     }
 
     /// [`cleared_in`](Self::cleared_in) of the pass whose color attachments `colors` read.

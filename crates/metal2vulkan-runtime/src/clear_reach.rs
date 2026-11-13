@@ -645,6 +645,19 @@ impl DrawnArea {
         }
     }
 
+    /// Whether a pixel of the area may lie inside `area`, `[x0, y0, x1, y1)` (`None` for every
+    /// pixel): one of its rectangles meets it, or it bounds nothing.
+    pub(super) fn meets(&self, area: Option<[u32; 4]>) -> bool {
+        if self.whole {
+            return true;
+        }
+        let Some([b0, b1, b2, b3]) = area else {
+            return self.rects.len() > 0;
+        };
+        (self.rects.iter())
+            .any(|&[a0, a1, a2, a3]| a0.max(b0) < a2.min(b2) && a1.max(b1) < a3.min(b3))
+    }
+
     /// The rectangle `[x0, y0, x1, y1)` bounding every rectangle, half-open in the render area's
     /// pixels: `None` where the area bounds nothing, or holds no rectangle.
     pub(super) fn bounds(&self) -> Option<[u32; 4]> {

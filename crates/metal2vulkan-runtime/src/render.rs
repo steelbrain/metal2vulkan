@@ -7615,38 +7615,8 @@ impl RenderLowering {
             if used.writes || !used.copies.cuts() {
                 continue;
             }
-            let key = used.copies.shadow_key;
-            // The texture whose shadow it is, and whether each of its bindings reads so.
-            let mut texture = None;
-            let mut own = true;
-            for write in &plan.descriptors {
-                let slot = match &write.source {
-                    WriteSource::Texture { slot, .. }
-                    | WriteSource::CombinedImageSampler {
-                        image: ImageSource::Texture { slot, .. },
-                        ..
-                    } => slot,
-                    _ => continue,
-                };
-                let table = match slot.stage {
-                    Stage::Vertex => &self.vertex,
-                    Stage::Fragment => &self.fragment,
-                    Stage::Object => &self.object,
-                    Stage::Mesh => &self.mesh,
-                    _ => continue,
-                };
-                let Some(bound) = table.textures.get(&slot.index) else {
-                    continue;
-                };
-                if bound.usage_shadow_copies().map(|c| c.shadow_key) != Some(key) {
-                    continue;
-                }
-                own &= slot.stage == Stage::Fragment
-                    && write.ty != metal2vulkan::vk::DescriptorType::STORAGE_IMAGE
-                    && fragment.own_pixel_textures.contains(&slot.index);
-                texture = Some(bound);
-            }
-            let Some(texture) = texture.filter(|t| own && t.attached_in(&self.layout)) else {
+            let texture = self.read_at_own_pixels(plan, fragment, used.copies.shadow_key);
+            let Some(texture) = texture.filter(|t| t.attached_in(&self.layout)) else {
                 continue;
             };
             let Some(loads) = own_pixel_loads(drawn, texture) else {
@@ -7656,6 +7626,119 @@ impl RenderLowering {
             bounded = true;
         }
         bounded
+    }
+
+    /// The texture whose usage shadow is `key` that a draw of `plan` binds in its tables, where
+    /// every binding of it there is a sampled one of a fragment slot that `fragment` reads at the
+    /// fragment's own pixel alone (`StageModule::own_pixel_textures`); `None` where it binds none
+    /// or one is read otherwise.
+    fn read_at_own_pixels(
+        &self,
+        plan: &BindingPlan,
+        fragment: &metal2vulkan::pipeline::StageModule,
+        key: ResourceKey,
+    ) -> Option<&Texture> {
+        let mut texture = None;
+        let mut own = true;
+        for write in &plan.descriptors {
+            let slot = match &write.source {
+                WriteSource::Texture { slot, .. }
+                | WriteSource::CombinedImageSampler {
+                    image: ImageSource::Texture { slot, .. },
+                    ..
+                } => slot,
+                _ => continue,
+            };
+            let table = match slot.stage {
+                Stage::Vertex => &self.vertex,
+                Stage::Fragment => &self.fragment,
+                Stage::Object => &self.object,
+                Stage::Mesh => &self.mesh,
+                _ => continue,
+            };
+            let Some(bound) = table.textures.get(&slot.index) else {
+                continue;
+            };
+            if bound.usage_shadow_copies().map(|c| c.shadow_key) != Some(key) {
+                continue;
+            }
+            own &= slot.stage == Stage::Fragment
+                && write.ty != metal2vulkan::vk::DescriptorType::STORAGE_IMAGE
+                && fragment.own_pixel_textures.contains(&slot.index);
+            texture = Some(bound);
+        }
+        texture.filter(|_| own)
+    }
+
+    /// Whether a draw of a plan of `facts` and `compiled` that samples a texture presenting a
+    /// color attachment of the pass, after a memory barrier inside the current instance, may read
+    /// a texel the instance changed (`texture/attached_reads.rs`, after a memory barrier): else
+    /// the copy taken before the instance holds every texel it reads as the copy after a split
+    /// would, and it stays in the instance (`WorkCounts::attachment_read_splits_spared`). It may
+    /// unless the instance is one of draws alone (not continuing another, no execution, no
+    /// stand-in of another format) in a pass of no rasterization-rate map or views, and every such
+    /// texture has a usage shadow, its draws wrote its truth only as the colors it presents,
+    /// which change only inside the draws' scissors there (`render/shadows.rs`'s
+    /// `drawn_alone`, loaded), and the instance's drawn area (`clear_reach::DrawnArea`) meets
+    /// none of the texels the draw reads: those around its scissors where it reads the texture at
+    /// its fragments' own pixels alone (as `bound_own_pixel_reads` bounds them), else every one.
+    fn reads_what_the_instance_drew(
+        &self,
+        device: &Device,
+        facts: &PlanFacts,
+        (plan, compiled): (&BindingPlan, &metal2vulkan::pipeline::RenderPipeline),
+    ) -> bool {
+        let current = &self.current;
+        if current.continues
+            || !current.pieces.is_empty()
+            || !current.reformats.is_empty()
+            || self.rate_map.is_some()
+            || plan.views.view_mask != 0
+        {
+            return true;
+        }
+        let fragment =
+            (compiled.stages.iter()).find(|m| m.stage == metal2vulkan::vk::ShaderStage::FRAGMENT);
+        let selects =
+            compiled.graphics.writes_viewport_index || self.amplification.offsets_viewports();
+        let mut scissors = [vk::Rect2D::default(); MAX_VIEWPORTS];
+        let rects = self
+            .state
+            .vk_scissors_in(&self.scissors, selects, &mut scissors);
+        let drawn = scissors_bound(rects);
+        let first = self.earlier.is_empty();
+        let colors = AttachedColors::of(&self.layout);
+        for texture in self.sampled_textures(facts) {
+            let mut presented = texture.attached_colors(&colors).peekable();
+            if presented.peek().is_none() {
+                continue;
+            }
+            let loaded_alone = presented.all(|index| {
+                (self.layout.colors.get(index).and_then(Option::as_ref)).is_some_and(|color| {
+                    (color.load == LoadAction::Load || !first)
+                        && shadows::drawn_alone(color, &self.layout)
+                })
+            });
+            let Some(copies) = texture.usage_shadow_copies() else {
+                return true;
+            };
+            if !loaded_alone || current.shadows.writes_truth(device, &copies) {
+                return true;
+            }
+            let own = fragment.and_then(|f| self.read_at_own_pixels(plan, f, copies.shadow_key));
+            let reads = match own {
+                // A draw of no pixel reads nothing at its own pixels.
+                Some(texture) => match drawn.and_then(|drawn| own_pixel_loads(drawn, texture)) {
+                    Some(reads) => Some(reads),
+                    None => continue,
+                },
+                None => None,
+            };
+            if current.drawn.meets(reads) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Whether a draw of a plan of `facts` samples, at a slot of its tables, a texture that
@@ -9244,7 +9327,13 @@ impl RenderLowering {
             .then(|| self.cleared_copies(&facts, call))
             .flatten();
         let behind_loads = behind_loads && copy_clears.is_none();
-        let after_barrier = (attached && (self.current.barriers || self.barrier)) || behind_loads;
+        // A draw after a barrier inside the instance that reads nothing the instance drew reads
+        // the copy taken before the instance, which holds what a split's would.
+        let inside = attached && self.current.barriers && !self.barrier && !behind_loads;
+        let spared =
+            inside && !self.reads_what_the_instance_drew(&device, &facts, (&*plan, compiled));
+        let after_barrier =
+            (attached && (self.current.barriers || self.barrier) && !spared) || behind_loads;
         let snapshot_split = snapshot.as_ref().is_some_and(|w| self.snapshot_apart(w));
         let storage_colors = self.storage_colors(&facts);
         let apart = snapshot_split || storage_colors & self.current.feedback.0 != 0;
@@ -9277,6 +9366,9 @@ impl RenderLowering {
         }
         if after_barrier && matches!(next, Next::New { split: true, .. }) {
             device.shared().counts.attachment_read_split();
+        }
+        if spared {
+            device.shared().counts.attachment_read_split_spared();
         }
         match &snapshot {
             Some(wanted) if wanted.in_place => device.shared().counts.reading_draw_in_place(),

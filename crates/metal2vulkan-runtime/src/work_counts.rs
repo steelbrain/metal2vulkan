@@ -624,6 +624,7 @@ pub(crate) struct Counters {
     alpha_textures_held_in_red: AtomicU64,
     view_shadows: AtomicU64,
     attachment_read_splits: AtomicU64,
+    attachment_read_splits_spared: AtomicU64,
     attachment_read_clears: AtomicU64,
     fetch_draw_barriers: AtomicU64,
     reading_draws_snapshotted: AtomicU64,
@@ -4794,6 +4795,14 @@ impl Counters {
     /// pass recorded into a new instance (`texture/attached_reads.rs`).
     pub(crate) fn attachment_read_split(&self) {
         self.attachment_read_splits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A draw that samples a color attachment's texture after a memory barrier inside its render
+    /// pass instance, which drew none of the texels it reads, stayed in the instance
+    /// (`texture/attached_reads.rs`).
+    pub(crate) fn attachment_read_split_spared(&self) {
+        self.attachment_read_splits_spared
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A draw that samples a color its render pass clears, after a memory barrier before the
@@ -9228,6 +9237,11 @@ pub struct WorkCounts {
     /// (`texture/attached_reads.rs`). Those of the second kind that `attachment_read_clears`
     /// counts split nothing.
     pub attachment_read_splits: u64,
+    /// Draws that sample a color attachment's texture after a memory barrier inside their render
+    /// pass instance, each staying in the instance in place of a split, as nothing the instance
+    /// drew meets the texels it reads: the copy taken before the instance holds every one of them
+    /// as a split's would (`texture/attached_reads.rs`). Not in `attachment_read_splits`.
+    pub attachment_read_splits_spared: u64,
     /// Draws that sample a color their render pass clears after a memory barrier before its
     /// first draw, before any draw of the pass, that read the color's copy in the pass's first
     /// instance, the copy cleared to the clear before the pass, instead of splitting it: one per
@@ -9265,11 +9279,13 @@ pub struct WorkCounts {
     /// the feedback loop layout they need (`render/snapshot.rs`, `render/inline_first.rs`).
     pub snapshot_inline_splits: u64,
     /// Draws that read a texture of their render pass after a memory barrier at their own pixels
-    /// and took the split (`attachment_read_splits`), by why the snapshot did not serve them
-    /// (`render/snapshot.rs`, `SplitReason`; the log names each reason once a device). This one:
-    /// the function's read reaches what no snapshot serves (`StageModule::snapshot_textures`: a
-    /// branch, a sample, a derivative, a store, or the function writes memory), and the fields
-    /// below it say which (`StageModule::snapshot_refusals`).
+    /// and took the split (`attachment_read_splits`), or were spared it where their instance drew
+    /// none of what they read (`attachment_read_splits_spared`), by why the snapshot did not
+    /// serve them (`render/snapshot.rs`, `SplitReason`; the log names each reason once a device).
+    /// This one: the function's read reaches what no snapshot serves
+    /// (`StageModule::snapshot_textures`: a branch, a sample, a derivative, a store, or the
+    /// function writes memory), and the fields below it say which
+    /// (`StageModule::snapshot_refusals`).
     pub reading_draws_split_unreadable_own_pixel: u64,
     /// Of `reading_draws_split_unreadable_own_pixel`, those of a slot whose read decides a branch
     /// or a switch, beside a branch that only decides whether the invocation demotes itself
@@ -10849,6 +10865,8 @@ impl Device {
                 .load(Ordering::Relaxed),
             view_shadows: counters.view_shadows.load(Ordering::Relaxed),
             attachment_read_splits: counters.attachment_read_splits.load(Ordering::Relaxed),
+            attachment_read_splits_spared: (counters.attachment_read_splits_spared)
+                .load(Ordering::Relaxed),
             attachment_read_clears: counters.attachment_read_clears.load(Ordering::Relaxed),
             fetch_draw_barriers: counters.fetch_draw_barriers.load(Ordering::Relaxed),
             reading_draws_snapshotted: counters.reading_draws_snapshotted.load(Ordering::Relaxed),
