@@ -59,7 +59,7 @@ use std::collections::BTreeMap;
 use crate::air::ir::{BlockId, Idx, InstKind, Value, ValueId};
 use crate::budget::Meter;
 use crate::device::subgroup::Tier;
-use crate::error::{Error, Location};
+use crate::error::{Error, Feature, Location, Unsupported};
 use crate::graph::LoopForest;
 use crate::lower::select::SelectCx;
 use crate::lower::strategy::{FamilyStrategy, Strategy};
@@ -115,7 +115,7 @@ pub struct Predication {
     /// (`RuntimeFact::PredicationVote`), because a synchronization lies in a loop. The emulated
     /// tier votes in its scratch's first word.
     pub vote_word: bool,
-    /// An object function's partial threadgroups (`MeshPlan::partial_groups`): the walk starts
+    /// An object function's or kernel's partial threadgroups (`MeshPlan::partial_groups`): the walk starts
     /// with `live` set only where the invocation is one of its threadgroup's threads
     /// (`dispatch::emit_entry`), rather than everywhere.
     pub partial_groups: bool,
@@ -248,8 +248,8 @@ pub const VOTE_BYTES: u32 = 4;
 /// caller already holds it (`simd::partly_live`, which keeps its ledger bytes); otherwise it is
 /// computed here, only for a function with such a barrier, and released. A function whose
 /// workgroup barriers are all in uniform blocks keeps `predication: None` and is emitted as before,
-/// but for an object function of partial threadgroups (`MeshPlan::partial_groups`): one with any
-/// workgroup barrier is walked predicated from its threadgroup's threads
+/// but for an object function or kernel of partial threadgroups (`MeshPlan::partial_groups`): one
+/// with any workgroup barrier is walked predicated from its threadgroup's threads
 /// ([`Predication::partial_groups`]).
 ///
 /// A synchronization in a loop makes the walk vote (`structurize::emit::CodeEmitter::vote`),
@@ -258,7 +258,9 @@ pub const VOTE_BYTES: u32 = 4;
 /// workgroup memory (`mesh::workgroup_limit`, else `ThreadgroupMemorySize`); an object function's
 /// arena fact counts the word (`RuntimeFact::ObjectThreadgroupArena`). An object function whose
 /// barriers are uniform and whose word does not fit runs no partial threadgroup instead
-/// (`MeshPlan::partial_groups` cleared, so the binder refuses such a draw).
+/// (`MeshPlan::partial_groups` cleared, so the binder refuses such a draw), and a kernel's
+/// partial-threadgroups variant (`LoweringInputs::partial_threadgroups`) is refused,
+/// `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`.
 pub fn barriers(
     cx: &mut SelectCx<'_>,
     strategy: &[Option<Strategy>],
@@ -277,8 +279,10 @@ pub fn barriers(
     if !strategy.iter().flatten().any(|s| set.holds(s)) {
         return Ok(());
     }
-    // A partial object threadgroup's invocations past its threads walk to every barrier.
-    let partial = cx.stage == Stage::Object && cx.families.mesh.partial_groups;
+    // A partial threadgroup's invocations past its threads walk to every barrier: an object
+    // function's, and a kernel's under `LoweringInputs::partial_threadgroups`.
+    let partial =
+        matches!(cx.stage, Stage::Object | Stage::Kernel) && cx.families.mesh.partial_groups;
     let computed;
     let u = match given {
         Some(u) => u,
@@ -321,8 +325,14 @@ pub fn barriers(
         match crate::lower::mesh::workgroup_limit(cx).check(required) {
             Ok(()) => {}
             // Uniform barriers need the walk only for partial threadgroups, which then stay
-            // refused.
+            // refused: an object function's draw by the binder, a kernel's variant here, so its
+            // dispatches keep their exact split.
             Err(Error::Unsupported(_)) if !divergent => {
+                if cx.stage == Stage::Kernel {
+                    return Err(
+                        Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into(),
+                    );
+                }
                 cx.families.mesh.partial_groups = false;
                 return Ok(());
             }

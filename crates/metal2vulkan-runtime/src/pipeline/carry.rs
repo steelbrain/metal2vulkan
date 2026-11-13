@@ -287,6 +287,7 @@ impl Program {
             call_flat_refused: AtomicBool::new(false),
             replay_refused: AtomicBool::new(false),
             folded_refused: AtomicBool::new(false),
+            partial_refused: AtomicBool::new(false),
             added_unsupported: self.added_unsupported,
             label: self.label.clone(),
             pieces,

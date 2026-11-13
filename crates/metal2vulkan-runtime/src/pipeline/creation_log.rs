@@ -11,8 +11,10 @@
 //!   compute state's pipelines differ by their specialization alone (the threadgroup size, an
 //!   edge region), so each line prints it whole: no numbering, no diff and no split. A kernel
 //!   whose compile is refused, at its state's creation or at a dispatch's variant, takes a line of
-//!   its own ([`compute_refused`]): its function name, the refusal, and its `descriptor:`. The
-//!   rest of this log is the render pipelines'.
+//!   its own ([`compute_refused`]): its function name, the refusal, and its `descriptor:`. A
+//!   variant a dispatch asks for in passing, whose refusal leaves the dispatch on another form (a
+//!   flat, folded or partial-threadgroups variant), says `declined` there in place of `refused`:
+//!   the state made, and the dispatch runs. The rest of this log is the render pipelines'.
 //!
 //! - **What it prints.** One line per render `VkPipeline` a device makes for a draw (or a host
 //!   step's draw), through the device's message sink at `Info` severity (id name
@@ -752,26 +754,42 @@ pub(crate) fn compute(
 }
 
 /// Deliver the line of a compute pipeline of `function` whose compile `device` refused with
-/// `error`, at its creation or at a dispatch's variant (the module's documentation, "Compute
-/// pipelines"): the kernel's function name, the refusal, and what the kernel was made from, where
-/// the log is on.
+/// `error`, at its creation (`variant` `None`) or at a dispatch's variant (the module's
+/// documentation, "Compute pipelines"): the kernel's function name, the refusal, and what the
+/// kernel was made from, where the log is on. The refusal of a variant a dispatch asks for in
+/// passing ([`probed`]) is the probe's answer, `declined`.
 pub(crate) fn compute_refused(
     device: &Device,
     function: &FunctionDescriptor,
+    variant: Option<&VariantKey>,
     error: &metal2vulkan::error::Error,
 ) {
     if !enabled() {
         return;
     }
+    let declined =
+        variant.is_some_and(probed) && matches!(error, metal2vulkan::error::Error::Unsupported(_));
+    let outcome = match declined {
+        true => "a variant asked for in passing declined, the dispatch keeps another form",
+        false => "refused",
+    };
     deliver(
         device,
         format!(
-            "metal2vulkan: pipeline creation: compute pipeline `{}`: refused: {error:?}; \
+            "metal2vulkan: pipeline creation: compute pipeline `{}`: {outcome}: {error:?}; \
              descriptor: {}",
             function.function.info().name,
             super::render::logged_function(function),
         ),
     );
+}
+
+/// Whether a dispatch asks for the variant of `key` in passing, a refusal of it leaving the
+/// dispatch on another form: a flat variant (`ComputePipelineState::settle_flat` and
+/// `replay_variant`), a folded one (`settle_folded`) or a partial-threadgroups one
+/// (`settle_partial`).
+fn probed(key: &VariantKey) -> bool {
+    key.flat_grid || key.folded_groups || key.partial_threadgroups
 }
 
 /// Hand `line` to the device's message sink, else to stderr.

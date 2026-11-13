@@ -49,7 +49,8 @@
 //! - `region[0].w`: Metal's nominal threads per threadgroup `L`, packed as
 //!   `(Lx − 1) | (Ly − 1) << 10 | (Lz − 1) << 20` (each axis is at most 1024 in Metal);
 //! - `region[1].xyz`: Metal's `threads_per_grid`; `region[1].w` is 0, or [`NONUNIFORM`] for a
-//!   partial object threadgroup's draw (below).
+//!   partial object threadgroup's draw or a kernel's ragged grid on its partial-threadgroups
+//!   variant (below).
 //!
 //! With `MultiRegion = 0` (single-region `Threadgroups` and every `ThreadgroupsIndirect`) the push
 //! field is not read: the region base is 0, `L = (sx, sy, sz)`, `threadgroups_per_grid =
@@ -82,6 +83,19 @@
 //! reaches each barrier and runs nothing else of the body, where a returned one would leave the
 //! others at a barrier it never reaches, which Vulkan leaves undefined.
 //!
+//! **Partial threadgroups of a kernel** (`LoweringInputs::partial_threadgroups`). A kernel's
+//! `dispatchThreads` whose grid is not a whole number of threadgroups runs the same way on the
+//! kernel's partial-threadgroups variant: the binder dispatches the threadgroups its threads fill,
+//! rounded up, at the call's size `L`, per chunk of group counts, each region `MultiRegion` 1 with
+//! `region[1].w` [`NONUNIFORM`], and the kernel's last threadgroup along an axis answers Metal's
+//! partial threadgroup as an object function's does (measured on an M3 Max, macOS 27.0.1, as for
+//! the split it replaces: `threads_per_threadgroup` is the threads left), its invocations past
+//! them returning before the body or walking it predicated. Its simdgroups are `lin`'s, so the
+//! last one of a partial threadgroup is Metal's partial simdgroup: its lanes past the threads are
+//! inactive, and every lane read ballots its live lanes (`simd::partly_live`). One variant of
+//! the call's threadgroup size runs every ragged grid, where the split runs an edge region of each
+//! remainder, a `VkPipeline` of its own.
+//!
 //! **Flat grids**. A flat variant (`LoweringInputs::flat_grid`, of a device replay or not) of a
 //! kernel that does not observe its threadgroup partition runs any grid in threadgroups of its own
 //! local size `N = sx·sy·sz`, dispatched `(nx, ny, nz)`: invocation `((wz · ny + wy) · nx + wx) ·
@@ -111,7 +125,8 @@
 //! `IndirectGroupCount` (any kernel may be dispatched indirectly, and the planner clamps GPU-written
 //! counts); a flattened kernel on `LocalSizeConstraint{multiple}` (the tier's subgroup size); a
 //! kernel reading grid builtins on `DispatchGrid`; a flat grid on `DispatchGrid` and `FlatGrid`; a
-//! folded variant on `DispatchGrid` and `FoldedGroups`. A threadgroup-memory length is a
+//! folded variant on `DispatchGrid` and `FoldedGroups`; a kernel's partial-threadgroups variant on
+//! `DispatchGrid` and `PartialThreadgroups`. A threadgroup-memory length is a
 //! `ThreadgroupMemoryLength{index}` specialization ([`threadgroup_length`]), which the arena
 //! lowering declares through this module.
 //!
@@ -435,9 +450,10 @@ pub struct DispatchPlan {
     /// `NumWorkgroups` unless an axis's threads wrap, as an indirect draw's may (Metal runs every
     /// threadgroup of it and reports the wrapped grid).
     pub object_grid: bool,
-    /// An object function (`lower::mesh::plan_partial_groups`): where its region says so
-    /// ([`NONUNIFORM`]), its threadgroup runs only the threads Metal's partial threadgroup has (the
-    /// module docs). It declares `MultiRegion` and reads the region whatever builtins it reads.
+    /// An object function, or a kernel under `LoweringInputs::partial_threadgroups`
+    /// (`lower::mesh::plan_partial_groups`): where its region says so ([`NONUNIFORM`]), its
+    /// threadgroup runs only the threads Metal's partial threadgroup has (the module docs). It
+    /// declares `MultiRegion` and reads the region whatever builtins it reads.
     pub partial_groups: bool,
 }
 
@@ -448,6 +464,11 @@ pub const FLAT_GRID_WORDS: u64 = 400;
 /// The words a folded variant adds: its threadgroup's index, position, and early return, derived
 /// once for the return and once more for each grid position parameter.
 pub const FOLDED_GROUPS_WORDS: u64 = 500;
+
+/// The words a kernel's partial threadgroups add per derivation of their threads (the region's
+/// flag, the threadgroup's position and threads, and the test or the position over them): once
+/// for the test before the body, and once more for each builtin parameter.
+pub const PARTIAL_THREADGROUPS_WORDS: u64 = 300;
 
 /// The dispatch family's module-scope objects: the kernel's, when the plan has one.
 #[derive(Clone, Debug, Default)]
@@ -592,7 +613,10 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
         cx.facts.insert(RuntimeFact::FoldedGroups);
     }
     if partial_groups {
-        cx.facts.insert(RuntimeFact::PartialObjectThreadgroups);
+        cx.facts.insert(match cx.stage {
+            crate::pipeline::sym::Stage::Kernel => RuntimeFact::PartialThreadgroups,
+            _ => RuntimeFact::PartialObjectThreadgroups,
+        });
     }
     Ok(DispatchPlan {
         local_size,
@@ -671,12 +695,12 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
         });
         fb.if_(&mut (), past, leave, None)?;
     }
-    // An invocation past a partial object threadgroup's threads returns before the body, or, where
-    // the body is walked predicated for its barriers, walks it never live.
+    // An invocation past a partial threadgroup's threads returns before the body, or, where the
+    // body is walked predicated for its barriers, walks it never live.
     if plan.partial_groups {
         let decl: &crate::lower::emit::Declared = cx.decl;
         let Some(decl) = decl.families.dispatch.kernel.as_ref() else {
-            return Err(cx.fail("partial object threadgroups without the kernel's declarations"));
+            return Err(cx.fail("partial threadgroups without the kernel's declarations"));
         };
         if let Some(live) = decl.live(fb, &mut |fb| cx.push_field(fb, PushField::DispatchRegion))? {
             let walked = cx
@@ -834,7 +858,7 @@ pub struct KernelDecl {
     wrapper: Option<WrapperGroups>,
     /// An unfolded object function's grid ([`DispatchPlan::object_grid`]).
     object_grid: bool,
-    /// An object function whose threadgroup may be partial ([`DispatchPlan::partial_groups`]).
+    /// A function whose threadgroup may be partial ([`DispatchPlan::partial_groups`]).
     partial_groups: bool,
 }
 
@@ -941,8 +965,9 @@ impl Needs {
 /// The nominal local size packing of `region[0].w`: 10 bits per axis, each `L − 1`.
 pub const NOMINAL_AXIS_BITS: u32 = 10;
 
-/// `region[1].w`'s flag of a draw whose last threadgroup along an axis runs only the threads left
-/// (`drawMeshThreads` with an object function, the module docs): an object function of
+/// `region[1].w`'s flag of a draw or dispatch whose last threadgroup along an axis runs only the
+/// threads left (`drawMeshThreads` with an object function, or a kernel's ragged
+/// `dispatchThreads` on its partial-threadgroups variant, the module docs): a function of
 /// [`DispatchPlan::partial_groups`] answers that threadgroup's threads.
 pub const NONUNIFORM: u32 = 1;
 
@@ -975,7 +1000,13 @@ pub fn region_bytes(base: [u32; 3], threads: [u32; 3], l: [u32; 3]) -> Option<[u
 /// The `DispatchRegion` bytes of a draw of the object threadgroups `threads` fill at nominal
 /// size `l`, the last along an axis running only the threads left ([`NONUNIFORM`]).
 pub fn partial_region_bytes(threads: [u32; 3], l: [u32; 3]) -> Option<[u8; 32]> {
-    let mut out = region_bytes([0; 3], threads, l)?;
+    nonuniform_region_bytes([0; 3], threads, l)
+}
+
+/// [`region_bytes`] of a region flagged [`NONUNIFORM`]: its threadgroups the ones `threads` fill
+/// at nominal size `l` from `base`, the last along an axis running only the threads left.
+pub fn nonuniform_region_bytes(base: [u32; 3], threads: [u32; 3], l: [u32; 3]) -> Option<[u8; 32]> {
+    let mut out = region_bytes(base, threads, l)?;
     out[28..].copy_from_slice(&NONUNIFORM.to_le_bytes());
     Some(out)
 }

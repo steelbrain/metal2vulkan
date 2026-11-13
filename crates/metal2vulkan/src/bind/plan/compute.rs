@@ -867,11 +867,15 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
         .dependencies
         .iter()
         .any(|d| d.fact == RuntimeFact::CallThreadgroups);
-    // And one compiled to fold its group counts.
+    // And one compiled to fold its group counts, or to run a ragged grid's partial threadgroups.
     variant.folded_groups = p
         .dependencies
         .iter()
         .any(|d| d.fact == RuntimeFact::FoldedGroups);
+    variant.partial_threadgroups = p
+        .dependencies
+        .iter()
+        .any(|d| d.fact == RuntimeFact::PartialThreadgroups);
     // A tile function's explicit imageblock standing alone in a pass that keeps fewer of its
     // cells' bytes: the variant that reads the others as zero and drops their writes.
     variant.kept_imageblock_bytes = kept_imageblock_bytes(p, shape);

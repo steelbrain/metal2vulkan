@@ -112,6 +112,7 @@ mod engine_nullable_private;
 mod engine_offset_arms;
 mod engine_opencl_mode;
 mod engine_padded_blends;
+mod engine_partial_threadgroups;
 mod engine_places;
 mod engine_pointer_cells;
 mod engine_pointer_memory;

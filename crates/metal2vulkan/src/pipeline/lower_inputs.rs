@@ -447,6 +447,25 @@ pub struct LoweringInputs {
     /// function compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub folded_groups: bool,
+    /// The kernel runs a `dispatchThreads` grid that is not a whole number of threadgroups in the
+    /// threadgroups its threads fill, rounded up, each at the call's threadgroup size `L`
+    /// (`VariantKey::partial_threadgroups`; `lower::dispatch`'s partial threadgroups): where its
+    /// `DispatchRegion` carries `lower::dispatch::NONUNIFORM`, the last threadgroup along an axis
+    /// answers Metal's partial threadgroup, `min(L, threads_per_grid − position · L)` threads per
+    /// axis, as `threads_per_threadgroup`, in its simdgroup and quadgroup counts and in its
+    /// threads' positions, and its invocations past them run none of the body (they return before
+    /// it, or, in a body that holds a workgroup barrier, walk it predicated to each barrier), so
+    /// its simdgroup operations run on the live lanes, Metal's partial simdgroup. Every lane read
+    /// ballots its live lanes (`simd::partly_live`). It declares `MultiRegion` and reads the
+    /// region whatever builtins it reads, and states `RuntimeFact::PartialThreadgroups`. A tile
+    /// function, a stage-input region, compute derivatives, emulated simdgroups (the input
+    /// `emulated_simdgroups` or a kernel whose lockstep order needs them), `flat_grid`,
+    /// `folded_groups`, `replay_bindings`, and a body whose uniform barriers' vote word its
+    /// workgroup memory cannot hold, are `Unsupported{GpuEncodedIndirectCommands,
+    /// NotImplemented}`: their dispatches keep the exact split. Any other function compiles as
+    /// without it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub partial_threadgroups: bool,
     /// Texture slots bound in one of Apple's extended-range formats
     /// (`VariantKey::extended_range`): each such slot is declared as an image of the format's raw
     /// unsigned texels (`metal::format::ExtendedRange::raw_format`), whose reads decode Metal's

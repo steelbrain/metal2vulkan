@@ -163,6 +163,7 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::RotatedWeights,
         RuntimeFact::PrivateList,
         RuntimeFact::RegionViewports,
+        RuntimeFact::PartialThreadgroups,
         RuntimeFact::YCbCrInPlace {
             slot,
             samplers: 1,
@@ -386,6 +387,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::OneRow => 95,
         RuntimeFact::RegionViewports => 96,
         RuntimeFact::CallThreadgroups => 97,
+        RuntimeFact::PartialThreadgroups => 98,
     }
 }
 
@@ -393,7 +395,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..98).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..99).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -463,6 +465,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::CrossClassReads { .. }
                 | RuntimeFact::FlatGrid
                 | RuntimeFact::CallThreadgroups
+                | RuntimeFact::PartialThreadgroups
                 | RuntimeFact::OneRow
                 | RuntimeFact::AmplificationDraws { .. }
                 | RuntimeFact::ViewportCompensation { .. }

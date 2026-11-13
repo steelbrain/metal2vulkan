@@ -387,12 +387,14 @@ impl ComputeCommandEncoder {
 }
 
 /// Announce how a recorded dispatch of `kernel` degraded: run as `regions` Vulkan dispatches, or
-/// on the kernel's emulated-simdgroups variant (`emulated`).
+/// on the kernel's emulated-simdgroups variant (`emulated`). On its partial-threadgroups variant
+/// (`partial`) a ragged grid runs its regions at one threadgroup size, so only its group counts
+/// split it.
 fn degrade_dispatch(
     device: &Device,
     kernel: &str,
     dispatch: &Dispatch,
-    regions: usize,
+    (regions, partial): (usize, bool),
     emulated: bool,
 ) {
     let object = || format!("a dispatch of kernel `{kernel}`");
@@ -401,10 +403,11 @@ fn degrade_dispatch(
         device.degrade(Degradation::SplitDispatch, || {
             let reason = match *dispatch {
                 Dispatch::Threads { threads, .. }
-                    if threads
-                        .iter()
-                        .zip(threads_per_group)
-                        .any(|(&n, group)| !n.is_multiple_of(group)) =>
+                    if !partial
+                        && threads
+                            .iter()
+                            .zip(threads_per_group)
+                            .any(|(&n, group)| !n.is_multiple_of(group)) =>
                 {
                     format!(
                         "its grid of {threads:?} threads is not a whole number of threadgroups \
@@ -1927,9 +1930,51 @@ fn flat_direct(
     }
 }
 
+/// The partial-threadgroups variant (`VariantKey::partial_threadgroups`) a direct
+/// `dispatchThreads:` runs on where no flat variant does, with its plan for `shape`: the
+/// threadgroups its threads fill, rounded up, at the call's threadgroup size, one Vulkan dispatch
+/// per chunk of group counts, the last threadgroup along an axis answering Metal's partial
+/// threadgroup's threads (`lower::dispatch`'s partial threadgroups of a kernel), in place of the
+/// interior and edge regions a split plans, each edge a `VkPipeline` of its remainder's size. So a
+/// kernel that observes its threadgroup partition runs every ragged grid of a threadgroup size on
+/// one `VkPipeline` beside its state's, and with no `Degradation::SplitDispatch` where its group
+/// counts fit the device's.
+///
+/// `None`, so the dispatch keeps its exact split, where its grid is a whole number of
+/// threadgroups or empty, in the large-buffer form, where the variant would emulate its
+/// simdgroups (`ComputePipelineState::settle_partial`), or where the compile layer refuses the
+/// kernel the variant, which the state remembers.
+fn partial_direct(
+    pipeline: &ComputePipelineState,
+    shape: &BindShape,
+    dispatch: &Dispatch,
+    forms: BufferForms,
+) -> Result<Option<(Arc<Variant>, Arc<BindingPlan>)>, Error> {
+    let Dispatch::Threads {
+        threads,
+        threads_per_group,
+    } = *dispatch
+    else {
+        return Ok(None);
+    };
+    if forms != BufferForms::Bound {
+        return Ok(None);
+    }
+    let empty = (0..3).any(|i| threads[i] == 0 || threads_per_group[i] == 0);
+    if empty || (0..3).all(|i| threads[i].is_multiple_of(threads_per_group[i])) {
+        return Ok(None);
+    }
+    match pipeline.settle_partial(shape, threads_per_group, dispatch) {
+        Ok(settled) => Ok(settled),
+        // Threadgroups the device's limits cannot hold: the split's own refusal answers.
+        Err(Error::Bind(BindError::Unsupported(_))) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 /// The variant a direct dispatch of a bind state of `shape` in `forms` runs on, and its plan for
-/// `shape`: its flat variant where it takes one ([`flat_direct`]), else
-/// `ComputePipelineState::settle`'s. A program's dispatch plans so ([`plan_now`]), and so does a
+/// `shape`: its flat variant where it takes one ([`flat_direct`]), else its partial-threadgroups
+/// variant where it takes one ([`partial_direct`]), else `ComputePipelineState::settle`'s. A program's dispatch plans so ([`plan_now`]), and so does a
 /// warm pass's dispatch of a record (`pipeline/dispatch_record.rs`), so both ask for the same
 /// variant and its regions' keys.
 pub(crate) fn settle_direct(
@@ -1938,8 +1983,11 @@ pub(crate) fn settle_direct(
     dispatch: &Dispatch,
     forms: BufferForms,
 ) -> Result<(Arc<Variant>, Arc<BindingPlan>), Error> {
-    match flat_direct(pipeline, shape, dispatch, forms)? {
-        Some(flat) => Ok(flat),
+    if let Some(flat) = flat_direct(pipeline, shape, dispatch, forms)? {
+        return Ok(flat);
+    }
+    match partial_direct(pipeline, shape, dispatch, forms)? {
+        Some(partial) => Ok(partial),
         None => pipeline.settle(shape, dispatch, forms),
     }
 }
@@ -2809,7 +2857,8 @@ fn record(
         core.retain(function_tables.clone());
     }
     let emulated = variant.emulates_simdgroups();
-    degrade_dispatch(&device, kernel, &dispatch, regions.len(), emulated);
+    let split = (regions.len(), variant.runs_partial_threadgroups());
+    degrade_dispatch(&device, kernel, &dispatch, split, emulated);
     if let Some(unlisted) = unlisted {
         heap_sets::degrade_unlisted(
             &device,

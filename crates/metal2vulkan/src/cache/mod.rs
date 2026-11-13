@@ -293,6 +293,14 @@ pub struct VariantKey {
     /// `PushField::ReplayRegionAddress`. The plan of a pipeline compiled under it states it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub folded_groups: bool,
+    /// The kernel runs a ragged `dispatchThreads` grid in the threadgroups its threads fill, at
+    /// the call's threadgroup size, the last along an axis Metal's partial threadgroup
+    /// (`LoweringInputs::partial_threadgroups`): the variant such a dispatch of a kernel that
+    /// observes its threadgroup partition runs on, one `VkPipeline` of the call's size in place of
+    /// an edge region's of each remainder. The plan of a pipeline compiled under it states it,
+    /// and plans such a dispatch so (`BindingPlan::instantiate_dispatch`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub partial_threadgroups: bool,
     /// Texture slots bound in one of Apple's extended-range formats, by the format
     /// (`LoweringInputs::extended_range`): the function reads and writes the bound texture's raw
     /// texels there, decoding and encoding Metal's values. The plan of a pipeline compiled under
@@ -576,6 +584,7 @@ impl VariantKey {
             && self.amplification_draws.is_none()
             && self.viewport_compensation.is_none()
             && !self.folded_groups
+            && !self.partial_threadgroups
             && self.extended_range.is_empty()
             && self.zeroed_colors.is_empty()
             && self.dropped_colors.is_empty()
@@ -605,8 +614,8 @@ impl VariantKey {
 
     /// The lowering inputs of the function of `stage` under this key: its storage-image choices,
     /// device-address slots, kept storage views, raw sRGB slots, cubic and anisotropic samplers,
-    /// for the kernel the emulated simdgroups, the flat grid, the folded groups and the replay's
-    /// bindings, for the vertex and fragment functions the draws of one amplification each, for
+    /// for the kernel the emulated simdgroups, the flat grid, the folded groups, the partial
+    /// threadgroups and the replay's bindings, for the vertex and fragment functions the draws of one amplification each, for
     /// the fragment function the colors it writes zero to and those it drops, its depth's clamp
     /// range and whether its draws' tests are read-only, for a tile function the imageblock bytes
     /// its pass keeps, and for the vertex function the
@@ -641,6 +650,8 @@ impl VariantKey {
         out.call_threadgroups =
             self.call_threadgroups && stage == crate::pipeline::sym::Stage::Kernel;
         out.folded_groups = self.folded_groups && stage == crate::pipeline::sym::Stage::Kernel;
+        out.partial_threadgroups =
+            self.partial_threadgroups && stage == crate::pipeline::sym::Stage::Kernel;
         out.replay_bindings = self.replay_bindings
             && matches!(
                 stage,

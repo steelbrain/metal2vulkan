@@ -12,7 +12,12 @@
 //!   `DispatchRegion` push field. On the plan of a flat variant ([`VariantKey::flat_grid`]) it is
 //!   one region instead, of the dispatch's own threadgroup size: its invocations count the grid's
 //!   threads in order and each takes the one it counts to, those past the last returning before
-//!   the body, so no edge and no group-count chunk is planned ([`regions`]).
+//!   the body, so no edge and no group-count chunk is planned ([`regions`]). On the plan of a
+//!   partial-threadgroups variant ([`VariantKey::partial_threadgroups`]) it is the threadgroups
+//!   its threads fill, rounded up, at the dispatch's threadgroup size, per group-count chunk, all
+//!   with `MultiRegion = 1` and their `DispatchRegion` flagged `lower::dispatch::NONUNIFORM`: the
+//!   kernel's last threadgroup along an axis answers Metal's partial threadgroup, so no edge is
+//!   planned and one `VkPipeline` of the dispatch's size runs every such grid.
 //! - A count above `maxComputeWorkGroupCount` on an axis is split into chunks, each a region
 //!   with `MultiRegion = 1` and its base in the push field. At most [`MAX_REGIONS`] regions are
 //!   planned; more is `Unsupported{GroupCount}`.
@@ -88,7 +93,7 @@ use crate::cache::{SpecializationKey, VariantKey};
 use crate::device::requirements::VkLimit;
 use crate::error::{BindError, Capability, Feature, LowerFamily, Unsupported};
 use crate::indirect_commands::BINDING_COUNT;
-use crate::lower::dispatch::{pack_nominal, region_bytes};
+use crate::lower::dispatch::{nonuniform_region_bytes, pack_nominal, region_bytes};
 use crate::metal::vertex::vertex_bytes;
 use crate::metal::{StepFunction, VertexFormat};
 use crate::pipeline::interface::{AccessSet, BufferForm, PushLoc};
@@ -465,6 +470,36 @@ pub(crate) struct Planned {
     pub nominal: [u32; 3],
     /// Some region runs only on the kernel's emulated-simdgroups variant.
     pub emulated: bool,
+    /// The regions run a partial-threadgroups variant's ragged grid: their `DispatchRegion` is
+    /// flagged `lower::dispatch::NONUNIFORM` ([`Ragged::Partial`]).
+    pub nonuniform: bool,
+}
+
+/// How a plan runs a `Threads` dispatch whose grid is not a whole number of threadgroups.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ragged {
+    /// Its interior and, per axis, an edge region of the remainder, each of an exact local size.
+    Split,
+    /// One region of the dispatch's threadgroup size, on a flat variant
+    /// ([`VariantKey::flat_grid`]).
+    Flat,
+    /// The threadgroups its threads fill at the dispatch's threadgroup size, per group-count
+    /// chunk, flagged `lower::dispatch::NONUNIFORM`, on a partial-threadgroups variant
+    /// ([`VariantKey::partial_threadgroups`]).
+    Partial,
+}
+
+impl Ragged {
+    /// The form the plan of a pipeline compiled under `variant` runs a ragged grid in.
+    pub(crate) fn of(variant: &VariantKey) -> Ragged {
+        if variant.flat_grid {
+            Ragged::Flat
+        } else if variant.partial_threadgroups {
+            Ragged::Partial
+        } else {
+            Ragged::Split
+        }
+    }
 }
 
 /// The widest tile threadgroup, and the tallest: Metal's largest tile, 32x32.
@@ -538,13 +573,15 @@ fn spread(need: u64, max_count: [u32; 3]) -> Result<[u32; 3], BindError> {
     Ok(out)
 }
 
-/// The regions of `dispatch` under `rules`, on the plan of a flat variant where `flat`
-/// ([`VariantKey::flat_grid`]): there a `Threads` grid that is not a whole number of threadgroups
-/// is one region of the dispatch's own threadgroup size, not an interior and its edges.
+/// The regions of `dispatch` under `rules`, a `Threads` grid that is not a whole number of
+/// threadgroups in the form `ragged` names: an interior and its edges, one region of the
+/// dispatch's own threadgroup size on a flat variant ([`VariantKey::flat_grid`]), or the
+/// threadgroups its threads fill on a partial-threadgroups variant
+/// ([`VariantKey::partial_threadgroups`]).
 pub(crate) fn regions(
     rules: &LocalRules,
     dispatch: &Dispatch,
-    flat: bool,
+    ragged: Ragged,
 ) -> Result<Planned, BindError> {
     if rules.tile {
         check_tile_dispatch(dispatch)?;
@@ -569,6 +606,7 @@ pub(crate) fn regions(
         regions,
         grid,
         nominal,
+        nonuniform: false,
     };
     match *dispatch {
         Dispatch::Threadgroups { groups, .. } => {
@@ -631,7 +669,7 @@ pub(crate) fn regions(
             // the single dispatch's group counts, so splitting them into regions would restart it
             // in each and run the same threads again: the region is never chunked, and its counts
             // only have to cover the grid ([`spread`]).
-            if flat {
+            if ragged == Ragged::Flat {
                 let fit = fit(rules, &[l])?;
                 let n: u64 = l.iter().map(|&x| u64::from(x)).product();
                 let total: u128 = threads.iter().map(|&x| u128::from(x)).product();
@@ -654,6 +692,32 @@ pub(crate) fn regions(
                     threads,
                     fit == Fit::EmulatedSimdgroups,
                 ));
+            }
+            // A partial-threadgroups variant runs the threadgroups the grid's threads fill, rounded
+            // up, at the dispatch's threadgroup size, per chunk of group counts, each region
+            // reading its base and the grid: the last threadgroup along an axis answers the
+            // threads left where the region is flagged.
+            let nonuniform = (0..3).any(|i| !threads[i].is_multiple_of(l[i]));
+            if ragged == Ragged::Partial && nonuniform {
+                let pieces: [Vec<Piece>; 3] = std::array::from_fn(|i| {
+                    let mut p = Vec::new();
+                    chunks(
+                        &mut p,
+                        0,
+                        threads[i].div_ceil(l[i]),
+                        l[i],
+                        rules.max_count[i],
+                    );
+                    p
+                });
+                let fit = fit(rules, &[l])?;
+                let mut out = planned(
+                    product(pieces, true)?,
+                    threads,
+                    fit == Fit::EmulatedSimdgroups,
+                );
+                out.nonuniform = true;
+                return Ok(out);
             }
             let mut edges = false;
             let pieces: [Vec<Piece>; 3] = std::array::from_fn(|i| {
@@ -726,6 +790,12 @@ impl BindingPlan {
     /// the call's threadgroup size, read by `vkCmdDispatchIndirect` with no clamp prepass, and the
     /// region reads its group counts and its grid builtins from the region record at its
     /// `PushHole::ReplayRegionAddress` (`MultiRegion` 1).
+    ///
+    /// The plan of a partial-threadgroups variant ([`VariantKey::partial_threadgroups`]) runs a
+    /// `Threads` dispatch whose grid is not a whole number of threadgroups as the threadgroups its
+    /// threads fill, rounded up, at the dispatch's threadgroup size, one region per chunk of group
+    /// counts, each `MultiRegion` 1 with its `DispatchRegion` flagged
+    /// `lower::dispatch::NONUNIFORM`; any other dispatch as the plan of the pipeline without it.
     pub fn instantiate_dispatch(
         &self,
         state: &BindState,
@@ -733,6 +803,7 @@ impl BindingPlan {
     ) -> Result<DispatchCommands, BindError> {
         let t = self.compute_template("instantiate_dispatch")?;
         let flat = self.variant.flat_grid;
+        let ragged = Ragged::of(&self.variant);
         let records = match (flat || self.variant.folded_groups, dispatch) {
             (false, _) => Records::Binder,
             (true, Dispatch::ThreadgroupsIndirect { .. }) => Records::Flat,
@@ -741,7 +812,7 @@ impl BindingPlan {
             (true, Dispatch::Threads { .. }) if flat => Records::Flat,
             (true, _) => return Err(not_implemented(Feature::GpuEncodedIndirectCommands)),
         };
-        let mut planned = regions(&t.local, dispatch, flat)?;
+        let mut planned = regions(&t.local, dispatch, ragged)?;
         if planned.emulated {
             return Err(BindError::NeedsVariant {
                 variant: Box::new(self.emulated_variant()),
@@ -788,7 +859,7 @@ impl BindingPlan {
             indirect: IndirectRef::new(0, 0),
             threads_per_group,
         };
-        let mut planned = regions(&t.local, &dispatch, self.variant.flat_grid)?;
+        let mut planned = regions(&t.local, &dispatch, Ragged::of(&self.variant))?;
         if planned.emulated {
             return Err(BindError::NeedsVariant {
                 variant: Box::new(self.emulated_variant()),
@@ -817,7 +888,7 @@ impl BindingPlan {
     /// only the variant's compile knows.
     pub fn dispatch_variant(&self, dispatch: &Dispatch) -> Result<VariantKey, BindError> {
         let t = self.compute_template("dispatch_variant")?;
-        let planned = regions(&t.local, dispatch, self.variant.flat_grid)?;
+        let planned = regions(&t.local, dispatch, Ragged::of(&self.variant))?;
         Ok(if planned.emulated {
             self.emulated_variant()
         } else if t.local.rows && !planned.regions.is_empty() && !multi_row(&planned) {
@@ -1126,6 +1197,7 @@ fn instantiate(
         regions: planned,
         grid,
         nominal,
+        nonuniform,
         ..
     } = planned;
     let reach = stage_in_reach(t, region, grid, state);
@@ -1133,8 +1205,11 @@ fn instantiate(
     for r in planned {
         let mut bytes = push.clone();
         if let Some(loc) = region_field {
-            let b = region_bytes(r.base, grid, nominal)
-                .ok_or_else(|| internal("an unpackable nominal threadgroup size"))?;
+            let b = match nonuniform {
+                true => nonuniform_region_bytes(r.base, grid, nominal),
+                false => region_bytes(r.base, grid, nominal),
+            }
+            .ok_or_else(|| internal("an unpackable nominal threadgroup size"))?;
             put(&mut bytes, push_start, &mut [], loc, &b)?;
         }
         let specialization = region_specialization(t, r.local, r.multi, reach);

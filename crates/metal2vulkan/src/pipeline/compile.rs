@@ -2703,9 +2703,16 @@ fn plan_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Planned
     }
     // A folded variant runs one threadgroup dispatch of its own threadgroup size: neither a flat
     // grid nor a device replay's bindings. The call's threadgroups are a flat grid's alone, and
-    // not a device replay's, whose commands' threadgroups its preprocess reads.
+    // not a device replay's, whose commands' threadgroups its preprocess reads. A partial
+    // threadgroups variant runs a direct `dispatchThreads` on subgroups, whose invocations past
+    // the grid it walks: none of the other forms, and no emulated simdgroups.
     if inputs.folded_groups && (inputs.flat_grid || inputs.replay_bindings)
         || inputs.call_threadgroups && (!inputs.flat_grid || inputs.replay_bindings)
+        || inputs.partial_threadgroups
+            && (inputs.flat_grid
+                || inputs.folded_groups
+                || inputs.replay_bindings
+                || inputs.emulated_simdgroups)
     {
         return Err(Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into());
     }

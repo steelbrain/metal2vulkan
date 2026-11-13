@@ -266,8 +266,8 @@ pub struct MeshPlan {
     /// An object or mesh function's payload arena's bytes (`arena::payload_bytes` of
     /// [`payload_extent`]), `None` without a payload (`StageInterface::payload`).
     pub payload: Option<u32>,
-    /// An object function: it runs a partial object threadgroup's threads alone where its region
-    /// says so ([`plan_partial_groups`]).
+    /// An object function, or a kernel under `LoweringInputs::partial_threadgroups`: it runs a
+    /// partial threadgroup's threads alone where its region says so ([`plan_partial_groups`]).
     pub partial_groups: bool,
 }
 
@@ -534,19 +534,36 @@ pub fn check_payload(cx: &SelectCx<'_>, size: u64) -> Result<(), Error> {
     workgroup_limit(cx).check(0)
 }
 
-/// Plan an object function's partial threadgroups: it reads its region (`PushField::DispatchRegion`)
-/// and answers a partial threadgroup of a `drawMeshThreads` as Metal runs it, with the threads
-/// left (`lower::dispatch`'s partial object threadgroups; `RuntimeFact::PartialObjectThreadgroups`).
-/// Its invocations past them return before the body where the body holds no workgroup barrier;
-/// where it holds one, the body is walked predicated from its threadgroup's threads
+/// Plan an object function's partial threadgroups, and a kernel's under
+/// `LoweringInputs::partial_threadgroups`: it reads its region (`PushField::DispatchRegion`) and
+/// answers a partial threadgroup of a `drawMeshThreads`, or of a `dispatchThreads`, as Metal runs
+/// it, with the threads left (`lower::dispatch`'s partial threadgroups;
+/// `RuntimeFact::PartialObjectThreadgroups`, `RuntimeFact::PartialThreadgroups`). Its invocations
+/// past them return before the body where the body holds no workgroup barrier; where it holds
+/// one, the body is walked predicated from its threadgroup's threads
 /// (`simd::divergent::barriers`, `Predication::partial_groups`), so they walk to each barrier
-/// without running anything else of it. Called before the push fields are placed.
-pub fn plan_partial_groups(cx: &mut SelectCx<'_>) {
-    if cx.stage != Stage::Object {
-        return;
+/// without running anything else of it. A tile function, a kernel that reads a stage-input region
+/// and one with compute derivatives (whose quads a returned lane would leave partial) are refused
+/// the kernel's input, `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`. Called before
+/// the push fields are placed.
+pub fn plan_partial_groups(cx: &mut SelectCx<'_>) -> Result<(), Error> {
+    match cx.stage {
+        Stage::Object => {}
+        Stage::Kernel if cx.inputs.partial_threadgroups => {
+            if crate::lower::access::tile::is_tile(cx)
+                || cx.inputs.stage_input.is_some()
+                || cx.families.barrier.compute_derivatives
+            {
+                return Err(
+                    Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into(),
+                );
+            }
+        }
+        _ => return Ok(()),
     }
     cx.families.mesh.partial_groups = true;
     cx.push.insert(PushField::DispatchRegion);
+    Ok(())
 }
 
 /// Plan the entry: an object function needs `VK_EXT_mesh_shader` and `taskShader` enabled

@@ -1480,7 +1480,12 @@ inputs and the heap's capacity.
 
 A dispatch is one or more regions (a grid that is not whole threadgroups adds edge regions), each
 with its group count, specialization and push constants: create one `VkPipeline` per distinct
-specialization. A kernel that steps a stage-in attribute by thread position, or reads
+specialization. The plan of a kernel's partial-threadgroups variant (`VariantKey::partial_threadgroups`,
+which `LoweringInputs::partial_threadgroups` compiles) runs such a grid as the threadgroups its
+threads fill at the dispatch's threadgroup size instead, the last along an axis Metal's partial
+threadgroup, so every remainder takes the same `VkPipeline`; a kernel the variant cannot run
+exactly (a tile function, a stage-input region, compute derivatives, emulated simdgroups) is
+refused it, `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`, and keeps the edges. A kernel that steps a stage-in attribute by thread position, or reads
 `[[grid_origin]]` or `[[grid_size]]`, needs the encoder's stage-in region:
 
 ```rust
@@ -2252,11 +2257,16 @@ bound.
   creation clears by a fill it waits for: two copies instead of one.
 - `metal2vulkan-degrade-split-dispatch` (performance). `SplitDispatch`: A dispatch is more than one
   Vulkan dispatch: a group count is past the device's `maxComputeWorkGroupCount`, or its grid is not
-  a whole number of threadgroups and the kernel observes its threadgroup partition (a kernel that
-  does not runs any such grid as one dispatch of its own threadgroup size, every invocation taking
-  the grid thread it counts to; one that observes it only through its simdgroups does so for a
-  one-row grid in threadgroups of one row, its workgroups and simdgroups Metal's, where its module
-  emulates no simdgroup and holds no workgroup barrier). Cost: one Vulkan dispatch per region (the interior and each partial
+  a whole number of threadgroups and the kernel observes its threadgroup partition in a way its
+  partial-threadgroups variant cannot run (a tile function, a stage-input region, compute
+  derivatives, simdgroups emulated in workgroup memory, or threadgroups that are not whole
+  subgroups of its pinned size). A kernel that does not observe its partition runs any such grid as
+  one dispatch of its own threadgroup size, every invocation taking the grid thread it counts to;
+  one that observes it only through its simdgroups does so for a one-row grid in threadgroups of
+  one row, its workgroups and simdgroups Metal's, where its module emulates no simdgroup and holds
+  no workgroup barrier; any other runs it on its partial-threadgroups variant, the threadgroups its
+  threads fill at the call's threadgroup size, the last along an axis Metal's partial threadgroup,
+  one dispatch per chunk of group counts on one `VkPipeline`. Cost: one Vulkan dispatch per region (the interior and each partial
   edge, per chunk of group counts), each on its own specialized pipeline, a barrier between each
   two.
 - `metal2vulkan-degrade-emulated-simdgroups` (performance). `EmulatedSimdgroups`: A dispatch whose

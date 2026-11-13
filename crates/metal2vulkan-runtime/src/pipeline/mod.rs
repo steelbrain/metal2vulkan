@@ -411,6 +411,9 @@ pub(super) struct Program {
     /// ([`ComputePipelineState::settle_folded`]), so its indirect threadgroup dispatches take the
     /// host step where no flat variant runs them.
     folded_refused: AtomicBool,
+    /// The compile layer refused the kernel a partial-threadgroups variant
+    /// ([`ComputePipelineState::settle_partial`]), so its direct dispatches of a ragged grid split.
+    partial_refused: AtomicBool,
     /// How many of the kernel's last `binary_functions` were added without its descriptor's
     /// `support_adding_binary_functions`
     /// ([`ComputePipelineState::new_compute_pipeline_state_with_additional_binary_functions`]):
@@ -917,7 +920,7 @@ impl ComputePipelineState {
             Variant::compiled(&sources, function, &kernel, key)
         })
         .map_err(|error| {
-            creation_log::compute_refused(device, function, &error);
+            creation_log::compute_refused(device, function, None, &error);
             compile_error(device, error)
         })?;
         additions::check_kernel_maximum(&compiled, call)?;
@@ -1026,6 +1029,7 @@ impl ComputePipelineState {
                 call_flat_refused: AtomicBool::new(false),
                 replay_refused: AtomicBool::new(false),
                 folded_refused: AtomicBool::new(false),
+                partial_refused: AtomicBool::new(false),
                 added_unsupported,
                 label: options.label.clone(),
                 pieces,
@@ -1845,6 +1849,54 @@ impl ComputePipelineState {
         Ok(Some((variant, plan)))
     }
 
+    /// The partial-threadgroups variant (`VariantKey::partial_threadgroups`) `dispatch`, a direct
+    /// `dispatchThreads:` of a ragged grid in threadgroups of `local` threads of a bind state of
+    /// `shape`, runs on, with its plan for `shape`: the variant the first plan names for a
+    /// threadgroup dispatch of `local` threads, with the partial threadgroups, compiled when first
+    /// needed (`compute::partial_direct`); the variant's plan must run that very dispatch, which
+    /// the check against `key` states. `None` where that variant has emulated simdgroups, which no
+    /// partial-threadgroups variant runs, unremembered (another threadgroup size may not); and
+    /// where the compile layer refuses the kernel the variant (a tile function, a stage-input
+    /// region, compute derivatives, simdgroups its lockstep order emulates, or a vote word its
+    /// workgroup memory cannot hold beside its arena), which the state remembers: the refusal
+    /// follows from what the variant adds to a kernel whose own compile stood, which no bind shape
+    /// or threadgroup size changes.
+    pub(super) fn settle_partial(
+        &self,
+        shape: &BindShape,
+        local: [u32; 3],
+        dispatch: &Dispatch,
+    ) -> Result<Option<(Arc<Variant>, Arc<BindingPlan>)>, Error> {
+        if self.0.partial_refused.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let plan = self.0.base.plan(&self.0.device, shape)?;
+        let whole = Dispatch::Threadgroups {
+            groups: [1, 1, 1],
+            threads_per_group: local,
+        };
+        let mut key = plan.dispatch_variant(&whole).map_err(Error::Bind)?;
+        if key.emulated_simdgroups {
+            return Ok(None);
+        }
+        key.partial_threadgroups = true;
+        let variant = match self.variant(&key) {
+            Ok(variant) => variant,
+            Err(Error::Unsupported(_)) => {
+                self.0.partial_refused.store(true, Ordering::Relaxed);
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let plan = variant.plan(&self.0.device, shape)?;
+        if plan.dispatch_variant(dispatch).map_err(Error::Bind)? != key {
+            return Err(internal(
+                "the plan of a partial-threadgroups variant asks for another variant",
+            ));
+        }
+        Ok(Some((variant, plan)))
+    }
+
     /// The variant of `key`: the first one where it is that one's (and not a stand-in's), else
     /// compiled when first needed.
     fn keyed(&self, key: &VariantKey) -> Result<Arc<Variant>, Error> {
@@ -1936,7 +1988,7 @@ impl Variant {
         let _noted = NoteEntries(device);
         let (found, _) = Variant::compiled(&Sources::later(device), function, descriptor, &key)
             .map_err(|error| {
-                creation_log::compute_refused(device, function, &error);
+                creation_log::compute_refused(device, function, Some(&key), &error);
                 compile_error(device, error)
             })?;
         Variant::of(device, key, found, function)
@@ -2073,6 +2125,12 @@ impl Variant {
     /// Whether the variant is the kernel's emulated-simdgroups one.
     pub(super) fn emulates_simdgroups(&self) -> bool {
         self.key.emulated_simdgroups
+    }
+
+    /// Whether the variant is the kernel's partial-threadgroups one, which runs a ragged grid's
+    /// threadgroups at the call's size (`VariantKey::partial_threadgroups`).
+    pub(super) fn runs_partial_threadgroups(&self) -> bool {
+        self.key.partial_threadgroups
     }
 
     /// The plan for `shape`, from the memo or planned now, both keyed by the shape's projection

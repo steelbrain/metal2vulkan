@@ -387,6 +387,10 @@ pub fn function_key(
     if inputs.folded_groups {
         h.bytes(b"folded-groups");
     }
+    // Appended only when set.
+    if inputs.partial_threadgroups {
+        h.bytes(b"partial-threadgroups");
+    }
     // Appended only when set, in its derived `Debug` form (an ordered map of integers and plain
     // enums, a total encoding as `inputs_encoding`'s).
     if !inputs.zeroed_colors.is_empty() {

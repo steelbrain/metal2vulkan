@@ -400,12 +400,12 @@ fn local_sizes_are_checked_against_every_d4_limit() {
         groups: [1, 1, 1],
         threads_per_group: [0, 1, 1],
     };
-    assert!(regions(&rules(), &d, false).is_err());
+    assert!(regions(&rules(), &d, Ragged::Split).is_err());
     let d = Dispatch::Threadgroups {
         groups: [1, 1, 1],
         threads_per_group: [1025, 1, 1],
     };
-    assert!(regions(&rules(), &d, false).is_err());
+    assert!(regions(&rules(), &d, Ragged::Split).is_err());
     // An edge region is checked too: a flattened kernel's partial edge runs on the
     // emulated-simdgroups variant, and a full grid on the flattened pipeline.
     let mut r = rules();
@@ -415,12 +415,12 @@ fn local_sizes_are_checked_against_every_d4_limit() {
         threads: [40, 1, 1],
         threads_per_group: [32, 1, 1],
     };
-    assert!(regions(&r, &d, false).expect("edge").emulated);
+    assert!(regions(&r, &d, Ragged::Split).expect("edge").emulated);
     let d = Dispatch::Threads {
         threads: [64, 1, 1],
         threads_per_group: [32, 1, 1],
     };
-    assert!(!regions(&r, &d, false).expect("full").emulated);
+    assert!(!regions(&r, &d, Ragged::Split).expect("full").emulated);
 }
 
 /// A flattened (Direct) kernel's template: `sn` in one spec constant, whole 32-lane subgroups.
@@ -702,12 +702,15 @@ fn emulated_simdgroup_scratch_is_checked_per_region() {
         threads: [300, 1, 1],
         threads_per_group: [300, 1, 1],
     };
-    assert!(regions(&r, &d, false).is_err());
+    assert!(regions(&r, &d, Ragged::Split).is_err());
     let d = Dispatch::Threads {
         threads: [300, 1, 1],
         threads_per_group: [256, 1, 1],
     };
-    assert!(regions(&r, &d, false).is_ok(), "256 + an edge of 44");
+    assert!(
+        regions(&r, &d, Ragged::Split).is_ok(),
+        "256 + an edge of 44"
+    );
 }
 
 /// A range of a dispatch's threadgroups (a region tile dispatch) runs those threadgroups alone,
@@ -918,7 +921,8 @@ fn a_flat_region_counts_every_grid_thread_exactly_once() {
                                     threads,
                                     threads_per_group: local,
                                 };
-                                let planned = regions(&rules, &d, true).expect("one flat region");
+                                let planned =
+                                    regions(&rules, &d, Ragged::Flat).expect("one flat region");
                                 let what = format!("{threads:?} threads of {local:?}");
                                 assert_eq!(planned.regions.len(), 1, "{what}");
                                 assert_eq!(planned.grid, threads, "{what}");
@@ -976,7 +980,7 @@ fn a_flat_region_that_cannot_cover_the_grid_is_refused() {
         threads: [9, 5, 3],
         threads_per_group: [1, 1, 1],
     };
-    let e = regions(&rules, &d, true).expect_err("135 threadgroups in 8");
+    let e = regions(&rules, &d, Ragged::Flat).expect_err("135 threadgroups in 8");
     assert!(
         matches!(&e, BindError::Unsupported(u) if matches!(
             u.feature,
@@ -985,7 +989,7 @@ fn a_flat_region_that_cannot_cover_the_grid_is_refused() {
         "{e:?}"
     );
     // The split covers it: 9 x 5 x 3 threadgroups in chunks of two per axis.
-    let planned = regions(&rules, &d, false).expect("the split");
+    let planned = regions(&rules, &d, Ragged::Split).expect("the split");
     assert_eq!(planned.regions.len(), 5 * 3 * 2);
 }
 

@@ -1636,8 +1636,8 @@ fn finish(
     arith::finish(&mut cx)?;
 
     // An object function's partial threadgroups read its region, which a folded variant's slot
-    // plan then reads from its record.
-    mesh::plan_partial_groups(&mut cx);
+    // plan then reads from its record; so do a kernel's under its input.
+    mesh::plan_partial_groups(&mut cx)?;
     let slots = access::finish_slots(&mut cx, m)?;
     access::absent::finish(&mut cx);
     sync::memory_model::finish_interlock(&mut cx, &slots)?;
@@ -1683,6 +1683,12 @@ fn finish(
         if tier == Tier::Emulated || sel.strategy.iter().flatten().any(|s| set.holds(s)) {
             return Err(Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into());
         }
+    }
+    // A kernel's partial threadgroups walk their invocations past the grid on a subgroup tier
+    // (`simd::divergent::barriers`); the emulated tier's exchanges are not walked so, and its
+    // dispatches keep their exact split.
+    if cx.inputs.partial_threadgroups && stage == Stage::Kernel && tier == Tier::Emulated {
+        return Err(Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into());
     }
     if tier == Tier::Emulated {
         // The emulated tier's exchange carries its own active flags.
@@ -1771,6 +1777,14 @@ fn finish(
     }
     if dispatch.as_ref().is_some_and(|d| d.folded_groups) {
         estimate.add(dispatch::FOLDED_GROUPS_WORDS);
+    }
+    // A kernel's partial threadgroups: the test before the body, and each builtin parameter's.
+    if let Some(d) = dispatch
+        .as_ref()
+        .filter(|d| d.partial_groups && stage == Stage::Kernel)
+    {
+        let derivations = 1 + d.params.len() as u64;
+        estimate.add(dispatch::PARTIAL_THREADGROUPS_WORDS.saturating_mul(derivations));
     }
     estimate.add(tessellation::estimate_words(&cx.families.tessellation));
     estimate.add(

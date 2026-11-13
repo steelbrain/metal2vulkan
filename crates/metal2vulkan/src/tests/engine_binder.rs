@@ -60,7 +60,7 @@ const TABLE: u64 = 0x0000_0010_0000_0000;
 const SINK: u64 = 0x0000_0011_0000_0000;
 const STATUS: u64 = 0x0000_0012_0000_0000;
 
-fn assemble_text(name: &str, text: &str) -> Option<Vec<u8>> {
+pub(super) fn assemble_text(name: &str, text: &str) -> Option<Vec<u8>> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
         "m2v-binder-{}-{}-{name}",
@@ -94,7 +94,7 @@ fn fixture(stem: &str) -> Option<Vec<u8>> {
 }
 
 /// Committed profile `stem` as a device, after `tweak` edits its description.
-fn device(stem: &str, tweak: impl FnOnce(&mut DeviceDescription)) -> Device {
+pub(super) fn device(stem: &str, tweak: impl FnOnce(&mut DeviceDescription)) -> Device {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
         .join(format!("{stem}.json"));
@@ -127,15 +127,15 @@ fn kslot(index: u32) -> SlotRef {
 
 /// A bound Metal buffer: its allocation bytes and addresses.
 #[derive(Clone)]
-struct Alloc {
-    bytes: Vec<u8>,
+pub(super) struct Alloc {
+    pub(super) bytes: Vec<u8>,
     offset: u64,
     guest: u64,
     host: Option<u64>,
 }
 
 impl Alloc {
-    fn new(len: usize, offset: u64) -> Alloc {
+    pub(super) fn new(len: usize, offset: u64) -> Alloc {
         Alloc {
             bytes: vec![0; len],
             offset,
@@ -147,14 +147,14 @@ impl Alloc {
 
 /// What the consumer has: bound buffers by kernel slot, used resources (`(guest, host, bytes)`),
 /// and the status buffer.
-struct World {
-    buffers: BTreeMap<u32, Alloc>,
+pub(super) struct World {
+    pub(super) buffers: BTreeMap<u32, Alloc>,
     used: Vec<(u64, u64, Vec<u8>)>,
     status: [u8; 32],
 }
 
 impl World {
-    fn new(buffers: impl IntoIterator<Item = (u32, Alloc)>) -> World {
+    pub(super) fn new(buffers: impl IntoIterator<Item = (u32, Alloc)>) -> World {
         World {
             buffers: buffers.into_iter().collect(),
             used: Vec::new(),
@@ -162,7 +162,7 @@ impl World {
         }
     }
 
-    fn state(&self) -> BindState {
+    pub(super) fn state(&self) -> BindState {
         let mut t = StageTable::default();
         for (&i, a) in &self.buffers {
             t.buffers.insert(
@@ -231,6 +231,17 @@ fn execute(
     m: &TypedModule,
     world: &mut World,
     dispatch: &Dispatch,
+) -> Result<DispatchCommands, BindError> {
+    execute_with(dev, (pipe, m), world, dispatch, Config::default())
+}
+
+/// [`execute`] with the interpreter's subgroup width and barrier rule `cfg`'s.
+pub(super) fn execute_with(
+    dev: &Device,
+    (pipe, m): (&ComputePipeline, &TypedModule),
+    world: &mut World,
+    dispatch: &Dispatch,
+    cfg: Config,
 ) -> Result<DispatchCommands, BindError> {
     let state = world.state();
     let plan = pipe.plan(dev, &state.shape())?;
@@ -387,7 +398,7 @@ fn execute(
             let cfg = Config {
                 workgroups,
                 order,
-                ..Config::default()
+                ..cfg
             };
             outs.push(run(m, &cfg, res.clone()).expect("run").buffers);
         }
@@ -457,7 +468,7 @@ fn run_clamp(dev: &Device, cmds: &DispatchCommands, world: &mut World) -> [u32; 
     [w(0), w(1), w(2)]
 }
 
-fn words(bytes: &[u8]) -> Vec<u32> {
+pub(super) fn words(bytes: &[u8]) -> Vec<u32> {
     bytes
         .as_chunks::<4>()
         .0

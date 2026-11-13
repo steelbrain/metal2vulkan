@@ -641,8 +641,9 @@ fn reads_live_lanes(s: &Strategy) -> bool {
 /// operation keeps its plain shuffles. Uniformity is conservative (a block every lane of a
 /// simdgroup executes, under a branch on the simdgroup index, is divergent to it); the ballot then
 /// has every bit, and the selects keep every value. Another stage's groups are not required whole
-/// (a vertex simdgroup past the draw's vertex count, a fragment's uncovered pixels), so every such
-/// operation there ballots its live lanes, and its uniformity is not computed.
+/// (a vertex simdgroup past the draw's vertex count, a fragment's uncovered pixels), and neither
+/// is a kernel's partial threadgroup's last simdgroup (`LoweringInputs::partial_threadgroups`),
+/// so every such operation there ballots its live lanes, and its uniformity is not computed.
 ///
 /// Returns a kernel's analysis when the body has such an operation, for the emulated tier's own
 /// use (`workgroup::check`), so it is computed once; the caller releases its ledger bytes.
@@ -654,7 +655,9 @@ pub fn partly_live(
     if !strategy.iter().flatten().any(reads_live_lanes) {
         return Ok(None);
     }
-    let u = if cx.stage == Stage::Kernel {
+    // A kernel's partial threadgroup leaves its lanes past the grid out of every block, as
+    // another stage's groups are not whole.
+    let u = if cx.stage == Stage::Kernel && !cx.inputs.partial_threadgroups {
         Some(uniform::Uniformity::of(cx.entry, cx.body, m)?)
     } else {
         None

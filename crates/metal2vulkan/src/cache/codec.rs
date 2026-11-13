@@ -1296,6 +1296,7 @@ codec_enum! {
         RotatedInputBlend { color, blend, kept },
         BorderTexels { slot },
         RegionViewports,
+        PartialThreadgroups,
     }
     UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {

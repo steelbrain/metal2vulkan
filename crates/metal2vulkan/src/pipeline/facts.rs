@@ -814,6 +814,13 @@ pub enum RuntimeFact {
     /// draw of a rasterization-rate-mapped pass's regions several at a time. Its plans state the
     /// variant the shape asks for (`BindShape::region_viewports`).
     RegionViewports,
+    /// The kernel was compiled under `VariantKey::partial_threadgroups`
+    /// (`LoweringInputs::partial_threadgroups`): where its `DispatchRegion` carries
+    /// `lower::dispatch::NONUNIFORM`, its last threadgroup along an axis runs only Metal's
+    /// partial threadgroup's threads, so a `dispatchThreads` grid that is not a whole number of
+    /// threadgroups runs at the call's threadgroup size alone. Its plans state the variant, and
+    /// plan such a dispatch so.
+    PartialThreadgroups,
 }
 
 /// What one compile made of a slot of a `RuntimeFact::UniformViewRange`.
