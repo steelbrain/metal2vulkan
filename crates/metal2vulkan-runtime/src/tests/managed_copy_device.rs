@@ -27,7 +27,17 @@
 //! - **Recovery** carries the buffer: its host copy made again over the same pages, its device
 //!   copy made on the new `VkDevice` and the pages copied in.
 //! - **Elsewhere, one copy.** A `Shared` no-copy buffer, and a `Managed` one on a device with
-//!   unified memory, lie in their pages.
+//!   unified memory, lie in their pages. There a `Managed` buffer's `did_modify_range` copies
+//!   nothing: neither the runtime's own nor one over the caller's pages copies a byte in or
+//!   stages one (`WorkCounts::managed_bytes_copied_in`, `managed_staging_bytes`), and the command
+//!   buffer after it reads the CPU's write.
+//! - **The copy-in bench** (ignored, `MANAGED-COPY-IN`; run in release): what a
+//!   `did_modify_range` of 256 KiB, 4 MiB and 32 MiB, written by the CPU before each commit of a
+//!   command buffer that reads the range's last bytes, costs the commit call and the wall time to
+//!   the completion, over the runtime's own `Managed` buffer and one over the caller's pages
+//!   through their import, on the default device and on one of `DevicePolicy::exact_answers()`:
+//!   the medians, the range over the median wall time, and the counts of the bytes copied in and
+//!   of the buffers the device parked, took again and destroyed past its bounds.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Where the device has unified memory
@@ -1139,4 +1149,133 @@ fn ranges_named_across_two_queues_reach_each_command_buffer_over_pages_no_import
 #[test]
 fn ranges_named_on_one_queue_reach_each_command_buffer_through_an_import() {
     named_rounds(Route::Import, false);
+}
+
+/// On a device with unified memory, a `Managed` buffer's `did_modify_range` copies nothing (the
+/// module docs, **Elsewhere, one copy**): the runtime's own, and one over the caller's pages.
+#[test]
+fn a_did_modify_range_on_unified_memory_copies_nothing() {
+    let pages = Pages::new(BYTES);
+    let scratch = Scratch::new("managed-unified");
+    let device = device(&scratch.0);
+    if !device.properties().has_unified_memory {
+        eprintln!(
+            "MANAGED-UNIFIED {}: no unified memory; two copies",
+            device.name()
+        );
+        return;
+    }
+    let queue = device.new_command_queue().unwrap();
+    let ran = Ran::default();
+    let own = device.new_buffer(BYTES, managed()).unwrap();
+    let caller = no_copy(&device, &pages, Route::Import, managed(), &ran);
+    assert_ne!(caller.host_backing(), Some(HostBacking::DeviceCopy));
+    let before = device.work_counts();
+    for (byte, buffer) in [(0x31u8, &own), (0x32, &caller)] {
+        let contents = buffer.contents().unwrap();
+        // SAFETY: the buffer's bytes, which no command buffer uses now.
+        unsafe { std::ptr::write_bytes(contents.as_ptr(), byte, BYTES as usize) };
+        buffer.did_modify_range(0..BYTES).unwrap();
+        assert_eq!(
+            read(&device, &queue, buffer, 0..BYTES),
+            vec![byte; BYTES as usize]
+        );
+    }
+    let after = device.work_counts();
+    eprintln!(
+        "MANAGED-UNIFIED {}: copied in {} bytes, staged {} bytes, two-copy buffers made {}",
+        device.name(),
+        after.managed_bytes_copied_in - before.managed_bytes_copied_in,
+        after.managed_staging_bytes,
+        after.managed_device_copies_made,
+    );
+    assert_eq!(
+        after.managed_bytes_copied_in,
+        before.managed_bytes_copied_in
+    );
+    assert_eq!(after.managed_staging_bytes, 0);
+    assert_eq!(after.managed_device_copies_made, 0);
+}
+
+/// The ranges of the copy-in bench (the module docs), each named whole before every commit.
+const BENCH_RANGES: [u64; 3] = [256 << 10, 4 << 20, 32 << 20];
+
+/// The commits of each leg of the copy-in bench.
+const BENCH_COMMITS: usize = 40;
+
+/// The middle of `values`, in milliseconds.
+fn median_ms(mut values: Vec<Duration>) -> f64 {
+    values.sort();
+    values[values.len() / 2].as_secs_f64() * 1e3
+}
+
+/// The copy-in bench (the module docs).
+#[test]
+#[ignore = "a release-mode benchmark"]
+fn managed_copy_in_bench() {
+    let largest = BENCH_RANGES[BENCH_RANGES.len() - 1];
+    let pages = Pages::new(largest);
+    let scratch = Scratch::new("managed-copy-in");
+    for exact in [false, true] {
+        let mut options = options(&scratch.0);
+        if exact {
+            options.policy = metal2vulkan::device::DevicePolicy::exact_answers();
+        }
+        let device = Device::system_default_with(&options).unwrap();
+        let policy = match exact {
+            true => "exact answers",
+            false => "default",
+        };
+        let queue = device.new_command_queue().unwrap();
+        let ran = Ran::default();
+        let own = device.new_buffer(largest, managed()).unwrap();
+        let caller = no_copy(&device, &pages, Route::Import, managed(), &ran);
+        let out = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+        for (name, buffer) in [("own", &own), ("caller's pages", &caller)] {
+            let contents = buffer.contents().unwrap();
+            for range in BENCH_RANGES {
+                let before = device.work_counts();
+                let (mut commits, mut whole) = (Vec::new(), Vec::new());
+                for commit in 0..BENCH_COMMITS {
+                    let byte = commit as u8 + 1;
+                    // SAFETY: the buffer's host copy, which no command buffer reads now.
+                    unsafe { std::ptr::write_bytes(contents.as_ptr(), byte, range as usize) };
+                    let began = Instant::now();
+                    buffer.did_modify_range(0..range).unwrap();
+                    let command_buffer = queue.command_buffer().unwrap();
+                    let mut blit = command_buffer.blit_command_encoder().unwrap();
+                    blit.copy_from_buffer_to_buffer(buffer, range - 4096, &out, 0, 4096)
+                        .unwrap();
+                    blit.end_encoding().unwrap();
+                    let committing = Instant::now();
+                    command_buffer.commit().unwrap();
+                    commits.push(committing.elapsed());
+                    assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
+                    whole.push(began.elapsed());
+                    assert_eq!(command_buffer.error(), None);
+                    // SAFETY: the out buffer's bytes, which no command writes now.
+                    let seen = unsafe { *out.contents().unwrap().as_ptr() };
+                    assert_eq!(seen, byte, "{name} {range}: commit {commit}");
+                }
+                let after = device.work_counts();
+                let (o, b) = (&after.object_churn, &before.object_churn);
+                let (commit, wall) = (median_ms(commits.clone()), median_ms(whole));
+                let most = commits.iter().max().unwrap().as_secs_f64() * 1e3;
+                eprintln!(
+                    "MANAGED-COPY-IN {} {policy}, {name}, {} KiB a commit: commit {commit:.3} ms \
+                     (most {most:.3}), to completion {wall:.3} ms, {:.2} GB/s; copied in {} \
+                     bytes, buffers parked {} taken again {} evicted {}",
+                    device.name(),
+                    range >> 10,
+                    range as f64 / (wall * 1e6),
+                    after.managed_bytes_copied_in - before.managed_bytes_copied_in,
+                    o.buffers_parked - b.buffers_parked,
+                    o.buffers_recycled - b.buffers_recycled,
+                    o.buffers_evicted - b.buffers_evicted,
+                );
+            }
+        }
+        drop((own, caller, out, queue, device));
+        assert!(ran_to(&ran, 1), "the deallocator did not run");
+    }
 }
