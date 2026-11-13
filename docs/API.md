@@ -3649,7 +3649,11 @@ bound.
   kind. Announced too, at most once each per recovery whatever an earlier
   recovery announced: where a call waited past 10 seconds for the recovery under way, where its
   command buffers in flight took past 10 seconds to fail, and where its new `VkDevice` could not
-  be made, after which the device answers as a lost one. `Device::recover_for_test` runs the
+  be made, after which the device answers as a lost one. A `VkDevice` whose work stopped with no
+  loss from the driver (no work of it advanced for 10 seconds with some pending, and a probe on
+  the staging queue did not complete in 2 seconds; `command_buffer/stall.rs`) is recovered from
+  the same way, and the reason says it stopped and was parked: never destroyed, its queues never
+  waited for (`Device::is_parked`). `Device::recover_for_test` runs the
   same recovery with no GPU fault. Cost: the events, fences, depth/stencil states, libraries,
   functions, dynamic libraries, binary archives, address pools, uses of guest RAM, no-copy
   buffers, `Private` buffers, buffers in the runtime's own pages (fresh pages, and the blocks of

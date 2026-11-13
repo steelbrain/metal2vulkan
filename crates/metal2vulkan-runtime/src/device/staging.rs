@@ -410,6 +410,56 @@ impl StagingLock<'_> {
     }
 }
 
+impl StagingLock<'_> {
+    /// Probe the staging queue's engine (`command_buffer/stall.rs`): a submission of no command
+    /// buffer and no wait that signals the queue's timeline, so it waits for nothing but the
+    /// staging submissions before it, which wait for no work in flight (the module docs), and
+    /// takes no command buffer, so it waits on the host for none. The value it signals.
+    pub(crate) fn probe(&mut self) -> Result<u64, Error> {
+        let device = self.device;
+        if device.is_lost() {
+            return Err(device.lost_refusal());
+        }
+        let shared = device.shared();
+        let raw = shared.vk();
+        let staging = self.staging;
+        let objects = &mut *self.objects;
+        if objects.made.is_none() {
+            let made = Made::new(device, staging.family)?;
+            let _ = staging.timeline.set(made.timeline);
+            staging.done.made(made.timeline);
+            objects.made = Some(made);
+        }
+        let queue = objects.queue;
+        let Some(made) = objects.made.as_mut() else {
+            unreachable!("made above");
+        };
+        let value = made.signalled + 1;
+        let signal_semaphores = [made.timeline];
+        let signal_values = [value];
+        let mut timeline =
+            vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&signal_values);
+        let submit = vk::SubmitInfo::default()
+            .signal_semaphores(&signal_semaphores)
+            .push_next(&mut timeline);
+        // SAFETY: the queue is used under the staging lock alone; the submission waits for
+        // nothing and signals the timeline above its value. No command buffer: nothing for the
+        // pending audit.
+        shared.counts.queue_submitted(1, 0);
+        shared.queue_quiet.began();
+        let submitted = unsafe {
+            staging.word.restore();
+            raw.queue_submit(queue, &[submit], vk::Fence::null())
+        };
+        shared.queue_quiet.ended();
+        exit_guard::called(Call::QueueSubmit);
+        submitted.map_err(|error| device.failed(error))?;
+        made.signalled = value;
+        staging.submitted.store(value, Ordering::Release);
+        Ok(value)
+    }
+}
+
 /// The index of a command buffer of `made`, `staging`'s, no submission holds: one whose last
 /// submission the host saw complete, else a new one while there are fewer than [`BUFFERS`], else
 /// the oldest, once a wait on the host saw its value reached.
@@ -558,6 +608,15 @@ impl Device {
             staging: fill_queue,
             objects: lock(&fill_queue.objects),
         })
+    }
+
+    /// Whether the host saw the staging submission that signals `value` complete within
+    /// `timeout` (a wait of it), a probe's (`command_buffer/stall.rs`).
+    pub(crate) fn staging_reached(&self, value: u64, timeout: Duration) -> Result<bool, Error> {
+        let staging = (self.shared().staging.as_ref())
+            .ok_or_else(|| internal("a staging wait on a device without a staging queue"))?;
+        let nanos = u64::try_from(timeout.as_nanos()).unwrap_or(u64::MAX);
+        reached(self, staging, value, nanos)
     }
 
     /// Wait on the host for the staging submission that signals `value`.

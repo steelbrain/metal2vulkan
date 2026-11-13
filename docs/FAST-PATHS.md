@@ -562,6 +562,21 @@ recorded here.
 Open differences from Metal that no note announces yet, and runtime costs still above the
 driver's. Each is open work.
 
+- **A GPU that stops with no loss from the driver is found only through a staging queue, and its
+  `VkDevice` leaks** (`command_buffer/stall.rs`). Where no work of a device advanced for 10 s with
+  some pending, a probe goes to the staging queue (NVIDIA's copy engine); one that does not
+  complete in 2 s, with no loss read from the stuck batch's fence or timeline, stops the
+  generation: its command buffers fail as a hang's (`GpuHang`, `GpuRecoveryVictim`), and the
+  device recovers. Metal ends long work itself: about 5 s on an Apple M3 Max (2^29 threadgroups
+  finished in 4.98 s, 2^30 did not), and on x86 Macs after 20.2 s on an AMD GPU and 16.1 s on an
+  Intel one (`MTLCommandBufferErrorTimeout`, code 2); the runtime fails no work of a device that
+  still makes progress, whatever its length, and a stopped one after 12 s at least. A device
+  without a staging queue sends no probe, so a stop there waits without end, as before. Whether
+  NVIDIA's copy engine stops with the rest after an Xid 109 is not yet measured: where it runs
+  on, the probe completes and the stop is not found. The stopped `VkDevice` is parked
+  (`release.rs`): it and every object of it stay to the process's end, with the host pages its
+  imports hold (`WorkCounts::wedges_declared`, `Device::is_parked`).
+
 - **A two-copy buffer over read-only pages keeps the GPU's writes until the command buffer that
   made them completed** (`managed_copy.rs`, `WorkCounts::managed_writes_undone`): its pages are
   copied in whole again at that completion, so the command buffer's later commands, and a

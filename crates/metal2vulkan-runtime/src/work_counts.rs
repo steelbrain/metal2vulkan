@@ -75,6 +75,9 @@ pub(crate) struct Counters {
     missed_completion_wakes: AtomicU64,
     completion_arms: AtomicU64,
     completion_arms_after_a_wake: AtomicU64,
+    stall_probes_sent: AtomicU64,
+    wedges_declared: AtomicU64,
+    longest_stall_nanos: AtomicU64,
     completion_reads_ran_ahead: AtomicU64,
     gate_waits: AtomicU64,
     gate_waits_slept: AtomicU64,
@@ -2029,6 +2032,24 @@ impl Counters {
     /// the waiter looked again (`command_buffer/completion.rs`).
     pub(crate) fn missed_completion_wake(&self) {
         self.missed_completion_wakes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A probe went to another engine after no queue's work advanced for `stalled`, with some
+    /// pending (`command_buffer/stall.rs`).
+    pub(crate) fn stall_probe_sent(&self, stalled: std::time::Duration) {
+        self.stall_probes_sent.fetch_add(1, Ordering::Relaxed);
+        self.stall_lasted(stalled);
+    }
+
+    /// No queue's work advanced for `stalled`, with some pending (`command_buffer/stall.rs`).
+    pub(crate) fn stall_lasted(&self, stalled: std::time::Duration) {
+        let nanos = u64::try_from(stalled.as_nanos()).unwrap_or(u64::MAX);
+        (self.longest_stall_nanos).fetch_max(nanos, Ordering::Relaxed);
+    }
+
+    /// A generation stopped and was parked (`command_buffer/stall.rs`).
+    pub(crate) fn wedge_declared(&self) {
+        self.wedges_declared.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A queue's waiter armed for its queue's front batch, having slept on its condition variable
@@ -5199,6 +5220,18 @@ pub struct WorkCounts {
     /// The device's recoveries from the loss of its `VkDevice` that made a new one
     /// (`Degradation::DeviceRecovered`).
     pub device_recoveries: u64,
+    /// The probes sent to another engine of the GPU (the staging queue's) after no queue's work
+    /// advanced for 10 seconds with some pending, to ask whether the GPU still runs anything
+    /// (`command_buffer/stall.rs`); Metal has no such probe.
+    pub stall_probes_sent: u64,
+    /// The generations that stopped: no work advanced and the probe did not complete in 2
+    /// seconds. Each was failed as a loss is (its oldest command buffer in flight as the hang,
+    /// `GpuHang`, the rest as victims), recovered from, and its `VkDevice` parked: never destroyed,
+    /// nothing of it released, its queues never waited for (`Device::is_parked`).
+    pub wedges_declared: u64,
+    /// The longest time, in nanoseconds, that no queue's work advanced while some was pending, as
+    /// the completion's waiters saw it at their probes and its end.
+    pub longest_stall_nanos: u64,
     /// `VkCommandPool`s made for command buffers, where no spare one was free.
     pub command_pools_made: u64,
     /// Released objects MoltenVK commits its residency set for, by kind (`churn_counts.rs`).
@@ -9413,6 +9446,9 @@ impl Device {
             fence_waits: counters.fence_waits.load(Ordering::Relaxed),
             missed_completion_wakes: counters.missed_completion_wakes.load(Ordering::Relaxed),
             completion_arms: counters.completion_arms.load(Ordering::Relaxed),
+            stall_probes_sent: counters.stall_probes_sent.load(Ordering::Relaxed),
+            wedges_declared: counters.wedges_declared.load(Ordering::Relaxed),
+            longest_stall_nanos: counters.longest_stall_nanos.load(Ordering::Relaxed),
             completion_arms_after_a_wake: (counters.completion_arms_after_a_wake)
                 .load(Ordering::Relaxed),
             completion_reads_ran_ahead: (counters.completion_reads_ran_ahead)

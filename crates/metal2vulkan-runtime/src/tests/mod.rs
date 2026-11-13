@@ -630,6 +630,8 @@ mod stage_entries_shared;
 mod staged_work_teardown;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod staging_waits;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod stall;
 mod stand_in;
 mod storage_form;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

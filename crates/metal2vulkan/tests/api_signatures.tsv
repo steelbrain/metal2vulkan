@@ -3124,6 +3124,7 @@ field	metal2vulkan-runtime::WorkCounts.linked_pipelines_shared	pub linked_pipeli
 field	metal2vulkan-runtime::WorkCounts.linked_use_questions_asked	pub linked_use_questions_asked: u64
 field	metal2vulkan-runtime::WorkCounts.live_tables_uploaded	pub live_tables_uploaded: u64
 field	metal2vulkan-runtime::WorkCounts.long_queue_settles	pub long_queue_settles: u64
+field	metal2vulkan-runtime::WorkCounts.longest_stall_nanos	pub longest_stall_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.makings_held_for_compile_memory	pub makings_held_for_compile_memory: u64
 field	metal2vulkan-runtime::WorkCounts.managed_bytes_copied_in	pub managed_bytes_copied_in: u64
 field	metal2vulkan-runtime::WorkCounts.managed_bytes_copied_out	pub managed_bytes_copied_out: u64
@@ -3437,6 +3438,7 @@ field	metal2vulkan-runtime::WorkCounts.staging_gpu_waits	pub staging_gpu_waits: 
 field	metal2vulkan-runtime::WorkCounts.staging_moves_queued	pub staging_moves_queued: u64
 field	metal2vulkan-runtime::WorkCounts.staging_submissions	pub staging_submissions: u64
 field	metal2vulkan-runtime::WorkCounts.stale_detached_reaches	pub stale_detached_reaches: u64
+field	metal2vulkan-runtime::WorkCounts.stall_probes_sent	pub stall_probes_sent: u64
 field	metal2vulkan-runtime::WorkCounts.stamped_buffers_kept	pub stamped_buffers_kept: u64
 field	metal2vulkan-runtime::WorkCounts.stamped_buffers_reused	pub stamped_buffers_reused: u64
 field	metal2vulkan-runtime::WorkCounts.stand_in_bytes	pub stand_in_bytes: u64
@@ -3498,6 +3500,7 @@ field	metal2vulkan-runtime::WorkCounts.wakes_completion_waiters	pub wakes_comple
 field	metal2vulkan-runtime::WorkCounts.wakes_event_waiters	pub wakes_event_waiters: u64
 field	metal2vulkan-runtime::WorkCounts.wakes_handler_threads	pub wakes_handler_threads: u64
 field	metal2vulkan-runtime::WorkCounts.wakes_spared	pub wakes_spared: u64
+field	metal2vulkan-runtime::WorkCounts.wedges_declared	pub wedges_declared: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_conversion_scratch_buffers	pub ycbcr_conversion_scratch_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_conversion_scratch_bytes	pub ycbcr_conversion_scratch_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_device_conversions	pub ycbcr_device_conversions: u64
@@ -8409,6 +8412,7 @@ method	metal2vulkan-runtime::Device::imports_shared_host_pointers	pub fn imports
 method	metal2vulkan-runtime::Device::in_place_check_line	pub fn in_place_check_line(&self) -> u64
 method	metal2vulkan-runtime::Device::in_place_check_report	pub fn in_place_check_report(&self) -> Vec<String>
 method	metal2vulkan-runtime::Device::in_place_check_took	pub fn in_place_check_took(&self) -> Option<Duration>
+method	metal2vulkan-runtime::Device::is_parked	pub fn is_parked(&self, device: vk::Device) -> bool
 method	metal2vulkan-runtime::Device::linear_texture_bytes_per_row	pub fn linear_texture_bytes_per_row(&self, descriptor: &TextureDescriptor) -> Result<Option<u64>, Error>
 method	metal2vulkan-runtime::Device::metal_heap_texture_size_and_align	pub fn metal_heap_texture_size_and_align(&self, descriptor: &TextureDescriptor) -> Result<Option<SizeAndAlign>, Error>
 method	metal2vulkan-runtime::Device::minimum_linear_texture_alignment_for_pixel_format	pub fn minimum_linear_texture_alignment_for_pixel_format(&self, format: PixelFormat) -> Result<u64, Error>

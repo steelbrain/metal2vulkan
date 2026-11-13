@@ -450,7 +450,9 @@ impl Line {
             State::Lost { culprit, .. } => culprit,
             _ => None,
         };
-        // The lost generation goes once the objects made on it went.
+        // The lost generation goes once the objects made on it went; a stopped one is parked
+        // (`command_buffer/stall.rs`): its teardown leaves its `VkDevice` and objects.
+        let wedged = lost.wedged();
         drop(old);
         drop(lost);
         // The command queues take a new place on the new generation at their next command buffer.
@@ -484,11 +486,19 @@ impl Line {
                 }
                 None => "no command buffer was in flight".to_owned(),
             };
+            let cause = match wedged {
+                true => {
+                    "stopped (no work of it advanced, and a probe on another engine did not \
+                     complete: the driver answered no loss), was parked (never destroyed, its \
+                     queues never waited for: `Device::is_parked`),"
+                }
+                false => "was lost",
+            };
             (
                 "the device".to_owned(),
                 format!(
-                    "its VkDevice was lost and made again in {took:?} (generation {generation}): \
-                     {culprit}; {}",
+                    "its VkDevice {cause} and made again in {took:?} (generation \
+                     {generation}): {culprit}; {}",
                     carried.say()
                 ),
             )
@@ -635,6 +645,20 @@ impl Device {
             true => Ok(()),
             false => Err(Error::DeviceLost),
         }
+    }
+
+    /// No Metal counterpart (a runtime-only query): whether `device`, a `VkDevice` whose handles
+    /// [`raw`](Self::raw) answered, stopped and is parked. No work of it advanced while some was
+    /// pending and a probe on another engine of the GPU did not complete, the driver answering no
+    /// loss (`command_buffer/stall.rs`), so its command buffers in flight failed as a lost
+    /// device's do (`GpuHang`, `GpuRecoveryVictim`) and the device recovered on a new `VkDevice`
+    /// (`Degradation::DeviceRecovered`, whose notice says it stopped). A parked `VkDevice` is
+    /// never destroyed and none of its objects is released, since its work never completes: a
+    /// consumer holding its handles waits for none of its queues and destroys none of its
+    /// objects, its swapchains among them, and leaves them likewise. False for any other
+    /// `VkDevice`, one lost to a driver's `VK_ERROR_DEVICE_LOST` among them.
+    pub fn is_parked(&self, device: vk::Device) -> bool {
+        crate::release::parked(device)
     }
 
     /// The generation this call goes to (the module docs): this handle's own where it is a
@@ -799,5 +823,11 @@ pub(crate) mod hooks {
         /// The next recovery's new `VkDevice` fails to be made, as a driver's refusal fails it:
         /// the line fails, and answers as the lost device does from then on.
         pub(crate) making_fails: AtomicBool,
+        /// How long no queue's work advances before a probe (`command_buffer/stall.rs`), in place
+        /// of its `STALL`.
+        pub(crate) stall_after: Mutex<Option<Duration>>,
+        /// No probe is seen answered (`command_buffer/stall.rs`), as on a GPU whose every engine
+        /// stopped: a stall past `stall_after` stops the generation.
+        pub(crate) probe_unanswered: AtomicBool,
     }
 }

@@ -9,13 +9,49 @@
 //! instance, its messenger, and the objects of `VK_EXT_device_generated_commands` have functions
 //! of their own). No other file of the runtime calls such an entry point: a source test fails
 //! when one does (`tests/exit_guard.rs`).
+//!
+//! A `VkDevice` that stopped is parked ([`park`], `command_buffer/stall.rs`): its work never
+//! completes, so none of its objects may be destroyed (each entry point asks that nothing pending
+//! use the object), and the door leaves each of them, the device itself among them, to the
+//! process's end: a leak of what the generation held (docs/FAST-PATHS.md, known gaps). Where no
+//! device is parked the door reads one flag.
 
 use crate::allocations;
 use crate::churn_counts::{self, VkRelease};
 use crate::exit_guard::{self, Call};
 use crate::generated_commands::{Commands, Handle};
 use ash::vk;
+use ash::vk::Handle as _;
 use std::panic::Location;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+
+/// The parked `VkDevice`s, by their handles' raw values ([`park`]).
+static PARKED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+
+/// Whether any `VkDevice` is parked: the door's one read where none is.
+static ANY_PARKED: AtomicBool = AtomicBool::new(false);
+
+/// Park `device`, which stopped (`command_buffer/stall.rs`): from now on the door releases nothing
+/// of it, the device itself included (the module docs).
+pub(crate) fn park(device: vk::Device) {
+    let mut parked = PARKED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !parked.contains(&device.as_raw()) {
+        parked.push(device.as_raw());
+    }
+    ANY_PARKED.store(true, Ordering::Release);
+}
+
+/// Whether `device` is parked ([`park`]).
+pub(crate) fn parked(device: vk::Device) -> bool {
+    ANY_PARKED.load(Ordering::Acquire)
+        && (PARKED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
+        .contains(&device.as_raw())
+}
 
 /// A Vulkan object a device releases.
 pub(crate) trait Released {
@@ -37,8 +73,8 @@ pub(crate) struct Door(());
 pub(crate) struct WholeDevice;
 
 /// Release `object` with `device`'s functions, inside a section of the exit guard, marking its
-/// entry point; once the process is exiting, leave it to the process's end. Whether it was
-/// released. Inside a section already (a whole drop's), it is always released. An image, a
+/// entry point; once the process is exiting, or where `device` is parked ([`park`]), leave it to
+/// the process's end. Whether it was released. Inside a section already (a whole drop's), it is always released. An image, a
 /// buffer or a memory released is counted at its caller's place (`churn_counts.rs`), and a memory
 /// among its device's live allocations too (`allocations.rs`), its free the device's work in
 /// progress for its checks to step aside for (`step_aside.rs`).
@@ -51,6 +87,9 @@ pub(crate) unsafe fn object<T: Released>(device: &ash::Device, object: T) -> boo
     let Some(_busy) = exit_guard::enter() else {
         return false;
     };
+    if parked(device.handle()) {
+        return false;
+    }
     let frees = matches!(T::CALL, Call::FreeMemory);
     let allocations = frees.then(|| allocations::of(device.handle())).flatten();
     let in_progress = allocations::Busy::of(allocations.as_deref());
@@ -126,6 +165,9 @@ pub(crate) unsafe fn generated(commands: &Commands, object: Generated) -> bool {
     let Some(_busy) = exit_guard::enter() else {
         return false;
     };
+    if parked(commands.device) {
+        return false;
+    }
     let (destroy, handle, call) = match object {
         Generated::ExecutionSet(set) => (
             commands.destroy_execution_set,

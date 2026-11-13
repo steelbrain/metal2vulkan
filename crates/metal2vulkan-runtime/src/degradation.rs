@@ -2304,7 +2304,10 @@ degradations! {
         /// earlier recovery announced: where a call waited past 10 seconds for the recovery under
         /// way (it waits on), where its command buffers in flight took past 10 seconds to fail (it
         /// waits on), and where its new `VkDevice` could not be made (the device then answers as
-        /// a lost one).
+        /// a lost one). A `VkDevice` whose work stopped with no loss from the driver (no work of it
+        /// advanced for 10 seconds with some pending, and a probe on the staging queue did not
+        /// complete in 2 seconds: `command_buffer/stall.rs`) is recovered from the same way; the
+        /// payload then says it stopped and was parked (`Device::is_parked`).
         DeviceRecovered = "device-recovered", Performance,
             "the events, fences, depth/stencil states, libraries, functions, dynamic libraries, \
              binary archives, address pools, uses of guest RAM, no-copy buffers, `Private` buffers, buffers in the runtime's own pages \

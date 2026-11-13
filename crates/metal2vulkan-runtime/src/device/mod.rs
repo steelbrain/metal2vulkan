@@ -414,6 +414,11 @@ pub(super) struct DeviceShared {
     /// The device was lost: no further submission. Shared with the relay (`relay.rs`), which
     /// records a loss it hears of.
     lost: Arc<AtomicBool>,
+    /// The generation stopped and is parked: no work of its advanced while some was pending and a
+    /// probe on another engine did not complete (`command_buffer/stall.rs`). It counts as lost
+    /// (`lost` is set too), and besides nothing waits for its queues and nothing of it is
+    /// destroyed, the `VkDevice` itself included (`release.rs`).
+    wedged: AtomicBool,
     pub(super) textures: super::texture::TextureState,
     /// The translated-shader cache on disk and the driver's pipeline cache.
     pub(super) shader_cache: ShaderCache,
@@ -744,6 +749,10 @@ impl DeviceShared {
     /// synchronized"). A wait on a lost device returns in finite time (vkspec 5.2.3). Called
     /// inside a section of the exit guard.
     pub(super) fn queues_idle(&self) {
+        // A parked generation's work never ends: a wait for its queues would never return.
+        if self.wedged() {
+            return;
+        }
         let raw = self.vk();
         for slot in self.queues.iter() {
             // SAFETY: the queue is the device's, used under its lock, inside a section. Its
@@ -758,6 +767,12 @@ impl DeviceShared {
     /// Whether the generation's `VkDevice` was lost.
     pub(crate) fn lost(&self) -> bool {
         self.lost.load(Ordering::Acquire)
+    }
+
+    /// Whether the generation stopped and is parked (`command_buffer/stall.rs`): lost, its queues
+    /// never waited for, nothing of it destroyed.
+    pub(crate) fn wedged(&self) -> bool {
+        self.wedged.load(Ordering::Acquire)
     }
 
     /// Whether `kind`, met while lowering a render encoder's call after it returned, refuses the
@@ -1127,7 +1142,9 @@ impl Drop for DeviceShared {
         // Likewise where a submission of the submission checks never completed: the wait for
         // idle would never return, and its objects are still pending. The instance, which may
         // not go before its devices, is kept to the process's end with the device.
-        if !checks_ended {
+        // So where the generation stopped and is parked (`command_buffer/stall.rs`): its work
+        // never ends.
+        if !checks_ended || self.wedged() {
             std::mem::forget(Arc::clone(&self.instance));
             return;
         }
@@ -1661,6 +1678,19 @@ impl Device {
     pub(super) fn is_lost(&self) -> bool {
         let shared = self.shared();
         shared.lost() && !line::runs_on(shared)
+    }
+
+    /// Record that the device stopped (`command_buffer/stall.rs`): its `VkDevice` is parked, so
+    /// nothing of it is destroyed from now on, the device itself included (`release.rs`), and
+    /// nothing waits for its queues; then it is lost, as [`mark_lost`](Self::mark_lost) records.
+    /// Counted: `WorkCounts::wedges_declared`, `WorkCounts::vk_devices_parked`.
+    pub(crate) fn mark_wedged(&self) {
+        let shared = self.shared();
+        if !shared.wedged.swap(true, Ordering::AcqRel) {
+            crate::release::park(shared.vk().handle());
+            shared.counts.wedge_declared();
+        }
+        self.mark_lost();
     }
 
     /// Record that the device was lost: its line recovers at the next call that needs the device,
@@ -2905,6 +2935,7 @@ impl Device {
             loader_word: Arc::new(loader_word),
             owned,
             lost,
+            wedged: AtomicBool::new(false),
             textures,
             shader_cache,
             in_place: crate::in_place::InPlaceChecks::new(

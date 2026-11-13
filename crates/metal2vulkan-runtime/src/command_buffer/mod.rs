@@ -50,6 +50,7 @@ pub(super) mod recovery;
 mod reencode;
 pub(super) mod rerun;
 pub(super) mod revocation;
+mod stall;
 mod storage_form;
 mod submit;
 

@@ -280,6 +280,8 @@ struct Pending {
     parked: Vec<bool>,
     /// The drains sleeping until no waiter is in a wait ([`take_pending`]).
     draining: usize,
+    /// How long no queue's work advanced while some was pending (`stall.rs`).
+    stall: super::stall::Clock,
 }
 
 /// A submitted batch its queue's waiter waits for.
@@ -343,6 +345,7 @@ impl Completion {
                 stopping: false,
                 parked: vec![false; queues],
                 draining: 0,
+                stall: super::stall::Clock::default(),
             }),
             wakes: (0..queues).map(|_| Condvar::new()).collect(),
             drained: Condvar::new(),
@@ -1182,6 +1185,7 @@ fn wait_for_queue(watch: &Watch, queue: usize) {
         let polled = match exit_guard::enter() {
             Some(busy) => {
                 let polled = poll(&device, queue, front);
+                let polled = stalled(watch, &device, queue, front, polled);
                 drop(busy);
                 Some(polled)
             }
@@ -1217,6 +1221,53 @@ fn wait_for_queue(watch: &Watch, queue: usize) {
         watch.notify(&watch.drained, draining);
         if turn && !turns(watch, &mut lists) {
             return;
+        }
+    }
+}
+
+/// The stall clock after `queue`'s waiter's wait for `front` answered `polled` (`stall.rs`): it
+/// stops where the queue's timeline advanced, and runs where the front is still pending; past
+/// its bound, this waiter probes the GPU where the device has a staging queue, and a probe that
+/// finds the generation stopped fails the wait as a lost device's, the generation marked
+/// stopped first (`Device::mark_wedged`). What the waiter answers.
+fn stalled(
+    watch: &Watch,
+    device: &Device,
+    queue: usize,
+    front: Front,
+    polled: Result<u64, CommandBufferError>,
+) -> Result<u64, CommandBufferError> {
+    let Ok(value) = polled else {
+        return polled;
+    };
+    let counts = &device.shared().counts;
+    let stalled = {
+        let mut pending = lock(&watch.pending);
+        if value > pending.reached[queue] || value >= front.value {
+            if let Some(lasted) = pending.stall.advanced() {
+                counts.stall_lasted(lasted);
+            }
+            return Ok(value);
+        }
+        let after = super::stall::stall_after(device);
+        match pending.stall.ran_out(after) {
+            Some(stalled) if super::stall::probes(device) => stalled,
+            // No other engine to ask: nothing is probed (`stall.rs`, **Bounds**).
+            Some(_) => {
+                pending.stall.probed();
+                return Ok(value);
+            }
+            None => return Ok(value),
+        }
+    };
+    let verdict = super::stall::probe(device, queue, (front.value, front.fence), stalled);
+    lock(&watch.pending).stall.probed();
+    match verdict {
+        super::stall::Verdict::Runs => Ok(value),
+        super::stall::Verdict::Failed(error) => Err(failure(device, error)),
+        super::stall::Verdict::Stopped => {
+            device.mark_wedged();
+            Err(failure(device, vk::Result::ERROR_DEVICE_LOST))
         }
     }
 }
