@@ -103,6 +103,13 @@ path = "examples/copy_engine.rs"
 name = "queue_plan_cost"
 path = "examples/queue_plan_cost.rs"
 
+# Not a consumer's example: what a render pass instance costs the driver's CPU, by how it is
+# recorded: a primary per pass or per submission, a framebuffer made per pass or kept, or dynamic
+# rendering, on a Vulkan device of its own (examples/pass_costs.rs).
+[[example]]
+name = "pass_costs"
+path = "examples/pass_costs.rs"
+
 [dependencies]
 # The translator, through its public API only: the compiler checks that the runtime
 # reaches nothing else. `ash` gives `ash_interop`'s conversions and `DeviceDescription::query`.
