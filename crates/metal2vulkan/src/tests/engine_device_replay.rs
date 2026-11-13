@@ -2207,6 +2207,130 @@ fn a_flat_read_modify_write_of_its_grid_index_has_no_flat_variant() {
     assert!(ran > 0, "no profile with device addresses");
 }
 
+/// `lanes(b0, p, l)`: each thread stores its index in its simdgroup (`thread_index_in_simdgroup`)
+/// at `b0[p]`, `p` its position in the grid: it observes its threadgroup partition through its
+/// simdgroups alone, with no subgroup operation (its lanes are counted from its thread's index).
+const LANES: &str = r#"define void @lanes(ptr addrspace(1) noundef "air-buffer-no-alias" %b0, i32 noundef %p, i32 noundef %l) {
+entry:
+  %i = zext i32 %p to i64
+  %o = getelementptr inbounds i32, ptr addrspace(1) %b0, i64 %i
+  store i32 %l, ptr addrspace(1) %o, align 4
+  ret void
+}
+
+!air.kernel = !{!0}
+!air.version = !{!20}
+!air.language_version = !{!21}
+!0 = !{ptr @lanes, !1, !2}
+!1 = !{}
+!2 = !{!3, !4, !5}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b0"}
+!4 = !{i32 1, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"p"}
+!5 = !{i32 2, !"air.thread_index_in_simdgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"l"}
+!20 = !{i32 2, i32 8, i32 0}
+!21 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
+/// [`LANES`] with a threadgroup barrier before its store: it observes its partition otherwise.
+fn lanes_barrier() -> String {
+    LANES
+        .replace(
+            "  store i32 %l,",
+            "  call void @air.wg.barrier(i32 1, i32 1)\n  store i32 %l,",
+        )
+        .replace(
+            "\n!air.kernel",
+            "\ndeclare void @air.wg.barrier(i32, i32)\n\n!air.kernel",
+        )
+}
+
+/// A kernel that observes its threadgroup partition through its simdgroups alone has no flat
+/// variant of any threadgroups, and has one of the call's (`VariantKey::call_threadgroups`): a
+/// lane's index in its simdgroup ([`LANES`]) on every profile with device addresses, and
+/// [`flat_rmw`]'s lockstep simdgroup barrier at least where the kernel's simdgroups are its
+/// subgroups (full subgroups: `Direct`, `Cluster32`); elsewhere that barrier would be a workgroup
+/// barrier or an emulated simdgroup's, and the variant is refused. The variant states
+/// `RuntimeFact::FlatGrid` and `RuntimeFact::CallThreadgroups`. A kernel with a threadgroup
+/// barrier has neither variant, and the input is refused without the flat grid and with the
+/// replay's bindings.
+#[test]
+fn a_flat_grid_of_the_call_s_threadgroups_admits_a_kernel_of_simdgroups() {
+    let (Some(lanes), Some(barrier), Some(rmw)) = (
+        assemble("lanes", LANES),
+        assemble("lanes_barrier", &lanes_barrier()),
+        assemble("flat_rmw", &flat_rmw()),
+    ) else {
+        return;
+    };
+    let mut key = VariantKey::new();
+    key.flat_grid = true;
+    let any = key.lowering_inputs(Stage::Kernel);
+    key.call_threadgroups = true;
+    let call = key.lowering_inputs(Stage::Kernel);
+    let mut alone = LoweringInputs::new();
+    alone.call_threadgroups = true;
+    let mut replayed = call.clone();
+    replayed.replay_bindings = true;
+    let stated = |pipe: &ComputePipeline| {
+        [RuntimeFact::FlatGrid, RuntimeFact::CallThreadgroups]
+            .map(|fact| pipe.dependencies.iter().any(|d| d.fact == fact))
+    };
+    let (mut ran, mut barriers) = (0, 0);
+    for (stem, dev) in devices() {
+        if dev.profile().fields().buffer_access != BufferAccess::Addressed {
+            continue;
+        }
+        ran += 1;
+        let refused = |r: Result<ComputePipeline, Error>, needs: Needs, what: &str| match r {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(
+                    u.feature,
+                    Feature::GpuEncodedIndirectCommands,
+                    "{stem} {what}"
+                );
+                assert_eq!(u.needs, needs, "{stem} {what}");
+            }
+            other => panic!("{stem} {what}: {:?}", other.map(|_| ())),
+        };
+        for (bc, entry) in [(&lanes, "lanes"), (&rmw, "flat")] {
+            refused(
+                pipeline(&dev, bc, entry, &any),
+                Needs::NotRepresentable,
+                entry,
+            );
+            refused(
+                pipeline(&dev, bc, entry, &alone),
+                Needs::NotImplemented,
+                entry,
+            );
+            refused(
+                pipeline(&dev, bc, entry, &replayed),
+                Needs::NotImplemented,
+                entry,
+            );
+        }
+        let observed = pipeline(&dev, &barrier, "lanes", &call);
+        refused(observed, Needs::NotRepresentable, "barrier");
+        let pipe = pipeline(&dev, &lanes, "lanes", &call).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert_eq!(stated(&pipe), [true, true], "{stem}");
+        let lib = Library::from_air(&rmw).expect("library");
+        let f = FunctionDescriptor::new(lib.function("flat").expect("function"));
+        let base = dev
+            .compile_function(&f, &LoweringInputs::new(), &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        match pipeline(&dev, &rmw, "flat", &call) {
+            Ok(pipe) => {
+                assert_eq!(stated(&pipe), [true, true], "{stem}");
+                barriers += 1;
+            }
+            Err(e) if base.requires_full_subgroups() => panic!("{stem}: {e}"),
+            refusal => refused(refusal, Needs::NotImplemented, "lockstep barrier"),
+        }
+    }
+    assert!(ran > 0, "no profile with device addresses");
+    assert!(barriers > 0, "no profile ran the lockstep barrier flat");
+}
+
 /// The folded group counts of a threadgroup `dispatch` on `dev`, and its region record: the product
 /// of its group counts spread over `x` up to its limit, then `y`, then `z`, and the record of its
 /// grid in threads with its threadgroup size packed, as the flat-dispatch module's folded form

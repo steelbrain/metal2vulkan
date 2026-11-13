@@ -26,6 +26,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
+use self::partition::Partition;
 use crate::air::abi::{AbiInt, AirAbi, OutputRole, ParamRole, Stage as AbiStage};
 use crate::air::container::{self, LibraryFunction};
 use crate::air::{self, ConstValue, LinkedCode, LinkedModule, LinkedName, SpecRequest};
@@ -2690,14 +2691,22 @@ fn plan_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Planned
     let spec = grouped_entry(spec, r.inputs, p)?;
     let inputs = lower_inputs(&spec, r.inputs, p, m)?;
     // A flat variant runs its grid in threadgroups of its own: only a kernel that does not observe
-    // its partition computes the same there.
-    let partition_oblivious = partition::oblivious(&spec);
-    if inputs.flat_grid && !partition_oblivious {
+    // its partition computes the same there; one of the call's threadgroups, also a kernel that
+    // observes it through its simdgroups alone.
+    let observed = partition::partition(&spec);
+    let flat_runs = match inputs.call_threadgroups {
+        false => observed == Partition::Oblivious,
+        true => observed <= Partition::Simdgroups,
+    };
+    if inputs.flat_grid && !flat_runs {
         return Err(Unsupported::not_representable(Feature::GpuEncodedIndirectCommands).into());
     }
     // A folded variant runs one threadgroup dispatch of its own threadgroup size: neither a flat
-    // grid nor a device replay's bindings.
-    if inputs.folded_groups && (inputs.flat_grid || inputs.replay_bindings) {
+    // grid nor a device replay's bindings. The call's threadgroups are a flat grid's alone, and
+    // not a device replay's, whose commands' threadgroups its preprocess reads.
+    if inputs.folded_groups && (inputs.flat_grid || inputs.replay_bindings)
+        || inputs.call_threadgroups && (!inputs.flat_grid || inputs.replay_bindings)
+    {
         return Err(Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into());
     }
     let linked: Vec<LinkedKey<'_>> = r.linked.iter().map(|s| s.key).collect();
@@ -2728,7 +2737,8 @@ fn plan_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Planned
         } else {
             memory.tg_metal_static
         },
-        partition_oblivious,
+        partition_oblivious: observed == Partition::Oblivious,
+        partition_simdgroups: observed == Partition::Simdgroups,
     };
     Ok(Planned {
         key,

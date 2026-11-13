@@ -1673,6 +1673,17 @@ fn finish(
     } else {
         subgroup::tier(&cx.simd, stage, model)?
     };
+    // A flat grid of the call's threadgroups returns its invocations past the grid before the
+    // body (`dispatch::emit_entry`), so the rest of their workgroup cannot meet a workgroup
+    // synchronization: a module that would hold one (the emulated tier's exchanges, or a
+    // simdgroup barrier emitted at workgroup scope where the subgroup is not the simdgroup) is
+    // refused, and its dispatch runs split instead.
+    if cx.inputs.flat_grid && cx.inputs.call_threadgroups {
+        let set = simd::divergent::SyncSet::WorkgroupBarriers { stage, tier };
+        if tier == Tier::Emulated || sel.strategy.iter().flatten().any(|s| set.holds(s)) {
+            return Err(Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into());
+        }
+    }
     if tier == Tier::Emulated {
         // The emulated tier's exchange carries its own active flags.
         cx.families.simd.partly_live.clear();

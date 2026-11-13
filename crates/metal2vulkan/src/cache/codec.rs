@@ -1249,6 +1249,7 @@ codec_enum! {
         RowLockstep,
         OneRow,
         FlatGrid,
+        CallThreadgroups,
         SparseTextureWrites { slot, atomic },
         TileThreadgroupMemory { index },
         TextureSwizzle { slot },
@@ -1331,7 +1332,7 @@ codec_struct! {
     TextureReferenceType { data_type, texture_type, access, depth }
     KernelFacts {
         max_total_threads, work_group_size, flat_local_size, static_threadgroup_bytes,
-        partition_oblivious,
+        partition_oblivious, partition_simdgroups,
     }
     StrategyCensus { entries }
     StrategyUse { uses, words }

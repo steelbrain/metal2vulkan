@@ -235,7 +235,9 @@ pub struct LoweringInputs {
     /// its pipeline, which only a kernel that does not observe its threadgroup partition
     /// (`KernelFacts::partition_oblivious`) allows: it reads no dispatch builtin but
     /// `thread_position_in_grid` and `threads_per_grid`. Any other function is
-    /// `Unsupported{GpuEncodedIndirectCommands, NotRepresentable}` under it. Under
+    /// `Unsupported{GpuEncodedIndirectCommands, NotRepresentable}` under it, but a kernel that
+    /// observes its partition through its simdgroups alone under
+    /// [`call_threadgroups`](Self::call_threadgroups). Under
     /// `replay_bindings` the replay's preprocess writes the record per command
     /// (`ReplayVariant::flat`); otherwise the kernel binds as any other, and a preprocess writes
     /// the record beside its dispatch's group counts. It needs device addresses, and refuses a
@@ -243,6 +245,23 @@ pub struct LoweringInputs {
     /// (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub flat_grid: bool,
+    /// With [`flat_grid`](Self::flat_grid), the dispatch's threadgroups are the call's
+    /// (`VariantKey::call_threadgroups`): the grid is one row along `x`, in threadgroups of the
+    /// variant's local size, one row along `x` too, so workgroup `w`, counted `x` fastest, is
+    /// Metal's threadgroup `w`, and its invocations count its threads in the order of its
+    /// simdgroups' lanes (`lin`, the flattened tiers' subgroups). A kernel that observes its
+    /// partition through its simdgroups alone (`KernelFacts::partition_simdgroups`) then computes
+    /// what Metal's dispatch computes, and may read `thread_index_in_simdgroup`,
+    /// `thread_index_in_quadgroup` and `threads_per_simdgroup` besides the grid's builtins. The
+    /// invocations past the grid's last thread return before the body, so its simdgroup
+    /// operations and barriers run on the live lanes of the last simdgroup, Metal's partial one;
+    /// a module that would hold a workgroup barrier (a simdgroup barrier or fence emitted at
+    /// workgroup scope, in a tier whose subgroup is not the simdgroup) is
+    /// `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`, and so is the input without
+    /// `flat_grid` or with `replay_bindings`. The caller states the dispatch's shape: nothing in
+    /// the module checks it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub call_threadgroups: bool,
     /// The fragment function's render pipeline has a vertex function that writes
     /// `[[render_target_array_index]]`. That function stores `Layer` as 0 for an index at or past
     /// the render pass's `renderTargetArrayLength`, where Metal renders the pass's first layer, and

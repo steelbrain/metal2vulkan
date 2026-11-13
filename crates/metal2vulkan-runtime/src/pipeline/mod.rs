@@ -348,6 +348,9 @@ pub(super) struct Program {
     /// The compile layer refused the kernel a flat variant ([`ComputePipelineState::settle_flat`]),
     /// so its indirect dispatches take the host step.
     flat_refused: AtomicBool,
+    /// The compile layer refused the kernel a flat variant of the call's threadgroups
+    /// ([`ComputePipelineState::settle_flat`]), so its direct dispatches of a ragged grid split.
+    call_flat_refused: AtomicBool,
     /// The state has no flat device-replay variant whose plan binds no descriptor
     /// ([`ComputePipelineState::replay_variant`]), so an execution of an indirect command
     /// buffer that may run it takes the host step.
@@ -967,6 +970,7 @@ impl ComputePipelineState {
                 stand_in,
                 others: Mutex::new(Lru::counted(VARIANTS)),
                 flat_refused: AtomicBool::new(false),
+                call_flat_refused: AtomicBool::new(false),
                 replay_refused: AtomicBool::new(false),
                 folded_refused: AtomicBool::new(false),
                 added_unsupported,
@@ -1654,17 +1658,27 @@ impl ComputePipelineState {
     /// `dispatch` is an indirect dispatch at the group counts a preprocess writes
     /// (`indirect_dispatch.rs`) or a direct `dispatchThreads:` whose grid the variant's one region
     /// covers (`compute::flat_direct`); the variant's plan must run that very dispatch, which the
-    /// check against `key` states. `None` where the compile layer refuses the kernel a flat
-    /// variant, `Unsupported{GpuEncodedIndirectCommands}`: the kernel observes its threadgroup
-    /// partition (`KernelFacts::partition_oblivious`), or the device reaches no memory by device
-    /// address. The state remembers that refusal, which no bind shape changes.
+    /// check against `key` states. With `call`, the variant of the call's threadgroups
+    /// (`VariantKey::call_threadgroups`), for a one-row grid in threadgroups of one row of a
+    /// direct dispatch. `None` where the compile layer refuses the kernel such a variant,
+    /// `Unsupported{GpuEncodedIndirectCommands}`: the kernel observes its threadgroup partition
+    /// (`KernelFacts::partition_oblivious`; with `call`, otherwise than through its simdgroups,
+    /// `KernelFacts::partition_simdgroups`, or its module would hold a workgroup barrier), or the
+    /// device reaches no memory by device address. The state remembers that refusal, which no
+    /// bind shape changes. With `call`, also `None` where `local` asks for emulated simdgroups,
+    /// which no flat variant runs, unremembered: another threadgroup size may not.
     pub(super) fn settle_flat(
         &self,
         shape: &BindShape,
         local: [u32; 3],
         dispatch: &Dispatch,
+        call: bool,
     ) -> Result<Option<(Arc<Variant>, Arc<BindingPlan>)>, Error> {
-        if self.0.flat_refused.load(Ordering::Relaxed) {
+        let refused = match call {
+            false => &self.0.flat_refused,
+            true => &self.0.call_flat_refused,
+        };
+        if refused.load(Ordering::Relaxed) {
             return Ok(None);
         }
         let plan = self.0.base.plan(&self.0.device, shape)?;
@@ -1674,13 +1688,17 @@ impl ComputePipelineState {
         let mut key = plan
             .dispatch_variant(&flat_dispatch(local))
             .map_err(Error::Bind)?;
+        if call && key.emulated_simdgroups {
+            return Ok(None);
+        }
         key.flat_grid = true;
+        key.call_threadgroups = call;
         let variant = match self.variant(&key) {
             Ok(variant) => variant,
             Err(Error::Unsupported(unsupported))
                 if unsupported.feature == Feature::GpuEncodedIndirectCommands =>
             {
-                self.0.flat_refused.store(true, Ordering::Relaxed);
+                refused.store(true, Ordering::Relaxed);
                 return Ok(None);
             }
             Err(error) => return Err(error),

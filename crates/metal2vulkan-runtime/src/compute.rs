@@ -1843,7 +1843,7 @@ fn settle_indirect(
     if let Some(indirect) = call.indirect(pipeline) {
         let local = indirect.threads_per_threadgroup;
         let flat = flat_dispatch(local);
-        if let Some((variant, plan)) = pipeline.settle_flat(shape, local, &flat)? {
+        if let Some((variant, plan)) = pipeline.settle_flat(shape, local, &flat, false)? {
             return Ok(Some((variant, plan, indirect)));
         }
     }
@@ -1867,9 +1867,18 @@ fn settle_indirect(
 /// call's size too: on a guest's run on an RX 7900 XTX, a kernel dispatched at 64 such widths
 /// made 185,566 `VkPipeline`s in 45 s while its variant kept 32 (`pipeline::REGION_PIPELINES`).
 ///
+/// A kernel that observes its partition through its simdgroups alone
+/// (`KernelFacts::partition_simdgroups`: a simdgroup barrier, function or lane builtin, and nothing
+/// of its threadgroup) runs a one-row grid in threadgroups of one row on the flat variant of the
+/// call's threadgroups (`VariantKey::call_threadgroups`): its workgroups are Metal's threadgroups,
+/// its simdgroups Metal's, the last one's lanes past the grid returned before the body. So a
+/// kernel compiled once does not compile a second `VkPipeline` for its ragged edge.
+///
 /// `None`, so the dispatch keeps its exact split, where its grid is already a whole number of
 /// threadgroups on every axis (the split is one region of the call's size, which the flat form
-/// cannot better) or is empty, where the kernel observes its threadgroup partition or the device
+/// cannot better) or is empty, where the kernel observes its threadgroup partition (through its
+/// simdgroups alone, where the grid or its threadgroups are not one row, or where the module would
+/// hold a workgroup barrier or emulate its simdgroups) or the device
 /// reaches no memory by device address
 /// (the compile layer's refusal, which the state remembers), where the flat form cannot cover the
 /// grid within the device's `maxComputeWorkGroupCount`, or in the large-buffer form, whose key
@@ -1897,7 +1906,13 @@ fn flat_direct(
     if empty || (0..3).all(|i| threads[i] % threads_per_group[i] == 0) {
         return Ok(None);
     }
-    match pipeline.settle_flat(shape, threads_per_group, dispatch) {
+    // The variant of any threadgroups, else, for one row in threadgroups of one row, the call's.
+    let mut settled = pipeline.settle_flat(shape, threads_per_group, dispatch, false);
+    let one_row = threads[1..] == [1, 1] && threads_per_group[1..] == [1, 1];
+    if one_row && matches!(settled, Ok(None)) {
+        settled = pipeline.settle_flat(shape, threads_per_group, dispatch, true);
+    }
+    match settled {
         Ok(settled) => Ok(settled),
         // A grid the flat form cannot cover within the device's group-count limits: the split
         // covers it exactly, region by region.

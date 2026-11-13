@@ -857,11 +857,16 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
     // A pipeline compiled as its one-row variant states it; a dispatch asks for it where every
     // region is one row of a kernel with `RowLockstep` (`dispatch_variant`).
     variant.one_row = p.dependencies.iter().any(|d| d.fact == RuntimeFact::OneRow);
-    // A pipeline compiled for a flat grid states its variant.
+    // A pipeline compiled for a flat grid states its variant, and one of the call's threadgroups
+    // states that too.
     variant.flat_grid = p
         .dependencies
         .iter()
         .any(|d| d.fact == RuntimeFact::FlatGrid);
+    variant.call_threadgroups = p
+        .dependencies
+        .iter()
+        .any(|d| d.fact == RuntimeFact::CallThreadgroups);
     // And one compiled to fold its group counts.
     variant.folded_groups = p
         .dependencies

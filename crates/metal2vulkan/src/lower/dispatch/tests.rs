@@ -31,6 +31,7 @@ fn plan(form: LocalSizeForm, multi_region: bool) -> DispatchPlan {
         tile: false,
         tile_sized: false,
         flat_grid: false,
+        call_threadgroups: false,
         keys: SpecKey::dispatch_keys(Stage::Kernel),
         folded_groups: false,
         draw_pieces: false,

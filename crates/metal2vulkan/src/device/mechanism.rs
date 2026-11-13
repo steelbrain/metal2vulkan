@@ -160,6 +160,7 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::OneRow => Mechanism::Variant,
         // A pipeline compiled under the flat-grid variant; its plans state it.
         RuntimeFact::FlatGrid => Mechanism::Variant,
+        RuntimeFact::CallThreadgroups => Mechanism::Variant,
         // A sparse texture's writes are dropped under the slot's `SparseTexture` specialization;
         // at a slot updated atomically the planner refuses one.
         RuntimeFact::SparseTextureWrites { atomic: false, .. } => Mechanism::Specialization,

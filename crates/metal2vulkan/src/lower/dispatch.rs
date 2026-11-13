@@ -89,7 +89,14 @@
 //! region[1].xyz`, in 64 bits, and takes the position it counts to; one past the grid's last thread
 //! returns before the body ([`emit_entry`]). Such a kernel reads no builtin but
 //! `thread_position_in_grid` and `threads_per_grid` (the compile refuses any other kernel under the
-//! input).
+//! input). Of the call's threadgroups (`LoweringInputs::call_threadgroups`: a one-row grid in
+//! threadgroups of one row), the invocation counts by `lin` in place of `LocalInvocationIndex`,
+//! so in a flattened tier its thread is its simdgroup lane's, and workgroup `w` is Metal's
+//! threadgroup `w` with its simdgroups and quadgroups: a kernel that observes its partition through
+//! its simdgroups alone reads `thread_index_in_simdgroup`, `thread_index_in_quadgroup` and
+//! `threads_per_simdgroup` too, and its simdgroup operations run on the lanes left live, as on
+//! Metal's partial simdgroup. A module that would hold a workgroup barrier there is refused
+//! (`select`).
 //!
 //! **Folded groups**. A folded variant (`LoweringInputs::folded_groups`) runs a threadgroup
 //! dispatch whose group counts are GPU data as one dispatch `(nx, ny, nz)` within the device's
@@ -406,6 +413,9 @@ pub struct DispatchPlan {
     pub tile_sized: bool,
     /// The kernel runs its grid flat (`LoweringInputs::flat_grid`).
     pub flat_grid: bool,
+    /// With `flat_grid`, its threadgroups are the call's (`LoweringInputs::call_threadgroups`):
+    /// it counts its threads by `lin` and may read the lanes' builtins.
+    pub call_threadgroups: bool,
     /// The specialization keys of its threadgroup size and grid form: an object function's own, the
     /// kernel's for every other stage.
     pub keys: DispatchKeys,
@@ -549,6 +559,7 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
         cx.facts.insert(RuntimeFact::TileThreadgroup { tile_sized });
     }
     let flat_grid = cx.inputs.flat_grid;
+    let call_threadgroups = flat_grid && cx.inputs.call_threadgroups;
     let folded_groups = cx.inputs.folded_groups;
     cx.facts.insert(RuntimeFact::ThreadsPerThreadgroup);
     cx.facts.insert(RuntimeFact::LocalSizeLimits);
@@ -574,6 +585,9 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
     if flat_grid {
         cx.facts.insert(RuntimeFact::FlatGrid);
     }
+    if call_threadgroups {
+        cx.facts.insert(RuntimeFact::CallThreadgroups);
+    }
     if folded_groups {
         cx.facts.insert(RuntimeFact::FoldedGroups);
     }
@@ -588,6 +602,7 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
         tile: crate::lower::access::tile::is_tile(cx),
         tile_sized,
         flat_grid,
+        call_threadgroups,
         keys: SpecKey::dispatch_keys(cx.stage),
         folded_groups,
         draw_pieces: folded_groups && cx.stage == crate::pipeline::sym::Stage::Object,
@@ -714,13 +729,8 @@ fn param_value(
     let (Some(p), Some(decl)) = (planned, decl) else {
         return Err(cx.fail(format!("parameter {} has no dispatch value", b.param)));
     };
-    // A flat grid derives the grid's builtins alone.
-    if decl.flat_grid
-        && !matches!(
-            p.builtin,
-            KernelBuiltin::ThreadPositionInGrid | KernelBuiltin::ThreadsPerGrid
-        )
-    {
+    // A flat grid derives the grid's builtins alone, and of the call's threadgroups the lanes'.
+    if decl.flat_grid && !decl.flat_reads(p.builtin) {
         return Err(cx.fail(format!("parameter {} is not a flat grid's", b.param)));
     }
     let raw = match (p.builtin, flat_position) {
@@ -801,6 +811,8 @@ pub struct KernelDecl {
     tile_sized: bool,
     /// The kernel runs its grid flat ([`KernelDecl::flat`]).
     flat_grid: bool,
+    /// Of the call's threadgroups ([`DispatchPlan::call_threadgroups`]).
+    call_threadgroups: bool,
     /// The kernel folds Metal's group counts into its dispatch ([`KernelDecl::folded`]).
     folded_groups: bool,
     /// A folded object function's `DrawIndex`, its draw's piece ([`DispatchPlan::draw_pieces`]).
@@ -1020,9 +1032,10 @@ impl KernelDecl {
         let needs = Needs::of(dp);
         let flat = dp.local_size == LocalSizeForm::Flat;
         // A flat grid counts its threads by `LocalInvocationIndex` in either form: it reads no
-        // simdgroup.
-        let index = needs.lin && (!flat || dp.flat_grid);
-        let subgroups = needs.lin && flat && !dp.flat_grid;
+        // simdgroup. One of the call's threadgroups counts them by `lin`, its simdgroups' lanes.
+        let by_index = dp.flat_grid && !dp.call_threadgroups;
+        let index = needs.lin && (!flat || by_index);
+        let subgroups = needs.lin && flat && !by_index;
         use crate::spv::BuiltIn as B;
         // A wrapper that computes the threadgroup's position and grid stores them into private
         // words, which the builtins read; it reads the dispatch's own.
@@ -1055,6 +1068,7 @@ impl KernelDecl {
             tile: dp.tile,
             tile_sized: dp.tile_sized,
             flat_grid: dp.flat_grid,
+            call_threadgroups: dp.call_threadgroups,
             folded_groups: dp.folded_groups,
             draw_index: var(dp.draw_pieces, B::DrawIndex, u32_)?,
             uvec3,
@@ -1386,6 +1400,20 @@ impl KernelDecl {
         fb.binary(BinOp::IAdd, base, within)
     }
 
+    /// Whether a flat grid derives builtin `b`: the grid's position and size, and, of the call's
+    /// threadgroups ([`DispatchPlan::call_threadgroups`]), a lane's index in its simdgroup or
+    /// quadgroup and the simdgroup's width, which its `lin` answers as Metal's threadgroup does.
+    fn flat_reads(&self, b: KernelBuiltin) -> bool {
+        use KernelBuiltin as K;
+        match b {
+            K::ThreadPositionInGrid | K::ThreadsPerGrid => true,
+            K::ThreadIndexInSimdgroup | K::ThreadIndexInQuadgroup | K::ThreadsPerSimdgroup => {
+                self.call_threadgroups
+            }
+            _ => false,
+        }
+    }
+
     /// `thread_index_in_threadgroup`: `lin`, or a tile function's index of its position
     /// ([`Self::tile_index`]), but `lin` where its threadgroup is the tile.
     fn thread_index(&self, fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
@@ -1446,8 +1474,8 @@ impl KernelDecl {
 
     /// A flat grid's thread position in the grid (a `uvec3`) and whether the invocation is inside
     /// the grid: its index `((wz · ny + wy) · nx + wx) · N + LocalInvocationIndex` over the
-    /// dispatch, with `N = sx·sy·sz`, counted over `threads_per_grid` (`region[1].xyz`) `x`
-    /// fastest. Inside the grid each axis's position is below its size, so it fits its `u32`;
+    /// dispatch (`lin` for the call's threadgroups, [`Self::lin`]), with `N = sx·sy·sz`, counted
+    /// over `threads_per_grid` (`region[1].xyz`) `x` fastest. Inside the grid each axis's position is below its size, so it fits its `u32`;
     /// past it the position is unused.
     ///
     /// Three arms, each chosen by values uniform over the workgroup, so a workgroup takes one:
@@ -1478,7 +1506,10 @@ impl KernelDecl {
         })?;
         let wg = self.load(fb, self.workgroup_id)?;
         let groups = self.load(fb, self.num_workgroups)?;
-        let lin = self.load(fb, self.local_index)?;
+        let lin = match self.call_threadgroups {
+            true => self.lin(fb)?,
+            false => self.load(fb, self.local_index)?,
+        };
         let s = self.size3(fb)?;
         let n = Self::volume(fb, s)?;
         let r = region(fb)?;

@@ -354,6 +354,11 @@ pub enum RuntimeFact {
     /// record at its `PushField::ReplayRegionAddress`, which a preprocess writes beside the
     /// dispatch's group counts. Its plans state the variant.
     FlatGrid,
+    /// The kernel was compiled under `VariantKey::call_threadgroups`
+    /// (`LoweringInputs::call_threadgroups`), with `FlatGrid`: it runs a one-row grid in the
+    /// call's threadgroups of one row, its invocations counting their threads in its simdgroups'
+    /// lane order. Its plans state the variant.
+    CallThreadgroups,
     /// The function writes texture slot `slot` (a `write` or an imageblock slice's copy), or,
     /// with `atomic`, updates it by a texture atomic. Metal drops every write a function makes to
     /// a sparse texture, its mapped tiles' included: the texture keeps its contents for the

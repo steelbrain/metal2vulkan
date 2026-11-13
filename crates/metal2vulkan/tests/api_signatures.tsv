@@ -4178,6 +4178,7 @@ field	metal2vulkan::cache::VariantKey.address_maps	pub address_maps: BTreeMap<Sl
 field	metal2vulkan::cache::VariantKey.addressed_function_tables	pub addressed_function_tables: bool
 field	metal2vulkan::cache::VariantKey.amplification_draws	pub amplification_draws: Option<crate::pipeline::AmplificationDraws>
 field	metal2vulkan::cache::VariantKey.anisotropic_samplers	pub anisotropic_samplers: BTreeSet<SlotRef>
+field	metal2vulkan::cache::VariantKey.call_threadgroups	pub call_threadgroups: bool
 field	metal2vulkan::cache::VariantKey.color_group	pub color_group: u32
 field	metal2vulkan::cache::VariantKey.cross_class	pub cross_class: BTreeMap<SlotRef, crate::pipeline::sym::SampledType>
 field	metal2vulkan::cache::VariantKey.cubic_samplers	pub cubic_samplers: BTreeMap<SlotRef, u32>
@@ -4770,6 +4771,7 @@ field	metal2vulkan::pipeline::LoweringInputs.alpha_in_red_colors	pub alpha_in_re
 field	metal2vulkan::pipeline::LoweringInputs.alpha_test	pub alpha_test: Option<crate::metal::CompareFunction>
 field	metal2vulkan::pipeline::LoweringInputs.amplification_draws	pub amplification_draws: Option<AmplificationDraws>
 field	metal2vulkan::pipeline::LoweringInputs.anisotropic_samplers	pub anisotropic_samplers: BTreeSet<SlotRef>
+field	metal2vulkan::pipeline::LoweringInputs.call_threadgroups	pub call_threadgroups: bool
 field	metal2vulkan::pipeline::LoweringInputs.color_group	pub color_group: Option<ColorGroup>
 field	metal2vulkan::pipeline::LoweringInputs.color_writes	pub color_writes: BTreeMap<u32, [Option<ChannelWrite>; 4]>
 field	metal2vulkan::pipeline::LoweringInputs.cross_class	pub cross_class: BTreeMap<SlotRef, SampledType>
@@ -14698,6 +14700,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::BicubicTexels	BicubicTexels { slot:
 variant	metal2vulkan::pipeline::RuntimeFact::BorderTexels	BorderTexels { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::BufferRangeLimit	BufferRangeLimit { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::CallStackDepth	CallStackDepth { depth: u32 }
+variant	metal2vulkan::pipeline::RuntimeFact::CallThreadgroups	CallThreadgroups
 variant	metal2vulkan::pipeline::RuntimeFact::ConstantLanes	ConstantLanes { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::ConstexprSampled	ConstexprSampled { slot: SlotRef, modes: [crate::metal::SamplerAddressMode; 3] }
 variant	metal2vulkan::pipeline::RuntimeFact::CrossClassReads	CrossClassReads { slot: SlotRef }

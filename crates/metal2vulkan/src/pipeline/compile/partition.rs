@@ -1,5 +1,5 @@
-//! Whether a kernel observes its threadgroup partition, decided from the specialized entry's AIR
-//! alone: `KernelFacts::partition_oblivious`.
+//! How a kernel observes its threadgroup partition, decided from the specialized entry's AIR
+//! alone: `KernelFacts::partition_oblivious` and `KernelFacts::partition_simdgroups`.
 //!
 //! A kernel that does not observe it computes the same in every partition of its grid into
 //! threadgroups, so the runtime may run an indirect command's dispatch in threadgroups of its own
@@ -22,7 +22,16 @@
 //!
 //! Any other operation is a thread's own: arithmetic, device and constant memory, textures,
 //! samplers, device-scope atomics and fences, indirect commands, function constants and tables,
-//! and `quad_is_helper_thread` and `simd_is_helper_thread`, which no kernel thread is.
+//! `air.all` and `air.any` of a boolean vector (a thread's own vector), and `quad_is_helper_thread`
+//! and `simd_is_helper_thread`, which no kernel thread is.
+//!
+//! A kernel observes it **through its simdgroups alone** when every observation is a simdgroup's:
+//! a barrier of simdgroup execution scope, a fence or an atomic of simdgroup scope, a simdgroup or
+//! quad function (`simd_*`, `quad_*`), `is_uniform`, the simdgroup size, and the builtins
+//! `thread_index_in_simdgroup`, `thread_index_in_quadgroup` and `threads_per_simdgroup`. Such a
+//! kernel computes the same in any partition that keeps its threadgroups, and with them their
+//! simdgroups and quadgroups (each of a threadgroup's consecutive 32 or 4 threads): a flat grid of
+//! the call's own threadgroups (`LoweringInputs::call_threadgroups`).
 
 use std::collections::BTreeSet;
 
@@ -31,14 +40,25 @@ use crate::air::abi::{Builtin, ParamRole, Stage as AbiStage};
 use crate::air::intrinsics::{AirIntrinsic, Fragment, Sync, ThreadScope};
 use crate::air::ir::{AddrSpace, Callee, InstKind, Type, Value};
 
-/// Whether kernel `e` does not observe its threadgroup partition (see the module). Any other
-/// stage, and an entry without a body, does.
-pub(super) fn oblivious(e: &air::Entry) -> bool {
+/// How a kernel observes its threadgroup partition (see the module).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Partition {
+    /// It does not observe it.
+    Oblivious,
+    /// It observes it through its simdgroups alone.
+    Simdgroups,
+    /// It observes it otherwise, or is not a kernel with a body.
+    Observed,
+}
+
+/// How kernel `e` observes its threadgroup partition (see the module). Any other stage, and an
+/// entry without a body, observes it.
+pub(super) fn partition(e: &air::Entry) -> Partition {
     if !matches!(e.ep.stage, AbiStage::Kernel { .. }) {
-        return false;
+        return Partition::Observed;
     }
     let Some(body) = e.module.func(e.func).and_then(|f| f.body.as_ref()) else {
-        return false;
+        return Partition::Observed;
     };
     if e.module
         .parts()
@@ -46,17 +66,19 @@ pub(super) fn oblivious(e: &air::Entry) -> bool {
         .iter()
         .any(|(_, g)| partitioned(g.space))
     {
-        return false;
+        return Partition::Observed;
     }
     let types = e.module.types();
+    let mut seen = Partition::Oblivious;
     let mut read = BTreeSet::new();
     for inst in body.insts.values() {
         if matches!(types.get(inst.ty), Some(Type::Ptr { space }) if partitioned(*space)) {
-            return false;
+            return Partition::Observed;
         }
         if let InstKind::Call(call) = &inst.kind {
-            if observes(&call.callee) {
-                return false;
+            seen = seen.max(observes(&call.callee));
+            if seen == Partition::Observed {
+                return seen;
             }
         }
         inst.kind.for_each_value(|v| {
@@ -65,10 +87,10 @@ pub(super) fn oblivious(e: &air::Entry) -> bool {
             }
         });
     }
-    !e.ep
-        .params
-        .iter()
-        .any(|b| read.contains(&b.param) && partition_role(&b.role))
+    let params = e.ep.params.iter().filter(|b| read.contains(&b.param));
+    params
+        .map(|b| partition_role(&b.role))
+        .fold(seen, Partition::max)
 }
 
 /// Whether `space` is memory one threadgroup shares.
@@ -79,36 +101,36 @@ fn partitioned(space: AddrSpace) -> bool {
     )
 }
 
-/// Whether a parameter of `role` is the partition's.
-fn partition_role(role: &ParamRole) -> bool {
+/// How a parameter of `role`, read, observes the partition.
+fn partition_role(role: &ParamRole) -> Partition {
     match role {
-        ParamRole::Threadgroup(_) | ParamRole::Imageblock(_) => true,
+        ParamRole::Threadgroup(_) | ParamRole::Imageblock(_) => Partition::Observed,
         ParamRole::Builtin(b) => partition_builtin(*b),
-        _ => false,
+        _ => Partition::Oblivious,
     }
 }
 
-/// Whether builtin `b` reads the partition (see the module).
-fn partition_builtin(b: Builtin) -> bool {
+/// How builtin `b`, read, observes the partition (see the module).
+fn partition_builtin(b: Builtin) -> Partition {
     match b {
+        Builtin::ThreadIndexInSimdgroup
+        | Builtin::ThreadIndexInQuadgroup
+        | Builtin::ThreadsPerSimdgroup => Partition::Simdgroups,
         Builtin::ThreadPositionInThreadgroup
         | Builtin::ThreadgroupPositionInGrid
         | Builtin::ThreadsPerThreadgroup
         | Builtin::ThreadgroupsPerGrid
         | Builtin::ThreadIndexInThreadgroup
-        | Builtin::ThreadIndexInSimdgroup
-        | Builtin::ThreadIndexInQuadgroup
         | Builtin::SimdgroupIndexInThreadgroup
         | Builtin::QuadgroupIndexInThreadgroup
-        | Builtin::ThreadsPerSimdgroup
         | Builtin::SimdgroupsPerThreadgroup
         | Builtin::QuadgroupsPerThreadgroup
         | Builtin::DispatchThreadsPerThreadgroup
-        | Builtin::DispatchSimdgroupsPerThreadgroup => true,
+        | Builtin::DispatchSimdgroupsPerThreadgroup => Partition::Observed,
         Builtin::ThreadPositionInGrid
         | Builtin::ThreadsPerGrid
         | Builtin::StageInGridSize
-        | Builtin::StageInGridOrigin => false,
+        | Builtin::StageInGridOrigin => Partition::Oblivious,
         // Other stages' builtins: no kernel reads them.
         Builtin::VertexId
         | Builtin::InstanceId
@@ -127,32 +149,37 @@ fn partition_builtin(b: Builtin) -> bool {
         | Builtin::PostDepthCoverage
         | Builtin::BarycentricCoord(_)
         | Builtin::RenderTargetArrayIndex
-        | Builtin::ViewportArrayIndex => true,
+        | Builtin::ViewportArrayIndex => Partition::Observed,
     }
 }
 
-/// Whether a call to `callee` observes the partition (see the module).
-fn observes(callee: &Callee) -> bool {
+/// How a call to `callee` observes the partition (see the module).
+fn observes(callee: &Callee) -> Partition {
     let op = match callee {
         Callee::Air { op, .. } => op,
-        Callee::Llvm { .. } => return false,
+        Callee::Llvm { .. } => return Partition::Oblivious,
         // Canonicalization inlines every defined callee; what remains is not the kernel's own.
         Callee::Direct(_)
         | Callee::Indirect { .. }
         | Callee::UnknownIntrinsic(_)
-        | Callee::Unbound { .. } => return true,
+        | Callee::Unbound { .. } => return Partition::Observed,
     };
-    let scoped =
-        |scope: ThreadScope| matches!(scope, ThreadScope::Threadgroup | ThreadScope::Simdgroup);
+    let scoped = |scope: ThreadScope| match scope {
+        ThreadScope::Simdgroup => Partition::Simdgroups,
+        ThreadScope::Threadgroup => Partition::Observed,
+        _ => Partition::Oblivious,
+    };
     match op {
-        AirIntrinsic::Sync(Sync::Barrier { .. }) => true,
+        AirIntrinsic::Sync(Sync::Barrier { scope, .. }) => match scope {
+            ThreadScope::Simdgroup => Partition::Simdgroups,
+            _ => Partition::Observed,
+        },
         AirIntrinsic::Sync(Sync::Fence { scope, .. }) => scoped(*scope),
         AirIntrinsic::Atomic(a) => scoped(a.scope),
-        AirIntrinsic::Group(_)
-        | AirIntrinsic::BoolReduce(_)
-        | AirIntrinsic::IsUniform(_)
-        | AirIntrinsic::SimdgroupSize(_)
-        | AirIntrinsic::SimdMatrix(_)
+        AirIntrinsic::Group(_) | AirIntrinsic::IsUniform(_) | AirIntrinsic::SimdgroupSize(_) => {
+            Partition::Simdgroups
+        }
+        AirIntrinsic::SimdMatrix(_)
         | AirIntrinsic::Imageblock(_)
         | AirIntrinsic::AsyncCopy(_)
         | AirIntrinsic::Derivative(_)
@@ -162,8 +189,10 @@ fn observes(callee: &Callee) -> bool {
         | AirIntrinsic::Tensor(_)
         | AirIntrinsic::AccelerationStructure(_)
         | AirIntrinsic::Intersect(_)
-        | AirIntrinsic::Mesh(_) => true,
-        AirIntrinsic::Fragment(Fragment::IsHelperThread)
+        | AirIntrinsic::Mesh(_) => Partition::Observed,
+        // A reduction of a thread's own boolean vector.
+        AirIntrinsic::BoolReduce(_)
+        | AirIntrinsic::Fragment(Fragment::IsHelperThread)
         | AirIntrinsic::Interpolate(_)
         | AirIntrinsic::Math(_)
         | AirIntrinsic::Convert(_)
@@ -175,9 +204,9 @@ fn observes(callee: &Callee) -> bool {
         | AirIntrinsic::Sampler(_)
         | AirIntrinsic::FunctionConstant(_)
         | AirIntrinsic::FunctionTable(_)
-        | AirIntrinsic::IndirectCommand(_) => false,
+        | AirIntrinsic::IndirectCommand(_) => Partition::Oblivious,
         // The dispatch's offset and dimension count, which every threadgroup reads alike.
-        AirIntrinsic::WorkItem(_) => false,
+        AirIntrinsic::WorkItem(_) => Partition::Oblivious,
         // A global built-in read canonicalization left a call (its lane is no constant, and
         // lowering refuses it) reads its built-in as the parameter would.
         AirIntrinsic::GlobalBuiltin(g) => partition_builtin(g.var.builtin()),
@@ -186,6 +215,7 @@ fn observes(callee: &Callee) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::Partition;
     use crate::budget::{Budget, Meter};
     use crate::device::DevicePolicy;
     use crate::library::FunctionConstantValues;
@@ -308,19 +338,20 @@ entry:
         );
     }
 
-    /// Whether kernel `k`'s specialized entry is partition-oblivious.
-    fn oblivious(name: &str, k: &Kernel<'_>) -> Option<bool> {
+    /// How kernel `k`'s specialized entry observes its partition.
+    fn partition(name: &str, k: &Kernel<'_>) -> Option<Partition> {
         let bc = k.bitcode(name)?;
         let mut m = Meter::new(&Budget::default());
         let none = FunctionConstantValues::defaults();
         let e = specialized_entry(&bc, "k", &lavapipe(), &none, &[], &mut m)
             .unwrap_or_else(|e| panic!("{name}: {e}"));
-        Some(super::oblivious(&e))
+        Some(super::partition(&e))
     }
 
     /// A kernel of the grid's builtins, a device-scope fence and a device-scope atomic does not
     /// observe its partition, nor one that asks whether its thread is a helper, which no kernel
-    /// thread is. The atomic updates the word after the one the kernel stores to: on the stored
+    /// thread is, nor one that reduces a boolean vector of its own (`air.any`, `air.all`). The
+    /// atomic updates the word after the one the kernel stores to: on the stored
     /// word itself, lanes of one simdgroup race, and the lockstep barrier that orders them observes
     /// the partition (`a_device_race_lockstep_orders_observes_the_partition`).
     #[test]
@@ -332,6 +363,10 @@ entry:
         let atomic = "%w = getelementptr i32, ptr addrspace(1) %out, i64 1\n  %o = call i32 \
                       @air.atomic.global.add.u.i32(ptr addrspace(1) %w, i32 1, i32 0, i32 2, i1 \
                       true)\n  %v = add i32 %b, %o";
+        let reduce = "%odd = trunc i32 %b to i1\n  %p = insertelement <2 x i1> <i1 true, i1 \
+                      true>, i1 %odd, i32 0\n  %a = call i1 @air.all.v2i1(<2 x i1> %p)\n  %n = \
+                      call i1 @air.any.v2i1(<2 x i1> %p)\n  %e = and i1 %a, %n\n  %z = zext i1 \
+                      %e to i32\n  %v = add i32 %b, %z";
         for (name, k) in [
             ("position in grid", PLAIN),
             (
@@ -367,11 +402,20 @@ entry:
                     ..PLAIN
                 },
             ),
+            (
+                "boolean vector reductions",
+                Kernel {
+                    body: reduce,
+                    declarations: "declare i1 @air.all.v2i1(<2 x i1>)\n\
+                                   declare i1 @air.any.v2i1(<2 x i1>)",
+                    ..PLAIN
+                },
+            ),
         ] {
-            let Some(oblivious) = oblivious(name, &k) else {
+            let Some(partition) = partition(name, &k) else {
                 return;
             };
-            assert!(oblivious, "{name}");
+            assert_eq!(partition, Partition::Oblivious, "{name}");
         }
     }
 
@@ -388,43 +432,47 @@ entry:
                            i32, i1)",
             ..PLAIN
         };
-        let Some(oblivious) = oblivious("device race", &k) else {
+        let Some(partition) = partition("device race", &k) else {
             return;
         };
-        assert!(!oblivious);
+        assert_ne!(partition, Partition::Oblivious);
     }
 
-    /// Each builtin of the partition, read, makes a kernel observe it.
+    /// Each builtin of the partition, read, makes a kernel observe it: a lane's index in its
+    /// simdgroup or quadgroup and the simdgroup's width through its simdgroups alone.
     #[test]
     fn each_builtin_of_the_partition_is_observed() {
-        for builtin in [
-            "thread_position_in_threadgroup",
-            "threadgroup_position_in_grid",
-            "threads_per_threadgroup",
-            "threadgroups_per_grid",
-            "thread_index_in_threadgroup",
-            "thread_index_in_simdgroup",
-            "thread_index_in_quadgroup",
-            "simdgroup_index_in_threadgroup",
-            "quadgroup_index_in_threadgroup",
-            "threads_per_simdgroup",
-            "simdgroups_per_threadgroup",
-            "quadgroups_per_threadgroup",
-            "dispatch_threads_per_threadgroup",
-            "dispatch_simdgroups_per_threadgroup",
+        use Partition::{Observed, Simdgroups};
+        for (builtin, want) in [
+            ("thread_position_in_threadgroup", Observed),
+            ("threadgroup_position_in_grid", Observed),
+            ("threads_per_threadgroup", Observed),
+            ("threadgroups_per_grid", Observed),
+            ("thread_index_in_threadgroup", Observed),
+            ("thread_index_in_simdgroup", Simdgroups),
+            ("thread_index_in_quadgroup", Simdgroups),
+            ("simdgroup_index_in_threadgroup", Observed),
+            ("quadgroup_index_in_threadgroup", Observed),
+            ("threads_per_simdgroup", Simdgroups),
+            ("simdgroups_per_threadgroup", Observed),
+            ("quadgroups_per_threadgroup", Observed),
+            ("dispatch_threads_per_threadgroup", Observed),
+            ("dispatch_simdgroups_per_threadgroup", Observed),
         ] {
-            let Some(oblivious) = oblivious(builtin, &Kernel { builtin, ..PLAIN }) else {
+            let Some(partition) = partition(builtin, &Kernel { builtin, ..PLAIN }) else {
                 return;
             };
-            assert!(!oblivious, "{builtin}");
+            assert_eq!(partition, want, "{builtin}");
         }
     }
 
     /// Threadgroup memory (an argument or a global), each barrier, a fence or an atomic of
     /// threadgroup or simdgroup scope, and a simdgroup or quad function each make a kernel observe
-    /// its partition.
+    /// its partition: a simdgroup barrier, fence or function and a quad function through its
+    /// simdgroups alone, unless the kernel observes it otherwise too.
     #[test]
     fn each_partition_feature_is_observed() {
+        use Partition::{Observed, Simdgroups};
         let tg_param = (
             ", ptr addrspace(3) %tg",
             r#"!5 = !{i32 2, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 3, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"tg"}"#,
@@ -443,6 +491,7 @@ entry:
                            %v = load i32, ptr addrspace(3) %tg, align 4",
                     ..PLAIN
                 },
+                Observed,
             ),
             (
                 "threadgroup global",
@@ -452,6 +501,7 @@ entry:
                            %v = load i32, ptr addrspace(3) @g, align 4",
                     ..PLAIN
                 },
+                Observed,
             ),
             (
                 "threadgroup barrier",
@@ -460,6 +510,7 @@ entry:
                     declarations: barrier,
                     ..PLAIN
                 },
+                Observed,
             ),
             (
                 "simdgroup barrier",
@@ -468,6 +519,7 @@ entry:
                     declarations: simd_barrier,
                     ..PLAIN
                 },
+                Simdgroups,
             ),
             (
                 "threadgroup fence",
@@ -476,6 +528,7 @@ entry:
                     declarations: fence,
                     ..PLAIN
                 },
+                Observed,
             ),
             (
                 "simdgroup fence",
@@ -484,6 +537,7 @@ entry:
                     declarations: fence,
                     ..PLAIN
                 },
+                Simdgroups,
             ),
             (
                 "threadgroup atomic",
@@ -493,6 +547,7 @@ entry:
                     declarations: atomic,
                     ..PLAIN
                 },
+                Observed,
             ),
             (
                 "simdgroup function",
@@ -502,6 +557,7 @@ entry:
                     declarations: "declare i32 @air.simd_shuffle.u.i32(i32, i16)",
                     ..PLAIN
                 },
+                Simdgroups,
             ),
             (
                 "quad function",
@@ -510,36 +566,69 @@ entry:
                     declarations: "declare i32 @air.quad_max.s.i32(i32)",
                     ..PLAIN
                 },
+                Simdgroups,
+            ),
+            (
+                "simdgroup and threadgroup barriers",
+                Kernel {
+                    body: "call void @air.simdgroup.barrier(i32 1, i32 4)\n  call void \
+                           @air.wg.barrier(i32 1, i32 1)\n  %v = add i32 %b, 1",
+                    declarations: "declare void @air.simdgroup.barrier(i32, i32)\n\
+                                   declare void @air.wg.barrier(i32, i32)",
+                    ..PLAIN
+                },
+                Observed,
+            ),
+            (
+                "simdgroup function and threadgroup builtin",
+                Kernel {
+                    builtin: "thread_index_in_threadgroup",
+                    body: "%s = call i32 @air.simd_shuffle.u.i32(i32 %b, i16 0)\n  \
+                           %v = add i32 %s, 1",
+                    declarations: "declare i32 @air.simd_shuffle.u.i32(i32, i16)",
+                    ..PLAIN
+                },
+                Observed,
             ),
         ];
-        for (name, k) in cases {
-            let Some(oblivious) = oblivious(name, &k) else {
+        for (name, k, want) in cases {
+            let Some(partition) = partition(name, &k) else {
                 return;
             };
-            assert!(!oblivious, "{name}");
+            assert_eq!(partition, want, "{name}");
         }
     }
 
-    /// The compiled artifact carries the fact (`KernelFacts::partition_oblivious`).
+    /// The compiled artifact carries the facts (`KernelFacts::partition_oblivious`,
+    /// `KernelFacts::partition_simdgroups`).
     #[test]
     fn the_artifact_states_whether_the_kernel_observes_its_partition() {
         let p = lavapipe();
         for (name, k, want) in [
-            ("grid", PLAIN, true),
+            ("grid", PLAIN, (true, false)),
+            (
+                "simdgroup",
+                Kernel {
+                    builtin: "thread_index_in_simdgroup",
+                    ..PLAIN
+                },
+                (false, true),
+            ),
             (
                 "threadgroup",
                 Kernel {
                     builtin: "thread_position_in_threadgroup",
                     ..PLAIN
                 },
-                false,
+                (false, false),
             ),
         ] {
             let Some(bc) = k.bitcode(name) else {
                 return;
             };
             let a = compile(&bc, "k", &p).unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert_eq!(a.kernel.partition_oblivious, want, "{name}");
+            let facts = (a.kernel.partition_oblivious, a.kernel.partition_simdgroups);
+            assert_eq!(facts, want, "{name}");
         }
     }
 }

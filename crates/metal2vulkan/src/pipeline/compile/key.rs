@@ -321,6 +321,10 @@ pub fn function_key(
         h.bytes(b"flat-grid");
     }
     // Appended only when set.
+    if inputs.call_threadgroups {
+        h.bytes(b"call-threadgroups");
+    }
+    // Appended only when set.
     if inputs.render_target_array_index_varying {
         h.bytes(b"render-target-array-index-varying");
     }

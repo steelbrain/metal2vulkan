@@ -249,6 +249,13 @@ pub struct VariantKey {
     /// `PushField::ReplayRegionAddress`. The plan of a pipeline compiled under it states it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub flat_grid: bool,
+    /// With [`flat_grid`](Self::flat_grid), its dispatch's threadgroups are the call's
+    /// (`LoweringInputs::call_threadgroups`): a one-row grid in threadgroups of one row, so a
+    /// kernel that observes its partition through its simdgroups alone
+    /// (`KernelFacts::partition_simdgroups`) runs flat too. The plan of a pipeline compiled under
+    /// it states it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub call_threadgroups: bool,
     /// The kernel, or the render pipeline's vertex and fragment functions, are a device-replay
     /// variant (`LoweringInputs::replay_bindings`): every buffer they read is at its device
     /// address in the slot table a replay's preprocess writes for its command, so
@@ -557,6 +564,7 @@ impl VariantKey {
             && self.ycbcr_planes_sampled.is_empty()
             && self.address_maps.is_empty()
             && !self.flat_grid
+            && !self.call_threadgroups
             && !self.replay_bindings
             && !self.merged_draws
             && self.amplification_draws.is_none()
@@ -623,6 +631,8 @@ impl VariantKey {
             self.emulated_simdgroups && stage == crate::pipeline::sym::Stage::Kernel;
         out.one_row = self.one_row && stage == crate::pipeline::sym::Stage::Kernel;
         out.flat_grid = self.flat_grid && stage == crate::pipeline::sym::Stage::Kernel;
+        out.call_threadgroups =
+            self.call_threadgroups && stage == crate::pipeline::sym::Stage::Kernel;
         out.folded_groups = self.folded_groups && stage == crate::pipeline::sym::Stage::Kernel;
         out.replay_bindings = self.replay_bindings
             && matches!(

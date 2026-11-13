@@ -563,6 +563,15 @@ fn function_keys_cover_their_inputs() {
     flat.replay_bindings = true;
     flat.flat_grid = true;
     assert_ne!(replay, a.function_compile_key(&fd, &flat));
+    // So is a flat variant of the call's threadgroups.
+    let mut plain_flat = LoweringInputs::new();
+    plain_flat.flat_grid = true;
+    let mut call_flat = plain_flat.clone();
+    call_flat.call_threadgroups = true;
+    assert_ne!(
+        a.function_compile_key(&fd, &plain_flat),
+        a.function_compile_key(&fd, &call_flat)
+    );
     // So is the raw render target slice index's varying.
     let mut layer = LoweringInputs::new();
     layer.render_target_array_index_varying = true;
@@ -688,6 +697,7 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", max_call_stack_depth: None", "")
                 .replace(", open_cl_mode: false", "")
                 .replace(", flat_grid: false", "")
+                .replace(", call_threadgroups: false", "")
                 .replace(", render_target_array_index_varying: false", "")
                 .replace(", primitive_id_varying: false", "")
                 .replace(", primitive_id_indices: None", "")

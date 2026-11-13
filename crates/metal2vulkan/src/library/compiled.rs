@@ -439,4 +439,13 @@ pub struct KernelFacts {
     /// threadgroup memory, no barrier, no fence or atomic of threadgroup or simdgroup scope, no
     /// simdgroup or quad function, and no builtin of the partition.
     pub partition_oblivious: bool,
+    /// The kernel observes its threadgroup partition through its simdgroups alone: its only
+    /// observations are barriers of simdgroup execution scope, fences and atomics of simdgroup
+    /// scope, simdgroup and quad functions, `is_uniform`, the simdgroup size, and the builtins
+    /// `thread_index_in_simdgroup`, `thread_index_in_quadgroup` and `threads_per_simdgroup`. It
+    /// computes the same in any partition that keeps its threadgroups, so a one-dimensional
+    /// dispatch of the call's threadgroups may run flat (`LoweringInputs::call_threadgroups`).
+    /// `false` for a kernel that does not observe its partition
+    /// ([`partition_oblivious`](Self::partition_oblivious)). Decided as that one is.
+    pub partition_simdgroups: bool,
 }
