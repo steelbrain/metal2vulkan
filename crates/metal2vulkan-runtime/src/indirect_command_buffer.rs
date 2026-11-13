@@ -14,7 +14,11 @@
 //!   translated kernel that reads the ID from an argument buffer reaches the buffer last made with
 //!   the ID. The buffer is host-visible whatever storage mode the program asks for; the object
 //!   answers the mode asked for, and the CPU encodes and reads back a `Private` buffer's commands
-//!   as a `Shared` one's, as plain Metal does.
+//!   as a `Shared` one's, as plain Metal does. The records, and the slots past them, lie in fresh
+//!   pages of the runtime's own where the device imports host pointers (`fresh_pages.rs`), so
+//!   that a device's recovery keeps them, as Metal keeps a buffer's records across its GPU's
+//!   restart; elsewhere in pooled memory, which the recovery's carry cannot keep
+//!   (`indirect_command_buffer/carry.rs`).
 //! - **CPU encoding.** [`IndirectCommandBuffer::indirect_compute_command_at`] gives a compute
 //!   command's setters, which write its record as Metal's do (an M3 Max on macOS 26.7 and an M4 on
 //!   27.0.1): a buffer's address plus its offset's low 32 bits as one address; threadgroup lengths
@@ -77,7 +81,6 @@ use super::error::{internal, invalid, Error, IndirectRule, MemoryKind, Problem, 
 use super::families::GpuFamily;
 use super::indirect_execute::Unforeseen;
 use super::kept_commands::{Kept, KeptChunk, KeptChunks, StepChunk, StepCopy, UnlockedWrites};
-use super::memory::MemoryClass;
 use super::pipeline::{
     ComputePipelineState, ComputeProgram, GraphicsState, RenderPipelineState, RenderProgram,
     RenderStateKind, WeakComputePipelineState, WeakRenderPipelineState,
@@ -618,23 +621,16 @@ impl Device {
             &self.shared().identifiers,
             metal_allocated_size(descriptor, size),
         )?;
-        let storage = self.zeroed_buffer(
-            CALL,
-            length,
-            backing,
-            MemoryClass::Shared,
-            false,
-            Place::Records(held.id),
-        )?;
+        // In the runtime's own pages where the device imports them, so that a recovery keeps
+        // the records (`indirect_command_buffer/carry.rs`).
+        let storage = self.records_buffer(CALL, length, backing, Place::Records(held.id))?;
         // The slots past the record's, of their own buffer, as long as Metal's storage grows.
         let overflow = match (layout, overflow_bytes) {
             (Some(layout), Some(bytes)) => {
-                let storage = self.zeroed_buffer(
+                let storage = self.records_buffer(
                     CALL,
                     bytes.max(SLOT_BYTES),
                     backing,
-                    MemoryClass::Shared,
-                    false,
                     AddressPlacement::Outside,
                 )?;
                 Some(Overflow {

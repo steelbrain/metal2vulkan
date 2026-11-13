@@ -4,14 +4,17 @@
 //!
 //! - **The records.** Its storage, and the buffer of the slots past its records ([`Overflow`]),
 //!   are buffers of the runtime's own whose `contents` pointer no program holds, carried as such
-//!   (`Buffer::carry_runtime`): in the runtime's own pages, the same pages there, the records as
-//!   they are; in pooled host-visible memory, new memory there, the records lost with the
-//!   `VkDevice`, whose memory Vulkan makes undefined (vkspec 5.2.3, "Lost Device"), written again
-//!   as a new buffer's: its header, every command reset, its slots past them zero. The CPU's
-//!   writes of the records under `pipelines` wait for the carry; a setter's write without it
-//!   (`Batch`: one that adds nothing to what the records may hold) does not, and one meanwhile
-//!   races the carry. A host read outside a command buffer's work holds the storage's parts it
-//!   reads.
+//!   (`Buffer::carry_runtime`): in the runtime's own pages, where every such buffer lies on a
+//!   device that imports host pointers (`fresh_pages.rs`), the same pages there, the records as
+//!   the CPU and the GPU left them, as Metal keeps them across its GPU's restart; in pooled
+//!   host-visible memory, on a device that imports none or where the import failed, new memory
+//!   there, the records lost with the `VkDevice`, whose memory Vulkan makes undefined (vkspec
+//!   5.2.3, "Lost Device"), written again as a new buffer's: its header, every command reset, its
+//!   slots past them zero. The CPU's writes of the records under `pipelines` wait for the carry;
+//!   a setter's write without it (`Batch`: one that adds nothing to what the records may hold)
+//!   does not: in the runtime's own pages it writes the pages the carry keeps, and in pooled
+//!   memory one meanwhile races the carry. A host read outside a command buffer's work holds the
+//!   storage's parts it reads.
 //! - **What stays.** The object, its records ID, address, `gpuResourceID`, `uniqueIdentifier` and
 //!   label, which are the device's line's rather than a generation's (`device/line.rs`'s
 //!   `Carried`); the threadgroup lengths past the last command's, which the host keeps; what its

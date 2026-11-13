@@ -39,7 +39,9 @@
 //!   with 256 of 1 MiB, 8.3 with none), below the floor for one import and past it for
 //!   [`TAX_IMPORTS`]. Where it does, the runtime keeps its own long buffers out of
 //!   fresh pages (`fresh_pages.rs`): each would add that cost, and more for its length, to every
-//!   submission for its whole life, where its fresh pages save one clear of its bytes. And it
+//!   submission for its whole life, where its fresh pages save one clear of its bytes. An
+//!   indirect command buffer's records lie in them whatever this answers, as a device's recovery
+//!   keeps them only there (`indirect_command_buffer/carry.rs`): one import a live buffer. And it
 //!   releases a no-copy buffer's idle pointer import and imports it again at its next blit
 //!   (`host_residency.rs`): under `HostMemory::new`'s contract the pages at the pointer stay the
 //!   same while the buffer lives, so the new import reads what the kept one would on any driver,

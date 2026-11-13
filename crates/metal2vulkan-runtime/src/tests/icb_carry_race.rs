@@ -1,9 +1,15 @@
-//! An indirect command buffer's setter racing its device's recovery, whose carry takes the
-//! buffer to the generation it makes (`indirect_command_buffer/carry.rs`): a set held by a hook
-//! (`hold_next_set`) once its batch is made, while the recovery runs to the end, writes the
-//! records the recovered buffer holds once let go, as a set made after the carry does, where
-//! the carry moved them to new memory (a buffer of pooled memory: its records reset there) as
-//! where it kept them.
+//! An indirect command buffer across its device's recovery, whose carry takes the buffer to the
+//! generation it makes (`indirect_command_buffer/carry.rs`):
+//!
+//! - the commands the CPU encoded before it read back and run after it, as Metal keeps a
+//!   buffer's records across its GPU's restart, where the records lie in the runtime's own pages,
+//!   as they do on a device that imports host pointers;
+//! - a set held by a hook (`hold_next_set`) once its batch is made, while the recovery runs to the
+//!   end, writes the records the recovered buffer holds once let go, as a set made after the
+//!   carry does, where the carry moved them to new memory (a buffer of pooled memory: its records
+//!   reset there) as where it kept them.
+//!
+//! The tests print whether the carry kept the records' pages (`Kept`) or moved them (`Lost`).
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). No GPU fault: the loss is marked (`Device::recover_for_test`).
@@ -11,9 +17,13 @@
 
 use super::device_recovery::{device, Scratch};
 use super::device_recovery_carry::BYTES;
-use super::device_recovery_live_table::{dispatched, dispatches, execute, indirect_state, WORDS};
+use super::device_recovery_live_table::{
+    dispatched, dispatches, encode_command, execute, indirect_state, WORDS,
+};
 use crate::indirect_command_buffer::hold_next_set;
-use crate::{Device, Error, IndirectCommandBuffer, ResourceOptions, Size};
+use crate::{
+    Device, Error, IndirectCommandBuffer, IndirectCommandBufferDescriptor, ResourceOptions, Size,
+};
 use metal2vulkan::metal::IndirectCommandType;
 use std::sync::mpsc;
 
@@ -87,5 +97,83 @@ fn a_locked_set_held_across_a_recovery_lands_on_the_recovered_records() {
     assert_eq!(
         execute(&device, &queue, &icb, [&input, &output, &scale]),
         dispatched()
+    );
+}
+
+/// The render commands of [`a_recovery_keeps_the_commands_the_cpu_encoded`]'s buffer of draws.
+const DRAWS: u64 = 64;
+
+/// The commands the CPU encoded before a recovery, read back and run after it as they were, as
+/// Metal keeps a buffer's records across its GPU's restart: a compute command encoded whole
+/// (state, buffers, dispatch) runs, and each of a buffer of draws' commands reads back its two
+/// vertex and two fragment buffers, nil at offsets of their own, which the setters wrote without
+/// the lock. The records lie in the runtime's own pages where the device imports host pointers,
+/// which the carry keeps (`Kept`); in pooled memory it moved them to new memory and reset every
+/// command (`Lost`), where Metal's are kept.
+#[test]
+fn a_recovery_keeps_the_commands_the_cpu_encoded() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let compute = indirect_state(&device);
+    let icb = dispatches(&device);
+    let private = || {
+        device
+            .new_buffer(BYTES, ResourceOptions::private())
+            .unwrap()
+    };
+    let (input, output, scale) = (private(), private(), private());
+    encode_command(&icb, &compute, [&input, &output, &scale]);
+    let mut descriptor = IndirectCommandBufferDescriptor::new();
+    descriptor.command_types = IndirectCommandType::DRAW;
+    descriptor.max_vertex_buffer_bind_count = 2;
+    descriptor.max_fragment_buffer_bind_count = 2;
+    let draws = device
+        .new_indirect_command_buffer(&descriptor, DRAWS, ResourceOptions::shared())
+        .unwrap();
+    // Command `i`'s vertex buffers 0 and 1 and fragment buffers 0 and 1: nil, at offsets of its
+    // own (a nil buffer's address is its offset).
+    let at = |i: u64| {
+        let first = (i + 1) * 64;
+        [first, first + 16, first + 32, first + 48]
+    };
+    for i in 0..DRAWS {
+        let command = draws.indirect_render_command_at(i).unwrap();
+        let [v0, v1, f0, f1] = at(i);
+        command.set_vertex_buffer(None, v0, 0).unwrap();
+        command.set_vertex_buffer(None, v1, 1).unwrap();
+        command.set_fragment_buffer(None, f0, 0).unwrap();
+        command.set_fragment_buffer(None, f1, 1).unwrap();
+    }
+    let records = [icb.records_address(), draws.records_address()];
+    device.recover_for_test().unwrap();
+    let kept = [icb.records_address(), draws.records_address()] == records;
+    let carry = if kept { "Kept" } else { "Lost" };
+    eprintln!("ICB-CARRY-RACE encoded before the recovery: {carry}");
+    let read = |i: u64| {
+        let command = draws.indirect_render_command_at(i).unwrap();
+        let address = |binding: Result<Option<crate::IndirectBufferBinding>, Error>| {
+            binding.unwrap().map(|binding| binding.address.0)
+        };
+        [
+            address(command.vertex_buffer(0)),
+            address(command.vertex_buffer(1)),
+            address(command.fragment_buffer(0)),
+            address(command.fragment_buffer(1)),
+        ]
+    };
+    for i in 0..DRAWS {
+        assert_eq!(read(i), at(i).map(Some), "render command {i} ({carry})");
+    }
+    let command = icb.indirect_compute_command_at(0).unwrap();
+    assert_eq!(
+        command.command_type().unwrap(),
+        IndirectCommandType::CONCURRENT_DISPATCH_THREADS,
+        "the dispatch encoded before the recovery ({carry})"
+    );
+    let queue = device.new_command_queue().unwrap();
+    assert_eq!(
+        execute(&device, &queue, &icb, [&input, &output, &scale]),
+        dispatched(),
+        "the command encoded before the recovery ran ({carry})"
     );
 }

@@ -3829,7 +3829,9 @@ bound.
   whatever that memory holds, and of a texture of `new_texture` or of a `Private` heap of any
   storage mode (it reads as a new one) but a texture buffer over its texels' buffer carried, a
   heap over the caller's memory and what is placed in it reading the same pages, and of an indirect
-  command buffer's records outside the runtime's own pages (every command reset); the other objects
+  command buffer's records on a device that imports no host pointer, or where their import failed
+  (every command reset; the notice counts such buffers), where Metal's are kept, as they are in
+  the runtime's own pages everywhere else; the other objects
   made before it are refused (`MadeBeforeRecovery`), where Metal's go on; the calls during it wait
   for it, and a device call the loss met while it ran runs again after it. A no-copy buffer is
   made again over

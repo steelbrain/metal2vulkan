@@ -36,6 +36,13 @@
 //!   pages already touched (about 4.5 us per MiB), which is cheaper than an import of fresh ones
 //!   (16 us per MiB). An import also costs 17 to 43 us whatever its size, against a pooled
 //!   placement's none.
+//! - **An indirect command buffer's records** (and its slots past them) lie in fresh pages of
+//!   their own at any length, whatever a held import costs, where the device imports host
+//!   pointers and the class's best type takes them: a device's recovery keeps them only in the
+//!   runtime's own pages, as Metal keeps a buffer's records across its GPU's restart
+//!   (`indirect_command_buffer/carry.rs`). Each such buffer is one more held import, which ANV on
+//!   i915 lists in every execbuffer at about 0.35 us (`submit_check.rs`) and RADV pays by its
+//!   pages.
 //! - **Recycled.** A parked buffer of the same making (`recycle.rs`) is still taken first, and its
 //!   bytes set to zero on the host (0.29 ms for 64 MiB), since its pages hold its last owner's.
 //!   Only a buffer made here reads zero unwritten.
@@ -69,11 +76,18 @@ pub(super) const FRESH_PAGES_PAST: u64 = BLOCK_BYTES / 2;
 /// where the device takes them (the module docs): `class` is the buffer's after a `Managed`
 /// buffer on a device without unified memory took `Private` memory and a host copy.
 pub(super) fn takes_fresh_pages(size: u64, class: MemoryClass) -> bool {
+    size > FRESH_PAGES_PAST && class_takes_fresh_pages(class)
+}
+
+/// Whether a buffer in memory of `class` may lie in fresh pages at all, whatever its length: the
+/// host maps memory of the class, on a system that maps such pages. An indirect command buffer's
+/// records take them at any length (`buffer.rs`'s `FreshPages::Always`).
+pub(super) fn class_takes_fresh_pages(class: MemoryClass) -> bool {
     let host_visible = matches!(
         class,
         MemoryClass::Shared | MemoryClass::WriteCombined | MemoryClass::Managed
     );
-    host_visible && size > FRESH_PAGES_PAST && cfg!(unix)
+    host_visible && cfg!(unix)
 }
 
 /// Anonymous private pages the runtime mapped for a buffer of its own, or for a block of the
