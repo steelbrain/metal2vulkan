@@ -137,12 +137,11 @@ pub(super) fn device(cache: &Path) -> Device {
     Device::system_default_with(&options(cache)).unwrap()
 }
 
-/// As [`device`], its recordings waiting for a pipeline still being made until it is made
+/// As [`device`], every call waiting for a pipeline still being made until it is made
 /// (`PipelineWaitPolicy::Exact`): for a test that holds a making in the device's pool and watches
-/// the command buffer that awaits it not complete. Under the default `Bounded` wait, a recording
-/// whose bound passed (its command buffer's commit plus `pipeline_commit_wait`, 4.5 s) drops the
-/// draw or dispatch (`render/pending.rs`, `pending_dispatch.rs`) and its command buffer completes,
-/// which a loaded host reaches while such a test still holds the making.
+/// the command buffer that awaits it not complete. A command buffer waits for its makings under
+/// the default `Bounded` wait too; under `Exact` a state's creation also makes its predicted
+/// pipeline before it returns, and a `commit` waits for the pipelines it records with no bound.
 pub(super) fn exact_waits_device(cache: &Path) -> Device {
     let mut options = options(cache);
     options.policy.pipeline_waits = PipelineWaitPolicy::Exact;
