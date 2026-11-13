@@ -636,6 +636,12 @@ pub enum Problem {
     ///
     /// Basis: ours (a runtime extension's own contract: Metal imports no guest RAM).
     HostRam,
+    /// A placement asked of host pages not imported yet (`Device::host_pages_texture_placement`,
+    /// a runtime extension) for a backing other than `HostBacking::ImportedByPointer` or
+    /// `HostBacking::ImportedAsDmaBuf`, the two imports of a no-copy buffer's pages it answers for.
+    ///
+    /// Basis: ours (a runtime extension's own contract: Metal has no such query).
+    HostPagesBacking,
     /// An image the caller made that cannot be wrapped as a texture of the descriptor
     /// (`new_texture_with_vk_image`).
     ///

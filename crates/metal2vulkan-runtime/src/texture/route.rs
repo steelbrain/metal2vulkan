@@ -12,9 +12,11 @@
 use super::image_error;
 use crate::buffer::CallerMemory;
 use crate::buffer_texture::Texels;
+use crate::dma_buf::ModifierMemory;
+use crate::error::internal;
 use crate::image_plan::{plan_image, ImageFacts, ImagePlan};
 use crate::in_place::{self, Access, Padding, PagesClass, Refusal, RowEnds, ShadowCause, Verdict};
-use crate::linear_plan::{holding, Between};
+use crate::linear_plan::{holding, Between, BufferLayout};
 use crate::texture_descriptor::{texture_usage, TextureDescriptor, TextureLayout};
 use crate::texture_placement::TexturePlacement;
 use crate::{Device, Error};
@@ -63,6 +65,23 @@ pub(crate) struct HostLie {
     pub(crate) caller: Option<(RowEnds, Padding)>,
 }
 
+/// The bytes a texture whose placement is asked lies over ([`Device::placement_over`]): a
+/// buffer's texels, or host pages not imported yet (`Device::host_pages_texture_placement`).
+pub(crate) enum Bytes<'a> {
+    Texels(&'a Texels),
+    Pages(&'a Pages),
+}
+
+/// Host pages no buffer was made over yet, as a no-copy buffer over them would lie
+/// (`Device::host_pages_texture_placement`): how a texture's texels lie there (`lie`, its class
+/// the import's), where (`layout`), and the memory an image in place over them is made for (host
+/// allocations, or dma-bufs).
+pub(crate) struct Pages {
+    pub(crate) lie: HostLie,
+    pub(crate) layout: BufferLayout,
+    pub(crate) memory: ModifierMemory,
+}
+
 /// How a texture over host pages goes ([`Route::Host`]).
 pub(crate) enum HostWay {
     /// A device copy (`Texels::device_copy`): a shadow whose copies in a log decides.
@@ -72,6 +91,16 @@ pub(crate) enum HostWay {
     InPlace { storable: bool },
     /// The shadow, why.
     Shadow(ShadowCause),
+}
+
+/// The route of a texture of `levels` whose texels run past its buffer's length where `past`,
+/// whatever holds its bytes: the shadow for a tiled texture of more than one level, and for texels
+/// past the length ([`Device::route_over_buffer`]); `None` for any other.
+fn levels_or_past((levels, past): (u32, bool)) -> Option<Route> {
+    if levels > 1 {
+        return Some(Route::Levels(levels));
+    }
+    past.then_some(Route::Past)
 }
 
 impl Device {
@@ -92,17 +121,20 @@ impl Device {
         Ok((usage, plan))
     }
 
-    /// Where a texture of `descriptor` (checked as `layout`) over `texels` lies if made now, for
+    /// Where a texture of `descriptor` (checked as `layout`) over `bytes` lies if made now, for
     /// Metal's `call`: the route its making takes, `past` where its texels run past the buffer's
     /// length (`Texels::runs_past`, where the making gives them their tail); and where that is the
-    /// image in place, whether the device makes it, by the making's own steps up to the bind
-    /// (`Device::in_place_image_made`), each image they make released unbound. Refused as the
-    /// making refuses the texture's declared plan or fails those steps. A pending verdict starts
-    /// the device's check, as the making's does; nothing is bound, submitted or counted.
-    pub(crate) fn placement_over_buffer(
+    /// image in place, whether the device makes it: what it answers before it makes any image
+    /// (`Device::in_place_unmade`), then over a buffer's texels the making's own steps up to the
+    /// bind (`Device::in_place_image_made`), each image they make released unbound. Over pages
+    /// not imported yet ([`Bytes::Pages`]) the answer is the image in place where those first
+    /// answers leave it to an image. Refused as the making refuses the texture's declared plan or
+    /// fails those steps. A pending verdict starts the device's check, as the making's does;
+    /// nothing is bound, submitted or counted.
+    pub(crate) fn placement_over(
         &self,
         call: &'static str,
-        texels: &Texels,
+        bytes: Bytes<'_>,
         (descriptor, layout): (&TextureDescriptor, &TextureLayout),
         past: bool,
     ) -> Result<TexturePlacement, Error> {
@@ -118,15 +150,33 @@ impl Device {
             None => (descriptor, layout),
         };
         let (usage, plan) = self.declared_plan(call, descriptor, layout, &facts)?;
-        let route = match self.route_over_buffer(texels, usage, (layout.levels, past)) {
+        let levels = (layout.levels, past);
+        let route = match bytes {
+            Bytes::Texels(texels) => self.route_over_buffer(texels, usage, levels),
+            Bytes::Pages(pages) => self.route_over_pages(&pages.lie, usage, levels),
+        };
+        let route = match route {
             Route::Host {
                 class,
                 rows,
                 padding,
                 way: HostWay::InPlace { storable },
             } => {
-                let made = (texels, class, storable);
-                let way = match self.in_place_image_made((&plan, descriptor), made, &facts)? {
+                let made = (&plan, descriptor);
+                let decided = match bytes {
+                    Bytes::Texels(texels) => {
+                        self.in_place_image_made(made, (texels, class, storable), &facts)?
+                    }
+                    Bytes::Pages(pages) => {
+                        let over = (&pages.layout, pages.memory);
+                        let lie = (&pages.lie, storable);
+                        match self.in_place_unmade(made, lie, over, &facts)? {
+                            Some(refused) => Err(refused),
+                            None => Ok(()),
+                        }
+                    }
+                };
+                let way = match decided {
                     Ok(()) => HostWay::InPlace { storable },
                     Err((refusal, why)) => HostWay::Shadow(ShadowCause::Refused(refusal, why)),
                 };
@@ -140,7 +190,13 @@ impl Device {
             // Over the device's own memory, whether the making's image aliases the bytes: the
             // device's linear image, or one at Metal's pitch where its check passed for its pooled
             // memory (`Device::alias_image_made`); else the cause of the shadow it is.
-            Route::Device { holds: Ok(between) } if texels.buffer.caller_memory().is_none() => {
+            Route::Device { holds: Ok(between) } => {
+                let Bytes::Texels(texels) = bytes else {
+                    return Err(internal("host pages routed as the device's own memory"));
+                };
+                if texels.buffer.caller_memory().is_some() {
+                    return Ok(TexturePlacement::NotHostPages);
+                }
                 let over = (texels, between, usage);
                 if let Err(cause) = self.alias_image_made(&plan, over, &facts)? {
                     return Ok(cause.placement());
@@ -193,13 +249,10 @@ impl Device {
         &self,
         texels: &Texels,
         usage: TextureUsage,
-        (levels, past): (u32, bool),
+        levels: (u32, bool),
     ) -> Route {
-        if levels > 1 {
-            return Route::Levels(levels);
-        }
-        if past {
-            return Route::Past;
+        if let Some(route) = levels_or_past(levels) {
+            return route;
         }
         let copied = texels.buffer.copied();
         let class = match texels.buffer.caller_memory() {
@@ -239,6 +292,18 @@ impl Device {
         // (`in_place::Padding`).
         let lie = texels.host_lie(class, self.shared().in_place.line());
         self.host_route(&lie, usage, || texels.device_copy(self))
+    }
+
+    /// The route of a texture of Metal `usage` and `levels` over host pages no buffer was made over
+    /// yet, whose texels lie as `lie` says, `past` where they run past the buffer's length: as
+    /// [`route_over_buffer`](Self::route_over_buffer) takes it over a no-copy buffer of them,
+    /// which takes no device copy: no such texture's does (an IOSurface plane's,
+    /// `Texels::device_copy`).
+    fn route_over_pages(&self, lie: &HostLie, usage: TextureUsage, levels: (u32, bool)) -> Route {
+        if let Some(route) = levels_or_past(levels) {
+            return route;
+        }
+        self.host_route(lie, usage, || false)
     }
 
     /// The route of a texture of Metal `usage` over host pages whose texels lie as `lie` says, as

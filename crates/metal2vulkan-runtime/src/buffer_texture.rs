@@ -54,8 +54,10 @@ use super::copy_plan::{
 };
 use super::degradation::Degradation;
 use super::device::lock;
+use super::dma_buf::ModifierMemory;
 use super::error::{internal, invalid, nil, vulkan, Error, Problem, RuntimeGap};
 use super::exit_guard;
+use super::host_backing::HostBacking;
 use super::in_place::{Padding, PagesClass, RowEnds};
 use super::key_hash::KeyMap;
 use super::linear_plan::{
@@ -75,7 +77,7 @@ use super::shadow_merge::UnormView;
 use super::shadow_standing::StandingAcross;
 use super::texture::carry::Remake;
 use super::texture::surface_two_planes;
-use super::texture::{HostLie, IdUse, Texture};
+use super::texture::{Bytes, HostLie, IdUse, Pages, Texture};
 use super::texture_descriptor::{
     Creator, Refused, TextureDescriptor, TextureLayout, TextureProblem,
 };
@@ -88,13 +90,14 @@ use super::ycbcr::{surface_planes, IoSurfaceYCbCr};
 use super::Device;
 use crate::release;
 use ash::vk;
-use metal2vulkan::bind::{BoundTexture, BufferRange};
+use metal2vulkan::bind::{BoundTexture, BufferRange, YCbCrPlanes};
 use metal2vulkan::device::{FormatUsage, VkFeature};
 use metal2vulkan::error::{Feature, Unsupported};
 use metal2vulkan::metal::format::{byte_format, ycbcr, ycbcr_format};
 use metal2vulkan::metal::{PixelFormat, TextureSwizzleChannels, TextureType, TextureUsage};
 use metal2vulkan::vk::{Format, ImageAspectFlags};
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
@@ -318,6 +321,31 @@ pub(super) enum TexelsHome {
     /// The device, for a shareable texture buffer (`newSharedTextureWithDescriptor:`,
     /// `texture/shared.rs`): a texture opened from its handle is the same texels.
     Shared,
+}
+
+/// Where the bytes kept in place of texels `placed` lays out in a buffer of `length` bytes end
+/// ([`Texels::kept`]): the length, or a 2D array's second slice over an IOSurface plane where
+/// that comes first (`linear_plan::Placed::kept`).
+fn kept_in(placed: &Placed, length: u64) -> u64 {
+    placed.kept.map_or(length, |kept| kept.min(length))
+}
+
+/// Whether texels laid out for the GPU, the CPU and a texture buffer's functions as `layouts`
+/// say run past `kept`, the bytes they keep in place ([`Texels::runs_past`]).
+fn past_kept(layouts: [&BufferLayout; 3], kept: u64) -> bool {
+    layouts.iter().map(|layout| layout.end()).max() > Some(kept)
+}
+
+/// Whether the rows' padding of texels laid out as `layout` in a buffer of `length` bytes is the
+/// buffer's own ([`Texels::padding_owned`]): the buffer holds their last row to its pitch, and
+/// they lie over a buffer's rows, or over an IOSurface plane's (`surface`) where the buffer
+/// declares the bytes between a texture's rows unobserved (`unobserved`).
+fn owns_padding(layout: &BufferLayout, surface: bool, unobserved: bool, length: u64) -> bool {
+    let to_pitch = BufferLayout {
+        row_bytes: layout.row_pitch,
+        ..*layout
+    };
+    (!surface || unobserved) && to_pitch.end() <= length
 }
 
 /// The bytes of one texel of `pf`, the block of its direct Vulkan format (the bytes Metal's
@@ -885,7 +913,9 @@ impl Buffer {
 
     /// [`texture_over`](Self::texture_over)'s texture, at `offset` with `bytes_per_row` (`over`),
     /// made where `goal` makes it; else where it would lie, answered after every check its making
-    /// runs before it makes anything ([`texture_placement`](Self::texture_placement)).
+    /// runs before it makes anything ([`texture_placement`](Self::texture_placement)): the
+    /// texture's shape first, which reads nothing of the buffer but its length, options and
+    /// whether its bytes are detached ([`shape_over`]).
     fn make_texture_over(
         &self,
         call: &'static str,
@@ -901,235 +931,63 @@ impl Buffer {
             Goal::Make => self.making_texture(),
             Goal::Ask => None,
         };
-        let detached = self.detached();
-        // A YCbCr format is made over a surface's planes with their facts (`ycbcr.rs`).
-        let asked_format = descriptor.pixel_format;
-        let surface = matches!(form, BufferTextureCall::IoSurfacePlane { .. });
-        // A two-plane extended-range format reads the surface's plane 1 from the same facts.
-        let surface_facts = ycbcr_surface;
-        let ycbcr_surface = ycbcr_surface.filter(|_| ycbcr(asked_format) && surface);
-        let device = self.generation();
-        let asked = device.texture_options(call, descriptor)?;
-        device.check_texture_placement(call, asked.placement, asked.usage, asked.texture_type)?;
-        let options = asked.resource_options;
-        let storage = options.storage_mode()?;
-        let cache = options.cpu_cache_mode()?;
-        let hazard = options.hazard_tracking_mode()?;
-        // A plain `newTextureWithDescriptor:offset:bytesPerRow:` takes the buffer's options
-        // whatever the descriptor names (probe 9d); an IOSurface plane takes its descriptor's, its
-        // default hazard tracking mode tracked, as the M4's plain run and validation do
-        // (the plan refuses a memoryless one).
-        let options = match form {
-            BufferTextureCall::IoSurfacePlane { .. } => {
-                let hazard = match hazard {
-                    HazardTrackingMode::Default => HazardTrackingMode::Tracked,
-                    hazard => hazard,
-                };
-                ResourceOptions::new(storage, cache, hazard)
-            }
-            BufferTextureCall::Texture | BufferTextureCall::Linear | BufferTextureCall::Tiled => {
-                self.resource_options()
-            }
-        };
-        let descriptor = &TextureDescriptor {
-            resource_options: options,
-            ..asked
-        };
-        let id_use = whose.id_use(descriptor.placement);
-        // A texture buffer of more than one level is stopped by `linear_plan`, as Metal's
-        // buffer creator stops it, not refused as the device's gap.
-        let rules = self.generation().properties().texture_rules();
-        let checked = match ycbcr_surface {
-            Some(_) => descriptor.check_over_surface(rules),
-            None => descriptor.check_made(Creator::Buffer, rules),
-        };
-        // A format of which plain Metal makes no texture alone answers nil over a buffer (the
-        // linear SPI's too) and, but for a two-plane YCbCr one, over a surface's plane, once every
-        // rule Metal stops passed and before the buffer's or the surface's own. Metal makes every
-        // two-plane YCbCr format over a surface's plane (`YCBCR8_420_2P` and `YCBCR10_420_2P` over
-        // a 'BGRA' surface's); the runtime makes those `ycbcr.rs` reads with the surface's facts,
-        // and the others are its gap.
-        let layout = match checked {
-            Err(Refused::Nil(TextureProblem::NoTextureOfFormat))
-                if surface && ycbcr_format(asked_format).is_some() =>
-            {
-                return Err(Error::Unsupported(
-                    Unsupported::not_implemented(Feature::Format).naming_format(asked_format),
-                ));
-            }
-            checked => checked.map_err(|refused| refused.error(call))?,
-        };
-        // Only an IOSurface plane takes a framebuffer-only texture: plain Metal asserts
-        // "framebufferOnly == NO" over a buffer, or on its rotation.
-        if descriptor.framebuffer_only && !surface {
-            return Err(invalid(
-                call,
-                Problem::Texture(TextureProblem::FramebufferOnly),
-            ));
-        }
-        let buffer = BufferFacts {
+        let facts = OverFacts {
+            device: self.generation(),
             length: self.length(),
+            detached: self.detached(),
+            options: self.resource_options(),
         };
-        let planar = matches!(form, BufferTextureCall::IoSurfacePlane { planar: true });
-        let converted = match &ycbcr_surface {
-            Some(facts) => Some(surface_planes(
-                &layout,
-                ([offset, bytes_per_row], planar),
-                facts,
-                self.length(),
-                device,
-            )?),
-            None => None,
-        };
-        // Metal makes no render target of a 4:2:0 or 4:2:2 format whose chroma blocks do not
-        // tile it (an odd width, or an odd height; plain Metal answers nil, the M3 Max under
-        // macOS 27.0.1), and makes any other.
-        if let Some((planes, _)) = &converted {
-            let halved = planes.codes.subsampling.halved() != [false, false];
-            let odd = planes.size.iter().any(|n| n % 2 != 0);
-            if halved && odd && descriptor.usage.contains(TextureUsage::RENDER_TARGET) {
-                return Err(Refused::Nil(TextureProblem::ExtentForFormat).error(call));
-            }
-        }
-        // A two-plane extended-range texture over a surface's plane 0 keeps its color words in
-        // the plane and its alpha bytes in the surface's plane 1 (`texture/surface_two_planes.rs`).
-        let alpha_plane = match form {
-            BufferTextureCall::IoSurfacePlane { planar }
-                if two_planes::holds_planes(layout.pixel_format) =>
-            {
-                Some(surface_two_planes::alpha_plane(
-                    layout.pixel_format,
-                    planar,
-                    surface_facts,
-                )?)
-            }
-            _ => None,
-        };
-        // A format no buffer backs is Metal's refusal, whatever its Vulkan format, but for a
-        // 4:2:2 one, which a plain run makes over a buffer (its validation asserts; probe 9
-        // `fmt.240`, `fmt.241`) and the runtime holds over none: its textures' carrier
-        // (`chroma_pairs.rs`) is an image of their own. An IOSurface plane's (a CoreVideo `2vuy` or
-        // `yuvs` surface's) is made, as Metal makes it, 2 bytes a texel in the carrier
-        // (`linear_plan.rs`).
-        let pf = layout.pixel_format;
-        let four_two_two = chroma_pairs::is_four_two_two(pf);
-        // A depth or stencil texture over a surface's plane (`linear_plan.rs` stops every other
-        // buffer's) keeps one aspect's unit a texel there.
-        let depth_unit = surface_depth_unit(pf).filter(|_| surface);
-        let texel_bytes = match (texel_bytes(pf), &converted) {
-            _ if depth_unit.is_some() => depth_unit.map_or(0, |unit| u64::from(unit.bytes)),
-            (Some(bytes), _) => bytes,
-            // Its texels are the luma plane's codes, a code's bytes a texel; packed codes' units
-            // of three (`ycbcr.rs`).
-            (None, Some((planes, _))) => u64::from(planes.codes.bytes),
-            // Its texels are plane 0's color words (`two_planes.rs`).
-            (None, None) if alpha_plane.is_some() => u64::from(two_planes::UNIT.bytes),
-            (None, None) if four_two_two && surface => u64::from(chroma_pairs::TEXEL_BYTES),
-            (None, None) if !is_linear(pf) && !four_two_two => 0,
-            (None, None) => {
-                return Err(Error::Unsupported(
-                    Unsupported::not_implemented(Feature::Format).naming_format(pf),
-                ))
-            }
-        };
-        // A packed format's luma rows are units of three codes, `⌈w / 3⌉` of them a row: the
-        // plane is planned as those units.
-        let planned = match &converted {
-            Some((planes, _)) if planes.codes.packed => {
-                let [w, h, d] = layout.extent;
-                let across = planes.codes.units(u64::from(w)) as u32;
-                TextureLayout {
-                    extent: [across, h, d],
-                    ..layout
-                }
-            }
-            _ => layout,
-        };
-        let texture = BufferTexture {
-            layout: planned,
-            texel_bytes,
-            storage,
-            offset,
-            bytes_per_row,
-            call: form,
-            usage: descriptor.usage,
-        };
-        // A rotated texture: its plane holds it turned, as Metal checks it, its CPU access and
-        // blits address the plane as the texture's own extent at the plane's rows, and its
-        // functions the stored frame (`texture/rotation.rs`).
-        // A rotated two-plane YCbCr texture is not measured: the runtime's gap. Nor is a rotated
-        // two-plane extended-range one over a surface.
-        if (converted.is_some() || alpha_plane.is_some()) && descriptor.rotation != 0 {
-            return Err(Error::Unsupported(
-                Unsupported::not_implemented(Feature::Format).naming_format(pf),
-            ));
-        }
-        // Over detached bytes the runtime makes no rotated texture, nor one of a surface's two
-        // planes (`stand_in.rs`): a two-plane YCbCr texture's converted texels have no stand-in
-        // of zero bytes.
-        let apart = converted.is_some() || alpha_plane.is_some() || descriptor.rotation != 0;
-        if detached && apart {
-            return Err(Error::NotImplemented(RuntimeGap::DetachTextures));
-        }
-        let rotation = match u8::try_from(descriptor.rotation) {
-            Ok(0) => None,
-            Ok(rotation) => Some(turned_plane(call, &texture, rotation, &buffer)?),
-            Err(_) => return Err(internal("a rotation past the descriptor's check")),
-        };
-        if let Some((rotation, stored)) = rotation {
-            if self.generation().is_lost() {
-                return Err(self.generation().lost_refusal());
-            }
-            if goal == Goal::Ask {
-                return Ok(Over::Asked(TexturePlacement::OtherShape));
-            }
-            let rows = Texels::new(
-                self.clone(),
-                rotated_rows(&texture),
-                texel_bytes,
-                descriptor,
-            );
-            let stored = Texels::placed(self.clone(), stored, texel_bytes, descriptor);
-            return self
-                .generation()
-                .new_rotated_texture(
-                    call,
-                    [rows, stored].map(|texels| texels.with_options(options).over_surface(surface)),
-                    descriptor,
-                    (&layout, rotation),
-                    id_use,
-                )
-                .map(Over::Made);
-        }
-        // A texture over a plane whose texels Metal lays out in no one place, its first level's
-        // and slice's among them, lies in memory of its own (`linear_plan.rs`'s **Beyond the
-        // plane's rows**).
-        if apart_from_plane(&texture) {
-            if storage == StorageMode::Memoryless {
-                return Err(Error::NotImplemented(RuntimeGap::MemorylessSurfacePlane));
-            }
-            if goal == Goal::Ask {
-                return Ok(Over::Asked(TexturePlacement::OtherShape));
-            }
-            let made = self
-                .generation()
-                .surface_texture_apart(call, descriptor, id_use)?;
-            self.degrade_apart(&layout, offset, bytes_per_row);
-            return Ok(Over::Made(made));
-        }
-        let placed = plan_buffer_texture(&texture, &buffer)
-            .map_err(|refusal| refusal_error(call, refusal))?;
-        if self.generation().is_lost() {
-            return Err(self.generation().lost_refusal());
-        }
-        // A texture of a surface's two planes, a texture buffer and a converted texture take no
-        // image in place.
-        let other = alpha_plane.is_some()
-            || converted.is_some()
-            || layout.texture_type == TextureType::TextureBuffer;
-        if goal == Goal::Ask && other {
+        let over = (offset, bytes_per_row);
+        let shape = shape_over(&facts, call, descriptor, over, form, ycbcr_surface)?;
+        if goal == Goal::Ask && shape.other() {
             return Ok(Over::Asked(TexturePlacement::OtherShape));
         }
+        let Shape {
+            descriptor,
+            layout,
+            options,
+            surface,
+            texel_bytes,
+            texture,
+            kind,
+        } = shape;
+        let descriptor = &descriptor;
+        let id_use = whose.id_use(descriptor.placement);
+        let (placed, alpha_plane, converted) = match kind {
+            // A rotated texture: its plane holds it turned (`shape_over`).
+            ShapeKind::Rotated { rotation, stored } => {
+                let rows = Texels::new(
+                    self.clone(),
+                    rotated_rows(&texture),
+                    texel_bytes,
+                    descriptor,
+                );
+                let stored = Texels::placed(self.clone(), stored, texel_bytes, descriptor);
+                return self
+                    .generation()
+                    .new_rotated_texture(
+                        call,
+                        [rows, stored]
+                            .map(|texels| texels.with_options(options).over_surface(surface)),
+                        descriptor,
+                        (&layout, rotation),
+                        id_use,
+                    )
+                    .map(Over::Made);
+            }
+            ShapeKind::Apart => {
+                let made = self
+                    .generation()
+                    .surface_texture_apart(call, descriptor, id_use)?;
+                self.degrade_apart(&layout, offset, bytes_per_row);
+                return Ok(Over::Made(made));
+            }
+            ShapeKind::Placed {
+                placed,
+                alpha,
+                converted,
+            } => (placed, alpha, converted),
+        };
         if let Some(alpha) = alpha_plane {
             let texels = Texels::placed(self.clone(), placed, texel_bytes, descriptor)
                 .with_options(options)
@@ -1171,9 +1029,8 @@ impl Buffer {
             if goal == Goal::Ask {
                 let past = texels.runs_past();
                 let asked = (descriptor, &layout);
-                let placement = self
-                    .generation()
-                    .placement_over_buffer(call, &texels, asked, past)?;
+                let bytes = Bytes::Texels(&texels);
+                let placement = (self.generation()).placement_over(call, bytes, asked, past)?;
                 return Ok(Over::Asked(placement));
             }
             // Texels past the buffer's length lie in a tail of their own (`linear_plan.rs`).
@@ -1194,6 +1051,401 @@ impl Buffer {
             Ok(Over::Made(texture))
         }
     }
+}
+
+impl Device {
+    /// Where a texture [`Buffer::new_texture_with_iosurface_plane`] makes of `descriptor` and
+    /// `plane` lies if made now over a no-copy buffer of `length` bytes from host address
+    /// `start`, whose pages the device imports as `backing` says
+    /// ([`HostBacking::ImportedByPointer`] or [`HostBacking::ImportedAsDmaBuf`]), asked before any
+    /// such buffer is made: a runtime extension with no Metal counterpart (Metal has no such
+    /// query, as a Mac's GPU works on a texture over the caller's pages in place).
+    ///
+    /// The answer is [`Buffer::texture_placement_with_iosurface_plane`]'s over such a buffer
+    /// wherever the steps before an import or an image decide it, by the same functions: the
+    /// texture's shape and the call's refusals (the same errors), [`TexturePlacement::OtherShape`],
+    /// the device's policy ([`TextureShadowReason::Policy`]), a shader's writes of a texel width
+    /// the device's check stores none of ([`TextureShadowReason::StoreWidth`]), the check's
+    /// verdicts for the pages' kind, the texture's accesses and how its texels lie in the device's
+    /// lines of memory from `start` ([`TexturePlacement::Pending`],
+    /// [`TextureShadowReason::CheckFailed`], [`TextureShadowReason::Unchecked`]), texels past
+    /// `length` ([`TextureShadowReason::PastLength`]), rows that share bytes
+    /// ([`InPlaceRefusal::Rows`]), and the refusals the device's format, feature and limit queries
+    /// give before it makes an image ([`InPlaceRefusal::Image`], [`InPlaceRefusal::Pitch`], and
+    /// over dma-bufs [`InPlaceRefusal::DmaBuf`]). Where only an image or the import decides (the
+    /// driver's linear image's layout, a `DRM_FORMAT_MOD_LINEAR` image's plane, their
+    /// requirements against the import's offset, size and memory type, the source's dma-buf and
+    /// the driver's import of it), it answers [`TexturePlacement::InPlace`]: the texture made then
+    /// may be a shadow for one of those, as the query of the buffer once made answers. It makes
+    /// no buffer, import or image, and binds or submits nothing; a pending verdict starts the
+    /// device's check, as the making's does
+    /// ([`Device::settle_in_place_checks`](crate::Device::settle_in_place_checks) says when its
+    /// verdicts are known). The buffer's resource options are not asked: a texture over an
+    /// IOSurface plane takes its descriptor's.
+    ///
+    /// Refused as `new_texture_with_iosurface_plane` refuses its arguments, as
+    /// `new_buffer_with_bytes_no_copy` refuses `length` (`Nil`, `BufferLength`), and (`Invalid`,
+    /// `HostPagesBacking`) for another `backing`.
+    pub fn host_pages_texture_placement(
+        &self,
+        backing: HostBacking,
+        descriptor: &TextureDescriptor,
+        plane: IoSurfacePlane,
+        start: u64,
+        length: u64,
+    ) -> Result<TexturePlacement, Error> {
+        let pages = (backing, start, length);
+        (self.current()).host_pages_texture_placement_now(pages, descriptor, plane)
+    }
+
+    /// [`Device::host_pages_texture_placement`] on the generation that serves
+    /// (`device/line.rs`).
+    fn host_pages_texture_placement_now(
+        &self,
+        (backing, start, length): (HostBacking, u64, u64),
+        descriptor: &TextureDescriptor,
+        plane: IoSurfacePlane,
+    ) -> Result<TexturePlacement, Error> {
+        const CALL: &str = "new_texture_with_iosurface_plane";
+        let (class, memory) = match backing {
+            HostBacking::ImportedByPointer => (PagesClass::Pointer, ModifierMemory::Host),
+            HostBacking::ImportedAsDmaBuf => (PagesClass::DmaBuf, ModifierMemory::DmaBuf),
+            _ => {
+                let call = "host_pages_texture_placement";
+                return Err(invalid(call, Problem::HostPagesBacking));
+            }
+        };
+        if length == 0 || length > self.properties().max_buffer_length {
+            let call = "new_buffer_with_bytes_no_copy";
+            return Err(nil(call, Problem::BufferLength { length }));
+        }
+        plane.refuse_client_direction()?;
+        // A no-copy buffer made over the pages: of its length, its bytes in pages, its options
+        // never read (an IOSurface plane's texture takes its descriptor's).
+        let facts = OverFacts {
+            device: self,
+            length,
+            detached: false,
+            options: ResourceOptions::default(),
+        };
+        let form = BufferTextureCall::IoSurfacePlane {
+            planar: plane.planar,
+        };
+        let over = (plane.offset, plane.bytes_per_row);
+        let shape = shape_over(&facts, CALL, descriptor, over, form, plane.ycbcr)?;
+        if shape.other() {
+            return Ok(TexturePlacement::OtherShape);
+        }
+        let ShapeKind::Placed { placed, .. } = shape.kind else {
+            return Err(internal("a texture of another shape over host pages"));
+        };
+        // Its texels as `Texels::placed` lays them out in such a buffer, whose bytes start at
+        // `start` in the device's lines of memory (`Texels::host_lie`): the buffer declares
+        // nothing of the bytes between rows (`BufferDescriptor::padding_unobserved`), and its bytes
+        // lie in their pages.
+        let gpu = placed.gpu;
+        let past = past_kept([&gpu, &placed.cpu, &gpu], kept_in(&placed, length));
+        let line = self.shared().in_place.line();
+        let owned = owns_padding(&gpu, shape.surface, false, length);
+        let lie = HostLie {
+            class,
+            rows: RowEnds::of(start, &gpu, line),
+            padding: Padding::of(start, &gpu, line, owned).declared(false),
+            texel: shape.texel_bytes,
+            detached: false,
+            caller: None,
+        };
+        let pages = Pages {
+            lie,
+            layout: gpu,
+            memory,
+        };
+        let asked = (&shape.descriptor, &shape.layout);
+        self.placement_over(CALL, Bytes::Pages(&pages), asked, past)
+    }
+}
+
+/// What the making of a texture over a buffer's bytes reads of the buffer before its bytes,
+/// pages or memory ([`shape_over`]): the generation it is made on, its length, whether its bytes
+/// are detached (`detach.rs`), and its resource options, which a texture over its bytes takes (an
+/// IOSurface plane's takes its descriptor's). A no-copy buffer not made yet has them too
+/// (`Device::host_pages_texture_placement`).
+struct OverFacts<'a> {
+    device: &'a Device,
+    length: u64,
+    detached: bool,
+    options: ResourceOptions,
+}
+
+/// A texture over a buffer's bytes as [`shape_over`] checked it, before anything is made: its
+/// descriptor, of the options it takes; its checked layout; those options; whether it is an
+/// IOSurface plane's; a texel's bytes; its texels as the buffer lays them out (`texture`, of a
+/// packed format's planned units); and which making it takes.
+struct Shape {
+    descriptor: TextureDescriptor,
+    layout: TextureLayout,
+    options: ResourceOptions,
+    surface: bool,
+    texel_bytes: u64,
+    texture: BufferTexture,
+    kind: ShapeKind,
+}
+
+/// Which making a texture over a buffer's bytes takes ([`Shape`]).
+enum ShapeKind {
+    /// Rotated: its plane holds it turned at `rotation`, its stored frame laid out as `stored`
+    /// (`texture/rotation.rs`).
+    Rotated { rotation: u8, stored: Placed },
+    /// Its texels lie apart from its IOSurface plane, in memory of its own (`linear_plan.rs`'s
+    /// **Beyond the plane's rows**).
+    Apart,
+    /// Laid out in the bytes as `placed`: a texture of a surface's two planes, its alpha plane
+    /// `alpha` (`texture/surface_two_planes.rs`); a converted one, of the planes and span
+    /// `converted` (`ycbcr.rs`); a texture buffer; or a 2D texture (or array).
+    Placed {
+        placed: Placed,
+        alpha: Option<[u64; 2]>,
+        converted: Option<(YCbCrPlanes, Range<u64>)>,
+    },
+}
+
+impl Shape {
+    /// Whether no image in place takes a texture of this shape, over any bytes
+    /// ([`TexturePlacement::OtherShape`]): a rotated texture, one apart from its plane, one of a
+    /// surface's two planes, a converted one and a texture buffer.
+    fn other(&self) -> bool {
+        match &self.kind {
+            ShapeKind::Rotated { .. } | ShapeKind::Apart => true,
+            ShapeKind::Placed {
+                alpha, converted, ..
+            } => {
+                alpha.is_some()
+                    || converted.is_some()
+                    || self.layout.texture_type == TextureType::TextureBuffer
+            }
+        }
+    }
+}
+
+/// The shape of the texture of `descriptor` over the bytes of a buffer of `facts` that `call`
+/// (made through `form`) makes, at `offset` with `bytes_per_row`, over a surface of
+/// `ycbcr_surface`'s facts where given: every check its making runs before it reads the buffer's
+/// bytes, pages or memory, refused as it refuses them.
+fn shape_over(
+    facts: &OverFacts<'_>,
+    call: &'static str,
+    descriptor: &TextureDescriptor,
+    (offset, bytes_per_row): (u64, u64),
+    form: BufferTextureCall,
+    ycbcr_surface: Option<IoSurfaceYCbCr>,
+) -> Result<Shape, Error> {
+    // A YCbCr format is made over a surface's planes with their facts (`ycbcr.rs`).
+    let asked_format = descriptor.pixel_format;
+    let surface = matches!(form, BufferTextureCall::IoSurfacePlane { .. });
+    // A two-plane extended-range format reads the surface's plane 1 from the same facts.
+    let surface_facts = ycbcr_surface;
+    let ycbcr_surface = ycbcr_surface.filter(|_| ycbcr(asked_format) && surface);
+    let device = facts.device;
+    let asked = device.texture_options(call, descriptor)?;
+    device.check_texture_placement(call, asked.placement, asked.usage, asked.texture_type)?;
+    let options = asked.resource_options;
+    let storage = options.storage_mode()?;
+    let cache = options.cpu_cache_mode()?;
+    let hazard = options.hazard_tracking_mode()?;
+    // A plain `newTextureWithDescriptor:offset:bytesPerRow:` takes the buffer's options
+    // whatever the descriptor names (probe 9d); an IOSurface plane takes its descriptor's, its
+    // default hazard tracking mode tracked, as the M4's plain run and validation do
+    // (the plan refuses a memoryless one).
+    let options = match form {
+        BufferTextureCall::IoSurfacePlane { .. } => {
+            let hazard = match hazard {
+                HazardTrackingMode::Default => HazardTrackingMode::Tracked,
+                hazard => hazard,
+            };
+            ResourceOptions::new(storage, cache, hazard)
+        }
+        BufferTextureCall::Texture | BufferTextureCall::Linear | BufferTextureCall::Tiled => {
+            facts.options
+        }
+    };
+    let descriptor = &TextureDescriptor {
+        resource_options: options,
+        ..asked
+    };
+    // A texture buffer of more than one level is stopped by `linear_plan`, as Metal's
+    // buffer creator stops it, not refused as the device's gap.
+    let rules = device.properties().texture_rules();
+    let checked = match ycbcr_surface {
+        Some(_) => descriptor.check_over_surface(rules),
+        None => descriptor.check_made(Creator::Buffer, rules),
+    };
+    // A format of which plain Metal makes no texture alone answers nil over a buffer (the
+    // linear SPI's too) and, but for a two-plane YCbCr one, over a surface's plane, once every
+    // rule Metal stops passed and before the buffer's or the surface's own. Metal makes every
+    // two-plane YCbCr format over a surface's plane (`YCBCR8_420_2P` and `YCBCR10_420_2P` over
+    // a 'BGRA' surface's); the runtime makes those `ycbcr.rs` reads with the surface's facts,
+    // and the others are its gap.
+    let layout = match checked {
+        Err(Refused::Nil(TextureProblem::NoTextureOfFormat))
+            if surface && ycbcr_format(asked_format).is_some() =>
+        {
+            return Err(Error::Unsupported(
+                Unsupported::not_implemented(Feature::Format).naming_format(asked_format),
+            ));
+        }
+        checked => checked.map_err(|refused| refused.error(call))?,
+    };
+    // Only an IOSurface plane takes a framebuffer-only texture: plain Metal asserts
+    // "framebufferOnly == NO" over a buffer, or on its rotation.
+    if descriptor.framebuffer_only && !surface {
+        return Err(invalid(
+            call,
+            Problem::Texture(TextureProblem::FramebufferOnly),
+        ));
+    }
+    let buffer = BufferFacts {
+        length: facts.length,
+    };
+    let planar = matches!(form, BufferTextureCall::IoSurfacePlane { planar: true });
+    let converted = match &ycbcr_surface {
+        Some(facts) => Some(surface_planes(
+            &layout,
+            ([offset, bytes_per_row], planar),
+            facts,
+            buffer.length,
+            device,
+        )?),
+        None => None,
+    };
+    // Metal makes no render target of a 4:2:0 or 4:2:2 format whose chroma blocks do not
+    // tile it (an odd width, or an odd height; plain Metal answers nil, the M3 Max under
+    // macOS 27.0.1), and makes any other.
+    if let Some((planes, _)) = &converted {
+        let halved = planes.codes.subsampling.halved() != [false, false];
+        let odd = planes.size.iter().any(|n| n % 2 != 0);
+        if halved && odd && descriptor.usage.contains(TextureUsage::RENDER_TARGET) {
+            return Err(Refused::Nil(TextureProblem::ExtentForFormat).error(call));
+        }
+    }
+    // A two-plane extended-range texture over a surface's plane 0 keeps its color words in
+    // the plane and its alpha bytes in the surface's plane 1 (`texture/surface_two_planes.rs`).
+    let alpha_plane = match form {
+        BufferTextureCall::IoSurfacePlane { planar }
+            if two_planes::holds_planes(layout.pixel_format) =>
+        {
+            Some(surface_two_planes::alpha_plane(
+                layout.pixel_format,
+                planar,
+                surface_facts,
+            )?)
+        }
+        _ => None,
+    };
+    // A format no buffer backs is Metal's refusal, whatever its Vulkan format, but for a
+    // 4:2:2 one, which a plain run makes over a buffer (its validation asserts; probe 9
+    // `fmt.240`, `fmt.241`) and the runtime holds over none: its textures' carrier
+    // (`chroma_pairs.rs`) is an image of their own. An IOSurface plane's (a CoreVideo `2vuy` or
+    // `yuvs` surface's) is made, as Metal makes it, 2 bytes a texel in the carrier
+    // (`linear_plan.rs`).
+    let pf = layout.pixel_format;
+    let four_two_two = chroma_pairs::is_four_two_two(pf);
+    // A depth or stencil texture over a surface's plane (`linear_plan.rs` stops every other
+    // buffer's) keeps one aspect's unit a texel there.
+    let depth_unit = surface_depth_unit(pf).filter(|_| surface);
+    let texel_bytes = match (texel_bytes(pf), &converted) {
+        _ if depth_unit.is_some() => depth_unit.map_or(0, |unit| u64::from(unit.bytes)),
+        (Some(bytes), _) => bytes,
+        // Its texels are the luma plane's codes, a code's bytes a texel; packed codes' units
+        // of three (`ycbcr.rs`).
+        (None, Some((planes, _))) => u64::from(planes.codes.bytes),
+        // Its texels are plane 0's color words (`two_planes.rs`).
+        (None, None) if alpha_plane.is_some() => u64::from(two_planes::UNIT.bytes),
+        (None, None) if four_two_two && surface => u64::from(chroma_pairs::TEXEL_BYTES),
+        (None, None) if !is_linear(pf) && !four_two_two => 0,
+        (None, None) => {
+            return Err(Error::Unsupported(
+                Unsupported::not_implemented(Feature::Format).naming_format(pf),
+            ))
+        }
+    };
+    // A packed format's luma rows are units of three codes, `⌈w / 3⌉` of them a row: the
+    // plane is planned as those units.
+    let planned = match &converted {
+        Some((planes, _)) if planes.codes.packed => {
+            let [w, h, d] = layout.extent;
+            let across = planes.codes.units(u64::from(w)) as u32;
+            TextureLayout {
+                extent: [across, h, d],
+                ..layout
+            }
+        }
+        _ => layout,
+    };
+    let texture = BufferTexture {
+        layout: planned,
+        texel_bytes,
+        storage,
+        offset,
+        bytes_per_row,
+        call: form,
+        usage: descriptor.usage,
+    };
+    // A rotated texture: its plane holds it turned, as Metal checks it, its CPU access and
+    // blits address the plane as the texture's own extent at the plane's rows, and its
+    // functions the stored frame (`texture/rotation.rs`).
+    // A rotated two-plane YCbCr texture is not measured: the runtime's gap. Nor is a rotated
+    // two-plane extended-range one over a surface.
+    if (converted.is_some() || alpha_plane.is_some()) && descriptor.rotation != 0 {
+        return Err(Error::Unsupported(
+            Unsupported::not_implemented(Feature::Format).naming_format(pf),
+        ));
+    }
+    // Over detached bytes the runtime makes no rotated texture, nor one of a surface's two
+    // planes (`stand_in.rs`): a two-plane YCbCr texture's converted texels have no stand-in
+    // of zero bytes.
+    let apart = converted.is_some() || alpha_plane.is_some() || descriptor.rotation != 0;
+    if facts.detached && apart {
+        return Err(Error::NotImplemented(RuntimeGap::DetachTextures));
+    }
+    let rotation = match u8::try_from(descriptor.rotation) {
+        Ok(0) => None,
+        Ok(rotation) => Some(turned_plane(call, &texture, rotation, &buffer)?),
+        Err(_) => return Err(internal("a rotation past the descriptor's check")),
+    };
+    let shape = |kind| Shape {
+        descriptor: *descriptor,
+        layout,
+        options,
+        surface,
+        texel_bytes,
+        texture,
+        kind,
+    };
+    if let Some((rotation, stored)) = rotation {
+        if device.is_lost() {
+            return Err(device.lost_refusal());
+        }
+        return Ok(shape(ShapeKind::Rotated { rotation, stored }));
+    }
+    // A texture over a plane whose texels Metal lays out in no one place, its first level's
+    // and slice's among them, lies in memory of its own (`linear_plan.rs`'s **Beyond the
+    // plane's rows**).
+    if apart_from_plane(&texture) {
+        if storage == StorageMode::Memoryless {
+            return Err(Error::NotImplemented(RuntimeGap::MemorylessSurfacePlane));
+        }
+        return Ok(shape(ShapeKind::Apart));
+    }
+    let placed =
+        plan_buffer_texture(&texture, &buffer).map_err(|refusal| refusal_error(call, refusal))?;
+    if device.is_lost() {
+        return Err(device.lost_refusal());
+    }
+    Ok(shape(ShapeKind::Placed {
+        placed,
+        alpha: alpha_plane,
+        converted,
+    }))
 }
 
 /// The plane of a texture of `rotation` made as `texture` (of a rotated descriptor, over an
@@ -1553,9 +1805,7 @@ impl Texels {
     ) -> Texels {
         let mut texels = Texels::new(buffer, placed.gpu, texel_bytes, descriptor);
         texels.cpu = placed.cpu;
-        if let Some(kept) = placed.kept {
-            texels.kept = kept.min(texels.kept);
-        }
+        texels.kept = kept_in(&placed, texels.kept);
         texels
     }
 
@@ -1779,12 +2029,8 @@ impl Texels {
     /// command, but bytes its maker declares nothing reads cannot tell keeping from changing;
     /// without the declaration a plane's padding is kept.
     pub(super) fn padding_owned(&self) -> bool {
-        let to_pitch = BufferLayout {
-            row_bytes: self.layout.row_pitch,
-            ..self.layout
-        };
-        (!self.surface || self.buffer.padding_unobserved())
-            && to_pitch.end() <= self.buffer.length()
+        let unobserved = self.buffer.padding_unobserved();
+        owns_padding(&self.layout, self.surface, unobserved, self.buffer.length())
     }
 
     /// The texture's resource options (the `options` field), its hazard tracking mode resolved.
@@ -1900,7 +2146,7 @@ impl Texels {
     /// array's second slice, [`Texels::kept`]): where [`with_tail`](Self::with_tail) gives them a
     /// tail.
     pub(super) fn runs_past(&self) -> bool {
-        self.layout.end().max(self.cpu.end()).max(self.shader.end()) > self.kept
+        past_kept([&self.layout, &self.cpu, &self.shader], self.kept)
     }
 
     /// Where the texels' bytes past the buffer's length lie, where they run past it: from the

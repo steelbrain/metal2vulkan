@@ -148,7 +148,7 @@ use metal2vulkan::vk::{
     ComponentMapping, Format, FormatFeatureFlags2, ImageAspectFlags, ImageUsageFlags,
     ImageViewType, SampleCountFlags,
 };
-pub(crate) use route::{HostLie, HostWay, Route};
+pub(crate) use route::{Bytes, HostLie, HostWay, Pages, Route};
 use stand_in::StandIn;
 use std::any::Any;
 use std::borrow::Cow;
