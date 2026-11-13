@@ -5,7 +5,9 @@
 //! ([`WordMem`]: a descriptor view, later the PSB and arena forms). Memory holds the
 //! little-endian bytes of the value under the AIR datalayout; the register value is the
 //! arithmetic family's representation ([`Form`]): an `iN` zero-extended in a `u32` or `u64`, `i1`
-//! as `bool` (one byte, `byte != 0`), floats native.
+//! as `bool` (one byte, `byte != 0`), floats native. A store masks an integer narrower than its
+//! container to its width before placing it ([`words_of`]): a poison value (a `nuw` operation's,
+//! `ops::int_binary`) may carry bits above the width, and the store writes only its own bytes.
 //!
 //! A vector of more than four whole-byte lanes is held **chunked**: its register value is the
 //! arithmetic family's composite of 4-lane chunks, the last holding the remaining 1 to 4 lanes.
@@ -907,10 +909,12 @@ pub fn words_of(fb: &mut FunctionBuilder<'_>, leaf: &Leaf, v: Value) -> BResult<
                 } else {
                     u32::from(bits / 8)
                 };
+                let x = ops::mask(fb, scalar, x)?;
                 put(fb, &mut out, i * lane_bytes, x)?;
             }
             Held::Wide { .. } => return Err(dangling()),
             Held::Int { .. } | Held::Float(FloatFmt::F64) => {
+                let x = ops::mask(fb, scalar, x)?;
                 let (lo, hi) = split64(fb, x)?;
                 put(fb, &mut out, 8 * i, lo)?;
                 if 8 * i + 4 < leaf.bytes {
@@ -994,7 +998,10 @@ fn vector_words(
         filled(fb, out)
     };
     Ok(Some(match form.held {
-        Held::Int { container: 32, .. } => placed(fb, v)?,
+        Held::Int { container: 32, .. } => {
+            let v = ops::mask(fb, form, v)?;
+            placed(fb, v)?
+        }
         Held::Float(FloatFmt::Half | FloatFmt::BFloat) => {
             // A narrow float is held widened: one encode of every lane, a `half`'s by the
             // device's narrowing (`narrow::to_bits`).
@@ -1007,6 +1014,7 @@ fn vector_words(
             placed(fb, u)?
         }
         Held::Int { container: 64, .. } | Held::Float(FloatFmt::F64) if n == 2 => {
+            let v = ops::mask(fb, form, v)?;
             let ty = uvec_ty(fb, 4)?;
             let u = fb.convert(ConvOp::Bitcast, v, ty)?;
             let mut out = Vec::with_capacity(4);

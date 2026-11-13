@@ -19,7 +19,7 @@ use super::libm::Lib;
 use super::math::{self, ConvertKind, FloatFn, IntFn, Sign};
 use super::nan::NanTest;
 use super::ops::{self, BitcastPlan, CastKind};
-use crate::air::ir::{BinOp as AirBin, FloatPredicate, IntPredicate};
+use crate::air::ir::{BinOp as AirBin, FloatPredicate, IntFlags, IntPredicate};
 use crate::device::DeviceProfile;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::spirv::builder::{FunctionBuilder, MaskForm, ModuleBuilder, ProductForm, QuantizeForm};
@@ -831,9 +831,48 @@ fn integer_operators_match_llvm_at_every_width() {
                 &format!("{op:?} i{bits}"),
                 &[f, f],
                 f,
-                &|fb, x| ops::int_binary(fb, op, f, x[0], x[1]),
+                &|fb, x| ops::int_binary(fb, op, IntFlags::NONE, f, x[0], x[1]),
                 &pairs(&vals, b),
                 &|c| Some(vec![llvm_int(op, bits, arg(c, 0), arg(c, 1))?]),
+                false,
+            );
+        }
+    }
+}
+
+/// LLVM's `op nuw` on `bits`-bit operands: `None` where the unsigned result leaves the width
+/// (poison).
+fn llvm_nuw(op: AirBin, bits: u8, a: u64, b: u64) -> Option<u64> {
+    let (a, b) = (u128::from(a), u128::from(b));
+    let r = match op {
+        AirBin::Add => a + b,
+        AirBin::Sub => a.checked_sub(b)?,
+        AirBin::Mul => a * b,
+        AirBin::Shl if b < u128::from(bits) => a << b,
+        _ => return None,
+    };
+    u64::try_from(r).ok().filter(|r| *r <= mask(bits))
+}
+
+/// An add, sub, mul or shl marked `nuw` is left unmasked, and answers LLVM's result wherever it
+/// is defined, at every width held in a container.
+#[test]
+fn nuw_operators_match_llvm_where_defined() {
+    let mut rng = Rng(0x2545_F491_4F6C_DD1D);
+    for bits in [5, 8, 16, 40] {
+        let vals = int_values(bits, &mut rng, 6);
+        let mut shifts = vals.clone();
+        shifts.extend(0..u64::from(bits));
+        let f = int(bits);
+        for op in [AirBin::Add, AirBin::Sub, AirBin::Mul, AirBin::Shl] {
+            let b: &[u64] = if op == AirBin::Shl { &shifts } else { &vals };
+            check(
+                &format!("{op:?} nuw i{bits}"),
+                &[f, f],
+                f,
+                &|fb, x| ops::int_binary(fb, op, IntFlags::NUW, f, x[0], x[1]),
+                &pairs(&vals, b),
+                &|c| Some(vec![llvm_nuw(op, bits, arg(c, 0), arg(c, 1))?]),
                 false,
             );
         }
@@ -853,7 +892,7 @@ fn integer_operators_on_vectors_work_per_lane() {
             &format!("{op:?} <4 x i8>"),
             &[f, f],
             f,
-            &|fb, x| ops::int_binary(fb, op, f, x[0], x[1]),
+            &|fb, x| ops::int_binary(fb, op, IntFlags::NONE, f, x[0], x[1]),
             &cases,
             &|c| {
                 (0..4)

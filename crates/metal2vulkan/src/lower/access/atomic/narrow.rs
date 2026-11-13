@@ -3,8 +3,9 @@
 //! atomics are not core Vulkan), so a narrow atomic operates on the field of its containing `u32`
 //! word: the word at `offset & ~3`, the field `bits` wide at bit `(offset & 3) * 8` (an LLVM
 //! atomic's alignment is at least its size, so the field never straddles two words; selection
-//! refuses an under-aligned one). Values are held zero-extended in a `u32`, so an operand shifted
-//! into place sets no bit outside its field.
+//! refuses an under-aligned one). Values are held zero-extended in a `u32`; the operand is masked
+//! to the field first (a poison operand, a `nuw` operation's, `ops::int_binary`, may carry bits
+//! above its width), so an operand shifted into place sets no bit outside its field.
 //!
 //! - `load` is `OpAtomicLoad` of the word and the field extracted from it.
 //! - `and`, `or`, and `xor` are one word atomic each, whose operand leaves the other fields
@@ -96,6 +97,11 @@ pub(super) fn apply(
 ) -> BResult<Option<SValue>> {
     let lane = k32(fb, (1u32 << bits) - 1)?;
     let mask = fb.binary(BinOp::ShiftLeftLogical, lane, shift)?;
+    let value = match o.value {
+        Some(x) => Some(fb.binary(BinOp::BitwiseAnd, x, lane)?),
+        None => None,
+    };
+    let o = Op { value, ..o };
     let f = Field {
         shift,
         bits,

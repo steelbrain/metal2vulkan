@@ -881,10 +881,12 @@ fn words_of(fb: &mut FunctionBuilder<'_>, s: Shape, v: SValue) -> BResult<Vec<SV
             (32, Held::Float(_)) => words.push(fb.convert(ConvOp::Bitcast, x, ut)?),
             (32, _) => words.push(x),
             _ => {
+                // An integer lane masked to its width: a poison lane (a `nuw` operation's,
+                // `ops::int_binary`) may exceed it, and never reaches its neighbour's bits.
                 let b = if lane.is_narrow() {
                     narrow::to_bits(fb, lane, x)?
                 } else {
-                    x
+                    ops::mask(fb, lane, x)?
                 };
                 let placed = if at == 0 {
                     b

@@ -96,7 +96,7 @@ use crate::air::intrinsics::{
 use crate::air::intrinsics::{Elem, Math};
 use crate::air::ir::{
     BinOp as AirBin, BlockId, CastOp, Const, FastMath, FloatPredicate, Inst, InstId, InstKind,
-    IntPredicate, Type, TypeId as AirTypeId, Value, ValueId,
+    IntFlags, IntPredicate, Type, TypeId as AirTypeId, Value, ValueId,
 };
 use crate::air::Entry;
 use crate::budget::Meter;
@@ -179,9 +179,11 @@ pub fn materialize(fb: &mut FunctionBuilder<'_>, k: &LoweredConst) -> BResult<Op
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArithStrategy {
-    /// An integer binary operator on held integers.
+    /// An integer binary operator on held integers, with the instruction's wrap flags
+    /// ([`ops::int_binary`]).
     Int {
         op: AirBin,
+        flags: IntFlags,
         form: Form,
     },
     /// A binary operator on `i1` values.
@@ -236,6 +238,10 @@ pub enum ArithStrategy {
     Select,
     /// The first operand itself (`freeze` of a value, unsigned `abs`).
     Copy,
+    /// `freeze` of a held integer narrower than its container: the operand masked to its width
+    /// ([`ops::mask`]). A poison operand (a `nuw` operation's, [`ops::int_binary`]) may carry
+    /// bits above the width; the frozen value is one value of the type.
+    Freeze(Form),
     /// The zero of the result's representation (`freeze` of `undef`/`poison`).
     Zero(DemoteTy),
     /// `OpUndef` of the result's representation (an element index known out of range).
@@ -431,6 +437,7 @@ impl FamilyStrategy for ArithStrategy {
             S::Bitcast { .. } => "arith.bitcast",
             S::Select => "arith.select",
             S::Copy | S::Zero(_) | S::Undef(_) => "arith.copy",
+            S::Freeze(_) => "arith.int.legalized",
             S::ExtractConst(_)
             | S::ExtractDynamic { .. }
             | S::InsertConst(_)
@@ -510,6 +517,8 @@ impl FamilyStrategy for ArithStrategy {
             // Two operand conversions (a shift pair or a select each) and the operation.
             S::IndexWord(_) => 32,
             S::Copy => 4,
+            // The mask and its constant.
+            S::Freeze(_) => 16,
             S::Zero(d) | S::Undef(d) | S::Null(d) => {
                 8u32.saturating_add(8u32.saturating_mul(leaves(d)))
             }
@@ -1409,6 +1418,22 @@ fn form_in(cx: &SelectCx<'_>, v: Value, chunk: Option<u8>) -> Result<Form, Error
     chunk_form(cx, t, chunk)
 }
 
+/// The form of `v` when it is an integer (or integer vector) held narrower than its container
+/// ([`Form::legalized`]).
+fn padded_int(cx: &SelectCx<'_>, v: Value, chunk: Option<u8>) -> Result<Option<Form>, Error> {
+    let t = ty_of(cx, v)?;
+    let types = cx.entry.module.types();
+    let elem = match types.get(t) {
+        Some(Type::Vector { elem, .. }) => *elem,
+        _ => t,
+    };
+    if !matches!(types.get(elem), Some(Type::Int(w)) if *w != 1) {
+        return Ok(None);
+    }
+    let f = chunk_form(cx, t, chunk)?;
+    Ok(f.legalized().then_some(f))
+}
+
 /// [`form_in`] of the instruction's result.
 fn result_form_in(cx: &SelectCx<'_>, inst: &Inst, chunk: Option<u8>) -> Result<Form, Error> {
     chunk_form(cx, inst.ty, chunk)
@@ -1448,11 +1473,21 @@ fn select_in(
     // The result is a value of a lowered type (or the operation is refused).
     let result = cx.lowered_repr(Value::Inst(at), inst.ty)?;
     Ok(match &inst.kind {
-        InstKind::BinOp { op, a, b, fmf, .. } => {
+        InstKind::BinOp {
+            op,
+            flags,
+            a,
+            b,
+            fmf,
+        } => {
             let f = form_in(cx, *a, chunk)?;
             match f.held {
                 Held::Bool if !op.is_float() => S::Bool { op: *op, form: f },
-                Held::Int { .. } if !op.is_float() => S::Int { op: *op, form: f },
+                Held::Int { .. } if !op.is_float() => S::Int {
+                    op: *op,
+                    flags: *flags,
+                    form: f,
+                },
                 // LLVM's `frem` on `float` is Metal's (measured on the M3 Max): with every
                 // fast-math flag its `fast::fmod`, as `air.fast_fmod` is lowered; otherwise
                 // `x - y * trunc(x / y)` of its precise quotient, which the device's `OpFRem` is at
@@ -1584,7 +1619,10 @@ fn select_in(
         InstKind::Select { .. } => S::Select,
         InstKind::Freeze(v) => match cx.constant(*v) {
             Some(LoweredConst::Undef(_)) => S::Zero(result),
-            _ => S::Copy,
+            _ => match padded_int(cx, *v, chunk)? {
+                Some(f) => S::Freeze(f),
+                None => S::Copy,
+            },
         },
         // A constant index out of range (or `undef`) gives poison.
         InstKind::ExtractElement { vec, idx } => match (idx, const_int(cx, *idx)) {
@@ -3003,6 +3041,7 @@ fn arity(s: &ArithStrategy) -> Option<usize> {
         S::FloatFn { f, .. } => Some(f.arity()),
         // A constant element index is a literal, never materialized.
         S::Copy
+        | S::Freeze(_)
         | S::Convert { .. }
         | S::Pack { .. }
         | S::ExtractConst(_)
@@ -3076,9 +3115,9 @@ fn value(
             let p = nth(cx, xs, 0)?;
             chunk::bitcast(fb, *from, *to, p)?
         }
-        S::Int { op, form } => {
+        S::Int { op, flags, form } => {
             let (p, q) = (a(cx, 0)?, a(cx, 1)?);
-            ops::int_binary(fb, *op, *form, p, q)?
+            ops::int_binary(fb, *op, *flags, *form, p, q)?
         }
         S::Bool { op, form } => {
             let (p, q) = (a(cx, 0)?, a(cx, 1)?);
@@ -3129,6 +3168,10 @@ fn value(
             fb.select(c, t, f)?
         }
         S::Copy => a(cx, 0)?,
+        S::Freeze(f) => {
+            let p = a(cx, 0)?;
+            ops::mask(fb, *f, p)?
+        }
         S::Zero(d) => match legal::zero(d) {
             Some(k) => match legal::materialize(fb, &k)? {
                 Some(x) => x,
