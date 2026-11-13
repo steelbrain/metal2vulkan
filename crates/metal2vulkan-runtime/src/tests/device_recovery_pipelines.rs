@@ -160,6 +160,7 @@ fn a_recovery_carries_a_compute_state() {
     assert_eq!(run(&device, &queue, &state).unwrap(), expected());
     // The lost `VkDevice` went at its rest, the state's program there let go of.
     assert_eq!(live_vk_devices(&device, 1), 1);
+    assert_eq!(device.work_counts().lost_programs_released, 1);
     assert_eq!(label, Some("scaled"));
     assert_eq!(run(&device, &queue, &state).unwrap(), expected());
 }
@@ -277,6 +278,7 @@ fn a_recovery_carries_a_drawing_state() {
     assert_eq!(draw(&device, &queue, &state).unwrap(), drawn());
     // The lost `VkDevice` went at its rest, the state's program there let go of.
     assert_eq!(live_vk_devices(&device, 1), 1);
+    assert_eq!(device.work_counts().lost_programs_released, 1);
     assert_eq!(label, Some("drawn"));
     assert_eq!(draw(&device, &queue, &state).unwrap(), drawn());
 }

@@ -155,8 +155,10 @@ fn a_recovery_carries_textures_their_views_and_those_over_carried_buffers() {
             vec![128; BYTES as usize]
         );
     }
-    // The lost `VkDevice` went at its rest, the textures' parts there let go of while they live.
+    // The lost `VkDevice` went at its rest, the textures' parts there let go of while they live:
+    // the texture's, the view's and the one over the buffer's.
     assert_eq!(live_vk_devices(&device, 1), 1);
+    assert_eq!(device.work_counts().lost_textures_released, 3);
     for texture in [&target, &view, &later] {
         assert_eq!(
             texels(&device, &queue, texture).unwrap(),

@@ -196,8 +196,12 @@ impl Texture {
     /// ([`VkImageLayouts`](super::VkImageLayouts)).
     ///
     /// The texture keeps the image for good: a fetched render target whose image takes
-    /// `STORAGE` later no longer does once its image was handed out.
+    /// `STORAGE` later no longer does once its image was handed out. Once its device's recovery
+    /// carried the texture to a new `VkDevice` (`Degradation::DeviceRecovered`), an image answered
+    /// before stays the lost device's, kept with that device until the texture goes, and a later
+    /// call answers the new one's.
     pub unsafe fn vk_image(&self) -> Option<vk::Image> {
+        let _held = self.hold();
         if self.shadow().is_some() {
             return None;
         }

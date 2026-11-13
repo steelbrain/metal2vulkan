@@ -26,7 +26,7 @@ use super::attributes::ResourceAttributes;
 use super::buffer_texture::TexelViews;
 use super::churn_counts::Recycled;
 use super::degradation::{Degradation, NoticesFor};
-use super::device::carry::{Contents, Left, LostParts, MadeOn};
+use super::device::carry::{CallHold, Contents, Left, LostParts, MadeOn, PartsCalls};
 use super::device::{lock, DeviceShared};
 use super::dirty_pages::{DirtySource, PagesLog};
 use super::error::{internal, invalid, nil, vulkan, Error, Problem};
@@ -126,7 +126,7 @@ struct BufferShared {
     /// with its own ordering where it was.
     carried: AtomicBool,
     /// The calls outside a command buffer's work under way on these parts ([`Buffer::held_parts`]).
-    calls: Mutex<LinkCalls>,
+    calls: PartsCalls,
 }
 
 /// Where a buffer's bytes are.
@@ -814,15 +814,10 @@ impl LostParts for LostBuffer {
             self.pages.release_lost();
             return;
         };
-        {
-            let mut calls = lock(&buffer.calls);
-            if calls.under_way > 0 {
-                // The last call under way on them lets them go (`Buffer::held_parts`).
-                calls.waiting = Some(self);
-                return;
-            }
+        // The last call under way on them lets them go (`Buffer::held_parts`).
+        if let Some(lost) = buffer.calls.unless_held(self) {
+            (*lost).release_now(&buffer);
         }
-        (*self).release_now(&buffer);
     }
 }
 
@@ -857,13 +852,9 @@ impl LostParts for LostPlaced {
         let Some(buffer) = self.buffer.upgrade() else {
             return;
         };
-        {
-            let mut calls = lock(&buffer.calls);
-            if calls.under_way > 0 {
-                // The last call under way on them lets them go (`Buffer::held_parts`).
-                calls.waiting = Some(self);
-                return;
-            }
+        // The last call under way on them lets them go (`Buffer::held_parts`).
+        if buffer.calls.unless_held(self).is_none() {
+            return;
         }
         let shared = buffer.device.shared();
         (shared.live_buffers).forget(buffer.address.0, buffer.object_id);
@@ -895,15 +886,10 @@ impl LostParts for LostHost {
         let Some(buffer) = self.buffer.upgrade() else {
             return;
         };
-        {
-            let mut calls = lock(&buffer.calls);
-            if calls.under_way > 0 {
-                // The last call under way on them lets them go (`Buffer::held_parts`).
-                calls.waiting = Some(self);
-                return;
-            }
+        // The last call under way on them lets them go (`Buffer::held_parts`).
+        if let Some(lost) = buffer.calls.unless_held(self) {
+            (*lost).release_now(&buffer);
         }
-        (*self).release_now(&buffer);
     }
 }
 
@@ -947,38 +933,12 @@ impl LostHost {
     }
 }
 
-/// The calls outside a command buffer's work under way on a buffer's parts on one generation
-/// ([`Buffer::held_parts`]), and the release of those parts that waits for them to end, where the
-/// buffer was carried from that generation and it came to rest (`device/carry.rs`).
-#[derive(Default)]
-struct LinkCalls {
-    under_way: usize,
-    waiting: Option<Box<dyn LostParts>>,
-}
-
 /// A call outside a command buffer's work on a buffer's parts on one generation
-/// ([`Buffer::held_parts`]), until it goes: the parts stay while it lives, and every read of the
-/// buffer's parts on this thread meanwhile answers them.
+/// ([`Buffer::held_parts`]), until it goes: the parts stay while it lives (`PartsCalls`), and
+/// every read of the buffer's parts on this thread meanwhile answers them.
 pub(super) struct HeldParts<'a> {
-    link: &'a Arc<BufferShared>,
+    _call: CallHold<'a>,
     _scope: NoticesFor,
-}
-
-impl Drop for HeldParts<'_> {
-    fn drop(&mut self) {
-        let waiting = {
-            let mut calls = lock(&self.link.calls);
-            calls.under_way -= 1;
-            match calls.under_way {
-                0 => calls.waiting.take(),
-                _ => None,
-            }
-        };
-        // Released now: no call is under way on them, unless one began since.
-        if let Some(lost) = waiting {
-            lost.release();
-        }
-    }
 }
 
 impl Drop for FixedPages {
@@ -3561,7 +3521,7 @@ impl Device {
             staged: AtomicBool::new(false),
             next: OnceLock::new(),
             carried: AtomicBool::new(false),
-            calls: Mutex::default(),
+            calls: PartsCalls::default(),
         }))
     }
 
@@ -3815,7 +3775,7 @@ impl Heap {
             staged: AtomicBool::new(false),
             next: OnceLock::new(),
             carried: AtomicBool::new(false),
-            calls: Mutex::default(),
+            calls: PartsCalls::default(),
         }))
     }
 }
@@ -3868,21 +3828,15 @@ impl Buffer {
     pub(super) fn held_parts(&self) -> HeldParts<'_> {
         let mut link = self.s();
         loop {
-            {
-                let mut calls = lock(&link.calls);
-                // Read under the lock their release takes: parts not marked let go of yet, or
-                // whose release a call under way holds back (one this thread is inside, say), go
-                // only once this call ends.
-                if !link.released() || calls.under_way > 0 {
-                    calls.under_way += 1;
-                    drop(calls);
-                    #[cfg(test)]
-                    held_hook();
-                    return HeldParts {
-                        link,
-                        _scope: NoticesFor::of_generation(link.generation),
-                    };
-                }
+            // Parts not marked let go of yet, or whose release a call under way holds back, go
+            // only once this call ends.
+            if let Some(call) = link.calls.hold_unless(|| link.released()) {
+                #[cfg(test)]
+                held_hook();
+                return HeldParts {
+                    _call: call,
+                    _scope: NoticesFor::of_generation(link.generation),
+                };
             }
             // Let go of on their lost generation since this thread read them: the generation
             // the buffer was carried to serves its calls. Parts marked were carried.
@@ -5347,7 +5301,7 @@ impl Buffer {
             staged: AtomicBool::new(false),
             next: OnceLock::new(),
             carried: AtomicBool::new(false),
-            calls: Mutex::default(),
+            calls: PartsCalls::default(),
         }));
         // A two-copy buffer's device copy takes the pages' bytes, its GPU writes not synchronized
         // lost with the `VkDevice` (`managed_copy.rs`).
@@ -5427,7 +5381,7 @@ impl Buffer {
             staged: AtomicBool::new(false),
             next: OnceLock::new(),
             carried: AtomicBool::new(false),
-            calls: Mutex::default(),
+            calls: PartsCalls::default(),
         }));
         let from = last.device.shared();
         let _set = last.next.set(carried);

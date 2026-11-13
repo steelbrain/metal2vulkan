@@ -204,5 +204,6 @@ fn a_recovery_carries_private_heaps_with_their_buffers_and_textures() {
     assert_eq!(automatic.used_size(), used - BYTES);
     // The lost `VkDevice` went at its rest, the carried texture's parts there let go of.
     assert_eq!(live_vk_devices(&device, 1), 1);
+    assert_eq!(device.work_counts().lost_textures_released, 1);
     drop(before);
 }

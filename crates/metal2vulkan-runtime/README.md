@@ -850,8 +850,8 @@ meanwhile wait for it.
   objects, at the same addresses and resource IDs. A pipeline state's base variant is made again there from what its creation
   compiled, with no translation, and the `VkPipeline` its creation predicted is queued with no
   wait; a bind of one whose making there failed is refused
-  (`RuntimeGap::RemadeAfterRecoveryFailed`). Its objects on the lost `VkDevice` stay with it, and
-  keep it alive, until it goes. A sampler state is placed there as at its making, so an argument
+  (`RuntimeGap::RemadeAfterRecoveryFailed`). Its objects on the lost `VkDevice` go once none of
+  that device's command buffers may record. A sampler state is placed there as at its making, so an argument
   buffer naming its resource ID reads it, and an equal request gets it; its `VkSampler`s are made
   there as its binds need them.
   An event keeps the value the host saw and its listeners' notifications. A buffer in the
@@ -877,8 +877,10 @@ meanwhile wait for it.
   as its image was their only copy (it reads as a new texture of its descriptor: refill one filled
   once and kept); the notice counts these by storage mode. A texture buffer of `new_texture` is made again over its texels'
   buffer where the recovery carried that, and one over a carried buffer over the buffer's bytes:
-  each reads what the buffer holds. A view views its parent there. Their images on the lost `VkDevice` stay with them, and keep it alive,
-  until they go.
+  each reads what the buffer holds. A view views its parent there. Their images on the lost
+  `VkDevice` go once none of that device's command buffers may record, but one whose `VkImage`
+  was handed out (`Texture::vk_image`), which stays, and keeps that device alive, until its
+  texture goes.
 - Any other object made before the recovery is refused where it meets the new `VkDevice` (an
   encoder's bind, a pipeline made from its functions) and in its own calls that need its lost one:
   `Error::NotImplemented(RuntimeGap::MadeBeforeRecovery)`. That covers pooled `Shared` and

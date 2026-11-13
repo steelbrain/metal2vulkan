@@ -4000,6 +4000,8 @@ impl IndirectComputeCommand {
     pub fn set_compute_pipeline_state(&self, state: &ComputePipelineState) -> Result<(), Error> {
         const CALL: &str = "set_compute_pipeline_state";
         self.icb.check_command_types(CALL)?;
+        // The state's program, held while the command takes it (`pipeline/carry.rs`).
+        let _held = state.hold();
         let device = state.bound_device()?;
         if !device.same(self.icb.generation()) {
             return Err(device.foreign(CALL, self.icb.generation()));
@@ -4620,6 +4622,8 @@ impl IndirectRenderCommand {
     pub fn set_render_pipeline_state(&self, state: &RenderPipelineState) -> Result<(), Error> {
         const CALL: &str = "set_render_pipeline_state";
         self.icb.check_command_types(CALL)?;
+        // The state's program, held while the command takes it (`pipeline/carry.rs`).
+        let _held = state.hold();
         let device = state.bound_device()?;
         if !device.same(self.icb.generation()) {
             return Err(device.foreign(CALL, self.icb.generation()));

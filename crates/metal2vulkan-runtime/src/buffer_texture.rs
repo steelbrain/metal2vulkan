@@ -1537,6 +1537,12 @@ pub(super) fn texture_buffer_over(
 }
 
 impl Texels {
+    /// The generation the texels' views are of: that of the texture's parts that hold them, made
+    /// where the buffer's reach took its parts (`texture/carry.rs`).
+    pub(super) fn generation(&self) -> &Device {
+        &self.views.device
+    }
+
     /// The texels of a texture of `descriptor` that `placed` lays out in `buffer`, `texel_bytes`
     /// each: for the GPU at its GPU layout, for the CPU at its CPU one.
     fn placed(

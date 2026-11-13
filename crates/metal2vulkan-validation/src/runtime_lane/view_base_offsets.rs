@@ -294,7 +294,7 @@ fn sampled(
     n: u32,
     xs: &[f64],
 ) -> Vec<[f32; 4]> {
-    let device = state.device();
+    let device = &state.device();
     let queue = device.new_command_queue().unwrap();
     let y = 0.5 / n as f32;
     let coords: Vec<u8> = xs

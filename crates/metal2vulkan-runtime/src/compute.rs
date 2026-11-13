@@ -2032,7 +2032,7 @@ fn settle_live<'a>(
     (changed, samplers): (u64, Vec<SamplerState>),
 ) -> Result<Option<(SettledDispatch, Flat<'a>)>, Error> {
     let pipeline = tables.pipeline;
-    let counts = pipeline.device().shared().counts.thread();
+    let counts = pipeline.generation().shared().counts.thread();
     let mut argument_samplers = samplers;
     let mut unlisted = None;
     let sampler_maps = tables.sampler_maps()?;
@@ -2119,7 +2119,7 @@ fn planned_as_before(
     direct: Option<Dispatch>,
 ) {
     match (as_before, direct) {
-        (true, _) => (pipeline.device().shared().counts)
+        (true, _) => (pipeline.generation().shared().counts)
             .thread()
             .dispatch_planned_as_before(),
         (false, Some(_)) => pipeline.keep_planned(Arc::clone(planned)),

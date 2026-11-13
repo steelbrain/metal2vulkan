@@ -3683,7 +3683,9 @@ bound.
   reads as a new texture of its descriptor, a heap's made again at its range of the heap there (a
   `Private` heap's reading as a new texture, one over the caller's memory reading the pages), one
   over a buffer made again over the buffer's bytes there, a view of its parent's image there.
-  Their images on the lost `VkDevice` stay with them, and keep it, until they go. A texture of a
+  Their images on the lost `VkDevice` go once none of its command buffers may record, but an
+  image whose `VkImage` was handed out (`Texture::vk_image`), which stays, and keeps it, until its
+  texture goes. A texture of a
   heap left, one over the caller's `VkImage`, a sparse or shareable texture and one over a buffer
   left are refused, with their views. A `Shared` heap, whose bytes are pooled host-visible
   memory the device allocated, is refused with its buffers, as a pooled buffer is. A compute, tile,
@@ -3691,7 +3693,7 @@ bound.
   `uniqueIdentifier` and label): its base variant made again there from what its creation
   compiled, with no translation, and the `VkPipeline` its creation predicted queued with no wait;
   a bind of one whose making there failed is refused (`RemadeAfterRecoveryFailed`). Its objects
-  on the lost `VkDevice` stay with it, and keep it, until it goes.
+  on the lost `VkDevice` go once none of its command buffers may record.
 - `metal2vulkan-degrade-private-properties-unknown` (precision). `PrivatePropertiesUnknown`: Apple's
   private device properties the device has no answer for: no document describes them and nothing the
   device reports maps to them. Cost: the device gives no answer for them (`PrivateAnswer::value` is

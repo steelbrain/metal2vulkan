@@ -67,6 +67,7 @@ impl Texture {
     /// `NonVolatile` to every request and change nothing, as plain Metal answers where its
     /// validation stops each, a query included.
     pub fn set_purgeable_state(&self, state: PurgeableState) -> Result<PurgeableState, Error> {
+        let _held = self.hold();
         if self.heap().is_some() {
             return Ok(PurgeableState::NonVolatile);
         }

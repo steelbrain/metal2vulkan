@@ -567,8 +567,9 @@ impl ComputePipelineState {
         &self,
         functions: &[Function],
     ) -> Result<ComputePipelineState, Error> {
+        let _held = self.hold();
         const CALL: &str = "new_compute_pipeline_state_with_additional_binary_functions";
-        let device = self.device().clone();
+        let device = self.device();
         let Kernel::Compute(descriptor) = &self.0.descriptor else {
             return Err(invalid(
                 CALL,
@@ -597,6 +598,7 @@ impl ComputePipelineState {
 
     /// `requiredThreadsPerThreadgroup`: the descriptor's, a zero size where it requires none.
     pub fn required_threads_per_threadgroup(&self) -> Size {
+        let _held = self.hold();
         size(self.required_threads())
     }
 
@@ -677,8 +679,9 @@ impl RenderPipelineState {
         &self,
         functions: &RenderPipelineFunctionsDescriptor,
     ) -> Result<RenderPipelineState, Error> {
+        let _held = self.hold();
         const CALL: &str = "new_render_pipeline_state_with_additional_binary_functions";
-        let device = self.device().clone();
+        let device = self.device();
         match self.kind() {
             Kind::Graphics(state) => {
                 let descriptor = match state.descriptor() {
@@ -764,6 +767,7 @@ impl RenderPipelineState {
     /// `required_threads_per_threadgroup`, a zero size where it requires none and for a drawing
     /// state.
     pub fn required_threads_per_tile_threadgroup(&self) -> Size {
+        let _held = self.hold();
         match self.kind() {
             Kind::Graphics(_) => size(None),
             Kind::Tile(state) => size(state.kernel().required_threads()),
@@ -776,6 +780,7 @@ impl RenderPipelineState {
     /// are refused at the creation ([`Device::new_mesh_render_pipeline_state`]); a draw is not
     /// held to it.
     pub fn required_threads_per_object_threadgroup(&self) -> Size {
+        let _held = self.hold();
         size(
             self.mesh_descriptor()
                 .and_then(|d| required_size(d.required_threads_per_object_threadgroup)),
@@ -786,6 +791,7 @@ impl RenderPipelineState {
     /// [`required_threads_per_object_threadgroup`](Self::required_threads_per_object_threadgroup),
     /// of the mesh stage.
     pub fn required_threads_per_mesh_threadgroup(&self) -> Size {
+        let _held = self.hold();
         size(
             self.mesh_descriptor()
                 .and_then(|d| required_size(d.required_threads_per_mesh_threadgroup)),

@@ -5239,6 +5239,14 @@ pub struct WorkCounts {
     /// The longest time, in nanoseconds, that no queue's work advanced while some was pending, as
     /// the completion's waiters saw it at their probes and its end.
     pub longest_stall_nanos: u64,
+    /// The carried pipeline states' programs on lost generations let go of at those
+    /// generations' rest (`pipeline/carry.rs`'s `LostProgram`), the states living on: one per
+    /// state and lost generation.
+    pub lost_programs_released: u64,
+    /// The carried textures' parts on lost generations let go of at those generations' rest
+    /// (`texture/carry.rs`'s `LostTexture`), the textures living on: one per texture or view and
+    /// lost generation.
+    pub lost_textures_released: u64,
     /// `VkCommandPool`s made for command buffers, where no spare one was free.
     pub command_pools_made: u64,
     /// Released objects MoltenVK commits its residency set for, by kind (`churn_counts.rs`).
@@ -9441,10 +9449,13 @@ impl Device {
         let (frees_paced, frees_paced_nanos) = self.shared().frees.paced();
         let dirty = self.shared().dirty.tally();
         let (vk_devices_live, vk_devices_made, device_recoveries) = self.shared().lineage.counts();
+        let (lost_programs_released, lost_textures_released) = self.shared().lineage.released();
         WorkCounts {
             vk_devices_live,
             vk_devices_made,
             device_recoveries,
+            lost_programs_released,
+            lost_textures_released,
             command_pools_made: counters.command_pools_made.load(Ordering::Relaxed),
             commands_recorded: self.shared().commands_recorded(),
             commands_uncounted: u64::from(self.shared().recording().is_none()),

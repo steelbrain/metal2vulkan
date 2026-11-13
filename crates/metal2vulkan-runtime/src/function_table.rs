@@ -172,12 +172,26 @@ impl Maker {
         }
     }
 
-    /// The state's device.
-    fn device(&self) -> &Device {
+    /// The device of the state's program this reach takes (`pipeline/carry.rs`): a borrow for a
+    /// command buffer's work.
+    fn generation(&self) -> &Device {
         match self {
-            Maker::Compute(state) => state.device(),
+            Maker::Compute(state) => state.generation(),
             Maker::Render(state, _) => state.device(),
             Maker::Unlinked(device) => device,
+        }
+    }
+
+    /// The state's device, owned: the generation handle of its program the state's hold reached
+    /// (`pipeline/carry.rs`).
+    fn device(&self) -> Device {
+        match self {
+            Maker::Compute(state) => state.device(),
+            Maker::Render(state, _) => {
+                let _held = state.hold();
+                state.device().clone()
+            }
+            Maker::Unlinked(device) => device.clone(),
         }
     }
 
@@ -195,10 +209,9 @@ impl Maker {
     /// link in `functions` or `binary_functions`. A function of another device is refused
     /// (`Invalid(ForeignObject)`).
     fn function_handle(self, function: &Function) -> Result<Option<FunctionHandle>, Error> {
-        if !function.root_device().same(self.device()) {
-            return Err(function
-                .root_device()
-                .foreign("function_handle", self.device()));
+        let device = self.device();
+        if !function.root_device().same(&device) {
+            return Err(function.root_device().foreign("function_handle", &device));
         }
         let handle = self
             .linked_functions()
@@ -301,7 +314,7 @@ impl Maker {
         descriptor: &VisibleFunctionTableDescriptor,
     ) -> Result<VisibleFunctionTable, Error> {
         const CALL: &str = "new_visible_function_table";
-        let device = self.device().clone();
+        let device = self.device();
         let count = descriptor.function_count;
         let max_buffer_length = device.properties().max_buffer_length;
         let Ok(size) = u32::try_from(count) else {
@@ -425,8 +438,11 @@ impl FunctionHandle {
         &self.name
     }
 
-    /// `device`.
-    pub fn device(&self) -> &Device {
+    /// `device`: a generation handle of the device, owned, as Metal's `device` answers a retained
+    /// device: that of the program of the state that gave the handle as the state answers it
+    /// ([`ComputePipelineState::device`], [`RenderPipelineState::device`]), or of a render
+    /// state's stage that has no function, the state's then.
+    pub fn device(&self) -> Device {
         self.state.device()
     }
 }
@@ -437,6 +453,7 @@ impl ComputePipelineState {
     /// `functions` or `binary_functions` (a private function, the kernel itself, another
     /// function). A function of another device is refused (`Invalid(ForeignObject)`).
     pub fn function_handle(&self, function: &Function) -> Result<Option<FunctionHandle>, Error> {
+        let _held = self.hold();
         Maker::Compute(self.clone()).function_handle(function)
     }
 
@@ -448,13 +465,14 @@ impl ComputePipelineState {
         &self,
         descriptor: &VisibleFunctionTableDescriptor,
     ) -> Result<VisibleFunctionTable, Error> {
+        let _held = self.hold();
         Maker::Compute(self.clone()).new_visible_function_table(descriptor)
     }
 
     /// The live tables this state made, in resource-ID order: what an argument buffer can name
     /// for a dispatch of the state (`BindState::function_tables`).
     pub(super) fn function_tables(&self) -> Vec<VisibleFunctionTable> {
-        live_tables(self.device(), |made| match made {
+        live_tables(self.generation(), |made| match made {
             Maker::Compute(state) => state == self,
             Maker::Render(..) | Maker::Unlinked(_) => false,
         })
@@ -474,6 +492,7 @@ impl RenderPipelineState {
         function: &Function,
         stage: RenderStages,
     ) -> Result<Option<FunctionHandle>, Error> {
+        let _held = self.hold();
         self.maker(stage)
             .ok_or_else(|| not_one_stage("function_handle", stage, false))?
             .function_handle(function)
@@ -491,6 +510,7 @@ impl RenderPipelineState {
         descriptor: &VisibleFunctionTableDescriptor,
         stage: RenderStages,
     ) -> Result<VisibleFunctionTable, Error> {
+        let _held = self.hold();
         self.maker(stage)
             .ok_or_else(|| not_one_stage("new_visible_function_table", stage, true))?
             .new_visible_function_table(descriptor)
@@ -529,7 +549,7 @@ impl RenderPipelineState {
         ];
         stages
             .contains(&stage)
-            .then(|| Maker::Unlinked(self.device().clone()))
+            .then(|| Maker::Unlinked(self.device()))
     }
 }
 
@@ -785,9 +805,18 @@ impl VisibleFunctionTable {
         Ok(())
     }
 
-    /// `device`.
-    pub fn device(&self) -> &Device {
+    /// `device`: a generation handle of the device, owned, as Metal's `device` answers a retained
+    /// device: that of the program of the state that made the table as the state answers it
+    /// ([`ComputePipelineState::device`], [`RenderPipelineState::device`]), or of a render
+    /// state's stage that has no function, the state's then.
+    pub fn device(&self) -> Device {
         self.0.state.device()
+    }
+
+    /// The device of the program of the state that made the table, as this reach takes it
+    /// (`pipeline/carry.rs`): a borrow for a command buffer's work.
+    pub(crate) fn generation(&self) -> &Device {
+        self.0.state.generation()
     }
 
     /// The table's size, the `functionCount` of the descriptor it was made from. Not public:

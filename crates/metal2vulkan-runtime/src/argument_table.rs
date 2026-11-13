@@ -1330,7 +1330,7 @@ impl ArgumentTable {
         self.changed(SlotClass::Buffer, span(first, tables.len()));
         check_range(call, first, tables.len(), BUFFER_SLOTS)?;
         for table in tables.iter().flatten() {
-            core.check_device(call, table.device())?;
+            core.check_device(call, table.generation())?;
         }
         for (table, index) in tables.iter().zip(first..) {
             if let Some(table) = table {

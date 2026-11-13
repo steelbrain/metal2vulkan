@@ -54,6 +54,7 @@ use crate::argument_table::{AtBindViews, ReadSlots};
 use crate::binary_archive::{self, Used};
 use crate::color_reformat::Routing;
 use crate::degradation::{BoundFormats, CompiledPipeline, Degradation, Occurrence};
+use crate::device::carry::{CallHold, LetGo, PartsCalls};
 use crate::device::{device_error, lock, shared_draw_lock};
 use crate::error::{internal, invalid, ArchivedPipeline, Error, Problem, RuntimeGap};
 use crate::released_programs::KeptProgram;
@@ -178,10 +179,12 @@ impl RenderProgram {
             id: None,
             identifier: None,
             _samplers: Vec::new(),
-            program: Arc::clone(&self.0),
+            label: self.0.label.clone(),
+            program: LetGo::new(Arc::clone(&self.0)),
             next: OnceLock::new(),
             carried: AtomicBool::new(false),
             remake_failed: AtomicBool::new(false),
+            calls: PartsCalls::default(),
         }))))
     }
 }
@@ -197,16 +200,35 @@ pub(crate) struct StateShared {
     /// The sampler IDs the state numbered as it was made (`resource_ids/numbered.rs`), held
     /// while it lives.
     _samplers: Vec<Arc<Numbered>>,
-    /// Its program on the generation it was made on.
-    program: Arc<Program>,
+    /// `label`: its program's (`PipelineOptions::label`), the state's own, so the borrow its
+    /// `label` answers outlives its program on a lost generation (`pipeline/carry.rs`).
+    label: Option<String>,
+    /// Its program on the generation it was made on, let go of at that generation's rest where a
+    /// recovery carried the state on (`pipeline/carry.rs`'s `LostProgram`).
+    program: LetGo<Arc<Program>>,
     /// Its program on each generation its device's recoveries carried it to, in turn
     /// (`pipeline/carry.rs`), which its reaches take from then on ([`StateShared::program`]).
-    next: OnceLock<Box<super::carry::ProgramLink<Program>>>,
+    next: super::carry::ProgramLinks<Program>,
     /// `next` is set: one load before a reach walks it.
     carried: AtomicBool,
     /// Its making on the generation a recovery made failed: a bind of it is refused
     /// (`RuntimeGap::RemadeAfterRecoveryFailed`).
     remake_failed: AtomicBool,
+    /// The calls outside command buffers' work under way on the state, which hold the programs
+    /// they reach (`pipeline/carry.rs`'s `Programs::calls`).
+    calls: PartsCalls,
+}
+
+impl super::carry::Programs for StateShared {
+    type Program = Program;
+
+    fn programs(&self) -> (&LetGo<Arc<Program>>, &super::carry::ProgramLinks<Program>) {
+        (&self.program, &self.next)
+    }
+
+    fn calls(&self) -> &PartsCalls {
+        &self.calls
+    }
 }
 
 impl std::ops::Deref for StateShared {
@@ -222,7 +244,7 @@ impl StateShared {
     #[inline]
     fn program(&self) -> &Arc<Program> {
         match self.carried.load(Ordering::Acquire) {
-            false => &self.program,
+            false => &*self.program,
             true => super::carry::reached(&self.program, &self.next),
         }
     }
@@ -394,6 +416,7 @@ const LAST_PIPELINES: usize = 4;
 
 impl std::fmt::Debug for RenderPipelineState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(state) => f
                 .debug_struct("RenderPipelineState")
@@ -848,11 +871,36 @@ impl RenderPipelineState {
         &self.0
     }
 
-    /// `device`.
-    pub fn device(&self) -> &Device {
+    /// `device`: a generation handle of the device, owned, as Metal's `device` answers a retained
+    /// device: of the generation the state was made on, then of each one the device's recoveries
+    /// carried the state to. The handle is the caller's: it keeps meaning that generation while
+    /// held, past a recovery that carries the state on, its raw handles that generation's
+    /// `VkDevice`'s, kept alive while held.
+    pub fn device(&self) -> Device {
+        let _held = self.hold();
         match &self.0 {
-            Kind::Graphics(state) => &state.0.device,
+            Kind::Graphics(state) => state.0.device.clone(),
             Kind::Tile(state) => state.kernel().device(),
+        }
+    }
+
+    /// A call outside command buffers' work on the state, from now until the hold goes: the
+    /// programs it reaches stay, their release at a lost generation's rest waiting for it
+    /// (`pipeline/carry.rs`), a tile pipeline's its kernel's.
+    pub(crate) fn hold(&self) -> CallHold<'_> {
+        match &self.0 {
+            Kind::Graphics(state) => state.hold(),
+            Kind::Tile(state) => state.kernel().hold(),
+        }
+    }
+
+    /// The device of the program this reach of the state takes (`pipeline/carry.rs`), a tile
+    /// pipeline's its kernel's: a borrow for a command buffer's work, or a call that holds the
+    /// state ([`hold`](Self::hold)).
+    pub(crate) fn generation(&self) -> &Device {
+        match &self.0 {
+            Kind::Graphics(state) => state.device(),
+            Kind::Tile(state) => state.kernel().generation(),
         }
     }
 
@@ -868,6 +916,7 @@ impl RenderPipelineState {
     /// `supportIndirectCommandBuffers`: a drawing state's descriptor's; false for a tile
     /// pipeline's, whose descriptor has no such field.
     pub fn support_indirect_command_buffers(&self) -> bool {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(state) => state.0.descriptor.support_indirect_command_buffers(),
             Kind::Tile(state) => state.kernel().support_indirect_command_buffers(),
@@ -886,6 +935,7 @@ impl RenderPipelineState {
     /// reads `[[barycentric_coord]]`, which this does not count
     /// ([`reads_barycentric_coord`](Self::reads_barycentric_coord) states it).
     pub fn has_flat_fragment_inputs(&self) -> bool {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(state) => state.base().graphics.flat_fragment_inputs,
             Kind::Tile(_) => false,
@@ -904,6 +954,7 @@ impl RenderPipelineState {
     /// shows only where this or [`has_flat_fragment_inputs`](Self::has_flat_fragment_inputs)
     /// answers `true`.
     pub fn reads_barycentric_coord(&self) -> bool {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(state) => state.base().graphics.reads_barycentric_coord,
             Kind::Tile(_) => false,
@@ -921,6 +972,7 @@ impl RenderPipelineState {
     /// consumer that draws a primitive's vertices another number of times (a re-indexed list in
     /// place of a strip or a fan) changes what a draw writes only where this answers `true`.
     pub fn vertex_writes_memory(&self) -> bool {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(state) => state.base().graphics.vertex_writes_memory,
             Kind::Tile(_) => false,
@@ -938,6 +990,7 @@ impl RenderPipelineState {
     /// class (`Problem::PointSizeTopology`), and draws a point of size 1 only under the point
     /// class for one that does not (docs/API.md section 4).
     pub fn writes_point_size(&self) -> bool {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(state) => state.base().graphics.writes_point_size,
             Kind::Tile(_) => false,
@@ -957,6 +1010,7 @@ impl RenderPipelineState {
     /// consumer that draws a primitive's vertices in another order changes where such a draw lands
     /// whether or not the fragment function reads the index.
     pub fn writes_render_target_array_index(&self) -> bool {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(state) => state.vertex_chooses_slice(),
             Kind::Tile(_) => false,
@@ -975,6 +1029,7 @@ impl RenderPipelineState {
     /// the encoder holds more than one viewport is refused, `Unsupported(LayeredRendering)` needing
     /// `multiViewport`.
     pub fn writes_viewport_array_index(&self) -> bool {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(state) => state.base().graphics.writes_viewport_index,
             Kind::Tile(_) => false,
@@ -992,6 +1047,7 @@ impl RenderPipelineState {
     /// copy indirect commands, so `false` is proven; one may answer `true` and never do so (a
     /// command buffer a function takes and does not touch).
     pub fn can_encode_indirect_commands(&self) -> bool {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(state) => state.base().interface.reaches_command_buffers,
             Kind::Tile(state) => state.kernel().can_encode_indirect_commands(),
@@ -1016,6 +1072,7 @@ impl RenderPipelineState {
     /// of the state writes such a record field. Empty where
     /// [`can_encode_indirect_commands`](Self::can_encode_indirect_commands) answers `false`.
     pub fn indirect_command_writes(&self) -> CommandWrites {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(state) => state.base().interface.command_writes,
             Kind::Tile(state) => state.kernel().indirect_command_writes(),
@@ -1039,6 +1096,7 @@ impl RenderPipelineState {
     /// [`object_writes_textures`](Self::object_writes_textures) and
     /// [`mesh_writes_textures`](Self::mesh_writes_textures)), and for a tile pipeline's state.
     pub fn vertex_writes_textures(&self) -> bool {
+        let _held = self.hold();
         self.stage_writes_textures(metal2vulkan::pipeline::Stage::Vertex)
     }
 
@@ -1047,6 +1105,7 @@ impl RenderPipelineState {
     /// function's. `false` for a state without a fragment function and for a tile pipeline's
     /// state.
     pub fn fragment_writes_textures(&self) -> bool {
+        let _held = self.hold();
         self.stage_writes_textures(metal2vulkan::pipeline::Stage::Fragment)
     }
 
@@ -1054,6 +1113,7 @@ impl RenderPipelineState {
     /// extension, decided as [`vertex_writes_textures`](Self::vertex_writes_textures) decides
     /// the vertex function's. `false` for a state without an object function.
     pub fn object_writes_textures(&self) -> bool {
+        let _held = self.hold();
         self.stage_writes_textures(metal2vulkan::pipeline::Stage::Object)
     }
 
@@ -1061,6 +1121,7 @@ impl RenderPipelineState {
     /// extension, decided as [`vertex_writes_textures`](Self::vertex_writes_textures) decides
     /// the vertex function's. `false` for any other state.
     pub fn mesh_writes_textures(&self) -> bool {
+        let _held = self.hold();
         self.stage_writes_textures(metal2vulkan::pipeline::Stage::Mesh)
     }
 
@@ -1070,6 +1131,7 @@ impl RenderPipelineState {
     /// [`ComputePipelineState::writes_textures`](crate::ComputePipelineState::writes_textures)).
     /// `false` for any other state.
     pub fn tile_writes_textures(&self) -> bool {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(_) => false,
             Kind::Tile(state) => state.kernel().writes_textures(),
@@ -1094,6 +1156,7 @@ impl RenderPipelineState {
     /// the attachments through the imageblock rather than as color outputs. A mesh pipeline's
     /// state answers for its fragment function.
     pub fn fragment_color_outputs(&self) -> Vec<u32> {
+        let _held = self.hold();
         let mask = match &self.0 {
             Kind::Graphics(state) => state.base().graphics.color_outputs,
             Kind::Tile(_) => 0,
@@ -1145,6 +1208,7 @@ impl RenderPipelineState {
         stages: RenderStages,
         index: u64,
     ) -> Result<Option<BindingAccess>, Error> {
+        let _held = self.hold();
         let accesses = match &self.0 {
             Kind::Graphics(state) => state.texture_accesses()?,
             Kind::Tile(state) => state.texture_accesses()?,
@@ -1164,6 +1228,7 @@ impl RenderPipelineState {
     /// creation's reflection is (`Unsupported` with `Feature::Reflection` for an argument whose
     /// answer Metal's has not been measured for, `Compile` for the decode's errors).
     pub fn compiled_reflection(&self) -> Result<RenderPipelineReflection, Error> {
+        let _held = self.hold();
         let budget = metal2vulkan::Budget::standard();
         match &self.0 {
             Kind::Graphics(state) => state.reflection(&budget),
@@ -1226,9 +1291,10 @@ impl RenderPipelineState {
     /// [`Degradation::UnmeasuredUniqueIdentifier`]
     /// for one with indirect command buffer support.
     pub fn unique_identifier(&self) -> u64 {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(state) => match &state.0.identifier {
-                Some(identifier) => identifier.answer(self.device(), "a render pipeline state"),
+                Some(identifier) => identifier.answer(self.generation(), "a render pipeline state"),
                 None => 0,
             },
             Kind::Tile(tile) => tile.kernel().unique_identifier(),
@@ -1305,7 +1371,10 @@ impl RenderPipelineState {
     /// What a drawing state runs, held without its ID; `None` for a tile pipeline's.
     pub(crate) fn program(&self) -> Option<RenderProgram> {
         match &self.0 {
-            Kind::Graphics(state) => Some(RenderProgram(Arc::clone(state.0.program()))),
+            Kind::Graphics(state) => {
+                let _held = state.hold();
+                Some(RenderProgram(Arc::clone(state.0.program())))
+            }
             Kind::Tile(_) => None,
         }
     }
@@ -1326,6 +1395,7 @@ impl RenderPipelineState {
     /// (`ComputePipelineState::max_total_threads_per_threadgroup`, `tile.rs`): a required size's
     /// threads, else the compiled pipeline's limit.
     pub fn max_total_threads_per_threadgroup(&self) -> u32 {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(_) => 0,
             Kind::Tile(state) => state.kernel().max_total_threads_per_threadgroup(),
@@ -1351,6 +1421,7 @@ impl RenderPipelineState {
     /// an M3 Max answers 3 (docs/API.md, accepted differences), and for any other state. A draw
     /// is not held to it.
     pub fn max_total_threads_per_object_threadgroup(&self) -> u32 {
+        let _held = self.hold();
         self.mesh_info()
             .map_or(0, |i| i.max_total_threads_per_object_threadgroup)
     }
@@ -1360,6 +1431,7 @@ impl RenderPipelineState {
     /// [`max_total_threads_per_object_threadgroup`](Self::max_total_threads_per_object_threadgroup)
     /// is of the object stage. 0 for any other state.
     pub fn max_total_threads_per_mesh_threadgroup(&self) -> u32 {
+        let _held = self.hold();
         self.mesh_info()
             .map_or(0, |i| i.max_total_threads_per_mesh_threadgroup)
     }
@@ -1368,12 +1440,14 @@ impl RenderPipelineState {
     /// the simdgroups the runtime runs it in, as an M3 Max answers; 0 without one, where an M3 Max
     /// answers 32 (docs/API.md, accepted differences), and for any other state.
     pub fn object_thread_execution_width(&self) -> u32 {
+        let _held = self.hold();
         self.mesh_info()
             .map_or(0, |i| i.object_thread_execution_width)
     }
 
     /// `meshThreadExecutionWidth`: 32 for a mesh state, as Metal answers; 0 for any other state.
     pub fn mesh_thread_execution_width(&self) -> u32 {
+        let _held = self.hold();
         self.mesh_info()
             .map_or(0, |i| i.mesh_thread_execution_width)
     }
@@ -1385,6 +1459,7 @@ impl RenderPipelineState {
     /// `maxMeshWorkGroupTotalCount` where it runs mesh functions natively and that is lower. An object function's grid is not held to it. 0
     /// for any other state.
     pub fn max_total_threadgroups_per_mesh_grid(&self) -> u32 {
+        let _held = self.hold();
         self.mesh_info()
             .map_or(0, |i| i.max_total_threadgroups_per_mesh_grid)
     }
@@ -1392,6 +1467,7 @@ impl RenderPipelineState {
     /// `threadgroupSizeMatchesTileSize`: a tile pipeline's descriptor's; false for a drawing
     /// state.
     pub fn threadgroup_size_matches_tile_size(&self) -> bool {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(_) => false,
             Kind::Tile(state) => state.descriptor().threadgroup_size_matches_tile_size,
@@ -1408,6 +1484,7 @@ impl RenderPipelineState {
     /// whose descriptor gives a color format without a texel size (one no pass has) is not
     /// measured (`NotImplemented(Render)`).
     pub fn imageblock_sample_length(&self) -> Result<u64, Error> {
+        let _held = self.hold();
         match &self.0 {
             Kind::Graphics(state) => {
                 let formats = state.0.descriptor.color_formats();
@@ -1435,6 +1512,7 @@ impl RenderPipelineState {
     /// raster sample count; neither rounded. Refused as
     /// [`imageblock_sample_length`](Self::imageblock_sample_length) is.
     pub fn imageblock_memory_length_for_dimensions(&self, dimensions: Size) -> Result<u64, Error> {
+        let _held = self.hold();
         let samples = match &self.0 {
             Kind::Graphics(state) => u64::from(state.0.descriptor.raster_sample_count()),
             Kind::Tile(_) => 1,
@@ -2093,10 +2171,12 @@ impl GraphicsState {
                 id,
                 identifier,
                 _samplers: samplers,
-                program: Arc::new(program),
+                label: program.label.clone(),
+                program: LetGo::new(Arc::new(program)),
                 next: OnceLock::new(),
                 carried: AtomicBool::new(false),
                 remake_failed: AtomicBool::new(false),
+                calls: PartsCalls::default(),
             }
         })))
     }
@@ -2267,9 +2347,17 @@ impl GraphicsState {
             .any(|d| matches!(d.fact, RuntimeFact::SampleCount))
     }
 
-    /// `device`.
+    /// The device of the program this reach of the state takes (`pipeline/carry.rs`): a borrow
+    /// for a command buffer's work, or a call that holds the state ([`hold`](Self::hold)).
     pub(crate) fn device(&self) -> &Device {
         &self.0.device
+    }
+
+    /// A call outside command buffers' work on the state, from now until the hold goes: the
+    /// programs it reaches stay, their release at a lost generation's rest waiting for it
+    /// (`pipeline/carry.rs`).
+    pub(crate) fn hold(&self) -> CallHold<'_> {
+        self.0.calls.hold()
     }
 
     /// Whether `other` is this state (a clone of it, or the state a command runs once the

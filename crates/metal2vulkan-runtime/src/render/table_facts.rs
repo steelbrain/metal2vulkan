@@ -176,7 +176,7 @@ impl TableFacts {
     ) -> Result<(), Error> {
         check_range(call, first, tables.len(), BUFFER_SLOTS)?;
         for table in tables.clone().flatten() {
-            check_device(device, call, table.device())?;
+            check_device(device, call, table.generation())?;
         }
         for (table, index) in tables.zip(first..) {
             self.buffers[index as usize] = match table {

@@ -115,10 +115,12 @@
 //!   that waits for or signals it after the carry refuses it, as its device is the next
 //!   generation (`Device::foreign`). A call outside command buffers' work that reaches a buffer's
 //!   Vulkan objects (a texture over its bytes, an export of its memory, an upload, a handle
-//!   handed out) holds the parts it read (`Buffer::held_parts`): their release at the generation's
-//!   rest waits for the call to end, and the call completes on the generation it began on. A
-//!   handle handed out (`Buffer::vk_buffer`, `Event::vk_semaphore`), which the caller may use
-//!   while the object lives, keeps its parts, and the lost `VkDevice`, until the object goes.
+//!   handed out) holds the parts it read (`Buffer::held_parts`), and a call on a texture or a
+//!   pipeline state outside command buffers' work holds the object's parts (`Texture::hold`,
+//!   `ComputePipelineState::hold`; [`PartsCalls`]): their release at the generation's rest waits
+//!   for the call to end, and the call completes on the generation it began on. A handle handed
+//!   out (`Buffer::vk_buffer`, `Texture::vk_image`, `Event::vk_semaphore`), which the caller may
+//!   use while the object lives, keeps its parts, and the lost `VkDevice`, until the object goes.
 //! - **The lost generation goes once nothing records on it.** A command buffer holds its queue's
 //!   slot on the generation from its making to its completion, or to its drop where it never
 //!   completed (`queue.rs`'s `Slot`); the registry knows the generation's queues' slots
@@ -132,12 +134,13 @@
 //!   still valid. Those objects must still be destroyed before their parents or the device can be
 //!   destroyed" (vkspec 5.2.3, "Lost Device"). Its device-level objects of work, what it keeps
 //!   for reuse and its kept empty blocks go then too, and no command buffer is made on it again
-//!   (`DeviceShared::keep_nothing`). A carried texture keeps its parts there until it goes
-//!   (`texture/carry.rs`), and a carried pipeline state its program there (`pipeline/carry.rs`).
-//!   So a carried object but a texture or a pipeline state holds nothing of the lost generation:
-//!   the lost `VkDevice` goes with the last object left on it (a pooled buffer, a pipeline state,
-//!   a texture), through the teardown every generation's goes through, and holds its own objects
-//!   alone meanwhile (`WorkCounts::vk_devices_live`).
+//!   (`DeviceShared::keep_nothing`). A carried texture's parts there and a carried pipeline
+//!   state's program there go then too (`texture/carry.rs`, `pipeline/carry.rs`;
+//!   `WorkCounts::lost_textures_released`, `WorkCounts::lost_programs_released`). So a carried
+//!   object holds nothing of the lost generation but a handle handed out: the lost `VkDevice`
+//!   goes with the last object left on it (a pooled buffer, a texture or pipeline state left
+//!   there, a handle handed out), through the teardown every generation's goes through, and holds
+//!   its own objects alone meanwhile (`WorkCounts::vk_devices_live`).
 
 use super::{lock, Device, DeviceShared};
 use crate::buffer::Buffer;
@@ -913,26 +916,35 @@ impl Device {
 
 /// The device of an object a recovery may carry (a buffer, its pages, an event): the generation it
 /// was made on, as every object's device is, until the object's parts there were let go of
-/// (`Carry::lost`); then let go of itself ([`MadeOn::let_go`]), so a carried object holds the lost
+/// (`Carry::lost`); then let go of itself ([`LetGo::let_go`]), so a carried object holds the lost
 /// generation no longer and that generation goes with the objects left on it (the module docs).
 /// Read as a [`Device`] at one indirection, as the field it stands for. No borrow of it reaches
 /// the program, which may hold one past the generation's rest: an object's `device` answers a
 /// clone.
-pub(crate) struct MadeOn {
-    device: UnsafeCell<ManuallyDrop<Device>>,
+pub(crate) type MadeOn = LetGo<Device>;
+
+/// A carried object's part on one generation (its device handle, [`MadeOn`]; a pipeline state's
+/// program there, `pipeline/carry.rs`; a texture's parts there, `texture/carry.rs`): the object's
+/// own, read in place at one indirection as the field it stands for, until its parts on that
+/// generation were let go of at the generation's rest (`Carry::lost`); then dropped in place
+/// ([`let_go`](Self::let_go)), the object living on, and read no more: every reach of the object
+/// from then on goes to where it was carried, and the work of a command buffer of the generation
+/// meets it nowhere ([`gone`](Self::gone)).
+pub(crate) struct LetGo<T> {
+    value: UnsafeCell<ManuallyDrop<T>>,
     /// It was let go of.
     gone: AtomicBool,
 }
 
-// SAFETY: it is a `Device`, which is `Send` and `Sync`, read through shared references, and let
-// go of once, when nothing reads it any more (`MadeOn::let_go`'s contract).
-unsafe impl Sync for MadeOn {}
+// SAFETY: it is a `T`, which is `Send` and `Sync`, read through shared references, and let go of
+// once, when nothing reads it any more (`LetGo::let_go`'s contract).
+unsafe impl<T: Send + Sync> Sync for LetGo<T> {}
 
-impl MadeOn {
-    /// `device`'s handle.
-    pub(crate) fn new(device: Device) -> MadeOn {
-        MadeOn {
-            device: UnsafeCell::new(ManuallyDrop::new(device)),
+impl<T> LetGo<T> {
+    /// `value`, held until it is let go of.
+    pub(crate) fn new(value: T) -> LetGo<T> {
+        LetGo {
+            value: UnsafeCell::new(ManuallyDrop::new(value)),
             gone: AtomicBool::new(false),
         }
     }
@@ -942,38 +954,108 @@ impl MadeOn {
         self.gone.load(Ordering::Acquire)
     }
 
-    /// Let go of the handle, once.
+    /// Let go of it, once.
     ///
     /// # Safety
     ///
     /// Nothing reads it from now on but [`gone`](Self::gone): its object's parts on the
     /// generation were let go of and no work of the generation's reaches them
-    /// (`Carry::let_go_at_rest`), and every other reach of the object goes to where it was
-    /// carried.
+    /// (`Carry::let_go_at_rest`), no call under way holds them (`PartsCalls`), and every other
+    /// reach of the object goes to where it was carried.
     pub(crate) unsafe fn let_go(&self) {
         if self.gone.swap(true, Ordering::AcqRel) {
             return;
         }
-        // SAFETY: the caller's: no reference to the handle is left, and none is taken again.
-        unsafe { ManuallyDrop::drop(&mut *self.device.get()) };
+        // SAFETY: the caller's: no reference to the value is left, and none is taken again.
+        unsafe { ManuallyDrop::drop(&mut *self.value.get()) };
     }
 }
 
-impl std::ops::Deref for MadeOn {
-    type Target = Device;
+impl<T> std::ops::Deref for LetGo<T> {
+    type Target = T;
 
     #[inline(always)]
-    fn deref(&self) -> &Device {
+    fn deref(&self) -> &T {
         // SAFETY: it lives until `let_go`, after which nothing reads it (its contract).
-        unsafe { &*self.device.get() }
+        unsafe { &*self.value.get() }
     }
 }
 
-impl Drop for MadeOn {
+impl<T> Drop for LetGo<T> {
     fn drop(&mut self) {
         if !*self.gone.get_mut() {
             // SAFETY: not let go of, and the last reference.
-            unsafe { ManuallyDrop::drop(self.device.get_mut()) };
+            unsafe { ManuallyDrop::drop(self.value.get_mut()) };
+        }
+    }
+}
+
+/// The calls outside command buffers' work under way on a carried object's parts (a buffer's on
+/// one generation, `Buffer::held_parts`; a pipeline state's programs, `pipeline/carry.rs`; a
+/// texture's, `texture/carry.rs`), and the releases of its parts on lost generations that wait for
+/// them to end: the parts a call reached stay while it is under way, and the last call to end lets
+/// go of those whose generation came to rest meanwhile ([`CallHold`]). A command buffer's work
+/// holds no call: its queue slot holds its generation, whose rest waits for it (the module docs).
+#[derive(Default)]
+pub(crate) struct PartsCalls(Mutex<Calls>);
+
+#[derive(Default)]
+struct Calls {
+    under_way: usize,
+    waiting: Vec<Box<dyn LostParts>>,
+}
+
+impl PartsCalls {
+    /// A call on the parts from now until the hold goes: none where `released`, read under the
+    /// lock their release takes, answers that the parts were marked let go of (`LostParts::mark`)
+    /// and no call under way holds their release back (one this thread is inside, say); else
+    /// their release waits for the call to end.
+    pub(crate) fn hold_unless(&self, released: impl FnOnce() -> bool) -> Option<CallHold<'_>> {
+        let mut calls = lock(&self.0);
+        if calls.under_way == 0 && released() {
+            return None;
+        }
+        calls.under_way += 1;
+        Some(CallHold(self))
+    }
+
+    /// A call on whichever of the parts it reaches from now until the hold goes: those of the
+    /// generation the object was carried to last, never let go of, or those it reached before a
+    /// carry, whose release waits for the call to end.
+    pub(crate) fn hold(&self) -> CallHold<'_> {
+        lock(&self.0).under_way += 1;
+        CallHold(self)
+    }
+
+    /// `parts`, back to their release to let go of now, where no call is under way on the
+    /// object's parts; else none, the parts kept for the last call under way to let go of as it
+    /// ends ([`CallHold`]).
+    pub(crate) fn unless_held<P: LostParts + 'static>(&self, parts: Box<P>) -> Option<Box<P>> {
+        let mut calls = lock(&self.0);
+        if calls.under_way > 0 {
+            calls.waiting.push(parts);
+            return None;
+        }
+        Some(parts)
+    }
+}
+
+/// A call under way on a carried object's parts ([`PartsCalls`]), until it goes: the last to go
+/// lets go of the parts whose release waited for it, unless one began since.
+pub(crate) struct CallHold<'a>(&'a PartsCalls);
+
+impl Drop for CallHold<'_> {
+    fn drop(&mut self) {
+        let waiting = {
+            let mut calls = lock(&self.0 .0);
+            calls.under_way -= 1;
+            match calls.under_way {
+                0 => calls.waiting.drain(..).collect(),
+                _ => Vec::new(),
+            }
+        };
+        for lost in waiting {
+            lost.release();
         }
     }
 }

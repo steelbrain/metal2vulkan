@@ -70,6 +70,7 @@ use super::copy_plan::{
 };
 use super::degradation::Degradation;
 use super::depth_clamp;
+use super::device::carry::{CallHold, LetGo, PartsCalls};
 use super::device::lock;
 use super::dma_buf::ModifierMemory;
 use super::error::{
@@ -438,23 +439,18 @@ pub struct Texture(Arc<TextureShared>, Option<Arc<Retain>>);
 /// thread it runs.
 pub(super) struct Retain(Weak<TextureShared>);
 
-/// A texture object. Its storage and what is made of it (`storage`, `moved`, `pending_move`,
-/// `usage_shadow`, `usage_shadow_making`, `faces`, `snapshot`, `kept_backings`, `render_shadow`,
-/// `facts` and `planes_in_place`) are its parts on the generation it was made on; where its
-/// device's recovery carried it (`texture/carry.rs`), its handles reach those of the generation
-/// the work at hand is on through [`Texture::s`], each generation's in a texture of the
-/// runtime's own there (`next`). The rest is the texture object's own, whatever generation serves.
+/// A texture object: its parts on the generation it was made on ([`Parts`]), and the rest, the
+/// texture object's own, whatever generation serves. Where its device's recovery carried it
+/// (`texture/carry.rs`), its handles reach the parts of the generation the work at hand is on
+/// through [`Texture::s`], each generation's in a texture of the runtime's own there (`next`);
+/// its parts on a lost generation go at that generation's rest (`texture/carry.rs`'s
+/// `LostTexture`), read as fields of the texture until then ([`Deref`](std::ops::Deref)).
 pub(super) struct TextureShared {
-    storage: Storage,
+    /// Its storage and what is made of it on its generation, let go of at that generation's rest
+    /// where a recovery carried the texture on.
+    parts: LetGo<Parts>,
     /// The [`Retain`] the texture's handles hold, while one does.
     retain: Weak<Retain>,
-    /// The storage a shadow over host pages made before its pages' in-place verdict moved to
-    /// once the verdict passed (`texture/storage_form.rs`): an image in place over its texels,
-    /// which the texture presents from then on instead of `storage` ([`Texture::storage`]).
-    moved: OnceLock<Storage>,
-    /// What such a shadow needs to move in place (`in_place::PendingMove`), while it may: `None`
-    /// for every other texture, and once it moved or its verdicts kept it a shadow.
-    pending_move: Mutex<Option<in_place::PendingMove>>,
     /// What this texture presents of its image.
     record: ViewRecord,
     /// The texture a view was made from (`parentTexture`).
@@ -468,6 +464,43 @@ pub(super) struct TextureShared {
     /// The encoder core that holds it from an argument table's retain (`retained::HeldBy`), its
     /// own also for a view.
     held_by: HeldBy,
+    /// What the draws that read it where their pass renders it covered, by reader, as passes
+    /// that measured them completed (`render/coverage.rs`): on the texture a view was made from,
+    /// never a view's own.
+    coverage: Mutex<crate::render::coverage::Learned>,
+    /// A heap's texture's heap (a sparse, automatic or placement heap's), which the texture
+    /// object keeps, as Metal's does; its image holds it weakly (`SparseImage::heap`,
+    /// `HeapPlace::heap`), so a command buffer that keeps the image keeps nothing of the heap but
+    /// its memory, and the heap goes at the program's release, as Metal frees it.
+    heap: Option<Heap>,
+    /// The generation it was made on: the address of its `DeviceShared`, as
+    /// `NoticesFor::generation` names a command buffer's.
+    generation: usize,
+    /// How a recovery makes a program's texture again on the generation it makes
+    /// (`texture/carry.rs`), set as the texture is made by a call a recovery makes again.
+    remake: OnceLock<carry::Remake>,
+    /// Its parts on the generation a recovery carried it to (`texture/carry.rs`): a texture of the
+    /// runtime's own there, made as the texture was, which may itself hold the next generation's.
+    next: OnceLock<Texture>,
+    /// A recovery carried it (`next` is set): its handles reach its parts through `next`
+    /// ([`Texture::s`]).
+    carried: AtomicBool,
+    /// The calls outside command buffers' work under way on the texture (`Texture::hold`), which
+    /// hold its parts on each generation they reach (`texture/carry.rs`).
+    calls: PartsCalls,
+}
+
+/// A texture's parts on one generation of its device ([`TextureShared::parts`]): its storage
+/// and what is made of it there.
+pub(super) struct Parts {
+    storage: Storage,
+    /// The storage a shadow over host pages made before its pages' in-place verdict moved to
+    /// once the verdict passed (`texture/storage_form.rs`): an image in place over its texels,
+    /// which the texture presents from then on instead of `storage` ([`Texture::storage`]).
+    moved: OnceLock<Storage>,
+    /// What such a shadow needs to move in place (`in_place::PendingMove`), while it may: `None`
+    /// for every other texture, and once it moved or its verdicts kept it a shadow.
+    pending_move: Mutex<Option<in_place::PendingMove>>,
     /// The image a slot binding takes where the texture's image and usage both lack the usage
     /// the binding needs (`texture/usage_shadow.rs`), made at the first such binding: read
     /// without a lock, made under `usage_shadow_making`.
@@ -481,10 +514,6 @@ pub(super) struct TextureShared {
     /// texture's texels into before it reads them (`texture/attached_reads.rs`), one a form, each
     /// made at the first such draw: on the texture a view was made from, never a view's own.
     snapshot: Mutex<Vec<Texture>>,
-    /// What the draws that read it where their pass renders it covered, by reader, as passes
-    /// that measured them completed (`render/coverage.rs`): on the texture a view was made from,
-    /// never a view's own.
-    coverage: Mutex<crate::render::coverage::Learned>,
     /// A memoryless texture's backings, one per queue and subresource, made at the first pass
     /// that needs one and kept with the texture (`attachment_stand_in::kept_backing`).
     kept_backings: Mutex<Vec<KeptBacking>>,
@@ -492,11 +521,6 @@ pub(super) struct TextureShared {
     /// (`texture/ycbcr_image.rs`), or that of a view its bindings present in its image's own
     /// format (`Texture::view_render_shadow`), made at the first pass that renders it.
     render_shadow: Mutex<Option<Texture>>,
-    /// A heap's texture's heap (a sparse, automatic or placement heap's), which the texture
-    /// object keeps, as Metal's does; its image holds it weakly (`SparseImage::heap`,
-    /// `HeapPlace::heap`), so a command buffer that keeps the image keeps nothing of the heap but
-    /// its memory, and the heap goes at the program's release, as Metal frees it.
-    heap: Option<Heap>,
     /// The facts a binding plan reads of the texture ([`facts`]), worked out at the first draw or
     /// plan that reads them and kept: they follow from what the texture is made with alone (its
     /// record, its image's plan and twins, its storage) and the device's profile, none of which
@@ -509,18 +533,17 @@ pub(super) struct TextureShared {
     /// (`texture/ycbcr_image.rs`): a slot of a function that reads it only so binds them, not the
     /// image. `None` for every other texture, a view of one among them.
     planes_in_place: Option<PlanesInPlace>,
-    /// The generation it was made on: the address of its `DeviceShared`, as
-    /// `NoticesFor::generation` names a command buffer's.
-    generation: usize,
-    /// How a recovery makes a program's texture again on the generation it makes
-    /// (`texture/carry.rs`), set as the texture is made by a call a recovery makes again.
-    remake: OnceLock<carry::Remake>,
-    /// Its parts on the generation a recovery carried it to (`texture/carry.rs`): a texture of the
-    /// runtime's own there, made as the texture was, which may itself hold the next generation's.
-    next: OnceLock<Texture>,
-    /// A recovery carried it (`next` is set): its handles reach its parts through `next`
-    /// ([`Texture::s`]).
-    carried: AtomicBool,
+}
+
+impl std::ops::Deref for TextureShared {
+    type Target = Parts;
+
+    /// Its parts on its generation: read only where they were not let go of, which no reach of a
+    /// texture meets ([`Texture::s`], `texture/carry.rs`).
+    #[inline(always)]
+    fn deref(&self) -> &Parts {
+        &self.parts
+    }
 }
 
 impl Drop for TextureShared {
@@ -529,6 +552,13 @@ impl Drop for TextureShared {
     /// Then the texture object is gone, as Metal frees it: the caller's range token drops with the
     /// last object over its image or texels (`ObjectsToken`).
     fn drop(&mut self) {
+        if self.parts.gone() {
+            // Its parts on the generation it was made on went at that generation's rest, its slot
+            // there left then, and its range token handed to its parts on the next
+            // (`texture/carry.rs`): its slots on the generations it was carried to are left.
+            self.leave_slot();
+            return;
+        }
         let (owned, device) = match (&self.storage, &self.heap) {
             (Storage::Image(image), Some(_)) => (Owned::TextureInHeap, &image.device),
             (Storage::Image(image), None) => (Owned::TextureImage, &image.device),
@@ -571,15 +601,29 @@ impl TextureShared {
         }
         let mut link = Some(self);
         while let Some(shared) = link {
-            let (device, keeper) = shared.slot_keeper();
-            heap_sets::gone(device, id, self.id.serial(), keeper);
+            // Parts let go of left their slot as they went (`texture/carry.rs`).
+            if !shared.parts.gone() {
+                let (device, keeper) = shared.slot_keeper();
+                heap_sets::gone(device, id, self.id.serial(), keeper);
+            }
             link = shared.next.get().map(|next| &*next.0);
         }
     }
 
+    /// Whether a `VkImage` of its parts on its generation was handed out (`Texture::vk_image`),
+    /// which the caller may use while the texture lives: its storage's, the one it moved to, or
+    /// its second face's.
+    pub(super) fn handed_out(&self) -> bool {
+        self.storage.handed_out()
+            || self.moved.get().is_some_and(Storage::handed_out)
+            || (self.faces.get())
+                .and_then(faces::Faces::other_image)
+                .is_some_and(|image| image.handed_out())
+    }
+
     /// The device of the texture's parts on their generation, and what keeps their image while a
     /// command buffer that bound its ID there may read it ([`leave_slot`](Self::leave_slot)).
-    fn slot_keeper(&self) -> (&Device, Option<Box<dyn Any + Send + Sync>>) {
+    pub(super) fn slot_keeper(&self) -> (&Device, Option<Box<dyn Any + Send + Sync>>) {
         match &self.storage {
             Storage::Image(image)
             | Storage::Alias { image, .. }
@@ -596,7 +640,7 @@ impl TextureShared {
                 };
                 (&image.device, Some(Box::new((Arc::clone(image), moved))))
             }
-            Storage::Texels(texels) => (texels.buffer.generation(), None),
+            Storage::Texels(texels) => (texels.generation(), None),
         }
     }
 }
@@ -622,6 +666,27 @@ enum Storage {
 }
 
 impl Storage {
+    /// The generation its objects are of: its image's, or its texel views'.
+    pub(super) fn generation(&self) -> &Device {
+        match self {
+            Storage::Image(image)
+            | Storage::Alias { image, .. }
+            | Storage::Shadow { image, .. } => &image.device,
+            Storage::Texels(texels) => texels.generation(),
+        }
+    }
+
+    /// Whether its image's `VkImage` was handed out (`Texture::vk_image`), which the caller may
+    /// use while the texture lives.
+    pub(super) fn handed_out(&self) -> bool {
+        match self {
+            Storage::Image(image)
+            | Storage::Alias { image, .. }
+            | Storage::Shadow { image, .. } => image.handed_out(),
+            Storage::Texels(_) => false,
+        }
+    }
+
     /// Where an automatic or placement heap's texture's image (a view's too) lies in its heap.
     fn heap_place(&self) -> Option<&heap::HeapPlace> {
         match self {
@@ -5267,30 +5332,33 @@ impl Texture {
             let weak = Arc::downgrade(&made);
             retain = Some(made);
             TextureShared {
-                storage,
+                parts: LetGo::new(Parts {
+                    storage,
+                    moved: OnceLock::new(),
+                    pending_move: Mutex::new(None),
+                    usage_shadow: OnceLock::new(),
+                    usage_shadow_making: Mutex::new(()),
+                    faces: OnceLock::new(),
+                    snapshot: Mutex::new(Vec::new()),
+                    kept_backings: Mutex::new(Vec::new()),
+                    render_shadow: Mutex::new(None),
+                    facts: OnceLock::new(),
+                    planes_in_place,
+                }),
                 retain: weak,
-                moved: OnceLock::new(),
-                pending_move: Mutex::new(None),
                 record,
                 parent,
                 id,
                 label: Mutex::new(None),
                 object_id: ObjectId::new(),
                 held_by: HeldBy::default(),
-                usage_shadow: OnceLock::new(),
-                usage_shadow_making: Mutex::new(()),
-                faces: OnceLock::new(),
-                snapshot: Mutex::new(Vec::new()),
                 coverage: Mutex::default(),
-                kept_backings: Mutex::new(Vec::new()),
-                render_shadow: Mutex::new(None),
                 heap,
-                facts: OnceLock::new(),
-                planes_in_place,
                 generation: std::ptr::from_ref(device.shared()).addr(),
                 remake: OnceLock::new(),
                 next: OnceLock::new(),
                 carried: AtomicBool::new(false),
+                calls: PartsCalls::default(),
             }
         });
         let texture = Texture(shared, retain);
@@ -5331,7 +5399,24 @@ impl Texture {
     }
 }
 
+/// A call outside command buffers' work on a texture ([`Texture::hold`]), until it goes.
+pub(crate) struct TextureHold<'a> {
+    _own: CallHold<'a>,
+    _root: Option<CallHold<'a>>,
+}
+
 impl Texture {
+    /// A call outside command buffers' work on the texture, from now until the hold goes: the
+    /// parts it reaches stay, their release at a lost generation's rest waiting for it
+    /// (`texture/carry.rs`), and so do those of the texture a view was made from, which a view's
+    /// calls reach too. A command buffer's work holds none: its queue slot holds its generation.
+    pub(crate) fn hold(&self) -> TextureHold<'_> {
+        TextureHold {
+            _own: self.0.calls.hold(),
+            _root: (self.0.parent.as_ref()).map(|_| self.root().0.calls.hold()),
+        }
+    }
+
     /// Keep `token` for the texture's range, dropped as the last texture object over its image
     /// or a texture buffer's texels goes (`RangeToken`, `ObjectsToken`), as a creator makes it.
     /// Internal for a texture over another resource's bytes or a view (no creator gives one a
@@ -5377,7 +5462,10 @@ impl Texture {
         let records = crate::degradation::NoticesFor::generation();
         let mut shared = &*self.0;
         loop {
-            if records == Some(shared.generation) {
+            // Not its parts on a lost generation that went: no command buffer is made there after
+            // its rest (`Carry::refuses`), and a call under way that reached them holds them
+            // (`Texture::hold`).
+            if records == Some(shared.generation) && !shared.parts.gone() {
                 return shared;
             }
             match shared.next.get() {
@@ -5523,6 +5611,7 @@ impl Texture {
     /// them as they lie, and one of its own holds no copy of any (Metal's answer there is not
     /// measured).
     pub fn did_modify_data(&self) {
+        let _held = self.hold();
         if let Some(levels) = self.shadow().and_then(|copies| copies.levels.as_ref()) {
             levels.mark_stale();
         }
@@ -6133,6 +6222,7 @@ impl Texture {
     /// held, past a recovery that carries the texture on, its raw handles that generation's
     /// `VkDevice`'s, kept alive while held.
     pub fn device(&self) -> Device {
+        let _held = self.hold();
         self.generation().clone()
     }
 
@@ -6238,6 +6328,7 @@ impl Texture {
     /// ([`hazard_tracking_mode`](Self::hazard_tracking_mode), `Identity::new`). Measured on an
     /// Apple M3 Max under macOS 27.0.1.
     pub fn resource_options(&self) -> ResourceOptions {
+        let _held = self.hold();
         let options = match self.storage() {
             Storage::Image(image) => image.options,
             Storage::Texels(texels)
@@ -6263,6 +6354,7 @@ impl Texture {
 
     /// `hazardTrackingMode`: `Tracked` or `Untracked`, `Default` resolved as Metal resolves it.
     pub fn hazard_tracking_mode(&self) -> HazardTrackingMode {
+        let _held = self.hold();
         let tracked = match self.storage() {
             Storage::Image(image)
             | Storage::Alias { image, .. }
@@ -6278,6 +6370,7 @@ impl Texture {
 
     /// `allowGPUOptimizedContents`.
     pub fn allow_gpu_optimized_contents(&self) -> bool {
+        let _held = self.hold();
         match self.storage() {
             Storage::Image(image) => image.allow_gpu_optimized_contents,
             Storage::Texels(texels)
@@ -6303,6 +6396,7 @@ impl Texture {
     /// `isSparse`: the texture was made from a sparse heap (a view of such a texture is sparse
     /// too).
     pub fn is_sparse(&self) -> bool {
+        let _held = self.hold();
         self.sparse_image().is_some()
     }
 
@@ -6310,6 +6404,7 @@ impl Texture {
     /// without one (Metal's rule; a view answers its texture's); `None` for a texture that is not
     /// sparse, whose answer is not measured.
     pub fn first_mipmap_in_tail(&self) -> Option<u64> {
+        let _held = self.hold();
         self.sparse_image()
             .map(|sparse| sparse.grid.first_mipmap_in_tail)
     }
@@ -6318,11 +6413,13 @@ impl Texture {
     /// heap, 0 without a tail (Metal's rule; a view answers its texture's); `None` for a texture
     /// that is not sparse, whose answer is not measured.
     pub fn tail_size_in_bytes(&self) -> Option<u64> {
+        let _held = self.hold();
         self.sparse_image().map(|sparse| sparse.tail_size_in_bytes)
     }
 
     /// `heap`: the heap the texture was made from, if any.
     pub fn heap(&self) -> Option<&Heap> {
+        let _held = self.hold();
         if let Some(heap) = &self.0.heap {
             return Some(heap);
         }
@@ -6333,6 +6430,7 @@ impl Texture {
     /// sparse heap, as Metal answers (and a Metal heap probe on the M3 Max and an M4
     /// for texture buffers), and for one outside a heap.
     pub fn heap_offset(&self) -> u64 {
+        let _held = self.hold();
         if let Some(buffer) = self.heap_texels() {
             return buffer.heap_offset();
         }
@@ -6355,6 +6453,7 @@ impl Texture {
     /// layout rounded up to 16-KiB pages past 16 KiB), which the runtime does not model, and a
     /// sparse heap's texture's answer is not measured.
     pub fn allocated_size(&self) -> Option<u64> {
+        let _held = self.hold();
         if let Some(buffer) = self.heap_texels() {
             return Some(buffer.length());
         }
@@ -6371,6 +6470,7 @@ impl Texture {
     /// leaves a `Shared` and a `Private` one where its validation stops the call. Refused for a
     /// sparse heap's texture (`NotImplemented(SparseHeaps)`, not measured).
     pub fn make_aliasable(&self) -> Result<(), Error> {
+        let _held = self.hold();
         if let (Some(place), Some(heap)) = (self.heap_place(), &self.0.heap) {
             heap.make_aliasable(place.offset, place.size, &place.aliasable);
             return Ok(());
@@ -6388,6 +6488,7 @@ impl Texture {
     /// texture it views); true for a placement heap's texture and its views from the start, and
     /// false otherwise, as Metal answers.
     pub fn is_aliasable(&self) -> bool {
+        let _held = self.hold();
         if let Some(buffer) = self.heap_texels() {
             return buffer.is_aliasable();
         }
@@ -6535,6 +6636,7 @@ impl Texture {
     /// (`Nil`, `StorageMode`) for a memoryless texture, a texture buffer too, as plain Metal
     /// answers every view of one, of its own format too (its API validation stops the call).
     pub fn new_texture_view(&self, pixel_format: PixelFormat) -> Result<Texture, Error> {
+        let _held = self.hold();
         let request = ViewRequest::of_format(&self.0.record, pixel_format);
         self.view("new_texture_view", &request, IdPlacement::Any)
     }
@@ -6548,6 +6650,7 @@ impl Texture {
         pixel_format: PixelFormat,
         placement: IdPlacement,
     ) -> Result<Texture, Error> {
+        let _held = self.hold();
         let request = ViewRequest::of_format(&self.0.record, pixel_format);
         self.view("new_texture_view_with_placement", &request, placement)
     }
@@ -6562,6 +6665,7 @@ impl Texture {
         levels: Range<u64>,
         slices: Range<u64>,
     ) -> Result<Texture, Error> {
+        let _held = self.hold();
         const CALL: &str = "new_texture_view_with_levels_slices";
         let request = self.subview(CALL, pixel_format, texture_type, levels, slices, None)?;
         self.view(CALL, &request, IdPlacement::Any)
@@ -6578,6 +6682,7 @@ impl Texture {
         slices: Range<u64>,
         swizzle: TextureSwizzleChannels,
     ) -> Result<Texture, Error> {
+        let _held = self.hold();
         const CALL: &str = "new_texture_view_with_swizzle";
         let request = self.subview(
             CALL,
@@ -6605,6 +6710,7 @@ impl Texture {
         swizzle: Option<TextureSwizzleChannels>,
         placement: IdPlacement,
     ) -> Result<Texture, Error> {
+        let _held = self.hold();
         const CALL: &str = "new_texture_subview_with_placement";
         let request = self.subview(CALL, pixel_format, texture_type, levels, slices, swizzle)?;
         self.view(CALL, &request, placement)
@@ -6827,6 +6933,7 @@ impl Texture {
         bytes_per_row: u64,
         bytes_per_image: u64,
     ) -> Result<(), Error> {
+        let _held = self.hold();
         let upload = Upload::Slice(bytes);
         let pitches = (bytes_per_row, bytes_per_image);
         self.replace((region, level, slice), upload, pitches)
@@ -6849,6 +6956,7 @@ impl Texture {
         bytes_per_row: u64,
         bytes_per_image: u64,
     ) -> Result<(), Error> {
+        let _held = self.hold();
         let upload = Upload::Host {
             bytes,
             copy: OnceCell::new(),
@@ -7076,6 +7184,7 @@ impl Texture {
         level: u64,
         slice: u64,
     ) -> Result<(), Error> {
+        let _held = self.hold();
         const CALL: &str = "get_bytes";
         let Some(copy) =
             self.host_copy(CALL, &region, level, slice, bytes_per_row, bytes_per_image)?

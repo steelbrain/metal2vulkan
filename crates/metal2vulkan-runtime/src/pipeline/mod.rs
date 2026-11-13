@@ -109,6 +109,7 @@ pub(super) use render::{ProgramName, Settled};
 pub(super) use tile::TileState;
 
 use super::binary_archive;
+use super::device::carry::{CallHold, LetGo, PartsCalls};
 use super::device::{device_error, lock};
 use super::error::{internal, invalid, ArchivedPipeline, Error, IndirectRule, Problem, RuntimeGap};
 use super::families::GpuFamily;
@@ -286,10 +287,12 @@ impl ComputeProgram {
             id: None,
             identifier: None,
             _samplers: Vec::new(),
-            program: Arc::clone(&self.0),
+            label: self.0.label.clone(),
+            program: LetGo::new(Arc::clone(&self.0)),
             next: OnceLock::new(),
             carried: AtomicBool::new(false),
             remake_failed: AtomicBool::new(false),
+            calls: PartsCalls::default(),
         }))
     }
 }
@@ -305,16 +308,35 @@ pub(super) struct StateShared {
     /// The sampler IDs the state numbered as it was made (`resource_ids/numbered.rs`), held
     /// while it lives.
     _samplers: Vec<Arc<Numbered>>,
-    /// Its program on the generation it was made on.
-    program: Arc<Program>,
+    /// `label`: its program's (`PipelineOptions::label`), the state's own, so the borrow its
+    /// `label` answers outlives its program on a lost generation (`pipeline/carry.rs`).
+    label: Option<String>,
+    /// Its program on the generation it was made on, let go of at that generation's rest where a
+    /// recovery carried the state on (`pipeline/carry.rs`'s `LostProgram`).
+    program: LetGo<Arc<Program>>,
     /// Its program on each generation its device's recoveries carried it to, in turn
     /// (`pipeline/carry.rs`), which its reaches take from then on ([`StateShared::program`]).
-    next: OnceLock<Box<carry::ProgramLink<Program>>>,
+    next: carry::ProgramLinks<Program>,
     /// `next` is set: one load before a reach walks it.
     carried: AtomicBool,
     /// Its making on the generation a recovery made failed: a bind of it is refused
     /// (`RuntimeGap::RemadeAfterRecoveryFailed`).
     remake_failed: AtomicBool,
+    /// The calls outside command buffers' work under way on the state, which hold the programs
+    /// they reach (`pipeline/carry.rs`'s `Programs::calls`).
+    calls: PartsCalls,
+}
+
+impl carry::Programs for StateShared {
+    type Program = Program;
+
+    fn programs(&self) -> (&LetGo<Arc<Program>>, &carry::ProgramLinks<Program>) {
+        (&self.program, &self.next)
+    }
+
+    fn calls(&self) -> &PartsCalls {
+        &self.calls
+    }
 }
 
 impl std::ops::Deref for StateShared {
@@ -330,7 +352,7 @@ impl StateShared {
     #[inline]
     fn program(&self) -> &Arc<Program> {
         match self.carried.load(Ordering::Acquire) {
-            false => &self.program,
+            false => &*self.program,
             true => carry::reached(&self.program, &self.next),
         }
     }
@@ -460,6 +482,7 @@ impl Drop for Program {
 
 impl std::fmt::Debug for ComputePipelineState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let _held = self.hold();
         f.debug_struct("ComputePipelineState")
             .field("function", &self.0.function.function.info().name)
             .finish()
@@ -1014,10 +1037,12 @@ impl ComputePipelineState {
                 id,
                 identifier,
                 _samplers: samplers,
-                program: Arc::new(program),
+                label: program.label.clone(),
+                program: LetGo::new(Arc::new(program)),
                 next: OnceLock::new(),
                 carried: AtomicBool::new(false),
                 remake_failed: AtomicBool::new(false),
+                calls: PartsCalls::default(),
             }
         }));
         // Kept by its generation for a recovery to carry (`pipeline/carry.rs`); a warm pass's
@@ -1089,8 +1114,27 @@ pub(super) fn duplicate_linked_name(linked: &LinkedFunctions) -> Option<String> 
 }
 
 impl ComputePipelineState {
-    /// `device`.
-    pub fn device(&self) -> &Device {
+    /// `device`: a generation handle of the device, owned, as Metal's `device` answers a retained
+    /// device: of the generation the state was made on, then of each one the device's recoveries
+    /// carried the state to. The handle is the caller's: it keeps meaning that generation while
+    /// held, past a recovery that carries the state on, its raw handles that generation's
+    /// `VkDevice`'s, kept alive while held.
+    pub fn device(&self) -> Device {
+        let _held = self.hold();
+        self.0.device.clone()
+    }
+
+    /// A call outside command buffers' work on the state, from now until the hold goes: the
+    /// programs it reaches stay, their release at a lost generation's rest waiting for it
+    /// (`pipeline/carry.rs`). A command buffer's work holds none: its queue slot holds its
+    /// generation.
+    pub(crate) fn hold(&self) -> CallHold<'_> {
+        self.0.calls.hold()
+    }
+
+    /// The device of the program this reach of the state takes (`pipeline/carry.rs`): a borrow
+    /// for a command buffer's work, or a call that holds the state ([`hold`](Self::hold)).
+    pub(crate) fn generation(&self) -> &Device {
         &self.0.device
     }
 
@@ -1182,6 +1226,7 @@ impl ComputePipelineState {
     /// threads than the size. Where the descriptor states no size, it is the compiled pipeline's
     /// answer.
     pub fn max_total_threads_per_threadgroup(&self) -> u32 {
+        let _held = self.hold();
         reported_max_total_threads(
             self.required_threads(),
             self.pipeline_max_total_threads_per_threadgroup(),
@@ -1211,6 +1256,7 @@ impl ComputePipelineState {
 
     /// `threadExecutionWidth` (32).
     pub fn thread_execution_width(&self) -> u32 {
+        let _held = self.hold();
         self.0.base.pipeline.metal_info.thread_execution_width
     }
 
@@ -1220,6 +1266,7 @@ impl ComputePipelineState {
     /// fit beside this length but not beside the scratch is refused
     /// (`Unsupported(ThreadgroupMemorySize)`), where Metal runs it.
     pub fn static_threadgroup_memory_length(&self) -> u32 {
+        let _held = self.hold();
         self.0
             .base
             .pipeline
@@ -1288,6 +1335,7 @@ impl ComputePipelineState {
     /// `imageblockMemoryLengthForDimensions:` (`imageblock_memory_length`): 0 for a kernel
     /// without an explicit imageblock.
     pub fn imageblock_memory_length_for_dimensions(&self, dimensions: Size) -> u64 {
+        let _held = self.hold();
         imageblock_memory_length(self.imageblock_cell_bytes(), dimensions)
     }
 
@@ -1321,6 +1369,7 @@ impl ComputePipelineState {
     /// (`Unsupported`, `Feature::Reflection`, naming its type, which the kernel's AIR is decoded
     /// again to name).
     pub fn compiled_reflection(&self) -> Result<ComputePipelineReflection, Error> {
+        let _held = self.hold();
         match &self.0.descriptor {
             Kernel::Compute(made) => {
                 self.kernel_reflection(made, &metal2vulkan::Budget::standard())
@@ -1376,6 +1425,7 @@ impl ComputePipelineState {
     /// can encode, reset or copy indirect commands, so `false` is proven; one may answer `true`
     /// and never do so (a command buffer it takes and does not touch).
     pub fn can_encode_indirect_commands(&self) -> bool {
+        let _held = self.hold();
         self.interface().reaches_command_buffers
     }
 
@@ -1387,6 +1437,7 @@ impl ComputePipelineState {
     /// constant). A clear bit is proven: the kernel writes no such record field. Empty where
     /// [`can_encode_indirect_commands`](Self::can_encode_indirect_commands) answers `false`.
     pub fn indirect_command_writes(&self) -> CommandWrites {
+        let _held = self.hold();
         self.interface().command_writes
     }
 
@@ -1405,12 +1456,14 @@ impl ComputePipelineState {
     /// tile function's as
     /// [`RenderPipelineState::tile_writes_textures`](crate::RenderPipelineState::tile_writes_textures).
     pub fn writes_textures(&self) -> bool {
+        let _held = self.hold();
         !self.interface().texture_writing_stages.is_empty()
     }
 
     /// `supportIndirectCommandBuffers` (the descriptor's; false for a state made from a
     /// function).
     pub fn support_indirect_command_buffers(&self) -> bool {
+        let _held = self.hold();
         self.0
             .base
             .pipeline
@@ -1453,8 +1506,9 @@ impl ComputePipelineState {
     /// for one with indirect command buffer support. Such a compute state's first identifier is one
     /// step into Metal's range, `2^36 + 0xc0`, no workload's first.
     pub fn unique_identifier(&self) -> u64 {
+        let _held = self.hold();
         match &self.0.identifier {
-            Some(identifier) => identifier.answer(self.device(), "a compute pipeline state"),
+            Some(identifier) => identifier.answer(self.generation(), "a compute pipeline state"),
             None => 0,
         }
     }
@@ -1495,6 +1549,7 @@ impl ComputePipelineState {
 
     /// What the state runs, held without its ID (`ComputeProgram`).
     pub(crate) fn program(&self) -> ComputeProgram {
+        let _held = self.hold();
         ComputeProgram(Arc::clone(self.0.program()))
     }
 

@@ -33,6 +33,10 @@ impl OfGeneration for Program {
     fn generation(&self) -> usize {
         generation_of(&self.device)
     }
+
+    fn lineage(&self) -> &crate::device::line::Lineage {
+        &self.device.shared().lineage
+    }
 }
 
 impl GraphicsState {
@@ -66,7 +70,7 @@ impl GraphicsState {
                 return Some(Err(error));
             }
         };
-        if !link(slot, program) {
+        if !link(shared, &last.device, slot, program) {
             return None;
         }
         shared.carried.store(true, Ordering::Release);

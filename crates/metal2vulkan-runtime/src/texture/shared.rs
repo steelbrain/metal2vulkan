@@ -205,6 +205,7 @@ impl Texture {
     /// `isShareable`: a texture of [`Device::new_shared_texture`], or one opened from a handle;
     /// never a view.
     pub fn is_shareable(&self) -> bool {
+        let _held = self.hold();
         self.0.parent.is_none()
             && match self.storage() {
                 Storage::Image(image) => {

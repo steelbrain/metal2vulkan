@@ -285,6 +285,13 @@ impl ObjectsToken {
         self.token.keep(token)
     }
 
+    /// Hand the token kept, if any, to `to`, as [`KeptToken::hand_to`]: a texture's parts on a lost
+    /// generation going at its rest, its parts on the next holding its range last
+    /// (`texture/carry.rs`).
+    pub(super) fn hand_token_to(&self, to: &ObjectsToken) {
+        self.token.hand_to(&to.token);
+    }
+
     /// A texture object over the image or texels went, its teardown done and no lock held: the
     /// token drops with the last ([`KeptToken::release`]). Whether it was the last (a heap
     /// texture's range then goes back to its heap).

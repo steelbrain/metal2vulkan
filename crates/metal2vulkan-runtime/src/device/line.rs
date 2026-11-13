@@ -132,6 +132,12 @@ pub(crate) struct Lineage {
     made: AtomicU64,
     /// Its recoveries that made a new `VkDevice` (`WorkCounts::device_recoveries`).
     recoveries: AtomicU64,
+    /// The carried states' programs let go of at a lost generation's rest
+    /// (`WorkCounts::lost_programs_released`).
+    programs_released: AtomicU64,
+    /// The carried textures' parts let go of at a lost generation's rest
+    /// (`WorkCounts::lost_textures_released`).
+    textures_released: AtomicU64,
 }
 
 impl Lineage {
@@ -151,6 +157,25 @@ impl Lineage {
     /// A `VkDevice` of the line was destroyed.
     pub(super) fn destroyed(&self) {
         self.live.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    /// A carried state's program on a lost generation was let go of at its rest.
+    pub(crate) fn program_released(&self) {
+        self.programs_released.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A carried texture's parts on a lost generation were let go of at its rest.
+    pub(crate) fn texture_released(&self) {
+        self.textures_released.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The carried states' programs and textures' parts let go of at lost generations' rest
+    /// (`WorkCounts`).
+    pub(crate) fn released(&self) -> (u64, u64) {
+        (
+            self.programs_released.load(Ordering::Relaxed),
+            self.textures_released.load(Ordering::Relaxed),
+        )
     }
 
     /// The `VkDevice`s alive, made, and the recoveries (`WorkCounts`).

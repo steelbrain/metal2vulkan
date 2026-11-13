@@ -642,6 +642,8 @@ impl ArgumentEncoder {
         match state {
             None => Ok(0),
             Some(state) => {
+                // The state's program, held while its device is checked (`pipeline/carry.rs`).
+                let _held = state.hold();
                 self.check_device(call, state.bound_device()?)?;
                 Ok(state.gpu_resource_id().0)
             }
@@ -683,6 +685,8 @@ impl ArgumentEncoder {
         match state {
             None => Ok(0),
             Some(state) => {
+                // The state's program, held while its device is checked (`pipeline/carry.rs`).
+                let _held = state.hold();
                 self.check_device(call, state.bound_device()?)?;
                 Ok(state.gpu_resource_id().0)
             }
@@ -766,7 +770,7 @@ impl ArgumentEncoder {
         match table {
             None => Ok(0),
             Some(table) => {
-                self.check_device(call, table.device())?;
+                self.check_device(call, &table.device())?;
                 Ok(table.gpu_resource_id().0)
             }
         }

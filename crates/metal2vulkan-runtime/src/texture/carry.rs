@@ -26,12 +26,20 @@
 //!   is made (`Carry::texture`), held weakly; a call the recovery makes again sets how
 //!   ([`Device::kept_texture`]), and carries the texture itself where the recovery took the
 //!   generation's objects before that (`Device::carry_late`).
-//! - **Its parts on the lost generation** stay with the texture until it goes: its images there
-//!   and the lost `VkDevice` with them.
+//! - **Its parts on the lost generation** (`TextureShared::parts`: its image or texel views there
+//!   and what its uses made of them) go at that generation's rest, the texture living on its
+//!   parts on the next ([`LostTexture`]): its slot in the lost generation's texture table and heap
+//!   sets is left, and the caller's range token its parts there kept is handed to its parts on the
+//!   next, which hold its range from then on. A call on the texture outside command buffers' work
+//!   holds its parts while it is under way (`Texture::hold`), so one that reached the lost parts
+//!   before the carry lets them go as it ends. Parts whose `VkImage` was handed out
+//!   (`Texture::vk_image`), which the caller may use while the texture lives, stay with it, and
+//!   the lost `VkDevice` with them, until it goes.
 
 use super::super::buffer::{Buffer, CallerMemory};
 use super::super::buffer_texture::{texture_buffer_over, TexelsHome};
 use super::super::degradation::NoticesFor;
+use super::super::device::carry::LostParts;
 use super::super::heap_sets;
 use super::super::linear_plan::BufferTextureCall;
 use super::super::texture_descriptor::TextureDescriptor;
@@ -41,7 +49,7 @@ use super::super::ycbcr::IoSurfaceYCbCr;
 use super::super::Device;
 use super::{IdUse, Initial, Owner, Storage, Texture, TextureShared};
 use std::sync::atomic::Ordering;
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 /// How a recovery makes a program's texture again (`TextureShared::remake`; the module docs):
 /// the call that made it, made again on the next generation as a texture of the runtime's own.
@@ -126,6 +134,67 @@ pub(crate) enum TextureLeft {
     Failed,
     /// Made by a call no recovery makes again.
     Other,
+}
+
+/// A carried texture's parts on a lost generation (`device/carry.rs`; the module docs): let go of
+/// at the generation's rest, once no call under way on the texture holds them (`Texture::hold`),
+/// and kept where their `VkImage` was handed out. Counted: `WorkCounts::lost_textures_released`.
+struct LostTexture {
+    texture: Weak<TextureShared>,
+    /// The lost generation's address (`TextureShared::generation`).
+    generation: usize,
+}
+
+impl LostParts for LostTexture {
+    fn release(self: Box<Self>) {
+        // The texture went, and its parts with it.
+        let Some(texture) = self.texture.upgrade() else {
+            return;
+        };
+        // The last call under way on the texture lets them go.
+        let Some(lost) = texture.calls.unless_held(self) else {
+            return;
+        };
+        let mut link: &TextureShared = &texture;
+        while link.parts.gone() || link.generation != lost.generation {
+            match link.next.get() {
+                Some(next) => link = &next.0,
+                None => return,
+            }
+        }
+        // Its `VkImage`, handed out, stays the caller's while the texture lives.
+        if link.handed_out() {
+            return;
+        }
+        // The parts on the next generation that holds some, which hold the texture's range from
+        // now on: carried parts have a next.
+        let Some(mut after) = link.next.get() else {
+            return;
+        };
+        while after.0.parts.gone() {
+            match after.0.next.get() {
+                Some(next) => after = next,
+                None => break,
+            }
+        }
+        if let (Some(from), Some(to)) = (link.storage.objects(), after.0.storage.objects()) {
+            from.hand_token_to(to);
+        }
+        // Its slot on the lost generation, which names its parts there.
+        let id = texture.id.id().0;
+        if id != 0 {
+            let (device, keeper) = link.slot_keeper();
+            heap_sets::gone(device, id, texture.id.serial(), keeper);
+        }
+        // Counted on the line, which outlives the generation the parts may hold last.
+        (link.storage.generation().shared().lineage).texture_released();
+        // SAFETY: the texture was carried past the parts' generation, which is at rest: none of
+        // its command buffers records (`Texture::s` skips them from now on), no call under way on
+        // the texture reached them (`PartsCalls::unless_held`), their slot there was left, no
+        // `VkImage` of theirs was handed out, and every other reach of the texture goes to its
+        // parts on a later generation.
+        unsafe { link.parts.let_go() };
+    }
 }
 
 /// A texture of the program's, held weakly by its generation's registry (`Carry::texture`).
@@ -276,6 +345,14 @@ impl Texture {
         if to.shared().carry.texture(self) {
             to.carry_late(|serving| self.carry(serving));
         }
+        // Its parts on the generation it leaves, let go of at that generation's rest: nothing
+        // reads them here from now on.
+        let from = last.storage.generation().clone();
+        let parts = Box::new(LostTexture {
+            texture: Arc::downgrade(&self.0),
+            generation: last.generation,
+        });
+        from.shared().carry.lost(from.shared(), parts);
         Ok(Some(remade))
     }
 
