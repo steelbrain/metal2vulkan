@@ -293,7 +293,7 @@ pub(super) enum Structure {
 
 impl Structure {
     /// Every extension structure, in chain order.
-    const EXTENSIONS: [Structure; 44] = [
+    const EXTENSIONS: [Structure; 45] = [
         Structure::SubgroupSizeControl,
         Structure::Demote,
         Structure::Terminate,
