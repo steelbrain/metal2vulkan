@@ -33,32 +33,49 @@
 //!   (`shadow::ShadowUse::used_as`), its reads' bounds included (`rebound.rs`). Each counts the
 //!   kept draw's reads through copies (`WorkCounts::attachment_reads_through_copies`,
 //!   `own_pixel_reads`) as it did.
-//! - **Forgotten at every call but a bind, a pipeline state set or a render state set.** Every
-//!   call of the encoder but the two direct draws, the vertex and fragment buffer, bytes, texture
-//!   and sampler state binds, `set_render_pipeline_state` and the sets of its render state (below)
-//!   forgets it as it logs itself (`RenderLowering::log`,
-//!   which every call does: at the call, on the device's lowering thread, and encoded again),
-//!   refused or not, whatever it changes, with every kept draw set aside (below); so does a draw
-//!   that keeps nothing (a draw again, a draw rebound and a draw kept are the only draws that
-//!   leave them), but a reader through snapshots that writes nothing else (below). A bind changes its
-//!   stage table's slots alone (and a bytes bind takes room in its command buffer's uploads), and
-//!   a table's stamp tells each change apart (`argument_table::Stamp`): the kept draw keeps the
-//!   four tables' stamps as it read them, and a draw whose tables kept them is the kept draw
-//!   again; one after binds is drawn again rebound where it can be (`rebound.rs`), else takes
-//!   every step. So the encoder's state a draw resolves from is the kept draw's, but for the
-//!   tables' slots the stamps tell apart, what the kept draw itself left and what changes with no
-//!   call of the encoder: the latter is [`Under`], compared at each draw: the count of no-copy
-//!   buffers' moves (a bound buffer's binding, a detach), the residency's generation once the
-//!   draw made the heaps' new textures resident, whether the device has buffers over host pages
-//!   and its host aliases' version, the encoder's parts and held images (what noting reads,
-//!   `noted_apart.rs`), with the command buffer the current instance records into, and the count
-//!   of the device's sampler IDs' slots' changes (a sampler state made or gone, which every step
-//!   of a draw lists again: `sampler::ArgumentSamplers`). Another thread may change the moves, the
-//!   sampler slots and the buffers over host pages with their aliases' version while a draw takes
-//!   its steps (the device's in-place check makes and lets go buffers over host pages on a thread
-//!   of its own): a draw is kept under them as its steps began, which they read ([`Outside`]),
-//!   and its uses' noting counts only where it was noted under them, so a change made meanwhile
-//!   makes the next draw take every step.
+//! - **Forgotten at every call but a bind, a pipeline state set, a render state set, a fence or a
+//!   use.** Every call of the encoder but the two direct draws, the vertex and fragment buffer,
+//!   bytes, texture and sampler state binds, `set_render_pipeline_state`, the sets of its render
+//!   state (below) and the calls kept across (below) forgets it as it logs itself
+//!   (`RenderLowering::log`, which every call does: at the call, on the device's lowering thread,
+//!   and encoded again), refused or not, whatever it changes, with every kept draw set aside
+//!   (below), counted by the call's kind (`WorkCounts::kept_draws_let_go_*`); so does a draw that
+//!   keeps nothing (a draw again, a draw rebound and a draw kept are the only draws that leave
+//!   them), but a reader through snapshots that writes nothing else (below). A bind changes its
+//!   stage table's slots alone (and a bytes bind takes room in its command buffer's uploads), and a
+//!   table's stamp tells each change apart (`argument_table::Stamp`): the kept draw keeps the four
+//!   tables' stamps as it read them, and a draw whose tables kept them is the kept draw again; one
+//!   after binds is drawn again rebound where it can be (`rebound.rs`), else takes every step. So
+//!   the encoder's state a draw resolves from is the kept draw's, but for the tables' slots the
+//!   stamps tell apart, what the kept draw itself left and what changes with no call of the
+//!   encoder: the latter is [`Under`], compared at each draw: the count of no-copy buffers' moves
+//!   (a bound buffer's binding, a detach), the residency's generation once the draw made the heaps'
+//!   new textures resident, whether the device has buffers over host pages and its host aliases'
+//!   version, the encoder's parts and held images (what noting reads, `noted_apart.rs`), with the
+//!   command buffer the current instance records into, and the count of the device's sampler IDs'
+//!   slots' changes (a sampler state made or gone, which every step of a draw lists again:
+//!   `sampler::ArgumentSamplers`). Another thread may change the moves, the sampler slots and the
+//!   buffers over host pages with their aliases' version while a draw takes its steps (the device's
+//!   in-place check makes and lets go buffers over host pages on a thread of its own): a draw is
+//!   kept under them as its steps began, which they read ([`Outside`]), and its uses' noting counts
+//!   only where it was noted under them, so a change made meanwhile makes the next draw take every
+//!   step.
+//! - **Kept across a fence or a use.** A call that changes nothing a kept draw read or recorded
+//!   keeps every kept draw as it was (`RenderLowering::log_across`,
+//!   `WorkCounts::kept_draws_kept_across_*`): `update_fence`, which only notes the update for the
+//!   encoder's end (`tracker::EncoderUses::update_fence`); `wait_for_fence` where the encoder used
+//!   no shadowed texture, which notes the wait, all of the encoder's work waiting, and carries no
+//!   shadowed texture's image on (`shadow::ShadowSync::not_carried`), which no kept draw of the
+//!   encoder read (one carried in works its own shadows out again as it is rebound, `rebound.rs`);
+//!   where the encoder used one, its later commands take its copies again, which a draw again would
+//!   not, so the wait forgets; and `use_resource`, `use_resources`, `use_heap` and `use_heaps` but
+//!   of a memoryless texture (which fails the command buffer, and forgets): a use that makes a
+//!   resource resident or widens a usage, stages or a heap's textures gives the residency a new
+//!   generation (`residency.rs`), which [`Under`] holds, so the next draw of each kept draw takes
+//!   every step, as every draw that reaches the residency must list it again; one that changes
+//!   nothing makes nothing resident and holds nothing more, so the next draw is the kept draw's
+//!   again. A use for writing of an indirect command buffer marks its write routes
+//!   (`write_routes.rs`) as at any use, which no draw reads.
 //! - **One per pipeline state.** A pipeline state set keeps the kept draw: at the next draw
 //!   through another state, it goes aside with its state's bind state and the storage its draws
 //!   wrote (`LiveBind::select`, `RenderLowering::select_kept`), and the draw starts from its own
@@ -177,7 +194,7 @@ use crate::noted_apart::NotedInto;
 use crate::pipeline::{RawPipeline, RenderPipelineState, RenderStateKind, WeakRenderPipelineState};
 use crate::resource::ResourceKey;
 use crate::tracker::{Use, UseRange};
-use crate::work_counts::{ArgumentsStop, UnlikeKept};
+use crate::work_counts::{ArgumentsStop, LoggedCall, UnlikeKept};
 use metal2vulkan::metal::RenderStages;
 
 /// The encoder's last direct draw, where it is kept (the module docs).
@@ -603,6 +620,24 @@ impl RenderLowering {
         self.again.epoch = Stamp::fresh();
     }
 
+    /// Forget every kept draw at a call of kind `by` the encoder logged (`RenderLowering::log`),
+    /// the last direct draw's counted where there is one (`WorkCounts::kept_draws_let_go_*`).
+    pub(super) fn let_go_again(&mut self, by: LoggedCall) {
+        if self.again.kept.is_some() && !self.replaying && !self.rerouting {
+            self.core.counts().kept_draw_let_go(by);
+        }
+        self.forget_again();
+    }
+
+    /// Keep every kept draw across a call of kind `by` the encoder logged that changes nothing
+    /// they read or recorded (`RenderLowering::log_across`, the module docs), the last direct
+    /// draw's counted where there is one (`WorkCounts::kept_draws_kept_across_*`).
+    pub(super) fn keep_again_across(&self, by: LoggedCall) {
+        if self.again.kept.is_some() && !self.replaying && !self.rerouting {
+            self.core.counts().kept_draw_kept_across(by);
+        }
+    }
+
     /// Forget every kept draw set aside with other pipeline states' bind states (`live`) that
     /// reads what a draw that read through snapshots, keeping nothing, wrote
     /// ([`forget_aside_readers`](Self::forget_aside_readers)), and the last direct draw's.
@@ -871,7 +906,8 @@ impl RenderLowering {
             counts.own_pixel_read();
         }
         // Its noting: its reads of fresh textures, where any texture is fresh, and what the
-        // encoder made resident since (nothing: no call came).
+        // encoder made resident since (nothing: a use that made anything resident gave the
+        // residency a new generation, which `Under` compares).
         match kept.reads_images && self.core.observes_fresh() {
             true => self.core.note_again(live.noted.uses()),
             false => self.core.note_again(&[]),
@@ -911,6 +947,7 @@ impl RenderLowering {
         let (rasterizes, depth_writes) = (kept.rasterizes, kept.depth_writes);
         self.keep_draw(again, (call, assembly, *draw), buffers.index.as_ref());
         self.draw_calls += 1;
+        self.last_draw_empty = false;
         self.command_encoded(reads);
         self.called = true;
         self.drew |= rasterizes;

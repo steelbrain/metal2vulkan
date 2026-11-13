@@ -81,9 +81,10 @@ use super::render::RenderCall;
 use super::render::RenderCommandEncoder;
 use super::render::RenderLowering;
 use super::render::{FRAGMENT_DRAW_STAGES, GEOMETRY_DRAW_STAGES};
-use super::replay::{BlitCall, ComputeCall, Resource};
+use super::replay::{BlitCall, CallLog, ComputeCall, Resource};
 use super::resource::{ResourceKey, ResourceRef};
 use super::tracker::Barrier;
+use super::work_counts::LoggedCall;
 use ash::vk;
 use metal2vulkan::metal::{BarrierScope, RenderStages};
 use std::sync::{Arc, Mutex};
@@ -343,7 +344,11 @@ impl RenderLowering {
         fence: &Fence,
         after_stages: RenderStages,
     ) -> Result<(), Error> {
-        self.log(|_| RenderCall::UpdateFence(fence.clone(), after_stages));
+        // An update records nothing into the pass, so the encoder's kept draws are kept
+        // (`render/draw_again.rs`).
+        self.log_across(LoggedCall::Fence, |_| {
+            RenderCall::UpdateFence(fence.clone(), after_stages)
+        });
         // The update follows the encoder's work, its later color groups' passes too, which
         // record in its core after the first group's: their encoders' calls change nothing
         // (`render/color_groups.rs`).
@@ -360,7 +365,15 @@ impl RenderLowering {
         fence: &Fence,
         before_stages: RenderStages,
     ) -> Result<(), Error> {
-        self.log(|_| RenderCall::WaitForFence(fence.clone(), before_stages));
+        // A wait records nothing into the pass, but that the encoder's shadowed textures take
+        // their copies again (`EncoderCore::ordered_other_work`): where the encoder used none,
+        // its kept draws are kept (`render/draw_again.rs`).
+        let call =
+            |_: &mut CallLog<RenderCall>| RenderCall::WaitForFence(fence.clone(), before_stages);
+        match self.core().used_shadows() {
+            true => self.log_letting_go(LoggedCall::Fence, call),
+            false => self.log_across(LoggedCall::Fence, call),
+        }
         // All of the encoder's work waits, its later color groups' passes too
         // (`render/color_groups.rs`).
         if self.later_group_encoder() {
@@ -377,7 +390,9 @@ impl RenderLowering {
         after_stages: RenderStages,
         before_stages: RenderStages,
     ) {
-        self.log(|_| RenderCall::BarrierWithScope(scope, after_stages, before_stages));
+        self.log_letting_go(LoggedCall::Barrier, |_| {
+            RenderCall::BarrierWithScope(scope, after_stages, before_stages)
+        });
         if scope.is_empty() || after_stages.is_empty() || before_stages.is_empty() {
             return;
         }
@@ -403,7 +418,7 @@ impl RenderLowering {
         after_stages: RenderStages,
         before_stages: RenderStages,
     ) -> Result<(), Error> {
-        self.log(|_| {
+        self.log_letting_go(LoggedCall::Barrier, |_| {
             RenderCall::BarrierWithResources(Resource::all(resources), after_stages, before_stages)
         });
         const CALL: &str = "memory_barrier_with_resources";

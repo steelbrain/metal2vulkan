@@ -1682,6 +1682,7 @@ impl RenderLowering {
             kept.under = under;
         }
         self.draw_calls += 1;
+        self.last_draw_empty = false;
         self.command_encoded(reads);
         self.called = true;
         self.drew |= rasterizes;

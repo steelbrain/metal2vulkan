@@ -120,15 +120,15 @@ fn state(device: &Device, path: &str, (vertex, fragment): (&str, &str)) -> Rende
 /// What a run recorded and drew: its commands recorded by kind, the target's words, and the
 /// device's counts after it, with the counts' change over it.
 pub(super) struct Ran {
-    commands: BTreeMap<String, u64>,
-    words: Vec<u32>,
+    pub(super) commands: BTreeMap<String, u64>,
+    pub(super) words: Vec<u32>,
     before: WorkCounts,
     after: WorkCounts,
 }
 
 impl Ran {
     /// How the count `of` changed over the run.
-    fn counted(&self, of: impl Fn(&WorkCounts) -> u64) -> u64 {
+    pub(super) fn counted(&self, of: impl Fn(&WorkCounts) -> u64) -> u64 {
         of(&self.after) - of(&self.before)
     }
 }

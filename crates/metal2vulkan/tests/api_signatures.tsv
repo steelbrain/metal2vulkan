@@ -2914,6 +2914,7 @@ field	metal2vulkan-runtime::WorkCounts.empty_memory_blocks_live	pub empty_memory
 field	metal2vulkan-runtime::WorkCounts.encoder_command_buffers_begun	pub encoder_command_buffers_begun: u64
 field	metal2vulkan-runtime::WorkCounts.encoder_primaries_begun_ahead	pub encoder_primaries_begun_ahead: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_barriered_at_open	pub encoders_barriered_at_open: u64
+field	metal2vulkan-runtime::WorkCounts.encoders_last_draw_empty	pub encoders_last_draw_empty: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_between	pub encoders_none_kept_next_between: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_ends	pub encoders_none_kept_next_ends: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_fits	pub encoders_none_kept_next_fits: u64
@@ -3168,6 +3169,14 @@ field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_between	pub kept
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_commit	pub kept_draws_carry_dropped_commit: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_layout	pub kept_draws_carry_dropped_layout: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_under	pub kept_draws_carry_dropped_under: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_kept_across_fence	pub kept_draws_kept_across_fence: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_kept_across_use	pub kept_draws_kept_across_use: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_let_go_barrier	pub kept_draws_let_go_barrier: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_let_go_fence	pub kept_draws_let_go_fence: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_let_go_other	pub kept_draws_let_go_other: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_let_go_store_action	pub kept_draws_let_go_store_action: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_let_go_use	pub kept_draws_let_go_use: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_let_go_visibility	pub kept_draws_let_go_visibility: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_uncarried_attached	pub kept_draws_uncarried_attached: u64
 field	metal2vulkan-runtime::WorkCounts.kept_padding_aliases	pub kept_padding_aliases: u64
 field	metal2vulkan-runtime::WorkCounts.kept_resident_keys_compared	pub kept_resident_keys_compared: u64

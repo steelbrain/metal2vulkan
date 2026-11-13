@@ -31,8 +31,9 @@ use crate::error::Error;
 use crate::function_table::VisibleFunctionTable;
 use crate::heap::Heap;
 use crate::pvrtc::degrade_unreadable;
-use crate::replay::Resource;
+use crate::replay::{CallLog, Resource};
 use crate::resource::ResourceRef;
+use crate::work_counts::LoggedCall;
 use metal2vulkan::metal::{RenderStages, ResourceUsage};
 
 impl RenderLowering {
@@ -43,7 +44,9 @@ impl RenderLowering {
         usage: ResourceUsage,
         stages: RenderStages,
     ) -> Result<(), Error> {
-        self.log(|_| RenderCall::UseResource(Resource::one(resource), usage, stages));
+        self.log_use(&[resource], |_| {
+            RenderCall::UseResource(Resource::one(resource), usage, stages)
+        });
         self.use_all("use_resource", &[resource], usage, stages)
     }
 
@@ -54,8 +57,26 @@ impl RenderLowering {
         usage: ResourceUsage,
         stages: RenderStages,
     ) -> Result<(), Error> {
-        self.log(|_| RenderCall::UseResources(Resource::all(resources), usage, stages));
+        self.log_use(resources, |_| {
+            RenderCall::UseResources(Resource::all(resources), usage, stages)
+        });
         self.use_all("use_resources", resources, usage, stages)
+    }
+
+    /// [`log`](Self::log) a use of `resources`, which keeps the encoder's kept draws
+    /// ([`log_across`](Self::log_across)) but where one is a memoryless texture, which fails
+    /// the command buffer (`render/draw_again.rs`): a use that changes the encoder's residency
+    /// gives it a new generation, which makes the next draw of each take every step
+    /// (`draw_again::Under`), and one that changes nothing makes nothing resident.
+    fn log_use(
+        &mut self,
+        resources: &[ResourceRef<'_>],
+        call: impl FnOnce(&mut CallLog<RenderCall>) -> RenderCall,
+    ) {
+        match resources.iter().any(ResourceRef::is_memoryless) {
+            true => self.log_letting_go(LoggedCall::Use, call),
+            false => self.log_across(LoggedCall::Use, call),
+        }
     }
 
     fn use_all(
@@ -90,13 +111,16 @@ impl RenderLowering {
 
     /// The lowering of [`RenderCommandEncoder::use_heap`].
     pub(crate) fn use_heap(&mut self, heap: &Heap, stages: RenderStages) -> Result<(), Error> {
-        self.log(|_| RenderCall::UseHeap(heap.clone(), stages));
+        // As a use of resources keeps the encoder's kept draws (`log_use`).
+        self.log_across(LoggedCall::Use, |_| {
+            RenderCall::UseHeap(heap.clone(), stages)
+        });
         self.use_heaps_of("use_heap", &[heap], stages)
     }
 
     /// The lowering of [`RenderCommandEncoder::use_heaps`].
     pub(crate) fn use_heaps(&mut self, heaps: &[&Heap], stages: RenderStages) -> Result<(), Error> {
-        self.log(|_| {
+        self.log_across(LoggedCall::Use, |_| {
             RenderCall::UseHeaps(heaps.iter().map(|&heap| heap.clone()).collect(), stages)
         });
         self.use_heaps_of("use_heaps", heaps, stages)

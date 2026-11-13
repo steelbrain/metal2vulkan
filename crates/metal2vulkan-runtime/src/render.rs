@@ -355,6 +355,7 @@ use super::versioned::Versioned;
 use super::visibility::{self, Continuation, Visibility, VisibilityResultMode};
 use crate::device::functions::Vk;
 use crate::work_counts::Begun;
+use crate::work_counts::LoggedCall;
 use crate::work_counts::NotInline;
 use crate::work_counts::Split;
 use crate::work_counts::UnkeptDraw;
@@ -1721,6 +1722,8 @@ pub(crate) struct RenderLowering {
     /// The encoder's draw calls that returned `Ok` so far: the next one's order among them,
     /// which a draw whose pipeline is being made keeps for its failure (`FailedPipeline::draw`).
     draw_calls: usize,
+    /// Whether the last of them drew nothing (`WorkCounts::encoders_last_draw_empty`).
+    last_draw_empty: bool,
     /// Its tile dispatch calls that returned `Ok` so far, likewise for a tile dispatch
     /// (`render/pending_tile.rs`).
     tile_dispatch_calls: usize,
@@ -2514,6 +2517,7 @@ impl RenderLowering {
                 executions: Vec::new(),
                 pending: Vec::new(),
                 draw_calls: 0,
+                last_draw_empty: false,
                 tile_dispatch_calls: 0,
                 replaying: false,
                 replay_plain: false,
@@ -3359,7 +3363,9 @@ impl RenderLowering {
         action: StoreAction,
         index: u32,
     ) -> Result<(), Error> {
-        self.log(|_| RenderCall::ColorStoreAction(action, index));
+        self.log_letting_go(LoggedCall::StoreAction, |_| {
+            RenderCall::ColorStoreAction(action, index)
+        });
         const CALL: &str = "set_color_store_action";
         check_index(CALL, index, MAX_COLOR_ATTACHMENTS as u32)?;
         let which = Attachment::Color(index);
@@ -3395,13 +3401,17 @@ impl RenderLowering {
 
     /// The lowering of [`RenderCommandEncoder::set_depth_store_action`].
     pub(crate) fn set_depth_store_action(&mut self, action: StoreAction) -> Result<(), Error> {
-        self.log(|_| RenderCall::DepthStoreAction(action));
+        self.log_letting_go(LoggedCall::StoreAction, |_| {
+            RenderCall::DepthStoreAction(action)
+        });
         self.set_aspect_store_action("set_depth_store_action", Attachment::Depth, action)
     }
 
     /// The lowering of [`RenderCommandEncoder::set_stencil_store_action`].
     pub(crate) fn set_stencil_store_action(&mut self, action: StoreAction) -> Result<(), Error> {
-        self.log(|_| RenderCall::StencilStoreAction(action));
+        self.log_letting_go(LoggedCall::StoreAction, |_| {
+            RenderCall::StencilStoreAction(action)
+        });
         self.set_aspect_store_action("set_stencil_store_action", Attachment::Stencil, action)
     }
 
@@ -3411,7 +3421,9 @@ impl RenderLowering {
         _options: StoreActionOptions,
         index: u32,
     ) -> Result<(), Error> {
-        self.log(|_| RenderCall::ColorStoreActionOptions(_options, index));
+        self.log_letting_go(LoggedCall::StoreAction, |_| {
+            RenderCall::ColorStoreActionOptions(_options, index)
+        });
         const CALL: &str = "set_color_store_action_options";
         check_index(CALL, index, MAX_COLOR_ATTACHMENTS as u32)?;
         let which = Attachment::Color(index);
@@ -3430,7 +3442,9 @@ impl RenderLowering {
         &mut self,
         options: StoreActionOptions,
     ) -> Result<(), Error> {
-        self.log(|_| RenderCall::DepthStoreActionOptions(options));
+        self.log_letting_go(LoggedCall::StoreAction, |_| {
+            RenderCall::DepthStoreActionOptions(options)
+        });
         self.set_aspect_store_action_options(
             "set_depth_store_action_options",
             Attachment::Depth,
@@ -3443,7 +3457,9 @@ impl RenderLowering {
         &mut self,
         options: StoreActionOptions,
     ) -> Result<(), Error> {
-        self.log(|_| RenderCall::StencilStoreActionOptions(options));
+        self.log_letting_go(LoggedCall::StoreAction, |_| {
+            RenderCall::StencilStoreActionOptions(options)
+        });
         self.set_aspect_store_action_options(
             "set_stencil_store_action_options",
             Attachment::Stencil,
@@ -4379,7 +4395,9 @@ impl RenderLowering {
         mode: VisibilityResultMode,
         offset: u64,
     ) -> Result<(), Error> {
-        self.log(|_| RenderCall::VisibilityResultMode(mode, offset));
+        self.log_letting_go(LoggedCall::Visibility, |_| {
+            RenderCall::VisibilityResultMode(mode, offset)
+        });
         let turn = self.group_turn();
         if let color_groups::Turn::Later(ran) = turn {
             // A later group draws as the first one does under the mode, and counts nothing.
@@ -8276,6 +8294,7 @@ impl RenderLowering {
             _ => {}
         }
         self.draw_calls += 1;
+        self.last_draw_empty = empty;
         self.called = true;
         Ok(())
     }
@@ -8371,6 +8390,7 @@ impl RenderLowering {
             self.degrade_ycbcr_blends();
         }
         self.draw_calls += 1;
+        self.last_draw_empty = empty;
         self.command_encoded(reads);
         self.called = true;
         self.drew |= !empty && rasterizes;

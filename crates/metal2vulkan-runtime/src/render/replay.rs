@@ -38,6 +38,7 @@ use crate::residency::Residency;
 use crate::sampler::SamplerState;
 use crate::values::{Region, Size};
 use crate::visibility::VisibilityResultMode;
+use crate::work_counts::LoggedCall;
 use metal2vulkan::metal::{
     BarrierScope, CullMode, DepthClipMode, IndexType, RenderStages, ResourceUsage,
     TriangleFillMode, Winding,
@@ -649,9 +650,34 @@ impl RenderLowering {
     /// Log the call `call` makes of the log, before it runs, where the encoder logs (the module
     /// docs). Every call but a direct draw, a bind, a pipeline state set and a set of the
     /// encoder's render state logs itself so, which forgets the encoder's kept draws, whatever
-    /// the call changes (`render/draw_again.rs`).
+    /// the call changes (`render/draw_again.rs`), but the calls that change nothing they read or
+    /// recorded ([`log_across`](Self::log_across)). The kept draw it lets go is counted as of a
+    /// call of no kind the counts name ([`LoggedCall::Other`]).
     pub(crate) fn log(&mut self, call: impl FnOnce(&mut CallLog<RenderCall>) -> RenderCall) {
-        self.forget_again();
+        self.log_letting_go(LoggedCall::Other, call);
+    }
+
+    /// [`log`](Self::log) a call of kind `by`, which forgets the encoder's kept draws, counted by
+    /// it (`WorkCounts::kept_draws_let_go_*`).
+    pub(crate) fn log_letting_go(
+        &mut self,
+        by: LoggedCall,
+        call: impl FnOnce(&mut CallLog<RenderCall>) -> RenderCall,
+    ) {
+        self.let_go_again(by);
+        self.log_keeping(call);
+    }
+
+    /// [`log`](Self::log) a call of kind `by` that changes nothing the encoder's kept draws read
+    /// or recorded, which keeps them, counted by it (`WorkCounts::kept_draws_kept_across_*`):
+    /// `update_fence`, `wait_for_fence` where the encoder used no shadowed texture, and a use of
+    /// resources or heaps but a memoryless texture's (`render/draw_again.rs`).
+    pub(crate) fn log_across(
+        &mut self,
+        by: LoggedCall,
+        call: impl FnOnce(&mut CallLog<RenderCall>) -> RenderCall,
+    ) {
+        self.keep_again_across(by);
         self.log_keeping(call);
     }
 

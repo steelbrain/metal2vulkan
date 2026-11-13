@@ -260,6 +260,9 @@ impl RenderLowering {
                 0 => Uncarried::Drawless,
                 _ => Uncarried::NoneKept,
             });
+            if self.draw_calls > 0 && self.last_draw_empty {
+                counts.encoder_last_draw_empty();
+            }
             if self.draw_calls > 0 {
                 self.hold_none_kept(live);
             }

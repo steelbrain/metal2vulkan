@@ -3041,6 +3041,7 @@ impl RenderExecution {
             executions: Vec::new(),
             pending: Vec::new(),
             draw_calls: 0,
+            last_draw_empty: false,
             tile_dispatch_calls: 0,
             replaying: true,
             replay_plain: true,

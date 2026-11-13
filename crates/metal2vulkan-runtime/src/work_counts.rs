@@ -351,6 +351,7 @@ pub(crate) struct Counters {
     kept_draws_uncarried_attached: AtomicU64,
     encoders_uncarried: [AtomicU64; Uncarried::COUNT],
     encoders_none_kept_next: [AtomicU64; NoneKeptNext::COUNT],
+    encoders_last_draw_empty: AtomicU64,
     inline_split_instances: AtomicU64,
     inline_memoryless_write_splits: AtomicU64,
     passes_not_inline: [AtomicU64; NotInline::COUNT],
@@ -824,6 +825,8 @@ struct CommandCounters {
     draws_none_kept: AtomicU64,
     draws_carry_stopped: AtomicU64,
     draws_carry_stopped_by: [AtomicU64; CarryStop::COUNT],
+    kept_draws_let_go_by: [AtomicU64; LoggedCall::COUNT],
+    kept_draws_kept_across_by: [AtomicU64; LoggedCall::COUNT],
     attached_read_slots: AtomicU64,
     attached_read_slots_by: [AtomicU64; AttachedLevels::COUNT],
 }
@@ -985,6 +988,30 @@ pub(crate) enum CarryStop {
 impl CarryStop {
     /// How many there are.
     pub(crate) const COUNT: usize = 4;
+}
+
+/// The kind of a call a render encoder logs (`RenderLowering::log` and kin, `render/replay.rs`)
+/// that met its kept draw: which let it go (`WorkCounts::kept_draws_let_go_*`) or kept it
+/// (`WorkCounts::kept_draws_kept_across_*`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LoggedCall {
+    /// `update_fence` or `wait_for_fence`.
+    Fence,
+    /// `use_resource`, `use_resources`, `use_heap` or `use_heaps`.
+    Use,
+    /// `memory_barrier_with_scope` or `memory_barrier_with_resources`.
+    Barrier,
+    /// A color's, the depth's or the stencil's store action or store action options.
+    StoreAction,
+    /// `set_visibility_result_mode`.
+    Visibility,
+    /// Any other call that logs itself.
+    Other,
+}
+
+impl LoggedCall {
+    /// How many there are.
+    pub(crate) const COUNT: usize = 6;
 }
 
 /// What kept a direct draw that recorded from being kept to draw again
@@ -1682,6 +1709,20 @@ impl Counting<'_> {
     /// (`WorkCounts::draws_none_kept`).
     pub(crate) fn draw_none_kept(&self) {
         self.0.add(|counts| &counts.draws_none_kept, 1);
+    }
+
+    /// A render encoder's kept draw let go by a call of kind `by` it logged
+    /// (`WorkCounts::kept_draws_let_go_*`).
+    pub(crate) fn kept_draw_let_go(&self, by: LoggedCall) {
+        self.0
+            .add(|counts| &counts.kept_draws_let_go_by[by as usize], 1);
+    }
+
+    /// A render encoder's kept draw kept across a call of kind `by` it logged
+    /// (`WorkCounts::kept_draws_kept_across_*`).
+    pub(crate) fn kept_draw_kept_across(&self, by: LoggedCall) {
+        self.0
+            .add(|counts| &counts.kept_draws_kept_across_by[by as usize], 1);
     }
 
     /// A render draw of the kept draw carried into its encoder whose rebind stopped where `why`
@@ -3447,6 +3488,12 @@ impl Counters {
     /// buffer's next render encoder (`WorkCounts::encoders_none_kept_next_*`).
     pub(crate) fn encoder_none_kept_next(&self, next: NoneKeptNext) {
         self.encoders_none_kept_next[next as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A render encoder ended whose last draw drew nothing (`WorkCounts::encoders_last_draw_empty`).
+    pub(crate) fn encoder_last_draw_empty(&self) {
+        self.encoders_last_draw_empty
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A render pass's first instance did not record inline, for `why` (`NotInline`).
@@ -7235,6 +7282,11 @@ pub struct WorkCounts {
     /// The next render encoder's pass, and what changes with no call, were as they were: a kept
     /// draw of theirs would have carried into it.
     pub encoders_none_kept_next_fits: u64,
+    /// Render encoders that drew and whose last draw call drew nothing (no vertex, index, patch,
+    /// instance or mesh threadgroup): it keeps nothing and lets every kept draw go, as a draw
+    /// that keeps nothing does (`render/draw_again.rs`), so they end with no kept draw
+    /// (`encoders_uncarried_none_kept`).
+    pub encoders_last_draw_empty: u64,
     /// Those of them that ended with more than one instance.
     pub inline_passes_split: u64,
     /// The instances after a split of such passes that recorded their draws inline too, in the
@@ -7985,6 +8037,32 @@ pub struct WorkCounts {
     /// otherwise, or not, at every step (`reading_draws_snapshotted_stopped`): another slot, color
     /// or form, or an instance that cannot hold their colors in the feedback loop layout.
     pub draws_carry_stopped_snapshot: u64,
+    /// Render encoders' kept draws (the last direct draw's) let go by a call the encoder logged,
+    /// with every kept draw set aside (`render/draw_again.rs`), so their next draw takes every
+    /// step (`draws_none_kept`): by `wait_for_fence` where the encoder used a shadowed texture,
+    /// which then takes its copies again (`shadow.rs`).
+    pub kept_draws_let_go_fence: u64,
+    /// By a `use_resource` or `use_resources` of a memoryless texture.
+    pub kept_draws_let_go_use: u64,
+    /// By `memory_barrier_with_scope` or `memory_barrier_with_resources`.
+    pub kept_draws_let_go_barrier: u64,
+    /// By a color's, the depth's or the stencil's store action or store action options.
+    pub kept_draws_let_go_store_action: u64,
+    /// By `set_visibility_result_mode`.
+    pub kept_draws_let_go_visibility: u64,
+    /// By any other call that logs itself (`RenderLowering::log`): every call but the draws, the
+    /// binds, a pipeline state set, the render state sets and those `kept_draws_kept_across_*`
+    /// and the counts above name.
+    pub kept_draws_let_go_other: u64,
+    /// Render encoders' kept draws (the last direct draw's) kept, with every kept draw set aside,
+    /// across a call the encoder logged that changes nothing they read or recorded
+    /// (`render/draw_again.rs`): `update_fence`, and `wait_for_fence` where the encoder used no
+    /// shadowed texture.
+    pub kept_draws_kept_across_fence: u64,
+    /// Across `use_resource`, `use_resources` (of no memoryless texture), `use_heap` or
+    /// `use_heaps`: one that changed the encoder's residency gave it a new generation, which
+    /// makes the next draw of each take every step.
+    pub kept_draws_kept_across_use: u64,
     /// Render encoders' direct draws that recorded a Vulkan draw and kept nothing to draw again
     /// or rebind (`render/draw_again.rs`), so their encoder's next draw takes every step; with,
     /// in the counts below, what kept each from being kept, a draw counted in every group it met
@@ -9926,6 +10004,12 @@ impl Device {
         let carry_stopped = |why: CarryStop| {
             (counters.commands).sum(|counts| &counts.draws_carry_stopped_by[why as usize])
         };
+        let let_go = |by: LoggedCall| {
+            (counters.commands).sum(|counts| &counts.kept_draws_let_go_by[by as usize])
+        };
+        let kept_across = |by: LoggedCall| {
+            (counters.commands).sum(|counts| &counts.kept_draws_kept_across_by[by as usize])
+        };
         let arguments_stopped = |why: ArgumentsStop| {
             (counters.commands)
                 .sum(|counts| &counts.draws_rebind_stopped_arguments_by[why as usize])
@@ -10544,6 +10628,7 @@ impl Device {
             encoders_none_kept_next_layout: none_kept_next(NoneKeptNext::Layout),
             encoders_none_kept_next_under: none_kept_next(NoneKeptNext::Under),
             encoders_none_kept_next_fits: none_kept_next(NoneKeptNext::Fits),
+            encoders_last_draw_empty: counters.encoders_last_draw_empty.load(Ordering::Relaxed),
             inline_passes_split: counters.inline_passes_split.load(Ordering::Relaxed),
             inline_split_instances: counters.inline_split_instances.load(Ordering::Relaxed),
             inline_memoryless_write_splits: (counters.inline_memoryless_write_splits)
@@ -10781,6 +10866,14 @@ impl Device {
             draws_carry_stopped_attached: carry_stopped(CarryStop::Attached),
             draws_carry_stopped_other: carry_stopped(CarryStop::Other),
             draws_carry_stopped_snapshot: carry_stopped(CarryStop::Snapshot),
+            kept_draws_let_go_fence: let_go(LoggedCall::Fence),
+            kept_draws_let_go_use: let_go(LoggedCall::Use),
+            kept_draws_let_go_barrier: let_go(LoggedCall::Barrier),
+            kept_draws_let_go_store_action: let_go(LoggedCall::StoreAction),
+            kept_draws_let_go_visibility: let_go(LoggedCall::Visibility),
+            kept_draws_let_go_other: let_go(LoggedCall::Other),
+            kept_draws_kept_across_fence: kept_across(LoggedCall::Fence),
+            kept_draws_kept_across_use: kept_across(LoggedCall::Use),
             draws_unkept: commands(|counts| &counts.draws_unkept),
             draws_unkept_instance: commands(|counts| &counts.draws_unkept_instance),
             draws_unkept_instance_later: commands(|counts| &counts.draws_unkept_instance_later),
