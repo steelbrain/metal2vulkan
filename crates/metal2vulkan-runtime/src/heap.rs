@@ -403,6 +403,23 @@ impl HeapKeys {
             .any(|(heap, id)| objects.contains(id) && heap.strong_count() > 0)
     }
 
+    /// Of the heaps `wanted` answers for, those `keys` name live, added to `found`, by their
+    /// identities: no heap is held, so none is let go under this lock.
+    pub(super) fn names_of<'a>(
+        &self,
+        keys: impl IntoIterator<Item = &'a ResourceKey>,
+        wanted: &dyn Fn(ObjectId) -> bool,
+        found: &mut std::collections::BTreeSet<ObjectId>,
+    ) {
+        let heaps = lock(&self.heaps);
+        let named = keys.into_iter().filter_map(|key| heaps.get(key));
+        found.extend(
+            named
+                .filter(|(heap, id)| wanted(*id) && heap.strong_count() > 0)
+                .map(|(_, id)| *id),
+        );
+    }
+
     /// The identity of the heap whose own buffer's key is `key`, while it lives.
     pub(super) fn id_of(&self, key: ResourceKey) -> Option<ObjectId> {
         let heaps = lock(&self.heaps);

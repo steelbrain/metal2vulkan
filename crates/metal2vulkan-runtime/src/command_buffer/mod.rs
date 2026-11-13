@@ -91,6 +91,7 @@ use super::heap::Heap;
 use super::heap_sets::HeapUse;
 use super::kept_commands::KeptContext;
 use super::live_buffers::LiveTable;
+use super::managed::MayUse;
 use super::managed_copy::AtCompletion;
 use super::merge_scratch::MergeScratch;
 use super::pass_runs::{PassRuns, RunKeep, RunPoint};
@@ -116,7 +117,7 @@ use super::texture::Texture;
 use super::tracker::{Footprint, Summary, Use};
 use super::unique_identifier::ScheduledWork;
 use super::upload::{Upload, Uploads};
-use super::used_resources::{names_any, EncoderKind, EncoderRecord, Reached, ReadRecord};
+use super::used_resources::{names_any, names_of, EncoderKind, EncoderRecord, Reached, ReadRecord};
 use super::values::CommandBufferStatus;
 use super::work_counts::{CarryDropped, Counters};
 use super::write_routes::{AtCommit, Routes};
@@ -1271,6 +1272,40 @@ impl State {
                         .flat_map(|done| done.keys.iter());
                     names_any(shared, keys, None, objects)
                 })
+    }
+
+    /// Of the owners `wanted` answers for (`count` of them), those its ended encoders' uses name
+    /// or made resident, as [`uses`](Self::uses) answers for each of them: each encoder's uses
+    /// read once, under one lock of each registry an encoder's, until all `count` are found.
+    pub(super) fn named_among(
+        &self,
+        shared: &super::device::DeviceShared,
+        wanted: &dyn Fn(ObjectId) -> bool,
+        count: usize,
+    ) -> BTreeSet<ObjectId> {
+        let mut found = BTreeSet::new();
+        for record in &self.ended {
+            if found.len() == count {
+                return found;
+            }
+            names_of(
+                shared,
+                &record.keys,
+                record.residency.as_ref(),
+                (wanted, &mut found),
+            );
+        }
+        let ended = self.ended.len();
+        for part in (self.recorded.iter()).filter(|part| part.encoder < ended) {
+            if found.len() == count {
+                break;
+            }
+            let keys = (part.segments.iter())
+                .filter_map(|segment| segment.recorded.as_ref())
+                .flat_map(|done| done.keys.iter());
+            names_of(shared, keys, None, (wanted, &mut found));
+        }
+        found
     }
 
     /// Whether the commands of its recorded parts `parts` (a batch's) may reach memory one of
@@ -3446,20 +3481,19 @@ impl CommandBuffer {
         self.commit_as("commit_failed", Some(failure), Hand::Wake)
     }
 
-    /// Whether its commands may use `buffer`'s memory, for the copies in of a `Managed` buffer's
-    /// ranges at its commit (`managed.rs`): where a command may reach memory no use names, where
-    /// its last encoder's end is still with the device's lowering thread (its uses not read yet),
-    /// where nothing owns the buffer's key, or where its encoders' uses name the buffer or made it
-    /// resident (`State::uses`).
-    fn may_use(&self, buffer: &Buffer) -> bool {
+    /// Which of the owners `wanted` answers for (`count` of them: those of the `Managed` buffers
+    /// whose ranges are noted) its commands may use, for the copies in of those ranges at its
+    /// commit (`managed.rs`): all where a command may reach memory no use names or its last
+    /// encoder's end is still with the device's lowering thread (its uses not read yet); else
+    /// those its encoders' uses name or made resident, as `State::uses` answers for each, its
+    /// uses read once ([`State::named_among`]).
+    fn may_use(&self, wanted: &dyn Fn(ObjectId) -> bool, count: usize) -> MayUse {
         let shared = self.0.device.shared();
-        let Some(owner) = crate::used_resources::owner_of(shared, buffer.identity().key) else {
-            return true;
-        };
         let state = self.state();
-        state.reaches_unnamed
-            || (state.ending.is_some() && !state.end_lowered)
-            || state.uses(shared, None, &[owner])
+        if state.reaches_unnamed || (state.ending.is_some() && !state.end_lowered) {
+            return MayUse::All;
+        }
+        MayUse::Of(state.named_among(shared, wanted, count))
     }
 
     /// [`commit`](Self::commit) for `call`, or, with `failure`,
@@ -3475,7 +3509,7 @@ impl CommandBuffer {
         // commit's, never an earlier one's (`managed.rs`); and its commit's stamp, which bounds
         // the uploads its batches take.
         let modified = &self.0.device.shared().modified;
-        let commit = modified.take_at_commit(|buffer| self.may_use(buffer));
+        let commit = modified.take_at_commit(|wanted, count| self.may_use(wanted, count));
         self.state().commit = commit;
         // Left to wait for the last render encoder's end, where its call left it to the device's
         // lowering thread and the thread has not lowered it, or for the commits left so.

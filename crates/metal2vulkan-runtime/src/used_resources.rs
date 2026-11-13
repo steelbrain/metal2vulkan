@@ -326,6 +326,23 @@ impl Owners {
         }
     }
 
+    /// Of the owners `wanted` answers for, those `keys` name live, added to `found`, by their
+    /// identities: no owner is held, so none is let go under this lock.
+    fn names_of<'a>(
+        &self,
+        keys: impl IntoIterator<Item = &'a ResourceKey>,
+        wanted: &dyn Fn(ObjectId) -> bool,
+        found: &mut BTreeSet<ObjectId>,
+    ) {
+        let registry = lock(&self.inner);
+        let owners = keys.into_iter().filter_map(|key| registry.owners.get(key));
+        found.extend(
+            owners
+                .filter(|(owner, id)| wanted(*id) && owner.lives())
+                .map(|(_, id)| *id),
+        );
+    }
+
     /// Whether one of `keys` has a live owner among `objects`, by its identity: no owner is held,
     /// so none is let go under this lock.
     fn names_any<'a>(
@@ -338,6 +355,26 @@ impl Owners {
             .filter_map(|key| registry.owners.get(key))
             .any(|(owner, id)| objects.contains(id) && owner.lives())
     }
+}
+
+/// Of the owners `wanted` answers for, those what `keys` name or `residency` made resident has
+/// among its owners, added to `found`, as [`names_any`] answers for each of them: the keys read
+/// once, under one lock of each registry.
+pub(super) fn names_of<'a>(
+    shared: &super::device::DeviceShared,
+    keys: impl IntoIterator<Item = &'a ResourceKey> + Clone,
+    residency: Option<&Residency>,
+    (wanted, found): (&dyn Fn(ObjectId) -> bool, &mut BTreeSet<ObjectId>),
+) {
+    shared.owners.names_of(keys.clone(), wanted, found);
+    shared.heap_keys.names_of(keys, wanted, found);
+    let Some(residency) = residency else {
+        return;
+    };
+    let resident = (residency.resources())
+        .filter_map(Owner::id_of_resident)
+        .chain(residency.used_heaps().map(Heap::object_id));
+    found.extend(resident.filter(|id| wanted(*id)));
 }
 
 /// What owns the memory under `key`, by its identity, while it lives: the program's buffer, or

@@ -56,7 +56,10 @@
 use super::buffer::{Buffer, WeakBuffer};
 use super::device::lock;
 use super::error::{invalid, Error, Problem};
+use super::resource::ResourceKey;
 use super::values::StorageMode;
+use super::ObjectId;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::sync::Mutex;
 
@@ -113,92 +116,226 @@ impl Buffer {
 /// write through a texture over the buffer) that no commit of a command buffer that may use
 /// their buffer took yet: the next such commit copies each in, as the host copy holds it then
 /// (the module docs), and the commits' stamps. A buffer gone meanwhile takes its ranges with it.
+/// Each buffer's ranges are kept by its key, and indexed by what owns its memory
+/// (`used_resources::owner_of`), so a commit reads what its command buffer's uses name once and
+/// takes the ranges of the owners among them: its cost follows what it uses, and the ranges of
+/// buffers no commit uses cost it nothing ([`Noted`]).
 #[derive(Default)]
 pub(super) struct Modified(Mutex<Ranges>);
 
 #[derive(Default)]
 struct Ranges {
-    noted: Noted<WeakBuffer>,
+    noted: Noted<ResourceKey, WeakBuffer>,
     /// The commits so far: the stamp of the last ([`Modified::take_at_commit`]).
     commits: u64,
+}
+
+/// Which of the owners of the buffers whose ranges are noted a committing command buffer may use
+/// ([`Modified::take_at_commit`]).
+pub(crate) enum MayUse {
+    /// All of them: a command may reach memory no use names, or its uses are not read yet.
+    All,
+    /// Those its encoders' uses name or made resident, by identity.
+    Of(BTreeSet<ObjectId>),
 }
 
 impl Modified {
     /// Note `range` of `buffer`: once, where a range noted of it already holds it.
     fn note(&self, buffer: &Buffer, range: Range<u64>) {
-        let same = |of: &WeakBuffer| of.upgrade().is_some_and(|of| of == *buffer);
-        lock(&self.0).noted.note(buffer.downgrade(), range, same);
+        let key = buffer.identity().key;
+        let owner = crate::used_resources::owner_of(buffer.generation().shared(), key);
+        let of = || buffer.downgrade();
+        lock(&self.0)
+            .noted
+            .note((key, owner), of, range, |of| !of.lives());
     }
 
-    /// A commit of a command buffer whose commands may use a buffer as `uses` answers: take the
-    /// ranges noted of those it may use, and copy their bytes in from their host copies, as they
-    /// hold them as the submission runs or now, before the command buffer is submitted, as the
-    /// device's policy says (`Buffer::upload_at_commit`). The commit's stamp, which the command
-    /// buffer keeps: one past every commit's taken before it, under the same lock. Each upload
-    /// carries it, and only a batch of a command buffer whose stamp is at least as large takes it
-    /// (`texture/first_move.rs`'s `register_upload`): its own submission that may use the buffer
-    /// copies them in, or a later commit's, never one committed before, which reads no range only
-    /// a later commit took. The ranges of the rest stay noted, in their order.
-    pub(crate) fn take_at_commit(&self, uses: impl Fn(&Buffer) -> bool) -> u64 {
-        // Each buffer read here, let go of once the lock is free.
-        let mut read = Vec::new();
+    /// A commit of a command buffer whose commands may use the owners of the noted buffers as
+    /// `may_use` answers (asked with whether an owner's buffers have ranges noted, and how many
+    /// owners do; not asked where no owner's are): take the ranges noted of those it may use,
+    /// and of buffers no owner holds (the runtime's own), and copy their bytes in from their host
+    /// copies, as they hold them as the submission runs or now, before the command buffer is
+    /// submitted, as the device's policy says (`Buffer::upload_at_commit`). The commit's stamp,
+    /// which the command buffer keeps: one past every commit's taken before it, under the same
+    /// lock. Each upload carries it, and only a batch of a command buffer whose stamp is at least
+    /// as large takes it (`texture/first_move.rs`'s `register_upload`): its own submission that
+    /// may use the buffer copies them in, or a later commit's, never one committed before, which
+    /// reads no range only a later commit took. The ranges of the rest stay noted, in their order.
+    pub(crate) fn take_at_commit(
+        &self,
+        may_use: impl FnOnce(&dyn Fn(ObjectId) -> bool, usize) -> MayUse,
+    ) -> u64 {
         let (commit, taken) = {
             let mut ranges = lock(&self.0);
             ranges.commits += 1;
-            let taken = ranges.noted.take(|of| {
-                let buffer = of.upgrade()?;
-                let used = uses(&buffer);
-                read.push(buffer);
-                Some(used)
-            });
+            // Its uses read only where an owner's buffers have ranges noted.
+            let used = match ranges.noted.owners() {
+                0 => MayUse::Of(BTreeSet::new()),
+                owners => {
+                    let noted = &ranges.noted;
+                    may_use(&|owner| noted.owns(owner), owners)
+                }
+            };
+            let taken = ranges.noted.take(&used);
             (ranges.commits, taken)
         };
+        // Each buffer upgraded with the lock free, and let go of with it free.
         for (buffer, range) in taken {
             if let Some(buffer) = buffer.upgrade() {
                 buffer.upload_at_commit(range, commit);
             }
         }
-        drop(read);
         commit
     }
 }
 
-/// Ranges of buffers named by `B`, in the order they were noted ([`Modified`]).
-pub(super) struct Noted<B>(Vec<(B, Range<u64>)>);
+/// Ranges of buffers named by `B`, each buffer's kept by its key `K` with what owns its memory
+/// ([`Modified`]): taken in the order each buffer's first was noted, a buffer's own in theirs.
+/// Indexed by owner, so a take looks at the buffers of the owners it is given and of none, never
+/// at the rest; a buffer gone is dropped as a note finds the ranges past twice their count at the
+/// last such sweep, so the ranges of buffers that went unused do not pile up.
+pub(super) struct Noted<K, B> {
+    /// Each buffer's ranges, by its key.
+    by_key: BTreeMap<K, NotedOf<B>>,
+    /// The keys of the buffers each owner holds, by the owner's identity.
+    by_owner: BTreeMap<ObjectId, BTreeSet<K>>,
+    /// The keys of the buffers no owner holds, which every take takes.
+    unowned: BTreeSet<K>,
+    /// The next buffer's place in the order.
+    next: u64,
+    /// The buffers past which the next note drops those gone.
+    sweep_at: usize,
+}
 
-impl<B> Default for Noted<B> {
+/// One buffer's noted ranges ([`Noted`]).
+struct NotedOf<B> {
+    of: B,
+    owner: Option<ObjectId>,
+    /// Its place in the order the buffers were first noted.
+    at: u64,
+    ranges: Vec<Range<u64>>,
+}
+
+/// The fewest buffers at which a note drops those gone ([`Noted`]).
+const SWEEP_FLOOR: usize = 64;
+
+impl<K, B> Default for Noted<K, B> {
     fn default() -> Self {
-        Noted(Vec::new())
+        Noted {
+            by_key: BTreeMap::new(),
+            by_owner: BTreeMap::new(),
+            unowned: BTreeSet::new(),
+            next: 0,
+            sweep_at: SWEEP_FLOOR,
+        }
     }
 }
 
-impl<B> Noted<B> {
-    /// Note `range` of `of`: once, where a range noted of a buffer `same` says is `of` already
-    /// holds it.
-    pub(super) fn note(&mut self, of: B, range: Range<u64>, same: impl Fn(&B) -> bool) {
-        let held = (self.0.iter())
-            .any(|(noted, at)| at.start <= range.start && range.end <= at.end && same(noted));
+impl<K: Ord + Copy, B> Noted<K, B> {
+    /// Note `range` of the buffer of `key`, which `owner` holds (`None`: no owner), made by `of`
+    /// where none of its ranges is noted: once, where a range noted of it already holds it. A
+    /// buffer `gone` answers for is dropped first where its key is noted again, and every one
+    /// once the buffers noted pass their sweep's bound.
+    pub(super) fn note(
+        &mut self,
+        (key, owner): (K, Option<ObjectId>),
+        of: impl FnOnce() -> B,
+        range: Range<u64>,
+        gone: impl Fn(&B) -> bool,
+    ) {
+        if self.by_key.get(&key).is_some_and(|noted| gone(&noted.of)) {
+            self.remove(key);
+        }
+        if self.by_key.len() >= self.sweep_at {
+            let went: Vec<K> = (self.by_key.iter())
+                .filter(|(_, noted)| gone(&noted.of))
+                .map(|(key, _)| *key)
+                .collect();
+            for key in went {
+                self.remove(key);
+            }
+            self.sweep_at = (2 * self.by_key.len()).max(SWEEP_FLOOR);
+        }
+        let next = &mut self.next;
+        let noted = self.by_key.entry(key).or_insert_with(|| {
+            *next += 1;
+            NotedOf {
+                of: of(),
+                owner,
+                at: *next,
+                ranges: Vec::new(),
+            }
+        });
+        if noted.ranges.is_empty() {
+            match noted.owner {
+                Some(owner) => {
+                    self.by_owner.entry(owner).or_default().insert(key);
+                }
+                None => {
+                    self.unowned.insert(key);
+                }
+            }
+        }
+        let held = (noted.ranges.iter()).any(|at| at.start <= range.start && range.end <= at.end);
         if !held {
-            self.0.push((of, range));
+            noted.ranges.push(range);
         }
     }
 
-    /// The ranges whose buffer `taken` answers true for, in their order; those it answers
-    /// `None` for (their buffer gone) go, and the rest stay, in their order.
-    pub(super) fn take(
-        &mut self,
-        mut taken: impl FnMut(&B) -> Option<bool>,
-    ) -> Vec<(B, Range<u64>)> {
-        let mut out = Vec::new();
-        let mut kept = Vec::new();
-        for (of, range) in self.0.drain(..) {
-            match taken(&of) {
-                Some(true) => out.push((of, range)),
-                Some(false) => kept.push((of, range)),
-                None => {}
+    /// Whether the buffers `owner` holds have ranges noted.
+    pub(super) fn owns(&self, owner: ObjectId) -> bool {
+        self.by_owner.contains_key(&owner)
+    }
+
+    /// How many owners hold buffers whose ranges are noted.
+    pub(super) fn owners(&self) -> usize {
+        self.by_owner.len()
+    }
+
+    /// The ranges of the buffers `used` names and of those no owner holds, by buffer in the order
+    /// each was first noted, a buffer's in theirs; the rest stay noted.
+    pub(super) fn take(&mut self, used: &MayUse) -> Vec<(B, Range<u64>)>
+    where
+        B: Clone,
+    {
+        let keys: Vec<K> = match used {
+            MayUse::All => self.by_key.keys().copied().collect(),
+            MayUse::Of(owners) => (owners.iter())
+                .filter_map(|owner| self.by_owner.get(owner))
+                .flatten()
+                .chain(&self.unowned)
+                .copied()
+                .collect(),
+        };
+        let mut taken: Vec<NotedOf<B>> = keys
+            .into_iter()
+            .filter_map(|key| self.remove(key))
+            .collect();
+        taken.sort_by_key(|noted| noted.at);
+        (taken.into_iter())
+            .flat_map(|noted| {
+                let of = noted.of;
+                (noted.ranges.into_iter()).map(move |range| (of.clone(), range))
+            })
+            .collect()
+    }
+
+    /// Drop the buffer of `key`'s ranges, and give them back.
+    fn remove(&mut self, key: K) -> Option<NotedOf<B>> {
+        let noted = self.by_key.remove(&key)?;
+        match noted.owner {
+            Some(owner) => {
+                if let Some(keys) = self.by_owner.get_mut(&owner) {
+                    keys.remove(&key);
+                    if keys.is_empty() {
+                        self.by_owner.remove(&owner);
+                    }
+                }
+            }
+            None => {
+                self.unowned.remove(&key);
             }
         }
-        self.0 = kept;
-        out
+        Some(noted)
     }
 }
