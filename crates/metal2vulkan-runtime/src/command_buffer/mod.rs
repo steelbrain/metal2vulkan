@@ -1023,6 +1023,10 @@ pub(super) struct State {
     /// reaches buffers through addresses), a root table of work on the GPU alone, or work its
     /// host steps resolve from records (`Deferred::reaches_unnamed`).
     pub(super) reaches_unnamed: bool,
+    /// The stamp of its commit (`managed.rs`'s `Modified::take_at_commit`): its batches take no
+    /// `Managed` buffer's upload of bytes a later commit took (`texture/first_move.rs`,
+    /// `FirstFill::upload`). 0 until it is committed.
+    pub(super) commit: u64,
     /// A command of it may write memory no use it noted names: one that reaches it as above
     /// whose functions may write memory (stores or atomic updates,
     /// `StageInterface::writes_memory`; the root table of a draw whose vertex and fragment
@@ -2424,6 +2428,7 @@ impl CommandBuffer {
                 release: None,
                 replay_tables: Vec::new(),
                 reaches_unnamed: false,
+                commit: 0,
                 writes_unnamed: false,
                 unrunnable: BTreeSet::new(),
                 submitted_holds: Vec::new(),
@@ -3369,10 +3374,12 @@ impl CommandBuffer {
         hand: Hand,
     ) -> Result<(), Error> {
         // The bytes of the ranges `did_modify_range` noted of the buffers this command buffer may
-        // use, as the host copies hold them now, for its submission, or one before it, that may
-        // use them (`managed.rs`).
+        // use, as the host copies hold them now, for its submission that may use them, or a later
+        // commit's, never an earlier one's (`managed.rs`); and its commit's stamp, which bounds
+        // the uploads its batches take.
         let modified = &self.0.device.shared().modified;
-        modified.take_at_commit(|buffer| self.may_use(buffer));
+        let commit = modified.take_at_commit(|buffer| self.may_use(buffer));
+        self.state().commit = commit;
         // Left to wait for the last render encoder's end, where its call left it to the device's
         // lowering thread and the thread has not lowered it, or for the commits left so.
         if failure.is_none() && self.queue_commit(call, hand)? {

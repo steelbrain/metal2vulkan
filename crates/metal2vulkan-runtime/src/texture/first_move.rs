@@ -765,11 +765,14 @@ pub(crate) struct FirstFill {
     /// it ([`FillTake::Reached`]); `None` where none did, or none owns it.
     owner: Option<ObjectId>,
     /// An upload into a buffer the program's command buffers may have read already
-    /// ([`FirstMoves::register_upload`]): a batch takes it only where its commands may reach the
-    /// memory, so it lands on that batch's `VkQueue`, after the command buffers before it there,
-    /// never because the batch takes every fill ([`Taken::every_fill`]); an internal
-    /// submission's take ([`FillTake::All`]) takes it too.
-    reached_only: bool,
+    /// ([`FirstMoves::register_upload`]), with the stamp of the commit that took its bytes
+    /// (`managed.rs`'s `Modified`; 0 where none did): a batch takes it only where its commands
+    /// may reach the memory and its command buffer was committed at or after that commit, so it
+    /// lands on that batch's `VkQueue`, after the command buffers before it there, and under no
+    /// command buffer committed before the bytes were taken; never because the batch takes every
+    /// fill ([`Taken::every_fill`]). An internal submission's take ([`FillTake::All`]) takes it
+    /// too. `None` for every other fill.
+    upload: Option<u64>,
 }
 
 impl FirstFill {
@@ -800,7 +803,7 @@ impl FirstFill {
             acquire: None,
             key: None,
             owner: None,
-            reached_only: false,
+            upload: None,
         }
     }
 
@@ -829,7 +832,7 @@ impl FirstFill {
                 acquire: None,
                 key: None,
                 owner: None,
-                reached_only: false,
+                upload: None,
             });
         }
         let zeros = moves.zeros(device, 0)?;
@@ -863,7 +866,7 @@ impl FirstFill {
             acquire: None,
             key: None,
             owner: None,
-            reached_only: false,
+            upload: None,
         }
     }
 
@@ -880,7 +883,7 @@ impl FirstFill {
             acquire: Some((source, target)),
             key: None,
             owner: None,
-            reached_only: false,
+            upload: None,
         }
     }
 
@@ -1020,24 +1023,36 @@ pub(crate) enum FillTake<'r> {
     All,
     /// Every one, knowing what owns the memory of what it takes by `owner_of` (the owner under a
     /// key, `used_resources::owner_of`), but an upload whose memory its commands do not reach, as
-    /// `reaches` answers for what owns it (`FirstFill::reached_only`): a batch's on a device
-    /// without a fill queue.
+    /// `reaches` answers for what owns it, or of a commit after `commit`, its command buffer's
+    /// (`FirstFill::upload`): a batch's on a device without a fill queue.
     Owned {
         owner_of: &'r dyn Fn(ResourceKey) -> Option<ObjectId>,
         reaches: &'r dyn Fn(ObjectId) -> bool,
+        commit: u64,
     },
     /// A batch's on a device with a fill queue (the module docs): the fills of memory its commands
     /// may reach, as `reaches` answers for what owns it (`owner_of` naming the owner under a
     /// key, `used_resources::owner_of`); every fill of memory no use of the program's names; and
     /// every fill where it takes a move of an image in memory another resource owns, or a staged
-    /// copy ([`Taken::every_fill`]).
+    /// copy ([`Taken::every_fill`]); but an upload of a commit after `commit`, its command
+    /// buffer's (`FirstFill::upload`).
     Reached {
         owner_of: &'r dyn Fn(ResourceKey) -> Option<ObjectId>,
         reaches: &'r dyn Fn(ObjectId) -> bool,
+        commit: u64,
     },
 }
 
 impl FillTake<'_> {
+    /// The stamp of the commit of the batch's command buffer, where the take is a batch's: it
+    /// takes no upload of a later commit (`FirstFill::upload`).
+    fn commit(&self) -> Option<u64> {
+        match self {
+            FillTake::All => None,
+            FillTake::Owned { commit, .. } | FillTake::Reached { commit, .. } => Some(*commit),
+        }
+    }
+
     /// What names the owner of the memory under a key, where the take knows it.
     fn owner_of(&self) -> Option<&dyn Fn(ResourceKey) -> Option<ObjectId>> {
         match self {
@@ -1327,11 +1342,14 @@ impl FirstMoves {
     }
 
     /// As [`register_bytes`](Self::register_bytes), of an upload into a buffer the program's
-    /// command buffers may have read already (a `Managed` buffer's copy in, `managed.rs`): a
-    /// batch takes it only where its commands may reach the buffer's memory
-    /// (`FirstFill::reached_only`), so it lands after the command buffers before that batch on
-    /// its `VkQueue`, which may still read the bytes it replaces, and before that batch's
-    /// commands. A batch of another queue that reaches none of the buffer leaves it waiting.
+    /// command buffers may have read already (a `Managed` buffer's copy in, `managed.rs`), of
+    /// bytes taken at the commit stamped `commit` (0: at none): a batch takes it only where its
+    /// commands may reach the buffer's memory and its command buffer was committed at or after
+    /// that commit (`FirstFill::upload`), so it lands after the command buffers before that batch
+    /// on its `VkQueue`, which may still read the bytes it replaces, and before that batch's
+    /// commands, and a command buffer committed before the bytes were taken, submitted after,
+    /// reads the bytes of its own commit, not these. A batch of another queue that reaches none
+    /// of the buffer leaves it waiting.
     pub(crate) fn register_upload(
         &self,
         keeper: Weak<dyn Filled>,
@@ -1339,10 +1357,11 @@ impl FirstMoves {
         source: (vk::Buffer, u64),
         length: u64,
         staging: Box<dyn Any + Send + Sync>,
+        commit: u64,
     ) -> bool {
         let fill = FirstFill::bytes(buffer, start, source, length, staging).keyed(&keeper);
         let fill = FirstFill {
-            reached_only: true,
+            upload: Some(commit),
             ..fill
         };
         self.register_fill_of_bytes(keeper, fill)
@@ -1517,14 +1536,21 @@ impl FirstMoves {
                             (fills.owner_of()).and_then(|owner_of| fill.key.and_then(owner_of));
                         let reached = match (&fills, fill.owner) {
                             (FillTake::Reached { reaches, .. }, Some(owner)) => reaches(owner),
-                            (FillTake::Owned { reaches, .. }, Some(owner)) if fill.reached_only => {
+                            (FillTake::Owned { reaches, .. }, Some(owner))
+                                if fill.upload.is_some() =>
+                            {
                                 reaches(owner)
                             }
                             _ => true,
                         };
                         // An upload goes only with a batch that may reach its memory, whatever
-                        // else the batch takes.
-                        let taken = reached || (every_fill && !fill.reached_only);
+                        // else the batch takes, of a command buffer committed at or after the
+                        // commit that took its bytes.
+                        let in_time = match (fill.upload, fills.commit()) {
+                            (Some(upload), Some(commit)) => upload <= commit,
+                            _ => true,
+                        };
+                        let taken = in_time && (reached || (every_fill && fill.upload.is_none()));
                         match taken {
                             // The submission holds the buffer's memory; the buffer goes as the
                             // program lets go of it, once the lock is free.
@@ -1554,13 +1580,13 @@ impl FirstMoves {
     /// Whether a batch whose commands name nothing takes no work waiting: none waits but fills
     /// of memory whose key `named_only` says only a batch that may reach it takes
     /// ([`FillTake::Reached`]), and uploads, which only such a batch takes on any device
-    /// (`FirstFill::reached_only`). A command buffer that needs no GPU work then goes with no
+    /// (`FirstFill::upload`). A command buffer that needs no GPU work then goes with no
     /// submission, and one that finds work waiting carries it as before
     /// (`command_buffer/submit.rs`).
     pub(crate) fn none_waiting_but(&self, named_only: impl Fn(ResourceKey) -> bool) -> bool {
         lock(&self.waiting).iter().all(|entry| {
             matches!(entry, Waiting::Fill(_, fill)
-                if fill.reached_only || fill.key.is_some_and(&named_only))
+                if fill.upload.is_some() || fill.key.is_some_and(&named_only))
         })
     }
 
@@ -2534,6 +2560,7 @@ mod tests {
         let fills = FillTake::Reached {
             owner_of: &owner_of,
             reaches: &reaches,
+            commit: 0,
         };
         let taken = moves.take_with(|_| true, fills, || None, |_| true);
         assert!(!taken.every_fill());
@@ -2548,6 +2575,7 @@ mod tests {
         let fills = FillTake::Reached {
             owner_of: &owner_of,
             reaches: &none,
+            commit: 0,
         };
         let taken = moves.take_with(|_| true, fills, || None, |_| true);
         assert!(taken.every_fill());
@@ -2564,6 +2592,7 @@ mod tests {
         let fills = FillTake::Reached {
             owner_of: &owner_of,
             reaches: &none,
+            commit: 0,
         };
         let taken = moves.take_with(|_| true, fills, || None, |_| true);
         assert!(taken.every_fill());
@@ -2572,12 +2601,12 @@ mod tests {
         assert!(moves.none_waiting_but(|_| false));
     }
 
-    /// As [`keyed_fill`], an upload into a buffer the program may have read already
-    /// (`FirstMoves::register_upload`).
-    fn upload(moves: &FirstMoves, raw: u64, key: ResourceKey) -> Arc<Unit> {
+    /// As [`keyed_fill`], an upload into a buffer the program may have read already, of bytes
+    /// taken at the commit stamped `commit` (`FirstMoves::register_upload`).
+    fn upload(moves: &FirstMoves, raw: u64, key: ResourceKey, commit: u64) -> Arc<Unit> {
         let buffer = keyed_fill(moves, raw, Some(key));
         if let Some(Waiting::Fill(_, fill)) = lock(&moves.waiting).last_mut() {
-            fill.reached_only = true;
+            fill.upload = Some(commit);
         }
         buffer
     }
@@ -2601,13 +2630,14 @@ mod tests {
         // Without a fill queue: a batch that reaches the other buffer takes every fill but the
         // upload.
         let _buffers = [
-            upload(&moves, 1, unused),
+            upload(&moves, 1, unused, 1),
             keyed_fill(&moves, 2, Some(used)),
-            upload(&moves, 3, used),
+            upload(&moves, 3, used, 1),
         ];
         let fills = FillTake::Owned {
             owner_of: &owner_of,
             reaches: &reaches,
+            commit: 1,
         };
         let taken = moves.take_with(|_| true, fills, || None, |_| true);
         assert!(taken.every_fill());
@@ -2622,6 +2652,7 @@ mod tests {
         let fills = FillTake::Reached {
             owner_of: &owner_of,
             reaches: &none,
+            commit: 1,
         };
         let taken = moves.take_with(|_| true, fills, || None, |_| true);
         assert!(taken.every_fill());
@@ -2632,14 +2663,58 @@ mod tests {
         let fills = FillTake::Owned {
             owner_of: &owner_of,
             reaches: &reaches_unused,
+            commit: 1,
         };
         let taken = moves.take_with(|_| true, fills, || None, |_| true);
         assert_eq!(filled(&taken), [1]);
         drop(taken.submitted(None));
         // An internal submission takes one whatever reaches it.
-        let _later = upload(&moves, 5, unused);
+        let _later = upload(&moves, 5, unused, 1);
         let taken = moves.take(|_| true);
         assert_eq!(filled(&taken), [5]);
+        drop(taken.submitted(None));
+        assert!(moves.none_waiting_but(|_| false));
+    }
+
+    /// An upload goes with no batch of a command buffer committed before the commit that took its
+    /// bytes, though the batch reaches its buffer and is submitted after that commit: the batch of
+    /// the commit takes its own upload and leaves the later ones, in their order, to the batches
+    /// of their commits, on a device with a fill queue or without one. An upload no commit took
+    /// (stamped 0) goes with any batch that reaches it.
+    #[test]
+    fn an_upload_goes_with_no_batch_committed_before_its_bytes_were_taken() {
+        let moves = FirstMoves::default();
+        let used = ResourceKey::new();
+        let used_id = ObjectId::new();
+        let owner_of = |key: ResourceKey| (key == used).then_some(used_id);
+        let reaches = |of: ObjectId| of == used_id;
+        let _buffers = [
+            upload(&moves, 1, used, 2),
+            upload(&moves, 2, used, 3),
+            upload(&moves, 3, used, 4),
+        ];
+        let owned = |commit: u64| FillTake::Owned {
+            owner_of: &owner_of,
+            reaches: &reaches,
+            commit,
+        };
+        let reached = |commit: u64| FillTake::Reached {
+            owner_of: &owner_of,
+            reaches: &reaches,
+            commit,
+        };
+        let taken = moves.take_with(|_| true, owned(1), || None, |_| true);
+        assert!(filled(&taken).is_empty(), "committed before every upload");
+        drop(taken.submitted(None));
+        let taken = moves.take_with(|_| true, reached(2), || None, |_| true);
+        assert_eq!(filled(&taken), [1]);
+        drop(taken.submitted(None));
+        let taken = moves.take_with(|_| true, owned(4), || None, |_| true);
+        assert_eq!(filled(&taken), [2, 3]);
+        drop(taken.submitted(None));
+        let _made = upload(&moves, 4, used, 0);
+        let taken = moves.take_with(|_| true, reached(1), || None, |_| true);
+        assert_eq!(filled(&taken), [4]);
         drop(taken.submitted(None));
         assert!(moves.none_waiting_but(|_| false));
     }
@@ -2688,6 +2763,7 @@ mod tests {
             let fills = FillTake::Owned {
                 owner_of: &owner_of,
                 reaches: &|_| true,
+                commit: 0,
             };
             moves.take_with(|_| true, fills, || None, |_| true)
         };

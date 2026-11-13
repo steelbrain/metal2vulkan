@@ -19,9 +19,12 @@
 //!   the buffer (its encoders' uses name it, `use_resource` made it resident, or a command may
 //!   reach memory no use names), of any of the device's queues, takes the range's bytes as the
 //!   host copy holds them then, before that call returns, and copies them to the device's own by
-//!   the next submission whose commands may use the buffer, before any of them, after the
-//!   command buffers before it on its `VkQueue` (`texture/first_move.rs`'s `register_upload`):
-//!   Metal's shape, the upload made before the GPU uses the buffer, on the user's own queue. A
+//!   the next submission whose commands may use the buffer of a command buffer committed at or
+//!   after that commit, before any of them, after the command buffers before it on its
+//!   `VkQueue` (`texture/first_move.rs`'s `register_upload`): Metal's shape, the upload made
+//!   before the GPU uses the buffer, on the user's own queue. A command buffer committed before,
+//!   whose submission the scheduler makes after the later commit, never takes it, so it reads
+//!   the bytes of its own commit and none a later commit took. A
 //!   commit that uses none of it leaves the range noted, and its submission leaves the copy
 //!   waiting, so the copy never lands under a command buffer of another queue still to read the
 //!   bytes it replaces (`synchronize_resource` copies the buffer back where the command buffer
@@ -103,37 +106,54 @@ impl Buffer {
 /// The ranges of buffers with a host copy the CPU wrote and named (`did_modify_range`, a CPU
 /// write through a texture over the buffer) that no commit of a command buffer that may use
 /// their buffer took yet: the next such commit copies each in, as the host copy holds it then
-/// (the module docs). A buffer gone meanwhile takes its ranges with it.
+/// (the module docs), and the commits' stamps. A buffer gone meanwhile takes its ranges with it.
 #[derive(Default)]
-pub(super) struct Modified(Mutex<Noted<WeakBuffer>>);
+pub(super) struct Modified(Mutex<Ranges>);
+
+#[derive(Default)]
+struct Ranges {
+    noted: Noted<WeakBuffer>,
+    /// The commits so far: the stamp of the last ([`Modified::take_at_commit`]).
+    commits: u64,
+}
 
 impl Modified {
     /// Note `range` of `buffer`: once, where a range noted of it already holds it.
     fn note(&self, buffer: &Buffer, range: Range<u64>) {
         let same = |of: &WeakBuffer| of.upgrade().is_some_and(|of| of == *buffer);
-        lock(&self.0).note(buffer.downgrade(), range, same);
+        lock(&self.0).noted.note(buffer.downgrade(), range, same);
     }
 
     /// A commit of a command buffer whose commands may use a buffer as `uses` answers: take the
     /// ranges noted of those it may use, and copy their bytes in as their host copies hold them
-    /// now (staged, `Buffer::upload_now`), before the command buffer is submitted, so its own
-    /// submission that may use the buffer, or one before it that may, copies them in. The ranges
-    /// of the rest stay noted, in their order.
-    pub(crate) fn take_at_commit(&self, uses: impl Fn(&Buffer) -> bool) {
+    /// now (staged, `Buffer::upload_now`), before the command buffer is submitted. The commit's
+    /// stamp, which the command buffer keeps: one past every commit's taken before it, under the
+    /// same lock. Each upload carries it, and only a batch of a command buffer whose stamp is at
+    /// least as large takes it (`texture/first_move.rs`'s `register_upload`): its own submission
+    /// that may use the buffer copies them in, or a later commit's, never one committed before,
+    /// which reads the bytes its own commit took. The ranges of the rest stay noted, in their
+    /// order.
+    pub(crate) fn take_at_commit(&self, uses: impl Fn(&Buffer) -> bool) -> u64 {
         // Each buffer read here, let go of once the lock is free.
         let mut read = Vec::new();
-        let taken = lock(&self.0).take(|of| {
-            let buffer = of.upgrade()?;
-            let used = uses(&buffer);
-            read.push(buffer);
-            Some(used)
-        });
+        let (commit, taken) = {
+            let mut ranges = lock(&self.0);
+            ranges.commits += 1;
+            let taken = ranges.noted.take(|of| {
+                let buffer = of.upgrade()?;
+                let used = uses(&buffer);
+                read.push(buffer);
+                Some(used)
+            });
+            (ranges.commits, taken)
+        };
         for (buffer, range) in taken {
             if let Some(buffer) = buffer.upgrade() {
-                buffer.upload_now(range);
+                buffer.upload_now(range, commit);
             }
         }
         drop(read);
+        commit
     }
 }
 

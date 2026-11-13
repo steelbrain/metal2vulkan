@@ -674,7 +674,7 @@ impl Device {
         };
         if buffer.storage_mode() != StorageMode::Private {
             fill(&buffer)?;
-            buffer.upload(0..length)?;
+            buffer.upload(0..length, 0)?;
             return Ok(buffer);
         }
         let staging = self.own_buffer(length, ResourceOptions::shared())?;

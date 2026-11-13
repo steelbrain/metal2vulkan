@@ -686,14 +686,18 @@ impl CommandBufferShared {
         // Either way it learns what owns the memory of the work it takes.
         let owner_of = |key: ResourceKey| crate::used_resources::owner_of(shared, key);
         let reaches = |owner: ObjectId| state.parts_reach(shared, start..end, &[owner]);
+        // An upload of bytes a later commit took waits for that commit's batches.
+        let commit = state.commit;
         let fill_take = match device.has_fill_queue() {
             true => FillTake::Reached {
                 owner_of: &owner_of,
                 reaches: &reaches,
+                commit,
             },
             false => FillTake::Owned {
                 owner_of: &owner_of,
                 reaches: &reaches,
+                commit,
             },
         };
         let hold = || crate::heap_sets::hold(device);

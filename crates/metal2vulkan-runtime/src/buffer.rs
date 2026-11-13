@@ -4305,15 +4305,17 @@ impl Buffer {
     /// (`texture/first_move.rs`'s `register_upload`), which the call does not wait for: every
     /// command buffer committed after the call reads the bytes, and none submitted before that
     /// submission on its `VkQueue` sees them land under it. The copy reads the host copy as that
-    /// submission runs, and the submission holds the host copy until it completed.
+    /// submission runs, and the submission holds the host copy until it completed. `commit` is
+    /// the stamp of the commit that took the range (`managed.rs`), which no batch committed before
+    /// it takes the copy for; 0 where none did, which any batch takes.
     /// Past the bound of what is staged, a submission waited for makes it now. Nothing for a
     /// buffer without a host copy, nor for an empty range.
-    pub(super) fn upload(&self, range: Range<u64>) -> Result<(), Error> {
+    pub(super) fn upload(&self, range: Range<u64>, commit: u64) -> Result<(), Error> {
         let s = self.s();
         let mirror = match self.mirror() {
             Some(HostCopy::Own(mirror)) => mirror,
             // The caller's pages, through their import or staging (`managed_copy.rs`).
-            Some(HostCopy::Caller(caller)) => return caller.copy_in(self, range, true),
+            Some(HostCopy::Caller(caller)) => return caller.copy_in(self, range, true, commit),
             None => return Ok(()),
         };
         if range.is_empty() {
@@ -4329,6 +4331,7 @@ impl Buffer {
             (mirror.raw, range.start),
             range.end - range.start,
             Box::new(Arc::clone(mirror)),
+            commit,
         );
         match past {
             true => device.submit_internal(|_, _| {}),
@@ -4337,17 +4340,18 @@ impl Buffer {
     }
 
     /// Copy the bytes `range` of a buffer with a host copy ([`HostCopy`]) to its own as the host
-    /// copy holds them now, at a commit (`managed.rs`'s `Modified`): the CPU copies them into
-    /// staging buffers, which the device's next submission copies from, before any of its
-    /// commands (`managed_copy::stage_in`). Where the staging buffers find no memory, the bytes
-    /// are copied from the host copy as that submission runs ([`upload`](Self::upload)). Nothing
-    /// for a buffer without a host copy, nor for an empty range, nor for pages detached.
-    pub(super) fn upload_now(&self, range: Range<u64>) {
+    /// copy holds them now, at the commit stamped `commit` (`managed.rs`'s `Modified`): the CPU
+    /// copies them into staging buffers, which the device's next submission of a command buffer
+    /// committed at or after it that may reach the buffer copies from, before any of its commands
+    /// (`managed_copy::stage_in`). Where the staging buffers find no memory, the bytes are copied
+    /// from the host copy as that submission runs ([`upload`](Self::upload)). Nothing for a buffer
+    /// without a host copy, nor for an empty range, nor for pages detached.
+    pub(super) fn upload_now(&self, range: Range<u64>, commit: u64) {
         let staged = match self.mirror() {
-            Some(HostCopy::Caller(caller)) => caller.copy_in_now(self, range.clone()),
+            Some(HostCopy::Caller(caller)) => caller.copy_in_now(self, range.clone(), commit),
             Some(HostCopy::Own(_)) => match self.mapped_contents() {
                 Some(contents) => {
-                    super::managed_copy::stage_in(self, contents, range.clone(), true)
+                    super::managed_copy::stage_in(self, contents, range.clone(), true, commit)
                 }
                 None => Ok(()),
             },
@@ -4356,7 +4360,7 @@ impl Buffer {
         // A failed submission past the bound fails the device, which the commit's own
         // submission reports.
         if staged.is_err() {
-            let _ = self.upload(range);
+            let _ = self.upload(range, commit);
         }
     }
 
@@ -4366,14 +4370,15 @@ impl Buffer {
     /// commands before it on its `VkQueue`, as [`upload`](Self::upload) copies, the submission holding `held` until it completed: a
     /// two-copy buffer's copy in from the caller's pages (`managed_copy.rs`), counted
     /// (`WorkCounts::managed_bytes_copied_in`), or from staging buffers of a host copy's bytes
-    /// ([`upload_now`](Self::upload_now)). Where `bounded`, past the bound of what is staged, a
+    /// ([`upload_now`](Self::upload_now)), for the commit stamped `commit` (0: none,
+    /// [`upload`](Self::upload)). Where `bounded`, past the bound of what is staged, a
     /// submission waited for makes it now; else it waits for the device's next.
     pub(super) fn copy_in_from(
         &self,
         source: (vk::Buffer, u64),
         range: Range<u64>,
         held: Box<dyn Any + Send + Sync>,
-        bounded: bool,
+        (bounded, commit): (bool, u64),
     ) -> Result<(), Error> {
         let s = self.s();
         let device = &s.device;
@@ -4387,6 +4392,7 @@ impl Buffer {
             source,
             bytes,
             held,
+            commit,
         );
         if self.caller_copy().is_some() {
             device.shared().counts.managed_copied(bytes, true);
@@ -5255,7 +5261,10 @@ impl Buffer {
         // A two-copy buffer's device copy takes the pages' bytes, its GPU writes not synchronized
         // lost with the `VkDevice` (`managed_copy.rs`).
         if let Some(caller) = carried.caller_copy() {
-            if caller.copy_in(&carried, 0..caller.reach(), true).is_err() {
+            if caller
+                .copy_in(&carried, 0..caller.reach(), true, 0)
+                .is_err()
+            {
                 if let Bytes::Own(parts) = &carried.0.bytes {
                     parts.range_token.hand_to(&own.range_token);
                 }
