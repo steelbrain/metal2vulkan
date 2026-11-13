@@ -201,6 +201,8 @@ pub(crate) struct Counters {
     indirect_records_read: AtomicU64,
     indirect_record_runs_read: AtomicU64,
     indirect_record_bytes_copied: AtomicU64,
+    indirect_record_bytes_gpu_copied: AtomicU64,
+    indirect_record_bytes_gpu_reset: AtomicU64,
     indirect_write_residencies_unmarked: AtomicU64,
     indirect_chunks_kept: AtomicU64,
     indirect_commands_kept: AtomicU64,
@@ -2454,6 +2456,18 @@ impl Counters {
     /// (`indirect_command_buffer.rs`).
     pub(crate) fn indirect_record_bytes_copied(&self, bytes: u64) {
         (self.indirect_record_bytes_copied).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A blit encoded a copy of `bytes` of an indirect command buffer's records into another's,
+    /// which the GPU makes (`blit_indirect.rs`).
+    pub(crate) fn indirect_record_bytes_gpu_copied(&self, bytes: u64) {
+        (self.indirect_record_bytes_gpu_copied).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A blit encoded a reset of `bytes` of an indirect command buffer's records, which the GPU
+    /// writes (`blit_indirect.rs`).
+    pub(crate) fn indirect_record_bytes_gpu_reset(&self, bytes: u64) {
+        (self.indirect_record_bytes_gpu_reset).fetch_add(bytes, Ordering::Relaxed);
     }
 
     /// `count` records of an indirect command buffer's commands were read from its storage and
@@ -6334,6 +6348,16 @@ pub struct WorkCounts {
     /// the copy the next step compares its records with where its execution keeps its chunks
     /// (`render/executions/kept.rs`), and decoded from there.
     pub indirect_record_bytes_copied: u64,
+    /// Bytes of indirect command buffers' records blits copied on the GPU
+    /// (`copyIndirectCommandBuffer:...`, `blit_indirect.rs`), counted as each copy is encoded:
+    /// `bind::indirect_commands::COMMAND_BYTES` a command whatever the buffers' descriptor, read
+    /// from the source's storage and written into the destination's (system memory on a discrete
+    /// GPU for a `Shared` buffer).
+    pub indirect_record_bytes_gpu_copied: u64,
+    /// Bytes of indirect command buffers' records blits reset on the GPU
+    /// (`resetCommandsInBuffer:withRange:`, `blit_indirect.rs`), counted as each reset is
+    /// encoded: `COMMAND_BYTES` a command, written into the buffer's storage.
+    pub indirect_record_bytes_gpu_reset: u64,
     /// Indirect command buffers a committed command buffer made resident for writing
     /// (`use_resource` or `use_resources` with `ResourceUsage::WRITE`, in any of its encoders) and
     /// left unmarked (`IndirectCommandBuffer::gpu_written` still `false`): it set no pipeline state
@@ -10078,6 +10102,10 @@ impl Device {
             indirect_draws_recorded: counters.indirect_draws_recorded.load(Ordering::Relaxed),
             indirect_records_read: counters.indirect_records_read.load(Ordering::Relaxed),
             indirect_record_runs_read: counters.indirect_record_runs_read.load(Ordering::Relaxed),
+            indirect_record_bytes_gpu_copied: (counters.indirect_record_bytes_gpu_copied)
+                .load(Ordering::Relaxed),
+            indirect_record_bytes_gpu_reset: (counters.indirect_record_bytes_gpu_reset)
+                .load(Ordering::Relaxed),
             indirect_record_bytes_copied: (counters.indirect_record_bytes_copied)
                 .load(Ordering::Relaxed),
             indirect_write_residencies_unmarked: (counters.indirect_write_residencies_unmarked)

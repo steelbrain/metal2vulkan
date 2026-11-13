@@ -262,6 +262,44 @@ fn problem(call: &'static str, problem: IndirectCommandBufferProblem) -> Error {
     invalid(call, Problem::IndirectCommandBuffer(problem))
 }
 
+/// A blit's copy of commands and its reset of a range count the bytes of the records the GPU
+/// moves as each is encoded (`WorkCounts::indirect_record_bytes_gpu_copied`,
+/// `indirect_record_bytes_gpu_reset`), whole records; an empty copy counts none.
+#[test]
+fn a_blit_counts_the_record_bytes_the_gpu_moves() {
+    let scratch = Scratch::new("icb-blit-counts");
+    let device = device(&scratch.0);
+    let mut descriptor = IndirectCommandBufferDescriptor::new();
+    descriptor.command_types = IndirectCommandType::DRAW;
+    let shared = ResourceOptions::shared();
+    let icb = device
+        .new_indirect_command_buffer(&descriptor, 4, shared)
+        .unwrap();
+    let copy = device
+        .new_indirect_command_buffer(&descriptor, 4, shared)
+        .unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let before = device.work_counts();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_indirect_command_buffer(&icb, 0..3, &copy, 1)
+        .unwrap();
+    blit.copy_indirect_command_buffer(&icb, 2..2, &copy, 0)
+        .unwrap();
+    blit.reset_commands_in_buffer(&icb, 1..3).unwrap();
+    blit.end_encoding().unwrap();
+    let after = device.work_counts();
+    let record = COMMAND_BYTES as u64;
+    assert_eq!(
+        (
+            after.indirect_record_bytes_gpu_copied - before.indirect_record_bytes_gpu_copied,
+            after.indirect_record_bytes_gpu_reset - before.indirect_record_bytes_gpu_reset,
+        ),
+        (3 * record, 2 * record),
+        "the records' bytes copied and reset"
+    );
+}
+
 /// Render commands: each setter's record, what the records may hold and the CPU's writes are
 /// the model's, through fields that add, fields that add nothing new, refusals and calls taken
 /// mid-command, a command's reset and a range's, a record the GPU may have written and one that

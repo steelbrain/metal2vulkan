@@ -17,7 +17,9 @@
 //!   upload arena to each command. Both write the destination's
 //!   records on the GPU as the command buffer runs, so the call marks it written by the GPU
 //!   (`IndirectCommandBuffer::written_by_gpu`): its executions run the records as they stand once
-//!   the work before them completed. An optimize records nothing.
+//!   the work before them completed. An optimize records nothing. Counted as encoded, in the
+//!   records' bytes (`COMMAND_BYTES` a command, whatever the descriptor):
+//!   `WorkCounts::indirect_record_bytes_gpu_copied` and `indirect_record_bytes_gpu_reset`.
 //! - **A buffer of no command types beside one of command types.** The copy completes and moves
 //!   nothing, as plain Metal's does. Metal's own answer, read through what the destination then
 //!   paints rather than through its status (an M3 Max, macOS 27.0.1, build 26A434, the validation
@@ -106,6 +108,8 @@ impl BlitCommandEncoder {
                 this.copy_overflow(source, from.clone(), destination, to.start)?;
                 let bytes = IndirectCommandBuffer::record_bytes(from);
                 let at = IndirectCommandBuffer::record_bytes(to).start;
+                let counts = &this.core().device().shared().counts;
+                counts.indirect_record_bytes_gpu_copied(bytes.end - bytes.start);
                 this.unlogged(|this| {
                     this.copy_from_buffer_to_buffer(
                         source.storage(),
@@ -149,6 +153,8 @@ impl BlitCommandEncoder {
                 buffer.written_by_gpu(GpuWriter::Reset);
                 this.core().retain(buffer.gpu_write());
                 let bytes = IndirectCommandBuffer::record_bytes(range.clone());
+                let counts = &this.core().device().shared().counts;
+                counts.indirect_record_bytes_gpu_reset(bytes.end - bytes.start);
                 let overflow = buffer
                     .overflow()
                     .map(|overflow| (overflow, overflow.bytes(range.clone())));
