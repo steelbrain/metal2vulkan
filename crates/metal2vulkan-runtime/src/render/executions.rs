@@ -2183,13 +2183,8 @@ impl RenderExecution {
         let snapshot = &self.snapshot;
         let device = command_buffer.device().clone();
         if let Some(form) = gpu {
-            if device.shared().encoder_trail {
-                let mut notes = crate::encoder_trail::Notes::default();
-                notes.gpu_alone();
-                command_buffer.trail_step(notes);
-            }
-            let encoder =
-                self.record_gpu(core, (command_buffer, residency), form, (storage, rendered))?;
+            let at = (command_buffer, residency);
+            let encoder = self.record_gpu(core, at, (form, step), (storage, rendered))?;
             return self.finish(encoder, found, rendered, &device);
         }
         if let Some(routes) = routes {

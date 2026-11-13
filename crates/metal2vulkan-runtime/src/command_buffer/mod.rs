@@ -2074,6 +2074,21 @@ impl State {
         part.summary = part.summary.fences_only();
     }
 
+    /// Join the GPU forms `commit`'s recording of each segment took (`forms`, one list per
+    /// segment in encoding order) to the encoder trail's name of the part that holds it
+    /// (`encoder_trail.rs`, **GPU forms**).
+    fn trail_forms(&mut self, forms: Vec<Vec<Arc<crate::encoder_trail::GpuForm>>>) {
+        let mut forms = forms.into_iter();
+        for part in &mut self.recorded {
+            for _ in &part.segments {
+                let took = forms.next().unwrap_or_default();
+                if let Some(trail) = part.trail.as_mut().filter(|_| !took.is_empty()) {
+                    trail.join_forms(took);
+                }
+            }
+        }
+    }
+
     /// Hand `commit`'s work on the segments, one per segment in encoding order, to them: the
     /// recording of a segment `commit` made, for good where no host step records it, and what a
     /// host step needs.
@@ -2573,8 +2588,39 @@ impl CommandBuffer {
         }
     }
 
+    /// Run `made`, a segment's recording at `commit`, and return what it made and the GPU forms
+    /// it took, where the device's encoder trail is on (`encoder_trail.rs`, **GPU forms**): it
+    /// notes as a host step does, and `commit` keeps the forms alone.
+    fn noting_forms<T>(
+        &self,
+        made: impl FnOnce() -> T,
+    ) -> (T, Vec<Arc<crate::encoder_trail::GpuForm>>) {
+        if !self.device().shared().encoder_trail {
+            return (made(), Vec::new());
+        }
+        *lock(&self.0.step_trail) = Some(crate::encoder_trail::Step::new(None));
+        let made = made();
+        let step = lock(&self.0.step_trail).take();
+        (
+            made,
+            step.map(crate::encoder_trail::Step::into_forms)
+                .unwrap_or_default(),
+        )
+    }
+
+    /// The text of each GPU form its encoders' parts took, as the encoder trail reads it now
+    /// (`encoder_trail.rs`, **GPU forms**): a device test's view.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn trail_form_texts(&self) -> Vec<String> {
+        (self.state().recorded.iter())
+            .filter_map(|part| part.trail.as_ref())
+            .flat_map(crate::encoder_trail::Named::forms)
+            .collect()
+    }
+
     /// Note, for the encoder trail, the states of `notes` that its host step under way read its
-    /// commands to name (`encoder_trail.rs`, **Host steps**); nothing outside a step.
+    /// commands to name (`encoder_trail.rs`, **Host steps**), or that `commit`'s recording of a
+    /// segment noted (`noting_forms`); nothing outside either.
     pub(crate) fn trail_step(&self, notes: crate::encoder_trail::Notes) {
         if let Some(step) = lock(&self.0.step_trail).as_mut() {
             step.noted(notes);
@@ -3791,12 +3837,18 @@ impl CommandBuffer {
         // use).
         let listing = Listing::new(device, used);
         // Recorded, or settled for their host steps, with the lock free: their dispatches take it,
-        // and announce degradations.
+        // and announce degradations. The GPU forms each recording took, for the encoder trail
+        // (`encoder_trail.rs`, **GPU forms**).
+        let mut forms = Vec::new();
         let prepared: Result<Vec<_>, Error> = match segments.is_empty() {
             true => Ok(Vec::new()),
             false => commit_times::phase(Phase::Recording, || {
                 (segments.iter().zip(&places))
-                    .map(|((work, host), _)| work.prepare(self, *host))
+                    .map(|((work, host), _)| {
+                        let (prepared, took) = self.noting_forms(|| work.prepare(self, *host));
+                        forms.push(took);
+                        prepared
+                    })
                     .collect()
             }),
         };
@@ -3888,6 +3940,7 @@ impl CommandBuffer {
                 state.fail(failure);
             }
             state.prepare(prepared);
+            state.trail_forms(forms);
             state.plan_checks();
             // A refused commit's commands run nothing: none of what follows is made for them.
             if run == CommitRun::Refused {

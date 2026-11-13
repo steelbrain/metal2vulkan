@@ -91,7 +91,7 @@ impl CommandBuffer {
                 twin_writes: Vec::new(),
                 overwrites: Vec::new(),
                 trail: (device.shared().encoder_trail)
-                    .then(|| std::sync::Arc::from("the runtime's storage form switch")),
+                    .then(|| crate::encoder_trail::Named::new("the runtime's storage form switch")),
             },
         );
         state.retained.extend(recorded.retained.into_entry());

@@ -419,6 +419,32 @@ impl Upload {
             .map(|address| address + self.offset)
     }
 
+    /// Up to `words` little-endian `u32`s of the region from its byte `at` (a multiple of 4), cut
+    /// to the region, as they stand now, while commands may still write them: the encoder trail's
+    /// view of a pending execution's scratch (`encoder_trail.rs`, **GPU forms**). Each word is
+    /// read once, volatile, from the chunk's mapping, which is host-coherent and lives while the
+    /// region does; a word a command writes meanwhile reads either value. It writes nothing,
+    /// takes no lock and waits for nothing.
+    pub(super) fn glimpse(&self, at: u64, words: usize) -> Vec<u32> {
+        let Some(mapped) = self.buffer.mapped_contents() else {
+            unreachable!("upload chunks are Shared buffers")
+        };
+        let fit = (self.len.saturating_sub(at) / 4).min(words as u64) as usize;
+        let start = (self.offset + at) as usize;
+        (0..fit)
+            .map(|word| {
+                // SAFETY: word `word` lies inside the region (`fit`), inside the chunk's mapping,
+                // which the region's buffer keeps mapped; the region starts 16-aligned and `at`
+                // is a multiple of 4, so the word is aligned. A volatile read of memory the GPU
+                // may write, which the host only reads.
+                let bytes = unsafe {
+                    std::ptr::read_volatile(mapped.as_ptr().add(start + 4 * word).cast::<[u8; 4]>())
+                };
+                u32::from_le_bytes(bytes)
+            })
+            .collect()
+    }
+
     /// The region's first `N` bytes as the device left them. The caller has waited for every
     /// command that writes them, and made their writes visible to the host.
     pub(super) fn read<const N: usize>(&self) -> [u8; N] {

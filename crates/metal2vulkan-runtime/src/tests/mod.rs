@@ -690,6 +690,8 @@ mod tiled_texture_step;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod told_once;
 mod tracker;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod trail_gpu_forms;
 mod trails;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod twin_flights;

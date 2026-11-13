@@ -317,7 +317,7 @@ pub(crate) struct Submitted {
     pub(crate) held: bool,
     /// What its encoders were, as the encoder trail names them, where the device's trail is on
     /// (`encoder_trail.rs`).
-    pub(crate) trail: Option<Arc<str>>,
+    pub(crate) trail: Option<crate::encoder_trail::Named>,
 }
 
 /// A batch of another `VkQueue` that a batch waited for and finishes after
@@ -631,7 +631,7 @@ fn turns(watch: &Watch, lists: &mut FenceLists) -> bool {
                 // The last batch of each queue taken, as the encoder trail names it.
                 for (queue, batch) in &finished {
                     if let Some(trail) = &batch.trail {
-                        pending.trails[*queue] = Some((Arc::clone(trail), Instant::now()));
+                        pending.trails[*queue] = Some((Arc::clone(trail.text()), Instant::now()));
                     }
                 }
                 // The waiters of the queues whose batches it took, where they sleep and their
@@ -1333,9 +1333,10 @@ fn stalled(
 /// The encoder trail's lines (`encoder_trail.rs`), where `queue`'s waiter's wait for `front` read
 /// its timeline at `value`, short of it, and no queue's work advanced for
 /// [`AFTER`](crate::encoder_trail::AFTER) since: one for each `VkQueue` whose oldest batch is
-/// pending, once a stall. Formatted under the lock, said after it.
+/// pending, once a stall. What they name is taken under the lock; formatted after it, where the
+/// GPU forms' scratch is read (`encoder_trail.rs`, **GPU forms**), and said.
 fn trail(watch: &Watch, device: &Device, queue: usize, front: Front, value: u64) {
-    let lines = {
+    let (stalled, named) = {
         let mut pending = lock(&watch.pending);
         if value > pending.reached[queue] || value >= front.value {
             return;
@@ -1349,21 +1350,22 @@ fn trail(watch: &Watch, device: &Device, queue: usize, front: Front, value: u64)
             trails,
             ..
         } = &*pending;
-        let mut lines = Vec::new();
-        let pool = device.shared().pipeline_pool.queued();
+        let mut named = Vec::new();
         for (queue, batches) in queues.iter().enumerate() {
             let Some(oldest) = batches.front().filter(|batch| batch.value > reached[queue]) else {
                 continue;
             };
-            let last = (trails[queue].as_ref()).map(|(trail, at)| (&**trail, at.elapsed()));
-            let front = oldest.trail.as_deref();
-            lines.push(crate::encoder_trail::line(
-                queue, stalled, front, last, pool,
-            ));
+            let last =
+                (trails[queue].as_ref()).map(|(trail, at)| (Arc::clone(trail), at.elapsed()));
+            named.push((queue, oldest.trail.clone(), last));
         }
-        lines
+        (stalled, named)
     };
-    for line in lines {
+    let pool = device.shared().pipeline_pool.queued();
+    for (queue, front, last) in named {
+        let front = front.as_ref().map(crate::encoder_trail::Named::pending);
+        let last = (last.as_ref()).map(|(trail, ago)| (&**trail, *ago));
+        let line = crate::encoder_trail::line(queue, stalled, front.as_deref(), last, pool);
         device.inform(crate::encoder_trail::ID_NAME, line);
     }
 }

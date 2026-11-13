@@ -482,15 +482,17 @@ impl RenderExecution {
     }
 
     /// Record the execution's GPU form `form` (the module docs) through `core`, a segment of
-    /// `command_buffer` with `residency` (the command buffer's): the preprocess and the barrier
-    /// after it, then the commands' draws into a secondary begun against the execution's
-    /// instance, over the pass's `storage`, in the call's layout as `rendered` backs it. Returns
-    /// the encoder that drew them, its runs to end ([`finish`](Self::finish)).
+    /// `command_buffer` with `residency` (the command buffer's), at `commit` or by its host step
+    /// (`step`): the preprocess and the barrier after it, then the commands' draws into a
+    /// secondary begun against the execution's instance, over the pass's `storage`, in the call's
+    /// layout as `rendered` backs it. The encoder trail notes the form and its scratch
+    /// (`encoder_trail.rs`, **GPU forms**). Returns the encoder that drew them, its runs to end
+    /// ([`finish`](Self::finish)).
     pub(super) fn record_gpu(
         &self,
         mut core: EncoderCore,
         (command_buffer, residency): (&CommandBuffer, &Residency),
-        form: &GpuForm,
+        (form, step): (&GpuForm, bool),
         (storage, rendered): (PassStorage, &mut Rendered),
     ) -> Result<RenderLowering, Error> {
         let snapshot = &self.snapshot;
@@ -515,10 +517,24 @@ impl RenderExecution {
                 .ok_or_else(no_address)?;
             let head = scratch_head(pre, sink)?;
             let scratch = cb.uploads.upload(&device, &head, pre.layout.bytes)?;
-            let status = cb.status_address(&device)?.ok_or_else(no_address)?;
-            (scratch, status)
+            (scratch, cb.status_words(&device)?)
         };
         let address = scratch.device_address().ok_or_else(no_address)?;
+        if device.shared().encoder_trail {
+            let (first, range_from) = match &self.range {
+                ExecutionRange::Fixed(range) => (range.start, None),
+                ExecutionRange::Indirect { offset, .. } => (0, Some(*offset)),
+            };
+            let indexed = draw_replay_indexed(form.decided);
+            let mut notes = crate::encoder_trail::Notes::default();
+            notes.gpu_form(crate::encoder_trail::GpuForm::new(
+                (!step, indexed, form.primitive_type),
+                (first, range_from),
+                (scratch.clone(), pre.layout, status.clone()),
+            ));
+            command_buffer.trail_step(notes);
+        }
+        let status = status.device_address().ok_or_else(no_address)?;
         let mut push = pre.push_constants.clone();
         for hole in &pre.push_holes {
             let (offset, value) = match *hole {

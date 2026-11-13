@@ -23,7 +23,19 @@
 //!   fanned out or region by region), the executions it recorded in their GPU form, and the kept
 //!   chunks it ran again (`render/executions/kept.rs`), whose draws it did not read. Its batch
 //!   names them after the encoder's own; the line names the device's pipeline pool's makings
-//!   waiting and under way. A submission
+//!   waiting and under way.
+//! - **GPU forms** ([`GpuForm`]). An execution recorded in its GPU form, at `commit` or by a host
+//!   step (`render/executions/gpu.rs`), whose records the host never reads, is named by its
+//!   shape: merged into one draw or a draw per command, indexed or not, its primitive type, the
+//!   commands its preprocess runs over and where its range comes from. Where its batch is the
+//!   oldest pending one, the line reads the scratch the GPU writes, as it stands while the work
+//!   is pending: the range the GPU copied, the merged draw's two `VkDrawIndirectCommand`s, the
+//!   commands with arguments and their vertices or indices times instances, the most of them,
+//!   and the command buffer's execution status words. It reads host-visible, host-coherent
+//!   memory the pending command buffer holds (`upload.rs`), already mapped, and only reads it: a
+//!   word the GPU writes meanwhile may read either value. It takes no lock and waits for
+//!   nothing. An encoder encoded again (`command_buffer/reencode.rs`) names none of its own.
+//! - A submission
 //!   the step makes and waits for itself (a rasterization-rate map's fan-out probe,
 //!   `render/fan_out.rs`, or a predicated loop's check run again, `command_buffer/rerun.rs`)
 //!   signals no timeline: once it ran for [`AFTER`], one line names it ([`waited_line`]).
@@ -37,7 +49,10 @@
 
 use crate::pipeline::{ComputePipelineState, RenderPipelineState};
 use crate::render_pass::PassLayout;
+use crate::upload::Upload;
 use crate::used_resources::EncoderKind;
+use metal2vulkan::bind::DrawReplayLayout;
+use metal2vulkan::metal::PrimitiveType;
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -49,6 +64,9 @@ pub(crate) const AFTER: Duration = Duration::from_secs(2);
 
 /// The most pipeline states a line names of one encoder.
 const KEPT: usize = 16;
+
+/// The most commands of a GPU form's arguments the line reads.
+const READ_COMMANDS: u32 = 1 << 20;
 
 /// The id name of the trail's lines.
 pub(crate) const ID_NAME: &str = "metal2vulkan-encoder-trail";
@@ -70,6 +88,8 @@ pub(crate) struct Notes {
     pass: Option<String>,
     /// What a host step drew of its commands.
     drawn: Drawn,
+    /// The executions recorded in their GPU form.
+    forms: Vec<Arc<GpuForm>>,
 }
 
 /// What a host step drew of an execution's commands (the module docs, **Host steps**).
@@ -249,9 +269,10 @@ impl Notes {
         self.drawn.routes[route as usize] += 1;
     }
 
-    /// A host step recorded an execution in its GPU form.
-    pub(crate) fn gpu_alone(&mut self) {
+    /// An execution was recorded in its GPU form `form`.
+    pub(crate) fn gpu_form(&mut self, form: GpuForm) {
         self.drawn.gpu_alone += 1;
+        self.forms.push(Arc::new(form));
     }
 
     /// A host step ran a kept chunk of `commands` again.
@@ -294,16 +315,237 @@ impl Notes {
     }
 }
 
+/// What a batch's encoders (or parts of them) were, as the trail names them: the text, and the
+/// executions of theirs recorded in their GPU form (the module docs, **GPU forms**), whose
+/// scratch the line reads where the batch is the oldest pending one.
+#[derive(Clone)]
+pub(crate) struct Named {
+    text: Arc<str>,
+    forms: Vec<Arc<GpuForm>>,
+}
+
+impl Named {
+    /// An encoder (or a part of one) named `text`, of no GPU form yet.
+    pub(crate) fn new(text: impl Into<Arc<str>>) -> Named {
+        Named {
+            text: text.into(),
+            forms: Vec::new(),
+        }
+    }
+
+    /// Its text.
+    pub(crate) fn text(&self) -> &Arc<str> {
+        &self.text
+    }
+
+    /// The same, `more` after its text.
+    pub(crate) fn after(&self, more: &str) -> Named {
+        Named {
+            text: Arc::from(format!("{}{more}", self.text)),
+            forms: self.forms.clone(),
+        }
+    }
+
+    /// Its executions took the GPU forms `forms` too.
+    pub(crate) fn join_forms(&mut self, forms: Vec<Arc<GpuForm>>) {
+        self.forms.extend(forms);
+    }
+
+    /// `parts`, each noted one of a batch's in order, as one: their texts joined by `; `, and
+    /// their forms; `None` where none was noted.
+    pub(crate) fn joined<'a>(mut parts: impl Iterator<Item = &'a Named>) -> Option<Named> {
+        let first = parts.next()?;
+        let Some(second) = parts.next() else {
+            return Some(first.clone());
+        };
+        let mut text = format!("{}; {}", first.text, second.text);
+        let mut forms = first.forms.clone();
+        forms.extend(second.forms.iter().cloned());
+        for more in parts {
+            text.push_str("; ");
+            text.push_str(&more.text);
+            forms.extend(more.forms.iter().cloned());
+        }
+        Some(Named {
+            text: Arc::from(text),
+            forms,
+        })
+    }
+
+    /// Its text, then each GPU form's shape and its scratch as it stands now, its work pending
+    /// (the module docs, **GPU forms**).
+    pub(crate) fn pending(&self) -> String {
+        let mut text = self.text.to_string();
+        for form in &self.forms {
+            let _ = write!(text, "; {}", form.described());
+        }
+        text
+    }
+
+    /// The text of each of its GPU forms ([`GpuForm::described`]): a device test's view.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn forms(&self) -> Vec<String> {
+        self.forms.iter().map(|form| form.described()).collect()
+    }
+}
+
+/// An execution recorded in its GPU form (`render/executions/gpu.rs`), as the trail names it (the
+/// module docs, **GPU forms**): its shape, and where its scratch lies.
+pub(crate) struct GpuForm {
+    /// Recorded at `commit`, else by a host step.
+    at_commit: bool,
+    /// Indexed draws among its commands, merged into one draw alone.
+    indexed: bool,
+    primitive_type: PrimitiveType,
+    /// The first command its preprocess runs over (the range given; 0 for one read from a
+    /// buffer, whose every command it runs over).
+    first: u32,
+    /// The offset in its buffer of the range read from one; `None` for a range given.
+    range_from: Option<u64>,
+    /// Its scratch (`bind::DrawReplayLayout`), and the command buffer's execution status words.
+    scratch: Upload,
+    layout: DrawReplayLayout,
+    status: Upload,
+}
+
+impl GpuForm {
+    /// The GPU form of an execution of commands from `first`, drawing `primitive_type`, `indexed`
+    /// or not, its range read at `range_from` of a buffer or given, recorded `at_commit` or by a
+    /// host step, into `scratch` of `layout`, with the command buffer's status words `status`.
+    pub(crate) fn new(
+        (at_commit, indexed, primitive_type): (bool, bool, PrimitiveType),
+        (first, range_from): (u32, Option<u64>),
+        (scratch, layout, status): (Upload, DrawReplayLayout, Upload),
+    ) -> GpuForm {
+        GpuForm {
+            at_commit,
+            indexed,
+            primitive_type,
+            first,
+            range_from,
+            scratch,
+            layout,
+            status,
+        }
+    }
+
+    /// Its shape, then its scratch's words as they stand now: the range the GPU copied, the
+    /// merged draw's two `VkDrawIndirectCommand`s, the commands whose arguments draw and their
+    /// vertices or indices times instances, the most of them (with its index entry's whole indices
+    /// and index size where indexed), and the command buffer's status words. Each word read once,
+    /// as it stood (`Upload::glimpse`).
+    pub(crate) fn described(&self) -> String {
+        let layout = &self.layout;
+        let when = match self.at_commit {
+            true => "at commit",
+            false => "by its host step",
+        };
+        let merged = match layout.merged {
+            Some(_) => "merged into one draw",
+            None => "a draw per command",
+        };
+        let indexed = match self.indexed {
+            true => ", indexed",
+            false => "",
+        };
+        let range = match self.range_from {
+            Some(offset) => format!("its range read from a buffer at offset {offset}"),
+            None => "its range given".to_owned(),
+        };
+        let mut text = format!(
+            "an execution's GPU form, recorded {when}: {merged}{indexed}, of primitive type {:?},              over {} command(s) from {}, {range}; read while the work is pending:",
+            self.primitive_type, layout.commands, self.first
+        );
+        if self.range_from.is_some() {
+            let [location, length] = word_pair(&self.scratch.glimpse(layout.range_offset(), 2));
+            let _ = write!(text, " the range copied {location}+{length},");
+        }
+        if let Some(merged) = layout.merged {
+            let draws = self.scratch.glimpse(merged.draw_offset(0), 8);
+            let draw = |words: &[u32]| match words {
+                [vertices, instances, first, base] => {
+                    format!(
+                        "{vertices} vertices x {instances} from vertex {first}, instance {base}"
+                    )
+                }
+                _ => "unread".to_owned(),
+            };
+            let _ = write!(
+                text,
+                " the merged draws [{}; {}],",
+                draw(draws.get(..4).unwrap_or_default()),
+                draw(draws.get(4..).unwrap_or_default())
+            );
+        }
+        let read = layout.commands.min(READ_COMMANDS);
+        let words = (read as usize) * (layout.types as usize) * 4;
+        let arguments = self.scratch.glimpse(layout.argument_offset(0, 0), words);
+        let (mut drawing, mut work) = (0u64, 0u64);
+        let mut most: Option<(u64, u32, [u32; 4])> = None;
+        for (at, draw) in arguments.chunks_exact(4).enumerate() {
+            let [vertices, instances, first, base] = [draw[0], draw[1], draw[2], draw[3]];
+            let draws = u64::from(vertices) * u64::from(instances);
+            if draws == 0 {
+                continue;
+            }
+            drawing += 1;
+            work = work.saturating_add(draws);
+            if most.is_none_or(|(most, ..)| most < draws) {
+                let command = at as u32 / layout.types.max(1);
+                most = Some((draws, command, [vertices, instances, first, base]));
+            }
+        }
+        let past = match layout.commands > read {
+            true => format!(" (of the first {read})"),
+            false => String::new(),
+        };
+        let _ = write!(
+            text,
+            " {drawing} argument(s) that draw{past}, {work} vertices or indices times instances"
+        );
+        if let Some((_, command, [vertices, instances, first, base])) = most {
+            let _ = write!(
+                text,
+                ", the most command {command}'s: {vertices} x {instances} from {first}, instance                  {base}"
+            );
+            if let Some(merged) = layout.merged.filter(|_| self.indexed) {
+                let entry = merged.indices_offset + u64::from(command) * 16;
+                let entry = self.scratch.glimpse(entry, 4);
+                if let [_, _, whole, size] = entry[..] {
+                    let _ = write!(text, " ({whole} whole indices of {size} byte(s))");
+                }
+            }
+        }
+        let status = self.status.glimpse(0, 3);
+        if let [bits, misses, faults] = status[..] {
+            let _ = write!(
+                text,
+                "; status bits {bits:#x}, resident misses {misses}, replay faults {faults:#x}"
+            );
+        }
+        text
+    }
+}
+
+/// The two words of `words`, zero where they were not read.
+fn word_pair(words: &[u32]) -> [u32; 2] {
+    match words {
+        [a, b, ..] => [*a, *b],
+        _ => [0, 0],
+    }
+}
+
 /// What a host step noted as it recorded an ended encoder's segment (the module docs, **Host
-/// steps**): the encoder as it ended, and the states its commands named.
+/// steps**), or what `commit` noted as it recorded one (its GPU forms alone): the encoder as it
+/// ended, and the states its commands named.
 pub(crate) struct Step {
-    encoder: Option<Arc<str>>,
+    encoder: Option<Named>,
     states: Notes,
 }
 
 impl Step {
     /// A step of the encoder `encoder` names, as it ended.
-    pub(crate) fn new(encoder: Option<Arc<str>>) -> Step {
+    pub(crate) fn new(encoder: Option<Named>) -> Step {
         Step {
             encoder,
             states: Notes::default(),
@@ -317,6 +559,12 @@ impl Step {
         }
         self.states.more += notes.more;
         self.states.drawn.join(notes.drawn);
+        self.states.forms.extend(notes.forms);
+    }
+
+    /// The GPU forms its recording took: what `commit` keeps of its notes.
+    pub(crate) fn into_forms(self) -> Vec<Arc<GpuForm>> {
+        self.states.forms
     }
 
     /// Whether its commands named any state, or it drew any.
@@ -326,10 +574,8 @@ impl Step {
 
     /// The encoder, and the states its commands named where they named any, as a line names it.
     pub(crate) fn described(&self) -> String {
-        let encoder = self
-            .encoder
-            .as_deref()
-            .unwrap_or("an encoder noted nothing of");
+        let encoder =
+            (self.encoder.as_ref()).map_or("an encoder noted nothing of", |named| &*named.text);
         if !self.named() {
             return encoder.to_owned();
         }
@@ -346,9 +592,19 @@ impl Step {
     }
 
     /// The encoder's name after the step: [`described`](Self::described) where its commands
-    /// named a state, else `None` (it stays as it ended).
-    pub(crate) fn stepped(&self) -> Option<Arc<str>> {
-        self.named().then(|| Arc::from(self.described()))
+    /// named a state, else `None` (it stays as it ended), with the GPU forms it ended with and
+    /// those the step's recording took.
+    pub(crate) fn stepped(&self) -> Option<Named> {
+        self.named().then(|| {
+            let mut forms = (self.encoder.as_ref())
+                .map(|named| named.forms.clone())
+                .unwrap_or_default();
+            forms.extend(self.states.forms.iter().cloned());
+            Named {
+                text: Arc::from(self.described()),
+                forms,
+            }
+        })
     }
 }
 
@@ -490,7 +746,7 @@ mod tests {
         );
         assert_eq!(text.matches(&a).count(), 1, "{text}");
         // A host step's commands' states follow the encoder's, each once.
-        let mut step = Step::new(Some(Arc::from("Render encoder 3 of command buffer 7")));
+        let mut step = Step::new(Some(Named::new("Render encoder 3 of command buffer 7")));
         assert!(step.stepped().is_none());
         let mut named = Notes::default();
         named.state(Some("b"), &["v"]);
@@ -501,7 +757,7 @@ mod tests {
         let b = label_hash(Some("b"), &["v"]);
         let stepped = step.stepped().expect("a state named");
         assert_eq!(
-            &*stepped,
+            &**stepped.text(),
             format!("Render encoder 3 of command buffer 7, its host step's commands' states [{b}]")
         );
         // What the step drew follows: the ranges it read, its draws and their work, the draw of
@@ -515,12 +771,12 @@ mod tests {
         drawn.routed(Route::Plain);
         drawn.routed(Route::FannedOut);
         drawn.routed(Route::FannedOut);
-        drawn.gpu_alone();
+        drawn.drawn.gpu_alone += 1;
         step.noted(drawn);
         let stepped = step.stepped().expect("a state named");
         let work = 72 + 6 * u64::from(u32::MAX) + 300;
         assert_eq!(
-            &*stepped,
+            &**stepped.text(),
             format!(
                 "Render encoder 3 of command buffer 7, its host step's commands' states [{b}]; \
                  its host step read ranges [4+9 ran 4..10], drew 3 draw(s) of {work} vertices \
@@ -537,9 +793,7 @@ mod tests {
         drawn.drew(true, 3, 3, 1);
         unnamed.noted(drawn);
         let stepped = unnamed.stepped().expect("a draw noted");
-        assert!(
-            stepped.contains("drew 1 draw(s) of 3 vertices"),
-            "{stepped}"
-        );
+        let text = stepped.pending();
+        assert!(text.contains("drew 1 draw(s) of 3 vertices"), "{text}");
     }
 }

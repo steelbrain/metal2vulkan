@@ -2146,18 +2146,8 @@ fn finishes_after(
 
 /// What a batch's encoders (or parts of them) `recorded` were, as the encoder trail names them
 /// (`encoder_trail.rs`): each noted one, in order; `None` where none was noted.
-fn batch_trail(recorded: &[Recorded]) -> Option<Arc<str>> {
-    let mut noted = recorded.iter().filter_map(|part| part.trail.as_ref());
-    let first = noted.next()?;
-    let Some(second) = noted.next() else {
-        return Some(Arc::clone(first));
-    };
-    let mut text = format!("{first}; {second}");
-    for more in noted {
-        text.push_str("; ");
-        text.push_str(more);
-    }
-    Some(Arc::from(text))
+fn batch_trail(recorded: &[Recorded]) -> Option<crate::encoder_trail::Named> {
+    crate::encoder_trail::Named::joined(recorded.iter().filter_map(|part| part.trail.as_ref()))
 }
 
 /// The images whose first use among `parts` (a batch's, in order) writes every texel before any

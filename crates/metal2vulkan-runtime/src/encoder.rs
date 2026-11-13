@@ -167,7 +167,7 @@ pub(super) struct Recorded {
     pub(super) overwrites: Vec<Overwrite>,
     /// What the encoder was, as the encoder trail names it, where the device's trail is on
     /// (`encoder_trail.rs`).
-    pub(super) trail: Option<Arc<str>>,
+    pub(super) trail: Option<crate::encoder_trail::Named>,
 }
 
 /// A texture whose image an encoder writes whole, every texel of every aspect, before any of its
@@ -3072,7 +3072,9 @@ impl EncoderCore {
                     sparse: Vec::new(),
                     twin_writes: Vec::new(),
                     overwrites: Vec::new(),
-                    trail: (trail.as_ref()).map(|trail| Arc::from(format!("{trail}, left out"))),
+                    trail: (trail.as_ref()).map(|trail| {
+                        crate::encoder_trail::Named::new(format!("{trail}, left out"))
+                    }),
                 },
             );
         }
@@ -3106,8 +3108,11 @@ impl EncoderCore {
                     twin_writes,
                     overwrites: overwrites.take().unwrap_or_default(),
                     trail: (trail.as_ref()).map(|trail| match count {
-                        1 => Arc::from(trail.as_str()),
-                        _ => Arc::from(format!("{trail}, part {} of {count}", at + 1)),
+                        1 => crate::encoder_trail::Named::new(trail.as_str()),
+                        _ => crate::encoder_trail::Named::new(format!(
+                            "{trail}, part {} of {count}",
+                            at + 1
+                        )),
                     }),
                 },
             );
