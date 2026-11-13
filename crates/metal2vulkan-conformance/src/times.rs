@@ -1165,7 +1165,8 @@ pub fn render(metal: Option<&Measurement>, ours: &Measurement, show: bool) -> St
         "  A RATIO FAR IN OUR FAVOUR IS A SETUP DIFFERENCE UNTIL SOMEBODY SHOWS OTHERWISE. The \
          suite's recordings make 733\n  shader references over 152 distinct (shader, entry) \
          pairs, so 90% are to a shader another case already used,\n  and our leg has a shader \
-         cache while Metal's newLibraryWithData recompiles every call. Our counters sum to 518\n           shader modules and 1,040 pipelines for 122 ms of measured compile -- about 78 us each, \
+         cache while Metal's newLibraryWithData recompiles every call. Our counters sum to 518\n  \
+         shader modules and 1,040 pipelines for 122 ms of measured compile -- about 78 us each, \
          which is not a price at\n  which any compile to machine code happens, so something below \
          us is handing back work already done. Use\n  --cold-shaders for the only setting under \
          which the compile rows compare like with like.\n",

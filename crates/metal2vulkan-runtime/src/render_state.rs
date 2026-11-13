@@ -1436,7 +1436,9 @@ impl VertexClamp {
             device.degrade(Degradation::SampleDepthClamp, || {
                 (
                     described(state, v),
-                    "Metal adds the depth bias to each vertex's depth clamped to [0, 1], where                      the device adds it before its clamp of each sample, so a primitive past                      Metal's near or far plane stores otherwise"
+                    "Metal adds the depth bias to each vertex's depth clamped to [0, 1], where \
+                     the device adds it before its clamp of each sample, so a primitive past \
+                     Metal's near or far plane stores otherwise"
                         .to_owned(),
                 )
             });

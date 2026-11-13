@@ -950,14 +950,16 @@ mod tests {
         }
         assert!(
             unexplained.is_empty(),
-            "these points of the quality sweep derive one answer and no prediction of              `rate_map_space` says why, so each is a site that compares nothing new: {}",
+            "these points of the quality sweep derive one answer and no prediction of \
+             `rate_map_space` says why, so each is a site that compares nothing new: {}",
             unexplained.join("; ")
         );
         // And the sweep is not mostly collapse: most of its points read a bucket of their own.
         let distinct = by_answer.len();
         assert!(
             distinct * 2 > answers.len(),
-            "the quality sweep derives {distinct} distinct answers over {} points, so over half              of it is a second reading of a bucket already read",
+            "the quality sweep derives {distinct} distinct answers over {} points, so over half \
+             of it is a second reading of a bucket already read",
             answers.len()
         );
     }
@@ -993,7 +995,8 @@ mod tests {
             assert_eq!(
                 answers.len(),
                 1,
-                "the forms over {count} layer(s) compile {} different maps, so the walk is                  comparing shapes rather than construction paths",
+                "the forms over {count} layer(s) compile {} different maps, so the walk is \
+                 comparing shapes rather than construction paths",
                 answers.len()
             );
         }

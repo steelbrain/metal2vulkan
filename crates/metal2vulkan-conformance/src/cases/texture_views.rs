@@ -772,11 +772,13 @@ mod tests {
         }
         assert!(
             missing.is_empty(),
-            "these `MTLTextureSwizzle` values are compared against Metal nowhere in the suite:              {missing:?}"
+            "these `MTLTextureSwizzle` values are compared against Metal nowhere in the suite: \
+             {missing:?}"
         );
         assert!(
             not_alone.is_empty(),
-            "these values appear only with all four channels the same, so a side that broadcast              one channel over the other three would pass every row: {not_alone:?}"
+            "these values appear only with all four channels the same, so a side that broadcast \
+             one channel over the other three would pass every row: {not_alone:?}"
         );
         assert!(
             parents().asks_inherited_swizzles,

@@ -1047,8 +1047,14 @@ pub(crate) fn layers_dropped(dropped: &[CString], device: &str) -> Option<String
         .map(|name| name.to_string_lossy().into_owned())
         .collect();
     Some(format!(
-        "metal2vulkan: the device on {device} was made without the instance layer(s) {}, which          the loader answered VK_ERROR_LAYER_NOT_PRESENT for: a layer it does not list, or one it          lists and cannot load (a layer manifest naming its library by a bare filename, which the          loader looks for on the system library search path). The device is the same in every          other way and its answers are Metal's; what those layers would have reported is missing          [{LAYERS_DROPPED}]"
-    , names.join(", ")))
+        "metal2vulkan: the device on {device} was made without the instance layer(s) {}, which \
+         the loader answered VK_ERROR_LAYER_NOT_PRESENT for: a layer it does not list, or one it \
+         lists and cannot load (a layer manifest naming its library by a bare filename, which the \
+         loader looks for on the system library search path). The device is the same in every \
+         other way and its answers are Metal's; what those layers would have reported is missing \
+         [{LAYERS_DROPPED}]",
+        names.join(", ")
+    ))
 }
 
 /// The id name of the informational message a device made without the layers its caller asked for

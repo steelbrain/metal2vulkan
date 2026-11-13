@@ -222,7 +222,7 @@ fn a_mistyped_call_to_a_defined_function_is_invalid_input() {
   ret void
 ",
         "define internal void @h(ptr addrspace(1) %p, i32 %v) {
-  store i32 %v, ptr          addrspace(1) %p, align 4
+  store i32 %v, ptr addrspace(1) %p, align 4
   ret void
 }
 ",

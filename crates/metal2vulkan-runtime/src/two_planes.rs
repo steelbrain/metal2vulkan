@@ -613,7 +613,9 @@ impl BlitCommandEncoder {
             Some("a copy within one texture")
         } else if volume {
             Some(
-                "a 3D texture, out of which Metal's blit reads the first texel at every texel and                  into which it wrote nothing at some widths, not modelled: the texels copy at the                  first depth slice",
+                "a 3D texture, out of which Metal's blit reads the first texel at every texel and \
+                 into which it wrote nothing at some widths, not modelled: the texels copy at the \
+                 first depth slice",
             )
         } else {
             match (level(source)?, level(destination)?) {

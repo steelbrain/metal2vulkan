@@ -474,7 +474,8 @@ fn a_private_plane_copies_in_after_its_own_command_buffer_s_write_and_once_hande
     assert_eq!(
         (counts.at[COMMAND_BUFFER], written, counts.against),
         (texels, texels, 0),
-        "decided by its own command buffer's write, as the reading encoder recorded it: no copy          left to the submission"
+        "decided by its own command buffer's write, as the reading encoder recorded it: no copy \
+         left to the submission"
     );
     // SAFETY: the handle is only read; no work of the caller's uses it.
     let _ = unsafe { plane.buffer.vk_buffer() };

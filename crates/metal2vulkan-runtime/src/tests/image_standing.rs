@@ -347,7 +347,10 @@ fn a_copy_in_after_an_earlier_pass_of_its_command_buffer_wrote_the_texture_is_de
         let skipped = delta(|c| c.shadow_texels_skipped_by_standing);
         let command_buffer = delta(|c| c.shadow_texels_unskipped_command_buffer);
         eprintln!(
-            "IMAGE-STANDING-EARLIER {} round {round}: {against} copies in against a standing,              {texels} texels copied in, {skipped} skipped, {command_buffer} decided by the              command buffer; VkCommandBuffers begun {}, batch work {}, continuations {},              submitted {}, submit infos {}",
+            "IMAGE-STANDING-EARLIER {} round {round}: {against} copies in against a standing, \
+             {texels} texels copied in, {skipped} skipped, {command_buffer} decided by the \
+             command buffer; VkCommandBuffers begun {}, batch work {}, continuations {}, \
+             submitted {}, submit infos {}",
             device.name(),
             delta(|c| c.command_buffers_begun),
             delta(|c| c.command_buffers_begun_batch_work),
@@ -358,7 +361,8 @@ fn a_copy_in_after_an_earlier_pass_of_its_command_buffer_wrote_the_texture_is_de
         assert_eq!(
             (against, texels, skipped, command_buffer),
             (0, SIDE * SIDE, 0, SIDE * SIDE),
-            "round {round}: the copies in against a standing, the texels copied in, those              skipped, and those moved for the earlier pass's write"
+            "round {round}: the copies in against a standing, the texels copied in, those \
+             skipped, and those moved for the earlier pass's write"
         );
         let reds = tools.reds(&texture);
         let wrong = (0..SIDE * SIDE).find_map(|at| {

@@ -185,7 +185,8 @@ fn a_fresh_texture_s_pattern_notice_follows_the_commit_order() {
             *count = fresh_notices(&messages);
         }
         println!(
-            "PARALLEL-FRESH on {name}: {samples}x, {first:?} then {second:?}: {} notice(s)              serially, {} with the later encoded first; Metal reads the pattern {metal:?} time(s)",
+            "PARALLEL-FRESH on {name}: {samples}x, {first:?} then {second:?}: {} notice(s) \
+             serially, {} with the later encoded first; Metal reads the pattern {metal:?} time(s)",
             announced[0], announced[1]
         );
         // No pattern, so nothing to announce, on a device without Metal's compression.
@@ -199,7 +200,9 @@ fn a_fresh_texture_s_pattern_notice_follows_the_commit_order() {
     }
     assert!(
         wrong.is_empty(),
-        "on {name}, notices of a new texture's pattern read that differ from the reads in commit          order ((samples, loads, notices serially and with the later encoded first, the          answer)): {wrong:?}"
+        "on {name}, notices of a new texture's pattern read that differ from the reads in commit \
+         order ((samples, loads, notices serially and with the later encoded first, the \
+         answer)): {wrong:?}"
     );
     drop(queue);
     drop(device);

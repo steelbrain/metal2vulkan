@@ -4430,7 +4430,10 @@ impl Device {
                 (
                     stage_object(stage.stage).to_owned(),
                     format!(
-                        "a filtered sample of a texture its argument buffers name takes the                          device's filter, not Metal's exact filter of the format, and a texture                          the command makes resident or binds that they can name is two-plane                          YCbCr: {}",
+                        "a filtered sample of a texture its argument buffers name takes the \
+                         device's filter, not Metal's exact filter of the format, and a texture \
+                         the command makes resident or binds that they can name is two-plane \
+                         YCbCr: {}",
                         self.note_reason(note)
                     ),
                 )

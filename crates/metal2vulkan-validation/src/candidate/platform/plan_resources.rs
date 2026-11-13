@@ -388,7 +388,8 @@ impl<'a> PlanResources<'a> {
                 ),
                 WriteSource::TileAttachment { color_index, .. } => {
                     return Err(format!(
-                        "color attachment {color_index}'s sample planes, which the draw does not                          keep"
+                        "color attachment {color_index}'s sample planes, which the draw does not \
+                         keep"
                     )
                     .into())
                 }

@@ -84,7 +84,9 @@ fn a_run_of_render_creations_shares_every_piece_of_its_shaders() {
     let before = device.work_counts();
     assert!(
         before.stage_entries_specialized > 0,
-        "the first creation must specialize its stages into the device's entries at all, not {}          times: a creation that specializes nothing there, because it keeps entries of its own,          makes the run's zero a vacuous zero",
+        "the first creation must specialize its stages into the device's entries at all, not {} \
+         times: a creation that specializes nothing there, because it keeps entries of its own, \
+         makes the run's zero a vacuous zero",
         before.stage_entries_specialized
     );
     let mut kept = Vec::with_capacity(RUN as usize);
