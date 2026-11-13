@@ -12,8 +12,9 @@
 //! draw rebound, its shadow the kept draw's); the second target's texels there (its shadow
 //! another: it takes every step); through the scissor [`SCISSOR`] (its read's bounds another,
 //! where the device bounds a read at its own pixels: it takes every step); and twice again. The
-//! same frame runs again with a call that keeps no draw before each draw but the first
-//! (`setTessellationFactorScale:`, which no draw of the pass reads), so each takes every step.
+//! same frame runs again, into a queue of its own, with a call that keeps no draw before each draw
+//! but the first (`setTessellationFactorScale:`, which no draw of the pass reads), so each takes
+//! every step.
 //!
 //! Both frames answer as Metal does, the first target's texels from before the pass where its
 //! own were read and the second's over [`SECOND_RECT`], with the same copies (the shadow copies,
@@ -21,17 +22,25 @@
 //! and the first frame's draws are kept, none for its shadows, so its draws again and rebound are
 //! counted where the second frame has none.
 //!
+//! On a device that reads a color's texture in place (`render/snapshot.rs`'s in place: it enabled
+//! `attachmentFeedbackLoopLayout`, and its passes fetch no color through input attachments,
+//! `framebuffer_fetch::through_inputs`), the draws of the second target's texels, which write
+//! nothing of it, read it in place instead, with no copy (`WorkCounts::reading_draws_in_place`),
+//! and keep nothing (`WorkCounts::draws_unkept_shadowed`): the draw after them finds none kept.
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_rect` and
 //! `tob_read` of the owned fixture `validation/fixtures/public/engine/tob_renders.ll`.
 
 use super::blit_holds::{device, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
+use crate::framebuffer_fetch::through_inputs;
 use crate::{
     BlitOption, ClearColor, CommandQueue, Device, LoadAction, Origin, PipelineOptions,
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, Size, StoreAction,
     Texture, TextureDescriptor, WorkCounts,
 };
+use metal2vulkan::device::VkFeature;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 
@@ -186,13 +195,15 @@ fn frame(
 #[derive(Debug, PartialEq, Eq)]
 struct Copies {
     /// `WorkCounts::shadow_copies`, `shadow_texels_copied_in`, `attachment_reads_through_copies`,
-    /// `own_pixel_reads`, `attachment_read_splits` and `render_passes_begun_inline`.
+    /// `own_pixel_reads`, `attachment_read_splits`, `render_passes_begun_inline` and
+    /// `reading_draws_in_place`.
     shadow_copies: u64,
     copied_in: u64,
     through_copies: u64,
     own_pixel: u64,
     splits: u64,
     inline: u64,
+    in_place: u64,
 }
 
 /// What a frame's pass kept, by the same counts: `draws_unkept`, `draws_unkept_shadowed`,
@@ -215,6 +226,7 @@ fn moved((before, after): &(WorkCounts, WorkCounts)) -> (Copies, Keeps) {
         own_pixel: delta(|c| c.own_pixel_reads),
         splits: delta(|c| c.attachment_read_splits),
         inline: delta(|c| c.render_passes_begun_inline),
+        in_place: delta(|c| c.reading_draws_in_place),
     };
     let keeps = Keeps {
         unkept: delta(|c| c.draws_unkept),
@@ -224,6 +236,14 @@ fn moved((before, after): &(WorkCounts, WorkCounts)) -> (Copies, Keeps) {
         stopped: delta(|c| c.draws_rebind_stopped),
     };
     (copies, keeps)
+}
+
+/// Whether `device` reads a color's texture in place at a draw's own pixels where the draw writes
+/// nothing of that color (`render/snapshot.rs`'s in place): it enabled
+/// `attachmentFeedbackLoopLayout`, and its passes fetch no color through input attachments.
+fn reads_in_place(device: &Device) -> bool {
+    let enabled = (device.enabled().features).contains(&VkFeature::AttachmentFeedbackLoopLayout);
+    enabled && !through_inputs(device.compile_device().profile())
 }
 
 /// The first target's reds after the frame: its own from before the pass, but the second
@@ -245,10 +265,13 @@ fn first_reds() -> Vec<u8> {
 fn draws_that_read_their_pass_s_copies_are_kept_with_the_copies_of_every_step() {
     let scratch = Scratch::new("kept-shadowed-draws");
     let device = device(&scratch.0);
-    let queue = device.new_command_queue().unwrap();
     let state = state(&device);
-    let (kept_counts, kept_reds) = frame(&queue, &state, false);
-    let (apart_counts, apart_reds) = frame(&queue, &state, true);
+    // Each frame into a queue of its own: the first frame's last draw, kept, is carried along its
+    // queue into the next render encoder whose pass is its pass's like (`render/carried.rs`),
+    // which the second frame's first draw would rebind.
+    let queue = || device.new_command_queue().unwrap();
+    let (kept_counts, kept_reds) = frame(&queue(), &state, false);
+    let (apart_counts, apart_reds) = frame(&queue(), &state, true);
     let want = [first_reds(), vec![SECOND_RED; (SIDE * SIDE) as usize]];
     for (frame, reds) in [("kept", &kept_reds), ("apart", &apart_reds)] {
         for (target, (reds, want)) in reds.iter().zip(&want).enumerate() {
@@ -267,34 +290,61 @@ fn draws_that_read_their_pass_s_copies_are_kept_with_the_copies_of_every_step() 
         "KEPT-SHADOWED-DRAWS {}: kept {kept_copies:?} {kept:?}; apart {apart_copies:?} {apart:?}",
         device.name()
     );
-    // The same copies, every draw a read through a copy.
+    // The same copies: every draw a read through a copy, but the four of the second target's
+    // texels where the device reads them in place.
     assert_eq!(kept_copies, apart_copies, "the kept frame's copies");
-    assert_eq!(kept_copies.through_copies, 8, "the reads through copies");
-    // Every draw keeps itself, the pass's first, which begins its instance, too. A draw again, or
-    // rebound, the first after a draw kept and every second after it takes every step in builds
-    // with debug assertions (`render/draw_again.rs`): of the draws after the first draw kept, the
-    // first and third (the draw rebound after the vertex bytes); of those after the last, the
-    // first. The scissor's draw is stopped where the device bounds the reads at their own pixels,
-    // as its read's bounds change, else rebound.
+    let in_place = reads_in_place(&device);
+    let (through, read_in_place) = match in_place {
+        true => (4, 4),
+        false => (8, 0),
+    };
+    let reads = (kept_copies.through_copies, kept_copies.in_place);
+    let what = "the reads through copies and in place";
+    assert_eq!(
+        reads,
+        (through, read_in_place),
+        "{what} on {}",
+        device.name()
+    );
+    // Every draw through a copy keeps itself, the pass's first, which begins its instance, too;
+    // a draw in place keeps nothing, so each after it finds none kept. A draw again, or rebound,
+    // the first after a draw kept and every second after it takes every step in builds with debug
+    // assertions (`render/draw_again.rs`): of the draws after the first draw kept, the first and
+    // third (the draw rebound after the vertex bytes); of those after the last, the first. The
+    // draw of the second target's texels is stopped, its shadow another. Through copies, the
+    // scissor's draw is stopped where the device bounds the reads at their own pixels, as its
+    // read's bounds change, else rebound, and the last two are drawn again.
     let bounded = kept_copies.own_pixel > 0;
     let debug = cfg!(debug_assertions);
-    let want = Keeps {
-        unkept: 0,
-        unkept_shadowed: 0,
-        as_before: match debug {
-            true => 2,
-            false => 4,
+    let unkept = 4 * u64::from(in_place);
+    let want = match in_place {
+        true => Keeps {
+            unkept,
+            unkept_shadowed: unkept,
+            as_before: 2 - u64::from(debug),
+            rebound: u64::from(!debug),
+            stopped: 1,
         },
-        rebound: u64::from(!debug) * (1 + u64::from(!bounded)),
-        stopped: 1 + u64::from(bounded),
+        false => Keeps {
+            unkept,
+            unkept_shadowed: unkept,
+            as_before: 4 - 2 * u64::from(debug),
+            rebound: u64::from(!debug) * (1 + u64::from(!bounded)),
+            stopped: 1 + u64::from(bounded),
+        },
     };
     assert_eq!(kept, want, "the kept frame's keeps on {}", device.name());
     let apart_want = Keeps {
-        unkept: 0,
-        unkept_shadowed: 0,
+        unkept,
+        unkept_shadowed: unkept,
         as_before: 0,
         rebound: 0,
         stopped: 0,
     };
-    assert_eq!(apart, apart_want, "the apart frame's keeps");
+    assert_eq!(
+        apart,
+        apart_want,
+        "the apart frame's keeps on {}",
+        device.name()
+    );
 }
