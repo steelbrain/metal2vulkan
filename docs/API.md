@@ -2228,7 +2228,9 @@ bound.
   Vulkan dispatch: a group count is past the device's `maxComputeWorkGroupCount`, or its grid is not
   a whole number of threadgroups and the kernel observes its threadgroup partition (a kernel that
   does not runs any such grid as one dispatch of its own threadgroup size, every invocation taking
-  the grid thread it counts to). Cost: one Vulkan dispatch per region (the interior and each partial
+  the grid thread it counts to; one that observes it only through its simdgroups does so for a
+  one-row grid in threadgroups of one row, its workgroups and simdgroups Metal's, where its module
+  emulates no simdgroup and holds no workgroup barrier). Cost: one Vulkan dispatch per region (the interior and each partial
   edge, per chunk of group counts), each on its own specialized pipeline, a barrier between each
   two.
 - `metal2vulkan-degrade-emulated-simdgroups` (performance). `EmulatedSimdgroups`: A dispatch whose
