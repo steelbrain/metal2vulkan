@@ -1603,6 +1603,73 @@ fn public_fixtures_with_loops_round_trip_instrumented() {
     );
 }
 
+/// The status atomics take the form of the module's AIR version: a module that states AIR 2.9
+/// (Apple's compiler for macOS 27) gets the `mem_flags` `i32` between the scope and the volatile
+/// flag, which `metal-opt` requires of it (it refused the AIR 2.8 load in every `tns_mm_v2` case);
+/// one that states AIR 2.8, or no version, keeps the AIR 2.8 form. Every call passes as many
+/// operands as its declaration takes.
+#[test]
+fn the_status_atomics_take_the_form_of_the_modules_air_version() {
+    if !llvm_as("the_status_atomics_take_the_form_of_the_modules_air_version") {
+        return;
+    }
+    const LOOP: &str = "entry:\n  br label %l\nl:\n  %i = phi i32 [ 0, %entry ], [ %i1, %l ]\n  \
+                        %i1 = add i32 %i, 1\n  %c = icmp ult i32 %i1, %n\n  \
+                        br i1 %c, label %l, label %d\nd:\n  ret void";
+    let version =
+        |minor: u32| format!("!air.version = !{{!9}}\n!9 = !{{i32 2, i32 {minor}, i32 0}}");
+    for (stated, flagged) in [
+        (String::new(), false),
+        (version(8), false),
+        (version(9), true),
+    ] {
+        let out = run(kernel(LOOP, &stated)).unwrap();
+        assert!(out.report.loops > 0, "{stated}: no fuel loop");
+        let text = write(&out.module, &out.pointees, &out.enums).unwrap();
+        let flags = if flagged { "i32, " } else { "" };
+        for declaration in [
+            format!("@\"air.atomic.global.load.i32\"(i32 addrspace(1)*, i32, i32, {flags}i1)"),
+            format!(
+                "@\"air.atomic.global.add.u.i32\"(i32 addrspace(1)*, i32, i32, i32, {flags}i1)"
+            ),
+            format!("@\"air.atomic.global.or.u.i32\"(i32 addrspace(1)*, i32, i32, i32, {flags}i1)"),
+        ] {
+            assert!(
+                text.contains(&declaration),
+                "{stated}: {declaration}\n{text}"
+            );
+        }
+        for name in [
+            "air.atomic.global.load.i32",
+            "air.atomic.global.add.u.i32",
+            "air.atomic.global.or.u.i32",
+        ] {
+            let decl = func(&out.module, name);
+            let params = param_count(&out.module, name);
+            let calls = out
+                .module
+                .parts()
+                .funcs
+                .iter()
+                .filter_map(|(_, f)| f.body.as_ref())
+                .flat_map(|b| b.insts.iter().map(|(_, i)| &i.kind))
+                .filter_map(|k| match k {
+                    InstKind::Call(c) => match c.callee {
+                        Callee::Air { decl: d, .. } if d == decl => Some(c.args.len()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!calls.is_empty(), "{stated}: @{name} is never called");
+            assert!(
+                calls.iter().all(|&n| n == params),
+                "{stated}: @{name}: {calls:?} != {params}"
+            );
+        }
+    }
+}
+
 /// A module whose loops are all barrier loops calls neither the atomic load nor the add, so no
 /// use constrains their pointer parameter: the transform records it, and the declarations are
 /// written as Metal declares them (Q2: `metal-opt` refused `air.atomic.global.load.i32` with an

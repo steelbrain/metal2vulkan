@@ -40,15 +40,56 @@ pub(super) fn writes_state_kinds(enums: &mut SiteEnums) {
     enums.func.remove(EnumAttrs::NO_SYNC);
 }
 
-/// `air.atomic.*` operands the transform passes: relaxed order, device scope, volatile.
+/// `air.atomic.*` operands the transform passes: relaxed order, device scope, no `mem_flags` (the
+/// AIR 2.9 form's), volatile.
 const ORDER_RELAXED: u64 = 0;
 const SCOPE_DEVICE: u64 = 2;
+const MEM_FLAGS_NONE: u64 = 0;
+
+/// The first AIR version whose atomic intrinsics take a `mem_flags` `i32` between the scope and the
+/// volatile flag (`T (ptr, i32 order, i32 scope, i32 flags, i1 volatile)` for a load): what Apple's
+/// compiler writes for macOS 27, and what `metal-opt` requires of a module that states it.
+const FLAGGED_ATOMICS: (u64, u64) = (2, 9);
+
+/// The `(major, minor)` of the module's `!air.version`, when it states one.
+fn air_version(module: &Module) -> Option<(u64, u64)> {
+    let list = module
+        .named_md()
+        .iter()
+        .find(|l| module.symbols().get(l.name) == Some(b"air.version".as_slice()))?;
+    let [node] = &*list.ops else {
+        return None;
+    };
+    let Some(Md::Node { ops, .. }) = module.md(*node) else {
+        return None;
+    };
+    let int = |at: usize| match module.md((*ops.get(at)?)?)? {
+        Md::Value(c) => match module.consts().get(*c)?.value {
+            Const::Int(v) => Some(v),
+            _ => None,
+        },
+        _ => None,
+    };
+    Some((int(0)?, int(1)?))
+}
 
 /// Local iterations per pool chunk, minus one.
 const CHUNK_MASK: u64 = (1 << CHUNK_SHIFT) - 1;
 
 /// The status argument's name in the stage metadata (diagnostics only).
 const STATUS_ARG_NAME: &str = "m2v_oracle_status";
+
+impl Ids {
+    /// An atomic call's operands: `head` (the pointer, and an `rmw`'s value), then the order, the
+    /// scope, the `mem_flags` where the module's atomics take one, and the volatile flag.
+    fn atomic(&self, head: &[Value]) -> Vec<Value> {
+        let mut args = head.to_vec();
+        args.extend([self.order, self.scope]);
+        args.extend(self.flags);
+        args.push(self.volatile);
+        args
+    }
+}
 
 /// Interning over the module's tables.
 struct Tables<'m, 'b> {
@@ -94,6 +135,8 @@ struct Ids {
     exhausted: Value,
     order: Value,
     scope: Value,
+    /// The `mem_flags` immediate, when the module's atomics take one ([`FLAGGED_ATOMICS`]).
+    flags: Option<Value>,
     volatile: Value,
     word: [Value; 4],
     one_count: Value,
@@ -203,6 +246,7 @@ pub(super) fn emit(
     let entry_name = name(&module, plan.entry);
     let site = entry_site(&module, plan.entry)
         .ok_or(FuelUnsupported::EntryNotAStage { entry: entry_name })?;
+    let flagged = air_version(&module).is_some_and(|v| v >= FLAGGED_ATOMICS);
     let ModuleParts {
         mut symbols,
         mut types,
@@ -250,17 +294,30 @@ pub(super) fn emit(
     let order = int(&mut t, i32, ORDER_RELAXED)?;
     let scope = int(&mut t, i32, SCOPE_DEVICE)?;
     let volatile = int(&mut t, i1, 1)?;
+    let flags = if flagged {
+        Some(int(&mut t, i32, MEM_FLAGS_NONE)?)
+    } else {
+        None
+    };
     let null_status = Value::Const(t.constant(device_ptr, Const::Null)?);
 
-    // The runtime intrinsics: reuse a declaration of the same name, else declare one.
+    // The runtime intrinsics: reuse a declaration of the same name, else declare one, in the form
+    // of the module's AIR version.
+    let immediates = |head: &[TypeId]| -> Vec<TypeId> {
+        let mut params = head.to_vec();
+        params.extend([i32, i32]);
+        params.extend(flagged.then_some(i32));
+        params.push(i1);
+        params
+    };
     let load_ty = t.ty(Type::Function {
         ret: i32,
-        params: vec![device_ptr, i32, i32, i1].into(),
+        params: immediates(&[device_ptr]).into(),
         vararg: false,
     })?;
     let rmw_ty = t.ty(Type::Function {
         ret: i32,
-        params: vec![device_ptr, i32, i32, i32, i1].into(),
+        params: immediates(&[device_ptr, i32]).into(),
         vararg: false,
     })?;
     // The typed-pointer declaration is `i32 (i32 addrspace(1)*, ...)`, as Metal declares it.
@@ -289,7 +346,7 @@ pub(super) fn emit(
                     decl
                 }
                 None => {
-                    let params = if which.rmw { 5 } else { 4 };
+                    let params = if which.rmw { 5 } else { 4 } + usize::from(flagged);
                     funcs.push(Function {
                         name: sym,
                         ty: fn_ty,
@@ -309,11 +366,13 @@ pub(super) fn emit(
                     decl
                 }
             };
-            let args: Vec<Value> = if which.rmw {
-                vec![null_status, one, order, scope, volatile]
+            let mut args: Vec<Value> = if which.rmw {
+                vec![null_status, one, order, scope]
             } else {
-                vec![null_status, order, scope, volatile]
+                vec![null_status, order, scope]
             };
+            args.extend(flags);
+            args.push(volatile);
             let class = classify(which.name.as_bytes(), sym, fn_ty, t.types);
             let bound = match class {
                 Some(class @ DeclClass::Air(_)) => bind(class, &args, t.consts)
@@ -349,6 +408,7 @@ pub(super) fn emit(
         exhausted: int(&mut t, i32, u64::from(EXHAUSTED))?,
         order,
         scope,
+        flags,
         volatile,
         word,
         one_count: int(&mut t, i32, 1)?,
@@ -795,16 +855,7 @@ impl Rewrite<'_> {
         e.push(
             exit,
             ids.i32,
-            self.call(
-                &ids.or,
-                &[
-                    frame.status,
-                    ids.exhausted,
-                    ids.order,
-                    ids.scope,
-                    ids.volatile,
-                ],
-            ),
+            self.call(&ids.or, &ids.atomic(&[frame.status, ids.exhausted])),
         );
         e.push(exit, ids.void, self.store(ids.one, frame.forced));
         e.push(exit, ids.void, InstKind::Ret(self.ret_zero));
@@ -836,10 +887,7 @@ impl Rewrite<'_> {
         let bits = e.push(
             pool,
             ids.i32,
-            self.call(
-                &ids.load,
-                &[frame.status, ids.order, ids.scope, ids.volatile],
-            ),
+            self.call(&ids.load, &ids.atomic(&[frame.status])),
         );
         let bit = e.push(pool, ids.i32, self.bin(BinOp::And, bits, ids.exhausted));
         let done = e.push(pool, ids.i1, self.icmp(IntPredicate::Ne, bit, ids.zero));
@@ -853,21 +901,14 @@ impl Rewrite<'_> {
         let taken = e.push(
             draw,
             ids.i32,
-            self.call(
-                &ids.add,
-                &[consumed, ids.one, ids.order, ids.scope, ids.volatile],
-            ),
+            self.call(&ids.add, &ids.atomic(&[consumed, ids.one])),
         );
         let size = e.push(
             draw,
             ids.device_ptr,
             self.gep(ids.i32, frame.status, &[ids.word[2]]),
         );
-        let chunks = e.push(
-            draw,
-            ids.i32,
-            self.call(&ids.load, &[size, ids.order, ids.scope, ids.volatile]),
-        );
+        let chunks = e.push(draw, ids.i32, self.call(&ids.load, &ids.atomic(&[size])));
         let over = e.push(draw, ids.i1, self.icmp(IntPredicate::Uge, taken, chunks));
         e.push(draw, ids.void, self.cond_br(over, exit, join));
         (check, join)
