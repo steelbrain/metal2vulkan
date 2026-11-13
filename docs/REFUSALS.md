@@ -297,7 +297,7 @@ Columns:
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
 | `InlinedInstructions` | Instructions after inlining | every device (a deterministic cap) | `ours` | 3: `crates/metal2vulkan-air/src/canon/inline.rs (inline)`, `crates/metal2vulkan-air/src/canon/inline.rs (u32_of)` (+1) | `rare`: very large shaders after inlining |
-| `OutputBlocks` | Structurizer output blocks, `4(n+e)+1024` | every device (a deterministic cap) | `ours` | 4: `crates/metal2vulkan/src/structurize/irreducible.rs (round)`, `crates/metal2vulkan/src/structurize/mod.rs (structure_prepared)` (+2) | `rare`: very large control flow |
+| `OutputBlocks` | Structurizer output blocks, `4(n+e)+1024` | every device (a deterministic cap) | `ours` | 4: `crates/metal2vulkan/src/structurize/irreducible.rs (round)`, `crates/metal2vulkan/src/structurize/mod.rs (structure_loops)` (+2) | `rare`: very large control flow |
 | `IrreducibleDepth` | Irreducible nesting depth | every device (a deterministic cap) | `ours` | 4: `crates/metal2vulkan-air/src/graph/loops.rs (compute_in)`, `crates/metal2vulkan/src/structurize/structurizer_properties/mod.rs (check_within_depth)` (+1) | `none`: deeply nested irreducible loops |
 | `SpirvWords` | Emitted SPIR-V words | every device (a deterministic cap) | `ours` | 2: `crates/metal2vulkan/src/lower/estimate.rs (check)`, `crates/metal2vulkan/src/lower/estimate.rs (check_emitted)` | `rare`: very large output modules |
 | `WorkUnits` | Deterministic work units of one attempt | every device (a deterministic cap) | `ours` | 1: `crates/metal2vulkan-air/src/budget/mod.rs (tick)` | `rare`: very large shaders |
@@ -802,7 +802,7 @@ Each refusal's sites, with the function that builds it.
 - `bind::UniformViewAliased`: `crates/metal2vulkan/src/bind/instantiate.rs (check_uniform_aliasing)`
 - `bind::MissingDeviceAddress`: `crates/metal2vulkan/src/bind/plan/slots.rs (plan_buffer)`
 - `limit::InlinedInstructions`: `crates/metal2vulkan-air/src/canon/inline.rs (inline)`; `crates/metal2vulkan-air/src/canon/inline.rs (u32_of)`; `crates/metal2vulkan-air/src/canon/inline.rs (usize_of)`
-- `limit::OutputBlocks`: `crates/metal2vulkan/src/structurize/irreducible.rs (round)`; `crates/metal2vulkan/src/structurize/mod.rs (structure_prepared)`; `crates/metal2vulkan/src/structurize/structurizer_properties/mod.rs (output_cap_is_checked_before_allocating)`; `crates/metal2vulkan/src/structurize/structurizer_properties/trees.rs (the_output_cap_is_checked_before_emission)`
+- `limit::OutputBlocks`: `crates/metal2vulkan/src/structurize/irreducible.rs (round)`; `crates/metal2vulkan/src/structurize/mod.rs (structure_loops)`; `crates/metal2vulkan/src/structurize/structurizer_properties/mod.rs (output_cap_is_checked_before_allocating)`; `crates/metal2vulkan/src/structurize/structurizer_properties/trees.rs (the_output_cap_is_checked_before_emission)`
 - `limit::IrreducibleDepth`: `crates/metal2vulkan-air/src/graph/loops.rs (compute_in)`; `crates/metal2vulkan/src/structurize/structurizer_properties/mod.rs (check_within_depth)`; `crates/metal2vulkan/src/structurize/structurizer_properties/mod.rs (irreducible_nesting_beyond_the_cap_is_refused, 2 sites)`
 - `limit::SpirvWords`: `crates/metal2vulkan/src/lower/estimate.rs (check)`; `crates/metal2vulkan/src/lower/estimate.rs (check_emitted)`
 - `limit::WorkUnits`: `crates/metal2vulkan-air/src/budget/mod.rs (tick)`
