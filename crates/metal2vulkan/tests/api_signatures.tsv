@@ -1330,8 +1330,10 @@ enum	metal2vulkan-runtime::InPlaceRefusal	#[derive(Clone, Copy, Debug, PartialEq
 enum	metal2vulkan-runtime::InPlaceRowEnds	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum InPlaceRowEnds
 enum	metal2vulkan-runtime::IndirectCommand	#[derive(Clone, Debug)] #[non_exhaustive] pub enum IndirectCommand
 enum	metal2vulkan-runtime::IndirectCommandBufferProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum IndirectCommandBufferProblem
+enum	metal2vulkan-runtime::IndirectComputeSet	#[derive(Clone, Copy, Debug)] pub enum IndirectComputeSet<'a>
 enum	metal2vulkan-runtime::IndirectDispatch	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum IndirectDispatch
 enum	metal2vulkan-runtime::IndirectDraw	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum IndirectDraw
+enum	metal2vulkan-runtime::IndirectRenderSet	#[derive(Clone, Copy, Debug)] pub enum IndirectRenderSet<'a>
 enum	metal2vulkan-runtime::IndirectRule	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum IndirectRule
 enum	metal2vulkan-runtime::InstanceApiVersion	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum InstanceApiVersion
 enum	metal2vulkan-runtime::LayerSettingValue	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum LayerSettingValue
@@ -8748,8 +8750,10 @@ method	metal2vulkan-runtime::IndirectCommandBuffer::may_name_encoding_states	pub
 method	metal2vulkan-runtime::IndirectCommandBuffer::reset_with_range	pub fn reset_with_range(&self, range: Range<u64>) -> Result<(), Error>
 method	metal2vulkan-runtime::IndirectCommandBuffer::resource_index	pub fn resource_index(&self) -> u64
 method	metal2vulkan-runtime::IndirectCommandBuffer::resource_options	pub fn resource_options(&self) -> ResourceOptions
+method	metal2vulkan-runtime::IndirectCommandBuffer::set_compute_command	pub fn set_compute_command<'a>(&self, index: u64, sets: impl IntoIterator<Item = IndirectComputeSet<'a>>) -> Result<(), (usize, Error)>
 method	metal2vulkan-runtime::IndirectCommandBuffer::set_label	pub fn set_label(&self, label: &str)
 method	metal2vulkan-runtime::IndirectCommandBuffer::set_purgeable_state	pub fn set_purgeable_state(&self, state: PurgeableState) -> Result<PurgeableState, Error>
+method	metal2vulkan-runtime::IndirectCommandBuffer::set_render_command	pub fn set_render_command<'a>(&self, index: u64, sets: impl IntoIterator<Item = IndirectRenderSet<'a>>) -> Result<(), (usize, Error)>
 method	metal2vulkan-runtime::IndirectCommandBuffer::size	pub fn size(&self) -> u64
 method	metal2vulkan-runtime::IndirectCommandBuffer::storage_mode	pub fn storage_mode(&self) -> StorageMode
 method	metal2vulkan-runtime::IndirectCommandBuffer::unique_identifier	pub fn unique_identifier(&self) -> u64
@@ -8769,6 +8773,7 @@ method	metal2vulkan-runtime::IndirectComputeCommand::pipeline_unique_identifier	
 method	metal2vulkan-runtime::IndirectComputeCommand::reset	pub fn reset(&self) -> Result<(), Error>
 method	metal2vulkan-runtime::IndirectComputeCommand::set_barrier	pub fn set_barrier(&self) -> Result<(), Error>
 method	metal2vulkan-runtime::IndirectComputeCommand::set_compute_pipeline_state	pub fn set_compute_pipeline_state(&self, state: &ComputePipelineState) -> Result<(), Error>
+method	metal2vulkan-runtime::IndirectComputeCommand::set_each	pub fn set_each<'a>(&self, sets: impl IntoIterator<Item = IndirectComputeSet<'a>>) -> Result<(), (usize, Error)>
 method	metal2vulkan-runtime::IndirectComputeCommand::set_imageblock_size	pub fn set_imageblock_size(&self, width: u64, height: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::IndirectComputeCommand::set_kernel_buffer	pub fn set_kernel_buffer(&self, buffer: Option<&Buffer>, offset: u64, index: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::IndirectComputeCommand::set_kernel_buffer_with_stride	pub fn set_kernel_buffer_with_stride(&self, buffer: Option<&Buffer>, offset: u64, stride: u64, index: u32) -> Result<(), Error>
@@ -8800,6 +8805,7 @@ method	metal2vulkan-runtime::IndirectRenderCommand::set_cull_mode	pub fn set_cul
 method	metal2vulkan-runtime::IndirectRenderCommand::set_depth_bias	pub fn set_depth_bias(&self, _depth_bias: f32, _slope_scale: f32, _clamp: f32) -> Result<(), Error>
 method	metal2vulkan-runtime::IndirectRenderCommand::set_depth_clip_mode	pub fn set_depth_clip_mode(&self, _mode: DepthClipMode) -> Result<(), Error>
 method	metal2vulkan-runtime::IndirectRenderCommand::set_depth_stencil_state	pub fn set_depth_stencil_state(&self, state: Option<&DepthStencilState>) -> Result<(), Error>
+method	metal2vulkan-runtime::IndirectRenderCommand::set_each	pub fn set_each<'a>(&self, sets: impl IntoIterator<Item = IndirectRenderSet<'a>>) -> Result<(), (usize, Error)>
 method	metal2vulkan-runtime::IndirectRenderCommand::set_fragment_buffer	pub fn set_fragment_buffer(&self, buffer: Option<&Buffer>, offset: u64, index: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::IndirectRenderCommand::set_front_facing_winding	pub fn set_front_facing_winding(&self, _winding: Winding) -> Result<(), Error>
 method	metal2vulkan-runtime::IndirectRenderCommand::set_mesh_buffer	pub fn set_mesh_buffer(&self, buffer: Option<&Buffer>, offset: u64, index: u32) -> Result<(), Error>
@@ -9575,6 +9581,7 @@ method	metal2vulkan::bind::YCbCrRefreshModule::shape	pub fn shape(firsts: [u32; 
 method	metal2vulkan::bind::YCbCrSampleModule::push	pub fn push(size: [u32; 2], extent: [u32; 2]) -> [u8; Self::PUSH_BYTES as usize]
 method	metal2vulkan::bind::YCbCrWriteModule::groups	pub fn groups(planes: &YCbCrPlanes) -> [u32; 2]
 method	metal2vulkan::bind::YCbCrWriteModule::shape	pub fn shape(planes: &YCbCrPlanes, all: bool) -> [u8; Self::SHAPE_WORDS as usize * 4]
+method	metal2vulkan::bind::indirect_commands::Action::writes	pub fn writes(&self) -> crate::pipeline::CommandWrites
 method	metal2vulkan::bind::indirect_commands::Bindings::buffers	pub fn buffers(&self, stage: BufferStage) -> &[Option<BufferBinding>; BINDING_COUNT]
 method	metal2vulkan::bind::indirect_commands::Bindings::buffers_mut	pub fn buffers_mut(&mut self, stage: BufferStage) -> &mut [Option<BufferBinding>; BINDING_COUNT]
 method	metal2vulkan::bind::indirect_commands::BufferBinding::buffer_alignment	pub fn buffer_alignment(&self) -> u64
@@ -12574,6 +12581,17 @@ variant	metal2vulkan-runtime::IndirectCommandBufferProblem::PipelineKind	Pipelin
 variant	metal2vulkan-runtime::IndirectCommandBufferProblem::PipelineWithoutSupport	PipelineWithoutSupport
 variant	metal2vulkan-runtime::IndirectCommandBufferProblem::Range	Range { location: u64, length: u64, size: u64 }
 variant	metal2vulkan-runtime::IndirectCommandBufferProblem::RenderState	RenderState
+variant	metal2vulkan-runtime::IndirectComputeSet::ClearBarrier	ClearBarrier
+variant	metal2vulkan-runtime::IndirectComputeSet::ConcurrentDispatchThreadgroups	ConcurrentDispatchThreadgroups { threadgroups: Size, threads_per_threadgroup: Size }
+variant	metal2vulkan-runtime::IndirectComputeSet::ConcurrentDispatchThreads	ConcurrentDispatchThreads { threads: Size, threads_per_threadgroup: Size }
+variant	metal2vulkan-runtime::IndirectComputeSet::Reset	Reset
+variant	metal2vulkan-runtime::IndirectComputeSet::SetBarrier	SetBarrier
+variant	metal2vulkan-runtime::IndirectComputeSet::SetComputePipelineState	SetComputePipelineState(&'a ComputePipelineState)
+variant	metal2vulkan-runtime::IndirectComputeSet::SetImageblockSize	SetImageblockSize { width: u64, height: u64 }
+variant	metal2vulkan-runtime::IndirectComputeSet::SetKernelBuffer	SetKernelBuffer { buffer: Option<&'a Buffer>, offset: u64, index: u32 }
+variant	metal2vulkan-runtime::IndirectComputeSet::SetKernelBufferWithStride	SetKernelBufferWithStride { buffer: Option<&'a Buffer>, offset: u64, stride: u64, index: u32 }
+variant	metal2vulkan-runtime::IndirectComputeSet::SetStageInRegion	SetStageInRegion(Region)
+variant	metal2vulkan-runtime::IndirectComputeSet::SetThreadgroupMemoryLength	SetThreadgroupMemoryLength { length: u32, index: u32 }
 variant	metal2vulkan-runtime::IndirectDispatch::Threadgroups	Threadgroups { threadgroups_per_grid: Size, threads_per_threadgroup: Size }
 variant	metal2vulkan-runtime::IndirectDispatch::Threads	Threads { threads_per_grid: Size, threads_per_threadgroup: Size }
 variant	metal2vulkan-runtime::IndirectDraw::IndexedPatches	IndexedPatches { control_points: u64, patch_start: u64, patch_count: u64, patch_index_buffer: Option<GpuAddress>, control_point_index_buffer: Option<GpuAddress>, instance_count: u64, base_instance: u64, factor_buffer: GpuAddress, factor_instance_stride: u64 }
@@ -12582,6 +12600,28 @@ variant	metal2vulkan-runtime::IndirectDraw::MeshThreadgroups	MeshThreadgroups { 
 variant	metal2vulkan-runtime::IndirectDraw::MeshThreads	MeshThreads { threads_per_grid: Size, threads_per_object_threadgroup: Size, threads_per_mesh_threadgroup: Size }
 variant	metal2vulkan-runtime::IndirectDraw::Patches	Patches { control_points: u64, patch_start: u64, patch_count: u64, patch_index_buffer: Option<GpuAddress>, instance_count: u64, base_instance: u64, factor_buffer: GpuAddress, factor_instance_stride: u64 }
 variant	metal2vulkan-runtime::IndirectDraw::Primitives	Primitives { primitive_type: DrawPrimitiveType, vertex_start: u64, vertex_count: u64, instance_count: u64, base_instance: u64 }
+variant	metal2vulkan-runtime::IndirectRenderSet::ClearBarrier	ClearBarrier
+variant	metal2vulkan-runtime::IndirectRenderSet::DrawIndexedPatches	DrawIndexedPatches { number_of_patch_control_points: u64, patch_start: u64, patch_count: u64, patch_index_buffer: Option<&'a Buffer>, patch_index_buffer_offset: u64, control_point_index_buffer: Option<&'a Buffer>, control_point_index_buffer_offset: u64, instance_count: u64, base_instance: u64, tessellation_factor_buffer: &'a Buffer, tessellation_factor_buffer_offset: u64, tessellation_factor_buffer_instance_stride: u64 }
+variant	metal2vulkan-runtime::IndirectRenderSet::DrawIndexedPrimitives	DrawIndexedPrimitives { primitive_type: DrawPrimitiveType, index_count: u64, index_type: IndexType, index_buffer: &'a Buffer, index_buffer_offset: u64, instance_count: u64, base_vertex: i64, base_instance: u64 }
+variant	metal2vulkan-runtime::IndirectRenderSet::DrawMeshThreadgroups	DrawMeshThreadgroups { threadgroups_per_grid: Size, threads_per_object_threadgroup: Size, threads_per_mesh_threadgroup: Size }
+variant	metal2vulkan-runtime::IndirectRenderSet::DrawMeshThreads	DrawMeshThreads { threads_per_grid: Size, threads_per_object_threadgroup: Size, threads_per_mesh_threadgroup: Size }
+variant	metal2vulkan-runtime::IndirectRenderSet::DrawPatches	DrawPatches { number_of_patch_control_points: u64, patch_start: u64, patch_count: u64, patch_index_buffer: Option<&'a Buffer>, patch_index_buffer_offset: u64, instance_count: u64, base_instance: u64, tessellation_factor_buffer: &'a Buffer, tessellation_factor_buffer_offset: u64, tessellation_factor_buffer_instance_stride: u64 }
+variant	metal2vulkan-runtime::IndirectRenderSet::DrawPrimitives	DrawPrimitives { primitive_type: DrawPrimitiveType, vertex_start: u64, vertex_count: u64, instance_count: u64, base_instance: u64 }
+variant	metal2vulkan-runtime::IndirectRenderSet::Reset	Reset
+variant	metal2vulkan-runtime::IndirectRenderSet::SetBarrier	SetBarrier
+variant	metal2vulkan-runtime::IndirectRenderSet::SetCullMode	SetCullMode(CullMode)
+variant	metal2vulkan-runtime::IndirectRenderSet::SetDepthBias	SetDepthBias { depth_bias: f32, slope_scale: f32, clamp: f32 }
+variant	metal2vulkan-runtime::IndirectRenderSet::SetDepthClipMode	SetDepthClipMode(DepthClipMode)
+variant	metal2vulkan-runtime::IndirectRenderSet::SetDepthStencilState	SetDepthStencilState(Option<&'a DepthStencilState>)
+variant	metal2vulkan-runtime::IndirectRenderSet::SetFragmentBuffer	SetFragmentBuffer { buffer: Option<&'a Buffer>, offset: u64, index: u32 }
+variant	metal2vulkan-runtime::IndirectRenderSet::SetFrontFacingWinding	SetFrontFacingWinding(Winding)
+variant	metal2vulkan-runtime::IndirectRenderSet::SetMeshBuffer	SetMeshBuffer { buffer: Option<&'a Buffer>, offset: u64, index: u32 }
+variant	metal2vulkan-runtime::IndirectRenderSet::SetObjectBuffer	SetObjectBuffer { buffer: Option<&'a Buffer>, offset: u64, index: u32 }
+variant	metal2vulkan-runtime::IndirectRenderSet::SetObjectThreadgroupMemoryLength	SetObjectThreadgroupMemoryLength { length: u32, index: u32 }
+variant	metal2vulkan-runtime::IndirectRenderSet::SetRenderPipelineState	SetRenderPipelineState(&'a RenderPipelineState)
+variant	metal2vulkan-runtime::IndirectRenderSet::SetTriangleFillMode	SetTriangleFillMode(TriangleFillMode)
+variant	metal2vulkan-runtime::IndirectRenderSet::SetVertexBuffer	SetVertexBuffer { buffer: Option<&'a Buffer>, offset: u64, index: u32 }
+variant	metal2vulkan-runtime::IndirectRenderSet::SetVertexBufferWithStride	SetVertexBufferWithStride { buffer: Option<&'a Buffer>, offset: u64, stride: u64, index: u32 }
 variant	metal2vulkan-runtime::IndirectRule::CommandRenderStates	CommandRenderStates
 variant	metal2vulkan-runtime::IndirectRule::FamilyRow	FamilyRow
 variant	metal2vulkan-runtime::IndirectRule::MemorylessReadPastPass	MemorylessReadPastPass

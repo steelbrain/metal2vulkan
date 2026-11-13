@@ -18,9 +18,10 @@ use crate::error::{internal, invalid};
 use crate::write_routes::GpuWriter;
 use crate::written_commands::Named;
 use crate::{
-    Buffer, ComputePipelineState, Device, DrawProblem, Error, IndirectCommandBuffer,
-    IndirectCommandBufferDescriptor, IndirectCommandBufferProblem, PipelineOptions, Problem,
-    Region, RenderPipelineState, ResourceOptions, RuntimeGap, Size,
+    Buffer, ComputePipelineState, Device, DrawPrimitiveType, DrawProblem, Error, GpuAddress,
+    IndirectBufferBinding, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
+    IndirectCommandBufferProblem, IndirectComputeSet, IndirectDraw, IndirectRenderSet,
+    PipelineOptions, Problem, Region, RenderPipelineState, ResourceOptions, RuntimeGap, Size,
 };
 use metal2vulkan::bind::indirect_commands::{
     Action, BufferBinding, BufferStage, CommandRecord, RecordField, RecordView,
@@ -740,4 +741,475 @@ fn device_of_another(scratch: &Scratch) -> Device {
     let cache = scratch.0.join("other");
     std::fs::create_dir_all(&cache).unwrap();
     device(&cache)
+}
+
+/// `set_each`, and `set_render_command` and `set_compute_command` with no command's handle, set a
+/// command as its setters one call at a time do: the same records and the same CPU writes
+/// counted, a render and a compute buffer alike; the first refused stops the rest, answered with
+/// its place and the setter's error, those before it made and those after it not taken. The
+/// buffer's calls answer the command's own refusals (an index past the size, a compute command of
+/// a render buffer) at place 0.
+#[test]
+fn set_each_sets_as_the_setters_one_at_a_time() {
+    let scratch = Scratch::new("icb-set-each");
+    let device = device(&scratch.0);
+    let state = render_state(&device, true);
+    let unsupported = render_state(&device, false);
+    let shared = ResourceOptions::shared();
+    let (a, b) = (
+        device.new_buffer(4096, shared).unwrap(),
+        device.new_buffer(4096, shared).unwrap(),
+    );
+    let mut descriptor = IndirectCommandBufferDescriptor::new();
+    descriptor.command_types = IndirectCommandType::DRAW;
+    descriptor.max_vertex_buffer_bind_count = 2;
+    descriptor.max_fragment_buffer_bind_count = 1;
+    let made = || {
+        device
+            .new_indirect_command_buffer(&descriptor, u64::from(COMMANDS), shared)
+            .unwrap()
+    };
+    let (one_by_one, each, whole) = (made(), made(), made());
+    let triangle = DrawPrimitiveType::from_raw(3).unwrap();
+    for index in 0..u64::from(COMMANDS) {
+        let c = one_by_one.indirect_render_command_at(index).unwrap();
+        c.set_render_pipeline_state(&state).unwrap();
+        c.set_vertex_buffer(Some(&a), index * 16, 0).unwrap();
+        c.set_vertex_buffer(Some(&b), 0, 1).unwrap();
+        c.set_fragment_buffer(Some(&a), 256, 0).unwrap();
+        c.draw_primitives(triangle, 0, 3, 1, index).unwrap();
+        let sets = [
+            IndirectRenderSet::SetRenderPipelineState(&state),
+            IndirectRenderSet::SetVertexBuffer {
+                buffer: Some(&a),
+                offset: index * 16,
+                index: 0,
+            },
+            IndirectRenderSet::SetVertexBuffer {
+                buffer: Some(&b),
+                offset: 0,
+                index: 1,
+            },
+            IndirectRenderSet::SetFragmentBuffer {
+                buffer: Some(&a),
+                offset: 256,
+                index: 0,
+            },
+            IndirectRenderSet::DrawPrimitives {
+                primitive_type: triangle,
+                vertex_start: 0,
+                vertex_count: 3,
+                instance_count: 1,
+                base_instance: index,
+            },
+        ];
+        let c = each.indirect_render_command_at(index).unwrap();
+        assert_eq!(c.set_each(sets), Ok(()), "command {index}");
+        assert_eq!(whole.set_render_command(index, sets), Ok(()));
+    }
+    assert!(storage(&one_by_one) == storage(&each), "the records");
+    assert!(
+        storage(&one_by_one) == storage(&whole),
+        "the buffer's records"
+    );
+    assert_eq!(
+        one_by_one.cpu_writes(),
+        each.cpu_writes(),
+        "the writes counted"
+    );
+    assert_eq!(one_by_one.cpu_writes(), whole.cpu_writes());
+    let named = |icb: &IndirectCommandBuffer| {
+        (0..u64::from(COMMANDS))
+            .map(|index| {
+                let c = icb.indirect_render_command_at(index).unwrap();
+                c.pipeline_state().unwrap().map(|s| s.gpu_resource_id())
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(named(&one_by_one), named(&each), "the states set");
+    assert_eq!(named(&one_by_one), named(&whole));
+
+    // The command's own refusals, at place 0 before any setter, none set.
+    let before = (storage(&whole), whole.cpu_writes());
+    let past = u64::from(COMMANDS);
+    let refused = whole.indirect_render_command_at(past).err().unwrap();
+    let draw = [IndirectRenderSet::SetBarrier];
+    assert_eq!(whole.set_render_command(past, draw), Err((0, refused)));
+    let refused = problem(
+        "set_compute_command",
+        IndirectCommandBufferProblem::CommandKind,
+    );
+    assert_eq!(whole.set_compute_command(0, []), Err((0, refused)));
+    assert!(
+        (storage(&whole), whole.cpu_writes()) == before,
+        "nothing set"
+    );
+
+    // A refusal mid-way: the buffer before it set, the draw after it not taken.
+    let fresh = made();
+    let c = fresh.indirect_render_command_at(0).unwrap();
+    let before = fresh.cpu_writes();
+    let sets = [
+        IndirectRenderSet::SetVertexBuffer {
+            buffer: Some(&a),
+            offset: 32,
+            index: 0,
+        },
+        IndirectRenderSet::SetRenderPipelineState(&unsupported),
+        IndirectRenderSet::DrawPrimitives {
+            primitive_type: triangle,
+            vertex_start: 0,
+            vertex_count: 3,
+            instance_count: 1,
+            base_instance: 0,
+        },
+    ];
+    let refused = problem(
+        "set_render_pipeline_state",
+        IndirectCommandBufferProblem::PipelineWithoutSupport,
+    );
+    assert_eq!(c.set_each(sets), Err((1, refused)));
+    let set = c.vertex_buffer(0).unwrap().map(|binding| binding.address);
+    assert_eq!(
+        set,
+        Some(GpuAddress(a.gpu_address().0 + 32)),
+        "the buffer before"
+    );
+    assert_eq!(c.draw().unwrap(), None, "the draw after");
+    assert_eq!(
+        c.pipeline_state().unwrap().map(|s| s.gpu_resource_id()),
+        None
+    );
+    assert_eq!(fresh.cpu_writes(), before + 1, "the one write made");
+
+    // A compute command, and a refusal first: nothing made.
+    let kernel = compute_state(&device, EXAMPLES, "scale_and_offset", true);
+    let plain = compute_state(&device, EXAMPLES, "scale_and_offset", false);
+    let mut descriptor = IndirectCommandBufferDescriptor::new();
+    descriptor.command_types = IndirectCommandType::CONCURRENT_DISPATCH;
+    descriptor.max_kernel_buffer_bind_count = 2;
+    let made = || {
+        device
+            .new_indirect_command_buffer(&descriptor, 2, shared)
+            .unwrap()
+    };
+    let (one_by_one, each, whole) = (made(), made(), made());
+    let (groups, threads) = (Size::new(4, 1, 1), Size::new(64, 1, 1));
+    let c = one_by_one.indirect_compute_command_at(1).unwrap();
+    c.set_compute_pipeline_state(&kernel).unwrap();
+    c.set_kernel_buffer(Some(&a), 48, 0).unwrap();
+    c.set_kernel_buffer(Some(&b), 0, 1).unwrap();
+    c.concurrent_dispatch_threadgroups(groups, threads).unwrap();
+    let c = each.indirect_compute_command_at(1).unwrap();
+    let sets = [
+        IndirectComputeSet::SetComputePipelineState(&kernel),
+        IndirectComputeSet::SetKernelBuffer {
+            buffer: Some(&a),
+            offset: 48,
+            index: 0,
+        },
+        IndirectComputeSet::SetKernelBuffer {
+            buffer: Some(&b),
+            offset: 0,
+            index: 1,
+        },
+        IndirectComputeSet::ConcurrentDispatchThreadgroups {
+            threadgroups: groups,
+            threads_per_threadgroup: threads,
+        },
+    ];
+    assert_eq!(c.set_each(sets), Ok(()));
+    assert_eq!(whole.set_compute_command(1, sets), Ok(()));
+    assert!(
+        storage(&one_by_one) == storage(&each),
+        "the compute records"
+    );
+    assert!(storage(&one_by_one) == storage(&whole));
+    assert_eq!(one_by_one.cpu_writes(), each.cpu_writes());
+    assert_eq!(one_by_one.cpu_writes(), whole.cpu_writes());
+    let refused = whole.indirect_compute_command_at(2).err().unwrap();
+    assert_eq!(whole.set_compute_command(2, sets), Err((0, refused)));
+    let c = each.indirect_compute_command_at(0).unwrap();
+    let before = (storage(&each), each.cpu_writes());
+    let sets = [
+        IndirectComputeSet::SetComputePipelineState(&plain),
+        IndirectComputeSet::SetKernelBuffer {
+            buffer: Some(&a),
+            offset: 0,
+            index: 0,
+        },
+    ];
+    let refused = problem(
+        "set_compute_pipeline_state",
+        IndirectCommandBufferProblem::PipelineWithoutSupport,
+    );
+    assert_eq!(c.set_each(sets), Err((0, refused)));
+    assert!(
+        (storage(&each), each.cpu_writes()) == before,
+        "nothing made"
+    );
+}
+
+/// Setters on two threads at once: each thread's commands read back as it set them, the writes
+/// all counted, where the threads set different commands of one buffer (one by its commands'
+/// setters, the other by `set_render_command`); and where one thread sets
+/// a command's pipeline state over and over while the other sets its buffers, each reads back its
+/// own field as it set it after every set, and the command reads back the last state set, its
+/// record naming that state's ID and identifier, and the last buffers set: no field one thread
+/// wrote is lost to the other's write.
+#[test]
+fn setters_on_two_threads_keep_each_other_s_fields() {
+    const SETS: u64 = 2000;
+    let scratch = Scratch::new("icb-two-threads");
+    let device = device(&scratch.0);
+    let states = [render_state(&device, true), render_state(&device, true)];
+    assert_ne!(states[0].gpu_resource_id(), states[1].gpu_resource_id());
+    let shared = ResourceOptions::shared();
+    let (a, b) = (
+        device.new_buffer(1 << 20, shared).unwrap(),
+        device.new_buffer(1 << 20, shared).unwrap(),
+    );
+    let mut descriptor = IndirectCommandBufferDescriptor::new();
+    descriptor.command_types = IndirectCommandType::DRAW;
+    descriptor.max_vertex_buffer_bind_count = 2;
+    descriptor.max_fragment_buffer_bind_count = 1;
+    let size = 64;
+    let icb = device
+        .new_indirect_command_buffer(&descriptor, size, shared)
+        .unwrap();
+    let triangle = DrawPrimitiveType::from_raw(3).unwrap();
+    let before = icb.cpu_writes();
+    // Different commands: thread `t` sets the commands `index % 2 == t`, each over and over,
+    // the last round's values its own.
+    let slot = |t: usize, index: u64, round: u64| {
+        if t == 1 {
+            let sets = [
+                IndirectRenderSet::SetRenderPipelineState(&states[t]),
+                IndirectRenderSet::SetVertexBuffer {
+                    buffer: Some(&a),
+                    offset: (index + round) * 16,
+                    index: 0,
+                },
+                IndirectRenderSet::SetVertexBuffer {
+                    buffer: Some(&b),
+                    offset: index * 32,
+                    index: 1,
+                },
+                IndirectRenderSet::SetFragmentBuffer {
+                    buffer: Some(&b),
+                    offset: round * 16,
+                    index: 0,
+                },
+                IndirectRenderSet::DrawPrimitives {
+                    primitive_type: triangle,
+                    vertex_start: index,
+                    vertex_count: 3,
+                    instance_count: 1,
+                    base_instance: round,
+                },
+            ];
+            return icb.set_render_command(index, sets).unwrap();
+        }
+        let c = icb.indirect_render_command_at(index).unwrap();
+        c.set_render_pipeline_state(&states[t]).unwrap();
+        c.set_vertex_buffer(Some(&a), (index + round) * 16, 0)
+            .unwrap();
+        c.set_vertex_buffer(Some(&b), index * 32, 1).unwrap();
+        c.set_fragment_buffer(Some(&b), round * 16, 0).unwrap();
+        c.draw_primitives(triangle, index, 3, 1, round).unwrap();
+    };
+    let rounds = SETS / size;
+    std::thread::scope(|scope| {
+        for t in 0..2 {
+            let slot = &slot;
+            scope.spawn(move || {
+                for round in 0..rounds {
+                    for index in (t as u64..size).step_by(2) {
+                        slot(t, index, round);
+                    }
+                }
+            });
+        }
+    });
+    let last = rounds - 1;
+    for index in 0..size {
+        let c = icb.indirect_render_command_at(index).unwrap();
+        let t = (index % 2) as usize;
+        let named = c.pipeline_state().unwrap().map(|s| s.gpu_resource_id());
+        assert_eq!(named, Some(states[t].gpu_resource_id()), "command {index}");
+        let at = |buffer: &Buffer, offset: u64| Some(GpuAddress(buffer.gpu_address().0 + offset));
+        let address = |binding: Option<IndirectBufferBinding>| binding.map(|b| b.address);
+        assert_eq!(
+            address(c.vertex_buffer(0).unwrap()),
+            at(&a, (index + last) * 16)
+        );
+        assert_eq!(address(c.vertex_buffer(1).unwrap()), at(&b, index * 32));
+        assert_eq!(address(c.fragment_buffer(0).unwrap()), at(&b, last * 16));
+        let drawn = c.draw().unwrap();
+        let expected = IndirectDraw::Primitives {
+            primitive_type: triangle,
+            vertex_start: index,
+            vertex_count: 3,
+            instance_count: 1,
+            base_instance: last,
+        };
+        assert_eq!(drawn, Some(expected), "command {index}");
+    }
+    assert_eq!(
+        icb.cpu_writes() - before,
+        5 * rounds * size,
+        "every write counted"
+    );
+
+    // One command: its pipeline state on one thread, its buffers on the other, each thread
+    // reading back its own field after every set, which the other's writes must leave as set.
+    let c = icb.indirect_render_command_at(7).unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for set in 0..SETS {
+                let state = &states[(set % 2) as usize];
+                c.set_render_pipeline_state(state).unwrap();
+                let id = c.pipeline_id().unwrap();
+                assert_eq!(id, Some(state.gpu_resource_id()), "set {set}: the state");
+            }
+        });
+        scope.spawn(|| {
+            for set in 0..SETS {
+                c.set_vertex_buffer(Some(&b), set * 16, 0).unwrap();
+                c.set_fragment_buffer(Some(&a), set * 32, 0).unwrap();
+                let address = c.vertex_buffer(0).unwrap().map(|b| b.address);
+                let expected = GpuAddress(b.gpu_address().0 + set * 16);
+                assert_eq!(address, Some(expected), "set {set}: the vertex buffer");
+            }
+        });
+    });
+    let state = &states[((SETS - 1) % 2) as usize];
+    let named = c.pipeline_state().unwrap().map(|s| s.gpu_resource_id());
+    assert_eq!(named, Some(state.gpu_resource_id()), "the last state set");
+    assert_eq!(c.pipeline_id().unwrap(), Some(state.gpu_resource_id()));
+    assert_eq!(
+        c.pipeline_unique_identifier().unwrap(),
+        Some(state.unique_identifier()),
+        "the record names the state set"
+    );
+    let address = c.vertex_buffer(0).unwrap().map(|b| b.address);
+    assert_eq!(
+        address,
+        Some(GpuAddress(b.gpu_address().0 + (SETS - 1) * 16))
+    );
+    let address = c.fragment_buffer(0).unwrap().map(|b| b.address);
+    assert_eq!(
+        address,
+        Some(GpuAddress(a.gpu_address().0 + (SETS - 1) * 32))
+    );
+}
+
+/// A setter's write takes the buffer's lock only where it sets a pipeline state the command does
+/// not name yet or adds to what the records may hold, on a buffer the GPU may not have written: a
+/// buffer slot, a draw or a barrier the CPU's edits added already, a barrier cleared, and the
+/// state the command names already go without it, counted apart (`writes_apart`), a call of
+/// `set_render_command` counting its writes so once; on a buffer the GPU may write, every write
+/// takes it.
+#[test]
+fn setters_take_the_lock_only_to_set_a_state_or_add_to_the_records() {
+    let scratch = Scratch::new("icb-unlocked-writes");
+    let device = device(&scratch.0);
+    let state = render_state(&device, true);
+    let shared = ResourceOptions::shared();
+    let buffer = device.new_buffer(4096, shared).unwrap();
+    let mut descriptor = IndirectCommandBufferDescriptor::new();
+    descriptor.command_types = IndirectCommandType::DRAW;
+    descriptor.max_vertex_buffer_bind_count = 1;
+    let icb = device
+        .new_indirect_command_buffer(&descriptor, u64::from(COMMANDS), shared)
+        .unwrap();
+    let c: Vec<_> = (0..u64::from(COMMANDS))
+        .map(|index| icb.indirect_render_command_at(index).unwrap())
+        .collect();
+    let (triangle, point) = (PrimitiveType::Triangle, PrimitiveType::Point);
+    let mut at = icb.writes_apart();
+    // A call's writes, and how many went under the lock and how many without it.
+    let mut went = |what: &str, call: Result<(), Error>, locked: u64, unlocked: u64| {
+        call.unwrap();
+        let now = icb.writes_apart();
+        assert_eq!(now, (at.0 + locked, at.1 + unlocked), "{what}");
+        at = now;
+    };
+    went("a state", c[0].set_render_pipeline_state(&state), 1, 0);
+    went(
+        "a buffer",
+        c[0].set_vertex_buffer(Some(&buffer), 0, 0),
+        0,
+        1,
+    );
+    went(
+        "a first draw",
+        c[0].draw_primitives(triangle, 0, 3, 1, 0),
+        1,
+        0,
+    );
+    went(
+        "the draw again",
+        c[1].draw_primitives(triangle, 0, 3, 1, 0),
+        0,
+        1,
+    );
+    went(
+        "another type",
+        c[1].draw_primitives(point, 0, 3, 1, 0),
+        1,
+        0,
+    );
+    went("a first barrier", c[1].set_barrier(), 1, 0);
+    went("a barrier again", c[2].set_barrier(), 0, 1);
+    went("a barrier cleared", c[2].clear_barrier(), 0, 1);
+    let other = render_state(&device, true);
+    let (one, other) = (&state, &other);
+    let states = [
+        ("the state, another command", one, 1, 0),
+        ("a state named already", one, 0, 1),
+        ("another state", other, 1, 0),
+        ("that state again", other, 0, 1),
+    ];
+    for (what, state, locked, unlocked) in states {
+        went(
+            what,
+            c[1].set_render_pipeline_state(state),
+            locked,
+            unlocked,
+        );
+    }
+    let sets = [
+        IndirectRenderSet::SetVertexBuffer {
+            buffer: Some(&buffer),
+            offset: 64,
+            index: 0,
+        },
+        IndirectRenderSet::DrawPrimitives {
+            primitive_type: DrawPrimitiveType::from_raw(3).unwrap(),
+            vertex_start: 0,
+            vertex_count: 3,
+            instance_count: 1,
+            base_instance: 0,
+        },
+    ];
+    let batch = icb.set_render_command(3, sets).map_err(|(_, error)| error);
+    went("a batch", batch, 0, 2);
+    icb.written_by_gpu(GpuWriter::Reset);
+    went(
+        "GPU-written, a draw",
+        c[3].draw_primitives(triangle, 0, 3, 1, 0),
+        1,
+        0,
+    );
+    went(
+        "GPU-written, a buffer",
+        c[3].set_vertex_buffer(Some(&buffer), 0, 0),
+        1,
+        0,
+    );
+    let named = c[1].set_render_pipeline_state(other);
+    went("GPU-written, a state named", named, 1, 0);
+    let named = c[1].pipeline_state().unwrap().map(|s| s.gpu_resource_id());
+    assert_eq!(named, Some(other.gpu_resource_id()), "the state set last");
 }

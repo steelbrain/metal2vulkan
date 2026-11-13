@@ -71,6 +71,7 @@ use super::address::{AddressPlacement, AddressSpace, Place, RecordsId};
 use super::buffer::{Buffer, Modes};
 use super::degradation::{Degradation, NoticesFor};
 use super::depth_stencil::DepthStencilState;
+use super::device::carry::CallHold;
 use super::device::lock;
 use super::error::{internal, invalid, Error, IndirectRule, MemoryKind, Problem, RuntimeGap};
 use super::families::GpuFamily;
@@ -78,8 +79,8 @@ use super::indirect_execute::Unforeseen;
 use super::kept_commands::{Kept, KeptChunk, KeptChunks, StepChunk, StepCopy, UnlockedWrites};
 use super::memory::MemoryClass;
 use super::pipeline::{
-    ComputePipelineState, ComputeProgram, RenderPipelineState, RenderProgram, RenderStateKind,
-    WeakComputePipelineState, WeakRenderPipelineState,
+    ComputePipelineState, ComputeProgram, GraphicsState, RenderPipelineState, RenderProgram,
+    RenderStateKind, WeakComputePipelineState, WeakRenderPipelineState,
 };
 use super::released_programs::{KeptProgram, KeptPrograms};
 use super::render::{index_size, DrawProblem};
@@ -115,9 +116,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 pub(crate) mod carry;
+mod set_each;
 mod set_states;
 
-use set_states::{Keyed, SetStates, StateKey};
+pub use set_each::{IndirectComputeSet, IndirectRenderSet};
+use set_states::{Keyed, SetKeys, SetStates, StateKey};
 
 /// The threadgroup lengths a fresh descriptor binds, as Metal's answers.
 const DEFAULT_THREADGROUP_LENGTHS: u32 = 31;
@@ -651,6 +654,8 @@ impl Device {
         }
         let options =
             ResourceOptions::new(modes.storage, modes.cache, storage.hazard_tracking_mode());
+        let states = CommandStates::new(size);
+        let set_keys = states.states.keys();
         let icb = IndirectCommandBuffer(Arc::new(IcbShared {
             storage,
             id,
@@ -660,13 +665,15 @@ impl Device {
             inheritance,
             size,
             options,
-            pipelines: Mutex::new(CommandStates::new(size)),
+            pipelines: Mutex::new(states),
+            set_keys,
             unlocked: UnlockedWrites::new(size),
             gpu_written: AtomicBool::new(false),
             gpu_writer: OnceLock::new(),
             unforeseen: Mutex::new(Vec::new()),
             cpu_writes: AtomicU64::new(0),
             unlocked_writes: AtomicU64::new(0),
+            added_writes: AtomicU64::new(0),
             barriers: AtomicBool::new(false),
             nines: AtomicBool::new(false),
             overflow,
@@ -743,12 +750,40 @@ impl CommandStates {
 }
 
 /// A pipeline state a setter sets on a command ([`IndirectCommandBuffer::edit`]): its key, what
-/// it may do to indirect command buffers, and the command's state made of it, which only a set
-/// where no command names the state yet makes ([`SetStates::set`]).
+/// it may do to indirect command buffers, its stamp, and the state under the setter's hold, of
+/// which only a set where no command names the state yet makes the command's state
+/// ([`make`](Self::make), [`SetStates::set`]).
 struct StateSet<'s> {
     key: StateKey,
     named: Named,
-    make: &'s dyn Fn() -> CommandState,
+    stamp: IdStamp,
+    of: StateOf<'s>,
+}
+
+/// The state a [`StateSet`] sets, and the setter's hold of it, under which its program is read.
+enum StateOf<'s> {
+    Compute(&'s ComputePipelineState, &'s CallHold<'s>),
+    Render(&'s GraphicsState, &'s CallHold<'s>),
+}
+
+impl StateSet<'_> {
+    /// The command's state: the state, named without holding it, and its program.
+    fn make(&self) -> CommandState {
+        match self.of {
+            StateOf::Compute(state, held) => CommandState::Compute(
+                state.downgrade(),
+                state.program_held(held),
+                self.stamp,
+                self.named,
+            ),
+            StateOf::Render(graphics, held) => CommandState::Render(
+                graphics.downgrade(),
+                graphics.program_held(held),
+                self.stamp,
+                self.named,
+            ),
+        }
+    }
 }
 
 /// The ID a state had when the CPU set it on a command, and the serial of its hold of the ID,
@@ -1103,11 +1138,14 @@ struct IcbShared {
     /// The options asked for, the hazard tracking mode resolved.
     options: ResourceOptions,
     /// The pipeline state the CPU set on each command, and the kept recordings of its chunks
-    /// ([`CommandStates`]). Held while the CPU writes a record, but for a buffer slot's setter's
-    /// write, which takes no lock ([`edit_unlocked`](IndirectCommandBuffer::edit_unlocked)).
+    /// ([`CommandStates`]). Held while the CPU writes a record, but for a setter's write that sets
+    /// no state and adds nothing to what the records may hold, which takes no lock ([`Batch`]).
     pipelines: Mutex<CommandStates>,
-    /// The chunks a buffer slot's setter wrote without `pipelines`, for the kept recordings'
-    /// next look to forget ([`UnlockedWrites`]).
+    /// The key of the state each command names, as `pipelines`' table holds it, for a pipeline
+    /// setter's look without the lock ([`SetKeys`]).
+    set_keys: Arc<SetKeys>,
+    /// The chunks a setter wrote without `pipelines` ([`Batch`]), for the kept recordings' next
+    /// look to forget ([`UnlockedWrites`]).
     unlocked: UnlockedWrites,
     /// A route that may write the buffer's records met it (`write_routes.rs`): the GPU may write
     /// them from then on (`written_by_gpu`). Set, and read where it decides, under
@@ -1122,12 +1160,16 @@ struct IcbShared {
     /// ([`cpu_writes`](IndirectCommandBuffer::cpu_writes)). Each adds one after it wrote, under
     /// the lock, by a load and a store (`Release`), and its readers load it without the lock.
     cpu_writes: AtomicU64,
-    /// The buffer slots' setters' writes so far without `pipelines`
-    /// ([`edit_unlocked`](IndirectCommandBuffer::edit_unlocked)), counted apart: each adds one
-    /// after it wrote, by an atomic add (`Release`). Counted in one with the writes under the
-    /// lock, each of those took an atomic add too, and a draw took about 4 ns more
-    /// (`tests::icb_encode_bench`).
+    /// The setters' writes so far without `pipelines` ([`Batch`]), counted apart: a batch adds
+    /// its writes after it made them, by an atomic add (`Release`). Counted in one with the
+    /// writes under the lock, each of those took an atomic add too, and a draw took about 4 ns
+    /// more (`tests::icb_encode_bench`).
     unlocked_writes: AtomicU64,
+    /// What the CPU's edits added to what the records may hold (`CommandStates::added`'s
+    /// writes, [`packed`]), for an edit's look without `pipelines`
+    /// ([`adds_nothing`](IndirectCommandBuffer::adds_nothing)): set under the lock with the
+    /// summary (`Release`), which only grows, so a write it holds stays held.
+    added_writes: AtomicU64,
     /// The CPU set a render command's barrier: an execution's render pass instance may split at
     /// it (`render/executions.rs`), for good.
     barriers: AtomicBool,
@@ -1182,12 +1224,14 @@ const _: fn(&IcbShared) = |icb| {
         size,
         options,
         pipelines,
+        set_keys,
         unlocked,
         gpu_written,
         gpu_writer,
         unforeseen,
         cpu_writes,
         unlocked_writes,
+        added_writes,
         barriers,
         nines,
         overflow,
@@ -1206,12 +1250,14 @@ const _: fn(&IcbShared) = |icb| {
     shared(size);
     shared(options);
     shared(pipelines);
+    shared(set_keys);
     shared(unlocked);
     shared(gpu_written);
     shared(gpu_writer);
     shared(unforeseen);
     shared(cpu_writes);
     shared(unlocked_writes);
+    shared(added_writes);
     shared(barriers);
     shared(nines);
     shared(overflow);
@@ -1625,16 +1671,16 @@ impl IndirectCommandBuffer {
             .map_err(|_| internal("an indirect command buffer's header was refused"))
     }
 
-    /// Set command `index`'s written flag (below the size) where `written`, else clear it: the
-    /// CPU's record writes keep it, as a kernel's do (`written_flag_offset`), so a blit's reset
-    /// writes only the records a flag marks (`blit_indirect.rs`). A clear flag is a record that
-    /// holds the reset record.
-    fn mark(&self, index: u32, written: bool) {
+    /// Set command `index`'s written flag (below the size) where `written`, else clear it, in
+    /// `storage`, the storage's bytes ([`bytes`](Self::bytes)): the CPU's record writes keep it,
+    /// as a kernel's do (`written_flag_offset`), so a blit's reset writes only the records a flag
+    /// marks (`blit_indirect.rs`). A clear flag is a record that holds the reset record.
+    fn mark_at(&self, storage: *mut u8, index: u32, written: bool) {
         let at = written_flag_offset(self.0.size, index) as usize;
         // SAFETY: the flag of a command below the size lies inside the mapped storage. A GPU
         // write to it meanwhile is the program's race, as one to the record is.
         unsafe {
-            self.bytes()
+            storage
                 .add(at)
                 .cast::<u32>()
                 .write_unaligned(u32::from(written));
@@ -1693,18 +1739,19 @@ impl IndirectCommandBuffer {
         record
             .encode_into(&mut bytes)
             .map_err(|_| internal("an indirect command's record does not encode"))?;
-        // SAFETY: as `record`'s; the CPU's writes are one at a time (`pipelines`), but a buffer
-        // slot's setter's, without it (`edit_unlocked`): one of the same command meanwhile is the
-        // program's race, as two threads encoding one command are on Metal.
+        let storage = self.bytes();
+        // SAFETY: as `record`'s; the CPU's writes are one at a time (`pipelines`), but a setter's
+        // without it (`Batch`): one of the same command meanwhile is the program's race, as two
+        // threads encoding one command are on Metal.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),
-                self.bytes().add(record_offset(index)),
+                storage.add(record_offset(index)),
                 COMMAND_BYTES,
             );
         }
         // A reset record, all zero, needs no reset.
-        self.mark(index, bytes.iter().any(|&byte| byte != 0));
+        self.mark_at(storage, index, bytes.iter().any(|&byte| byte != 0));
         self.wrote(commands, index..index + 1);
         Ok(())
     }
@@ -1728,6 +1775,14 @@ impl IndirectCommandBuffer {
     pub(super) fn cpu_writes(&self) -> u64 {
         let locked = self.0.cpu_writes.load(Ordering::Acquire);
         locked.wrapping_add(self.0.unlocked_writes.load(Ordering::Acquire))
+    }
+
+    /// [`cpu_writes`](Self::cpu_writes) apart: those under `pipelines`, and the setters' without
+    /// it ([`Batch`]), for a device test of which way a write went.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn writes_apart(&self) -> (u64, u64) {
+        let locked = self.0.cpu_writes.load(Ordering::Acquire);
+        (locked, self.0.unlocked_writes.load(Ordering::Acquire))
     }
 
     /// Reset commands `range` (inside the size).
@@ -1929,36 +1984,62 @@ impl IndirectCommandBuffer {
                 && types.intersects(COMPUTE_TYPES))
     }
 
-    /// Write `field` into command `index`'s record (below the size), and where the field names a
-    /// pipeline state, `set`'s as the state the CPU set on it: the field's words alone, in place, as
-    /// Metal's setter writes its field, the rest of the record as the GPU and the CPU left it
-    /// (`CommandRecord::write_field`); then what the record holds joins what its records may
-    /// (`grown_writes`, `add_written`). All of it under one hold of `pipelines`; a buffer slot's
-    /// takes [`edit_slot`](Self::edit_slot).
-    fn edit(&self, index: u32, field: RecordField, set: Option<StateSet<'_>>) -> Result<(), Error> {
-        let mut commands = lock(&self.0.pipelines);
-        // SAFETY: the record of a command below the size lies inside the mapped storage, and the
-        // CPU's writes of the records are one at a time (`pipelines`, held while the slice lives),
-        // but a buffer slot's setter's (`edit_unlocked`): one of the same command meanwhile, as a
-        // GPU write to it, is the program's race, as on Metal.
-        let bytes = unsafe {
-            std::slice::from_raw_parts_mut(self.bytes().add(record_offset(index)), COMMAND_BYTES)
+    /// Write `field`, which names no pipeline state, into command `index`'s record (below the
+    /// size): a [`Batch`] of it alone.
+    fn edit(&self, index: u32, field: RecordField) -> Result<(), Error> {
+        self.batch(index).field(field, Then::Nothing)
+    }
+
+    /// Write `field` into command `index`'s record (below the size) in `storage`, the storage's
+    /// bytes ([`bytes`](Self::bytes)): the field's words alone, in place, as Metal's setter writes
+    /// its field, the rest of the record as the GPU and the CPU left it
+    /// (`CommandRecord::write_field`). Every setter's write of a field, under `pipelines` or not,
+    /// is this one. A record that does not decode is a GPU write's, the program's race.
+    #[inline]
+    fn write_field(&self, storage: *mut u8, index: u32, field: RecordField) -> Result<(), Error> {
+        // SAFETY: the record of a command below the size lies inside the mapped storage. Another
+        // write of the same command meanwhile, under `pipelines` or not, is the program's race, as
+        // two threads encoding one command, or a GPU write to it, are on Metal.
+        let record = unsafe {
+            std::slice::from_raw_parts_mut(storage.add(record_offset(index)), COMMAND_BYTES)
         };
-        CommandRecord::write_field(bytes, field).map_err(|error| match error {
+        CommandRecord::write_field(record, field).map_err(|error| match error {
             RecordError::Length { .. }
             | RecordError::Action { .. }
             | RecordError::Barrier { .. }
             | RecordError::PipelineState => undecodable(),
             _ => internal("an indirect command's record does not take a setter's field"),
         })?;
-        self.mark(index, true);
+        // Its written flag set after the field, as every write of a record but the reset
+        // record's sets it.
+        self.mark_at(storage, index, true);
+        Ok(())
+    }
+
+    /// [`write_field`](Self::write_field) of `field` with `set` as the state the CPU set on the
+    /// command where the field names one, under one hold of `pipelines`; then what the record
+    /// holds joins what its records may (`grown_writes`, `add_written`). A [`Batch`] takes it
+    /// for a field it cannot write without the lock.
+    fn edit_locked(
+        &self,
+        storage: *mut u8,
+        index: u32,
+        field: RecordField,
+        set: Option<StateSet<'_>>,
+    ) -> Result<(), Error> {
+        let mut commands = lock(&self.0.pipelines);
+        self.write_field(storage, index, field)?;
         self.wrote(&mut commands, index..index + 1);
+        // SAFETY: as `write_field`'s; the CPU's writes of the records under `pipelines`, held
+        // while the slice lives, are one at a time.
+        let record =
+            unsafe { std::slice::from_raw_parts(storage.add(record_offset(index)), COMMAND_BYTES) };
         let named = set.as_ref().map(|set| set.named);
         // Read before the state is set, so a state set is always added: only a GPU write since
         // the field's, the program's race, leaves a record that does not decode here.
-        let grown = self.grown_writes(&commands, bytes, field, named)?;
+        let grown = self.grown_writes(&commands, record, field, named)?;
         if let Some(set) = set {
-            commands.states.set(index, set.key, set.make);
+            commands.states.set(index, set.key, || set.make());
         }
         let followed = match grown {
             Some(writes) => self.add_written(&mut commands, index, writes, named),
@@ -1971,40 +2052,25 @@ impl IndirectCommandBuffer {
         Ok(())
     }
 
-    /// [`edit`](Self::edit) of `field`, a buffer slot: without `pipelines`
-    /// ([`edit_unlocked`](Self::edit_unlocked)) on a buffer the GPU may not have written, else
-    /// under it. Apart from `edit`, whose other writes then compile as they did before the
-    /// unlocked write: beside it in `edit`, a draw took about 5 ns more
-    /// (`tests::icb_encode_bench`).
-    fn edit_slot(&self, index: u32, field: RecordField) -> Result<(), Error> {
-        match self.gpu_written() {
-            false => self.edit_unlocked(index, field),
-            true => self.edit(index, field, None),
+    /// Whether an edit of `field` that sets no state adds nothing to what the records may hold,
+    /// as [`grown_writes`](Self::grown_writes) would find it, without `pipelines`: on a buffer the
+    /// GPU may not have written, whose actions and barriers the CPU's edits all added, so that a
+    /// record's other fields add nothing, a field of another kind adds nothing, and an action, or
+    /// a barrier set, adds what it holds where the edits did not add it already (`added_writes`).
+    fn adds_nothing(&self, field: RecordField) -> bool {
+        if self.gpu_written() {
+            return false;
         }
-    }
-
-    /// [`edit`](Self::edit) of `field`, a buffer slot, into command `index`'s record (below the
-    /// size) without `pipelines`, on a buffer the GPU may not have written: there such an edit
-    /// names no state and adds nothing to what the records may hold (`grown_writes` reads no record
-    /// for it), so the count of the CPU's writes and the kept recordings of the command's chunk
-    /// alone follow it, as they follow a write under the lock ([`wrote`](Self::wrote)): the chunk
-    /// noted for the kept recordings' next look to forget ([`UnlockedWrites`],
-    /// `KeptChunks::settle`), then the write counted, by an atomic add. A buffer the GPU starts
-    /// writing meanwhile is the race a write under the lock has with it too (`gpu_written` is set
-    /// under `unforeseen`'s lock). The lock's two locked instructions were most of a buffer
-    /// setter's cost (`tests::icb_encode_bench`).
-    fn edit_unlocked(&self, index: u32, field: RecordField) -> Result<(), Error> {
-        // SAFETY: the record of a command below the size lies inside the mapped storage. Another
-        // write of the same command meanwhile, under `pipelines` or not, is the program's race, as
-        // two threads encoding one command, or a GPU write to it, are on Metal.
-        let bytes = unsafe {
-            std::slice::from_raw_parts_mut(self.bytes().add(record_offset(index)), COMMAND_BYTES)
+        let writes = match field {
+            RecordField::Action(action) => action.writes(),
+            RecordField::Barrier(true) => CommandWrites {
+                operations: CommandWrites::BARRIER,
+                primitive_types: 0,
+            },
+            _ => return true,
         };
-        CommandRecord::write_field(bytes, field).map_err(field_error)?;
-        self.mark(index, true);
-        self.0.unlocked.wrote(index);
-        self.0.unlocked_writes.fetch_add(1, Ordering::Release);
-        Ok(())
+        let added = self.0.added_writes.load(Ordering::Acquire);
+        added | packed(writes) == added
     }
 
     /// What `record`, command `index`'s after an edit of `field`, holds (`RecordView::writes`: its
@@ -2067,10 +2133,9 @@ impl IndirectCommandBuffer {
             primitive_types: 0,
         };
         let (added, added_named) = commands.added;
-        commands.added = (
-            added.union(writes).union(pipeline),
-            added_named.union(named.unwrap_or_default()),
-        );
+        let added = added.union(writes).union(pipeline);
+        commands.added = (added, added_named.union(named.unwrap_or_default()));
+        self.0.added_writes.store(packed(added), Ordering::Release);
         followed
     }
 
@@ -2091,68 +2156,30 @@ impl IndirectCommandBuffer {
         self.clear_overflow(&mut commands, index..index + 1)
     }
 
-    /// Set `set`'s buffer on command `index`, for `call`, at the buffer's address plus the offset's
-    /// low 32 bits, as Metal keeps it: on an M4 under macOS 27.0.1, a kernel or vertex buffer set
-    /// at 2^40 + 16 or 2^32 + 32, plainly or with an attribute stride, read and answered 16 or 32
-    /// past the buffer's address, and so did a fragment buffer's getter; one set at 2^32 + 16 in a
-    /// buffer past 4 GiB read at 16, where a compute encoder's own buffer reads at the whole offset
-    /// (with and without API validation; the consumer measured the getters so on an M3 Max), and so
-    /// did object and mesh buffers' getters and reads. Refused (`Invalid`): a buffer of another
-    /// device. On a buffer that inherits its buffers the record keeps it and reads it back, and an
-    /// execution binds the encoder's buffers alone, none where the encoder's slot is unbound, as
-    /// plain Metal's, where its validation stops the call.
-    ///
-    /// A slot at or past the set's limit (the descriptor's count of the stage) is **taken** and
-    /// kept nowhere. Plain Metal takes it: on an M3 Max under macOS 27.0.1 a buffer of
-    /// `maxKernelBufferBindCount` 2 took `setKernelBuffer:offset:atIndex:` at index 2 and at
-    /// index 4 with no error and its `size` still read 3 commands, where Metal's own API
-    /// validation stops the call ("index(2) must be < 2."). Nothing of either side binds such a
-    /// slot to a function: an execution binds the slots below the count alone (`bindings` in
-    /// `indirect_execute.rs`, `buffers` in `render/executions.rs`), as Metal's count-sized
-    /// argument table does, and [`read_buffer`](Self::read_buffer) answers none at or past the
-    /// count. So the binding is dropped rather than written: the record's own slots are held to
-    /// the descriptor's counts by the engine (`indirect_commands::descriptor`'s `validate_record`,
-    /// which an execution's records and the records the GPU writes both go through), and what
-    /// Metal keeps such a slot in for its private getters is unmeasured.
-    fn set_buffer(&self, index: u32, call: &'static str, set: BufferSet<'_>) -> Result<(), Error> {
-        let BufferSet {
-            stage,
-            limit,
-            slot,
-            buffer,
-            offset,
-            attribute_stride,
-        } = set;
-        if let Some(buffer) = buffer {
-            if !buffer.generation().same(self.generation()) {
-                return Err(buffer.generation().foreign(call, self.generation()));
+    /// A [`Batch`] of a setter's writes, or of the setters `set_each` names, on command `index`
+    /// (below the size).
+    fn batch(&self, index: u32) -> Batch<'_> {
+        Batch {
+            icb: self,
+            index,
+            storage: self.bytes(),
+            unlocked: 0,
+        }
+    }
+
+    /// Note `then`, after a field's write: a draw of primitive type 9 marks the buffer for the
+    /// executions that look for one ([`nine_among`](Self::nine_among)); a render command's
+    /// barrier, for the executions whose render pass instances may split at it.
+    fn then(&self, then: Then) {
+        match then {
+            Then::Nothing => {}
+            Then::Drew(primitive_type) => {
+                if primitive_type == DrawPrimitiveType::Nine {
+                    self.0.nines.store(true, Ordering::Release);
+                }
             }
+            Then::Barrier => self.0.barriers.store(true, Ordering::Release),
         }
-        // At or past the descriptor's count nothing binds the slot and no getter reads it, so
-        // the binding is kept nowhere; the call is still taken, as plain Metal takes it.
-        if slot >= limit {
-            return Ok(());
-        }
-        // Metal keeps the offset's low 32 bits: its getters answer them and the GPU reads
-        // there, inside a buffer past 4 GiB too. A nil buffer keeps them too, as its address:
-        // Metal's getters answer them and its function sees them as the buffer's address.
-        let base = buffer.map_or(0, |buffer| buffer.gpu_address().0);
-        let binding = BufferBinding {
-            address: base + u64::from(offset as u32),
-            attribute_stride,
-        };
-        // Past the slots the record holds no function binds a buffer (Metal's argument tables
-        // hold 31): plain Metal keeps it for its private getters, and so does the overflow.
-        if slot >= RECORD_BUFFERS {
-            let mut commands = lock(&self.0.pipelines);
-            return self.write_overflow(&mut commands, index, stage, slot, Some(binding));
-        }
-        let field = RecordField::Buffer {
-            stage,
-            slot: slot as usize,
-            binding: Some(binding),
-        };
-        self.edit_slot(index, field)
     }
 
     /// Where Metal keeps threadgroup length `slot` of command `index` of a compute buffer: at
@@ -2196,7 +2223,7 @@ impl IndirectCommandBuffer {
                     index: slot as usize,
                     length,
                 };
-                self.edit(command, field, None)
+                self.edit(command, field)
             }
             LengthPlace::Overflow(at) => {
                 let _pipelines = lock(&self.0.pipelines);
@@ -3882,6 +3909,137 @@ pub(super) struct WrittenRecords<S> {
     pub(super) records: Vec<Option<(CommandRecord, Option<S>)>>,
 }
 
+/// What the buffer notes after a field's write ([`IndirectCommandBuffer::then`]).
+#[derive(Clone, Copy)]
+enum Then {
+    Nothing,
+    /// A draw of the primitive type.
+    Drew(DrawPrimitiveType),
+    /// A render command's barrier.
+    Barrier,
+}
+
+/// One command's setters' writes, made in turn as each setter's checks pass: a setter's alone, or
+/// the setters a call of `set_each` names (`set_each.rs`), in the storage's bytes as the batch
+/// found them, each setter writing into the batch rather than handing its write back (a plan
+/// value handed back cost a buffer setter about 9 ns, `tests::icb_encode_bench`). A field that sets no state and adds nothing to
+/// what the records may hold ([`adds_nothing`](IndirectCommandBuffer::adds_nothing)) is written
+/// without `pipelines`, the count of the CPU's writes and the kept recordings of the command's
+/// chunk alone following it, as they follow a write under the lock
+/// ([`wrote`](IndirectCommandBuffer::wrote)): once the batch ends, the chunk noted for the kept
+/// recordings' next look to forget ([`UnlockedWrites`], `KeptChunks::settle`), then the writes
+/// counted, by one atomic add. A buffer the GPU starts writing meanwhile is the race a write under
+/// the lock has with it too (`gpu_written` is set under `unforeseen`'s lock). The lock's two locked
+/// instructions were most of a buffer setter's cost (`tests::icb_encode_bench`). Another write is
+/// made under `pipelines` ([`edit_locked`](IndirectCommandBuffer::edit_locked)).
+struct Batch<'i> {
+    icb: &'i IndirectCommandBuffer,
+    index: u32,
+    /// The storage's bytes ([`bytes`](IndirectCommandBuffer::bytes)).
+    storage: *mut u8,
+    /// The writes made without `pipelines`, not yet counted.
+    unlocked: u64,
+}
+
+impl Batch<'_> {
+    /// Write `field`, which names no pipeline state, then note `then`: without `pipelines` where
+    /// it adds nothing to what the records may hold, else under it.
+    fn field(&mut self, field: RecordField, then: Then) -> Result<(), Error> {
+        let icb = self.icb;
+        match icb.adds_nothing(field) {
+            true => {
+                icb.write_field(self.storage, self.index, field)?;
+                self.unlocked += 1;
+            }
+            false => icb.edit_locked(self.storage, self.index, field, None)?,
+        }
+        icb.then(then);
+        Ok(())
+    }
+
+    /// Set `set` on the command, as its pipeline of ID `id`, under `pipelines`.
+    fn state(&mut self, id: NonZeroU64, set: StateSet<'_>) -> Result<(), Error> {
+        let field = RecordField::Pipeline(id);
+        self.icb
+            .edit_locked(self.storage, self.index, field, Some(set))
+    }
+
+    /// Set `set`'s buffer on the command, for `call`, at the buffer's address plus the offset's
+    /// low 32 bits, as Metal keeps it: on an M4 under macOS 27.0.1, a kernel or vertex buffer set
+    /// at 2^40 + 16 or 2^32 + 32, plainly or with an attribute stride, read and answered 16 or 32
+    /// past the buffer's address, and so did a fragment buffer's getter; one set at 2^32 + 16 in a
+    /// buffer past 4 GiB read at 16, where a compute encoder's own buffer reads at the whole offset
+    /// (with and without API validation; the consumer measured the getters so on an M3 Max), and so
+    /// did object and mesh buffers' getters and reads. Refused (`Invalid`): a buffer of another
+    /// device. On a buffer that inherits its buffers the record keeps it and reads it back, and an
+    /// execution binds the encoder's buffers alone, none where the encoder's slot is unbound, as
+    /// plain Metal's, where its validation stops the call.
+    ///
+    /// A slot at or past the set's limit (the descriptor's count of the stage) is **taken** and
+    /// kept nowhere. Plain Metal takes it: on an M3 Max under macOS 27.0.1 a buffer of
+    /// `maxKernelBufferBindCount` 2 took `setKernelBuffer:offset:atIndex:` at index 2 and at
+    /// index 4 with no error and its `size` still read 3 commands, where Metal's own API
+    /// validation stops the call ("index(2) must be < 2."). Nothing of either side binds such a
+    /// slot to a function: an execution binds the slots below the count alone (`bindings` in
+    /// `indirect_execute.rs`, `buffers` in `render/executions.rs`), as Metal's count-sized
+    /// argument table does, and [`read_buffer`](IndirectCommandBuffer::read_buffer) answers none
+    /// at or past the
+    /// count. So the binding is dropped rather than written: the record's own slots are held to
+    /// the descriptor's counts by the engine (`indirect_commands::descriptor`'s `validate_record`,
+    /// which an execution's records and the records the GPU writes both go through), and what
+    /// Metal keeps such a slot in for its private getters is unmeasured.
+    fn buffer(&mut self, call: &'static str, set: BufferSet<'_>) -> Result<(), Error> {
+        let icb = self.icb;
+        let BufferSet {
+            stage,
+            limit,
+            slot,
+            buffer,
+            offset,
+            attribute_stride,
+        } = set;
+        if let Some(buffer) = buffer {
+            if !buffer.generation().same(icb.generation()) {
+                return Err(buffer.generation().foreign(call, icb.generation()));
+            }
+        }
+        // At or past the descriptor's count nothing binds the slot and no getter reads it, so
+        // the binding is kept nowhere; the call is still taken, as plain Metal takes it.
+        if slot >= limit {
+            return Ok(());
+        }
+        // Metal keeps the offset's low 32 bits: its getters answer them and the GPU reads
+        // there, inside a buffer past 4 GiB too. A nil buffer keeps them too, as its address:
+        // Metal's getters answer them and its function sees them as the buffer's address.
+        let base = buffer.map_or(0, |buffer| buffer.gpu_address().0);
+        let binding = BufferBinding {
+            address: base + u64::from(offset as u32),
+            attribute_stride,
+        };
+        // Past the slots the record holds no function binds a buffer (Metal's argument tables
+        // hold 31): plain Metal keeps it for its private getters, and so does the overflow.
+        if slot >= RECORD_BUFFERS {
+            let mut commands = lock(&icb.0.pipelines);
+            return icb.write_overflow(&mut commands, self.index, stage, slot, Some(binding));
+        }
+        let field = RecordField::Buffer {
+            stage,
+            slot: slot as usize,
+            binding: Some(binding),
+        };
+        self.field(field, Then::Nothing)
+    }
+}
+
+impl Drop for Batch<'_> {
+    fn drop(&mut self) {
+        if self.unlocked != 0 {
+            self.icb.0.unlocked.wrote(self.index);
+            (self.icb.0.unlocked_writes).fetch_add(self.unlocked, Ordering::Release);
+        }
+    }
+}
+
 /// A buffer a command's setter sets: at `slot` of `stage`, below the descriptor's `limit`, at
 /// `offset` and `attribute_stride` (none: the pipeline's own); `None` unsets the slot.
 struct BufferSet<'a> {
@@ -4099,18 +4257,10 @@ fn record_offset(index: u32) -> usize {
     COMMAND_BUFFER_HEADER_BYTES + index as usize * COMMAND_BYTES
 }
 
-/// The error of a buffer slot's setter whose field the record refuses
-/// (`CommandRecord::write_field`), written without the lock
-/// ([`edit_unlocked`](IndirectCommandBuffer::edit_unlocked)). `edit` maps its own in place: a
-/// call of this one from it made a draw about 1 ns slower (`tests::icb_encode_bench`).
-fn field_error(error: RecordError) -> Error {
-    match error {
-        RecordError::Length { .. }
-        | RecordError::Action { .. }
-        | RecordError::Barrier { .. }
-        | RecordError::PipelineState => undecodable(),
-        _ => internal("an indirect command's record does not take a setter's field"),
-    }
+/// `writes` in one word, as `IcbShared::added_writes` keeps them: the operations above the
+/// primitive types.
+fn packed(writes: CommandWrites) -> u64 {
+    u64::from(writes.operations) << 8 | u64::from(writes.primitive_types)
 }
 
 /// The runtime's error for a record that does not decode (a GPU write, the program's race).
@@ -4131,26 +4281,272 @@ pub struct IndirectComputeCommand {
     index: u32,
 }
 
-impl IndirectComputeCommand {
-    /// Write `field` into the record, with `set` as the state the CPU set where it names one
-    /// (`IndirectCommandBuffer::edit`).
-    fn edit(&self, field: RecordField, set: Option<StateSet<'_>>) -> Result<(), Error> {
-        self.icb.edit(self.index, field, set)
-    }
+/// Compute command `index` of `icb`, borrowed: what an [`IndirectComputeCommand`]'s calls and
+/// [`IndirectCommandBuffer::set_compute_command`] reach, without a handle of the buffer of its
+/// own.
+struct ComputeAt<'i> {
+    icb: &'i IndirectCommandBuffer,
+    index: u32,
+}
 
-    fn descriptor(&self) -> &IndirectCommandBufferDescriptor {
-        &self.icb.0.descriptor
+impl IndirectComputeCommand {
+    fn at(&self) -> ComputeAt<'_> {
+        ComputeAt {
+            icb: &self.icb,
+            index: self.index,
+        }
     }
 
     /// `setComputePipelineState:`. Refused (`Invalid`): a buffer that inherits its pipeline
     /// state, a state made without `supportIndirectCommandBuffers` (both end Metal's process), a
     /// state of another device.
     pub fn set_compute_pipeline_state(&self, state: &ComputePipelineState) -> Result<(), Error> {
+        self.at().set_compute_pipeline_state(state)
+    }
+
+    /// `setKernelBuffer:offset:atIndex:`: buffer `index` at `buffer`'s address plus `offset`'s
+    /// low 32 bits, as Metal keeps it, at the pipeline's own attribute stride; `None` binds no
+    /// buffer and keeps the offset's low 32 bits as the slot's address, as Metal's nil does: its
+    /// getter answers them, and a function the command runs sees them as the buffer's address (an
+    /// execution on the host binds no buffer there, its function seeing none, announced as
+    /// `indirect-nil-buffer-offset`). Taken at an index at or past the descriptor's
+    /// `max_kernel_buffer_bind_count` and kept nowhere, as plain Metal takes it (where its own
+    /// validation stops the call): no execution binds such a slot and no getter answers it.
+    /// Measured on an M3 Max under macOS 27.0.1: a buffer of `maxKernelBufferBindCount` 2 took
+    /// the call at index 2 and at index 4 with no error, and its `size` still read 3 commands.
+    /// Refused (`Invalid`): a buffer of another device. On a buffer that inherits its buffers it
+    /// is kept and read back, and executions bind the encoder's.
+    pub fn set_kernel_buffer(
+        &self,
+        buffer: Option<&Buffer>,
+        offset: u64,
+        index: u32,
+    ) -> Result<(), Error> {
+        self.at().set_kernel_buffer(buffer, offset, index)
+    }
+
+    /// `setKernelBuffer:offset:attributeStride:atIndex:`: as
+    /// [`set_kernel_buffer`](Self::set_kernel_buffer), at attribute stride `stride` (all ones is
+    /// the pipeline's own, as Metal reads it back). Where the descriptor does not support dynamic
+    /// attribute strides the stride is dropped and the buffer set as `set_kernel_buffer` sets it,
+    /// as plain Metal keeps it (its stride reads back all ones, the pipeline's own; an M3 Max and
+    /// an M4; Metal's API validation stops the call). `None` sets a nil buffer at the stride, which
+    /// the stride getter answers.
+    pub fn set_kernel_buffer_with_stride(
+        &self,
+        buffer: Option<&Buffer>,
+        offset: u64,
+        stride: u64,
+        index: u32,
+    ) -> Result<(), Error> {
+        self.at()
+            .set_kernel_buffer_with_stride(buffer, offset, stride, index)
+    }
+
+    /// `concurrentDispatchThreadgroups:threadsPerThreadgroup:`: the command dispatches
+    /// `threadgroups` of `threads_per_threadgroup`, each axis's low 32 bits, as Metal keeps them.
+    /// Every compute buffer's records hold it: on a buffer of dispatches of threads it runs as
+    /// on its own, as plain Metal runs it, where Metal's validation stops the call
+    /// ("MTLIndirectCommandTypeConcurrentDispatch is not enabled").
+    pub fn concurrent_dispatch_threadgroups(
+        &self,
+        threadgroups: Size,
+        threads_per_threadgroup: Size,
+    ) -> Result<(), Error> {
+        self.at()
+            .concurrent_dispatch_threadgroups(threadgroups, threads_per_threadgroup)
+    }
+
+    /// `concurrentDispatchThreads:threadsPerThreadgroup:`: the command dispatches `threads` in
+    /// groups of `threads_per_threadgroup`, each axis's low 32 bits, as Metal keeps them. Every
+    /// compute buffer's records hold it: on a buffer of dispatches of threadgroups it runs as on
+    /// its own, as plain Metal runs it, where Metal's validation stops the call.
+    pub fn concurrent_dispatch_threads(
+        &self,
+        threads: Size,
+        threads_per_threadgroup: Size,
+    ) -> Result<(), Error> {
+        self.at()
+            .concurrent_dispatch_threads(threads, threads_per_threadgroup)
+    }
+
+    /// `setBarrier`: the command waits for the commands before it.
+    pub fn set_barrier(&self) -> Result<(), Error> {
+        self.at().set_barrier()
+    }
+
+    /// `clearBarrier`.
+    pub fn clear_barrier(&self) -> Result<(), Error> {
+        self.at().clear_barrier()
+    }
+
+    /// `setThreadgroupMemoryLength:atIndex:`: as set, a multiple of 16 or not and past the
+    /// device's maximum alike, where Metal keeps it, at any index, the descriptor's
+    /// `max_kernel_threadgroup_memory_bind_count` or not: 38 lengths a command, of one array, so
+    /// an index of 38 or more sets a later command's length (`index - 38` of the next command's,
+    /// and so on), and one past the last command's is kept beside the buffer for the getter. No
+    /// function binds one past index 30: Metal keeps lengths 31 to 37 for its private getter
+    /// alone, as the runtime does. Past the last command's lengths Metal keeps each command's
+    /// words: 2 a command where the buffer does not inherit its pipeline state, then 8 a command;
+    /// a length set there is reset and copied with that command, as on Metal: a CPU reset clears
+    /// the 2, a GPU reset both, and a GPU copy carries both (and clears lengths 36 and 37 where
+    /// the commands hold the 2). Differs: Metal's pipeline setter writes the 2 words and clears
+    /// lengths 36 and 37, and its dispatch and imageblock setters write the 8 (the threadgroup
+    /// counts and size, the imageblock's width and height), so its getter answers those there;
+    /// the runtime keeps the lengths set there alone, and its pipeline setter leaves lengths 36
+    /// and 37. A GPU copy writes a value of its own two places past the commands' words, which
+    /// the runtime does not. Far past the last command's lengths (about 4000 places on an M3
+    /// Max), Metal's setter ends the process; the runtime keeps the length.
+    pub fn set_threadgroup_memory_length(&self, length: u32, index: u32) -> Result<(), Error> {
+        self.at().set_threadgroup_memory_length(length, index)
+    }
+
+    /// `setStageInRegion:`: each origin and size value's low 32 bits, as Metal keeps them.
+    pub fn set_stage_in_region(&self, region: Region) -> Result<(), Error> {
+        self.at().set_stage_in_region(region)
+    }
+
+    /// `setImageblockWidth:height:`: as set. A side past 65535, which Metal keeps, is refused
+    /// (`NotImplemented(IndirectImageblockSize)`): the record holds 16 bits a side, as a
+    /// kernel's `set_imageblock_size` writes it.
+    pub fn set_imageblock_size(&self, width: u64, height: u64) -> Result<(), Error> {
+        self.at().set_imageblock_size(width, height)
+    }
+
+    /// `reset`: the command as a fresh buffer's, but for the pipeline state it executes with,
+    /// which Metal's reset keeps while its getter reports none (measured on the M3 Max and the M4):
+    /// a dispatch encoded after the reset runs it. [`IndirectCommandBuffer:: commands`] reports
+    /// none, as Metal's getter does; a pipeline setter replaces it. The imageblock size is kept
+    /// too, as plain Metal's reads back after `reset` (the size set before it, measured by the
+    /// integration consumer on an M3 without API validation).
+    pub fn reset(&self) -> Result<(), Error> {
+        self.at().reset()
+    }
+    /// `getCommandType`, Apple's private getter: the command's
+    /// [`command_type`](EncodedComputeCommand::command_type) as
+    /// [`IndirectCommandBuffer::commands`] reads it now, its record's action alone read. Each of
+    /// the command's getters reads its field of the record as it is at the call (a runtime
+    /// extension standing for Metal's private getters, as `commands` is), so a field read after
+    /// the GPU may have written the records may not be what an execution committed earlier
+    /// runs ([`IndirectCommandBuffer::gpu_written`]).
+    pub fn command_type(&self) -> Result<IndirectCommandType, Error> {
+        self.at().command_type()
+    }
+
+    /// `hasBarrier`, Apple's private getter: the command's
+    /// [`barrier`](EncodedComputeCommand::barrier), read alone.
+    pub fn has_barrier(&self) -> Result<bool, Error> {
+        self.at().has_barrier()
+    }
+
+    /// `dispatchThreadgroupsArguments` and `dispatchThreadsArguments`, Apple's private getters:
+    /// the command's [`dispatch`](EncodedComputeCommand::dispatch), read alone.
+    pub fn dispatch(&self) -> Result<Option<IndirectDispatch>, Error> {
+        self.at().dispatch()
+    }
+
+    /// The kernel buffer set at `index`: the command's
+    /// [`kernel_buffers`](EncodedComputeCommand::kernel_buffers)`[index]`, read alone, none at or
+    /// past the descriptor's `max_kernel_buffer_bind_count`. Metal's private getters of the slot
+    /// (`getKernelBufferAddressAtIndex:`, `getKernelAttributeStrideAtIndex:`) answer it as
+    /// [`EncodedComputeCommand::kernel_buffer_address`] and
+    /// [`EncodedComputeCommand::kernel_attribute_stride`] do.
+    pub fn kernel_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
+        self.at().kernel_buffer(index)
+    }
+
+    /// `getThreadgroupMemoryLengthAtIndex:`, Apple's private getter: the length at `index`'s low
+    /// 32 bits, as Metal's takes them, where Metal keeps it, as
+    /// [`set_threadgroup_memory_length`](Self::set_threadgroup_memory_length) sets it (below 31,
+    /// the command's
+    /// [`threadgroup_memory_lengths`](EncodedComputeCommand::threadgroup_memory_lengths)`[index]`;
+    /// at 38 or more, a later command's; past the last command's, the commands' words there),
+    /// read alone: 0 where none was set, at any index, the descriptor's
+    /// `max_kernel_threadgroup_memory_bind_count` or not; always some. Differs: past the last
+    /// command's lengths Metal's getter answers what its pipeline, dispatch and imageblock
+    /// setters wrote there, the runtime's only lengths set there (the setter's docs); far past
+    /// them (an M3 Max: 100000 places past command 0's of 3), Metal's getter ends the process,
+    /// and the runtime's answers.
+    pub fn threadgroup_memory_length(&self, index: u64) -> Result<Option<u32>, Error> {
+        self.at().threadgroup_memory_length(index)
+    }
+
+    /// `getStageInRegion`, Apple's private getter: the command's
+    /// [`stage_in_region`](EncodedComputeCommand::stage_in_region), read alone.
+    pub fn stage_in_region(&self) -> Result<Region, Error> {
+        self.at().stage_in_region()
+    }
+
+    /// The imageblock size Apple's private getter answers: the command's
+    /// [`imageblock_width`](EncodedComputeCommand::imageblock_width) and
+    /// [`imageblock_height`](EncodedComputeCommand::imageblock_height), read alone.
+    pub fn imageblock_size(&self) -> Result<(u64, u64), Error> {
+        self.at().imageblock_size()
+    }
+
+    /// The command's [`pipeline`](EncodedComputeCommand::pipeline), read alone: the state set on
+    /// it, none when unset, reset, or when no state of the ID it names lives.
+    pub fn pipeline_state(&self) -> Result<Option<ComputePipelineState>, Error> {
+        self.at().pipeline_state()
+    }
+
+    /// The command's [`pipeline_id`](EncodedComputeCommand::pipeline_id), read alone: the ID of
+    /// the state its record names, none where it names none.
+    pub fn pipeline_id(&self) -> Result<Option<ResourceId>, Error> {
+        self.at().pipeline_id()
+    }
+
+    /// `getPipelineStateUniqueIdentifier`, Apple's private getter: the command's
+    /// [`pipeline_unique_identifier`](EncodedComputeCommand::pipeline_unique_identifier), read
+    /// alone, whose kind the device announces as `commands` announces it.
+    pub fn pipeline_unique_identifier(&self) -> Result<Option<u64>, Error> {
+        self.at().pipeline_unique_identifier()
+    }
+}
+
+impl ComputeAt<'_> {
+    /// Write `field`, which names no pipeline state, into the record
+    /// (`IndirectCommandBuffer::edit`).
+    fn edit(&self, field: RecordField) -> Result<(), Error> {
+        self.icb.edit(self.index, field)
+    }
+
+    fn descriptor(&self) -> &IndirectCommandBufferDescriptor {
+        &self.icb.0.descriptor
+    }
+
+    fn set_compute_pipeline_state(&self, state: &ComputePipelineState) -> Result<(), Error> {
+        self.pipeline_in(&mut self.icb.batch(self.index), state)
+    }
+
+    /// [`set_compute_pipeline_state`](Self::set_compute_pipeline_state) of `state` in `batch`.
+    /// The state the command names already, as the CPU set it since the buffer's last carry
+    /// (`SetKeys`), passed every check then and is the command's state still: its ID is written
+    /// again without the lock or a hold of the state, as any field that adds nothing to what the
+    /// records may hold is (`Batch::field`).
+    fn pipeline_in(
+        &self,
+        batch: &mut Batch<'_>,
+        state: &ComputePipelineState,
+    ) -> Result<(), Error> {
         const CALL: &str = "set_compute_pipeline_state";
-        self.icb.check_command_types(CALL)?;
+        if let (Some(id), Some(serial)) = (
+            NonZeroU64::new(state.gpu_resource_id().0),
+            state.id_serial(),
+        ) {
+            let key = StateKey {
+                compute: true,
+                id: id.get(),
+                serial,
+            };
+            if self.icb.0.set_keys.names(self.index, key) {
+                return batch.field(RecordField::Pipeline(id), Then::Nothing);
+            }
+        }
         // The state's program, held while the command takes it (`pipeline/carry.rs`): one hold
-        // for every read of the state below.
+        // for every read of the state.
         let held = state.hold();
+        self.icb.check_command_types(CALL)?;
         let device = state.bound_device()?;
         if !device.same(self.icb.generation()) {
             return Err(device.foreign(CALL, self.icb.generation()));
@@ -4188,43 +4584,47 @@ impl IndirectComputeCommand {
                 serial,
             },
             named,
-            make: &|| {
-                CommandState::Compute(state.downgrade(), state.program_held(&held), stamp, named)
-            },
+            stamp,
+            of: StateOf::Compute(state, &held),
         };
-        self.edit(RecordField::Pipeline(id), Some(set))
+        batch.state(id, set)
     }
 
-    /// `setKernelBuffer:offset:atIndex:`: buffer `index` at `buffer`'s address plus `offset`'s
-    /// low 32 bits, as Metal keeps it, at the pipeline's own attribute stride; `None` binds no
-    /// buffer and keeps the offset's low 32 bits as the slot's address, as Metal's nil does: its
-    /// getter answers them, and a function the command runs sees them as the buffer's address (an
-    /// execution on the host binds no buffer there, its function seeing none, announced as
-    /// `indirect-nil-buffer-offset`). Taken at an index at or past the descriptor's
-    /// `max_kernel_buffer_bind_count` and kept nowhere, as plain Metal takes it (where its own
-    /// validation stops the call): no execution binds such a slot and no getter answers it.
-    /// Measured on an M3 Max under macOS 27.0.1: a buffer of `maxKernelBufferBindCount` 2 took
-    /// the call at index 2 and at index 4 with no error, and its `size` still read 3 commands.
-    /// Refused (`Invalid`): a buffer of another device. On a buffer that inherits its buffers it
-    /// is kept and read back, and executions bind the encoder's.
-    pub fn set_kernel_buffer(
+    fn set_kernel_buffer(
         &self,
         buffer: Option<&Buffer>,
         offset: u64,
         index: u32,
     ) -> Result<(), Error> {
-        self.set_buffer("set_kernel_buffer", buffer, offset, None, index)
+        self.kernel_buffer_in(&mut self.icb.batch(self.index), buffer, offset, index)
     }
 
-    /// `setKernelBuffer:offset:attributeStride:atIndex:`: as
-    /// [`set_kernel_buffer`](Self::set_kernel_buffer), at attribute stride `stride` (all ones is
-    /// the pipeline's own, as Metal reads it back). Where the descriptor does not support dynamic
-    /// attribute strides the stride is dropped and the buffer set as `set_kernel_buffer` sets it,
-    /// as plain Metal keeps it (its stride reads back all ones, the pipeline's own; an M3 Max and
-    /// an M4; Metal's API validation stops the call). `None` sets a nil buffer at the stride, which
-    /// the stride getter answers.
-    pub fn set_kernel_buffer_with_stride(
+    /// [`set_kernel_buffer`](Self::set_kernel_buffer) in `batch`.
+    fn kernel_buffer_in(
         &self,
+        batch: &mut Batch<'_>,
+        buffer: Option<&Buffer>,
+        offset: u64,
+        index: u32,
+    ) -> Result<(), Error> {
+        self.buffer_in(batch, "set_kernel_buffer", buffer, offset, None, index)
+    }
+
+    fn set_kernel_buffer_with_stride(
+        &self,
+        buffer: Option<&Buffer>,
+        offset: u64,
+        stride: u64,
+        index: u32,
+    ) -> Result<(), Error> {
+        let batch = &mut self.icb.batch(self.index);
+        self.kernel_buffer_with_stride_in(batch, buffer, offset, stride, index)
+    }
+
+    /// [`set_kernel_buffer_with_stride`](Self::set_kernel_buffer_with_stride) in `batch`.
+    fn kernel_buffer_with_stride_in(
+        &self,
+        batch: &mut Batch<'_>,
         buffer: Option<&Buffer>,
         offset: u64,
         stride: u64,
@@ -4233,11 +4633,14 @@ impl IndirectComputeCommand {
         const CALL: &str = "set_kernel_buffer_with_stride";
         let dynamic = self.descriptor().support_dynamic_attribute_stride;
         let stride = (dynamic && stride != u64::MAX).then_some(stride);
-        self.set_buffer(CALL, buffer, offset, stride, index)
+        self.buffer_in(batch, CALL, buffer, offset, stride, index)
     }
 
-    fn set_buffer(
+    /// A kernel buffer setter for `call` in `batch` ([`Batch::buffer`], against the
+    /// descriptor's count).
+    fn buffer_in(
         &self,
+        batch: &mut Batch<'_>,
         call: &'static str,
         buffer: Option<&Buffer>,
         offset: u64,
@@ -4252,20 +4655,27 @@ impl IndirectComputeCommand {
             offset,
             attribute_stride,
         };
-        self.icb.set_buffer(self.index, call, set)
+        batch.buffer(call, set)
     }
 
-    /// `concurrentDispatchThreadgroups:threadsPerThreadgroup:`: the command dispatches
-    /// `threadgroups` of `threads_per_threadgroup`, each axis's low 32 bits, as Metal keeps them.
-    /// Every compute buffer's records hold it: on a buffer of dispatches of threads it runs as
-    /// on its own, as plain Metal runs it, where Metal's validation stops the call
-    /// ("MTLIndirectCommandTypeConcurrentDispatch is not enabled").
-    pub fn concurrent_dispatch_threadgroups(
+    fn concurrent_dispatch_threadgroups(
         &self,
         threadgroups: Size,
         threads_per_threadgroup: Size,
     ) -> Result<(), Error> {
-        self.set_dispatch(
+        let batch = &mut self.icb.batch(self.index);
+        self.dispatch_threadgroups_in(batch, threadgroups, threads_per_threadgroup)
+    }
+
+    /// [`concurrent_dispatch_threadgroups`](Self::concurrent_dispatch_threadgroups) in `batch`.
+    fn dispatch_threadgroups_in(
+        &self,
+        batch: &mut Batch<'_>,
+        threadgroups: Size,
+        threads_per_threadgroup: Size,
+    ) -> Result<(), Error> {
+        self.dispatch_in(
+            batch,
             "concurrent_dispatch_threadgroups",
             Action::DispatchThreadgroups {
                 grid: low_bits(threadgroups),
@@ -4274,16 +4684,24 @@ impl IndirectComputeCommand {
         )
     }
 
-    /// `concurrentDispatchThreads:threadsPerThreadgroup:`: the command dispatches `threads` in
-    /// groups of `threads_per_threadgroup`, each axis's low 32 bits, as Metal keeps them. Every
-    /// compute buffer's records hold it: on a buffer of dispatches of threadgroups it runs as on
-    /// its own, as plain Metal runs it, where Metal's validation stops the call.
-    pub fn concurrent_dispatch_threads(
+    fn concurrent_dispatch_threads(
         &self,
         threads: Size,
         threads_per_threadgroup: Size,
     ) -> Result<(), Error> {
-        self.set_dispatch(
+        let batch = &mut self.icb.batch(self.index);
+        self.dispatch_threads_in(batch, threads, threads_per_threadgroup)
+    }
+
+    /// [`concurrent_dispatch_threads`](Self::concurrent_dispatch_threads) in `batch`.
+    fn dispatch_threads_in(
+        &self,
+        batch: &mut Batch<'_>,
+        threads: Size,
+        threads_per_threadgroup: Size,
+    ) -> Result<(), Error> {
+        self.dispatch_in(
+            batch,
             "concurrent_dispatch_threads",
             Action::DispatchThreads {
                 grid: low_bits(threads),
@@ -4293,46 +4711,37 @@ impl IndirectComputeCommand {
     }
 
     /// Set the record's dispatch `action`, which every compute buffer's records hold
-    /// (`CommandDescriptor::holds`). Refused for `call` on a buffer of no command types
-    /// (`NoCommandTypes`), where plain Metal's process ends.
-    fn set_dispatch(&self, call: &'static str, action: Action) -> Result<(), Error> {
+    /// (`CommandDescriptor::holds`), in `batch`. Refused for `call` on a buffer of no command
+    /// types (`NoCommandTypes`), where plain Metal's process ends.
+    fn dispatch_in(
+        &self,
+        batch: &mut Batch<'_>,
+        call: &'static str,
+        action: Action,
+    ) -> Result<(), Error> {
         self.icb.check_command_types(call)?;
-        self.edit(RecordField::Action(action), None)
+        batch.field(RecordField::Action(action), Then::Nothing)
     }
 
-    /// `setBarrier`: the command waits for the commands before it.
-    pub fn set_barrier(&self) -> Result<(), Error> {
-        self.edit(RecordField::Barrier(true), None)
+    fn set_barrier(&self) -> Result<(), Error> {
+        self.barrier_in(&mut self.icb.batch(self.index), true)
     }
 
-    /// `clearBarrier`.
-    pub fn clear_barrier(&self) -> Result<(), Error> {
-        self.edit(RecordField::Barrier(false), None)
+    fn clear_barrier(&self) -> Result<(), Error> {
+        self.barrier_in(&mut self.icb.batch(self.index), false)
     }
 
-    /// `setThreadgroupMemoryLength:atIndex:`: as set, a multiple of 16 or not and past the
-    /// device's maximum alike, where Metal keeps it, at any index, the descriptor's
-    /// `max_kernel_threadgroup_memory_bind_count` or not: 38 lengths a command, of one array, so
-    /// an index of 38 or more sets a later command's length (`index - 38` of the next command's,
-    /// and so on), and one past the last command's is kept beside the buffer for the getter. No
-    /// function binds one past index 30: Metal keeps lengths 31 to 37 for its private getter
-    /// alone, as the runtime does. Past the last command's lengths Metal keeps each command's
-    /// words: 2 a command where the buffer does not inherit its pipeline state, then 8 a command;
-    /// a length set there is reset and copied with that command, as on Metal: a CPU reset clears
-    /// the 2, a GPU reset both, and a GPU copy carries both (and clears lengths 36 and 37 where
-    /// the commands hold the 2). Differs: Metal's pipeline setter writes the 2 words and clears
-    /// lengths 36 and 37, and its dispatch and imageblock setters write the 8 (the threadgroup
-    /// counts and size, the imageblock's width and height), so its getter answers those there;
-    /// the runtime keeps the lengths set there alone, and its pipeline setter leaves lengths 36
-    /// and 37. A GPU copy writes a value of its own two places past the commands' words, which
-    /// the runtime does not. Far past the last command's lengths (about 4000 places on an M3
-    /// Max), Metal's setter ends the process; the runtime keeps the length.
-    pub fn set_threadgroup_memory_length(&self, length: u32, index: u32) -> Result<(), Error> {
+    /// [`set_barrier`](Self::set_barrier) (`set`) or [`clear_barrier`](Self::clear_barrier) in
+    /// `batch`.
+    fn barrier_in(&self, batch: &mut Batch<'_>, set: bool) -> Result<(), Error> {
+        batch.field(RecordField::Barrier(set), Then::Nothing)
+    }
+
+    fn set_threadgroup_memory_length(&self, length: u32, index: u32) -> Result<(), Error> {
         self.icb.set_length(self.index, index, length)
     }
 
-    /// `setStageInRegion:`: each origin and size value's low 32 bits, as Metal keeps them.
-    pub fn set_stage_in_region(&self, region: Region) -> Result<(), Error> {
+    fn set_stage_in_region(&self, region: Region) -> Result<(), Error> {
         let Region { origin, size } = region;
         let values = [
             origin.x,
@@ -4343,29 +4752,20 @@ impl IndirectComputeCommand {
             size.depth,
         ];
         let region = values.map(|value| value as u32);
-        self.edit(RecordField::StageInRegion(region), None)
+        self.edit(RecordField::StageInRegion(region))
     }
 
-    /// `setImageblockWidth:height:`: as set. A side past 65535, which Metal keeps, is refused
-    /// (`NotImplemented(IndirectImageblockSize)`): the record holds 16 bits a side, as a
-    /// kernel's `set_imageblock_size` writes it.
-    pub fn set_imageblock_size(&self, width: u64, height: u64) -> Result<(), Error> {
+    fn set_imageblock_size(&self, width: u64, height: u64) -> Result<(), Error> {
         let (Ok(w), Ok(h)) = (u16::try_from(width), u16::try_from(height)) else {
             return Err(Error::NotImplemented(RuntimeGap::IndirectImageblockSize {
                 width,
                 height,
             }));
         };
-        self.edit(RecordField::ImageblockSize([w, h]), None)
+        self.edit(RecordField::ImageblockSize([w, h]))
     }
 
-    /// `reset`: the command as a fresh buffer's, but for the pipeline state it executes with,
-    /// which Metal's reset keeps while its getter reports none (measured on the M3 Max and the M4):
-    /// a dispatch encoded after the reset runs it. [`IndirectCommandBuffer:: commands`] reports
-    /// none, as Metal's getter does; a pipeline setter replaces it. The imageblock size is kept
-    /// too, as plain Metal's reads back after `reset` (the size set before it, measured by the
-    /// integration consumer on an M3 without API validation).
-    pub fn reset(&self) -> Result<(), Error> {
+    fn reset(&self) -> Result<(), Error> {
         self.icb.check_command_types("reset")?;
         self.icb.reset_command(self.index, |record| {
             let retained = record.bindings.pipeline.or(record.retained_pipeline);
@@ -4377,14 +4777,7 @@ impl IndirectComputeCommand {
             true
         })
     }
-    /// `getCommandType`, Apple's private getter: the command's
-    /// [`command_type`](EncodedComputeCommand::command_type) as
-    /// [`IndirectCommandBuffer::commands`] reads it now, its record's action alone read. Each of
-    /// the command's getters reads its field of the record as it is at the call (a runtime
-    /// extension standing for Metal's private getters, as `commands` is), so a field read after
-    /// the GPU may have written the records may not be what an execution committed earlier
-    /// runs ([`IndirectCommandBuffer::gpu_written`]).
-    pub fn command_type(&self) -> Result<IndirectCommandType, Error> {
+    fn command_type(&self) -> Result<IndirectCommandType, Error> {
         self.check_getter("command_type")?;
         self.icb
             .read_record(self.index, |view| command_type(&view.action()))
@@ -4397,54 +4790,30 @@ impl IndirectComputeCommand {
         self.icb.check_command_types(call)
     }
 
-    /// `hasBarrier`, Apple's private getter: the command's
-    /// [`barrier`](EncodedComputeCommand::barrier), read alone.
-    pub fn has_barrier(&self) -> Result<bool, Error> {
+    fn has_barrier(&self) -> Result<bool, Error> {
         self.check_getter("has_barrier")?;
         self.icb.read_record(self.index, |view| view.barrier())
     }
 
-    /// `dispatchThreadgroupsArguments` and `dispatchThreadsArguments`, Apple's private getters:
-    /// the command's [`dispatch`](EncodedComputeCommand::dispatch), read alone.
-    pub fn dispatch(&self) -> Result<Option<IndirectDispatch>, Error> {
+    fn dispatch(&self) -> Result<Option<IndirectDispatch>, Error> {
         self.check_getter("dispatch")?;
         self.icb
             .read_record(self.index, |view| dispatch_of(&view.action()))
     }
 
-    /// The kernel buffer set at `index`: the command's
-    /// [`kernel_buffers`](EncodedComputeCommand::kernel_buffers)`[index]`, read alone, none at or
-    /// past the descriptor's `max_kernel_buffer_bind_count`. Metal's private getters of the slot
-    /// (`getKernelBufferAddressAtIndex:`, `getKernelAttributeStrideAtIndex:`) answer it as
-    /// [`EncodedComputeCommand::kernel_buffer_address`] and
-    /// [`EncodedComputeCommand::kernel_attribute_stride`] do.
-    pub fn kernel_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
+    fn kernel_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
         self.check_getter("kernel_buffer")?;
         let count = self.descriptor().max_kernel_buffer_bind_count;
         self.icb
             .read_buffer(self.index, BufferStage::Kernel, count, index)
     }
 
-    /// `getThreadgroupMemoryLengthAtIndex:`, Apple's private getter: the length at `index`'s low
-    /// 32 bits, as Metal's takes them, where Metal keeps it, as
-    /// [`set_threadgroup_memory_length`](Self::set_threadgroup_memory_length) sets it (below 31,
-    /// the command's
-    /// [`threadgroup_memory_lengths`](EncodedComputeCommand::threadgroup_memory_lengths)`[index]`;
-    /// at 38 or more, a later command's; past the last command's, the commands' words there),
-    /// read alone: 0 where none was set, at any index, the descriptor's
-    /// `max_kernel_threadgroup_memory_bind_count` or not; always some. Differs: past the last
-    /// command's lengths Metal's getter answers what its pipeline, dispatch and imageblock
-    /// setters wrote there, the runtime's only lengths set there (the setter's docs); far past
-    /// them (an M3 Max: 100000 places past command 0's of 3), Metal's getter ends the process,
-    /// and the runtime's answers.
-    pub fn threadgroup_memory_length(&self, index: u64) -> Result<Option<u32>, Error> {
+    fn threadgroup_memory_length(&self, index: u64) -> Result<Option<u32>, Error> {
         self.check_getter("threadgroup_memory_length")?;
         self.icb.length(self.index, index as u32).map(Some)
     }
 
-    /// `getStageInRegion`, Apple's private getter: the command's
-    /// [`stage_in_region`](EncodedComputeCommand::stage_in_region), read alone.
-    pub fn stage_in_region(&self) -> Result<Region, Error> {
+    fn stage_in_region(&self) -> Result<Region, Error> {
         self.check_getter("stage_in_region")?;
         let [x, y, z, width, height, depth] = self
             .icb
@@ -4456,10 +4825,7 @@ impl IndirectComputeCommand {
         })
     }
 
-    /// The imageblock size Apple's private getter answers: the command's
-    /// [`imageblock_width`](EncodedComputeCommand::imageblock_width) and
-    /// [`imageblock_height`](EncodedComputeCommand::imageblock_height), read alone.
-    pub fn imageblock_size(&self) -> Result<(u64, u64), Error> {
+    fn imageblock_size(&self) -> Result<(u64, u64), Error> {
         self.check_getter("imageblock_size")?;
         let [width, height] = self
             .icb
@@ -4467,26 +4833,19 @@ impl IndirectComputeCommand {
         Ok((width.into(), height.into()))
     }
 
-    /// The command's [`pipeline`](EncodedComputeCommand::pipeline), read alone: the state set on
-    /// it, none when unset, reset, or when no state of the ID it names lives.
-    pub fn pipeline_state(&self) -> Result<Option<ComputePipelineState>, Error> {
+    fn pipeline_state(&self) -> Result<Option<ComputePipelineState>, Error> {
         self.check_getter("pipeline_state")?;
         Ok(self.icb.compute_pipeline_now(self.index)?.0)
     }
 
-    /// The command's [`pipeline_id`](EncodedComputeCommand::pipeline_id), read alone: the ID of
-    /// the state its record names, none where it names none.
-    pub fn pipeline_id(&self) -> Result<Option<ResourceId>, Error> {
+    fn pipeline_id(&self) -> Result<Option<ResourceId>, Error> {
         self.check_getter("pipeline_id")?;
         self.icb.read_record(self.index, |view| {
             view.pipeline().map(|id| ResourceId(id.get()))
         })
     }
 
-    /// `getPipelineStateUniqueIdentifier`, Apple's private getter: the command's
-    /// [`pipeline_unique_identifier`](EncodedComputeCommand::pipeline_unique_identifier), read
-    /// alone, whose kind the device announces as `commands` announces it.
-    pub fn pipeline_unique_identifier(&self) -> Result<Option<u64>, Error> {
+    fn pipeline_unique_identifier(&self) -> Result<Option<u64>, Error> {
         self.check_getter("pipeline_unique_identifier")?;
         let (_, identifier) = self.icb.compute_pipeline_now(self.index)?;
         self.icb.announce_identifier(identifier);
@@ -4743,7 +5102,494 @@ pub struct IndirectRenderCommand {
     index: u32,
 }
 
+/// Render command `index` of `icb`, borrowed: what an [`IndirectRenderCommand`]'s calls and
+/// [`IndirectCommandBuffer::set_render_command`] reach, without a handle of the buffer of its own.
+struct RenderAt<'i> {
+    icb: &'i IndirectCommandBuffer,
+    index: u32,
+}
+
 impl IndirectRenderCommand {
+    fn at(&self) -> RenderAt<'_> {
+        RenderAt {
+            icb: &self.icb,
+            index: self.index,
+        }
+    }
+
+    /// `setRenderPipelineState:`. Refused (`Invalid`): a buffer that inherits its pipeline
+    /// state, a state made without `supportIndirectCommandBuffers` (a tile pipeline's among
+    /// them), a state of another device, and a state whose kind of draw the buffer's command
+    /// types lack (`PipelineKind`: a vertex function's on a buffer of mesh draws alone, a mesh
+    /// one's on a buffer of no mesh draw), where Metal's process ends.
+    pub fn set_render_pipeline_state(&self, state: &RenderPipelineState) -> Result<(), Error> {
+        self.at().set_render_pipeline_state(state)
+    }
+
+    /// `setVertexBuffer:offset:atIndex:`: vertex buffer `index` at `buffer`'s address plus
+    /// `offset`'s low 32 bits, as Metal keeps it, at the pipeline's own attribute stride; `None`
+    /// sets a nil buffer at the offset's low 32 bits, as
+    /// [`IndirectComputeCommand::set_kernel_buffer`] does, an index at or past the descriptor's
+    /// `max_vertex_buffer_bind_count` taken and kept nowhere as that call's is. Refused
+    /// (`Invalid`): a buffer of another device. On a buffer that inherits its buffers it is kept
+    /// and read back, and executions bind the encoder's.
+    pub fn set_vertex_buffer(
+        &self,
+        buffer: Option<&Buffer>,
+        offset: u64,
+        index: u32,
+    ) -> Result<(), Error> {
+        self.at().set_vertex_buffer(buffer, offset, index)
+    }
+
+    /// `setVertexBuffer:offset:attributeStride:atIndex:`: as
+    /// [`set_vertex_buffer`](Self::set_vertex_buffer), at attribute stride `stride` (all ones is
+    /// the pipeline's own). On a buffer that does not support dynamic attribute strides the
+    /// stride is dropped and the buffer set, as plain Metal sets it where its validation stops
+    /// the call: the stride reads back all ones and the draw reads the buffer at its offset, as a
+    /// kernel buffer's is. `None` sets a nil buffer at the stride, as
+    /// [`IndirectComputeCommand::set_kernel_buffer_with_stride`] does.
+    pub fn set_vertex_buffer_with_stride(
+        &self,
+        buffer: Option<&Buffer>,
+        offset: u64,
+        stride: u64,
+        index: u32,
+    ) -> Result<(), Error> {
+        self.at()
+            .set_vertex_buffer_with_stride(buffer, offset, stride, index)
+    }
+
+    /// `setFragmentBuffer:offset:atIndex:`: as [`set_vertex_buffer`](Self::set_vertex_buffer),
+    /// against the descriptor's `max_fragment_buffer_bind_count`.
+    pub fn set_fragment_buffer(
+        &self,
+        buffer: Option<&Buffer>,
+        offset: u64,
+        index: u32,
+    ) -> Result<(), Error> {
+        self.at().set_fragment_buffer(buffer, offset, index)
+    }
+
+    /// `drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:`: the command draws
+    /// `vertex_count` vertices of `primitive_type` from `vertex_start`, `instance_count` times
+    /// from `base_instance`, each value's low 32 bits, which the record holds (Metal takes larger
+    /// values; what it keeps of them is not measured: its getter answers an object). A type is a
+    /// public one or one of Metal's private ones ([`DrawPrimitiveType`]), which an execution draws
+    /// as an encoder's draw of it draws, type 9 failing the command buffer so where an execution
+    /// of a range given at its call finds it there (the M3 Max, macOS 27.0.1: types 5 to 9 drew
+    /// and failed as the encoder's draws of them, direct and indexed). A draw of no vertices or
+    /// no instances runs nothing, as plain Metal runs it where its validation stops the call
+    /// ("instanceCount(0) must be non-zero"). The records of every render buffer but one
+    /// of mesh draws alone hold it: on a buffer whose command types lack `DRAW` it runs as on its
+    /// own, as plain Metal runs it, where Metal's validation stops the call ("drawPrimitives is not
+    /// enabled on this indirect command buffer"). Refused (`Invalid`): a buffer of mesh draws alone
+    /// (`CommandType`), where Metal's process ends, with and without its validation (an M4: buffers
+    /// of either mesh kind and of both, the encoder's pipeline inherited).
+    pub fn draw_primitives(
+        &self,
+        primitive_type: impl Into<DrawPrimitiveType>,
+        vertex_start: u64,
+        vertex_count: u64,
+        instance_count: u64,
+        base_instance: u64,
+    ) -> Result<(), Error> {
+        self.at().draw_primitives(
+            primitive_type,
+            vertex_start,
+            vertex_count,
+            instance_count,
+            base_instance,
+        )
+    }
+
+    /// `drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:
+    /// baseVertex:baseInstance:`: the command draws `index_count` indices of `index_type` from
+    /// `index_buffer_offset` of `index_buffer`, `instance_count` times from `base_instance`, each
+    /// index plus `base_vertex`, of a public primitive type or a private one, as
+    /// [`draw_primitives`](Self::draw_primitives) says (type 9 faults the command buffer, of any
+    /// index or instance count, as the encoder's draw does). The record holds the buffer as one
+    /// address (its `gpu_address` plus the offset's low 32 bits, as Metal keeps it; its validation
+    /// checks the whole offset, as the refusal below does), which an execution resolves against
+    /// the encoder's resident resources (`render/executions.rs`), and each value's low 32 bits,
+    /// `base_vertex` as a signed one: Metal keeps a base vertex's so (a count past 32 bits always
+    /// runs past the buffer, which is refused). It runs as on its own on a buffer of patch draws,
+    /// whose records hold it, as plain Metal runs it, where Metal's validation stops a buffer
+    /// whose command types lack `DRAW_INDEXED`. A draw of no indices or no instances runs nothing
+    /// (but type 9's), and the indices are read from the offset rounded down to a multiple of the
+    /// index size, as plain Metal runs them where its validation stops the call
+    /// (`idx_count_zero`, `idx_instances_zero`; 32-bit indices at offset 2 and 16-bit ones at 1
+    /// drew those at 0).
+    ///
+    /// On a buffer of draws of primitives alone, whose records cannot hold it, the draw is
+    /// **taken** and its record kept, and an execution of the command **runs nothing**: it draws
+    /// no vertex, reads no index, and reports no fault, as plain Metal's execution of it does
+    /// (`IndirectCommandBuffer::takes_as_nothing`, which carries the reading). The read-back is
+    /// the indexed draw as set, the record's own, as every read-back is (what Metal's private
+    /// getters answer for such a record is unmeasured).
+    ///
+    /// Refused (`Invalid`): a buffer of mesh draws alone, whose records cannot hold it
+    /// (`CommandType`; Metal's process ends), and, as Metal's validation stops it, indices past
+    /// the buffer's length from that offset (`IndexBufferRange`, of the whole count; plain Metal
+    /// draws from whatever memory follows), and an index buffer of another device.
+    pub fn draw_indexed_primitives(
+        &self,
+        primitive_type: impl Into<DrawPrimitiveType>,
+        index_count: u64,
+        index_type: IndexType,
+        index_buffer: &Buffer,
+        index_buffer_offset: u64,
+        instance_count: u64,
+        base_vertex: i64,
+        base_instance: u64,
+    ) -> Result<(), Error> {
+        self.at().draw_indexed_primitives(
+            primitive_type,
+            index_count,
+            index_type,
+            index_buffer,
+            index_buffer_offset,
+            instance_count,
+            base_vertex,
+            base_instance,
+        )
+    }
+
+    /// `drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:
+    /// baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:
+    /// tessellationFactorBufferInstanceStride:`: the command draws `patch_count` patches from
+    /// `patch_start` (each patch's index from `patch_index_buffer` where it has one),
+    /// `instance_count` times from `base_instance`, their factors read from
+    /// `tessellation_factor_buffer` at the offset and the instance stride. The record holds each
+    /// buffer as one address, at its offset's low 32 bits as Metal keeps it (the patch index and
+    /// factor buffers), which an execution resolves against the encoder's resident resources, and
+    /// each value's low 32 bits (Metal keeps a patch count's so). The control points are kept,
+    /// though Metal's execution draws with its pipeline's (measured: 3 and 0 drew as a quad
+    /// pipeline's 4), as the execution does, more than 32 included (a Metal probe `icb_cp33` drew
+    /// as 3 do, where Metal's validation stops the call); a draw of no patches or no instances runs
+    /// nothing, and the patch indices are read from the offset rounded down to a multiple of 4, as
+    /// plain Metal runs them where its validation stops the call (`patch_instances_zero`; indices 9
+    /// and 3 at offset 2 drew patches 9 and 3). A factor offset and instance stride that are not
+    /// multiples of 4, which Metal's validation stops for the encoder's, are read as plain Metal
+    /// reads them, as the encoder's are: the factors from the offset rounded down to a multiple of
+    /// 2, each instance's at the stride rounded down to a multiple of 4 (Metal probes
+    /// `icb_factor_offset2`, 4 and 5: strides 2 and 14 drew what 0 and 12 draw, 6 and 10 what 4 and
+    /// 8 draw). It runs as on its own on a buffer of indexed patch draws, whose records hold it, as
+    /// plain Metal runs it, where Metal's validation stops a buffer whose command types lack
+    /// `DRAW_PATCHES`. Refused (`Invalid`): a buffer of neither patch kind, whose records cannot
+    /// hold it (`CommandType`; plain Metal ends its process), and, as Metal's validation stops
+    /// each, buffers of another device. Refused as the encoder's draw refuses them, which Metal's
+    /// validation of a command was not measured to: patch indices past the patch index buffer
+    /// from its offset's low 32 bits, which the command keeps (`PatchIndexBufferRange`; plain
+    /// Metal read 0 past it, the buffer's page padding, which stays undefined). An odd factor
+    /// offset is read from the byte below, and an odd instance stride
+    /// rounded down to a multiple of 4, as plain Metal reads a command's and the encoder's alike,
+    /// with and without its validation.
+    pub fn draw_patches(
+        &self,
+        number_of_patch_control_points: u64,
+        patch_start: u64,
+        patch_count: u64,
+        patch_index_buffer: Option<&Buffer>,
+        patch_index_buffer_offset: u64,
+        instance_count: u64,
+        base_instance: u64,
+        tessellation_factor_buffer: &Buffer,
+        tessellation_factor_buffer_offset: u64,
+        tessellation_factor_buffer_instance_stride: u64,
+    ) -> Result<(), Error> {
+        self.at().draw_patches(
+            number_of_patch_control_points,
+            patch_start,
+            patch_count,
+            patch_index_buffer,
+            patch_index_buffer_offset,
+            instance_count,
+            base_instance,
+            tessellation_factor_buffer,
+            tessellation_factor_buffer_offset,
+            tessellation_factor_buffer_instance_stride,
+        )
+    }
+
+    /// `drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:
+    /// controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:
+    /// tessellationFactorBuffer:tessellationFactorBufferOffset:
+    /// tessellationFactorBufferInstanceStride:`: the command draws as
+    /// [`draw_patches`](Self::draw_patches) does, but control point `k` of the patch whose index is
+    /// `p` is the index (of its pipeline's `tessellationControlPointIndexType`) at position
+    /// `p · N + k` of `control_point_index_buffer` from its offset, `N` its pipeline's control
+    /// points, whatever the command names, as the encoder's `draw_indexed_patches` reads them
+    /// (a probe, an M4: the command's 0, 1 and 4 drew as the pipeline's 3). The record holds each
+    /// buffer as one address, at its offset's low 32 bits (the control-point index buffer's too),
+    /// and each value's low 32 bits (probe 9b: Metal keeps a patch start's so; its getters answer
+    /// each count's). `None` for the control-point index buffer, which Metal takes, makes the
+    /// command a plain patch draw of the same values, as Metal records it: its `getCommandType`
+    /// answers `DrawPatches` on an M4 (probe 9b, a buffer of indexed patch draws alone) and on the
+    /// consumer's M3 Max, and it draws as a plain patch draw on that pipeline draws, every
+    /// control-point index 0 on a pipeline with an index type (probe 9b: the same marks as its
+    /// plain patch draw on the same pipeline). It runs as on its own on a buffer of patch draws,
+    /// whose records hold it, as plain Metal runs it, where Metal's validation stops a buffer whose
+    /// command types lack `DRAW_INDEXED_PATCHES` ("drawIndexedPatches is not enabled on this
+    /// indirect command buffer"). Refused (`Invalid`) as `draw_patches` is, for a buffer of neither
+    /// patch kind (`CommandType`), and for a control-point index buffer of another device. Metal's
+    /// validation does not stop a factor offset or instance stride that is not a multiple of 4 here
+    /// (probe 9), which the runtime reads as `draw_patches` does; nor does it check the
+    /// control-point index buffer, whose index size the pipeline set at execution states (an
+    /// execution runs what Metal's does, `render/executions.rs`).
+    pub fn draw_indexed_patches(
+        &self,
+        number_of_patch_control_points: u64,
+        patch_start: u64,
+        patch_count: u64,
+        patch_index_buffer: Option<&Buffer>,
+        patch_index_buffer_offset: u64,
+        control_point_index_buffer: Option<&Buffer>,
+        control_point_index_buffer_offset: u64,
+        instance_count: u64,
+        base_instance: u64,
+        tessellation_factor_buffer: &Buffer,
+        tessellation_factor_buffer_offset: u64,
+        tessellation_factor_buffer_instance_stride: u64,
+    ) -> Result<(), Error> {
+        self.at().draw_indexed_patches(
+            number_of_patch_control_points,
+            patch_start,
+            patch_count,
+            patch_index_buffer,
+            patch_index_buffer_offset,
+            control_point_index_buffer,
+            control_point_index_buffer_offset,
+            instance_count,
+            base_instance,
+            tessellation_factor_buffer,
+            tessellation_factor_buffer_offset,
+            tessellation_factor_buffer_instance_stride,
+        )
+    }
+
+    /// `setObjectBuffer:offset:atIndex:`: object buffer `index` at `buffer`'s address plus
+    /// `offset`'s low 32 bits, as Metal keeps it; `None` sets a nil buffer at the
+    /// offset's low 32 bits, as [`IndirectComputeCommand::set_kernel_buffer`] does, an index at
+    /// or past the descriptor's `max_object_buffer_bind_count` taken and kept nowhere as that
+    /// call's is. Refused (`Invalid`): a buffer of another device, a command of a buffer of
+    /// dispatches (`CommandKind`).
+    pub fn set_object_buffer(
+        &self,
+        buffer: Option<&Buffer>,
+        offset: u64,
+        index: u32,
+    ) -> Result<(), Error> {
+        self.at().set_object_buffer(buffer, offset, index)
+    }
+
+    /// `setMeshBuffer:offset:atIndex:`: as [`set_object_buffer`](Self::set_object_buffer),
+    /// against the descriptor's `max_mesh_buffer_bind_count`.
+    pub fn set_mesh_buffer(
+        &self,
+        buffer: Option<&Buffer>,
+        offset: u64,
+        index: u32,
+    ) -> Result<(), Error> {
+        self.at().set_mesh_buffer(buffer, offset, index)
+    }
+
+    /// `drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:`: the
+    /// command draws `threadgroups_per_grid` threadgroups (of the object function where its
+    /// pipeline has one, else of the mesh function) of the threads given, each axis's low 32
+    /// bits, as the encoder's `draw_mesh_threadgroups` draws them (`render/mesh.rs`). Refused
+    /// (`Invalid`) for a buffer whose records do not hold it (`CommandType`) and a command of a
+    /// buffer of dispatches (`CommandKind`).
+    pub fn draw_mesh_threadgroups(
+        &self,
+        threadgroups_per_grid: Size,
+        threads_per_object_threadgroup: Size,
+        threads_per_mesh_threadgroup: Size,
+    ) -> Result<(), Error> {
+        self.at().draw_mesh_threadgroups(
+            threadgroups_per_grid,
+            threads_per_object_threadgroup,
+            threads_per_mesh_threadgroup,
+        )
+    }
+
+    /// `drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:`: the command
+    /// draws `threads_per_grid` threads, as the encoder's `draw_mesh_threads` draws them, each
+    /// axis's low 32 bits. Refused as
+    /// [`draw_mesh_threadgroups`](Self::draw_mesh_threadgroups) is.
+    pub fn draw_mesh_threads(
+        &self,
+        threads_per_grid: Size,
+        threads_per_object_threadgroup: Size,
+        threads_per_mesh_threadgroup: Size,
+    ) -> Result<(), Error> {
+        self.at().draw_mesh_threads(
+            threads_per_grid,
+            threads_per_object_threadgroup,
+            threads_per_mesh_threadgroup,
+        )
+    }
+
+    /// `setBarrier`: the command's draw runs after the earlier draws of its execution and of the
+    /// encoder, their writes visible to it, as Metal orders it on a buffer of mesh draws (a Metal
+    /// probe, the M3 Max and an M4: a reader's object function reads a writer's mesh function's
+    /// words) and plain Metal on a buffer without mesh draws, where Metal's validation stops the
+    /// call ("setBarrier is not enabled on this indirect command buffer (requires
+    /// DrawMeshThreadgroups or DrawMeshThreads)"; an M4). An execution draws such a command in a
+    /// render pass instance of its own (`render/executions.rs`), a memoryless attachment kept
+    /// across it, whether the barrier was set before or after the encoder that executes the
+    /// command ended. A command of a buffer of dispatches does nothing, as plain Metal's.
+    pub fn set_barrier(&self) -> Result<(), Error> {
+        self.at().set_barrier()
+    }
+
+    /// `clearBarrier`: the command keeps no barrier, as plain Metal's reads back where its
+    /// validation stops the call on a buffer without mesh draws. A command of a buffer of
+    /// dispatches does nothing, as plain Metal's.
+    pub fn clear_barrier(&self) -> Result<(), Error> {
+        self.at().clear_barrier()
+    }
+
+    /// `reset`: the command as a fresh buffer's. Refused (`CommandKind`) for a command of a
+    /// buffer of dispatches, where Metal's process ends (SIGSEGV), but taken on a buffer of no
+    /// command types, where plain Metal's returns (an M3 Max, macOS 27.0.1, three processes,
+    /// beside a compute command's `reset` on the same buffer, which ends the process).
+    pub fn reset(&self) -> Result<(), Error> {
+        self.at().reset()
+    }
+
+    /// `setDepthStencilState:`: refused on a device that does not claim Apple10 (`Invalid`,
+    /// `RenderState`), where Metal's process ends, and `NotImplemented(IndirectRenderCommands)` on
+    /// one that does, whose commands would draw with it (the module docs). Refused (`Invalid`)
+    /// first: a state of another device.
+    pub fn set_depth_stencil_state(&self, state: Option<&DepthStencilState>) -> Result<(), Error> {
+        self.at().set_depth_stencil_state(state)
+    }
+
+    /// `setDepthBias:slopeScale:clamp:`: refused, as `set_depth_stencil_state` is.
+    pub fn set_depth_bias(
+        &self,
+        _depth_bias: f32,
+        _slope_scale: f32,
+        _clamp: f32,
+    ) -> Result<(), Error> {
+        self.at().set_depth_bias(_depth_bias, _slope_scale, _clamp)
+    }
+
+    /// `setDepthClipMode:`: refused, as `set_depth_stencil_state` is.
+    pub fn set_depth_clip_mode(&self, _mode: DepthClipMode) -> Result<(), Error> {
+        self.at().set_depth_clip_mode(_mode)
+    }
+
+    /// `setCullMode:`: refused, as `set_depth_stencil_state` is.
+    pub fn set_cull_mode(&self, _mode: CullMode) -> Result<(), Error> {
+        self.at().set_cull_mode(_mode)
+    }
+
+    /// `setFrontFacingWinding:`: refused, as `set_depth_stencil_state` is.
+    pub fn set_front_facing_winding(&self, _winding: Winding) -> Result<(), Error> {
+        self.at().set_front_facing_winding(_winding)
+    }
+
+    /// `setTriangleFillMode:`: refused, as `set_depth_stencil_state` is.
+    pub fn set_triangle_fill_mode(&self, _mode: TriangleFillMode) -> Result<(), Error> {
+        self.at().set_triangle_fill_mode(_mode)
+    }
+
+    /// `setObjectThreadgroupMemoryLength:atIndex:`: the command's mesh draw runs its object
+    /// function with the lengths the command set, 0 where it set none, never the encoder's (the
+    /// M3 Max: an argument past a length of 16 reached the next argument, whatever the encoder
+    /// set). Taken at any index, as plain Metal takes one at or past the descriptor's
+    /// `max_object_threadgroup_memory_bind_count`, where its validation stops it (an M4); the
+    /// record holds indices below 31, which is every one a function binds, and one past them
+    /// changes nothing. Differs: the record's first two lengths are an indexed patch draw's
+    /// control-point index buffer, so such a draw on the command clears them, and a length set
+    /// there while the command holds one is dropped. Refused (`Invalid`): a command of a buffer
+    /// whose command types hold no mesh draw (`ObjectThreadgroupMemory`), where Metal's process
+    /// ends, and of a buffer of dispatches (`CommandKind`).
+    pub fn set_object_threadgroup_memory_length(
+        &self,
+        length: u32,
+        index: u32,
+    ) -> Result<(), Error> {
+        self.at()
+            .set_object_threadgroup_memory_length(length, index)
+    }
+
+    /// `getCommandType`, Apple's private getter: the command's
+    /// [`command_type`](EncodedRenderCommand::command_type) as
+    /// [`IndirectCommandBuffer::commands`] reads it now, its record's action alone read, as a
+    /// compute command's getters read theirs ([`IndirectComputeCommand::command_type`]). Each
+    /// getter is refused (`Invalid`, `CommandKind`) for a command of a buffer of dispatches,
+    /// where Metal's answer was not measured.
+    pub fn command_type(&self) -> Result<IndirectCommandType, Error> {
+        self.at().command_type()
+    }
+
+    /// `hasBarrier`, Apple's private getter: the command's
+    /// [`barrier`](EncodedRenderCommand::barrier), read alone.
+    pub fn has_barrier(&self) -> Result<bool, Error> {
+        self.at().has_barrier()
+    }
+
+    /// `drawArguments`, `drawIndexedArguments`, `drawPatchesArguments`,
+    /// `drawIndexedPatchesArguments` and `getTessellationFactorArguments`, Apple's private
+    /// getters: the command's [`draw`](EncodedRenderCommand::draw), read alone, as Metal answers
+    /// it: a draw of primitive type 7, 8 or 9 reads as one of points, Metal's 0 (the M3 Max,
+    /// macOS 27.0.1), though it draws as set.
+    pub fn draw(&self) -> Result<Option<IndirectDraw>, Error> {
+        self.at().draw()
+    }
+
+    /// The vertex buffer set at `index`: the command's
+    /// [`vertex_buffers`](EncodedRenderCommand::vertex_buffers)`[index]`, read alone, none at or
+    /// past the descriptor's `max_vertex_buffer_bind_count`, which Metal's private getters of the
+    /// slot answer as [`EncodedRenderCommand::vertex_buffer_address`] and
+    /// [`EncodedRenderCommand::vertex_attribute_stride`] do.
+    pub fn vertex_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
+        self.at().vertex_buffer(index)
+    }
+
+    /// The fragment buffer set at `index`, as [`vertex_buffer`](Self::vertex_buffer) reads a
+    /// vertex buffer, below the descriptor's `max_fragment_buffer_bind_count`
+    /// ([`EncodedRenderCommand::fragment_buffers`]).
+    pub fn fragment_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
+        self.at().fragment_buffer(index)
+    }
+
+    /// The object buffer set at `index`, as [`vertex_buffer`](Self::vertex_buffer) reads a
+    /// vertex buffer, below the descriptor's `max_object_buffer_bind_count`
+    /// ([`EncodedRenderCommand::object_buffers`]).
+    pub fn object_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
+        self.at().object_buffer(index)
+    }
+
+    /// The mesh buffer set at `index`, as [`vertex_buffer`](Self::vertex_buffer) reads a vertex
+    /// buffer, below the descriptor's `max_mesh_buffer_bind_count`
+    /// ([`EncodedRenderCommand::mesh_buffers`]).
+    pub fn mesh_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
+        self.at().mesh_buffer(index)
+    }
+
+    /// The command's [`pipeline`](EncodedRenderCommand::pipeline), read alone.
+    pub fn pipeline_state(&self) -> Result<Option<RenderPipelineState>, Error> {
+        self.at().pipeline_state()
+    }
+
+    /// The command's [`pipeline_id`](EncodedRenderCommand::pipeline_id), read alone.
+    pub fn pipeline_id(&self) -> Result<Option<ResourceId>, Error> {
+        self.at().pipeline_id()
+    }
+
+    /// `getPipelineStateUniqueIdentifier`, Apple's private getter: the command's
+    /// [`pipeline_unique_identifier`](EncodedRenderCommand::pipeline_unique_identifier), read
+    /// alone, whose kind the device announces as `commands` announces it.
+    pub fn pipeline_unique_identifier(&self) -> Result<Option<u64>, Error> {
+        self.at().pipeline_unique_identifier()
+    }
+}
+
+impl RenderAt<'_> {
     fn descriptor(&self) -> &IndirectCommandBufferDescriptor {
         &self.icb.0.descriptor
     }
@@ -4761,32 +5607,53 @@ impl IndirectRenderCommand {
         !self.icb.is_render()
     }
 
-    /// Write `field` into the record, with `set` as the state the CPU set where it names one
+    /// Write `field`, which names no pipeline state, into the record
     /// (`IndirectCommandBuffer::edit`), for `call`: refused (`CommandKind`) for a command of a
     /// buffer of dispatches (`of_compute`).
-    fn edit(
+    fn edit(&self, call: &'static str, field: RecordField) -> Result<(), Error> {
+        self.edit_in(&mut self.icb.batch(self.index), call, field, Then::Nothing)
+    }
+
+    /// [`edit`](Self::edit) of `field` in `batch`, then noting `then`.
+    fn edit_in(
         &self,
+        batch: &mut Batch<'_>,
         call: &'static str,
         field: RecordField,
-        set: Option<StateSet<'_>>,
+        then: Then,
     ) -> Result<(), Error> {
         if self.of_compute() {
             return Err(problem(call, IndirectCommandBufferProblem::CommandKind));
         }
-        self.icb.edit(self.index, field, set)
+        batch.field(field, then)
     }
 
-    /// `setRenderPipelineState:`. Refused (`Invalid`): a buffer that inherits its pipeline
-    /// state, a state made without `supportIndirectCommandBuffers` (a tile pipeline's among
-    /// them), a state of another device, and a state whose kind of draw the buffer's command
-    /// types lack (`PipelineKind`: a vertex function's on a buffer of mesh draws alone, a mesh
-    /// one's on a buffer of no mesh draw), where Metal's process ends.
-    pub fn set_render_pipeline_state(&self, state: &RenderPipelineState) -> Result<(), Error> {
+    fn set_render_pipeline_state(&self, state: &RenderPipelineState) -> Result<(), Error> {
+        self.pipeline_in(&mut self.icb.batch(self.index), state)
+    }
+
+    /// [`set_render_pipeline_state`](Self::set_render_pipeline_state) of `state` in `batch`:
+    /// the state the command names already is written again without the lock or a hold, as
+    /// `ComputeAt::pipeline_in` writes a compute state.
+    fn pipeline_in(&self, batch: &mut Batch<'_>, state: &RenderPipelineState) -> Result<(), Error> {
         const CALL: &str = "set_render_pipeline_state";
-        self.icb.check_command_types(CALL)?;
+        if let (Some(id), Some(serial)) = (
+            NonZeroU64::new(state.gpu_resource_id().0),
+            state.id_serial(),
+        ) {
+            let key = StateKey {
+                compute: false,
+                id: id.get(),
+                serial,
+            };
+            if self.icb.0.set_keys.names(self.index, key) {
+                return batch.field(RecordField::Pipeline(id), Then::Nothing);
+            }
+        }
         // The state's program, held while the command takes it (`pipeline/carry.rs`): one hold
-        // for every read of the state below.
+        // for every read of the state.
         let held = state.hold();
+        self.icb.check_command_types(CALL)?;
         let device = state.bound_device()?;
         if !device.same(self.icb.generation()) {
             return Err(device.foreign(CALL, self.icb.generation()));
@@ -4841,27 +5708,28 @@ impl IndirectRenderCommand {
                 serial,
             },
             named,
-            make: &|| {
-                CommandState::Render(
-                    graphics.downgrade(),
-                    graphics.program_held(&held),
-                    stamp,
-                    named,
-                )
-            },
+            stamp,
+            of: StateOf::Render(graphics, &held),
         };
-        self.edit(CALL, RecordField::Pipeline(id), Some(set))
+        if self.of_compute() {
+            return Err(problem(CALL, IndirectCommandBufferProblem::CommandKind));
+        }
+        batch.state(id, set)
     }
 
-    /// `setVertexBuffer:offset:atIndex:`: vertex buffer `index` at `buffer`'s address plus
-    /// `offset`'s low 32 bits, as Metal keeps it, at the pipeline's own attribute stride; `None`
-    /// sets a nil buffer at the offset's low 32 bits, as
-    /// [`IndirectComputeCommand::set_kernel_buffer`] does, an index at or past the descriptor's
-    /// `max_vertex_buffer_bind_count` taken and kept nowhere as that call's is. Refused
-    /// (`Invalid`): a buffer of another device. On a buffer that inherits its buffers it is kept
-    /// and read back, and executions bind the encoder's.
-    pub fn set_vertex_buffer(
+    fn set_vertex_buffer(
         &self,
+        buffer: Option<&Buffer>,
+        offset: u64,
+        index: u32,
+    ) -> Result<(), Error> {
+        self.vertex_buffer_in(&mut self.icb.batch(self.index), buffer, offset, index)
+    }
+
+    /// [`set_vertex_buffer`](Self::set_vertex_buffer) in `batch`.
+    fn vertex_buffer_in(
+        &self,
+        batch: &mut Batch<'_>,
         buffer: Option<&Buffer>,
         offset: u64,
         index: u32,
@@ -4870,7 +5738,8 @@ impl IndirectRenderCommand {
         if self.of_compute() {
             return Ok(());
         }
-        self.set_buffer(
+        self.buffer_in(
+            batch,
             "set_vertex_buffer",
             BufferStage::Vertex,
             buffer,
@@ -4880,15 +5749,21 @@ impl IndirectRenderCommand {
         )
     }
 
-    /// `setVertexBuffer:offset:attributeStride:atIndex:`: as
-    /// [`set_vertex_buffer`](Self::set_vertex_buffer), at attribute stride `stride` (all ones is
-    /// the pipeline's own). On a buffer that does not support dynamic attribute strides the
-    /// stride is dropped and the buffer set, as plain Metal sets it where its validation stops
-    /// the call: the stride reads back all ones and the draw reads the buffer at its offset, as a
-    /// kernel buffer's is. `None` sets a nil buffer at the stride, as
-    /// [`IndirectComputeCommand::set_kernel_buffer_with_stride`] does.
-    pub fn set_vertex_buffer_with_stride(
+    fn set_vertex_buffer_with_stride(
         &self,
+        buffer: Option<&Buffer>,
+        offset: u64,
+        stride: u64,
+        index: u32,
+    ) -> Result<(), Error> {
+        let batch = &mut self.icb.batch(self.index);
+        self.vertex_buffer_with_stride_in(batch, buffer, offset, stride, index)
+    }
+
+    /// [`set_vertex_buffer_with_stride`](Self::set_vertex_buffer_with_stride) in `batch`.
+    fn vertex_buffer_with_stride_in(
+        &self,
+        batch: &mut Batch<'_>,
         buffer: Option<&Buffer>,
         offset: u64,
         stride: u64,
@@ -4898,13 +5773,30 @@ impl IndirectRenderCommand {
         self.icb.check_command_types(CALL)?;
         let dynamic = self.descriptor().support_dynamic_attribute_stride;
         let stride = (dynamic && stride != u64::MAX).then_some(stride);
-        self.set_buffer(CALL, BufferStage::Vertex, buffer, offset, stride, index)
+        self.buffer_in(
+            batch,
+            CALL,
+            BufferStage::Vertex,
+            buffer,
+            offset,
+            stride,
+            index,
+        )
     }
 
-    /// `setFragmentBuffer:offset:atIndex:`: as [`set_vertex_buffer`](Self::set_vertex_buffer),
-    /// against the descriptor's `max_fragment_buffer_bind_count`.
-    pub fn set_fragment_buffer(
+    fn set_fragment_buffer(
         &self,
+        buffer: Option<&Buffer>,
+        offset: u64,
+        index: u32,
+    ) -> Result<(), Error> {
+        self.fragment_buffer_in(&mut self.icb.batch(self.index), buffer, offset, index)
+    }
+
+    /// [`set_fragment_buffer`](Self::set_fragment_buffer) in `batch`.
+    fn fragment_buffer_in(
+        &self,
+        batch: &mut Batch<'_>,
         buffer: Option<&Buffer>,
         offset: u64,
         index: u32,
@@ -4912,7 +5804,8 @@ impl IndirectRenderCommand {
         if self.of_compute() {
             return Ok(());
         }
-        self.set_buffer(
+        self.buffer_in(
+            batch,
             "set_fragment_buffer",
             BufferStage::Fragment,
             buffer,
@@ -4924,6 +5817,22 @@ impl IndirectRenderCommand {
 
     fn set_buffer(
         &self,
+        call: &'static str,
+        stage: BufferStage,
+        buffer: Option<&Buffer>,
+        offset: u64,
+        attribute_stride: Option<u64>,
+        index: u32,
+    ) -> Result<(), Error> {
+        let batch = &mut self.icb.batch(self.index);
+        self.buffer_in(batch, call, stage, buffer, offset, attribute_stride, index)
+    }
+
+    /// A buffer setter of `stage` for `call` in `batch`: refused (`CommandKind`) for a command of
+    /// a buffer of dispatches, then as [`Batch::buffer`] sets it against the stage's count.
+    fn buffer_in(
+        &self,
+        batch: &mut Batch<'_>,
         call: &'static str,
         stage: BufferStage,
         buffer: Option<&Buffer>,
@@ -4949,7 +5858,7 @@ impl IndirectRenderCommand {
             offset,
             attribute_stride,
         };
-        self.icb.set_buffer(self.index, call, set)
+        batch.buffer(call, set)
     }
 
     /// Refuse a draw `action` of `kind` for `call` where the buffer's records cannot hold it
@@ -4979,24 +5888,29 @@ impl IndirectRenderCommand {
         Ok(())
     }
 
-    /// `drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:`: the command draws
-    /// `vertex_count` vertices of `primitive_type` from `vertex_start`, `instance_count` times
-    /// from `base_instance`, each value's low 32 bits, which the record holds (Metal takes larger
-    /// values; what it keeps of them is not measured: its getter answers an object). A type is a
-    /// public one or one of Metal's private ones ([`DrawPrimitiveType`]), which an execution draws
-    /// as an encoder's draw of it draws, type 9 failing the command buffer so where an execution
-    /// of a range given at its call finds it there (the M3 Max, macOS 27.0.1: types 5 to 9 drew
-    /// and failed as the encoder's draws of them, direct and indexed). A draw of no vertices or
-    /// no instances runs nothing, as plain Metal runs it where its validation stops the call
-    /// ("instanceCount(0) must be non-zero"). The records of every render buffer but one
-    /// of mesh draws alone hold it: on a buffer whose command types lack `DRAW` it runs as on its
-    /// own, as plain Metal runs it, where Metal's validation stops the call ("drawPrimitives is not
-    /// enabled on this indirect command buffer"). Refused (`Invalid`): a buffer of mesh draws alone
-    /// (`CommandType`), where Metal's process ends, with and without its validation (an M4: buffers
-    /// of either mesh kind and of both, the encoder's pipeline inherited).
-    pub fn draw_primitives(
+    fn draw_primitives(
         &self,
         primitive_type: impl Into<DrawPrimitiveType>,
+        vertex_start: u64,
+        vertex_count: u64,
+        instance_count: u64,
+        base_instance: u64,
+    ) -> Result<(), Error> {
+        self.draw_primitives_in(
+            &mut self.icb.batch(self.index),
+            primitive_type.into(),
+            vertex_start,
+            vertex_count,
+            instance_count,
+            base_instance,
+        )
+    }
+
+    /// [`draw_primitives`](Self::draw_primitives) in `batch`.
+    fn draw_primitives_in(
+        &self,
+        batch: &mut Batch<'_>,
+        primitive_type: DrawPrimitiveType,
         vertex_start: u64,
         vertex_count: u64,
         instance_count: u64,
@@ -5007,7 +5921,6 @@ impl IndirectRenderCommand {
         if self.of_compute() {
             return Ok(());
         }
-        let primitive_type = primitive_type.into();
         let action = Action::DrawPrimitives {
             primitive_type: primitive_type.raw() as u32,
             vertex_start: vertex_start as u32,
@@ -5016,41 +5929,11 @@ impl IndirectRenderCommand {
             base_instance: base_instance as u32,
         };
         self.check_draw(CALL, IndirectCommandType::DRAW, &action)?;
-        self.edit(CALL, RecordField::Action(action), None)?;
-        self.drew(primitive_type);
-        Ok(())
+        let then = Then::Drew(primitive_type);
+        self.edit_in(batch, CALL, RecordField::Action(action), then)
     }
 
-    /// `drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:
-    /// baseVertex:baseInstance:`: the command draws `index_count` indices of `index_type` from
-    /// `index_buffer_offset` of `index_buffer`, `instance_count` times from `base_instance`, each
-    /// index plus `base_vertex`, of a public primitive type or a private one, as
-    /// [`draw_primitives`](Self::draw_primitives) says (type 9 faults the command buffer, of any
-    /// index or instance count, as the encoder's draw does). The record holds the buffer as one
-    /// address (its `gpu_address` plus the offset's low 32 bits, as Metal keeps it; its validation
-    /// checks the whole offset, as the refusal below does), which an execution resolves against
-    /// the encoder's resident resources (`render/executions.rs`), and each value's low 32 bits,
-    /// `base_vertex` as a signed one: Metal keeps a base vertex's so (a count past 32 bits always
-    /// runs past the buffer, which is refused). It runs as on its own on a buffer of patch draws,
-    /// whose records hold it, as plain Metal runs it, where Metal's validation stops a buffer
-    /// whose command types lack `DRAW_INDEXED`. A draw of no indices or no instances runs nothing
-    /// (but type 9's), and the indices are read from the offset rounded down to a multiple of the
-    /// index size, as plain Metal runs them where its validation stops the call
-    /// (`idx_count_zero`, `idx_instances_zero`; 32-bit indices at offset 2 and 16-bit ones at 1
-    /// drew those at 0).
-    ///
-    /// On a buffer of draws of primitives alone, whose records cannot hold it, the draw is
-    /// **taken** and its record kept, and an execution of the command **runs nothing**: it draws
-    /// no vertex, reads no index, and reports no fault, as plain Metal's execution of it does
-    /// (`IndirectCommandBuffer::takes_as_nothing`, which carries the reading). The read-back is
-    /// the indexed draw as set, the record's own, as every read-back is (what Metal's private
-    /// getters answer for such a record is unmeasured).
-    ///
-    /// Refused (`Invalid`): a buffer of mesh draws alone, whose records cannot hold it
-    /// (`CommandType`; Metal's process ends), and, as Metal's validation stops it, indices past
-    /// the buffer's length from that offset (`IndexBufferRange`, of the whole count; plain Metal
-    /// draws from whatever memory follows), and an index buffer of another device.
-    pub fn draw_indexed_primitives(
+    fn draw_indexed_primitives(
         &self,
         primitive_type: impl Into<DrawPrimitiveType>,
         index_count: u64,
@@ -5061,8 +5944,33 @@ impl IndirectRenderCommand {
         base_vertex: i64,
         base_instance: u64,
     ) -> Result<(), Error> {
+        self.draw_indexed_primitives_in(
+            &mut self.icb.batch(self.index),
+            primitive_type.into(),
+            index_count,
+            index_type,
+            index_buffer,
+            index_buffer_offset,
+            instance_count,
+            base_vertex,
+            base_instance,
+        )
+    }
+
+    /// [`draw_indexed_primitives`](Self::draw_indexed_primitives) in `batch`.
+    fn draw_indexed_primitives_in(
+        &self,
+        batch: &mut Batch<'_>,
+        primitive_type: DrawPrimitiveType,
+        index_count: u64,
+        index_type: IndexType,
+        index_buffer: &Buffer,
+        index_buffer_offset: u64,
+        instance_count: u64,
+        base_vertex: i64,
+        base_instance: u64,
+    ) -> Result<(), Error> {
         const CALL: &str = "draw_indexed_primitives";
-        let primitive_type = primitive_type.into();
         let action = Action::DrawIndexedPrimitives {
             primitive_type: primitive_type.raw() as u32,
             index_count: index_count as u32,
@@ -5094,50 +6002,11 @@ impl IndirectRenderCommand {
                 }),
             ));
         }
-        self.edit(CALL, RecordField::Action(action), None)?;
-        self.drew(primitive_type);
-        Ok(())
+        let then = Then::Drew(primitive_type);
+        self.edit_in(batch, CALL, RecordField::Action(action), then)
     }
 
-    /// The command now draws `primitive_type`: a draw of type 9 marks its buffer for the
-    /// executions that look for one ([`IndirectCommandBuffer::nine_among`]).
-    fn drew(&self, primitive_type: DrawPrimitiveType) {
-        if primitive_type == DrawPrimitiveType::Nine {
-            self.icb.0.nines.store(true, Ordering::Release);
-        }
-    }
-
-    /// `drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:
-    /// baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:
-    /// tessellationFactorBufferInstanceStride:`: the command draws `patch_count` patches from
-    /// `patch_start` (each patch's index from `patch_index_buffer` where it has one),
-    /// `instance_count` times from `base_instance`, their factors read from
-    /// `tessellation_factor_buffer` at the offset and the instance stride. The record holds each
-    /// buffer as one address, at its offset's low 32 bits as Metal keeps it (the patch index and
-    /// factor buffers), which an execution resolves against the encoder's resident resources, and
-    /// each value's low 32 bits (Metal keeps a patch count's so). The control points are kept,
-    /// though Metal's execution draws with its pipeline's (measured: 3 and 0 drew as a quad
-    /// pipeline's 4), as the execution does, more than 32 included (a Metal probe `icb_cp33` drew
-    /// as 3 do, where Metal's validation stops the call); a draw of no patches or no instances runs
-    /// nothing, and the patch indices are read from the offset rounded down to a multiple of 4, as
-    /// plain Metal runs them where its validation stops the call (`patch_instances_zero`; indices 9
-    /// and 3 at offset 2 drew patches 9 and 3). A factor offset and instance stride that are not
-    /// multiples of 4, which Metal's validation stops for the encoder's, are read as plain Metal
-    /// reads them, as the encoder's are: the factors from the offset rounded down to a multiple of
-    /// 2, each instance's at the stride rounded down to a multiple of 4 (Metal probes
-    /// `icb_factor_offset2`, 4 and 5: strides 2 and 14 drew what 0 and 12 draw, 6 and 10 what 4 and
-    /// 8 draw). It runs as on its own on a buffer of indexed patch draws, whose records hold it, as
-    /// plain Metal runs it, where Metal's validation stops a buffer whose command types lack
-    /// `DRAW_PATCHES`. Refused (`Invalid`): a buffer of neither patch kind, whose records cannot
-    /// hold it (`CommandType`; plain Metal ends its process), and, as Metal's validation stops
-    /// each, buffers of another device. Refused as the encoder's draw refuses them, which Metal's
-    /// validation of a command was not measured to: patch indices past the patch index buffer
-    /// from its offset's low 32 bits, which the command keeps (`PatchIndexBufferRange`; plain
-    /// Metal read 0 past it, the buffer's page padding, which stays undefined). An odd factor
-    /// offset is read from the byte below, and an odd instance stride
-    /// rounded down to a multiple of 4, as plain Metal reads a command's and the encoder's alike,
-    /// with and without its validation.
-    pub fn draw_patches(
+    fn draw_patches(
         &self,
         number_of_patch_control_points: u64,
         patch_start: u64,
@@ -5174,35 +6043,10 @@ impl IndirectRenderCommand {
             None,
             tessellation_factor_buffer,
         )?;
-        self.edit(CALL, RecordField::Action(action), None)
+        self.edit(CALL, RecordField::Action(action))
     }
 
-    /// `drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:
-    /// controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:
-    /// tessellationFactorBuffer:tessellationFactorBufferOffset:
-    /// tessellationFactorBufferInstanceStride:`: the command draws as
-    /// [`draw_patches`](Self::draw_patches) does, but control point `k` of the patch whose index is
-    /// `p` is the index (of its pipeline's `tessellationControlPointIndexType`) at position
-    /// `p · N + k` of `control_point_index_buffer` from its offset, `N` its pipeline's control
-    /// points, whatever the command names, as the encoder's `draw_indexed_patches` reads them
-    /// (a probe, an M4: the command's 0, 1 and 4 drew as the pipeline's 3). The record holds each
-    /// buffer as one address, at its offset's low 32 bits (the control-point index buffer's too),
-    /// and each value's low 32 bits (probe 9b: Metal keeps a patch start's so; its getters answer
-    /// each count's). `None` for the control-point index buffer, which Metal takes, makes the
-    /// command a plain patch draw of the same values, as Metal records it: its `getCommandType`
-    /// answers `DrawPatches` on an M4 (probe 9b, a buffer of indexed patch draws alone) and on the
-    /// consumer's M3 Max, and it draws as a plain patch draw on that pipeline draws, every
-    /// control-point index 0 on a pipeline with an index type (probe 9b: the same marks as its
-    /// plain patch draw on the same pipeline). It runs as on its own on a buffer of patch draws,
-    /// whose records hold it, as plain Metal runs it, where Metal's validation stops a buffer whose
-    /// command types lack `DRAW_INDEXED_PATCHES` ("drawIndexedPatches is not enabled on this
-    /// indirect command buffer"). Refused (`Invalid`) as `draw_patches` is, for a buffer of neither
-    /// patch kind (`CommandType`), and for a control-point index buffer of another device. Metal's
-    /// validation does not stop a factor offset or instance stride that is not a multiple of 4 here
-    /// (probe 9), which the runtime reads as `draw_patches` does; nor does it check the
-    /// control-point index buffer, whose index size the pipeline set at execution states (an
-    /// execution runs what Metal's does, `render/executions.rs`).
-    pub fn draw_indexed_patches(
+    fn draw_indexed_patches(
         &self,
         number_of_patch_control_points: u64,
         patch_start: u64,
@@ -5267,10 +6111,10 @@ impl IndirectRenderCommand {
         {
             for index in 0..2 {
                 let field = RecordField::ThreadgroupMemoryLength { index, length: 0 };
-                self.edit(CALL, field, None)?;
+                self.edit(CALL, field)?;
             }
         }
-        self.edit(CALL, RecordField::Action(action), None)
+        self.edit(CALL, RecordField::Action(action))
     }
 
     /// Refuse a patch draw's values for `call` as [`draw_patches`](Self::draw_patches) states:
@@ -5313,13 +6157,7 @@ impl IndirectRenderCommand {
         Ok(())
     }
 
-    /// `setObjectBuffer:offset:atIndex:`: object buffer `index` at `buffer`'s address plus
-    /// `offset`'s low 32 bits, as Metal keeps it; `None` sets a nil buffer at the
-    /// offset's low 32 bits, as [`IndirectComputeCommand::set_kernel_buffer`] does, an index at
-    /// or past the descriptor's `max_object_buffer_bind_count` taken and kept nowhere as that
-    /// call's is. Refused (`Invalid`): a buffer of another device, a command of a buffer of
-    /// dispatches (`CommandKind`).
-    pub fn set_object_buffer(
+    fn set_object_buffer(
         &self,
         buffer: Option<&Buffer>,
         offset: u64,
@@ -5335,9 +6173,7 @@ impl IndirectRenderCommand {
         )
     }
 
-    /// `setMeshBuffer:offset:atIndex:`: as [`set_object_buffer`](Self::set_object_buffer),
-    /// against the descriptor's `max_mesh_buffer_bind_count`.
-    pub fn set_mesh_buffer(
+    fn set_mesh_buffer(
         &self,
         buffer: Option<&Buffer>,
         offset: u64,
@@ -5353,13 +6189,7 @@ impl IndirectRenderCommand {
         )
     }
 
-    /// `drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:`: the
-    /// command draws `threadgroups_per_grid` threadgroups (of the object function where its
-    /// pipeline has one, else of the mesh function) of the threads given, each axis's low 32
-    /// bits, as the encoder's `draw_mesh_threadgroups` draws them (`render/mesh.rs`). Refused
-    /// (`Invalid`) for a buffer whose records do not hold it (`CommandType`) and a command of a
-    /// buffer of dispatches (`CommandKind`).
-    pub fn draw_mesh_threadgroups(
+    fn draw_mesh_threadgroups(
         &self,
         threadgroups_per_grid: Size,
         threads_per_object_threadgroup: Size,
@@ -5372,14 +6202,10 @@ impl IndirectRenderCommand {
             mesh_threads: low_bits(threads_per_mesh_threadgroup),
         };
         self.check_draw(CALL, IndirectCommandType::DRAW_MESH_THREADGROUPS, &action)?;
-        self.edit(CALL, RecordField::Action(action), None)
+        self.edit(CALL, RecordField::Action(action))
     }
 
-    /// `drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:`: the command
-    /// draws `threads_per_grid` threads, as the encoder's `draw_mesh_threads` draws them, each
-    /// axis's low 32 bits. Refused as
-    /// [`draw_mesh_threadgroups`](Self::draw_mesh_threadgroups) is.
-    pub fn draw_mesh_threads(
+    fn draw_mesh_threads(
         &self,
         threads_per_grid: Size,
         threads_per_object_threadgroup: Size,
@@ -5392,42 +6218,31 @@ impl IndirectRenderCommand {
             mesh_threads: low_bits(threads_per_mesh_threadgroup),
         };
         self.check_draw(CALL, IndirectCommandType::DRAW_MESH_THREADS, &action)?;
-        self.edit(CALL, RecordField::Action(action), None)
+        self.edit(CALL, RecordField::Action(action))
     }
 
-    /// `setBarrier`: the command's draw runs after the earlier draws of its execution and of the
-    /// encoder, their writes visible to it, as Metal orders it on a buffer of mesh draws (a Metal
-    /// probe, the M3 Max and an M4: a reader's object function reads a writer's mesh function's
-    /// words) and plain Metal on a buffer without mesh draws, where Metal's validation stops the
-    /// call ("setBarrier is not enabled on this indirect command buffer (requires
-    /// DrawMeshThreadgroups or DrawMeshThreads)"; an M4). An execution draws such a command in a
-    /// render pass instance of its own (`render/executions.rs`), a memoryless attachment kept
-    /// across it, whether the barrier was set before or after the encoder that executes the
-    /// command ended. A command of a buffer of dispatches does nothing, as plain Metal's.
-    pub fn set_barrier(&self) -> Result<(), Error> {
+    fn set_barrier(&self) -> Result<(), Error> {
+        self.barrier_in(&mut self.icb.batch(self.index), true)
+    }
+
+    /// [`set_barrier`](Self::set_barrier) (`set`) or [`clear_barrier`](Self::clear_barrier) in
+    /// `batch`: nothing on a command of a buffer of dispatches.
+    fn barrier_in(&self, batch: &mut Batch<'_>, set: bool) -> Result<(), Error> {
         if self.of_compute() {
             return Ok(());
         }
-        self.edit("set_barrier", RecordField::Barrier(true), None)?;
-        self.icb.0.barriers.store(true, Ordering::Release);
-        Ok(())
+        let (call, then) = match set {
+            true => ("set_barrier", Then::Barrier),
+            false => ("clear_barrier", Then::Nothing),
+        };
+        self.edit_in(batch, call, RecordField::Barrier(set), then)
     }
 
-    /// `clearBarrier`: the command keeps no barrier, as plain Metal's reads back where its
-    /// validation stops the call on a buffer without mesh draws. A command of a buffer of
-    /// dispatches does nothing, as plain Metal's.
-    pub fn clear_barrier(&self) -> Result<(), Error> {
-        if self.of_compute() {
-            return Ok(());
-        }
-        self.edit("clear_barrier", RecordField::Barrier(false), None)
+    fn clear_barrier(&self) -> Result<(), Error> {
+        self.barrier_in(&mut self.icb.batch(self.index), false)
     }
 
-    /// `reset`: the command as a fresh buffer's. Refused (`CommandKind`) for a command of a
-    /// buffer of dispatches, where Metal's process ends (SIGSEGV), but taken on a buffer of no
-    /// command types, where plain Metal's returns (an M3 Max, macOS 27.0.1, three processes,
-    /// beside a compute command's `reset` on the same buffer, which ends the process).
-    pub fn reset(&self) -> Result<(), Error> {
+    fn reset(&self) -> Result<(), Error> {
         if self.of_compute() && !self.icb.has_no_command_types() {
             return Err(problem("reset", IndirectCommandBufferProblem::CommandKind));
         }
@@ -5454,11 +6269,7 @@ impl IndirectRenderCommand {
         problem(call, IndirectCommandBufferProblem::RenderState)
     }
 
-    /// `setDepthStencilState:`: refused on a device that does not claim Apple10 (`Invalid`,
-    /// `RenderState`), where Metal's process ends, and `NotImplemented(IndirectRenderCommands)` on
-    /// one that does, whose commands would draw with it (the module docs). Refused (`Invalid`)
-    /// first: a state of another device.
-    pub fn set_depth_stencil_state(&self, state: Option<&DepthStencilState>) -> Result<(), Error> {
+    fn set_depth_stencil_state(&self, state: Option<&DepthStencilState>) -> Result<(), Error> {
         const CALL: &str = "set_depth_stencil_state";
         if let Some(state) = state.filter(|state| !state.root_device().same(self.icb.generation()))
         {
@@ -5467,8 +6278,7 @@ impl IndirectRenderCommand {
         Err(self.render_state(CALL))
     }
 
-    /// `setDepthBias:slopeScale:clamp:`: refused, as `set_depth_stencil_state` is.
-    pub fn set_depth_bias(
+    fn set_depth_bias(
         &self,
         _depth_bias: f32,
         _slope_scale: f32,
@@ -5477,42 +6287,23 @@ impl IndirectRenderCommand {
         Err(self.render_state("set_depth_bias"))
     }
 
-    /// `setDepthClipMode:`: refused, as `set_depth_stencil_state` is.
-    pub fn set_depth_clip_mode(&self, _mode: DepthClipMode) -> Result<(), Error> {
+    fn set_depth_clip_mode(&self, _mode: DepthClipMode) -> Result<(), Error> {
         Err(self.render_state("set_depth_clip_mode"))
     }
 
-    /// `setCullMode:`: refused, as `set_depth_stencil_state` is.
-    pub fn set_cull_mode(&self, _mode: CullMode) -> Result<(), Error> {
+    fn set_cull_mode(&self, _mode: CullMode) -> Result<(), Error> {
         Err(self.render_state("set_cull_mode"))
     }
 
-    /// `setFrontFacingWinding:`: refused, as `set_depth_stencil_state` is.
-    pub fn set_front_facing_winding(&self, _winding: Winding) -> Result<(), Error> {
+    fn set_front_facing_winding(&self, _winding: Winding) -> Result<(), Error> {
         Err(self.render_state("set_front_facing_winding"))
     }
 
-    /// `setTriangleFillMode:`: refused, as `set_depth_stencil_state` is.
-    pub fn set_triangle_fill_mode(&self, _mode: TriangleFillMode) -> Result<(), Error> {
+    fn set_triangle_fill_mode(&self, _mode: TriangleFillMode) -> Result<(), Error> {
         Err(self.render_state("set_triangle_fill_mode"))
     }
 
-    /// `setObjectThreadgroupMemoryLength:atIndex:`: the command's mesh draw runs its object
-    /// function with the lengths the command set, 0 where it set none, never the encoder's (the
-    /// M3 Max: an argument past a length of 16 reached the next argument, whatever the encoder
-    /// set). Taken at any index, as plain Metal takes one at or past the descriptor's
-    /// `max_object_threadgroup_memory_bind_count`, where its validation stops it (an M4); the
-    /// record holds indices below 31, which is every one a function binds, and one past them
-    /// changes nothing. Differs: the record's first two lengths are an indexed patch draw's
-    /// control-point index buffer, so such a draw on the command clears them, and a length set
-    /// there while the command holds one is dropped. Refused (`Invalid`): a command of a buffer
-    /// whose command types hold no mesh draw (`ObjectThreadgroupMemory`), where Metal's process
-    /// ends, and of a buffer of dispatches (`CommandKind`).
-    pub fn set_object_threadgroup_memory_length(
-        &self,
-        length: u32,
-        index: u32,
-    ) -> Result<(), Error> {
+    fn set_object_threadgroup_memory_length(&self, length: u32, index: u32) -> Result<(), Error> {
         const CALL: &str = "set_object_threadgroup_memory_length";
         if self.of_compute() {
             return Err(problem(CALL, IndirectCommandBufferProblem::CommandKind));
@@ -5535,7 +6326,7 @@ impl IndirectRenderCommand {
             index: index as usize,
             length,
         };
-        self.edit(CALL, field, None)
+        self.edit(CALL, field)
     }
 
     /// Refuse, for `call`, a getter of a command of a buffer of dispatches (`CommandKind`,
@@ -5548,86 +6339,57 @@ impl IndirectRenderCommand {
         }
     }
 
-    /// `getCommandType`, Apple's private getter: the command's
-    /// [`command_type`](EncodedRenderCommand::command_type) as
-    /// [`IndirectCommandBuffer::commands`] reads it now, its record's action alone read, as a
-    /// compute command's getters read theirs ([`IndirectComputeCommand::command_type`]). Each
-    /// getter is refused (`Invalid`, `CommandKind`) for a command of a buffer of dispatches,
-    /// where Metal's answer was not measured.
-    pub fn command_type(&self) -> Result<IndirectCommandType, Error> {
+    fn command_type(&self) -> Result<IndirectCommandType, Error> {
         self.check_getter("command_type")?;
         self.icb
             .read_record(self.index, |view| command_type(&view.action()))
     }
 
-    /// `hasBarrier`, Apple's private getter: the command's
-    /// [`barrier`](EncodedRenderCommand::barrier), read alone.
-    pub fn has_barrier(&self) -> Result<bool, Error> {
+    fn has_barrier(&self) -> Result<bool, Error> {
         self.check_getter("has_barrier")?;
         self.icb.read_record(self.index, |view| view.barrier())
     }
 
-    /// `drawArguments`, `drawIndexedArguments`, `drawPatchesArguments`,
-    /// `drawIndexedPatchesArguments` and `getTessellationFactorArguments`, Apple's private
-    /// getters: the command's [`draw`](EncodedRenderCommand::draw), read alone, as Metal answers
-    /// it: a draw of primitive type 7, 8 or 9 reads as one of points, Metal's 0 (the M3 Max,
-    /// macOS 27.0.1), though it draws as set.
-    pub fn draw(&self) -> Result<Option<IndirectDraw>, Error> {
+    fn draw(&self) -> Result<Option<IndirectDraw>, Error> {
         self.check_getter("draw")?;
         self.icb
             .read_record(self.index, |view| answered_draw(&view.action()))
     }
 
-    /// The vertex buffer set at `index`: the command's
-    /// [`vertex_buffers`](EncodedRenderCommand::vertex_buffers)`[index]`, read alone, none at or
-    /// past the descriptor's `max_vertex_buffer_bind_count`, which Metal's private getters of the
-    /// slot answer as [`EncodedRenderCommand::vertex_buffer_address`] and
-    /// [`EncodedRenderCommand::vertex_attribute_stride`] do.
-    pub fn vertex_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
+    fn vertex_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
         self.check_getter("vertex_buffer")?;
         let count = self.descriptor().max_vertex_buffer_bind_count;
         self.icb
             .read_buffer(self.index, BufferStage::Vertex, count, index)
     }
 
-    /// The fragment buffer set at `index`, as [`vertex_buffer`](Self::vertex_buffer) reads a
-    /// vertex buffer, below the descriptor's `max_fragment_buffer_bind_count`
-    /// ([`EncodedRenderCommand::fragment_buffers`]).
-    pub fn fragment_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
+    fn fragment_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
         self.check_getter("fragment_buffer")?;
         let count = self.descriptor().max_fragment_buffer_bind_count;
         self.icb
             .read_buffer(self.index, BufferStage::Fragment, count, index)
     }
 
-    /// The object buffer set at `index`, as [`vertex_buffer`](Self::vertex_buffer) reads a
-    /// vertex buffer, below the descriptor's `max_object_buffer_bind_count`
-    /// ([`EncodedRenderCommand::object_buffers`]).
-    pub fn object_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
+    fn object_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
         self.check_getter("object_buffer")?;
         let count = self.descriptor().max_object_buffer_bind_count;
         self.icb
             .read_buffer(self.index, BufferStage::Object, count, index)
     }
 
-    /// The mesh buffer set at `index`, as [`vertex_buffer`](Self::vertex_buffer) reads a vertex
-    /// buffer, below the descriptor's `max_mesh_buffer_bind_count`
-    /// ([`EncodedRenderCommand::mesh_buffers`]).
-    pub fn mesh_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
+    fn mesh_buffer(&self, index: u64) -> Result<Option<IndirectBufferBinding>, Error> {
         self.check_getter("mesh_buffer")?;
         let count = self.descriptor().max_mesh_buffer_bind_count;
         self.icb
             .read_buffer(self.index, BufferStage::Mesh, count, index)
     }
 
-    /// The command's [`pipeline`](EncodedRenderCommand::pipeline), read alone.
-    pub fn pipeline_state(&self) -> Result<Option<RenderPipelineState>, Error> {
+    fn pipeline_state(&self) -> Result<Option<RenderPipelineState>, Error> {
         self.check_getter("pipeline_state")?;
         Ok(self.icb.render_pipeline_now(self.index)?.0)
     }
 
-    /// The command's [`pipeline_id`](EncodedRenderCommand::pipeline_id), read alone.
-    pub fn pipeline_id(&self) -> Result<Option<ResourceId>, Error> {
+    fn pipeline_id(&self) -> Result<Option<ResourceId>, Error> {
         self.check_getter("pipeline_id")?;
         self.icb.read_record(self.index, |view| {
             let runs = view.pipeline().or(view.retained_pipeline());
@@ -5635,10 +6397,7 @@ impl IndirectRenderCommand {
         })
     }
 
-    /// `getPipelineStateUniqueIdentifier`, Apple's private getter: the command's
-    /// [`pipeline_unique_identifier`](EncodedRenderCommand::pipeline_unique_identifier), read
-    /// alone, whose kind the device announces as `commands` announces it.
-    pub fn pipeline_unique_identifier(&self) -> Result<Option<u64>, Error> {
+    fn pipeline_unique_identifier(&self) -> Result<Option<u64>, Error> {
         self.check_getter("pipeline_unique_identifier")?;
         let (_, identifier) = self.icb.render_pipeline_now(self.index)?;
         self.icb.announce_identifier(identifier);

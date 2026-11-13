@@ -5054,6 +5054,21 @@ each item named states the rule in full.
 
 **Indirect command buffers**
 
+- **A command's setters in one call** (`IndirectRenderCommand::set_each`,
+  `IndirectComputeCommand::set_each`, no Metal counterpart): an `IndirectRenderSet` or
+  `IndirectComputeSet` names one setter call, its fields the setter's arguments, and each does
+  what that setter does, refusals included. The first refused stops the rest and answers its place
+  among them with the setter's error; the calls before it stay made and those after it are not
+  taken, as one setter call at a time would leave the command.
+  `IndirectCommandBuffer::set_render_command` and `set_compute_command` (no Metal counterpart:
+  `indirectRenderCommandAtIndex:` or `indirectComputeCommandAtIndex:`, then the setters) take the
+  command's index with the sets, with no command handle; the refusals of the index (past the
+  size) and of the kind (a compute command of a render buffer) answer at place 0, before any
+  setter. A setter's write that adds nothing to what the records may hold, on a buffer the GPU
+  may not have written, takes no lock: a buffer slot, a draw, dispatch or barrier the CPU's
+  writes added already, and a pipeline state the command names already, which is not held
+  either. Each command's first set of a state, and every set after a device recovery carried
+  the buffer, takes the lock and checks the state.
 - **A command's read-back answers Metal's private getters**: `command_type`, the buffer addresses
   and attribute strides, as Metal's `get*` getters answer them. `IndirectComputeCommand` and
   `IndirectRenderCommand` read one field of their record alone (`command_type`, `has_barrier`,

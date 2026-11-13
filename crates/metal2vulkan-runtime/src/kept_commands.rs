@@ -532,8 +532,8 @@ pub(super) struct StepChunk {
     pub(super) copy: StepCopy,
 }
 
-/// The chunks the CPU wrote a record of without the buffer's lock (a buffer slot's setter,
-/// `IndirectCommandBuffer::edit_unlocked`), noted for the next look at the kept recordings to
+/// The chunks the CPU wrote a record of without the buffer's lock (a setter's write, in
+/// `indirect_command_buffer`'s `Batch`), noted for the next look at the kept recordings to
 /// forget ([`KeptChunks::settle`]): a flag a chunk, and one that some flag is set. A write notes
 /// its chunk after it wrote, and the note is published (`Release`) before the write is counted
 /// (`IndirectCommandBuffer::cpu_writes`), so a settle after a read of the count that counts the

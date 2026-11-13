@@ -6,10 +6,13 @@
 //! set costs a store whatever the buffer's size, and the table keeps one entry a state, however
 //! many commands name it. An entry goes with the last command that names it, so the table holds
 //! no state none of the commands names. A recovery's carry carries each entry once
-//! ([`entries_mut`](SetStates::entries_mut)).
+//! ([`entries_mut`](SetStates::entries_mut)). Each command's key is also kept where a setter
+//! reads it without the lock ([`SetKeys`]).
 
 use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
 /// What tells two states the CPU set apart: the kind, the ID and the serial of the state's hold
 /// of it (`IdStamp`), which no other state's hold of any ID shares.
@@ -23,6 +26,62 @@ pub(super) struct StateKey {
 /// A state a command names, by the key that tells it apart (`CommandState`'s).
 pub(super) trait Keyed {
     fn key(&self) -> StateKey;
+}
+
+/// The key of the state each command names, as [`SetStates`] holds it, readable without the
+/// buffer's lock: two words a command, the state's ID (0 for none) and its serial above its kind,
+/// stored under the lock as a set or a clear changes the command's state, none until a state is
+/// set. A setter of the state a command names already finds it here and writes its ID again
+/// without the lock, the table unchanged. A command's two words are stored one after the other:
+/// a read of them while another thread sets the same command is the program's race, as two
+/// threads encoding one command are on Metal.
+pub(super) struct SetKeys {
+    size: u32,
+    words: OnceLock<Box<[AtomicU64]>>,
+}
+
+impl SetKeys {
+    fn new(size: u32) -> SetKeys {
+        SetKeys {
+            size,
+            words: OnceLock::new(),
+        }
+    }
+
+    /// Whether command `index` (below the size) names the state of key `key`.
+    pub(super) fn names(&self, index: u32, key: StateKey) -> bool {
+        let Some(words) = self.words.get() else {
+            return false;
+        };
+        let at = 2 * index as usize;
+        words[at].load(Ordering::Acquire) == key.id
+            && words[at + 1].load(Ordering::Acquire) == serial_and_kind(key)
+    }
+
+    /// Command `index` (below the size) names the state of key `key`, or none.
+    fn store(&self, index: u32, key: Option<StateKey>) {
+        let words = self.words.get_or_init(|| {
+            (0..2 * self.size as usize)
+                .map(|_| AtomicU64::new(0))
+                .collect()
+        });
+        let at = 2 * index as usize;
+        let (id, serial) = key.map_or((0, 0), |key| (key.id, serial_and_kind(key)));
+        words[at].store(id, Ordering::Release);
+        words[at + 1].store(serial, Ordering::Release);
+    }
+
+    /// No command names a state.
+    fn clear_all(&self) {
+        for word in self.words.get().into_iter().flatten() {
+            word.store(0, Ordering::Release);
+        }
+    }
+}
+
+/// `key`'s serial above its kind, in one word.
+fn serial_and_kind(key: StateKey) -> u64 {
+    key.serial << 1 | u64::from(key.compute)
 }
 
 /// A distinct state, and how many commands name it.
@@ -47,11 +106,18 @@ pub(super) struct SetStates<S> {
     /// The place of the entry set last, looked at first: a buffer's commands mostly name one
     /// state in turn.
     last: Option<(StateKey, u32)>,
+    /// Each command's key, for the setters' look without the lock.
+    keys: Arc<SetKeys>,
 }
 
 impl<S: Keyed> SetStates<S> {
     /// The table of a buffer of `size` commands: none set.
     pub(super) fn new(size: u32) -> SetStates<S> {
+        SetStates::empty(size, Arc::new(SetKeys::new(size)))
+    }
+
+    /// The table of a buffer of `size` commands, none set, its keys in `keys`.
+    fn empty(size: u32, keys: Arc<SetKeys>) -> SetStates<S> {
         SetStates {
             size,
             slots: Vec::new(),
@@ -59,7 +125,13 @@ impl<S: Keyed> SetStates<S> {
             free: Vec::new(),
             places: HashMap::new(),
             last: None,
+            keys,
         }
+    }
+
+    /// Each command's key, readable without the lock ([`SetKeys`]).
+    pub(super) fn keys(&self) -> Arc<SetKeys> {
+        Arc::clone(&self.keys)
     }
 
     /// The state the CPU set on command `index`.
@@ -95,6 +167,9 @@ impl<S: Keyed> SetStates<S> {
         }
         let slot = place + 1;
         let before = std::mem::replace(&mut self.slots[index as usize], slot);
+        // Stored again where the command named the state already: the keys may have been
+        // forgotten since (`forget_keys`).
+        self.keys.store(index, Some(key));
         if before == slot {
             return;
         }
@@ -108,13 +183,24 @@ impl<S: Keyed> SetStates<S> {
     pub(super) fn clear(&mut self, index: u32) {
         if let Some(slot) = self.slots.get_mut(index as usize) {
             let before = std::mem::replace(slot, 0);
+            if before != 0 {
+                self.keys.store(index, None);
+            }
             self.release(before);
         }
     }
 
+    /// The keys read without the lock name no state until a set stores each command's again,
+    /// the table unchanged: a recovery's carry forgets them, so that each command's next set of
+    /// its state is checked again, under the lock, against the generation it was carried to.
+    pub(super) fn forget_keys(&self) {
+        self.keys.clear_all();
+    }
+
     /// No command names a state from now on.
     pub(super) fn clear_all(&mut self) {
-        *self = SetStates::new(self.size);
+        self.keys.clear_all();
+        *self = SetStates::empty(self.size, Arc::clone(&self.keys));
     }
 
     /// Each distinct state a command names, once.
@@ -195,11 +281,14 @@ mod tests {
 
     /// One entry a distinct state, made once while a command names it, shared by the commands
     /// that name it, gone with the last of them and made again after; a reset command names
-    /// none; the range skips commands that name none.
+    /// none; the range skips commands that name none. The keys read without the lock follow
+    /// every set and clear, kind included, and come back with a set after they were forgotten.
     #[test]
     fn a_state_is_kept_once_while_a_command_names_it() {
         let mut table = SetStates::new(6);
+        let keys = table.keys();
         assert!(table.get(0).is_none());
+        assert!(!keys.names(0, key(7)), "none before a set");
         assert_eq!(table.in_range(0..6).count(), 0);
         let mut made = 0;
         let mut set = |table: &mut SetStates<Made>, index, id| {
@@ -216,6 +305,13 @@ mod tests {
         assert_eq!(table.get(0), Some(&Made(key(7), 1)));
         assert_eq!(table.get(1), Some(&Made(key(9), 2)));
         assert_eq!(table.get(5), None);
+        assert!(keys.names(0, key(7)) && keys.names(1, key(9)));
+        assert!(!keys.names(1, key(7)) && !keys.names(5, key(7)));
+        let compute = StateKey {
+            compute: true,
+            ..key(7)
+        };
+        assert!(!keys.names(0, compute), "the kind tells keys apart");
         let ids: Vec<u64> = table.in_range(0..6).map(|state| state.0.id).collect();
         assert_eq!(ids, [7, 9, 7, 7, 9]);
         assert_eq!(table.entries_mut().count(), 2);
@@ -223,6 +319,7 @@ mod tests {
         for index in [0, 2] {
             table.clear(index);
         }
+        assert!(!keys.names(0, key(7)) && keys.names(3, key(7)));
         assert_eq!(table.entries_mut().count(), 2);
         set(&mut table, 3, 9);
         assert_eq!(table.entries_mut().count(), 1);
@@ -237,5 +334,14 @@ mod tests {
         table.clear_all();
         assert_eq!(table.in_range(0..6).count(), 0);
         assert_eq!(table.entries_mut().count(), 0);
+        assert!(!keys.names(0, key(7)), "the same keys, cleared");
+        set(&mut table, 2, 9);
+        assert!(keys.names(2, key(9)));
+        // Forgotten, then stored again by a set of the state the command names already.
+        table.forget_keys();
+        assert!(!keys.names(2, key(9)));
+        set(&mut table, 2, 9);
+        assert!(keys.names(2, key(9)));
+        assert_eq!(table.entries_mut().count(), 1);
     }
 }

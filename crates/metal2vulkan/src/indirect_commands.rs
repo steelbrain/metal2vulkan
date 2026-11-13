@@ -580,6 +580,13 @@ pub enum Action {
 }
 
 impl Action {
+    /// What a record holding the action, and no barrier, holds of what a command may write
+    /// ([`CommandRecord::writes`] of such a record): its operation, and a draw's primitive type
+    /// (every type for a private one, past Metal's five).
+    pub fn writes(&self) -> crate::pipeline::CommandWrites {
+        writes_of(self, false)
+    }
+
     /// Whether the action's arguments take the stage-in region's words
     /// (`layout::DRAW_ARGUMENT_WORDS`): an indexed draw's, a patch draw's, an indexed patch
     /// draw's or a mesh draw's. A render command sets no stage-in region.

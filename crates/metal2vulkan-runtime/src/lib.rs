@@ -343,8 +343,9 @@ pub use host_ram::{HostRam, HostRamUse};
 pub use indirect_command_buffer::{
     EncodedComputeCommand, EncodedRenderCommand, IndirectBufferBinding, IndirectCommand,
     IndirectCommandBuffer, IndirectCommandBufferDescriptor, IndirectCommandBufferProblem,
-    IndirectCommandCheck, IndirectCommandCheckNeeds, IndirectComputeCommand, IndirectDispatch,
-    IndirectDraw, IndirectRenderCommand, NIL_PATCH_BUFFER_ADDRESS,
+    IndirectCommandCheck, IndirectCommandCheckNeeds, IndirectComputeCommand, IndirectComputeSet,
+    IndirectDispatch, IndirectDraw, IndirectRenderCommand, IndirectRenderSet,
+    NIL_PATCH_BUFFER_ADDRESS,
 };
 pub use interop::{SemaphoreProblem, VkEventSignal, VkEventWait, VkHostMemory};
 pub use library::{Function, FunctionDescriptor, Library};
