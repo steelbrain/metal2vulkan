@@ -20,9 +20,13 @@
 //!   below the bind offset and reaches 2³¹ or more above it is exact on both sides; a `Psb`
 //!   window longer than 2³² is refused.
 //! - Constant GEP indices whose products exceed 128 bits wrap to the offset's low word.
+//! - A 16-byte leaf is one element of its slot's `uvec4` view only at an offset proven a multiple
+//!   of 16; a `float4` whose offset is a multiple of 4 and not of 16 is read and written at that
+//!   offset, as Metal does, whatever the `align 16` its AIR states.
 //!
 //! `llvm-as` assembles the fixtures; without it the tests skip visibly.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -40,7 +44,7 @@ use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
 use crate::pipeline::facts::{RuntimeFact, UniformViewChoice};
 use crate::pipeline::interface::{BufferForm, DescriptorView, PushLoc, SlotInterface, Window};
 use crate::pipeline::sym::{
-    PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage, Symbol,
+    Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage, Symbol,
 };
 use crate::pipeline::testing::{
     compile, device_nan_bits, engine_dir, link_and_validate, llvm_assemble, meter, typed_module,
@@ -490,6 +494,28 @@ fn leaf_kernel(k: &LeafKernel) -> String {
     format!(
         "{HEADER}define void @{name}(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0, ptr addrspace(1) noundef \"air-buffer-no-alias\" %1, ptr addrspace(1) noundef \"air-buffer-no-alias\" %2) {{\nentry:\n  %o = load i32, ptr addrspace(1) %2, align 4\n  %p = getelementptr i8, ptr addrspace(1) %0, i32 %o\n{body}  ret void\n}}\n\n{}",
         meta(name)
+    )
+}
+
+/// [`leaf_kernel`] with its offset proven a multiple of 16: `params[0]` counts 16-byte units
+/// (a GEP over `<4 x i32>`), and `data` and `out` are `uint4` buffers (`air.arg_type_align_size`
+/// 16, so Metal binds them at multiples of 16).
+fn leaf_kernel_in_units(k: &LeafKernel) -> String {
+    let name = k.name;
+    let ty = k.ty;
+    let a = k.align;
+    let body = match &k.store {
+        None => format!(
+            "  %v = load {ty}, ptr addrspace(1) %p, align {a}\n  store {ty} %v, ptr addrspace(1) %1, align 16\n"
+        ),
+        Some((c, _)) => format!("  store {ty} {c}, ptr addrspace(1) %p, align {a}\n"),
+    };
+    let meta = meta(name).replace(
+        "!\"air.arg_type_size\", i32 1, !\"air.arg_type_align_size\", i32 1, !\"air.arg_type_name\", !\"uchar\"",
+        "!\"air.arg_type_size\", i32 16, !\"air.arg_type_align_size\", i32 16, !\"air.arg_type_name\", !\"uint4\"",
+    );
+    format!(
+        "{HEADER}define void @{name}(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0, ptr addrspace(1) noundef \"air-buffer-no-alias\" %1, ptr addrspace(1) noundef \"air-buffer-no-alias\" %2) {{\nentry:\n  %o = load i32, ptr addrspace(1) %2, align 4\n  %p = getelementptr <4 x i32>, ptr addrspace(1) %0, i32 %o\n{body}  ret void\n}}\n\n{meta}"
     )
 }
 
@@ -2103,17 +2129,19 @@ fn every_view_of_a_written_slot_stays_writable() {
     }
 }
 
-/// The `uvec4` residuals the 16-byte units are checked at: zero, below 16, a multiple of 16, past
-/// 32, and wrapped.
+/// The residuals the 16-byte leaves are checked at: zero, below 16, a multiple of 16, past 32, and
+/// wrapped.
 const VEC4_RESIDUALS: [u32; 6] = [0, 4, 12, 16, 36, 0xFFFF_FFF0];
 
-/// A 16-byte leaf whose alignment is at least 16 is one element of the slot's `uvec4` view
-/// (declared beside the word view, and stored with one `OpStore`), in both encodings, on every
-/// tested profile; aligned to 4 it moves word by word (four stores, no `uvec4` view of the slot it
-/// stores to). At every residual a descriptor offset that is a multiple of 16 reads and writes
-/// exactly the leaf's 16 bytes of a 48-byte range (a `half` NaN stored from a constant a NaN where
-/// the module encodes it by the device's narrowing, `device_nan_bits`), and with
-/// the in-shader check the offset past the range reads 0 and writes nothing.
+/// A 16-byte leaf whose alignment is at least 16 at an offset proven a multiple of 16
+/// ([`leaf_kernel_in_units`]) is one element of the slot's `uvec4` view (declared beside the word
+/// view, and stored with one `OpStore`), in both encodings, on every tested profile; aligned to 4,
+/// or at an offset nothing proves a multiple of 16 ([`leaf_kernel`]'s byte offset from a buffer,
+/// whatever its `align`), it moves word by word (four stores, no `uvec4` view of the slot it stores
+/// to). At every residual its buffer's alignment allows, a descriptor offset that is a multiple of
+/// 16 reads and writes exactly the leaf's 16 bytes of a 48-byte range (a `half` NaN stored from a
+/// constant a NaN where the module encodes it by the device's narrowing, `device_nan_bits`), and
+/// with the in-shader check the offset past the range reads 0 and writes nothing.
 #[test]
 fn sixteen_byte_leaves_move_as_one_uvec4() {
     const OP_STORE: u16 = 62;
@@ -2126,88 +2154,281 @@ fn sixteen_byte_leaves_move_as_one_uvec4() {
     for (what, p) in encodings() {
         let robust = what.ends_with("robust=true");
         for k in &sixteen {
-            let what = format!("{what} {}", k.name);
-            let Some(bc) = assemble_text(k.name, &leaf_kernel(k)) else {
-                return;
-            };
-            check_l3(&bc, k.name, &p, &what);
-            let (plan, m) = typed_module(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let vec4 = k.align >= 16;
-            // A load kernel stores the loaded leaf to `out` at alignment 16.
-            assert_eq!(
-                views_of(&m, 0),
-                if vec4 { 2 } else { 1 },
-                "{what}: views of data"
-            );
-            assert_eq!(
-                views_of(&m, 1),
-                if k.store.is_none() { 2 } else { 0 },
-                "{what}: views of out"
-            );
-            let a = compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let native_halves = k.ty.contains("half") && device_nan_bits(&a);
-            let stores = opcodes(&a.module.words)
-                .iter()
-                .filter(|o| **o == OP_STORE)
-                .count();
-            let want = if k.store.is_some() && !vec4 { 4 } else { 1 };
-            assert_eq!(stores, want, "{what}: stores");
-            let data = pattern(48);
-            for r in VEC4_RESIDUALS {
-                // The interpreter models no robustness: robust encodings run in bounds only.
-                let descs: &[u32] = if robust {
-                    &[0, 16, 32]
+            for units in [true, false] {
+                let what = format!("{what} {} units={units}", k.name);
+                let text = if units {
+                    leaf_kernel_in_units(k)
                 } else {
-                    &[0, 16, 32, 48]
+                    leaf_kernel(k)
                 };
-                for &desc in descs {
-                    let o = desc.wrapping_sub(r);
-                    let mut params = vec![0u8; 16];
-                    params[..4].copy_from_slice(&o.to_le_bytes());
-                    let res = Resources {
-                        buffers: vec![
-                            Buffer {
-                                slot: Some(kslot(0)),
-                                address: None,
-                                bytes: data.clone(),
-                            },
-                            bound(1, 0, &[0; 32], 0),
-                            bound(2, 0, &params, 0),
-                        ],
-                        push: push_bytes(&plan, &[(0, r)]),
-                        spec: Default::default(),
+                let Some(bc) = assemble_text(k.name, &text) else {
+                    return;
+                };
+                check_l3(&bc, k.name, &p, &what);
+                let (plan, m) =
+                    typed_module(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+                let vec4 = units && k.align >= 16;
+                // A load kernel stores the loaded leaf to `out` at alignment 16, at offset 0 of a
+                // buffer whose bind offset is a multiple of 16 where it is a `uint4` buffer.
+                assert_eq!(
+                    views_of(&m, 0),
+                    if vec4 { 2 } else { 1 },
+                    "{what}: views of data"
+                );
+                assert_eq!(
+                    views_of(&m, 1),
+                    match (&k.store, units) {
+                        (Some(_), _) => 0,
+                        (None, true) => 2,
+                        (None, false) => 1,
+                    },
+                    "{what}: views of out"
+                );
+                let a = compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+                let native_halves = k.ty.contains("half") && device_nan_bits(&a);
+                let stores = opcodes(&a.module.words)
+                    .iter()
+                    .filter(|o| **o == OP_STORE)
+                    .count();
+                let want = match (&k.store, units) {
+                    (Some(_), _) if !vec4 => 4,
+                    (None, false) => 4,
+                    _ => 1,
+                };
+                assert_eq!(stores, want, "{what}: stores");
+                let data = pattern(48);
+                // A `uint4` buffer is bound at a multiple of 16.
+                let residuals = VEC4_RESIDUALS.iter().filter(|r| !units || *r % 16 == 0);
+                for &r in residuals {
+                    // The interpreter models no robustness: robust encodings run in bounds only.
+                    let descs: &[u32] = if robust {
+                        &[0, 16, 32]
+                    } else {
+                        &[0, 16, 32, 48]
                     };
-                    let out = run(&m, &Config::default(), res)
-                        .unwrap_or_else(|e| panic!("{what} r={r:#x} desc={desc}: {e:?}"));
-                    let at = desc as usize;
-                    let inb = at + 16 <= data.len();
-                    match &k.store {
-                        None => {
-                            let want: Vec<u8> = if inb {
-                                data[at..at + 16].to_vec()
-                            } else {
-                                vec![0; 16]
-                            };
-                            assert_eq!(out.buffers[1][..16], want[..], "{what} r={r:#x} {desc}");
-                        }
-                        Some((_, bytes)) => {
-                            let mut want = data.clone();
-                            if inb {
-                                want[at..at + 16].copy_from_slice(bytes);
-                            }
-                            if native_halves {
-                                assert!(
-                                    same_halves(&out.buffers[0], &want),
-                                    "{what} r={r:#x} {desc}: {:?}",
-                                    out.buffers[0]
+                    for &desc in descs {
+                        let o = desc.wrapping_sub(r);
+                        let o = if units { o / 16 } else { o };
+                        let mut params = vec![0u8; 16];
+                        params[..4].copy_from_slice(&o.to_le_bytes());
+                        let res = Resources {
+                            buffers: vec![
+                                Buffer {
+                                    slot: Some(kslot(0)),
+                                    address: None,
+                                    bytes: data.clone(),
+                                },
+                                bound(1, 0, &[0; 32], 0),
+                                bound(2, 0, &params, 0),
+                            ],
+                            push: push_bytes(&plan, &[(0, r)]),
+                            spec: Default::default(),
+                        };
+                        let out = run(&m, &Config::default(), res)
+                            .unwrap_or_else(|e| panic!("{what} r={r:#x} desc={desc}: {e:?}"));
+                        let at = desc as usize;
+                        let inb = at + 16 <= data.len();
+                        match &k.store {
+                            None => {
+                                let want: Vec<u8> = if inb {
+                                    data[at..at + 16].to_vec()
+                                } else {
+                                    vec![0; 16]
+                                };
+                                assert_eq!(
+                                    out.buffers[1][..16],
+                                    want[..],
+                                    "{what} r={r:#x} {desc}"
                                 );
-                            } else {
-                                assert_eq!(out.buffers[0], want, "{what} r={r:#x} {desc}");
+                            }
+                            Some((_, bytes)) => {
+                                let mut want = data.clone();
+                                if inb {
+                                    want[at..at + 16].copy_from_slice(bytes);
+                                }
+                                if native_halves {
+                                    assert!(
+                                        same_halves(&out.buffers[0], &want),
+                                        "{what} r={r:#x} {desc}: {:?}",
+                                        out.buffers[0]
+                                    );
+                                } else {
+                                    assert_eq!(out.buffers[0], want, "{what} r={r:#x} {desc}");
+                                }
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+/// Rows of 21 `float`s, one thread a row, each row written as four `float4`s and five `float`s as
+/// Apple's compiler emits `device float4 *v = (device float4 *)(out + 21 * p); v[i] = float4(p, 4i,
+/// 4i + 1, 4i + 2)` and `out[21 * p + c] = c` (its loops kept): row `p` starts at byte `84 p`, so 3
+/// rows in 4 start 4, 8 or 12 bytes past a multiple of 16, while the vectors' AIR says `align 16`.
+const FLOAT4_ROWS: &str = r#"define void @float4_rows(ptr addrspace(1) noundef "air-buffer-no-alias" %0, i32 noundef %1) {
+entry:
+  %r = mul i32 %1, 21
+  %rz = zext i32 %r to i64
+  %row = getelementptr inbounds float, ptr addrspace(1) %0, i64 %rz
+  %pf = tail call fast float @air.convert.f.f32.u.i32(i32 %1)
+  %v0 = insertelement <4 x float> undef, float %pf, i64 0
+  br label %vectors
+
+vectors:
+  %i = phi i32 [ 0, %entry ], [ %in, %vectors ]
+  %f = shl nuw nsw i32 %i, 2
+  %f1 = tail call fast float @air.convert.f.f32.u.i32(i32 %f)
+  %v1 = insertelement <4 x float> %v0, float %f1, i64 1
+  %g = or i32 %f, 1
+  %g1 = tail call fast float @air.convert.f.f32.u.i32(i32 %g)
+  %v2 = insertelement <4 x float> %v1, float %g1, i64 2
+  %h = or i32 %f, 2
+  %h1 = tail call fast float @air.convert.f.f32.u.i32(i32 %h)
+  %v3 = insertelement <4 x float> %v2, float %h1, i64 3
+  %iz = zext i32 %i to i64
+  %at = getelementptr inbounds <4 x float>, ptr addrspace(1) %row, i64 %iz
+  store <4 x float> %v3, ptr addrspace(1) %at, align 16
+  %in = add nuw nsw i32 %i, 1
+  %vdone = icmp eq i32 %in, 4
+  br i1 %vdone, label %scalars, label %vectors
+
+scalars:
+  %c = phi i32 [ 16, %vectors ], [ %cn, %scalars ]
+  %cf = tail call fast float @air.convert.f.f32.u.i32(i32 %c)
+  %e = add i32 %c, %r
+  %ez = zext i32 %e to i64
+  %ep = getelementptr inbounds float, ptr addrspace(1) %0, i64 %ez
+  store float %cf, ptr addrspace(1) %ep, align 4
+  %cn = add nuw nsw i32 %c, 1
+  %sdone = icmp eq i32 %cn, 21
+  br i1 %sdone, label %exit, label %scalars
+
+exit:
+  ret void
+}
+
+declare float @air.convert.f.f32.u.i32(i32)
+
+!air.kernel = !{!9}
+!air.version = !{!17}
+!air.language_version = !{!18}
+!9 = !{ptr @float4_rows, !10, !11}
+!10 = !{}
+!11 = !{!12, !13}
+!12 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"float", !"air.arg_name", !"out"}
+!13 = !{i32 1, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"p"}
+!17 = !{i32 2, i32 8, i32 0}
+!18 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
+/// `float4`s at their own indices, `v[p] = float4(p, 1, 2, 3)` over a `device float4 *`: every
+/// offset a multiple of 16, as the binding's is.
+const FLOAT4_GRID: &str = r#"define void @float4_grid(ptr addrspace(1) noundef "air-buffer-no-alias" %0, i32 noundef %1) {
+entry:
+  %pf = tail call fast float @air.convert.f.f32.u.i32(i32 %1)
+  %v = insertelement <4 x float> <float undef, float 1.0, float 2.0, float 3.0>, float %pf, i64 0
+  %iz = zext i32 %1 to i64
+  %at = getelementptr inbounds <4 x float>, ptr addrspace(1) %0, i64 %iz
+  store <4 x float> %v, ptr addrspace(1) %at, align 16
+  ret void
+}
+
+declare float @air.convert.f.f32.u.i32(i32)
+
+!air.kernel = !{!9}
+!air.version = !{!17}
+!air.language_version = !{!18}
+!9 = !{ptr @float4_grid, !10, !11}
+!10 = !{}
+!11 = !{!12, !13}
+!12 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"v"}
+!13 = !{i32 1, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"p"}
+!17 = !{i32 2, i32 8, i32 0}
+!18 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
+/// Eight threads, one threadgroup: the spec the interpreter runs a kernel's grid of 8 at.
+fn eight_threads() -> BTreeMap<SpecKey, u64> {
+    let mut spec = BTreeMap::new();
+    spec.insert(SpecKey::LocalSize(Axis::X), 8);
+    spec.insert(SpecKey::LocalSize(Axis::Y), 1);
+    spec.insert(SpecKey::LocalSize(Axis::Z), 1);
+    spec.insert(SpecKey::FlatLocalSize, 8);
+    spec
+}
+
+/// A `float4` whose address is a multiple of 4 and not of 16 is read and written at that address,
+/// whatever the `align 16` its AIR states: Metal's answer for [`FLOAT4_ROWS`] over 8 threads on an
+/// Apple M3 Max (`probes/vector_access_placement.m` in the conformance crate) is every row exact,
+/// `p 0 1 2 p 4 5 6 p 8 9 10 p 12 13 14 16 17 18 19 20`. Nothing proves those offsets multiples of
+/// 16 (the row's stride is 84 bytes and its buffer a `float` buffer, bound at any multiple of 4), so
+/// the slot has no `uvec4` view and the vectors move as words, at residuals 0 and 4, on every tested
+/// profile in both encodings. Where the offsets are proven multiples of 16 ([`FLOAT4_GRID`], a
+/// `float4` buffer at its own indices) the vector is one element of the slot's `uvec4` view.
+#[test]
+fn a_float4_aligned_only_to_its_lanes_is_placed_at_its_address() {
+    let (Some(rows), Some(grid)) = (
+        assemble_text("float4_rows", &format!("{HEADER}{FLOAT4_ROWS}")),
+        assemble_text("float4_grid", &format!("{HEADER}{FLOAT4_GRID}")),
+    ) else {
+        return;
+    };
+    let metal: Vec<f32> = (0..8u32)
+        .flat_map(|p| {
+            let p = p as f32;
+            let mut row = Vec::new();
+            for i in 0..4u32 {
+                let f = (4 * i) as f32;
+                row.extend([p, f, f + 1.0, f + 2.0]);
+            }
+            row.extend((16..21).map(|c| c as f32));
+            row
+        })
+        .collect();
+    for (what, p) in encodings() {
+        check_l3(&rows, "float4_rows", &p, &what);
+        let (plan, m) =
+            typed_module(&rows, "float4_rows", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+        for r in [0u32, 4] {
+            let res = Resources {
+                buffers: vec![bound(0, r, &[0xEE; 8 * 84], 0xEE)],
+                push: push_bytes(&plan, &[(0, r)]),
+                spec: eight_threads(),
+            };
+            let out =
+                run(&m, &Config::default(), res).unwrap_or_else(|e| panic!("{what} r={r}: {e:?}"));
+            let got: Vec<f32> = out.buffers[0][r as usize..r as usize + 8 * 84]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|w| f32::from_le_bytes(*w))
+                .collect();
+            assert_eq!(got, metal, "{what} r={r}");
+        }
+        assert_eq!(views_of(&m, 0), 1, "{what}: views of the rows");
+        check_l3(&grid, "float4_grid", &p, &what);
+        let (plan, m) =
+            typed_module(&grid, "float4_grid", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert_eq!(views_of(&m, 0), 2, "{what}: views of the grid");
+        for r in [0u32, 16] {
+            let res = Resources {
+                buffers: vec![bound(0, r, &[0xEE; 8 * 16], 0xEE)],
+                push: push_bytes(&plan, &[(0, r)]),
+                spec: eight_threads(),
+            };
+            let out =
+                run(&m, &Config::default(), res).unwrap_or_else(|e| panic!("{what} r={r}: {e:?}"));
+            let got: Vec<f32> = out.buffers[0][r as usize..r as usize + 8 * 16]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|w| f32::from_le_bytes(*w))
+                .collect();
+            let want: Vec<f32> = (0..8u32).flat_map(|p| [p as f32, 1.0, 2.0, 3.0]).collect();
+            assert_eq!(got, want, "{what} r={r}");
         }
     }
 }

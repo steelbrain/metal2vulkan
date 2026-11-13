@@ -1089,7 +1089,8 @@ pub(crate) fn access(
         super::tile_memory::written(cx)?;
     }
     let align = align.map_or(1, |a| a.bytes());
-    let leaf = leaf::leaf_of(cx.entry, cx.profile, &cx.memory.layouts, ty, align)?;
+    let proven = cx.memory.proven_align(cx.entry, ptr);
+    let leaf = leaf::leaf_of(cx.entry, cx.profile, &cx.memory.layouts, ty, align, proven)?;
     let ptr = access_ptr(cx, ptr, arena, u64::from(leaf.bytes))?;
     let value = stored_value(cx, value)?;
     Ok(LocalAccess {

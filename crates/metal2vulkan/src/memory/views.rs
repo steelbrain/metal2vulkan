@@ -30,11 +30,13 @@
 //!
 //! A storage or uniform slot may also have a **`uvec4` view** ([`Vec4View`]): `StorageBuffer {
 //! uvec4[] }` or `Uniform { uvec4[N] }` at the slot's binding, declared where an access of the slot
-//! moves a 16-byte leaf whose AIR alignment is at least 16 (a `UniformVec4` word view is its own).
-//! The binder's 16-byte-aligned descriptor bases carry that alignment to the unit index
-//! `(residual + m) / 16`, and a 16-aligned 16-byte leaf lies wholly inside or wholly outside a
-//! bound range (every range is a whole number of 16-byte units), so the word view's containment
-//! check of the leaf's 16 bytes is the unit's. `u64[]` views are not declared.
+//! moves a 16-byte leaf whose AIR alignment is at least 16 at an offset `residual + m` proven a
+//! multiple of 16 (`memory::leaf`'s placement: the residual's alignment is the bind offset's, and
+//! `m`'s is its structure's; a `UniformVec4` word view is its own). The binder's 16-byte-aligned
+//! descriptor bases carry that alignment to the unit index `(residual + m) / 16`, and a 16-aligned
+//! 16-byte leaf lies wholly inside or wholly outside a bound range (every range is a whole number
+//! of 16-byte units), so the word view's containment check of the leaf's 16 bytes is the unit's.
+//! `u64[]` views are not declared.
 
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, SlotRef};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
@@ -68,7 +70,7 @@ pub struct View {
 /// and uniform view's range at a multiple of `max(min*BufferOffsetAlignment, 16)` bytes from the
 /// allocation's start ([`base_alignment`]), so with the allocation's first byte at a
 /// 16-byte-aligned Metal address, a descriptor byte is congruent to its Metal address modulo 16
-/// and a 16-byte leaf whose AIR alignment is at least 16 is one `uvec4` element.
+/// and a 16-byte leaf whose Metal address is a multiple of 16 is one `uvec4` element.
 pub const BASE_ALIGNMENT: u64 = 16;
 
 /// The alignment of a Metal buffer slot's descriptor base for a view whose minimum offset

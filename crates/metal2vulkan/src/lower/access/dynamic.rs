@@ -769,6 +769,7 @@ pub fn select(
                 &cx.memory.layouts,
                 inst.ty,
                 align_of(*align),
+                cx.memory.proven_align(cx.entry, *ptr),
             )?;
             DynStrategy::Load(WideAccess {
                 ptr: plan_deref(cx, *ptr)?,
@@ -797,6 +798,7 @@ pub fn select(
                 &cx.memory.layouts,
                 ty,
                 align_of(*align),
+                cx.memory.proven_align(cx.entry, *ptr),
             )?;
             let value = stored_value(cx, *val)?;
             DynStrategy::Store(WideAccess {
@@ -857,7 +859,8 @@ fn coherent(
     };
     // The intrinsic states no alignment: the value's natural (ABI) one.
     let align = cx.memory.layouts.abi_align(ty).unwrap_or(1);
-    let leaf = leaf::leaf_of(cx.entry, cx.profile, &cx.memory.layouts, ty, align)?;
+    let proven = cx.memory.proven_align(cx.entry, ptr);
+    let leaf = leaf::leaf_of(cx.entry, cx.profile, &cx.memory.layouts, ty, align, proven)?;
     let value = match value {
         Some(v) => Some(stored_value(cx, v)?),
         None => None,

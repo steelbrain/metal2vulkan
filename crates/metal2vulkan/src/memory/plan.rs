@@ -48,8 +48,9 @@ use std::sync::Arc;
 
 use super::abi_index::AbiIndex;
 use super::provenance::{
-    self, grow, imageblock_cell, CellFacts, Class, ConstForm, Extent, HandleClass, OffsetRange,
-    PrivForm, Provenance, Repr, Root, RootSetId, RootSets, RootUse, Shape,
+    self, grow, imageblock_cell, twos, CellFacts, Class, ConstForm, Extent, HandleClass,
+    OffsetRange, PrivForm, Provenance, Repr, Root, RootSetId, RootSets, RootUse, Shape,
+    ALIGN_LOG_CAP,
 };
 use super::window;
 use crate::air::abi::{AbiInt, Access, ImageblockKind, ParamRole};
@@ -323,8 +324,9 @@ pub struct MemoryPlan {
     pub repr: Vec<Option<Repr>>,
     /// The interned root sets `repr` names.
     pub sets: RootSets,
-    /// The offset range of every pointer value, sorted by value.
-    pub offsets: Vec<(ValueId, OffsetRange)>,
+    /// The offset range of every pointer value and the base-2 logarithm of the alignment its
+    /// offset is known to have (`PtrFact::align`), sorted by value.
+    pub offsets: Vec<(ValueId, OffsetRange, u8)>,
     /// The device and constant pointer values whose offset is a constant plus one dynamic
     /// multiple of a stride (`Shape::Strided`: one dynamic element index), with that base and
     /// stride, sorted by value.
@@ -391,8 +393,84 @@ impl MemoryPlan {
     /// The offset range of pointer value `v` from its root.
     pub fn offset(&self, v: Value) -> Option<OffsetRange> {
         let id = self.values.id(v)?;
-        let at = self.offsets.binary_search_by_key(&id, |(v, _)| *v).ok()?;
-        self.offsets.get(at).map(|(_, r)| *r)
+        let at = self
+            .offsets
+            .binary_search_by_key(&id, |(v, _, _)| *v)
+            .ok()?;
+        self.offsets.get(at).map(|(_, r, _)| *r)
+    }
+
+    /// The base-2 logarithm of a power of two (at most `ALIGN_LOG_CAP`) that divides every
+    /// offset pointer value `v` may take from its roots (`PtrFact::align`); 0 for a value without
+    /// a fact.
+    pub fn offset_twos(&self, v: Value) -> u8 {
+        let Some(id) = self.values.id(v) else {
+            return 0;
+        };
+        self.offsets
+            .binary_search_by_key(&id, |(v, _, _)| *v)
+            .ok()
+            .and_then(|at| self.offsets.get(at))
+            .map_or(0, |(_, _, a)| *a)
+    }
+
+    /// The base-2 logarithm of a power of two (at most `ALIGN_LOG_CAP`) that divides the byte
+    /// offset of root `r`'s first byte in the word memory an access of it reaches:
+    ///
+    /// - a buffer parameter's, its descriptor view's residual, which is congruent to the bind
+    ///   offset modulo 16 (`memory::views::BASE_ALIGNMENT`): Metal binds a buffer at an offset that
+    ///   is a multiple of the alignment of the data its function consumes, which AIR states as
+    ///   `air.arg_type_align_size` (Metal's API validation fails a `float4 *` buffer bound at
+    ///   offset 4: "must be a multiple of 16", `probes/vector_access_placement.m` in the
+    ///   conformance crate);
+    /// - a `[[threadgroup(n)]]` region's, its region's alignment;
+    /// - an arena object's or a blob constant's, its offset;
+    /// - the null root's, the cap: nothing is accessed there;
+    /// - any other root's (a buffer table's element, a dynamic or an intrinsic's root), 0.
+    pub fn base_twos(&self, e: &Entry, r: Root) -> u8 {
+        match r {
+            Root::Null => ALIGN_LOG_CAP,
+            Root::Param(p) => match self.tg_arena.dynamic.iter().find(|d| d.param == p) {
+                Some(d) => twos(i128::from(d.align)),
+                None => self
+                    .abi
+                    .binding(e, p)
+                    .and_then(|b| b.ty.align)
+                    .map_or(0, |a| twos(i128::from(a))),
+            },
+            Root::Global(g) => {
+                let object = ArenaObject::Global(g);
+                let entry = self
+                    .tg_arena
+                    .entry(object)
+                    .or_else(|| self.priv_arena.entry(object));
+                match (entry, self.const_global(g).map(|c| c.form)) {
+                    (Some(entry), _) => twos(i128::from(entry.offset)),
+                    (None, Some(ConstGlobalForm::Blob { offset })) => twos(i128::from(offset)),
+                    _ => 0,
+                }
+            }
+            Root::Alloca(id) => self
+                .priv_arena
+                .entry(ArenaObject::Alloca(id))
+                .map_or(0, |entry| twos(i128::from(entry.offset))),
+            _ => 0,
+        }
+    }
+
+    /// The alignment in bytes (at most 16) proven for every byte offset at which pointer value `v`
+    /// reaches its word memory: the least over its roots' bases ([`MemoryPlan::base_twos`]) and
+    /// its offset from them ([`MemoryPlan::offset_twos`]). An access's own `align` is not a proof:
+    /// Metal places a `float4` whose address is a multiple of 4 and not of 16 at that address,
+    /// though its AIR states `align 16`.
+    pub fn proven_align(&self, e: &Entry, v: Value) -> u64 {
+        let roots = self.roots_of(v).unwrap_or(&[]);
+        let base = roots
+            .iter()
+            .map(|r| self.base_twos(e, *r))
+            .min()
+            .unwrap_or(0);
+        1 << base.min(self.offset_twos(v))
     }
 
     /// `(base, stride)` when the offset of device or constant pointer value `v` is `base + k ·
@@ -457,7 +535,7 @@ impl MemoryPlan {
     /// The bytes the plan's tables hold, as the ledger charges them.
     pub fn retained_bytes(&self) -> usize {
         self.repr.capacity() * std::mem::size_of::<Option<Repr>>()
-            + self.offsets.capacity() * std::mem::size_of::<(ValueId, OffsetRange)>()
+            + self.offsets.capacity() * std::mem::size_of::<(ValueId, OffsetRange, u8)>()
             + self.strided.capacity() * std::mem::size_of::<(ValueId, i64, u64)>()
             + self.root_sets.capacity() * std::mem::size_of::<(ValueId, RootSetId)>()
             + self.sets.retained_bytes()
@@ -616,7 +694,7 @@ fn analyze(e: &Entry, p: &DeviceProfile, m: &mut Meter) -> Result<MemoryPlan, Er
 /// What [`Planner::reprs`] derives.
 struct Reprs {
     repr: Vec<Option<Repr>>,
-    offsets: Vec<(ValueId, OffsetRange)>,
+    offsets: Vec<(ValueId, OffsetRange, u8)>,
     strided: Vec<(ValueId, i64, u64)>,
     root_sets: Vec<(ValueId, RootSetId)>,
     handle_table: Option<Vec<HandleClass>>,
@@ -2161,10 +2239,10 @@ impl Planner<'_> {
                     strided.push((v, base, stride));
                 }
             }
-            offsets.push((v, f.range));
+            offsets.push((v, f.range, f.align));
             root_sets.push((v, f.roots));
         }
-        offsets.sort_unstable_by_key(|(v, _)| *v);
+        offsets.sort_unstable_by_key(|(v, _, _)| *v);
         strided.sort_unstable_by_key(|(v, _, _)| *v);
         root_sets.sort_unstable_by_key(|(v, _)| *v);
         let handle_table = (!handles.is_empty()).then(|| handles.into_iter().collect());

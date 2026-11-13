@@ -214,6 +214,7 @@ fn an_access_as_wide_as_its_step_is_one_test() {
                 roots: super::super::RootSetId::EMPTY,
                 range: OffsetRange::Span { lo: 0, hi: last },
                 shape,
+                align: 0,
             };
             let before = m.work();
             let touched =

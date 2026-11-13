@@ -14,9 +14,11 @@
 //! least 4, or when it is an arena or blob pointer whose offset is a translation-time constant
 //! multiple of 4 (an object's placed offset displaced by constant GEPs; both memories start at a
 //! word). A `memcpy` or `memmove` of a constant multiple of 16 bytes with a static buffer endpoint,
-//! every buffer endpoint's call-site `align` at least 16 and every other endpoint word-aligned,
-//! moves 16-byte `uvec4` units instead: a buffer slot with a `uvec4` view moves each unit as one
-//! element of it, and every other memory as its four words. Every unit is one leaf load and store
+//! every buffer endpoint's call-site `align` at least 16 and its offset proven a multiple of 16
+//! (`MemoryPlan::proven_align`: the call-site `align` alone is no proof, `memory::leaf`'s
+//! placement), and every other endpoint word-aligned, moves 16-byte `uvec4` units instead: a
+//! buffer slot with a `uvec4` view moves each unit as one element of it, and every other memory as
+//! its four words. Every unit is one leaf load and store
 //! (`memory::leaf`), each contained exactly as a plain access of that leaf, so a byte store never
 //! disturbs a neighbour (the sub-word atomics); an arena unit at a constant offset that ends inside
 //! the arena's translation-time size has no check, which could only pass. `memset` stores the byte
@@ -557,8 +559,17 @@ pub fn select(
         Some(intrinsic_endpoint(cx, arg(cx, 1)?, false, m)?.with_volatile(volatile))
     };
     let unit = unit_of(
-        (&dst, arg_align(call, 0)),
-        from.as_ref().map(|f| (f, arg_align(call, 1))),
+        (
+            &dst,
+            arg_align(call, 0),
+            cx.memory.proven_align(cx.entry, d),
+        ),
+        from.as_ref()
+            .map(|f| -> Result<_, Error> {
+                let s = arg(cx, 1)?;
+                Ok((f, arg_align(call, 1), cx.memory.proven_align(cx.entry, s)))
+            })
+            .transpose()?,
         &span,
     );
     let length = match span {
@@ -625,24 +636,25 @@ enum Span {
 }
 
 /// The bytes of each unit of a copy or fill to `dst` from `from` (each with its call-site
-/// `align`) of length `span` (module doc). A copy of a constant nonzero multiple of 16 bytes with
-/// a static buffer endpoint, every buffer endpoint's call-site `align` at least 16 and every other
-/// endpoint word-aligned, moves 16: a buffer endpoint's call-site `align` of 16 makes each unit's
-/// descriptor offset a multiple of 16, so a `uvec4` view element holds exactly its bytes, and every
-/// other memory moves a 16-byte unit as its four words, which needs only word alignment. Otherwise
-/// a unit is a word when both endpoints are word-aligned, else a byte.
-fn unit_of(dst: (&Endpoint, u64), from: Option<(&Endpoint, u64)>, span: &Span) -> u32 {
+/// `align` and the alignment its offset is proven to have) of length `span` (module doc). A copy
+/// of a constant nonzero multiple of 16 bytes with a static buffer endpoint, every buffer
+/// endpoint's call-site `align` at least 16 and its offset proven a multiple of 16, and every
+/// other endpoint word-aligned, moves 16: each unit's descriptor offset is a multiple of 16, so a
+/// `uvec4` view element holds exactly its bytes, and every other memory moves a 16-byte unit as
+/// its four words, which needs only word alignment. Otherwise a unit is a word when both endpoints
+/// are word-aligned, else a byte.
+fn unit_of(dst: (&Endpoint, u64, u64), from: Option<(&Endpoint, u64, u64)>, span: &Span) -> u32 {
     let ends = || std::iter::once(dst).chain(from);
     let vec4 = from.is_some()
         && matches!(*span, Span::Bytes(len) if len > 0 && len % 16 == 0)
-        && ends().any(|(e, _)| matches!(e, Endpoint::Buffer(_)))
-        && ends().all(|(e, call)| match e {
-            Endpoint::Buffer(_) => call >= 16,
+        && ends().any(|(e, _, _)| matches!(e, Endpoint::Buffer(_)))
+        && ends().all(|(e, call, proven)| match e {
+            Endpoint::Buffer(_) => call >= 16 && proven >= 16,
             _ => known_align(e, call) >= 4,
         });
     if vec4 {
         16
-    } else if ends().all(|(e, call)| known_align(e, call) >= 4) {
+    } else if ends().all(|(e, call, _)| known_align(e, call) >= 4) {
         4
     } else {
         1

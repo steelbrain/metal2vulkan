@@ -351,6 +351,7 @@ fn view(
             &cx.memory.layouts,
             field_ty,
             offset_align(at.offset),
+            offset_align(at.offset),
         )?;
         // A value wider than its slot is a packed pixel-format member, which Metal converts.
         if leaf.bytes > at.size

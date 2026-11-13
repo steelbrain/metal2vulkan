@@ -15,9 +15,10 @@
 //! and the register value goes chunk by chunk.
 //!
 //! No narrow storage type is used: a leaf is composed from the 32-bit words covering it. The
-//! **path** depends only on the access's alignment `a` ([`Path`]):
+//! **path** depends only on the access's alignment `a` and, for a 16-byte leaf, the alignment its
+//! offset is proven to have ([`Path`]):
 //!
-//! - [`Path::Vec4`] (`n == 16` and `a >= 16`): the offset is a multiple of 16, so the leaf is
+//! - [`Path::Vec4`] (`n == 16`, `a >= 16`, and the offset proven a multiple of 16): the leaf is
 //!   `uvec4` unit `off/16` where the memory has one ([`Units::vec4`]), else [`Path::Aligned`]'s
 //!   four words.
 //! - [`Path::Aligned`] (`a >= 4`): the offset is a multiple of 4, so the leaf is words
@@ -73,10 +74,26 @@
 //! **Volatile**. A volatile access is the same leaf through a word memory whose [`WordOps`] carry
 //! `volatile`: every word or unit it loads or stores has the `Volatile` memory operand.
 //!
-//! The alignment is a promise about the Metal address; it carries to the offset in a word memory
-//! because every word memory's base is 4-byte aligned in the Metal address space (the binder's
-//! descriptor bases are), and to a `uvec4` unit's index because a descriptor view's base is 16-byte
-//! aligned there.
+//! **Placement**. Metal does not place an access at the alignment its AIR states. Measured on an
+//! Apple M3 Max under macOS 27.0.1, rows of 21 elements one thread a row
+//! (`probes/vector_access_placement.m` in the conformance crate):
+//!
+//! | Access | Its address | Where Metal reads or writes it |
+//! |---|---|---|
+//! | `float4` (`align 16`): device, threadgroup, constant | 4, 8 or 12 mod 16 | at the address |
+//! | `half4` store (`align 8`): device | 2 mod 4 | the multiple of 4 below |
+//! | `uchar4` store (`align 4`): device | odd | the multiple of 4 below |
+//! | `float4 *` buffer bound at offset 4 | 4 mod 16 | at the address |
+//!
+//! Metal's API validation fails that last bind ("must be a multiple of 16"): a buffer's bind
+//! offset is a multiple of its argument's `air.arg_type_align_size`. An alignment of at least 4
+//! carries to the offset in a word memory, because every word memory's base is 4-byte aligned in
+//! the Metal address space (the binder's descriptor bases are): the words at `off/4` are those
+//! Metal reads, for each row of the table. A `uvec4` unit at `off/16` is exact only where `off` is
+//! a multiple of 16, which the access's `align` does not say, so it is taken only where the offset
+//! is proven one (`MemoryPlan::proven_align`: the structure of the pointer's offset and its roots'
+//! bases, a buffer's from its argument's alignment); elsewhere the leaf is the four words at
+//! `off/4`.
 
 use crate::air::ir::{Type, TypeId as AirTypeId, TypeLayouts};
 use crate::air::Entry;
@@ -187,7 +204,7 @@ fn not_lowered() -> Error {
 /// How a leaf is composed from words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Path {
-    /// A 16-byte leaf at an offset that is a multiple of 16: one `uvec4` unit where the memory
+    /// A 16-byte leaf at an offset proven a multiple of 16: one `uvec4` unit where the memory
     /// has one ([`Units::vec4`]), else [`Path::Aligned`]'s four words.
     Vec4,
     /// The offset is a multiple of 4.
@@ -271,17 +288,19 @@ impl Leaf {
     }
 }
 
-/// The leaf of an access of AIR type `ty` with alignment `align` bytes (1 when unstated), or the
-/// refusal of a type that is not a scalar or vector the arithmetic family holds on `p`. A
-/// vector's lanes must be whole bytes (`<N x i1>` and odd widths are bit-packed in LLVM); one of
-/// 5 to 255 lanes is chunked, and a `<1 x T>` (a chunked composite of one scalar) or a vector of
-/// more lanes is not implemented.
+/// The leaf of an access of AIR type `ty` with alignment `align` bytes (1 when unstated) at an
+/// offset proven a multiple of `proven` bytes (`MemoryPlan::proven_align`; the module doc's
+/// placement), or the refusal of a type that is not a scalar or vector the arithmetic family holds
+/// on `p`. A vector's lanes must be whole bytes (`<N x i1>` and odd widths are bit-packed in LLVM);
+/// one of 5 to 255 lanes is chunked, and a `<1 x T>` (a chunked composite of one scalar) or a
+/// vector of more lanes is not implemented.
 pub fn leaf_of(
     e: &Entry,
     p: &DeviceProfile,
     layouts: &TypeLayouts,
     ty: AirTypeId,
     align: u64,
+    proven: u64,
 ) -> Result<Leaf, Error> {
     // A 64-bit integer is two words on a profile without `shaderInt64`, in a chunk too.
     let form = match legal::chunked(e.module.types(), ty) {
@@ -330,7 +349,7 @@ pub fn leaf_of(
     ) {
         return Err(not_lowered());
     }
-    let path = if bytes == 16 && align >= 16 {
+    let path = if bytes == 16 && align >= 16 && proven >= 16 {
         Path::Vec4
     } else if align >= 4 {
         Path::Aligned

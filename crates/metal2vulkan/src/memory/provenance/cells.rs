@@ -425,6 +425,7 @@ impl Cx<'_> {
                         roots: self.sets.join(out.roots, x.roots, m)?,
                         range: out.range.join(x.range),
                         shape: out.shape.join(x.shape),
+                        align: out.align.min(x.align),
                     };
                 }
             }
@@ -664,6 +665,7 @@ impl Cx<'_> {
                     roots: self.sets.join(held.roots, x.roots, m)?,
                     range: held.range.join(x.range),
                     shape: held.shape.join(x.shape),
+                    align: held.align.min(x.align),
                 };
             }
             self.leak(held, m)?;

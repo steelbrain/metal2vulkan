@@ -254,12 +254,32 @@ impl Shape {
     }
 }
 
+/// The base-2 logarithm of the widest alignment an offset's [`PtrFact::align`] tracks: 16 bytes,
+/// the widest unit an access moves (`memory::leaf`'s `uvec4`).
+pub const ALIGN_LOG_CAP: u8 = 4;
+
+/// The base-2 logarithm of the greatest power of two, up to [`ALIGN_LOG_CAP`], that divides `x`
+/// (the cap for 0, which every power divides).
+pub fn twos(x: i128) -> u8 {
+    if x == 0 {
+        ALIGN_LOG_CAP
+    } else {
+        (x.trailing_zeros() as u8).min(ALIGN_LOG_CAP)
+    }
+}
+
 /// The analysis fact of one pointer value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PtrFact {
     pub roots: RootSetId,
     pub range: OffsetRange,
     pub shape: Shape,
+    /// The base-2 logarithm of a power of two (at most [`ALIGN_LOG_CAP`]) that divides every
+    /// offset the value may take from its root: the least over the values a `phi` or `select`
+    /// merges, and over a GEP's base and terms, a dynamic index's stride times the factor of two
+    /// its index is known to carry ([`known_twos`]). It is never widened: it only falls, and has
+    /// five values.
+    pub align: u8,
 }
 
 impl PtrFact {
@@ -267,6 +287,7 @@ impl PtrFact {
         roots: RootSetId::EMPTY,
         range: OffsetRange::Empty,
         shape: Shape::Empty,
+        align: ALIGN_LOG_CAP,
     };
 
     fn at(roots: RootSetId, offset: i64) -> PtrFact {
@@ -277,6 +298,7 @@ impl PtrFact {
                 hi: offset,
             },
             shape: Shape::Exact(offset),
+            align: twos(i128::from(offset)),
         }
     }
 
@@ -285,6 +307,7 @@ impl PtrFact {
             roots,
             range: OffsetRange::Top,
             shape: Shape::Top,
+            align: 0,
         }
     }
 }
@@ -742,6 +765,115 @@ pub(crate) fn gep_displacement(
         }
     }
     Ok((konst.and_then(|c| i64::try_from(c).ok()), strides))
+}
+
+/// The base-2 logarithm of the alignment (at most [`ALIGN_LOG_CAP`]) that the displacement of
+/// `getelementptr src_ty, _, idx..` is known to have: the least over its terms, a constant index's
+/// displacement and a dynamic index's stride times the factor of two its index carries
+/// ([`known_twos`]). The walk is [`gep_displacement`]'s, which refuses what it cannot size first; a
+/// term it cannot read here counts as unaligned.
+fn gep_twos(e: &Entry, layouts: &TypeLayouts, src_ty: TypeId, idx: &[Value]) -> u8 {
+    let mut least = ALIGN_LOG_CAP;
+    let mut cur = src_ty;
+    for (n, &i) in idx.iter().enumerate() {
+        let scale = if n == 0 {
+            layouts.alloc_size(src_ty)
+        } else {
+            match e.module.types().get(cur) {
+                Some(Type::Struct { fields, .. }) => {
+                    let field = const_index(e, i).and_then(|k| usize::try_from(k).ok());
+                    let off = field.and_then(|k| layouts.field_offsets(cur)?.get(k).copied());
+                    match (field.and_then(|k| fields.get(k)), off) {
+                        (Some(f), Some(off)) => {
+                            least = least.min(twos(i128::from(off)));
+                            cur = *f;
+                            continue;
+                        }
+                        _ => return 0,
+                    }
+                }
+                Some(Type::Array { elem, .. } | Type::Vector { elem, .. }) => {
+                    cur = *elem;
+                    layouts.alloc_size(*elem)
+                }
+                _ => None,
+            }
+        };
+        let Some(scale) = scale else { return 0 };
+        let term = match const_index(e, i) {
+            Some(k) => twos(i128::from(k) * i128::from(scale)),
+            None => twos(i128::from(scale))
+                .saturating_add(known_twos(e, i, KNOWN_TWOS_DEPTH))
+                .min(ALIGN_LOG_CAP),
+        };
+        least = least.min(term);
+    }
+    least
+}
+
+/// How deep [`known_twos`] reads an index's definition.
+const KNOWN_TWOS_DEPTH: u8 = 4;
+
+/// The base-2 logarithm of a power of two (at most [`ALIGN_LOG_CAP`]) that divides integer `v` in
+/// every execution, read from its definition up to `depth` instructions deep: a constant's own; a
+/// shift left by a constant adds the shift and a product adds its factors'; an `and` keeps the
+/// larger of its operands', a sum, difference, `or`, `xor` or `select` the smaller; an extension or
+/// truncation keeps its operand's (the cap is below every integer width but `i1`, whose values
+/// 0 and 1 a truncation to it would not keep, so that one is 0). Anything else is 0.
+fn known_twos(e: &Entry, v: Value, depth: u8) -> u8 {
+    use crate::air::ir::BinOp as IntOp;
+    if let Some(k) = const_index(e, v) {
+        return twos(i128::from(k));
+    }
+    let Value::Inst(id) = v else { return 0 };
+    if depth == 0 {
+        return 0;
+    }
+    let body = e.module.func(e.func).and_then(|f| f.body.as_ref());
+    let Some(inst) = body.and_then(|b| b.insts.get(id)) else {
+        return 0;
+    };
+    let d = depth - 1;
+    let of = |x: Value| known_twos(e, x, d);
+    match &inst.kind {
+        InstKind::BinOp {
+            op: IntOp::Shl,
+            a,
+            b,
+            ..
+        } => match const_index(e, *b).and_then(|s| u8::try_from(s).ok()) {
+            Some(s) => of(*a).saturating_add(s).min(ALIGN_LOG_CAP),
+            None => 0,
+        },
+        InstKind::BinOp {
+            op: IntOp::Mul,
+            a,
+            b,
+            ..
+        } => of(*a).saturating_add(of(*b)).min(ALIGN_LOG_CAP),
+        InstKind::BinOp {
+            op: IntOp::And,
+            a,
+            b,
+            ..
+        } => of(*a).max(of(*b)),
+        InstKind::BinOp {
+            op: IntOp::Add | IntOp::Sub | IntOp::Or | IntOp::Xor,
+            a,
+            b,
+            ..
+        } => of(*a).min(of(*b)),
+        InstKind::Select { t, f, .. } => of(*t).min(of(*f)),
+        InstKind::Cast {
+            op: CastOp::ZExt | CastOp::SExt,
+            v,
+        } => of(*v),
+        InstKind::Cast {
+            op: CastOp::Trunc,
+            v,
+        } if !matches!(e.module.types().get(inst.ty), Some(Type::Int(1))) => of(*v),
+        _ => 0,
+    }
 }
 
 /// The dense index of a pointer-typed argument or instruction.
@@ -1239,10 +1371,12 @@ impl<'a> Cx<'a> {
             }
             (Shape::Top, _, _) => Shape::Top,
         };
+        let align = base.align.min(gep_twos(self.e, self.layouts, src_ty, idx));
         Ok(PtrFact {
             roots: base.roots,
             range,
             shape,
+            align,
         })
     }
 
@@ -1480,6 +1614,7 @@ impl<'a> Cx<'a> {
             roots: self.sets.join(a.roots, b.roots, m)?,
             range: a.range.join(b.range),
             shape: a.shape.join(b.shape),
+            align: a.align.min(b.align),
         })
     }
 }
@@ -2353,7 +2488,15 @@ fn fixpoint(
             if new == old {
                 continue;
             }
-            let changes = cx.changes.get(i).copied().unwrap_or(0).saturating_add(1);
+            // Only the offsets widen, so only their changes count: the alignment falls at most
+            // `ALIGN_LOG_CAP` times on its own.
+            let moved = new.range != old.range || new.shape != old.shape;
+            let changes = cx
+                .changes
+                .get(i)
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(u8::from(moved));
             if changes > WIDEN_AFTER {
                 if new.range != OffsetRange::Empty {
                     new.range = OffsetRange::Top;

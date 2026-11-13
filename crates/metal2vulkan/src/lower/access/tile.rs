@@ -844,7 +844,7 @@ pub(super) fn select_texel(
             .ok_or_else(|| cx.invariant("an implicit imageblock value without a type"))?,
         None => ty,
     };
-    let leaf = leaf::leaf_of(cx.entry, cx.profile, &cx.memory.layouts, access_ty, 1)?;
+    let leaf = leaf::leaf_of(cx.entry, cx.profile, &cx.memory.layouts, access_ty, 1, 1)?;
     let contained = imageblock::contained(cx);
     let p = plan(cx)?;
     let cell_bytes = p.cell_bytes;

@@ -1986,7 +1986,8 @@ fn select_access(
 ) -> Result<Access, Error> {
     let (targets, null, blob_check) = blob_roots(cx, ptr, value.is_some(), m)?;
     let align = align.map_or(1, |a| a.bytes());
-    let leaf = leaf::leaf_of(cx.entry, cx.profile, &cx.memory.layouts, ty, align)?;
+    let proven = cx.memory.proven_align(cx.entry, ptr);
+    let leaf = leaf::leaf_of(cx.entry, cx.profile, &cx.memory.layouts, ty, align, proven)?;
     access_with_leaf(cx, ptr, value, leaf, targets, null, blob_check)
 }
 

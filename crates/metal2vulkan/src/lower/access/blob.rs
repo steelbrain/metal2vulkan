@@ -187,7 +187,8 @@ pub fn load(
 ) -> Result<BlobLoad, Error> {
     use_blob(cx)?;
     let align = align.map_or(1, |a| a.bytes());
-    let leaf = leaf::leaf_of(cx.entry, cx.profile, &cx.memory.layouts, ty, align)?;
+    let proven = cx.memory.proven_align(cx.entry, ptr);
+    let leaf = leaf::leaf_of(cx.entry, cx.profile, &cx.memory.layouts, ty, align, proven)?;
     Ok(BlobLoad {
         ptr: blob_ptr(cx, ptr)?,
         leaf,
