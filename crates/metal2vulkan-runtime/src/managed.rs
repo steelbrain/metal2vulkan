@@ -17,14 +17,13 @@
 //!   copy in such cached memory, which `contents` maps (`buffer.rs`'s `Mirror`). `did_modify_range`
 //!   notes the range ([`Modified`]); the next commit of a command buffer whose commands may use
 //!   the buffer (its encoders' uses name it, `use_resource` made it resident, or a command may
-//!   reach memory no use names), of any of the device's queues, takes the range's bytes as the
-//!   host copy holds them then, before that call returns, and copies them to the device's own by
-//!   the next submission whose commands may use the buffer of a command buffer committed at or
-//!   after that commit, before any of them, after the command buffers before it on its
-//!   `VkQueue` (`texture/first_move.rs`'s `register_upload`): Metal's shape, the upload made
-//!   before the GPU uses the buffer, on the user's own queue. A command buffer committed before,
-//!   whose submission the scheduler makes after the later commit, never takes it, so it reads
-//!   the bytes of its own commit and none a later commit took. A
+//!   reach memory no use names), of any of the device's queues, takes the range, and the next
+//!   submission whose commands may use the buffer of a command buffer committed at or after that
+//!   commit copies it from the host copy to the device's own, before any of them, after the
+//!   command buffers before it on its `VkQueue` (`texture/first_move.rs`'s `register_upload`):
+//!   Metal's shape, the upload made before the GPU uses the buffer, on the user's own queue. A
+//!   command buffer committed before, whose submission the scheduler makes after the later
+//!   commit, never takes it, so none reads a range only a later commit took. A
 //!   commit that uses none of it leaves the range noted, and its submission leaves the copy
 //!   waiting, so the copy never lands under a command buffer of another queue still to read the
 //!   bytes it replaces (`synchronize_resource` copies the buffer back where the command buffer
@@ -34,19 +33,25 @@
 //!   and an RTX 5080, where a device-local write and a copy back ran at several GB/s. A `Managed`
 //!   no-copy buffer is two copies the same way, its host copy the caller's pages
 //!   (`managed_copy.rs`).
-//! - **The bytes a command buffer reads** are the host copy's at the commit, after the
-//!   `did_modify_range`, of the first command buffer that may use the buffer, Metal's answer on a
-//!   Mac with a discrete GPU: on an AMD Radeon Pro 5300M
-//!   (macOS 26.7.1), a kernel copying a 4 KiB `Managed` buffer behind a spin kernel read the CPU's
-//!   write made before the commit (after the call, and with the command buffer encoded before the
-//!   write), and not one made 30 ms after the commit while the GPU still spun. On an Intel UHD
+//! - **The bytes a command buffer reads** follow the device's policy
+//!   (`DevicePolicy::managed_copy_in`). Under the default, `ManagedCopyInPolicy::AtSubmission`,
+//!   the GPU copies the range from the host copy as that submission runs, with no copy on the CPU
+//!   (but of pages no import maps, which the CPU copies at the commit into staging memory,
+//!   `managed_copy.rs`): a command buffer reads the bytes the host copy held at its commit, and a
+//!   CPU write after the commit, before the GPU ran the command buffer, may reach it. Macs differ
+//!   there, so the cheaper answer is the default: on an AMD Radeon Pro 5300M (macOS 26.7.1, two
+//!   copies), a kernel copying a 4 KiB `Managed` buffer behind a spin kernel read the CPU's write
+//!   made before the commit (after the call, and with the command buffer encoded before the
+//!   write), and not one made 30 ms after the commit while the GPU still spun; on an Intel UHD
 //!   Graphics 630 (unified memory, one copy) it read the later write, as the GPU reads the memory
-//!   the CPU wrote last. Read as the copy ran, a CPU write after the commit reached a command
-//!   buffer the GPU had not reached yet. Taking the bytes costs a CPU copy of each range noted
-//!   since the last commit into staging buffers of the runtime's own at that commit, freed once
-//!   the submission that copies them in completed (`managed_copy.rs`, at most `STAGED_BYTES`
-//!   staged ahead). A range the staging buffers find no memory for is copied in from the host
-//!   copy as that submission runs, as before.
+//!   the CPU wrote last. Under `ManagedCopyInPolicy::AtCommit`, which
+//!   `DevicePolicy::exact_answers()` selects, the commit takes the range's bytes as the host copy
+//!   holds them then, before the call returns: a CPU copy of each range noted since the last
+//!   commit into staging buffers of host-cached memory, freed once the submission that copies
+//!   them in completed (`managed_copy.rs`, at most `STAGED_BYTES` staged ahead), so a write after
+//!   the commit reaches no command buffer committed before it, the 5300M's answer. A range the
+//!   staging buffers find no memory for is copied in from the host copy as that submission runs,
+//!   as under the default.
 
 use super::buffer::{Buffer, WeakBuffer};
 use super::device::lock;
@@ -58,10 +63,11 @@ use std::sync::Mutex;
 impl Buffer {
     /// `didModifyRange:`: the CPU wrote `range` of a managed buffer; command buffers committed
     /// after this call see it. Where the buffer has a host copy (a device without unified memory),
-    /// the range's bytes are taken from it at the next commit of a command buffer that may use the
-    /// buffer and copied to its own bytes by that command buffer's submission, or one before it
-    /// that may use the buffer, before any of its commands (the module docs); the call does not
-    /// wait for the GPU. On a buffer of another storage mode it does nothing, whatever the range,
+    /// the range is taken at the next commit of a command buffer that may use the buffer and
+    /// copied from the host copy to its own bytes by that command buffer's submission, or one
+    /// before it that may use the buffer, before any of its commands, read as the device's policy
+    /// says (`DevicePolicy::managed_copy_in`, the module docs); the call does not wait for the
+    /// GPU. On a buffer of another storage mode it does nothing, whatever the range,
     /// as plain Metal does (RT2 `managed.didmodify.shared`: `Shared` and `Private` buffers, in
     /// range and past it; Metal's validation stops it). Refused for a managed buffer's range past
     /// the buffer.
@@ -125,14 +131,14 @@ impl Modified {
     }
 
     /// A commit of a command buffer whose commands may use a buffer as `uses` answers: take the
-    /// ranges noted of those it may use, and copy their bytes in as their host copies hold them
-    /// now (staged, `Buffer::upload_now`), before the command buffer is submitted. The commit's
-    /// stamp, which the command buffer keeps: one past every commit's taken before it, under the
-    /// same lock. Each upload carries it, and only a batch of a command buffer whose stamp is at
-    /// least as large takes it (`texture/first_move.rs`'s `register_upload`): its own submission
-    /// that may use the buffer copies them in, or a later commit's, never one committed before,
-    /// which reads the bytes its own commit took. The ranges of the rest stay noted, in their
-    /// order.
+    /// ranges noted of those it may use, and copy their bytes in from their host copies, as they
+    /// hold them as the submission runs or now, before the command buffer is submitted, as the
+    /// device's policy says (`Buffer::upload_at_commit`). The commit's stamp, which the command
+    /// buffer keeps: one past every commit's taken before it, under the same lock. Each upload
+    /// carries it, and only a batch of a command buffer whose stamp is at least as large takes it
+    /// (`texture/first_move.rs`'s `register_upload`): its own submission that may use the buffer
+    /// copies them in, or a later commit's, never one committed before, which reads no range only
+    /// a later commit took. The ranges of the rest stay noted, in their order.
     pub(crate) fn take_at_commit(&self, uses: impl Fn(&Buffer) -> bool) -> u64 {
         // Each buffer read here, let go of once the lock is free.
         let mut read = Vec::new();
@@ -149,7 +155,7 @@ impl Modified {
         };
         for (buffer, range) in taken {
             if let Some(buffer) = buffer.upgrade() {
-                buffer.upload_now(range, commit);
+                buffer.upload_at_commit(range, commit);
             }
         }
         drop(read);

@@ -685,7 +685,7 @@ impl BlitCommandEncoder {
             // Pages no import maps: a copy into a staging buffer, which the command buffer's
             // completion copies into them (`managed_copy.rs`).
             SyncTarget::Pages(pages) => {
-                let staging = Staging::new(self.core.device(), bytes, false)?;
+                let staging = Staging::new(self.core.device(), bytes)?;
                 let (host, at) = staging.buffer.at(0);
                 let copy = region(start, at, bytes);
                 let uses = [

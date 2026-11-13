@@ -8,9 +8,9 @@
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DevicePolicy, DontCareColorPolicy, ExtendedRangeBlitPolicy,
     HalfChainPolicy, HeapAnswerPolicy, HeapCompressionPolicy, HostPageTexturePolicy,
-    PipelineWaitPolicy, QueueSharingPolicy, RateMapRegionPolicy, RenderLoweringPolicy,
-    UnsharedIsolationPolicy, UnstoredDontCarePolicy, VertexReachPolicy, WideLinePolicy,
-    YCbCrInPlacePolicy,
+    ManagedCopyInPolicy, PipelineWaitPolicy, QueueSharingPolicy, RateMapRegionPolicy,
+    RenderLoweringPolicy, UnsharedIsolationPolicy, UnstoredDontCarePolicy, VertexReachPolicy,
+    WideLinePolicy, YCbCrInPlacePolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -70,7 +70,8 @@ fn choices() -> Vec<Choice> {
         // queue submits to, how much of other queues' work goes ahead of an unshared queue's, what
         // a colour attachment stored `DontCare` keeps, what a pass reads of an attachment it loads
         // `DontCare` and does not store, which draws pull a vertex layout past a wrapping
-        // fixed-function input, and how a rate-mapped pass's draws reach its regions.
+        // fixed-function input, how a rate-mapped pass's draws reach its regions, and when a
+        // `Managed` buffer's GPU copy takes the bytes `didModifyRange:` names.
         heap_compression: _,
         heap_answers: _,
         completion: _,
@@ -88,6 +89,7 @@ fn choices() -> Vec<Choice> {
         unstored_dont_care_loads: _,
         vertex_reach: _,
         rate_map_regions: _,
+        managed_copy_in: _,
         // The translator's: how a `half` chain rounds without `shaderFloat16`, and how planes of a
         // two-plane YCbCr texture read in place are sampled.
         half_chains: _,
@@ -111,6 +113,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.unstored_dont_care_loads: UnstoredDontCarePolicy { Driver, Cleared }),
         choice!(p.vertex_reach: VertexReachPolicy { Bounded, Exact }),
         choice!(p.rate_map_regions: RateMapRegionPolicy { FanOut, Exact }),
+        choice!(p.managed_copy_in: ManagedCopyInPolicy { AtSubmission, AtCommit }),
     ]
 }
 
@@ -779,6 +782,38 @@ fn exact_answers_draw_every_rate_mapped_draw_region_by_region() {
     assert_eq!(
         DevicePolicy::UNTRUSTED.exact_answers().rate_map_regions,
         RateMapRegionPolicy::Exact
+    );
+}
+
+/// The runtime's choice of when a `Managed` buffer's GPU copy takes a named range's bytes
+/// (`managed_copy_in`) moves no committed profile's fingerprint: no profile carries it.
+#[test]
+fn the_runtime_s_managed_copy_in_choice_keys_no_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let submission = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let commit = committed_profiles_with(DevicePolicy {
+        managed_copy_in: ManagedCopyInPolicy::AtCommit,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(submission.len(), commit.len());
+    for ((stem, s), (other, c)) in submission.iter().zip(&commit) {
+        assert_eq!(stem, other);
+        assert_eq!(s.fingerprint(), c.fingerprint(), "{stem}");
+    }
+}
+
+/// `DevicePolicy::exact_answers()` takes every `Managed` buffer's named range on the CPU at the
+/// commit, and the default has the GPU copy it from the host copy as the submission runs.
+#[test]
+fn exact_answers_take_a_managed_range_at_the_commit() {
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.managed_copy_in,
+        ManagedCopyInPolicy::AtSubmission
+    );
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.exact_answers().managed_copy_in,
+        ManagedCopyInPolicy::AtCommit
     );
 }
 

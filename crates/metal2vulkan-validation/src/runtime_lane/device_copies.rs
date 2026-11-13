@@ -28,9 +28,16 @@
 //!   the five steps of the oracle (an AMD Radeon Pro 5300M and an Intel UHD Graphics 630, macOS
 //!   26.7.1) of a `Managed` buffer over pages and of one the runtime made, each behind busy work on
 //!   the GPU: CPU writes of a range, its `did_modify_range`, and a command buffer that copies the
-//!   range out, encoded and committed in their orders. With two copies the command buffer reads the
-//!   bytes as its commit found them, a write after the commit not; with one, the memory as the CPU
-//!   wrote it last.
+//!   range out, encoded and committed in their orders. With one copy the command buffer reads the
+//!   memory as the CPU wrote it last; with two, the bytes as its commit found them, and a write
+//!   after the commit, before the GPU ran the command buffer, either of the oracles' answers: the
+//!   5300M's, the bytes at the commit, or the 630's, the write (the default,
+//!   `ManagedCopyInPolicy::AtSubmission`, whose copy in reads the host copy as the submission
+//!   runs).
+//!   [`exact_answers_take_a_did_modify_range_at_the_commit`]: the same steps under
+//!   `ManagedCopyInPolicy::AtCommit`, which `DevicePolicy::exact_answers()` selects: with two
+//!   copies the write after the commit reaches no command buffer committed before it, the
+//!   5300M's answer.
 //! - [`a_surface_without_a_log_is_placed_as_one_with`], under the validation layer: the same
 //!   surface over pages without a log is two copies without unified memory, else in place or a
 //!   shadow; no device copy either way.
@@ -52,9 +59,10 @@ use super::no_copy_textures::{floats, staged};
 use super::pitched_surfaces::reading;
 use super::{layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::device::ManagedCopyInPolicy;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, CommandQueue, CpuCacheMode, Device, DirtyPages, DirtyStamp,
+    BlitOption, Buffer, CommandQueue, CpuCacheMode, Device, DeviceOptions, DirtyPages, DirtyStamp,
     HazardTrackingMode, HostMemory, LoadAction, Origin, Region, RenderPassDescriptor,
     RenderPipelineState, ResourceOptions, ScissorRect, Size, StorageMode, StoreAction, Texture,
     TextureDescriptor, WorkCounts,
@@ -493,10 +501,25 @@ enum Act {
 
 #[test]
 fn a_did_modify_range_reaches_the_bytes_the_next_commit_finds() {
+    did_modify_range_steps(ManagedCopyInPolicy::AtSubmission);
+}
+
+#[test]
+fn exact_answers_take_a_did_modify_range_at_the_commit() {
+    did_modify_range_steps(ManagedCopyInPolicy::AtCommit);
+}
+
+/// The oracle's steps of [`a_did_modify_range_reaches_the_bytes_the_next_commit_finds`] on a
+/// device of `policy` (`DevicePolicy::managed_copy_in`).
+fn did_modify_range_steps(policy: ManagedCopyInPolicy) {
     use Act::{Commit, Encode, Modify, Write};
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
-    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
+    let adjust = |options: &mut DeviceOptions| {
+        in_place(options);
+        options.policy.managed_copy_in = policy;
+    };
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
     let queue = device.new_command_queue().unwrap();
     let busy = Busy::new(&device, &queue);
     let len = GUEST_PAGE;
@@ -509,15 +532,23 @@ fn a_did_modify_range_reaches_the_bytes_the_next_commit_finds() {
     let two = two_copies(&device);
     // The steps of the oracle (an AMD Radeon Pro 5300M, two copies, and an Intel UHD Graphics 630,
     // one, macOS 26.7.1), each with what the command buffer read there: `a` written first, `b`
-    // second.
+    // second. With two copies the default may read either oracle's answer where they differ.
     let (a, b) = (0xa1u8, 0xb2u8);
-    let steps: [(&[Act], u8, u8); 5] = [
-        (&[Write(a), Modify, Encode, Commit], a, a),
-        (&[Encode, Write(a), Modify, Write(b), Commit], b, b),
-        (&[Write(a), Modify, Write(b), Encode, Commit], b, b),
+    let either: &[u8] = match policy {
+        ManagedCopyInPolicy::AtSubmission => &[a, b],
+        ManagedCopyInPolicy::AtCommit => &[a],
+    };
+    let steps: [(&[Act], &[u8], u8); 5] = [
+        (&[Write(a), Modify, Encode, Commit], &[a], a),
+        (&[Encode, Write(a), Modify, Write(b), Commit], &[b], b),
+        (&[Write(a), Modify, Write(b), Encode, Commit], &[b], b),
         // `b` written after the commit, while the GPU is still busy before the command buffer.
-        (&[Write(a), Modify, Encode, Commit, Write(b)], a, b),
-        (&[Write(a), Modify, Write(b), Modify, Encode, Commit], b, b),
+        (&[Write(a), Modify, Encode, Commit, Write(b)], either, b),
+        (
+            &[Write(a), Modify, Write(b), Modify, Encode, Commit],
+            &[b],
+            b,
+        ),
     ];
     for (name, buffer) in [("over pages", &surface), ("the runtime's", &own)] {
         let write = |byte: u8| {
@@ -570,11 +601,12 @@ fn a_did_modify_range_reaches_the_bytes_the_next_commit_finds() {
             let contents = out.contents().unwrap();
             // SAFETY: the buffer's `size` bytes, which no command writes any longer.
             let read = unsafe { std::slice::from_raw_parts(contents.as_ptr(), size as usize) };
-            let want = if two { on_two } else { on_one };
+            let want = if two { on_two } else { &[on_one][..] };
             assert!(
-                read.iter().all(|&byte| byte == want),
-                "{name}, step {step} {acts:?}: the command buffer read {want:02x} (two copies \
-                 {two}): {:02x?}",
+                want.iter()
+                    .any(|&want| read.iter().all(|&byte| byte == want)),
+                "{name}, step {step} {acts:?} {policy:?}: the command buffer read one of \
+                 {want:02x?} (two copies {two}): {:02x?}",
                 &read[..8]
             );
         }

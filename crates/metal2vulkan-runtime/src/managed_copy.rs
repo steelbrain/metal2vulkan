@@ -27,9 +27,11 @@
 //!   `register_bytes`; on a device without a fill queue, by the device's next submission, whatever
 //!   its commands reach): no command buffer can have read the bytes the copy replaces
 //!   (`Replaces::Unread`), and the copy's source (the import, below) is held only until the
-//!   submission that took it completed. A `did_modify_range`'s range is copied in at the next
-//!   commit of a command buffer that may use the buffer, as the pages hold it then (`managed.rs`:
-//!   staged by the CPU, [`CallerCopy::copy_in_now`]), and a rebind copies the new pages in whole:
+//!   submission that took it completed. A `did_modify_range`'s range is taken at the next commit
+//!   of a command buffer that may use the buffer (`managed.rs`), read from an import as the
+//!   submission below runs under the default `ManagedCopyInPolicy::AtSubmission`, or as the pages
+//!   hold it at the commit under `ManagedCopyInPolicy::AtCommit` (staged by the CPU,
+//!   [`CallerCopy::copy_in_now`]), and a rebind copies the new pages in whole:
 //!   each by the device's next submission whose commands may use the buffer (or an internal one),
 //!   before any of its commands, after the commands before it on its `VkQueue`
 //!   (`texture/first_move.rs`'s `register_upload`), which the call does not wait for, so every
@@ -44,10 +46,15 @@
 //!   `VkQueue`. Not on the staging queue,
 //!   which waits for no work in flight. From an import, the copy's source is
 //!   the import's `VkBuffer`, held (imported again where the device released it) until the
-//!   submission completed; from pages no import maps, the call copies the bytes on the CPU into
-//!   staging buffers of [`STAGED_CHUNK`] bytes at most, written once and freed once the
-//!   submission completed. Past the bound of what is staged (`texture/first_move.rs`'s
-//!   `STAGED_BYTES`), the call makes a submission for them and waits.
+//!   submission completed: no copy on the CPU and no staging. From pages no import maps (and under
+//!   `AtCommit` from an import too), the call copies the bytes on the CPU into staging buffers of
+//!   [`STAGED_CHUNK`] bytes at most, of host-cached system memory, which the GPU's copy reads
+//!   across the bus, never the device-local memory a write-combined buffer prefers there, which
+//!   the CPU would write across the bus ([`Staging::new`]); each is written once, freed once the
+//!   submission completed, and of a power-of-two length, so a later copy's of a like size takes
+//!   one the device parked (`recycle.rs`) rather than new memory. Past the bound of what is staged
+//!   (`texture/first_move.rs`'s `STAGED_BYTES`), the call makes a submission for them and
+//!   waits.
 //! - **Copies out.** `synchronize_resource` copies the buffer's bytes to the import in the blit
 //!   encoder's command stream, a blit's write of the import (`blit.rs`); to pages no import maps,
 //!   into a staging buffer there, which the command buffer's completion copies to the pages before
@@ -87,6 +94,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// The most bytes one staging buffer of a copy in from pages no import maps holds: the bytes
 /// past it go in the next.
 pub(super) const STAGED_CHUNK: u64 = 32 << 20;
+
+/// The fewest bytes a staging buffer holds ([`Staging::new`]).
+const STAGING_LEAST: u64 = 64 << 10;
 
 /// The host copy of a `Managed` no-copy buffer on a device without unified memory: the caller's
 /// pages, as an import or alone (the module docs).
@@ -173,18 +183,27 @@ pub(super) struct Staging {
 }
 
 impl Staging {
-    /// A staging buffer of `bytes` bytes of host-visible memory, its bytes as placed: write-combined
-    /// for a copy in, which the CPU writes and the GPU reads once; host-cached for a copy out,
-    /// which the GPU writes and the CPU reads.
-    pub(super) fn new(device: &Device, bytes: u64, copy_in: bool) -> Result<Staging, Error> {
-        let cache = match copy_in {
-            true => CpuCacheMode::WriteCombined,
-            false => CpuCacheMode::DefaultCache,
-        };
-        let options = ResourceOptions::new(StorageMode::Shared, cache, HazardTrackingMode::Tracked);
-        let (buffer, _) = device.unzeroed_buffer_with(bytes, options)?;
-        device.shared().counts.managed_staging(bytes, true);
-        Ok(Staging { buffer, bytes })
+    /// A staging buffer of at least `bytes` bytes of host-visible memory, its bytes as placed:
+    /// `Shared` in the default CPU cache mode, so host-cached system memory on a device without
+    /// unified memory (`MemoryClass::Shared`), which the GPU's copy reads or writes across the bus
+    /// and the CPU reaches at its own memory's speed, never the device-local memory a
+    /// write-combined one prefers there, which the CPU writes across the bus. Its length is the
+    /// power of two at or past `bytes` (at least [`STAGING_LEAST`]), so a staging buffer of a
+    /// later copy of a like size takes one the device parked once the work that used it
+    /// completed (`recycle.rs`), not new memory.
+    pub(super) fn new(device: &Device, bytes: u64) -> Result<Staging, Error> {
+        let length = bytes.next_power_of_two().max(STAGING_LEAST);
+        let options = ResourceOptions::new(
+            StorageMode::Shared,
+            CpuCacheMode::DefaultCache,
+            HazardTrackingMode::Tracked,
+        );
+        let (buffer, _) = device.unzeroed_buffer_with(length, options)?;
+        device.shared().counts.managed_staging(length, true);
+        Ok(Staging {
+            buffer,
+            bytes: length,
+        })
     }
 
     /// Its bytes on the CPU.
@@ -436,10 +455,10 @@ impl CallerCopy {
     }
 
     /// Copy `range` of the pages into `buffer`'s device copy as they hold it now, at a commit
-    /// after a `did_modify_range` (`managed.rs`): the CPU copies the bytes into staging buffers
-    /// ([`stage_in`]), whatever reaches the pages, so a CPU write after the commit reaches no
-    /// command buffer committed before it, and for that commit's stamp, `commit`. Nothing while
-    /// the pages are detached.
+    /// after a `did_modify_range` under `ManagedCopyInPolicy::AtCommit` (`managed.rs`): the CPU
+    /// copies the bytes into staging buffers ([`stage_in`]), whatever reaches the pages, so a CPU
+    /// write after the commit reaches no command buffer committed before it, and for that
+    /// commit's stamp, `commit`. Nothing while the pages are detached.
     pub(super) fn copy_in_now(
         &self,
         buffer: &Buffer,
@@ -525,7 +544,7 @@ pub(super) fn stage_in(
     let mut start = range.start;
     while start < range.end {
         let bytes = (range.end - start).min(STAGED_CHUNK);
-        let staging = Staging::new(device, bytes, true)?;
+        let staging = Staging::new(device, bytes)?;
         let into = staging.contents()?;
         // SAFETY: the caller's pages hold the bytes from `pointer` to its reach, mapped while the
         // buffer holds them (`HostMemory::new`); the staging buffer holds `bytes` bytes nothing

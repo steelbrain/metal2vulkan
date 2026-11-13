@@ -450,11 +450,14 @@ after it, and 0 of 80 with the device dropped first
   (`HostBacking::DeviceCopy`): the GPU's in device-local memory of the runtime's own, which every
   command reads and writes, and the caller's pages, which `contents` answers. The pages are
   copied in as the buffer is made and by a rebind (whole), before any command of a command
-  buffer committed after the call, and a `did_modify_range`'s range as the pages hold it at the
-  next commit of a command buffer that uses the buffer (copied there on the CPU into staging
-  buffers), copied in on that command buffer's queue after the command buffers before it there,
-  so a later range never lands under an earlier command buffer still to read the buffer; a CPU
-  write no
+  buffer committed after the call, and a `did_modify_range`'s range at the next commit of a
+  command buffer that uses the buffer, copied in on that command buffer's queue after the command
+  buffers before it there, so a later range never lands under an earlier command buffer still to
+  read the buffer. By default the GPU copies it from the pages' import as that submission runs,
+  so a CPU write after the commit, before the GPU runs the command buffer, may be read;
+  `ManagedCopyInPolicy::AtCommit` (which `DevicePolicy::exact_answers()` selects) copies it on
+  the CPU at the commit into staging buffers of host-cached memory instead, as the pages hold it
+  then (docs/FAST-PATHS.md). A CPU write no
   `did_modify_range` names is not seen by the GPU, as on a Mac with a discrete GPU. A blit's
   `synchronize_resource` copies the GPU's copy out to the pages in its command buffer's order.
   The copies run from an import of the pages where the device makes one, else (the gate refused

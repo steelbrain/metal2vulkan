@@ -52,6 +52,7 @@ use crate::{
     ImportRequest, Origin, Region, ResourceOptions, ResourceRef, Size, StorageMode,
     TextureDescriptor, WorkCounts,
 };
+use metal2vulkan::device::ManagedCopyInPolicy;
 use metal2vulkan::metal::PixelFormat;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
@@ -1027,17 +1028,36 @@ fn rounds(
     rounds
 }
 
+/// The bytes the round `round` of [`rounds`] of `salt` may read, under `policy`: its own, and
+/// under the default (`ManagedCopyInPolicy::AtSubmission`, whose copy in reads the host copy as
+/// the submission runs) what the CPU wrote to its buffer after its commit, before the GPU ran its
+/// command buffer: `0xee`, and the bytes of the later rounds over the same buffer. Never an
+/// earlier round's, nor another buffer's.
+fn readable(round: u8, salt: u8, policy: ManagedCopyInPolicy) -> Vec<u8> {
+    let byte = |round: u8| 1 + 2 * round + salt;
+    match (policy, round % 4) {
+        (ManagedCopyInPolicy::AtCommit, _) | (_, 3) => vec![byte(round)],
+        (ManagedCopyInPolicy::AtSubmission, _) => {
+            let last = round - round % 4 + 3;
+            (round..=last).map(byte).chain([0xee]).collect()
+        }
+    }
+}
+
 /// `did_modify_range` across commits of two-copy buffers, the runtime's own host copy and the
-/// caller's pages by `route`: on two queues, each on a thread of its own, where `two`, else one
-/// after the other on one queue and thread. A commit takes the ranges of the buffers its command
-/// buffer uses (`managed.rs`), and its copy in goes with a submission that uses the buffer, after
-/// the command buffers before it on its queue: so each command buffer reads the bytes its host
-/// copy held at its commit, none written after it, and none of a later round's, whose copy in
-/// never lands under it. Every fourth round lets its buffer go with its command buffer pending.
-/// No command buffer fails, the validation layer the device asks for reports nothing
+/// caller's pages by `route`, on a device of `policy` (`DevicePolicy::managed_copy_in`): on two
+/// queues, each on a thread of its own, where `two`, else one after the other on one queue and
+/// thread. A commit takes the ranges of the buffers its command buffer uses (`managed.rs`), and
+/// its copy in goes with a submission that uses the buffer, after the command buffers before it on
+/// its queue: so each command buffer reads, in each byte, what [`readable`] says: none of an
+/// earlier round's, whose copy in never lands over a later commit's, and under
+/// `ManagedCopyInPolicy::AtCommit` only the bytes its host copy held at its commit. Every fourth
+/// round lets its buffer go with its command buffer pending, and reads its own bytes under either
+/// policy. No command buffer fails, the validation layer the device asks for reports nothing
 /// (`layer_claim.rs`, which passes its whole-pool report of a host query reset), and the staging
-/// buffers go once all completed. Printed (`MANAGED-ROUNDS`): the rounds that read other bytes.
-fn named_rounds(route: Route, two: bool) {
+/// buffers go once all completed. Printed (`MANAGED-ROUNDS`): the rounds that read bytes written
+/// after their commit, and those that read others.
+fn named_rounds(route: Route, two: bool, policy: ManagedCopyInPolicy) {
     let generations = usize::from(ROUNDS / 4);
     let pages: Vec<Pages> = (0..generations).map(|_| Pages::new(BYTES)).collect();
     let addresses: Vec<usize> = pages
@@ -1046,11 +1066,12 @@ fn named_rounds(route: Route, two: bool) {
         .collect();
     let scratch = Scratch::new("managed-across-queues");
     let watched = Watched::default();
-    let options = DeviceOptions {
+    let mut options = DeviceOptions {
         layers: watched.layers(),
         messages: Some(watched.sink(|_| {})),
         ..options(&scratch.0)
     };
+    options.policy.managed_copy_in = policy;
     let device = Device::system_default_with(&options).unwrap();
     if device.properties().has_unified_memory {
         eprintln!(
@@ -1092,9 +1113,9 @@ fn named_rounds(route: Route, two: bool) {
             (first, rounds(&device, &queue, 1, callers))
         }
     };
-    let mut wrong = Vec::new();
-    for (thread, done) in [("own", first), ("caller's", second)] {
-        for (byte, target, command_buffer) in done {
+    let (mut later, mut wrong) = (0, Vec::new());
+    for (thread, salt, done) in [("own", 0, first), ("caller's", 1, second)] {
+        for (round, (byte, target, command_buffer)) in (0..).zip(done) {
             assert!(
                 command_buffer.wait_until_completed_for(WAIT).is_ok(),
                 "{route:?} {thread}: a command buffer did not complete in {WAIT:?}"
@@ -1107,8 +1128,11 @@ fn named_rounds(route: Route, two: bool) {
             let contents = target.contents().unwrap();
             // SAFETY: the target's bytes, which no command writes now.
             let seen = unsafe { std::slice::from_raw_parts(contents.as_ptr(), SPAN as usize) };
-            if !seen.iter().all(|&seen| seen == byte) {
-                wrong.push(format!("{thread} {byte:#x} read {:#x}", seen[0]));
+            let readable = readable(round, salt, policy);
+            match seen.iter().find(|&seen| !readable.contains(seen)) {
+                Some(other) => wrong.push(format!("{thread} {byte:#x} read {other:#x}")),
+                None if seen.iter().any(|&seen| seen != byte) => later += 1,
+                None => {}
             }
         }
     }
@@ -1119,8 +1143,9 @@ fn named_rounds(route: Route, two: bool) {
     let rest = staged_down_to(&device, before.managed_staging_bytes);
     assert_eq!(rest.managed_staging_bytes, before.managed_staging_bytes);
     eprintln!(
-        "MANAGED-ROUNDS {} {route:?}, {} queue(s): {} rounds each of two buffers, ranges named \
-         {}; rounds that read other bytes {} {wrong:?}",
+        "MANAGED-ROUNDS {} {route:?} {policy:?}, {} queue(s): {} rounds each of two buffers, \
+         ranges named {}; rounds that read bytes written after their commit {later}, other bytes \
+         {} {wrong:?}",
         device.name(),
         1 + usize::from(two),
         ROUNDS,
@@ -1138,17 +1163,32 @@ fn named_rounds(route: Route, two: bool) {
 
 #[test]
 fn ranges_named_across_two_queues_reach_each_command_buffer_through_an_import() {
-    named_rounds(Route::Import, true);
+    named_rounds(Route::Import, true, ManagedCopyInPolicy::AtSubmission);
+}
+
+#[test]
+fn ranges_named_across_two_queues_at_the_commit_reach_each_command_buffer_through_an_import() {
+    named_rounds(Route::Import, true, ManagedCopyInPolicy::AtCommit);
 }
 
 #[test]
 fn ranges_named_across_two_queues_reach_each_command_buffer_over_pages_no_import_maps() {
-    named_rounds(Route::Pages, true);
+    named_rounds(Route::Pages, true, ManagedCopyInPolicy::AtSubmission);
+}
+
+#[test]
+fn ranges_named_across_two_queues_at_the_commit_reach_each_command_buffer_over_pages() {
+    named_rounds(Route::Pages, true, ManagedCopyInPolicy::AtCommit);
 }
 
 #[test]
 fn ranges_named_on_one_queue_reach_each_command_buffer_through_an_import() {
-    named_rounds(Route::Import, false);
+    named_rounds(Route::Import, false, ManagedCopyInPolicy::AtSubmission);
+}
+
+#[test]
+fn ranges_named_on_one_queue_at_the_commit_reach_each_command_buffer_through_an_import() {
+    named_rounds(Route::Import, false, ManagedCopyInPolicy::AtCommit);
 }
 
 /// On a device with unified memory, a `Managed` buffer's `did_modify_range` copies nothing (the

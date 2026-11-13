@@ -8,9 +8,9 @@ use std::time::Duration;
 /// `completion`, `batch_order`, `render_lowering`, `host_page_textures`, `pipeline_waits`,
 /// `pipeline_creation_wait`, `pipeline_commit_wait`, `wide_lines`, `extended_range_blits`,
 /// `queue_sharing`, `unshared_isolation`, `dont_care_colors`, `unstored_dont_care_loads`,
-/// `vertex_reach` and `rate_map_regions` can change emitted code, so the profile carries it
-/// (containment as the encoding it selects) and its fingerprint covers it; those seventeen are the
-/// runtime's alone (a heap's
+/// `vertex_reach`, `rate_map_regions` and `managed_copy_in` can change emitted code, so the profile
+/// carries it (containment as the encoding it selects) and its fingerprint covers it; those
+/// eighteen are the runtime's alone (a heap's
 /// compressed texture's image, what a heap texture's size query answers, when the host sees a
 /// command buffer complete, how a batch begins after the earlier ones
 /// of its queue, where a render encoder's calls are lowered, what holds a sampled texture over host
@@ -19,8 +19,9 @@ use std::time::Duration;
 /// `VkQueue` a command queue submits to, how much of other queues' work goes ahead of an unshared
 /// queue's on a `VkQueue` they share, what a colour attachment stored `DontCare` keeps, what a pass
 /// reads of an attachment it loads `DontCare` and does not store, which draws fetch a vertex
-/// layout in the shader where the device's fixed-function input would wrap past 4 GiB, and how a
-/// rate-mapped pass's draws reach its regions), and no profile carries them.
+/// layout in the shader where the device's fixed-function input would wrap past 4 GiB, how a
+/// rate-mapped pass's draws reach its regions, and when a `Managed` buffer's GPU copy takes the
+/// bytes a `didModifyRange:` names), and no profile carries them.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -143,6 +144,11 @@ pub struct DevicePolicy {
     /// runtime's choice alone: no emitted code of a pipeline changes, the fan-out and its probe
     /// being variants of their own.
     pub rate_map_regions: RateMapRegionPolicy,
+    /// When the GPU copy of a `Managed` buffer on a device without unified memory takes the
+    /// bytes of a range `didModifyRange:` names: copied by the GPU from the host copy as the
+    /// submission runs (the default), or copied on the CPU at the commit as the host copy holds
+    /// them then. The runtime's choice alone: no emitted code changes.
+    pub managed_copy_in: ManagedCopyInPolicy,
 }
 
 impl DevicePolicy {
@@ -158,9 +164,10 @@ impl DevicePolicy {
     /// held to about 2 ms ahead of an unshared queue's on a `VkQueue` they share, a colour stored
     /// `DontCare` stored as the driver stores it, an attachment loaded `DontCare` and not stored
     /// cleared where its driver clears it no slower, a vertex layout pulled past a wrapping
-    /// fixed-function input only where the draw's own values reach past 4 GiB, and a rate-mapped
+    /// fixed-function input only where the draw's own values reach past 4 GiB, a rate-mapped
     /// pass's triangles a host step records fanned out to its regions where a probe finds they
-    /// can be.
+    /// can be, and a `Managed` buffer's named range copied in by the GPU from its host copy as the
+    /// submission runs.
     pub const UNTRUSTED: DevicePolicy = DevicePolicy {
         pointer_domain: PointerDomain::ResidentTable,
         handle_domain: HandleDomain::Table,
@@ -185,6 +192,7 @@ impl DevicePolicy {
         unstored_dont_care_loads: UnstoredDontCarePolicy::Driver,
         vertex_reach: VertexReachPolicy::Bounded,
         rate_map_regions: RateMapRegionPolicy::FanOut,
+        managed_copy_in: ManagedCopyInPolicy::AtSubmission,
     };
 
     /// This policy with Metal's answer wherever the choices offer it: a heap's texture whose bytes
@@ -212,10 +220,11 @@ impl DevicePolicy {
     /// in a pass whose draws reach a tile ([`UnstoredDontCarePolicy::Cleared`]), and every vertex
     /// layout a draw may fetch past 4 GiB of its bind offset pulled where the device's
     /// fixed-function input wraps there, wherever the draw's reach is stated
-    /// ([`VertexReachPolicy::Exact`]), and every draw of a rate-mapped pass recorded once per
-    /// region ([`RateMapRegionPolicy::Exact`]). Every other field is kept, `unshared_isolation` among
-    /// them: its default is the one nearer Metal's, whose queues do not wait for each other's
-    /// whole command buffers.
+    /// ([`VertexReachPolicy::Exact`]), every draw of a rate-mapped pass recorded once per
+    /// region ([`RateMapRegionPolicy::Exact`]), and every `Managed` buffer's named range taken
+    /// on the CPU at the commit ([`ManagedCopyInPolicy::AtCommit`]). Every other field is kept,
+    /// `unshared_isolation` among them: its default is the one nearer Metal's, whose queues do
+    /// not wait for each other's whole command buffers.
     pub const fn exact_answers(self) -> DevicePolicy {
         DevicePolicy {
             heap_compression: HeapCompressionPolicy::Uncompressed,
@@ -234,6 +243,7 @@ impl DevicePolicy {
             unstored_dont_care_loads: UnstoredDontCarePolicy::Cleared,
             vertex_reach: VertexReachPolicy::Exact,
             rate_map_regions: RateMapRegionPolicy::Exact,
+            managed_copy_in: ManagedCopyInPolicy::AtCommit,
             ..self
         }
     }
@@ -760,4 +770,33 @@ pub enum RateMapRegionPolicy {
     FanOut,
     /// Every draw region by region, each region's through its own viewport and scissor.
     Exact,
+}
+
+/// When the GPU copy of a `Managed` buffer takes the bytes of a range `didModifyRange:` names, on
+/// a device without unified memory, where the runtime keeps such a buffer as two copies (a host
+/// copy, which `contents` maps: the caller's pages of a no-copy buffer, or host memory of the
+/// runtime's own; and the GPU's own in device-local memory, which every command uses). Either way
+/// the next commit of a command buffer that may use the buffer takes the range for its own
+/// submission, which copies it in before any of its commands, and no later commit's range lands
+/// under it. What differs is when the bytes are read: Metal on an AMD Radeon Pro 5300M (two
+/// copies, macOS 26.7.1) reads them at the commit, so a CPU write of the range after the commit,
+/// while the GPU has not reached the command buffer, is not read; on an Intel UHD Graphics 630
+/// (one copy) it is (the validation lane `device_copies`). The runtime's choice alone: no emitted
+/// code changes.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum ManagedCopyInPolicy {
+    /// The GPU copies the range from the host copy (the import of the caller's pages, or the
+    /// runtime's own host memory) as the submission runs (the default), with no copy on the CPU:
+    /// a CPU write of the range after the commit, before the GPU runs the command buffer, may be
+    /// read, as on the UHD 630. Pages no import maps, which the GPU cannot read, are copied into
+    /// staging memory on the CPU at the commit.
+    #[default]
+    AtSubmission,
+    /// The CPU copies the range into staging memory at the commit, as the host copy holds it
+    /// then, and the submission copies that in: a CPU write after the commit never reaches a
+    /// command buffer committed before it, as on the 5300M. Its cost is a CPU copy of the range's
+    /// bytes at each commit.
+    AtCommit,
 }

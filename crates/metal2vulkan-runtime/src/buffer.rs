@@ -55,6 +55,7 @@ use super::Device;
 use crate::release;
 use ash::vk;
 use metal2vulkan::bind::ResidentRange;
+use metal2vulkan::device::ManagedCopyInPolicy;
 use std::any::Any;
 use std::mem::ManuallyDrop;
 use std::ops::Range;
@@ -4435,29 +4436,42 @@ impl Buffer {
         }
     }
 
-    /// Copy the bytes `range` of a buffer with a host copy ([`HostCopy`]) to its own as the host
-    /// copy holds them now, at the commit stamped `commit` (`managed.rs`'s `Modified`): the CPU
-    /// copies them into staging buffers, which the device's next submission of a command buffer
-    /// committed at or after it that may reach the buffer copies from, before any of its commands
-    /// (`managed_copy::stage_in`). Where the staging buffers find no memory, the bytes are copied
-    /// from the host copy as that submission runs ([`upload`](Self::upload)). Nothing for a buffer
-    /// without a host copy, nor for an empty range, nor for pages detached.
-    pub(super) fn upload_now(&self, range: Range<u64>, commit: u64) {
-        let staged = match self.mirror() {
-            Some(HostCopy::Caller(caller)) => caller.copy_in_now(self, range.clone(), commit),
-            Some(HostCopy::Own(_)) => match self.mapped_contents() {
-                Some(contents) => {
-                    let replaces = Replaces::Read(commit);
-                    super::managed_copy::stage_in(self, contents, range.clone(), true, replaces)
+    /// Copy the bytes `range` of a buffer with a host copy ([`HostCopy`]) to its own, taken at the
+    /// commit stamped `commit` (`managed.rs`'s `Modified`) for the device's next submission of a
+    /// command buffer committed at or after it that may reach the buffer, before any of its
+    /// commands, as the device's policy says (`DevicePolicy::managed_copy_in`): under
+    /// `ManagedCopyInPolicy::AtSubmission` (the default) the GPU copies them from the host copy as
+    /// that submission runs ([`upload`](Self::upload)), with no copy on the CPU but of pages no
+    /// import maps (`managed_copy.rs`); under `AtCommit` the CPU copies them now, as the host copy
+    /// holds them, into staging memory that submission copies from (`managed_copy::stage_in`),
+    /// and where that memory is not found the GPU copies them from the host copy as under the
+    /// default. Nothing for a buffer without a host copy, nor for an empty range, nor for pages
+    /// detached.
+    pub(super) fn upload_at_commit(&self, range: Range<u64>, commit: u64) {
+        let replaces = Replaces::Read(commit);
+        let policy = self.generation().compile_device().policy().managed_copy_in;
+        let staged = match (policy, self.mirror()) {
+            (ManagedCopyInPolicy::AtCommit, Some(HostCopy::Caller(caller))) => {
+                caller.copy_in_now(self, range.clone(), commit)
+            }
+            (ManagedCopyInPolicy::AtCommit, Some(HostCopy::Own(_))) => {
+                match self.mapped_contents() {
+                    Some(contents) => {
+                        super::managed_copy::stage_in(self, contents, range.clone(), true, replaces)
+                    }
+                    None => Ok(()),
                 }
-                None => Ok(()),
-            },
-            None => Ok(()),
+            }
+            // A failed submission past the bound fails the device, which the commit's own
+            // submission reports.
+            _ => {
+                let _ = self.upload(range, replaces);
+                return;
+            }
         };
-        // A failed submission past the bound fails the device, which the commit's own
-        // submission reports.
+        // As above.
         if staged.is_err() {
-            let _ = self.upload(range, Replaces::Read(commit));
+            let _ = self.upload(range, replaces);
         }
     }
 
@@ -4467,7 +4481,8 @@ impl Buffer {
     /// commands before it on its `VkQueue`, as [`upload`](Self::upload) copies, the submission holding `held` until it completed: a
     /// two-copy buffer's copy in from the caller's pages (`managed_copy.rs`), counted
     /// (`WorkCounts::managed_bytes_copied_in`), or from staging buffers of a host copy's bytes
-    /// ([`upload_now`](Self::upload_now)), taken by the batch `replaces` says ([`Replaces`]).
+    /// ([`upload_at_commit`](Self::upload_at_commit)), taken by the batch `replaces` says
+    /// ([`Replaces`]).
     /// Where `bounded`, past the bound of what is staged, a submission waited for makes it now;
     /// else it waits for the device's next.
     pub(super) fn copy_in_from(
