@@ -73,7 +73,8 @@ fn sized_descriptor(probe: &Probe) -> RenderPipelineDescriptor {
 }
 
 /// The kinds a test forces where the device has not announced them, beside its pipeline states'
-/// makings': the `Shared` resources' system memory.
+/// makings': the `Shared` buffers' system memory (its passes' `Shared` textures announce none). A
+/// test that makes no buffer forces nothing.
 fn shared(probe: &Probe) -> BTreeSet<Degradation> {
     BTreeSet::from_iter(
         shared_in_system_memory(&probe.device).then_some(Degradation::SharedInSystemMemory),
@@ -124,7 +125,7 @@ fn refuses_points(probe: &Probe) -> bool {
 fn a_triangle_in_fill_mode_points_draws_its_vertices() {
     let (messages, _cache, probe) = validated();
     if refuses_points(&probe) {
-        assert_made_once(&messages, &[], &shared(&probe));
+        assert_made_once(&messages, &[], &BTreeSet::new());
         quiet(probe, &messages);
         return;
     }
@@ -184,7 +185,7 @@ fn a_triangle_in_fill_mode_points_draws_its_vertices() {
 fn a_function_without_a_point_size_draws_points_of_one_pixel() {
     let (messages, _cache, probe) = validated();
     if refuses_points(&probe) {
-        assert_made_once(&messages, &[], &shared(&probe));
+        assert_made_once(&messages, &[], &BTreeSet::new());
         quiet(probe, &messages);
         return;
     }
@@ -214,6 +215,6 @@ fn points_need_fill_mode_non_solid() {
         let needs = Unsupported::needs(what, Capability::Feature(VkFeature::FillModeNonSolid));
         assert_eq!(refusal(&probe, fill), Some(needs), "{fill:?}");
     }
-    assert_made_once(&messages, &[], &shared(&probe));
+    assert_made_once(&messages, &[], &BTreeSet::new());
     quiet(probe, &messages);
 }
