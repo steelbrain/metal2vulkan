@@ -143,7 +143,12 @@ impl Program {
     /// base variant's objects made there from its compiled pipeline, its predicted `VkPipeline`
     /// queued on the making pool with no wait. Refused as the objects' making refuses.
     fn made_again(&self, to: &Device) -> Result<Program, Error> {
-        let found = Remembered::Compiled(Arc::clone(&self.base.pipeline));
+        // The variant a state carried before made of the same pipeline there, where it lives: one
+        // variant of a pipeline on a generation, as its creations share it.
+        let pipeline = &self.base.pipeline;
+        let memo = &to.shared().shader_cache.memo;
+        let found = (memo.compute(&pipeline.key))
+            .unwrap_or_else(|| Remembered::Compiled(Arc::clone(pipeline)));
         let base = Variant::of(to, self.base.key.clone(), found, &self.function)?;
         let pieces = piece_holds::PieceHolds::new();
         if let (Kernel::Compute(descriptor), false) = (&self.descriptor, self.stand_in) {
