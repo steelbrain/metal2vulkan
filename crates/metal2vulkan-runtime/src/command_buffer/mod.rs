@@ -864,6 +864,11 @@ pub(super) struct State {
     /// recovery (`Line::holds_hang_queue`, `device/line.rs`): it runs nothing and completes with
     /// no error, as Metal's command buffers committed on a hang's queue in flight do.
     held_by_lost_hang: bool,
+    /// It is the hang a loss of its device named (`completion.rs`, `name_hang`): it fails as the
+    /// hang (`GpuHang`) whichever of the loss's failures finishes it, its last batch taken with
+    /// the loss's failure, watched after it, or held by the scheduler and failed with the loss
+    /// (`scheduler::fail_lost`).
+    hang_of_loss: bool,
     /// The ended encoders Metal's GPU faults, each with the error it fails the command buffer
     /// with (an execution of commands that inherit a pipeline state made without
     /// `supportIndirectCommandBuffers`, `CommandBufferError::PageFault`; an indexed or indirect
@@ -2393,6 +2398,7 @@ impl CommandBuffer {
                 hang_scheduling: None,
                 behind_hang: None,
                 held_by_lost_hang: false,
+                hang_of_loss: false,
                 shadow_attachments: Vec::new(),
                 shadows_copied_in: Vec::new(),
                 shadow_carry: Some(ShadowCarry::default()),
@@ -5839,18 +5845,11 @@ impl CommandBufferShared {
             // opened before its batches went, so before now: its waiters wait for those to close
             // (`trails.rs`).
             state.trail_mark = self.device.shared().trails.mark();
-            // The hang a loss of the device named, by the recovery's answers
-            // (`completion.rs`): counted against its queue as Metal counts a hang
-            // (`revocation.rs`).
-            let lost_hang = result == Err(CommandBufferError::GpuHang);
             // A failure the driver relayed for one of its batches is Metal's answer for its work
             // (`device/relay.rs`). The device's loss is not: where a recovery from it answered
-            // already (`completion.rs`, the oldest incomplete command buffer as the hang and the
-            // rest as its victims, as its notice names them), that answer stands.
-            let recovered = matches!(
-                result,
-                Err(CommandBufferError::GpuHang | CommandBufferError::GpuRecoveryVictim)
-            );
+            // already (`completion.rs`, its command buffers as the hang's victims, as its notice
+            // names them), that answer stands.
+            let recovered = result == Err(CommandBufferError::GpuRecoveryVictim);
             let result = match (state.failure, self.relayed.failure()) {
                 (Some(error), _) => Err(error),
                 (None, Some((relay::DEVICE_REMOVED, _))) if recovered => result,
@@ -5860,6 +5859,19 @@ impl CommandBufferShared {
                 }
                 (None, None) => result,
             };
+            // The hang a loss of the device named fails as the hang whichever of the loss's
+            // failures finished it (`hang_of_loss`): its last batch's, one its batch's refused
+            // submission set, or the scheduler's (`scheduler::fail_lost`). Counted against its
+            // queue as Metal counts a hang (`revocation.rs`).
+            let result = match result {
+                Err(CommandBufferError::DeviceLost | CommandBufferError::GpuRecoveryVictim)
+                    if state.hang_of_loss =>
+                {
+                    Err(CommandBufferError::GpuHang)
+                }
+                result => result,
+            };
+            let lost_hang = state.hang_of_loss && result == Err(CommandBufferError::GpuHang);
             // The logs of host pages hear of its shadows' copies back and its writes in place
             // again where its last batch's completion did not tell them (`completion.rs`), and let
             // go of the holds a failed one's copies in set (`dirty_pages.rs`).

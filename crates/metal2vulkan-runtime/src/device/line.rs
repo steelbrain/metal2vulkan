@@ -222,7 +222,7 @@ pub(crate) struct Culprit {
     /// The queue was picked among two or more with work in flight: an inference, the queue whose
     /// oldest incomplete batch was submitted first.
     pub(crate) inferred: bool,
-    /// The command buffers that failed with it as its victims.
+    /// The command buffers that failed as its victims, counted as each failed ([`Line::victim`]).
     pub(crate) victims: usize,
 }
 
@@ -542,6 +542,18 @@ impl Line {
     pub(crate) fn named(&self, named: Culprit) {
         if let State::Lost { culprit, .. } = &mut *lock(&self.state) {
             culprit.get_or_insert(named);
+        }
+    }
+
+    /// Count a command buffer that failed as the victim of the hang the loss named, for the
+    /// recovery's notice: each failure of the loss counts its own (`command_buffer/completion.rs`).
+    pub(crate) fn victim(&self) {
+        if let State::Lost {
+            culprit: Some(culprit),
+            ..
+        } = &mut *lock(&self.state)
+        {
+            culprit.victims += 1;
         }
     }
 

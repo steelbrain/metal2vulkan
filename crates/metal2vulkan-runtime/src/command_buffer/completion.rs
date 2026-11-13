@@ -821,7 +821,10 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
 /// (`GpuHang`), counted against its queue (`revocation.rs`), and every other as its victim
 /// (`GpuRecoveryVictim`), those of a later failure of the same loss too: a batch on its way to
 /// the driver as the device was lost, watched once this failure took the pending ones
-/// (`failed_with_loss`).
+/// (`failed_with_loss`), or one the scheduler held and failed with the loss
+/// (`scheduler::fail_lost`). The hang's command buffer is marked as the loss names it
+/// ([`name_hang`]), so it fails as the hang whichever of these failures finishes it: its front
+/// batch may be one of several, its last batch held or watched after.
 fn fail(watch: &Watch, ending: Vec<Hold<CommandBufferShared>>, error: CommandBufferError) {
     let failed = take_pending(watch);
     let held = (ending.first().map(|buffer| buffer.device()))
@@ -833,17 +836,14 @@ fn fail(watch: &Watch, ending: Vec<Hold<CommandBufferShared>>, error: CommandBuf
         device.shared().copied.owe();
         device.drain_queues();
         if error == CommandBufferError::DeviceLost && device.line().recovers() {
-            // One loss, one hang: a later failure of the lost device's batches (one watched
-            // after the first took the pending ones, `failed_with_loss`) answers victims alone.
+            // One loss, one hang: a later failure of the lost device's batches answers victims
+            // alone, but for the hang's own command buffer.
             let (hung, timed_out) = {
                 let pending = lock(&watch.pending);
                 (pending.hung, pending.timed_out)
             };
-            answers = match hung {
-                true => Answers::Recovered(None),
-                false => Answers::recovered(device, &failed, timed_out),
-            };
-            if matches!(answers, Answers::Recovered(Some(_))) {
+            answers = Answers::Recovered;
+            if !hung && name_hang(device, &failed, timed_out) {
                 lock(&watch.pending).hung = true;
             }
         }
@@ -892,68 +892,71 @@ fn fail(watch: &Watch, ending: Vec<Hold<CommandBufferShared>>, error: CommandBuf
 enum Answers {
     /// Each with the wait's error.
     Error(CommandBufferError),
-    /// A lost device its line recovers: the culprit's command buffer as the hang, the rest as its
-    /// victims.
-    Recovered(Option<*const CommandBufferShared>),
+    /// A lost device its line recovers: each as the recovery's victim, the hang's command buffer
+    /// as the hang (`CommandBufferShared::complete_seen`, the hang [`name_hang`] marked).
+    Recovered,
 }
 
 impl Answers {
-    /// The answers of a loss of `device` its line recovers from, `failed` the pending batches in
-    /// each queue's order. The culprit is the command buffer of the front batch of `timed_out`,
-    /// the `VkQueue` whose front went past the watchdog's bound (`stall.rs`), exactly, where one
-    /// did; else of the oldest incomplete batch: on one `VkQueue` with work in flight, its first
-    /// pending batch, exactly (an in-order queue); on two or more, an inference, the first pending
-    /// batch of the queue whose command buffer was submitted first. Named on the device's line,
-    /// for its notice and the hold of its queue (`device/line.rs`).
-    fn recovered(
-        device: &Device,
-        failed: &[(usize, Submitted)],
-        timed_out: Option<usize>,
-    ) -> Answers {
-        // Each queue's first pending batch, of a command buffer that was submitted, with its queue.
-        let mut fronts: Vec<(usize, &Submitted)> = Vec::new();
-        let mut queue = None;
-        for (at, batch) in failed {
-            if queue != Some(*at) && batch.buffer.kernel.start() > 0 {
-                queue = Some(*at);
-                fronts.push((*at, batch));
-            }
-        }
-        let timed_out = timed_out.and_then(|timed| fronts.iter().find(|(at, _)| *at == timed));
-        let culprit = timed_out
-            .or_else(|| {
-                fronts
-                    .iter()
-                    .min_by_key(|(_, batch)| batch.buffer.kernel.start())
-            })
-            .map(|(_, batch)| *batch);
-        let Some(culprit) = culprit else {
-            return Answers::Recovered(None);
-        };
-        let buffer = &culprit.buffer;
-        let failing = failed.iter().filter(|(_, batch)| batch.last).count();
-        let queue = buffer.queue.label();
-        let named = lock(&buffer.state).named(queue.as_deref());
-        device.line().named(Culprit {
-            queue: Arc::downgrade(buffer.queue.common()),
-            named,
-            inferred: timed_out.is_none() && fronts.len() > 1,
-            victims: failing.saturating_sub(1),
-        });
-        let culprit: &CommandBufferShared = buffer;
-        Answers::Recovered(Some(std::ptr::from_ref(culprit)))
-    }
-
-    /// The error `buffer` fails with.
+    /// The error `buffer` fails with, the hang's own answered as it completes.
     fn of(&self, buffer: &CommandBufferShared) -> CommandBufferError {
         match self {
             Answers::Error(error) => *error,
-            Answers::Recovered(Some(culprit)) if std::ptr::eq(buffer, *culprit) => {
-                CommandBufferError::GpuHang
+            Answers::Recovered => {
+                // Counted for the recovery's notice (`device/line.rs`).
+                if !lock(&buffer.state).hang_of_loss {
+                    buffer.device().line().victim();
+                }
+                CommandBufferError::GpuRecoveryVictim
             }
-            Answers::Recovered(_) => CommandBufferError::GpuRecoveryVictim,
         }
     }
+}
+
+/// Name the hang of a loss of `device` its line recovers from, `failed` the pending batches in
+/// each queue's order; whether one was named. It is the command buffer of the front batch of
+/// `timed_out`, the `VkQueue` whose front went past the watchdog's bound (`stall.rs`), exactly,
+/// where one did; else of the oldest incomplete batch: on one `VkQueue` with work in flight, its
+/// first pending batch, exactly (an in-order queue); on two or more, an inference, the first
+/// pending batch of the queue whose command buffer was submitted first. The command buffer is
+/// marked the loss's hang (`hang_of_loss`): it fails as the hang whichever of the loss's failures
+/// finishes it, its front batch being any of its batches. Named on the device's line, for its
+/// notice and the hold of its queue (`device/line.rs`).
+fn name_hang(device: &Device, failed: &[(usize, Submitted)], timed_out: Option<usize>) -> bool {
+    // Each queue's first pending batch, of a command buffer that was submitted, with its queue.
+    let mut fronts: Vec<(usize, &Submitted)> = Vec::new();
+    let mut queue = None;
+    for (at, batch) in failed {
+        if queue != Some(*at) && batch.buffer.kernel.start() > 0 {
+            queue = Some(*at);
+            fronts.push((*at, batch));
+        }
+    }
+    let timed_out = timed_out.and_then(|timed| fronts.iter().find(|(at, _)| *at == timed));
+    let culprit = timed_out
+        .or_else(|| {
+            fronts
+                .iter()
+                .min_by_key(|(_, batch)| batch.buffer.kernel.start())
+        })
+        .map(|(_, batch)| *batch);
+    let Some(culprit) = culprit else {
+        return false;
+    };
+    let buffer = &culprit.buffer;
+    let queue = buffer.queue.label();
+    let named = {
+        let mut state = lock(&buffer.state);
+        state.hang_of_loss = true;
+        state.named(queue.as_deref())
+    };
+    device.line().named(Culprit {
+        queue: Arc::downgrade(buffer.queue.common()),
+        named,
+        inferred: timed_out.is_none() && fronts.len() > 1,
+        victims: 0,
+    });
+    true
 }
 
 /// Let go of `fence` of `device`'s `VkQueue` `queue` after a failed wait: released once the
