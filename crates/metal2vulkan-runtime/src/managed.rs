@@ -36,8 +36,8 @@
 //! - **The bytes a command buffer reads** follow the device's policy
 //!   (`DevicePolicy::managed_copy_in`). Under the default, `ManagedCopyInPolicy::AtSubmission`,
 //!   the GPU copies the range from the host copy as that submission runs, with no copy on the CPU
-//!   (but of pages no import maps, which the CPU copies at the commit into staging memory,
-//!   `managed_copy.rs`): a command buffer reads the bytes the host copy held at its commit, and a
+//!   (but of pages no import of their own maps and no guest RAM's chunk imports hold, which the
+//!   CPU copies at the commit into staging memory, `managed_copy.rs`): a command buffer reads the bytes the host copy held at its commit, and a
 //!   CPU write after the commit, before the GPU ran the command buffer, may reach it. Macs differ
 //!   there, so the cheaper answer is the default: on an AMD Radeon Pro 5300M (macOS 26.7.1, two
 //!   copies), a kernel copying a 4 KiB `Managed` buffer behind a spin kernel read the CPU's write

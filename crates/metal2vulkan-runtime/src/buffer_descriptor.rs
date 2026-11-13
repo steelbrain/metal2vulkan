@@ -2357,6 +2357,18 @@ impl Device {
         // A two-copy buffer's host copy is the pages alone instead (`managed_copy.rs`).
         if let Naming::HostCopy = naming {
             let drops = read_only || matches!(why, CopiedFor::Unwritable);
+            let alone = match &why {
+                CopiedFor::Refused | CopiedFor::DeviceRefused | CopiedFor::Failed(_) => {
+                    crate::managed_copy::AloneBecause::Refused
+                }
+                CopiedFor::OverImport | CopiedFor::OverRamChunk => {
+                    crate::managed_copy::AloneBecause::OverImports
+                }
+                CopiedFor::ReadOnly | CopiedFor::Unwritable => {
+                    crate::managed_copy::AloneBecause::Unwritable
+                }
+            };
+            self.shared().counts.managed_pages_alone(alone);
             return Err(crate::managed_copy::uncopied(drops));
         }
         let (cause, failed): (_, Option<FailedImport>) = match why {

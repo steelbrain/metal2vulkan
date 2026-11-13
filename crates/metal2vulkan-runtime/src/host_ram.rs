@@ -1064,6 +1064,53 @@ impl RamOnDevice {
         self.chunk(device, importer, slot, By::Object).ok()
     }
 
+    /// The pieces of the RAM's chunks' imports that hold a two-copy buffer's pages, which no
+    /// import of their own maps (`managed_copy.rs`'s `CallerPages`): `runs`, the resolver's answer
+    /// for the buffer's import window (`Device::route_runs`, which took them), laid one after
+    /// another from the window's first byte and cut where a chunk ends, of the window's bytes
+    /// `bytes` (the buffer's, from its byte 0, to its reach). Each piece is a range of the
+    /// buffer's bytes and where they lie in its chunk's import, which the piece holds: taken as an
+    /// object over the chunk takes it ([`RamOnDevice::for_object`]). `None` where a chunk takes
+    /// none (one not imported on a listed plan, held back, refused, or failed) or the runs do not
+    /// cover `bytes`: the copies in then go through the CPU.
+    pub(crate) fn pieces_of(
+        &self,
+        device: &Device,
+        importer: &Importer,
+        runs: &[Range<u64>],
+        bytes: Range<u64>,
+    ) -> Option<Box<[ChunkPiece]>> {
+        let laid = copy::one_after_another(0, runs)?;
+        let (pieces, _) = copy::pieces(&laid, &self.spans())?;
+        let mut taken: BTreeMap<usize, Arc<RamChunk>> = BTreeMap::new();
+        let mut out = Vec::with_capacity(pieces.len());
+        let mut covered = bytes.start;
+        for piece in pieces {
+            let start = piece.at.max(bytes.start);
+            let end = (piece.at + piece.length).min(bytes.end);
+            if start >= end {
+                continue;
+            }
+            let chunk = match taken.get(&piece.slot) {
+                Some(chunk) => Arc::clone(chunk),
+                None => {
+                    let chunk = self.for_object(device, importer, piece.slot)?;
+                    taken.insert(piece.slot, Arc::clone(&chunk));
+                    chunk
+                }
+            };
+            let host = self.slots[piece.slot].span.start + piece.offset + (start - piece.at);
+            let at = chunk.offset_of(&(host..host + (end - start)))?;
+            covered = covered.max(end);
+            out.push(ChunkPiece {
+                bytes: start - bytes.start..end - bytes.start,
+                source: (chunk.raw, at),
+                _chunk: chunk,
+            });
+        }
+        (covered == bytes.end).then(|| out.into_boxed_slice())
+    }
+
     /// Whether a copy's ranges over a chunk not imported yet may be imported alone while the
     /// chunk's import is made ([`RamOnDevice::run_alone`]): only on a device
     /// whose plan is [`Plan::listed`], whose chunks and runs are each a dma-buf of the RAM's
@@ -2103,6 +2150,17 @@ impl Drop for RamAfterFree {
     }
 }
 
+/// A piece of a RAM's chunk import that holds some of a two-copy buffer's pages
+/// ([`RamOnDevice::pieces_of`]), which the buffer's copies in read on the GPU.
+pub(crate) struct ChunkPiece {
+    /// The buffer's bytes it holds, from the buffer's byte 0.
+    pub(crate) bytes: Range<u64>,
+    /// Where they lie: the import's `VkBuffer`, and the byte of it they start at.
+    pub(crate) source: (vk::Buffer, u64),
+    /// The import, held while the piece lives.
+    _chunk: Arc<RamChunk>,
+}
+
 /// Where a resolver's answer puts a no-copy object's pages (`HostMemory::with_runs`).
 pub(crate) enum Routed {
     /// One run inside chunk `slot` of `ram`, from host address `start`: the object is bound in
@@ -2123,6 +2181,13 @@ pub(crate) enum Routed {
 }
 
 impl Routed {
+    /// The RAM the pages lie in.
+    pub(crate) fn ram(&self) -> &Arc<RamOnDevice> {
+        match self {
+            Routed::InChunk { ram, .. } | Routed::Runs { ram, .. } => ram,
+        }
+    }
+
     /// The RAM and the runs, kept with the object until its rebind or release.
     pub(crate) fn kept(&self) -> (Arc<RamOnDevice>, Box<[Range<u64>]>) {
         match self {

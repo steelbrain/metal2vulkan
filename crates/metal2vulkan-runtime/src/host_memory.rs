@@ -478,8 +478,12 @@ impl HostMemory {
     /// runtime's other paths, as over memory no RAM holds, and the chunk is imported only for
     /// the copies over it ([`Device::use_host_ram`](crate::Device::use_host_ram)). Pages of more
     /// than one run, or of a run crossing a chunk's end, take the runtime's other paths (the gate,
-    /// then an import or a copy), the runs kept with the object. Counted:
-    /// `WorkCounts::chunk_bound_buffers_made`. No Metal counterpart.
+    /// then an import or a copy), the runs kept with the object. A `Managed` no-copy buffer over
+    /// such pages on a device without unified memory, whose host copy is its pages alone (an import
+    /// of their own would map pages a chunk's import holds), copies them in by the GPU from the
+    /// chunks' imports where those hold them all, the CPU staging nothing. Counted:
+    /// `WorkCounts::chunk_bound_buffers_made`, `WorkCounts::managed_pages_in_ram_chunks`. No Metal
+    /// counterpart.
     pub fn with_runs(self, resolver: RunResolver) -> HostMemory {
         HostMemory {
             runs: Some(resolver),

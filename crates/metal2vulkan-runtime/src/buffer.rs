@@ -4420,8 +4420,9 @@ impl Buffer {
     /// says which batch takes it ([`Replaces`]): where no command buffer can have read the
     /// bytes, one that takes a new buffer's first fill (`register_bytes`). The copy stages
     /// nothing (`texture/first_move.rs`'s `Keeps::HostCopy`), so it makes no submission, however
-    /// many bytes wait; pages no import maps are staged, and past the bound of what is staged a
-    /// submission waited for makes them now (`managed_copy.rs`). Nothing for a buffer without a
+    /// many bytes wait; pages no import maps are staged (but those a guest RAM's chunk imports
+    /// hold, which the GPU copies from them), and past the bound of what is staged a submission
+    /// waited for makes them now (`managed_copy.rs`). Nothing for a buffer without a
     /// host copy, nor for an empty range.
     pub(super) fn upload(&self, range: Range<u64>, replaces: Replaces) -> Result<(), Error> {
         let s = self.s();
@@ -4454,7 +4455,7 @@ impl Buffer {
     /// commands, as the device's policy says (`DevicePolicy::managed_copy_in`): under
     /// `ManagedCopyInPolicy::AtSubmission` (the default) the GPU copies them from the host copy as
     /// that submission runs ([`upload`](Self::upload)), with no copy on the CPU but of pages no
-    /// import maps (`managed_copy.rs`); under `AtCommit` the CPU copies them now, as the host copy
+    /// import maps and no guest RAM's chunk imports hold (`managed_copy.rs`); under `AtCommit` the CPU copies them now, as the host copy
     /// holds them, into staging memory that submission copies from (`managed_copy::stage_in`),
     /// and where that memory is not found the GPU copies them from the host copy as under the
     /// default. Nothing for a buffer without a host copy, nor for an empty range, nor for pages
@@ -4474,9 +4475,10 @@ impl Buffer {
                     None => Ok(()),
                 }
             }
-            // Copies from the host copy, which stage nothing and go with this commit's batch; pages
-            // no import maps staged, a failed submission past the bound failing the device, which
-            // the commit's own submission reports.
+            // Copies from the host copy (or a guest RAM's chunk imports that hold it), which stage
+            // nothing and go with this commit's batch; pages no import maps staged, a failed
+            // submission past the bound failing the device, which the commit's own submission
+            // reports.
             _ => {
                 let _ = self.upload(range, replaces);
                 return;

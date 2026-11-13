@@ -2,6 +2,14 @@
 //! (`managed_copy.rs`): two copies, the caller's pages and the GPU's own, the buffer's pages
 //! across the end of a chunk whose import, and the next chunk's, live.
 //!
+//! - **Copies in from the chunks.** The buffer's host copy is its pages alone
+//!   (`WorkCounts::managed_pages_alone_over_imports`): an import of their own would map pages the
+//!   chunks' imports hold, so nothing is imported and the gate is not asked. The chunks' imports
+//!   hold them all (`managed_pages_in_ram_chunks`). Its copy in as it is made is the GPU's, from
+//!   those imports, the CPU staging nothing (`managed_bytes_copied_in_from_ram`,
+//!   `managed_bytes_staged_in`), and so is the copy in of a range `did_modify_range` names across
+//!   the chunks' end; under `ManagedCopyInPolicy::AtCommit` the CPU stages that range at the
+//!   commit instead. The GPU reads the CPU's bytes under both.
 //! - **The bench across a chunk's end** (ignored, `MANAGED-RAM-COPY-IN`; run in release): what a
 //!   `did_modify_range` of 256 KiB, 4 MiB and 32 MiB across the end of the RAM's first chunk,
 //!   written by the CPU before each commit of a command buffer that reads the range's first and
@@ -12,12 +20,15 @@
 //! of device the cfg selects. A device that imports no host memory, or has unified memory (where
 //! a `Managed` buffer is one copy), says so and passes.
 
-use super::host_ram_device::{gate, held_device, itself, new_ram, resolver, settles, MIB, WAIT};
-use crate::{
-    Buffer, CpuCacheMode, Device, HazardTrackingMode, HostBacking, HostMemory, ResourceOptions,
-    StorageMode,
+use super::host_ram_device::{
+    bytes, fill_pattern, gate, gpu_bytes, held_device, itself, new_ram, resolver, settles, MIB,
+    WAIT,
 };
-use metal2vulkan::device::DevicePolicy;
+use crate::{
+    Buffer, CpuCacheMode, Device, HazardTrackingMode, HostBacking, HostMemory, ImportRequest,
+    ResourceOptions, StorageMode,
+};
+use metal2vulkan::device::{DevicePolicy, ManagedCopyInPolicy};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -61,11 +72,16 @@ fn two_copy_device(policy: DevicePolicy) -> Option<Device> {
 /// The memory at host address `at` of the test's RAM, its pages their own run of it, under a gate
 /// that admits every import.
 fn memory_at(at: u64) -> HostMemory {
-    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    memory_gated(at, &Arc::default())
+}
+
+/// [`memory_at`], the gate's requests into `gates`.
+fn memory_gated(at: u64, gates: &Arc<Mutex<Vec<ImportRequest>>>) -> HostMemory {
+    let runs: Arc<Mutex<_>> = Arc::default();
     // SAFETY: the RAM's bytes, mapped until its keep-alive goes, after every device let go.
     unsafe { HostMemory::new(NonNull::new(at as *mut u8).unwrap()) }
         .with_runs(resolver(&runs, itself))
-        .with_import_gate(gate(&gates, true))
+        .with_import_gate(gate(gates, true))
 }
 
 /// `Shared` buffers of four pages, one in each of the RAM's two whole chunks from `start`, far
@@ -85,6 +101,96 @@ fn import_both_chunks(device: &Device, start: u64) -> (Buffer, Buffer) {
         .unwrap()
     };
     (in_chunk(start + 16 * page), in_chunk(start + 96 * MIB))
+}
+
+/// Copies in from the chunks (the module docs), under `copy_in`.
+fn copies_in_across_a_chunk_end(copy_in: ManagedCopyInPolicy) {
+    const LENGTH: u64 = 4 * MIB;
+    let mut policy = DevicePolicy::default();
+    policy.managed_copy_in = copy_in;
+    let Some(device) = two_copy_device(policy) else {
+        return;
+    };
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    let (ram, start, dropped) = new_ram();
+    let used = device.use_host_ram(&ram).unwrap();
+    let chunks = import_both_chunks(&device, start);
+    let at = start + CHUNK_END - LENGTH / 2;
+    fill_pattern(at..at + LENGTH);
+    let gates = Arc::default();
+    let before = device.work_counts();
+    // SAFETY: as in `memory_at`.
+    let buffer = unsafe {
+        device.new_buffer_with_bytes_no_copy(memory_gated(at, &gates), LENGTH, managed(), None)
+    }
+    .unwrap();
+    assert_eq!(buffer.host_backing(), Some(HostBacking::DeviceCopy));
+    assert_eq!(
+        buffer.contents().map(|pointer| pointer.as_ptr() as u64),
+        Some(at)
+    );
+    let made = device.work_counts();
+    assert_eq!(
+        (
+            made.managed_pages_alone_over_imports - before.managed_pages_alone_over_imports,
+            made.managed_pages_in_ram_chunks - before.managed_pages_in_ram_chunks,
+            made.host_pointer_imports_made - before.host_pointer_imports_made,
+            made.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
+        ),
+        (1, 1, 0, 0),
+        "its pages alone, which the chunks' imports hold; nothing imported"
+    );
+    assert!(gates.lock().unwrap().is_empty(), "the gate was not asked");
+    assert_eq!(
+        gpu_bytes(&device, &buffer, LENGTH),
+        bytes(at..at + LENGTH),
+        "the bytes copied in as the buffer was made"
+    );
+    let first = device.work_counts();
+    assert_eq!(
+        (
+            first.managed_bytes_copied_in_from_ram - before.managed_bytes_copied_in_from_ram,
+            first.managed_bytes_staged_in - before.managed_bytes_staged_in,
+        ),
+        (LENGTH, 0),
+        "copied in from the chunks' imports as it was made, nothing staged"
+    );
+    // The CPU's write across the chunks' end, named.
+    let named = LENGTH / 2 - 2 * page..LENGTH / 2 + 2 * page;
+    let length = named.end - named.start;
+    // SAFETY: the RAM's bytes, which no command buffer reads now.
+    unsafe { std::ptr::write_bytes((at + named.start) as *mut u8, 0xa5, length as usize) };
+    buffer.did_modify_range(named).unwrap();
+    assert_eq!(
+        gpu_bytes(&device, &buffer, LENGTH),
+        bytes(at..at + LENGTH),
+        "the CPU's write across the chunks' end"
+    );
+    let after = device.work_counts();
+    let expected = match copy_in == ManagedCopyInPolicy::AtCommit {
+        true => (0, length),
+        false => (length, 0),
+    };
+    assert_eq!(
+        (
+            after.managed_bytes_copied_in_from_ram - first.managed_bytes_copied_in_from_ram,
+            after.managed_bytes_staged_in - first.managed_bytes_staged_in,
+        ),
+        expected,
+        "the named range copied in from the chunks' imports, or staged at the commit ({copy_in:?})"
+    );
+    drop((buffer, chunks, used, ram, device));
+    assert!(settles(&dropped), "the RAM's keep-alive did not go");
+}
+
+#[test]
+fn a_managed_buffer_across_a_chunk_end_copies_in_from_the_chunks_imports() {
+    copies_in_across_a_chunk_end(ManagedCopyInPolicy::AtSubmission);
+}
+
+#[test]
+fn a_managed_buffer_across_a_chunk_end_is_staged_at_the_commit_under_at_commit() {
+    copies_in_across_a_chunk_end(ManagedCopyInPolicy::AtCommit);
 }
 
 /// The median of `values`, in milliseconds.

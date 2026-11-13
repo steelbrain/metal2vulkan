@@ -551,9 +551,12 @@ copies) read the bytes at the commit. `ManagedCopyInPolicy::AtCommit`, which `ex
 selects, takes the 5300M's answer: the commit copies each range on the CPU into staging buffers
 of host-cached system memory, a cost of the range's bytes, and a write after it reaches no
 command buffer committed before it, however late the GPU reaches it (docs/FAST-PATHS.md). Pages
-no import maps are staged so at the commit under either. A CPU write that no `did_modify_range` names is not seen by the GPU. A blit encoder's `synchronize_resource` copies the GPU's copy out to the pages in its
+no import of their own maps are staged so at the commit under either, but where a guest RAM's
+chunk imports hold them all (`HostRam`): there the default copies them by the GPU from those
+imports, as from an import of their own (`WorkCounts::managed_bytes_copied_in_from_ram`). A CPU write that no `did_modify_range` names is not seen by the GPU. A blit encoder's `synchronize_resource` copies the GPU's copy out to the pages in its
 command buffer's order, which the CPU sees once the command buffer completed. The copies run
-from an import of the pages where the device makes one (never a copy of them), else through
+from an import of the pages where the device makes one (never a copy of them), or from the
+chunk imports of a guest RAM that hold them, else through
 staging buffers the runtime frees once their work completed, at most 256 MiB staged ahead
 (`WorkCounts::managed_*`). A texture over the buffer's bytes is over the GPU's copy and follows
 it, its `replace_region` copying in and its `synchronize_resource` or `synchronize_texture`

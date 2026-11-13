@@ -19,9 +19,13 @@
 //!   dma-bufs, or in a guest RAM's chunk: `host_memory.rs`, `host_ram.rs`), which is a buffer of
 //!   the runtime's own over them, outside the Metal address space ([`Side::Import`]), or, where
 //!   the device imports none of them (the caller's gate refused it, the device refused the
-//!   pointer, the import failed), the pages alone ([`Side::Pages`]): never a copy of them as well
-//!   (`copied.rs`), which would be a third. `contents` is the caller's pointer, and the
-//!   deallocator and keep-alive go as a no-copy buffer's do.
+//!   pointer, the import failed, a live import holds some of them), the pages alone
+//!   ([`Side::Pages`]): never a copy of them as well (`copied.rs`), which would be a third. Pages
+//!   alone that a guest RAM's chunk imports hold all of (`host_ram.rs`: pages across a chunk's
+//!   end, or of several runs, whose own import would map pages a chunk's maps, or which the
+//!   device refused) keep the pieces of those imports ([`CallerPages::chunks`]), which hold the
+//!   chunks imported while the pages are the buffer's. `contents` is the caller's pointer, and
+//!   the deallocator and keep-alive go as a no-copy buffer's do.
 //! - **Copies in.** The buffer's bytes and the rest of their last page ([`CallerCopy::reach`])
 //!   are copied in as it is made, as a new buffer's first fill is made (`texture/first_move.rs`'s
 //!   `register_bytes`; on a device without a fill queue, by the device's next submission, whatever
@@ -46,17 +50,22 @@
 //!   `VkQueue`. Not on the staging queue,
 //!   which waits for no work in flight. From an import, the copy's source is
 //!   the import's `VkBuffer`, held (imported again where the device released it) until the
-//!   submission completed: no copy on the CPU and no staging. From pages no import maps (and under
-//!   `AtCommit` from an import too), the call copies the bytes on the CPU into staging buffers of
+//!   submission completed: no copy on the CPU and no staging. From pages alone that a guest RAM's
+//!   chunk imports hold, the copy's sources are those imports' `VkBuffer`s, a copy of each piece
+//!   of the range, the pages held until the submission completed: no copy on the CPU and no
+//!   staging either (`WorkCounts::managed_bytes_copied_in_from_ram`). From pages no import maps
+//!   (and under `AtCommit` from an import or a RAM's chunks too), the call copies the bytes on the
+//!   CPU into staging buffers of
 //!   [`STAGED_CHUNK`] bytes at most, of host-cached system memory, which the GPU's copy reads
 //!   across the bus, never the device-local memory a write-combined buffer prefers there, which
 //!   the CPU would write across the bus ([`Staging::new`]); each is written once, freed once the
 //!   submission completed, and of a power-of-two length, so a later copy's of a like size takes
-//!   one the device parked (`recycle.rs`) rather than new memory. Past the bound of what is staged
+//!   one the device parked (`recycle.rs`) rather than new memory
+//!   (`WorkCounts::managed_bytes_staged_in`). Past the bound of what is staged
 //!   (`texture/first_move.rs`'s `STAGED_BYTES`), the call makes a submission for them and
-//!   waits. A copy from an import stages nothing and counts toward no bound, so a commit's copies
-//!   in of the ranges named go with its own batch however many bytes they are, and the commit
-//!   waits for none of them.
+//!   waits. A copy from an import, or from a RAM's chunks, stages nothing and counts toward no
+//!   bound, so a commit's copies in of the ranges named go with its own batch however many bytes
+//!   they are, and the commit waits for none of them.
 //! - **Copies out.** `synchronize_resource` copies the buffer's bytes to the import in the blit
 //!   encoder's command stream, a blit's write of the import (`blit.rs`); to pages no import maps,
 //!   into a staging buffer there, which the command buffer's completion copies to the pages before
@@ -85,7 +94,8 @@ use super::buffer::{Buffer, HostCopy, Naming, Replaces};
 use super::device::lock;
 use super::error::{internal, Error};
 use super::exit_guard;
-use super::host_memory::{HostMemory, HostParts, Release};
+use super::host_memory::{HostMemory, HostParts, ImportWindow, Release, RunResolver};
+use super::host_ram::ChunkPiece;
 use super::texture::first_move::Keeps;
 use super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
 use super::Device;
@@ -120,17 +130,21 @@ pub(super) enum Side {
     /// An import of them, which a buffer of the runtime's own over them holds, outside the Metal
     /// address space (made as [`Naming::HostCopy`]): its rebind and detach are the host copy's.
     Import(Buffer),
-    /// The pages alone, which no import maps, and whether they are detached.
+    /// The pages alone, which no import of their own maps, and whether they are detached.
     Pages(Arc<CallerPages>, bool),
 }
 
-/// The caller's pages of a `Managed` no-copy buffer that no import maps ([`Side::Pages`]), given
-/// back to the caller's deallocator and keep-alive as they go: once the buffer let go of them and
-/// every copy into them or out of them completed.
+/// The caller's pages of a `Managed` no-copy buffer that no import of their own maps
+/// ([`Side::Pages`]), given back to the caller's deallocator and keep-alive as they go: once the
+/// buffer let go of them and every copy into them or out of them completed.
 pub(super) struct CallerPages {
     pointer: NonNull<u8>,
     /// The bytes from the pointer the copies cover ([`CallerCopy::reach`] at most).
     reach: u64,
+    /// Where a guest RAM's chunk imports hold them all (`host_ram.rs`), the pieces of those
+    /// imports, which the copies in read on the GPU; `None` where no import holds them, whose
+    /// copies in the CPU stages.
+    chunks: Option<Box<[ChunkPiece]>>,
     /// The process cannot write them, or Metal's private option bit 24 drops the GPU's writes:
     /// nothing is copied out to them.
     drops_writes: bool,
@@ -452,7 +466,10 @@ impl CallerCopy {
             }
             Side::Pages(pages, false) => {
                 let range = range.start..range.end.min(pages.reach);
-                stage_in(buffer, pages.pointer, range, bounded, replaces)
+                match &pages.chunks {
+                    Some(pieces) => copy_in_from_chunks(buffer, &pages, pieces, range, replaces),
+                    None => stage_in(buffer, pages.pointer, range, bounded, replaces),
+                }
             }
             Side::Pages(_, true) => Ok(()),
         }
@@ -560,12 +577,87 @@ pub(super) fn stage_in(
                 bytes as usize,
             );
         }
+        device.shared().counts.managed_staged_in(bytes);
         let source = staging.buffer.at(0);
         let held = Keeps::Staging(Box::new(staging));
         buffer.copy_in_from(source, start..start + bytes, held, (bounded, replaces))?;
         start += bytes;
     }
     Ok(())
+}
+
+/// Copy `range` of the caller's `pages` into `buffer`'s device copy by the GPU, from the guest
+/// RAM's chunk imports `pieces` that hold them ([`CallerPages::chunks`]): a copy of each piece's
+/// part of the range, read as the submission that makes it runs, which holds the pages (and so
+/// the imports) until it completed, for the batch `replaces` says ([`Replaces`]). No CPU copy and
+/// no staging, so no bound of what is staged and no submission made for them.
+fn copy_in_from_chunks(
+    buffer: &Buffer,
+    pages: &Arc<CallerPages>,
+    pieces: &[ChunkPiece],
+    range: Range<u64>,
+    replaces: Replaces,
+) -> Result<(), Error> {
+    let counts = &buffer.generation().shared().counts;
+    for piece in pieces {
+        let start = range.start.max(piece.bytes.start);
+        let end = range.end.min(piece.bytes.end);
+        if start >= end {
+            continue;
+        }
+        let (source, at) = piece.source;
+        let source = (source, at + (start - piece.bytes.start));
+        let held = Keeps::HostCopy(Box::new(Arc::clone(pages)));
+        buffer.copy_in_from(source, start..end, held, (false, replaces))?;
+        counts.managed_copied_in_from_ram(end - start);
+    }
+    Ok(())
+}
+
+/// The caller's resolver of a two-copy buffer's pages' runs (`HostMemory::with_runs`) as its host
+/// copy is made ([`Device::caller_side`]): asked at most once, as [`RunResolver`]'s contract
+/// says, its answer kept with the window it was asked for, for the pages alone
+/// ([`Device::chunks_of`]).
+#[derive(Clone, Default)]
+struct Asked(Arc<Mutex<Option<Kept>>>);
+
+/// A resolver's answer and the window it was asked for: its first byte and length.
+type Kept = ((u64, u64), Option<Vec<Range<u64>>>);
+
+impl Asked {
+    /// `resolver`, asked at most once: its answer kept, and given again for the same window, a
+    /// later ask of another answered `None`. Asked with no lock held.
+    fn keeping(&self, resolver: RunResolver) -> RunResolver {
+        let asked = self.clone();
+        Arc::new(move |start, length| {
+            if let Some((window, answer)) = &*lock(&asked.0) {
+                return answer.clone().filter(|_| *window == (start, length));
+            }
+            let answer = resolver(start, length);
+            *lock(&asked.0) = Some(((start, length), answer.clone()));
+            answer
+        })
+    }
+
+    /// The window the resolver was asked for and the runs it answered, where it answered some.
+    fn answer(&self) -> Option<((u64, u64), Vec<Range<u64>>)> {
+        let (window, answer) = lock(&self.0).clone()?;
+        Some((window, answer?))
+    }
+}
+
+/// Why a two-copy buffer's host copy is its pages alone, no import of their own mapping them
+/// (`WorkCounts::managed_pages_alone_*`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AloneBecause {
+    /// The caller's gate refused their import, the device refused their pointer and no dma-buf of
+    /// them served, or the import failed.
+    Refused,
+    /// A live import of another object's pages, or of a guest RAM's chunk, holds some of them.
+    OverImports,
+    /// The process cannot write them, or Metal's private option bit 24 drops the GPU's writes and
+    /// the system maps no read-only view of them.
+    Unwritable,
 }
 
 /// The refusal a buffer made as [`Naming::HostCopy`] answers where it would be a copy of the
@@ -597,7 +689,9 @@ impl Device {
     /// The host copy of a two-copy buffer of `made`'s call, length and options over the caller's
     /// memory's `parts`, given back to `release`: an import of them, made as a no-copy buffer's
     /// (but never a copy of them), outside the Metal address space, or, where the device imports
-    /// none, the pages alone. Refused as a no-copy buffer is, where the pages are.
+    /// none, the pages alone, with the pieces of a guest RAM's chunk imports that hold them all
+    /// where there are such ([`Device::chunks_of`]). Refused as a no-copy buffer is, where the
+    /// pages are.
     ///
     /// # Safety
     ///
@@ -611,6 +705,13 @@ impl Device {
         let pointer = parts.pointer;
         let vouched = parts.writable;
         let made_of = parts.clone();
+        // The caller's resolver of the pages' runs, asked once (`RunResolver`): its answer kept
+        // for the pages alone.
+        let asked = Asked::default();
+        let parts = HostParts {
+            runs: parts.runs.map(|runs| asked.keeping(runs)),
+            ..parts
+        };
         let outside = super::address::AddressPlacement::Outside.into();
         let made = (call, length, options, outside);
         // SAFETY: the caller's contract.
@@ -628,9 +729,14 @@ impl Device {
                 // writes to pages the process cannot write are dropped, never copied out to them.
                 let drops_writes = error == uncopied(true)
                     || (!vouched && self.unwritable(at..at + reach, page)?);
+                let chunks = self.chunks_of(call, (pointer, reach), &asked);
+                if chunks.is_some() {
+                    self.shared().counts.managed_pages_in_ram_chunks();
+                }
                 let pages = CallerPages {
                     pointer,
                     reach,
+                    chunks,
                     drops_writes,
                     made_of,
                     release: OnceLock::new(),
@@ -643,6 +749,33 @@ impl Device {
             side.release_to(release);
         }
         Ok(side)
+    }
+
+    /// The pieces of a guest RAM's chunk imports that hold all of a two-copy buffer's pages from
+    /// `pointer` to its `reach`, which no import of their own maps ([`CallerPages::chunks`]): of
+    /// the runs the caller's resolver answered for their import window (`asked`), where the
+    /// device uses the RAM they lie in (`Device::route_runs`) and each chunk they touch takes an
+    /// import as an object over it does (`host_ram.rs`'s `RamOnDevice::pieces_of`). `None`
+    /// elsewhere: the resolver was not asked or answered no runs, or a chunk takes no import.
+    fn chunks_of(
+        &self,
+        call: &'static str,
+        (pointer, reach): (NonNull<u8>, u64),
+        asked: &Asked,
+    ) -> Option<Box<[ChunkPiece]>> {
+        let ((start, size), runs) = asked.answer()?;
+        let importer = self.shared().host_import.as_ref().ok()?;
+        let offset = (pointer.as_ptr() as u64).checked_sub(start)?;
+        let window = ImportWindow {
+            start,
+            size,
+            offset,
+        };
+        let kept = runs.clone();
+        let resolver: RunResolver = Arc::new(move |_, _| Some(kept.clone()));
+        let routed = self.route_runs(call, importer, &resolver, &window).ok()??;
+        let bytes = offset..offset.checked_add(reach)?;
+        routed.ram().pieces_of(self, importer, &runs, bytes)
     }
 
     /// Whether the process cannot write the pages of `range` (whole pages of `page` bytes), as

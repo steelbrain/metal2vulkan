@@ -510,6 +510,12 @@ pub(crate) struct Counters {
     managed_bytes_synchronized: AtomicU64,
     managed_staging_bytes: AtomicU64,
     managed_writes_undone: AtomicU64,
+    managed_bytes_staged_in: AtomicU64,
+    managed_bytes_copied_in_from_ram: AtomicU64,
+    managed_pages_alone_refused: AtomicU64,
+    managed_pages_alone_over_imports: AtomicU64,
+    managed_pages_alone_unwritable: AtomicU64,
+    managed_pages_in_ram_chunks: AtomicU64,
     dma_buf_textures_in_place: AtomicU64,
     fresh_page_textures_in_place: AtomicU64,
     copied_textures_in_place: AtomicU64,
@@ -4210,6 +4216,36 @@ impl Counters {
     /// and its pages were copied in again (`managed_copy.rs`).
     pub(crate) fn managed_write_undone(&self) {
         self.managed_writes_undone.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The CPU copied `bytes` bytes of a two-copy buffer's host copy into a staging buffer for a
+    /// copy in (`managed_copy.rs`'s `stage_in`).
+    pub(crate) fn managed_staged_in(&self, bytes: u64) {
+        (self.managed_bytes_staged_in).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// The GPU's copy of `bytes` bytes of a two-copy buffer's pages into its device copy, from a
+    /// guest RAM's chunk imports, was registered (`managed_copy.rs`).
+    pub(crate) fn managed_copied_in_from_ram(&self, bytes: u64) {
+        (self.managed_bytes_copied_in_from_ram).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A two-copy buffer's host copy was made its pages alone, no import of their own mapping
+    /// them, for `why` (`managed_copy.rs`).
+    pub(crate) fn managed_pages_alone(&self, why: crate::managed_copy::AloneBecause) {
+        use crate::managed_copy::AloneBecause;
+        let count = match why {
+            AloneBecause::Refused => &self.managed_pages_alone_refused,
+            AloneBecause::OverImports => &self.managed_pages_alone_over_imports,
+            AloneBecause::Unwritable => &self.managed_pages_alone_unwritable,
+        };
+        count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Such pages alone took the pieces of a guest RAM's chunk imports that hold them all, which
+    /// their copies in read (`managed_copy.rs`).
+    pub(crate) fn managed_pages_in_ram_chunks(&self) {
+        (self.managed_pages_in_ram_chunks).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A texture over host pages of `class` was made an image in place over them (`in_place.rs`),
@@ -8486,6 +8522,33 @@ pub struct WorkCounts {
     /// Command buffers that used such a buffer whose pages drop the GPU's writes (a read-only
     /// rebind) and completed, its pages then copied in whole again.
     pub managed_writes_undone: u64,
+    /// The bytes the CPU copied from `Managed` buffers' host copies into staging buffers for
+    /// their copies in, on a device without unified memory: such a buffer's pages no import maps
+    /// (but those a guest RAM's chunk imports hold, `managed_bytes_copied_in_from_ram`), and
+    /// under `ManagedCopyInPolicy::AtCommit` every range a commit takes, of the runtime's own
+    /// `Managed` buffers too. Every other copy in is the GPU's, from the host copy itself.
+    pub managed_bytes_staged_in: u64,
+    /// The bytes the GPU copied into such buffers' device copies from a guest RAM's chunk imports
+    /// that hold their pages, which no import of their own maps (`HostRam`): no CPU copy and no
+    /// staging. Of `managed_bytes_copied_in`.
+    pub managed_bytes_copied_in_from_ram: u64,
+    /// Host copies of such buffers made (with the buffer, at a rebind, at a recovery) that are
+    /// their pages alone, no import of their own mapping them, because the caller's gate refused
+    /// their import, the device refused their pointer and no dma-buf of them served, or the import
+    /// failed.
+    pub managed_pages_alone_refused: u64,
+    /// Such host copies made their pages alone because a live import of another object's pages,
+    /// or of a guest RAM's chunk, holds some of them (their bytes across an import's edge, or a
+    /// chunk's end): no page is imported twice.
+    pub managed_pages_alone_over_imports: u64,
+    /// Such host copies made their pages alone because the process cannot write them, or Metal's
+    /// private option bit 24 drops the GPU's writes and the system maps no read-only view.
+    pub managed_pages_alone_unwritable: u64,
+    /// Of the host copies counted by `managed_pages_alone_*`, those whose pages a guest RAM's chunk
+    /// imports hold all of: their copies in are the GPU's, from those imports
+    /// (`managed_bytes_copied_in_from_ram`), never staged by the CPU, but under
+    /// `ManagedCopyInPolicy::AtCommit`.
+    pub managed_pages_in_ram_chunks: u64,
     /// Of `host_textures_in_place`, those over pages imported as dma-bufs: each a
     /// `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages (also counted in
     /// `dma_buf_images`).
@@ -10556,6 +10619,17 @@ impl Device {
             managed_bytes_synchronized: counters.managed_bytes_synchronized.load(Ordering::Relaxed),
             managed_staging_bytes: counters.managed_staging_bytes.load(Ordering::Relaxed),
             managed_writes_undone: counters.managed_writes_undone.load(Ordering::Relaxed),
+            managed_bytes_staged_in: counters.managed_bytes_staged_in.load(Ordering::Relaxed),
+            managed_bytes_copied_in_from_ram: (counters.managed_bytes_copied_in_from_ram)
+                .load(Ordering::Relaxed),
+            managed_pages_alone_refused: (counters.managed_pages_alone_refused)
+                .load(Ordering::Relaxed),
+            managed_pages_alone_over_imports: (counters.managed_pages_alone_over_imports)
+                .load(Ordering::Relaxed),
+            managed_pages_alone_unwritable: (counters.managed_pages_alone_unwritable)
+                .load(Ordering::Relaxed),
+            managed_pages_in_ram_chunks: (counters.managed_pages_in_ram_chunks)
+                .load(Ordering::Relaxed),
             dma_buf_textures_in_place: counters.dma_buf_textures_in_place.load(Ordering::Relaxed),
             fresh_page_textures_in_place: counters
                 .fresh_page_textures_in_place
