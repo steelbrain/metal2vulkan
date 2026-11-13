@@ -24,7 +24,10 @@
 //! (`IMPORT-FREE-HOLD completed`), per size: the frees' runs (the first deallocator to the last),
 //! how long after `wait_until_completed` returned the last deallocator ran, the spread of the
 //! pings whose commit to completion overlapped a round's commit to its last deallocator, beside
-//! those that overlapped none, and the free thread's counts over the leg.
+//! those that overlapped none, and the free thread's counts over the leg. The rounds alternate:
+//! the frees posted to the free thread, paced, as the release posts them, and freed in place on
+//! the completion's thread, as it freed them before posting (`free_thread::FREES_IN_PLACE`), so
+//! both forms meet the same host; printed per form too.
 //!
 //! Ignored: run them in release under `--cfg m2v_gpu`, `cargo test --release -p
 //! metal2vulkan-runtime --lib import_free_hold_bench -- --ignored --nocapture`.
@@ -565,6 +568,8 @@ fn import_free_hold_bench() {
 struct Completed {
     bytes: usize,
     count: usize,
+    /// Freed in place, else posted.
+    in_place: bool,
     windows: Vec<Range<Instant>>,
     runs: Vec<Duration>,
     after_wait: Vec<Duration>,
@@ -605,20 +610,25 @@ fn no_copy_buffers(
     Some(buffers)
 }
 
-/// [`ROUNDS`] rounds of the completion leg (the module docs) of `count` buffers of `bytes` on
-/// `device`, [`GAP`] apart; `None` where it cannot make them.
-fn completed_rounds(device: &Device, (bytes, count): (usize, usize)) -> Option<Completed> {
+/// [`ROUNDS`] rounds of each form of the completion leg (the module docs) of `count` buffers of
+/// `bytes` on `device`, alternating, [`GAP`] apart: posted, then in place; `None` where it cannot
+/// make them.
+fn completed_rounds(device: &Device, (bytes, count): (usize, usize)) -> Option<[Completed; 2]> {
     let pages = Pages::new(bytes * count, 64 << 10);
     let queue = device.new_command_queue().unwrap();
     let target = device.new_buffer(4096, ResourceOptions::private()).unwrap();
-    let mut completed = Completed {
+    let form = |in_place| Completed {
         bytes,
         count,
+        in_place,
         windows: Vec::new(),
         runs: Vec::new(),
         after_wait: Vec::new(),
     };
-    for _ in 0..ROUNDS {
+    let mut forms = [form(false), form(true)];
+    for round in 0..2 * ROUNDS {
+        let completed = &mut forms[round % 2];
+        (crate::free_thread::FREES_IN_PLACE).store(completed.in_place, Ordering::Relaxed);
         let ran = Arc::new(Mutex::new(Vec::new()));
         let buffers = no_copy_buffers(device, &pages, (bytes, count), &ran)?;
         let command_buffer = queue.command_buffer().unwrap();
@@ -650,7 +660,8 @@ fn completed_rounds(device: &Device, (bytes, count): (usize, usize)) -> Option<C
             .push(last.saturating_duration_since(waited));
         std::thread::sleep(GAP);
     }
-    Some(completed)
+    (crate::free_thread::FREES_IN_PLACE).store(false, Ordering::Relaxed);
+    Some(forms)
 }
 
 #[test]
@@ -667,6 +678,7 @@ fn import_free_hold_bench_completed() {
         let measured: Vec<Completed> = [(512 << 10, PIECES), (64 << 20, 4)]
             .into_iter()
             .filter_map(|size| completed_rounds(&device, size))
+            .flatten()
             .collect();
         drop(stops);
         (pinger.join().unwrap(), measured)
@@ -684,9 +696,13 @@ fn import_free_hold_bench_completed() {
     );
     for completed in &measured {
         let size = format!(
-            "{} no-copy buffers of {} KiB",
+            "{} no-copy buffers of {} KiB, {}",
             completed.count,
-            completed.bytes >> 10
+            completed.bytes >> 10,
+            match completed.in_place {
+                true => "freed in place",
+                false => "posted",
+            }
         );
         let beside = pings
             .iter()

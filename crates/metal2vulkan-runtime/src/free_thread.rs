@@ -181,8 +181,19 @@ impl Drop for AtCompletion {
 /// posted to the free thread: a completed command buffer's release lets go of it
 /// ([`AtCompletion`]), not inside the program's code (a deallocator that release ran).
 pub(crate) fn posts_imports() -> bool {
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    if FREES_IN_PLACE.load(Ordering::Relaxed) {
+        return false;
+    }
     AT_COMPLETION.with(Cell::get) && !exit_guard::in_program_call()
 }
+
+/// The crate's device tests' stand-in for the release before posting: a completed command
+/// buffer's release frees every import in place while set (`tests/import_free_hold_bench.rs`'s
+/// completion leg, which measures both in one process).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) static FREES_IN_PLACE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// A block's memory, its buffer of addresses and the pages it was imported from, posted to be
 /// freed.
