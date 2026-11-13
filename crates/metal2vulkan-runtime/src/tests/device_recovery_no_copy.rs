@@ -23,10 +23,10 @@ use std::time::{Duration, Instant};
 const LENGTH: u64 = 16 * 1024;
 
 /// The bytes the tests write and read of each buffer.
-const BYTES: u64 = 4096;
+pub(super) const BYTES: u64 = 4096;
 
 /// A fresh private anonymous mapping of `length` bytes, page-aligned: its first byte.
-fn mapping(length: u64) -> NonNull<u8> {
+pub(super) fn mapping(length: u64) -> NonNull<u8> {
     // SAFETY: a fresh private anonymous mapping, unmapped by `unmap`.
     let start = unsafe {
         libc::mmap(
@@ -43,7 +43,7 @@ fn mapping(length: u64) -> NonNull<u8> {
 }
 
 /// Unmap [`mapping`]'s `length` bytes at `start`.
-fn unmap(start: NonNull<u8>, length: u64) {
+pub(super) fn unmap(start: NonNull<u8>, length: u64) {
     // SAFETY: the test's mapping, which no buffer lies in any more.
     unsafe { libc::munmap(start.as_ptr().cast(), length as usize) };
 }
@@ -62,7 +62,7 @@ fn host_bytes(at: NonNull<u8>) -> Vec<u8> {
 
 /// `buffer`'s first [`BYTES`] bytes set to `byte` by `queue`'s GPU work, completed.
 #[track_caller]
-fn fill(queue: &CommandQueue, buffer: &Buffer, byte: u8) {
+pub(super) fn fill(queue: &CommandQueue, buffer: &Buffer, byte: u8) {
     let command_buffer = queue.command_buffer().unwrap();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.fill_buffer(buffer, 0..BYTES, byte).unwrap();
@@ -77,7 +77,7 @@ fn fill(queue: &CommandQueue, buffer: &Buffer, byte: u8) {
 /// `source`'s first [`BYTES`] bytes as `queue`'s GPU work reads them, into a new `Shared` buffer
 /// of `device`'s serving generation.
 #[track_caller]
-fn read(device: &Device, queue: &CommandQueue, source: &Buffer) -> Vec<u8> {
+pub(super) fn read(device: &Device, queue: &CommandQueue, source: &Buffer) -> Vec<u8> {
     let target = device.new_buffer(BYTES, ResourceOptions::shared()).unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
@@ -117,7 +117,7 @@ fn ran_to(ran: &Arc<Mutex<Vec<(u64, u64)>>>, runs: usize) -> bool {
 /// read through a handle of that generation the test lets go of at once. A root handle's own
 /// reach of a generation's state pins that generation for the root's life (`Device::shared_arc`),
 /// which would keep the lost `VkDevice` past the recovery.
-fn import_page(device: &Device) -> Option<u64> {
+pub(super) fn import_page(device: &Device) -> Option<u64> {
     let serving = device.current();
     let page = serving.shared().host_import.as_ref().ok()?.page;
     Some(page)
