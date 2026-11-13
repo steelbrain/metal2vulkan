@@ -28,7 +28,8 @@
 //! - **The table** (`LiveTable`). One resident set of every listed buffer, coalesced as a root
 //!   table's (`bind::ResidentSet`), uploaded to a buffer of the runtime's own at a 32-byte-aligned
 //!   device address. It is made at the first commit that needs it after a change of the list (a
-//!   buffer made or gone, a rebind), kept by the device until the next change, and shared by
+//!   buffer made or gone, a rebind), kept by the device until the next change (or, on a
+//!   generation a recovery left, its rest: `LiveBuffers::close`), and shared by
 //!   every command buffer committed meanwhile. A command buffer holds it weakly from its commit
 //!   to its first submission, which takes the table of the list then, the same one where the
 //!   list is unchanged, and holds it, and with it each listed buffer's pages, until it completes
@@ -106,11 +107,14 @@ struct Inner {
     rebinds: u64,
     /// The table of the current generation, once made: dropped at the next change, so a gone
     /// buffer's pages go with the last command buffer that holds an older table. It holds the
-    /// device only while a listed buffer lives, which holds it too.
+    /// device only while a listed buffer lives, which holds it too; on a generation a recovery
+    /// left, whose listed buffers it carried on, until that generation's rest
+    /// ([`close`](LiveBuffers::close)).
     current: Option<Arc<LiveTable>>,
     /// The buffer of a table that no command buffer held when a change replaced it, which the
     /// next table's set is written into where it fits; kept only while a buffer is listed, so it
-    /// holds the device only while a listed buffer does.
+    /// holds the device only while a listed buffer does, and as [`current`](Self::current) on a
+    /// generation a recovery left.
     spare: Option<Buffer>,
 }
 
@@ -298,6 +302,23 @@ impl LiveBuffers {
     /// The generation of the list now: bumped by each change of what the table lists.
     pub(super) fn generation(&self) -> u64 {
         lock(&self.inner).generation
+    }
+
+    /// The device, a generation a recovery left, came to rest (`device/carry.rs`): none of its
+    /// command buffers records, nor is one made there again, so none takes or holds a table of
+    /// it. Its table and spare, buffers of the runtime's own there, go: they held the device
+    /// while a listed buffer lived, which held it too, but the recovery carried the listed
+    /// buffers on, and they hold it no longer, so the lost `VkDevice` would live while they do,
+    /// and past them (the table lives until the next change, which no command buffer makes
+    /// there).
+    pub(super) fn close(&self) {
+        let (table, spare) = {
+            let mut inner = lock(&self.inner);
+            (inner.current.take(), inner.spare.take())
+        };
+        // Dropped with no lock held: a last hold's drop frees pages.
+        drop(table);
+        drop(spare);
     }
 
     /// The table of the live buffers now: the one made since the last change of the list, else a

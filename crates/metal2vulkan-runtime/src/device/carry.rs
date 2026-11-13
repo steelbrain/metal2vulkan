@@ -506,7 +506,8 @@ impl DeviceShared {
     /// A lost generation whose recovery carried its objects on, the line serving past it and none
     /// of its command buffers left to record, on which no work is made again: its device-level
     /// objects of work (the internal submissions' and the staging queue's pools, the runtime's own
-    /// kernels, the GPU pools' blocks, the mipmap scratch), its parked buffers and images and the
+    /// kernels, the GPU pools' blocks, the mipmap scratch, the live buffers' table,
+    /// `LiveBuffers::close`), its parked buffers and images and the
     /// empty blocks it keeps go, and it parks and keeps none from now on. So the objects left on
     /// it hold the bare `VkDevice` and their own memory alone, and a carried object's memory there
     /// goes back to the device (`Recycler::close`, `memory::keep_none`). Its teardown destroys the
@@ -519,6 +520,8 @@ impl DeviceShared {
         // Its queues idle, each under its lock: its submission checks' thread may submit there
         // still (`DeviceShared::queues_idle`).
         self.queues_idle();
+        // Before the recycler closes: the table's buffers park there, and go with it.
+        self.live_buffers.close();
         if let Some(internal) = lock(&self.internal).take() {
             internal.destroy(self.vk());
         }

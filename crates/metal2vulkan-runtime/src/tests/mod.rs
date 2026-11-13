@@ -149,6 +149,8 @@ mod device_recovery_handles;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device_recovery_heap;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod device_recovery_live_table;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device_recovery_no_copy;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device_recovery_no_copy_heap;
