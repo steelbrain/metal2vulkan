@@ -18,7 +18,8 @@
 //!   round, as a device whose memo a run's many states evicted: each round finds each on disk.
 //!
 //! Printed for each: the median and slowest function and creation times, and the round's work
-//! counts (translations, cache reads, the shader modules, layouts and `VkPipeline`s made).
+//! counts (translations, cache reads, the shader modules, layouts and `VkPipeline`s made). Then
+//! the pieces of a creation from disk alone ([`parts`]).
 //!
 //! [`compute_create_profile`] is a target for a profiler: one cold round of [`CONV`], then many
 //! rounds on its device with a memo of one byte.
@@ -30,9 +31,10 @@
 
 use super::blit_holds::{options, Scratch};
 use crate::{ComputePipelineState, Device, Library, PipelineOptions, WorkCounts};
-use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
+use metal2vulkan::cache::PipelineArtifact;
+use metal2vulkan::library::{CompiledFunction, FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::DataType;
-use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
+use metal2vulkan::pipeline::{ComputePipeline, ComputePipelineDescriptor, StageSource};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -233,7 +235,79 @@ fn compute_create_bench() {
         }
         let work_disk = work(&before, &device.work_counts());
         report(&device, &kernel, "warm, memo of 1 byte", &times, &work_disk);
+        parts(&device, &library, &kernel);
     }
+}
+
+/// The times of [`parts`]' pieces.
+const PIECES: usize = 64;
+
+/// The median of `PIECES` runs of `piece`, in microseconds.
+fn median_of(mut piece: impl FnMut()) -> f64 {
+    let mut times: Vec<Duration> = (0..PIECES)
+        .map(|_| {
+            let began = Instant::now();
+            piece();
+            began.elapsed()
+        })
+        .collect();
+    times.sort();
+    times[PIECES / 2].as_secs_f64() * 1e6
+}
+
+/// What the pieces of a creation that finds its translation on disk cost alone, for `kernel`'s
+/// first state on `device` (`COMPUTE-CREATE-PARTS`): each artifact's decode from its bytes (the
+/// frame's checks and the body's decode), the digest of the stage's words that names its module,
+/// and the driver's `vkCreateShaderModule` of them.
+fn parts(device: &Device, library: &Library, kernel: &Kernel) {
+    let compile = device.compile_device();
+    let function = library
+        .new_function_with_name_constant_values(kernel.name, &(kernel.constants)(0))
+        .unwrap();
+    let descriptor = function.function_descriptor();
+    let inputs = metal2vulkan::pipeline::LoweringInputs::new();
+    let budget = metal2vulkan::Budget::standard();
+    let compiled = compile
+        .compile_function(&descriptor, &inputs, &budget)
+        .unwrap();
+    let key = *compiled.key();
+    let pipeline = compile
+        .compile_compute_pipeline(
+            &ComputePipelineDescriptor::new(StageSource::Compiled(compiled.clone())),
+            &budget,
+        )
+        .unwrap();
+    let function_bytes = compiled.to_bytes();
+    let pipeline_bytes = pipeline.to_bytes();
+    let function_decode = median_of(|| {
+        CompiledFunction::from_bytes_for_key(&function_bytes, &key, compile).unwrap();
+    });
+    let pipeline_decode = median_of(|| {
+        ComputePipeline::from_bytes_for_key(&pipeline_bytes, &pipeline.key, compile).unwrap();
+    });
+    let words = &pipeline.stage.spirv;
+    let digest = median_of(|| {
+        crate::pipeline::objects::words_digest(words);
+    });
+    let raw = device.shared().vk();
+    let info = ash::vk::ShaderModuleCreateInfo::default().code(words);
+    let module = median_of(|| {
+        // SAFETY: the words are live SPIR-V for the call; the module is destroyed at once, used by
+        // nothing.
+        let made = unsafe { raw.create_shader_module(&info, None) }.unwrap();
+        // SAFETY: made above, used by nothing.
+        unsafe { raw.destroy_shader_module(made, None) };
+    });
+    eprintln!(
+        "COMPUTE-CREATE-PARTS {} {}: function artifact {} bytes, decoded in {function_decode:.1} us; \
+         pipeline artifact {} bytes, decoded in {pipeline_decode:.1} us; {} words, digest \
+         {digest:.1} us, vkCreateShaderModule and its destroy {module:.1} us (medians of {PIECES})",
+        device.name(),
+        kernel.name,
+        function_bytes.len(),
+        pipeline_bytes.len(),
+        words.len(),
+    );
 }
 
 /// The rounds [`compute_create_profile`] makes once the first translated.
