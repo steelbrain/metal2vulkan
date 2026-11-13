@@ -282,8 +282,10 @@ fn an_archive_and_a_dynamic_library_go_on_past_a_recovery() {
     dynamic.set_label("dynamic");
     device.recover_for_test().unwrap();
     archive.add_compute_pipeline_functions(&descriptor).unwrap();
-    let mut options = PipelineOptions::default();
-    options.binary_archives = vec![archive.clone()];
+    let options = PipelineOptions {
+        binary_archives: vec![archive.clone()],
+        ..PipelineOptions::default()
+    };
     let state = device
         .new_compute_pipeline_state(&descriptor, &options)
         .unwrap();
