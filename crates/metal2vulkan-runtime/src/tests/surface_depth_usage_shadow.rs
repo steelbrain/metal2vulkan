@@ -84,7 +84,7 @@ fn a_surface_depth_texture_s_usage_shadow_copies_the_plane_s_aspect_alone() {
     let texture = (surface.new_texture_with_iosurface_plane(&descriptor, plane)).unwrap();
     let made = || (device.shared().usage_shadows_made).load(Ordering::Acquire);
     let before = made();
-    let read: Vec<f32> = (read(&device, &read_d, &texture, 4).chunks(4))
+    let seen: Vec<f32> = (read(&device, &read_d, &texture, 4).chunks(4))
         .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
         .collect();
     let shadows = made() - before;
@@ -92,13 +92,13 @@ fn a_surface_depth_texture_s_usage_shadow_copies_the_plane_s_aspect_alone() {
     let stencils: Vec<u32> = (read(&device, &read_u, &view, 16).chunks(16))
         .map(|texel| u32::from_le_bytes(texel[..4].try_into().unwrap()))
         .collect();
-    let depths_read = read == depths;
+    let depths_read = seen == depths;
     let zero = stencils.iter().all(|&stencil| stencil == 0);
     println!(
         "SURFACE-DEPTH-USAGE-SHADOW {}: usage shadows made {shadows}, depths the plane's \
          {depths_read} (first {:?}), stencils zero {zero}",
         device.name(),
-        &read[..4]
+        &seen[..4]
     );
     assert_eq!(shadows, 1, "the read took no usage shadow");
     assert!(depths_read, "the depths read are not the plane's");
