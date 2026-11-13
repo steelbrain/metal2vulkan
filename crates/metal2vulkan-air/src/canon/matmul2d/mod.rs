@@ -18,12 +18,12 @@
 //!   in `multiply` mode, then for `k` ascending below the descriptor's `k`, over integers
 //!   `acc += a * b`, wrapping, and over floats `acc = fma(a, b, acc)`, one rounding per step
 //!   (`llvm.fma.f32`), with or without relaxed precision. An element of `A` or `B` past its
-//!   tensor's extents reads zero. A cooperative right input's element is another lane's, read
-//!   with a shuffle every lane of the simdgroup runs.
+//!   tensor's extents reads zero. A cooperative input's element is another lane's, read with a
+//!   shuffle every lane of the simdgroup runs.
 //!
 //! A call this does not model stays a call. If one survives SCCP, [`refuse_left`] refuses the
 //! kernel as `Unsupported{Tensors, NotImplemented}`, naming what is not modeled: a shape or
-//! simdgroup count no probe measured, a cooperative left input, a tensor destination, a dynamic
+//! simdgroup count no probe measured, a transposed cooperative left input, a tensor destination, a dynamic
 //! `k`, a tensor other than `tensor_inline`, an element type outside the measured ones, the
 //! forms `get_element_index`, the copies,
 //! conversions, reductions, the single-thread runs, a `_v2` run's tensor with scale factors or a

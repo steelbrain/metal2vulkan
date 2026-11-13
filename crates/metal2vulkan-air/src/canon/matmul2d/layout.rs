@@ -10,7 +10,8 @@
 //!
 //! Element `e` of a thread is the `e % 2`th of block `p = e / 2` of its simdgroup `s`. The blocks
 //! of the operand form a grid of `R x C` blocks (the destination: `M / 8` rows of `N / 8`
-//! columns; the right input: `K / 8` rows of `N / 8` columns), split among the scope's
+//! columns; the right input: `K / 8` rows of `N / 8` columns; the left input: `M / 8` rows of
+//! `K / 8` columns), split among the scope's
 //! simdgroups as `SR x SC` interleaved: simdgroup `s` holds the blocks whose row is `s / SC`
 //! modulo `SR` and whose column is `s % SC` modulo `SC`, in row-major order. So
 //!
@@ -21,7 +22,8 @@
 //! and a thread holds `2 * (R / SR) * (C / SC)` elements, contiguously, `e` at byte
 //! `e * size(element)`. The destination's element at row `m` and column `n` has the coordinates
 //! `(n, m)`; the right input's at row `k` and column `n` has `(n, k)`, or `(k, n)` when the
-//! right input is transposed.
+//! right input is transposed; the left input's at row `m` and column `k` has `(k, m)`, whichever
+//! the right input's transpose (a transposed left input was not measured).
 //!
 //! The split is measured per shape, not derived: only the shapes below are modeled, and any other
 //! is refused. Every layout probe found every element of every thread valid.
@@ -66,6 +68,7 @@ pub(super) fn lane_place<A: Arith>(a: &mut A, lane: A::V) -> Result<(A::V, A::V)
 /// Which operand a cooperative tensor holds, as the layouts distinguish them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Holds {
+    Left,
     Destination,
     Right,
 }
@@ -92,10 +95,15 @@ const DESTINATIONS: &[((u32, u32, u32, u32), (u32, u32))] = &[
     ((64, 64, 32, 4), (2, 2)),
     ((128, 128, 32, 4), (2, 2)),
     ((8, 128, 32, 4), (1, 4)),
+    ((16, 32, 32, 1), (1, 1)),
 ];
 
 /// The measured right-input shapes: `(m, n, k, simdgroups)`, all one simdgroup.
-const RIGHTS: &[(u32, u32, u32, u32)] = &[(16, 16, 32, 1), (32, 32, 32, 1)];
+const RIGHTS: &[(u32, u32, u32, u32)] = &[(16, 16, 32, 1), (32, 32, 32, 1), (16, 32, 32, 1)];
+
+/// The measured left-input shapes: `(m, n, k, simdgroups)`, all one simdgroup, the left input
+/// not transposed.
+const LEFTS: &[(u32, u32, u32, u32)] = &[(16, 32, 32, 1), (32, 32, 32, 1)];
 
 impl Layout {
     /// The layout of `holds` for descriptor `d` over `simdgroups`, when it is measured.
@@ -104,18 +112,25 @@ impl Layout {
             return None;
         };
         let shape = (d.m, d.n, k, simdgroups);
-        let (rows, split) = match holds {
+        let (rows, cols, split) = match holds {
             Holds::Destination => {
                 let (_, split) = DESTINATIONS.iter().find(|(s, _)| *s == shape)?;
-                (d.m / 8, *split)
+                (d.m / 8, d.n / 8, *split)
             }
             Holds::Right => {
                 RIGHTS.iter().find(|s| **s == shape)?;
-                (k / 8, (1, 1))
+                (k / 8, d.n / 8, (1, 1))
+            }
+            Holds::Left => {
+                if d.transpose_left {
+                    return None;
+                }
+                LEFTS.iter().find(|s| **s == shape)?;
+                (d.m / 8, k / 8, (1, 1))
             }
         };
         Some(Layout {
-            cols: d.n / 8,
+            cols,
             rows,
             split,
             row_first: holds == Holds::Right && d.transpose_right,
@@ -184,6 +199,35 @@ impl Layout {
         let e = a.op(BinOp::Add, p, j)?;
         Ok((src, e))
     }
+
+    /// Where a one-simdgroup left layout ([`Layout::of`] of [`Holds::Left`]) holds row `m` and
+    /// column `k`, where `m` is a row lane `lane` holds in its own blocks of a one-simdgroup
+    /// destination (`m % 8` is `row(lane)`): the holding lane, which keeps `lane`'s bits 1, 2, and
+    /// 4 (its block row) and takes bits 0 and 3 from `k % 8` (the block column), and the element,
+    /// `2 * ((m / 8) * (K / 8) + k / 8) + k % 2`, the same in every lane.
+    pub fn left_holder<A: Arith>(
+        &self,
+        a: &mut A,
+        (m, k): (A::V, A::V),
+        lane: A::V,
+    ) -> Result<(A::V, A::V), Error> {
+        let keep = a.opk(BinOp::And, lane, 0b1_0110)?;
+        let lo = a.opk(BinOp::LShr, k, 1)?;
+        let lo = a.opk(BinOp::And, lo, 1)?;
+        let hi = a.opk(BinOp::LShr, k, 2)?;
+        let hi = a.opk(BinOp::And, hi, 1)?;
+        let hi = a.opk(BinOp::Shl, hi, 3)?;
+        let src = a.op(BinOp::Or, keep, lo)?;
+        let src = a.op(BinOp::Or, src, hi)?;
+        let bm = a.opk(BinOp::LShr, m, 3)?;
+        let bm = a.opk(BinOp::Mul, bm, self.cols)?;
+        let bk = a.opk(BinOp::LShr, k, 3)?;
+        let p = a.op(BinOp::Add, bm, bk)?;
+        let p = a.opk(BinOp::Shl, p, 1)?;
+        let j = a.opk(BinOp::And, k, 1)?;
+        let e = a.op(BinOp::Add, p, j)?;
+        Ok((src, e))
+    }
 }
 
 #[cfg(test)]
@@ -242,7 +286,8 @@ mod tests {
                 RIGHTS
                     .iter()
                     .map(|&(m, n, k, s)| (Holds::Right, m, n, k, s)),
-            );
+            )
+            .chain(LEFTS.iter().map(|&(m, n, k, s)| (Holds::Left, m, n, k, s)));
         for (holds, m, n, k, sgs) in shapes {
             let l = Layout::of(holds, &desc(m, n, k, false), sgs).unwrap();
             let (rows, cols) = (8 * l.rows, 8 * l.cols);
@@ -287,9 +332,26 @@ mod tests {
         assert_eq!(place(&r, 2, 0, 0), (0, 8));
         assert_eq!(place(&r, 4, 0, 0), (8, 0));
         assert!(r.row_first);
-        // Unmeasured shapes are refused.
-        assert!(Layout::of(Holds::Destination, &desc(16, 32, 32, false), 1).is_none());
+        // The left input (`tns_coop_left`): lane 0 holds (k, m) = (0, 0), (1, 0), (8, 0), (9, 0),
+        // ..., then (0, 8); lane 9 starts at (6, 0); whichever the right input's transpose.
+        for tr in [false, true] {
+            let l = Layout::of(Holds::Left, &desc(16, 32, 32, tr), 1).unwrap();
+            assert_eq!(l.capacity(), 16);
+            assert_eq!(place(&l, 1, 0, 0), (0, 1));
+            assert_eq!(place(&l, 2, 0, 0), (0, 8));
+            assert_eq!(place(&l, 8, 0, 0), (8, 0));
+            assert_eq!(place(&l, 0, 9, 0), (0, 6));
+            assert!(!l.row_first);
+        }
+        let l = Layout::of(Holds::Left, &desc(32, 32, 32, false), 1).unwrap();
+        assert_eq!(l.capacity(), 32);
+        // Unmeasured shapes are refused, and a transposed left input.
+        assert!(Layout::of(Holds::Destination, &desc(16, 64, 32, false), 1).is_none());
         assert!(Layout::of(Holds::Right, &desc(64, 64, 32, false), 4).is_none());
+        assert!(Layout::of(Holds::Left, &desc(16, 16, 32, false), 1).is_none());
+        let mut transposed = desc(16, 32, 32, false);
+        transposed.transpose_left = true;
+        assert!(Layout::of(Holds::Left, &transposed, 1).is_none());
     }
 
     /// For every destination element a lane holds and every `k`, [`Layout::right_holder`] names
@@ -306,6 +368,26 @@ mod tests {
                         let (src, e2) = r.right_holder(&mut Eval, (kk, col), lane).unwrap();
                         assert!(src < 32 && e2 < r.capacity());
                         assert_eq!(place(&r, e2, src, 0), (kk, col), "{m}x{n}x{k} lane {lane}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// For every destination element a lane holds and every `k`, [`Layout::left_holder`] names
+    /// the lane and element of the left input's row at the destination element's row, column `k`.
+    #[test]
+    fn the_left_holder_holds_the_element() {
+        for &(m, n, k, sgs) in LEFTS {
+            let d = Layout::of(Holds::Destination, &desc(m, n, k, false), sgs).unwrap();
+            let l = Layout::of(Holds::Left, &desc(m, n, k, false), sgs).unwrap();
+            for lane in 0..32 {
+                for e in 0..d.capacity() {
+                    let (row, _) = place(&d, e, lane, 0);
+                    for kk in 0..k {
+                        let (src, e2) = l.left_holder(&mut Eval, (row, kk), lane).unwrap();
+                        assert!(src < 32 && e2 < l.capacity());
+                        assert_eq!(place(&l, e2, src, 0), (row, kk), "{m}x{n}x{k} lane {lane}");
                     }
                 }
             }

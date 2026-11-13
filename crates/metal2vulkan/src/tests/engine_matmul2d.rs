@@ -16,10 +16,14 @@
 //! run in its `_v2` form, with a transposed B also as a cooperative right input and in threadgroup
 //! memory: its float sums are the same reference's.
 //!
-//! The owned fixture `tns_init` constructs a cooperative tensor (a destination or a right input)
-//! in a loop's body: each construction zeroes the elements the thread holds, the second after the
-//! first set them, as on Metal (and the gather kernels whose destinations Metal starts from zero in
-//! every round).
+//! The owned fixture `tns_mm_left` (built for macOS 27) gives the product a cooperative left input
+//! filled by coordinate, over 16 x 32 x 32 and 32 x 32 x 32 with B transposed or not, in device or
+//! threadgroup memory or a cooperative right input: its float sums are the same reference's.
+//!
+//! The owned fixtures `tns_init` and `tns_init_left` (`tns_mm_left`'s second kernel) construct a
+//! cooperative tensor (a destination, a right input, or a left input) in a loop's body: each
+//! construction zeroes the elements the thread holds, the second after the first set them, as on
+//! Metal (and the gather kernels whose destinations Metal starts from zero in every round).
 //!
 //! The extents give whole tiles, partial tiles, and tiles that pass the tensors; the values are
 //! seeded pseudo-random, the floats over a wide exponent range so that a sum in any other order
@@ -100,6 +104,21 @@ fn v2_float_products_are_metals_sequential_fused_sums_on_lavapipe() {
 }
 
 #[test]
+fn left_cooperative_float_products_are_metals_sequential_fused_sums_on_moltenvk() {
+    left_cooperative_fused_sums(MOLTENVK);
+}
+
+#[test]
+fn left_cooperative_float_products_are_metals_sequential_fused_sums_on_radv() {
+    left_cooperative_fused_sums(RADV);
+}
+
+#[test]
+fn left_cooperative_float_products_are_metals_sequential_fused_sums_on_lavapipe() {
+    left_cooperative_fused_sums(LAVAPIPE);
+}
+
+#[test]
 fn relaxed_float_products_are_metals_sequential_fused_sums_on_moltenvk() {
     float_products_are_metals_sequential_fused_sums(FloatMode::Relaxed, MOLTENVK);
 }
@@ -132,6 +151,16 @@ fn construction_zeroes_cooperative_tensors_on_radv() {
 #[test]
 fn construction_zeroes_cooperative_tensors_on_lavapipe() {
     construction_zeroes_cooperative_tensors(LAVAPIPE);
+}
+
+#[test]
+fn construction_zeroes_cooperative_left_inputs_on_moltenvk() {
+    construction_zeroes_cooperative_left_inputs(MOLTENVK);
+}
+
+#[test]
+fn construction_zeroes_cooperative_left_inputs_on_lavapipe() {
+    construction_zeroes_cooperative_left_inputs(LAVAPIPE);
 }
 
 fn bitcode(name: &str) -> Option<Vec<u8>> {
@@ -612,6 +641,69 @@ fn fused_sums_of(
     }
 }
 
+/// `tns_mm_left`'s variant `v`: the format of A and B, M, and whether B is transposed (B's place,
+/// device or threadgroup memory or a cooperative right input, `v % 12 / 4`, reads the same).
+fn left_variant(v: u32) -> (Format, usize, bool) {
+    let format = [Format::Float, Format::Half, Format::BFloat][(v / 12) as usize];
+    let w = v % 12;
+    (format, if w % 4 < 2 { 16 } else { 32 }, w % 2 == 1)
+}
+
+/// Float, half, and bfloat products into float with a cooperative left input are Metal's
+/// sequential fused sums on `profile`, B in device or threadgroup memory or a cooperative right
+/// input, transposed or not, for M of 16 and 32 (`tns_mm_left`, one tile).
+fn left_cooperative_fused_sums((stem, widths): (&str, &[SubgroupSize])) {
+    let Some(bc) = bitcode("tns_mm_left") else {
+        return;
+    };
+    let mut rng = Rng(0x1ef7);
+    for v in 0..36 {
+        let (format, m, tr) = left_variant(v);
+        let kernel = kernel(&bc, "tns_mm_left", v, stem);
+        for spread in [3, 12] {
+            // One block each: A m x 32, B 32 x 32 (its rows B's columns when transposed), C m x 32.
+            let a: Vec<u32> = (0..m * 32)
+                .map(|_| format.random(&mut rng, spread))
+                .collect();
+            let b: Vec<u32> = (0..1024).map(|_| format.random(&mut rng, spread)).collect();
+            let c: Vec<f32> = (0..m * 32)
+                .map(|_| f32::from_bits(Format::Float.random(&mut rng, spread)))
+                .collect();
+            let mut want = vec![0u32; m * 32];
+            for row in 0..m {
+                for col in 0..32 {
+                    let mut acc = c[row * 32 + col];
+                    for k in 0..32 {
+                        let x = format.widen(a[row * 32 + k]);
+                        let y = format.widen(if tr { b[col * 32 + k] } else { b[k * 32 + col] });
+                        acc = x.mul_add(y, acc);
+                    }
+                    want[row * 32 + col] = acc.to_bits();
+                }
+            }
+            let init = [
+                a.iter().flat_map(|&x| format.store(x)).collect::<Vec<u8>>(),
+                b.iter().flat_map(|&x| format.store(x)).collect(),
+                le_bytes(&c, f32::to_le_bytes),
+                vec![0xa5; m * 32 * 4],
+                le_bytes(&[0u32, 0, 0, 0], u32::to_le_bytes),
+            ];
+            let out = kernel.run(widths, 32, &init);
+            let got = words(&out[3]);
+            for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+                assert_eq!(
+                    g,
+                    w,
+                    "{} ({format:?}, spread {spread}): out[{i}] {} != {}",
+                    kernel.what,
+                    f32::from_bits(*g),
+                    f32::from_bits(*w)
+                );
+            }
+        }
+    }
+}
+
 /// `fixture` with every spelling of a descriptor's fields `from` respelled `to`, for each pair (in
 /// the descriptor constants and in the helpers' by-value arguments alike), assembled; `None`
 /// without `llvm-as`.
@@ -648,8 +740,8 @@ fn respelled(fixture: &str, pairs: &[(&str, &str)]) -> Option<Vec<u8>> {
 fn unmeasured_forms_are_refused_naming_them() {
     let cases = [(
         "i32 16, i32 16, i32 32",
-        "i32 16, i32 32, i32 32",
-        "16x32x32",
+        "i32 16, i32 64, i32 32",
+        "16x64x32",
     )];
     let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
     for (from, to, why) in cases {
@@ -702,12 +794,33 @@ fn construction_zeroes_cooperative_tensors((stem, widths): (&str, &[SubgroupSize
     let Some(bc) = bitcode("tns_init") else {
         return;
     };
+    constructions_zero(&bc, "tns_init", &INIT_VARIANTS, (stem, widths));
+}
+
+/// The same of a cooperative left input, 16 x 32 x 32 and 32 x 32 x 32 in float, half, and bfloat,
+/// as Metal does (`tns_init_left`, the M3 Max).
+fn construction_zeroes_cooperative_left_inputs((stem, widths): (&str, &[SubgroupSize])) {
+    let Some(bc) = bitcode("tns_mm_left") else {
+        return;
+    };
+    let variants: Vec<(u32, u32)> = (0..6).map(|v| (v, 1)).collect();
+    constructions_zero(&bc, "tns_init_left", &variants, (stem, widths));
+}
+
+/// Kernel `entry` of `bc`, `tns_init`'s or its like, constructs zeroed tensors in every one of its
+/// `variants` (each with its scope's simdgroups) on `stem`.
+fn constructions_zero(
+    bc: &[u8],
+    entry: &str,
+    variants: &[(u32, u32)],
+    (stem, widths): (&str, &[SubgroupSize]),
+) {
     const ROUNDS: u32 = 2;
     // `tns_init`'s words per thread and round.
     const HELD: usize = 64;
     const FILL: u32 = 0xa5a5_a5a5;
-    for (v, simdgroups) in INIT_VARIANTS {
-        let kernel = kernel(&bc, "tns_init", v, stem);
+    for &(v, simdgroups) in variants {
+        let kernel = kernel(bc, entry, v, stem);
         let threads = 32 * simdgroups;
         let rows = (ROUNDS * threads) as usize;
         let init = [
