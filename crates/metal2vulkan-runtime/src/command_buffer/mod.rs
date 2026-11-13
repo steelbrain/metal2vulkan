@@ -60,6 +60,7 @@ pub(super) use first_submission::{NotedTable, ReplayTable};
 use follow::{Follow, Release};
 pub(super) use group::{Group, GroupEnd, GROUP_BATCHES};
 use rebound_use::{ReboundUse, Unlogged};
+pub(crate) use stall::Stop;
 pub(super) use submit::{BatchLists, Submitting};
 
 use super::apple_only::AppleOnly;

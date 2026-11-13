@@ -414,11 +414,12 @@ pub(super) struct DeviceShared {
     /// The device was lost: no further submission. Shared with the relay (`relay.rs`), which
     /// records a loss it hears of.
     lost: Arc<AtomicBool>,
-    /// The generation stopped and is parked: no work of its advanced while some was pending and a
-    /// probe on another engine did not complete (`command_buffer/stall.rs`). It counts as lost
-    /// (`lost` is set too), and besides nothing waits for its queues and nothing of it is
-    /// destroyed, the `VkDevice` itself included (`release.rs`).
-    wedged: AtomicBool,
+    /// The generation stopped and is parked, and why (`command_buffer/stall.rs`): no work of its
+    /// advanced while some was pending and a probe on another engine did not complete, or a
+    /// queue's front batch went past Metal's watchdog bound. It counts as lost (`lost` is set
+    /// too), and besides nothing waits for its queues and nothing of it is destroyed, the
+    /// `VkDevice` itself included (`release.rs`).
+    stopped: OnceLock<crate::command_buffer::Stop>,
     pub(super) textures: super::texture::TextureState,
     /// The translated-shader cache on disk and the driver's pipeline cache.
     pub(super) shader_cache: ShaderCache,
@@ -772,7 +773,12 @@ impl DeviceShared {
     /// Whether the generation stopped and is parked (`command_buffer/stall.rs`): lost, its queues
     /// never waited for, nothing of it destroyed.
     pub(crate) fn wedged(&self) -> bool {
-        self.wedged.load(Ordering::Acquire)
+        self.stopped.get().is_some()
+    }
+
+    /// Why the generation stopped and is parked, where it did ([`wedged`](Self::wedged)).
+    pub(crate) fn stopped(&self) -> Option<crate::command_buffer::Stop> {
+        self.stopped.get().copied()
     }
 
     /// Whether `kind`, met while lowering a render encoder's call after it returned, refuses the
@@ -1680,15 +1686,20 @@ impl Device {
         shared.lost() && !line::runs_on(shared)
     }
 
-    /// Record that the device stopped (`command_buffer/stall.rs`): its `VkDevice` is parked, so
-    /// nothing of it is destroyed from now on, the device itself included (`release.rs`), and
-    /// nothing waits for its queues; then it is lost, as [`mark_lost`](Self::mark_lost) records.
-    /// Counted: `WorkCounts::wedges_declared`, `WorkCounts::vk_devices_parked`.
-    pub(crate) fn mark_wedged(&self) {
+    /// Record that the device stopped, for `stop` (`command_buffer/stall.rs`): its `VkDevice` is
+    /// parked, so nothing of it is destroyed from now on, the device itself included
+    /// (`release.rs`), and nothing waits for its queues; then it is lost, as
+    /// [`mark_lost`](Self::mark_lost) records. The first stop is the generation's. Counted:
+    /// `WorkCounts::wedges_declared` or `WorkCounts::watchdog_timeouts`, by the stop, and
+    /// `WorkCounts::vk_devices_parked`.
+    pub(crate) fn mark_wedged(&self, stop: crate::command_buffer::Stop) {
         let shared = self.shared();
-        if !shared.wedged.swap(true, Ordering::AcqRel) {
+        if shared.stopped.set(stop).is_ok() {
             crate::release::park(shared.vk().handle());
-            shared.counts.wedge_declared();
+            match stop {
+                crate::command_buffer::Stop::Unanswered => shared.counts.wedge_declared(),
+                crate::command_buffer::Stop::Watchdog => shared.counts.watchdog_timed_out(),
+            }
         }
         self.mark_lost();
     }
@@ -2936,7 +2947,7 @@ impl Device {
             loader_word: Arc::new(loader_word),
             owned,
             lost,
-            wedged: AtomicBool::new(false),
+            stopped: OnceLock::new(),
             textures,
             shader_cache,
             in_place: crate::in_place::InPlaceChecks::new(

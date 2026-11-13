@@ -477,7 +477,7 @@ impl Line {
         };
         // The lost generation goes once the objects made on it went; a stopped one is parked
         // (`command_buffer/stall.rs`): its teardown leaves its `VkDevice` and objects.
-        let wedged = lost.wedged();
+        let stopped = lost.stopped();
         drop(old);
         drop(lost);
         // The command queues take a new place on the new generation at their next command buffer.
@@ -511,13 +511,19 @@ impl Line {
                 }
                 None => "no command buffer was in flight".to_owned(),
             };
-            let cause = match wedged {
-                true => {
+            let cause = match stopped {
+                Some(crate::command_buffer::Stop::Unanswered) => {
                     "stopped (no work of it advanced, and a probe on another engine did not \
                      complete: the driver answered no loss), was parked (never destroyed, its \
                      queues never waited for: `Device::is_parked`),"
                 }
-                false => "was lost",
+                Some(crate::command_buffer::Stop::Watchdog) => {
+                    "stopped (a queue's front batch went past Metal's watchdog bound without its \
+                     timeline advancing, whatever another engine answered: the driver answered no \
+                     loss), was parked (never destroyed, its queues never waited for: \
+                     `Device::is_parked`),"
+                }
+                None => "was lost",
             };
             (
                 "the device".to_owned(),
@@ -854,5 +860,9 @@ pub(crate) mod hooks {
         /// No probe is seen answered (`command_buffer/stall.rs`), as on a GPU whose every engine
         /// stopped: a stall past `stall_after` stops the generation.
         pub(crate) probe_unanswered: AtomicBool,
+        /// How long a queue's front batch may go without its timeline advancing before it fails
+        /// as Metal's timed-out command buffer (`command_buffer/stall.rs`), in place of its
+        /// `WATCHDOG`.
+        pub(crate) watchdog_after: Mutex<Option<Duration>>,
     }
 }

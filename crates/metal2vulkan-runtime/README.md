@@ -908,12 +908,15 @@ meanwhile wait for it.
 - A `VkDevice` whose work stopped while the driver answers no loss is recovered from as a lost
   one: where no work of it advanced for 10 seconds with some pending and a probe on another
   engine (the staging queue) did not complete in 2 seconds, its command buffers in flight fail as
-  above and the device recovers. A device that still makes progress is never failed, however
-  long its work runs. The stopped `VkDevice` is parked: never destroyed, none of its objects
-  released, its queues never waited for, and the notice says it stopped. `Device::is_parked`
-  answers whether a `VkDevice` whose handles `Device::raw` answered is parked: a consumer leaves
-  what it made with those handles (a swapchain among them) and waits for none of its queues.
-  Counted: `stall_probes_sent`, `wedges_declared`, `longest_stall_nanos`.
+  above and the device recovers. Metal's own watchdog is kept too, at 20.2 seconds, the largest
+  of its measured bounds: a queue's front batch that goes that long without its queue's work
+  advancing, whatever the probe answers, fails as Metal's timed-out command buffer (`GpuHang`),
+  the rest in flight as victims, and the device recovers the same way. The stopped `VkDevice` is
+  parked: never destroyed, none of its objects released, its queues never waited for, and the
+  notice says it stopped and why. `Device::is_parked` answers whether a `VkDevice` whose handles
+  `Device::raw` answered is parked: a consumer leaves what it made with those handles (a
+  swapchain among them) and waits for none of its queues. Counted: `stall_probes_sent`,
+  `wedges_declared`, `watchdog_timeouts`, `longest_stall_nanos`.
 - `Device::raw` answers the new `VkDevice`'s handles once a later call asks; the handles it
   answered before stay valid until then, and the lost `VkDevice` stays alive until then, so the
   consumer destroys what it made with those handles (a swapchain, an import) first.

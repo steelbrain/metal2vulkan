@@ -1,15 +1,21 @@
-//! The completion's stall clock and probe (`command_buffer/stall.rs`), over a command buffer that
-//! waits on its `VkQueue` for a signal the caller reserved of a plain event
+//! The completion's stall clock, probe and watchdog (`command_buffer/stall.rs`), over a command
+//! buffer that waits on its `VkQueue` for a signal the caller reserved of a plain event
 //! (`Event::reserve_vk_signal`) and has not submitted: it is pending, and no work of the device
-//! advances. The clock's bound is shortened through the line's hooks (`device/line.rs`).
+//! advances. The clock's and the watchdog's bounds are shortened through the line's hooks
+//! (`device/line.rs`).
 //!
-//! - Where the probe is answered (a device with a staging queue), nothing fails: the probe is
-//!   counted and said, and the command buffer completes once the host signals the semaphore. A
-//!   device without a staging queue sends no probe, and nothing fails either.
+//! - Where the probe is answered (a device with a staging queue) and the front advances before
+//!   the watchdog's bound, nothing fails: the probe is counted and said, and the command buffer
+//!   completes once the host signals the semaphore. A device without a staging queue sends no
+//!   probe, and nothing fails either.
 //! - Where no probe is seen answered, as on a GPU whose every engine stopped, the generation
 //!   stops: the command buffer fails as the hang (`GpuHang`), the device recovers on a new
 //!   `VkDevice` whose notice says the old one stopped, the old `VkDevice` is parked
 //!   (`Device::is_parked`), and a command buffer runs after it.
+//! - Where the probe is answered but the front does not advance within the watchdog's bound, as
+//!   on NVIDIA's driver after an Xid 109 (its copy engine running on), the command buffer fails
+//!   as Metal's timed-out one (`GpuHang`) no sooner than the bound, the generation stops and is
+//!   parked, and a command buffer runs after it.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). No GPU fault and no spin: the stuck work is a semaphore
@@ -35,6 +41,13 @@ const STALL: Duration = Duration::from_millis(200);
 /// The longest a test waits for the stall's answer: the bound, the probe's 2 s, and room.
 const WAIT: Duration = Duration::from_secs(20);
 
+/// The watchdog's bound in the test of it, in place of `stall::WATCHDOG`.
+const WATCHDOG: Duration = Duration::from_secs(1);
+
+/// The watchdog's bound in the test whose front advances: past the second or so it holds the
+/// front on either kind of device.
+const ADVANCES_WITHIN: Duration = Duration::from_secs(3);
+
 /// What a device's sink heard: its degrade notices, and its informational texts.
 #[derive(Default)]
 struct Heard {
@@ -43,8 +56,13 @@ struct Heard {
 }
 
 /// The device the cfg selects, its messages kept in `heard`, its stall clock's bound [`STALL`],
-/// and no probe seen answered where `unanswered`.
-fn device(cache: &Path, heard: &Arc<Mutex<Heard>>, unanswered: bool) -> Device {
+/// its watchdog's `watchdog` where set, and no probe seen answered where `unanswered`.
+fn device(
+    cache: &Path,
+    heard: &Arc<Mutex<Heard>>,
+    unanswered: bool,
+    watchdog: Option<Duration>,
+) -> Device {
     let heard = Arc::clone(heard);
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
@@ -71,6 +89,7 @@ fn device(cache: &Path, heard: &Arc<Mutex<Heard>>, unanswered: bool) -> Device {
     let device = Device::system_default_with(&options).unwrap();
     let hooks = &device.line().hooks;
     *crate::device::lock(&hooks.stall_after) = Some(STALL);
+    *crate::device::lock(&hooks.watchdog_after) = watchdog;
     hooks.probe_unanswered.store(unanswered, Ordering::Release);
     device
 }
@@ -114,13 +133,14 @@ fn until(device: &Device, done: impl Fn(&crate::WorkCounts) -> bool) -> bool {
     false
 }
 
-/// A stall whose probe is answered fails nothing: the probe is counted and said, the stall's
-/// length kept, and the stuck command buffer completes once the host signals the semaphore.
+/// A stall whose probe is answered, its front advancing within the watchdog's bound, fails
+/// nothing: the probe is counted and said, the stall's length kept, and the stuck command buffer
+/// completes once the host signals the semaphore.
 #[test]
 fn a_stall_whose_probe_is_answered_fails_nothing() {
     let scratch = Scratch::new();
     let heard = Arc::new(Mutex::new(Heard::default()));
-    let device = device(&scratch.0, &heard, false);
+    let device = device(&scratch.0, &heard, false, Some(ADVANCES_WITHIN));
     let event = device.new_event().unwrap();
     let buffer = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
     let (command_buffer, counter) = stuck(&device, &event, &buffer);
@@ -159,6 +179,7 @@ fn a_stall_whose_probe_is_answered_fails_nothing() {
         Duration::from_nanos(counts.longest_stall_nanos),
     );
     assert_eq!(counts.wedges_declared, 0);
+    assert_eq!(counts.watchdog_timeouts, 0);
     assert_eq!(counts.device_recoveries, 0);
     match probes {
         true => {
@@ -177,7 +198,7 @@ fn a_stall_whose_probe_is_answered_fails_nothing() {
 fn a_stall_no_probe_answers_stops_and_parks_the_generation() {
     let scratch = Scratch::new();
     let heard = Arc::new(Mutex::new(Heard::default()));
-    let device = device(&scratch.0, &heard, true);
+    let device = device(&scratch.0, &heard, true, None);
     // SAFETY: the functions and handle of the generation that stops, used only to signal the
     // event's semaphore below, on the parked `VkDevice`, which is never destroyed.
     let parked = unsafe { device.raw() }.device.clone();
@@ -239,6 +260,7 @@ fn a_stall_no_probe_answers_stops_and_parks_the_generation() {
             .collect::<Vec<_>>(),
     );
     assert_eq!(counts.wedges_declared, 1);
+    assert_eq!(counts.watchdog_timeouts, 0);
     assert_eq!(counts.device_recoveries, 1);
     assert!(counts.stall_probes_sent >= 1);
     assert!(said
@@ -249,6 +271,108 @@ fn a_stall_no_probe_answers_stops_and_parks_the_generation() {
             .iter()
             .any(|notice| notice.reason.contains("stopped")),
         "the recovery's notice does not say the generation stopped"
+    );
+    let info = vk::SemaphoreSignalInfo::default()
+        .semaphore(semaphore)
+        .value(counter);
+    // SAFETY: the parked `VkDevice` and its semaphore, both live (never destroyed); the counter
+    // the reservation named, which nothing before it waits for.
+    unsafe { parked.signal_semaphore(&info) }.unwrap();
+}
+
+/// A front that does not advance within the watchdog's bound fails as Metal's timed-out command
+/// buffer, whatever the probe answers: no sooner than the bound, as the hang (`GpuHang`), with
+/// every probe sent meanwhile answered where the device has a staging queue; the generation
+/// stops and is parked, the notice says the watchdog stopped it, and a command buffer committed
+/// after runs on the new `VkDevice`.
+#[test]
+fn a_front_past_the_watchdog_fails_as_metals_timeout() {
+    let scratch = Scratch::new();
+    let heard = Arc::new(Mutex::new(Heard::default()));
+    let device = device(&scratch.0, &heard, false, Some(WATCHDOG));
+    // SAFETY: the functions and handle of the generation that stops, used only to signal the
+    // event's semaphore below, on the parked `VkDevice`, which is never destroyed.
+    let parked = unsafe { device.raw() }.device.clone();
+    let stopped = parked.handle();
+    let event = device.new_event().unwrap();
+    // SAFETY: the stopping generation's semaphore of the event, which stays that generation's
+    // (`Event::vk_semaphore`), signalled once from the host to the reserved counter below.
+    let semaphore = unsafe { event.vk_semaphore() };
+    let buffer = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    let began = Instant::now();
+    let (command_buffer, counter) = stuck(&device, &event, &buffer);
+    assert!(
+        command_buffer.wait_until_completed_for(WAIT).is_ok(),
+        "the stuck command buffer did not fail in {WAIT:?}"
+    );
+    let failed = began.elapsed();
+    assert_eq!(
+        (command_buffer.status(), command_buffer.error()),
+        (
+            CommandBufferStatus::Error,
+            Some(CommandBufferError::GpuHang)
+        )
+    );
+    assert!(
+        failed >= WATCHDOG,
+        "failed after {failed:?}, before the bound"
+    );
+    assert!(device.is_parked(stopped));
+    // The next call recovers: a command buffer runs on the new `VkDevice`.
+    let after = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let runs = queue.command_buffer().unwrap();
+    let mut blit = runs.blit_command_encoder().unwrap();
+    blit.fill_buffer(&after, 0..4096, 2).unwrap();
+    blit.end_encoding().unwrap();
+    runs.commit().unwrap();
+    assert!(runs.wait_until_completed_for(WAIT).is_ok());
+    assert_eq!(runs.error(), None);
+    // SAFETY: as above.
+    let serving = unsafe { device.raw() }.device.handle();
+    assert_ne!(serving, stopped);
+    assert!(!device.is_parked(serving));
+    let counts = device.work_counts();
+    let heard = heard.lock().unwrap();
+    let recovered: Vec<&DegradeNotice> = (heard.notices.iter())
+        .filter(|notice| notice.degradation == Degradation::DeviceRecovered)
+        .collect();
+    let probes: Vec<&String> = (heard.texts.iter())
+        .filter(|text| text.contains("a probe on the staging queue"))
+        .collect();
+    let timed: Vec<&String> = (heard.texts.iter())
+        .filter(|text| text.contains("past Metal's watchdog bound"))
+        .collect();
+    eprintln!(
+        "STALL-WATCHDOG {}: staging queue {}, failed after {failed:?}; probes {}, wedges {}, \
+         watchdog timeouts {}, recoveries {}; {probes:?}; {timed:?}; {:?}",
+        device.name(),
+        device.has_staging_queue(),
+        counts.stall_probes_sent,
+        counts.wedges_declared,
+        counts.watchdog_timeouts,
+        counts.device_recoveries,
+        recovered
+            .iter()
+            .map(|notice| &notice.reason)
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(counts.watchdog_timeouts, 1);
+    assert_eq!(counts.wedges_declared, 0);
+    assert_eq!(counts.device_recoveries, 1);
+    assert_eq!(timed.len(), 1, "the watchdog was not said once");
+    if device.has_staging_queue() {
+        assert!(
+            counts.stall_probes_sent >= 1,
+            "no probe went before the bound"
+        );
+        assert!(probes.iter().all(|text| text.contains("the GPU runs")));
+    }
+    assert!(
+        recovered
+            .iter()
+            .any(|notice| notice.reason.contains("watchdog")),
+        "the recovery's notice does not say the watchdog stopped the generation"
     );
     let info = vk::SemaphoreSignalInfo::default()
         .semaphore(semaphore)

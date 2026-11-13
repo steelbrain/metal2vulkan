@@ -562,20 +562,26 @@ recorded here.
 Open differences from Metal that no note announces yet, and runtime costs still above the
 driver's. Each is open work.
 
-- **A GPU that stops with no loss from the driver is found only through a staging queue, and its
-  `VkDevice` leaks** (`command_buffer/stall.rs`). Where no work of a device advanced for 10 s with
-  some pending, a probe goes to the staging queue (NVIDIA's copy engine); one that does not
+- **A GPU that stops with no loss from the driver fails its work later than Metal's watchdog
+  would, and its `VkDevice` leaks** (`command_buffer/stall.rs`). Metal ends long work itself,
+  with `MTLCommandBufferErrorTimeout` (code 2): about 5 s on an Apple M3 Max (2^29 threadgroups
+  finished in 4.98 s, 2^30 did not; a command buffer waiting for an event no one signalled failed
+  5.00 s after its commit), and on x86 Macs after 20.2 s on an AMD GPU and 16.1 s on an Intel one,
+  where an 8 s kernel completed on both. The runtime keeps two bounds. Where no work of a device
+  advanced for 10 s with some pending, a probe goes to the staging queue; one that does not
   complete in 2 s, with no loss read from the stuck batch's fence or timeline, stops the
-  generation: its command buffers fail as a hang's (`GpuHang`, `GpuRecoveryVictim`), and the
-  device recovers. Metal ends long work itself: about 5 s on an Apple M3 Max (2^29 threadgroups
-  finished in 4.98 s, 2^30 did not), and on x86 Macs after 20.2 s on an AMD GPU and 16.1 s on an
-  Intel one (`MTLCommandBufferErrorTimeout`, code 2); the runtime fails no work of a device that
-  still makes progress, whatever its length, and a stopped one after 12 s at least. A device
-  without a staging queue sends no probe, so a stop there waits without end, as before. Whether
-  NVIDIA's copy engine stops with the rest after an Xid 109 is not yet measured: where it runs
-  on, the probe completes and the stop is not found. The stopped `VkDevice` is parked
+  generation (`WorkCounts::wedges_declared`), after 12 s at least. Whatever the probe answers, a
+  queue's front batch that goes 20.2 s without its timeline advancing (the largest of Metal's
+  measured bounds, so no work that Metal completes on any of the GPUs measured fails) fails as
+  Metal's timed-out command buffer (`GpuHang`, counted against its queue as Metal counts a
+  timeout) and stops the generation (`WorkCounts::watchdog_timeouts`): on an RTX 3090 (620.70.06)
+  after an Xid 109 the copy engine ran on, its probes completing in under a millisecond, while
+  the graphics queue's batch never completed. Either way the rest in flight fail as victims
+  (`GpuRecoveryVictim`) and the device recovers. A device without a staging queue sends no
+  probe, so a stop there is found by the watchdog alone. Work Metal's M3 Max would fail between 5
+  and 20.2 s runs on to its end, or fails at 20.2 s. The stopped `VkDevice` is parked
   (`release.rs`): it and every object of it stay to the process's end, with the host pages its
-  imports hold (`WorkCounts::wedges_declared`, `Device::is_parked`). NVIDIA's driver (620.70.06)
+  imports hold (`Device::is_parked`). NVIDIA's driver (620.70.06)
   tears down every `VkDevice` left at the process's exit in an exit handler of `libEGL_nvidia`,
   which waits for its work: on an RTX 3090 it spun without end on a parked `VkDevice` whose batch
   waited for a semaphore signal that never came (`tests/stall.rs`, where the stuck work is that

@@ -77,6 +77,7 @@ pub(crate) struct Counters {
     completion_arms_after_a_wake: AtomicU64,
     stall_probes_sent: AtomicU64,
     wedges_declared: AtomicU64,
+    watchdog_timeouts: AtomicU64,
     longest_stall_nanos: AtomicU64,
     completion_reads_ran_ahead: AtomicU64,
     gate_waits: AtomicU64,
@@ -2051,6 +2052,12 @@ impl Counters {
     /// A generation stopped and was parked (`command_buffer/stall.rs`).
     pub(crate) fn wedge_declared(&self) {
         self.wedges_declared.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A queue's front batch went past the watchdog's bound, its command buffer failed as Metal's
+    /// timed-out one, and the generation was parked (`command_buffer/stall.rs`).
+    pub(crate) fn watchdog_timed_out(&self) {
+        self.watchdog_timeouts.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A queue's waiter armed for its queue's front batch, having slept on its condition variable
@@ -5236,6 +5243,13 @@ pub struct WorkCounts {
     /// `GpuHang`, the rest as victims), recovered from, and its `VkDevice` parked: never destroyed,
     /// nothing of it released, its queues never waited for (`Device::is_parked`).
     pub wedges_declared: u64,
+    /// The command buffers failed as Metal's watchdog fails one (`GpuHang`, code 2): its queue's
+    /// front batch went 20.2 seconds (the largest of Metal's measured bounds) without its
+    /// timeline advancing, whatever another engine answered. Each also stopped its generation,
+    /// which was failed, recovered from and parked as one whose probe went unanswered is (which
+    /// `wedges_declared` counts, not this), and counts against its queue as Metal counts a
+    /// timeout (`command_buffer/stall.rs`).
+    pub watchdog_timeouts: u64,
     /// The longest time, in nanoseconds, that no queue's work advanced while some was pending, as
     /// the completion's waiters saw it at their probes and its end.
     pub longest_stall_nanos: u64,
@@ -9484,6 +9498,7 @@ impl Device {
             completion_arms: counters.completion_arms.load(Ordering::Relaxed),
             stall_probes_sent: counters.stall_probes_sent.load(Ordering::Relaxed),
             wedges_declared: counters.wedges_declared.load(Ordering::Relaxed),
+            watchdog_timeouts: counters.watchdog_timeouts.load(Ordering::Relaxed),
             longest_stall_nanos: counters.longest_stall_nanos.load(Ordering::Relaxed),
             completion_arms_after_a_wake: (counters.completion_arms_after_a_wake)
                 .load(Ordering::Relaxed),

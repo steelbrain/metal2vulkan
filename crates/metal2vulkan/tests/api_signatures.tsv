@@ -3510,6 +3510,7 @@ field	metal2vulkan-runtime::WorkCounts.wakes_completion_waiters	pub wakes_comple
 field	metal2vulkan-runtime::WorkCounts.wakes_event_waiters	pub wakes_event_waiters: u64
 field	metal2vulkan-runtime::WorkCounts.wakes_handler_threads	pub wakes_handler_threads: u64
 field	metal2vulkan-runtime::WorkCounts.wakes_spared	pub wakes_spared: u64
+field	metal2vulkan-runtime::WorkCounts.watchdog_timeouts	pub watchdog_timeouts: u64
 field	metal2vulkan-runtime::WorkCounts.wedges_declared	pub wedges_declared: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_conversion_scratch_buffers	pub ycbcr_conversion_scratch_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_conversion_scratch_bytes	pub ycbcr_conversion_scratch_bytes: u64

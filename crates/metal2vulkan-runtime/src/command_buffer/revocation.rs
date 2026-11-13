@@ -9,7 +9,13 @@
 //!   `MTLCommandBufferErrorPageFault` (3) or `MTLCommandBufferErrorTimeout` (2, a GPU hang)
 //!   counts against its queue. One that fails as a victim of the GPU's recovery
 //!   (`MTLCommandBufferErrorInternal`, "Discarded (victim of GPU error/recovery)") does not:
-//!   three on one queue, and a victim then a fault, left the queue serving.
+//!   three on one queue, and a victim then a fault, left the queue serving. A command buffer
+//!   Metal's watchdog fails counts too: on the same Mac two command buffers of one queue, each
+//!   waiting for a shared event no one signalled, failed in turn with
+//!   `MTLCommandBufferErrorTimeout` ("Caused GPU Timeout Error
+//!   (00000002:kIOGPUCommandBufferCallbackErrorTimeout)") 5.00 s after their commits, and the
+//!   fill committed after them failed with `MTLCommandBufferErrorAccessRevoked` 0.24 ms after its
+//!   commit, nothing of it run, where a new queue's ran.
 //! - **The second one revokes the queue.** Once the queue's second command buffer with a caused
 //!   error completes (two faults, two hangs, a hang then a fault), every command buffer committed
 //!   on the queue after that fails at its commit: `Scheduled` and completed 0.02 to 0.06 ms after
@@ -30,7 +36,10 @@
 //! execution of an indirect command buffer under a state it cannot inherit), and
 //! [`CommandBufferError::GpuHang`]; and one a program commits as failed in their place
 //! (`CommandBuffer::commit_failed`, [`CommandBufferError::Injected`] of Metal's code of either,
-//! 3 or 2), which stands for what Metal's GPU caused. Of the other codes it counts none: a
+//! 3 or 2), which stands for what Metal's GPU caused. The watchdog's `GpuHang` (`stall.rs`) counts
+//! as Metal's timeout does. The count is the queue's over every place of it: a recovery's new
+//! place of the queue keeps it (`queue.rs`), as Metal's queue, which no recovery replaces, keeps
+//! its own. Of the other codes it counts none: a
 //! victim's (1) does not count on Metal, and the rest are not caused GPU errors or not measured.
 //! A failure the driver relays is the driver's own queue's, which Metal counts itself under
 //! MoltenVK. From the completion of the second one, before its

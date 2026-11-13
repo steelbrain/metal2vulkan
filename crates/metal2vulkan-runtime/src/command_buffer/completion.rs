@@ -280,8 +280,12 @@ struct Pending {
     parked: Vec<bool>,
     /// The drains sleeping until no waiter is in a wait ([`take_pending`]).
     draining: usize,
-    /// How long no queue's work advanced while some was pending (`stall.rs`).
+    /// How long no queue's work advanced while some was pending, and each queue's front without
+    /// its timeline advancing (`stall.rs`).
     stall: super::stall::Clock,
+    /// The `VkQueue` whose front batch went past the watchdog's bound (`stall.rs`): the loss's
+    /// hang is its command buffer, exactly ([`Answers::recovered`]).
+    timed_out: Option<usize>,
 }
 
 /// A submitted batch its queue's waiter waits for.
@@ -345,7 +349,8 @@ impl Completion {
                 stopping: false,
                 parked: vec![false; queues],
                 draining: 0,
-                stall: super::stall::Clock::default(),
+                stall: super::stall::Clock::new(queues),
+                timed_out: None,
             }),
             wakes: (0..queues).map(|_| Condvar::new()).collect(),
             drained: Condvar::new(),
@@ -809,10 +814,13 @@ fn fail(watch: &Watch, ending: Vec<Hold<CommandBufferShared>>, error: CommandBuf
         if error == CommandBufferError::DeviceLost && device.line().recovers() {
             // One loss, one hang: a later failure of the lost device's batches (one watched
             // after the first took the pending ones, `failed_with_loss`) answers victims alone.
-            let hung = lock(&watch.pending).hung;
+            let (hung, timed_out) = {
+                let pending = lock(&watch.pending);
+                (pending.hung, pending.timed_out)
+            };
             answers = match hung {
                 true => Answers::Recovered(None),
-                false => Answers::recovered(device, &failed),
+                false => Answers::recovered(device, &failed, timed_out),
             };
             if matches!(answers, Answers::Recovered(Some(_))) {
                 lock(&watch.pending).hung = true;
@@ -870,24 +878,34 @@ enum Answers {
 
 impl Answers {
     /// The answers of a loss of `device` its line recovers from, `failed` the pending batches in
-    /// each queue's order. The culprit is
-    /// the command buffer of the oldest incomplete batch: on one `VkQueue` with work in flight,
-    /// its first pending batch, exactly (an in-order queue); on two or more, an inference, the
-    /// first pending batch of the queue whose command buffer was submitted first. Named on the
-    /// device's line, for its notice and the hold of its queue (`device/line.rs`).
-    fn recovered(device: &Device, failed: &[(usize, Submitted)]) -> Answers {
-        // Each queue's first pending batch, of a command buffer that was submitted.
-        let mut fronts: Vec<&Submitted> = Vec::new();
+    /// each queue's order. The culprit is the command buffer of the front batch of `timed_out`,
+    /// the `VkQueue` whose front went past the watchdog's bound (`stall.rs`), exactly, where one
+    /// did; else of the oldest incomplete batch: on one `VkQueue` with work in flight, its first
+    /// pending batch, exactly (an in-order queue); on two or more, an inference, the first pending
+    /// batch of the queue whose command buffer was submitted first. Named on the device's line,
+    /// for its notice and the hold of its queue (`device/line.rs`).
+    fn recovered(
+        device: &Device,
+        failed: &[(usize, Submitted)],
+        timed_out: Option<usize>,
+    ) -> Answers {
+        // Each queue's first pending batch, of a command buffer that was submitted, with its queue.
+        let mut fronts: Vec<(usize, &Submitted)> = Vec::new();
         let mut queue = None;
         for (at, batch) in failed {
             if queue != Some(*at) && batch.buffer.kernel.start() > 0 {
                 queue = Some(*at);
-                fronts.push(batch);
+                fronts.push((*at, batch));
             }
         }
-        let culprit = fronts
-            .iter()
-            .min_by_key(|batch| batch.buffer.kernel.start());
+        let timed_out = timed_out.and_then(|timed| fronts.iter().find(|(at, _)| *at == timed));
+        let culprit = timed_out
+            .or_else(|| {
+                fronts
+                    .iter()
+                    .min_by_key(|(_, batch)| batch.buffer.kernel.start())
+            })
+            .map(|(_, batch)| *batch);
         let Some(culprit) = culprit else {
             return Answers::Recovered(None);
         };
@@ -898,7 +916,7 @@ impl Answers {
         device.line().named(Culprit {
             queue: Arc::downgrade(buffer.queue.common()),
             named,
-            inferred: fronts.len() > 1,
+            inferred: timed_out.is_none() && fronts.len() > 1,
             victims: failing.saturating_sub(1),
         });
         let culprit: &CommandBufferShared = buffer;
@@ -1225,11 +1243,13 @@ fn wait_for_queue(watch: &Watch, queue: usize) {
     }
 }
 
-/// The stall clock after `queue`'s waiter's wait for `front` answered `polled` (`stall.rs`): it
-/// stops where the queue's timeline advanced, and runs where the front is still pending; past
-/// its bound, this waiter probes the GPU where the device has a staging queue, and a probe that
-/// finds the generation stopped fails the wait as a lost device's, the generation marked
-/// stopped first (`Device::mark_wedged`). What the waiter answers.
+/// The stall clock and the queue's watchdog clock after `queue`'s waiter's wait for `front`
+/// answered `polled` (`stall.rs`): they stop where the queue's timeline advanced, and run where
+/// the front is still pending. Past the watchdog's bound the front fails as Metal's timed-out
+/// command buffer, whatever any probe answers; past the stall clock's, this waiter probes the GPU
+/// where the device has a staging queue, and a probe that finds the generation stopped fails the
+/// wait. Either fails it as a lost device's, the generation marked stopped first
+/// (`Device::mark_wedged`). What the waiter answers.
 fn stalled(
     watch: &Watch,
     device: &Device,
@@ -1247,7 +1267,18 @@ fn stalled(
             if let Some(lasted) = pending.stall.advanced() {
                 counts.stall_lasted(lasted);
             }
+            pending.stall.front_advanced(queue);
             return Ok(value);
+        }
+        let held = pending.stall.front_held(queue);
+        let bound = super::stall::watchdog_after(device);
+        if held >= bound {
+            pending.stall.front_advanced(queue);
+            pending.timed_out.get_or_insert(queue);
+            drop(pending);
+            super::stall::timed_out(device, queue, held, bound);
+            device.mark_wedged(super::stall::Stop::Watchdog);
+            return Err(failure(device, vk::Result::ERROR_DEVICE_LOST));
         }
         let after = super::stall::stall_after(device);
         match pending.stall.ran_out(after) {
@@ -1266,7 +1297,7 @@ fn stalled(
         super::stall::Verdict::Runs => Ok(value),
         super::stall::Verdict::Failed(error) => Err(failure(device, error)),
         super::stall::Verdict::Stopped => {
-            device.mark_wedged();
+            device.mark_wedged(super::stall::Stop::Unanswered);
             Err(failure(device, vk::Result::ERROR_DEVICE_LOST))
         }
     }
