@@ -4601,8 +4601,9 @@ impl IndirectRenderCommand {
     pub fn set_render_pipeline_state(&self, state: &RenderPipelineState) -> Result<(), Error> {
         const CALL: &str = "set_render_pipeline_state";
         self.icb.check_command_types(CALL)?;
-        if !state.device().same(self.icb.device()) {
-            return Err(state.device().foreign(CALL, self.icb.device()));
+        let device = state.bound_device()?;
+        if !device.same(self.icb.device()) {
+            return Err(device.foreign(CALL, self.icb.device()));
         }
         if self.descriptor().inherit_pipeline_state {
             return Err(problem(

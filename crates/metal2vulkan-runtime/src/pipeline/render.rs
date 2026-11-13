@@ -87,6 +87,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Instant;
 
+mod carry;
 mod residual;
 
 /// The general form of a key, which `tests::general_form` reads from IDs and meanings alone.
@@ -145,6 +146,11 @@ impl WeakRenderPipelineState {
     pub(crate) fn lives(&self) -> bool {
         self.0.strong_count() > 0
     }
+
+    /// The drawing state, while the program holds it ([`upgrade`](Self::upgrade)'s).
+    pub(crate) fn graphics(&self) -> Option<GraphicsState> {
+        self.0.upgrade().map(GraphicsState)
+    }
 }
 
 /// The same drawing state ([`WeakRenderPipelineState::names`]'s identity).
@@ -173,6 +179,9 @@ impl RenderProgram {
             identifier: None,
             _samplers: Vec::new(),
             program: Arc::clone(&self.0),
+            next: OnceLock::new(),
+            carried: AtomicBool::new(false),
+            remake_failed: AtomicBool::new(false),
         }))))
     }
 }
@@ -188,13 +197,34 @@ pub(crate) struct StateShared {
     /// The sampler IDs the state numbered as it was made (`resource_ids/numbered.rs`), held
     /// while it lives.
     _samplers: Vec<Arc<Numbered>>,
+    /// Its program on the generation it was made on.
     program: Arc<Program>,
+    /// Its program on each generation its device's recoveries carried it to, in turn
+    /// (`pipeline/carry.rs`), which its reaches take from then on ([`StateShared::program`]).
+    next: OnceLock<Box<super::carry::ProgramLink<Program>>>,
+    /// `next` is set: one load before a reach walks it.
+    carried: AtomicBool,
+    /// Its making on the generation a recovery made failed: a bind of it is refused
+    /// (`RuntimeGap::RemadeAfterRecoveryFailed`).
+    remake_failed: AtomicBool,
 }
 
 impl std::ops::Deref for StateShared {
     type Target = Program;
     fn deref(&self) -> &Program {
-        &self.program
+        self.program()
+    }
+}
+
+impl StateShared {
+    /// The program this reach of the state takes (`pipeline/carry.rs`): the one it was made
+    /// with, until a recovery carried it.
+    #[inline]
+    fn program(&self) -> &Arc<Program> {
+        match self.carried.load(Ordering::Acquire) {
+            false => &self.program,
+            true => super::carry::reached(&self.program, &self.next),
+        }
     }
 }
 
@@ -205,7 +235,7 @@ impl Drop for StateShared {
         let Some(id) = self.id.as_ref().filter(|id| id.id().0 != 0) else {
             return;
         };
-        let program = &self.program;
+        let program = self.program();
         program
             .device
             .shared()
@@ -826,6 +856,15 @@ impl RenderPipelineState {
         }
     }
 
+    /// The device a bind of the state checks it against: its program's; refused where its
+    /// making on the generation a recovery made failed (`pipeline/carry.rs`).
+    pub(crate) fn bound_device(&self) -> Result<&Device, Error> {
+        match &self.0 {
+            Kind::Graphics(state) => state.bound_device(),
+            Kind::Tile(state) => state.kernel().bound_device(),
+        }
+    }
+
     /// `supportIndirectCommandBuffers`: a drawing state's descriptor's; false for a tile
     /// pipeline's, whose descriptor has no such field.
     pub fn support_indirect_command_buffers(&self) -> bool {
@@ -1266,7 +1305,7 @@ impl RenderPipelineState {
     /// What a drawing state runs, held without its ID; `None` for a tile pipeline's.
     pub(crate) fn program(&self) -> Option<RenderProgram> {
         match &self.0 {
-            Kind::Graphics(state) => Some(RenderProgram(Arc::clone(&state.0.program))),
+            Kind::Graphics(state) => Some(RenderProgram(Arc::clone(state.0.program()))),
             Kind::Tile(_) => None,
         }
     }
@@ -1772,7 +1811,7 @@ impl GraphicsState {
         // Its first draw's predicted `VkPipeline`, made where Metal compiles (`predicted.rs`):
         // a state drawn in color groups draws as its twins, which predict their own.
         if grouped.is_none() {
-            state.make_at_creation();
+            state.make_at_creation(true);
         }
         // The pipelines its tested draws' depth stand-in copies by, made where Metal compiles.
         state.make_stand_in_copies();
@@ -1804,7 +1843,7 @@ impl GraphicsState {
                     None,
                 )?;
                 made.make_neutrals();
-                made.make_at_creation();
+                made.make_at_creation(true);
                 made.make_stand_in_copies();
                 twins.push(made);
             }
@@ -1814,6 +1853,7 @@ impl GraphicsState {
                 .set(twins)
                 .map_err(|_| internal("a state's color groups made twice"))?;
         }
+        state.kept(device);
         Ok(state)
     }
 
@@ -1929,6 +1969,7 @@ impl GraphicsState {
             None,
         )?;
         state.make_neutrals();
+        state.kept(device);
         // The creation's record, as the program asked for it (`warm/record.rs`).
         device.record_pipeline(|| crate::warm::Pipeline::Mesh(requested.clone()));
         Ok(state)
@@ -2053,6 +2094,9 @@ impl GraphicsState {
                 identifier,
                 _samplers: samplers,
                 program: Arc::new(program),
+                next: OnceLock::new(),
+                carried: AtomicBool::new(false),
+                remake_failed: AtomicBool::new(false),
             }
         })))
     }
@@ -2231,7 +2275,7 @@ impl GraphicsState {
     /// Whether `other` is this state (a clone of it, or the state a command runs once the
     /// program released it, `RenderProgram::state`), not another state alike.
     pub(crate) fn is(&self, other: &GraphicsState) -> bool {
-        Arc::ptr_eq(&self.0.program, &other.0.program)
+        Arc::ptr_eq(self.0.program(), other.0.program())
     }
 
     /// Note that it made a visible function table (`function_table.rs`).
@@ -2254,13 +2298,13 @@ impl GraphicsState {
     /// Its program, named without holding it: what a draw's encoder keeps the state's last
     /// settle under (`live_bind.rs`), which [`runs`](Self::runs) tells apart.
     pub(crate) fn program_name(&self) -> ProgramName {
-        ProgramName(Arc::downgrade(&self.0.program))
+        ProgramName(Arc::downgrade(self.0.program()))
     }
 
     /// Whether it runs the program `name` names, as [`is`](Self::is) tells states apart, without
     /// touching either's counts.
     pub(crate) fn runs(&self, name: &ProgramName) -> bool {
-        std::ptr::eq(Arc::as_ptr(&self.0.program), name.0.as_ptr())
+        std::ptr::eq(Arc::as_ptr(self.0.program()), name.0.as_ptr())
     }
 
     /// How many of `stage`'s function's last `binary_functions` were added without the stage's
@@ -3254,11 +3298,14 @@ impl RenderVariant {
     /// driver and settles its entries. The makings of `ahead`'s keys (a predicted key whose general
     /// form is among `keys`, `render/residual.rs`) are handed to the pool right after, under either
     /// policy, at the rank nothing waits for, and not waited for. Their specialized notices wait
-    /// for their first draws ([`first_use`](Self::first_use)). Each key is its variant's.
+    /// for their first draws ([`first_use`](Self::first_use)). Each key is its variant's. Not
+    /// `waited` (a recovery's making again of the state, `render/carry.rs`), those handed to the
+    /// pool under `PipelineWaitPolicy::Bounded` are not waited for at all.
     pub(crate) fn make_at_creation(
         keys: Vec<(Arc<RenderVariant>, GraphicsKey, RenderPassObject)>,
         ahead: Vec<(Arc<RenderVariant>, GraphicsKey, RenderPassObject)>,
         state: &GraphicsState,
+        waited: bool,
     ) {
         let device = &state.0.device;
         let joined = device.compile_device().policy().pipeline_waits == PipelineWaitPolicy::Exact;
@@ -3342,7 +3389,11 @@ impl RenderVariant {
             drop(variant.pooled(state, (key, Arc::new(pass), ticket), (line, claimed), true));
         }
         // Those handed to the pool, waited for a bound at most: a making still running then goes
-        // on for the draws that take it.
+        // on for the draws that take it. None where not `waited`: each goes on for its draws.
+        let handed = match waited {
+            true => handed,
+            false => Vec::new(),
+        };
         let deadline = Instant::now() + device.compile_device().policy().pipeline_creation_wait;
         for making in &handed {
             if making.wait_until(deadline).is_none() {

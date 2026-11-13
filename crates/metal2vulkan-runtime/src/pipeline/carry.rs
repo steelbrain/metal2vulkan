@@ -4,12 +4,14 @@
 //! - **What is made again.** A state's program (`Program`) holds its generation's objects: its
 //!   variants' shader modules, layouts and `VkPipeline`s, its plans, its pool makings. The
 //!   recovery makes the state's base variant again on the new generation from the pipeline its
-//!   creation compiled, which the state holds, so nothing is translated again; its other
-//!   variants, plans and `VkPipeline`s are made there as its dispatches and draws need them, the
-//!   device's memo of compiled pipelines carried before (`PipelineMemo::carry_from`) sparing
-//!   their translations. The `VkPipeline` its creation predicted is queued on the device's
-//!   making pool with no wait: a dispatch or draw that binds the state before it is made holds
-//!   its command buffer for it, as at creation.
+//!   creation compiled, which the state holds, so nothing is translated again (a drawing state's
+//!   large-buffer form's too); its other variants, plans and `VkPipeline`s are made there as its
+//!   dispatches and draws need them, the device's memo of compiled pipelines carried before
+//!   (`PipelineMemo::carry_from`) sparing their translations. The `VkPipeline` its creation
+//!   predicted is queued on the device's making pool with no wait: a dispatch or draw that binds
+//!   the state before it is made holds its command buffer for it, as at creation. A compiled
+//!   pipeline is its compile profile's: where the new generation compiles otherwise
+//!   ([`compiles_alike`]), no state is made again there.
 //! - **What stays.** The state object: its handles, ID, `uniqueIdentifier`, label and sampler
 //!   numbers. Its program on the next generation is linked after the lost one's
 //!   ([`ProgramLink`]); its handles reach it from then on, and the work of a command buffer of
@@ -17,6 +19,9 @@
 //!   the lost generation, and so the lost `VkDevice`, until it goes (`device/carry.rs`).
 //! - **A failed making** leaves the state's program the lost generation's: the recovery's notice
 //!   counts it, and a bind of the state is refused (`RuntimeGap::RemadeAfterRecoveryFailed`).
+//!
+//! A compute state (and so a tile state's kernel) is carried here; a drawing state, mesh ones
+//! among them, by `render/carry.rs`, its program's fields being its module's.
 
 use super::memo::Remembered;
 use super::{
@@ -46,6 +51,19 @@ pub(crate) trait OfGeneration {
 /// The address of `device`'s generation.
 pub(crate) fn generation_of(device: &Device) -> usize {
     std::ptr::from_ref(device.shared()).addr()
+}
+
+/// Whether `to`, a generation a recovery made, compiles as `from`, the lost one, does: one compile
+/// profile, so what one compiled the other takes (the memo's pipelines, a state's own).
+pub(crate) fn compiles_alike(from: &Device, to: &Device) -> bool {
+    let profile = |device: &Device| device.compile_device().profile_fingerprint();
+    profile(from) == profile(to)
+}
+
+/// What a state's making again on a generation that compiles otherwise answers
+/// ([`compiles_alike`]): refused, as its compiled pipeline is not that generation's.
+pub(crate) fn compiled_otherwise() -> Error {
+    Error::NotImplemented(RuntimeGap::RemadeAfterRecoveryFailed)
 }
 
 impl OfGeneration for Program {
@@ -142,8 +160,12 @@ impl ComputePipelineState {
 impl Program {
     /// This program made again on `to`, the generation a recovery made (the module docs): its
     /// base variant's objects made there from its compiled pipeline, its predicted `VkPipeline`
-    /// queued on the making pool with no wait. Refused as the objects' making refuses.
+    /// queued on the making pool with no wait. Refused as the objects' making refuses, and where
+    /// `to` compiles otherwise.
     fn made_again(&self, to: &Device) -> Result<Program, Error> {
+        if !compiles_alike(&self.device, to) {
+            return Err(compiled_otherwise());
+        }
         // The variant a state carried before made of the same pipeline there, where it lives: one
         // variant of a pipeline on a generation, as its creations share it.
         let pipeline = &self.base.pipeline;

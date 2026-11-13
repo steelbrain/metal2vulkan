@@ -839,8 +839,8 @@ meanwhile wait for it.
   uses of guest RAM (`HostRamUse`), the no-copy buffers, the `Private` buffers, the buffers in the
   runtime's own pages, the `Private` heaps with the buffers placed in them, the textures of
   `new_texture`, the textures over the buffers it carried and the views of either, and the
-  compute and tile pipeline states to the new `VkDevice`: the same objects, at the same addresses
-  and resource IDs. A pipeline state's base variant is made again there from what its creation
+  compute, tile, drawing and mesh pipeline states to the new `VkDevice`: the same objects, at the
+  same addresses and resource IDs. A pipeline state's base variant is made again there from what its creation
   compiled, with no translation, and the `VkPipeline` its creation predicted is queued with no
   wait; a bind of one whose making there failed is refused
   (`RuntimeGap::RemadeAfterRecoveryFailed`). Its objects on the lost `VkDevice` stay with it, and
@@ -873,8 +873,8 @@ meanwhile wait for it.
   costs its submissions or that textures over such pages take less, or had not answered; and a
   `Managed` buffer without unified memory), detached no-copy buffers, `Shared`, no-copy and
   sparse heaps with the buffers placed in them, heaps' textures, textures over the caller's
-  `VkImage`, sparse and shareable textures, textures over buffers left and their views, render
-  pipeline states, buffers over the caller's `VkBuffer`, and exportable memory or events. Make it again.
+  `VkImage`, sparse and shareable textures, textures over buffers left and their views, buffers
+  over the caller's `VkBuffer`, and exportable memory or events. Make it again.
   Metal's objects go on. The recovery's notice counts the buffers, heaps, textures and events it
   carried and left, by kind.
 - The lost `VkDevice` is destroyed once the objects left on it went and, where `Device::raw`

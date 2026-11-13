@@ -683,7 +683,7 @@ impl ArgumentEncoder {
         match state {
             None => Ok(0),
             Some(state) => {
-                self.check_device(call, state.device())?;
+                self.check_device(call, state.bound_device()?)?;
                 Ok(state.gpu_resource_id().0)
             }
         }

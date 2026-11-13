@@ -133,7 +133,9 @@ impl GraphicsState {
     /// constants can take (`render/residual.rs`); where the key differs from that form, hand the
     /// key itself to the device's pool right after, at the rank nothing waits for, for the draws
     /// that bind what the prediction names. A key whose pass is refused is left to its draw.
-    pub(crate) fn make_at_creation(&self) {
+    /// Not `waited`, a recovery's making again of the state (`render/carry.rs`), nothing waits
+    /// for the making handed to the pool (`RenderVariant::make_at_creation`).
+    pub(crate) fn make_at_creation(&self, waited: bool) {
         let Some((variant, key)) = self.predicted() else {
             return;
         };
@@ -148,7 +150,7 @@ impl GraphicsState {
                 Err(_) => (general, Vec::new()),
             },
         };
-        RenderVariant::make_at_creation(vec![(variant, made, pass)], ahead, self);
+        RenderVariant::make_at_creation(vec![(variant, made, pass)], ahead, self, waited);
     }
 
     /// The key of the predicted first draw (the module docs), where the state alone describes

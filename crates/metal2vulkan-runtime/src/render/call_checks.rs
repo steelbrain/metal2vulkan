@@ -439,7 +439,7 @@ impl CallChecks {
         state: &RenderPipelineState,
     ) -> Result<Checked, Error> {
         const CALL: &str = "set_render_pipeline_state";
-        check_device(device, CALL, state.device())?;
+        check_device(device, CALL, state.bound_device()?)?;
         let RenderStateKind::Graphics(graphics) = state.kind() else {
             return FROM_NOW;
         };

@@ -3038,7 +3038,7 @@ impl RenderLowering {
     /// the pass's color groups taken.
     fn set_state(&mut self, state: &RenderPipelineState) -> Result<(), Error> {
         const CALL: &str = "set_render_pipeline_state";
-        self.core.check_device(CALL, state.device())?;
+        self.core.check_device(CALL, state.bound_device()?)?;
         let drawn = drawn_as(self.layout.samples, state)?;
         let state = self.grouped_as(drawn.clone())?;
         // Routed once here: the check and each draw read it (`routing`).

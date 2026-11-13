@@ -3652,8 +3652,8 @@ bound.
   pages the `Shared` and `Managed` buffers lie in where the device's checks found a held host-page
   import costs its submissions nothing and textures over such pages take what they take over its
   own memory), `Private` heaps with the buffers placed in them, textures of `new_texture`,
-  textures over the buffers carried and views of them, and compute and tile pipeline states made
-  before it go on, the contents of a `Private` buffer or heap lost (it reads zero) and of a
+  textures over the buffers carried and views of them, and pipeline states made before it go on,
+  the contents of a `Private` buffer or heap lost (it reads zero) and of a
   texture of `new_texture` of any storage mode (it reads as a new one) but a texture buffer over
   its texels' buffer carried; the other objects made before it are refused (`MadeBeforeRecovery`),
   where Metal's go on; the calls during it wait for it, and a device call the loss met while it
@@ -3672,7 +3672,12 @@ bound.
   image there. Their images on the lost `VkDevice` stay with them, and keep it, until they go. A
   heap's texture, one over the caller's `VkImage`, a sparse or shareable texture and one over a
   buffer left are refused, with their views. A `Shared` heap, whose bytes are pooled host-visible
-  memory the device allocated, is refused with its buffers, as a pooled buffer is.
+  memory the device allocated, is refused with its buffers, as a pooled buffer is. A compute, tile,
+  drawing or mesh pipeline state is the same state on the new `VkDevice` (its identity, ID,
+  `uniqueIdentifier` and label): its base variant made again there from what its creation
+  compiled, with no translation, and the `VkPipeline` its creation predicted queued with no wait;
+  a bind of one whose making there failed is refused (`RemadeAfterRecoveryFailed`). Its objects
+  on the lost `VkDevice` stay with it, and keep it, until it goes.
 - `metal2vulkan-degrade-private-properties-unknown` (precision). `PrivatePropertiesUnknown`: Apple's
   private device properties the device has no answer for: no document describes them and nothing the
   device reports maps to them. Cost: the device gives no answer for them (`PrivateAnswer::value` is
