@@ -291,9 +291,9 @@ fn differing(a: &[u8], b: &[u8]) -> usize {
 }
 
 /// Under `FanOut` the host step probes once, fans the grid commands out and draws the large one
-/// region by region between them, with the fan-out's pipelines `commit` began: the step makes
-/// as many as it makes for the frame under `Exact`. The pixels are the encoder's
-/// region-by-region draws'.
+/// region by region between them, with the pipelines `commit` began: the fan-out's and the
+/// regions variant's, so the step makes none. The pixels are the encoder's region-by-region
+/// draws'.
 #[test]
 fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     let scratch = Scratch::new("rate-mapped-fan-out");
@@ -310,22 +310,13 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
         "RATE-MAP-FAN-OUT counts {counts:?} probe_gpu_nanos {probe_nanos}; fan-out pipelines \
          {ready} ready, {waited} waited for; {made} made at the step"
     );
+    assert_eq!(made, 0, "pipelines the host step made");
     match fans_out(&workload.device) {
         true => {
             assert_eq!(counts, [1, 1, u64::from(COMMANDS - 1)]);
             assert!(
                 ready + waited >= 2,
                 "the commit began no probe or draw pipeline"
-            );
-            // The same frame on a device of the other policy: the step's own makings there.
-            let scratch = Scratch::new("rate-mapped-fan-out-made");
-            let exact = Workload::new(device_under(&scratch.0, RateMapRegionPolicy::Exact));
-            exact.frame(false);
-            let (_, before, after) = exact.frame(true);
-            let exact_made = after.host_step_pipelines_made - before.host_step_pipelines_made;
-            assert_eq!(
-                made, exact_made,
-                "pipelines the host step made for the fan-out"
             );
         }
         false => assert_eq!(counts, [0; 3]),
@@ -339,8 +330,6 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     assert_eq!(differ, 0, "texels the fanned-out execution draws otherwise");
 }
 
-/// Under `Exact` no probe runs and every command is drawn region by region; the pixels are the
-/// encoder's draws'.
 /// With the encoder trail on (`encoder_trail.rs`), the host step notes the states its commands
 /// name and its probe is a waited submission the trail watches; the execution is fanned out as
 /// without, to the same pixels.
@@ -364,6 +353,9 @@ fn the_encoder_trail_fans_out_the_same_pixels() {
     assert_eq!(differ, 0, "texels the fanned-out execution draws otherwise");
 }
 
+/// Under `Exact` no probe runs and every command is drawn region by region, with the regions
+/// variant's pipelines `commit` began: the host step makes none. The pixels are the encoder's
+/// draws'.
 #[test]
 fn exact_regions_draw_every_command_region_by_region() {
     let scratch = Scratch::new("rate-mapped-fan-out-exact");
@@ -371,6 +363,9 @@ fn exact_regions_draw_every_command_region_by_region() {
     let (drawn, _, _) = workload.frame(false);
     let (exact, before, after) = workload.frame(true);
     assert_eq!(fan_counts(&before, &after), [0; 3]);
+    let made = after.host_step_pipelines_made - before.host_step_pipelines_made;
+    eprintln!("RATE-MAP-EXACT {made} made at the step");
+    assert_eq!(made, 0, "pipelines the host step made");
     let differ = differing(&drawn, &exact);
     assert_eq!(differ, 0, "texels the execution draws otherwise");
 }

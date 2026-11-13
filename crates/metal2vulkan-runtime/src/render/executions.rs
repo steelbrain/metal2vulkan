@@ -2056,6 +2056,11 @@ impl RenderLowering {
         );
         self.shape_inputs()
             .clamp_draw_depth(&mut fixed, graphics, clamp)?;
+        // As many viewports as each of the step's commands sets where the variant records the
+        // regions several at a time, as the step's draw keys it.
+        if let Some(batch) = super::region_batch(&variant, self.core.device())? {
+            fixed.viewports = batch as u32;
+        }
         // The class's list topology where the pipeline makes the topology dynamic.
         let (topology, primitive_restart) = crate::pipeline::keyed_assembly(
             settings.topology,

@@ -1004,6 +1004,22 @@ impl PartialEq for DrawState {
     }
 }
 
+/// How many of a rate-mapped pass's regions a draw of `variant` records at a time where its plan's
+/// variant draws them several at a time (`VariantKey::region_viewports`): as many a command as
+/// `device`'s multi-draw commands take (`MultiDraws::batch`), each command setting that many
+/// viewports, which its `VkPipeline` takes (`FixedState::viewports`, [`region_states`]); `None`
+/// for a variant that draws them one at a time. The host step's draw and an execution's settle
+/// at commit (`render/executions.rs`) key the pipeline alike by it.
+fn region_batch(variant: &RenderVariant, device: &Device) -> Result<Option<usize>, Error> {
+    match (variant.key().region_viewports, &device.shared().multi_draws) {
+        (false, _) => Ok(None),
+        (true, Some(multi)) => Ok(Some(multi.batch() as usize)),
+        (true, None) => Err(internal(
+            "regions drawn several at a time without the multi-draw commands",
+        )),
+    }
+}
+
 /// The states a draw of `state` records a rate-mapped pass's `regions` with
 /// (`rate_mapped_pass.rs`), each region's viewport taking the depth range `depth` where the draw
 /// compensates it: one a region, or, `batch` the most one multi-draw takes
@@ -9789,18 +9805,9 @@ impl RenderLowering {
             }
         };
         let mut fixed = draw_state.fixed;
-        // Where its plan's variant draws them so (`VariantKey::region_viewports`), the draw
-        // records those regions several at a time, as many a command as the device's multi-draw
-        // commands take (`MultiDraws::batch`).
-        let batch = match (variant.key().region_viewports, &device.shared().multi_draws) {
-            (false, _) => None,
-            (true, Some(multi)) => Some(multi.batch() as usize),
-            (true, None) => {
-                return Err(internal(
-                    "regions drawn several at a time without the multi-draw commands",
-                ))
-            }
-        };
+        // Where its plan's variant draws them so, the draw records those regions several at a
+        // time (`region_batch`).
+        let batch = region_batch(&variant, &device)?;
         // A rate-mapped pass records the draw once per region of the map's layer of the slice
         // it renders (`rate_mapped_pass.rs`): each amplification drawn one at a time its own
         // slice's, else the draw's one slice, or none known where its primitives choose.
