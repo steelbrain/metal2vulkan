@@ -452,6 +452,7 @@ const EVERY_EXTENSION: &[&CStr] = &[
     c"VK_KHR_push_descriptor",
     c"VK_KHR_maintenance8",
     c"VK_KHR_shader_fma",
+    c"VK_EXT_shader_float8",
     c"VK_EXT_border_color_swizzle",
     c"VK_EXT_custom_border_color",
     c"VK_EXT_depth_bias_control",
