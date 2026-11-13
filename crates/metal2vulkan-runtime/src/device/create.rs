@@ -2374,6 +2374,10 @@ pub(super) fn create_on(
     let name = &enabled.device_name;
     let (raw, (plan, extra_places), took_least) =
         made_within_resources(name, (plan, extra_places), least, make)?;
+    // A device was made from the instance: the drivers stay loaded from now on, kept before the
+    // device is primed and registers the exit hook, so what the keeper's instance loads is
+    // loaded before that registration (`keeper.rs`).
+    keep_drivers_loaded(instance);
     // The least plan's queues are the runtime's own choice, not the caller's limits: no limits'
     // messages ([`LeastPlanTaken`]).
     let planned = planned.filter(|_| took_least.is_none());
@@ -2730,10 +2734,7 @@ impl Device {
         let mut refusal = None;
         for physical in ranked(&instance, options)? {
             match device_of(&mut made[at], &instance, physical, options, &cache) {
-                Ok(device) => {
-                    keep_drivers_loaded(&instance);
-                    return Ok(device);
-                }
+                Ok(device) => return Ok(device),
                 Err(error) => {
                     refusal.get_or_insert(error);
                 }
@@ -2834,9 +2835,7 @@ impl Device {
         else {
             return Err(Error::NoDevice);
         };
-        let device = device_of(&mut made[at], &instance, physical, options, &cache)?;
-        keep_drivers_loaded(&instance);
-        Ok(device)
+        device_of(&mut made[at], &instance, physical, options, &cache)
     }
 
     /// `MTLCopyAllDevices`: [`Device::all_with`] the default options.
@@ -2862,9 +2861,6 @@ impl Device {
                 Err(Error::Unsupported(_) | Error::NoDevice) => {}
                 Err(error) => return Err(error),
             }
-        }
-        if !devices.is_empty() {
-            keep_drivers_loaded(&instance);
         }
         Ok(devices)
     }

@@ -25,7 +25,7 @@ pub(crate) fn count() -> Option<u64> {
     let mut adds: Option<u64> = None;
     // SAFETY: the callback only reads its object and writes `adds`, which outlives the call.
     unsafe { libc::dl_iterate_phdr(Some(first), (&raw mut adds).cast()) };
-    adds
+    adds.map(|adds| adds + forced())
 }
 
 /// The images the process has loaded since this was first asked, unloaded ones included (dyld
@@ -47,7 +47,32 @@ pub(crate) fn count() -> Option<u64> {
     }
     // SAFETY: the callback only counts; dyld keeps it for the process's life.
     WATCH.call_once(|| unsafe { _dyld_register_func_for_add_image(added) });
-    Some(ADDS.load(Ordering::SeqCst))
+    Some(ADDS.load(Ordering::SeqCst) + forced())
+}
+
+/// The loads tests forced ([`force`]).
+#[cfg(test)]
+static FORCED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Tests: count one load more, as a shared object loaded now would.
+#[cfg(test)]
+pub(crate) fn force() {
+    FORCED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The loads tests forced so far ([`force`]), counted with the host's.
+#[cfg(test)]
+pub(crate) fn forced() -> u64 {
+    FORCED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// No load is forced outside tests.
+#[cfg(all(
+    not(test),
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
+const fn forced() -> u64 {
+    0
 }
 
 /// No count on other hosts: the exit guard registers its hook at every device there.
