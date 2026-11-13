@@ -398,10 +398,10 @@ after it, and 0 of 80 with the device dropped first
   `DeviceOptions::mac_class` declares, by default the class of the device's GPU: an Apple silicon
   Mac on an Apple GPU, a Mac with an Intel or AMD GPU on every other;
   `DeviceProperties::lossless_compression` states it): an Apple silicon Mac's reads zero or that
-  Mac's fixed pattern of a compressed texture; a Mac with an Intel or AMD GPU's holds what its
-  memory held, written by nothing (`WorkCounts::private_textures_unfilled`), or on an Apple GPU,
-  whose own compressed texture would read Apple's pattern, zero
-  (`WorkCounts::private_textures_zero_filled`) (docs/API.md, accepted differences). A new
+  Mac's fixed pattern of a compressed texture; a Mac with an Intel or AMD GPU's reads zero,
+  filled at its first use (`WorkCounts::private_textures_zero_filled`), never what its memory
+  held, which may be another process's texels where a consumer's processes share the device
+  (docs/API.md, accepted differences). A new
   resource's first GPU work (its image's first layout, its zeros) runs at the start of the next
   command buffer committed on any queue, or on the fill queue (above); a command buffer on
   another queue waits for it only where its commands, or its own first work, may reach the new

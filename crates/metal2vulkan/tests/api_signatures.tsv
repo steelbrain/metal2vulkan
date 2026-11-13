@@ -3206,7 +3206,6 @@ field	metal2vulkan-runtime::WorkCounts.pooled_textures_moved_in_place	pub pooled
 field	metal2vulkan-runtime::WorkCounts.predicated_loop_runs_again	pub predicated_loop_runs_again: u64
 field	metal2vulkan-runtime::WorkCounts.prefixed_starts	pub prefixed_starts: u64
 field	metal2vulkan-runtime::WorkCounts.primaries_begun_ahead	pub primaries_begun_ahead: u64
-field	metal2vulkan-runtime::WorkCounts.private_textures_unfilled	pub private_textures_unfilled: u64
 field	metal2vulkan-runtime::WorkCounts.private_textures_zero_filled	pub private_textures_zero_filled: u64
 field	metal2vulkan-runtime::WorkCounts.provoking_last_pipeline_draws	pub provoking_last_pipeline_draws: u64
 field	metal2vulkan-runtime::WorkCounts.provoking_listed_draws	pub provoking_listed_draws: u64

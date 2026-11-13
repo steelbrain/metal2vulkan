@@ -3952,11 +3952,11 @@ impl Device {
     /// keeps it uncompressed and Metal's fixed pattern where it compresses it (an Apple M4 under
     /// macOS 27.0.1, each time, also right after a texture of the same shape was written and
     /// released; [`fresh_patterned`](Self::fresh_patterned)). On one that presents a Mac keeping
-    /// none, it holds what its memory held, written by no command, as a Mac with an Intel or AMD
-    /// GPU's does (counted, `WorkCounts::private_textures_unfilled`), except on an Apple GPU,
-    /// whose own image of such a texture is compressed and would read Apple's pattern: there it
-    /// reads zero, what such a Mac's reads where its memory held nothing (counted,
-    /// `WorkCounts::private_textures_zero_filled`). [`Initial::Zero`] starts every one but a
+    /// none, it reads zero (counted, `WorkCounts::private_textures_zero_filled`), what such a
+    /// Mac's reads where its memory held nothing: never what its memory held, which may be a
+    /// released texture's texels, of another process of a consumer whose processes share the
+    /// device (a recycled image's, `recycle.rs`, or bytes a pool block's last resource left).
+    /// [`Initial::Zero`] starts every one but a
     /// `Memoryless` one at zero in every texel instead, uncounted. The runtime's own images keep
     /// [`new_image`](Self::new_image)'s start: an image its first command writes in full need
     /// not be zeroed first.
@@ -3981,22 +3981,16 @@ impl Device {
             );
         }
         let uncompressed = storage == StorageMode::Private && !self.metal_compresses_textures();
-        let apple_gpu = crate::MacClass::of_vendor(self.properties().vendor_id)
-            == crate::MacClass::AppleSilicon;
-        let unfilled = uncompressed && !apple_gpu;
-        let held = memoryless || unfilled;
         let image = self.new_image_starting(
             plan,
             layout,
             descriptor,
             identity,
-            Start::held_or_zero(held),
+            Start::held_or_zero(memoryless),
             Device::runtime_owner,
         )?;
-        match (unfilled, uncompressed) {
-            (true, _) => self.shared().counts.private_texture_unfilled(),
-            (false, true) => self.shared().counts.private_texture_zero_filled(),
-            (false, false) => {}
+        if uncompressed {
+            self.shared().counts.private_texture_zero_filled();
         }
         Ok(image)
     }

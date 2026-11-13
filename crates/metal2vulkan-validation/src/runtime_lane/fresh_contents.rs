@@ -46,14 +46,15 @@
 //!
 //! **On a device without Metal's compression** (`DeviceProperties::lossless_compression` false: a
 //! device that presents a Mac whose GPU keeps no texture compressed, as an Intel or AMD GPU's
-//! does), a new `Private` texture holds what its memory held: zero, or a released texture's texels
-//! (the consumer's probe of new `Private` textures on an AMD Radeon Pro 5300M and an Intel UHD 630:
-//! zero, and a released colour texture's texels exactly where one of the same descriptor was
-//! released first). The runtime writes nothing into it (`WorkCounts::private_textures_unfilled`).
-//! Each case there holds its `Private` textures to that: the count moved by one a texture, nothing
-//! announced `fresh-pattern-zeroed`, and the texels, which nothing wrote, are not Metal's whole
-//! pattern; it prints what they held (`FRESH-UNFILLED`). Its `Shared` and `Managed` textures and
-//! its buffers read zero, as on every device. On a device with Metal's compression the count stays
+//! does), a new `Private` texture reads zero, filled at its first use
+//! (`WorkCounts::private_textures_zero_filled`). Such a Mac's holds what its memory held: zero, or
+//! a released texture's texels of the same process (the consumer's probe of new `Private` textures
+//! on an AMD Radeon Pro 5300M and an Intel UHD 630: zero, and a released colour texture's texels
+//! exactly where one of the same descriptor was released first); one device may serve several
+//! processes of a consumer, whose texels the runtime never shows another. Each case there holds its
+//! `Private` textures to that: the count moved by one a texture, nothing announced
+//! `fresh-pattern-zeroed`, and the texels read zero. Its `Shared` and `Managed` textures and its
+//! buffers read zero, as on every device. On a device with Metal's compression the count stays
 //! zero.
 
 use super::degrade_notices::counts;
@@ -90,40 +91,27 @@ pub(super) fn zeroed(messages: &Messages) -> bool {
     counts(&messages.take_notices()).contains_key(&Degradation::FreshPatternZeroed)
 }
 
-/// Whether `device` is without Metal's compression, where a new `Private` texture holds what
-/// its memory held, written by nothing (the module docs). Every lane device presents its GPU's
-/// Mac class (`DeviceOptions::mac_class` unset), which keeps no texture compressed on a GPU that
-/// is not Apple's alone, so the device writes nothing there; an Apple GPU presenting a Mac with an
-/// Intel or AMD GPU instead fills it with zeros, which the runtime's own `mac_class` tests hold.
-pub(super) fn unfilled(device: &Device) -> bool {
+/// Whether `device` is without Metal's compression, where a new `Private` texture reads zero,
+/// filled at its first use (the module docs). Every lane device presents its GPU's Mac class
+/// (`DeviceOptions::mac_class` unset), which keeps no texture compressed on a GPU that is not
+/// Apple's.
+pub(super) fn zero_filled(device: &Device) -> bool {
     !device.properties().lossless_compression
 }
 
 /// The kinds a read of a new `Private` texture's unwritten pattern announces on `device` where
 /// the device cannot write it: [`FRESH_PATTERNS`], or none on a device without Metal's
-/// compression, whose new textures hold what their memory held, which nothing announces.
+/// compression, whose new textures read zero, which nothing announces.
 pub(super) fn patterns_of(device: &Device) -> &'static [Degradation] {
-    match unfilled(device) {
+    match zero_filled(device) {
         true => &[],
         false => &FRESH_PATTERNS,
     }
 }
 
-/// The new `Private` textures `device` made holding what their memory held, so far.
-pub(super) fn unfilled_count(device: &Device) -> u64 {
-    device.work_counts().private_textures_unfilled
-}
-
-/// What `read`, a new `Private` texture's texels that nothing wrote, held: zero, the released
-/// texture's `old` texel in every texel, or other bytes.
-fn held(read: &[u8], old: &[u8]) -> &'static str {
-    if read.iter().all(|&byte| byte == 0) {
-        "zero"
-    } else if !old.is_empty() && read.chunks(old.len()).all(|texel| texel == old) {
-        "the released texture's texels"
-    } else {
-        "other bytes"
-    }
+/// The new `Private` textures `device` made filled with zeros at their first use, so far.
+pub(super) fn zero_filled_count(device: &Device) -> u64 {
+    device.work_counts().private_textures_zero_filled
 }
 
 /// The three storage modes a resource of its own memory takes.
@@ -496,32 +484,30 @@ fn new_textures_read_metal_s_answer_after_written_ones_are_released() {
         );
         drop(first);
         zeroed(&messages);
-        let before = unfilled_count(&lane.device);
+        let before = zero_filled_count(&lane.device);
         let new = lane.device.new_texture(&shape.descriptor).unwrap();
         assert!(
             !zeroed(&messages),
             "{} on {name}: announced as made",
             shape.name
         );
-        let unfilled = shape.private() && unfilled(&lane.device);
+        let filled = shape.private() && zero_filled(&lane.device);
         assert_eq!(
-            unfilled_count(&lane.device) - before,
-            u64::from(unfilled),
-            "{} on {name}: counted as made unfilled",
+            zero_filled_count(&lane.device) - before,
+            u64::from(filled),
+            "{} on {name}: counted as zero-filled",
             shape.name
         );
         let read = texels(&lane, &shape, &new);
         let zeroed = zeroed(&messages);
-        if unfilled {
-            let what = held(&read, &old);
-            let pattern = shape.pattern.is_some() && read == shape.expected(false);
+        if filled {
             assert!(
-                !zeroed && !pattern,
-                "{} on {name}, without Metal's compression: announced {zeroed}, reads Metal's \
-                 pattern {pattern}, which nothing wrote",
-                shape.name
+                !zeroed && non_zero(&read).is_none(),
+                "{} on {name}, without Metal's compression: announced {zeroed}, reads other than \
+                 zero {:02x?}",
+                shape.name,
+                non_zero(&read)
             );
-            println!("FRESH-UNFILLED {} on {name}: {what}", shape.name);
             (made, left) = (made + 1, left + 1);
             continue;
         }
@@ -547,7 +533,7 @@ fn new_textures_read_metal_s_answer_after_written_ones_are_released() {
     }
     println!(
         "FRESH-TEXTURES {made} cases read Metal's answer on {name}: {patterned} its pattern, \
-         {announced} zero announced, {left} Private ones holding what their memory held"
+         {announced} zero announced, {left} Private ones zero-filled"
     );
     drop(cache);
     quiet(lane, &messages);
@@ -677,7 +663,7 @@ fn new_private_textures_read_metal_s_pattern_by_format() {
         let shape =
             Shape::new(&format!("{pf:?}"), pf, (64, bytes), usage, private).patterned(texel, 1);
         zeroed(&messages);
-        let before = unfilled_count(&lane.device);
+        let before = zero_filled_count(&lane.device);
         let texture = match lane.device.new_texture(&shape.descriptor) {
             Ok(texture) => texture,
             Err(Error::Unsupported(why)) => {
@@ -687,22 +673,22 @@ fn new_private_textures_read_metal_s_pattern_by_format() {
             Err(error) => panic!("{pf:?} on {name}: {error:?}"),
         };
         assert!(!zeroed(&messages), "{pf:?} on {name}: announced as made");
-        let unfilled = unfilled(&lane.device);
+        let filled = zero_filled(&lane.device);
         assert_eq!(
-            unfilled_count(&lane.device) - before,
-            u64::from(unfilled),
-            "{pf:?} on {name}: counted as made unfilled"
+            zero_filled_count(&lane.device) - before,
+            u64::from(filled),
+            "{pf:?} on {name}: counted as zero-filled"
         );
         let read = texels(&lane, &shape, &texture);
         let zeroed = zeroed(&messages);
-        if unfilled {
-            let what = held(&read, &[]);
+        if filled {
             assert!(
-                !zeroed && read != shape.expected(false),
-                "{pf:?} on {name}, without Metal's compression: announced {zeroed}, or reads Metal's \
-                 pattern, which nothing wrote"
+                !zeroed && non_zero(&read).is_none(),
+                "{pf:?} on {name}, without Metal's compression: announced {zeroed}, or reads other \
+                 than zero {:02x?}",
+                non_zero(&read)
             );
-            left.push(format!("{pf:?} {what}"));
+            left.push(pf);
             continue;
         }
         assert!(
@@ -718,7 +704,7 @@ fn new_private_textures_read_metal_s_pattern_by_format() {
     }
     println!(
         "FRESH-PATTERNS on {name}: Metal's pattern {patterned:?}; zero announced {announced:?}; \
-         holding what their memory held {left:?}"
+         zero-filled {left:?}"
     );
     drop(cache);
     quiet(lane, &messages);
@@ -727,7 +713,7 @@ fn new_private_textures_read_metal_s_pattern_by_format() {
 /// New `Private` mipmapped `RGBA8Unorm` chains read Metal's pattern in each level whose shorter
 /// side is 16 or more, zero in the rest (a 64² chain's levels 64, 32 and 16; 100x40's 100x40 and
 /// 50x20; 16x256's and 17²'s first), level by level. On a device without Metal's compression each
-/// holds what its memory held, counted, and not the pattern.
+/// reads zero, counted as zero-filled.
 #[test]
 fn new_private_chains_read_the_pattern_in_their_wide_levels() {
     let (messages, cache, lane) = pattern_lane();
@@ -750,25 +736,21 @@ fn new_private_chains_read_the_pattern_in_their_wide_levels() {
         shape.descriptor.height = height;
         shape.descriptor.mipmap_level_count = levels;
         let shape = shape.patterned(MAGENTA, wide);
-        let before = unfilled_count(&lane.device);
+        let before = zero_filled_count(&lane.device);
         let texture = lane.device.new_texture(&shape.descriptor).unwrap();
-        let unfilled = unfilled(&lane.device);
+        let filled = zero_filled(&lane.device);
         assert_eq!(
-            unfilled_count(&lane.device) - before,
-            u64::from(unfilled),
-            "a new Private {width}x{height} chain on {name}: counted as made unfilled"
+            zero_filled_count(&lane.device) - before,
+            u64::from(filled),
+            "a new Private {width}x{height} chain on {name}: counted as zero-filled"
         );
         let read = texels(&lane, &shape, &texture);
-        match unfilled {
-            true => {
-                let what = held(&read, &[]);
-                assert!(
-                    read != shape.expected(false),
-                    "a new Private {width}x{height} chain on {name}, without Metal's compression: \
-                     reads Metal's pattern, which nothing wrote"
-                );
-                println!("FRESH-UNFILLED a {width}x{height} chain on {name}: {what}");
-            }
+        match filled {
+            true => assert_eq!(
+                non_zero(&read),
+                None,
+                "a new Private {width}x{height} chain on {name}, without Metal's compression"
+            ),
             false => assert!(
                 read == shape.expected(false),
                 "a new Private {width}x{height} chain of {levels} levels on {name}"
@@ -786,8 +768,8 @@ const DEPTH_SIDE: u32 = 16;
 /// A new `Private` 4x `Depth32Float` render target of [`DEPTH_SIDE`]², sampled too: Metal reads
 /// its pattern, a NaN depth (all ones), which no clear of a multisampled image writes, so it
 /// reads zero here and announces `fresh-pattern-zeroed` where a command first reads it unwritten.
-/// With it, whether it holds what its memory held, written by nothing (on a device presented
-/// without Metal's compression, counted).
+/// With it, whether it reads zero, filled at its first use (on a device presented without Metal's
+/// compression, counted).
 fn msaa_depth(lane: &Lane) -> (Texture, bool) {
     let side = u64::from(DEPTH_SIDE);
     let pf = PixelFormat::Depth32Float;
@@ -796,15 +778,15 @@ fn msaa_depth(lane: &Lane) -> (Texture, bool) {
     descriptor.sample_count = 4;
     descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
     descriptor.resource_options = ResourceOptions::private();
-    let before = unfilled_count(&lane.device);
+    let before = zero_filled_count(&lane.device);
     let texture = lane.device.new_texture(&descriptor).unwrap();
-    let unfilled = unfilled(&lane.device);
+    let filled = zero_filled(&lane.device);
     assert_eq!(
-        unfilled_count(&lane.device) - before,
-        u64::from(unfilled),
-        "a new 4x Depth32Float: counted as made unfilled"
+        zero_filled_count(&lane.device) - before,
+        u64::from(filled),
+        "a new 4x Depth32Float: counted as zero-filled"
     );
-    (texture, unfilled)
+    (texture, filled)
 }
 
 /// A pass of `depth` alone, loaded by `load` (cleared to `clear`) and stored, with no draw.
@@ -894,8 +876,8 @@ fn a_multisampled_depth_cleared_past_its_render_area_reads_its_clear_silently() 
         options.mac_class = Some(MacClass::AppleSilicon);
     });
     let name = lane.device.name();
-    let (depth, unfilled) = msaa_depth(&lane);
-    assert!(!unfilled, "a new 4x Depth32Float on {name}: unfilled");
+    let (depth, filled) = msaa_depth(&lane);
+    assert!(!filled, "a new 4x Depth32Float on {name}: zero-filled");
     let mut descriptor = RenderPassDescriptor::new();
     let attachment = &mut descriptor.depth_attachment;
     attachment.texture = Some(depth.clone());
@@ -931,13 +913,13 @@ fn a_multisampled_depth_cleared_past_its_render_area_reads_its_clear_silently() 
 
 /// A new multisampled `Depth32Float` target a pass loads before anything wrote it announces
 /// `fresh-pattern-zeroed` as the pass's encoder is made, where the device writes zero for Metal's
-/// NaN, and reads that. On a device without Metal's compression it holds what its memory
-/// held, and announces nothing.
+/// NaN, and reads that. On a device without Metal's compression it reads zero, and announces
+/// nothing.
 #[test]
 fn a_loaded_never_written_multisampled_depth_announces() {
     let (messages, cache, lane) = pattern_lane();
     let name = lane.device.name();
-    let (depth, unfilled) = msaa_depth(&lane);
+    let (depth, filled) = msaa_depth(&lane);
     assert!(
         !zeroed(&messages),
         "a new 4x Depth32Float on {name}: announced as made"
@@ -946,7 +928,8 @@ fn a_loaded_never_written_multisampled_depth_announces() {
     let zeroed = zeroed(&messages);
     let depths = sample_depths(&lane, &depth);
     assert!(
-        (unfilled && !zeroed) || reads_fresh(&depths, zeroed),
+        (filled && !zeroed && depths.iter().all(|&depth| depth == 0))
+            || reads_fresh(&depths, zeroed),
         "a loaded 4x Depth32Float on {name} (announced: {zeroed}): {:08x?} first",
         &depths[..4.min(depths.len())]
     );
@@ -957,12 +940,12 @@ fn a_loaded_never_written_multisampled_depth_announces() {
 
 /// A new multisampled `Depth32Float` target a shader reads before anything wrote it announces
 /// `fresh-pattern-zeroed` at that read, where the device writes zero for Metal's NaN. On a device
-/// without Metal's compression it holds what its memory held, and announces nothing.
+/// without Metal's compression it reads zero, and announces nothing.
 #[test]
 fn a_never_written_multisampled_depth_read_by_a_shader_announces() {
     let (messages, cache, lane) = pattern_lane();
     let name = lane.device.name();
-    let (depth, unfilled) = msaa_depth(&lane);
+    let (depth, filled) = msaa_depth(&lane);
     assert!(
         !zeroed(&messages),
         "a new 4x Depth32Float on {name}: announced as made"
@@ -970,7 +953,8 @@ fn a_never_written_multisampled_depth_read_by_a_shader_announces() {
     let depths = sample_depths(&lane, &depth);
     let zeroed = zeroed(&messages);
     assert!(
-        (unfilled && !zeroed) || reads_fresh(&depths, zeroed),
+        (filled && !zeroed && depths.iter().all(|&depth| depth == 0))
+            || reads_fresh(&depths, zeroed),
         "a read 4x Depth32Float on {name} (announced: {zeroed}): {:08x?} first",
         &depths[..4.min(depths.len())]
     );
@@ -998,8 +982,8 @@ fn msaa_pass(
 }
 
 /// A new `Private` 4x multisampled `RGBA8Unorm` target, made right after one cleared to a color
-/// and stored was released, resolves to zero when loaded (the module docs). On a device without
-/// Metal's compression it holds what its memory held, counted, its resolve unchecked.
+/// and stored was released, resolves to zero when loaded (the module docs): on a device without
+/// Metal's compression, counted as zero-filled.
 #[test]
 fn a_new_multisampled_texture_reads_zero() {
     let (messages, cache, lane) = lane();
@@ -1010,13 +994,12 @@ fn a_new_multisampled_texture_reads_zero() {
     let cleared = msaa_pass(&old, (LoadAction::Clear, color), StoreAction::Store, None);
     lane.run(&cleared, |_, _, _| {}).unwrap();
     drop(old);
-    let before = unfilled_count(&lane.device);
+    let before = zero_filled_count(&lane.device);
     let new = lane.msaa(pf);
-    let unfilled = unfilled(&lane.device);
     assert_eq!(
-        unfilled_count(&lane.device) - before,
-        u64::from(unfilled),
-        "a new Private 4x RGBA8Unorm target on {name}: counted as made unfilled"
+        zero_filled_count(&lane.device) - before,
+        u64::from(zero_filled(&lane.device)),
+        "a new Private 4x RGBA8Unorm target on {name}: counted as zero-filled"
     );
     let mut shape = ONE;
     shape.shared = true;
@@ -1030,17 +1013,11 @@ fn a_new_multisampled_texture_reads_zero() {
     );
     lane.run(&loaded, |_, _, _| {}).unwrap();
     let texels = lane.read(&resolved, (0, 0), 4, BlitOption::None);
-    match unfilled {
-        true => println!(
-            "FRESH-UNFILLED a 4x RGBA8Unorm target's resolve on {name}: {}",
-            held(&texels, &[])
-        ),
-        false => assert_eq!(
-            non_zero(&texels),
-            None,
-            "a new Private 4x RGBA8Unorm target's resolve on {name}"
-        ),
-    }
+    assert_eq!(
+        non_zero(&texels),
+        None,
+        "a new Private 4x RGBA8Unorm target's resolve on {name}"
+    );
     drop(cache);
     quiet(lane, &messages);
 }
@@ -1076,17 +1053,17 @@ fn new_multisampled_textures_read_the_pattern_or_announce_zero() {
         (PixelFormat::RGBA16Float, 8, true),
     ] {
         zeroed(&messages);
-        let before = unfilled_count(&lane.device);
+        let before = zero_filled_count(&lane.device);
         let new = lane.texture(pf, msaa, TextureUsage::RENDER_TARGET);
         assert!(
             !zeroed(&messages),
             "a new Private 4x 8x8 {pf:?} on {name}: as made"
         );
-        let unfilled = unfilled(&lane.device);
+        let filled = zero_filled(&lane.device);
         assert_eq!(
-            unfilled_count(&lane.device) - before,
-            u64::from(unfilled),
-            "a new Private 4x 8x8 {pf:?} on {name}: counted as made unfilled"
+            zero_filled_count(&lane.device) - before,
+            u64::from(filled),
+            "a new Private 4x 8x8 {pf:?} on {name}: counted as zero-filled"
         );
         let resolved = lane.texture(pf, resolve, TextureUsage::RENDER_TARGET);
         let none = ClearColor::new(0.0, 0.0, 0.0, 0.0);
@@ -1099,13 +1076,16 @@ fn new_multisampled_textures_read_the_pattern_or_announce_zero() {
         lane.run(&loaded, |_, _, _| {}).unwrap();
         let announced = zeroed(&messages);
         assert!(
-            (nan && !unfilled) || !announced,
+            (nan && !filled) || !announced,
             "a new Private 4x 8x8 {pf:?} on {name}, loaded: announced"
         );
         let texels = lane.read(&resolved, (0, 0), bytes, BlitOption::None);
-        if unfilled {
-            let what = held(&texels, &[]);
-            println!("FRESH-UNFILLED a 4x 8x8 {pf:?} target's resolve on {name}: {what}");
+        if filled {
+            assert_eq!(
+                non_zero(&texels),
+                None,
+                "a new Private 4x 8x8 {pf:?} target's resolve on {name}"
+            );
             continue;
         }
         let first = &texels[..bytes as usize];
@@ -1161,13 +1141,13 @@ fn a_new_multisampled_float_texture_s_samples_hold_metal_s_pattern_or_announce()
         shared: false,
     };
     zeroed(&messages);
-    let before = unfilled_count(&lane.device);
+    let before = zero_filled_count(&lane.device);
     let new = lane.texture(pf, msaa, TextureUsage::RENDER_TARGET);
-    let unfilled = unfilled(&lane.device);
+    let filled = zero_filled(&lane.device);
     assert_eq!(
-        unfilled_count(&lane.device) - before,
-        u64::from(unfilled),
-        "a new Private 4x 8x8 {pf:?} on {name}: counted as made unfilled"
+        zero_filled_count(&lane.device) - before,
+        u64::from(filled),
+        "a new Private 4x 8x8 {pf:?} on {name}: counted as zero-filled"
     );
     let viewed =
         TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ | TextureUsage::PIXEL_FORMAT_VIEW;
@@ -1213,10 +1193,10 @@ fn a_new_multisampled_float_texture_s_samples_hold_metal_s_pattern_or_announce()
         },
         &samples[..8]
     );
-    // On a device without Metal's compression nothing wrote the samples, and nothing
-    // announces their pattern zeroed.
+    // On a device without Metal's compression the samples read zero, and nothing announces
+    // their pattern zeroed.
     assert!(
-        (unfilled && !zero) || exact || (nans && converted) || (zeros && zero),
+        (filled && zeros && !zero) || exact || (nans && converted) || (zeros && zero),
         "a new Private 4x 8x8 {pf:?} target's samples on {name}: {:02x?} first",
         &samples[..8]
     );
@@ -1226,8 +1206,7 @@ fn a_new_multisampled_float_texture_s_samples_hold_metal_s_pattern_or_announce()
 
 /// A new `Private` `RGB10A8_2P_XR10` texture that shaders write reads, in both planes, what a new
 /// `Shared` one reads (zero bytes), made right after one written by a kernel was released (the
-/// module docs). On a device without Metal's compression it holds what its memory held,
-/// counted, its planes unchecked.
+/// module docs): on a device without Metal's compression, counted as zero-filled.
 #[test]
 fn a_new_two_plane_texture_reads_zero_in_both_planes() {
     let (messages, cache, lane) = lane();
@@ -1267,29 +1246,18 @@ fn a_new_two_plane_texture_reads_zero_in_both_planes() {
     let written = reads(&lane.device, &lane.queue, &kernels, &old, dispatch);
     assert_ne!(written, zero, "the written texture on {name}");
     drop(old);
-    let before = unfilled_count(&lane.device);
+    let before = zero_filled_count(&lane.device);
     let new = made(ResourceOptions::private());
-    let unfilled = unfilled(&lane.device);
     assert_eq!(
-        unfilled_count(&lane.device) > before,
-        unfilled,
-        "a new Private {pf:?} texture on {name}: counted as made unfilled"
+        zero_filled_count(&lane.device) > before,
+        zero_filled(&lane.device),
+        "a new Private {pf:?} texture on {name}: counted as zero-filled"
     );
     let read = reads(&lane.device, &lane.queue, &kernels, &new, dispatch);
-    let same = read == zero;
-    match unfilled {
-        true => println!(
-            "FRESH-UNFILLED a {pf:?} texture on {name}: {}",
-            match same {
-                true => "a new Shared one's planes",
-                false => "other planes",
-            }
-        ),
-        false => assert!(
-            same,
-            "a new Private {pf:?} texture on {name} reads other planes than a new Shared one's"
-        ),
-    }
+    assert!(
+        read == zero,
+        "a new Private {pf:?} texture on {name} reads other planes than a new Shared one's"
+    );
     drop(cache);
     quiet(lane, &messages);
 }

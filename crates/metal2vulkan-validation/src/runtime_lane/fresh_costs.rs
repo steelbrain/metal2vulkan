@@ -20,10 +20,10 @@
 //! `Private` ones Metal's pattern (`RGBA8Unorm` opaque magenta, `RGBA16Float` and `Depth32Float`
 //! all-ones NaNs where the device writes them, zero announced where it does not), the `Shared`
 //! one zero. On a device without Metal's compression (`DeviceProperties::lossless_compression`
-//! false) a `Private` texture has no first work: it holds what its memory held, unchecked, and the
-//! test asserts instead that each was counted so (`WorkCounts::private_textures_unfilled`).
+//! false) a `Private` texture's first work is its zeros: the last one reads zero, and each was
+//! counted so (`WorkCounts::private_textures_zero_filled`).
 
-use super::fresh_contents::{unfilled, unfilled_count, zeroed, FRESH_PATTERNS};
+use super::fresh_contents::{zero_filled, zero_filled_count, zeroed, FRESH_PATTERNS};
 use super::{read_buffer, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
@@ -202,8 +202,8 @@ fn new_texture_zero_costs() {
             shape.descriptor.resource_options.storage_mode(),
             Ok(StorageMode::Private)
         );
-        let left = private && unfilled(&device);
-        let before = unfilled_count(&device);
+        let filled = private && zero_filled(&device);
+        let before = zero_filled_count(&device);
         for k in 0..WARM + SAMPLES {
             let alone = submit(&queue, &scratch);
             let began = Instant::now();
@@ -219,11 +219,11 @@ fn new_texture_zero_costs() {
             }
             last = textures.into_iter().last();
         }
-        let each = u64::from(left) * shape.count as u64;
+        let each = u64::from(filled) * shape.count as u64;
         assert_eq!(
-            unfilled_count(&device) - before,
+            zero_filled_count(&device) - before,
             each * (WARM + SAMPLES) as u64,
-            "{name} on {on}: counted as made unfilled"
+            "{name} on {on}: counted as zero-filled"
         );
         let (make, make_fast) = stat(made);
         let (wall, wall_fast) = stat(first);
@@ -238,12 +238,12 @@ fn new_texture_zero_costs() {
             wall - alone,
             (wall - alone) / shape.count as f64,
         );
-        if let (Some(texel), Some(texture), false) = (shape.texel, &last, left) {
+        if let (Some(texel), Some(texture)) = (shape.texel, &last) {
             let bytes = first_level(&device, &queue, texture, texel.len() as u64);
-            // Zero where the device announced, at this read, that it could not write Metal's
-            // pattern exactly.
+            // Zero where the device fills a new `Private` texture with zeros, or announced, at
+            // this read, that it could not write Metal's pattern exactly.
             let zeroed = zeroed(&messages);
-            let reads = |at: &[u8]| match zeroed {
+            let reads = |at: &[u8]| match zeroed || filled {
                 true => at.iter().all(|&b| b == 0),
                 false => at == texel,
             };

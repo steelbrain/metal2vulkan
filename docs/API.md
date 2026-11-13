@@ -5158,16 +5158,17 @@ each item named states the rule in full.
   unified memory and keeps no texture compressed). `DeviceProperties::lossless_compression`
   states it. On a device that presents a Mac with an Intel or AMD GPU (`lossless_compression`
   false), the runtime answers as that Mac:
-  - a new `Private` texture holds what its memory held, zero or a released texture's texels, and
-    no command writes it (`WorkCounts::private_textures_unfilled` counts each), where an Apple
-    silicon Mac's reads zero or the compressed texture's fixed pattern, so `fresh-pattern-zeroed`
-    is never announced. Measured on Macs with an AMD Radeon Pro 5300M and an Intel UHD 630 (the
-    consumer's probes): new `Private` textures read zero; a mipmapped `RGBA16Float` one made right
-    after a cleared one of its descriptor was released read the cleared colour in every level on
-    both; a `Depth32Float` one never read the released clear. On an Apple GPU, whose own image of
-    such a texture is compressed and would read Apple's pattern, which no such Mac reads, the
-    runtime fills it with zeros as it is made instead (`WorkCounts::private_textures_zero_filled`
-    counts each).
+  - a new `Private` texture reads zero, filled at its first use
+    (`WorkCounts::private_textures_zero_filled` counts each), where an Apple silicon Mac's reads
+    zero or the compressed texture's fixed pattern, so `fresh-pattern-zeroed` is never announced.
+    Such a Mac's holds what its memory held. Measured on Macs with an AMD Radeon Pro 5300M and an
+    Intel UHD 630 (the consumer's probes): new `Private` textures read zero; a mipmapped
+    `RGBA16Float` one made right after a cleared one of its descriptor was released read the
+    cleared colour in every level on both; a `Depth32Float` one never read the released clear.
+    That colour is the same process's. A consumer that serves several processes from one device
+    would show one process another's texels that way, which macOS never does, so the runtime
+    gives the zeros those Macs read where their memory held nothing, which Metal's undefined
+    contents allow.
   - a GPU blit or fill through any texture keeps its bytes, with no `extended-range-bits-kept`,
     `device-nan-encoding` or `shared-exponent-kept` note for it and no rewrite under
     `ExtendedRangeBlitPolicy::Canonical`, and a clear of any texture takes the route of Metal's

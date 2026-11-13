@@ -8,11 +8,10 @@
 //!   read by a blit before anything writes it:
 //!   - an Apple silicon Mac's reads Metal's fixed pattern, opaque magenta, in every texel
 //!     (`texture/heap_tiled.rs`'s `fresh_pattern`), which the runtime writes whatever the GPU;
-//!   - a Mac with an Intel or AMD GPU's holds what its memory held: on a GPU that is not Apple's
-//!     the runtime writes nothing (`WorkCounts::private_textures_unfilled` moves by one), and the
-//!     test prints what it held (`MAC-CLASS-UNFILLED`); on an Apple GPU, whose own compressed
-//!     image would read Apple's pattern, it reads zero
-//!     (`WorkCounts::private_textures_zero_filled` moves by one).
+//!   - a Mac with an Intel or AMD GPU's reads zero, on every GPU: the runtime fills it with zeros
+//!     (`WorkCounts::private_textures_zero_filled` moves by one), never leaving what its memory
+//!     held, which may be another process's texels where a consumer's processes share the
+//!     device.
 
 use super::blit_holds::{Scratch, WAIT};
 use crate::texture::heap_tiled::{fresh_pattern, FreshPattern};
@@ -48,8 +47,8 @@ fn device(cache: &Path, class: Option<MacClass>) -> Device {
 }
 
 /// What a new `Private` render target of `device` reads, blitted out before anything writes it,
-/// and how far it moved the unfilled and zero-filled counts.
-fn fresh(device: &Device) -> (Vec<u8>, u64, u64) {
+/// and how far it moved the zero-filled count.
+fn fresh(device: &Device) -> (Vec<u8>, u64) {
     let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
     descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
     descriptor.resource_options = ResourceOptions::private();
@@ -85,7 +84,6 @@ fn fresh(device: &Device) -> (Vec<u8>, u64, u64) {
             .to_vec();
     (
         read,
-        after.private_textures_unfilled - before.private_textures_unfilled,
         after.private_textures_zero_filled - before.private_textures_zero_filled,
     )
 }
@@ -101,33 +99,25 @@ fn starts_as(device: &Device, class: MacClass) {
         "{name}: {class:?}"
     );
     let apple_gpu = MacClass::of_vendor(device.properties().vendor_id) == MacClass::AppleSilicon;
-    let (read, unfilled, zero_filled) = fresh(device);
-    match (class, apple_gpu) {
-        (MacClass::AppleSilicon, _) => {
+    let (read, zero_filled) = fresh(device);
+    match class {
+        MacClass::AppleSilicon => {
             let Some(FreshPattern::Color { texel, .. }) = fresh_pattern(PixelFormat::RGBA8Unorm)
             else {
                 panic!("RGBA8Unorm has a colour pattern");
             };
-            assert_eq!((unfilled, zero_filled), (0, 0), "{name}: {class:?}");
+            assert_eq!(zero_filled, 0, "{name}: {class:?}");
             assert!(
                 read.chunks(texel.len()).all(|t| t == texel),
                 "{name}: {class:?}: a new texture reads Metal's pattern"
             );
         }
-        (MacClass::IntelOrAmd, true) => {
-            assert_eq!((unfilled, zero_filled), (0, 1), "{name}: {class:?}");
+        MacClass::IntelOrAmd => {
+            assert_eq!(zero_filled, 1, "{name}: {class:?}");
             assert!(
                 read.iter().all(|&byte| byte == 0),
-                "{name}: {class:?}: a new texture on an Apple GPU reads zero"
+                "{name}: {class:?}: a new texture reads zero"
             );
-        }
-        (MacClass::IntelOrAmd, false) => {
-            assert_eq!((unfilled, zero_filled), (1, 0), "{name}: {class:?}");
-            let held = match read.iter().all(|&byte| byte == 0) {
-                true => "zero",
-                false => "other bytes",
-            };
-            println!("MAC-CLASS-UNFILLED on {name}: {held}");
         }
     }
     println!("MAC-CLASS on {name}: {class:?}, Apple GPU {apple_gpu}");

@@ -282,12 +282,12 @@ pub enum MacClass {
     /// (an Apple M3 Max).
     AppleSilicon,
     /// A Mac with an Intel or AMD GPU, which keeps no texture compressed: a new `Private`
-    /// texture holds what its memory held (zero, or a released texture's texels: an Intel UHD
-    /// 630 and an AMD Radeon Pro 5300M), blits keep the bytes, and a `half` NaN clear goes
-    /// through `half`. On a GPU that keeps no texture compressed the runtime writes nothing into
-    /// a new `Private` texture (`WorkCounts::private_textures_unfilled`); on an Apple GPU, whose
-    /// own compressed texture would read Apple's pattern, it fills it with zeros
-    /// (`WorkCounts::private_textures_zero_filled`). A `Clear` load in a pass of one layer
+    /// texture reads zero, blits keep the bytes, and a `half` NaN clear goes through `half`. Such
+    /// a Mac's new `Private` texture holds what its memory held (zero, or a released texture's
+    /// texels of the same process: an Intel UHD 630 and an AMD Radeon Pro 5300M); the runtime
+    /// fills it with zeros instead (`WorkCounts::private_textures_zero_filled`), as the memory
+    /// may have held another process's where a consumer's processes share the device. A `Clear`
+    /// load in a pass of one layer
     /// without a draw call clears the whole level and slice past the render area, the AMD Radeon
     /// Pro 5300M's answer; an Intel UHD 630 clears anything from the render area alone to the
     /// whole texture there, by format and shape (the consumer's probes). Its GPU adds a sampler

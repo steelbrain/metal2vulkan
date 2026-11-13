@@ -395,8 +395,8 @@ pub const WITHOUT_COMPRESSION: &str = "a-device-answers-as-the-class-of-mac-it-p
 /// texture's fixed pattern, and a GPU blit through a compressed texture writes some formats'
 /// canonical encoding. A device that presents a Mac keeping none
 /// (`DeviceProperties::lossless_compression` false), as a Mac with an Intel or AMD GPU is, answers
-/// as that Mac: the new texture holds what its memory held, zero or a released texture's texels,
-/// and nothing writes it (`WorkCounts::private_textures_unfilled`), and the blit keeps the bytes.
+/// as that Mac: the new texture reads zero (`WorkCounts::private_textures_zero_filled`), what such
+/// a Mac's reads where its memory held nothing, and the blit keeps the bytes.
 ///
 /// **Why it is the venue's and not ours**, as [`shared_memory_notice`] is: no recording holds what
 /// a Mac without the compression reads, and its answer for a new texture is not one value but
