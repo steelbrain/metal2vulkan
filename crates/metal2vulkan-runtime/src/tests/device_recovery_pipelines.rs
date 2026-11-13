@@ -102,14 +102,22 @@ fn kernel(device: &Device) -> Function {
         .unwrap()
 }
 
-/// A state of `function` whose dispatches take 32 threads a threadgroup, which its creation
-/// predicts, of at most `most` threads a threadgroup (a field of its pipeline's key), labelled
-/// `label`.
-fn state(device: &Device, function: &Function, most: u32, label: &str) -> ComputePipelineState {
+/// A state of `function`, labelled `label`: of at most `most` threads a threadgroup (a field of
+/// its pipeline's key) where `most` is given, else one whose dispatches take 32 threads a
+/// threadgroup, which its creation predicts. Metal refuses a request that states both and
+/// differs.
+fn state(
+    device: &Device,
+    function: &Function,
+    most: Option<u32>,
+    label: &str,
+) -> ComputePipelineState {
     let mut descriptor =
         ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
-    descriptor.required_threads_per_threadgroup = Some([32, 1, 1]);
-    descriptor.max_total_threads_per_threadgroup = Some(most);
+    match most {
+        Some(most) => descriptor.max_total_threads_per_threadgroup = Some(most),
+        None => descriptor.required_threads_per_threadgroup = Some([32, 1, 1]),
+    }
     let options = PipelineOptions {
         label: Some(label.to_owned()),
         ..PipelineOptions::default()
@@ -129,7 +137,7 @@ fn a_recovery_carries_a_compute_state() {
     let heard = Heard::default();
     let device = heard_device(&scratch.0, &heard);
     let queue = device.new_command_queue().unwrap();
-    let state = state(&device, &kernel(&device), 32, "scaled");
+    let state = state(&device, &kernel(&device), None, "scaled");
     assert_eq!(run(&device, &queue, &state).unwrap(), expected());
     let identity = (state.unique_identifier(), state.label().map(str::to_owned));
     let from = heard.lock().unwrap().len();
@@ -287,8 +295,9 @@ fn recovery_time(device: &Device, heard: &Heard, states: u32) -> Duration {
 
 /// A recovery's wall time with no live state, with [`STATES`] live compute states of as many
 /// pipelines, and with [`STATES`] live drawing states of as many pipelines, each state made
-/// again with its predicted `VkPipeline` queued (logged as `RECOVERY-WALL`); and a state of each
-/// kind made again runs there.
+/// again (a drawing state's predicted `VkPipeline` queued; the compute states, of no stated
+/// threadgroup size, predict none), logged as `RECOVERY-WALL`; and a state of each kind made
+/// again runs there.
 #[test]
 fn a_recovery_with_many_live_states_is_timed() {
     let scratch = Scratch::new();
@@ -298,7 +307,7 @@ fn a_recovery_with_many_live_states_is_timed() {
     let bare = recovery_time(&device, &heard, 0);
     let function = kernel(&device);
     let states: Vec<_> = (0..STATES)
-        .map(|most| state(&device, &function, 32 + most, "timed"))
+        .map(|most| state(&device, &function, Some(32 + most), "timed"))
         .collect();
     let compute = recovery_time(&device, &heard, STATES);
     assert_eq!(run(&device, &queue, &states[0]).unwrap(), expected());
