@@ -559,6 +559,13 @@ impl Device {
         {
             return Ok(plan);
         }
+        #[cfg(test)]
+        if (self.shared().sampled_costs_forced).load(std::sync::atomic::Ordering::Relaxed)
+            && candidate.usage.contains(ImageUsageFlags::SAMPLED)
+            && !plan.usage.contains(ImageUsageFlags::SAMPLED)
+        {
+            return Ok(plan);
+        }
         let answers = &self.shared().textures.usage_answers;
         let known = lock(answers).answer(&plan, &candidate);
         let free = match known {

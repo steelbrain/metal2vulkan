@@ -605,6 +605,11 @@ pub(super) struct DeviceShared {
     /// render target `STORAGE` for nothing.
     #[cfg(test)]
     pub(crate) storage_costs_forced: AtomicBool,
+    /// `SAMPLED` costs every image whose plan lacks it something (`Device::if_free`), whatever
+    /// the device lays out: for the test of `tests/surface_depth_usage_shadow.rs`, whose texture's
+    /// shadow then lacks it and is sampled through a usage shadow.
+    #[cfg(test)]
+    pub(crate) sampled_costs_forced: AtomicBool,
     /// The route a test takes for images over dma-buf pages, whatever the driver answers of an
     /// explicit plane's offset (`dma_buf.rs`'s `PlaneRoute`, as its `u8`): for the tests of
     /// `tests/dma_buf_plane_offset.rs` on a driver that answers the offset asked.
@@ -3036,6 +3041,8 @@ impl Device {
             linear_rule_forced: Default::default(),
             #[cfg(test)]
             storage_costs_forced: Default::default(),
+            #[cfg(test)]
+            sampled_costs_forced: Default::default(),
             #[cfg(test)]
             plane_route_forced: Default::default(),
             dirty: Default::default(),
