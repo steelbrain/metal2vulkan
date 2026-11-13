@@ -26,7 +26,8 @@
 //!   for that one instead. Chained so, a kept command buffer names in each submission every
 //!   command buffer that ever came next after it, and the submission fails once one of those was
 //!   trimmed away (`RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission`): there the
-//!   spares free command buffers without trimming their pools (`spares.rs`).
+//!   spares trim their pools only in trim rounds, each once every kept command buffer was marked
+//!   to be recorded again before a batch takes it ([`KeptBarriers::invalidate`], `spares.rs`).
 //! - **Timestamps, per slot.** A command buffer that writes timestamps writes them into one slot's
 //!   two queries, so it is kept for its slot ([`SlotStamps`]): one per slot and list, taken again
 //!   only by a batch of a later holding of that slot (`gpu_time::Slot::lease`), once the batch
@@ -116,6 +117,10 @@ pub(crate) struct QueueKept {
     stamped: Vec<KeptList>,
     /// The command buffers of the lists replaced, each completed, for later recordings.
     spare: Vec<vk::CommandBuffer>,
+    /// The times its command buffers were marked to be recorded again
+    /// ([`invalidate`](Self::invalidate)): one recorded before the last is recorded again before
+    /// a batch takes it.
+    epoch: u64,
 }
 
 /// What a batch takes of a `VkQueue`'s kept command buffers ([`QueueKept::take`]).
@@ -143,6 +148,8 @@ struct KeptList {
 struct Kept {
     raw: vk::CommandBuffer,
     after: u64,
+    /// Its queue's [`QueueKept::epoch`] as it was recorded.
+    epoch: u64,
     /// Where it writes timestamps: the slot's pool and first query, and the lease of the holding
     /// whose batch last took it.
     slot: Option<(vk::QueryPool, u32, u64)>,
@@ -202,6 +209,11 @@ impl QueueKept {
             // the one that may have completed.
             if list.buffers.front().is_some_and(|k| k.after <= completed) {
                 if let Some(mut taken) = list.buffers.pop_front() {
+                    // Marked to be recorded again: recorded into for this batch.
+                    if taken.epoch < self.epoch {
+                        self.spare.push(taken.raw);
+                        return Take::Record(index);
+                    }
                     taken.after = at;
                     let raw = taken.raw;
                     list.buffers.push_back(taken);
@@ -232,6 +244,10 @@ impl QueueKept {
                 let Some(mut taken) = list.buffers.remove(at_index) else {
                     return Take::Past;
                 };
+                if taken.epoch < self.epoch {
+                    self.spare.push(taken.raw);
+                    return Take::Record(index);
+                }
                 taken.after = at;
                 taken.slot = Some((stamps.queries, stamps.first, stamps.lease));
                 let raw = taken.raw;
@@ -246,6 +262,12 @@ impl QueueKept {
     /// A spare command buffer to record, where a replaced list left one.
     pub(crate) fn spare(&mut self) -> Option<vk::CommandBuffer> {
         self.spare.pop()
+    }
+
+    /// Mark every command buffer kept so far to be recorded again before a batch takes it: once
+    /// begun again, it names no command buffer that came next after it before (the module docs).
+    pub(crate) fn invalidate(&mut self) {
+        self.epoch += 1;
     }
 
     /// `raw`, recorded for the list at `list` ([`Take::Record`]) of the kind `stamps` gives,
@@ -264,6 +286,7 @@ impl QueueKept {
         lists[list].buffers.push_back(Kept {
             raw,
             after: at,
+            epoch: self.epoch,
             slot: stamps.map(|stamps| (stamps.queries, stamps.first, stamps.lease)),
         });
     }
@@ -413,6 +436,15 @@ impl KeptBarriers {
             .flat_map(|list| &list.buffers)
             .find(|kept| kept.raw == raw)
             .map(|kept| kept.after)
+    }
+
+    /// Mark every `VkQueue`'s kept command buffers to be recorded again before a batch takes one
+    /// ([`QueueKept::invalidate`]): before a trim round (`spares.rs`), under the scheduler's
+    /// state, while no batch holds one it took.
+    pub(crate) fn invalidate(&mut self) {
+        for kept in &mut self.queues {
+            kept.invalidate();
+        }
     }
 
     /// Release the pools, with every kept command buffer, as the device is torn down after its

@@ -288,6 +288,41 @@ fn a_stamped_command_buffer_waits_for_its_slot_s_timestamps_to_be_read() {
     );
 }
 
+/// Kept command buffers marked to be recorded again (`QueueKept::invalidate`, before a trim round
+/// of the spares) are each recorded again, into the same command buffer, as a batch would take
+/// it, once its last batch completed: one pending meanwhile leaves the batch to record another.
+/// Those recorded since are kept as before; so is a slot's stamped one.
+#[test]
+fn kept_command_buffers_marked_are_recorded_again_before_a_batch_takes_them() {
+    let mut queue = Queue::default();
+    let barriers = list(0);
+    assert_eq!(queue.take(&barriers, 1, 0), Got::Recorded { n: 1, list: 0 });
+    assert_eq!(queue.take(&barriers, 2, 0), Got::Recorded { n: 2, list: 0 });
+    assert_eq!(queue.take(&barriers, 3, 1), Got::Kept(1));
+    assert_eq!(
+        queue.take_stamped(&barriers, start(0, 1), 3, 1),
+        Got::Recorded { n: 3, list: 0 }
+    );
+    queue.kept.invalidate();
+    // 2, whose batch completed: recorded again; 1, pending: another one.
+    assert_eq!(queue.take(&barriers, 4, 2), Got::Recorded { n: 2, list: 0 });
+    assert_eq!(queue.take(&barriers, 4, 2), Got::Recorded { n: 4, list: 0 });
+    // 1 once its batch completed: recorded again; then each is kept.
+    assert_eq!(queue.take(&barriers, 5, 3), Got::Recorded { n: 1, list: 0 });
+    assert_eq!(queue.take(&barriers, 6, 5), Got::Kept(2));
+    assert_eq!(queue.take(&barriers, 6, 5), Got::Kept(4));
+    assert_eq!(queue.take(&barriers, 6, 5), Got::Kept(1));
+    // The slot's, at its next holding: recorded again, then kept.
+    assert_eq!(
+        queue.take_stamped(&barriers, start(0, 2), 6, 5),
+        Got::Recorded { n: 3, list: 0 }
+    );
+    assert_eq!(
+        queue.take_stamped(&barriers, start(0, 3), 7, 6),
+        Got::Kept(3)
+    );
+}
+
 /// The holdings of one slot rise: a slot is handed out again only once the command buffer that
 /// held it dropped it, after the completion turn read its timestamps, and the next holding's
 /// lease is above every earlier one's, so a kept command buffer's slot was read before it is

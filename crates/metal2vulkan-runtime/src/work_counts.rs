@@ -68,6 +68,8 @@ pub(crate) struct Counters {
     /// given back by a command buffer that recorded `RECORDED` commands or more; then the trims
     /// of their pools.
     spare_command_buffers_freed: [AtomicU64; 4],
+    spare_command_pool_trim_rounds: AtomicU64,
+    spare_command_buffers_trimmed_in_rounds: AtomicU64,
     spare_command_pool_trims: AtomicU64,
     live_tables_uploaded: AtomicU64,
     timeline_waits: AtomicU64,
@@ -2133,6 +2135,14 @@ impl Counters {
             freed.fetch_add(count as u64, Ordering::Relaxed);
         }
         (self.spare_command_pool_trims).fetch_add(trims as u64, Ordering::Relaxed);
+    }
+
+    /// A trim round trimmed `pools` spare command pools, destroying `buffers` command buffers
+    /// freed from them untrimmed (`spares.rs`).
+    pub(crate) fn spare_command_pools_trimmed_in_round(&self, pools: usize, buffers: usize) {
+        (self.spare_command_pool_trim_rounds).fetch_add(1, Ordering::Relaxed);
+        (self.spare_command_pool_trims).fetch_add(pools as u64, Ordering::Relaxed);
+        (self.spare_command_buffers_trimmed_in_rounds).fetch_add(buffers as u64, Ordering::Relaxed);
     }
 
     /// The live buffers' table was uploaded to a buffer made for it, no spare reused.
@@ -5592,9 +5602,17 @@ pub struct WorkCounts {
     /// begun again, reset or freed.
     pub spare_command_buffers_freed_past_recorded: u64,
     /// The `vkTrimCommandPool` calls after those frees, one after each 32 command buffers freed
-    /// at most, which return to the device what its driver kept of them (none on a driver whose
-    /// trim fails the kept barriers, `spares.rs`).
+    /// at most, which return to the device what its driver kept of them; on a driver whose trim
+    /// after them fails the kept barriers, those of the trim rounds instead, one a pool trimmed
+    /// (`spares.rs`).
     pub spare_command_pool_trims: u64,
+    /// The trim rounds: on a driver whose trim after each free fails the kept barriers, the kept
+    /// barrier command buffers marked to be recorded again, then the spare pools holding the most
+    /// command buffers freed untrimmed trimmed, once they held 4096 (`spares.rs`).
+    pub spare_command_pool_trim_rounds: u64,
+    /// The command buffers freed untrimmed whose objects the driver kept for its pools' later
+    /// allocations, destroyed by the trim rounds (`spares.rs`).
+    pub spare_command_buffers_trimmed_in_rounds: u64,
     /// Buffers made to upload a live buffers' table to, where no spare one held it.
     pub live_tables_uploaded: u64,
     /// The queues' waiters' waits for a timeline's value, where the batch one waited for had
@@ -9990,6 +10008,12 @@ impl Device {
             spare_command_buffers_freed_past_recorded: counters.spare_command_buffers_freed[3]
                 .load(Ordering::Relaxed),
             spare_command_pool_trims: counters.spare_command_pool_trims.load(Ordering::Relaxed),
+            spare_command_pool_trim_rounds: counters
+                .spare_command_pool_trim_rounds
+                .load(Ordering::Relaxed),
+            spare_command_buffers_trimmed_in_rounds: counters
+                .spare_command_buffers_trimmed_in_rounds
+                .load(Ordering::Relaxed),
             live_tables_uploaded: counters.live_tables_uploaded.load(Ordering::Relaxed),
             timeline_waits: counters.timeline_waits.load(Ordering::Relaxed),
             fence_waits: counters.fence_waits.load(Ordering::Relaxed),

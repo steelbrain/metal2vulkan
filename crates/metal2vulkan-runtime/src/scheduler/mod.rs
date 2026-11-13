@@ -648,6 +648,16 @@ impl State {
         self.sliced = true;
     }
 
+    /// A trim round of `device`'s spare command pools (`spares.rs`), before any batch takes a
+    /// kept barrier command buffer again: those kept are marked to be recorded again
+    /// (`command_buffer/kept_barriers.rs`), then the pools trimmed. Only while the group holds no
+    /// batch, whose kept ones are taken and not yet submitted.
+    pub(crate) fn trim_round(&mut self, device: &crate::device::DeviceShared) {
+        debug_assert!(!self.group.holds());
+        self.kept.invalidate();
+        device.spares.trim_round(device);
+    }
+
     /// The ticket of a pass that took batches with submission handlers ([`Turns`]), taken under
     /// the lock in the order the passes ran.
     fn handler_ticket(&mut self) -> u64 {
@@ -1123,6 +1133,19 @@ impl Scheduler {
     pub(crate) fn under_lock<R>(&self, f: impl FnOnce() -> R) -> R {
         let _state = lock(self.shared.inbox.state());
         f()
+    }
+
+    /// A trim round of `device`'s spare command pools now, under the state's lock, as a batch's
+    /// submission makes one ([`State::trim_round`]), for the crate's device tests: false, with
+    /// none made, where the group holds batches.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn trim_round_now(&self, device: &crate::device::DeviceShared) -> bool {
+        let mut state = lock(self.shared.inbox.state());
+        if state.group.holds() {
+            return false;
+        }
+        state.trim_round(device);
+        true
     }
 
     /// Look for work again: an event's value rose, a pipeline was made, a rebind encoded a

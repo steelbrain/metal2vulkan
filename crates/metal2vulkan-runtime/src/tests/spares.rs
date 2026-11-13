@@ -5,8 +5,9 @@
 use crate::descriptor_arena::{Room, SetNeeds};
 use crate::spares::{
     keep_command_pool, keep_descriptor_pool, keep_idle_command_pool, past_held, take_command_pool,
-    take_command_pool_holding, take_descriptor_pool, take_idle, CommandPool, CommandPools,
-    DescriptorPool, DESCRIPTORS, DESCRIPTOR_POOLS, HELD, IDLE_FOR, RECENT_FOR, RECENT_USES,
+    take_command_pool_holding, take_descriptor_pool, take_idle, take_to_trim, CommandPool,
+    CommandPools, DescriptorPool, DESCRIPTORS, DESCRIPTOR_POOLS, HELD, IDLE_FOR, RECENT_FOR,
+    RECENT_USES, TRIMMED_AT_ONCE,
 };
 use ash::vk::{self, Handle};
 use std::collections::VecDeque;
@@ -178,7 +179,8 @@ fn a_taker_takes_the_fewest_and_one_past_its_first_pool_the_most() {
     ];
     pools[0].begun = Some(vk::CommandBuffer::from_raw(10));
     pools[1].begun = Some(vk::CommandBuffer::from_raw(20));
-    for expected in [1, 2, 4, 3, 5] {
+    // Those holding a primary begun ahead, then the fewest of those holding any, then the empty.
+    for expected in [1, 2, 3, 5, 4] {
         assert_eq!(taken(take_command_pool(&mut pools, 0)), Some(expected));
     }
     let mut empty = vec![holding(6, 0, 0)];
@@ -187,6 +189,48 @@ fn a_taker_takes_the_fewest_and_one_past_its_first_pool_the_most() {
         None
     );
     assert_eq!(empty.len(), 1);
+}
+
+/// A pool counts the command buffers freed from it until a trim destroys them, one fewer for each
+/// made from it since; a trim round takes the spares holding the most of them, until they hold
+/// [`TRIMMED_AT_ONCE`] together or are every one holding any, each with its place, and the next
+/// round the rest.
+#[test]
+fn a_trim_round_takes_the_pools_holding_the_most_freed_untrimmed() {
+    let primary = vk::CommandBufferLevel::PRIMARY;
+    let at_once = TRIMMED_AT_ONCE as u64;
+    let raws = |pools: &[CommandPool]| pools.iter().map(|p| p.raw.as_raw()).collect::<Vec<_>>();
+    let mut half = holding(1, at_once / 2, 1);
+    assert_eq!(half.untrimmed(), 0);
+    assert_eq!(half.shed().len() as u64, at_once / 2 + 1);
+    half.taken();
+    half.made(primary, vk::CommandBuffer::from_raw(7));
+    assert_eq!(half.untrimmed() as u64, at_once / 2, "one made again");
+    let mut most = holding(3, at_once * 7 / 8, 0);
+    most.shed();
+    let mut few = holding(5, 30, 0);
+    few.shed();
+    let mut pools = vec![half, holding(2, 5, 1), most, holding(4, 9, 1), few];
+    let taken = take_to_trim(&mut pools);
+    let places: Vec<usize> = taken.iter().map(|(at, _)| *at).collect();
+    assert_eq!(
+        places,
+        [0, 2],
+        "the most, then the half reach the bound: the few stay"
+    );
+    assert_eq!(raws(&pools), [2, 4, 5]);
+    for (at, mut pool) in taken {
+        pool.trimmed();
+        assert_eq!(pool.untrimmed(), 0);
+        pools.insert(at, pool);
+    }
+    assert_eq!(raws(&pools), [1, 2, 3, 4, 5]);
+    let taken = take_to_trim(&mut pools);
+    assert_eq!(taken.iter().map(|(at, _)| *at).collect::<Vec<_>>(), [4]);
+    assert!(
+        take_to_trim(&mut pools).is_empty(),
+        "none holds any but the few, out"
+    );
 }
 
 /// A command buffer takes the newest spare command pool made for its queue's family, never one
@@ -220,7 +264,8 @@ fn a_spare_command_pool_is_taken_only_for_its_family() {
 
 /// Every command pool given back is kept, past the former bounds too (8 spares, and a pool that
 /// made more than 64 command buffers, each released on the completing handler thread before),
-/// and each is taken again, newest first: the runtime never releases one while the device lives.
+/// and each is taken again, the one holding command buffers first, then the empty ones, newest
+/// first: the runtime never releases one while the device lives.
 #[test]
 fn every_command_pool_given_back_is_kept() {
     let mut pools = Vec::new();
@@ -239,10 +284,6 @@ fn every_command_pool_given_back_is_kept() {
         );
     }
     assert_eq!(pools.len(), 101);
-    for n in (0..100u64).rev() {
-        let pool = take_command_pool(&mut pools, 0).expect("kept");
-        assert_eq!(pool.raw, vk::CommandPool::from_raw(n + 1));
-    }
     let mut large = take_command_pool(&mut pools, 0).expect("the large pool kept");
     assert_eq!(large.raw, vk::CommandPool::from_raw(1000));
     large.taken();
@@ -251,6 +292,10 @@ fn every_command_pool_given_back_is_kept() {
         Some(vk::CommandBuffer::from_raw(1)),
         "its command buffers handed out again"
     );
+    for n in (0..100u64).rev() {
+        let pool = take_command_pool(&mut pools, 0).expect("kept");
+        assert_eq!(pool.raw, vk::CommandPool::from_raw(n + 1));
+    }
     assert!(pools.is_empty());
 }
 
@@ -1091,7 +1136,12 @@ mod device {
     /// (`RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission`): Mesa's slab allocator takes
     /// freed slices back only once an allocation finds its current slab full
     /// (`pb_slab_alloc_reclaimed`), releasing each slab they empty, and a submission fails only
-    /// while no buffer object made since holds the handle released.
+    /// while no buffer object made since holds the handle released. Once the frees ran, every
+    /// command buffer completed, a trim round runs under the scheduler's state as a batch's
+    /// submission runs one (`scheduler::State::trim_round`): the kept barrier command buffers
+    /// are marked to be recorded again, then the pools trimmed; where the spares do not trim
+    /// after each free, it trims the burst's pool. A round a submission ran instead would find
+    /// that pool taken by the very command buffer whose submission ran it.
     #[test]
     fn kept_barriers_run_again_after_the_command_buffers_after_them_were_freed() {
         let scratch = std::env::temp_dir().join(format!("m2v-spares-trims-{}", std::process::id()));
@@ -1112,12 +1162,31 @@ mod device {
         let mut statuses = vec![fills(&device, &queue, &shared, 1)];
         statuses.push(fills_of(&device, &queue, &burst));
         // Past the spans of the burst's use, it leaves the pool's recent uses after as many more,
-        // and the give-back then frees what it made.
+        // and the give-back then frees what it made: where the device does not trim after each
+        // free, more until the spares hold `KEPT` freed untrimmed, at most four times as many.
         std::thread::sleep(2 * RECENT_FOR);
-        for _ in 0..=RECENT_USES {
+        let spares = &device.shared().spares;
+        // Of each spare pool, what it holds and what was freed from it untrimmed, after the
+        // burst and after each command buffer since.
+        let mut seen = vec![spares.spare_pools()];
+        for fill in 0.. {
             statuses.push(fills(&device, &queue, &shared, 2));
+            seen.push(spares.spare_pools());
+            let untrimmed: usize = seen[fill + 1].iter().map(|(_, untrimmed)| untrimmed).sum();
+            let past = fill >= RECENT_USES && (spares.trims() || untrimmed >= KEPT);
+            if past || fill == 4 * RECENT_USES {
+                break;
+            }
         }
-        let freed = device.shared().spares.freed_on().len();
+        let freed = spares.freed_on().len();
+        let before = device.work_counts();
+        assert!(
+            device.shared().scheduler.trim_round_now(device.shared()),
+            "the group held batches with every command buffer completed"
+        );
+        let at_round = device.work_counts().spare_command_buffers_trimmed_in_rounds
+            - before.spare_command_buffers_trimmed_in_rounds;
+        let after_round = spares.spare_pools();
         for step in 1..=TAIL / STEP {
             let again: Vec<&Buffer> = std::iter::repeat_n(&shared, KEPT)
                 .chain(&own[..step * STEP])
@@ -1131,17 +1200,32 @@ mod device {
         let first = statuses
             .iter()
             .position(|status| *status != CommandBufferStatus::Completed);
-        let recoveries = device.work_counts().device_recoveries;
+        let counts = device.work_counts();
+        let recoveries = counts.device_recoveries;
+        let trims = device.shared().spares.trims();
+        let (rounds, trimmed) = (
+            counts.spare_command_pool_trim_rounds,
+            counts.spare_command_buffers_trimmed_in_rounds,
+        );
         println!(
-            "SPARES-TRIMS {}: trims {}; {freed} frees ran; {failed} of {} command buffers not \
-             completed, the first at {first:?}; {recoveries} recoveries",
+            "SPARES-TRIMS {}: trims {trims}; {freed} frees ran; {failed} of {} command buffers \
+             not completed, the first at {first:?}; {recoveries} recoveries; {rounds} trim \
+             rounds destroyed {trimmed} command buffers freed untrimmed, {at_round} by the \
+             test's; the spare pools (held, untrimmed) after the burst and each command buffer \
+             since {seen:?}, after the round {after_round:?}",
             device.name(),
-            device.shared().spares.trims(),
             statuses.len()
         );
         assert!(freed > 0, "the burst's command buffers were never freed");
         assert_eq!(failed, 0, "command buffers did not complete: {statuses:?}");
         assert_eq!(recoveries, 0, "the device recovered from a loss");
+        assert!(rounds > 0, "the trim round never ran");
+        if !trims {
+            assert!(
+                at_round > 0,
+                "the trim round trimmed nothing of the burst's pool"
+            );
+        }
         drop((own, shared, queue, device));
         let _ = std::fs::remove_dir_all(&scratch);
     }

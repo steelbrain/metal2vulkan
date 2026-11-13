@@ -446,6 +446,13 @@ impl CommandBufferShared {
         // copied host buffers in again, its wait met (`copies_again.rs`).
         self.copy_in_again(index)?;
         let shared = device.shared();
+        // Where the spares' frees left their pools holding command buffers untrimmed past their
+        // bound, a trim round, before any batch takes a kept barrier command buffer
+        // (`scheduler::State::trim_round`). Not while the group holds batches, whose kept ones
+        // are taken and not yet submitted.
+        if shared.spares.trim_due() && !scheduler.group.holds() {
+            scheduler.trim_round(shared);
+        }
         let raw = shared.vk();
         let queue = self.queue.vk_queue();
         let mut state = lock(&self.state);
