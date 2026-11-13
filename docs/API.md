@@ -299,7 +299,9 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   leaves it to the driver's `DONT_CARE` elsewhere, announced `dont-care-unstored-load`: lavapipe's
   draws then read its earlier texels. `unstored_dont_care_loads = UnstoredDontCarePolicy::Cleared`,
   which `exact_answers()` selects, clears it on every device. Separate depth and stencil textures
-  take the same answer, each aspect apart, in the scratch image the pass renders them through. A
+  take the same answer, each aspect apart, in the scratch image the pass renders them through. An
+  image the runtime makes to stand for an attachment there (that scratch image, a stand-in, a
+  backing) starts at zero on such a driver, never as its memory lies. A
   memoryless one is not covered.
 
 Loops run as written: no execution bound is translated in.

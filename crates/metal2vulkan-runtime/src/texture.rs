@@ -2952,8 +2952,14 @@ impl Device {
     /// into (`depth_stencil_scratch.rs`), made for `maker`, which holds it as its
     /// [`ImageMaker`] says, or the one of the same descriptor and plan `maker` lends again. Its
     /// image starts in `UNDEFINED`, which the device's next submission leaves for `GENERAL`
-    /// (`texture/first_move.rs`): making it waits for no GPU work. Refused as `new_texture`
-    /// refuses the image.
+    /// (`texture/first_move.rs`): making it waits for no GPU work. It holds what its memory held,
+    /// but an attachment's (color, depth or stencil attachment usage) that a clear writes, on a
+    /// device that leaves a `DontCare` load of an attachment its pass does not store to the
+    /// driver's `DONT_CARE` (`clear_reach::UnstoredLoads`): such a load reads what the image
+    /// holds (its depth or stencil test, a blend, a fetch), so that image starts at zero, never
+    /// as its memory lies, which may hold a released texture's texels, of another process of a
+    /// consumer whose processes share the device (a recycled image's, `recycle.rs`). Refused as
+    /// `new_texture` refuses the image.
     pub(super) fn new_planned_texture(
         maker: &dyn ImageMaker,
         descriptor: &TextureDescriptor,
@@ -2970,7 +2976,22 @@ impl Device {
             return Err(internal("an encoder's own image that is not `Private`"));
         }
         let key = plan.clone();
-        let image = device.new_image(plan, &layout, descriptor, HazardTrackingMode::Tracked)?;
+        let attachment =
+            ImageUsageFlags::COLOR_ATTACHMENT | ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+        let unstored = super::clear_reach::UnstoredLoads::of(
+            device.compile_device().policy().unstored_dont_care_loads,
+            &device.properties().driver_facts,
+        );
+        let start = match plan.usage.intersects(attachment)
+            && unstored == super::clear_reach::UnstoredLoads::DontCare
+            && device.clears_to_zero(&plan)
+        {
+            true => Start::ZeroUnpatterned,
+            false => Start::Held,
+        };
+        let identity = Identity::new(HazardTrackingMode::Tracked, false);
+        let owner = Device::runtime_owner;
+        let image = device.new_image_starting(plan, &layout, descriptor, identity, start, owner)?;
         let record = ViewRecord::of_descriptor(&layout, descriptor);
         let storage = Storage::Image(image.shared());
         let texture = Texture::made(device, storage, record, None, IdUse::Runtime);
