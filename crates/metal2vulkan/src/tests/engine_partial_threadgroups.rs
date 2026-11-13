@@ -225,9 +225,7 @@ fn run_on(
     dispatch: &Dispatch,
 ) -> Result<(DispatchCommands, Vec<u32>), BindError> {
     let mut w = World::new([(0, Alloc::new(4 * words_out, 0))]);
-    for b in &mut w.buffers.get_mut(&0).expect("out").bytes {
-        *b = POISON;
-    }
+    w.buffers.get_mut(&0).expect("out").bytes.fill(POISON);
     let state = w.state();
     let plan = pipe.plan(dev, &state.shape())?;
     let lanes = width(&plan.instantiate_dispatch(&state, dispatch)?);
