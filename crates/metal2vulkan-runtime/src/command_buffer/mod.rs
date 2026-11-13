@@ -2079,7 +2079,7 @@ impl State {
     /// (`encoder_trail.rs`, **GPU forms**).
     fn trail_forms(&mut self, forms: Vec<Vec<Arc<crate::encoder_trail::GpuForm>>>) {
         let mut forms = forms.into_iter();
-        for part in &mut self.recorded {
+        for part in self.recorded.iter_mut() {
             for _ in &part.segments {
                 let took = forms.next().unwrap_or_default();
                 if let Some(trail) = part.trail.as_mut().filter(|_| !took.is_empty()) {
