@@ -1826,7 +1826,7 @@ fn i64_lengths_between_wide_endpoints_count_in_64_bits() {
             .filter(|v| matches!(m.types().get(v.pointee), Ok(Type::Int { width: 64, .. })))
             .count();
         // The four loops' counters, and the base and length the module's one resident-set
-        // search carries through its loop.
+        // search carries through its 64-bit narrowing (its 32-bit loop's are `u32`s).
         assert_eq!(counters, 4 + 2, "{what}: u64 loop counters");
         for (l0, l1, l2) in [
             (0u64, 0u64, 0u64),

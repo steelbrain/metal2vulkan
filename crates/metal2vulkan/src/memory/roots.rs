@@ -28,10 +28,12 @@
 //! `RootTable::resident_fields`).
 //!
 //! **The search** ([`resolve`]) turns a guest address `i` into a wide pointer: a binary search for
-//! the last resident entry whose `guest ≤ i`, one loop whose step halves the candidates whatever
-//! its compare gives (one entry load and a select, no branch on the address), so its trip count,
-//! ⌈log₂ N⌉, follows `N` alone and every invocation that searches one table takes the same
-//! branches; then `i − guest ≤ size` (a one-past-the-end pointer stays in its allocation). A hit
+//! the last resident entry whose `guest ≤ i`, whose step halves the candidates whatever its
+//! compare gives (one entry load and a select, no branch on the address), so its trip count
+//! follows `N` alone and every invocation that searches one table takes the same branches. A set
+//! of `2^32` entries or more is first narrowed in 64-bit steps to fewer (no smaller set enters
+//! that loop); a loop of two steps an iteration then counts the candidates in 32 bits, ⌈⌈log₂ N⌉ /
+//! 2⌉ times. Then `i − guest ≤ size` (a one-past-the-end pointer stays in its allocation). A hit
 //! is `(root, i − guest)`, with the entry's `host` and `size` for a wide pointer
 //! ([`resolve_wide`]); a miss, or an empty set, is `(0, i)` (`(0, i, 0, 0)`). A module with
 //! more than one search defines it once ([`define_resolve`]), as it does the handle-table search,
@@ -53,7 +55,9 @@ use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopFn, LoopSpec};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{FuncId, TypeId, Value};
-use crate::spirv::ir::{natural_layout, BinOp, ConstBits, Constant, LayoutRule, MemAccess, Type};
+use crate::spirv::ir::{
+    natural_layout, BinOp, ConstBits, Constant, ConvOp, LayoutRule, MemAccess, Type,
+};
 
 /// Bytes of one root-table entry.
 pub const ENTRY_BYTES: u64 = 32;
@@ -291,7 +295,7 @@ fn entries(fb: &mut FunctionBuilder<'_>, table: Value) -> BResult<Value> {
     fb.device_place(table, array)
 }
 
-/// The `u64` field at byte `field` of entry `root` (a `u64`) of [`entries`] `e`.
+/// The `u64` field at byte `field` of entry `root` (a `u32` or `u64`) of [`entries`] `e`.
 fn field_of(fb: &mut FunctionBuilder<'_>, e: Value, root: Value, field: u64) -> BResult<Value> {
     let member = fb.u32_const((field / 8) as u32)?;
     let member = fb.module().const_value(member)?;
@@ -338,9 +342,9 @@ pub fn resolve(
 
 /// A finished search ([`search`]).
 struct Found {
-    /// The set's entries, from its first.
+    /// The entries the 32-bit loop searched, from the first of them.
     set: Value,
-    /// The last candidate's index in the set.
+    /// The last candidate's index among them (a `u32`).
     base: Value,
     /// Its entry's `size`.
     size: Value,
@@ -363,19 +367,29 @@ fn search(fb: &mut FunctionBuilder<'_>, table: Value, guest: Value) -> BResult<F
     let skip = fb.binary(BinOp::IMul, start, stride)?;
     let at = fb.binary(BinOp::IAdd, table, skip)?;
     let set = entries(fb, at)?;
-    let base = bisect(fb, set, guest, zero, count)?;
-    let g = field_of(fb, set, base, GUEST)?;
-    let size = field_of(fb, set, base, SIZE)?;
+    let (wide, left) = narrow(fb, set, guest, zero, count)?;
+    let skip = fb.binary(BinOp::IMul, wide, stride)?;
+    let at = fb.binary(BinOp::IAdd, at, skip)?;
+    let window = entries(fb, at)?;
+    let u32_ = fb.uint_ty(32)?;
+    let left = fb.convert(ConvOp::UConvert, left, u32_)?;
+    let zero32 = k32(fb, 0)?;
+    let base = bisect(fb, window, guest, zero32, left)?;
+    let g = field_of(fb, window, base, GUEST)?;
+    let size = field_of(fb, window, base, SIZE)?;
     let rel = fb.binary(BinOp::ISub, guest, g)?;
     let above = fb.binary(BinOp::ULessThanEqual, g, guest)?;
     let within = fb.binary(BinOp::ULessThanEqual, rel, size)?;
     let hit = fb.binary(BinOp::LogicalAnd, above, within)?;
     let null = k64(fb, NULL_ROOT)?;
-    let found = fb.binary(BinOp::IAdd, start, base)?;
+    let u64_ = u64_ty(fb)?;
+    let near = fb.convert(ConvOp::UConvert, base, u64_)?;
+    let found = fb.binary(BinOp::IAdd, start, wide)?;
+    let found = fb.binary(BinOp::IAdd, found, near)?;
     let root = fb.select(hit, found, null)?;
     let off = fb.select(hit, rel, guest)?;
     Ok(Found {
-        set,
+        set: window,
         base,
         size,
         hit,
@@ -386,14 +400,14 @@ fn search(fb: &mut FunctionBuilder<'_>, table: Value, guest: Value) -> BResult<F
 
 /// One step of the search: of the `len` candidates from `base` of the set `set`, the half from
 /// the middle where its entry's Metal address is at most `guest`, else the half before it.
+/// `base` and `len` are of one width, `one` the constant 1 of it.
 fn search_step(
     fb: &mut FunctionBuilder<'_>,
     set: Value,
     guest: Value,
-    base: Value,
-    len: Value,
+    (base, len): (Value, Value),
+    one: Value,
 ) -> BResult<(Value, Value)> {
-    let one = k64(fb, 1)?;
     let half = fb.binary(BinOp::ShiftRightLogical, len, one)?;
     let mid = fb.binary(BinOp::IAdd, base, half)?;
     let g = field_of(fb, set, mid, GUEST)?;
@@ -403,16 +417,19 @@ fn search_step(
     Ok((base, len))
 }
 
-/// The search's loop: [`search_step`] while more than one of the `len` candidates from `base` is
-/// left; the last candidate. Each step keeps `len − ⌊len/2⌋` of them whatever its compare gives,
-/// so the trip count follows `len` alone. The loop carries both in `Function` variables.
-fn bisect(
+/// The search's narrowing of a set of `2^32` entries or more: [`search_step`] in 64 bits while
+/// `2^32` or more of the `len` candidates from `base` are left; the first candidate and their count
+/// then. No set below `2^32` entries enters it; nothing bounds a set's count below that (a `u64`
+/// in the binder's tables, in a consumer's `RootTable::resident_fields`, and in the runtime's set
+/// of live buffers), so a larger set is narrowed here before the 32-bit loop ([`bisect`]). The
+/// loop carries both in `Function` variables.
+fn narrow(
     fb: &mut FunctionBuilder<'_>,
     set: Value,
     guest: Value,
     base: Value,
     len: Value,
-) -> BResult<Value> {
+) -> BResult<(Value, Value)> {
     let u64_ = u64_ty(fb)?;
     let at = fb.local_var(u64_, None)?;
     let at = fb.var_ptr(at)?;
@@ -422,7 +439,47 @@ fn bisect(
     fb.store(left, len, MemAccess::default())?;
     let body: LoopFn<'_, ()> = Box::new(move |fb, ctx, lc| {
         let len = fb.load(left, MemAccess::default())?;
+        let reach = k64(fb, 1u64 << 32)?;
+        let fits = fb.binary(BinOp::ULessThan, len, reach)?;
+        let exit: ArmFn<'_, ()> = Box::new(move |fb, _| {
+            lc.break_(fb)?;
+            Ok(ArmEnd::Exits)
+        });
+        fb.if_(ctx, fits, exit, None)?;
+        let base = fb.load(at, MemAccess::default())?;
         let one = k64(fb, 1)?;
+        let (base, len) = search_step(fb, set, guest, (base, len), one)?;
+        fb.store(at, base, MemAccess::default())?;
+        fb.store(left, len, MemAccess::default())
+    });
+    fb.loop_(&mut (), LoopSpec::default(), body)?;
+    let base = fb.load(at, MemAccess::default())?;
+    let len = fb.load(left, MemAccess::default())?;
+    Ok((base, len))
+}
+
+/// The search's loop, in 32 bits: two [`search_step`]s an iteration while more than one of the
+/// `len` candidates from `base` (`u32`s, `len < 2^32` after [`narrow`]) is left; the last
+/// candidate. Each step keeps `len − ⌊len/2⌋` of them whatever its compare gives, so the trip
+/// count, ⌈⌈log₂ len⌉ / 2⌉, follows `len` alone; a second step of one candidate reads its entry
+/// again and keeps it. The loop carries both in `Function` variables.
+fn bisect(
+    fb: &mut FunctionBuilder<'_>,
+    set: Value,
+    guest: Value,
+    base: Value,
+    len: Value,
+) -> BResult<Value> {
+    let u32_ = fb.uint_ty(32)?;
+    let at = fb.local_var(u32_, None)?;
+    let at = fb.var_ptr(at)?;
+    let left = fb.local_var(u32_, None)?;
+    let left = fb.var_ptr(left)?;
+    fb.store(at, base, MemAccess::default())?;
+    fb.store(left, len, MemAccess::default())?;
+    let body: LoopFn<'_, ()> = Box::new(move |fb, ctx, lc| {
+        let len = fb.load(left, MemAccess::default())?;
+        let one = k32(fb, 1)?;
         let found = fb.binary(BinOp::ULessThanEqual, len, one)?;
         let exit: ArmFn<'_, ()> = Box::new(move |fb, _| {
             lc.break_(fb)?;
@@ -430,12 +487,19 @@ fn bisect(
         });
         fb.if_(ctx, found, exit, None)?;
         let base = fb.load(at, MemAccess::default())?;
-        let (base, len) = search_step(fb, set, guest, base, len)?;
+        let step = search_step(fb, set, guest, (base, len), one)?;
+        let (base, len) = search_step(fb, set, guest, step, one)?;
         fb.store(at, base, MemAccess::default())?;
         fb.store(left, len, MemAccess::default())
     });
     fb.loop_(&mut (), LoopSpec::default(), body)?;
     fb.load(at, MemAccess::default())
+}
+
+/// A `u32` constant.
+fn k32(fb: &mut FunctionBuilder<'_>, v: u32) -> BResult<Value> {
+    let c = fb.u32_const(v)?;
+    fb.module().const_value(c)
 }
 
 #[cfg(test)]

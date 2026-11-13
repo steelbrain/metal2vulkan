@@ -238,10 +238,12 @@ pub enum Side {
 }
 
 /// SPIR-V words of the module's resident-set search ([`roots::resolve`], once per module): the
-/// table's and the set's conversions, the hit test, and a function's frame; and its loop: one step
-/// (the halving, the entry's access chain and load, a compare, and a select, about 40 words), its
-/// two variables' stores and loads, and the loop's and its exit's blocks.
-pub const SEARCH_WORDS: u32 = 44 + 216 + 96;
+/// table's and the set's conversions, the hit test, and a function's frame (216); its two loops,
+/// each with its two variables' stores and loads and the loop's and its exit's blocks (96 each);
+/// three steps (the halving, the entry's access chain and load, a compare, and a select, about 40
+/// words each: one in the 64-bit narrowing, two in the 32-bit loop); and the window between them,
+/// its two conversions and the root's second addition (48).
+pub const SEARCH_WORDS: u32 = 3 * 44 + 216 + 2 * 96 + 48;
 /// SPIR-V words of one use of the search: the root table's address and the call.
 const CALL_WORDS: u32 = 24;
 /// SPIR-V words of one wide access before its leaf: the pointer's fields, the check, the sink
