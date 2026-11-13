@@ -1896,7 +1896,13 @@ impl IndirectCommandBuffer {
         let bytes = unsafe {
             std::slice::from_raw_parts_mut(self.bytes().add(record_offset(index)), COMMAND_BYTES)
         };
-        CommandRecord::write_field(bytes, field).map_err(field_error)?;
+        CommandRecord::write_field(bytes, field).map_err(|error| match error {
+            RecordError::Length { .. }
+            | RecordError::Action { .. }
+            | RecordError::Barrier { .. }
+            | RecordError::PipelineState => undecodable(),
+            _ => internal("an indirect command's record does not take a setter's field"),
+        })?;
         self.wrote(&mut commands, index..index + 1);
         let named = set.as_ref().map(CommandState::named);
         // Read before the state is set, so a state set is always added: only a GPU write since
@@ -4039,7 +4045,10 @@ fn record_offset(index: u32) -> usize {
     COMMAND_BUFFER_HEADER_BYTES + index as usize * COMMAND_BYTES
 }
 
-/// The error of a setter whose field the record refuses (`CommandRecord::write_field`).
+/// The error of a buffer slot's setter whose field the record refuses
+/// (`CommandRecord::write_field`), written without the lock
+/// ([`edit_unlocked`](IndirectCommandBuffer::edit_unlocked)). `edit` maps its own in place: a
+/// call of this one from it made a draw about 1 ns slower (`tests::icb_encode_bench`).
 fn field_error(error: RecordError) -> Error {
     match error {
         RecordError::Length { .. }
