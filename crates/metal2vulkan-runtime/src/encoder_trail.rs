@@ -338,14 +338,6 @@ impl Named {
         &self.text
     }
 
-    /// The same, `more` after its text.
-    pub(crate) fn after(&self, more: &str) -> Named {
-        Named {
-            text: Arc::from(format!("{}{more}", self.text)),
-            forms: self.forms.clone(),
-        }
-    }
-
     /// Its executions took the GPU forms `forms` too.
     pub(crate) fn join_forms(&mut self, forms: Vec<Arc<GpuForm>>) {
         self.forms.extend(forms);
