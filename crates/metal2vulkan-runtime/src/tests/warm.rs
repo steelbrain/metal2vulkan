@@ -680,8 +680,7 @@ fn a_failed_creation_is_announced_once_by_its_kind_and_the_pass_goes_on() {
     };
     let met = warm
         .new_compute_pipeline_state(&refused(2048), &PipelineOptions::default())
-        .err()
-        .expect("Metal refuses 2048 threads a threadgroup");
+        .expect_err("Metal refuses 2048 threads a threadgroup");
     let kind = crate::warm::failure_kind(&met);
     let render = PipelineRecord::from_bytes(&records[0].to_bytes()).unwrap();
     warm.warm(vec![record(2048), render, record(4096)], u64::MAX);
