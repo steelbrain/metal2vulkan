@@ -4,11 +4,12 @@
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-runtime --example pass_costs -- \
-//!     [--frames F] [--repeats R] [--draws D]
+//!     [--frames F] [--repeats R] [--draws D] [--extent W,H] [--clear]
 //! ```
 //!
 //! Each frame is [`PASSES`] render pass instances of `D` draws (1 by default), over one
-//! `B8G8R8A8_UNORM` color attachment held in `GENERAL`, loaded and stored, submitted [`GROUP`] passes
+//! `B8G8R8A8_UNORM` color attachment of `W` by `H` texels (1024 by 1024 by default) held in
+//! `GENERAL`, loaded (cleared with `--clear`) and stored, submitted [`GROUP`] passes
 //! to a `vkQueueSubmit`, two frames in flight; each draw binds the pipeline and draws a triangle.
 //! The shapes:
 //!
@@ -39,7 +40,7 @@ const GROUP: usize = 6;
 /// Frames in flight.
 const SLOTS: usize = 2;
 
-/// The color attachment's extent.
+/// The color attachment's extent where the command line gives none.
 const EXTENT: vk::Extent2D = vk::Extent2D {
     width: 1024,
     height: 1024,
@@ -47,6 +48,13 @@ const EXTENT: vk::Extent2D = vk::Extent2D {
 
 /// The color attachment's format.
 const FORMAT: vk::Format = vk::Format::B8G8R8A8_UNORM;
+
+/// The attachment's clear value, where it is cleared (`--clear`).
+const CLEAR: [vk::ClearValue; 1] = [vk::ClearValue {
+    color: vk::ClearColorValue {
+        float32: [0.0, 0.0, 0.0, 1.0],
+    },
+}];
 
 /// The longest wait for a frame.
 const TIMEOUT: u64 = 20_000_000_000;
@@ -281,10 +289,12 @@ struct Bench {
     slots: Vec<Slot>,
     next: usize,
     draws: u32,
+    extent: vk::Extent2D,
+    load: vk::AttachmentLoadOp,
 }
 
 impl Bench {
-    fn new(draws: u32) -> Bench {
+    fn new(draws: u32, extent: vk::Extent2D, load: vk::AttachmentLoadOp) -> Bench {
         // SAFETY: loading the Vulkan loader runs its initialization; nothing else is assumed.
         let entry = unsafe { ash::Entry::load() }.expect("the Vulkan loader");
         // SAFETY: a global command of a loaded entry.
@@ -349,7 +359,8 @@ impl Bench {
         let color_mask = has_state3 && state3.extended_dynamic_state3_color_write_mask == vk::TRUE;
         println!(
             "PASS-COSTS device {name} driver {driver_info} color write mask {color_mask} \
-             passes {PASSES} group {GROUP} draws {draws}"
+             passes {PASSES} group {GROUP} draws {draws} extent {}x{} load {load:?}",
+            extent.width, extent.height,
         );
         // SAFETY: the instance's.
         let families = unsafe { instance.get_physical_device_queue_family_properties(physical) };
@@ -381,7 +392,7 @@ impl Bench {
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .format(FORMAT)
-            .extent(EXTENT.into())
+            .extent(extent.into())
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
@@ -427,7 +438,7 @@ impl Bench {
         let attachment = [vk::AttachmentDescription::default()
             .format(FORMAT)
             .samples(vk::SampleCountFlags::TYPE_1)
-            .load_op(vk::AttachmentLoadOp::LOAD)
+            .load_op(load)
             .store_op(vk::AttachmentStoreOp::STORE)
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
@@ -444,7 +455,7 @@ impl Bench {
             .subpasses(&subpass);
         // SAFETY: `pass_info` and what it points at live for the call.
         let render_pass = unsafe { device.create_render_pass(&pass_info, None) }.unwrap();
-        let kept = framebuffer(&device, render_pass, view);
+        let kept = framebuffer(&device, render_pass, view, extent);
         // SAFETY: an empty layout.
         let layout = unsafe {
             device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default(), None)
@@ -492,6 +503,8 @@ impl Bench {
             slots,
             next: 0,
             draws,
+            extent,
+            load,
         };
         bench.to_general(range);
         bench
@@ -545,14 +558,14 @@ impl Bench {
         let viewport = [vk::Viewport {
             x: 0.0,
             y: 0.0,
-            width: EXTENT.width as f32,
-            height: EXTENT.height as f32,
+            width: self.extent.width as f32,
+            height: self.extent.height as f32,
             min_depth: 0.0,
             max_depth: 1.0,
         }];
         let scissor = [vk::Rect2D {
             offset: vk::Offset2D::default(),
-            extent: EXTENT,
+            extent: self.extent,
         }];
         let both = vk::StencilFaceFlags::FRONT_AND_BACK;
         // SAFETY: `command` is recording, of a device of Vulkan 1.3, whose pipelines take each
@@ -598,7 +611,7 @@ impl Bench {
         let device = &self.device;
         let area = vk::Rect2D {
             offset: vk::Offset2D::default(),
-            extent: EXTENT,
+            extent: self.extent,
         };
         // SAFETY: `command` is recording, outside any instance; the framebuffer, view and
         // pipelines are live until the frame completed.
@@ -607,7 +620,8 @@ impl Bench {
                 Instance::Made | Instance::Kept => {
                     let target = match instance {
                         Instance::Made => {
-                            let target = framebuffer(device, self.render_pass, self.view);
+                            let target =
+                                framebuffer(device, self.render_pass, self.view, self.extent);
                             made.push(target);
                             target
                         }
@@ -616,7 +630,8 @@ impl Bench {
                     let begin = vk::RenderPassBeginInfo::default()
                         .render_pass(self.render_pass)
                         .framebuffer(target)
-                        .render_area(area);
+                        .render_area(area)
+                        .clear_values(&CLEAR);
                     device.cmd_begin_render_pass(command, &begin, vk::SubpassContents::INLINE);
                     self.pass_pipeline
                 }
@@ -624,8 +639,9 @@ impl Bench {
                     let colors = [vk::RenderingAttachmentInfo::default()
                         .image_view(self.view)
                         .image_layout(vk::ImageLayout::GENERAL)
-                        .load_op(vk::AttachmentLoadOp::LOAD)
-                        .store_op(vk::AttachmentStoreOp::STORE)];
+                        .load_op(self.load)
+                        .store_op(vk::AttachmentStoreOp::STORE)
+                        .clear_value(CLEAR[0])];
                     let begin = vk::RenderingInfo::default()
                         .render_area(area)
                         .layer_count(1)
@@ -775,15 +791,16 @@ fn framebuffer(
     device: &ash::Device,
     render_pass: vk::RenderPass,
     view: vk::ImageView,
+    extent: vk::Extent2D,
 ) -> vk::Framebuffer {
     let views = [view];
     let info = vk::FramebufferCreateInfo::default()
         .render_pass(render_pass)
         .attachments(&views)
-        .width(EXTENT.width)
-        .height(EXTENT.height)
+        .width(extent.width)
+        .height(extent.height)
         .layers(1);
-    // SAFETY: `info` and the view are live for the call; the view is of `EXTENT`.
+    // SAFETY: `info` and the view are live for the call; the view is of `extent`.
     unsafe { device.create_framebuffer(&info, None) }.unwrap()
 }
 
@@ -896,7 +913,22 @@ fn main() {
     let frames = option(&arguments, "--frames", 200);
     let repeats = option(&arguments, "--repeats", 5).max(1);
     let draws = option(&arguments, "--draws", 1) as u32;
-    let mut bench = Bench::new(draws);
+    let extent = match arguments.iter().position(|argument| argument == "--extent") {
+        Some(at) => {
+            let given = arguments.get(at + 1).expect("--extent takes W,H");
+            let (width, height) = given.split_once(',').expect("--extent takes W,H");
+            vk::Extent2D {
+                width: width.parse().expect("--extent takes W,H"),
+                height: height.parse().expect("--extent takes W,H"),
+            }
+        }
+        None => EXTENT,
+    };
+    let load = match arguments.iter().any(|argument| argument == "--clear") {
+        true => vk::AttachmentLoadOp::CLEAR,
+        false => vk::AttachmentLoadOp::LOAD,
+    };
+    let mut bench = Bench::new(draws, extent, load);
     for shape in SHAPES {
         bench.run(shape, 20);
     }
