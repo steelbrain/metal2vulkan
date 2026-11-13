@@ -474,8 +474,8 @@ impl GpuForm {
         let arguments = self.scratch.glimpse(layout.argument_offset(0, 0), words);
         let (mut drawing, mut work) = (0u64, 0u64);
         let mut most: Option<(u64, u32, [u32; 4])> = None;
-        for (at, draw) in arguments.chunks_exact(4).enumerate() {
-            let [vertices, instances, first, base] = [draw[0], draw[1], draw[2], draw[3]];
+        for (at, draw) in arguments.as_chunks::<4>().0.iter().enumerate() {
+            let [vertices, instances, first, base] = *draw;
             let draws = u64::from(vertices) * u64::from(instances);
             if draws == 0 {
                 continue;
