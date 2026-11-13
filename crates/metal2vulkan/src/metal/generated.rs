@@ -789,6 +789,12 @@ metal_enum! {
     TriangleFillMode = "MTLTriangleFillMode" {
         Fill = 0, "MTLTriangleFillModeFill";
         Lines = 1, "MTLTriangleFillModeLines";
+        ///
+        /// Not declared by the SDK headers: the raw value 2, which Apple's GL renderer sends
+        /// for `glPolygonMode(GL_POINT)`. Metal draws each triangle's vertices as points of one
+        /// pixel on an Apple M3 Max and an Intel UHD Graphics 630, where a Radeon Pro 5300M
+        /// fills the triangle.
+        Points = 2, "MTLTriangleFillModePoints";
     }
     aliases {
     }

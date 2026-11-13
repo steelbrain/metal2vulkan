@@ -24,7 +24,8 @@
 //! [`UNTIMED`], [`FROM_HOST`]), color fills packed where fills ignore the color
 //! ([`UNPACKED_FILL`]), texture buffers' fills reading bytes past their pattern's copies in
 //! `texture_buffer_fills` ([`TEXTURE_BUFFER_FILL`]), draws of points no state sizes in
-//! `topology_classes` ([`UNSIZED_POINTS`]),
+//! `topology_classes` ([`UNSIZED_POINTS`]), triangles in fill mode `Points` whose vertex function
+//! writes a point size in `triangle_points` ([`TRIANGLE_POINT_SIZE`]),
 //! resource IDs ([`UNLISTED`]),
 //! indirect command buffers' commands naming a released state ([`RELEASED_STATES`]) and their host
 //! steps ([`HOST_STEPS`]), indirect dispatches' host reads ([`INDIRECT_DISPATCHES`]), indexed draws
@@ -231,6 +232,7 @@ use super::sparse_textures::SPARSE;
 use super::texture_blits::{MIPMAPS, UPLOADS};
 use super::tile_dispatches::TILE_DISPATCHES;
 use super::topology_classes::UNSIZED_POINTS;
+use super::triangle_points::TRIANGLE_POINT_SIZE;
 use super::two_plane_copies::TWO_PLANE_COPIES;
 use super::unorm_depth_bias::{UNORM_DEPTH_BIAS, UNORM_DEPTH_ROUNDING};
 use super::view_reinterpretation::VIEW_SHADOWS;
@@ -610,6 +612,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &CREATED,
         &PRIVATE_PROPERTIES,
         &UNSIZED_POINTS,
+        &TRIANGLE_POINT_SIZE,
         &SYNTHESIZED_GEOMETRY,
         &EMULATED_TESSELLATION,
         &GROUPED,

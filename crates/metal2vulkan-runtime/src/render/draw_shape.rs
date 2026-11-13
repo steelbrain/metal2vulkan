@@ -83,7 +83,7 @@ use crate::sample_positions::Sixteenths;
 use crate::versioned::Versioned;
 use crate::Device;
 use metal2vulkan::bind::BindingPlan;
-use metal2vulkan::metal::{PixelFormat, PrimitiveTopologyClass, PrimitiveType};
+use metal2vulkan::metal::{PixelFormat, PrimitiveTopologyClass, PrimitiveType, TriangleFillMode};
 use metal2vulkan::pipeline::{GraphicsState, Stage};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -420,6 +420,30 @@ impl ShapeInputs<'_> {
                     ),
                     "Metal sizes no point outside the point class without a point size, and \
                      what it draws there is undefined"
+                        .to_owned(),
+                )
+            });
+        }
+        // A triangle's vertices drawn as points (fill mode `Points`) take the size the vertex
+        // function writes where Metal draws one pixel: announced once at the draw, as above.
+        let triangle_points = !base.rasterizer_discard
+            && base.writes_point_size
+            && self.state.fill_mode() == TriangleFillMode::Points
+            && matches!(
+                topology,
+                metal2vulkan::vk::PrimitiveTopology::TRIANGLE_LIST
+                    | metal2vulkan::vk::PrimitiveTopology::TRIANGLE_STRIP
+                    | metal2vulkan::vk::PrimitiveTopology::TRIANGLE_FAN
+            );
+        if announce && triangle_points {
+            device.degrade(Degradation::TrianglePointSize, || {
+                (
+                    format!(
+                        "{call}: a draw of triangles in fill mode Points under a pipeline state \
+                         whose vertex function writes a point size"
+                    ),
+                    "the device sizes a polygon's points by the point size the last stage \
+                     writes (polygonModePointSize), where Metal draws one pixel"
                         .to_owned(),
                 )
             });

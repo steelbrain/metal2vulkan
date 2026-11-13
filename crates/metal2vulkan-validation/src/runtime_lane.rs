@@ -960,6 +960,8 @@ mod tile_threadgroups;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod topology_classes;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod triangle_points;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod two_plane_copies;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod two_plane_heap_blits;

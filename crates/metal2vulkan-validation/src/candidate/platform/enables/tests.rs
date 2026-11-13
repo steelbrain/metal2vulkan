@@ -369,7 +369,7 @@ fn the_old_engine_list_is_unchanged() {
             F::FragmentShaderBarycentric,
             // The portability subset's structure is chained with what the device supports, as
             // it always was; the vocabulary names these members, the next three since ARTIFACT 180,
-            // and `imageViewFormatSwizzle` since ARTIFACT 203.
+            // `imageViewFormatSwizzle` since ARTIFACT 203, and `pointPolygons`.
             F::ConstantAlphaColorBlendFactors,
             F::VertexAttributeAccessBeyondStride,
             F::SamplerMipLodBias,
@@ -379,6 +379,7 @@ fn the_old_engine_list_is_unchanged() {
             F::ImageView2DOn3DImage,
             F::SeparateStencilMaskRef,
             F::ImageViewFormatSwizzle,
+            F::PointPolygons,
             // `maintenance5` was always chained for the generated-commands path; the vocabulary
             // names it.
             F::Maintenance5,

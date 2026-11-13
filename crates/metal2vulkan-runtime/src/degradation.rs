@@ -2368,6 +2368,17 @@ degradations! {
             "the points rasterize nothing, the vertex function run for each, where what Metal \
              draws is undefined: most of its draws draw nothing, and some a few of the points \
              or a box";
+        /// A draw of triangles in fill mode `TriangleFillMode::Points` (the raw value 2, which
+        /// Apple's GL renderer sends), whose vertices the device draws as points, under a render
+        /// pipeline state whose vertex function writes `[[point_size]]`
+        /// (`render/draw_shape.rs`): a direct draw, an indirect one, or an indirect command's in
+        /// an execution. The device sizes each point by the size the vertex function writes where its
+        /// `polygonModePointSize` is set (every device profiled), where Metal draws one pixel
+        /// whatever the function writes (measured on an Apple M3 Max). A vertex function that
+        /// writes none draws points of one pixel: its module writes 1.
+        TrianglePointSize = "triangle-point-size", Precision,
+            "each vertex can draw at the point size the vertex function writes, where Metal \
+             draws one pixel";
         /// A draw of lines at a width other than 1 (Apple's `setLineWidth:`), or of a triangle's
         /// edges in fill mode `Lines` or of a mesh draw, drawn by the device's own lines
         /// (`render/line_width.rs`), which no device's are taken to draw as Metal's

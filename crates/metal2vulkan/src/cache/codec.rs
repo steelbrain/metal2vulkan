@@ -1006,6 +1006,7 @@ codec_enum! {
         WideLines,
         MultiDraw,
         ShaderFloat8,
+        PointPolygons,
     }
     VkExtension {
         ExtRobustness2, ExtImageRobustness, ExtShaderAtomicFloat, ExtShaderAtomicFloat2,

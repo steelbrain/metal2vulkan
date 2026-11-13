@@ -980,6 +980,7 @@ members! {
     PortabilitySubset.portability_subset.image_view2_d_on3_d_image => ImageView2DOn3DImage;
     PortabilitySubset.portability_subset.separate_stencil_mask_ref => SeparateStencilMaskRef;
     PortabilitySubset.portability_subset.image_view_format_swizzle => ImageViewFormatSwizzle;
+    PortabilitySubset.portability_subset.point_polygons => PointPolygons;
 }
 
 members! {

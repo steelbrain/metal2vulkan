@@ -597,6 +597,7 @@ fn unexposed_structures_are_never_chained() {
         VkFeature::ImageView2DOn3DImage,
         VkFeature::SeparateStencilMaskRef,
         VkFeature::ImageViewFormatSwizzle,
+        VkFeature::PointPolygons,
     ] {
         assert!(!desc.features.contains(&absent), "{absent:?}");
     }

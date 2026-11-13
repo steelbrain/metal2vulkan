@@ -371,6 +371,12 @@ pub enum VkFeature {
     /// of every device that lists the extension. The lowering converts an 8-bit float to a wider
     /// one through the device's own type where it has it (`lower::arith::narrow`'s `fp8_native`).
     ShaderFloat8,
+    // Appended.
+    /// `pointPolygons` (a portability-subset member): `VK_POLYGON_MODE_POINT` with rasterization
+    /// on (`VUID-VkPipelineRasterizationStateCreateInfo-pointPolygons-04458`), as the render
+    /// encoder's `TriangleFillMode::Points` draws. Like every portability member, a device without
+    /// `VK_KHR_portability_subset` has no such restriction.
+    PointPolygons,
 }
 
 /// A Vulkan device extension the new core can require.

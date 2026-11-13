@@ -27,7 +27,7 @@ Columns:
 
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 130 | 130 | 7 | 32 | 72 | 19 | 0 |
+| Translator and front-end refusals | 131 | 131 | 8 | 32 | 72 | 19 | 0 |
 | Runtime gaps | 79 | 79 | 1 | 10 | 46 | 22 | 0 |
 | Apple-only calls | 4 | 4 | 0 | 0 | 0 | 4 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
@@ -41,7 +41,7 @@ Columns:
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 49 | 58 | 0 | 0 | 23 |
+| Translator and front-end refusals | 0 | 0 | 0 | 50 | 58 | 0 | 0 | 23 |
 | Runtime gaps | 0 | 0 | 0 | 0 | 79 | 0 | 0 | 0 |
 | Apple-only calls | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
@@ -152,6 +152,7 @@ Columns:
 | `IndependentBlending` | Color attachments whose write masks or blend states differ, as Metal sets them per attachment, on a device without `independentBlend`, where no... | devices without VkFeature::IndependentBlend | `device` | 2: `crates/metal2vulkan-runtime/src/render.rs (check_pipeline)`, `crates/metal2vulkan/src/pipeline/link/graphics.rs (uniform_blend)` | `rare`: per-attachment blending on a device without independentBlend |
 | `RasterSampleCount` | A `rasterSampleCount` outside the device's framebuffer sample counts for the pipeline's attachments (`framebuffer*SampleCounts`), and, for a color... | devices short of a Vulkan property the site names; devices without a capability the site computes | `device` | 2: `crates/metal2vulkan-runtime/src/families/limits.rs (sample_count)`, `crates/metal2vulkan/src/pipeline/graphics.rs (sample_count_properties)` | `app`: a sample count a device lacks for the attachments |
 | `TriangleFillLines` | The render encoder's `MTLTriangleFillModeLines` (`polygonMode` `LINE`) on a device without `fillModeNonSolid` | - | `-` | via a helper: 1: `crates/metal2vulkan/src/metal/state.rs (polygon_mode)` | `app`: wireframe on a device without fillModeNonSolid |
+| `TriangleFillPoints` | The render encoder's `TriangleFillMode::Points` (`polygonMode` `POINT`) on a device without `fillModeNonSolid`, or on a portability-subset device... | devices short of a Vulkan feature the site names | `device` | 1: `crates/metal2vulkan/src/metal/state.rs (polygon_mode)` | `system`: Apple's GL renderer's glPolygonMode(GL_POINT) on a device without fillModeNonSolid, or a portability-subset device without pointPolygons (MoltenVK) |
 | `DepthClipClamp` | The render encoder's `MTLDepthClipModeClamp` (`depthClampEnable`) on a device without `depthClamp` | - | `-` | via a helper: 1: `crates/metal2vulkan/src/metal/state.rs (depth_clamp_enable)` | `app`: depth clamp on a device without depthClamp |
 | `DepthBiasClamp` | The render encoder's depth bias clamp, nonzero with a nonzero bias, on a device without `depthBiasClamp` | - | `-` | via a helper: 1: `crates/metal2vulkan/src/metal/state.rs (depth_bias)` | `app`: depth bias clamp on a device without depthBiasClamp |
 | `ConstantAlphaBlendFactor` | `CONSTANT_ALPHA` or `ONE_MINUS_CONSTANT_ALPHA` (Metal's `BlendAlpha` factors) as a color blend factor on a portability-subset device without... | devices without VkFeature::ConstantAlphaColorBlendFactors | `device` | 1: `crates/metal2vulkan/src/metal/state.rs (check_constant_alpha)` | `app`: blend-alpha factors on a portability-subset device without them |
@@ -678,6 +679,7 @@ Each refusal's sites, with the function that builds it.
 - `feature::IndependentBlending`: `crates/metal2vulkan-runtime/src/render.rs (check_pipeline)`; `crates/metal2vulkan/src/pipeline/link/graphics.rs (uniform_blend)`
 - `feature::RasterSampleCount`: `crates/metal2vulkan-runtime/src/families/limits.rs (sample_count)`; `crates/metal2vulkan/src/pipeline/graphics.rs (sample_count_properties)`
 - `feature::TriangleFillLines`: `crates/metal2vulkan/src/metal/state.rs (polygon_mode)`
+- `feature::TriangleFillPoints`: `crates/metal2vulkan/src/metal/state.rs (polygon_mode)`
 - `feature::DepthClipClamp`: `crates/metal2vulkan/src/metal/state.rs (depth_clamp_enable)`
 - `feature::DepthBiasClamp`: `crates/metal2vulkan/src/metal/state.rs (depth_bias)`
 - `feature::ConstantAlphaBlendFactor`: `crates/metal2vulkan/src/metal/state.rs (check_constant_alpha)`

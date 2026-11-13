@@ -33,7 +33,7 @@ macro_rules! metal_enum {
     (
         $(#[$meta:meta])*
         $name:ident = $metal:literal {
-            $($variant:ident = $value:literal, $mname:literal;)*
+            $($(#[$vmeta:meta])* $variant:ident = $value:literal, $mname:literal;)*
         }
         aliases {
             $($alias:literal => $target:ident;)*
@@ -46,6 +46,7 @@ macro_rules! metal_enum {
         pub enum $name {
             $(
                 #[doc = concat!("`", $mname, "`.")]
+                $(#[$vmeta])*
                 $variant = $value,
             )*
         }

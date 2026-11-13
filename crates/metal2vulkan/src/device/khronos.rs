@@ -1693,6 +1693,7 @@ pub(super) const FEATURE_MEMBERS: &[(&str, VkFeature)] = {
         ("imageView2DOn3DImage", F::ImageView2DOn3DImage),
         ("separateStencilMaskRef", F::SeparateStencilMaskRef),
         ("imageViewFormatSwizzle", F::ImageViewFormatSwizzle),
+        ("pointPolygons", F::PointPolygons),
         ("fullDrawIndexUint32", F::FullDrawIndexUint32),
         ("depthClipEnable", F::DepthClipEnable),
         ("depthClampControl", F::DepthClampControl),

@@ -360,6 +360,14 @@ fn require(profile: &DeviceProfile, feature: VkFeature, what: Feature) -> Result
 /// `VkPipelineRasterizationStateCreateInfo::polygonMode`. Both APIs apply the mode to triangles
 /// only. `Lines` rasterizes each triangle's edges as lines (`LINE`, with `lineWidth` 1) and needs
 /// `fillModeNonSolid` (`VUID-VkPipelineRasterizationStateCreateInfo-polygonMode-01507`).
+/// `Points`, the raw value 2 that no SDK header declares, rasterizes each triangle's vertices as
+/// points (`POINT`), as Metal draws them on an Apple M3 Max and an Intel UHD Graphics 630 (the
+/// M3 Max culls the triangle first, as Vulkan does): it needs `fillModeNonSolid`, and on a
+/// portability-subset device `pointPolygons`
+/// (`VUID-VkPipelineRasterizationStateCreateInfo-pointPolygons-04458`). The M3 Max draws each
+/// point one pixel wide whatever `[[point_size]]` the vertex function writes; Vulkan sizes it by
+/// the `PointSize` the last pre-rasterization stage writes where the device's
+/// `polygonModePointSize` is set.
 pub fn polygon_mode(
     mode: TriangleFillMode,
     profile: &DeviceProfile,
@@ -373,6 +381,22 @@ pub fn polygon_mode(
                 Feature::TriangleFillLines,
             )?;
             vk::PolygonMode::LINE
+        }
+        TriangleFillMode::Points => {
+            require(
+                profile,
+                VkFeature::FillModeNonSolid,
+                Feature::TriangleFillPoints,
+            )?;
+            let polygons = VkFeature::PointPolygons;
+            if profile.fields().enabled.portability_withholds(polygons) {
+                return Err(Unsupported::needs(
+                    Feature::TriangleFillPoints,
+                    Capability::Feature(polygons),
+                )
+                .into());
+            }
+            vk::PolygonMode::POINT
         }
     })
 }
@@ -629,6 +653,28 @@ mod tests {
         assert_eq!(
             polygon_mode(TriangleFillMode::Lines, lavapipe.profile()),
             Ok(vk::PolygonMode::LINE)
+        );
+        // Points need `fillModeNonSolid` too, and on MoltenVK, whose portability subset withholds
+        // `pointPolygons`, that member: lavapipe lists no portability subset.
+        assert_eq!(
+            polygon_mode(TriangleFillMode::Points, floor.profile()),
+            Err(needs(
+                Feature::TriangleFillPoints,
+                VkFeature::FillModeNonSolid
+            ))
+        );
+        assert_eq!(
+            polygon_mode(TriangleFillMode::Points, lavapipe.profile()),
+            Ok(vk::PolygonMode::POINT)
+        );
+        let moltenvk = committed("moltenvk-m3");
+        assert_eq!(
+            polygon_mode(TriangleFillMode::Lines, moltenvk.profile()),
+            Ok(vk::PolygonMode::LINE)
+        );
+        assert_eq!(
+            polygon_mode(TriangleFillMode::Points, moltenvk.profile()),
+            Err(needs(Feature::TriangleFillPoints, VkFeature::PointPolygons))
         );
         assert_eq!(
             depth_clamp_enable(DepthClipMode::Clip, floor.profile()),

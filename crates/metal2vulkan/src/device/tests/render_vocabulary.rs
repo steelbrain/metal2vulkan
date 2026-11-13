@@ -56,10 +56,10 @@ fn stated_flags(json: &Value, member: &str) -> BTreeSet<String> {
 }
 
 /// The eight features ARTIFACT 180 adds, `imageViewFormatSwizzle` (ARTIFACT 203),
-/// `provokingVertexLast` and `multiDraw`, each with its structure, its member, and the extension
-/// that exposes it
+/// `provokingVertexLast`, `multiDraw` and `pointPolygons`, each with its structure, its member,
+/// and the extension that exposes it
 /// (`None`: `VkPhysicalDeviceFeatures`, Vulkan 1.0).
-const FEATURES: [(&str, &str, VkFeature, Option<VkExtension>); 11] = [
+const FEATURES: [(&str, &str, VkFeature, Option<VkExtension>); 12] = [
     (
         "VkPhysicalDeviceFeatures",
         "fullDrawIndexUint32",
@@ -88,6 +88,12 @@ const FEATURES: [(&str, &str, VkFeature, Option<VkExtension>); 11] = [
         "VkPhysicalDevicePortabilitySubsetFeaturesKHR",
         "imageViewFormatSwizzle",
         VkFeature::ImageViewFormatSwizzle,
+        Some(VkExtension::KhrPortabilitySubset),
+    ),
+    (
+        "VkPhysicalDevicePortabilitySubsetFeaturesKHR",
+        "pointPolygons",
+        VkFeature::PointPolygons,
         Some(VkExtension::KhrPortabilitySubset),
     ),
     (

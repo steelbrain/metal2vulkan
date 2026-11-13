@@ -1,6 +1,6 @@
 import unittest
 
-from regen_metal_enums import DECL, parse_body, rows, strip_comments, variant_name
+from regen_metal_enums import DECL, parse_body, render, rows, strip_comments, variant_name
 
 
 class ParseTests(unittest.TestCase):
@@ -45,6 +45,21 @@ class ParseTests(unittest.TestCase):
         for body in ["MTLXA = sizeof(int)", "MTLXA = MTLYB", "MTLXA = 1 + 1", "MTLXA = -1"]:
             with self.subTest(body=body), self.assertRaises(ValueError):
                 rows("MTLX", parse_body("MTLX", body), flags=False)
+
+    def test_private_values_follow_the_headers_with_their_docs(self):
+        found = {"MTLTriangleFillMode": (
+            "ENUM", "MTLTriangleFillModeFill = 0, MTLTriangleFillModeLines = 1,")}
+        text = render(found, "0.0", ["MTLTriangleFillMode"], [])
+        lines = [line.strip() for line in text.splitlines()]
+        after = lines.index('Lines = 1, "MTLTriangleFillModeLines";') + 1
+        points = lines.index('Points = 2, "MTLTriangleFillModePoints";')
+        self.assertEqual(lines[after], "///")
+        self.assertTrue(all(line.startswith("/// ") for line in lines[after + 1:points]))
+        self.assertLess(after + 1, points)
+        declared = {"MTLTriangleFillMode": (
+            "ENUM", "MTLTriangleFillModeFill = 0, MTLTriangleFillModePoints = 2,")}
+        with self.assertRaises(ValueError):
+            render(declared, "0.0", ["MTLTriangleFillMode"], [])
 
     def test_variant_names(self):
         prefixes = ["MTLPixelFormat", "MTLPixelForma"]

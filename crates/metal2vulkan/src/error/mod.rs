@@ -1478,6 +1478,9 @@ pub enum Feature {
     /// The render encoder's `MTLTriangleFillModeLines` (`polygonMode` `LINE`) on a device
     /// without `fillModeNonSolid`.
     TriangleFillLines,
+    /// The render encoder's `TriangleFillMode::Points` (`polygonMode` `POINT`) on a device
+    /// without `fillModeNonSolid`, or on a portability-subset device without `pointPolygons`.
+    TriangleFillPoints,
     /// The render encoder's `MTLDepthClipModeClamp` (`depthClampEnable`) on a device without
     /// `depthClamp`.
     DepthClipClamp,

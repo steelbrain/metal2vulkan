@@ -14,6 +14,12 @@ for the front end's enums, `crates/metal2vulkan-air/src/metal/mod.rs`.
 Deprecated spellings with the same value are recorded as aliases. Value expressions other than
 integer literals, shifts, ors, and references to earlier enumerators fail generation.
 
+Values the headers do not declare but Metal takes are the script's `PRIVATE` input, one line per
+value after the type's header enumerators, each with a comment giving the evidence that Metal takes
+it (the device, the macOS release, what Metal did with it); generation fails once the headers
+declare one. `PRIVATE_DOCS` gives such a value a doc comment on its variant, where a consumer needs
+to know what Metal does with it.
+
 It also generates `scripts/conformance-coverage/metal_enumerators.tsv` from the `TABLE_ONLY` list:
 the SDK's enumerators and ordinals for the Metal enums and option sets the tree declares **by
 hand** rather than from these headers, because the compile-and-plan layer never reads them. No Rust

@@ -476,7 +476,8 @@ impl EncoderState {
         self.alpha_test_reference = Some(value);
     }
 
-    /// `setTriangleFillMode:`: `Lines` needs `fillModeNonSolid`.
+    /// `setTriangleFillMode:`: `Lines` needs `fillModeNonSolid`, `Points` that and, on a
+    /// portability-subset device, `pointPolygons` (`metal::state::polygon_mode`).
     pub(super) fn set_fill_mode(
         &mut self,
         mode: TriangleFillMode,

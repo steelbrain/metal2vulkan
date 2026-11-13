@@ -79,18 +79,18 @@ What this axis cannot see, measured rather than asserted:
 | | |
 |---|---|
 | Metal enums and option sets with a generated value list | 60 |
-| their values | 760 |
+| their values | 761 |
 | of those, unreachable: no case can put them to Metal | 51 |
-| so reachable by some case | 709 |
+| so reachable by some case | 710 |
 | values compared | 678 |
-| share of the reachable compared | 96% |
+| share of the reachable compared | 95% |
 | values only the suite's shared sources name | 15 |
-| values no source names and no recording holds | 16 |
+| values no source names and no recording holds | 17 |
 | of the types above, those the suite also spells through its own vocabulary | 5 |
-| types every reachable value of which is compared | 45 |
+| types every reachable value of which is compared | 44 |
 | types no value of which is compared | 2 |
 
-The share is weakly informative on its own: `MTLPixelFormat`, `MTLDataType`, `MTLAttributeFormat`, `MTLVertexFormat` hold 506 of the 760 values between them, so an aggregate over types this uneven is mostly theirs. The per-type table is the one to read.
+The share is weakly informative on its own: `MTLPixelFormat`, `MTLDataType`, `MTLAttributeFormat`, `MTLVertexFormat` hold 506 of the 761 values between them, so an aggregate over types this uneven is mostly theirs. The per-type table is the one to read.
 
 ### Depth by type
 
@@ -106,6 +106,7 @@ Deepest gap first, which is the order the work list reads in. *answered*, *at a 
 | `MTLBarrierScope` | 3 | 2 | 0 | 0 | 2 | 0 | 0 | 1 |
 | `MTLReadWriteTextureTier` | 3 | 2 | 1 | 0 | 2 | 0 | 0 | 1 |
 | `MTLResourceUsage` | 3 | 2 | 0 | 0 | 2 | 0 | 0 | 1 |
+| `MTLTriangleFillMode` | 3 | 2 | 0 | 0 | 2 | 0 | 0 | 1 |
 | `MTLCommandBufferStatus` | 6 | 0 | 0 | 0 | 0 | 6 | 0 | 0 |
 | `MTLPurgeableState` | 4 | 1 | 0 | 0 | 1 | 3 | 0 | 0 |
 | `MTLSparseTextureRegionAlignmentMode` | 2 | 0 | 0 | 0 | 0 | 2 | 0 | 0 |
@@ -152,7 +153,6 @@ Deepest gap first, which is the order the work list reads in. *answered*, *at a 
 | `MTLTextureSwizzle` | 6 | 6 | 0 | 0 | 6 | 0 | 0 | 0 |
 | `MTLTextureType` | 10 | 10 | 7 | 0 | 10 | 0 | 0 | 0 |
 | `MTLTextureUsage` | 9 | 9 | 0 | 0 | 9 | 0 | 0 | 0 |
-| `MTLTriangleFillMode` | 2 | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | `MTLVertexFormat` | 54 | 54 | 2 | 52 | 18 | 0 | 0 | 0 |
 | `MTLVertexStepFunction` | 5 | 5 | 2 | 2 | 5 | 0 | 0 | 0 |
 | `MTLVisibilityResultMode` | 3 | 3 | 0 | 0 | 3 | 0 | 0 | 0 |
@@ -303,7 +303,7 @@ The work list of this axis, and the shape of the answer to *is the depth suffici
 - **`MTLReadWriteTextureTier`**, 2 of 3 compared
 - **`MTLResourceUsage`**, 2 of 3 compared
 - **`MTLStoreActionOptions`**, 2 of 2 compared
-- **`MTLTriangleFillMode`**, 2 of 2 compared
+- **`MTLTriangleFillMode`**, 2 of 3 compared
 - **`MTLVisibilityResultType`**, 2 of 2 compared
 
 ### Types a case is about, whose values this axis cannot read
@@ -333,6 +333,7 @@ The work list. A name here is a value of Metal's that no committed recording hol
 - **`MTLBarrierScope`**, 1 of 3: `MTLBarrierScopeBuffers`
 - **`MTLReadWriteTextureTier`**, 1 of 3: `MTLReadWriteTextureTier1`
 - **`MTLResourceUsage`**, 1 of 3: `MTLResourceUsageSample`
+- **`MTLTriangleFillMode`**, 1 of 3: `MTLTriangleFillModePoints`
 
 And the values only the suite's shared sources name, which some case reaches and this cannot attribute:
 

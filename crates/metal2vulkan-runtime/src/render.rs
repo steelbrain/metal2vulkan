@@ -12805,7 +12805,15 @@ impl RenderCommandEncoder {
         }
     }
 
-    /// `setTriangleFillMode:`. `Lines` needs `fillModeNonSolid` (`Unsupported`).
+    /// `setTriangleFillMode:` (`MTLTriangleFillMode`). `Lines` needs `fillModeNonSolid`
+    /// (`Unsupported`). `Points` is the raw value 2, which no SDK header declares and Apple's GL
+    /// renderer sends for `glPolygonMode(GL_POINT)`: Metal draws each triangle's vertices as points
+    /// of one pixel on an Apple M3 Max and an Intel UHD Graphics 630 (a Radeon Pro 5300M fills the
+    /// triangle), and the runtime draws them as points (`VK_POLYGON_MODE_POINT`). It needs
+    /// `fillModeNonSolid`, and on a portability-subset device `pointPolygons` (`Unsupported`). A
+    /// point takes the size the vertex function writes (`[[point_size]]`), where the M3 Max draws
+    /// one pixel whatever it writes: a draw whose vertex function writes one announces
+    /// `Degradation::TrianglePointSize`.
     pub fn set_triangle_fill_mode(&mut self, mode: TriangleFillMode) -> Result<(), Error> {
         match self.lowers_at_call() {
             true => self.at_call(|lowering| lowering.set_triangle_fill_mode(mode)),

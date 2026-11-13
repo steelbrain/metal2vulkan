@@ -3883,6 +3883,13 @@ bound.
   direct draw, an indirect one, or an indirect command's in an execution. Cost: the points rasterize
   nothing, the vertex function run for each, where what Metal draws is undefined: most of its draws
   draw nothing, and some a few of the points or a box.
+- `metal2vulkan-degrade-triangle-point-size` (precision). `TrianglePointSize`: A draw of triangles
+  in fill mode `TriangleFillMode::Points` (the raw value 2, which Apple's GL renderer sends) under a
+  render pipeline state whose vertex function writes `[[point_size]]`: a direct draw, an indirect
+  one, or an indirect command's in an execution. The device sizes each vertex's point by the size
+  the function writes where its `polygonModePointSize` is set; Metal draws one pixel whatever the
+  function writes (an Apple M3 Max). Cost: each vertex can draw at the point size the vertex
+  function writes, where Metal draws one pixel.
 - `metal2vulkan-degrade-device-wide-lines` (precision). `DeviceWideLines`: A draw of lines at a
   width other than 1 (Apple's `setLineWidth:`), or of a triangle's edges in fill mode `Lines` or of
   a mesh draw, drawn by the device's own lines, which no device's are taken to draw as Metal's

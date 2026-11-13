@@ -99,6 +99,7 @@ feature	IntersectionFunctionTable	rare	ray tracing (out of scope by ruling)
 feature	IndependentBlending	rare	per-attachment blending on a device without independentBlend
 feature	RasterSampleCount	app	a sample count a device lacks for the attachments
 feature	TriangleFillLines	app	wireframe on a device without fillModeNonSolid
+feature	TriangleFillPoints	system	Apple's GL renderer's glPolygonMode(GL_POINT) on a device without fillModeNonSolid, or a portability-subset device without pointPolygons (MoltenVK)
 feature	DepthClipClamp	app	depth clamp on a device without depthClamp
 feature	DepthBiasClamp	app	depth bias clamp on a device without depthBiasClamp
 feature	ConstantAlphaBlendFactor	app	blend-alpha factors on a portability-subset device without them

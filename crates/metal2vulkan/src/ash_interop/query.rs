@@ -832,6 +832,7 @@ feature_sources! { c, x;
     ImageView2DOn3DImage => on(c.portability_subset.image_view2_d_on3_d_image);
     SeparateStencilMaskRef => on(c.portability_subset.separate_stencil_mask_ref);
     ImageViewFormatSwizzle => on(c.portability_subset.image_view_format_swizzle);
+    PointPolygons => on(c.portability_subset.point_polygons);
     ShaderFmaFloat16 => on(c.shader_fma.shader_fma_float16);
     ShaderFmaFloat32 => on(c.shader_fma.shader_fma_float32);
     ShaderFloat8 => on(c.shader_float8.shader_float8);

@@ -1250,6 +1250,7 @@ members! {
         Some(F::SeparateStencilMaskRef);
     PortabilitySubset.portability_subset.image_view_format_swizzle =>
         Some(F::ImageViewFormatSwizzle);
+    PortabilitySubset.portability_subset.point_polygons => Some(F::PointPolygons);
     GeneratedCommands.generated_commands.device_generated_commands => None,
         registry = "deviceGeneratedCommands";
 }

@@ -305,7 +305,7 @@ exposures! {
     Extension(&[E::KhrPortabilitySubset]) => [
         ConstantAlphaColorBlendFactors, VertexAttributeAccessBeyondStride, SamplerMipLodBias,
         MutableComparisonSamplers, ShaderSampleRateInterpolationFunctions, MultisampleArrayImage,
-        ImageView2DOn3DImage, SeparateStencilMaskRef, ImageViewFormatSwizzle,
+        ImageView2DOn3DImage, SeparateStencilMaskRef, ImageViewFormatSwizzle, PointPolygons,
     ];
 }
 
