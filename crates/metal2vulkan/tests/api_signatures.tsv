@@ -2946,6 +2946,7 @@ field	metal2vulkan-runtime::WorkCounts.gate_waits_slept	pub gate_waits_slept: u6
 field	metal2vulkan-runtime::WorkCounts.gate_wakes_found_shut	pub gate_wakes_found_shut: u64
 field	metal2vulkan-runtime::WorkCounts.gathered_draws	pub gathered_draws: u64
 field	metal2vulkan-runtime::WorkCounts.gpu_form_commands	pub gpu_form_commands: u64
+field	metal2vulkan-runtime::WorkCounts.gpu_form_device_local_bytes	pub gpu_form_device_local_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.gpu_pool_blocks_made	pub gpu_pool_blocks_made: u64
 field	metal2vulkan-runtime::WorkCounts.gpu_pool_blocks_released	pub gpu_pool_blocks_released: u64
 field	metal2vulkan-runtime::WorkCounts.gpu_pool_leases_peak	pub gpu_pool_leases_peak: u64
