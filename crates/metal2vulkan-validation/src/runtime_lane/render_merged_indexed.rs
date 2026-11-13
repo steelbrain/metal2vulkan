@@ -17,6 +17,7 @@ use super::indirect_host_steps::{complete, HOST_STEPS};
 use super::render_executions::{forced_with, icb};
 use super::{at_plan, buffer_with};
 use crate::air_library::AirLibrary;
+use metal2vulkan::device::HeapAnswerPolicy;
 use metal2vulkan::metal::{
     IndirectCommandType, PixelFormat, RenderStages, ResourceUsage, TextureUsage,
 };
@@ -26,8 +27,8 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    Buffer, ClearColor, ComputePipelineState, Device, HeapDescriptor, HeapType,
-    IndirectCommandBufferDescriptor, Library, LoadAction, PipelineOptions, Region,
+    Buffer, ClearColor, ComputePipelineState, Degradation, Device, DeviceOptions, HeapDescriptor,
+    HeapType, IndirectCommandBufferDescriptor, Library, LoadAction, PipelineOptions, Region,
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction, Texture,
     TextureDescriptor,
 };
@@ -305,9 +306,20 @@ const EXECUTIONS: u64 = 4;
 /// commands' recordings (`render/executions/kept.rs`), each keyed by what the command buffer made
 /// resident, which its residency lists once for all of them (`Residency::kept_key`), not once an
 /// execution: the listing costs the resources a frame, not the resources times the executions.
+///
+/// The device answers the heap's textures its own images' size and alignment
+/// (`HeapAnswerPolicy::Device`, the default) in place of the lane's exact answers, so they lie in
+/// the heap's bytes wherever the device's image fits there. Held to Metal's answer, a texture
+/// whose image needs more is a shadow of the heap's bytes (RADV's 64x64 `RGBA8Unorm` image takes
+/// 16384 bytes at an alignment of 4096, Metal's answer 16512 at 128), and an execution that may
+/// use a shadowed texture keeps no recording.
 #[test]
 fn a_host_step_lists_its_residency_once_for_every_execution() {
-    on_device_with(at_plan, |device, _messages| {
+    let device_answers = |options: &mut DeviceOptions| {
+        at_plan(options);
+        options.policy.heap_answers = HeapAnswerPolicy::Device;
+    };
+    on_device_with(device_answers, |device, messages| {
         let library = library(device);
         let state = device
             .new_render_pipeline_state(&state_descriptor(&library), &PipelineOptions::default())
@@ -346,6 +358,10 @@ fn a_host_step_lists_its_residency_once_for_every_execution() {
                     .unwrap(),
             );
         }
+        assert!(
+            !messages.announced(Degradation::ShadowedTexture),
+            "the heap's textures lie in its bytes, none a shadow"
+        );
         let target = target(device);
         let queue = device.new_command_queue().unwrap();
         let mut listed = Vec::new();
