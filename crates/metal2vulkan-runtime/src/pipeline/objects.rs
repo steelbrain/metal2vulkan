@@ -1231,6 +1231,11 @@ impl VariantObjects {
         // A large kernel's words of the process's limit, waited for without the turn
         // (`compile_memory.rs`).
         let words = shared.compile_memory(c.object.words());
+        // The line and the module before the driver's call, so a making that never returns is
+        // named.
+        if let Some(kernel) = &self.logged {
+            creation_log::compute_started(&self.device, kernel, c.specialization);
+        }
         let started = std::time::Instant::now();
         // With what the driver reports of the making: a pipeline found in its record's cache
         // reads no data back (`shader_cache/driver.rs`).

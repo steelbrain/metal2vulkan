@@ -473,9 +473,10 @@ const LOG_LINE: &str = "metal2vulkan: pipeline creation: compute pipeline `__ent
 /// makes has its line in the pipeline creation log (`pipeline/creation_log.rs`), naming the
 /// kernel, its module, its specialization, its precision notes (`NativeNanEncoding` among them,
 /// but where the device's narrowing is measured to move a NaN as Metal's) and what it was made
-/// from (the function, its bitcode's SHA-256 and its constant values); with
+/// from (the function, its bitcode's SHA-256 and its constant values), after the line of its
+/// making's start, which names the kernel, the same module and its specialization; with
 /// `METAL2VULKAN_DUMP_PIPELINES` naming a directory, its module is written there by the hash the
-/// line names it by. A child process of this test binary ([`compute_log_child`]) dispatches it
+/// lines name it by. A child process of this test binary ([`compute_log_child`]) dispatches it
 /// with the log on.
 #[test]
 fn the_pipeline_creation_log_names_a_compute_pipeline_and_its_notes() {
@@ -496,10 +497,12 @@ fn the_pipeline_creation_log_names_a_compute_pipeline_and_its_notes() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "the child failed: {stderr}");
-    let logged = stderr
-        .lines()
-        .find(|l| l.starts_with(LOG_LINE))
+    let lines: Vec<&str> = stderr.lines().filter(|l| l.starts_with(LOG_LINE)).collect();
+    let made = lines
+        .iter()
+        .position(|l| l.contains(" ms, spirv "))
         .unwrap_or_else(|| panic!("no compute pipeline's line: {stderr}"));
+    let logged = lines[made];
     assert!(logged.contains(" words), specialization ["), "{logged}");
     assert!(
         logged.contains("; descriptor: `__entry_vsh_round` air ")
@@ -512,6 +515,13 @@ fn the_pipeline_creation_log_names_a_compute_pipeline_and_its_notes() {
         .and_then(|(_, rest)| rest.split_once(' '))
         .map(|(hash, _)| hash)
         .unwrap_or_else(|| panic!("no module hash: {logged}"));
+    let started = format!("{LOG_LINE}making, spirv {hash} (");
+    assert!(
+        lines[..made]
+            .iter()
+            .any(|l| l.starts_with(&started) && l.contains(" words), specialization [")),
+        "no line of the making's start before {logged}: {stderr}"
+    );
     let module = std::fs::read(dumped.join(format!("{hash}.spv"))).unwrap();
     assert_eq!(
         module.get(..4),

@@ -1839,7 +1839,9 @@ With `METAL2VULKAN_LOG_PIPELINES` set, a device also logs one line per compute `
 makes (id name `metal2vulkan-pipeline-creation`, `Info` severity): its kernel, its SPIR-V (a hash
 and its length), each specialization constant, the precision notes the stage holds under that
 specialization, the creation's time and the descriptor the kernel was made from (the function's
-name, the SHA-256 of its bitcode and the constant values it was made with). And one line per
+name, the SHA-256 of its bitcode and the constant values it was made with), after a line as the
+making starts, before the driver's call, naming its kernel, its SPIR-V and its specialization: a
+making that never returns is that line without its made line. And one line per
 render `VkPipeline` it makes (the same
 id name and severity), with where its time went: the
 wait for its turn, the digests that name its parts, each library (made by this making, its
@@ -1851,8 +1853,8 @@ differ only in formats no translation reads share one); a state's first line als
 descriptor it was made from (each function's name, the SHA-256 of its bitcode and the constant
 values it was made with, each color attachment's format, blend and write mask, the depth and
 stencil formats and the raster samples). With `METAL2VULKAN_DUMP_PIPELINES` naming a directory, a
-device writes each such pipeline's SPIR-V modules there, render and compute, one file per module
-named by the hash
+device writes each such pipeline's SPIR-V modules there, render and compute (a compute module as
+its making starts), one file per module named by the hash
 the line prints it by (`<hash>.spv`), and the log is on too. And, once per reason, why a draw
 that reads its own pass's color attachment after a barrier took the split rather than a snapshot
 (id name `metal2vulkan-snapshot-fallback`, `Info` severity; `WorkCounts::reading_draws_snapshotted`

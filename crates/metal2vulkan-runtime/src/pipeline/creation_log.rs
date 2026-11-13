@@ -7,7 +7,10 @@
 //!   id, its meaning and its value), the precision notes the stage holds under that
 //!   specialization (`notes`, as a render line names a stage's), the creation's wall time, and
 //!   what the kernel was made from (`descriptor:`, as a render state's first line names each
-//!   function: its name, its bitcode's SHA-256 and the constant values it was made with). A
+//!   function: its name, its bitcode's SHA-256 and the constant values it was made with). Before
+//!   the driver's call, a line of the making's start ([`compute_started`]) names the kernel, its
+//!   SPIR-V and its specialization, and the dump directory takes its module then: a making that
+//!   never returns is that line without its made line, its module on disk. A
 //!   compute state's pipelines differ by their specialization alone (the threadgroup size, an
 //!   edge region), so each line prints it whole: no numbering, no diff and no split. A kernel
 //!   whose compile is refused, at its state's creation or at a dispatch's variant, takes a line of
@@ -706,22 +709,39 @@ pub(crate) fn compute_kernel(
     })
 }
 
-/// Deliver the line of a compute `VkPipeline` `device` made of `kernel` under `specialization`,
-/// its creation `took` long (the module's documentation, "Compute pipelines").
-pub(crate) fn compute(
+/// Deliver the line of a compute `VkPipeline` `device` starts making of `kernel` under
+/// `specialization`, before the driver's call, and write its module into the dump directory where
+/// one is set: a making that never returns is this line without its made line ([`compute`]), and
+/// its module is on disk (the module's documentation, "Compute pipelines").
+pub(crate) fn compute_started(
     device: &Device,
     kernel: &LoggedKernel,
     specialization: &SpecializationKey,
-    took: Duration,
 ) {
     let stage = &kernel.stage;
+    let hash = spirv_hash(&stage.spirv);
+    let dumped = dump_modules(std::iter::once((hash, &stage.spirv[..]))).unwrap_or_default();
+    deliver(
+        device,
+        format!(
+            "metal2vulkan: pipeline creation: compute pipeline `{}`: making, spirv {hash:016x} \
+             ({} words), specialization [{}]{dumped}",
+            kernel.name,
+            stage.spirv.len(),
+            constants(stage, specialization).join(", "),
+        ),
+    );
+}
+
+/// Each of `specialization`'s constants of `stage`: its id, its meaning and its value.
+fn constants(stage: &StageModule, specialization: &SpecializationKey) -> Vec<String> {
     let meanings: BTreeMap<u32, SpecKey> = stage
         .specialization
         .constants
         .iter()
         .map(|c| (c.id, c.key))
         .collect();
-    let constants: Vec<String> = specialization
+    specialization
         .entries
         .iter()
         .map(|e| {
@@ -735,19 +755,30 @@ pub(crate) fn compute(
                 .map_or_else(String::new, |k| format!(" {k:?}"));
             format!("{}{meaning} = {}", e.constant_id, u64::from_le_bytes(word))
         })
-        .collect();
+        .collect()
+}
+
+/// Deliver the line of a compute `VkPipeline` `device` made of `kernel` under `specialization`,
+/// its creation `took` long (the module's documentation, "Compute pipelines"). Its module was
+/// dumped as the making started ([`compute_started`]).
+pub(crate) fn compute(
+    device: &Device,
+    kernel: &LoggedKernel,
+    specialization: &SpecializationKey,
+    took: Duration,
+) {
+    let stage = &kernel.stage;
     let notes = stage.precision_notes_under(specialization);
     let hash = spirv_hash(&stage.spirv);
-    let dumped = dump_modules(std::iter::once((hash, &stage.spirv[..]))).unwrap_or_default();
     deliver(
         device,
         format!(
             "metal2vulkan: pipeline creation: compute pipeline `{}`: {:.3} ms, spirv {hash:016x} \
-             ({} words), specialization [{}], notes {notes:?}; descriptor: {}{dumped}",
+             ({} words), specialization [{}], notes {notes:?}; descriptor: {}",
             kernel.name,
             took.as_secs_f64() * 1000.0,
             stage.spirv.len(),
-            constants.join(", "),
+            constants(stage, specialization).join(", "),
             kernel.function,
         ),
     );
