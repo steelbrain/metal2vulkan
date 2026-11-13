@@ -825,6 +825,8 @@ surface! {
     "bind::fan_out" => metal2vulkan::bind::fan_out {
         const HEADER_ENTRIES;
         const MAX_SEGMENTS;
+        const PROBE_COUNT_WORDS;
+        const PROBE_DRAW_WORDS;
         const TABLE_BYTES;
         const WIDEN_PIXELS;
         fn clip_entry;
