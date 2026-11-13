@@ -2929,6 +2929,15 @@ fn compile_kept<K>(
             precision.sort_unstable();
         }
     }
+    // A `half` dot product or `mix` the module computes at 16 bits (`spirv::half_hold`): the
+    // device's 16-bit instruction within its precision bounds, where the `float` one rounded may
+    // differ.
+    if crate::spirv::half_hold::rounds_in_16_bits(&module)
+        && !precision.contains(&PrecisionNote::DeviceArithmetic)
+    {
+        precision.push(PrecisionNote::DeviceArithmetic);
+        precision.sort_unstable();
+    }
     if helper_guard.exposed {
         precision.push(PrecisionNote::HelperBranchDropsSimdgroupStores);
         precision.sort_unstable();

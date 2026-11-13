@@ -7,8 +7,10 @@
 //! each block by routing every instruction's [`Strategy`] to its family's emit function. It then
 //! lets `fragment::wrap_entry` choose the entry function (the walked body itself, or a raster order
 //! group's interlocked wrapper that calls it), declares the entry point, finalizes, runs P9
-//! (`promote_single_store`), and removes what no instruction reads, taking the lowering's offers
-//! that make the module smaller (`spirv::dead::remove_dead_keeping`).
+//! (`promote_single_store`), removes what no instruction reads, taking the lowering's offers
+//! that make the module smaller (`spirv::dead::remove_dead_keeping`), and, under the 16-bit float
+//! controls, holds the `half` values of a module that computes `half` in 16 bits there
+//! (`spirv::half_hold`).
 //!
 //! The emitter owns its value environment: the SPIR-V value of each AIR value in the block being
 //! emitted, reset at the top of every block, and the values the entry hook (`stage_io::emit_entry`;
@@ -1460,6 +1462,11 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
     let r = remove_dead_keeping(&mut module, &offers, m);
     m.release(std::mem::size_of_val(offers.as_slice()));
     r?;
+    // Under the 16-bit float controls, a module that computes `half` in 16 bits holds its `half`
+    // values there (`spirv::half_hold`).
+    if plan.families.arith.quantize == crate::spirv::builder::QuantizeForm::Controlled {
+        crate::spirv::half_hold::hold(&mut module, m)?;
+    }
     Ok(Emitted { module, merged })
 }
 
