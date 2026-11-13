@@ -1968,6 +1968,68 @@ fn a_block_writes_only_texture_s_image_is_a_shader_write_one_s() {
     assert!(stored > 100, "{stored}");
 }
 
+/// A multisample colour texture of `ShaderWrite` usage without `PixelFormatView` whose image takes
+/// no storage usage (the device stores no samples of it) is the image of the texture without
+/// `ShaderWrite`, on every committed profile and for every pixel format: its views listed, not a
+/// mutable image of any format (`image_plan.rs`'s `any_format`), so a driver that clears a
+/// multisample image fast only where its views are listed (ANV) clears it so. Where the device
+/// stores the samples, its image takes storage usage.
+#[test]
+fn a_multisample_shader_write_image_lists_its_views() {
+    let read = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+    let written = read | TextureUsage::SHADER_WRITE;
+    let (mut listed, mut stored) = (0, 0);
+    for (name, desc, device) in committed() {
+        let facts = facts(&desc, &device);
+        for &pf in PixelFormat::ALL {
+            if metal2vulkan::metal::format::is_depth_stencil(pf) {
+                continue;
+            }
+            let l = layout(TextureType::Type2DMultisample, pf, 4, 1);
+            let what = format!("{name}: {pf:?}");
+            let (Ok(r), Ok(w)) = (
+                plan_image(&l, read, false, &facts),
+                plan_image(&l, written, false, &facts),
+            ) else {
+                continue;
+            };
+            check_plan(&name, pf, written, &w, &facts);
+            if w.usage.contains(ImageUsageFlags::STORAGE) {
+                stored += 1;
+                continue;
+            }
+            assert_eq!(
+                (w.format, w.usage, w.flags, &w.view_formats),
+                (r.format, r.usage, r.flags, &r.view_formats),
+                "{what}"
+            );
+            assert!(
+                !w.flags.contains(ImageCreateFlags::MUTABLE_FORMAT) || !w.view_formats.is_empty(),
+                "{what}: {w:?}"
+            );
+            listed += 1;
+        }
+    }
+    assert!(listed > 100, "{listed}");
+    // The Iris Xe's 4x `RGBA8Unorm` one, which an ANV walk cleared slowly as a mutable image of
+    // any format.
+    let anv = committed()
+        .into_iter()
+        .find(|(name, _, _)| name == "intel-irisxe-rplp-anv")
+        .expect("the Iris Xe's profile");
+    let facts = facts(&anv.1, &anv.2);
+    let l = layout(
+        TextureType::Type2DMultisample,
+        PixelFormat::RGBA8Unorm,
+        4,
+        1,
+    );
+    let w = plan_image(&l, written, false, &facts).expect("4x RGBA8Unorm");
+    assert!(!w.usage.contains(ImageUsageFlags::STORAGE), "{w:?}");
+    assert!(!w.view_formats.is_empty(), "{w:?}");
+    eprintln!("multisample ShaderWrite images listed {listed}, stored {stored}");
+}
+
 /// A texture of `R10Unorm_X6` or `RG10Unorm_X12` (or of their `_sRGB` twins) holds its words raw
 /// in `R16_UINT` or `R16G16_UINT` for every usage, on every committed device, in memory of its own
 /// as much as over memory it is given: one plan for both, as Metal makes it from either

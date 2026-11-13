@@ -818,18 +818,26 @@ fn plan_held(
             unavailable |= usage.intersection(TextureUsage::RENDER_TARGET);
         }
     }
-    // A color texture Metal keeps uncompressed (`metal_keeps_uncompressed`) whose image takes no
-    // storage usage (a multisample one the device stores no samples of, say) is planned as one
-    // of `PixelFormatView` usage, a mutable image: a driver that compresses images keeps a
+    // A single-sample color texture Metal keeps uncompressed (`metal_keeps_uncompressed`) whose
+    // image takes no storage usage (of a format the device stores no texel of, say) is planned as
+    // one of `PixelFormatView` usage, a mutable image: a driver that compresses images keeps a
     // mutable one of any view format uncompressed (MoltenVK gives its Metal texture
     // `PixelFormatView` usage, as a storage image's `ShaderWrite`), as Metal keeps the texture.
     // Such an image no shader reads, writes or renders through is sampled too where the format
     // samples: MoltenVK gives a mutable image's Metal texture `PixelFormatView` usage only where
     // the image has a view usage (sampled, storage, input or color attachment; MoltenVK 1.4.1's
     // `MVKPixelFormats::getMTLTextureUsage`); without one it made a compressed texture, larger
-    // than Metal's (a `PixelFormatView` texture alone, the consumer's M3 Max).
+    // than Metal's (a `PixelFormatView` texture alone, the consumer's M3 Max). A multisample one
+    // the device stores no samples of lists its views, as one without `ShaderWrite` does: what
+    // Metal answers of its compression (its heap size and alignment, the reach of its clears, what
+    // it reads before a write: `texture/heap_tiled.rs`, `clear_reach.rs`) is the runtime's model,
+    // not the image's, and a driver that compresses multisample images keeps a mutable one of any
+    // view format compressed alike (ANV's MCS is format-agnostic), where such an image clears to a
+    // colour other than its default slowly (ANV's clear of a 4x `RGBA8Unorm` one: 0.20 ms).
+    let multisample = samples != SampleCountFlags::TYPE_1;
     let any_format = usage.contains(TextureUsage::PIXEL_FORMAT_VIEW)
         || (metal_keeps_uncompressed(!depth_stencil, usage)
+            && !multisample
             && !usage_flags.contains(ImageUsageFlags::STORAGE));
     let view_usage = ImageUsageFlags::SAMPLED
         | ImageUsageFlags::STORAGE
