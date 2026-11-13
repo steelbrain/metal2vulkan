@@ -85,7 +85,12 @@
 //!   runs on one of the device's handler threads, in the command buffer's queue's context, after
 //!   the GPU's last use, as Metal's runs on one of its threads: what its commands retained and its
 //!   encoders' logs (`replay.rs`) go in its release, and no thread that submits command buffers
-//!   or sees them complete holds a handle past it (`exit_guard::program_release`). One released
+//!   or sees them complete holds a handle past it (`exit_guard::program_release`). Where that
+//!   release lets go of the import last and the deallocator waits for its free (no keep-alive),
+//!   the free goes to the device's free thread and the deallocator runs there after it
+//!   (`free_thread.rs`, **What is posted**), possibly after the command buffer's waiters
+//!   returned: Metal ties the deallocator to the buffer's deallocation, not to a wait for the
+//!   command buffer. One released
 //!   while only command buffers not yet submitted reach it unnamed goes at once, as Metal's does
 //!   (it runs in the release, on the releasing thread, while such a command buffer waits
 //!   committed: probe `dealloc-probe3`, the M3 Max under macOS 27.0.1): on the releasing thread,

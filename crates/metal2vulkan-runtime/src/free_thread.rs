@@ -15,7 +15,10 @@
 //!   ([`PostedImport`]): Vulkan has "the application must ensure that the imported memory range
 //!   remains valid and accessible for the lifetime of the imported memory object"
 //!   (`VkImportMemoryHostPointerInfoEXT`), and the caller learns that its pages may go from
-//!   that deallocator or keep-alive, which go here after the free. Any other import is freed
+//!   that deallocator or keep-alive, which go here after the free. So such a deallocator may run
+//!   after the command buffer's waiters returned (`wait_until_completed`), paced behind the
+//!   frees posted before it: Metal ties a deallocator to the buffer's deallocation, not to a
+//!   wait for a command buffer that used it. Any other import is freed
 //!   where it goes: a program's own release frees it before the release returns, as the caller
 //!   may free its pages once it returned, and a command buffer's release with nothing waiting
 //!   frees it before the command buffer's waiters return. A block

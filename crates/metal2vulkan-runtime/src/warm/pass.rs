@@ -374,7 +374,10 @@ fn warm_call(device: &WeakDevice, call: Call) {
 /// the device's message sink, else on stderr: a warning, which ends nothing.
 fn say_unread(device: &Device, why: &str) {
     let text = format!(
-        "metal2vulkan: a pipeline record handed to Device::warm could not be read ({why}): it is          not warmed, the pass goes on with the next record, and the program's creation of its          descriptor makes what it needs when asked. This device's later unread records are          counted alone (`WarmStatistics::records_unread`)."
+        "metal2vulkan: a pipeline record handed to Device::warm could not be read ({why}): it is \
+         not warmed, the pass goes on with the next record, and the program's creation of its \
+         descriptor makes what it needs when asked. This device's later unread records are \
+         counted alone (`WarmStatistics::records_unread`)."
     );
     let message = crate::DebugMessage {
         severity: crate::MessageSeverity::Warning,
