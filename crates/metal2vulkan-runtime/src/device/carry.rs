@@ -1050,7 +1050,7 @@ impl Drop for CallHold<'_> {
             let mut calls = lock(&self.0 .0);
             calls.under_way -= 1;
             match calls.under_way {
-                0 => calls.waiting.drain(..).collect(),
+                0 => std::mem::take(&mut calls.waiting),
                 _ => Vec::new(),
             }
         };

@@ -244,7 +244,7 @@ impl StateShared {
     #[inline]
     fn program(&self) -> &Arc<Program> {
         match self.carried.load(Ordering::Acquire) {
-            false => &*self.program,
+            false => &self.program,
             true => super::carry::reached(&self.program, &self.next),
         }
     }
