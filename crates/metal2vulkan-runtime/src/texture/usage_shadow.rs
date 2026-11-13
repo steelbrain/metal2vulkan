@@ -45,19 +45,21 @@
 //!   writes the shadow's view and names the shadow in its uses, and every other binding names its
 //!   own image. It is exact and announces nothing.
 
-use super::{Image, Owner, Storage, Texture};
+use super::{Image, Owner, Start, Storage, Texture};
 use crate::binding_view::binding_view;
+use crate::copy_plan::surface_depth_unit;
 use crate::degradation::Degradation;
 use crate::device::lock;
 use crate::error::{internal, Error, RuntimeGap};
 use crate::image_plan::plan_image;
-use crate::resource::ResourceKey;
+use crate::resource::{Identity, ResourceKey};
 use crate::shadow::ShadowCopies;
 use crate::texture::{image_error, texture_aspects, view_error};
 use crate::texture_descriptor::{TextureDescriptor, TextureLayout};
 use crate::tracker::{Access, Use};
 use crate::values::{CpuCacheMode, ResourceOptions, StorageMode};
 use crate::view_plan::ViewRecord;
+use crate::Device;
 use ash::vk;
 use metal2vulkan::bind::ImageViewDesc;
 use metal2vulkan::error::{Feature, Unsupported};
@@ -390,13 +392,34 @@ impl Texture {
                 let hazard = texels.options().hazard_tracking_mode()?;
                 descriptor.resource_options =
                     ResourceOptions::new(StorageMode::Private, CpuCacheMode::DefaultCache, hazard);
-                let image = device.new_image(plan, &layout, &descriptor, hazard)?;
-                let mut copies = texels.shadow_copies(
-                    image.raw.get(),
-                    image.identity,
-                    texture_aspects(image.plan()),
-                    (None, None),
-                )?;
+                // A depth or stencil texture over a surface's plane copies the aspect the plane
+                // holds alone (`copy_plan::surface_depth_unit`), one aspect a region as Vulkan
+                // copies (`VUID-VkBufferImageCopy-aspectMask-00212`); its other aspect, which no
+                // copy writes, starts at zero, as its own shadow's does
+                // (`Device::storage_over_buffer`).
+                let every = texture_aspects(&plan);
+                let held = surface_depth_unit(layout.pixel_format).map(|unit| unit.aspect.into());
+                let aspects = match held {
+                    Some(held) if every.contains(held) => held,
+                    _ => every,
+                };
+                let image = match aspects != every {
+                    true => {
+                        let identity = Identity::new(hazard, false);
+                        let (start, owner) = (Start::ZeroUnpatterned, Device::runtime_owner);
+                        device.new_image_starting(
+                            plan,
+                            &layout,
+                            &descriptor,
+                            identity,
+                            start,
+                            owner,
+                        )?
+                    }
+                    false => device.new_image(plan, &layout, &descriptor, hazard)?,
+                };
+                let mut copies =
+                    texels.shadow_copies(image.raw.get(), image.identity, aspects, (None, None))?;
                 // The texture's own image lies in the bytes too where it aliases them.
                 if matches!(self.storage(), Storage::Alias { .. }) {
                     copies.backing = copies.backing.aliased();
