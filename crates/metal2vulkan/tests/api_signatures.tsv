@@ -12796,6 +12796,7 @@ variant	metal2vulkan-runtime::RuntimeGap::ProvokingVertex	ProvokingVertex
 variant	metal2vulkan-runtime::RuntimeGap::PvrtcBlockOrder	PvrtcBlockOrder
 variant	metal2vulkan-runtime::RuntimeGap::RateMapRegions	RateMapRegions(RegionRefusal)
 variant	metal2vulkan-runtime::RuntimeGap::RebindTextures	RebindTextures
+variant	metal2vulkan-runtime::RuntimeGap::RemadeAfterRecoveryFailed	RemadeAfterRecoveryFailed
 variant	metal2vulkan-runtime::RuntimeGap::Render	Render
 variant	metal2vulkan-runtime::RuntimeGap::RenderAttachments	RenderAttachments
 variant	metal2vulkan-runtime::RuntimeGap::ResidencySets	ResidencySets

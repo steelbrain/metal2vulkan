@@ -28,7 +28,7 @@ Columns:
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
 | Translator and front-end refusals | 129 | 129 | 7 | 32 | 71 | 19 | 0 |
-| Runtime gaps | 78 | 78 | 1 | 9 | 46 | 22 | 0 |
+| Runtime gaps | 79 | 79 | 1 | 10 | 46 | 22 | 0 |
 | Apple-only calls | 4 | 4 | 0 | 0 | 0 | 4 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
@@ -42,7 +42,7 @@ Columns:
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
 | Translator and front-end refusals | 0 | 0 | 0 | 48 | 58 | 0 | 0 | 23 |
-| Runtime gaps | 0 | 0 | 0 | 0 | 78 | 0 | 0 | 0 |
+| Runtime gaps | 0 | 0 | 0 | 0 | 79 | 0 | 0 | 0 |
 | Apple-only calls | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
@@ -267,6 +267,7 @@ Columns:
 | `ColorAttachmentGroups` | What a render pass the device draws in color groups does not build | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/render/color_groups.rs (gap)` | `app`: in a render pass of more color attachments than the device draws at once (five or more on a device of four), or one at an index past them: a pipeline state of other colors, a tile state, an execution of render commands, a draw reading another group's attachment |
 | `MadeBeforeRecovery` | An object made before its device's recovery from the loss of its `VkDevice` that the recovery did not carry to the new one (the runtime made a new... | every device (runtime piece not built) | `ours` | 3: `crates/metal2vulkan-runtime/src/device/line.rs (foreign)`, `crates/metal2vulkan-runtime/src/device/line.rs (lost_refusal)` (+1) | `app`: any object a program made before its device recovered from a lost VkDevice that the recovery does not carry (a pooled Shared or Managed buffer in memory the device allocated, a texture, a pipeline state), used after the recovery |
 | `AdoptedDeviceRecovery` | `Device::recover_for_test` on a device the consumer made (`Device::from_raw`) | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/device/line.rs (recover_for_test)` | `none`: the recovery test hook on a device the consumer made itself |
+| `RemadeAfterRecoveryFailed` | A bind of a pipeline state made before its device's recovery whose making on the new `VkDevice` failed there (its shader modules, layouts or... | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/pipeline/carry.rs (bound_device)` | `app`: a pipeline state made before its device recovered from a lost VkDevice whose making again on the new one failed, bound after the recovery |
 
 ## 3. Apple-only calls (`Error::AppleOnly`)
 
@@ -785,6 +786,7 @@ Each refusal's sites, with the function that builds it.
 - `gap::ColorAttachmentGroups`: `crates/metal2vulkan-runtime/src/render/color_groups.rs (gap)`
 - `gap::MadeBeforeRecovery`: `crates/metal2vulkan-runtime/src/device/line.rs (foreign)`; `crates/metal2vulkan-runtime/src/device/line.rs (lost_refusal)`; `crates/metal2vulkan-runtime/src/event.rs (carry)`
 - `gap::AdoptedDeviceRecovery`: `crates/metal2vulkan-runtime/src/device/line.rs (recover_for_test)`
+- `gap::RemadeAfterRecoveryFailed`: `crates/metal2vulkan-runtime/src/pipeline/carry.rs (bound_device)`
 - `apple::ProtectedContent`: `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (commit_now)`; `crates/metal2vulkan-runtime/src/command_buffer/protection.rs (refuse_protected_state_encoder)`; `crates/metal2vulkan-runtime/src/command_buffer/protection.rs (set)`
 - `apple::ViewportTransformDisabled`: `crates/metal2vulkan-runtime/src/apple_only.rs (check)`
 - `apple::VertexAmplificationMode`: `crates/metal2vulkan-runtime/src/apple_only.rs (check)`; `crates/metal2vulkan-runtime/src/apple_only.rs (set_vertex_amplification_mode)`

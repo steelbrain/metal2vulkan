@@ -1,9 +1,9 @@
 //! What a device's recovery carries to its next generation (`line.rs`): the program's events, its
 //! uses of guest RAM, its no-copy buffers, the buffers of the runtime's memory whose bytes no
 //! pointer of the program's reaches or whose pages the runtime owns, its `Private` heaps with
-//! the buffers placed in them, and its textures made by a call the recovery makes again
-//! (`texture/carry.rs`), each the same object on the new `VkDevice`, as Metal keeps its objects
-//! across its GPU's recovery. A fence, a depth/stencil state, a library, a function, an address
+//! the buffers placed in them, its textures made by a call the recovery makes again
+//! (`texture/carry.rs`), and its compute and tile pipeline states (`pipeline/carry.rs`), each the
+//! same object on the new `VkDevice`, as Metal keeps its objects across its GPU's recovery. A fence, a depth/stencil state, a library, a function, an address
 //! pool, a dynamic library and a binary archive hold no Vulkan object (`fence.rs`,
 //! `depth_stencil.rs`, `library.rs`, `address_pool.rs`, `dynamic_library.rs`, `binary_archive`):
 //! the recovery carries their handle of the device alone ([`LineDevice`]).
@@ -51,7 +51,13 @@
 //!   lost whatever its storage mode, as its image in the lost `VkDevice`'s memory was their only
 //!   copy, one over a carried buffer (a texture buffer of `Device::new_texture` over its texels'
 //!   buffer too) reading the buffer's bytes; its identity, resource ID, label and purgeable state
-//!   kept (`Texture::carry`).
+//!   kept (`Texture::carry`). A compute or tile pipeline state, after the textures: its base
+//!   variant's objects made there from the pipeline its creation compiled, so nothing is
+//!   translated again, the `VkPipeline` its creation predicted queued on the making pool with no
+//!   wait; the lost generation's memo of compiled pipelines taken first where both generations
+//!   compile alike (`PipelineMemo::carry_from`); its identity, ID, `uniqueIdentifier` and label
+//!   kept (`ComputePipelineState::carry`). One whose making there failed stays the lost
+//!   generation's, refused where bound (`RuntimeGap::RemadeAfterRecoveryFailed`).
 //! - **The bytes kept are the pages'.** A buffer or texture carried with its contents reads the
 //!   pages it lies in, imported again. Vulkan makes the content of external memory imported to a
 //!   lost device undefined (vkspec 5.2.3, "Lost Device"): read here as the hung work's writes,
@@ -116,6 +122,8 @@ use crate::buffer::Buffer;
 use crate::event::EventShared;
 use crate::heap::{Heap, WeakHeap};
 use crate::host_ram::RamUseCell;
+use crate::pipeline::carry::StateCarried;
+use crate::pipeline::{ComputePipelineState, WeakComputePipelineState};
 use crate::queue::Slots;
 use crate::resource::ObjectId;
 use crate::texture::carry::{Remade, TextureLeft, WeakTexture};
@@ -168,12 +176,17 @@ struct State {
     /// The handles of the device that the objects holding no Vulkan object answer
     /// ([`LineDevice`]), held weakly.
     links: Vec<Weak<GenerationLink>>,
+    /// The program's compute states, tile states' kernels among them (`pipeline/carry.rs`), held
+    /// weakly.
+    compute_states: Vec<WeakComputePipelineState>,
     /// The size at which the next keeping drops the gone events' entries.
     prune_at: usize,
     /// The size at which the next keeping drops the gone textures' entries.
     textures_prune_at: usize,
     /// The size at which the next keeping drops the gone handles' entries.
     links_prune_at: usize,
+    /// The size at which the next keeping drops the gone states' entries.
+    states_prune_at: usize,
     /// The recovery took the generation's objects ([`Carry::take`]): what is kept from now on,
     /// its maker carries.
     taken: bool,
@@ -221,6 +234,7 @@ pub(crate) struct Taken {
     heaps: Vec<Heap>,
     textures: Vec<Texture>,
     links: Vec<Arc<GenerationLink>>,
+    compute_states: Vec<ComputePipelineState>,
 }
 
 impl Carry {
@@ -285,6 +299,20 @@ impl Carry {
         lock(&self.state).taken
     }
 
+    /// Keep `state`, a compute state made or carried here (`pipeline/carry.rs`): as
+    /// [`event`](Self::event), its gone entries dropped as the registry grows.
+    pub(crate) fn compute_state(&self, state: &ComputePipelineState) -> bool {
+        let mut state_list = lock(&self.state);
+        if state_list.compute_states.len() >= state_list.states_prune_at {
+            state_list
+                .compute_states
+                .retain(WeakComputePipelineState::lives);
+            state_list.states_prune_at = (2 * state_list.compute_states.len()).max(PRUNE_FLOOR);
+        }
+        state_list.compute_states.push(state.downgrade());
+        state_list.taken
+    }
+
     /// Keep `link`, this generation's handle of the device an object holding no Vulkan object
     /// answers ([`LineDevice`]): as [`event`](Self::event), its gone entries dropped as the
     /// registry grows.
@@ -316,6 +344,9 @@ impl Carry {
                 .filter_map(WeakTexture::upgrade)
                 .collect(),
             links: state.links.iter().filter_map(Weak::upgrade).collect(),
+            compute_states: (state.compute_states.iter())
+                .filter_map(WeakComputePipelineState::upgrade)
+                .collect(),
         }
     }
 
@@ -531,6 +562,8 @@ pub(crate) struct Carried {
     textures: [u64; 5],
     /// The textures left the lost generation's, by why.
     textures_left: [u64; 7],
+    /// The pipeline states made again there, and those whose making there failed.
+    states: (u64, u64),
 }
 
 impl Carried {
@@ -606,10 +639,18 @@ impl Carried {
                 shared + managed + private
             ),
         };
+        let states = match self.states {
+            (0, 0) => String::new(),
+            (made, failed) => format!(
+                ", and {made} pipeline states made again (their predicted pipelines queued), \
+                 {failed} more whose making there failed (refused where bound: \
+                 `RemadeAfterRecoveryFailed`)"
+            ),
+        };
         format!(
             "it carried {} events, {ram}{} buffers with their contents and {lost} `Private` \
              buffers ({lost_bytes} bytes) whose contents were lost (they read zero){heaps}\
-             {textures}; left refused (`MadeBeforeRecovery`): {left}",
+             {textures}{states}; left refused (`MadeBeforeRecovery`): {left}",
             self.events, self.kept
         )
     }
@@ -647,6 +688,15 @@ impl Carried {
         }
     }
 
+    /// One pipeline state's carry.
+    fn state(&mut self, carried: StateCarried) {
+        match carried {
+            Some(Ok(())) => self.states.0 += 1,
+            Some(Err(_)) => self.states.1 += 1,
+            None => {}
+        }
+    }
+
     /// One event's carry.
     fn event(&mut self, carried: Result<(), Error>) {
         match carried {
@@ -677,9 +727,19 @@ impl Device {
             heaps,
             textures,
             links,
+            compute_states,
         } = shared.carry.take(shared);
         for link in &links {
             link.carry(next);
+        }
+        // The lost generation's compiled functions and pipelines, the next's too where both
+        // compile alike: a creation there, or a state's remaking, translates nothing again.
+        let profile = |device: &Device| device.compile_device().profile_fingerprint();
+        if profile(self) == profile(next) {
+            next.shared()
+                .shader_cache
+                .memo
+                .carry_from(&shared.shader_cache.memo);
         }
         let mut carried = Carried::default();
         for event in &events {
@@ -699,6 +759,11 @@ impl Device {
         // they were kept (a view's carry carries its parent where it was not).
         for texture in &textures {
             carried.texture(texture.carry(next));
+        }
+        // The compute states, tile states' kernels among them: each its base variant's objects
+        // made there from its compiled pipeline (`pipeline/carry.rs`).
+        for state in &compute_states {
+            carried.state(state.carry(next));
         }
         carried
     }

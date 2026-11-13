@@ -2141,24 +2141,32 @@ pub enum RuntimeGap {
     /// such pages take what they take over its own memory; and the `Private` heaps with the buffers
     /// placed in them (their contents lost: they read zero), in which buffers and textures are made
     /// again after it; and the textures of `Device::new_texture` (their contents lost), those over the
-    /// buffers it carried (reading the buffers' bytes) and the views of either. Every other object's
-    /// Vulkan objects are the lost `VkDevice`'s, which serves nothing more: a pooled `Shared` or
-    /// `Managed` buffer in memory the device allocated, whose `contents` pointer is its lost memory's
-    /// mapping, a detached no-copy buffer, a `Shared`, no-copy or sparse heap and the buffers placed in
-    /// it, a heap's texture or one over a heap's buffer, a texture over the caller's `VkImage`, a
-    /// sparse or shareable texture, a texture over a buffer left, a view of any of them, a pipeline
-    /// state, a sampler state, an indirect command buffer, a buffer over the caller's `VkBuffer` or in
-    /// exportable memory, and an event made exportable. A call that meets such an object with the new
-    /// generation (an encoder's bind, a pipeline's making from its functions, a buffer or texture
-    /// placed in its heap) or that needs its own lost `VkDevice` (its placements, its imports again,
-    /// its event signals) is refused, where Metal's object goes on; the recovery's notice counts the
-    /// buffers, heaps, textures and events it left. The same object made again on the device serves; a
-    /// command buffer made before the recovery fails as its victim (`GpuRecoveryVictim`).
+    /// buffers it carried (reading the buffers' bytes) and the views of either; and the compute and
+    /// tile pipeline states (their base variants made again there from what their creations compiled; a
+    /// bind of one whose making there failed is refused, `RemadeAfterRecoveryFailed`). Every other
+    /// object's Vulkan objects are the lost `VkDevice`'s, which serves nothing more: a pooled `Shared`
+    /// or `Managed` buffer in memory the device allocated, whose `contents` pointer is its lost
+    /// memory's mapping, a detached no-copy buffer, a `Shared`, no-copy or sparse heap and the buffers
+    /// placed in it, a heap's texture or one over a heap's buffer, a texture over the caller's
+    /// `VkImage`, a sparse or shareable texture, a texture over a buffer left, a view of any of them, a
+    /// render pipeline state, a sampler state, an indirect command buffer, a buffer over the caller's
+    /// `VkBuffer` or in exportable memory, and an event made exportable. A call that meets such an
+    /// object with the new generation (an encoder's bind, a pipeline's making from its functions, a
+    /// buffer or texture placed in its heap) or that needs its own lost `VkDevice` (its placements, its
+    /// imports again, its event signals) is refused, where Metal's object goes on; the recovery's
+    /// notice counts the buffers, heaps, textures and events it left. The same object made again on the
+    /// device serves; a command buffer made before the recovery fails as its victim
+    /// (`GpuRecoveryVictim`).
     MadeBeforeRecovery,
     /// `Device::recover_for_test` on a device the consumer made (`Device::from_raw`): the runtime
     /// cannot make a new `VkDevice` of the consumer's, so it recovers none, and the device is
     /// left as it was. A real loss of such a device answers as a lost device does.
     AdoptedDeviceRecovery,
+    /// A bind of a pipeline state made before its device's recovery whose making on the new
+    /// `VkDevice` failed there (its shader modules, layouts or sampler set refused): the state
+    /// stays its lost generation's, and the recovery's notice counts it. Metal's state goes on;
+    /// the same state made again on the device serves.
+    RemadeAfterRecoveryFailed,
 }
 
 /// The kind of memory that ran out.

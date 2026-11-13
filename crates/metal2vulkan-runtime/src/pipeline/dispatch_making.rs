@@ -18,7 +18,7 @@
 //!   compiles nothing. Where the descriptor states `requiredThreadsPerThreadgroup`, that size is
 //!   the threadgroup every dispatch of the state must have, so the local size of a first
 //!   dispatch's region is part of the request itself. The creation then makes that
-//!   region's `VkPipeline` ([`Variant::make_at_creation`]): a `dispatchThreadgroups:` on the base
+//!   region's `VkPipeline` ([`Variant::make_predicted`]): a `dispatchThreadgroups:` on the base
 //!   variant, planned for nothing bound but Metal's default sampler at each runtime sampler slot
 //!   that does not compare (as a render state's prediction, `predicted.rs`), at that size
 //!   ([`predicted_threads`]). A dispatch whose region has that key takes the pipeline made; one
@@ -235,16 +235,18 @@ impl Variant {
     /// variant, its base, is predicted to take (the module docs), where no caller made or began
     /// it: its notices wait for the first dispatch that takes it. Under
     /// `PipelineWaitPolicy::Bounded` handed to the device's pool, kept by `holds`, the state's,
-    /// and waited for the policy's `pipeline_creation_wait` at most; under `Exact` made on this
-    /// thread. A
-    /// descriptor that requires no threadgroup size predicts no region at all, and a prediction
-    /// the plan refuses or that runs on another variant makes nothing; a failed making is not
-    /// kept and refuses nothing, its dispatch meeting it as before.
-    pub(super) fn make_at_creation(
+    /// and, where `waited` (a creation's), waited for the policy's `pipeline_creation_wait` at
+    /// most (a recovery's making again of the state waits for none, `pipeline/carry.rs`); under
+    /// `Exact` made on this thread. A descriptor that requires no threadgroup size predicts no
+    /// region at all, and a prediction the plan refuses or that runs on another variant makes
+    /// nothing; a failed making is not kept and refuses nothing, its dispatch meeting it as
+    /// before.
+    pub(super) fn make_predicted(
         self: &Arc<Self>,
         device: &Device,
         descriptor: &ComputePipelineDescriptor,
         holds: &Arc<PieceHolds<RegionHeld>>,
+        waited: bool,
     ) {
         if crate::exit_guard::in_host_step() {
             return;
@@ -260,9 +262,10 @@ impl Variant {
             let pending = ticket.pending();
             pending.queued_at(self.pooled(holds, key, ticket, true));
             // A making still running at the bound goes on for the dispatches that take it.
-            if pending
-                .wait_until(Instant::now() + policy.pipeline_creation_wait)
-                .is_none()
+            if waited
+                && pending
+                    .wait_until(Instant::now() + policy.pipeline_creation_wait)
+                    .is_none()
             {
                 device.shared().counts.creation_left_making();
             }
@@ -366,7 +369,7 @@ impl ComputePipelineState {
         region: &DispatchRegion,
         formats: BoundFormats<'_>,
     ) -> RegionPipeline {
-        let holds = &self.0.program.pieces;
+        let holds = &self.0.program().pieces;
         variant.begin_region_pipeline(holds, (region, self.is_tile()), formats)
     }
 }

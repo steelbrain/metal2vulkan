@@ -126,6 +126,14 @@ impl<K: Clone + Eq + Hash, V> Lru<K, V> {
         Some((slot.key, slot.value))
     }
 
+    /// Its entries with their weights, the least recently used first, their uses left as they
+    /// were.
+    pub(crate) fn oldest_first(&self) -> impl Iterator<Item = (&K, &V, u64)> {
+        (self.order.values())
+            .filter_map(|number| self.entries.get(number))
+            .map(|slot| (&slot.key, &slot.value, slot.weight))
+    }
+
     /// The value of `key`, its use left as it was.
     pub(crate) fn peek(&self, key: &K) -> Option<&V> {
         let number = self.numbers.get(key)?;
@@ -393,6 +401,27 @@ impl PipelineMemo {
         let key = MemoKey::Render(variant.pipeline().key);
         if let Some(MemoValue::Render(_, live)) = lock(&self.pipelines).get_mut(&key) {
             *live = Arc::downgrade(variant);
+        }
+    }
+
+    /// Take `earlier`'s compiled functions and pipelines as this memo's own, in their order of
+    /// use and at their weights: the memo of a lost generation of the device whose recovery made
+    /// this one's, of the same profile (the caller's check), so each is what a compile here
+    /// would give. None of its live variants: their objects were the lost `VkDevice`'s.
+    pub(crate) fn carry_from(&self, earlier: &PipelineMemo) {
+        let earlier = lock(&earlier.pipelines);
+        let mut pipelines = lock(&self.pipelines);
+        for (key, value, weight) in earlier.oldest_first() {
+            let value = match value {
+                MemoValue::Function(function) => MemoValue::Function(function.clone()),
+                MemoValue::Compute(pipeline, _) => {
+                    MemoValue::Compute(Arc::clone(pipeline), Weak::new())
+                }
+                MemoValue::Render(pipeline, _) => {
+                    MemoValue::Render(Arc::clone(pipeline), Weak::new())
+                }
+            };
+            pipelines.insert(key.clone(), value, weight);
         }
     }
 

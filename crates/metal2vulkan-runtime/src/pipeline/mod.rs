@@ -41,6 +41,7 @@
 mod additions;
 mod attachment_formats;
 pub(super) mod budget;
+pub(super) mod carry;
 pub(super) mod compile_memory;
 pub(super) mod content_keyed;
 pub(super) mod creation_log;
@@ -259,6 +260,11 @@ impl WeakComputePipelineState {
         self.0.upgrade().map(ComputePipelineState)
     }
 
+    /// Whether the state lives.
+    pub(crate) fn lives(&self) -> bool {
+        self.0.strong_count() > 0
+    }
+
     /// Whether it names `state`: the very state, not one alike. While it is held, no other state
     /// lies where it lay, even once the program let it go.
     pub(crate) fn names(&self, state: &ComputePipelineState) -> bool {
@@ -281,6 +287,9 @@ impl ComputeProgram {
             identifier: None,
             _samplers: Vec::new(),
             program: Arc::clone(&self.0),
+            next: OnceLock::new(),
+            carried: AtomicBool::new(false),
+            remake_failed: AtomicBool::new(false),
         }))
     }
 }
@@ -296,13 +305,34 @@ pub(super) struct StateShared {
     /// The sampler IDs the state numbered as it was made (`resource_ids/numbered.rs`), held
     /// while it lives.
     _samplers: Vec<Arc<Numbered>>,
+    /// Its program on the generation it was made on.
     program: Arc<Program>,
+    /// Its program on each generation its device's recoveries carried it to, in turn
+    /// (`pipeline/carry.rs`), which its reaches take from then on ([`StateShared::program`]).
+    next: OnceLock<Box<carry::ProgramLink<Program>>>,
+    /// `next` is set: one load before a reach walks it.
+    carried: AtomicBool,
+    /// Its making on the generation a recovery made failed: a bind of it is refused
+    /// (`RuntimeGap::RemadeAfterRecoveryFailed`).
+    remake_failed: AtomicBool,
 }
 
 impl std::ops::Deref for StateShared {
     type Target = Program;
     fn deref(&self) -> &Program {
-        &self.program
+        self.program()
+    }
+}
+
+impl StateShared {
+    /// The program this reach of the state takes (`pipeline/carry.rs`): the one it was made
+    /// with, until a recovery carried it.
+    #[inline]
+    fn program(&self) -> &Arc<Program> {
+        match self.carried.load(Ordering::Acquire) {
+            false => &self.program,
+            true => carry::reached(&self.program, &self.next),
+        }
     }
 }
 
@@ -313,7 +343,7 @@ impl Drop for StateShared {
         let Some(id) = self.id.as_ref().filter(|id| id.id().0 != 0) else {
             return;
         };
-        let program = &self.program;
+        let program = self.program();
         program
             .device
             .shared()
@@ -441,7 +471,7 @@ impl PartialEq for ComputePipelineState {
     /// command runs once the program released it, `ComputeProgram::state`), not an equal
     /// descriptor: two states made from one descriptor are two states.
     fn eq(&self, other: &ComputePipelineState) -> bool {
-        Arc::ptr_eq(&self.0.program, &other.0.program)
+        Arc::ptr_eq(self.0.program(), other.0.program())
     }
 }
 
@@ -916,7 +946,7 @@ impl ComputePipelineState {
         // stand-in compile is never dispatched.
         let pieces = piece_holds::PieceHolds::new();
         if let (Kernel::Compute(descriptor), false) = (&kernel, stand_in) {
-            base.make_at_creation(device, descriptor, &pieces);
+            base.make_predicted(device, descriptor, &pieces, true);
         }
         device.degrade_absent_reads(&base.shared_pipeline().dependencies, |_| {
             function.function.info().name.to_string()
@@ -945,7 +975,7 @@ impl ComputePipelineState {
         };
         let interface = &base.shared_pipeline().interface;
         let at_bind_views = AtBindViews::new(device, interface, ReadSlots::every());
-        Ok(ComputePipelineState(Arc::new_cyclic(|state| {
+        let state = ComputePipelineState(Arc::new_cyclic(|state| {
             // The state holds its ID's slot, which lists it among the states an indirect
             // command's record can name (`indirect_states`).
             let id = match (&identifier, indirect) {
@@ -985,8 +1015,17 @@ impl ComputePipelineState {
                 identifier,
                 _samplers: samplers,
                 program: Arc::new(program),
+                next: OnceLock::new(),
+                carried: AtomicBool::new(false),
+                remake_failed: AtomicBool::new(false),
             }
-        })))
+        }));
+        // Kept by its generation for a recovery to carry (`pipeline/carry.rs`); a warm pass's
+        // state is no program's.
+        if !crate::warm::warming() && device.shared().carry.compute_state(&state) {
+            device.carry_late(|serving| state.carry(serving).unwrap_or(Ok(())));
+        }
+        Ok(state)
     }
 }
 
@@ -1456,7 +1495,7 @@ impl ComputePipelineState {
 
     /// What the state runs, held without its ID (`ComputeProgram`).
     pub(crate) fn program(&self) -> ComputeProgram {
-        ComputeProgram(Arc::clone(&self.0.program))
+        ComputeProgram(Arc::clone(self.0.program()))
     }
 
     /// The shape of `state` among those of what its latest direct dispatches planned

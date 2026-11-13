@@ -3981,8 +3981,9 @@ impl IndirectComputeCommand {
     pub fn set_compute_pipeline_state(&self, state: &ComputePipelineState) -> Result<(), Error> {
         const CALL: &str = "set_compute_pipeline_state";
         self.icb.check_command_types(CALL)?;
-        if !state.device().same(self.icb.device()) {
-            return Err(state.device().foreign(CALL, self.icb.device()));
+        let device = state.bound_device()?;
+        if !device.same(self.icb.device()) {
+            return Err(device.foreign(CALL, self.icb.device()));
         }
         if self.descriptor().inherit_pipeline_state {
             return Err(problem(
@@ -5254,8 +5255,8 @@ impl IndirectRenderCommand {
     /// first: a state of another device.
     pub fn set_depth_stencil_state(&self, state: Option<&DepthStencilState>) -> Result<(), Error> {
         const CALL: &str = "set_depth_stencil_state";
-        if let Some(state) = state.filter(|state| !state.device().same(self.icb.device())) {
-            return Err(state.device().foreign(CALL, self.icb.device()));
+        if let Some(state) = state.filter(|state| !state.root_device().same(self.icb.device())) {
+            return Err(state.root_device().foreign(CALL, self.icb.device()));
         }
         Err(self.render_state(CALL))
     }

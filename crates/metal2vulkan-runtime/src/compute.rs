@@ -442,7 +442,7 @@ impl ComputeCommandEncoder {
             |_| ComputeCall::PipelineState(state.clone()),
             |this| {
                 this.core
-                    .check_device("set_compute_pipeline_state", state.device())?;
+                    .check_device("set_compute_pipeline_state", state.bound_device()?)?;
                 this.pipeline = Some(state.clone());
                 (this.core.routes).state_set(state.indirect_command_writes(), || {
                     vec![state.function_name().to_owned()]
