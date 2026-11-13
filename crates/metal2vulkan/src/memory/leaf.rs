@@ -74,16 +74,18 @@
 //! **Volatile**. A volatile access is the same leaf through a word memory whose [`WordOps`] carry
 //! `volatile`: every word or unit it loads or stores has the `Volatile` memory operand.
 //!
-//! **Placement**. Metal does not place an access at the alignment its AIR states. Measured on an
-//! Apple M3 Max under macOS 27.0.1, rows of 21 elements one thread a row
-//! (`probes/vector_access_placement.m` in the conformance crate):
+//! **Placement**. Metal does not place an access at the alignment its AIR states. Measured with
+//! rows of 21 elements, one thread a row (`probes/vector_access_placement.m` in the conformance
+//! crate), on an Apple M3 Max under macOS 27.0.1, and for the first row on an AMD Radeon Pro
+//! 5300M under macOS 26.7.1 too, the same answer from the same library:
 //!
 //! | Access | Its address | Where Metal reads or writes it |
 //! |---|---|---|
-//! | `float4` (`align 16`): device, threadgroup, constant | 4, 8 or 12 mod 16 | at the address |
-//! | `half4` store (`align 8`): device | 2 mod 4 | the multiple of 4 below |
-//! | `uchar4` store (`align 4`): device | odd | the multiple of 4 below |
-//! | `float4 *` buffer bound at offset 4 | 4 mod 16 | at the address |
+//! | `float4` (`align 16`) load and store: device (both GPUs) | 4, 8 or 12 mod 16 | at the address |
+//! | the same in threadgroup and constant memory (M3 Max) | 4, 8 or 12 mod 16 | at the address |
+//! | `half4` store (`align 8`): device (M3 Max) | 2 mod 4 | the multiple of 4 below |
+//! | `uchar4` store (`align 4`): device (M3 Max) | odd | the multiple of 4 below |
+//! | `float4 *` buffer bound at offset 4 (M3 Max) | 4 mod 16 | at the address |
 //!
 //! Metal's API validation fails that last bind ("must be a multiple of 16"): a buffer's bind
 //! offset is a multiple of its argument's `air.arg_type_align_size`. An alignment of at least 4
