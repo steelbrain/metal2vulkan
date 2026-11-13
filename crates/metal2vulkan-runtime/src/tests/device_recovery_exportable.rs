@@ -94,8 +94,8 @@ fn read(queue: &CommandQueue, texture: &Texture) -> Vec<u8> {
 }
 
 /// A `Private` buffer exportable as each handle type the device exports, with a texture over it,
-/// made before a recovery, is carried over its own memory: the notice counts the buffer among
-/// those carried with their contents and the texture among those over carried buffers; an export
+/// made before a recovery, is carried over its own memory: the notice leaves no buffer in
+/// exportable memory refused and counts the texture among those over carried buffers; an export
 /// after the recovery answers the same file, allocation size, offset and memory type as one
 /// before; and a fill of the buffer on the new `VkDevice` reads back through the texture.
 #[test]
@@ -136,9 +136,12 @@ fn a_recovery_carries_a_private_exportable_buffer_over_its_own_memory() {
         device.recover_for_test().unwrap();
         let said = recovery_notices(&heard, from, "the device");
         assert_eq!(said.len(), 1, "{export:?}: {said:?}");
+        // The buffers carried with their contents are not counted: a read buffer let go of may
+        // be among them. The export after the recovery shows this one's.
         assert!(
-            said[0].contains(" 1 buffers with their contents ")
-                && said[0].contains(" 1 textures over the buffers carried "),
+            said[0].contains(" 1 textures over the buffers carried ")
+                && !said[0].contains("exportable memory")
+                && !said[0].contains("opaque-fd"),
             "{export:?}: {said:?}"
         );
         let after = exported(&buffer, export);
