@@ -55,9 +55,9 @@ fn count_ops(words: &[u32], op: u32) -> usize {
     n
 }
 
-/// A draw's triangle stage emits three vertices a copy, as many copies as its state says, and a
-/// probe's none and pushes its flag's index in the geometry stage's own range; every class's
-/// module is valid on the device.
+/// A draw's triangle stage emits three vertices a copy, in a loop of as many copies as its state
+/// says, its output vertices three a copy, and a probe's none and pushes its flag's index in the
+/// geometry stage's own range; every class's module is valid on the device.
 #[test]
 fn a_fan_out_variant_s_triangle_stage_emits_its_copies() {
     for stem in ["lavapipe", "intel-irisxe-rplp-anv", "nvidia-pascal-linux"] {
@@ -94,13 +94,24 @@ fn a_fan_out_variant_s_triangle_stage_emits_its_copies() {
                 crate::spirv::testing::check_words_valid(&module.spirv, requirements, &p)
                     .unwrap_or_else(|e| panic!("{stem} {mode:?} {class:?}: {e}"));
                 let emits = count_ops(&module.spirv, crate::spv::Op::EmitVertex as u32);
-                let expected = match (class, mode) {
-                    (Class::Point, _) => 1,
-                    (Class::Line, _) => 2,
-                    (_, RegionFanOut::Draw) => 3 * fan.copies as usize,
-                    (_, RegionFanOut::Probe) => 0,
+                let (expected, outputs) = match (class, mode) {
+                    (Class::Point, _) => (1, 1),
+                    (Class::Line, _) => (2, 2),
+                    (_, RegionFanOut::Draw) => (3, 3 * fan.copies),
+                    (_, RegionFanOut::Probe) => (0, 3),
                 };
                 assert_eq!(emits, expected, "{stem} {mode:?} {class:?}");
+                let loops = count_ops(&module.spirv, crate::spv::Op::LoopMerge as u32);
+                let looped = (class, mode) == (Class::Triangle, RegionFanOut::Draw);
+                assert_eq!(loops, usize::from(looped), "{stem} {mode:?} {class:?}");
+                let declared = (instructions(&module.spirv, crate::spv::Op::ExecutionMode))
+                    .into_iter()
+                    .filter(|m| {
+                        m.get(1) == Some(&(crate::spv::ExecutionMode::OutputVertices as u32))
+                    })
+                    .map(|m| m[2])
+                    .collect::<Vec<u32>>();
+                assert_eq!(declared, [outputs], "{stem} {mode:?} {class:?}");
             }
         }
     }
