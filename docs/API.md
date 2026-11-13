@@ -3977,7 +3977,10 @@ bound.
   constexpr sampler clamped to the edge fetches its texel.
 - `metal2vulkan-degrade-device-arithmetic` (precision). `PrecisionNote::DeviceArithmetic`: Float
   division, remainder, square root, fused multiply-add, and dot products use Vulkan's precision
-  bounds (e.g. 2.5 ULP division, a possibly unfused `Fma`) rather than correct rounding.
+  bounds (e.g. 2.5 ULP division, a possibly unfused `Fma`) rather than correct rounding. A `half`
+  square root is the device's 16-bit `Sqrt` where the module computes `half` in 16 bits under the
+  16-bit float controls (inherited from `1 / InverseSqrt`, in `half` ulp), and the `float` one
+  rounded to `half` elsewhere.
 - `metal2vulkan-degrade-device-signed-zero-inf-nan` (precision).
   `PrecisionNote::DeviceSignedZeroInfNan`: Float operations LLVM requires to keep signed zeros,
   infinities, and NaNs run without `SignedZeroInfNanPreserve`, which the device does not support at
@@ -4568,7 +4571,10 @@ bound.
 - `metal2vulkan-degrade-native-division` (precision). `PrecisionNote::NativeDivision`: Native device
   maths: a precise `float` or `half` division, or Metal's fast division or reciprocal, is the
   device's `OpFDiv` where the device's division is not Metal's own: within Vulkan's 2.5 ulp, where
-  Metal's precise division is correctly rounded.
+  Metal's precise division is correctly rounded. A `half` one is the `float` quotient rounded to
+  `half`, or, where the module computes `half` in 16 bits under the 16-bit float controls, the
+  device's 16-bit `OpFDiv`: within 2.5 `half` ulp, its divisor scaled by a power of two into
+  `[2^-14, 2^14]`.
 - `metal2vulkan-degrade-native-fma` (precision). `PrecisionNote::NativeFma`: Native device maths: a
   `float` fused multiply-add on a device without `OpFmaKHR`, or a `half` one where the device's
   16-bit `Fma` is not measured to be Metal's and the device has no 16-bit `OpFmaKHR` under the

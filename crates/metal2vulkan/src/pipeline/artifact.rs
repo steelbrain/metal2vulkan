@@ -757,7 +757,10 @@ pub enum PrecisionNote {
     PixelSamplerScaling,
     /// Float division, remainder, square root, fused multiply-add, and dot products use Vulkan's
     /// precision bounds (e.g. 2.5 ULP division, a possibly unfused `Fma`) rather than correct
-    /// rounding. A fast (`arcp`) division is the device's `OpFDiv`, where Metal's is `x` times a
+    /// rounding. A `half` square root is the device's 16-bit `Sqrt` where the module computes
+    /// `half` in 16 bits under the 16-bit float controls, within Vulkan's bound for it (inherited
+    /// from `1 / InverseSqrt`, 2 then 2.5 `half` ulp), and the `float` one rounded to `half`
+    /// elsewhere. A fast (`arcp`) division is the device's `OpFDiv`, where Metal's is `x` times a
     /// reciprocal it rounds within about 0.64 ulp but not correctly. Not recorded by precise
     /// `fmod`, whose answer is the one right value on every device, nor, on a device whose `float`
     /// functions are Metal's own (MoltenVK), in an entry Metal compiles with fast math
@@ -1803,8 +1806,12 @@ pub enum PrecisionNote {
     /// rounded and its fast one `x` times a reciprocal within about 0.64 ulp; beyond that range
     /// a precise division's operands are scaled by `2^-2` into it, exactly, and a fast one is the
     /// device's as Metal's flushes there. A `half` quotient is the `float` one rounded to `half`
-    /// once more: within one unit in the last place of the `half` result. Validation derives no
-    /// tolerance from it.
+    /// once more: within one unit in the last place of the `half` result; or, where the module
+    /// computes `half` in 16 bits under the 16-bit float controls, the device's 16-bit `OpFDiv`,
+    /// within Vulkan's 2.5 `half` ulp for a divisor in `[2^-14, 2^14]`, the operands of a divisor
+    /// past `2^14` scaled by `2^-2` and those of a denormal divisor by `2^10` into it, exactly but
+    /// where the quotient rounds to a zero or overflows anyway. Validation derives no tolerance
+    /// from it.
     NativeDivision,
     /// Native device maths: a `float` fused multiply-add on a device without `OpFmaKHR`, or a
     /// `half` one where the device's 16-bit `Fma` is not measured to be Metal's and the device has

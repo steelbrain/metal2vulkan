@@ -1,8 +1,8 @@
 //! `half` values held as 16-bit floats, in a module that computes `half` in 16 bits under the
 //! 16-bit float controls.
 //!
-//! The lowering holds a `half` widened in an `f32` (`lower::arith::narrow`): a 16-bit `+ - *`
-//! narrows its operands, computes and widens its result, and every other operation on `half`
+//! The lowering holds a `half` widened in an `f32` (`lower::arith::narrow`): a 16-bit `+ - * /`
+//! or `sqrt` narrows its operands, computes and widens its result, and every other operation on `half`
 //! values (a minimum, a select, a dot product, a store to a demotion variable or a thread array)
 //! reads the widened `f32`. Where the module computes in 16 bits under the float controls
 //! (`QuantizeForm::Controlled`, `narrow::computes_in_16_bits`), the device's native form of `half`

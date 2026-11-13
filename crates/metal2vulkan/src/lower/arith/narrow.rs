@@ -26,9 +26,10 @@
 //! controls of [`QuantizeForm::Controlled`], which make it so by the Vulkan spec and which the
 //! entry then declares ([`computes_in_16_bits`]); there the emitted module holds every exact
 //! `half` at 16 bits, its moves, minimums, maximums and clamps, its demotion variables and thread
-//! arrays, and its `dot` and `mix`, 16-bit instructions (`spirv::half_hold`). For `+ - * /` and
-//! square root the double
-//! rounding (the exact result to `f32`, then to the narrow format) is innocuous, because `f32`
+//! arrays, and its `dot` and `mix`, 16-bit instructions (`spirv::half_hold`); a `half` `/` and
+//! `sqrt` under those controls are the device's 16-bit `OpFDiv` and `Sqrt` between exact
+//! conversions too, within Vulkan's bounds for them (`super::divide`, `super::math`). For
+//! `+ - * /` and square root the double rounding (the exact result to `f32`, then to the narrow format) is innocuous, because `f32`
 //! carries at least `2p + 2` significand bits for both formats; a `half` fused multiply-add's is
 //! not, so it is the device's 16-bit one where that is Metal's, and else the device's `f32` one
 //! rounded to `half`, noted (`super::fma`), and a `bfloat` one is corrected ([`bf16_fma`]).
@@ -1849,9 +1850,10 @@ fn computes(inst: &Inst) -> bool {
     }
 }
 
-/// Whether module `m` computes in 16-bit floats: an `OpFAdd`, `OpFSub` or `OpFMul`, an `OpFmaKHR`
-/// or a `GLSL.std.450 Fma` whose result is a 16-bit float or a vector of them, the device's own
-/// `half` arithmetic (`super::ops::f16_binary`, `super::fma`). Under the 16-bit float controls
+/// Whether module `m` computes in 16-bit floats: an `OpFAdd`, `OpFSub`, `OpFMul` or `OpFDiv`, an
+/// `OpFmaKHR`, or a `GLSL.std.450 Fma` or `Sqrt` whose result is a 16-bit float or a vector of
+/// them, the device's own `half` arithmetic (`super::ops::f16_binary`, `super::fma`,
+/// `super::divide`, `super::math`'s `sqrt`). Under the 16-bit float controls
 /// ([`QuantizeForm::Controlled`]) the entry then declares [`controlled_modes`], which make that
 /// arithmetic Metal's. One pass over the instructions.
 pub fn computes_in_16_bits(m: &TypedModule) -> bool {
@@ -1867,9 +1869,11 @@ pub fn computes_in_16_bits(m: &TypedModule) -> bool {
     };
     m.blocks().iter().flat_map(|b| &b.insts).any(|n| {
         let arithmetic = match &n.inst {
-            Inst::Binary { op, .. } => matches!(op, BinOp::FAdd | BinOp::FSub | BinOp::FMul),
+            Inst::Binary { op, .. } => {
+                matches!(op, BinOp::FAdd | BinOp::FSub | BinOp::FMul | BinOp::FDiv)
+            }
             Inst::Fma { .. } => true,
-            Inst::Glsl { op, .. } => *op == GlslOp::Fma,
+            Inst::Glsl { op, .. } => matches!(op, GlslOp::Fma | GlslOp::Sqrt),
             _ => false,
         };
         arithmetic && n.result.is_some_and(half)

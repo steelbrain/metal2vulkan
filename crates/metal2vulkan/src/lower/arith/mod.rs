@@ -294,8 +294,9 @@ pub enum ArithStrategy {
         contract: Contraction,
     },
     /// Metal's precise division on `float` or `half` lanes (an `fdiv` without `arcp` on `float`,
-    /// any `fdiv` on `half`): the device's `OpFDiv`, its divisor kept in Vulkan's range
-    /// ([`divide::native`], `PrecisionNote::NativeDivision`).
+    /// any `fdiv` on `half`): the device's `OpFDiv`, its divisor kept in Vulkan's range, a `half`
+    /// one's 16 bits wide under the 16-bit float controls ([`divide::native`],
+    /// `PrecisionNote::NativeDivision`).
     NativeDivide {
         form: Form,
     },
@@ -2165,11 +2166,11 @@ enum F16Basis {
 /// one to four lanes (a chunk's own form), where profile `p` has `shaderFloat16` and takes
 /// `DriverDeviation::MetalHalfArithmetic` ([`F16Basis::Measured`]) or rounds to `half` under the
 /// 16-bit float controls ([`F16Basis::Controlled`]). Under those controls the instruction is Metal's
-/// by the Vulkan spec ([`ops::f16_binary`]). A `half` `fdiv` is the device's `float` quotient of
-/// the widened operands, rounded to `half`: Metal's fast and relaxed compiles answer the device's
-/// 16-bit quotient of widened operands as a `float` one, it has no form that keeps it apart, and
-/// Vulkan's precision table does not make a 16-bit quotient correctly rounded. A `half` `frem` is
-/// not measured.
+/// by the Vulkan spec ([`ops::f16_binary`]). A `half` `fdiv` is Metal's precise division
+/// ([`divide::native`]): under those controls the device's 16-bit `OpFDiv`, its native form, and
+/// elsewhere the device's `float` quotient of the widened operands rounded to `half`, as Metal's
+/// fast and relaxed compiles answer the device's 16-bit quotient of widened operands as a `float`
+/// one and it has no form that keeps it apart. A `half` `frem` is not measured.
 fn f16_arithmetic(p: &DeviceProfile, op: AirBin, f: Form) -> Option<F16Basis> {
     use crate::error::DriverDeviation;
     let applies = matches!(op, AirBin::FAdd | AirBin::FSub | AirBin::FMul)

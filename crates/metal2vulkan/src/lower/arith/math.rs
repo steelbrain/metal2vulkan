@@ -29,8 +29,8 @@ use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::libm::{self, Lib};
 use crate::lower::arith::nan::{self, NanTest};
 use crate::lower::arith::narrow;
-use crate::lower::arith::ops::{fsplat, mask, ones, sext, splat, ty, CastKind};
-use crate::spirv::builder::FunctionBuilder;
+use crate::lower::arith::ops::{float_ty, fsplat, mask, ones, sext, splat, ty, CastKind};
+use crate::spirv::builder::{FunctionBuilder, QuantizeForm};
 use crate::spirv::error::{BResult, BuildError, TypeRule};
 use crate::spirv::ids::Value;
 use crate::spirv::ir::{BinOp, Contraction, ConvOp, GlslOp, UnOp};
@@ -1293,7 +1293,9 @@ impl FloatFn {
 /// `Dot` gives the scalar), by the device's instructions, and precise `fmod` by `lib`'s routine
 /// where the module defines it. A `half` function is its `float` function rounded, its zeros' signs
 /// and NaNs' signs that function's: a `half` `fmod`'s zero remainder the dividend's sign, as the
-/// `float` remainder keeps it ([`FloatFn::half_zero_of_float`]).
+/// `float` remainder keeps it ([`FloatFn::half_zero_of_float`]). A `half` `sqrt` is the device's
+/// 16-bit `Sqrt` where the module's `half` roundings take the 16-bit float controls
+/// ([`sqrt_16`]).
 pub fn float_fn(
     fb: &mut FunctionBuilder<'_>,
     op: FloatFn,
@@ -1303,6 +1305,12 @@ pub fn float_fn(
     lib: &Lib,
 ) -> BResult<Value> {
     use FloatFn as F;
+    if op == F::Sqrt
+        && f.float_fmt() == Some(FloatFmt::Half)
+        && fb.module().quantize_form() == QuantizeForm::Controlled
+    {
+        return sqrt_16(fb, f, arg(args, 0)?);
+    }
     let r = float_fn_core(fb, op, f, contract, args, lib)?;
     let r = match op {
         _ if op.closed_on_narrow() => r,
@@ -1314,6 +1322,20 @@ pub fn float_fn(
         _ => narrow::round(fb, f, r)?,
     };
     Ok(r)
+}
+
+/// `half` `sqrt(a)` (a `half` held in a `float` of form `f`) by the device's 16-bit `Sqrt`: the
+/// operand narrowed to 16 bits, exactly since it is a `half`, the instruction, and its result
+/// widened, exactly. Vulkan bounds the 16-bit `Sqrt` as it does the `float` one, inherited from
+/// `1 / InverseSqrt` (2 ulp, then the division's 2.5), here in `half` ulp, where Metal's precise
+/// `sqrt` is correctly rounded (`PrecisionNote::DeviceArithmetic`). The module computes in 16 bits
+/// ([`narrow::computes_in_16_bits`]), so its entry declares the 16-bit float controls, under which
+/// a denormal operand and result are kept and a zero's sign, an infinity and a NaN are IEEE 754's.
+fn sqrt_16(fb: &mut FunctionBuilder<'_>, f: Form, a: Value) -> BResult<Value> {
+    let (h, w) = (float_ty(fb, f.lanes, 16)?, float_ty(fb, f.lanes, 32)?);
+    let x = fb.convert(ConvOp::FConvert, a, h)?;
+    let r = fb.glsl(GlslOp::Sqrt, &[x])?;
+    fb.convert(ConvOp::FConvert, r, w)
 }
 
 /// The `float` function a `half` call of `op` (form `f`, held in `float`) takes before its

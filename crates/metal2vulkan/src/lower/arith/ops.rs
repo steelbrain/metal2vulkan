@@ -305,14 +305,7 @@ pub fn f16_binary(
     a: Value,
     b: Value,
 ) -> BResult<Value> {
-    let float_ty = |fb: &mut FunctionBuilder<'_>, width: u8| -> BResult<TypeId> {
-        let e = fb.module().ty(Type::Float { width })?;
-        match lanes {
-            1 => Ok(e),
-            len => fb.module().ty(Type::Vector { elem: e, len }),
-        }
-    };
-    let (h, w) = (float_ty(fb, 16)?, float_ty(fb, 32)?);
+    let (h, w) = (float_ty(fb, lanes, 16)?, float_ty(fb, lanes, 32)?);
     let x = fb.convert(ConvOp::FConvert, a, h)?;
     let y = fb.convert(ConvOp::FConvert, b, h)?;
     let r = match (op, contract) {
@@ -320,24 +313,41 @@ pub fn f16_binary(
         (AirBin::FSub, _) => fb.binary_with(BinOp::FSub, x, y, contract)?,
         (AirBin::FMul, Contraction::Allowed) => fb.binary(BinOp::FMul, x, y)?,
         (AirBin::FMul, Contraction::Forbidden) => {
-            let e = fb.module().ty(Type::Float { width: 16 })?;
-            let s = fb.module().constant(Constant::Scalar {
-                ty: e,
-                bits: ConstBits(0x8000),
-            })?;
-            let z = match lanes {
-                1 => s,
-                n => fb.module().constant(Constant::Composite {
-                    ty: h,
-                    parts: vec![s; usize::from(n)].into(),
-                })?,
-            };
-            let z = fb.module().const_value(z)?;
+            let z = f16_splat(fb, lanes, 0x8000)?;
             fb.glsl_with(GlslOp::Fma, &[x, y, z], Contraction::Forbidden)?
         }
         _ => return Err(BuildError::Type(TypeRule::ScalarWidth)),
     };
     fb.convert(ConvOp::FConvert, r, w)
+}
+
+/// The float type of `width` bits on `lanes` lanes: the scalar for one lane, its vector otherwise.
+pub fn float_ty(fb: &mut FunctionBuilder<'_>, lanes: u8, width: u8) -> BResult<TypeId> {
+    let e = fb.module().ty(Type::Float { width })?;
+    match lanes {
+        1 => Ok(e),
+        len => fb.module().ty(Type::Vector { elem: e, len }),
+    }
+}
+
+/// The 16-bit float of bits `bits` on each of `lanes` lanes, a constant.
+pub fn f16_splat(fb: &mut FunctionBuilder<'_>, lanes: u8, bits: u16) -> BResult<Value> {
+    let e = fb.module().ty(Type::Float { width: 16 })?;
+    let s = fb.module().constant(Constant::Scalar {
+        ty: e,
+        bits: ConstBits(u64::from(bits)),
+    })?;
+    let k = match lanes {
+        1 => s,
+        n => {
+            let ty = float_ty(fb, n, 16)?;
+            fb.module().constant(Constant::Composite {
+                ty,
+                parts: vec![s; usize::from(n)].into(),
+            })?
+        }
+    };
+    fb.module().const_value(k)
 }
 
 /// `icmp` on held integers of form `f`.
