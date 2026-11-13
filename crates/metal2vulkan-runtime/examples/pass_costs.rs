@@ -359,8 +359,10 @@ impl Bench {
         let color_mask = has_state3 && state3.extended_dynamic_state3_color_write_mask == vk::TRUE;
         println!(
             "PASS-COSTS device {name} driver {driver_info} color write mask {color_mask} \
-             passes {PASSES} group {GROUP} draws {draws} extent {}x{} load {load:?}",
-            extent.width, extent.height,
+             passes {PASSES} group {GROUP} draws {draws} extent {}x{} cleared {}",
+            extent.width,
+            extent.height,
+            load == vk::AttachmentLoadOp::CLEAR,
         );
         // SAFETY: the instance's.
         let families = unsafe { instance.get_physical_device_queue_family_properties(physical) };
