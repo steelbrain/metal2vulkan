@@ -43,11 +43,11 @@ pub const PREFIX: &[u8] = b"__tensorops_impl_matmul2d_op_";
 
 /// `__tensor_ops_datatype_invalid`: the scale type a `_v2` run passes for a tensor operand without
 /// scale factors (`tensor_plane_scales`).
-pub const NO_SCALE: u64 = 0;
+pub(crate) const NO_SCALE: u64 = 0;
 
 /// `dynamic_extent` as a `_v2` run passes a tensor's static extent that is dynamic: the `int` -1,
 /// zero-extended.
-pub const DYNAMIC_EXTENT: u64 = 0xFFFF_FFFF;
+pub(crate) const DYNAMIC_EXTENT: u64 = 0xFFFF_FFFF;
 
 /// The reserved element index (`__tensor_ops_reserved_index`, `USHRT_MAX`): the header passes
 /// `get_element_pointer` of it to `run` and to the copy helpers as the storage itself.
@@ -315,7 +315,7 @@ impl RunForm {
     /// sizes and its two static extents (`get_static_extent`), which follow its descriptor type
     /// in that order, for the tensor whose pointer is argument `at` ([`RunForm::operand_args`]).
     /// `None` for a form other than `_v2`.
-    pub fn v2_tensor_args(&self, at: usize) -> Option<[usize; 5]> {
+    pub(crate) fn v2_tensor_args(&self, at: usize) -> Option<[usize; 5]> {
         self.v2.then_some([at + 2, at + 3, at + 4, at + 5, at + 6])
     }
 }
