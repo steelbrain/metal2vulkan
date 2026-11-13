@@ -47,7 +47,6 @@
 
 use super::{Image, Owner, Start, Storage, Texture};
 use crate::binding_view::binding_view;
-use crate::copy_plan::surface_depth_unit;
 use crate::degradation::Degradation;
 use crate::device::lock;
 use crate::error::{internal, Error, RuntimeGap};
@@ -392,13 +391,14 @@ impl Texture {
                 let hazard = texels.options().hazard_tracking_mode()?;
                 descriptor.resource_options =
                     ResourceOptions::new(StorageMode::Private, CpuCacheMode::DefaultCache, hazard);
-                // A depth or stencil texture over a surface's plane copies the aspect the plane
-                // holds alone (`copy_plan::surface_depth_unit`), one aspect a region as Vulkan
-                // copies (`VUID-VkBufferImageCopy-aspectMask-00212`); its other aspect, which no
-                // copy writes, starts at zero, as its own shadow's does
+                // A depth or stencil texture over a surface's plane, or a view of one, copies the
+                // aspect the plane holds alone, the unit of the texture made over the plane
+                // (`Texture::surface_plane_unit`: a view's format may name the other aspect), one
+                // aspect a region as Vulkan copies (`VUID-VkBufferImageCopy-aspectMask-00212`);
+                // its other aspect, which no copy writes, starts at zero, as its own shadow's does
                 // (`Device::storage_over_buffer`).
                 let every = texture_aspects(&plan);
-                let held = surface_depth_unit(layout.pixel_format).map(|unit| unit.aspect.into());
+                let held = self.surface_plane_unit().map(|unit| unit.aspect.into());
                 let aspects = match held {
                     Some(held) if every.contains(held) => held,
                     _ => every,

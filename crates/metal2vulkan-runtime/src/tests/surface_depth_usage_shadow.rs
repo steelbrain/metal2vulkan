@@ -6,7 +6,8 @@
 //! shadow copies that aspect, one aspect a region as Vulkan copies
 //! (`VUID-VkBufferImageCopy-aspectMask-00212`), and the kernel reads the plane's depths. One usage
 //! shadow is made (`DeviceShared::usage_shadows_made`), a read of the texture's `X32_Stencil8`
-//! view reads 0, and the layer reports nothing. Printed (`SURFACE-DEPTH-USAGE-SHADOW`): what the
+//! view, whose own usage shadow copies the depth its texture's plane holds, reads 0, and the layer
+//! reports nothing. Printed (`SURFACE-DEPTH-USAGE-SHADOW`): what the
 //! reads found.
 
 use super::blit_holds::{options, Scratch, WAIT};
