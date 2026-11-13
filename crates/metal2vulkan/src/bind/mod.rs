@@ -147,6 +147,7 @@ pub(crate) mod dynamic_views;
 pub(crate) mod etc_decode;
 pub(crate) mod extended_canonical;
 pub(crate) mod extended_shadow;
+pub mod fan_out;
 pub(crate) mod graphics;
 pub(crate) mod heap;
 pub(crate) mod index_bounds;
@@ -265,7 +266,6 @@ pub use plan::{
     GraphicsTemplate, ImageSource, ImageViewDesc, PlanDiagnostic, PushFieldPlacement, PushTemplate,
     ResourceUse, SamplerSource, UseTarget, VertexBufferBind, ViewSetup, WriteSource,
 };
-pub use rate_map::fan_out;
 pub use rate_map::{
     RasterizationRateMap, RateMapAxis, RateMapDescriptor, RateMapError, RateMapLayerDescriptor,
     RateMapRegion, RateMapRegions, RegionError, RegionLimits, UnpinnedCompile, MAX_SCREEN_EXTENT,

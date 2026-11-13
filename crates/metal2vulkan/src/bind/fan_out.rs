@@ -1,7 +1,7 @@
 //! The region table of a rate-mapped pass drawn by fan-out: each primitive once, its vertices
 //! shaded once, and a geometry stage that emits a copy of each triangle per region it touches
 //! (`pipeline::link::geometry`, the fan-out stage), where the regions route
-//! ([`RateMapRegions`](super::RateMapRegions)) records each draw once per region.
+//! ([`RateMapRegions`](crate::bind::RateMapRegions)) records each draw once per region.
 //!
 //! A region of the plan is a viewport and a scissor: its line maps the guest's normalized device
 //! coordinates to physical pixels, and its scissor keeps its own pixels. The fan-out draw has one
@@ -36,7 +36,7 @@
 //! then y's: a line `vec4(ndc_lo, ndc_hi, a, b)`, a clip `vec4(W/2, X + W/2 − p₀, p₁ − X − W/2,
 //! 0)`.
 
-/// The most segments an axis holds: [`RateMapRegions::MAX_REGIONS`](super::RateMapRegions) is
+/// The most segments an axis holds: [`RateMapRegions::MAX_REGIONS`](crate::bind::RateMapRegions) is
 /// this many per axis squared.
 pub const MAX_SEGMENTS: u32 = 128;
 

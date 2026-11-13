@@ -375,11 +375,13 @@ surface! {
         enum BandPrimitive E;
         struct BlendState N;
         struct ColorAttachmentState N;
+        struct FanOutState N;
         struct FragmentImageblock N;
         struct GraphicsState N;
         enum ImageblockMechanism N;
         struct InputAttachmentUse N;
         struct LineBandState N;
+        enum RegionFanOut E;
         struct ShaderTestsUse N;
         struct ShadowStencilUse N;
         struct StandInUse N;
@@ -816,7 +818,17 @@ surface! {
         enum RewriteProgram N;
         struct RewriteRunDraw E;
         enum RewriteSource N;
+        mod fan_out;
         mod indirect_commands;
+    }
+    "bind::fan_out" => metal2vulkan::bind::fan_out {
+        const HEADER_ENTRIES;
+        const MAX_SEGMENTS;
+        const TABLE_BYTES;
+        const WIDEN_PIXELS;
+        fn clip_entry;
+        fn line_entry;
+        fn table;
     }
     "bind::indirect_commands" => metal2vulkan::bind::indirect_commands {
         enum Action E;
@@ -2315,6 +2327,7 @@ fn scanned_modules() -> Vec<&'static str> {
         "reflection",
         "pipeline",
         "bind",
+        "bind::fan_out",
         "bind::indirect_commands",
         "cache",
         "metal",

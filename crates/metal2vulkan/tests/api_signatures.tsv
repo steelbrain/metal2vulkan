@@ -482,6 +482,7 @@ assoc-const	metal2vulkan::pipeline::CommandWrites::RENDER_STATE	pub const RENDER
 assoc-const	metal2vulkan::pipeline::CommandWrites::RESET	pub const RESET: u32
 assoc-const	metal2vulkan::pipeline::CommandWrites::STAGE_IN_REGION	pub const STAGE_IN_REGION: u32
 assoc-const	metal2vulkan::pipeline::CommandWrites::THREADGROUP_MEMORY	pub const THREADGROUP_MEMORY: u32
+assoc-const	metal2vulkan::pipeline::FanOutState::PUSH_BYTES	pub const PUSH_BYTES: u32
 assoc-const	metal2vulkan::pipeline::FunctionHandle::NULL_WORD	pub const NULL_WORD: u32
 assoc-const	metal2vulkan::pipeline::FunctionHandle::RESERVED_WORD	pub const RESERVED_WORD: u32
 assoc-const	metal2vulkan::pipeline::LineBandState::FRONT_FACE	pub const FRONT_FACE: vk::FrontFace
@@ -964,6 +965,7 @@ assoc-const-value	metal2vulkan::pipeline::CommandWrites::RENDER_STATE	1 <<9
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::RESET	1 <<13
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::STAGE_IN_REGION	1 <<11
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::THREADGROUP_MEMORY	1 <<10
+assoc-const-value	metal2vulkan::pipeline::FanOutState::PUSH_BYTES	crate::pipeline::link::fan_out::PUSH_BYTES
 assoc-const-value	metal2vulkan::pipeline::FunctionHandle::NULL_WORD	0
 assoc-const-value	metal2vulkan::pipeline::FunctionHandle::RESERVED_WORD	1
 assoc-const-value	metal2vulkan::pipeline::LineBandState::FRONT_FACE	crate::pipeline::link::band::LineBand::FRONT_FACE
@@ -1025,6 +1027,10 @@ const	metal2vulkan::bind::METAL_OBJECT_GRID_TOTAL	pub const METAL_OBJECT_GRID_TO
 const	metal2vulkan::bind::NEUTRAL_HEAP_ELEMENT	pub const NEUTRAL_HEAP_ELEMENT: u32
 const	metal2vulkan::bind::SRGB_RESOLVE_LINEAR	pub const SRGB_RESOLVE_LINEAR: [u16; 256]
 const	metal2vulkan::bind::SRGB_RESOLVE_THRESHOLDS	pub const SRGB_RESOLVE_THRESHOLDS: [u16; 255]
+const	metal2vulkan::bind::fan_out::HEADER_ENTRIES	pub const HEADER_ENTRIES: u32
+const	metal2vulkan::bind::fan_out::MAX_SEGMENTS	pub const MAX_SEGMENTS: u32
+const	metal2vulkan::bind::fan_out::TABLE_BYTES	pub const TABLE_BYTES: u64
+const	metal2vulkan::bind::fan_out::WIDEN_PIXELS	pub const WIDEN_PIXELS: f64
 const	metal2vulkan::bind::indirect_commands::BINDING_COUNT	pub const BINDING_COUNT: usize
 const	metal2vulkan::bind::indirect_commands::COMMAND_BUFFER_HEADER_BYTES	pub const COMMAND_BUFFER_HEADER_BYTES: usize
 const	metal2vulkan::bind::indirect_commands::COMMAND_BYTES	pub const COMMAND_BYTES: usize
@@ -1094,6 +1100,10 @@ const-value	metal2vulkan::bind::METAL_OBJECT_GRID_TOTAL	1 <<29
 const-value	metal2vulkan::bind::NEUTRAL_HEAP_ELEMENT	NEUTRAL_ELEMENT
 const-value	metal2vulkan::bind::SRGB_RESOLVE_LINEAR	[0, 1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 18, 20, 21, 23, 25, 27, 29, 31, 33, 35, 37, 40, 42, 45, 48, 50, 53, 56, 59, 62, 66, 69, 72, 76, 79, 83, 87, 91, 95, 99, 103, 107, 112, 116, 121, 126, 131, 136, 141, 146, 151, 156, 162, 168, 173, 179, 185, 191, 197, 204, 210, 216, 223, 230, 237, 244, 251, 258, 265, 273, 280, 288, 296, 304, 312, 320, 329, 337, 346, 354, 363, 372, 381, 390, 400, 409, 419, 428, 438, 448, 458, 469, 479, 490, 500, 511, 522, 533, 544, 555, 567, 578, 590, 602, 614, 626, 639, 651, 664, 676, 689, 702, 715, 728, 742, 755, 769, 783, 797, 811, 825, 840, 854, 869, 884, 899, 914, 929, 945, 960, 976, 992, 1008, 1024, 1041, 1057, 1074, 1091, 1108, 1125, 1142, 1159, 1177, 1195, 1213, 1231, 1249, 1267, 1286, 1304, 1323, 1342, 1361, 1381, 1400, 1420, 1440, 1459, 1480, 1500, 1520, 1541, 1562, 1582, 1603, 1625, 1646, 1668, 1689, 1711, 1733, 1755, 1778, 1800, 1823, 1846, 1869, 1892, 1916, 1939, 1963, 1987, 2011, 2035, 2059, 2084, 2109, 2133, 2159, 2184, 2209, 2235, 2260, 2286, 2312, 2339, 2365, 2392, 2419, 2446, 2473, 2500, 2527, 2555, 2583, 2611, 2639, 2668, 2696, 2725, 2754, 2783, 2812, 2841, 2871, 2901, 2931, 2961, 2991, 3022, 3052, 3083, 3114, 3146, 3177, 3209, 3240, 3272, 3304, 3337, 3369, 3402, 3435, 3468, 3501, 3535, 3568, 3602, 3636, 3670, 3705, 3739, 3774, 3809, 3844, 3879, 3915, 3950, 3986, 4022, 4059, 4095]
 const-value	metal2vulkan::bind::SRGB_RESOLVE_THRESHOLDS	[1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 18, 19, 21, 23, 24, 26, 28, 30, 32, 34, 37, 39, 42, 44, 47, 49, 52, 55, 58, 61, 64, 68, 71, 74, 78, 82, 85, 89, 93, 97, 102, 106, 110, 115, 119, 124, 129, 134, 139, 144, 149, 154, 160, 165, 171, 177, 183, 189, 195, 201, 207, 214, 220, 227, 234, 241, 248, 255, 262, 270, 277, 285, 293, 300, 308, 317, 325, 333, 342, 350, 359, 368, 377, 386, 395, 405, 414, 424, 434, 444, 454, 464, 474, 485, 495, 506, 517, 528, 539, 550, 562, 573, 585, 597, 609, 621, 633, 645, 658, 670, 683, 696, 709, 722, 736, 749, 763, 777, 790, 804, 819, 833, 848, 862, 877, 892, 907, 922, 938, 953, 969, 985, 1001, 1017, 1033, 1049, 1066, 1083, 1100, 1117, 1134, 1151, 1169, 1186, 1204, 1222, 1240, 1259, 1277, 1296, 1314, 1333, 1352, 1371, 1391, 1410, 1430, 1450, 1470, 1490, 1510, 1531, 1552, 1572, 1593, 1615, 1636, 1657, 1679, 1701, 1723, 1745, 1767, 1790, 1812, 1835, 1858, 1881, 1904, 1928, 1951, 1975, 1999, 2023, 2048, 2072, 2097, 2121, 2146, 2172, 2197, 2222, 2248, 2274, 2300, 2326, 2352, 2379, 2406, 2433, 2460, 2487, 2514, 2542, 2569, 2597, 2626, 2654, 2682, 2711, 2740, 2769, 2798, 2827, 2857, 2886, 2916, 2946, 2977, 3007, 3038, 3068, 3099, 3130, 3162, 3193, 3225, 3257, 3289, 3321, 3354, 3386, 3419, 3452, 3485, 3518, 3552, 3586, 3620, 3654, 3688, 3722, 3757, 3792, 3827, 3862, 3897, 3933, 3969, 4005, 4041, 4077]
+const-value	metal2vulkan::bind::fan_out::HEADER_ENTRIES	2
+const-value	metal2vulkan::bind::fan_out::MAX_SEGMENTS	128
+const-value	metal2vulkan::bind::fan_out::TABLE_BYTES	(HEADER_ENTRIES as u64 + 4 * MAX_SEGMENTS as u64) * 16
+const-value	metal2vulkan::bind::fan_out::WIDEN_PIXELS	0.125
 const-value	metal2vulkan::bind::indirect_commands::BINDING_COUNT	32
 const-value	metal2vulkan::bind::indirect_commands::COMMAND_BUFFER_HEADER_BYTES	16
 const-value	metal2vulkan::bind::indirect_commands::COMMAND_BYTES	((THREADGROUP_WORD + THREADGROUP_COUNT + 2) * 4).next_multiple_of(8)
@@ -1541,6 +1551,7 @@ enum	metal2vulkan::pipeline::PushField	#[cfg_attr(feature = "serde", derive(serd
 enum	metal2vulkan::pipeline::PushLoc	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PushLoc
 enum	metal2vulkan::pipeline::Reconvergence	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Reconvergence
 enum	metal2vulkan::pipeline::RecordValue	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RecordValue
+enum	metal2vulkan::pipeline::RegionFanOut	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum RegionFanOut
 enum	metal2vulkan::pipeline::ResourceKind	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ResourceKind
 enum	metal2vulkan::pipeline::RotatedBlendForm	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum RotatedBlendForm
 enum	metal2vulkan::pipeline::RuntimeFact	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum RuntimeFact
@@ -3553,6 +3564,7 @@ field	metal2vulkan::bind::BindShape.mesh_last_first	pub mesh_last_first: bool
 field	metal2vulkan::bind::BindShape.primitive_id_indices	pub primitive_id_indices: Option<metal::IndexType>
 field	metal2vulkan::bind::BindShape.private_list	pub private_list: bool
 field	metal2vulkan::bind::BindShape.quad_primitive_ids	pub quad_primitive_ids: bool
+field	metal2vulkan::bind::BindShape.region_fan_out	pub region_fan_out: Option<crate::pipeline::RegionFanOut>
 field	metal2vulkan::bind::BindShape.region_viewports	pub region_viewports: bool
 field	metal2vulkan::bind::BindShape.render_area	pub render_area: [u32; 2]
 field	metal2vulkan::bind::BindShape.render_target_array_length	pub render_target_array_length: u32
@@ -3587,6 +3599,7 @@ field	metal2vulkan::bind::BindState.primitive_id_indices	pub primitive_id_indice
 field	metal2vulkan::bind::BindState.primitive_type	pub primitive_type: Option<metal::PrimitiveType>
 field	metal2vulkan::bind::BindState.private_list	pub private_list: bool
 field	metal2vulkan::bind::BindState.quad_primitive_ids	pub quad_primitive_ids: bool
+field	metal2vulkan::bind::BindState.region_fan_out	pub region_fan_out: Option<(crate::pipeline::RegionFanOut, u32)>
 field	metal2vulkan::bind::BindState.region_viewports	pub region_viewports: bool
 field	metal2vulkan::bind::BindState.render_area	pub render_area: [u32; 2]
 field	metal2vulkan::bind::BindState.render_target_array_length	pub render_target_array_length: u32
@@ -4202,6 +4215,7 @@ field	metal2vulkan::cache::VariantKey.psb_slots	pub psb_slots: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.pulled_vertex_buffers	pub pulled_vertex_buffers: BTreeSet<u32>
 field	metal2vulkan::cache::VariantKey.quad_primitive_ids	pub quad_primitive_ids: bool
 field	metal2vulkan::cache::VariantKey.read_only_tests	pub read_only_tests: bool
+field	metal2vulkan::cache::VariantKey.region_fan_out	pub region_fan_out: Option<crate::pipeline::RegionFanOut>
 field	metal2vulkan::cache::VariantKey.region_viewports	pub region_viewports: bool
 field	metal2vulkan::cache::VariantKey.replay_bindings	pub replay_bindings: bool
 field	metal2vulkan::cache::VariantKey.rotated_weights	pub rotated_weights: bool
@@ -4678,6 +4692,9 @@ field	metal2vulkan::pipeline::EntryPlan.strategies	pub strategies: BTreeMap<Stri
 field	metal2vulkan::pipeline::ExtendedRangeColor.blended	pub blended: bool
 field	metal2vulkan::pipeline::ExtendedRangeColor.form	pub form: metal::format::ExtendedRange
 field	metal2vulkan::pipeline::ExtendedRangeColor.nearest_even	pub nearest_even: bool
+field	metal2vulkan::pipeline::FanOutState.copies	pub copies: u32
+field	metal2vulkan::pipeline::FanOutState.mode	pub mode: RegionFanOut
+field	metal2vulkan::pipeline::FanOutState.push_offset	pub push_offset: u32
 field	metal2vulkan::pipeline::FetchedAttachment.blending_enabled	pub blending_enabled: bool
 field	metal2vulkan::pipeline::FetchedAttachment.equation	pub equation: Option<BlendEquation>
 field	metal2vulkan::pipeline::FetchedAttachment.pixel_format	pub pixel_format: metal::PixelFormat
@@ -4724,6 +4741,7 @@ field	metal2vulkan::pipeline::GraphicsState.rasterizer_discard	pub rasterizer_di
 field	metal2vulkan::pipeline::GraphicsState.reads_barycentric_coord	pub reads_barycentric_coord: bool
 field	metal2vulkan::pipeline::GraphicsState.reads_position_depth	pub reads_position_depth: bool
 field	metal2vulkan::pipeline::GraphicsState.reads_primitive_id	pub reads_primitive_id: bool
+field	metal2vulkan::pipeline::GraphicsState.region_fan_out	pub region_fan_out: Option<FanOutState>
 field	metal2vulkan::pipeline::GraphicsState.sample_mask	pub sample_mask: Option<u32>
 field	metal2vulkan::pipeline::GraphicsState.sample_shading	pub sample_shading: bool
 field	metal2vulkan::pipeline::GraphicsState.shader_tests	pub shader_tests: Option<ShaderTestsUse>
@@ -5210,6 +5228,9 @@ fn	metal2vulkan::bind::etc_decode_module	pub fn etc_decode_module(device: &Devic
 fn	metal2vulkan::bind::extended_canonical_module	pub fn extended_canonical_module(device: &Device) -> Result<ExtendedCanonicalModule, Error>
 fn	metal2vulkan::bind::extended_range_canonical	pub fn extended_range_canonical([low, high]: [u32; 2]) -> [u32; 2]
 fn	metal2vulkan::bind::extended_shadow_module	pub fn extended_shadow_module(device: &Device, form: ExtendedRange) -> Result<ExtendedShadowModule, Error>
+fn	metal2vulkan::bind::fan_out::clip_entry	pub const fn clip_entry(axis: u32, k: u32) -> u32
+fn	metal2vulkan::bind::fan_out::line_entry	pub const fn line_entry(axis: u32, k: u32) -> u32
+fn	metal2vulkan::bind::fan_out::table	pub fn table(target: [f32; 4], regions: &[([f32; 4], [u32; 4])]) -> Option<Vec<u8>>
 fn	metal2vulkan::bind::flat_dispatch_module	pub fn flat_dispatch_module(device: &Device) -> Result<FlatDispatchModule, Error>
 fn	metal2vulkan::bind::fold_object_grid	pub fn fold_object_grid(groups: [u32; 3], threads: [u32; 3], task: MeshGridLimits, direct: bool) -> Option<ObjectFold>
 fn	metal2vulkan::bind::geometry_flags	pub fn geometry_flags(opaque: bool, allow_duplicate_invocation: bool) -> u32
@@ -10476,6 +10497,7 @@ struct	metal2vulkan::pipeline::EmulatedTessellation	#[cfg_attr(feature = "serde"
 struct	metal2vulkan::pipeline::EntryDescriptor	#[derive(Clone, Debug)] #[non_exhaustive] pub struct EntryDescriptor<'a>
 struct	metal2vulkan::pipeline::EntryPlan	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct EntryPlan
 struct	metal2vulkan::pipeline::ExtendedRangeColor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ExtendedRangeColor
+struct	metal2vulkan::pipeline::FanOutState	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct FanOutState
 struct	metal2vulkan::pipeline::FetchedAttachment	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct FetchedAttachment
 struct	metal2vulkan::pipeline::FragmentImageblock	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct FragmentImageblock
 struct	metal2vulkan::pipeline::FramebufferFetchInputs	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct FramebufferFetchInputs
@@ -13254,6 +13276,8 @@ variant	metal2vulkan::bind::WriteSource::MeshRecords	MeshRecords
 variant	metal2vulkan::bind::WriteSource::MeshWork	MeshWork
 variant	metal2vulkan::bind::WriteSource::Neutral	Neutral(NeutralResource)
 variant	metal2vulkan::bind::WriteSource::PatchIndices	PatchIndices { min_bytes: u32 }
+variant	metal2vulkan::bind::WriteSource::RateMapFlags	RateMapFlags
+variant	metal2vulkan::bind::WriteSource::RateMapRegions	RateMapRegions
 variant	metal2vulkan::bind::WriteSource::Sampler	Sampler { slot: SlotRef, compare: bool, integer: bool, opaque_black: OpaqueBlackBorder }
 variant	metal2vulkan::bind::WriteSource::ShadowStencil	ShadowStencil
 variant	metal2vulkan::bind::WriteSource::SnapshotTexels	SnapshotTexels { slot: u32 }
@@ -14634,6 +14658,7 @@ variant	metal2vulkan::pipeline::PushField::MergedDrawAddress	MergedDrawAddress
 variant	metal2vulkan::pipeline::PushField::PatchIndexBound	PatchIndexBound
 variant	metal2vulkan::pipeline::PushField::PatchIndexOffset	PatchIndexOffset
 variant	metal2vulkan::pipeline::PushField::PointGuard	PointGuard
+variant	metal2vulkan::pipeline::PushField::RegionProbe	RegionProbe
 variant	metal2vulkan::pipeline::PushField::RenderTargetArrayLength	RenderTargetArrayLength
 variant	metal2vulkan::pipeline::PushField::ReplayRegionAddress	ReplayRegionAddress
 variant	metal2vulkan::pipeline::PushField::RootTableAddress	RootTableAddress
@@ -14671,6 +14696,8 @@ variant	metal2vulkan::pipeline::RecordValue::PointSize	PointSize
 variant	metal2vulkan::pipeline::RecordValue::Position	Position
 variant	metal2vulkan::pipeline::RecordValue::Varying	Varying(crate::pipeline::sym::VaryingKey)
 variant	metal2vulkan::pipeline::RecordValue::ViewportIndex	ViewportIndex
+variant	metal2vulkan::pipeline::RegionFanOut::Draw	Draw
+variant	metal2vulkan::pipeline::RegionFanOut::Probe	Probe
 variant	metal2vulkan::pipeline::ResourceKind::AccelerationStructure	AccelerationStructure(AccelerationStructureLevel)
 variant	metal2vulkan::pipeline::ResourceKind::Buffer	Buffer
 variant	metal2vulkan::pipeline::ResourceKind::CombinedTextureSampler	CombinedTextureSampler(CombinedSampler)
@@ -14900,6 +14927,8 @@ variant	metal2vulkan::pipeline::SyntheticBinding::Imageblock	Imageblock
 variant	metal2vulkan::pipeline::SyntheticBinding::MeshRecords	MeshRecords
 variant	metal2vulkan::pipeline::SyntheticBinding::MeshWork	MeshWork
 variant	metal2vulkan::pipeline::SyntheticBinding::PatchIndices	PatchIndices
+variant	metal2vulkan::pipeline::SyntheticBinding::RateMapFlags	RateMapFlags
+variant	metal2vulkan::pipeline::SyntheticBinding::RateMapRegions	RateMapRegions
 variant	metal2vulkan::pipeline::SyntheticBinding::RootTable	RootTable
 variant	metal2vulkan::pipeline::SyntheticBinding::SamplerTable	SamplerTable
 variant	metal2vulkan::pipeline::SyntheticBinding::ShadowStencil	ShadowStencil
