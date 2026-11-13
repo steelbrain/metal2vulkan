@@ -17,8 +17,9 @@ use metal2vulkan::Budget;
 use std::sync::Arc;
 
 /// The translator's census name of a kernel emulated in place of the pin of its device's widest
-/// mode (`WorkCounts::widest_pin_kernels_emulated`).
-const WIDEST_PIN_STRATEGY: &str = "simd.emulated.widest-pin";
+/// mode (`WorkCounts::widest_pin_kernels_emulated`, and the pipeline creation log's compute lines,
+/// `creation_log::compute_kernel`).
+pub(super) const WIDEST_PIN_STRATEGY: &str = "simd.emulated.widest-pin";
 
 /// The render pipeline artifacts this process encoded for the directory, which
 /// `tests::render_stage_digests`' count reads: a sweep whose stage functions the directory holds

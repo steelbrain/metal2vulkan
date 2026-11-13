@@ -1895,14 +1895,18 @@ How a notice reaches you:
 
 With `METAL2VULKAN_LOG_PIPELINES` set, a device also logs one line per compute `VkPipeline` it
 makes (id name `metal2vulkan-pipeline-creation`, `Info` severity): its kernel, its SPIR-V (a hash
-and its length), each specialization constant, the precision notes the stage holds under that
-specialization, the creation's time and the descriptor the kernel was made from (the function's
-name, the SHA-256 of its bitcode and the constant values it was made with), after a line as the
-making starts, before the driver's call, naming its kernel, its SPIR-V and its specialization: a
-making that never returns is that line without its made line. And one line per
-render `VkPipeline` it makes (the same
-id name and severity), with where its time went: the
-wait for its turn, the digests that name its parts, each library (made by this making, its
+and its length), each specialization constant, the subgroup size the pipeline requires
+(`subgroup size required 32`, or `subgroup size any`), whether its kernel's simdgroups are
+emulated in place of the pin to the device's widest mode (`simdgroups emulated (widest pin)`) or
+by the dispatch's emulated-simdgroups variant (`simdgroups emulated (variant)`), else `simdgroups
+not emulated for the widest pin or a variant` (which does not tell whether the translator emulated
+them for another cause), the precision notes the stage holds under that specialization, the
+creation's time and the descriptor the kernel was made from (the function's name, the SHA-256 of
+its bitcode and the constant values it was made with), after a line as the making starts, before
+the driver's call, naming its kernel, its SPIR-V, its specialization, the subgroup size and the
+simdgroups' emulation: a making that never returns is that line without its made line. And one
+line per render `VkPipeline` it makes (the same id name and severity), with where its time went:
+the wait for its turn, the digests that name its parts, each library (made by this making, its
 driver cache record loaded, missed or shared with an earlier making in this process, and whether
 its driver found it in that cache or compiled it, or another caller's) and the link (a record
 names its pass by which attachments it has, its samples and its inputs, not their formats; a

@@ -898,15 +898,17 @@ impl VariantObjects {
         Ok((objects, pipelines))
     }
 
-    /// Keep the kernel `stage` of the function `function` describes for the pipeline creation
-    /// log's line of each compute `VkPipeline` these objects make, while the log is on
+    /// Keep the kernel `stage` of the function `function` describes, of a variant of emulated
+    /// simdgroups where `emulated_variant` says so, for the pipeline creation log's line of each
+    /// compute `VkPipeline` these objects make, while the log is on
     /// (`creation_log::compute_kernel`).
     pub(crate) fn log_kernel(
         &mut self,
         function: &metal2vulkan::pipeline::FunctionDescriptor,
         stage: &StageModule,
+        emulated_variant: bool,
     ) {
-        self.logged = creation_log::compute_kernel(function, stage);
+        self.logged = creation_log::compute_kernel(function, stage, emulated_variant);
     }
 
     /// Name the `VkPipeline`s it makes for the layers' messages by `names`, its Metal functions'
@@ -1255,7 +1257,8 @@ impl VariantObjects {
         // The line and the module before the driver's call, so a making that never returns is
         // named.
         if let Some(kernel) = &self.logged {
-            creation_log::compute_started(&self.device, kernel, c.specialization);
+            let required = c.required_subgroup_size;
+            creation_log::compute_started(&self.device, kernel, c.specialization, required);
         }
         let started = std::time::Instant::now();
         // With what the driver reports of the making: a pipeline found in its record's cache
@@ -1264,7 +1267,8 @@ impl VariantObjects {
         let created_in = started.elapsed();
         drop(words);
         if let Some(kernel) = &self.logged {
-            creation_log::compute(&self.device, kernel, c.specialization, created_in);
+            let made = (c.specialization, c.required_subgroup_size);
+            creation_log::compute(&self.device, kernel, made, created_in);
         }
         drop(leader);
         drop(turn);

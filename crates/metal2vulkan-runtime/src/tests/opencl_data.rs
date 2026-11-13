@@ -471,10 +471,12 @@ const LOG_LINE: &str = "metal2vulkan: pipeline creation: compute pipeline `__ent
 
 /// With `METAL2VULKAN_LOG_PIPELINES` set, the compute `VkPipeline` a dispatch of `vsh_round`
 /// makes has its line in the pipeline creation log (`pipeline/creation_log.rs`), naming the
-/// kernel, its module, its specialization, its precision notes (`NativeNanEncoding` among them,
-/// but where the device's narrowing is measured to move a NaN as Metal's) and what it was made
-/// from (the function, its bitcode's SHA-256 and its constant values), after the line of its
-/// making's start, which names the kernel, the same module and its specialization; with
+/// kernel, its module, its specialization, the subgroup size it requires and why its simdgroups
+/// are emulated (`vsh_round` has none: not for the widest pin or a variant), its precision notes
+/// (`NativeNanEncoding` among them, but where the device's narrowing is measured to move a NaN as
+/// Metal's) and what it was made from (the function, its bitcode's SHA-256 and its constant
+/// values), after the line of its making's start, which names the kernel, the same module, its
+/// specialization, the subgroup size and the simdgroups; with
 /// `METAL2VULKAN_DUMP_PIPELINES` naming a directory, its module is written there by the hash the
 /// lines name it by. A child process of this test binary ([`compute_log_child`]) dispatches it
 /// with the log on.
@@ -504,6 +506,9 @@ fn the_pipeline_creation_log_names_a_compute_pipeline_and_its_notes() {
         .unwrap_or_else(|| panic!("no compute pipeline's line: {stderr}"));
     let logged = lines[made];
     assert!(logged.contains(" words), specialization ["), "{logged}");
+    let simdgroups = ", simdgroups not emulated for the widest pin or a variant";
+    let fields = |l: &str| l.contains("], subgroup size ") && l.contains(simdgroups);
+    assert!(fields(logged), "{logged}");
     assert!(
         logged.contains("; descriptor: `__entry_vsh_round` air ")
             && logged.contains(" constants {"),
@@ -517,9 +522,9 @@ fn the_pipeline_creation_log_names_a_compute_pipeline_and_its_notes() {
         .unwrap_or_else(|| panic!("no module hash: {logged}"));
     let started = format!("{LOG_LINE}making, spirv {hash} (");
     assert!(
-        lines[..made]
-            .iter()
-            .any(|l| l.starts_with(&started) && l.contains(" words), specialization [")),
+        lines[..made].iter().any(|l| l.starts_with(&started)
+            && l.contains(" words), specialization [")
+            && fields(l)),
         "no line of the making's start before {logged}: {stderr}"
     );
     let module = std::fs::read(dumped.join(format!("{hash}.spv"))).unwrap();

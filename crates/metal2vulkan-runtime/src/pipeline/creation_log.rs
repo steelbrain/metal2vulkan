@@ -10,7 +10,14 @@
 //!   function: its name, its bitcode's SHA-256 and the constant values it was made with). Before
 //!   the driver's call, a line of the making's start ([`compute_started`]) names the kernel, its
 //!   SPIR-V and its specialization, and the dump directory takes its module then: a making that
-//!   never returns is that line without its made line, its module on disk. A
+//!   never returns is that line without its made line, its module on disk. Both lines name the
+//!   subgroup size the pipeline is created to require (`subgroup size required 32`, or `subgroup
+//!   size any` where it requires none) and why its kernel emulates its simdgroups, where the
+//!   runtime can tell: `simdgroups emulated (widest pin)`, the translator's emulation in place of
+//!   the pin to the device's widest mode (its census entry), or `simdgroups emulated (variant)`,
+//!   the dispatch's emulated-simdgroups variant (`VariantKey::emulated_simdgroups`); else
+//!   `simdgroups not emulated for the widest pin or a variant`, which does not tell the translator's
+//!   tier, chosen for other causes too. A
 //!   compute state's pipelines differ by their specialization alone (the threadgroup size, an
 //!   edge region), so each line prints it whole: no numbering, no diff and no split. A kernel
 //!   whose compile is refused, at its state's creation or at a dispatch's variant, takes a line of
@@ -692,31 +699,55 @@ pub(crate) struct LoggedKernel {
     /// values (`render::logged_function`).
     function: String,
     stage: StageModule,
+    /// Why the kernel emulates its simdgroups, where the runtime can tell (the module's
+    /// documentation, "Compute pipelines").
+    simdgroups: &'static str,
 }
 
-/// The kernel `stage` of a compute variant of the function `function` describes, kept for its
-/// pipelines' lines while the log is on; `None` while it is off.
+/// The kernel `stage` of a compute variant of the function `function` describes, the variant
+/// one of emulated simdgroups where `emulated_variant` says so, kept for its pipelines' lines
+/// while the log is on; `None` while it is off.
 pub(crate) fn compute_kernel(
     function: &FunctionDescriptor,
     stage: &StageModule,
+    emulated_variant: bool,
 ) -> Option<Box<LoggedKernel>> {
     enabled().then(|| {
+        let widest_pin = stage
+            .strategies
+            .entries
+            .contains_key(super::sources::WIDEST_PIN_STRATEGY);
         Box::new(LoggedKernel {
             name: function.function.info().name.to_owned(),
             function: super::render::logged_function(function),
             stage: stage.clone(),
+            simdgroups: match (widest_pin, emulated_variant) {
+                (true, _) => "simdgroups emulated (widest pin)",
+                (false, true) => "simdgroups emulated (variant)",
+                (false, false) => "simdgroups not emulated for the widest pin or a variant",
+            },
         })
     })
 }
 
+/// The subgroup size a compute pipeline is created to require, `required`, as its lines name it.
+fn subgroup_size(required: Option<u32>) -> String {
+    match required {
+        Some(size) => format!("subgroup size required {size}"),
+        None => "subgroup size any".to_owned(),
+    }
+}
+
 /// Deliver the line of a compute `VkPipeline` `device` starts making of `kernel` under
-/// `specialization`, before the driver's call, and write its module into the dump directory where
-/// one is set: a making that never returns is this line without its made line ([`compute`]), and
-/// its module is on disk (the module's documentation, "Compute pipelines").
+/// `specialization`, requiring the subgroup size `required`, before the driver's call, and write
+/// its module into the dump directory where one is set: a making that never returns is this line
+/// without its made line ([`compute`]), and its module is on disk (the module's documentation,
+/// "Compute pipelines").
 pub(crate) fn compute_started(
     device: &Device,
     kernel: &LoggedKernel,
     specialization: &SpecializationKey,
+    required: Option<u32>,
 ) {
     let stage = &kernel.stage;
     let hash = spirv_hash(&stage.spirv);
@@ -725,10 +756,12 @@ pub(crate) fn compute_started(
         device,
         format!(
             "metal2vulkan: pipeline creation: compute pipeline `{}`: making, spirv {hash:016x} \
-             ({} words), specialization [{}]{dumped}",
+             ({} words), specialization [{}], {}, {}{dumped}",
             kernel.name,
             stage.spirv.len(),
             constants(stage, specialization).join(", "),
+            subgroup_size(required),
+            kernel.simdgroups,
         ),
     );
 }
@@ -759,12 +792,12 @@ fn constants(stage: &StageModule, specialization: &SpecializationKey) -> Vec<Str
 }
 
 /// Deliver the line of a compute `VkPipeline` `device` made of `kernel` under `specialization`,
-/// its creation `took` long (the module's documentation, "Compute pipelines"). Its module was
-/// dumped as the making started ([`compute_started`]).
+/// requiring the subgroup size `required`, its creation `took` long (the module's documentation,
+/// "Compute pipelines"). Its module was dumped as the making started ([`compute_started`]).
 pub(crate) fn compute(
     device: &Device,
     kernel: &LoggedKernel,
-    specialization: &SpecializationKey,
+    (specialization, required): (&SpecializationKey, Option<u32>),
     took: Duration,
 ) {
     let stage = &kernel.stage;
@@ -774,11 +807,13 @@ pub(crate) fn compute(
         device,
         format!(
             "metal2vulkan: pipeline creation: compute pipeline `{}`: {:.3} ms, spirv {hash:016x} \
-             ({} words), specialization [{}], notes {notes:?}; descriptor: {}",
+             ({} words), specialization [{}], {}, {}, notes {notes:?}; descriptor: {}",
             kernel.name,
             took.as_secs_f64() * 1000.0,
             stage.spirv.len(),
             constants(stage, specialization).join(", "),
+            subgroup_size(required),
+            kernel.simdgroups,
             kernel.function,
         ),
     );

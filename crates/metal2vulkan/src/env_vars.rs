@@ -38,10 +38,13 @@ pub const REGISTRY: &[EnvVar] = &[
         name: "METAL2VULKAN_LOG_PIPELINES",
         default: "unset (off)",
         effect: "metal2vulkan-runtime's diagnostics: one line per compute VkPipeline a device \
-                 makes (its kernel, its SPIR-V, its specialization constants, its precision notes, \
-                 the creation's time and the descriptor it was made from: the function's name, \
-                 the SHA-256 of its bitcode and the constant values it was made with), after one \
-                 as its making starts (its kernel, its SPIR-V and its specialization), and one per \
+                 makes (its kernel, its SPIR-V, its specialization constants, the subgroup size \
+                 it requires, whether its simdgroups are emulated for the widest mode's pin or by \
+                 the dispatch's variant, its precision notes, the creation's time and the \
+                 descriptor it was made from: the function's name, the SHA-256 of its bitcode and \
+                 the constant values it was made with), after one as its making starts (its \
+                 kernel, its SPIR-V, its specialization, the subgroup size and the simdgroups' \
+                 emulation), and one per \
                  render VkPipeline, through the device's \
                  message sink or on stderr: its state, its key, the \
                  key's fields that differ from the state's closest earlier pipeline (a state's \
