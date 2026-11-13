@@ -767,12 +767,7 @@ pub(crate) fn compute_refused(
     if !enabled() {
         return;
     }
-    let declined =
-        variant.is_some_and(probed) && matches!(error, metal2vulkan::error::Error::Unsupported(_));
-    let outcome = match declined {
-        true => "a variant asked for in passing declined, the dispatch keeps another form",
-        false => "refused",
-    };
+    let outcome = refusal_outcome(variant, error);
     deliver(
         device,
         format!(
@@ -782,6 +777,21 @@ pub(crate) fn compute_refused(
             super::render::logged_function(function),
         ),
     );
+}
+
+/// What a refused compile of a compute pipeline's `variant` (`None` at its state's creation) with
+/// `error` is to the log: the probe's answer where a dispatch asks for the variant in passing
+/// ([`probed`]) and the compile layer refuses it, `refused` otherwise.
+fn refusal_outcome(
+    variant: Option<&VariantKey>,
+    error: &metal2vulkan::error::Error,
+) -> &'static str {
+    let declined =
+        variant.is_some_and(probed) && matches!(error, metal2vulkan::error::Error::Unsupported(_));
+    match declined {
+        true => "a variant asked for in passing declined, the dispatch keeps another form",
+        false => "refused",
+    }
 }
 
 /// Whether a dispatch asks for the variant of `key` in passing, a refusal of it leaving the
@@ -986,9 +996,39 @@ fn find_statistics_function() -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        describe, driver_found, elided, note, record_handed, record_text, split_of, split_text,
-        splitting, take_record, Fields, RecordNote,
+        describe, driver_found, elided, note, record_handed, record_text, refusal_outcome,
+        split_of, split_text, splitting, take_record, Fields, RecordNote,
     };
+    use metal2vulkan::cache::VariantKey;
+    use metal2vulkan::error::{Error, Feature, Unsupported};
+
+    /// The flat variant's probe of a kernel that observes its partition, refused
+    /// `Unsupported{GpuEncodedIndirectCommands, NotRepresentable}`, is the probe's answer, and so
+    /// is a folded or partial-threadgroups variant's refusal; a creation's refusal, and a refused
+    /// variant no dispatch probes, stay refusals.
+    #[test]
+    fn a_probed_variant_s_refusal_is_declined_and_a_creation_s_refused() {
+        let refusal = || -> Error {
+            Unsupported::not_representable(Feature::GpuEncodedIndirectCommands).into()
+        };
+        let probes: [fn(&mut VariantKey); 3] = [
+            |k| k.flat_grid = true,
+            |k| k.folded_groups = true,
+            |k| k.partial_threadgroups = true,
+        ];
+        for probe in probes {
+            let mut key = VariantKey::new();
+            probe(&mut key);
+            assert!(
+                refusal_outcome(Some(&key), &refusal()).contains("declined"),
+                "{key:?}"
+            );
+        }
+        assert_eq!(refusal_outcome(None, &refusal()), "refused");
+        let mut emulated = VariantKey::new();
+        emulated.emulated_simdgroups = true;
+        assert_eq!(refusal_outcome(Some(&emulated), &refusal()), "refused");
+    }
     use std::collections::VecDeque;
     use std::time::Duration;
 
