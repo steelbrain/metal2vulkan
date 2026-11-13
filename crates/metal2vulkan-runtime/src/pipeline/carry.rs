@@ -13,7 +13,8 @@
 //! - **What stays.** The state object: its handles, ID, `uniqueIdentifier`, label and sampler
 //!   numbers. Its program on the next generation is linked after the lost one's
 //!   ([`ProgramLink`]); its handles reach it from then on, and the work of a command buffer of
-//!   the lost generation reaches that generation's ([`reached`]).
+//!   the lost generation reaches that generation's ([`reached`]). The state holds its program on
+//!   the lost generation, and so the lost `VkDevice`, until it goes (`device/carry.rs`).
 //! - **A failed making** leaves the state's program the lost generation's: the recovery's notice
 //!   counts it, and a bind of the state is refused (`RuntimeGap::RemadeAfterRecoveryFailed`).
 

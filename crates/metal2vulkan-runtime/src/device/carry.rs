@@ -112,7 +112,8 @@
 //!   destroyed" (vkspec 5.2.3, "Lost Device"). Its device-level objects of work, what it keeps
 //!   for reuse and its kept empty blocks go then too, and no command buffer is made on it again
 //!   (`DeviceShared::keep_nothing`). A carried texture keeps its parts there until it goes
-//!   (`texture/carry.rs`). So a carried object but a texture holds nothing of the lost generation:
+//!   (`texture/carry.rs`), and a carried pipeline state its program there (`pipeline/carry.rs`).
+//!   So a carried object but a texture or a pipeline state holds nothing of the lost generation:
 //!   the lost `VkDevice` goes with the last object left on it (a pooled buffer, a pipeline state,
 //!   a texture), through the teardown every generation's goes through, and holds its own objects
 //!   alone meanwhile (`WorkCounts::vk_devices_live`).

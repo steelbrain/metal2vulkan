@@ -69,7 +69,7 @@ fn kernel(device: &Device) -> Function {
 
 /// A state of `function` whose dispatches take `threads` threads a threadgroup, which its creation
 /// predicts, labelled `label`.
-fn state(device: &Device, function: &Function, threads: u64, label: &str) -> ComputePipelineState {
+fn state(device: &Device, function: &Function, threads: u32, label: &str) -> ComputePipelineState {
     let mut descriptor =
         ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
     descriptor.required_threads_per_threadgroup = Some([threads, 1, 1]);
@@ -84,7 +84,8 @@ fn state(device: &Device, function: &Function, threads: u64, label: &str) -> Com
 
 /// A compute state made before a recovery is the same state after it (its `uniqueIdentifier` and
 /// label), on the next generation, as the recovery's notice counts; its dispatches there run it
-/// and write what they wrote before; and the lost generation goes while the state lives.
+/// and write what they wrote before; and the lost generation, whose program the state holds,
+/// goes with the state.
 #[test]
 fn a_recovery_carries_a_compute_state() {
     let scratch = Scratch::new();
@@ -111,6 +112,8 @@ fn a_recovery_carries_a_compute_state() {
         identity
     );
     assert_eq!(run(&device, &queue, &state).unwrap(), expected());
+    assert_eq!(live_vk_devices(&device, 2), 2);
+    drop(state);
     assert_eq!(live_vk_devices(&device, 1), 1);
 }
 
@@ -133,7 +136,7 @@ fn a_recovery_with_many_live_compute_states_is_timed() {
     let queue = device.new_command_queue().unwrap();
     let function = kernel(&device);
     let bare = recovery_time(&device);
-    let states: Vec<_> = (1..=u64::from(STATES))
+    let states: Vec<_> = (1..=STATES)
         .map(|threads| state(&device, &function, threads, "timed"))
         .collect();
     let from = heard.lock().unwrap().len();
