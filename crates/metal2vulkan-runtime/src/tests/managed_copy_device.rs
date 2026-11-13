@@ -1219,7 +1219,7 @@ fn managed_copy_in_bench() {
     for exact in [false, true] {
         let mut options = options(&scratch.0);
         if exact {
-            options.policy = metal2vulkan::device::DevicePolicy::exact_answers();
+            options.policy = options.policy.exact_answers();
         }
         let device = Device::system_default_with(&options).unwrap();
         let policy = match exact {
