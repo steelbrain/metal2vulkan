@@ -1777,6 +1777,13 @@ impl IndirectCommandBuffer {
         locked.wrapping_add(self.0.unlocked_writes.load(Ordering::Acquire))
     }
 
+    /// The address of the records' bytes as the storage's mapping holds them now
+    /// ([`bytes`](Self::bytes)), for a device test of whether a recovery's carry moved them.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn records_address(&self) -> usize {
+        self.bytes().addr()
+    }
+
     /// [`cpu_writes`](Self::cpu_writes) apart: those under `pipelines`, and the setters' without
     /// it ([`Batch`]), for a device test of which way a write went.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -2017,17 +2024,21 @@ impl IndirectCommandBuffer {
     }
 
     /// [`write_field`](Self::write_field) of `field` with `set` as the state the CPU set on the
-    /// command where the field names one, under one hold of `pipelines`; then what the record
-    /// holds joins what its records may (`grown_writes`, `add_written`). A [`Batch`] takes it
-    /// for a field it cannot write without the lock.
+    /// command where the field names one, under one hold of `pipelines`, into the storage's bytes
+    /// as they are under it; then what the record holds joins what its records may
+    /// (`grown_writes`, `add_written`). A [`Batch`] takes it for a field it cannot write without
+    /// the lock.
     fn edit_locked(
         &self,
-        storage: *mut u8,
         index: u32,
         field: RecordField,
         set: Option<StateSet<'_>>,
     ) -> Result<(), Error> {
         let mut commands = lock(&self.0.pipelines);
+        // Read under the lock: a recovery's carry, which holds it, may have moved the records
+        // to new memory since the setter began (`carry.rs`), and a write through the bytes the
+        // setter found before would land in the lost generation's.
+        let storage = self.bytes();
         self.write_field(storage, index, field)?;
         self.wrote(&mut commands, index..index + 1);
         // SAFETY: as `write_field`'s; the CPU's writes of the records under `pipelines`, held
@@ -3920,18 +3931,18 @@ enum Then {
 }
 
 /// One command's setters' writes, made in turn as each setter's checks pass: a setter's alone, or
-/// the setters a call of `set_each` names (`set_each.rs`), in the storage's bytes as the batch
-/// found them, each setter writing into the batch rather than handing its write back (a plan
+/// the setters a call of `set_each` names (`set_each.rs`), each setter writing into the batch rather than handing its write back (a plan
 /// value handed back cost a buffer setter about 9 ns, `tests::icb_encode_bench`). A field that sets no state and adds nothing to
 /// what the records may hold ([`adds_nothing`](IndirectCommandBuffer::adds_nothing)) is written
 /// without `pipelines`, the count of the CPU's writes and the kept recordings of the command's
 /// chunk alone following it, as they follow a write under the lock
 /// ([`wrote`](IndirectCommandBuffer::wrote)): once the batch ends, the chunk noted for the kept
 /// recordings' next look to forget ([`UnlockedWrites`], `KeptChunks::settle`), then the writes
-/// counted, by one atomic add. A buffer the GPU starts writing meanwhile is the race a write under
-/// the lock has with it too (`gpu_written` is set under `unforeseen`'s lock). The lock's two locked
-/// instructions were most of a buffer setter's cost (`tests::icb_encode_bench`). Another write is
-/// made under `pipelines` ([`edit_locked`](IndirectCommandBuffer::edit_locked)).
+/// counted, by one atomic add; it writes the storage's bytes as the batch found them. A buffer the
+/// GPU starts writing meanwhile is the race a write under the lock has with it too (`gpu_written`
+/// is set under `unforeseen`'s lock). The lock's two locked instructions were most of a buffer
+/// setter's cost (`tests::icb_encode_bench`). Another write is made under `pipelines`
+/// ([`edit_locked`](IndirectCommandBuffer::edit_locked)), in the bytes as they are under it.
 struct Batch<'i> {
     icb: &'i IndirectCommandBuffer,
     index: u32,
@@ -3945,13 +3956,15 @@ impl Batch<'_> {
     /// Write `field`, which names no pipeline state, then note `then`: without `pipelines` where
     /// it adds nothing to what the records may hold, else under it.
     fn field(&mut self, field: RecordField, then: Then) -> Result<(), Error> {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        set_hook();
         let icb = self.icb;
         match icb.adds_nothing(field) {
             true => {
                 icb.write_field(self.storage, self.index, field)?;
                 self.unlocked += 1;
             }
-            false => icb.edit_locked(self.storage, self.index, field, None)?,
+            false => icb.edit_locked(self.index, field, None)?,
         }
         icb.then(then);
         Ok(())
@@ -3959,9 +3972,10 @@ impl Batch<'_> {
 
     /// Set `set` on the command, as its pipeline of ID `id`, under `pipelines`.
     fn state(&mut self, id: NonZeroU64, set: StateSet<'_>) -> Result<(), Error> {
-        let field = RecordField::Pipeline(id);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        set_hook();
         self.icb
-            .edit_locked(self.storage, self.index, field, Some(set))
+            .edit_locked(self.index, RecordField::Pipeline(id), Some(set))
     }
 
     /// Set `set`'s buffer on the command, for `call`, at the buffer's address plus the offset's
@@ -4037,6 +4051,37 @@ impl Drop for Batch<'_> {
             self.icb.0.unlocked.wrote(self.index);
             (self.icb.0.unlocked_writes).fetch_add(self.unlocked, Ordering::Release);
         }
+    }
+}
+
+/// Whether a test armed a hook ([`hold_next_set`]): one load where none did.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+static SET_HOOKS: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+thread_local! {
+    /// The hook this thread's next setter write runs first ([`hold_next_set`]).
+    static SET_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Have this thread's next setter write of a field run `hook` first, once its batch is made and
+/// before anything of the write: a device test holds a set there while a recovery carries the
+/// buffer (`tests::icb_carry_race`).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn hold_next_set(hook: impl FnOnce() + 'static) {
+    SET_HOOKS.store(true, Ordering::Relaxed);
+    SET_HOOK.with(|armed| *armed.borrow_mut() = Some(Box::new(hook)));
+}
+
+/// Run this thread's hook, where a test armed one ([`hold_next_set`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+fn set_hook() {
+    if !SET_HOOKS.load(Ordering::Relaxed) {
+        return;
+    }
+    if let Some(hook) = SET_HOOK.with(|armed| armed.borrow_mut().take()) {
+        hook();
     }
 }
 
