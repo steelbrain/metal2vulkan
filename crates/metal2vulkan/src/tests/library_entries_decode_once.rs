@@ -26,6 +26,10 @@
 //!   taken for another ([`two_libraries_decode_their_modules_apart`]).
 //! - **The same module, word for word.** Every entry compiled from a shared decode is the module
 //!   its own unshared compile makes, word for word, and its artifact is byte for byte the same.
+//! - **The same charge, unit for unit.** Every entry compiled from a shared decode is charged the
+//!   work units its own unshared compile is charged, the decode it copied included: the object
+//!   spares the decode's time and never its budget, so a refusal at the work cap is the same
+//!   through either.
 //! - **The hash is the library's, not a second one.** A compile records its function's AIR hash
 //!   from the library's table rather than hashing the bitcode again, which is exact because a
 //!   module's hash is the hash of the bytes every entry of it shares, and a metallib function's
@@ -197,14 +201,15 @@ fn the_entries_of_one_library_decode_its_module_once() {
         );
     }
 
-    // The decode is work the shared compiles do not do: every entry past the first costs fewer
-    // work units than the same entry compiled with an object of its own.
-    for (i, fd) in stages.iter().enumerate().skip(1) {
-        let (shared, apart) = (shared_work[i], apart_work[i]);
-        assert!(
-            shared < apart,
-            "entry {} must cost fewer work units reading a shared decode than reading its own: \
-             {shared} against {apart}",
+    // A copied decode is charged what reading it charged: every entry costs the work units of
+    // its own unshared compile, through a shared decode or one of its own.
+    for (i, fd) in stages.iter().enumerate() {
+        let (shared, apart, own) = (shared_work[i], apart_work[i], alone[i].2);
+        assert_eq!(
+            (shared, apart),
+            (own, own),
+            "entry {} must cost the work units of its own compile, {own}, reading a shared \
+             decode ({shared}) and reading its own ({apart})",
             fd.function.info().name
         );
     }

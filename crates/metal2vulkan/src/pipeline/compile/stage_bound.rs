@@ -15,8 +15,10 @@
 //!
 //! - a kernel that took the `Emulated` simdgroup tier only in place of the `Direct` tier's pin to
 //!   the device's widest mode (`lower::simd::widest_pin`) is planned again keeping the pin
-//!   (`lower::simd::WidestPin::Kept`), its emulated module dropped and what its emission charged
-//!   released;
+//!   (`lower::simd::WidestPin::Kept`), its emulated module dropped and what its plan and emission
+//!   hold of the ledger released. Only the selection is made again: the entry is decoded,
+//!   specialized, ordered and analyzed once, so the kernel is charged what any compile of it is
+//!   charged, whichever path reached it (`super::Analyzed`);
 //! - every other module past it, a kernel planned again that still is among them, is refused
 //!   (`Unsupported`, `Feature::StageSize`, `Needs::DriverDefect`): Metal compiles it, so the
 //!   refusal is the device's gap, recorded in `docs/FAST-PATHS.md`'s known gaps.
@@ -29,7 +31,7 @@
 //! is three quarters of 2^20: a stage at the bound stays under the driver's 2^20 objects at up to
 //! 4/3 objects per instruction, a third above the largest ratio measured.
 
-use super::{plan_one, Planned, Request};
+use super::{analyze_one, Planned, Request};
 use crate::budget::Meter;
 use crate::device::profile::DriverWorkaround;
 use crate::device::DeviceProfile;
@@ -53,23 +55,24 @@ pub(super) fn emit(
 ) -> Result<(Planned, Emitted), Error> {
     let defect = DriverWorkaround::SerializedStageWrapsLargeModules;
     let bounded = p.workarounds().contains(&defect);
+    let analyzed = analyze_one(r, p, m)?;
     let mut widest = WidestPin::Weighed;
     loop {
-        let planned = plan_one(r, p, widest, m)?;
-        planned.plan.estimate.check(word_cap)?;
         let before = m.ledger();
-        let mut emitted = crate::lower::emit::emit_module(&planned.spec, &planned.plan, m)?;
+        let (plan, kernel) = analyzed.select(p, widest, m)?;
+        plan.estimate.check(word_cap)?;
+        let mut emitted = crate::lower::emit::emit_module(&analyzed.spec, &plan, m)?;
         // Every driver compiles each repeated region of the entry again; above the measured size,
         // repeated regions are written once, as a loop.
         crate::spirv::roll::roll_entry(&mut emitted.module, m)?;
         if !bounded || crate::spirv::roll::entry_weight(&emitted.module, m)? <= weight_cap {
-            return Ok((planned, emitted));
+            return Ok((analyzed.planned(plan, kernel), emitted));
         }
-        if widest == WidestPin::Kept || !planned.plan.families.simd.widest_pin {
+        if widest == WidestPin::Kept || !plan.families.simd.widest_pin {
             return Err(Unsupported::driver_defect(Feature::StageSize, defect).into());
         }
-        // The emulated module goes, and with it what its emission holds of the ledger.
-        drop(emitted);
+        // The emulated plan and module go, and with them what they hold of the ledger.
+        drop((plan, emitted));
         let held = m.ledger().saturating_sub(before);
         m.release(usize::try_from(held).unwrap_or(usize::MAX));
         widest = WidestPin::Kept;

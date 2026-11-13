@@ -2386,6 +2386,103 @@ fn a_kernel_past_the_stage_bound_keeps_the_widest_pin_or_is_refused() {
     }
 }
 
+/// One input, one answer, whichever path compiles it: on the Iris Xe, the pressured kernel of
+/// `a_kernel_past_the_stage_bound_keeps_the_widest_pin_or_is_refused`, past a bound its emulated
+/// module passes (planned again keeping the pin) and past one its pinned module passes too
+/// (refused, `Feature::StageSize`), is charged the same work units compiled alone
+/// (`Device::compile_function`) and compiled from a creation's entries
+/// (`Device::compile_function_from_entries`), whether the entry there was made or found. So at
+/// exactly that many work units both paths give the bound's answer, and at one fewer both are
+/// refused at the work cap. The plan made again selects from the entry's one analysis: a meter
+/// that is also charged one more plan of the entry, as the plan made again once charged, is
+/// refused at the cap where the compile alone answers.
+#[test]
+fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
+    use crate::device::Device;
+    use crate::error::{Feature, Limit, Unsupported};
+    use crate::library::Library;
+    use crate::lower::simd::{WIDEST_PIN_FLOOR, WIDEST_PIN_WORDS};
+    use crate::pipeline::compile::{
+        compile_bitcode_bounded, compile_stage_bounded, plan_bitcode, StageEntries,
+    };
+    use crate::pipeline::testing::meter;
+    use crate::pipeline::FunctionDescriptor;
+    use crate::spirv::roll::entry_weight;
+    let fan = Padding::Fan((WIDEST_PIN_FLOOR / 2 + 16).max(WIDEST_PIN_WORDS as usize + 8));
+    let Some(bc) = assemble("device_half", &device_half_padded(fan, None)) else {
+        return;
+    };
+    let iris_desc = crate::pipeline::testing::description("intel-irisxe-rplp-anv").unwrap();
+    let iris = Device::new(iris_desc, DevicePolicy::default()).unwrap();
+    let iris = iris.profile();
+    let library = Library::from_air(&bc).expect("library");
+    let fd = FunctionDescriptor::new(library.function("device_half").expect("the kernel"));
+    let weight = |cap| {
+        let compiled =
+            compile_bitcode_bounded(&bc, EntryRef::Name("device_half"), iris, &mut meter(), cap);
+        let (_, _, module) = compiled.expect("compiled");
+        entry_weight(&module, &mut meter()).expect("weight")
+    };
+    let emulated = weight(u64::MAX);
+    let pinned = weight(emulated - 1);
+    assert!(pinned < emulated, "pinned {pinned}, emulated {emulated}");
+    // Its answer, as a planned-again `Direct` module's word count or the refusal's feature.
+    let answer = |compiled: Result<crate::library::CompiledFunction, Error>| match compiled {
+        Ok(c) => Ok(c.artifact().module.words.len()),
+        Err(Error::Unsupported(Unsupported { feature, .. })) => Err(Ok(feature)),
+        Err(Error::LimitExceeded(limit)) => Err(Err(limit)),
+        Err(e) => panic!("{e:?}"),
+    };
+    let capped = |work| Meter::with_caps(&Budget::default(), work, crate::budget::LEDGER_BYTES);
+    for (cap, planned_again) in [(emulated - 1, true), (pinned - 1, false)] {
+        // The work units each path is charged: alone, from entries that make the entry, and from
+        // the same entries again, which find it.
+        let entries = StageEntries::new();
+        let work = |entries: Option<&StageEntries>| {
+            let mut m = meter();
+            let got = answer(compile_stage_bounded(&fd, iris, entries, &mut m, cap));
+            (got, m.work())
+        };
+        let (alone, made, found) = (work(None), work(Some(&entries)), work(Some(&entries)));
+        assert_eq!(entries.counts(), (1, 1), "made once, then found");
+        let (want, w) = alone.clone();
+        match &want {
+            Ok(_) => assert!(planned_again, "{want:?}"),
+            Err(refused) => assert_eq!(*refused, Ok(Feature::StageSize)),
+        }
+        assert_eq!(
+            (made, found),
+            ((want.clone(), w), (want.clone(), w)),
+            "bound {cap}"
+        );
+        // At exactly that many work units, the bound's answer through both paths; at one fewer,
+        // the work cap's through both.
+        for (budget, expected) in [(w, want.clone()), (w - 1, Err(Err(Limit::WorkUnits)))] {
+            for via in [None, Some(&entries)] {
+                let mut m = capped(budget);
+                let got = answer(compile_stage_bounded(&fd, iris, via, &mut m, cap));
+                let shared = via.is_some();
+                assert_eq!(
+                    got, expected,
+                    "bound {cap}, {budget} work units, shared {shared}"
+                );
+            }
+        }
+        // The negative control: one more plan of the entry charged first, as the plan made again
+        // once charged it, is past the cap the compile alone answers within.
+        let mut m = capped(w);
+        let consts = FunctionConstantValues::defaults();
+        let entry = EntryRef::Name("device_half");
+        plan_bitcode(&bc, entry, &consts, iris, &LowerInputs::new(), &mut m).expect("planned");
+        let got = answer(compile_stage_bounded(&fd, iris, None, &mut m, cap));
+        assert_eq!(
+            got,
+            Err(Err(Limit::WorkUnits)),
+            "bound {cap}, charged twice"
+        );
+    }
+}
+
 /// Texture calls take no device barrier: their pointer is the texture's handle.
 #[test]
 fn texture_calls_take_no_device_barrier() {

@@ -109,6 +109,7 @@ budget Meter struct(O)
 budget PRIVATE_ARENA_BYTES const
 budget SPIRV_WORDS const
 budget STANDARD_DEADLINE const
+budget Spent struct(O)
 budget TYPE_COUNT const
 budget WORK_UNITS const
 budget map_bytes fn
@@ -148,10 +149,12 @@ canon::function_table FIRST_FUNCTION_WORD const
 canon::function_table PRESENT_WORD const
 canon::function_table SIZE_WORD const
 canon::opencl entry fn
+canon::rate_map_data BOUNDARY_MASK const
 canon::rate_map_data BYTES const
 canon::rate_map_data ENTRIES const
 canon::rate_map_data ENTRY_WORDS const
 canon::rate_map_data GRANULARITY const
+canon::rate_map_data GRANULE_SHIFT const
 canon::rate_map_data HORIZONTAL_TO_PHYSICAL const
 canon::rate_map_data HORIZONTAL_TO_SCREEN const
 canon::rate_map_data INDEX_CAP const
@@ -180,7 +183,9 @@ canon::rate_map_data physical_to_screen fn
 canon::rate_map_data screen_to_physical fn
 canon::rate_map_data shader_index fn
 canon::rate_map_data shader_physical_to_screen fn
+canon::rate_map_data shader_physical_to_screen_integer fn
 canon::rate_map_data shader_screen_to_physical fn
+canon::rate_map_data shader_screen_to_physical_integer fn
 canon::rate_map_data table fn
 canon::rate_map_data tile_line fn
 container BITCODE_MAGIC const

@@ -7924,13 +7924,16 @@ method	metal2vulkan-air::budget::Meter::charge	pub fn charge(&mut self, bytes: u
 method	metal2vulkan-air::budget::Meter::grow	pub fn grow<T>(&mut self, v: &mut Vec<T>, additional: usize) -> Result<(), Error>
 method	metal2vulkan-air::budget::Meter::ledger	pub fn ledger(&self) -> u64
 method	metal2vulkan-air::budget::Meter::ledger_peak	pub fn ledger_peak(&self) -> u64
+method	metal2vulkan-air::budget::Meter::measured	pub fn measured<T, E>(&mut self, f: impl FnOnce(&mut Meter) -> Result<T, E>) -> Result<(T, Spent), E>
 method	metal2vulkan-air::budget::Meter::new	pub fn new(budget: &Budget) -> Meter
 method	metal2vulkan-air::budget::Meter::release	pub fn release(&mut self, bytes: usize)
 method	metal2vulkan-air::budget::Meter::reserve	pub fn reserve<T>(&mut self, v: &mut Vec<T>, additional: usize) -> Result<(), Error>
 method	metal2vulkan-air::budget::Meter::reserve_exact	pub fn reserve_exact<T>(&mut self, v: &mut Vec<T>, additional: usize) -> Result<(), Error>
+method	metal2vulkan-air::budget::Meter::spend	pub fn spend(&mut self, spent: Spent) -> Result<(), Error>
 method	metal2vulkan-air::budget::Meter::tick	pub fn tick(&mut self, units: u32) -> Result<(), Error>
 method	metal2vulkan-air::budget::Meter::with_caps	pub fn with_caps(budget: &Budget, work_cap: u64, byte_cap: u64) -> Meter
 method	metal2vulkan-air::budget::Meter::work	pub fn work(&self) -> u64
+method	metal2vulkan-air::budget::Spent::held	pub fn held(&self) -> u64
 method	metal2vulkan-air::canon::CommandWrites::is_empty	pub const fn is_empty(self) -> bool
 method	metal2vulkan-air::canon::CommandWrites::may	pub const fn may(self, bits: u32) -> bool
 method	metal2vulkan-air::canon::CommandWrites::may_draw_primitive_type	pub const fn may_draw_primitive_type(self, raw: u32) -> bool
@@ -10112,6 +10115,7 @@ struct	metal2vulkan-air::budget::Budget	#[derive(Clone, Debug, Default)] #[non_e
 struct	metal2vulkan-air::budget::CancelToken	#[derive(Clone, Debug, Default)] pub struct CancelToken(Arc<AtomicBool>)
 struct	metal2vulkan-air::budget::Growth	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] pub struct Growth
 struct	metal2vulkan-air::budget::Meter	#[derive(Debug)] pub struct Meter
+struct	metal2vulkan-air::budget::Spent	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] pub struct Spent
 struct	metal2vulkan-air::canon::CallStack	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct CallStack
 struct	metal2vulkan-air::canon::CommandWrites	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct CommandWrites
 struct	metal2vulkan-air::canon::ConstantRead	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ConstantRead

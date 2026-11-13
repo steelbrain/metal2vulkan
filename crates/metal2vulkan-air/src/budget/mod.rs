@@ -214,6 +214,25 @@ impl Budget {
     }
 }
 
+/// What one piece of work charged a [`Meter`] ([`Meter::measured`]): its work units, the most
+/// ledger bytes it held at once above the ledger it began at, and the bytes it still held when it
+/// ended. A result kept for later asks charges each of them this ([`Meter::spend`]), so what a
+/// meter answers never depends on whether the result was made or found.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Spent {
+    work: u64,
+    peak: u64,
+    held: u64,
+}
+
+impl Spent {
+    /// The ledger bytes the work still held when it ended: what its result holds while it is
+    /// kept.
+    pub fn held(&self) -> u64 {
+        self.held
+    }
+}
+
 /// Per-attempt meter: deadline, cancellation, work units, and the byte ledger.
 #[derive(Debug)]
 pub struct Meter {
@@ -410,6 +429,41 @@ impl Meter {
     /// `CompileReport`).
     pub fn ledger_peak(&self) -> u64 {
         self.peak_bytes
+    }
+
+    /// `f` run on this meter, with what it charged ([`Spent`]). A refusal is `f`'s own.
+    pub fn measured<T, E>(
+        &mut self,
+        f: impl FnOnce(&mut Meter) -> Result<T, E>,
+    ) -> Result<(T, Spent), E> {
+        let (work, bytes, peak) = (self.work, self.bytes, self.peak_bytes);
+        // The work's own peak, read from the ledger it begins at; the meter's is restored after.
+        self.peak_bytes = bytes;
+        let made = f(self);
+        let spent = Spent {
+            work: self.work.saturating_sub(work),
+            peak: self.peak_bytes.saturating_sub(bytes),
+            held: self.bytes.saturating_sub(bytes),
+        };
+        self.peak_bytes = self.peak_bytes.max(peak);
+        made.map(|made| (made, spent))
+    }
+
+    /// Charge what `spent` states its work charged another meter, or this one before
+    /// ([`Meter::measured`]): its work units, then its peak to the ledger, of which the bytes it
+    /// held when it ended stay charged. The caps refuse it where they refused the work itself,
+    /// counting its work units before its bytes.
+    pub fn spend(&mut self, spent: Spent) -> Result<(), Error> {
+        let mut work = spent.work;
+        while work > 0 {
+            let units = u32::try_from(work).unwrap_or(u32::MAX);
+            self.tick(units)?;
+            work = work.saturating_sub(u64::from(units));
+        }
+        self.charge(usize::try_from(spent.peak).unwrap_or(usize::MAX))?;
+        let gone = spent.peak.saturating_sub(spent.held);
+        self.release(usize::try_from(gone).unwrap_or(usize::MAX));
+        Ok(())
     }
 }
 

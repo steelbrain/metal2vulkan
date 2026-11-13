@@ -20,7 +20,8 @@
 //!   specialization, which its stage-input descriptor does not decide: a [`StageEntries`] shared
 //!   between the siblings decodes and specializes the kernel **once** and spares every later one,
 //!   and compiles the same module from it, where one object a sibling decodes once a sibling
-//!   ([`a_sweeps_siblings_share_one_decode`]).
+//!   ([`a_sweeps_siblings_share_one_decode`]). What it spares is time and not budget: each
+//!   sibling is charged the work units of its own unshared compile, the entry it found included.
 //!
 //! A render creation gives one such object to its checks, its keys and its compiles; a compute
 //! creation gives none ([`Device::compile_function`] rather than
@@ -324,22 +325,16 @@ fn a_sweeps_siblings_share_one_decode() {
         "{n} siblings with an object each must decode the kernel {n} times"
     );
 
-    // What the decodes the sharing spares are worth, in the one quantity no load touches. The
-    // first sibling pays the decode in both forms; the later ones pay it only apart.
-    let later_shared: u64 = shared_work[1..].iter().sum();
-    let later_apart: u64 = apart_work[1..].iter().sum();
-    assert!(
-        later_shared < later_apart,
-        "the siblings after the first must cost less work from a shared entry than from one \
-         each: {later_shared} work units against {later_apart}"
-    );
-    let plain_total: u64 = plain.iter().map(|(_, _, work)| work).sum();
-    eprintln!(
-        "work units over {n} siblings: {plain_total} compiled as the creation path compiles them, \
-         {} from a shared entry (first {}, later {later_shared} against {later_apart})",
-        shared_work.iter().sum::<u64>(),
-        shared_work[0],
-    );
+    // A found entry is charged what making it charged: every sibling costs the work units of its
+    // own unshared compile, from the shared entry or from one of its own.
+    for (at, (format, _, plain)) in plain.iter().enumerate() {
+        assert_eq!(
+            (shared_work[at], apart_work[at]),
+            (*plain, *plain),
+            "a sibling must cost the work units of its own compile, {plain}, from a shared entry \
+             and from one of its own ({format:?})"
+        );
+    }
     // The entries are told apart by the kernel and its depth alone, never by the stage input, so
     // the sweep's siblings are one entry and not thirty-two: the object holds one.
     let held = format!("{shared:?}");

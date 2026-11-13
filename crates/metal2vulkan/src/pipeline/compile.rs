@@ -33,7 +33,7 @@ use crate::air::container::{self, LibraryFunction};
 use crate::air::{self, ConstValue, LinkedCode, LinkedModule, LinkedName, SpecRequest};
 use crate::bind::argument_buffer::{self, EntryLayout};
 use crate::bind::{ArgumentBufferLayout, ArgumentLayoutError};
-use crate::budget::{Meter, SPIRV_WORDS};
+use crate::budget::{Meter, Spent, SPIRV_WORDS};
 use crate::cache::Hash256;
 use crate::cache::VariantKey;
 use crate::device::DeviceProfile;
@@ -918,10 +918,17 @@ pub(crate) fn stage_uses_direct_arguments(
 /// at the same time for the same inputs: the whole module is decoded, with every entry's argument
 /// metadata, by the first ask that needs it.
 ///
+/// **Charged as made.** An ask that finds what an earlier ask made is charged what making it
+/// charged (`Spent`: its work units, its ledger peak and the ledger bytes it holds), though
+/// nothing is made again. So the object spares time and never budget: a compile's answer under
+/// its budget, a refusal at a cap included, is the same whether its entry, its decode or its
+/// answer was made or found, and the same as a compile's that shares nothing
+/// (`Device::compile_function`).
+///
 /// **Bounded.** It keeps at most 32 specialized entries and at most 64 MiB of them (each entry
-/// charged what specializing it charged the ledger), at most 32 plain answers, and at most 4
-/// module decodes and 32 MiB of them (each charged what decoding it charged the ledger); past any
-/// of those, the least recently used go, so an object that outlives one creation never grows
+/// counted as the ledger bytes specializing it held), at most 32 plain answers, and at most 4
+/// module decodes and 32 MiB of them (each counted as the ledger bytes decoding it held); past
+/// any of those, the least recently used go, so an object that outlives one creation never grows
 /// without bound. A refusal is not kept: the next ask makes it again.
 #[derive(Default)]
 pub struct StageEntries {
@@ -933,8 +940,8 @@ pub struct StageEntries {
 /// while the search stays a scan of a handful.
 const KEPT_ENTRIES: usize = 32;
 
-/// The most bytes of specialized entries one [`StageEntries`] keeps: 64 MiB, each entry charged
-/// what specializing it charged the compile's ledger. One translation attempt may use 500 MiB, so
+/// The most bytes of specialized entries one [`StageEntries`] keeps: 64 MiB, each entry counted
+/// as the ledger bytes specializing it held. One translation attempt may use 500 MiB, so
 /// an object shared between creations holds a fraction of one attempt's room.
 const KEPT_ENTRY_BYTES: u64 = 64 << 20;
 
@@ -943,14 +950,14 @@ const KEPT_ENTRY_BYTES: u64 = 64 << 20;
 /// compiled in turn, asks over.
 const KEPT_DECODES: usize = 4;
 
-/// The most bytes of module decodes one [`StageEntries`] keeps: 32 MiB, each decode charged what
-/// decoding it charged the compile's ledger. Half the entries' room, and a sixteenth of one
+/// The most bytes of module decodes one [`StageEntries`] keeps: 32 MiB, each decode counted as
+/// the ledger bytes decoding it held. Half the entries' room, and a sixteenth of one
 /// translation attempt's 500 MiB.
 pub(crate) const KEPT_DECODE_BYTES: u64 = 32 << 20;
 
 /// What a [`StageEntries`] holds: its specialized entries, its plain answers and its module
-/// decodes, each least recently used first, the bytes the entries and the decodes were charged,
-/// and the totals its counts report.
+/// decodes, each least recently used first, the bytes the entries and the decodes hold, and the
+/// totals its counts report.
 #[derive(Default)]
 struct Kept {
     entries: Vec<StageEntry>,
@@ -974,8 +981,9 @@ struct KeptDecode {
     /// decoding anything (a metallib's verified `HASH`, or a module's own hash, which every entry
     /// of it carries).
     air_hash: Hash256,
-    /// What decoding it charged the ledger, which the byte bound counts.
-    bytes: u64,
+    /// What decoding it charged, which every ask that copies it is charged; the byte bound counts
+    /// the bytes it holds.
+    spent: Spent,
     decoded: Arc<air::Decoded>,
 }
 
@@ -987,6 +995,8 @@ struct StageAnswer {
     function: FunctionDescriptor,
     /// Whether the entry returns a value ([`stage_returns_value`]).
     returns_value: bool,
+    /// What reading it charged, which every ask that finds it is charged.
+    spent: Spent,
 }
 
 /// One specialized entry of [`StageEntries`], with what tells it apart.
@@ -998,8 +1008,9 @@ struct StageEntry {
     depth: u32,
     /// Specialized as the kernel of a compute pipeline of OpenCL mode.
     open_cl_mode: bool,
-    /// What specializing it charged the ledger, which the byte bound counts.
-    bytes: u64,
+    /// What specializing it charged, which every ask that finds it is charged; the byte bound
+    /// counts the bytes it holds.
+    spent: Spent,
     specialized: Arc<Specialized>,
 }
 
@@ -1037,12 +1048,8 @@ impl StageEntries {
     }
 
     /// The decode of the module whose AIR hash is `air_hash`, whose bitcode is `bitcode`: a copy
-    /// of the one an earlier ask read, else one read now under `m` and kept. A refusal is not
-    /// kept: the next ask reads it again.
-    ///
-    /// The copy is not charged to `m`, as a specialized entry an earlier ask made is not: what
-    /// bounds it is this object's own byte bound, and the compile that copies it would have
-    /// decoded the same module itself.
+    /// of the one an earlier ask read, charged to `m` what reading it charged, else one read now
+    /// under `m` and kept. A refusal is not kept: the next ask reads it again.
     fn module(
         &self,
         air_hash: &Hash256,
@@ -1050,51 +1057,54 @@ impl StageEntries {
         m: &mut Meter,
     ) -> Result<air::Decoded, Error> {
         let lock = || self.kept.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(decoded) = lock().decode(air_hash) {
+        let found = lock().decode(air_hash);
+        if let Some((decoded, spent)) = found {
+            m.spend(spent)?;
             return Ok(air::Decoded::clone(&decoded));
         }
-        // What the decode charged the ledger, which the byte bound counts: the decode is what the
-        // charge is still held for once this returns.
-        let before = m.ledger();
-        let decoded = Arc::new(air::decode(bitcode, m)?);
-        let bytes = m.ledger().saturating_sub(before);
+        let (decoded, spent) = m.measured(|m| air::decode(bitcode, m))?;
+        let decoded = Arc::new(decoded);
         let mine = air::Decoded::clone(&decoded);
         let mut kept = lock();
         // Another caller may have decoded the same module meanwhile: the bytes decide the decode,
         // so its decode is this one and the two share what is kept.
-        if let Some(theirs) = kept.decode(air_hash) {
+        if let Some((theirs, _)) = kept.decode(air_hash) {
             return Ok(air::Decoded::clone(&theirs));
         }
         kept.decodes_read += 1;
-        kept.decode_bytes = kept.decode_bytes.saturating_add(bytes);
+        kept.decode_bytes = kept.decode_bytes.saturating_add(spent.held());
         kept.decodes.push(KeptDecode {
             air_hash: *air_hash,
-            bytes,
+            spent,
             decoded,
         });
         kept.evict();
         Ok(mine)
     }
 
-    /// Whether the entry of stage `fd` returns a value: the answer an earlier ask read, else read
-    /// now under `m` by `read`, which decodes the stage's AIR and specializes nothing
-    /// ([`stage_returns_value`]). The stage's descriptor alone decides it. A refusal is not kept.
+    /// Whether the entry of stage `fd` returns a value: the answer an earlier ask read, charged to
+    /// `m` what reading it charged, else read now under `m` by `read`, which decodes the stage's
+    /// AIR and specializes nothing ([`stage_returns_value`]). The stage's descriptor alone decides
+    /// it. A refusal is not kept.
     fn returns_value(
         &self,
         fd: &FunctionDescriptor,
-        read: impl FnOnce(&StageEntries) -> Result<bool, Error>,
+        m: &mut Meter,
+        read: impl FnOnce(&StageEntries, &mut Meter) -> Result<bool, Error>,
     ) -> Result<bool, Error> {
         // The library's table states it without decoding (`Function::info`).
         let air_hash = fd.function.info().air_hash;
         let lock = || self.kept.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(returns) = lock().answer(&air_hash, fd) {
+        let found = lock().answer(&air_hash, fd);
+        if let Some((returns, spent)) = found {
+            m.spend(spent)?;
             return Ok(returns);
         }
-        let returns_value = read(self)?;
+        let (returns_value, spent) = m.measured(|m| read(self, m))?;
         let mut kept = lock();
         // As a specialized entry's: another caller may have read it meanwhile, and its answer is
         // this one.
-        if let Some(theirs) = kept.answer(&air_hash, fd) {
+        if let Some((theirs, _)) = kept.answer(&air_hash, fd) {
             return Ok(theirs);
         }
         kept.made += 1;
@@ -1102,6 +1112,7 @@ impl StageEntries {
             air_hash,
             function: fd.clone(),
             returns_value,
+            spent,
         });
         kept.evict();
         Ok(returns_value)
@@ -1111,8 +1122,9 @@ impl StageEntries {
     /// taken as 1, Metal's default), specialized as a compile specializes it before lowering
     /// (its constants bound, its linked functions resolved, its calls inlined, SCCP run), with
     /// what a compile takes beside it (The AIR hash, the entry name, what its code read before, so
-    /// a compile of the stage reads it too, [`specialize_one`]): the one made before, else made now
-    /// under `m`. A refusal is not kept: the next ask makes it again.
+    /// a compile of the stage reads it too, [`specialize_one`]): the one made before, charged to
+    /// `m` what making it charged, else made now under `m`. A refusal is not kept: the next ask
+    /// makes it again.
     fn specialized(
         &self,
         fd: &FunctionDescriptor,
@@ -1124,38 +1136,39 @@ impl StageEntries {
         // The library's table states it without decoding (`Function::info`).
         let air_hash = fd.function.info().air_hash;
         let lock = || self.kept.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(specialized) = lock().take(&air_hash, fd, depth, open_cl_mode) {
+        let found = lock().take(&air_hash, fd, depth, open_cl_mode);
+        if let Some((specialized, spent)) = found {
+            m.spend(spent)?;
             return Ok(specialized);
         }
         let mut inputs = LowerInputs::new();
         inputs.max_call_stack_depth = call_stack_input(depth);
         inputs.open_cl_mode = open_cl_mode;
-        // What the specialization charged the ledger, which the byte bound counts: the entry is
-        // what the charge is still held for once this returns.
-        let before = m.ledger();
-        let specialized = Arc::new(with_request_shared(
-            &fd.function,
-            &fd.constants,
-            (&fd.linked, &fd.libraries),
-            InputsFrom::Given(&inputs),
-            Shared::Decode(self),
-            |r| specialize_one(r, m),
-        )?);
-        let bytes = m.ledger().saturating_sub(before);
+        let (specialized, spent) = m.measured(|m| {
+            with_request_shared(
+                &fd.function,
+                &fd.constants,
+                (&fd.linked, &fd.libraries),
+                InputsFrom::Given(&inputs),
+                Shared::Decode(self),
+                |r| specialize_one(r, m),
+            )
+        })?;
+        let specialized = Arc::new(specialized);
         let mut kept = lock();
         // Another caller may have specialized the same stage meanwhile: its entry is this one, so
         // the two share one.
-        if let Some(theirs) = kept.take(&air_hash, fd, depth, open_cl_mode) {
+        if let Some((theirs, _)) = kept.take(&air_hash, fd, depth, open_cl_mode) {
             return Ok(theirs);
         }
         kept.made += 1;
-        kept.bytes = kept.bytes.saturating_add(bytes);
+        kept.bytes = kept.bytes.saturating_add(spent.held());
         kept.entries.push(StageEntry {
             air_hash,
             function: fd.clone(),
             depth,
             open_cl_mode,
-            bytes,
+            spent,
             specialized: Arc::clone(&specialized),
         });
         kept.evict();
@@ -1165,15 +1178,15 @@ impl StageEntries {
 
 impl Kept {
     /// The entry of `fd` at `depth` whose function's AIR hash is `air_hash`, made the most
-    /// recently used: `None` where none is held. The hash is compared first, so a scan reads a
-    /// function descriptor only where the hashes agree.
+    /// recently used, with what making it charged: `None` where none is held. The hash is
+    /// compared first, so a scan reads a function descriptor only where the hashes agree.
     fn take(
         &mut self,
         air_hash: &Hash256,
         fd: &FunctionDescriptor,
         depth: u32,
         open_cl_mode: bool,
-    ) -> Option<Arc<Specialized>> {
+    ) -> Option<(Arc<Specialized>, Spent)> {
         let at = self.entries.iter().position(|e| {
             e.depth == depth
                 && e.open_cl_mode == open_cl_mode
@@ -1181,36 +1194,37 @@ impl Kept {
                 && e.function == *fd
         })?;
         let entry = self.entries.remove(at);
-        let specialized = Arc::clone(&entry.specialized);
+        let found = (Arc::clone(&entry.specialized), entry.spent);
         self.entries.push(entry);
         self.found += 1;
-        Some(specialized)
+        Some(found)
     }
 
     /// The plain answer of `fd` whose function's AIR hash is `air_hash`, made the most recently
-    /// used: `None` where none is held. The hash is compared first, as [`Kept::take`] compares it.
-    fn answer(&mut self, air_hash: &Hash256, fd: &FunctionDescriptor) -> Option<bool> {
+    /// used, with what reading it charged: `None` where none is held. The hash is compared first,
+    /// as [`Kept::take`] compares it.
+    fn answer(&mut self, air_hash: &Hash256, fd: &FunctionDescriptor) -> Option<(bool, Spent)> {
         let at = self
             .answers
             .iter()
             .position(|a| a.air_hash == *air_hash && a.function == *fd)?;
         let answer = self.answers.remove(at);
-        let returns_value = answer.returns_value;
+        let found = (answer.returns_value, answer.spent);
         self.answers.push(answer);
         self.found += 1;
-        Some(returns_value)
+        Some(found)
     }
 
-    /// The decode of the module whose AIR hash is `air_hash`, made the most recently used:
-    /// `None` where none is held. The hash decides the decode completely, so nothing else is
-    /// compared.
-    fn decode(&mut self, air_hash: &Hash256) -> Option<Arc<air::Decoded>> {
+    /// The decode of the module whose AIR hash is `air_hash`, made the most recently used, with
+    /// what reading it charged: `None` where none is held. The hash decides the decode
+    /// completely, so nothing else is compared.
+    fn decode(&mut self, air_hash: &Hash256) -> Option<(Arc<air::Decoded>, Spent)> {
         let at = self.decodes.iter().position(|d| d.air_hash == *air_hash)?;
         let decode = self.decodes.remove(at);
-        let decoded = Arc::clone(&decode.decoded);
+        let found = (Arc::clone(&decode.decoded), decode.spent);
         self.decodes.push(decode);
         self.decodes_copied += 1;
-        Some(decoded)
+        Some(found)
     }
 
     /// Drop the least recently used entries, answers and decodes until the bounds hold, never the
@@ -1221,7 +1235,7 @@ impl Kept {
             && (self.entries.len() > KEPT_ENTRIES || self.bytes > KEPT_ENTRY_BYTES)
         {
             let gone = self.entries.remove(0);
-            self.bytes = self.bytes.saturating_sub(gone.bytes);
+            self.bytes = self.bytes.saturating_sub(gone.spent.held());
         }
         while self.answers.len() > KEPT_ENTRIES.max(1) {
             self.answers.remove(0);
@@ -1230,7 +1244,7 @@ impl Kept {
             && (self.decodes.len() > KEPT_DECODES || self.decode_bytes > KEPT_DECODE_BYTES)
         {
             let gone = self.decodes.remove(0);
-            self.decode_bytes = self.decode_bytes.saturating_sub(gone.bytes);
+            self.decode_bytes = self.decode_bytes.saturating_sub(gone.spent.held());
         }
     }
 }
@@ -1260,7 +1274,7 @@ pub(crate) fn stage_returns_value(
     entries: &StageEntries,
     m: &mut Meter,
 ) -> Result<bool, Error> {
-    entries.returns_value(fd, |shared| stage_returns_value_read(fd, shared, m))
+    entries.returns_value(fd, m, |shared, m| stage_returns_value_read(fd, shared, m))
 }
 
 /// [`FunctionDescriptor::needs_specialization`] under `m`: a module function's constants read
@@ -1662,6 +1676,35 @@ pub(crate) fn compile_bitcode_bounded(
         let r = Request::bitcode(bitcode, entry, &consts, &[], &inputs);
         compile_bounded(&r, p, m, (SPIRV_WORDS, weight_cap), TypedModule::clone)
             .map(|(artifact, plan, module)| (CompiledFunction::new(artifact), plan, module))
+    })
+}
+
+/// Stage `fd` compiled with default lowering inputs as [`compile_stage`] compiles it, or as
+/// [`compile_stage_from`] compiles it reading `entries` where given, under the stage bound
+/// `weight_cap` in place of [`stage_bound::SERIALIZED_STAGE_WEIGHT`]: so a test reaches the bound
+/// with a small module through either path.
+#[cfg(test)]
+pub(crate) fn compile_stage_bounded(
+    fd: &FunctionDescriptor,
+    p: &DeviceProfile,
+    entries: Option<&StageEntries>,
+    m: &mut Meter,
+    weight_cap: u64,
+) -> Result<CompiledFunction, Error> {
+    let inputs = LowerInputs::new();
+    let shared = entries.map_or(Shared::Nothing, |e| Shared::Entry(e, fd));
+    guarded(|| {
+        with_request_shared(
+            &fd.function,
+            &fd.constants,
+            (&fd.linked, &fd.libraries),
+            InputsFrom::Given(&inputs),
+            shared,
+            |r| {
+                compile_bounded(r, p, m, (SPIRV_WORDS, weight_cap), |_| ())
+                    .map(|(artifact, _, ())| CompiledFunction::new(artifact))
+            },
+        )
     })
 }
 
@@ -2707,6 +2750,72 @@ fn plan_one(
     widest: crate::lower::simd::WidestPin,
     m: &mut Meter,
 ) -> Result<Planned, Error> {
+    let analyzed = analyze_one(r, p, m)?;
+    let (plan, kernel) = analyzed.select(p, widest, m)?;
+    Ok(analyzed.planned(plan, kernel))
+}
+
+/// What [`plan_one`] reads of a request before it selects: the ordered entry, what its code read
+/// before specialization, the inputs it lowers under, its key, its memory plan and the partition
+/// it observes. A plan made again past the stage bound (`stage_bound`) selects from it again,
+/// without decoding, specializing, ordering or analyzing the entry again.
+struct Analyzed {
+    key: FunctionCompileKey,
+    spec: air::Entry,
+    before: reflection::UnspecializedReads,
+    inputs: LowerInputs,
+    memory: crate::memory::plan::MemoryPlan,
+    observed: Partition,
+}
+
+impl Analyzed {
+    /// The plan of the analyzed entry, keeping the widest mode's pin or weighing it as `widest`
+    /// says, and the kernel facts it gives.
+    fn select(
+        &self,
+        p: &DeviceProfile,
+        widest: crate::lower::simd::WidestPin,
+        m: &mut Meter,
+    ) -> Result<(Plan, KernelFacts), Error> {
+        let (spec, memory, observed) = (&self.spec, &self.memory, self.observed);
+        let plan = crate::lower::select::select(spec, memory, p, (&self.inputs, widest), m)?;
+        let kernel = KernelFacts {
+            max_total_threads: spec.ep.stage.max_total_threads(),
+            work_group_size: spec.ep.stage.work_group_size(),
+            flat_local_size: plan
+                .dispatch
+                .as_ref()
+                .is_some_and(|d| d.local_size == LocalSizeForm::Flat),
+            // The static part: the objects, and with `[[threadgroup(n)]]` regions the
+            // 16-byte-aligned offset where the first region starts. With typed threadgroup
+            // objects (no regions), the static part of Metal's own layout, which holds them too.
+            static_threadgroup_bytes: if memory.typed_shared.is_empty() {
+                crate::memory::arena::TgShape::of(&memory.tg_arena)
+                    .static_bytes()
+                    .unwrap_or(u64::MAX)
+            } else {
+                memory.tg_metal_static
+            },
+            partition_oblivious: observed == Partition::Oblivious,
+            partition_simdgroups: observed == Partition::Simdgroups,
+        };
+        Ok((plan, kernel))
+    }
+
+    /// The plan `plan` of the analyzed entry, with its kernel facts `kernel`.
+    fn planned(self, plan: Plan, kernel: KernelFacts) -> Planned {
+        Planned {
+            key: self.key,
+            spec: self.spec,
+            before: self.before,
+            plan,
+            kernel,
+        }
+    }
+}
+
+/// [`plan_one`]'s reads before it selects ([`Analyzed`]).
+fn analyze_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Analyzed, Error> {
     let Specialized {
         air_hash,
         entry,
@@ -2752,33 +2861,13 @@ fn plan_one(
         (&linked, &r.dynamic.key()),
     );
     let memory = crate::memory::plan::analyze_memory(&spec, p, m)?;
-    let plan = crate::lower::select::select(&spec, &memory, p, (&inputs, widest), m)?;
-    let kernel = KernelFacts {
-        max_total_threads: spec.ep.stage.max_total_threads(),
-        work_group_size: spec.ep.stage.work_group_size(),
-        flat_local_size: plan
-            .dispatch
-            .as_ref()
-            .is_some_and(|d| d.local_size == LocalSizeForm::Flat),
-        // The static part: the objects, and with `[[threadgroup(n)]]` regions the 16-byte-aligned
-        // offset where the first region starts. With typed threadgroup objects (no regions), the
-        // static part of Metal's own layout, which holds them too.
-        static_threadgroup_bytes: if memory.typed_shared.is_empty() {
-            crate::memory::arena::TgShape::of(&memory.tg_arena)
-                .static_bytes()
-                .unwrap_or(u64::MAX)
-        } else {
-            memory.tg_metal_static
-        },
-        partition_oblivious: observed == Partition::Oblivious,
-        partition_simdgroups: observed == Partition::Simdgroups,
-    };
-    Ok(Planned {
+    Ok(Analyzed {
         key,
         spec,
         before,
-        plan,
-        kernel,
+        inputs,
+        memory,
+        observed,
     })
 }
 

@@ -342,3 +342,58 @@ fn budget_types_are_send_and_sync() {
     send_sync::<Budget>();
     send_sync::<CancelToken>();
 }
+
+/// What a piece of work charged one meter, spent on another, leaves the second where the work
+/// itself would have: the same work units, the same ledger, the same peak, and the same refusals
+/// at the same caps. Measured from a ledger and a peak that are not zero, so neither is read as
+/// the work's own.
+#[test]
+fn spent_work_charges_another_meter_as_the_work_did() {
+    let work = |m: &mut Meter| -> Result<(), Error> {
+        m.tick(70_000)?;
+        m.charge(300)?;
+        m.charge(200)?;
+        m.release(400);
+        m.tick(5)
+    };
+    let mut made = Meter::new(&Budget::default());
+    made.tick(9).unwrap();
+    made.charge(1_000).unwrap();
+    made.release(900);
+    let ((), spent) = made.measured(work).unwrap();
+    assert_eq!(spent.held(), 100);
+    assert_eq!(
+        (made.work(), made.ledger(), made.ledger_peak()),
+        (70_014, 200, 1_000)
+    );
+
+    let mut fresh = Meter::new(&Budget::default());
+    work(&mut fresh).unwrap();
+    let mut found = Meter::new(&Budget::default());
+    found.spend(spent).unwrap();
+    assert_eq!(
+        (found.work(), found.ledger(), found.ledger_peak()),
+        (fresh.work(), fresh.ledger(), fresh.ledger_peak())
+    );
+    assert_eq!(
+        (found.work(), found.ledger(), found.ledger_peak()),
+        (70_005, 100, 500)
+    );
+
+    // At the caps the work just fits, both fit; one under either, both are refused alike.
+    let at = |work_cap, byte_cap| {
+        let mut fresh = Meter::with_caps(&Budget::default(), work_cap, byte_cap);
+        let mut found = Meter::with_caps(&Budget::default(), work_cap, byte_cap);
+        (work(&mut fresh), found.spend(spent))
+    };
+    assert_eq!(at(70_005, 500), (Ok(()), Ok(())));
+    let over = |limit| Err(Error::LimitExceeded(limit));
+    assert_eq!(
+        at(70_004, 500),
+        (over(Limit::WorkUnits), over(Limit::WorkUnits))
+    );
+    assert_eq!(
+        at(70_005, 499),
+        (over(Limit::LedgerBytes), over(Limit::LedgerBytes))
+    );
+}

@@ -211,8 +211,10 @@ impl Device {
     /// one a linked-use question or a key of the same creation made
     /// ([`RenderPipelineDescriptor::fragment_writes_depth_unattached`],
     /// [`Device::render_variant_key`]), else one made there now, so a creation decodes and
-    /// specializes each stage once. It compiles what `compile_function` compiles; the
-    /// specialization a creation already did is not charged to `b` again.
+    /// specializes each stage once. It compiles and charges what `compile_function` compiles and
+    /// charges: an entry the creation already made is charged to `b` what making it charged,
+    /// though it is not made again, so a refusal at one of the budget's caps is
+    /// `compile_function`'s too.
     pub fn compile_function_from_entries(
         &self,
         f: &FunctionDescriptor,
@@ -245,9 +247,10 @@ impl Device {
     /// [`ComputePipelineDescriptor::reflection`] still lists a buffer for every set attribute.
     ///
     /// It decodes and specializes the kernel's AIR under `b`, reading the stage's specialized
-    /// entry from `entries` (the one a key or check of the same creation made, else one made
-    /// there now), so a sweep of states over one kernel decodes once. Inputs without a
-    /// stage-input descriptor are their own answer, decoding nothing.
+    /// entry from `entries` (the one a key or check of the same creation made, charged to `b`
+    /// what making it charged, else one made there now), so a sweep of states over one kernel
+    /// decodes once. Inputs without a stage-input descriptor are their own answer, decoding
+    /// nothing.
     ///
     /// Refused by the decode's and the specialization's own errors.
     pub fn kernel_inputs_read(
