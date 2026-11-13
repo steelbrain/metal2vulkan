@@ -57,7 +57,9 @@
 //!   (`exit_guard.rs`), as every runtime thread's does: the objects' making, the submissions, each
 //!   wait of at most [`WAIT_SLICE`], and the releases. Once the process is exiting it ends,
 //!   unrecorded, and leaves its objects to the process's end. A refused opening is the round's
-//!   last submission, so no batch submitted waits for good.
+//!   last submission, so no batch submitted waits for good. On a device that stopped and is
+//!   parked (`command_buffer/stall.rs`), whose work never completes, a wait ends as on a lost
+//!   device, so the device's teardown finds the thread ended.
 //! - **Its queues held through its submissions.** A round takes the lock of each of its
 //!   `VkQueue`s, in index order, before its opening, and lets them go once its last batch was
 //!   submitted (`QueueUses::use_queues_kept`), so its three submissions go in their order with no
@@ -801,6 +803,10 @@ impl Objects {
             exit_guard::called(Call::WaitSemaphores);
             match waited {
                 Ok(()) => return Ok(true),
+                // A stopped device's work never completes (`command_buffer/stall.rs`).
+                Err(vk::Result::TIMEOUT) if crate::release::parked(parts.vk().handle()) => {
+                    return Err(vulkan(vk::Result::ERROR_DEVICE_LOST));
+                }
                 Err(vk::Result::TIMEOUT) => continue,
                 Err(error) => return Err(vulkan(error)),
             }
@@ -824,6 +830,10 @@ impl Objects {
             exit_guard::called(Call::WaitForFences);
             match waited {
                 Ok(()) => break,
+                // As in `wait`: a stopped device's fences are never signalled.
+                Err(vk::Result::TIMEOUT) if crate::release::parked(parts.vk().handle()) => {
+                    return Err(vulkan(vk::Result::ERROR_DEVICE_LOST));
+                }
                 Err(vk::Result::TIMEOUT) => continue,
                 Err(error) => return Err(vulkan(error)),
             }

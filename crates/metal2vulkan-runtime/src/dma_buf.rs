@@ -386,7 +386,8 @@ impl DmaBufPages {
             // SAFETY: the timeline is the device's, live while the device is.
             let waited = unsafe { raw_device.wait_semaphores(&info, WAIT_SLICE.as_nanos() as u64) };
             exit_guard::called(Call::WaitSemaphores);
-            if waited != Err(vk::Result::TIMEOUT) {
+            // A stopped device's binding never completes (`command_buffer/stall.rs`).
+            if waited != Err(vk::Result::TIMEOUT) || crate::release::parked(raw_device.handle()) {
                 return;
             }
         }
