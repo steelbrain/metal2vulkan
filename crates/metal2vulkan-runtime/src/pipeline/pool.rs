@@ -475,6 +475,13 @@ impl Pool {
         state.work.len() + state.threads.saturating_sub(state.free)
     }
 
+    /// The pieces waiting for a thread, and those its threads run now: what the encoder trail's
+    /// line names (`encoder_trail.rs`).
+    pub(crate) fn queued(&self) -> (usize, usize) {
+        let state = lock(&self.shared.state);
+        (state.work.len(), state.threads.saturating_sub(state.free))
+    }
+
     /// The threads alive and those of them free (the pool's tests).
     #[cfg(test)]
     fn census(&self) -> (usize, usize) {

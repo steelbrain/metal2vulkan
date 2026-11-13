@@ -2182,6 +2182,11 @@ impl RenderExecution {
         let snapshot = &self.snapshot;
         let device = command_buffer.device().clone();
         if let Some(form) = gpu {
+            if device.shared().encoder_trail {
+                let mut notes = crate::encoder_trail::Notes::default();
+                notes.gpu_alone();
+                command_buffer.trail_step(notes);
+            }
             let encoder =
                 self.record_gpu(core, (command_buffer, residency), form, (storage, rendered))?;
             return self.finish(encoder, found, rendered, &device);
@@ -2679,6 +2684,17 @@ impl RenderExecution {
             }
             if !probing {
                 regions = note(found.piece_after(encoder));
+            }
+            if let Some((notes, _)) = &mut trail {
+                use crate::encoder_trail::Route;
+                notes.routed(
+                    match (probing, encoder.fanned.0, encoder.rate_map.is_some()) {
+                        (true, _, _) => Route::Probe,
+                        (false, true, _) => Route::FannedOut,
+                        (false, false, true) => Route::RegionByRegion,
+                        (false, false, false) => Route::Plain,
+                    },
+                );
             }
         }
         if let Some((notes, _)) = trail {

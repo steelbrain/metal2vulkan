@@ -19,8 +19,11 @@
 //!   (`CommandBuffer::record_host_step`) notes the states its indirect commands name, as the GPU
 //!   and the CPU left the records, and what it drew of them ([`Drawn`]): each range it read from a
 //!   buffer, the draws it recorded, their vertices or indices times their instances, the draw of
-//!   the most of those, and the kept chunks it ran again (`render/executions/kept.rs`), whose
-//!   draws it did not read. Its batch names them after the encoder's own. A submission
+//!   the most of those, the route each draw took ([`Route`]: plain, a rate-mapped pass's probe,
+//!   fanned out or region by region), the executions it recorded in their GPU form, and the kept
+//!   chunks it ran again (`render/executions/kept.rs`), whose draws it did not read. Its batch
+//!   names them after the encoder's own; the line names the device's pipeline pool's makings
+//!   waiting and under way. A submission
 //!   the step makes and waits for itself (a rasterization-rate map's fan-out probe,
 //!   `render/fan_out.rs`, or a predicated loop's check run again, `command_buffer/rerun.rs`)
 //!   signals no timeline: once it ran for [`AFTER`], one line names it ([`waited_line`]).
@@ -87,6 +90,24 @@ pub(crate) struct Drawn {
     /// The kept chunks it ran again, and their commands.
     kept: u64,
     kept_commands: u64,
+    /// Its draws by the route they took, in [`Route`]'s order.
+    routes: [u64; 4],
+    /// Its executions recorded in their GPU form (`render/executions/gpu.rs`), whose records the
+    /// host did not read.
+    gpu_alone: u64,
+}
+
+/// The route a host step's draw took: its pipeline's variant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Route {
+    /// Outside a rate-mapped pass: the state's own variant.
+    Plain,
+    /// A rate-mapped pass's fan-out probe (`VariantKey::region_fan_out`, `Probe`).
+    Probe,
+    /// A rate-mapped pass's draw fanned out (`region_fan_out`, `Draw`).
+    FannedOut,
+    /// A rate-mapped pass's draw recorded region by region.
+    RegionByRegion,
 }
 
 impl Drawn {
@@ -105,6 +126,10 @@ impl Drawn {
         }
         self.kept += other.kept;
         self.kept_commands += other.kept_commands;
+        for (route, more) in self.routes.iter_mut().zip(other.routes) {
+            *route += more;
+        }
+        self.gpu_alone += other.gpu_alone;
     }
 
     fn largest(&mut self, draw: (bool, u32, u32, u32)) {
@@ -120,7 +145,11 @@ impl Drawn {
     }
 
     fn any(&self) -> bool {
-        !self.ranges.is_empty() || self.draws > 0 || self.kept > 0
+        !self.ranges.is_empty()
+            || self.draws > 0
+            || self.kept > 0
+            || self.routes.iter().any(|&route| route > 0)
+            || self.gpu_alone > 0
     }
 
     /// As a line names it.
@@ -143,14 +172,18 @@ impl Drawn {
             ),
             None => String::new(),
         };
+        let [plain, probe, fanned, regions] = self.routes;
         format!(
             "its host step read ranges [{}]{more}, drew {} draw(s) of {} vertices or indices \
-             times instances{largest}, and ran {} kept chunk(s) of {} command(s) again",
+             times instances{largest}, and ran {} kept chunk(s) of {} command(s) again; routes: \
+             {plain} plain, {probe} probe, {fanned} fanned out, {regions} region by region, {} \
+             execution(s) on the GPU alone",
             ranges.join(", "),
             self.draws,
             self.work,
             self.kept,
-            self.kept_commands
+            self.kept_commands,
+            self.gpu_alone
         )
     }
 }
@@ -209,6 +242,16 @@ impl Notes {
         drawn.draws += 1;
         drawn.work = (drawn.work).saturating_add(u64::from(count) * u64::from(instances));
         drawn.largest((indexed, primitive, count, instances));
+    }
+
+    /// A host step's draw took `route`.
+    pub(crate) fn routed(&mut self, route: Route) {
+        self.drawn.routes[route as usize] += 1;
+    }
+
+    /// A host step recorded an execution in its GPU form.
+    pub(crate) fn gpu_alone(&mut self) {
+        self.drawn.gpu_alone += 1;
     }
 
     /// A host step ran a kept chunk of `commands` again.
@@ -371,12 +414,14 @@ pub(crate) fn pass_named(layout: &PassLayout, instances: usize, rate_mapped: boo
 }
 
 /// The line of `queue`'s stall of `stalled` (the module docs): `front`, its oldest pending batch's
-/// encoders as noted, and `last`, the last batch it completed, with how long before.
+/// encoders as noted, `last`, the last batch it completed, with how long before, and the device's
+/// pipeline pool's makings waiting and under way (`pipeline/pool.rs`).
 pub(crate) fn line(
     queue: usize,
     stalled: Duration,
     front: Option<&str>,
     last: Option<(&str, Duration)>,
+    (waiting, making): (usize, usize),
 ) -> String {
     let last = match last {
         Some((last, ago)) => format!("{last} ({ago:?} before)"),
@@ -384,7 +429,8 @@ pub(crate) fn line(
     };
     format!(
         "metal2vulkan: encoder trail: no work of the device advanced for {stalled:?} with some \
-         pending; VkQueue {queue}'s oldest pending batch: {}; the last batch it completed: {last}",
+         pending; VkQueue {queue}'s oldest pending batch: {}; the last batch it completed: \
+         {last}; the device's pipeline pool: {waiting} making(s) waiting, {making} under way",
         front.unwrap_or("no encoder noted"),
     )
 }
@@ -466,6 +512,10 @@ mod tests {
         drawn.drew(false, 3, 6, u32::MAX);
         drawn.drew(true, 3, 300, 1);
         drawn.kept_again(64);
+        drawn.routed(Route::Plain);
+        drawn.routed(Route::FannedOut);
+        drawn.routed(Route::FannedOut);
+        drawn.gpu_alone();
         step.noted(drawn);
         let stepped = step.stepped().expect("a state named");
         let work = 72 + 6 * u64::from(u32::MAX) + 300;
@@ -475,7 +525,9 @@ mod tests {
                 "Render encoder 3 of command buffer 7, its host step's commands' states [{b}]; \
                  its host step read ranges [4+9 ran 4..10], drew 3 draw(s) of {work} vertices \
                  or indices times instances, the largest a draw of primitive type 3: 6 vertices \
-                 times {} instance(s), and ran 1 kept chunk(s) of 64 command(s) again",
+                 times {} instance(s), and ran 1 kept chunk(s) of 64 command(s) again; routes: \
+                 1 plain, 0 probe, 2 fanned out, 0 region by region, 1 execution(s) on the GPU \
+                 alone",
                 u32::MAX
             )
         );

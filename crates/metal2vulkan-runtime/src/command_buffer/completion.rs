@@ -1350,13 +1350,16 @@ fn trail(watch: &Watch, device: &Device, queue: usize, front: Front, value: u64)
             ..
         } = &*pending;
         let mut lines = Vec::new();
+        let pool = device.shared().pipeline_pool.queued();
         for (queue, batches) in queues.iter().enumerate() {
             let Some(oldest) = batches.front().filter(|batch| batch.value > reached[queue]) else {
                 continue;
             };
             let last = (trails[queue].as_ref()).map(|(trail, at)| (&**trail, at.elapsed()));
             let front = oldest.trail.as_deref();
-            lines.push(crate::encoder_trail::line(queue, stalled, front, last));
+            lines.push(crate::encoder_trail::line(
+                queue, stalled, front, last, pool,
+            ));
         }
         lines
     };

@@ -1904,11 +1904,13 @@ state it bound (the first 8 bytes of the SHA-256 of the state's label and its fu
 name and no shader text), and of each state its indirect commands named at a host step, with what
 that step drew: each range it read from a buffer (its location and length as the bytes held them,
 and the commands it ran), its draws, their vertices or indices times their instances summed, the
-draw of the most of those (its primitive type, count and instances), and the kept chunks it ran
-again, whose draws it did not read. Once no
-work of the device advanced for 2 s while some was pending, it logs one line for each `VkQueue`
-whose oldest batch is pending (id name `metal2vulkan-encoder-trail`, `Info` severity): that
-batch's encoders, and the last batch the queue completed, with how long before; once a stall. A
+draw of the most of those (its primitive type, count and instances), the route each draw took
+(plain, a rate-mapped pass's probe, fanned out, or region by region), the executions it recorded in
+their GPU form, and the kept chunks it ran again, whose draws it did not read. Once no work of the
+device advanced for 2 s while some was pending, it logs one line for each `VkQueue` whose oldest
+batch is pending (id name `metal2vulkan-encoder-trail`, `Info` severity): that batch's encoders,
+the last batch the queue completed, with how long before, and the device's pipeline pool's makings
+waiting and under way; once a stall. A
 submission a host step makes and waits for itself (a rasterization-rate map's fan-out probe, a
 predicated loop's check run again) signals no timeline: once it ran for 2 s, one line names it,
 the encoder whose step made it and the states its commands named. The stall probe and the

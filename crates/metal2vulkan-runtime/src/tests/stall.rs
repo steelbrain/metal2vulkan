@@ -561,5 +561,6 @@ fn the_encoder_trail_names_the_stuck_encoder_and_the_last_one_completed() {
     let done_id = done.object_id().get();
     let last = format!("the last batch it completed: Blit encoder 0 of command buffer {done_id}");
     assert!(line.contains(&last), "{line}");
+    assert!(line.contains("; the device's pipeline pool: "), "{line}");
     assert!(submitted >= 2, "{submitted} submissions for 2 encoders");
 }
