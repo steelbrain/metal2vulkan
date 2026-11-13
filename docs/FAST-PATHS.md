@@ -615,7 +615,11 @@ driver's. Each is open work.
   than `SERIALIZED_STAGE_WEIGHT` (786,432 instructions, every call counted as its callee's body)
   is never handed to the driver: a kernel that emulated its simdgroups only in place of the
   widest mode's pin is compiled pinned to 32 lanes again, and every other one is refused
-  (`Feature::StageSize`), where Metal compiles it.
+  (`Feature::StageSize`), where Metal compiles it. The refusal follows what the driver compiles,
+  not the defect alone: on the Iris Xe of RPL-P (ANV, Mesa 26.2.6), a kernel of entry weight
+  1,565,083 created as a `VK_EXT_shader_object` compute shader, which the driver compiles without
+  that round trip, still held more than 8 GiB of the process within ten minutes and did not
+  finish.
 
 - **A rate-mapped pass's work is cut into bounded pieces only between its executed commands'
   draws, and between ranges of a draw's indices where the draw is cut so**
