@@ -4234,6 +4234,7 @@ field	metal2vulkan::cache::VariantKey.line_band	pub line_band: Option<crate::pip
 field	metal2vulkan::cache::VariantKey.merged_draws	pub merged_draws: bool
 field	metal2vulkan::cache::VariantKey.mesh_last_first	pub mesh_last_first: bool
 field	metal2vulkan::cache::VariantKey.one_row	pub one_row: bool
+field	metal2vulkan::cache::VariantKey.partial_threadgroups	pub partial_threadgroups: bool
 field	metal2vulkan::cache::VariantKey.primitive_id_indices	pub primitive_id_indices: Option<crate::metal::IndexType>
 field	metal2vulkan::cache::VariantKey.private_list	pub private_list: bool
 field	metal2vulkan::cache::VariantKey.psb_slots	pub psb_slots: BTreeSet<SlotRef>
@@ -4840,6 +4841,7 @@ field	metal2vulkan::pipeline::LoweringInputs.multisampled	pub multisampled: bool
 field	metal2vulkan::pipeline::LoweringInputs.object_payload	pub object_payload: Option<u32>
 field	metal2vulkan::pipeline::LoweringInputs.one_row	pub one_row: bool
 field	metal2vulkan::pipeline::LoweringInputs.open_cl_mode	pub open_cl_mode: bool
+field	metal2vulkan::pipeline::LoweringInputs.partial_threadgroups	pub partial_threadgroups: bool
 field	metal2vulkan::pipeline::LoweringInputs.primitive_id_indices	pub primitive_id_indices: Option<crate::metal::IndexType>
 field	metal2vulkan::pipeline::LoweringInputs.primitive_id_varying	pub primitive_id_varying: bool
 field	metal2vulkan::pipeline::LoweringInputs.primitive_varyings	pub primitive_varyings: BTreeSet<VaryingKey>
@@ -14794,6 +14796,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::OneRow	OneRow
 variant	metal2vulkan::pipeline::RuntimeFact::OpenClMode	OpenClMode
 variant	metal2vulkan::pipeline::RuntimeFact::OutOfBoundsAlpha	OutOfBoundsAlpha { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::PartialObjectThreadgroups	PartialObjectThreadgroups
+variant	metal2vulkan::pipeline::RuntimeFact::PartialThreadgroups	PartialThreadgroups
 variant	metal2vulkan::pipeline::RuntimeFact::PredicationVote	PredicationVote
 variant	metal2vulkan::pipeline::RuntimeFact::PrivateList	PrivateList
 variant	metal2vulkan::pipeline::RuntimeFact::QuadPrimitiveIds	QuadPrimitiveIds

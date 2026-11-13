@@ -229,6 +229,7 @@ mod serde_round_trips {
             amplification_draws: Some(AmplificationDraws::new(true, false)),
             viewport_compensation: Some(ViewportCompensation::new(true)),
             folded_groups: true,
+            partial_threadgroups: true,
             extended_range: BTreeMap::from([(
                 slot(Stage::Kernel, SlotClass::Texture, 5),
                 crate::metal::format::ExtendedRange::Bgra10 { srgb: true },
@@ -415,6 +416,7 @@ mod serde_round_trips {
             absent_varyings: BTreeSet::from([VaryingKey::user(b"generated(5colorDv4_f)")]),
             viewport_compensation: Some(ViewportCompensation::new(false)),
             folded_groups: true,
+            partial_threadgroups: true,
             extended_range: BTreeMap::from([(
                 slot(Stage::Fragment, SlotClass::Texture, 2),
                 crate::metal::format::ExtendedRange::Bgr10 { srgb: false },

@@ -472,6 +472,8 @@ mod owned_pushes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod padding_unobserved;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod partial_threadgroups;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod pass_end_tiles;
 mod pass_log;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

@@ -1849,6 +1849,14 @@ impl ComputePipelineState {
         Ok(Some((variant, plan)))
     }
 
+    /// Run the state's direct dispatches of a ragged grid split, as where the compile layer
+    /// refused it the partial-threadgroups variant ([`Self::settle_partial`]): what
+    /// `tests::partial_threadgroups` compares the variant's answers with.
+    #[cfg(test)]
+    pub(crate) fn split_ragged_grids(&self) {
+        self.0.partial_refused.store(true, Ordering::Relaxed);
+    }
+
     /// The partial-threadgroups variant (`VariantKey::partial_threadgroups`) `dispatch`, a direct
     /// `dispatchThreads:` of a ragged grid in threadgroups of `local` threads of a bind state of
     /// `shape`, runs on, with its plan for `shape`: the variant the first plan names for a

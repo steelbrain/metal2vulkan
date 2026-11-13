@@ -3,10 +3,12 @@
 //! of the call's threadgroups (`compute.rs`'s `flat_direct`, `VariantKey::call_threadgroups`): one
 //! `VkPipeline`, where the split makes one for its interior and one for its edge, every thread's
 //! lane and simdgroup what Metal's threadgroups give it, the last simdgroup's lanes past the grid
-//! left out of its reduction as Metal's partial simdgroup leaves them. A grid of two rows splits,
-//! and so does a kernel with a threadgroup barrier. A kernel with a simdgroup barrier and a
-//! reduction runs flat where its simdgroups are the device's subgroups (its tier asks for full
-//! subgroups) and splits where they are not (lavapipe's 8-lane subgroups, which emulate them).
+//! left out of its reduction as Metal's partial simdgroup leaves them. A grid of two rows, and a
+//! kernel with a threadgroup barrier, run on the kernel's partial-threadgroups variant instead
+//! (`compute.rs`'s `partial_direct`): one `VkPipeline` too. A kernel with a simdgroup barrier and
+//! a reduction runs flat where its simdgroups are the device's subgroups (its tier asks for full
+//! subgroups) and splits where they are not (lavapipe's 8-lane subgroups, which emulate them, and
+//! which no partial-threadgroups variant runs).
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The kernels are LLVM text written here
@@ -179,11 +181,11 @@ fn a_ragged_row_of_a_simdgroup_kernel_runs_flat_in_the_call_s_threadgroups() {
         device.name(),
         cases.each_ref().map(|case| case.0),
     );
-    // One flat `VkPipeline`; the split's interior and edge; the split again; one where the
-    // simdgroups are subgroups, else the split's two.
+    // One flat `VkPipeline`; the partial-threadgroups variant's one, twice; one where the
+    // simdgroups are subgroups, else the split's interior and edge.
     let sum_made = match flat_sum {
         true => 1,
         false => 2,
     };
-    assert_eq!(made, [1, 2, 2, sum_made]);
+    assert_eq!(made, [1, 1, 1, sum_made]);
 }
