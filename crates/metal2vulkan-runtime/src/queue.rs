@@ -113,6 +113,7 @@ use super::queue_share::Choice;
 use super::render::Carried;
 use super::texture::copy_images::CopyImages;
 use super::texture::kept_image::KeptImages;
+use std::any::Any;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
@@ -267,8 +268,9 @@ pub(crate) struct Slots {
     rest: OnceLock<RestWatch>,
     /// The context of the queue's next place, held while a command buffer committed here holds
     /// its slot ([`QueueGen::follow`]): released as the last of them gives its slot back. Taken
-    /// under `held`'s lock.
-    next: Mutex<Option<HeldContext>>,
+    /// under `held`'s lock. A [`HeldContext`], whose type it does not name: the contexts hold the
+    /// command buffers that hold these slots.
+    next: Mutex<Option<Box<dyn Any + Send + Sync>>>,
 }
 
 /// A command queue's context on the place a recovery gave it, held until the command buffers
@@ -331,7 +333,7 @@ impl Slots {
     fn hold_next(&self, next: HeldContext) {
         let held = self.lock();
         if held.all > held.open {
-            *lock(&self.next) = Some(next);
+            *lock(&self.next) = Some(Box::new(next));
         }
     }
 
