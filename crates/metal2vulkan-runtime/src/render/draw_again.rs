@@ -12,13 +12,14 @@
 //!   it stood, or into its pass's first instance begun inline at it (`render/inline_first.rs`:
 //!   the next draw finds the instance begun, its record holding the states the kept draw set),
 //!   through a pipeline made ahead, needing nothing before or around it of its own: no
-//!   split, stand-in, snapshot, copy, index bounds or rewrite pass, mesh or tessellation work, rate
-//!   map, color groups, extended-range color or its shadow, set 1 or handle table, root table or
-//!   push hole, barrier in its instance, read of a color its pass clears behind its load actions
-//!   (a copy cleared to the clear, `texture/attached_reads.rs`), read of input attachments ordered
-//!   between draws alone beside a color write (the next such draw records after a barrier:
-//!   `render.rs`'s `InterlockedStorage`), and no write among its uses, which each change what the
-//!   next draw meets or are work of the draw's own. Its uses are noted as the
+//!   split, stand-in, snapshot (but a reader's, below), copy, index bounds or rewrite pass, mesh or
+//!   tessellation work, rate map, color groups, extended-range color or its shadow, set 1 or
+//!   handle table, root table or push hole (but a reader's phase), barrier in its instance, read
+//!   of a color its pass clears behind its load actions (a copy cleared to the clear,
+//!   `texture/attached_reads.rs`), read of input attachments ordered between draws alone beside a
+//!   color write (the next such draw records after a barrier: `render.rs`'s
+//!   `InterlockedStorage`), and no write among its uses (but a reader's of its snapshots), which
+//!   each change what the next draw meets or are work of the draw's own. Its uses are noted as the
 //!   next draw would note them (`NotedApart`). A draw that met a notice its device announces or
 //!   refuses at every occurrence (`EachWatch`) keeps nothing: its next draw must meet it again.
 //! - **Shadowed textures gathered once.** A kept draw may use shadowed textures, a texture of its
@@ -71,20 +72,37 @@
 //!   record does not hold recorded; it takes no shortcut of a draw moved, which reads what the
 //!   encoder's last draw left. Each state's bind state is its own, though states of one function
 //!   pair share an interface, so the draw kept of one is never the other's.
-//! - **Past a reader through snapshots.** A draw that reads through snapshots
-//!   (`render/snapshot.rs`) keeps nothing. Where it records into its instance as it stood, of the
-//!   encoder's own colors, as a direct draw, and no use of it but its snapshots' writes, what it
-//!   writes is its pass's colors and its snapshots: it forgets only the kept draws set aside that
-//!   read them (`RenderLowering::forget_readers`), each that reads a color's texture through its
+//! - **A reader through snapshots** (`render/snapshot.rs`) is kept as a plain draw is
+//!   (`snapshot::KeptReader`), but for its two Vulkan draws, its phase's
+//!   push hole and its snapshots' writes, where it reads no color in place and pins none of its
+//!   colors to their images (the pass's end decides from those). Its draw again records both
+//!   draws and their barriers as its first recording did, but for the state commands, which its
+//!   command buffer holds: `B1`, the snapshot draw's masks 0 and phase 1 and its draw, then `B2`,
+//!   the drawing draw's own masks and phase 0 and its draw, inside its query where it is measured,
+//!   every snapshot draw of the Metal draw before every drawing draw. `B1` orders every color
+//!   write before it, so it reads what the draws before it wrote, as every step's reader does.
+//!   It weighs its form again as every step weighs it (`RenderLowering::weigh_snapshot`): its
+//!   identity among the pass's readers and what its texture learned it covered change with no
+//!   call (`render/coverage.rs`). Where it would take another form it takes every step
+//!   (`WorkCounts::reading_draws_snapshotted_stopped`); else it takes its identity, count and
+//!   query as every step takes them (`WorkCounts::reading_draws_snapshotted_again`). A draw
+//!   rebound of it works out again that it reads through snapshots as every step would
+//!   (`rebound.rs`).
+//! - **Past a reader through snapshots.** Where a reader records into its instance as it stood,
+//!   of the encoder's own colors, as a direct draw, and no use of it but its snapshots' writes,
+//!   what it writes is its pass's colors and its snapshots, kept or not: it forgets only the kept
+//!   draws set aside that read them (`RenderLowering::forget_aside_readers`; one that keeps
+//!   nothing forgets the last direct draw's too), each that reads a color's texture through its
 //!   copy (`Kept::through_copies`) or at levels apart from the attached ones
 //!   (`render/attached_levels.rs`), or whose uses meet a color's memory
-//!   (`render_target::shares_attachment`). No kept draw reads a snapshot: only a draw that reads
-//!   through snapshots binds one. The others stay kept under the epoch, between, so the next draw
-//!   of each is rebound (`rebound.rs`), recording every state command its instance's record does
-//!   not hold, as after a draw kept of another state. The reader's other steps add to what the
-//!   encoder holds as a kept draw's do; its barriers are inside the subpass, by region; and its
-//!   snapshots are images, so the pass's fragments still wrote no buffer bytes a stage before
-//!   them reads (`render/pass_start_reads.rs`). `tests::snapshot_reader_keeps` checks it.
+//!   (`render_target::shares_attachment`), but a kept reader through snapshots of its own, whose
+//!   next draw takes its snapshots again behind its own `B1`. Only readers bind snapshots. The
+//!   others stay kept under the epoch, between, so the next draw of each is rebound
+//!   (`rebound.rs`), recording every state command its instance's record does not hold, as after
+//!   a draw kept of another state. The reader's other steps add to what the encoder holds as a
+//!   kept draw's do; its barriers are inside the subpass, by region; and its snapshots are images,
+//!   so the pass's fragments still wrote no buffer bytes a stage before them reads
+//!   (`render/pass_start_reads.rs`). `tests::snapshot_reader_keeps` checks it.
 //! - **Of other arguments.** A draw that differs from the kept draw only in its arguments (its
 //!   call of the same primitive type, with indices or without, its vertex or index counts and
 //!   starts, its index buffer, index type or index buffer's offset, each read in place, its
@@ -269,6 +287,9 @@ pub(crate) struct Kept {
     /// The `VkPipeline` it recorded through, held while it is kept: its recording names it by
     /// handle, and a draw carried across retains it (`render/carried.rs`).
     pub(super) made: KeptPipeline,
+    /// What it repeats of its two draws, where it reads through snapshots
+    /// (`render/snapshot.rs`; the module docs).
+    pub(super) reader: Option<super::snapshot::KeptReader>,
 }
 
 /// A kept draw's `VkPipeline` ([`Kept::made`]): the same where it is the same object.
@@ -582,16 +603,27 @@ impl RenderLowering {
         self.again.epoch = Stamp::fresh();
     }
 
-    /// Forget the kept draws set aside with other pipeline states' bind states (`live`) that read
-    /// what a draw that read through snapshots, keeping nothing, wrote: its pass's colors, read
-    /// through their textures' copies, at levels apart from the attached ones, or by a use of
-    /// their memory (`render_target::shares_attachment`). No kept draw reads a snapshot. The
-    /// others stay kept under the encoder's epoch (the module docs).
+    /// Forget every kept draw set aside with other pipeline states' bind states (`live`) that
+    /// reads what a draw that read through snapshots, keeping nothing, wrote
+    /// ([`forget_aside_readers`](Self::forget_aside_readers)), and the last direct draw's.
     pub(super) fn forget_readers(&mut self, live: &mut LiveBind) -> Result<(), Error> {
         self.again.kept = None;
+        self.forget_aside_readers(live)
+    }
+
+    /// Forget the kept draws set aside with other pipeline states' bind states (`live`) that read
+    /// what a draw that read through snapshots wrote, kept or not: its pass's colors, read
+    /// through their textures' copies, at levels apart from the attached ones, or by a use of
+    /// their memory (`render_target::shares_attachment`), but where a kept draw reads them through
+    /// snapshots of its own, which its next draw takes again behind its own barrier (the module
+    /// docs). The others stay kept under the encoder's epoch.
+    pub(super) fn forget_aside_readers(&mut self, live: &mut LiveBind) -> Result<(), Error> {
         let (memo, layout) = (&mut self.attached, &self.layout);
         let version = layout.version();
         live.forget_kept_where(|kept, uses| {
+            if kept.reader.is_some() {
+                return Ok(false);
+            }
             let attached = kept.through_copies.0 || kept.reads_attached();
             Ok(attached || memo.shares((layout, version), uses)?)
         })
@@ -689,6 +721,22 @@ impl RenderLowering {
         Again::No
     }
 
+    /// What the kept draw `reader`, which reads through snapshots, weighs its form by now
+    /// (`RenderLowering::weigh_snapshot`), where it takes the snapshot again on a device of the
+    /// write mask command; else `None`, and the draw takes every step.
+    fn weigh_again(
+        &self,
+        reader: &super::snapshot::KeptReader,
+    ) -> Option<super::snapshot::Weighed> {
+        let Some(RenderStateKind::Graphics(pipeline)) = self.pipeline.as_ref().map(|p| p.kind())
+        else {
+            return None;
+        };
+        self.core.device().shared().color_write_masks?;
+        let weighed = self.weigh_snapshot(pipeline, reader.feedback);
+        weighed.within.then_some(weighed)
+    }
+
     /// The stamps of the encoder's vertex, fragment, object and mesh tables.
     pub(super) fn table_stamps(&self) -> [Stamp; 4] {
         [&self.vertex, &self.fragment, &self.object, &self.mesh].map(|table| table.stamp())
@@ -774,6 +822,19 @@ impl RenderLowering {
                 }
             };
         }
+        // A reader through snapshots weighs its form again, as every step does: its identity
+        // among the pass's readers and what its texture learned it covered change with no call
+        // (`render/coverage.rs`). Where it would take another form, it takes every step.
+        let weighed = match &kept.reader {
+            Some(reader) => match self.weigh_again(reader) {
+                Some(weighed) => Some(weighed),
+                None => {
+                    self.core.counts().draw_reader_stopped();
+                    return Again::No;
+                }
+            },
+            None => None,
+        };
         #[cfg(debug_assertions)]
         {
             let hits = self.again.hits;
@@ -784,8 +845,25 @@ impl RenderLowering {
                 return Again::Check;
             }
         }
+        // Its identity, count and query taken, as every step takes them.
+        let query = match weighed.map(|weighed| self.take_weighed(weighed)) {
+            Some(Ok(query)) => query,
+            Some(Err(refused)) => return Again::Refused(refused),
+            None => None,
+        };
+        let Some(kept) = self.again.kept.as_ref() else {
+            return Again::No;
+        };
         let counts = self.core.counts();
         counts.draw_drawn_again((kept.pushes_set_zero, kept.last_vertex));
+        if kept.reader.is_some() {
+            counts.reading_draw_again();
+            let shared = &self.core.device().shared().counts;
+            shared.reading_draw_snapshotted();
+            if query.is_some() {
+                shared.coverage_query();
+            }
+        }
         if kept.through_copies.0 {
             counts.attachment_read_through_copy();
         }
@@ -803,9 +881,24 @@ impl RenderLowering {
         // buffer completes (retained as the kept draw recorded); the command buffer's state is
         // the kept draw's, as no call came and no draw recorded since (`render/bound.rs`).
         unsafe {
-            let raw = self.core.device().shared().vk();
-            // A kept draw is a whole draw's (`DrawStates::Whole`), of no regions.
-            super::record_draw_command(raw, kept.command_buffer, kept.command, None, (None, None));
+            let shared = self.core.device().shared();
+            let raw = shared.vk();
+            match (&kept.reader, shared.color_write_masks) {
+                // Its snapshot's two draws and their barriers, the drawing one inside its query
+                // (`render/snapshot.rs`): the device has the write mask command, as the kept
+                // draw's reads through snapshots took it (`weigh_again`).
+                (Some(reader), Some(masks)) => {
+                    reader.record_again(raw, masks, kept.command_buffer, kept.command, query);
+                }
+                // A kept draw is a whole draw's (`DrawStates::Whole`), of no regions.
+                _ => super::record_draw_command(
+                    raw,
+                    kept.command_buffer,
+                    kept.command,
+                    None,
+                    (None, None),
+                ),
+            }
         }
         if let Some(execution) = &kept.execution {
             let pipeline = execution.pipeline.clone();

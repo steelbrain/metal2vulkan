@@ -1,7 +1,7 @@
-//! A reader through snapshots (`render/snapshot.rs`) keeps nothing, and forgets only the kept
-//! draws that read what it wrote, its pass's colors and its snapshots (`render/draw_again.rs`,
-//! past a reader through snapshots): a kept draw of another pipeline state that reads none of it
-//! stays kept, and its next draw is rebound; one that reads the reader's color is forgotten.
+//! A reader through snapshots (`render/snapshot.rs`) is kept, and forgets only the kept draws
+//! that read what it wrote, its pass's colors and its snapshots (`render/draw_again.rs`, past a
+//! reader through snapshots): a kept draw of another pipeline state that reads none of it stays
+//! kept, and its next draw is rebound; one that reads the reader's color is forgotten.
 //!
 //! One pass over a [`SIDE`]-square private `BGRA8Unorm` target, loaded and stored, which a copy
 //! before it fills with [`CLEARED`] but [`PRE`] over [`SAMPLED`], with no scissor, draws in turn:
@@ -13,8 +13,8 @@
 //! 3. the sampler (`tob_sample`: each fragment samples the target's texture at its own position)
 //!    over [`SAMPLED`], which reads the texture's copy from before its instance and is kept: a
 //!    kept draw that reads the reader's color;
-//! 4. the reader over [`SECOND_READ`], in its instance as it stood: it forgets the sampler's kept
-//!    draw and keeps the fill's;
+//! 4. the reader over [`SECOND_READ`], in its instance as it stood: its kept draw rebound; it
+//!    forgets the sampler's kept draw and keeps the fill's;
 //! 5. the fill: its kept draw past the reader, rebound;
 //! 6. the sampler: forgotten, it takes every step and is kept again;
 //! 7. the fill: rebound after the sampler's draw.
@@ -26,10 +26,11 @@
 //! [`SAMPLED`], the texels from before the pass the sampler reads; [`CLEARED`] elsewhere, the
 //! readers writing back the texels they read, which no draw before them wrote. On a device that
 //! takes the snapshot path, both readers read through snapshots, and of the first frame's draws
-//! five find nothing kept (the first four and the sampler's second) where the second frame's seven
-//! do; the fill's two draws after the reader are rebound, each taking every step instead in
-//! builds with debug assertions and checking that the rebind worked out what every step works out
-//! (`rebound.rs`). A device without the path reads through copies, which keeps the readers.
+//! four find nothing kept (the first three and the sampler's second) where the second frame's
+//! seven do, and none keeps nothing; the reader's second draw and the fill's two draws after it
+//! are rebound. In builds with debug assertions, the reader's and the fill's last take every step
+//! instead, each the first after a draw kept, checking that the rebind worked out what every step
+//! works out (`rebound.rs`). A device without the path reads through copies.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_rect`,
@@ -51,10 +52,10 @@ use std::time::{Duration, Instant};
 
 /// The target's side, in pixels: through the whole target's scissor, a reader of a 4-byte color
 /// takes the snapshot by the area rule.
-const SIDE: u64 = 1024;
+pub(super) const SIDE: u64 = 1024;
 
 /// The target's format.
-const FORMAT: PixelFormat = PixelFormat::BGRA8Unorm;
+pub(super) const FORMAT: PixelFormat = PixelFormat::BGRA8Unorm;
 
 /// The rectangles the draws cover, `[x0, y0, x1, y1]`: the readers', apart from every other.
 const FIRST_READ: [u64; 4] = [600, 600, 664, 664];
@@ -69,6 +70,15 @@ const FILLED: u8 = 90;
 
 /// The state of `tob_rect` and `tob_renders.ll`'s `fragment`, into a color of [`FORMAT`].
 fn state(device: &Device, fragment: &str) -> RenderPipelineState {
+    state_into(device, fragment, ColorAttachmentDescriptor::new(FORMAT))
+}
+
+/// The state of `tob_rect` and `tob_renders.ll`'s `fragment`, into the color `color`.
+pub(super) fn state_into(
+    device: &Device,
+    fragment: &str,
+    color: ColorAttachmentDescriptor,
+) -> RenderPipelineState {
     let function = |name: &str| {
         let function = library(device, "engine/tob_renders.ll")
             .new_function_with_name(name)
@@ -77,7 +87,7 @@ fn state(device: &Device, fragment: &str) -> RenderPipelineState {
     };
     let mut descriptor = RenderPipelineDescriptor::new(function("tob_rect"));
     descriptor.fragment = Some(function(fragment));
-    descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(FORMAT));
+    descriptor.color_attachments[0] = Some(color);
     device
         .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
         .unwrap()
@@ -91,7 +101,7 @@ struct States {
 }
 
 /// A private [`FORMAT`] render target that shaders read.
-fn target(device: &Device) -> Texture {
+pub(super) fn target(device: &Device) -> Texture {
     let mut descriptor = TextureDescriptor::texture_2d(FORMAT, SIDE, SIDE, false);
     descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
     descriptor.resource_options = ResourceOptions::private();
@@ -99,14 +109,14 @@ fn target(device: &Device) -> Texture {
 }
 
 /// The corners, in normalized device coordinates, of the target's pixels `[x0, x1) x [y0, y1)`.
-fn corners([x0, y0, x1, y1]: [u64; 4]) -> Vec<u8> {
+pub(super) fn corners([x0, y0, x1, y1]: [u64; 4]) -> Vec<u8> {
     let x = |p: u64| p as f32 / SIDE as f32 * 2.0 - 1.0;
     let y = |p: u64| 1.0 - p as f32 / SIDE as f32 * 2.0;
     bytes_of(&[x(x0), y(y1), x(x1), y(y0)], f32::to_le_bytes)
 }
 
 /// Whether `rect` holds pixel `(x, y)`.
-fn holds([x0, y0, x1, y1]: [u64; 4], (x, y): (u64, u64)) -> bool {
+pub(super) fn holds([x0, y0, x1, y1]: [u64; 4], (x, y): (u64, u64)) -> bool {
     (x0..x1).contains(&x) && (y0..y1).contains(&y)
 }
 
@@ -133,13 +143,18 @@ fn after_reds() -> Vec<u8> {
 
 /// Fill `target` with [`before_reds`], a command buffer of its own, completed.
 fn fill_before(queue: &CommandQueue, target: &Texture) {
-    let row = SIDE * 4;
     // `BGRA8Unorm`'s red is its third byte.
     let texels: Vec<u8> = (before_reds().into_iter())
         .flat_map(|red| [0, 0, red, 255])
         .collect();
+    upload(queue, target, &texels);
+}
+
+/// Fill `target` with `texels`, by row, a command buffer of its own, completed.
+pub(super) fn upload(queue: &CommandQueue, target: &Texture, texels: &[u8]) {
+    let row = SIDE * 4;
     let source = (queue.device())
-        .new_buffer_with_bytes(&texels, ResourceOptions::shared())
+        .new_buffer_with_bytes(texels, ResourceOptions::shared())
         .unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
@@ -164,6 +179,12 @@ fn fill_before(queue: &CommandQueue, target: &Texture) {
 
 /// The red of each of `texture`'s pixels, by row.
 fn reds(queue: &CommandQueue, texture: &Texture) -> Vec<u8> {
+    let texels = download(queue, texture);
+    texels.chunks(4).map(|texel| texel[2]).collect()
+}
+
+/// The bytes of each of `texture`'s pixels, by row.
+pub(super) fn download(queue: &CommandQueue, texture: &Texture) -> Vec<u8> {
     let row = SIDE * 4;
     let back = (queue.device())
         .new_buffer(SIDE * row, ResourceOptions::shared())
@@ -186,8 +207,7 @@ fn reds(queue: &CommandQueue, texture: &Texture) -> Vec<u8> {
     blit.end_encoding().unwrap();
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
-    let texels = super::merge_scratch::read(&back, SIDE * row);
-    texels.chunks(4).map(|texel| texel[2]).collect()
+    super::merge_scratch::read(&back, SIDE * row)
 }
 
 /// The frame over a new target (the module docs), each draw but the first after a call that keeps
@@ -268,7 +288,7 @@ fn moved((before, after): &(WorkCounts, WorkCounts)) -> Keeps {
 }
 
 /// Wait until the device's pipeline pool makes nothing.
-fn settled(device: &Device) {
+pub(super) fn settled(device: &Device) {
     let until = Instant::now() + WAIT;
     while device.work_counts().pipeline_pool_busy != 0 {
         assert!(Instant::now() < until, "the pipeline pool still busy");
@@ -312,17 +332,18 @@ fn a_reader_through_snapshots_forgets_only_the_kept_draws_that_read_its_color() 
         assert_eq!(kept.snapshotted, 0, "the readers through snapshots");
         return;
     }
-    // Five draws find nothing kept: the first four, and the sampler's second, which the second
-    // reader forgot. The fill's two draws after the reader are rebound, or in builds with debug
-    // assertions take every step to check the rebind (each the first after a draw kept).
+    // Four draws find nothing kept: the first three, and the sampler's second, which the second
+    // reader forgot. The second reader and the fill's two draws after it are rebound, or in builds
+    // with debug assertions the reader and the fill's last take every step to check the rebind
+    // (each the first after a draw kept).
     let debug = cfg!(debug_assertions);
     let want = Keeps {
         snapshotted: 2,
-        none_kept: 5,
-        rebound: u64::from(!debug) * 2,
+        none_kept: 4,
+        rebound: if debug { 1 } else { 3 },
         stopped: 0,
         unlike: 0,
-        unkept: 2,
+        unkept: 0,
     };
     assert_eq!(kept, want, "the kept frame's keeps on {}", device.name());
     let apart_want = Keeps {
@@ -331,7 +352,7 @@ fn a_reader_through_snapshots_forgets_only_the_kept_draws_that_read_its_color() 
         rebound: 0,
         stopped: 0,
         unlike: 0,
-        unkept: 2,
+        unkept: 0,
     };
     assert_eq!(
         apart,

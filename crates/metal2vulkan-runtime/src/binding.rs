@@ -674,6 +674,20 @@ pub(super) fn rebind_into(
                 }
                 false
             }
+            // A fragment texture slot read through a snapshot binds its snapshot beside its
+            // texture (`render/snapshot.rs`): the changed texture's, through the tables'
+            // snapshots.
+            &WriteSource::SnapshotTexels { slot } => {
+                let slot = SlotRef {
+                    stage: Stage::Fragment,
+                    class: SlotClass::Texture,
+                    index: slot,
+                };
+                if !changed(&slot) {
+                    continue;
+                }
+                false
+            }
             WriteSource::CombinedImageSampler { image, sampler } => {
                 let image = match image {
                     ImageSource::Texture { slot, .. } => changed(slot),

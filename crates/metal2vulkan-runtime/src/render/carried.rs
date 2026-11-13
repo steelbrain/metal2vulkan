@@ -85,6 +85,17 @@
 //!   begins it (`render/inline_first.rs`), where no draw before it began it. What it compares at
 //!   a draw again is the encoder's: the command buffer its instance records into, and what it
 //!   read that changes with no call (`Under`), as of the opening.
+//! - **A reader through snapshots** (`render/snapshot.rs`) carries as any kept draw: same pass
+//!   shape and layers, residency, sampler slots and no-copy moves, the feedback loop layout being
+//!   no part of the shape (pipelines and passes are compatible whatever their colors' layouts).
+//!   What its snapshots need is of the slots the next encoder binds after its opening: its first
+//!   draw there, rebound (`rebound.rs`), works out again that it reads through snapshots of the
+//!   same slots and colors, pinning none, through the kept plan, and that the snapshot is its
+//!   form; it begins the pass's first instance in its secondary, with its colors in the feedback
+//!   loop layout from its begin, where no draw before it began that instance, else records into
+//!   that instance where it holds them so; and it binds the snapshots of the textures that
+//!   encoder bound. Where any of those does not hold, that draw takes every step
+//!   (`WorkCounts::draws_carry_stopped_snapshot`); the carry's other draws are rebound still.
 //! - **None kept.** An encoder that drew but ended with no kept draw carries nothing, and counts
 //!   what a kept draw of it would have come to (`WorkCounts::encoders_none_kept_next_*`): where
 //!   its end is not one a kept draw carries from (`carry_ends`), the first reason, a split or

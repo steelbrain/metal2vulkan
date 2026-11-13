@@ -120,7 +120,7 @@
 //!   commit where it may, noted at its reader's draw, `texture/storage_form.rs`) or which the draw
 //!   pins (below), no two of the colors of one image (whose
 //!   snapshot is one); the draw costs no more so than the split would
-//!   (`RenderCommandEncoder::snapshot_cheaper`: at any area where every such color is a texture
+//!   (`RenderCommandEncoder::weigh_snapshot`: at any area where every such color is a texture
 //!   whose image lies over its buffer's bytes, `RenderCommandEncoder::over_bytes`; else by the
 //!   rule below); the binder keeps every such slot (in a pass with no depth or stencil
 //!   attachment, on a device that also enabled
@@ -186,9 +186,16 @@
 //!   alone, and no run of passes takes the pass (`pass_runs.rs`). Once a stand-in or the hidden
 //!   depth and stencil arrived after a pin, no later draw pins (`RenderLowering::pins_frozen`):
 //!   its reader splits.
+//! - **Kept.** A reader that records into its instance as it stood, pinning no color, is kept to
+//!   draw again, rebound and carried into the next render encoder (`render/draw_again.rs`,
+//!   `render/carried.rs`), as a plain draw is, with its two draws ([`KeptReader`]): each draw of
+//!   it records both and their barriers, weighs its form again as every step weighs it, and takes
+//!   its identity, count and query as every step does.
 //! - **Counted**: `WorkCounts::reading_draws_snapshotted`, and of them
-//!   `WorkCounts::snapshot_inline_splits` and `WorkCounts::reading_draws_pinned`; the passes whose
-//!   stand-ins arrived after a pin, `WorkCounts::stand_ins_after_pins`; each draw at its own pixels
+//!   `WorkCounts::snapshot_inline_splits`, `WorkCounts::reading_draws_pinned` and
+//!   `WorkCounts::reading_draws_snapshotted_again` (those recorded as a kept draw); the draws of a
+//!   kept reader that took every step, `WorkCounts::reading_draws_snapshotted_stopped`; the
+//!   passes whose stand-ins arrived after a pin, `WorkCounts::stand_ins_after_pins`; each draw at its own pixels
 //!   that took the split, by the check that took it (`SplitReason`,
 //!   `WorkCounts::reading_draws_split_*`), a function whose read no snapshot serves among them. With `METAL2VULKAN_LOG_PIPELINES` set,
 //!   the first draw of each reason a draw took the split says so, once per device
@@ -230,6 +237,122 @@ pub(super) struct Wanted {
     /// Else it reads the copy taken before the pass (`texture/attached_reads.rs`), and gives up
     /// its snapshots counted under no split reason.
     pub(super) split_otherwise: bool,
+}
+
+/// Why a draw asks to read through no snapshot ([`RenderLowering::snapshot_wanted_or`]), which
+/// [`RenderLowering::snapshot_wanted`] counts.
+pub(super) enum NotWanted {
+    /// Nothing to count: it reads no attachment so, or it is recorded from an execution's
+    /// commands or again into another instance.
+    Quiet,
+    /// A check took the split where `split` (`Wanted::split_otherwise`), else the copy, for
+    /// `reason`.
+    Check { split: bool, reason: SplitReason },
+    /// After a barrier, its function reads at its own pixels slots no snapshot serves, left out by
+    /// these clauses (`StageModule::snapshot_refusals`).
+    Unreadable(Unreadable),
+}
+
+/// What weighs a reader's form ([`RenderLowering::weigh_snapshot`]), worked out with nothing
+/// taken or counted: whether it takes the snapshot; its identity, by the identity of the
+/// reader it would be (`coverage::Readers::peek_key`), and its first color's texture, where the
+/// device may measure it (none over a buffer's bytes); the pixels that texture learned it
+/// covered; and its sizes for the readers' log (`reader_sizes.rs`).
+#[derive(Clone)]
+pub(super) struct Weighed {
+    pub(super) within: bool,
+    reader: Option<(super::coverage::ReaderKey, Texture)>,
+    learned: Option<u64>,
+    sizes: (u64, u64, u64),
+}
+
+/// What a kept draw that reads through snapshots repeats of its two draws (the module docs; the
+/// kept draw, `render/draw_again.rs`): the slots and colors it reads so, its phase's push
+/// constant, the pipeline's own write mask of each color blend element, and its pipeline layout,
+/// which the phase is pushed through. Its draw again records both draws and their barriers as its
+/// first recording did; a draw rebound records them through its kept recording.
+#[derive(Clone, PartialEq)]
+pub(crate) struct KeptReader {
+    pub(super) slots: BTreeSet<u32>,
+    pub(super) feedback: Feedback,
+    hole: (vk::ShaderStageFlags, u32),
+    own: Vec<vk::ColorComponentFlags>,
+    layout: vk::PipelineLayout,
+}
+
+impl KeptReader {
+    /// The reader of `wanted` whose two draws take `steps`, through a pipeline of `layout`.
+    pub(super) fn new(wanted: &Wanted, steps: &PairSteps, layout: vk::PipelineLayout) -> Self {
+        KeptReader {
+            slots: wanted.slots.clone(),
+            feedback: wanted.feedback,
+            hole: steps.hole,
+            own: steps.own.clone(),
+            layout,
+        }
+    }
+
+    /// Whether `wanted` asks to read what it reads: the same slots and colors, pinning none.
+    pub(super) fn reads_as(&self, wanted: &Wanted) -> bool {
+        !wanted.in_place
+            && wanted.pins == 0
+            && wanted.slots == self.slots
+            && wanted.feedback == self.feedback
+    }
+
+    /// Its two recordings' parts, through the device's write mask command `masks`: the snapshot
+    /// draw's, then the drawing draw's, each its phase's first.
+    pub(super) fn pairs(&self, masks: ColorWriteMasks) -> [Pair; 2] {
+        let steps = PairSteps {
+            hole: self.hole,
+            masks,
+            own: self.own.clone(),
+        };
+        [Phase::Snapshot, Phase::Drawing].map(|phase| Pair {
+            phase,
+            first: true,
+            steps: Some(steps.clone()),
+        })
+    }
+
+    /// Record its draw again, `command` twice, into `command_buffer` as its first recording
+    /// recorded it but for the state commands, which the command buffer holds as it left them:
+    /// `B1`, the snapshot draw's masks and phase and its draw, then, inside `query` where it is
+    /// measured, `B2`, the drawing draw's masks and phase and its draw.
+    ///
+    /// # Safety
+    ///
+    /// As [`Pair::record`]: the kept draw recorded `command` into `command_buffer`, which records
+    /// the same render pass instance and holds the kept draw's pipeline and states; `query` is the
+    /// pass's own, reset on the host and begun nowhere else, with no other occlusion query active.
+    pub(super) unsafe fn record_again(
+        &self,
+        raw: &ash::Device,
+        masks: ColorWriteMasks,
+        command_buffer: vk::CommandBuffer,
+        command: metal2vulkan::vk::DrawCommand,
+        query: Option<(vk::QueryPool, u32)>,
+    ) {
+        for pair in self.pairs(masks) {
+            let counted = query.filter(|_| pair.phase == Phase::Drawing);
+            // SAFETY: the caller's contract.
+            unsafe {
+                if let Some((pool, query)) = counted {
+                    raw.cmd_begin_query(
+                        command_buffer,
+                        pool,
+                        query,
+                        vk::QueryControlFlags::PRECISE,
+                    );
+                }
+                pair.record(raw, command_buffer, self.layout);
+                super::record_draw_command(raw, command_buffer, command, None, (None, None));
+                if let Some((pool, query)) = counted {
+                    raw.cmd_end_query(command_buffer, pool, query);
+                }
+            }
+        }
+    }
 }
 
 /// The form `plan` keeps fragment texture slot `slot`'s snapshot in
@@ -463,19 +586,40 @@ impl RenderLowering {
         pipeline: &DrawingState,
         reformats: &[Reformat],
     ) -> Option<Wanted> {
+        match self.snapshot_wanted_or(pipeline, reformats) {
+            Ok(wanted) => Some(wanted),
+            Err(NotWanted::Quiet) => None,
+            Err(NotWanted::Check { split, reason }) => self.fallback_if(split, reason),
+            Err(NotWanted::Unreadable(clauses)) => {
+                unreadable_own_pixel(self.core.device(), clauses);
+                None
+            }
+        }
+    }
+
+    /// [`snapshot_wanted`](Self::snapshot_wanted)'s answer, with nothing counted or said: the
+    /// draw's wish, else why it has none ([`NotWanted`]). A kept draw that reads through
+    /// snapshots asks it again at its next draw (`render/draw_again.rs`), which takes every step,
+    /// counted as every step counts it, where the answer is another.
+    pub(super) fn snapshot_wanted_or(
+        &self,
+        pipeline: &DrawingState,
+        reformats: &[Reformat],
+    ) -> Result<Wanted, NotWanted> {
         // With a barrier before it or not: a draw that reads with none reads what the draws
         // before it wrote, as with one (`docs/API.md`'s accepted differences), where it would
         // read the copy taken before the pass, the texels from before it.
         let ordered = self.current.barriers || self.barrier;
         if self.replaying || self.rerouting {
-            return None;
+            return Err(NotWanted::Quiet);
         }
         let mut split = ordered;
         let base = pipeline.base();
         let fragment = base
             .stages
             .iter()
-            .find(|m| m.stage == metal2vulkan::vk::ShaderStage::FRAGMENT)?;
+            .find(|m| m.stage == metal2vulkan::vk::ShaderStage::FRAGMENT)
+            .ok_or(NotWanted::Quiet)?;
         let mut wanted = Wanted::default();
         for &slot in &fragment.snapshot_textures {
             let Some(texture) = self.fragment.textures.get(&slot) else {
@@ -491,7 +635,7 @@ impl RenderLowering {
                     true => SplitReason::DeviceLacks,
                     false => SplitReason::NotInPlace,
                 };
-                return self.fallback_if(split, reason);
+                return Err(NotWanted::Check { split, reason });
             };
             wanted.slots.insert(slot);
             wanted.feedback.0 |= 1 << index;
@@ -510,22 +654,22 @@ impl RenderLowering {
                 let clauses = (fragment.snapshot_refusals.iter())
                     .filter(|(slot, _)| unreadable(slot))
                     .fold(Unreadable::default(), |set, &(_, why)| set.with(why));
-                unreadable_own_pixel(self.core.device(), clauses);
+                return Err(NotWanted::Unreadable(clauses));
             }
-            return None;
+            return Err(NotWanted::Quiet);
         }
         wanted.split_otherwise = split;
         let device = self.core.device();
+        let check = |reason| NotWanted::Check { split, reason };
         if device.shared().color_write_masks.is_none() {
-            return self.fallback_if(split, SplitReason::DeviceLacks);
+            return Err(check(SplitReason::DeviceLacks));
         }
         if self.visibility.active() {
-            return self.fallback_if(split, SplitReason::VisibilityQuery);
+            return Err(check(SplitReason::VisibilityQuery));
         }
-        if let Err(reason) = self.in_instance(pipeline, reformats, &mut wanted) {
-            return self.fallback_if(split, reason);
-        }
-        Some(wanted)
+        self.in_instance(pipeline, reformats, &mut wanted)
+            .map_err(check)?;
+        Ok(wanted)
     }
 
     /// What a draw of `pipeline` (its state's base) through `reformats` and `settings` reads in
@@ -656,7 +800,7 @@ impl RenderLowering {
 
     /// Whether the draw of `pipeline` that asks to read the pass's colors through snapshots as
     /// `wanted` ([`snapshot_wanted`](Self::snapshot_wanted)) takes them: where it costs no more
-    /// than the split ([`snapshot_cheaper`](Self::snapshot_cheaper)), weighed at what the reader
+    /// than the split ([`weigh_snapshot`](Self::weigh_snapshot)), weighed at what the reader
     /// covered in the latest pass that measured it, where one did, else by the area rule; and,
     /// where the device measures readers, the query of the pass's its drawing commands record
     /// inside, whose count its texture keeps as the pass completes (`render/coverage.rs`). `None`
@@ -671,35 +815,9 @@ impl RenderLowering {
         if wanted.in_place {
             return Ok((Some(wanted), None));
         }
-        let colors: Vec<usize> = (0..self.layout.colors.len())
-            .filter(|&i| wanted.feedback.has(i))
-            .collect();
-        let first = colors
-            .first()
-            .and_then(|&index| self.layout.colors.get(index)?.as_ref())
-            .map(|color| color.target.texture.clone());
-        // A reader over a buffer's bytes takes the snapshot at any area: nothing to learn.
-        let reader = match first {
-            Some(texture) if !self.over_bytes(&colors) => {
-                Some((self.readers.next_key(pipeline.address(), &texture), texture))
-            }
-            _ => None,
-        };
-        let learned = reader
-            .as_ref()
-            .and_then(|(key, texture)| texture.learned_coverage(*key));
-        if learned.is_some() {
-            self.core
-                .device()
-                .shared()
-                .counts
-                .reading_draw_by_coverage();
-        }
-        let within = self.snapshot_cheaper(pipeline, &colors, learned);
-        let query = match reader {
-            Some((key, texture)) => self.readers.measure(self.core.device(), &texture, key)?,
-            None => None,
-        };
+        let weighed = self.weigh_snapshot(pipeline, wanted.feedback);
+        let (within, learned) = (weighed.within, weighed.learned);
+        let query = self.take_weighed(weighed)?;
         let split = wanted.split_otherwise;
         let wanted = match (within, learned) {
             (true, _) => Some(wanted),
@@ -707,6 +825,84 @@ impl RenderLowering {
             (false, None) => self.fallback_if(split, SplitReason::Area),
         };
         Ok((wanted, query))
+    }
+
+    /// Weigh the form of the draw of `pipeline` that asks to read the pass's colors `feedback`
+    /// through snapshots ([`Weighed`]), taking nothing: the snapshot where it costs no more
+    /// than the split would, at any area over a buffer's bytes
+    /// ([`over_bytes`](Self::over_bytes)); else, where the reader covered some pixels in the
+    /// latest pass that measured it, by what the snapshot draw costs over them
+    /// (`coverage::snapshot_covers`); else by the area rule ([`snapshot_within`]) over
+    /// [`snapshot_weights`](Self::snapshot_weights). A reader over a buffer's bytes has nothing
+    /// to learn, so it is no measured reader.
+    pub(super) fn weigh_snapshot(&self, pipeline: &DrawingState, feedback: Feedback) -> Weighed {
+        let colors: Vec<usize> = (0..self.layout.colors.len())
+            .filter(|&i| feedback.has(i))
+            .collect();
+        let over_bytes = self.over_bytes(&colors);
+        let first = colors
+            .first()
+            .and_then(|&index| self.layout.colors.get(index)?.as_ref())
+            .map(|color| color.target.texture.clone());
+        let reader = match first {
+            Some(texture) if !over_bytes => {
+                Some((self.readers.peek_key(pipeline.address(), &texture), texture))
+            }
+            _ => None,
+        };
+        let learned = reader
+            .as_ref()
+            .and_then(|(key, texture)| texture.learned_coverage(*key));
+        let (covered, pixels, bytes, copied) = self.snapshot_weights(pipeline, &colors);
+        let within = over_bytes
+            || match learned {
+                Some(drawn) => super::coverage::snapshot_covers(
+                    drawn.saturating_mul(colors.len() as u64),
+                    copied,
+                ),
+                None => snapshot_within(covered, copied),
+            };
+        Weighed {
+            within,
+            reader,
+            learned,
+            sizes: (covered, pixels, bytes),
+        }
+    }
+
+    /// Take what `weighed` weighed of a reader that records now, whichever form it takes: its
+    /// identity (`coverage::Readers::take_key`), its count where it was weighed by what it
+    /// covered (`WorkCounts::reading_draws_by_coverage`), its size where
+    /// `METAL2VULKAN_LOG_PIPELINES` is set (`reader_sizes.rs`), and, where the device measures
+    /// readers, the query its drawing commands record inside (`render/coverage.rs`).
+    pub(super) fn take_weighed(
+        &mut self,
+        weighed: Weighed,
+    ) -> Result<Option<(vk::QueryPool, u32)>, crate::Error> {
+        let Weighed {
+            within,
+            reader,
+            learned,
+            sizes: (covered, pixels, bytes),
+        } = weighed;
+        if let Some((key, texture)) = &reader {
+            self.readers.take_key(*key, texture);
+        }
+        let device = self.core.device();
+        if learned.is_some() {
+            device.shared().counts.reading_draw_by_coverage();
+        }
+        if crate::pipeline::creation_log_enabled() {
+            let line = crate::device::lock(&device.shared().reader_sizes)
+                .add(covered, pixels, bytes, within);
+            if let Some(line) = line {
+                device.inform("metal2vulkan-snapshot-readers", line);
+            }
+        }
+        match reader {
+            Some((key, texture)) => self.readers.measure(self.core.device(), &texture, key),
+            None => Ok(None),
+        }
     }
 
     /// Whether the draw of `pipeline` reads the pass's color `index`, whose own image a later
@@ -745,39 +941,6 @@ impl RenderLowering {
             && graphics.input_attachments.is_empty()
             && !self.state.needs_hidden(depth, stencil)
             && !crate::render_pass::not_2d(&color.target)
-    }
-
-    /// Whether a draw of `pipeline` that reads the pass's `colors` through snapshots costs no
-    /// more than the split would: at any area over a buffer's bytes
-    /// ([`over_bytes`](Self::over_bytes)); else, where the reader covered `learned` pixels in the
-    /// latest pass that measured it, by what the snapshot draw costs over them
-    /// (`coverage::snapshot_covers`); else by the area rule ([`snapshot_within`]) over
-    /// [`snapshot_weights`](Self::snapshot_weights); counted by its size where
-    /// `METAL2VULKAN_LOG_PIPELINES` is set (`reader_sizes.rs`).
-    fn snapshot_cheaper(
-        &self,
-        pipeline: &DrawingState,
-        colors: &[usize],
-        learned: Option<u64>,
-    ) -> bool {
-        let (covered, pixels, bytes, copied) = self.snapshot_weights(pipeline, colors);
-        let within = self.over_bytes(colors)
-            || match learned {
-                Some(drawn) => super::coverage::snapshot_covers(
-                    drawn.saturating_mul(colors.len() as u64),
-                    copied,
-                ),
-                None => snapshot_within(covered, copied),
-            };
-        if crate::pipeline::creation_log_enabled() {
-            let device = self.core.device();
-            let line = crate::device::lock(&device.shared().reader_sizes)
-                .add(covered, pixels, bytes, within);
-            if let Some(line) = line {
-                device.inform("metal2vulkan-snapshot-readers", line);
-            }
-        }
-        within
     }
 
     /// Whether every one of the pass's `colors` renders a texture over its buffer's bytes

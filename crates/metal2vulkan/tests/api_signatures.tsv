@@ -2849,6 +2849,7 @@ field	metal2vulkan-runtime::WorkCounts.draws_as_before	pub draws_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.draws_carry_stopped	pub draws_carry_stopped: u64
 field	metal2vulkan-runtime::WorkCounts.draws_carry_stopped_attached	pub draws_carry_stopped_attached: u64
 field	metal2vulkan-runtime::WorkCounts.draws_carry_stopped_other	pub draws_carry_stopped_other: u64
+field	metal2vulkan-runtime::WorkCounts.draws_carry_stopped_snapshot	pub draws_carry_stopped_snapshot: u64
 field	metal2vulkan-runtime::WorkCounts.draws_carry_stopped_stale	pub draws_carry_stopped_stale: u64
 field	metal2vulkan-runtime::WorkCounts.draws_counted_past_early_masks	pub draws_counted_past_early_masks: u64
 field	metal2vulkan-runtime::WorkCounts.draws_dropped_unmade	pub draws_dropped_unmade: u64
@@ -3308,6 +3309,8 @@ field	metal2vulkan-runtime::WorkCounts.reading_draws_by_coverage	pub reading_dra
 field	metal2vulkan-runtime::WorkCounts.reading_draws_in_place	pub reading_draws_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_pinned	pub reading_draws_pinned: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_snapshotted	pub reading_draws_snapshotted: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_snapshotted_again	pub reading_draws_snapshotted_again: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_snapshotted_stopped	pub reading_draws_snapshotted_stopped: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_area	pub reading_draws_split_area: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_coverage	pub reading_draws_split_coverage: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_device_lacks	pub reading_draws_split_device_lacks: u64

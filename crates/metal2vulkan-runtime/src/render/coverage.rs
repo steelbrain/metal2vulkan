@@ -148,6 +148,24 @@ impl Readers {
         ReaderKey { state, ordinal }
     }
 
+    /// The identity [`next_key`](Self::next_key) would give the draw of the state at `state`
+    /// reading `texture`, taking none: what a kept reader weighs its form by before it records
+    /// (`render/draw_again.rs`).
+    pub(super) fn peek_key(&self, state: usize, texture: &Texture) -> ReaderKey {
+        let pair = (state, texture.root_address());
+        let ordinal = (self.0.as_ref())
+            .and_then(|readers| readers.ordinals.iter().find(|(p, _)| *p == pair))
+            .map_or(0, |&(_, next)| next);
+        ReaderKey { state, ordinal }
+    }
+
+    /// Take `key`, which [`peek_key`](Self::peek_key) gave for a reader of `texture` that now
+    /// records, as [`next_key`](Self::next_key) takes it.
+    pub(super) fn take_key(&mut self, key: ReaderKey, texture: &Texture) {
+        let taken = self.next_key(key.state, texture);
+        debug_assert_eq!(taken, key, "a reader took another identity than it peeked");
+    }
+
     /// Measure the reader `key` of `texture` where `device` measures readers and the pass
     /// measured fewer than [`MEASURED`]: the query its drawing commands record inside, the next of
     /// the device's pool ([`SparePools::take`]). `None` where it is not measured.

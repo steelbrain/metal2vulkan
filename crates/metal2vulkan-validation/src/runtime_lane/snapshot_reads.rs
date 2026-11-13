@@ -58,7 +58,7 @@
 //!   (`WorkCounts::feedback_loop_alias_images`), with the storage usage the snapshot's fetch reads
 //!   through, which one over host pages takes where the check passed for a shader's writes there
 //!   (`Pointer writes: Passed`), as
-//!   `RenderCommandEncoder::snapshot_cheaper` weighs no area for either; else a split.
+//!   `RenderCommandEncoder::weigh_snapshot` weighs no area for either; else a split.
 //! - [`each_form_reads_what_the_split_reads`]: the first test's draws over a target of each of
 //!   `RGBA8Unorm`, `BGRA8Unorm`, `R8Unorm`, `RG8Unorm` (8-bit codes), `RGBA16Float` (half-float
 //!   codes) and `RGB10A2Unorm` (bits): the bytes the split leaves, byte for byte, with a snapshot

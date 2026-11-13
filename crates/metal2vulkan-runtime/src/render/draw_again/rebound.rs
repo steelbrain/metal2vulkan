@@ -127,10 +127,28 @@
 //!   otherwise), and keeps them for the encoder's next draw rebound to compare with. It begins its
 //!   pass's first instance as every step's first draw does (`RenderLowering::inline_begin`), and
 //!   records every state command it sets into that instance's command buffer, whose record holds
-//!   none (`WorkCounts::draws_rebound_carried`). One carried across a commit (`Kept::across`)
-//!   retains into its command buffer what every step retains beyond its tables' objects, which
-//!   that command buffer holds none of: its pipeline state, its variant's objects, its
-//!   `VkPipeline` and the call's index buffer.
+//!   none (`WorkCounts::draws_rebound_carried`). It retains into its encoder what every step
+//!   retains beyond its tables' objects: its pipeline state, its variant's objects and its
+//!   `VkPipeline`, which its encoder's later draws then retain no more, as after every step's
+//!   (`LastRetained`); one carried across a commit (`Kept::across`), whose command buffer holds
+//!   none of them, the call's index buffer too.
+//! - **A reader through snapshots** (`render/snapshot.rs`, `render/draw_again.rs`) works out again
+//!   that it reads through them as every step would ([`RenderLowering::read_again`]): its draw
+//!   reads no color in place, asks to read the same slots of the same colors, pinning none
+//!   (`RenderLowering::snapshot_wanted_or`, which counts nothing); its plan reads through them
+//!   (`snapshot_holds`); its instance can hold those colors in the feedback loop layout
+//!   (`snapshot_apart`), a carried draw's unbegun one beginning in its secondary with them there;
+//!   and its form, weighed as every step weighs it, is the snapshot. Else it takes every step
+//!   (`WorkCounts::reading_draws_snapshotted_stopped`, and of a carried draw
+//!   `draws_carry_stopped_snapshot`), which decides its form anew. Its tables bind each slot's
+//!   texture in the feedback loop layout and its snapshot, made or kept with that texture
+//!   (`binding::rebind_into` writes a changed slot's snapshot beside it); every step reads no
+//!   copy of its colors and checks no read of them as an attachment's, nor does it. Its uses are
+//!   made again whole, its snapshots' after them, never moved or narrowed, and its snapshots'
+//!   writes are unordered writes as every step's. It records its two draws, each its phase's
+//!   first, through its kept recording, the drawing one inside its query where it is measured,
+//!   takes its identity, count and query as every step takes them, and forgets the kept draws set
+//!   aside that read its colors (`RenderLowering::forget_aside_readers`).
 //! - **Checked in builds with debug assertions.** As a draw again is: the first rebound draw of a
 //!   kept draw and every second after it work out the rebind, then take every step instead, which
 //!   must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes, vertex
@@ -154,12 +172,15 @@ use std::sync::Arc;
 
 use super::{Again, RenderLowering};
 use crate::argument_table::Stamp;
-use crate::binding::{self, NarrowedSlots, SetWrite, Write};
+use crate::binding::{self, NarrowedSlots, SetWrite, SnapshotViews, Write};
 use crate::draw_source::{DrawSource, IndexBind};
 use crate::error::Error;
 use crate::live_bind::{LiveBind, Reshape};
+use crate::pipeline::GraphicsState as DrawingState;
 use crate::pipeline::{RenderStateKind, Settled};
-use crate::render::{line_width, Assembly, Bound, DrawBuffers, DrawState, Recording};
+use crate::render::bound::Recorded;
+use crate::render::snapshot::{self, KeptReader, Phase, Weighed};
+use crate::render::{line_width, Assembly, Bound, DrawBuffers, DrawSettings, DrawState, Recording};
 use crate::render_target::Feedback;
 use crate::resource::ResourceKey;
 use crate::shadow::{ShadowUse, UsedAs};
@@ -374,6 +395,19 @@ struct Rebinding {
     /// draw gathered its own into the ended encoder's instance (`render/carried.rs`); none for
     /// any other, whose kept draw's are its own, gathered into its instance already.
     gathers: Vec<ShadowUse>,
+    /// Of a draw that reads through snapshots, its form weighed again, its colors and its
+    /// snapshots' uses, the last of its uses ([`ReadAgain`]).
+    reader: Option<(Weighed, Feedback, usize)>,
+}
+
+/// What a kept draw that reads through snapshots works out again as it is rebound (the module
+/// docs): its form weighed as every step weighs it, its colors, and its slots' snapshots, made or
+/// kept with their textures, with their views, which its tables bind.
+struct ReadAgain {
+    weighed: Weighed,
+    feedback: Feedback,
+    views: SnapshotViews,
+    texels: Vec<Texture>,
 }
 
 impl RenderLowering {
@@ -467,7 +501,18 @@ impl RenderLowering {
         }
         #[cfg(not(debug_assertions))]
         let _: &mut Option<super::Checked> = checked;
-        // The attachments' reads: its last check, refused here, as it may have announced.
+        // A reader through snapshots: its identity, count and query taken, as every step takes
+        // them, and its colors.
+        let (query, feedback) = match &rebinding.reader {
+            Some((weighed, feedback, _)) => match self.take_weighed(weighed.clone()) {
+                Ok(query) => (query, *feedback),
+                Err(refused) => return Again::Refused(refused),
+            },
+            None => (None, Feedback::NONE),
+        };
+        // The attachments' reads: its last check, refused here, as it may have announced. A
+        // reader through snapshots reads its colors through them, and every step checks none of
+        // its reads so (`render/snapshot.rs`).
         let core = &self.core;
         let version = self.layout.version();
         let (memo, layout) = (&mut self.attached, &*self.layout);
@@ -475,6 +520,7 @@ impl RenderLowering {
         // Of a draw narrowed, the moved slots' uses alone: every other use is the kept draw's,
         // whose check found them sharing none (it was drawn), against the same attachments.
         let attached = match (rebinding.narrowed, live.uses.prefix()) {
+            _ if rebinding.reader.is_some() => Ok(()),
             (true, _) => {
                 let moved = (&live.kept.moved[..], &live.uses[..]);
                 core.degrade_moved_attachment_reads(call, shares, moved)
@@ -488,17 +534,36 @@ impl RenderLowering {
         if let Err(refused) = attached {
             return Again::Refused(refused);
         }
-        // A carried draw begins its pass's first instance (`render/carried.rs`).
+        // A carried draw begins its pass's first instance (`render/carried.rs`), its colors read
+        // through snapshots in the feedback loop layout from its begin.
         if carried {
-            if let Err(refused) = self.begin_carried() {
+            if let Err(refused) = self.begin_carried(feedback) {
                 return Again::Refused(refused);
             }
         }
+        self.current.feedback.0 |= feedback.0;
         let counted = (stamps, changed.images());
-        let recorded =
-            self.record_rebound(live, (call, assembly, draw), buffers, (counted, &rebinding));
+        let recorded = self.record_rebound(
+            live,
+            (call, assembly, draw),
+            buffers,
+            (counted, &rebinding, query),
+        );
         if let Err(refused) = recorded {
             return Again::Refused(refused);
+        }
+        // A reader through snapshots counted as every step counts it, and the kept draws set
+        // aside that read its colors forgotten (`render/draw_again.rs`).
+        if rebinding.reader.is_some() {
+            self.core.counts().reading_draw_again();
+            let shared = &self.core.device().shared().counts;
+            shared.reading_draw_snapshotted();
+            if query.is_some() {
+                shared.coverage_query();
+            }
+            if let Err(refused) = self.forget_aside_readers(live) {
+                return Again::Refused(refused);
+            }
         }
         let counts = self.core.counts();
         if rebinding.through_copies.0 {
@@ -575,11 +640,12 @@ impl RenderLowering {
 
     /// Begin the pass's first instance for the kept draw carried into the encoder, as every
     /// step's first draw that records begins it (`render/inline_first.rs`): inline where the pass
-    /// opened so and its instance allows it, else its secondary. Refused only where an object
-    /// cannot be made, as every step's is.
-    fn begin_carried(&mut self) -> Result<(), Error> {
+    /// opened so and its instance allows it, else its secondary; a reader's, of its `feedback`
+    /// colors read through snapshots, in its secondary. Refused only where an object cannot be
+    /// made, as every step's is.
+    fn begin_carried(&mut self, feedback: Feedback) -> Result<(), Error> {
         let next = super::super::Next::Current;
-        let begin = self.inline_begin(&next, None, (true, true, false), Feedback::NONE)?;
+        let begin = self.inline_begin(&next, None, (true, true, false), feedback)?;
         if let Some(begin) = begin {
             self.begin_inline(begin);
         }
@@ -806,6 +872,22 @@ impl RenderLowering {
             return None;
         };
         let (settled, rebinds) = kept.rebinds(slots, &mut live.rebinds);
+        // A reader through snapshots reads through them again as every step would: else it
+        // takes every step, which decides its form anew (`render/snapshot.rs`).
+        let reading = (self.again.kept.as_ref())
+            .and_then(|kept| (kept.reader.as_ref()).map(|reader| (reader, &*kept.settings)));
+        let read_again = match reading {
+            Some((reader, settings)) => match self.read_again(reader, settings, settled) {
+                Some(read_again) => Some(read_again),
+                None => {
+                    self.core.counts().draw_reader_stopped();
+                    stop.1 = CarryStop::Snapshot;
+                    return None;
+                }
+            },
+            None => None,
+        };
+        let reads = read_again.is_some();
         let Settled {
             variant,
             plan,
@@ -818,7 +900,8 @@ impl RenderLowering {
         // apart, it takes from the encoder's last draw.
         // Nor one of another index buffer, whose uses meet a buffer the kept draw's did not.
         let between = (self.again.kept.as_ref()).is_some_and(|kept| kept.between);
-        let moved = changed.moved && !between && !reindexed;
+        // Nor a reader's, whose snapshots' uses follow its plan's (`ReadAgain`).
+        let moved = changed.moved && !between && !reindexed && !reads;
         if moved {
             live.kept.ranges.clear();
             (live.kept.ranges).extend_from_slice(&live.commands.descriptor_ranges);
@@ -886,7 +969,7 @@ impl RenderLowering {
         // plan writes is a color attachment's (a draw that does records apart), and no
         // extended-range texture is bound through a shadow (`LiveBind`'s state), as for the kept
         // draw.
-        let attached = self.samples_attachment(facts, Texture::attached_among);
+        let attached = !reads && self.samples_attachment(facts, Texture::attached_among);
         let images = changed.images();
         if (attached
             && self.loads_ordered
@@ -946,7 +1029,7 @@ impl RenderLowering {
         // kept draw's are another encoder's (`render/carried.rs`).
         // A draw of other arguments patches its index buffer's use too, as a moved slot's.
         let patch = (&**plan, &command, &stages[..]);
-        let inside = match images || carried {
+        let inside = match images || carried || reads {
             true => None,
             false => {
                 let moved_uses = (&mut live.kept.moved_at, &mut live.kept.moved);
@@ -978,6 +1061,9 @@ impl RenderLowering {
                     .with_attachments(&self.layout)
                     .with_narrowed(&narrowed);
             }
+            if let Some(read_again) = &read_again {
+                tables = tables.with_snapshots(&read_again.views);
+            }
             // Its runtime samplers' address modes: the kept draw's, as `bring_in` found them.
             if images {
                 tables = tables.with_sampler_maps(live.read_from.maps().clone());
@@ -998,6 +1084,10 @@ impl RenderLowering {
                 rebound =
                     binding::command_uses_into(call, uses, (index, None), &mut live.uses).is_ok();
             }
+        }
+        // A reader's snapshots' uses after its plan's, as every step adds them.
+        if let (true, Some(read_again)) = (rebound, &read_again) {
+            (live.uses).extend(read_again.texels.iter().map(Texture::snapshot_use));
         }
         let rebound = rebound
             && binding::push_writes_into(&commands.push_constants, &[], &mut live.pushes).is_ok();
@@ -1130,6 +1220,15 @@ impl RenderLowering {
             stop.0 = ArgumentsStop::Detached;
             return None;
         }
+        let reader = read_again.map(|read_again| {
+            let ReadAgain {
+                weighed,
+                feedback,
+                texels,
+                ..
+            } = read_again;
+            (weighed, feedback, texels.len())
+        });
         Some(Rebinding {
             moved,
             writes_kept,
@@ -1138,6 +1237,63 @@ impl RenderLowering {
             through_copies: (attached, own_pixel),
             reindexed,
             gathers,
+            reader,
+        })
+    }
+
+    /// What the kept draw that reads through snapshots as `reader`, under `settings`, works out
+    /// again to read through them as every step would with its settle `settled` (the module
+    /// docs, `render/snapshot.rs`): its draw reads no color in place, asks to read the same slots
+    /// of the same colors, pinning none; the plan reads through them; its instance holds them in
+    /// the feedback loop layout, or a carried draw's yet unbegun instance will; and its form,
+    /// weighed again, is the snapshot. Its slots' snapshots made or kept with their textures, as
+    /// every step makes them. `None` where any of those differs, or a snapshot's view is refused,
+    /// as every step's would be: the draw takes every step.
+    fn read_again(
+        &self,
+        reader: &KeptReader,
+        settings: &DrawSettings,
+        settled: &Settled,
+    ) -> Option<ReadAgain> {
+        let pipeline: &DrawingState = match self.pipeline.as_ref().map(|p| p.kind()) {
+            Some(RenderStateKind::Graphics(pipeline)) => pipeline,
+            _ => return None,
+        };
+        self.core.device().shared().color_write_masks?;
+        // A kept draw renders no color through a view of another format (`Kept`).
+        if self.in_place_wanted(pipeline, &[], settings).is_some() {
+            return None;
+        }
+        let wanted = self.snapshot_wanted_or(pipeline, &[]).ok()?;
+        if !reader.reads_as(&wanted)
+            || self.snapshot_holds(settled, &wanted).is_err()
+            || self.snapshot_apart(&wanted)
+        {
+            return None;
+        }
+        let weighed = self.weigh_snapshot(pipeline, wanted.feedback);
+        if !weighed.within {
+            return None;
+        }
+        let mut views = Vec::with_capacity(wanted.slots.len());
+        let mut texels = Vec::with_capacity(wanted.slots.len());
+        for &slot in &wanted.slots {
+            let texture = self.fragment.textures.get(&slot)?;
+            let form = snapshot::form(&settled.plan, slot)?;
+            let made = texture
+                .snapshot_texels(self.core.command_buffer(), form)
+                .ok()?;
+            views.push((slot, made.snapshot_view(form).ok()?));
+            texels.push(made);
+        }
+        Some(ReadAgain {
+            weighed,
+            feedback: wanted.feedback,
+            views: SnapshotViews {
+                slots: wanted.slots,
+                views,
+            },
+            texels,
         })
     }
 
@@ -1148,18 +1304,26 @@ impl RenderLowering {
         live: &mut LiveBind,
         (call, assembly, draw): (&'static str, Assembly, &DrawCall),
         buffers: &DrawBuffers<'_>,
-        ((stamps, images), rebinding): (([Stamp; 4], bool), &Rebinding),
+        ((stamps, images), rebinding, query): (
+            ([Stamp; 4], bool),
+            &Rebinding,
+            Option<(vk::QueryPool, u32)>,
+        ),
     ) -> Result<(), Error> {
         let kept = settles_kept(self, live)
             .then_some(live.settled.as_ref())
             .flatten();
         let unsettled = || crate::error::internal("a draw rebound unsettled");
         let objects = kept.ok_or_else(unsettled)?.settled().variant.objects();
-        // Of a draw carried across a commit (`render/carried.rs`), what every step retains beyond
-        // its tables' objects and index buffer, which its command buffer holds none of: its
-        // pipeline state, its variant's objects and the `VkPipeline` its recording names.
-        let kept_made = (self.again.kept.as_ref()).filter(|kept| kept.across);
-        let across = match (kept_made, self.pipeline.as_ref().map(|state| state.kind())) {
+        // Of a draw carried in (`render/carried.rs`), what every step retains beyond its tables'
+        // objects and index buffer: its pipeline state, its variant's objects and the `VkPipeline`
+        // its recording names. The command buffer of one carried across a commit holds none of
+        // them; the encoder of one carried from its command buffer's last render encoder retained
+        // none of them, and its later draws retain only what no earlier draw of it retained
+        // (`LastRetained`), as every step's does.
+        let kept_made = (self.again.kept.as_ref()).filter(|kept| kept.carried);
+        let across = (self.again.kept.as_ref()).is_some_and(|kept| kept.across);
+        let carried_in = match (kept_made, self.pipeline.as_ref().map(|state| state.kind())) {
             (None, _) => None,
             (Some(kept), Some(RenderStateKind::Graphics(state))) => {
                 let made = Some(Arc::clone(&kept.made.0));
@@ -1239,8 +1403,15 @@ impl RenderLowering {
         // indirect arguments (`draw_again::unwritten`), so none is an unordered write, an
         // indirect read or a geometry write, and in a pass whose fragments wrote nothing
         // (`rebind`) none meets what the pass's reads announce. Their noting adds them alone.
+        // A reader's snapshots' uses, its last, write its snapshots, images the pass's reads take
+        // nothing of (`render/pass_start_reads.rs`), and are unordered writes as every step's.
+        let snapshots = rebinding
+            .reader
+            .as_ref()
+            .map_or(0, |&(_, _, snapshots)| snapshots);
+        let planned = uses.len() - snapshots;
         debug_assert!(
-            super::unwritten(uses).0 && !self.pass_start.fragments_wrote(),
+            super::unwritten(&uses[..planned]).0 && !self.pass_start.fragments_wrote(),
             "a draw rebound writes, or follows a fragment write of its pass"
         );
         // Noted: a draw narrowed's moved slots' uses alone where the last command noted is the
@@ -1270,10 +1441,13 @@ impl RenderLowering {
             }
         }
         let resident = prefix.map_or(0, |prefix| prefix.len as u64);
-        if let Some(prefix) = prefix {
-            if self.unordered.add_draw((uses, prefix)) {
-                self.core.counts().resident_uses_unordered_writes(resident);
+        match prefix {
+            Some(prefix) => {
+                if self.unordered.add_draw((uses, prefix)) {
+                    self.core.counts().resident_uses_unordered_writes(resident);
+                }
             }
+            None => self.unordered.add(&uses[planned..]),
         }
         // The pass's reads, and the instance's gathered uses: of a draw narrowed, the moved slots'
         // uses alone, every other use being the kept draw's, which they hold; of a draw inside,
@@ -1370,7 +1544,7 @@ impl RenderLowering {
             }
             false => pushed,
         };
-        let recording = Recording {
+        let mut recording = Recording {
             raw: shared.vk(),
             command_buffer: self.current.draws,
             layout: owned.layout,
@@ -1397,11 +1571,49 @@ impl RenderLowering {
             draw: owned.draw,
             pair: None,
         };
-        // SAFETY: as the kept draw's recording: the secondary command buffer (or the pass's,
-        // inline) records the kept draw's instance, and only this encoder records it; every
-        // object recorded is live until the command buffer completes (the kept draw's retained,
-        // and the tables' retained below); `bound` is the record of what its draws bound there.
-        let recorded = unsafe { recording.record(bound) };
+        // A reader's two draws, each its phase's first, the drawing one inside its query, as
+        // every step records them (`render/snapshot.rs`).
+        let reader = (self.again.kept.as_ref()).and_then(|kept| kept.reader.as_ref());
+        let pairs = match (reader, shared.color_write_masks) {
+            (Some(reader), Some(masks)) => Some(reader.pairs(masks)),
+            (Some(_), None) => {
+                return Err(crate::error::internal(
+                    "a reader rebound without the write mask command",
+                ))
+            }
+            (None, _) => None,
+        };
+        let mut recorded = Recorded::default();
+        let raw = shared.vk();
+        let cb = self.current.draws;
+        match pairs {
+            None => {
+                // SAFETY: as the kept draw's recording: the secondary command buffer (or the
+                // pass's, inline) records the kept draw's instance, and only this encoder
+                // records it; every object recorded is live until the command buffer completes
+                // (the kept draw's retained, and the tables' retained below); `bound` is the
+                // record of what its draws bound there.
+                recorded += unsafe { recording.record(bound) };
+            }
+            Some(pairs) => {
+                for pair in pairs {
+                    let counted = query.filter(|_| pair.phase == Phase::Drawing);
+                    // SAFETY: as above; the pass is one `render_target` made, of no views, and
+                    // the query the pass's own, reset on the host and begun nowhere else, with no
+                    // other occlusion query active (`RenderLowering::snapshot_wanted`).
+                    unsafe {
+                        if let Some((pool, query)) = counted {
+                            raw.cmd_begin_query(cb, pool, query, vk::QueryControlFlags::PRECISE);
+                        }
+                        recording.pair = Some(pair);
+                        recorded += recording.record(bound);
+                        if let Some((pool, query)) = counted {
+                            raw.cmd_end_query(cb, pool, query);
+                        }
+                    }
+                }
+            }
+        }
         let settled = bound.records();
         if let Some(written) = written {
             self.core.keep_set_zero(written, &live.kept.writes);
@@ -1456,11 +1668,11 @@ impl RenderLowering {
         self.object.retain_exclusive(&mut self.core);
         self.mesh.retain_exclusive(&mut self.core);
         // Its index buffer where it is another than the kept draw's, or the draw carried across.
-        let reindexed = rebinding.reindexed || across.is_some();
+        let reindexed = rebinding.reindexed || across;
         if let (true, Some(source)) = (reindexed, buffers.index.as_ref()) {
             self.core.retain_shared(source.buffer.held());
         }
-        if let Some(retained) = across {
+        if let Some(retained) = carried_in {
             self.last_retained.retain_draw(&mut self.core, retained);
         }
         self.last_retained

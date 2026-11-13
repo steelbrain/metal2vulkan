@@ -819,6 +819,8 @@ struct CommandCounters {
     draws_rebind_stopped_arguments: AtomicU64,
     draws_rebind_stopped_arguments_by: [AtomicU64; ArgumentsStop::COUNT],
     draws_rebound_carried: AtomicU64,
+    reading_draws_snapshotted_again: AtomicU64,
+    reading_draws_snapshotted_stopped: AtomicU64,
     draws_none_kept: AtomicU64,
     draws_carry_stopped: AtomicU64,
     draws_carry_stopped_by: [AtomicU64; CarryStop::COUNT],
@@ -975,11 +977,14 @@ pub(crate) enum CarryStop {
     Attached,
     /// Any other step of a rebind.
     Other,
+    /// It reads through snapshots, and would read through them otherwise, or not, at every
+    /// step (`render/draw_again/rebound.rs`).
+    Snapshot,
 }
 
 impl CarryStop {
     /// How many there are.
-    pub(crate) const COUNT: usize = 3;
+    pub(crate) const COUNT: usize = 4;
 }
 
 /// What kept a direct draw that recorded from being kept to draw again
@@ -1659,6 +1664,20 @@ impl Counting<'_> {
         self.0.add(|counts| &counts.draws_rebound_carried, 1);
     }
 
+    /// A render draw that read through snapshots as a kept draw, drawn again or rebound
+    /// (`WorkCounts::reading_draws_snapshotted_again`).
+    pub(crate) fn reading_draw_again(&self) {
+        self.0
+            .add(|counts| &counts.reading_draws_snapshotted_again, 1);
+    }
+
+    /// A render draw of a kept draw that reads through snapshots that took every step, as it
+    /// would read through them otherwise, or not (`WorkCounts::reading_draws_snapshotted_stopped`).
+    pub(crate) fn draw_reader_stopped(&self) {
+        self.0
+            .add(|counts| &counts.reading_draws_snapshotted_stopped, 1);
+    }
+
     /// A render encoder's direct draw whose encoder kept no draw of its pipeline state
     /// (`WorkCounts::draws_none_kept`).
     pub(crate) fn draw_none_kept(&self) {
@@ -1674,6 +1693,7 @@ impl Counting<'_> {
             CarryStop::Stale => |c| &c.draws_carry_stopped_by[CarryStop::Stale as usize],
             CarryStop::Attached => |c| &c.draws_carry_stopped_by[CarryStop::Attached as usize],
             CarryStop::Other => |c| &c.draws_carry_stopped_by[CarryStop::Other as usize],
+            CarryStop::Snapshot => |c| &c.draws_carry_stopped_by[CarryStop::Snapshot as usize],
         };
         counts.add(count, 1);
     }
@@ -7961,6 +7981,10 @@ pub struct WorkCounts {
     /// Of `draws_carry_stopped`, those that stopped at another step of a rebind
     /// (`draws_rebind_stopped`'s).
     pub draws_carry_stopped_other: u64,
+    /// Of `draws_carry_stopped`, those that read through snapshots and would read through them
+    /// otherwise, or not, at every step (`reading_draws_snapshotted_stopped`): another slot, color
+    /// or form, or an instance that cannot hold their colors in the feedback loop layout.
+    pub draws_carry_stopped_snapshot: u64,
     /// Render encoders' direct draws that recorded a Vulkan draw and kept nothing to draw again
     /// or rebind (`render/draw_again.rs`), so their encoder's next draw takes every step; with,
     /// in the counts below, what kept each from being kept, a draw counted in every group it met
@@ -9479,6 +9503,15 @@ pub struct WorkCounts {
     /// in the instance wrote, an x86 Mac's answer, where an M3 Max reads the texels from before
     /// the pass (`docs/API.md`'s accepted differences).
     pub reading_draws_in_place: u64,
+    /// Of `reading_draws_snapshotted`, the draws recorded as a kept draw (`render/draw_again.rs`):
+    /// drawn again, their two draws and their barriers alone, or rebound, a kept draw carried
+    /// into its encoder's (`render/carried.rs`) among them, each weighing its form again as every
+    /// step weighs it.
+    pub reading_draws_snapshotted_again: u64,
+    /// Draws of a kept draw that reads through snapshots that took every step: the draw would
+    /// read through snapshots otherwise, or not (another slot, color, plan or form, or an instance
+    /// that cannot hold its colors in the feedback loop layout).
+    pub reading_draws_snapshotted_stopped: u64,
     /// Of `reading_draws_snapshotted` and `reading_draws_in_place`, the draws recorded into a new
     /// instance because their own was recorded inline, its render pass instance begun without
     /// the feedback loop layout they need (`render/snapshot.rs`, `render/inline_first.rs`).
@@ -10747,6 +10780,7 @@ impl Device {
             draws_carry_stopped_stale: carry_stopped(CarryStop::Stale),
             draws_carry_stopped_attached: carry_stopped(CarryStop::Attached),
             draws_carry_stopped_other: carry_stopped(CarryStop::Other),
+            draws_carry_stopped_snapshot: carry_stopped(CarryStop::Snapshot),
             draws_unkept: commands(|counts| &counts.draws_unkept),
             draws_unkept_instance: commands(|counts| &counts.draws_unkept_instance),
             draws_unkept_instance_later: commands(|counts| &counts.draws_unkept_instance_later),
@@ -11109,6 +11143,8 @@ impl Device {
             attachment_read_clears: counters.attachment_read_clears.load(Ordering::Relaxed),
             fetch_draw_barriers: counters.fetch_draw_barriers.load(Ordering::Relaxed),
             reading_draws_snapshotted: counters.reading_draws_snapshotted.load(Ordering::Relaxed),
+            reading_draws_snapshotted_again: commands(|c| &c.reading_draws_snapshotted_again),
+            reading_draws_snapshotted_stopped: commands(|c| &c.reading_draws_snapshotted_stopped),
             reading_draws_in_place: counters.reading_draws_in_place.load(Ordering::Relaxed),
             snapshot_inline_splits: counters.snapshot_inline_splits.load(Ordering::Relaxed),
             reading_draws_split_unreadable_own_pixel: split_by(SplitReason::UnreadableOwnPixel),

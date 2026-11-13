@@ -1,5 +1,5 @@
 //! The sizes of the draws that read their pass's texture through a snapshot or take the split by
-//! the area rule (`render/snapshot.rs`'s `RenderCommandEncoder::snapshot_cheaper`), counted for a
+//! the area rule (`render/snapshot.rs`'s `RenderCommandEncoder::weigh_snapshot`), counted for a
 //! diagnostic line where `METAL2VULKAN_LOG_PIPELINES` is set: how many such draws weigh which share
 //! of their colors' pixels, at which texel bytes, on which side of the rule. A device counts them
 //! only while the log is on, writes the line after 64 of them and after each power of two past

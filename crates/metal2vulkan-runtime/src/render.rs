@@ -8355,12 +8355,13 @@ impl RenderLowering {
         // state's bind state reads: every kept draw is forgotten, as at a call. One kept
         // recorded as a draw again of it would, into its instance as it stood. One that read
         // through snapshots and wrote nothing else wrote only its pass's colors and its
-        // snapshots: it forgets the kept draws that read those alone (`render/draw_again.rs`).
-        if self.again_kept().is_none() {
-            match self.snapshots_alone {
-                true => self.forget_readers(live)?,
-                false => self.forget_again(),
-            }
+        // snapshots, kept or not: it forgets the kept draws that read those alone
+        // (`render/draw_again.rs`).
+        match self.again_kept().map(|kept| kept.reader.is_some()) {
+            None if self.snapshots_alone => self.forget_readers(live)?,
+            None => self.forget_again(),
+            Some(true) => self.forget_aside_readers(live)?,
+            Some(false) => {}
         }
         // Every draw, one of nothing too; an execution's commands announce at the
         // execution (`executions.rs`).
@@ -11350,6 +11351,9 @@ impl RenderLowering {
         // resident are a function of their identity, so they are walked once for it
         // (`WorkCounts::resident_uses_again_checked`); whether those write is counted where the
         // draw is not kept (`WorkCounts::draws_unkept_writing_resident`).
+        // A reader through snapshots' writes of its snapshots aside: it is kept with them, its
+        // draw again taking them again behind its own barriers (`render/snapshot.rs`).
+        let snapshot_uses = uses.len() - snapshot_texels.len();
         let (unwritten, reads_images, resident_writes) = {
             let (resident, own) = match uses.prefix() {
                 Some(prefix) => {
@@ -11364,14 +11368,19 @@ impl RenderLowering {
                             facts
                         }
                     };
-                    (facts, &uses[prefix.len..])
+                    (facts, &uses[prefix.len..snapshot_uses])
                 }
-                None => ((true, false), &uses[..]),
+                None => ((true, false), &uses[..snapshot_uses]),
             };
             match resident {
                 (true, resident_reads) => {
                     let (unwritten, reads_images) = draw_again::unwritten(own);
-                    (unwritten, resident_reads || reads_images, false)
+                    let snapshots = !snapshot_texels.is_empty();
+                    (
+                        unwritten,
+                        resident_reads || reads_images || snapshots,
+                        false,
+                    )
                 }
                 (false, _) => (false, false, true),
             }
@@ -11382,6 +11391,13 @@ impl RenderLowering {
         // A draw that binds a zero region of its own binds a new one at each step
         // (`binding::binds_own_zeros`): kept, it would bind the region its kept draw had.
         let own_zeros = binding::binds_own_zeros(&plan);
+        // A reader through snapshots is kept with its two draws (`render/draw_again.rs`): not one
+        // read in place, nor one that pins its colors to their images, whose pins are its pass's.
+        let reader_keeps = matches!(
+            (&snapshot, &pair_base),
+            (Some(wanted), Some(snapshot::Pair { steps: Some(_), .. }))
+                if !wanted.in_place && wanted.pins == 0
+        );
         let plain_but_heap = stepless
             && !own_zeros
             && !barriered
@@ -11398,9 +11414,9 @@ impl RenderLowering {
             && pushes.len() == 1
             && vk_draws.len() == 1
             && chunked.is_empty()
-            && pair_base.is_none()
+            && (pair_base.is_none() || reader_keeps)
             && matches!(draw_states, DrawStates::Whole(_))
-            && snapshot.is_none()
+            && (snapshot.is_none() || reader_keeps)
             && !reads_clear
             && (draw_shadows.is_empty() || !self.replaying)
             && stencil_use.is_none()
@@ -11420,7 +11436,9 @@ impl RenderLowering {
             && views == ViewSetup::default()
             && resumed.is_none()
             && commands.root_tables.is_empty()
-            && commands.push_holes.is_empty()
+            && (commands.push_holes.iter()).all(|hole| {
+                reader_keeps && matches!(hole, metal2vulkan::bind::PushHole::SnapshotPhase { .. })
+            })
             && pass_start.reads_encoders()
             && matches!(settings.line, LineRoute::Plain)
             && matches!(
@@ -11532,7 +11550,7 @@ impl RenderLowering {
                 _ => None,
             };
             let rebinds = function_tables.is_empty()
-                && uses.len() == plan_uses
+                && uses.len() == plan_uses + snapshot_texels.len()
                 && bound.holes.is_empty()
                 && writes.iter().all(|write| write.held.is_none());
             let recorded = recorded.filter(|_| rebinds);
@@ -11570,6 +11588,15 @@ impl RenderLowering {
                 carried: false,
                 across: false,
                 made: draw_again::KeptPipeline(Arc::clone(made)),
+                reader: match (&snapshot, &pair_base) {
+                    (
+                        Some(wanted),
+                        Some(snapshot::Pair {
+                            steps: Some(steps), ..
+                        }),
+                    ) => Some(snapshot::KeptReader::new(wanted, steps, objects.layout())),
+                    _ => None,
+                },
             };
             self.again.keep(kept);
         }
