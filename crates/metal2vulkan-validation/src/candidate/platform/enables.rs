@@ -1381,6 +1381,7 @@ const EXTENSIONS: &[ExtensionName] = {
         e(c"VK_EXT_provoking_vertex", Some(X::ExtProvokingVertex)),
         e(c"VK_EXT_line_rasterization", Some(X::ExtLineRasterization)),
         e(c"VK_EXT_multi_draw", Some(X::ExtMultiDraw)),
+        e(c"VK_EXT_shader_float8", Some(X::ExtShaderFloat8)),
         e(c"VK_EXT_post_depth_coverage", Some(X::ExtPostDepthCoverage)),
         e(c"VK_EXT_mesh_shader", Some(X::ExtMeshShader)),
         e(c"VK_KHR_shader_float_controls2", None),

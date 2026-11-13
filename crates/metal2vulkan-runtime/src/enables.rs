@@ -1057,6 +1057,7 @@ const EXTENSIONS: &[(VkExtension, &CStr)] = {
         (X::ExtProvokingVertex, c"VK_EXT_provoking_vertex"),
         (X::ExtLineRasterization, c"VK_EXT_line_rasterization"),
         (X::ExtMultiDraw, c"VK_EXT_multi_draw"),
+        (X::ExtShaderFloat8, c"VK_EXT_shader_float8"),
         (X::KhrRayQuery, c"VK_KHR_ray_query"),
         (
             X::KhrAccelerationStructure,

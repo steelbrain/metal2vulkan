@@ -495,6 +495,12 @@ pub enum VkExtension {
     // Appended.
     /// `VK_EXT_multi_draw` (never promoted): [`VkFeature::MultiDraw`].
     ExtMultiDraw,
+    // Appended.
+    /// `VK_EXT_shader_float8` (never promoted): the 8-bit float types of `SPV_EXT_float8`, whose
+    /// `shaderFloat8` Vulkan requires of every device that lists it. The core enables it where the
+    /// device lists it, and there refuses a `matmul2d` of 8-bit floats, whose conversion through
+    /// the device's type is not built yet.
+    ExtShaderFloat8,
 }
 
 /// One subgroup operation class (`VkSubgroupFeatureFlagBits`).

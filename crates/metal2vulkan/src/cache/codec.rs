@@ -1014,6 +1014,7 @@ codec_enum! {
         ExtLineRasterization,
         Ext4444Formats,
         ExtMultiDraw,
+        ExtShaderFloat8,
     }
     SubgroupOp { Basic, Vote, Arithmetic, Ballot, Shuffle, ShuffleRelative, Clustered, Quad }
     FloatWidth { F16, F32, F64 }

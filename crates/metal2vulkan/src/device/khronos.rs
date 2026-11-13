@@ -1783,6 +1783,7 @@ pub(crate) fn extension_from_name(name: &str) -> Option<VkExtension> {
         "VK_EXT_texture_compression_astc_hdr" => E::ExtTextureCompressionAstcHdr,
         "VK_EXT_4444_formats" => E::Ext4444Formats,
         "VK_EXT_multi_draw" => E::ExtMultiDraw,
+        "VK_EXT_shader_float8" => E::ExtShaderFloat8,
         "VK_IMG_format_pvrtc" => E::ImgFormatPvrtc,
         "VK_EXT_border_color_swizzle" => E::ExtBorderColorSwizzle,
         "VK_EXT_custom_border_color" => E::ExtCustomBorderColor,

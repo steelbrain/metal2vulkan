@@ -160,6 +160,7 @@ fn entry(
         lockstep: Default::default(),
         call_stack: None,
         unmeasured_speculation: false,
+        float8_products: false,
         module,
     }
 }

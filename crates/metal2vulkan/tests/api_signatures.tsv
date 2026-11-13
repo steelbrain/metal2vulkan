@@ -1603,6 +1603,7 @@ field	metal2vulkan-air::Entry.cfg	pub cfg: Cfg<BlockId>
 field	metal2vulkan-air::Entry.compile	pub compile: CompileOptions
 field	metal2vulkan-air::Entry.dom	pub dom: DomTree<BlockId>
 field	metal2vulkan-air::Entry.ep	pub ep: EntryPoint
+field	metal2vulkan-air::Entry.float8_products	pub float8_products: bool
 field	metal2vulkan-air::Entry.func	pub func: FuncId
 field	metal2vulkan-air::Entry.function_constants	pub function_constants: bool
 field	metal2vulkan-air::Entry.function_tables	pub function_tables: BTreeSet<u32>
@@ -13600,6 +13601,7 @@ variant	metal2vulkan::device::VkExtension::ExtSampleLocations	ExtSampleLocations
 variant	metal2vulkan::device::VkExtension::ExtShaderAtomicFloat	ExtShaderAtomicFloat
 variant	metal2vulkan::device::VkExtension::ExtShaderAtomicFloat2	ExtShaderAtomicFloat2
 variant	metal2vulkan::device::VkExtension::ExtShaderDemoteToHelperInvocation	ExtShaderDemoteToHelperInvocation
+variant	metal2vulkan::device::VkExtension::ExtShaderFloat8	ExtShaderFloat8
 variant	metal2vulkan::device::VkExtension::ExtShaderImageAtomicInt64	ExtShaderImageAtomicInt64
 variant	metal2vulkan::device::VkExtension::ExtShaderStencilExport	ExtShaderStencilExport
 variant	metal2vulkan::device::VkExtension::ExtShaderViewportIndexLayer	ExtShaderViewportIndexLayer

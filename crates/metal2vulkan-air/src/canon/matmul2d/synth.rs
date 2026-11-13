@@ -401,6 +401,19 @@ pub(super) enum Lowered {
     },
 }
 
+/// Whether `l`'s body reads 8-bit float elements (`metal_fp8_e4m3_format`,
+/// `metal_fp8_e5m2_format`), each widened to float through integer arithmetic on its byte
+/// ([`fp8_wide`]): a `run` whose left or right input holds them.
+pub(super) fn reads_float8(l: &Lowered) -> bool {
+    let float8 = |t: DataType| matches!(t, DataType::Fp8E4M3 | DataType::Fp8E5M2);
+    match l {
+        Lowered::Run(r) => float8(r.form.left.elem()) || float8(r.form.right.elem()),
+        Lowered::Const { .. } | Lowered::Nothing | Lowered::Helper(_) | Lowered::Tensor { .. } => {
+            false
+        }
+    }
+}
+
 /// Whether `l`'s body reads the lane's and the simdgroup's index.
 pub(super) fn needs_lanes(l: &Lowered) -> bool {
     match l {
