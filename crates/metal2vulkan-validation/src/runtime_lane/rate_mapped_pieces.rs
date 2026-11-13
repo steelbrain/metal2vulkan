@@ -10,14 +10,18 @@
 //! their mean and their most), drawn from a grid of small triangles over the screen
 //! (`tob_triangle`, `tob_solid`). Drawn region by region, its command buffer runs well under a
 //! second, so a device that cut nothing would still not reach amdgpu's 2 s job timeout: at the
-//! host step, 514 ms of an Iris Xe's GPU, in 20 pieces of at most 32 ms, and 462 ms of a Radeon
-//! 780M's, in 20 pieces of at most 47 ms (Mesa 26.2.6). Fanned out it is 111 ms and 125 ms, after
-//! probes of 1.1 ms and 0.5 ms. On an RTX 3090 (NVIDIA 620.70.06) it is 54 ms, in 20 pieces of at
-//! most 2.6 ms, and fanned out 98 ms, after a probe of 14 ms. Printed as a `RATE-MAP-PIECES` line:
-//! the map's regions, the
-//! command buffer's GPU time, the pieces and ranges it was cut into, and its pieces' GPU times
-//! where the device times them. Checked: the command buffer was cut into pieces and its largest
-//! command into ranges, and no piece ran past [`PIECE_LIMIT`]. Twice: over a range the call
+//! host step, cold, 515 ms of an Iris Xe's GPU, in 20 pieces of at most 32 ms, and 300 ms of a
+//! Radeon 780M's, in 20 pieces of at most 36 ms (Mesa 26.2.6). Fanned out it is 110 ms and 84 ms
+//! cold, 40 ms and 35 ms warm, after probes of 1.1 ms and 0.5 ms. On an RTX 3090 (NVIDIA
+//! 620.70.06) it is 62 ms, in 20 pieces of at most 3.0 ms, and fanned out 89 ms cold, 82 ms of it
+//! the step making the fan-out's two pipelines, and 6.0 ms warm, after a probe of 1.5 ms. The
+//! frame runs twice, cold, then warm, the pipelines it draws with made, each printed as a
+//! `RATE-MAP-PIECES` line: the map's
+//! regions, the command buffer's GPU time, the pieces and ranges it was cut into, and its pieces'
+//! GPU times where the device times them, and the host step's time and the pipelines it made
+//! (`WorkCounts::host_step_nanos`, `host_step_pipelines_made`, `render_pipeline_create_nanos`).
+//! Checked, each time: the command buffer was cut into pieces and its largest command into
+//! ranges, and no piece ran past [`PIECE_LIMIT`]. Twice: over a range the call
 //! names, from the CPU's records, which `commit` records (`rate_mapped_pieces`), and over a range
 //! read from a buffer, from records a blit encoder of the command buffer may write before the
 //! pass (a reset of a command past the range), which its host step records
@@ -34,8 +38,7 @@
 //! `rate_mapped_pieces_guest_scale` (fanned out) and `rate_mapped_pieces_guest_scale_exact`: a GPU
 //! hazard, whose command buffer may run for a second or more, compiled only under
 //! `m2v_gpu_hazards`. They print the same line and check the same bounds. On the RTX 3090 the
-//! region-by-region frame is 332 ms, in 117 pieces of at most 2.7 ms, and fanned out 174 ms,
-//! after a probe of 74 ms.
+//! region-by-region frame is 332 ms, in 117 pieces of at most 2.7 ms.
 //!
 //! Ignored by default: a measurement on a GPU, far too slow on a CPU device. Run it by name with
 //! `--run-ignored all`. The fixture's text is compiled in, so the binary also runs on a machine
@@ -87,7 +90,7 @@ const PIECE_LIMIT: Duration = Duration::from_secs(1);
 /// The counts of `work`: the pieces past the first, the index ranges past the first, the pieces
 /// timed, their GPU time and the longest's; the probes, the draws they flagged, the draws fanned
 /// out and the probes' GPU time.
-fn counts(work: &WorkCounts) -> [u64; 9] {
+fn counts(work: &WorkCounts) -> [u64; 12] {
     [
         work.rate_map_pieces,
         work.rate_map_index_ranges,
@@ -98,6 +101,9 @@ fn counts(work: &WorkCounts) -> [u64; 9] {
         work.rate_map_flagged_draws,
         work.rate_map_fanned_draws,
         work.rate_map_probe_gpu_nanos,
+        work.host_step_nanos,
+        work.host_step_pipelines_made,
+        work.render_pipeline_create_nanos,
     ]
 }
 
@@ -281,73 +287,81 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32) {
     target.resource_options = ResourceOptions::private();
     let target = device.new_texture(&target).unwrap();
     let queue = device.new_command_queue().unwrap();
-    let before = counts(&device.work_counts());
-    let command_buffer = queue.command_buffer().unwrap();
-    if step {
-        let mut blit = command_buffer.blit_command_encoder().unwrap();
-        let past = spread as u64;
-        blit.reset_commands_in_buffer(&icb, past..past + 1).unwrap();
-        blit.end_encoding().unwrap();
-    }
-    let mut pass = RenderPassDescriptor::new();
-    let color = &mut pass.color_attachments[0];
-    color.texture = Some(target.clone());
-    color.load_action = LoadAction::DontCare;
-    color.store_action = StoreAction::Store;
-    pass.rasterization_rate_map = Some(map.clone());
-    let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
-    encoder.set_render_pipeline_state(&pipeline).unwrap();
-    match step {
-        true => encoder.execute_commands_in_buffer_indirect(&icb, &range, 0),
-        false => encoder.execute_commands_in_buffer(&icb, 0..spread as u64),
-    }
-    .unwrap();
-    encoder.end_encoding().unwrap();
-    command_buffer.commit().unwrap();
-    command_buffer.wait_until_completed_for(WAIT).unwrap();
-    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-    let gpu = command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap();
-    drop(command_buffer);
-    let after = counts(&device.work_counts());
-    let [pieces, ranges, timed, nanos, probes, flagged, fanned, probe_nanos] =
-        [0, 1, 2, 3, 5, 6, 7, 8].map(|i| after[i] - before[i]);
-    let most = Duration::from_nanos(after[4]);
-    let indices: u64 = draws.iter().map(|&count| u64::from(count)).sum();
-    let mean = Duration::from_nanos(nanos / timed.max(1));
-    let at = match (step, policy) {
-        (true, RateMapRegionPolicy::FanOut) => "host step, fan-out",
-        (true, _) => "host step, exact",
-        (false, _) => "commit",
-    };
-    eprintln!(
-        "RATE-MAP-PIECES {name} ({at}): screen {}x{}, physical {}x{}, {regions} regions, {spread} \
-         commands of {indices} indices: the command buffer {:.1} ms of GPU time, {} pieces \
-         ({ranges} index ranges past the first); {timed} pieces timed, the longest {:.2} ms, the \
-         mean {:.2} ms; {probes} probes of {:.2} ms, {flagged} draws flagged, {fanned} fanned out",
-        SCREEN[0],
-        SCREEN[1],
-        size.width,
-        size.height,
-        gpu * 1e3,
-        pieces + 1,
-        most.as_secs_f64() * 1e3,
-        mean.as_secs_f64() * 1e3,
-        probe_nanos as f64 * 1e-6,
-    );
-    match fans {
-        true => {
-            assert_eq!(probes, 1, "the host step probed the pass once");
-            assert!(fanned > 0, "no draw was fanned out");
+    for frame in ["cold", "warm"] {
+        let before = counts(&device.work_counts());
+        let command_buffer = queue.command_buffer().unwrap();
+        if step {
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            let past = spread as u64;
+            blit.reset_commands_in_buffer(&icb, past..past + 1).unwrap();
+            blit.end_encoding().unwrap();
         }
-        false => {
-            assert_eq!((probes, fanned), (0, 0), "a draw was fanned out");
-            assert!(pieces > 0, "the frame was not cut into pieces");
-            assert!(ranges > 0, "its largest command was not cut into ranges");
+        let mut pass = RenderPassDescriptor::new();
+        let color = &mut pass.color_attachments[0];
+        color.texture = Some(target.clone());
+        color.load_action = LoadAction::DontCare;
+        color.store_action = StoreAction::Store;
+        pass.rasterization_rate_map = Some(map.clone());
+        let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        encoder.set_render_pipeline_state(&pipeline).unwrap();
+        match step {
+            true => encoder.execute_commands_in_buffer_indirect(&icb, &range, 0),
+            false => encoder.execute_commands_in_buffer(&icb, 0..spread as u64),
         }
+        .unwrap();
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        let gpu = command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap();
+        drop(command_buffer);
+        let after = counts(&device.work_counts());
+        let delta = |i: usize| after[i] - before[i];
+        let [pieces, ranges, timed, nanos] = [0, 1, 2, 3].map(delta);
+        let [probes, flagged, fanned, probe_nanos] = [5, 6, 7, 8].map(delta);
+        let [stepped, made, made_nanos] = [9, 10, 11].map(delta);
+        let most = Duration::from_nanos(after[4]);
+        let indices: u64 = draws.iter().map(|&count| u64::from(count)).sum();
+        let mean = Duration::from_nanos(nanos / timed.max(1));
+        let at = match (step, policy) {
+            (true, RateMapRegionPolicy::FanOut) => "host step, fan-out",
+            (true, _) => "host step, exact",
+            (false, _) => "commit",
+        };
+        eprintln!(
+            "RATE-MAP-PIECES {name} ({at}, {frame}): screen {}x{}, physical {}x{}, {regions} \
+             regions, {spread} commands of {indices} indices: the command buffer {:.1} ms of GPU \
+             time, {} pieces ({ranges} index ranges past the first); {timed} pieces timed, the \
+             longest {:.2} ms, the mean {:.2} ms; {probes} probes of {:.2} ms, {flagged} draws \
+             flagged, {fanned} fanned out; the host step {:.1} ms, {made} pipelines made there, \
+             {:.1} ms creating render pipelines",
+            SCREEN[0],
+            SCREEN[1],
+            size.width,
+            size.height,
+            gpu * 1e3,
+            pieces + 1,
+            most.as_secs_f64() * 1e3,
+            mean.as_secs_f64() * 1e3,
+            probe_nanos as f64 * 1e-6,
+            stepped as f64 * 1e-6,
+            made_nanos as f64 * 1e-6,
+        );
+        match fans {
+            true => {
+                assert_eq!(probes, 1, "the host step probed the pass once");
+                assert!(fanned > 0, "no draw was fanned out");
+            }
+            false => {
+                assert_eq!((probes, fanned), (0, 0), "a draw was fanned out");
+                assert!(pieces > 0, "the frame was not cut into pieces");
+                assert!(ranges > 0, "its largest command was not cut into ranges");
+            }
+        }
+        assert!(most < PIECE_LIMIT, "a piece ran {most:?}");
+        assert!(
+            Duration::from_nanos(probe_nanos) < PIECE_LIMIT,
+            "the probe ran {probe_nanos} ns"
+        );
     }
-    assert!(most < PIECE_LIMIT, "a piece ran {most:?}");
-    assert!(
-        Duration::from_nanos(probe_nanos) < PIECE_LIMIT,
-        "the probe ran {probe_nanos} ns"
-    );
 }
