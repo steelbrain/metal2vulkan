@@ -7,8 +7,9 @@
 //! Vulkan spec (`RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits, and
 //! the modes the device's independence ties to them), it is that conversion and its widening, each
 //! decorated `NoContraction`, in an entry declaring those modes ([`QuantizeForm::Controlled`],
-//! [`controlled_modes`]): exact on every such device whose driver keeps the pair (not NVIDIA's,
-//! `DriverWorkaround::HalfConversionPairFolded`), with no fact and no note, but for the result of
+//! [`controlled_modes`]), where the driver keeps the pair (not NVIDIA's,
+//! `DriverWorkaround::HalfConversionPairFolded`, whose round trip is the device's conversion,
+//! [`quantize_form`]): exact, with no fact and no note, but for the result of
 //! `float` arithmetic on a driver that fuses the operation into the narrowing (RADV's,
 //! `DriverWorkaround::HalfConversionFusedWithArithmetic`, [`rounds_arithmetic`]), which the module
 //! records as `PrecisionNote::NativeHalfConversion`. Elsewhere, where the

@@ -2307,7 +2307,7 @@ pub fn unorm8_tile_value(
 /// the device's conversion under the 16-bit float controls ([`QuantizeForm::Controlled`]: the
 /// profile has `shaderFloat16`, `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve`
 /// for 16 bits, and a driver that keeps the conversion and its widening, not one with
-/// `DriverWorkaround::HalfConversionPairFolded`; [`narrow::controlled_modes`]), that conversion
+/// `DriverWorkaround::HalfConversionPairFolded`; [`narrow::quantize_form`]), that conversion
 /// and its widening ([`narrow::round`]): two instructions, Metal's `half(float)` by the Vulkan spec
 /// (conversions are correctly rounded, to nearest even under `RoundingModeRTE`, denormals kept
 /// under `DenormPreserve`, zero signs and infinities under `SignedZeroInfNanPreserve`), as the
