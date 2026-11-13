@@ -273,3 +273,38 @@ fn the_digest_definition_is_pinned() {
         "the content digest's definition changed"
     );
 }
+
+/// A sequence of integers decodes, taken at once, to what reading its items one at a time gives,
+/// and a sequence its bytes cut short is `Malformed`.
+#[test]
+fn integer_sequences_decode_item_for_item() {
+    fn one_at_a_time<T: Codec>(bytes: &[u8]) -> Vec<T> {
+        let mut r = Reader::new(bytes);
+        let n = u32::get(&mut r).expect("count") as usize;
+        let items = (0..n).map(|_| T::get(&mut r).expect("item")).collect();
+        assert_eq!(r.remaining(), 0);
+        items
+    }
+    fn check<T: Codec + Clone + PartialEq + std::fmt::Debug>(items: Vec<T>) {
+        let bytes = encode(&items);
+        assert_eq!(decode::<Vec<T>>(&bytes), Ok(items.clone()));
+        assert_eq!(one_at_a_time::<T>(&bytes), items);
+        let shared: Arc<[T]> = Arc::from(items.clone());
+        assert_eq!(decode::<Arc<[T]>>(&encode(&shared)), Ok(shared));
+        if !items.is_empty() {
+            let short = &bytes[..bytes.len() - 1];
+            assert_eq!(decode::<Vec<T>>(short), Err(Malformed));
+            assert_eq!(decode::<Arc<[T]>>(short), Err(Malformed));
+        }
+    }
+    check::<u16>(vec![0, 1, 0x8000, u16::MAX]);
+    check::<u32>(
+        (0..1000)
+            .map(|i: u32| i.wrapping_mul(0x9e37_79b9))
+            .collect(),
+    );
+    check::<u32>(Vec::new());
+    check::<u64>(vec![u64::MAX, 0x0123_4567_89ab_cdef, 7]);
+    check::<i32>(vec![i32::MIN, -1, 0, i32::MAX]);
+    check::<i64>(vec![i64::MIN, -2, i64::MAX]);
+}

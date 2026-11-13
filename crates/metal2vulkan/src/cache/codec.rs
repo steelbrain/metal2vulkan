@@ -268,6 +268,12 @@ pub(crate) fn decode<T: Codec>(bytes: &[u8]) -> Result<T, Malformed> {
 // ---- Primitives ----
 
 macro_rules! codec_int {
+    // The `n` values `r` holds next, every byte of them taken at once.
+    (@items $t:ty, $r:ident, $n:ident) => {{
+        const N: usize = std::mem::size_of::<$t>();
+        let bytes = $r.take($n.checked_mul(N).ok_or(Malformed)?)?;
+        bytes.as_chunks::<N>().0.iter().map(|b| <$t>::from_le_bytes(*b))
+    }};
     ($($t:ty),*) => {$(
         impl Codec for $t {
             const MIN_BYTES: usize = std::mem::size_of::<$t>();
@@ -276,6 +282,14 @@ macro_rules! codec_int {
             }
             fn get(r: &mut Reader<'_>) -> Result<Self, Malformed> {
                 Ok(<$t>::from_le_bytes(r.array()?))
+            }
+            // A module's words are most of an artifact's bytes: taken in one step, not an
+            // item at a time.
+            fn get_items(r: &mut Reader<'_>, n: usize) -> Result<Vec<Self>, Malformed> {
+                Ok(codec_int!(@items $t, r, n).collect())
+            }
+            fn get_shared(r: &mut Reader<'_>, n: usize) -> Result<Arc<[Self]>, Malformed> {
+                Ok(codec_int!(@items $t, r, n).collect())
             }
         }
     )*};
