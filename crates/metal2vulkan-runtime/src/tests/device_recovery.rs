@@ -15,8 +15,8 @@
 
 use crate::{
     Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue, Degradation,
-    DegradeNotice, Device, DeviceKind, DeviceOptions, Error, MessageSink, ResourceOptions,
-    ShaderCacheOptions,
+    DegradeNotice, Device, DeviceKind, DeviceOptions, Error, EventRef, MessageSink,
+    ResourceOptions, ShaderCacheOptions,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -96,10 +96,15 @@ fn device_with(cache: &Path, messages: Option<MessageSink>) -> Device {
 /// An uncommitted command buffer of `queue` that fills `buffer`'s first 4096 bytes.
 fn filled_by(queue: &CommandQueue, buffer: &Buffer) -> CommandBuffer {
     let command_buffer = queue.command_buffer().unwrap();
+    fill(&command_buffer, buffer);
+    command_buffer
+}
+
+/// Encode into `command_buffer` a fill of `buffer`'s first 4096 bytes.
+fn fill(command_buffer: &CommandBuffer, buffer: &Buffer) {
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.fill_buffer(buffer, 0..4096, 1).unwrap();
     blit.end_encoding().unwrap();
-    command_buffer
 }
 
 /// A committed command buffer of `queue` that copies between two private buffers of `device`
@@ -303,6 +308,71 @@ fn a_queue_s_second_hang_revokes_it_before_the_recovery() {
         return;
     }
     panic!("no loss of {ATTEMPTS} caught the second busy command buffer in flight");
+}
+
+/// What each command buffer's completed handler saw, in the order they ran: its queue's index, its
+/// place among the queue's command buffers, and its error.
+type Ran = Arc<Mutex<Vec<(usize, usize, Option<CommandBufferError>)>>>;
+
+/// Command buffers committed before a loss and still held unsubmitted at it, on two queues (each
+/// queue's first behind an event value nothing reaches, its second behind that one on its queue),
+/// fail as the recovery's victims, every completed handler run, each queue's in commit order and
+/// before that queue's command buffer committed after the recovery, which completes.
+#[test]
+fn work_held_unsubmitted_at_a_loss_fails_as_its_victims_in_queue_order() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let queues = [
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
+    ];
+    let event = device.new_shared_event().unwrap();
+    let filled = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    let ran = Ran::default();
+    let handled = |queue: usize, place: usize, command_buffer: &CommandBuffer| {
+        let ran = Arc::clone(&ran);
+        (command_buffer.add_completed_handler(Box::new(move |done: &CommandBuffer| {
+            ran.lock().unwrap().push((queue, place, done.error()));
+        })))
+        .unwrap();
+    };
+    let mut held = Vec::new();
+    for (at, queue) in queues.iter().enumerate() {
+        let waiting = queue.command_buffer().unwrap();
+        (waiting.encode_wait_for_event(EventRef::Shared(&event), 1)).unwrap();
+        fill(&waiting, &filled);
+        let behind = filled_by(queue, &filled);
+        for (place, command_buffer) in [waiting, behind].into_iter().enumerate() {
+            handled(at, place, &command_buffer);
+            command_buffer.commit().unwrap();
+            held.push(command_buffer);
+        }
+    }
+    device.recover_for_test().unwrap();
+    for (at, queue) in queues.iter().enumerate() {
+        let later = filled_by(queue, &filled);
+        handled(at, 2, &later);
+        later.commit().unwrap();
+        assert_eq!(outcome(&later), (CommandBufferStatus::Completed, None));
+    }
+    for command_buffer in &held {
+        assert_eq!(
+            outcome(command_buffer),
+            (
+                CommandBufferStatus::Error,
+                Some(CommandBufferError::GpuRecoveryVictim)
+            )
+        );
+    }
+    let ran = ran.lock().unwrap();
+    for at in 0..queues.len() {
+        let of_queue: Vec<_> = (ran.iter())
+            .filter(|(queue, ..)| *queue == at)
+            .map(|&(_, place, error)| (place, error))
+            .collect();
+        let victim = Some(CommandBufferError::GpuRecoveryVictim);
+        assert_eq!(of_queue, [(0, victim), (1, victim), (2, None)], "{ran:?}");
+    }
 }
 
 /// A command buffer whose work completed, its queue's timeline past it, completes though the wait
