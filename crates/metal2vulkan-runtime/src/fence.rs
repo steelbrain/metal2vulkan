@@ -141,10 +141,11 @@ impl Device {
 }
 
 impl Fence {
-    /// `device`: a generation handle of the device: of the generation the fence was made on, then
-    /// of each one the device's recoveries carried the fence to. A handle taken of it is the
-    /// caller's: it keeps meaning that generation while held, past a recovery that carries the
-    /// fence on, its raw handles that generation's `VkDevice`'s, kept alive while held.
+    /// `device`: a generation handle of the device, owned, as Metal's `device` answers a retained
+    /// device: of the generation the fence was made on, then of each one the device's recoveries
+    /// carried the fence to. The handle is the caller's: it keeps meaning that generation while
+    /// held, past a recovery that carries the fence on, its raw handles that generation's
+    /// `VkDevice`'s, kept alive while held.
     pub fn device(&self) -> Device {
         self.0.device.generation().clone()
     }

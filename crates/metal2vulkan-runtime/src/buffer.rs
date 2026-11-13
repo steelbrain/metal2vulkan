@@ -4839,10 +4839,11 @@ impl Buffer {
         }
     }
 
-    /// `device`: a generation handle of the device: of the generation the buffer was made on, then
-    /// of each one the device's recoveries carried the buffer to. A handle taken of it is the
-    /// caller's: it keeps meaning that generation while held, past a recovery that carries the
-    /// buffer on, its raw handles that generation's `VkDevice`'s, kept alive while held.
+    /// `device`: a generation handle of the device, owned, as Metal's `device` answers a retained
+    /// device: of the generation the buffer was made on, then of each one the device's recoveries
+    /// carried the buffer to. The handle is the caller's: it keeps meaning that generation while
+    /// held, past a recovery that carries the buffer on, its raw handles that generation's
+    /// `VkDevice`'s, kept alive while held.
     pub fn device(&self) -> Device {
         self.generation().clone()
     }

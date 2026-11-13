@@ -78,10 +78,11 @@ impl Device {
 }
 
 impl DepthStencilState {
-    /// `device`: a generation handle of the device: of the generation the state was made on, then
-    /// of each one the device's recoveries carried the state to. A handle taken of it is the
-    /// caller's: it keeps meaning that generation while held, past a recovery that carries the
-    /// state on, its raw handles that generation's `VkDevice`'s, kept alive while held.
+    /// `device`: a generation handle of the device, owned, as Metal's `device` answers a retained
+    /// device: of the generation the state was made on, then of each one the device's recoveries
+    /// carried the state to. The handle is the caller's: it keeps meaning that generation while
+    /// held, past a recovery that carries the state on, its raw handles that generation's
+    /// `VkDevice`'s, kept alive while held.
     pub fn device(&self) -> Device {
         self.0.device.generation().clone()
     }

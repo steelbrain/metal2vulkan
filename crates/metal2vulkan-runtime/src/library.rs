@@ -207,10 +207,11 @@ impl Device {
 }
 
 impl Library {
-    /// `device`: a generation handle of the device: of the generation the library was made on, then
-    /// of each one the device's recoveries carried the library to. A handle taken of it is the
-    /// caller's: it keeps meaning that generation while held, past a recovery that carries the
-    /// library on, its raw handles that generation's `VkDevice`'s, kept alive while held.
+    /// `device`: a generation handle of the device, owned, as Metal's `device` answers a retained
+    /// device: of the generation the library was made on, then of each one the device's recoveries
+    /// carried the library to. The handle is the caller's: it keeps meaning that generation while
+    /// held, past a recovery that carries the library on, its raw handles that generation's
+    /// `VkDevice`'s, kept alive while held.
     pub fn device(&self) -> Device {
         self.device.generation().clone()
     }
@@ -423,10 +424,11 @@ impl Library {
 }
 
 impl Function {
-    /// `device`: a generation handle of the device: of the generation its library was made on, then
-    /// of each one the device's recoveries carried its library to. A handle taken of it is the
-    /// caller's: it keeps meaning that generation while held, past a recovery that carries its
-    /// library on, its raw handles that generation's `VkDevice`'s, kept alive while held.
+    /// `device`: a generation handle of the device, owned, as Metal's `device` answers a retained
+    /// device: of the generation its library was made on, then of each one the device's recoveries
+    /// carried its library to. The handle is the caller's: it keeps meaning that generation while
+    /// held, past a recovery that carries its library on, its raw handles that generation's
+    /// `VkDevice`'s, kept alive while held.
     pub fn device(&self) -> Device {
         self.generation().clone()
     }
