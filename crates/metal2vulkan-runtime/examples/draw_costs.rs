@@ -3,7 +3,7 @@
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|scene|rebinds]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--threads N] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|pass1|pass17|scene|rebinds]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--threads N] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -40,6 +40,14 @@
 //!   (its own pass's color attachment, read at the fragment's pixel), a sampler and a scissor
 //!   rectangle, then draws 6 vertices, three draws of five indexed (`UInt16`). One draw in each
 //!   pass is a backdrop.
+//! - **pass1** and **pass17**, a window server's frame of many small passes as it composites a
+//!   view of icons: 8 command buffers of 16 passes of 1 draw, and of 4 passes of 17 draws. Each
+//!   pass loads and stores one of 8 surfaces of 256x256 over buffers of their own as the
+//!   compositor's are (`--pages` too), sets its viewport and draws the compositor's plain quads,
+//!   each after the pipeline state (once a pass), its vertex buffers 0 and 1 and fragment buffer
+//!   0, fragment texture 0 (the next of its sampled surfaces), its sampler and a scissor
+//!   rectangle. A pass's cost is the first's figure a draw less the draw's, which the second's
+//!   gives: (17 draws and a pass) less (1 draw and a pass), over 16.
 //! - **scene**, a 3D engine's frame as a layer over another graphics API issues it: 8 command
 //!   buffers of 10 passes and 24 draws each, every pass over the same four 512x512 color
 //!   targets (`BGRA8Unorm`, `RGBA8Unorm` and two `RGBA16Float`), the first cleared, the rest
@@ -178,6 +186,9 @@ enum Stream {
     Damaged,
     /// A window compositor's frame of passes over surfaces ([`Compositor`]).
     Composited,
+    /// A window server's frame of small passes of this many draws each, over the compositor's
+    /// objects ([`Compositor::small_passes`]).
+    Passes(usize),
     /// A 3D engine's frame of passes over four color targets ([`Scene`]), each draw binding its
     /// material's textures and samplers again where `rebinds`.
     Scene { rebinds: bool },
@@ -226,7 +237,7 @@ struct Shape {
 }
 
 /// The shapes, in the order they run.
-const SHAPES: [Shape; 8] = [
+const SHAPES: [Shape; 10] = [
     Shape {
         name: "ws",
         buffers: 8,
@@ -264,6 +275,18 @@ const SHAPES: [Shape; 8] = [
         stream: Stream::Composited,
     },
     Shape {
+        name: "pass1",
+        buffers: 8,
+        draws: 16,
+        stream: Stream::Passes(1),
+    },
+    Shape {
+        name: "pass17",
+        buffers: 8,
+        draws: 4 * 17,
+        stream: Stream::Passes(17),
+    },
+    Shape {
         name: "scene",
         buffers: 8,
         draws: SCENE_DRAWS,
@@ -284,7 +307,7 @@ impl Shape {
             Stream::Bytes | Stream::Clipped | Stream::Damaged => 1,
             Stream::Layers => 2,
             // Its slots lie in the compositor's or the scene's own buffer.
-            Stream::Composited | Stream::Scene { .. } => 0,
+            Stream::Composited | Stream::Passes(_) | Stream::Scene { .. } => 0,
         }
     }
 
@@ -580,6 +603,9 @@ impl Bench {
         if let (Stream::Composited, Some(compositor)) = (shape.stream, &self.compositor) {
             return compositor.steps(buffer);
         }
+        if let (Stream::Passes(each), Some(compositor)) = (shape.stream, &self.compositor) {
+            return compositor.small_passes(buffer, shape.draws / each, each);
+        }
         if let (Stream::Scene { rebinds }, Some(scene)) = (shape.stream, &self.scene) {
             return scene.steps(buffer, rebinds);
         }
@@ -608,7 +634,7 @@ impl Bench {
                     steps.push(Step::VertexBuffer(&chunks[chunk], offset, 0));
                     steps.push(Step::Draw(PrimitiveType::TriangleStrip, 4));
                 }
-                Stream::Composited | Stream::Scene { .. } => {}
+                Stream::Composited | Stream::Passes(_) | Stream::Scene { .. } => {}
                 Stream::Clipped | Stream::Damaged => {
                     if draw % RUN == 0 {
                         steps.push(Step::Pipeline(&self.pipelines[draw / RUN % PIPELINES]));
@@ -764,6 +790,10 @@ const LAYERS: [(u64, u64); 5] = [
     (512, 512),
 ];
 const LAYER_DRAWS: usize = 4;
+
+/// The small passes' surfaces ([`Compositor::small_passes`]), and their side.
+const SMALL_TARGETS: usize = 8;
+const SMALL_SIDE: u64 = 256;
 const FRAMEBUFFER_DRAWS: usize = 15;
 const COMPOSITOR_DRAWS: usize = LAYERS.len() * LAYER_DRAWS + FRAMEBUFFER_DRAWS;
 
@@ -875,7 +905,8 @@ impl Compositor {
             surfaces.push(buffer);
             Ok(texture)
         };
-        let targets = (LAYERS.iter().copied().chain([FRAMEBUFFER]))
+        let small = [(SMALL_SIDE, SMALL_SIDE); SMALL_TARGETS];
+        let targets = (LAYERS.iter().copied().chain([FRAMEBUFFER]).chain(small))
             .map(|size| surface(size, true))
             .collect::<Result<Vec<_>>>()?;
         let sources = (0..SOURCES)
@@ -884,16 +915,17 @@ impl Compositor {
                 at => surface(SOURCE_SIZES[(at - 1) % SOURCE_SIZES.len()], false),
             })
             .collect::<Result<Vec<_>>>()?;
-        let passes = (targets.iter().zip(LAYERS.iter().chain([&FRAMEBUFFER])))
+        let sizes = LAYERS.iter().chain([&FRAMEBUFFER]).chain(&small);
+        let passes = (targets.iter().zip(sizes))
             .enumerate()
             .map(|(at, (target, &(width, height)))| {
                 let mut descriptor = RenderPassDescriptor::new();
                 let color = &mut descriptor.color_attachments[0];
                 color.texture = Some(target.clone());
                 color.store_action = StoreAction::Store;
-                match at < LAYERS.len() {
-                    true => color.load_action = LoadAction::Load,
-                    false => {
+                match at == LAYERS.len() {
+                    false => color.load_action = LoadAction::Load,
+                    true => {
                         color.load_action = LoadAction::Clear;
                         color.clear_color = ClearColor::new(0.1, 0.1, 0.1, 1.0);
                     }
@@ -1059,6 +1091,38 @@ impl Compositor {
                 true => Step::DrawIndexed(&self.data, INDICES + slot * 64),
                 false => Step::Draw(PrimitiveType::Triangle, 6),
             });
+        }
+        steps
+    }
+}
+
+impl Compositor {
+    /// Command buffer `buffer`'s steps of a window server's frame ([`Stream::Passes`]): `passes`
+    /// passes of `each` plain quads, each pass over the next of the small surfaces, each draw's
+    /// slots the next of the buffer's.
+    fn small_passes(&self, buffer: usize, passes: usize, each: usize) -> Vec<Step<'_>> {
+        let first = LAYERS.len() + 1;
+        let mut steps = Vec::new();
+        for pass in 0..passes {
+            steps.push(Step::Pass(first + (buffer * passes + pass) % SMALL_TARGETS));
+            steps.push(Step::Pipeline(&self.pipelines[Quad::Plain as usize]));
+            for k in 0..each {
+                let d = pass * each + k;
+                let slot = (buffer * passes * each + d) as u64 % COMPOSITOR_SLOTS;
+                steps.push(Step::VertexBuffer(&self.data, CORNERS6 + slot * 128, 0));
+                steps.push(Step::VertexBuffer(&self.data, PLACEMENT + slot * 256, 1));
+                steps.push(Step::FragmentBuffer(&self.data, TINT + slot * 256, 0));
+                let source = &self.sources[(d * 5 + buffer) % SOURCES];
+                steps.push(Step::FragmentTexture(source, 0));
+                steps.push(Step::FragmentSampler(&self.sampler));
+                steps.push(Step::Scissor(ScissorRect {
+                    x: (d * 97 % 8) as u64 * SMALL_SIDE / 16,
+                    y: (d * 53 % 8) as u64 * SMALL_SIDE / 16,
+                    width: SMALL_SIDE / 2,
+                    height: SMALL_SIDE / 2,
+                }));
+                steps.push(Step::Draw(PrimitiveType::Triangle, 6));
+            }
         }
         steps
     }
@@ -1808,7 +1872,7 @@ fn main() -> Result<()> {
     println!("device: {}", device.name());
     let library = library(&device, metallib.as_deref())?;
     let compositor = (shapes.iter())
-        .any(|shape| shape.stream == Stream::Composited)
+        .any(|shape| matches!(shape.stream, Stream::Composited | Stream::Passes(_)))
         .then_some(pages);
     let scene = (shapes.iter()).any(|shape| matches!(shape.stream, Stream::Scene { .. }));
     let bench = Bench::new(device, &library, shadowed, (compositor, scene))?;
