@@ -133,6 +133,12 @@ entry:
   %q3 = extractelement <2 x half> %q, i64 1
   %s = call half @air.sqrt.f16(half %q1)
   %q2 = fdiv half %ha, %hc
+  %u0 = insertelement <2 x float> undef, float %a, i64 0
+  %u = insertelement <2 x float> %u0, float %c, i64 1
+  %w = fmul <2 x float> %u, %u
+  %w0 = extractelement <2 x float> %w, i64 0
+  %w1 = extractelement <2 x float> %w, i64 1
+  %ws = fadd float %w0, %w1
   %r1 = fpext half %q1 to float
   %r2 = fpext half %s to float
   %r3 = fpext half %q2 to float
@@ -141,10 +147,12 @@ entry:
   %o2 = getelementptr inbounds float, ptr addrspace(1) %0, i64 5
   %o3 = getelementptr inbounds float, ptr addrspace(1) %0, i64 6
   %o4 = getelementptr inbounds float, ptr addrspace(1) %0, i64 7
+  %o5 = getelementptr inbounds float, ptr addrspace(1) %0, i64 8
   store float %r1, ptr addrspace(1) %o1, align 4
   store float %r2, ptr addrspace(1) %o2, align 4
   store float %r3, ptr addrspace(1) %o3, align 4
   store float %r4, ptr addrspace(1) %o4, align 4
+  store float %ws, ptr addrspace(1) %o5, align 4
   ret void
 }
 
@@ -171,9 +179,9 @@ const RESULT: f32 = 33.25;
 
 /// The division kernel's inputs `a`, `b`, `c` (past `2^14`) and `e` (a `half` denormal, `2^-16`),
 /// and its exact results: `a / b`, `sqrt(a / b)`, `a / c` (the smallest normal `half`) and
-/// `b * b / e`.
+/// `b * b / e`; then, in `float`, `a * a + c * c` of a vector inserted into an undefined one.
 const DIVIDE_INPUTS: [f32; 4] = [2.0, 0.25, 32768.0, 1.0 / 65536.0];
-const QUOTIENTS: [f32; 4] = [8.0, 2.828_125, 1.0 / 16384.0, 4096.0];
+const QUOTIENTS: [f32; 5] = [8.0, 2.828_125, 1.0 / 16384.0, 4096.0, 1_073_741_824.0];
 
 /// The bitcode of module `src`, or `None` (skipped visibly) without `llvm-as`.
 fn bitcode_of(src: &str) -> Option<Vec<u8>> {
@@ -275,6 +283,9 @@ struct Shape {
     /// The divisions and square roots at 16 bits and at 32.
     divides: [usize; 2],
     sqrts: [usize; 2],
+    /// The undefined `f32` values, and the widenings of undefined 16-bit ones.
+    wide_undefs: usize,
+    undef_widenings: usize,
     /// The variables (`Function` and `Private`) holding floats at 32 bits and at 16.
     wide_vars: usize,
     narrow_vars: usize,
@@ -295,10 +306,22 @@ fn shape(m: &TypedModule) -> Shape {
             _ => None,
         })
         .collect();
+    let undefs: Vec<_> = m
+        .blocks()
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter_map(|n| matches!(n.inst, Inst::Undef).then_some(n.result).flatten())
+        .collect();
     let mut s = Shape::default();
     for n in m.blocks().iter().flat_map(|b| &b.insts) {
         let r16 = n.result.is_some_and(|r| width(r) == Some(16));
         match &n.inst {
+            Inst::Undef if n.result.is_some_and(|r| width(r) == Some(32)) => s.wide_undefs += 1,
+            Inst::Convert {
+                op: ConvOp::FConvert,
+                a,
+                ..
+            } if undefs.contains(a) => s.undef_widenings += 1,
             Inst::Convert {
                 op: ConvOp::FConvert,
                 a,
@@ -395,7 +418,8 @@ fn half_values_are_held_at_16_bits_under_the_float_controls() {
 
 /// On the Iris Xe and RADV (the 16-bit float controls) a `half` division, on two lanes and on
 /// one, and a `half` square root are the device's 16-bit `OpFDiv` and `Sqrt`, none at 32 bits and
-/// no exact half narrowed, recording `NativeDivision` and `DeviceArithmetic` and passing L3; a
+/// no exact half narrowed, and an undefined `float` vector stays one (no widening of its 16-bit
+/// twin), recording `NativeDivision` and `DeviceArithmetic` and passing L3; a
 /// divisor past `2^14` and a denormal one are scaled into Vulkan's range exactly. On lavapipe
 /// (the conversion alone) they are the `float` instructions. Each answers the exact results on
 /// the interpreter.
@@ -411,8 +435,13 @@ fn half_division_and_sqrt_are_16_bit_under_the_float_controls() {
         let s = shape(&m);
         assert_eq!(s.exact_narrowings, 0, "{stem}: {s:?}");
         assert_eq!((s.divides, s.sqrts), ([2, 0], [1, 0]), "{stem}: {s:?}");
+        // The `float` vector's undefined base stays an undefined `float` vector.
+        assert!(
+            s.wide_undefs >= 1 && s.undef_widenings == 0,
+            "{stem}: {s:?}"
+        );
         assert_eq!(
-            interpret_on(&m, push, &DIVIDE_INPUTS, 4),
+            interpret_on(&m, push, &DIVIDE_INPUTS, 5),
             QUOTIENTS,
             "{stem}"
         );
@@ -431,7 +460,7 @@ fn half_division_and_sqrt_are_16_bit_under_the_float_controls() {
     let s = shape(&m);
     assert_eq!((s.divides, s.sqrts), ([0, 2], [0, 1]), "lavapipe: {s:?}");
     assert_eq!(
-        interpret_on(&m, push, &DIVIDE_INPUTS, 4),
+        interpret_on(&m, push, &DIVIDE_INPUTS, 5),
         QUOTIENTS,
         "lavapipe"
     );

@@ -877,6 +877,19 @@ fn rebuild(
                 tw.twin.insert(r, t);
                 out.push(node);
             }
+            // An undefined value's twin is the 16-bit undefined value; its `f32` stays undefined,
+            // where a use reads it, as no widening of the twin is any more defined.
+            Inst::Undef if flag(&facts.half, r) => {
+                let t = twin_value(m, r, block)?;
+                out.push(InstNode {
+                    result: Some(t),
+                    inst: Inst::Undef,
+                });
+                tw.twin.insert(r, t);
+                if wide_uses {
+                    out.push(node);
+                }
+            }
             // An exact half's own instruction on its operands' twins, or a rounded value's at 16
             // bits; the `f32` is the twin's widening.
             inst if flag(&facts.half, r) || flag(&facts.rounded, r) => {
