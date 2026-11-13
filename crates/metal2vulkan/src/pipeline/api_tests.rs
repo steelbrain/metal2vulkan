@@ -270,6 +270,7 @@ mod serde_round_trips {
             anisotropic_samplers: BTreeSet::from([slot(Stage::Fragment, SlotClass::Sampler, 1)]),
             color_group: 1,
             region_viewports: true,
+            region_fan_out: Some(crate::pipeline::RegionFanOut::Probe),
         });
         round_trip(&SpecializationKey {
             data: vec![1, 0, 0, 0],
@@ -703,6 +704,11 @@ mod serde_round_trips {
                 primitive: crate::pipeline::BandPrimitive::Triangles,
             }),
             interpolates_at_sample: true,
+            region_fan_out: Some(crate::pipeline::FanOutState {
+                mode: crate::pipeline::RegionFanOut::Probe,
+                copies: 7,
+                push_offset: 116,
+            }),
         });
         let mut slots = BTreeMap::new();
         slots.insert(

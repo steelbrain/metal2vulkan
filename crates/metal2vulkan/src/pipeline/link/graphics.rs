@@ -767,6 +767,8 @@ pub fn graphics_state(
         emulated_tessellation: None,
         // A band variant's pipeline states its band (`link`).
         line_band: None,
+        // A fan-out variant's pipeline states its fan-out (`link`).
+        region_fan_out: None,
         writes_point_size: vs.writes_point_size(),
         flat_fragment_inputs: fs.is_some_and(|fs| reads_flat_inputs(&fs.io)),
         clip_distances: vs

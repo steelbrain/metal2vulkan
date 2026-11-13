@@ -1008,8 +1008,9 @@ impl Device {
             stages = all;
         }
         // A fragment function that reads `[[barycentric_coord]]` as varyings, or a vertex function
-        // that selects its slice or viewport through them: the geometry stages of the point, line
-        // and triangle classes, before the fragment stage, or last without one.
+        // that selects its slice or viewport through them, or a fan-out variant: the geometry
+        // stages of the point, line and triangle classes, before the fragment stage, or last
+        // without one.
         if let Some(g) = &linked.geometry {
             let at = stages
                 .iter()
@@ -1037,7 +1038,9 @@ impl Device {
             stages.splice(at..at, added);
         }
         let mut dependencies = dependencies(&artifacts, self);
-        if let Some(g) = &linked.geometry {
+        // A fan-out variant's stages are the consumer's choice of how to draw its rate-mapped
+        // pass, which its graphics state states (`GraphicsState::region_fan_out`).
+        if let Some(g) = linked.geometry.as_ref().filter(|g| g.fan_out.is_none()) {
             let fact = RuntimeFact::SynthesizedGeometry {
                 weights: !g.forms.is_empty(),
                 layer: g.layer,

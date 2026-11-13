@@ -40,10 +40,10 @@ use crate::pipeline::artifact::{
 use crate::pipeline::descriptor::TessellationDescriptor;
 use crate::pipeline::facts::{Mechanism, RuntimeFact, UniformViewChoice};
 use crate::pipeline::graphics::{
-    BandPrimitive, BlendState, ColorAttachmentState, EmulatedTessellation, FragmentImageblock,
-    GraphicsState, ImageblockMechanism, InputAttachmentUse, LineBandState, ShaderTestsUse,
-    ShadowStencilUse, StandInUse, StandInView, StorageAttachmentUse, StorageAttachmentView,
-    TessellationState,
+    BandPrimitive, BlendState, ColorAttachmentState, EmulatedTessellation, FanOutState,
+    FragmentImageblock, GraphicsState, ImageblockMechanism, InputAttachmentUse, LineBandState,
+    RegionFanOut, ShaderTestsUse, ShadowStencilUse, StandInUse, StandInView, StorageAttachmentUse,
+    StorageAttachmentView, TessellationState,
 };
 use crate::pipeline::interface::{
     AccessSet, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView, LevelReads,
@@ -832,6 +832,7 @@ codec_enum! {
     HandleClass { Image(f0), Sampler { compare, integer }, FunctionTable }
     SyntheticBinding {
         ArgumentTable, ExecutionStatus, RootTable, HandleTable, ConstantBlob, TessellationFactors, Imageblock,
+        RateMapRegions, RateMapFlags,
         SamplerTable,
         ShadowStencil,
         FunctionTableDirectory,
@@ -898,6 +899,7 @@ codec_enum! {
         AlphaTestReference,
         YCbCrInPlace(f0),
         LineBand,
+        RegionProbe,
     }
     Symbol { Binding(f0), DescriptorSet(f0), Location(f0), Component(f0), SpecId(f0) }
 }
@@ -1395,6 +1397,7 @@ codec_struct! {
         reads_position_depth,
         fragment_writes_memory, color_outputs, sample_mask, shader_tests, snapshot_reads,
         color_group, logic_op, line_band, interpolates_at_sample, writes_sample_mask,
+        region_fan_out,
     }
     TessellationState {
         patch_control_points, domain, control_points, factor_step_function, push_offset,
@@ -1402,6 +1405,7 @@ codec_struct! {
     }
     EmulatedTessellation { domain, control_points, descriptor }
     LineBandState { push_offset, primitive }
+    FanOutState { mode, copies, push_offset }
     FragmentImageblock { mechanism, words, master, data_size, alignment }
     ColorAttachmentState { format, write_mask, blend }
     BlendState { src_color, dst_color, color_op, src_alpha, dst_alpha, alpha_op }
@@ -1421,6 +1425,7 @@ codec_enum! {
     StorageAttachmentView { Attachment, SamplePlanes { layers } }
     StandInView { Image, SamplePlanes { layers } }
     BandPrimitive { Lines, Triangles }
+    RegionFanOut { Draw, Probe }
     PrecisionNote {
         F16FmaDoubleRounding, F16IntConvDoubleRounding, GradFromBias,
         DeviceTranscendentals, ReductionOrder, DeviceDenormals,
