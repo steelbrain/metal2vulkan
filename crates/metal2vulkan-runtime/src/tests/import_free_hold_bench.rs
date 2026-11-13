@@ -13,17 +13,30 @@
 //! right after another, and paced, each after a wait as long as the frees before it took, less the
 //! time since the last ended (`step_aside::pace`, the runtime's own threads' rule). Printed (`IMPORT-FREE-HOLD`), per kind: the makes' spread;
 //! per kind and order: the frees' spread, the runs' lengths, and the spread of the pings whose
-//! commit to completion overlapped a run, beside those that overlapped no make or free. Ignored:
-//! run it in release under `--cfg m2v_gpu`, `cargo test --release -p metal2vulkan-runtime --lib
-//! import_free_hold_bench -- --ignored --nocapture`.
+//! commit to completion overlapped a run, beside those that overlapped no make or free.
+//!
+//! The completion leg (`import_free_hold_bench_completed`): the same pinger beside imports a
+//! completed command buffer's release frees (`command_buffer/mod.rs`'s release step). Each round
+//! makes [`PIECES`] no-copy buffers of 512 KiB, or four of 64 MiB, over anonymous pages, each
+//! with a deallocator that notes when it ran; records a copy of a word out of each into a
+//! `Private` buffer, commits, and lets go of the buffers while the command buffer is in flight,
+//! so its completion lets go of their pages last and frees their imports. Printed
+//! (`IMPORT-FREE-HOLD completed`), per size: the frees' runs (the first deallocator to the last),
+//! how long after `wait_until_completed` returned the last deallocator ran, the spread of the
+//! pings whose commit to completion overlapped a round's commit to its last deallocator, beside
+//! those that overlapped none, and the free thread's counts over the leg.
+//!
+//! Ignored: run them in release under `--cfg m2v_gpu`, `cargo test --release -p
+//! metal2vulkan-runtime --lib import_free_hold_bench -- --ignored --nocapture`.
 
 use super::host_residency::{udmabuf, udmabuf_openable};
-use crate::{Device, DeviceKind, DeviceOptions, ResourceOptions};
+use crate::{Buffer, Device, DeviceKind, DeviceOptions, HostMemory, ResourceOptions};
 use ash::vk;
 use std::ops::Range;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const WAIT: Duration = Duration::from_secs(60);
@@ -412,9 +425,8 @@ fn measure(device: &Device, kind: Kind) -> Option<Spans> {
     Some(spans)
 }
 
-#[test]
-#[ignore = "a release benchmark: run with --ignored --nocapture"]
-fn import_free_hold_bench() {
+/// The bench's device: the first GPU, its submission checks settled.
+fn bench_device() -> Device {
     let options = DeviceOptions {
         kinds: vec![
             DeviceKind::Discrete,
@@ -426,6 +438,51 @@ fn import_free_hold_bench() {
     let device = Device::system_default_with(&options).unwrap();
     // The submission checks' own imports and frees, out of the way first.
     let _settled = device.settle_submit_checks(WAIT);
+    device
+}
+
+/// Commit a one-word fill on a queue of `device`'s own every [`PING`] and wait for it, until
+/// `done`: each one's commit to completion.
+fn ping(device: &Device, done: &AtomicBool) -> Vec<Range<Instant>> {
+    let queue = device.new_command_queue().unwrap();
+    let word = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+    let mut pings = Vec::new();
+    while !done.load(Ordering::Acquire) {
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(&word, 0..4, 2).unwrap();
+        blit.end_encoding().unwrap();
+        let committed = Instant::now();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        pings.push(committed..Instant::now());
+        std::thread::sleep(PING);
+    }
+    pings
+}
+
+/// The device's name, vendor and driver version, as the bench prints them.
+fn named(device: &Device) -> String {
+    // SAFETY: the bench reads the instance's own query of its physical device.
+    let handles = unsafe { device.raw() };
+    // SAFETY: the physical device is the instance's.
+    let properties = unsafe {
+        handles
+            .instance
+            .get_physical_device_properties(handles.physical_device)
+    };
+    format!(
+        "{} (vendor {:#06x}, driver version {:#x})",
+        device.name(),
+        properties.vendor_id,
+        properties.driver_version
+    )
+}
+
+#[test]
+#[ignore = "a release benchmark: run with --ignored --nocapture"]
+fn import_free_hold_bench() {
+    let device = bench_device();
     // The bench's frees are owed as the runtime's own threads' are.
     crate::step_aside::mark_a_paced_thread();
     let done = AtomicBool::new(false);
@@ -443,23 +500,7 @@ fn import_free_hold_bench() {
     });
     let (pings, measured) = std::thread::scope(|scope| {
         let stops = Stops(&done);
-        let pinger = scope.spawn(|| {
-            let queue = device.new_command_queue().unwrap();
-            let word = device.new_buffer(4096, ResourceOptions::private()).unwrap();
-            let mut pings = Vec::new();
-            while !done.load(Ordering::Acquire) {
-                let command_buffer = queue.command_buffer().unwrap();
-                let mut blit = command_buffer.blit_command_encoder().unwrap();
-                blit.fill_buffer(&word, 0..4, 2).unwrap();
-                blit.end_encoding().unwrap();
-                let committed = Instant::now();
-                command_buffer.commit().unwrap();
-                command_buffer.wait_until_completed_for(WAIT).unwrap();
-                pings.push(committed..Instant::now());
-                std::thread::sleep(PING);
-            }
-            pings
-        });
+        let pinger = scope.spawn(|| ping(&device, &done));
         // The pinger's queue and its first pings before the first make.
         std::thread::sleep(Duration::from_millis(500));
         let measured: Vec<Spans> = kinds
@@ -469,20 +510,7 @@ fn import_free_hold_bench() {
         drop(stops);
         (pinger.join().unwrap(), measured)
     });
-    // SAFETY: the bench reads the instance's own query of its physical device.
-    let handles = unsafe { device.raw() };
-    // SAFETY: the physical device is the instance's.
-    let properties = unsafe {
-        handles
-            .instance
-            .get_physical_device_properties(handles.physical_device)
-    };
-    eprintln!(
-        "IMPORT-FREE-HOLD device: {} (vendor {:#06x}, driver version {:#x})",
-        device.name(),
-        properties.vendor_id,
-        properties.driver_version
-    );
+    eprintln!("IMPORT-FREE-HOLD device: {}", named(&device));
     let quiet = pings.iter().filter(|ping| {
         !(measured.iter())
             .flat_map(|spans| {
@@ -529,4 +557,158 @@ fn import_free_hold_bench() {
             );
         }
     }
+}
+
+/// What the completion leg measured of one size: each round's commit to its last deallocator,
+/// its frees' run (the first deallocator to the last), and how long after the wait returned its
+/// last deallocator ran (zero where before).
+struct Completed {
+    bytes: usize,
+    count: usize,
+    windows: Vec<Range<Instant>>,
+    runs: Vec<Duration>,
+    after_wait: Vec<Duration>,
+}
+
+/// [`PIECES`] no-copy buffers of 512 KiB, or four of 64 MiB, over anonymous pages, each with a
+/// deallocator that notes when it ran into `ran`; `None`, printed, where the device makes none.
+fn no_copy_buffers(
+    device: &Device,
+    pages: &Pages,
+    (bytes, count): (usize, usize),
+    ran: &Arc<Mutex<Vec<Instant>>>,
+) -> Option<Vec<Buffer>> {
+    let mut buffers = Vec::with_capacity(count);
+    for index in 0..count {
+        let ran = Arc::clone(ran);
+        let deallocator: crate::Deallocator = Box::new(move |_: NonNull<u8>, _: u64| {
+            ran.lock().unwrap().push(Instant::now());
+        });
+        // SAFETY: the pages outlive every buffer over them (`Pages` drops after the leg waits for
+        // every deallocator), and only these buffers' commands use them.
+        let made = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                HostMemory::new(pages.at(index * bytes)),
+                bytes as u64,
+                ResourceOptions::default(),
+                Some(deallocator),
+            )
+        };
+        match made {
+            Ok(buffer) => buffers.push(buffer),
+            Err(error) => {
+                eprintln!("IMPORT-FREE-HOLD completed: no no-copy buffer ({error:?}): not run");
+                return None;
+            }
+        }
+    }
+    Some(buffers)
+}
+
+/// [`ROUNDS`] rounds of the completion leg (the module docs) of `count` buffers of `bytes` on
+/// `device`, [`GAP`] apart; `None` where it cannot make them.
+fn completed_rounds(device: &Device, (bytes, count): (usize, usize)) -> Option<Completed> {
+    let pages = Pages::new(bytes * count, 64 << 10);
+    let queue = device.new_command_queue().unwrap();
+    let target = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+    let mut completed = Completed {
+        bytes,
+        count,
+        windows: Vec::new(),
+        runs: Vec::new(),
+        after_wait: Vec::new(),
+    };
+    for _ in 0..ROUNDS {
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let buffers = no_copy_buffers(device, &pages, (bytes, count), &ran)?;
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        for (index, buffer) in buffers.iter().enumerate() {
+            let at = 4 * (index as u64 % 1024);
+            blit.copy_from_buffer_to_buffer(buffer, 0, &target, at, 4)
+                .unwrap();
+        }
+        blit.end_encoding().unwrap();
+        let committed = Instant::now();
+        command_buffer.commit().unwrap();
+        // The command buffer in flight holds the pages last: its completion frees the imports.
+        drop(buffers);
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        let waited = Instant::now();
+        let deadline = waited + WAIT;
+        while ran.lock().unwrap().len() < count {
+            assert!(Instant::now() < deadline, "a deallocator never ran");
+            std::thread::sleep(Duration::from_micros(100));
+        }
+        let mut ran = ran.lock().unwrap().clone();
+        ran.sort();
+        let (first, last) = (ran[0], ran[ran.len() - 1]);
+        completed.windows.push(committed..last);
+        completed.runs.push(last - first);
+        completed
+            .after_wait
+            .push(last.saturating_duration_since(waited));
+        std::thread::sleep(GAP);
+    }
+    Some(completed)
+}
+
+#[test]
+#[ignore = "a release benchmark: run with --ignored --nocapture"]
+fn import_free_hold_bench_completed() {
+    let device = bench_device();
+    let done = AtomicBool::new(false);
+    let before = device.work_counts();
+    let (pings, measured) = std::thread::scope(|scope| {
+        let stops = Stops(&done);
+        let pinger = scope.spawn(|| ping(&device, &done));
+        // The pinger's queue and its first pings before the first make.
+        std::thread::sleep(Duration::from_millis(500));
+        let measured: Vec<Completed> = [(512 << 10, PIECES), (64 << 20, 4)]
+            .into_iter()
+            .filter_map(|size| completed_rounds(&device, size))
+            .collect();
+        drop(stops);
+        (pinger.join().unwrap(), measured)
+    });
+    let after = device.work_counts();
+    eprintln!("IMPORT-FREE-HOLD completed device: {}", named(&device));
+    let quiet = pings.iter().filter(|ping| {
+        !(measured.iter())
+            .flat_map(|completed| completed.windows.iter())
+            .any(|window| overlaps(ping, window))
+    });
+    eprintln!(
+        "IMPORT-FREE-HOLD completed: pings beside no round {}",
+        spread(lengths(quiet))
+    );
+    for completed in &measured {
+        let size = format!(
+            "{} no-copy buffers of {} KiB",
+            completed.count,
+            completed.bytes >> 10
+        );
+        let beside = pings
+            .iter()
+            .filter(|ping| (completed.windows.iter()).any(|window| overlaps(ping, window)));
+        eprintln!(
+            "IMPORT-FREE-HOLD completed {size}: frees' runs {}",
+            spread(completed.runs.clone())
+        );
+        eprintln!(
+            "IMPORT-FREE-HOLD completed {size}: last deallocator after the wait returned {}",
+            spread(completed.after_wait.clone())
+        );
+        eprintln!(
+            "IMPORT-FREE-HOLD completed {size}: pings beside a round {}",
+            spread(lengths(beside))
+        );
+    }
+    eprintln!(
+        "IMPORT-FREE-HOLD completed counts: memory_frees_posted {}, memory_frees_paced {} \
+         ({:.3} ms waited)",
+        after.memory_frees_posted - before.memory_frees_posted,
+        after.memory_frees_paced - before.memory_frees_paced,
+        (after.memory_frees_paced_nanos - before.memory_frees_paced_nanos) as f64 / 1e6
+    );
 }
