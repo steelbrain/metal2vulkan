@@ -14,7 +14,10 @@
 //! 780M's, in 20 pieces of at most 36 ms (Mesa 26.2.6). Printed as a `RATE-MAP-PIECES` line: the
 //! map's regions, the command buffer's GPU time, the pieces and ranges it was cut into, and its
 //! pieces' GPU times where the device times them. Checked: the command buffer was cut into
-//! pieces and its largest command into ranges, and no piece ran past [`PIECE_LIMIT`].
+//! pieces and its largest command into ranges, and no piece ran past [`PIECE_LIMIT`]. Twice:
+//! with the CPU's records, which `commit` records (`rate_mapped_pieces`), and with records a
+//! blit encoder of the command buffer may write before the pass (a reset of a command past the
+//! range), which its host step records (`rate_mapped_pieces_host_step`).
 //!
 //! Ignored by default: a measurement on a GPU, far too slow on a CPU device. Run it by name with
 //! `--run-ignored all`. The fixture's text is compiled in, so the binary also runs on a machine
@@ -69,10 +72,24 @@ fn counts(work: &WorkCounts) -> [u64; 5] {
     ]
 }
 
-/// One frame of the commands, cut into pieces: printed and bounded (the module docs).
+/// One frame of the commands, cut into pieces at `commit`: printed and bounded (the module docs).
 #[test]
 #[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
 fn rate_mapped_pieces() {
+    pieces_frame(false);
+}
+
+/// One frame of the commands, their records ones the GPU may write, cut into pieces at the host
+/// step: printed and bounded (the module docs).
+#[test]
+#[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
+fn rate_mapped_pieces_host_step() {
+    pieces_frame(true);
+}
+
+/// One frame of the commands, recorded at the host step where a blit encoder may write their
+/// records before the pass (`step`), else at `commit`.
+fn pieces_frame(step: bool) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
@@ -146,8 +163,9 @@ fn rate_mapped_pieces() {
     icb.inherit_buffers = false;
     icb.max_vertex_buffer_bind_count = 1;
     icb.max_fragment_buffer_bind_count = 1;
+    // One command past the range, which a blit encoder resets where the host step records.
     let icb = device
-        .new_indirect_command_buffer(&icb, spread as u64, ResourceOptions::shared())
+        .new_indirect_command_buffer(&icb, spread as u64 + 1, ResourceOptions::shared())
         .unwrap();
     for (k, &count) in draws.iter().enumerate() {
         let command = icb.indirect_render_command_at(k as u64).unwrap();
@@ -196,6 +214,12 @@ fn rate_mapped_pieces() {
     let queue = device.new_command_queue().unwrap();
     let before = counts(&device.work_counts());
     let command_buffer = queue.command_buffer().unwrap();
+    if step {
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        let past = spread as u64;
+        blit.reset_commands_in_buffer(&icb, past..past + 1).unwrap();
+        blit.end_encoding().unwrap();
+    }
     let mut pass = RenderPassDescriptor::new();
     let color = &mut pass.color_attachments[0];
     color.texture = Some(target.clone());
@@ -218,8 +242,12 @@ fn rate_mapped_pieces() {
     let most = Duration::from_nanos(after[4]);
     let indices: u64 = draws.iter().map(|&count| u64::from(count)).sum();
     let mean = Duration::from_nanos(nanos / timed.max(1));
+    let at = match step {
+        true => "host step",
+        false => "commit",
+    };
     eprintln!(
-        "RATE-MAP-PIECES {name}: screen {}x{}, physical {}x{}, {regions} regions, {spread} \
+        "RATE-MAP-PIECES {name} ({at}): screen {}x{}, physical {}x{}, {regions} regions, {spread} \
          commands of {indices} indices: the command buffer {:.1} ms of GPU time, {} pieces \
          ({ranges} index ranges past the first); {timed} pieces timed, the longest {:.2} ms, the \
          mean {:.2} ms",
