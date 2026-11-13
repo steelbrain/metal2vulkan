@@ -2310,7 +2310,7 @@ degradations! {
         /// payload then says it stopped and was parked (`Device::is_parked`).
         DeviceRecovered = "device-recovered", Performance,
             "the events, fences, depth/stencil states, libraries, functions, dynamic libraries, \
-             binary archives, address pools, uses of guest RAM, no-copy buffers, `Private` buffers, buffers in the runtime's own pages \
+             binary archives, address pools, rasterization rate maps, uses of guest RAM, no-copy buffers, `Private` buffers, buffers in the runtime's own pages \
              (fresh pages, and the blocks of pages the `Shared` and `Managed` buffers lie in where \
              the device's checks found a held host-page import costs its submissions nothing and \
              textures over such pages take what they take over its own memory), `Private` heaps \

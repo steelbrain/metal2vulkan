@@ -1,7 +1,8 @@
 //! What a device's recovery leaves of the objects that hold no Vulkan object: a depth/stencil
-//! state, a library, a function, an address pool, a binary archive and a dynamic library made
-//! before it serve after it, as Metal's objects go on, and hold nothing of the lost generation;
-//! their devices are generation handles, which keep meaning their generation.
+//! state, a library, a function, an address pool, a binary archive, a dynamic library and a
+//! rasterization rate map made before it serve after it, as Metal's objects go on, and hold
+//! nothing of the lost generation; their devices are generation handles, which keep meaning their
+//! generation.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). No GPU fault: the loss is marked (`Device::recover_for_test`).
@@ -15,6 +16,7 @@ use crate::{
     PipelineOptions, RenderPassDescriptor, ResourceOptions, StorageMode, StoreAction,
     TextureDescriptor,
 };
+use metal2vulkan::bind::{RateMapDescriptor, RateMapLayerDescriptor};
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
@@ -60,6 +62,49 @@ fn a_depth_stencil_state_goes_on_past_a_recovery() {
         (CommandBufferStatus::Completed, None)
     );
     assert_eq!(state.descriptor(), &descriptor);
+    assert_eq!(live_vk_devices(&device, 1), 1);
+}
+
+/// A rasterization rate map made before a recovery serves after it: a render pass over it of the
+/// next generation encodes and its command buffer completes, its parameter data copies into a
+/// buffer of the next generation and a reset compiles; its device is the next generation's, and
+/// the lost generation goes while the map lives.
+#[test]
+fn a_rasterization_rate_map_goes_on_past_a_recovery() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    let mut descriptor = RateMapDescriptor::new([64, 64]);
+    descriptor.layers = vec![RateMapLayerDescriptor::new(vec![1.0, 0.5], vec![1.0, 0.5])];
+    let map = device.new_rasterization_rate_map(&descriptor).unwrap();
+    device.recover_for_test().unwrap();
+    let size = map.physical_size_for_layer(0);
+    let mut target =
+        TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, size.width, size.height, false);
+    target.usage = TextureUsage::RENDER_TARGET;
+    target.resource_options = ResourceOptions::private();
+    let color = device.new_texture(&target).unwrap();
+    let mut pass = RenderPassDescriptor::new();
+    let attachment = &mut pass.color_attachments[0];
+    attachment.texture = Some(color);
+    attachment.load_action = LoadAction::Clear;
+    attachment.store_action = StoreAction::Store;
+    pass.rasterization_rate_map = Some(map.clone());
+    let command_buffer = queue.command_buffer().unwrap();
+    let encoder = command_buffer.render_command_encoder(&pass).unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    assert_eq!(
+        outcome(&command_buffer),
+        (CommandBufferStatus::Completed, None)
+    );
+    let parameters = map.parameter_buffer_size_and_align().size;
+    let buffer = device
+        .new_buffer(parameters, ResourceOptions::shared())
+        .unwrap();
+    map.copy_parameter_data_to_buffer(&buffer, 0).unwrap();
+    map.reset_using_descriptor(&descriptor).unwrap();
+    assert!(map.device().generation_serves());
     assert_eq!(live_vk_devices(&device, 1), 1);
 }
 
@@ -170,6 +215,9 @@ fn an_objects_device_keeps_meaning_its_generation_past_a_recovery() {
     let pool = device
         .reserve_address_pool(AddressPlacement::Any, BYTES)
         .unwrap();
+    let map = device
+        .new_rasterization_rate_map(&RateMapDescriptor::new([64, 64]))
+        .unwrap();
     let devices = || {
         [
             fence.device(),
@@ -177,6 +225,7 @@ fn an_objects_device_keeps_meaning_its_generation_past_a_recovery() {
             library.device(),
             function.device(),
             pool.device(),
+            map.device(),
         ]
     };
     let taken = devices();

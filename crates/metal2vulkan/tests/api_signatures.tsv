@@ -8760,7 +8760,7 @@ method	metal2vulkan-runtime::PurgeableState::raw	pub fn raw(self) -> u64
 method	metal2vulkan-runtime::Query::gap	pub fn gap(self) -> Option<RuntimeGap>
 method	metal2vulkan-runtime::Query::selector	pub fn selector(self) -> &'static str
 method	metal2vulkan-runtime::RasterizationRateMap::copy_parameter_data_to_buffer	pub fn copy_parameter_data_to_buffer(&self, buffer: &Buffer, offset: u64) -> Result<(), Error>
-method	metal2vulkan-runtime::RasterizationRateMap::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::RasterizationRateMap::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::RasterizationRateMap::label	pub fn label(&self) -> Option<&str>
 method	metal2vulkan-runtime::RasterizationRateMap::layer_count	pub fn layer_count(&self) -> u64
 method	metal2vulkan-runtime::RasterizationRateMap::map_physical_to_screen_coordinates	pub fn map_physical_to_screen_coordinates(&self, physical: Coordinate2D, layer: u64) -> Result<Coordinate2D, Error>

@@ -80,10 +80,16 @@
 //!   mapping, at any offset, as Metal takes a misaligned one. It refuses a buffer of another
 //!   device, a `Private` buffer (Metal's copy ends the process there), and a write past the
 //!   buffer's length (Metal's writes past it). The bytes are Metal's.
+//! - **A device's recovery** (`device/carry.rs`). A map holds no Vulkan object: the recovery
+//!   carries its handle of the device alone (`LineDevice`), so a map made before it serves the
+//!   passes, copies and resets after it, as Metal's map goes on; its `device` answers the
+//!   generation it was carried to last. The device's note of a map of layers released goes on
+//!   too.
 
 use super::buffer::Buffer;
 use super::capabilities::RATE_MAP_LAYERS;
 use super::degradation::Degradation;
+use super::device::carry::LineDevice;
 use super::device::{lock, Device};
 use super::error::{internal, invalid, Error, Problem};
 use super::heap::SizeAndAlign;
@@ -160,7 +166,8 @@ pub enum RateMapProblem {
 pub struct RasterizationRateMap(Arc<MapShared>);
 
 struct MapShared {
-    device: Device,
+    /// Its device, which a recovery carries (the module docs).
+    device: LineDevice,
     label: Option<String>,
     mutability: Mutability,
     /// What the map is now: a reset puts a new one in its place, so a pass keeps the one it took
@@ -330,8 +337,7 @@ impl Drop for MapShared {
             .get_mut()
             .is_ok_and(|state| state.compiled().is_some_and(|map| map.layer_count() > 0));
         if layered {
-            self.device
-                .shared()
+            (self.device.generation().shared())
                 .layered_rate_map_released
                 .store(true, Ordering::Relaxed);
         }
@@ -383,7 +389,7 @@ impl Device {
         let state = MapState::made(descriptor, released)?;
         degrade_compiled(self, &state);
         Ok(RasterizationRateMap(Arc::new(MapShared {
-            device: self.clone(),
+            device: LineDevice::new(self),
             label: descriptor.label.clone(),
             mutability: descriptor.mutability,
             state: Mutex::new(Arc::new(state)),
@@ -493,9 +499,26 @@ fn layer_index(layer: u64) -> u32 {
 }
 
 impl RasterizationRateMap {
-    /// `device`.
-    pub fn device(&self) -> &Device {
-        &self.0.device
+    /// `device`: a generation handle of the device, owned, as Metal's `device` answers a retained
+    /// device: of the generation the map was made on, then of each one the device's recoveries
+    /// carried the map to. The handle is the caller's: it keeps meaning that generation while
+    /// held, past a recovery that carries the map on, its raw handles that generation's
+    /// `VkDevice`'s, kept alive while held.
+    pub fn device(&self) -> Device {
+        self.generation().clone()
+    }
+
+    /// The generation handle [`device`](Self::device) answers a clone of, borrowed for the
+    /// runtime's own reads: a caller's handle is `device`'s, as a recovery lets go of the
+    /// object's handle of a lost generation at that generation's rest (`device/carry.rs`).
+    pub(super) fn generation(&self) -> &Device {
+        self.0.device.generation()
+    }
+
+    /// A root handle of the map's device, which a pass or a copy of any of its generations
+    /// matches.
+    pub(super) fn root_device(&self) -> &Device {
+        self.0.device.root()
     }
 
     /// What the map is now, which a pass takes as its encoder opens (`rate_mapped_pass.rs`).
@@ -612,8 +635,8 @@ impl RasterizationRateMap {
     /// (`StorageMode`), and a write past its length (`RangeOutOfBounds`).
     pub fn copy_parameter_data_to_buffer(&self, buffer: &Buffer, offset: u64) -> Result<(), Error> {
         const CALL: &str = "copy_parameter_data_to_buffer";
-        if !buffer.generation().same(&self.0.device) {
-            return Err(buffer.generation().foreign(CALL, &self.0.device));
+        if !buffer.generation().same(self.root_device()) {
+            return Err(buffer.generation().foreign(CALL, self.root_device()));
         }
         let Some(contents) = buffer.mapped_contents() else {
             return Err(invalid(CALL, Problem::StorageMode));
@@ -658,7 +681,7 @@ impl RasterizationRateMap {
     /// A pass that took the map before the reset and whose command buffer is not yet submitted
     /// draws by the map as reset, as Metal's GPU reads it (`rate_mapped_pass.rs`).
     pub fn reset_using_descriptor(&self, descriptor: &RateMapDescriptor) -> Result<(), Error> {
-        let device = &self.0.device;
+        let device = self.generation();
         let released = device
             .shared()
             .layered_rate_map_released

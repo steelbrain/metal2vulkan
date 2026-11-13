@@ -299,8 +299,8 @@ pub(super) fn check_descriptor(
     let Some(map) = &descriptor.rasterization_rate_map else {
         return Ok(());
     };
-    if !map.device().same(device) {
-        return Err(map.device().foreign(call, device));
+    if !map.root_device().same(device) {
+        return Err(map.root_device().foreign(call, device));
     }
     let state = map.state();
     let layers = state.layer_count();
@@ -430,7 +430,7 @@ impl RateMappedPass {
                 if self.state.made_after_release() {
                     let [width, height] = self.state.screen_size();
                     self.map
-                        .device()
+                        .generation()
                         .degrade(Degradation::ZeroLayerMapAfterRelease, || {
                             (
                                 format!(

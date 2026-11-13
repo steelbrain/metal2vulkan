@@ -5,9 +5,10 @@
 //! the recovery makes again (those placed in the heaps it carries among them)
 //! (`texture/carry.rs`), its pipeline states (`pipeline/carry.rs`) and its sampler states
 //! (`sampler.rs`), each the same object on the new `VkDevice`, as Metal keeps its objects across its GPU's recovery. A fence, a depth/stencil state, a library, a function, an address
-//! pool, a dynamic library and a binary archive hold no Vulkan object (`fence.rs`,
-//! `depth_stencil.rs`, `library.rs`, `address_pool.rs`, `dynamic_library.rs`, `binary_archive`):
-//! the recovery carries their handle of the device alone ([`LineDevice`]).
+//! pool, a dynamic library, a binary archive and a rasterization rate map hold no Vulkan object
+//! (`fence.rs`, `depth_stencil.rs`, `library.rs`, `address_pool.rs`, `dynamic_library.rs`,
+//! `binary_archive`, `rate_map.rs`): the recovery carries their handle of the device alone
+//! ([`LineDevice`]), and the device's note that it released a map of layers.
 //!
 //! - **Kept as made.** Each event (`EventShared::new`), heap (`Device::new_heap`) and texture of
 //!   the program's (`Texture::made`) is kept here, held weakly, by the generation it was made on;
@@ -855,6 +856,11 @@ impl Device {
         for link in &links {
             link.carry(next);
         }
+        // A map of no layers made after a map of layers was released is one whose passes Metal
+        // draws from the memory it left, before the recovery or after (`rate_map.rs`).
+        if shared.layered_rate_map_released.load(Ordering::Relaxed) {
+            (next.shared().layered_rate_map_released).store(true, Ordering::Relaxed);
+        }
         let mut carried = Carried::default();
         // The sampler states: each placed there as at its making (`sampler.rs`).
         for state in &samplers {
@@ -1061,7 +1067,8 @@ impl Drop for CallHold<'_> {
 }
 
 /// The device of an object that holds no Vulkan object (a fence, a depth/stencil state, a library
-/// and its functions, an address pool, a dynamic library, a binary archive), which a recovery carries as its handle of the device
+/// and its functions, an address pool, a dynamic library, a binary archive, a rasterization rate
+/// map), which a recovery carries as its handle of the device
 /// alone: a root handle, which the object's own calls and checks go through
 /// ([`root`](Self::root): of whatever generation serves, matched by its line), and the generation
 /// handle its `device` answers ([`generation`](Self::generation)): the generation it was made on,

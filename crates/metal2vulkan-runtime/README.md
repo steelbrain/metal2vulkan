@@ -842,6 +842,7 @@ meanwhile wait for it.
   recovery.
 - The recovery carries the events, the fences, the depth/stencil states, the libraries and their
   functions, the dynamic libraries, the binary archives, the address pools (`AddressPool`, whose slots take buffers after it as before), the
+  rasterization rate maps, the
   uses of guest RAM (`HostRamUse`), the no-copy buffers, the `Private` buffers (exportable ones
   among them), the buffers in the runtime's own pages, the `Private` heaps and the heaps over the
   caller's memory with the buffers and textures placed in them, the textures of
