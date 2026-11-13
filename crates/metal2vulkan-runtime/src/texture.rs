@@ -439,16 +439,16 @@ pub struct Texture(Arc<TextureShared>, Option<Arc<Retain>>);
 /// thread it runs.
 pub(super) struct Retain(Weak<TextureShared>);
 
-/// A texture object: its parts on the generation it was made on ([`Parts`]), and the rest, the
-/// texture object's own, whatever generation serves. Where its device's recovery carried it
-/// (`texture/carry.rs`), its handles reach the parts of the generation the work at hand is on
-/// through [`Texture::s`], each generation's in a texture of the runtime's own there (`next`);
-/// its parts on a lost generation go at that generation's rest (`texture/carry.rs`'s
+/// A texture object: its parts on the generation it was made on ([`TextureParts`]), and the
+/// rest, the texture object's own, whatever generation serves. Where its device's recovery
+/// carried it (`texture/carry.rs`), its handles reach the parts of the generation the work at
+/// hand is on through [`Texture::s`], each generation's in a texture of the runtime's own there
+/// (`next`); its parts on a lost generation go at that generation's rest (`texture/carry.rs`'s
 /// `LostTexture`), read as fields of the texture until then ([`Deref`](std::ops::Deref)).
 pub(super) struct TextureShared {
     /// Its storage and what is made of it on its generation, let go of at that generation's rest
     /// where a recovery carried the texture on.
-    parts: LetGo<Parts>,
+    parts: LetGo<TextureParts>,
     /// The [`Retain`] the texture's handles hold, while one does.
     retain: Weak<Retain>,
     /// What this texture presents of its image.
@@ -492,7 +492,7 @@ pub(super) struct TextureShared {
 
 /// A texture's parts on one generation of its device ([`TextureShared::parts`]): its storage
 /// and what is made of it there.
-pub(super) struct Parts {
+pub(super) struct TextureParts {
     storage: Storage,
     /// The storage a shadow over host pages made before its pages' in-place verdict moved to
     /// once the verdict passed (`texture/storage_form.rs`): an image in place over its texels,
@@ -536,12 +536,12 @@ pub(super) struct Parts {
 }
 
 impl std::ops::Deref for TextureShared {
-    type Target = Parts;
+    type Target = TextureParts;
 
     /// Its parts on its generation: read only where they were not let go of, which no reach of a
     /// texture meets ([`Texture::s`], `texture/carry.rs`).
     #[inline(always)]
-    fn deref(&self) -> &Parts {
+    fn deref(&self) -> &TextureParts {
         &self.parts
     }
 }
@@ -5332,7 +5332,7 @@ impl Texture {
             let weak = Arc::downgrade(&made);
             retain = Some(made);
             TextureShared {
-                parts: LetGo::new(Parts {
+                parts: LetGo::new(TextureParts {
                     storage,
                     moved: OnceLock::new(),
                     pending_move: Mutex::new(None),
