@@ -3059,6 +3059,9 @@ impl RenderLowering {
     fn set_state(&mut self, state: &RenderPipelineState) -> Result<(), Error> {
         const CALL: &str = "set_render_pipeline_state";
         self.core.check_device(CALL, state.bound_device()?)?;
+        if let Some(trail) = self.core.trail() {
+            trail.render(state);
+        }
         let drawn = drawn_as(self.layout.samples, state)?;
         let state = self.grouped_as(drawn.clone())?;
         // Routed once here: the check and each draw read it (`routing`).
@@ -4653,6 +4656,14 @@ impl RenderLowering {
         // The pass's line, where the pass log is on and the pass names a texture it watches.
         if let Some(notes) = pass_notes {
             pass_log::ended(core.device(), &notes, &layout, instances.len(), &residency);
+        }
+        // The pass as the encoder trail names it, where it is on (`encoder_trail.rs`).
+        if let Some(trail) = core.trail() {
+            trail.pass(crate::encoder_trail::pass_named(
+                &layout,
+                instances.len(),
+                rate_mapped,
+            ));
         }
         if grouped.is_none() && untouched::changes_nothing(&layout, called, &instances) {
             core.device().shared().counts.untouched_pass_skipped();

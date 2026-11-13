@@ -724,6 +724,10 @@ pub(super) struct DeviceShared {
     /// Its command buffers keep execution records (`DeviceOptions::record_executions`): where
     /// not, its encoders build none (`EncoderCore::executed`).
     pub(crate) record_executions: bool,
+    /// Its encoder trail is on (`DeviceOptions::encoder_trail`, or `METAL2VULKAN_ENCODER_TRAIL`
+    /// set; `encoder_trail.rs`): each encoder goes in a submission of its own, and a stall's line
+    /// names the encoder each stuck queue holds.
+    pub(crate) encoder_trail: bool,
     /// It loads no dynamic library from a file (`DeviceOptions::load_no_dynamic_library_file`,
     /// `dynamic_library.rs`).
     pub(crate) load_no_dynamic_library_file: bool,
@@ -1943,6 +1947,9 @@ pub(super) struct Parts {
     /// Its pending audit is on (`DeviceOptions::pending_audit`; `pending_audit.rs`), as it is
     /// where `METAL2VULKAN_PENDING_AUDIT` is set.
     pub(super) pending_audit: bool,
+    /// Its encoder trail is on (`DeviceOptions::encoder_trail`; `encoder_trail.rs`), as it is
+    /// where `METAL2VULKAN_ENCODER_TRAIL` is set.
+    pub(super) encoder_trail: bool,
     /// Its views may reinterpret an image's components ([`DeviceShared`]'s field), outside
     /// `enabled`'s vocabulary.
     pub(super) view_reinterpretation: bool,
@@ -2049,6 +2056,7 @@ impl Device {
             fail_in_place_check,
             assume_submissions_merge,
             pending_audit,
+            encoder_trail,
             view_reinterpretation,
             generated_commands,
             host_image_copy,
@@ -2907,6 +2915,7 @@ impl Device {
             lowering_refuses,
             deferred: crate::render::DeferredEncoders::default(),
             record_executions,
+            encoder_trail: encoder_trail || metal2vulkan::env_vars::encoder_trail(),
             load_no_dynamic_library_file,
             views_epoch: AtomicU64::new(0),
             pipeline_recording: crate::warm::Recording::new(pipeline_records),

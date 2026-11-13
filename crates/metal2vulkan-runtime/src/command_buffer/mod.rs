@@ -266,6 +266,10 @@ pub(super) struct CommandBufferShared {
     /// The `MTLCommandBufferError` code the driver relayed for one of its batches, with Metal's
     /// description, empty until one (`device/relay.rs`).
     relayed: Arc<Relayed>,
+    /// What its host step under way noted, where the device's encoder trail is on
+    /// (`encoder_trail.rs`, **Host steps**): set and taken by `record_host_step` around each
+    /// segment's step, and read by a submission the step waits for (`rerun.rs`).
+    step_trail: Mutex<Option<crate::encoder_trail::Step>>,
     /// The numbers its host steps give the variant instances they make, drawn at its commit in
     /// the program's call (`pipeline/kept.rs`).
     step_numbers: OnceLock<StepNumbers>,
@@ -1884,6 +1888,10 @@ impl State {
     /// that batch ended before this encoder ([`CommandBufferShared::close_tail`]).
     pub(super) fn end_encoder(&mut self, command_buffer: &CommandBuffer, recorded: Recorded) {
         self.recorded.push(recorded);
+        // Each encoder in a batch of its own, where the encoder trail is on (`encoder_trail.rs`).
+        if command_buffer.device().shared().encoder_trail {
+            self.batches.alone();
+        }
         self.batches.encoder();
         self.carry_batches = self.batches.all().len();
         self.encoder_open = false;
@@ -2446,6 +2454,7 @@ impl CommandBuffer {
             changed: Condvar::new(),
             gate: Arc::default(),
             relayed: Arc::default(),
+            step_trail: Mutex::new(None),
             step_numbers: OnceLock::new(),
             making_deadline: OnceLock::new(),
             unmade: Mutex::new(Vec::new()),
@@ -2534,20 +2543,33 @@ impl CommandBuffer {
 
     /// Submit `raws`, ended, in order, on its `VkQueue`, and wait for them to complete: a host
     /// step's own submission, its probe of a rate-mapped pass's draws (`rate_mapped_pass.rs`,
-    /// **Fan-out**), as a predicated loop's run again's (`rerun.rs`). Whether they completed:
-    /// `false` where the driver relayed a failure for them, which fails the command buffer at its
-    /// completion, or the process is exiting.
+    /// **Fan-out**), as a predicated loop's run again's (`rerun.rs`), `what` naming it for the
+    /// encoder trail (`encoder_trail.rs`). Whether they completed: `false` where the driver
+    /// relayed a failure for them, which fails the command buffer at its completion, or the
+    /// process is exiting.
     ///
     /// # Safety
     ///
     /// Each of `raws` is a command buffer of its pool, ended, in no pending submission, and
     /// recorded for this submission alone; what it uses lives until it completes.
-    pub(crate) unsafe fn submit_waited(&self, raws: &[vk::CommandBuffer]) -> Result<bool, Error> {
+    pub(crate) unsafe fn submit_waited(
+        &self,
+        raws: &[vk::CommandBuffer],
+        what: &str,
+    ) -> Result<bool, Error> {
         // SAFETY: the caller's.
-        match unsafe { rerun::submit_waited(&self.0, raws) } {
+        match unsafe { rerun::submit_waited(&self.0, raws, what) } {
             rerun::Waited::Completed => Ok(true),
             rerun::Waited::Relayed | rerun::Waited::Exiting => Ok(false),
             rerun::Waited::Failed(error) => Err(self.device().failed(error)),
+        }
+    }
+
+    /// Note, for the encoder trail, the states of `notes` that its host step under way read its
+    /// commands to name (`encoder_trail.rs`, **Host steps**); nothing outside a step.
+    pub(crate) fn trail_step(&self, notes: crate::encoder_trail::Notes) {
+        if let Some(step) = lock(&self.0.step_trail).as_mut() {
+            step.noted(notes);
         }
     }
 
@@ -4929,8 +4951,17 @@ impl CommandBufferShared {
                 let segment = &state.recorded[encoder].segments[at];
                 let replaced = segment.recorded.as_ref().map(|done| done.takes.clone());
                 state.step_takes = replaced.unwrap_or_default();
+                // What the step records, as the encoder trail names it (`encoder_trail.rs`).
+                if device.shared().encoder_trail {
+                    let ended = state.recorded[encoder].trail.clone();
+                    *lock(&self.step_trail) = Some(crate::encoder_trail::Step::new(ended));
+                }
             }
             let recorded = work.step(&buffer, &inputs);
+            let stepped = match device.shared().encoder_trail {
+                true => lock(&self.step_trail).take(),
+                false => None,
+            };
             // A device test's failure of the recording (`CommandBuffer::fail_host_step`), the
             // recording it made dropped without the lock.
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -4945,6 +4976,11 @@ impl CommandBufferShared {
             state.step_takes.clear();
             match recorded {
                 Ok(done) => {
+                    // The encoder as its batch's trail names it, the states its commands named
+                    // after its own (`encoder_trail.rs`).
+                    if let Some(trail) = stepped.as_ref().and_then(|step| step.stepped()) {
+                        state.recorded[encoder].trail = Some(trail);
+                    }
                     let segment = &mut state.recorded[encoder].segments[at];
                     segment.stepped = true;
                     // Its recording is the step's now, which a rebind does not record again.
@@ -5585,6 +5621,7 @@ impl CommandBufferShared {
                 holds: Vec::new(),
                 after: Vec::new(),
                 held: false,
+                trail: None,
             },
         );
     }

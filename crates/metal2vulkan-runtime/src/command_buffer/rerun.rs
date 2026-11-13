@@ -391,7 +391,7 @@ impl LoopCheck {
         // for this submission alone (a run again's), ended, and is in no pending submission: the
         // laying's batch completed before the check's step, and each submission of a run again
         // before the next.
-        match unsafe { submit_waited(buffer, raws) } {
+        match unsafe { submit_waited(buffer, raws, "a predicated loop's check, run again") } {
             Waited::Completed => Ok(()),
             Waited::Relayed => Err(Stop::Relayed),
             Waited::Failed(error) => Err(Stop::Failed(submission_error(&buffer.device, error))),
@@ -413,7 +413,8 @@ pub(super) enum Waited {
 
 /// Submit `raws` (ended, in order) on `buffer`'s `VkQueue` and wait for them to complete, in
 /// slices: a predicated loop's run again ([`LoopCheck`]), a host step's probe of a rate-mapped
-/// pass (`rate_mapped_pass.rs`, **Fan-out**).
+/// pass (`rate_mapped_pass.rs`, **Fan-out**). `what` names it for the encoder trail's line, where
+/// the device's trail is on and it ran for its bound (`encoder_trail.rs`, **Host steps**).
 ///
 /// # Safety
 ///
@@ -423,6 +424,7 @@ pub(super) enum Waited {
 pub(super) unsafe fn submit_waited(
     buffer: &CommandBufferShared,
     raws: &[vk::CommandBuffer],
+    what: &str,
 ) -> Waited {
     let device = &buffer.device;
     let Some(busy) = exit_guard::enter() else {
@@ -453,6 +455,9 @@ pub(super) unsafe fn submit_waited(
         return Waited::Failed(error);
     }
     drop(busy);
+    // The encoder trail's line is due once, past its bound.
+    let began = std::time::Instant::now();
+    let mut trailed = !shared.encoder_trail;
     loop {
         let Some(_busy) = exit_guard::enter() else {
             return Waited::Exiting;
@@ -462,7 +467,13 @@ pub(super) unsafe fn submit_waited(
         exit_guard::called(Call::WaitForFences);
         match waited {
             Ok(()) => break,
-            Err(vk::Result::TIMEOUT) => continue,
+            Err(vk::Result::TIMEOUT) => {
+                if !trailed && began.elapsed() >= crate::encoder_trail::AFTER {
+                    trailed = true;
+                    trail_waited(buffer, queue, what, began.elapsed());
+                }
+                continue;
+            }
             // The fence stays in the relay's log, as a failed batch's does, never released.
             Err(error) => return Waited::Failed(error),
         }
@@ -491,6 +502,24 @@ pub(super) unsafe fn submit_waited(
         Some(_) => Waited::Relayed,
         None => Waited::Completed,
     }
+}
+
+/// The encoder trail's line of `what`, a submission on `VkQueue` `queue` of `buffer`'s that the host
+/// waits for and that ran for `ran` (`encoder_trail.rs`, **Host steps**): the encoder whose host
+/// step made it, where one did, with the states its commands named so far.
+fn trail_waited(buffer: &CommandBufferShared, queue: usize, what: &str, ran: Duration) {
+    let device = &buffer.device;
+    let step = lock(&buffer.step_trail)
+        .as_ref()
+        .map(|step| step.described());
+    let what = match step {
+        Some(step) => format!("{what} of a host step of {step}"),
+        None => format!("{what} of command buffer {}", buffer.id.get()),
+    };
+    let last = device.shared().completion.trail_last(queue);
+    let last = last.as_ref().map(|(trail, ago)| (&**trail, *ago));
+    let line = crate::encoder_trail::waited_line(queue, &what, ran, last);
+    device.inform(crate::encoder_trail::ID_NAME, line);
 }
 
 /// A recording of nothing: a check records no command.

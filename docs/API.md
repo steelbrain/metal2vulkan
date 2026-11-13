@@ -1894,6 +1894,21 @@ signals, and a secondary through each primary that executes it. It reads those t
 `metal2vulkan-pending-audit`, `Info` severity): what was done, the thread, the command buffer, the
 timeline, its counter and the value, with the thread's backtrace for the first 8; and a line as the
 device is made and as it goes, with the checks and findings by kind. It changes no work.
+With `METAL2VULKAN_ENCODER_TRAIL` set (or `DeviceOptions::encoder_trail`), a device submits each
+encoder, and each part of one a host step splits off, in a `vkQueueSubmit` of its own that signals
+its queue's timeline, grouping no batches, and notes what each encoder was: its kind, its command
+buffer's object ID, its place among the command buffer's encoders, a render pass's area, sample
+count, attachments' formats and sizes, Vulkan render pass instances and whether it is over a
+rasterization-rate map, its executions of indirect commands, and the label hash of each pipeline
+state it bound (the first 8 bytes of the SHA-256 of the state's label and its functions' names; no
+name and no shader text), and of each state its indirect commands named at a host step. Once no
+work of the device advanced for 2 s while some was pending, it logs one line for each `VkQueue`
+whose oldest batch is pending (id name `metal2vulkan-encoder-trail`, `Info` severity): that
+batch's encoders, and the last batch the queue completed, with how long before; once a stall. A
+submission a host step makes and waits for itself (a rasterization-rate map's fan-out probe, a
+predicated loop's check run again) signals no timeline: once it ran for 2 s, one line names it,
+the encoder whose step made it and the states its commands named. It changes when work goes to the driver, and its
+timing, never what the work computes.
 Whatever the variables, a placement heap's `newTextureWithDescriptor:offset:` that makes no texture
 (`Nil` or `OutOfMemory`) at an offset inside the heap says so (id name
 `metal2vulkan-heap-texture-refused`, `Info` severity): the descriptor, the offset, the heap's size,

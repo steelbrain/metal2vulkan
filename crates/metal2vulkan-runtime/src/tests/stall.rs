@@ -94,6 +94,34 @@ fn device(
     device
 }
 
+/// The device the cfg selects with its encoder trail on (`encoder_trail.rs`), its messages kept in
+/// `heard`, its stall clock's bound left as it is (no probe within a test's wait).
+fn trail_device(cache: &Path, heard: &Arc<Mutex<Heard>>) -> Device {
+    let heard = Arc::clone(heard);
+    let options = DeviceOptions {
+        kinds: match cfg!(m2v_cpu_icd) {
+            true => vec![DeviceKind::Cpu],
+            false => vec![
+                DeviceKind::Integrated,
+                DeviceKind::Discrete,
+                DeviceKind::Virtual,
+            ],
+        },
+        shader_cache: ShaderCacheOptions {
+            directory: Some(cache.to_owned()),
+            ..ShaderCacheOptions::default()
+        },
+        messages: Some(MessageSink::new(move |message| {
+            if message.degradation.is_none() {
+                heard.lock().unwrap().texts.push(message.text.clone());
+            }
+        })),
+        encoder_trail: true,
+        ..DeviceOptions::default()
+    };
+    Device::system_default_with(&options).unwrap()
+}
+
 /// A committed command buffer that waits for `event` to reach 10, a signal of it reserved for the
 /// caller and not submitted, so it is pending on its `VkQueue`; then fills `buffer`. The
 /// reserved counter value.
@@ -380,4 +408,80 @@ fn a_front_past_the_watchdog_fails_as_metals_timeout() {
     // SAFETY: the parked `VkDevice` and its semaphore, both live (never destroyed); the counter
     // the reservation named, which nothing before it waits for.
     unsafe { parked.signal_semaphore(&info) }.unwrap();
+}
+
+/// With the encoder trail on (`encoder_trail.rs`), each encoder goes in a submission of its own,
+/// and once no work advanced for 2 s, a line names the encoder its queue's oldest pending batch
+/// holds and the last batch that queue completed: here the first of two blit encoders after a wait
+/// for a signal reserved and not yet made, and the one blit encoder of a command buffer of the
+/// queue that completed before. The stuck command buffer completes once the host signals.
+#[test]
+fn the_encoder_trail_names_the_stuck_encoder_and_the_last_one_completed() {
+    let scratch = Scratch::new();
+    let heard = Arc::new(Mutex::new(Heard::default()));
+    let device = trail_device(&scratch.0, &heard);
+    let buffer = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    // An unshared queue never moves between `VkQueue`s (`queue_share.rs`).
+    let queue = device.new_command_queue_unshared(4).unwrap();
+    let done = queue.command_buffer().unwrap();
+    let mut blit = done.blit_command_encoder().unwrap();
+    blit.fill_buffer(&buffer, 0..4096, 2).unwrap();
+    blit.end_encoding().unwrap();
+    done.commit().unwrap();
+    assert!(done.wait_until_completed_for(WAIT).is_ok());
+    let event = device.new_event().unwrap();
+    // SAFETY: the signal is made from the host below, once.
+    let reserved = unsafe { event.reserve_vk_signal(10) }.unwrap();
+    let VkEventSignal::Counter { counter, .. } = reserved else {
+        panic!("a first reservation names a counter: {reserved:?}");
+    };
+    let before = device.work_counts().queue_submissions;
+    let stuck = queue.command_buffer().unwrap();
+    stuck.encode_wait_for_event((&event).into(), 10).unwrap();
+    for value in [3, 4] {
+        let mut blit = stuck.blit_command_encoder().unwrap();
+        blit.fill_buffer(&buffer, 0..4096, value).unwrap();
+        blit.end_encoding().unwrap();
+    }
+    stuck.commit().unwrap();
+    let deadline = Instant::now() + WAIT;
+    let line = loop {
+        let found = (heard.lock().unwrap().texts.iter())
+            .find(|text| text.contains("encoder trail"))
+            .cloned();
+        if let Some(line) = found {
+            break line;
+        }
+        assert!(Instant::now() < deadline, "no trail line in {WAIT:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    // SAFETY: the event's semaphore, signalled once from the host to the reserved counter, which
+    // nothing before it waits for.
+    let semaphore = unsafe { event.vk_semaphore() };
+    let info = vk::SemaphoreSignalInfo::default()
+        .semaphore(semaphore)
+        .value(counter);
+    // SAFETY: as above; the device is live.
+    unsafe { device.shared().vk().signal_semaphore(&info) }.unwrap();
+    assert!(stuck.wait_until_completed_for(WAIT).is_ok());
+    assert_eq!(
+        (stuck.status(), stuck.error()),
+        (CommandBufferStatus::Completed, None)
+    );
+    let submitted = device.work_counts().queue_submissions - before;
+    eprintln!(
+        "ENCODER-TRAIL {}: {submitted} submissions for the stuck command buffer's 2 encoders; {line}",
+        device.name()
+    );
+    let stuck_id = stuck.object_id().get();
+    let oldest = format!("oldest pending batch: Blit encoder 0 of command buffer {stuck_id}");
+    assert!(line.contains(&oldest), "{line}");
+    assert!(
+        !line.contains(&format!("encoder 1 of command buffer {stuck_id}")),
+        "the second encoder went in the first's batch: {line}"
+    );
+    let done_id = done.object_id().get();
+    let last = format!("the last batch it completed: Blit encoder 0 of command buffer {done_id}");
+    assert!(line.contains(&last), "{line}");
+    assert!(submitted >= 2, "{submitted} submissions for 2 encoders");
 }

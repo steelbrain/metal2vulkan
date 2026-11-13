@@ -203,6 +203,16 @@ pub(super) enum ExecutionRange {
     Indirect { buffer: Buffer, offset: u64 },
 }
 
+impl ExecutionRange {
+    /// The commands of a range the call gave; `None` for one a buffer holds.
+    pub(super) fn given(&self) -> Option<u64> {
+        match self {
+            ExecutionRange::Fixed(range) => Some(u64::from(range.end - range.start)),
+            ExecutionRange::Indirect { .. } => None,
+        }
+    }
+}
+
 /// The range of an execution `core` encodes from the [`RANGE_BYTES`] at `offset` of `buffer`
 /// (`executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:`), which its host step reads
 /// ([`ExecutionRange::commands`]). Read there in place where the host maps the bytes the GPU
@@ -431,6 +441,23 @@ impl Execute {
             };
             let (commands, written) = self.written_commands(piece, states, check)?;
             faults = ReplayFaults(faults.0 | written.0);
+            // The states the commands name, for the encoder trail, where it is on: each run of
+            // one state noted once (`encoder_trail.rs`, **Host steps**).
+            if command_buffer.device().shared().encoder_trail {
+                let mut notes = crate::encoder_trail::Notes::default();
+                let mut last = None;
+                for own in commands
+                    .iter()
+                    .flatten()
+                    .filter_map(|(_, own)| own.as_ref())
+                {
+                    if last != Some(own) {
+                        notes.compute(own);
+                        last = Some(own);
+                    }
+                }
+                command_buffer.trail_step(notes);
+            }
             if reports {
                 let executed = commands.iter().map(Option::as_ref);
                 let read = (RecordsRead::HostStep, &residency);

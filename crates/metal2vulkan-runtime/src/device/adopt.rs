@@ -366,6 +366,8 @@ impl Device {
             assume_submissions_merge: false,
             // On where `METAL2VULKAN_PENDING_AUDIT` is set (`assemble`).
             pending_audit: false,
+            // On where `METAL2VULKAN_ENCODER_TRAIL` is set (`assemble`).
+            encoder_trail: false,
             announce_each: raw.announce_each,
             lowering_refuses: raw.lowering_refuses,
             view_reinterpretation,

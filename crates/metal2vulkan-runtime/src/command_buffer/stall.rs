@@ -98,6 +98,8 @@ pub(super) struct Clock {
     probing: bool,
     /// Per `VkQueue`: since when its front batch has gone without its timeline advancing.
     fronts: Vec<Option<Instant>>,
+    /// The encoder trail named this stall's stuck encoders (`encoder_trail.rs`).
+    trailed: bool,
 }
 
 impl Clock {
@@ -107,6 +109,7 @@ impl Clock {
             since: None,
             probing: false,
             fronts: vec![None; queues],
+            trailed: false,
         }
     }
 
@@ -125,7 +128,18 @@ impl Clock {
 
     /// A queue's timeline advanced: the clock stops. How long it ran, where it ran.
     pub(super) fn advanced(&mut self) -> Option<Duration> {
+        self.trailed = false;
         self.since.take().map(|since| since.elapsed())
+    }
+
+    /// A waiter's wait ran out with its queue's front pending, the device's encoder trail on
+    /// (`encoder_trail.rs`): the clock runs. How long it has run where it passed `after` and the
+    /// trail named this stall's encoders no time before, now named.
+    pub(super) fn trail_due(&mut self, after: Duration) -> Option<Duration> {
+        let stalled = self.since.get_or_insert_with(Instant::now).elapsed();
+        let due = !self.trailed && stalled >= after;
+        self.trailed |= due;
+        due.then_some(stalled)
     }
 
     /// A waiter's wait ran out with its queue's front pending: the clock runs. How long it has run

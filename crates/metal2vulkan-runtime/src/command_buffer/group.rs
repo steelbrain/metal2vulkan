@@ -126,12 +126,15 @@ const BATCH_INFOS: usize = 2;
 const MOST_INFOS: usize = GROUP_BATCHES * BATCH_INFOS + 1 + BATCH_INFOS;
 
 /// Whether `device`'s batches on `VkQueue` `queue` may wait in a group: its policy groups them,
-/// its check found a submission that signals nothing merged into the next (the module docs), and
-/// the queue's failures are not relayed (each relayed batch takes a fence, `device/relay.rs`).
+/// its check found a submission that signals nothing merged into the next (the module docs),
+/// the queue's failures are not relayed (each relayed batch takes a fence, `device/relay.rs`),
+/// and its encoder trail is off (`encoder_trail.rs`: each batch goes alone).
 pub(crate) fn groups(device: &Device, queue: usize) -> bool {
     device.compile_device().policy().completion == CompletionPolicy::Grouped
         && device.submissions_merge_now()
         && device.shared().flights(queue).is_none()
+        // The encoder trail submits each batch alone (`encoder_trail.rs`).
+        && !device.shared().encoder_trail
 }
 
 impl CommandBufferShared {

@@ -216,7 +216,7 @@ use super::hang;
 use super::kept_barriers::{KeptBarriers, SlotStamps};
 use super::{lock, recording_error, submission_error, CommandBufferShared, State};
 use crate::deferred::Deferred;
-use crate::encoder::{count_shadow_copies, RecordedSegment};
+use crate::encoder::{count_shadow_copies, Recorded, RecordedSegment};
 use crate::error::CommandBufferError;
 use crate::error::{internal, Error};
 use crate::event::EventShared;
@@ -446,6 +446,11 @@ impl CommandBufferShared {
         let raw = shared.vk();
         let queue = self.queue.vk_queue();
         let mut state = lock(&self.state);
+        // What its encoders were, as the encoder trail names them (`encoder_trail.rs`).
+        let trail = match shared.encoder_trail {
+            true => batch_trail(&state.recorded[state.batch_range(index)]),
+            false => None,
+        };
         // Whether the batch may wait in the scheduler's group for one kernel submission with the
         // batches after it (`group.rs`), as far as is known before anything changes; first work
         // it takes still sends it now. One that may not, or of another `VkQueue`, waits,
@@ -1535,6 +1540,7 @@ impl CommandBufferShared {
                 holds,
                 after,
                 held: false,
+                trail,
             },
             handlers,
             forms,
@@ -1614,6 +1620,7 @@ impl CommandBufferShared {
                 holds,
                 after: Vec::new(),
                 held: false,
+                trail: None,
             },
             handlers,
             forms,
@@ -2130,4 +2137,20 @@ fn finishes_after(
         }
     }
     after
+}
+
+/// What a batch's encoders (or parts of them) `recorded` were, as the encoder trail names them
+/// (`encoder_trail.rs`): each noted one, in order; `None` where none was noted.
+fn batch_trail(recorded: &[Recorded]) -> Option<Arc<str>> {
+    let mut noted = recorded.iter().filter_map(|part| part.trail.as_ref());
+    let first = noted.next()?;
+    let Some(second) = noted.next() else {
+        return Some(Arc::clone(first));
+    };
+    let mut text = format!("{first}; {second}");
+    for more in noted {
+        text.push_str("; ");
+        text.push_str(more);
+    }
+    Some(Arc::from(text))
 }

@@ -444,6 +444,9 @@ impl ComputeCommandEncoder {
                 this.core
                     .check_device("set_compute_pipeline_state", state.bound_device()?)?;
                 this.pipeline = Some(state.clone());
+                if let Some(trail) = this.core.trail() {
+                    trail.compute(state);
+                }
                 (this.core.routes).state_set(state.indirect_command_writes(), || {
                     vec![state.function_name().to_owned()]
                 });
@@ -1478,6 +1481,9 @@ impl ComputeCommandEncoder {
         pipeline: Option<ComputePipelineState>,
         check: Option<(IndirectCommandCheck, IndirectCommandCheckNeeds)>,
     ) -> Result<(), Error> {
+        if let Some(trail) = self.core.trail() {
+            trail.execution(range.given());
+        }
         self.sync_heaps();
         // Its commands bind the heap sets as they record, later.
         self.core.command_buffer().state().heaps.executes_later();

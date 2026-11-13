@@ -559,6 +559,9 @@ impl RenderLowering {
         pipeline: Option<RenderPipelineState>,
         check: Option<(IndirectCommandCheck, IndirectCommandCheckNeeds)>,
     ) -> Result<(), Error> {
+        if let Some(trail) = self.core.trail() {
+            trail.execution(range.given());
+        }
         self.sync_heaps();
         // Its commands bind the heap sets as they record, later.
         self.core.command_buffer().state().heaps.executes_later();
@@ -2413,7 +2416,17 @@ impl RenderExecution {
         // records its probes alone, in one run, before the pass (`render/fan_out.rs`): it begins
         // no piece and cuts no draw into ranges.
         let probing = encoder.fan_run.as_ref().is_some_and(FanOutRun::probes);
+        // The states the commands name, for the encoder trail, where it is on: each run of one
+        // state noted once (`encoder_trail.rs`, **Host steps**).
+        let mut trail = (encoder.core.device().shared().encoder_trail)
+            .then(|| (crate::encoder_trail::Notes::default(), None));
         for (place, (record, own)) in commands.into_iter().enumerate() {
+            if let (Some((notes, last)), Some(own)) = (&mut trail, own) {
+                if *last != Some(own) {
+                    notes.render(own);
+                    *last = Some(own);
+                }
+            }
             // A command's barrier: its draw records into the execution's next run, which its
             // pass runs in a render pass instance of its own after a barrier from everything
             // before, so it sees the earlier draws' writes as plain Metal's does; but where the
@@ -2611,6 +2624,9 @@ impl RenderExecution {
             if !probing {
                 regions = note(found.piece_after(encoder));
             }
+        }
+        if let Some((notes, _)) = trail {
+            encoder.core.command_buffer().trail_step(notes);
         }
         Ok(())
     }
@@ -4117,7 +4133,8 @@ impl DeferredPass {
         // SAFETY: the segment's command buffers, of the command buffer's pool, ended and
         // recorded for this submission alone; what they use the segment holds, which the pass's
         // joins.
-        let completed = unsafe { command_buffer.submit_waited(&recorded.raws) }?;
+        let what = "the rasterization-rate map's fan-out probe";
+        let completed = unsafe { command_buffer.submit_waited(&recorded.raws, what) }?;
         // Its time read and counted, its submission done.
         drop(times);
         recorded.raws.clear();

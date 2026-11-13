@@ -160,6 +160,9 @@ pub(super) struct Recorded {
     /// their second decoded twins after its work (`texture/decoded_twin.rs`); none for any other
     /// encoder.
     pub(super) twin_writes: Vec<TwinWrite>,
+    /// What the encoder was, as the encoder trail names it, where the device's trail is on
+    /// (`encoder_trail.rs`).
+    pub(super) trail: Option<Arc<str>>,
 }
 
 /// Commands an encoder left to record later (`deferred.rs`).
@@ -393,6 +396,9 @@ pub(super) struct EncoderCore {
     /// nothing joined, moved or went since (`host_aliases::Quiet`): a command over those takes no
     /// lock.
     aliases_quiet: Quiet,
+    /// What the encoder did, for the encoder trail's line, where the device's trail is on
+    /// (`encoder_trail.rs`).
+    trail: Option<Box<crate::encoder_trail::Notes>>,
     /// The open runs of the index gather pass ([`gather`](Self::gather)), which record before
     /// the encoder's next command, and before its `VkCommandBuffer` ends.
     gathers: GatherRuns,
@@ -701,6 +707,11 @@ impl EncoderCore {
             aliased_uses: Vec::new(),
             // The keys an ended encoder found, which hold here while the version stands.
             aliases_quiet: command_buffer.generation().aliases.quiet(),
+            trail: command_buffer
+                .device()
+                .shared()
+                .encoder_trail
+                .then(Box::default),
             gathers: GatherRuns::default(),
             id: CORES.fetch_add(1, Ordering::Relaxed),
             replaying: false,
@@ -858,6 +869,7 @@ impl EncoderCore {
             unattached_as_called: false,
             aliased_uses: Vec::new(),
             aliases_quiet: Quiet::default(),
+            trail: None,
             gathers: GatherRuns::default(),
             id: CORES.fetch_add(1, Ordering::Relaxed),
             // A segment a rebind records again, its command buffer committed.
@@ -2778,6 +2790,12 @@ impl EncoderCore {
         self.defer_into(Some(next), Deferred::Pending(Arc::new(dispatch)))
     }
 
+    /// The encoder trail's notes of what the encoder did, where the device's trail is on
+    /// (`encoder_trail.rs`).
+    pub(super) fn trail(&mut self) -> Option<&mut crate::encoder_trail::Notes> {
+        self.trail.as_deref_mut()
+    }
+
     /// Metal fails the command buffer from this encoder on with `error`, as it commits: the
     /// encoder and every one after it run nothing (`State::fail_from`).
     pub(super) fn fail_command_buffer(&mut self, error: CommandBufferError) {
@@ -2925,6 +2943,7 @@ impl EncoderCore {
             twin_writes,
             routes,
             aliases_quiet,
+            trail,
             ..
         } = self;
         ended.push(raw);
@@ -2961,6 +2980,9 @@ impl EncoderCore {
         if let Some(why) = unlogged {
             state.encoder_unlogged(encoder, why);
         }
+        // What it was, as the encoder trail names it (`encoder_trail.rs`).
+        let command_buffer_id = open.command_buffer.object_id().get();
+        let trail = trail.map(|notes| notes.described(kind, command_buffer_id, encoder));
         state.encoder_holds(encoder, uses.held().to_vec());
         match fails_command_buffer {
             Some(CommandBufferError::GpuHang) => {
@@ -3005,6 +3027,7 @@ impl EncoderCore {
                     summary: summary.fences_only(),
                     sparse: Vec::new(),
                     twin_writes: Vec::new(),
+                    trail: (trail.as_ref()).map(|trail| Arc::from(format!("{trail}, left out"))),
                 },
             );
         }
@@ -3033,6 +3056,10 @@ impl EncoderCore {
                     summary,
                     sparse: Vec::new(),
                     twin_writes,
+                    trail: (trail.as_ref()).map(|trail| match count {
+                        1 => Arc::from(trail.as_str()),
+                        _ => Arc::from(format!("{trail}, part {} of {count}", at + 1)),
+                    }),
                 },
             );
         }

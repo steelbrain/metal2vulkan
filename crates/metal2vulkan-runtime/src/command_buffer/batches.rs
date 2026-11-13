@@ -89,6 +89,15 @@ impl<E, S> Batches<E, S> {
         self.split();
     }
 
+    /// The next encoder goes in a batch of its own, where the current one holds an encoder
+    /// already: the encoder trail's (`encoder_trail.rs`), whose batches hold one encoder each.
+    /// The current batch's waits stay with it, and so does the encoder where it holds none.
+    pub(crate) fn alone(&mut self) {
+        if self.encoders > 0 {
+            self.split();
+        }
+    }
+
     /// The next encoder is a resource state encoder: its updates bind before its batch's work, so
     /// it starts a batch unless the current one holds only such encoders and no signal.
     pub(crate) fn sparse(&mut self) {

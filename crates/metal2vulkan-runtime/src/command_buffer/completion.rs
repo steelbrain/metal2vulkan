@@ -192,7 +192,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How long one wait on the timelines lasts.
 const WAIT_SLICE: Duration = Duration::from_millis(100);
@@ -286,6 +286,9 @@ struct Pending {
     /// The `VkQueue` whose front batch went past the watchdog's bound (`stall.rs`): the loss's
     /// hang is its command buffer, exactly ([`Answers::recovered`]).
     timed_out: Option<usize>,
+    /// Per `VkQueue`: what the last batch a turn took held, as the encoder trail names it, and
+    /// when it was taken, where the device's trail is on (`encoder_trail.rs`).
+    trails: Vec<Option<(Arc<str>, Instant)>>,
 }
 
 /// A submitted batch its queue's waiter waits for.
@@ -312,6 +315,9 @@ pub(crate) struct Submitted {
     pub(crate) after: Vec<Waited>,
     /// A take left it for one of those ([`reached`]): counted once.
     pub(crate) held: bool,
+    /// What its encoders were, as the encoder trail names them, where the device's trail is on
+    /// (`encoder_trail.rs`).
+    pub(crate) trail: Option<Arc<str>>,
 }
 
 /// A batch of another `VkQueue` that a batch waited for and finishes after
@@ -351,6 +357,7 @@ impl Completion {
                 draining: 0,
                 stall: super::stall::Clock::new(queues),
                 timed_out: None,
+                trails: vec![None; queues],
             }),
             wakes: (0..queues).map(|_| Condvar::new()).collect(),
             drained: Condvar::new(),
@@ -384,6 +391,14 @@ impl Completion {
                 Err(Error::OutOfMemory(MemoryKind::Host))
             }
         }
+    }
+
+    /// The last batch `VkQueue` `queue` completed of those the encoder trail named, and how long
+    /// before (`encoder_trail.rs`).
+    pub(crate) fn trail_last(&self, queue: usize) -> Option<(Arc<str>, Duration)> {
+        let pending = lock(&self.watch.pending);
+        let (trail, at) = pending.trails.get(queue)?.as_ref()?;
+        Some((Arc::clone(trail), at.elapsed()))
     }
 
     /// Wait for `batch`, just submitted to `VkQueue` `queue` (or a failed command buffer's end,
@@ -612,6 +627,12 @@ fn turns(watch: &Watch, lists: &mut FenceLists) -> bool {
                 if finished.is_empty() {
                     pending.turning = false;
                     return true;
+                }
+                // The last batch of each queue taken, as the encoder trail names it.
+                for (queue, batch) in &finished {
+                    if let Some(trail) = &batch.trail {
+                        pending.trails[*queue] = Some((Arc::clone(trail), Instant::now()));
+                    }
                 }
                 // The waiters of the queues whose batches it took, where they sleep and their
                 // queue still holds a batch to arm for, or they stop: one whose queue it emptied
@@ -1260,6 +1281,9 @@ fn stalled(
     let Ok(value) = polled else {
         return polled;
     };
+    if device.shared().encoder_trail {
+        trail(watch, device, queue, front, value);
+    }
     let counts = &device.shared().counts;
     let stalled = {
         let mut pending = lock(&watch.pending);
@@ -1300,6 +1324,41 @@ fn stalled(
             device.mark_wedged(super::stall::Stop::Unanswered);
             Err(failure(device, vk::Result::ERROR_DEVICE_LOST))
         }
+    }
+}
+
+/// The encoder trail's lines (`encoder_trail.rs`), where `queue`'s waiter's wait for `front` read
+/// its timeline at `value`, short of it, and no queue's work advanced for
+/// [`AFTER`](crate::encoder_trail::AFTER) since: one for each `VkQueue` whose oldest batch is
+/// pending, once a stall. Formatted under the lock, said after it.
+fn trail(watch: &Watch, device: &Device, queue: usize, front: Front, value: u64) {
+    let lines = {
+        let mut pending = lock(&watch.pending);
+        if value > pending.reached[queue] || value >= front.value {
+            return;
+        }
+        let Some(stalled) = pending.stall.trail_due(crate::encoder_trail::AFTER) else {
+            return;
+        };
+        let Pending {
+            queues,
+            reached,
+            trails,
+            ..
+        } = &*pending;
+        let mut lines = Vec::new();
+        for (queue, batches) in queues.iter().enumerate() {
+            let Some(oldest) = batches.front().filter(|batch| batch.value > reached[queue]) else {
+                continue;
+            };
+            let last = (trails[queue].as_ref()).map(|(trail, at)| (&**trail, at.elapsed()));
+            let front = oldest.trail.as_deref();
+            lines.push(crate::encoder_trail::line(queue, stalled, front, last));
+        }
+        lines
+    };
+    for line in lines {
+        device.inform(crate::encoder_trail::ID_NAME, line);
     }
 }
 

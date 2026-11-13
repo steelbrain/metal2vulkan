@@ -314,6 +314,29 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
 
 /// Under `Exact` no probe runs and every command is drawn region by region; the pixels are the
 /// encoder's draws'.
+/// With the encoder trail on (`encoder_trail.rs`), the host step notes the states its commands
+/// name and its probe is a waited submission the trail watches; the execution is fanned out as
+/// without, to the same pixels.
+#[test]
+fn the_encoder_trail_fans_out_the_same_pixels() {
+    let scratch = Scratch::new("rate-mapped-fan-out-trail");
+    let mut options = options(&scratch.0);
+    options.policy.rate_map_regions = RateMapRegionPolicy::FanOut;
+    options.encoder_trail = true;
+    let workload = Workload::new(Device::system_default_with(&options).unwrap());
+    assert!(workload.device.shared().encoder_trail);
+    let (drawn, _, _) = workload.frame(false);
+    let (fanned, before, after) = workload.frame(true);
+    let counts = fan_counts(&before, &after);
+    eprintln!("RATE-MAP-FAN-OUT-TRAIL counts {counts:?}");
+    match fans_out(&workload.device) {
+        true => assert_eq!(counts, [1, 1, u64::from(COMMANDS - 1)]),
+        false => assert_eq!(counts, [0; 3]),
+    }
+    let differ = differing(&drawn, &fanned);
+    assert_eq!(differ, 0, "texels the fanned-out execution draws otherwise");
+}
+
 #[test]
 fn exact_regions_draw_every_command_region_by_region() {
     let scratch = Scratch::new("rate-mapped-fan-out-exact");

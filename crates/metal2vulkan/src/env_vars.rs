@@ -136,6 +136,24 @@ pub const REGISTRY: &[EnvVar] = &[
                  (CommandBuffer::queue_head_time, CommandBuffer::submit_returned_time); it \
                  changes no work; set to anything but empty or 0",
     },
+    EnvVar {
+        name: "METAL2VULKAN_ENCODER_TRAIL",
+        default: "unset (off)",
+        effect: "metal2vulkan-runtime's diagnostics: each device submits each encoder (or each \
+                 part of one a host step splits off) in a vkQueueSubmit of its own that signals \
+                 its queue's timeline, grouping no batches, and notes what the encoder was: its \
+                 kind, its command buffer's object ID, its place among the command buffer's \
+                 encoders, a render pass's area and attachments' formats and sizes, its \
+                 indirect command executions, and the label hashes of the pipeline states it \
+                 bound (a SHA-256 of each state's label and functions' names: no name and no \
+                 shader text), and those its indirect commands named at a host step; once no \
+                 work of the device advanced for 2 s while some was pending, one line through \
+                 the device's message sink or on stderr for each queue whose oldest batch is \
+                 pending names that encoder and the last one the queue completed, and a line \
+                 names a host step's own waited submission (a rate-map fan-out probe, a loop's \
+                 check) that ran for 2 s; costs when set: a submission per encoder and a line \
+                 formatted at each encoder's end; set to anything but empty or 0",
+    },
 ];
 
 /// Multi-line `--help` block listing every registry var.
@@ -214,6 +232,14 @@ pub fn pending_audit() -> bool {
 /// clock twice more a command buffer, and changes no work.
 pub fn queue_times() -> bool {
     std::env::var_os("METAL2VULKAN_QUEUE_TIMES")
+        .is_some_and(|value| !value.is_empty() && value != "0")
+}
+
+/// Whether each metal2vulkan-runtime device submits each encoder alone and names the encoder its
+/// GPU stopped in (`REGISTRY`): set, and neither empty nor `0`. A default-off diagnostic: it
+/// changes how the work is split into submissions, never what it computes, and prints.
+pub fn encoder_trail() -> bool {
+    std::env::var_os("METAL2VULKAN_ENCODER_TRAIL")
         .is_some_and(|value| !value.is_empty() && value != "0")
 }
 

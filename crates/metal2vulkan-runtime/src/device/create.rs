@@ -240,6 +240,15 @@ pub struct DeviceOptions {
     /// hold it to a finding. No Metal counterpart.
     #[doc(hidden)]
     pub pending_audit: bool,
+    /// Turn each device's encoder trail on: a diagnostic that submits each encoder in a
+    /// `vkQueueSubmit` of its own and, once no work of the device advanced for 2 s while some was
+    /// pending, names the encoder each stuck `VkQueue`'s oldest batch holds and the last one it
+    /// completed (id name `metal2vulkan-encoder-trail`, `encoder_trail.rs`); it changes when work
+    /// goes to the driver, never what it computes. Off by default; `METAL2VULKAN_ENCODER_TRAIL`,
+    /// set, turns it on for every device too. For the tests that hold it to its line. No Metal
+    /// counterpart.
+    #[doc(hidden)]
+    pub encoder_trail: bool,
     /// Color formats each device takes as no color attachment, as a device without the
     /// attachment feature of them does: their tilings' `COLOR_ATTACHMENT` and blend features and
     /// their attachment sample counts are left out of the description the device plans and
@@ -411,6 +420,7 @@ impl std::fmt::Debug for DeviceOptions {
             fail_in_place_check,
             assume_submissions_merge,
             pending_audit,
+            encoder_trail,
             withheld_attachment_formats,
             color_attachment_limit,
             pipeline_records,
@@ -446,6 +456,7 @@ impl std::fmt::Debug for DeviceOptions {
             .field("fail_in_place_check", fail_in_place_check)
             .field("assume_submissions_merge", assume_submissions_merge)
             .field("pending_audit", pending_audit)
+            .field("encoder_trail", encoder_trail)
             .field("withheld_attachment_formats", withheld_attachment_formats)
             .field("color_attachment_limit", color_attachment_limit)
             .field(
@@ -2400,6 +2411,7 @@ pub(super) fn create_on(
         fail_in_place_check: options.fail_in_place_check,
         assume_submissions_merge: options.assume_submissions_merge,
         pending_audit: options.pending_audit,
+        encoder_trail: options.encoder_trail,
         view_reinterpretation,
         generated_commands,
         host_image_copy,
@@ -2600,6 +2612,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         fail_in_place_check,
         assume_submissions_merge,
         pending_audit,
+        encoder_trail,
         withheld_attachment_formats,
         color_attachment_limit,
         pipeline_records: _,
@@ -2630,6 +2643,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *fail_in_place_check == b.fail_in_place_check
         && *assume_submissions_merge == b.assume_submissions_merge
         && *pending_audit == b.pending_audit
+        && *encoder_trail == b.encoder_trail
         && *withheld_attachment_formats == b.withheld_attachment_formats
         && *color_attachment_limit == b.color_attachment_limit
         && *extra_queues == b.extra_queues

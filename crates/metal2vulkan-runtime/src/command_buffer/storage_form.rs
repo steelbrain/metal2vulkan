@@ -89,6 +89,8 @@ impl CommandBuffer {
                 summary: recorded.summary,
                 sparse: Vec::new(),
                 twin_writes: Vec::new(),
+                trail: (device.shared().encoder_trail)
+                    .then(|| std::sync::Arc::from("the runtime's storage form switch")),
             },
         );
         state.retained.extend(recorded.retained.into_entry());
