@@ -4,7 +4,7 @@
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-runtime --example pass_costs -- \
-//!     [--frames F] [--repeats R] [--draws D] [--extent W,H] [--clear]
+//!     [--frames F] [--repeats R] [--draws D] [--extent W,H] [--clear] [--begins]
 //! ```
 //!
 //! Each frame is [`PASSES`] render pass instances of `D` draws (1 by default), over one
@@ -17,7 +17,10 @@
 //!   an encoder's pass, or one primary for each submission's passes (`per-group`). A new primary
 //!   starts with no dynamic state, so it sets the 17 dynamic states the runtime's draws record
 //!   (`render.rs`'s `RECORDED` and the color write mask); `per-group-restated` sets them at each
-//!   pass too.
+//!   pass too. `per-pass-fresh` allocates each pass's primary and frees it once its frame
+//!   completed, the pool untrimmed (Mesa's common pool keeps a freed command buffer for its next
+//!   allocation); `per-pass-fresh-trimmed` trims the pool after the frees, so each allocation
+//!   makes a new command buffer, with no command stream memory of its own yet.
 //! - **The instance**: a `VkRenderPass` instance (`vkCmdBeginRenderPass`) over a `VkFramebuffer`
 //!   made for the pass and destroyed once its frame completed (`made`), as the runtime makes one
 //!   for each instance (`render_target::framebuffer`), or over one framebuffer kept (`kept`); or a
@@ -27,7 +30,11 @@
 //! median of `R` runs of `F` frames, 5 of 200 by default, after a run of 20 not counted) to
 //! record (its framebuffer's making included), to submit, and to reclaim (the framebuffers'
 //! destruction and the command pool's reset once the frame completed), and their sum. Then the
-//! differences between shapes that differ in one thing, a pass.
+//! differences between shapes that differ in one thing, a pass. With `--begins` it also times
+//! each `vkBeginCommandBuffer` and each instance's begin (`vkCmdBeginRenderPass` or
+//! `vkCmdBeginRendering`) alone, a pass, which adds the clock's reads to the record time.
+
+use std::cell::Cell;
 
 use ash::vk;
 
@@ -136,6 +143,10 @@ enum Buffers {
     Group,
     /// One primary for each submission's passes, setting the dynamic states at each pass.
     GroupRestated,
+    /// A primary allocated for each pass, freed once its frame completed.
+    Fresh,
+    /// A primary allocated for each pass, freed once its frame completed, the pool trimmed.
+    FreshTrimmed,
 }
 
 /// How a pass begins its instance.
@@ -162,6 +173,8 @@ impl Shape {
             Buffers::Pass => "per-pass",
             Buffers::Group => "per-group",
             Buffers::GroupRestated => "per-group-restated",
+            Buffers::Fresh => "per-pass-fresh",
+            Buffers::FreshTrimmed => "per-pass-fresh-trimmed",
         };
         let instance = match self.instance {
             Instance::Made => "made",
@@ -173,7 +186,7 @@ impl Shape {
 }
 
 /// The shapes, in the order they run.
-const SHAPES: [Shape; 7] = [
+const SHAPES: [Shape; 9] = [
     Shape {
         buffers: Buffers::Pass,
         instance: Instance::Made,
@@ -202,10 +215,18 @@ const SHAPES: [Shape; 7] = [
         buffers: Buffers::Group,
         instance: Instance::Dynamic,
     },
+    Shape {
+        buffers: Buffers::Fresh,
+        instance: Instance::Made,
+    },
+    Shape {
+        buffers: Buffers::FreshTrimmed,
+        instance: Instance::Made,
+    },
 ];
 
 /// The pairs of shapes that differ in one thing, and what that is.
-const DIFFERENCES: [(usize, usize, &str); 6] = [
+const DIFFERENCES: [(usize, usize, &str); 8] = [
     (
         0,
         3,
@@ -228,13 +249,26 @@ const DIFFERENCES: [(usize, usize, &str); 6] = [
         6,
         "today's shape against a primary per group and dynamic rendering",
     ),
+    (
+        7,
+        0,
+        "a primary allocated and freed for each pass against one kept",
+    ),
+    (
+        8,
+        0,
+        "a new primary for each pass (pool trimmed) against one kept",
+    ),
 ];
 
-/// A frame's slot: its command pool and primaries, the framebuffers its passes made, and the fence
-/// its last submission signals.
+/// A frame's slot: its command pool and primaries, the primaries its frame allocated and whether
+/// their frees trim the pool, the framebuffers its passes made, and the fence its last submission
+/// signals.
 struct Slot {
     pool: vk::CommandPool,
     buffers: Vec<vk::CommandBuffer>,
+    fresh: Vec<vk::CommandBuffer>,
+    trim: bool,
     framebuffers: Vec<vk::Framebuffer>,
     fence: vk::Fence,
 }
@@ -251,12 +285,15 @@ fn thread_ns() -> u64 {
     at.tv_sec as u64 * 1_000_000_000 + at.tv_nsec as u64
 }
 
-/// The CPU time of a run's phases, in nanoseconds a pass.
+/// The CPU time of a run's phases, in nanoseconds a pass, and of the begins inside the record
+/// (`--begins`; 0 where untimed).
 #[derive(Clone, Copy, Default)]
 struct Phases {
     record: f64,
     submit: f64,
     reclaim: f64,
+    buffer_begins: f64,
+    instance_begins: f64,
 }
 
 impl Phases {
@@ -291,10 +328,14 @@ struct Bench {
     draws: u32,
     extent: vk::Extent2D,
     load: vk::AttachmentLoadOp,
+    /// Whether the begins are timed (`--begins`), and their thread time this run: the primaries'
+    /// and the instances'.
+    timed: bool,
+    begins: [Cell<u64>; 2],
 }
 
 impl Bench {
-    fn new(draws: u32, extent: vk::Extent2D, load: vk::AttachmentLoadOp) -> Bench {
+    fn new(draws: u32, extent: vk::Extent2D, load: vk::AttachmentLoadOp, timed: bool) -> Bench {
         // SAFETY: loading the Vulkan loader runs its initialization; nothing else is assumed.
         let entry = unsafe { ash::Entry::load() }.expect("the Vulkan loader");
         // SAFETY: a global command of a loaded entry.
@@ -483,6 +524,8 @@ impl Bench {
                 Slot {
                     pool,
                     buffers,
+                    fresh: Vec::with_capacity(PASSES),
+                    trim: false,
                     framebuffers: Vec::with_capacity(PASSES),
                     fence,
                 }
@@ -507,6 +550,8 @@ impl Bench {
             draws,
             extent,
             load,
+            timed,
+            begins: [Cell::new(0), Cell::new(0)],
         };
         bench.to_general(range);
         bench
@@ -552,6 +597,28 @@ impl Bench {
             device.queue_wait_idle(self.queue).unwrap();
             (device.reset_command_pool(slot.pool, vk::CommandPoolResetFlags::empty())).unwrap();
         }
+    }
+
+    /// Run `call`, adding its thread time to begin `at`'s where the begins are timed.
+    fn begin(&self, at: usize, call: impl FnOnce()) {
+        match self.timed {
+            true => {
+                let start = thread_ns();
+                call();
+                (self.begins[at]).set(self.begins[at].get() + thread_ns() - start);
+            }
+            false => call(),
+        }
+    }
+
+    /// A primary allocated from `pool`.
+    fn allocate(&self, pool: vk::CommandPool) -> vk::CommandBuffer {
+        let allocate = vk::CommandBufferAllocateInfo::default()
+            .command_pool(pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+        // SAFETY: the pool is live and this thread's alone.
+        unsafe { self.device.allocate_command_buffers(&allocate) }.unwrap()[0]
     }
 
     /// Set the 17 dynamic states on `command`, as a new primary needs.
@@ -634,7 +701,9 @@ impl Bench {
                         .framebuffer(target)
                         .render_area(area)
                         .clear_values(&CLEAR);
-                    device.cmd_begin_render_pass(command, &begin, vk::SubpassContents::INLINE);
+                    self.begin(1, || {
+                        device.cmd_begin_render_pass(command, &begin, vk::SubpassContents::INLINE)
+                    });
                     self.pass_pipeline
                 }
                 Instance::Dynamic => {
@@ -648,7 +717,7 @@ impl Bench {
                         .render_area(area)
                         .layer_count(1)
                         .color_attachments(&colors);
-                    device.cmd_begin_rendering(command, &begin);
+                    self.begin(1, || device.cmd_begin_rendering(command, &begin));
                     self.dynamic_pipeline
                 }
             };
@@ -666,6 +735,9 @@ impl Bench {
     /// Run `frames` frames of `shape`: the CPU time of each phase, a pass.
     fn run(&mut self, shape: Shape, frames: usize) -> Phases {
         let mut spent = [0u64; 3];
+        for begins in &self.begins {
+            begins.set(0);
+        }
         for _ in 0..frames {
             let at = self.next;
             self.next = (self.next + 1) % SLOTS;
@@ -679,6 +751,15 @@ impl Bench {
             }
             // SAFETY: the slot's command buffers completed (the fence).
             unsafe {
+                let slot = &mut self.slots[at];
+                if !slot.fresh.is_empty() {
+                    self.device.free_command_buffers(slot.pool, &slot.fresh);
+                    slot.fresh.clear();
+                    if slot.trim {
+                        (self.device)
+                            .trim_command_pool(slot.pool, vk::CommandPoolTrimFlags::empty());
+                    }
+                }
                 let pool = self.slots[at].pool;
                 (self
                     .device
@@ -700,6 +781,10 @@ impl Bench {
             }
             let submitted = thread_ns();
             self.slots[at].framebuffers = made;
+            if matches!(shape.buffers, Buffers::Fresh | Buffers::FreshTrimmed) {
+                self.slots[at].fresh = submissions.concat();
+                self.slots[at].trim = shape.buffers == Buffers::FreshTrimmed;
+            }
             spent[0] += recorded - reclaimed;
             spent[1] += submitted - recorded;
             spent[2] += reclaimed - start;
@@ -709,6 +794,8 @@ impl Bench {
             record: spent[0] as f64 / passes,
             submit: spent[1] as f64 / passes,
             reclaim: spent[2] as f64 / passes,
+            buffer_begins: self.begins[0].get() as f64 / passes,
+            instance_begins: self.begins[1].get() as f64 / passes,
         }
     }
 
@@ -721,7 +808,7 @@ impl Bench {
     ) -> (Vec<Vec<vk::CommandBuffer>>, Vec<vk::Framebuffer>) {
         let mut made = Vec::with_capacity(PASSES);
         let device = &self.device;
-        let buffers = &self.slots[at].buffers;
+        let (buffers, pool) = (&self.slots[at].buffers, self.slots[at].pool);
         let begin = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         let mut submissions = Vec::with_capacity(PASSES / GROUP + 1);
@@ -731,10 +818,13 @@ impl Bench {
             // SAFETY: each primary is reset (its pool) and begun once a frame.
             unsafe {
                 match shape.buffers {
-                    Buffers::Pass => {
+                    Buffers::Pass | Buffers::Fresh | Buffers::FreshTrimmed => {
                         for pass in passes {
-                            let command = buffers[pass];
-                            device.begin_command_buffer(command, &begin).unwrap();
+                            let command = match shape.buffers {
+                                Buffers::Pass => buffers[pass],
+                                _ => self.allocate(pool),
+                            };
+                            self.begin(0, || device.begin_command_buffer(command, &begin).unwrap());
                             self.set_states(command);
                             self.pass(command, shape.instance, &mut made);
                             device.end_command_buffer(command).unwrap();
@@ -743,7 +833,7 @@ impl Bench {
                     }
                     Buffers::Group | Buffers::GroupRestated => {
                         let command = buffers[group];
-                        device.begin_command_buffer(command, &begin).unwrap();
+                        self.begin(0, || device.begin_command_buffer(command, &begin).unwrap());
                         for pass in passes.clone() {
                             if pass == passes.start || shape.buffers == Buffers::GroupRestated {
                                 self.set_states(command);
@@ -930,7 +1020,8 @@ fn main() {
         true => vk::AttachmentLoadOp::CLEAR,
         false => vk::AttachmentLoadOp::LOAD,
     };
-    let mut bench = Bench::new(draws, extent, load);
+    let timed = arguments.iter().any(|argument| argument == "--begins");
+    let mut bench = Bench::new(draws, extent, load, timed);
     for shape in SHAPES {
         bench.run(shape, 20);
     }
@@ -945,6 +1036,8 @@ fn main() {
             record: median(phases.iter().map(|p| p.record).collect()),
             submit: median(phases.iter().map(|p| p.submit).collect()),
             reclaim: median(phases.iter().map(|p| p.reclaim).collect()),
+            buffer_begins: median(phases.iter().map(|p| p.buffer_begins).collect()),
+            instance_begins: median(phases.iter().map(|p| p.instance_begins).collect()),
         })
         .collect();
     for (shape, phases) in SHAPES.iter().zip(&medians) {
@@ -956,6 +1049,14 @@ fn main() {
             phases.reclaim,
             phases.total(),
         );
+        if timed {
+            println!(
+                "PASS-COSTS {:<26} begin_command_buffer_ns {:7.0} begin_instance_ns {:7.0}",
+                shape.name(),
+                phases.buffer_begins,
+                phases.instance_begins,
+            );
+        }
     }
     for (from, to, what) in DIFFERENCES {
         let (a, b) = (medians[from], medians[to]);
