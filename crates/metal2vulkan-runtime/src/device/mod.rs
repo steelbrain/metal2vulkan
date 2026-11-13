@@ -545,6 +545,9 @@ pub(super) struct DeviceShared {
     /// The variants' shader modules by their exact SPIR-V, shared device-wide
     /// (`pipeline/content_keyed.rs`).
     pub(super) shader_modules: Mutex<crate::pipeline::ShaderModules>,
+    /// The compiled pipelines' stage words' digests, kept past their variants
+    /// (`pipeline/objects.rs`, `WordsDigests`).
+    pub(super) words_digests: Mutex<crate::pipeline::WordsDigests>,
     /// The variants' pipeline layouts by their exact definition, shared device-wide
     /// (`pipeline/shared_layouts.rs`).
     pub(crate) pipeline_layouts: Mutex<crate::pipeline::shared_layouts::SharedLayouts>,
@@ -3018,6 +3021,9 @@ impl Device {
             kept: Mutex::default(),
             region_ledger,
             shader_modules: Mutex::default(),
+            words_digests: Mutex::new(crate::pipeline::WordsDigests::counted(
+                crate::pipeline::WORDS_DIGESTS,
+            )),
             pipeline_layouts: Mutex::default(),
             flights: crate::pipeline::flight::Flights::default(),
             color_resolves: Mutex::new(ColorResolveObjects::default()),

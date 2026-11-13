@@ -18,6 +18,7 @@ use super::graphics::Notices;
 use super::interlocked_writes;
 use super::kept::{Compiled, Instance, KeptObjects, KeptPipeline, Place};
 use super::libraries::Linked;
+use super::memo::Lru;
 use super::shared_layouts::{settle_layouts, shared_layout, SharedLayout};
 use super::RegionKey;
 use crate::binding::{Info, SetWrite};
@@ -301,8 +302,21 @@ impl Owned<DeviceShared> for ShaderModule {
 /// `DeviceShared::shader_modules`).
 pub(crate) type ShaderModules = ContentKeyed<Hash256, ShaderModule>;
 
+/// The most compiled pipelines whose stages' digests a device keeps ([`WordsDigests`]).
+pub(crate) const WORDS_DIGESTS: usize = 16384;
+
+/// The digests of each compiled pipeline's stage words ([`words_digest`]), in stage order, by the
+/// compiled pipeline (the memo's key), kept past its variants and past the memo, which let it go
+/// (`DeviceShared::words_digests`). A variant whose objects are made again, where no kept
+/// instance gives them back (`kept.rs`), names its modules by these and hashes no word: a
+/// program's state after the warm pass made the same pipeline, or after the memo let it go. A key
+/// names one compiled pipeline in a process, as the memo trusts, so it names those words.
+/// Holds no Vulkan object; at most [`WORDS_DIGESTS`], the least recently used going first.
+pub(crate) type WordsDigests = Lru<Compiled, Arc<[Hash256]>>;
+
 /// The SHA-256 of SPIR-V `words` (their length, then their bytes): what names a stage's module in
-/// the device's map and its words in its makings' records, taken once per stage of a variant.
+/// the device's map and its words in its makings' records, taken once per stage of a variant of a
+/// pipeline the device kept no digests of ([`WordsDigests`]).
 ///
 /// The only derivation of such a digest there is. A creation that holds the compiled function a
 /// stage's words came from asks the function for the digest it already took with this very
@@ -817,7 +831,14 @@ impl VariantObjects {
         // order.
         settle_device_maps(device);
         let Some(back) = back else {
+            // The digests an earlier variant of the pipeline took, where the caller has none.
+            let known = match digests {
+                Some(_) => None,
+                None => lock(&shared.words_digests).get(&compiled).cloned(),
+            };
+            let digests = digests.or(known.as_deref());
             let mut objects = VariantObjects::create(device, layout, stages, pipeline, digests)?;
+            lock(&shared.words_digests).insert(compiled, Arc::clone(&objects.words), 1);
             objects.keep = (!warming).then(|| Instance::new(compiled));
             return Ok((objects, Vec::new()));
         };

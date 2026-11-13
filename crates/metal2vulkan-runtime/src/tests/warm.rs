@@ -530,6 +530,46 @@ fn a_warm_pass_takes_nothing_the_program_sees() {
     println!("the creations announced {warm_notices} notice(s) on both devices");
 }
 
+/// The program's compute state of a pipeline a warm pass made makes its variant's objects again
+/// (the pass kept none), and hashes none of its stage's words: the device kept the digests the
+/// pass's variants took (`pipeline/objects.rs`, `WordsDigests`). Paired: the pass itself, on a
+/// device that knew none of them, took one at least.
+#[test]
+fn the_program_s_state_after_a_pass_hashes_no_stage_words() {
+    let recording = Scratch::new("warm-digests-recording");
+    let records = recorded(&recording.0);
+    let scratch = Scratch::new("warm-digests");
+    let warm = device(&scratch.0, None, None);
+    let kernel = compute(&warm);
+    let derived = crate::pipeline::objects::words_digests_derived;
+    let before_pass = derived();
+    warm.warm(records, u64::MAX);
+    let s = warmed(&warm, STATES);
+    assert_eq!(s.records_warmed, STATES, "{s:?}");
+    assert!(
+        derived() > before_pass,
+        "the pass, on a device that knew no pipeline, hashed no stage's words"
+    );
+    let stages = |device: &Device| {
+        let counts = device.work_counts();
+        counts.shader_modules_made + counts.shader_modules_shared
+    };
+    let (before, stages_before) = (derived(), stages(&warm));
+    let state = warm
+        .new_compute_pipeline_state(&kernel, &PipelineOptions::default())
+        .unwrap();
+    assert!(
+        stages(&warm) > stages_before,
+        "the program's state made no variant's objects: nothing here asked for a digest"
+    );
+    assert_eq!(
+        derived() - before,
+        0,
+        "the program's state hashed the stage words the pass's variant hashed"
+    );
+    drop(state);
+}
+
 /// A pass stops before its next record once the driver data its makings added reaches its byte
 /// budget: none is made under a budget of 0 bytes, and only the first under a budget of 1 byte.
 /// The 1-byte pass runs over a directory of its own, which holds none of the records' driver

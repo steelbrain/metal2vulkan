@@ -87,8 +87,8 @@ pub(super) use graphics::{
     color_write_masks, keyed_assembly, DepthRange, DrawKey, FixedState, GraphicsKey,
 };
 pub(super) use making::Pending;
-pub(super) use objects::ShaderModules;
 pub(super) use objects::{create_set_layout, set_needs, RawPipeline, VariantObjects};
+pub(super) use objects::{ShaderModules, WordsDigests, WORDS_DIGESTS};
 pub use options::{PipelineOption, PipelineOptions};
 /// The general form of a key (`render/residual.rs`), for `tests::general_form`.
 #[cfg(test)]
