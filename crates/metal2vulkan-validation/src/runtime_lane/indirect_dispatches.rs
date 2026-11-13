@@ -44,8 +44,13 @@ use super::indirect_host_steps::state;
 use super::{at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::StatusReport;
-use metal2vulkan::pipeline::{ComputePipelineDescriptor, RuntimeFact, StageSource};
-use metal2vulkan_devtools::llvm_assemble_text;
+use metal2vulkan::cache::VariantKey;
+use metal2vulkan::library::Library;
+use metal2vulkan::pipeline::{
+    ComputePipelineDescriptor, FunctionDescriptor, RuntimeFact, Stage, StageSource,
+};
+use metal2vulkan::Budget;
+use metal2vulkan_devtools::{engine_dir, llvm_assemble, llvm_assemble_text};
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferStatus, ComputeCommandEncoder, ComputePipelineState,
     Degradation, Device, Error, ExecutedPipeline, Invalid, PipelineOptions, Problem, Size,
@@ -56,17 +61,51 @@ use metal2vulkan_runtime::{
 pub(super) const INDIRECT_DISPATCHES: [Degradation; 1] = [Degradation::HostReadDispatchArguments];
 
 /// The kinds a test's steps force beside [`INDIRECT_DISPATCHES`], where the device has not
-/// announced them: `split-dispatch` where a dispatch of threads leaves a partial threadgroup
-/// (`ragged`: Vulkan dispatches whole workgroups), and the `Shared` buffers' system memory.
-fn forced_beside(device: &Device, ragged: bool) -> std::collections::BTreeSet<Degradation> {
+/// announced them: `split-dispatch` where a dispatch runs as several Vulkan dispatches (`split`:
+/// a ragged grid the device keeps split, [`ragged_splits`], or group counts past its limits), and
+/// the `Shared` buffers' system memory.
+fn forced_beside(device: &Device, split: bool) -> std::collections::BTreeSet<Degradation> {
     forced(&[
-        (Degradation::SplitDispatch, ragged),
+        (Degradation::SplitDispatch, split),
         (
             Degradation::SharedInSystemMemory,
             shared_in_system_memory(device),
         ),
     ])
 }
+
+/// Whether a ragged `dispatchThreads` grid of the fixture's kernel (one that is not a whole number
+/// of threadgroups) runs as a split on `device`, an edge region at each remainder's threadgroup
+/// size, Vulkan dispatching whole workgroups. The runtime runs such a grid at the call's
+/// threadgroup size alone on the kernel's partial-threadgroups variant, which it asks the compile
+/// layer for under its variant key with `VariantKey::partial_threadgroups` set, and keeps the
+/// split where the compile layer refuses it (`Unsupported`): for one, where the kernel's workgroup
+/// barriers run on the emulated simdgroup tier. The same compile answers here: the kernel uses no
+/// simdgroup function, so no threadgroup size asks for its emulated-simdgroups variant, and its
+/// dispatches here bind plain buffers, so its key is the empty one with the variant set.
+fn ragged_splits(device: &Device) -> bool {
+    let compile = device.compile_device();
+    let budget = Budget::standard();
+    let mut key = VariantKey::new();
+    key.partial_threadgroups = true;
+    let bitcode = llvm_assemble(&engine_dir().join(format!("{TEMPLATE}.ll"))).unwrap();
+    let library = Library::from_air(&bitcode).unwrap();
+    let function = FunctionDescriptor::new(library.function(TEMPLATE).unwrap());
+    let variant = compile
+        .compile_function(&function, &key.lowering_inputs(Stage::Kernel), &budget)
+        .and_then(|compiled| {
+            let descriptor = ComputePipelineDescriptor::new(StageSource::Compiled(compiled));
+            compile.compile_compute_pipeline(&descriptor, &budget)
+        });
+    match variant {
+        Ok(_) => false,
+        Err(metal2vulkan::error::Error::Unsupported(_)) => true,
+        Err(error) => panic!("the partial-threadgroups variant of {TEMPLATE}: {error}"),
+    }
+}
+
+/// The fixture's kernel.
+const TEMPLATE: &str = "icb_replay_grid_template";
 
 /// The output's slots, and the fixture's `params[1]`.
 const SLOTS: u32 = 64;
@@ -128,7 +167,7 @@ impl Fixture {
         let mut words = vec![0; (OFFSET / 4) as usize];
         words.extend(sizes.words());
         Fixture {
-            state: state(device, "icb_replay_grid_template", false),
+            state: state(device, TEMPLATE, false),
             params: buffer_with(device, &bytes(&[7, SLOTS])).unwrap(),
             out: buffer_with(device, &bytes(&[0; SLOTS as usize])).unwrap(),
             arguments: buffer_with(device, &bytes(&words)).unwrap(),
@@ -234,8 +273,16 @@ fn an_indirect_dispatch_runs_as_the_direct_dispatch_of_its_arguments() {
             assert_ne!(direct, vec![0; SLOTS as usize], "{sizes:?}");
             assert_eq!(run(device, sizes, Encoded::Indirect), direct, "{sizes:?}");
         }
-        // A grid of 10 x 3 threads in threadgroups of 4 x 2 leaves partial ones.
-        assert_made_once(messages, &INDIRECT_DISPATCHES, &forced_beside(device, true));
+        // The ragged grids, where the device keeps them split, and 65536 groups along y, past
+        // the device's `maxComputeWorkGroupCount` there on every committed profile.
+        let limits = device.compile_device().profile().limits();
+        let past = limits.max_compute_work_group_count[1] < 65536;
+        let split = ragged_splits(device) || past;
+        assert_made_once(
+            messages,
+            &INDIRECT_DISPATCHES,
+            &forced_beside(device, split),
+        );
     });
 }
 
@@ -266,8 +313,14 @@ fn an_indirect_dispatch_reads_the_arguments_the_work_before_it_wrote() {
         encoder.end_encoding().unwrap();
         complete(&command_buffer, "written arguments");
         assert_eq!(fixture.out(), direct);
-        // A grid of 10 x 3 threads in threadgroups of 4 x 2 leaves partial ones.
-        assert_made_once(messages, &INDIRECT_DISPATCHES, &forced_beside(device, true));
+        // A grid of 10 x 3 threads in threadgroups of 4 x 2 leaves partial ones, which split
+        // where the device keeps such a grid split.
+        let split = ragged_splits(device);
+        assert_made_once(
+            messages,
+            &INDIRECT_DISPATCHES,
+            &forced_beside(device, split),
+        );
     });
 }
 
@@ -276,8 +329,7 @@ fn an_indirect_dispatch_reads_the_arguments_the_work_before_it_wrote() {
 #[test]
 fn an_indirect_dispatch_metal_runs_nothing_for_runs_nothing() {
     on_device_with(at_plan, |device, messages| {
-        let max =
-            state(device, "icb_replay_grid_template", false).max_total_threads_per_threadgroup();
+        let max = state(device, TEMPLATE, false).max_total_threads_per_threadgroup();
         let past = [MAX_GROUP, max.div_ceil(MAX_GROUP) + 1, 1];
         for sizes in [
             Sizes::Threads {
@@ -406,8 +458,14 @@ fn an_unaligned_offset_reads_at_the_multiple_below() {
             complete(&command_buffer, &format!("{sizes:?} at {offset}"));
             assert_eq!(fixture.out(), direct, "{sizes:?} at {offset}");
         }
-        // A grid of 10 x 3 threads in threadgroups of 4 x 2 leaves partial ones.
-        assert_made_once(messages, &INDIRECT_DISPATCHES, &forced_beside(device, true));
+        // A grid of 10 x 3 threads in threadgroups of 4 x 2 leaves partial ones, which split
+        // where the device keeps such a grid split.
+        let split = ragged_splits(device);
+        assert_made_once(
+            messages,
+            &INDIRECT_DISPATCHES,
+            &forced_beside(device, split),
+        );
     });
 }
 
