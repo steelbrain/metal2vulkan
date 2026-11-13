@@ -1,11 +1,13 @@
 //! What a load shaped like a guest's walk makes and frees of the spares' command buffers
 //! (`spares.rs`), and what its threads spend. A compositor's queue commits a command buffer of
-//! [`FRAME`] render passes every [`FRAME_EVERY`], as a guest's window server committed about 94
-//! passes a frame at 41 frames a second; [`SMALL_QUEUES`] queues of their own each commit a
-//! command buffer of one pass, one blit encoder or two, in turn, every [`SMALL_EVERY`], as the
-//! walk's other command buffers, about 1,600 a second together. Each queue keeps [`IN_FLIGHT`]
-//! command buffers in flight. A pass, without attachments, draws a point of `ob3_index_buffer`
-//! (rasterization disabled) one to four times; a blit encoder fills 256 bytes of a buffer.
+//! render passes every [`FRAME_EVERY`], as a guest's window server committed about 94 passes a
+//! frame at 41 frames a second, each frame's count drawn from [`FRAME`] (47 to 141);
+//! [`SMALL_QUEUES`] queues of their own each commit a command buffer of [`SMALL`] encoders (one
+//! to eight, a pass or blit encoders in turn) every [`SMALL_EVERY`], as the walk's other command
+//! buffers, about 1,600 a second together. The counts follow a fixed sequence, the same each run.
+//! Each queue keeps [`IN_FLIGHT`] command buffers in flight. A pass, without attachments, draws a
+//! point of `ob3_index_buffer` (rasterization disabled) one to four times; a blit encoder fills
+//! 256 bytes of a buffer.
 //!
 //! Printed (`SPARES-WALK`), over [`MEASURE`] after [`WARM`]: the command buffers the device
 //! allocated a second, by the place that asked; those the spares freed a second, by why, and the
@@ -26,8 +28,11 @@ use metal2vulkan::pipeline::{RenderPipelineDescriptor, StageSource};
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
-/// The render passes of the compositor's command buffers.
-const FRAME: usize = 94;
+/// The render passes of the compositor's command buffers: 47 and up to 94 more, 94 on average.
+const FRAME: std::ops::Range<usize> = 47..142;
+
+/// The encoders of the small command buffers, in turn.
+const SMALL: [usize; 8] = [1, 1, 1, 2, 2, 3, 4, 8];
 
 /// The compositor's command buffers' period: about 41 a second.
 const FRAME_EVERY: Duration = Duration::from_micros(24_400);
@@ -72,9 +77,9 @@ fn process_ns() -> u64 {
 /// What a queue encodes into each command buffer.
 #[derive(Clone, Copy)]
 enum Shape {
-    /// The compositor's: [`FRAME`] passes.
+    /// The compositor's: passes, as many as [`FRAME`] draws.
     Frame,
-    /// A small queue's: one pass, one blit encoder or two, in turn.
+    /// A small queue's: [`SMALL`] encoders in turn, a pass or blit encoders in turn.
     Small,
 }
 
@@ -124,6 +129,12 @@ fn commit(
     let (mut spent, mut counted) = (0, 0);
     let mut flight = VecDeque::new();
     let start = Instant::now();
+    // A fixed sequence (a linear congruential generator's high bits), the same each run.
+    let mut seed = 0x2545_f491_u32;
+    let mut draw = |range: std::ops::Range<usize>| {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        range.start + (seed >> 8) as usize % range.len()
+    };
     for n in 0u32.. {
         let next = start + every * n;
         let now = Instant::now();
@@ -137,14 +148,17 @@ fn commit(
         let command_buffer = queue.command_buffer().unwrap();
         match shape {
             Shape::Frame => {
-                for pass in 0..FRAME {
+                for pass in 0..draw(FRAME) {
                     scene.pass(&command_buffer, 1 + pass % 4);
                 }
             }
-            Shape::Small => match n % 3 {
-                0 => scene.pass(&command_buffer, 1),
-                at => scene.fills(&command_buffer, target, at as usize),
-            },
+            Shape::Small => {
+                let encoders = SMALL[n as usize % SMALL.len()];
+                match n % 2 {
+                    0 => (0..encoders).for_each(|_| scene.pass(&command_buffer, 1)),
+                    _ => scene.fills(&command_buffer, target, encoders),
+                }
+            }
         }
         command_buffer.commit().unwrap();
         if begun.0 >= from {
@@ -238,7 +252,7 @@ fn spares_walk() {
     );
     let each = |(ns, count): (u64, u64)| ns as f64 / count.max(1) as f64 / 1000.0;
     println!(
-        "SPARES-WALK {}: over {seconds} s after {} s: {} compositor command buffers of {FRAME} \
+        "SPARES-WALK {}: over {seconds} s after {} s: {} compositor command buffers of 47 to 141 \
          passes, {:.1} us of thread time each; {} small ones, {:.1} us each; process CPU {:.1} \
          ms a second",
         device.name(),
