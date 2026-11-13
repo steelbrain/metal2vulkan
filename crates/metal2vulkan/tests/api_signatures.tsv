@@ -2970,6 +2970,7 @@ field	metal2vulkan-runtime::WorkCounts.host_import_fds_kept	pub host_import_fds_
 field	metal2vulkan-runtime::WorkCounts.host_import_releases_pending	pub host_import_releases_pending: u64
 field	metal2vulkan-runtime::WorkCounts.host_import_releases_posted	pub host_import_releases_posted: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_held_for_good	pub host_imports_held_for_good: u64
+field	metal2vulkan-runtime::WorkCounts.host_imports_joined_releasable	pub host_imports_joined_releasable: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_kept_for_fds	pub host_imports_kept_for_fds: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_kept_no_stand_in	pub host_imports_kept_no_stand_in: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_kept_of_heap	pub host_imports_kept_of_heap: u64
@@ -2980,7 +2981,10 @@ field	metal2vulkan-runtime::WorkCounts.host_imports_lost	pub host_imports_lost: 
 field	metal2vulkan-runtime::WorkCounts.host_imports_read_apart	pub host_imports_read_apart: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_read_apart_address	pub host_imports_read_apart_address: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_read_apart_binding	pub host_imports_read_apart_binding: u64
-field	metal2vulkan-runtime::WorkCounts.host_imports_read_apart_second_buffer	pub host_imports_read_apart_second_buffer: u64
+field	metal2vulkan-runtime::WorkCounts.host_imports_read_apart_heap	pub host_imports_read_apart_heap: u64
+field	metal2vulkan-runtime::WorkCounts.host_imports_read_apart_inside	pub host_imports_read_apart_inside: u64
+field	metal2vulkan-runtime::WorkCounts.host_imports_read_apart_rebound	pub host_imports_read_apart_rebound: u64
+field	metal2vulkan-runtime::WorkCounts.host_imports_read_apart_shared_range	pub host_imports_read_apart_shared_range: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_read_apart_texture	pub host_imports_read_apart_texture: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_read_apart_unreleased	pub host_imports_read_apart_unreleased: u64
 field	metal2vulkan-runtime::WorkCounts.host_imports_read_apart_vk_buffer	pub host_imports_read_apart_vk_buffer: u64

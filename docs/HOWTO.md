@@ -309,7 +309,12 @@ released:
 A buffer stays imported for good once its Metal address is handed out (`gpu_address`, a binding, an
 argument buffer or table, an indirect command buffer, `use_resource`), its `VkBuffer` is read, a
 texture that reads its memory is made over its bytes (a shadow, or an image in place in an import
-of their pointer), or a second buffer lies in its import; so do a heap's and a rebind's imports. A
+of their pointer), a buffer is bound inside its import or made to share its range
+(`BufferDescriptor::range_of`), or a no-copy heap's bytes or a rebound buffer lie in its import; so
+do a heap's and a rebind's imports. A no-copy buffer made over the same bytes lies in the import and
+reads it as the first does, so the import stays releasable while every read of each of them was a
+blit's, or none (a buffer never read, which only holds the bytes imported, among them;
+`host_imports_joined_releasable`). A
 texture in place over a dma-buf import's bytes lies in an import of a dma-buf of its own pages,
 asked of the buffer's source, and leaves the buffer's import releasable: on RADV a guest surface (a
 no-copy buffer and a texture in place over it) lists the texture's import alone in each kernel
@@ -320,7 +325,8 @@ releasable until a read other than a blit's kept them for good. For imports
 of either kind, `host_imports_read_apart` counts the live ones that a read other than a blit's keeps
 for good (the
 `host_imports_read_apart_*` gauges by reason: the Metal address, the `VkBuffer`, a binding, a
-texture, a second buffer, no releasing thread), the `host_imports_kept_*` gauges the live ones kept
+texture, a buffer bound inside, a buffer sharing the range, a heap's bytes, a rebound buffer, no
+releasing thread), the `host_imports_kept_*` gauges the live ones kept
 whatever reads them, by cause (a heap's, a rebind's, a pointer import on a device whose held
 imports cost no submission or made before its check answered, no stand-in, and
 `host_imports_kept_for_fds`), and `host_imports_used` the imports each committed

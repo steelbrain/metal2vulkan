@@ -16,6 +16,9 @@
 //! - the pages a release keeps across a remap of the buffer's addresses;
 //! - that a buffer whose Metal address was handed out stays imported, and that one with a texture
 //!   in place over its bytes (an image over a dma-buf of its own pages) does not;
+//! - that an import two buffers lie in (one never read, one read by blits) is released while idle,
+//!   and that a binding of one and the other's Metal address loaded by a kernel read and write the
+//!   pages once it is imported again;
 //! - that a buffer past the descriptors the device keeps (capped through
 //!   `Device::cap_kept_host_import_fds`) is made and stays imported, counted while it lives
 //!   (`host_imports_kept_for_fds`);
@@ -41,7 +44,7 @@ use crate::{
     ResourceOptions, ShaderCacheOptions, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::device::HostPageTexturePolicy;
-use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use metal2vulkan::metal::{PixelFormat, ResourceUsage, TextureUsage};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
@@ -632,6 +635,171 @@ fn an_idle_dma_buf_import_is_released_and_imported_again_at_its_next_blit() {
         eprintln!(
             "{TEST}: on {}: {chunks} chunks released 3 times, imported again 3 times; a copy's \
              call took {importing:?} importing them again, {imported:?} imported",
+            device.name()
+        );
+    });
+}
+
+/// `words` as their little-endian bytes.
+fn word_bytes(words: &[u32]) -> Vec<u8> {
+    words.iter().copied().flat_map(u32::to_le_bytes).collect()
+}
+
+/// Two no-copy buffers over the same 4 pages, where the device imports dma-bufs of them: a holder
+/// that nothing ever reads, made first, and a second buffer over the same bytes, which lies in the
+/// holder's import (`host_aliases.rs`) and which only blits read at first:
+/// - the second buffer leaves the import releasable (`WorkCounts::host_imports_joined_releasable`):
+///   no read apart, nothing held for good;
+/// - read by a blit, the import is released while idle; the CPU's writes made while it is released
+///   are read by the next blit through the second buffer, imported again from the descriptors kept,
+///   the source called once in all;
+/// - released again, a kernel binds the second buffer (its indices), makes the holder resident
+///   (`useResource:`, as Metal reaches a no-copy buffer unnamed only once a command buffer used it)
+///   and loads the holder's Metal address from its bytes (an argument word naming it), reading the
+///   holder's bytes through the address and writing through it: the binding imports it again, for
+///   good, and the words read and written are the pages' own;
+/// - the hook releases it no more, and gone, it leaves the gauges.
+///
+/// Where the device imports the pointer, the test says so and passes.
+#[test]
+fn an_import_two_buffers_lie_in_is_released_while_idle_and_read_right_again() {
+    const TEST: &str = "dma-buf residency of two buffers";
+    on_device(TEST, |device| {
+        let page = host_page();
+        let len = 4 * page;
+        let queue = device.new_command_queue().unwrap();
+        let ram = Ram::new(len, 0, len);
+        let first = counting(len, 11);
+        ram.write_file(0, &first);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (holder, chunks) = no_copy(TEST, device, &ram, (0, len), &calls);
+        if chunks == 0 {
+            return;
+        }
+        let made = device.work_counts();
+        assert_eq!(residency(&made), (0, 0, 1, chunks), "{TEST}: the holder");
+        let live = made.dma_buf_memories_live;
+        // SAFETY: the view outlives the buffer, and the source makes dma-bufs of its pages.
+        let second = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                HostMemory::with_dma_buf(ram.pointer(0), ram.source(&calls)),
+                len as u64,
+                ResourceOptions::default(),
+                None,
+            )
+        }
+        .unwrap();
+        let joined = device.work_counts();
+        assert_eq!(
+            joined.dma_buf_imports, made.dma_buf_imports,
+            "{TEST}: imported again"
+        );
+        assert_eq!(
+            joined.host_imports_held_for_good, 0,
+            "{TEST}: the second buffer kept the import for good"
+        );
+        assert_eq!(
+            joined.host_imports_read_apart, made.host_imports_read_apart,
+            "{TEST}"
+        );
+        assert_eq!(residency(&joined), (0, 0, 1, chunks), "{TEST}: joined");
+        assert!(read(&queue, &second, len) == first, "{TEST}");
+
+        release(TEST, device, 1);
+        let released = device.work_counts();
+        assert_eq!(residency(&released), (1, 0, 0, chunks), "{TEST}: released");
+        assert_eq!(released.dma_buf_memories_live, live - chunks, "{TEST}");
+        assert_eq!(
+            released.host_imports_joined_releasable - made.host_imports_joined_releasable,
+            1,
+            "{TEST}: joined"
+        );
+
+        // The CPU writes while it is released, through the file: the kernel's indices (16 + t to
+        // read, 32 + t to write) and the words it reads.
+        let indices: Vec<u32> = (0..8)
+            .map(|t| 16 + t)
+            .chain((0..8).map(|t| 32 + t))
+            .collect();
+        let read_words: Vec<u32> = (0..8).map(|t| 0xC0DE_0000 + t).collect();
+        ram.write_file(0, &word_bytes(&indices));
+        ram.write_file(64, &word_bytes(&read_words));
+        let mut now = first.clone();
+        now[..64].copy_from_slice(&word_bytes(&indices));
+        now[64..96].copy_from_slice(&word_bytes(&read_words));
+        assert!(
+            read(&queue, &second, len) == now,
+            "{TEST}: the bytes written while released"
+        );
+        let again = device.work_counts();
+        assert_eq!(
+            residency(&again),
+            (1, 1, 1, chunks),
+            "{TEST}: imported again"
+        );
+        assert_eq!(again.dma_buf_memories_live, live, "{TEST}");
+
+        // Released again, a binding of the second buffer and the holder's address.
+        release(TEST, device, 1);
+        let function = super::encoder_holds::library(device, "engine/ob2_loaded_pointer.ll")
+            .new_function_with_name("ob2_loaded_pointer")
+            .unwrap();
+        let state = device
+            .new_compute_pipeline_state_with_function(&function, &crate::PipelineOptions::default())
+            .unwrap();
+        let out = device.new_buffer(32, ResourceOptions::shared()).unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder.set_compute_pipeline_state(&state).unwrap();
+        encoder.set_buffer(Some(&second), 0, 0).unwrap();
+        // Metal reaches a no-copy buffer through an address only once a command buffer's commands
+        // used it (`live_buffers.rs`): the holder is made resident.
+        let usage = ResourceUsage::READ | ResourceUsage::WRITE;
+        (encoder.use_resource(holder.as_resource(), usage)).unwrap();
+        encoder
+            .set_bytes(&holder.gpu_address().0.to_le_bytes(), 1)
+            .unwrap();
+        encoder.set_buffer(Some(&out), 0, 2).unwrap();
+        encoder
+            .dispatch_threads(Size::new(8, 1, 1), Size::new(8, 1, 1))
+            .unwrap();
+        encoder.end_encoding().unwrap();
+        run(&command_buffer);
+        let contents = out.contents().unwrap();
+        // SAFETY: the output's own 32 bytes, which its completed command buffer wrote.
+        let got = unsafe { std::slice::from_raw_parts(contents.as_ptr(), 32) }.to_vec();
+        assert!(
+            got == word_bytes(&read_words),
+            "{TEST}: the words read through the address"
+        );
+        let written: Vec<u32> = (0..8).map(|t| 0xB000_0000 | t).collect();
+        now[128..160].copy_from_slice(&word_bytes(&written));
+        assert!(
+            ram.read_file(0, len) == now,
+            "{TEST}: the words written through the address"
+        );
+        let held = device.work_counts();
+        assert_eq!(residency(&held), (2, 2, 0, 0), "{TEST}: held for good");
+        assert_eq!(held.host_imports_held_for_good, 1, "{TEST}: held for good");
+        assert_eq!(held.dma_buf_memories_live, live, "{TEST}");
+        assert_eq!(
+            device.release_idle_host_imports(),
+            0,
+            "{TEST}: held for good"
+        );
+        assert_eq!(
+            calls.load(Ordering::Acquire),
+            1,
+            "{TEST}: the source's calls"
+        );
+
+        drop((holder, second));
+        let gone = counts_once(TEST, device, "the import gone", |counts| {
+            counts.host_imports_held_for_good == 0 && counts.dma_buf_memories_live == live - chunks
+        });
+        assert_eq!(residency(&gone), (2, 2, 0, 0), "{TEST}: gone");
+        eprintln!(
+            "{TEST}: on {}: {chunks} chunks of two buffers released twice, imported again twice",
             device.name()
         );
     });

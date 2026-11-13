@@ -98,20 +98,20 @@ fn a_command_buffer_counts_each_import_it_uses_once_and_blits_never_read_apart()
     });
     assert_eq!(counts(&device), (used + 3, apart, live));
 
-    // A buffer over exactly `a`'s bytes lies in its import, which a second buffer reads apart; a
-    // command buffer using both counts the import once.
+    // A buffer over exactly `a`'s bytes lies in its import, reading none apart: it reads the
+    // import as `a` does. A command buffer using both counts the import once.
     let d = over_host(&device, &first, &runs).unwrap();
-    assert_eq!(counts(&device), (used + 3, apart + 1, live));
+    assert_eq!(counts(&device), (used + 3, apart, live));
     blits(&queue, |blit| {
         blit.fill_buffer(&a, 0..4096, 2).unwrap();
         blit.fill_buffer(&d, 4096..8192, 3).unwrap();
     });
-    assert_eq!(counts(&device), (used + 4, apart + 1, live));
+    assert_eq!(counts(&device), (used + 4, apart, live));
 
     // Its Metal address handed out reads `b`'s import apart, once however often.
     let _ = b.gpu_address();
     let _ = b.gpu_address();
-    assert_eq!(counts(&device), (used + 4, apart + 2, live));
+    assert_eq!(counts(&device), (used + 4, apart + 1, live));
 
     // The imports that go leave the gauge.
     drop((a, b, c, d));
@@ -151,14 +151,18 @@ fn a_commit_counts_each_import_once_past_the_few_it_tells_apart_in_place() {
 }
 
 /// The reason gauges: the Metal address, the `VkBuffer`, a binding, a texture over the bytes, a
-/// second buffer, no releasing thread.
-fn reasons(counts: &WorkCounts) -> [u64; 6] {
+/// buffer bound inside, a buffer sharing the range, a heap's bytes, a rebound buffer, no
+/// releasing thread.
+fn reasons(counts: &WorkCounts) -> [u64; 9] {
     [
         counts.host_imports_read_apart_address,
         counts.host_imports_read_apart_vk_buffer,
         counts.host_imports_read_apart_binding,
         counts.host_imports_read_apart_texture,
-        counts.host_imports_read_apart_second_buffer,
+        counts.host_imports_read_apart_inside,
+        counts.host_imports_read_apart_shared_range,
+        counts.host_imports_read_apart_heap,
+        counts.host_imports_read_apart_rebound,
         counts.host_imports_read_apart_unreleased,
     ]
 }
@@ -174,7 +178,7 @@ fn kept_or_resident(counts: &WorkCounts) -> u64 {
 }
 
 /// `base` with `by` added at `reason`.
-fn plus(base: [u64; 6], reason: usize, by: u64) -> [u64; 6] {
+fn plus(base: [u64; 9], reason: usize, by: u64) -> [u64; 9] {
     let mut out = base;
     out[reason] += by;
     out
@@ -214,15 +218,14 @@ fn each_read_apart_counts_for_its_reason_once_and_each_import_for_its_keeping() 
         .unwrap();
     let now = plus(now, 3, 1);
     assert_eq!(reasons(&device.work_counts()), now);
-    // A second buffer over `d`'s bytes lies in its import.
+    // A second buffer over `d`'s bytes lies in its import, reading none apart.
     let e = over_host(&device, &hosts[3], &runs).unwrap();
-    let now = plus(now, 4, 1);
     assert_eq!(reasons(&device.work_counts()), now);
-    // Four imports read apart, each once whatever its reasons; `a`'s again for a second reason.
+    // Three imports read apart, each once whatever its reasons; `a`'s again for a second reason.
     let _ = unsafe { a.vk_buffer() };
     let counts = device.work_counts();
     assert_eq!(reasons(&counts), plus(now, 1, 1));
-    assert_eq!(counts.host_imports_read_apart, apart + 4);
+    assert_eq!(counts.host_imports_read_apart, apart + 3);
 
     // The imports that go leave every gauge.
     drop((texture, a, b, c, d, e));

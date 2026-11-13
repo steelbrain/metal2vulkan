@@ -1914,7 +1914,7 @@ impl Device {
     ) -> Option<(HostBuffer, Placement)> {
         let shared = self.shared();
         let raw_device = shared.vk();
-        let pages = import.pages(ReadApart::SecondBuffer);
+        let pages = import.pages(ReadApart::Inside);
         #[cfg(unix)]
         if matches!(pages, ImportPages::StandIn(_)) {
             return None;
@@ -2519,7 +2519,7 @@ impl Device {
             return Err(other.generation().foreign(call, self));
         }
         let unshared = || {
-            let address = other.exposed_address(ReadApart::SecondBuffer);
+            let address = other.exposed_address(ReadApart::SharedRange);
             let held = AddressRange::of(address.0, other.length());
             Error::PlacementConflict(PlacementConflict::Unshared { held })
         };

@@ -1862,6 +1862,10 @@ impl Gpu for Runtime {
             ("dma_buf_image_memories_live", c.dma_buf_image_memories_live),
             ("host_imports_released", c.host_imports_released),
             ("host_imports_reimported", c.host_imports_reimported),
+            (
+                "host_imports_joined_releasable",
+                c.host_imports_joined_releasable,
+            ),
             ("host_imports_resident", c.host_imports_resident),
             ("host_imports_held_for_good", c.host_imports_held_for_good),
             ("host_imports_lost", c.host_imports_lost),
@@ -1886,8 +1890,20 @@ impl Gpu for Runtime {
                 c.host_imports_read_apart_texture,
             ),
             (
-                "host_imports_read_apart_second_buffer",
-                c.host_imports_read_apart_second_buffer,
+                "host_imports_read_apart_inside",
+                c.host_imports_read_apart_inside,
+            ),
+            (
+                "host_imports_read_apart_shared_range",
+                c.host_imports_read_apart_shared_range,
+            ),
+            (
+                "host_imports_read_apart_heap",
+                c.host_imports_read_apart_heap,
+            ),
+            (
+                "host_imports_read_apart_rebound",
+                c.host_imports_read_apart_rebound,
             ),
             (
                 "host_imports_read_apart_unreleased",

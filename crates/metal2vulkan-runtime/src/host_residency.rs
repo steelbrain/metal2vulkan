@@ -39,9 +39,21 @@
 //!   read returns: its Metal address handed out (`gpu_address`, so a binding, an argument
 //!   buffer, an argument table, an indirect command buffer or `use_resource`), its `VkBuffer`
 //!   handed out (`vk_buffer`), a texture or texel view over its bytes bound to its memory or
-//!   `VkBuffer` (a shadow of them, or an image in place in an import of their pointer), or a second
-//!   buffer lying in the import (`host_aliases.rs`). So no pointer, descriptor or image other than
-//!   a blit's command ever holds a released import's objects. A texture in place over a dma-buf
+//!   `VkBuffer` (a shadow of them, or an image in place in an import of their pointer), a buffer
+//!   bound inside its memory with a `VkBuffer` of its own or made to share its buffer's range
+//!   (`host_aliases.rs`, `BufferDescriptor::range_of`), or a no-copy heap's own bytes or a
+//!   rebound buffer lying in it (a heap's placed buffers' addresses are the heap's). So no
+//!   pointer, descriptor or image other than a blit's command ever holds a released import's
+//!   objects.
+//! - **Several buffers in one import.** Every no-copy buffer made over the bytes the import's
+//!   buffers were made over lies in it (`host_aliases.rs`, "One memory, one import"), and reads
+//!   it as they do, through the import: its blits take the import's objects as the first
+//!   buffer's do, imported again where released, and any other read of it keeps the import
+//!   imported for good as the first buffer's would. So the import stays releasable while every
+//!   read of each buffer in it was a blit's, or none: a buffer that is never read, made only to
+//!   keep the bytes imported (a consumer's holder of a view of its guest's pages), keeps the
+//!   import no more than a buffer only blits read does. Counted:
+//!   `WorkCounts::host_imports_joined_releasable`. A texture in place over a dma-buf
 //!   import's bytes is not such a read: its `DRM_FORMAT_MOD_LINEAR` image lies in an import of a
 //!   dma-buf of its own pages, which it asks the buffer's source for as it is made, reading the
 //!   buffer's import as a blit does (imported again where released, `dma_buf.rs`), and binds none
@@ -329,6 +341,11 @@ impl Residency {
             releasable: AtomicBool::new(true),
             stand_in,
         }
+    }
+
+    /// Whether it is releasable still: no read but a blit's took it yet.
+    pub(super) fn releasable(&self) -> bool {
+        self.releasable.load(Ordering::Acquire)
     }
 
     /// The device's stand-in's pages.

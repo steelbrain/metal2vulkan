@@ -59,7 +59,7 @@ use std::any::Any;
 use std::mem::ManuallyDrop;
 use std::ops::Range;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::Instant;
 
@@ -198,7 +198,7 @@ pub(super) struct HostCell {
     /// `Buffer::exposed_address`), a bit each ([`ReadApart`]): once any is, its import is kept
     /// imported for good (`host_residency.rs`), and a call for a reason noted need not look
     /// again.
-    exposed: AtomicU8,
+    exposed: AtomicU16,
     /// The device whose work counts each look at its pages adds to
     /// (`WorkCounts::no_copy_lies_read`): its generation, let go of once the buffer was carried
     /// to the next one and its pages there went (`device/carry.rs`).
@@ -1070,12 +1070,37 @@ pub(super) struct HostPages {
     made_of: OnceLock<HostParts>,
 }
 
+/// How new pages come to lie in an import ([`HostPages::new`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Joining {
+    /// The import was made for them.
+    First,
+    /// A no-copy buffer's, made over the bytes the import's buffers were made over
+    /// (`host_aliases.rs`): it reads the import as they do, through the import, so a releasable
+    /// import stays releasable beside it (`host_residency.rs`).
+    Buffer,
+    /// A no-copy heap's own bytes, over the bytes the import's buffers were made over: its
+    /// placed buffers' addresses are the heap's, handed out with no read of the import noted, so
+    /// the import is kept imported for good.
+    Heap,
+    /// A rebound buffer's (`rebind.rs`): kept imported for good, as a rebind's own import is.
+    Rebound,
+}
+
 impl HostPages {
-    /// New pages lying in `import`, with no release yet.
-    fn new(import: Arc<HostImport>) -> HostPages {
-        if import.lying.fetch_add(1, Ordering::AcqRel) > 0 {
-            // Another buffer lies in it: imported for good (`host_residency.rs`).
-            import.expose(ReadApart::SecondBuffer);
+    /// New pages lying in `import`, with no release yet, `joining` it so.
+    fn new(import: Arc<HostImport>, joining: Joining) -> HostPages {
+        let others = import.lying.fetch_add(1, Ordering::AcqRel) > 0;
+        match (joining, others) {
+            // Imported for good beside the others (`host_residency.rs`).
+            (Joining::Heap, true) => {
+                import.expose(ReadApart::Heap);
+            }
+            (Joining::Rebound, true) => {
+                import.expose(ReadApart::Rebound);
+            }
+            (Joining::Buffer, true) => import.note_joined(),
+            (Joining::First | Joining::Buffer | Joining::Heap | Joining::Rebound, _) => {}
         }
         HostPages {
             parked: Mutex::new(Vec::new()),
@@ -1379,7 +1404,7 @@ pub(super) struct HostImport {
     /// The reads other than a blit's that took it, a bit each ([`HostImport::note_read_apart`]):
     /// counted in `WorkCounts::host_imports_read_apart` and the gauge of each reason while it
     /// lives.
-    read_apart: AtomicU8,
+    read_apart: AtomicU16,
     /// Why the device never releases it while idle, for an import it keeps: counted in that
     /// reason's `WorkCounts` gauge while it lives. `None` for a releasable one.
     kept_because: Option<KeptBecause>,
@@ -1480,27 +1505,38 @@ pub(crate) enum ReadApart {
     /// A texture over the bytes: an image bound to the memory, or a texel view over the
     /// `VkBuffer`.
     Texture,
-    /// A second buffer lying in the import, or sharing its buffer's range.
-    SecondBuffer,
+    /// A buffer bound inside its memory, with a `VkBuffer` of its own (`host_aliases.rs`, "One
+    /// page, one import").
+    Inside,
+    /// A buffer made to share its buffer's range (`BufferDescriptor::range_of`), its Metal
+    /// address handed to that buffer.
+    SharedRange,
+    /// A no-copy heap's own bytes lying in it ([`Joining::Heap`]).
+    Heap,
+    /// A rebound buffer lying in it ([`Joining::Rebound`]).
+    Rebound,
     /// No thread to release it while idle (`host_residency.rs`).
     Unreleased,
 }
 
 impl ReadApart {
     /// How many reasons there are.
-    pub(crate) const COUNT: usize = 6;
+    pub(crate) const COUNT: usize = 9;
     const ALL: [ReadApart; ReadApart::COUNT] = [
         ReadApart::Address,
         ReadApart::VkBuffer,
         ReadApart::Binding,
         ReadApart::Texture,
-        ReadApart::SecondBuffer,
+        ReadApart::Inside,
+        ReadApart::SharedRange,
+        ReadApart::Heap,
+        ReadApart::Rebound,
         ReadApart::Unreleased,
     ];
 
     /// Its bit in [`HostImport::read_apart`].
-    fn bit(self) -> u8 {
-        1 << self as u8
+    fn bit(self) -> u16 {
+        1 << self as u16
     }
 }
 
@@ -1580,7 +1616,7 @@ impl HostImport {
             objects: ManuallyDrop::new(Objects::Fixed(Imported::new(device, pages))),
             lying: AtomicUsize::new(0),
             inside: AtomicUsize::new(0),
-            read_apart: AtomicU8::new(0),
+            read_apart: AtomicU16::new(0),
             kept_because: because,
             unlisted: AtomicBool::new(unlisted),
             kept: Mutex::new(None),
@@ -1607,7 +1643,7 @@ impl HostImport {
             ))),
             lying: AtomicUsize::new(0),
             inside: AtomicUsize::new(0),
-            read_apart: AtomicU8::new(0),
+            read_apart: AtomicU16::new(0),
             kept_because: None,
             unlisted: AtomicBool::new(false),
             kept: Mutex::new(None),
@@ -1764,6 +1800,16 @@ impl HostImport {
             counts.host_import_read_apart(true);
         }
         counts.host_import_read_apart_for(reason, true);
+    }
+
+    /// A no-copy buffer made over its bytes came to lie in it beside another
+    /// ([`Joining::Buffer`]): counted where it is releasable still, which it stays
+    /// (`WorkCounts::host_imports_joined_releasable`, `host_residency.rs`).
+    fn note_joined(&self) {
+        #[cfg(unix)]
+        if self.residency().is_some_and(Residency::releasable) {
+            (self.device.shared().counts).host_import_joined_releasable();
+        }
     }
 }
 
@@ -3371,7 +3417,12 @@ impl Device {
                 let import = self.host_import(pages, again, kept);
                 #[cfg(not(unix))]
                 let import = Arc::new(HostImport::new(self, pages, kept));
-                self.host_lie(identity.key, import, release, drops_writes)
+                self.host_lie(
+                    identity.key,
+                    (import, Joining::First),
+                    release,
+                    drops_writes,
+                )
             }
             Owner::Runtime | Owner::Vulkan => Lie::Fixed(Arc::new(FixedPages {
                 device: MadeOn::new(self.clone()),
@@ -3431,8 +3482,12 @@ impl Device {
         naming: Naming,
     ) -> Buffer {
         let identity = naming.identity(modes.hazard, of_heap);
+        let joining = match of_heap {
+            true => Joining::Heap,
+            false => Joining::Buffer,
+        };
         let own = OwnBytes {
-            lie: self.host_lie(identity.key, import, release, false),
+            lie: self.host_lie(identity.key, (import, joining), release, false),
             reserved,
             identity,
             owner: Owner::Caller,
@@ -3448,12 +3503,12 @@ impl Device {
     fn host_lie(
         &self,
         key: ResourceKey,
-        import: Arc<HostImport>,
+        (import, joining): (Arc<HostImport>, Joining),
         release: Option<Release>,
         drops_writes: bool,
     ) -> Lie {
         let drops_writes = drops_writes || import.drops_writes();
-        let host = HostPages::new(import);
+        let host = HostPages::new(import, joining);
         if let Some(release) = release {
             host.release_to(release);
         }
@@ -3462,7 +3517,7 @@ impl Device {
             texels: Mutex::new(Vec::new()),
             textures: Mutex::new(TexturesOver::default()),
             in_place: Mutex::new(Vec::new()),
-            exposed: AtomicU8::new(0),
+            exposed: AtomicU16::new(0),
             device: MadeOn::new(self.clone()),
             released: AtomicBool::new(false),
             freed: AtomicBool::new(false),
@@ -3552,14 +3607,14 @@ impl Device {
     ) -> Arc<HostPages> {
         let pages = self.pages_of(raw, memory, offset, base, reach);
         let import = HostImport::new(self, pages, Some(KeptBecause::Rebind));
-        Arc::new(HostPages::new(Arc::new(import)))
+        Arc::new(HostPages::new(Arc::new(import), Joining::First))
     }
 
     /// Host pages a rebind gives a no-copy buffer lying in `import`, the import of the same bytes
     /// a live no-copy buffer was made over (`rebind.rs`, `host_aliases.rs`), without their
     /// release, as [`Device::host_pages`] gives them.
     pub(super) fn pages_in_import(&self, import: Arc<HostImport>) -> Arc<HostPages> {
-        Arc::new(HostPages::new(import))
+        Arc::new(HostPages::new(import, Joining::Rebound))
     }
 
     /// The Vulkan device address of `raw`, where the device enables `bufferDeviceAddress`.
@@ -4557,7 +4612,7 @@ impl Buffer {
                     ..
                 },
             ) => Some((
-                self.exposed_address(ReadApart::SecondBuffer),
+                self.exposed_address(ReadApart::SharedRange),
                 own.reserved,
                 self.mapped_contents()?,
             )),

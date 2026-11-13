@@ -402,6 +402,7 @@ pub(crate) struct Counters {
     host_imports_released: AtomicU64,
     host_imports_released_over_most: AtomicU64,
     host_imports_reimported: AtomicU64,
+    host_imports_joined_releasable: AtomicU64,
     host_imports_resident: AtomicU64,
     host_imports_held_for_good: AtomicU64,
     host_imports_lost: AtomicU64,
@@ -3607,6 +3608,12 @@ impl Counters {
     /// A released import was imported again.
     pub(crate) fn host_import_reimported(&self) {
         self.host_imports_reimported.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A no-copy buffer came to lie in a releasable import beside another, which it left
+    /// releasable (`host_residency.rs`).
+    pub(crate) fn host_import_joined_releasable(&self) {
+        (self.host_imports_joined_releasable).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A releasable import holds its memory from now on (`resident`), or no longer (released,
@@ -7841,15 +7848,20 @@ pub struct WorkCounts {
     /// Released imports imported again from the dma-bufs kept, each at the first blit that read
     /// the buffer after its release (on the encoding thread).
     pub host_imports_reimported: u64,
+    /// No-copy buffers made over the bytes of a releasable import another buffer lies in, which
+    /// left it releasable: an import stays so while every read of each buffer in it was a blit's,
+    /// or none (`host_residency.rs`, `host_aliases.rs`).
+    pub host_imports_joined_releasable: u64,
     /// The releasable imports that hold their memory now: those no read but a blit's took, which
     /// the device may release while idle, and releases past its most where a held import adds to
     /// every submission's cost (`host_imports_released_over_most`). An import a read other than a
     /// blit's took leaves it for `host_imports_held_for_good`.
     pub host_imports_resident: u64,
     /// The imports that were releasable until a read other than a blit's took them (a binding, a
-    /// texture over the bytes, the Metal address or `VkBuffer` handed out, a second buffer lying
-    /// in the import: `host_imports_read_apart`), which hold their memory now: kept imported for
-    /// good, whatever the device's most, until their buffer goes. With `host_imports_resident`,
+    /// texture over the bytes, the Metal address or `VkBuffer` handed out, a buffer bound inside
+    /// the import or sharing its buffer's range, a heap's bytes or a rebound buffer lying in it:
+    /// `host_imports_read_apart`), which hold their memory now: kept imported for good, whatever
+    /// the device's most, until their buffers go. With `host_imports_resident`,
     /// every import with a residency that holds its memory.
     pub host_imports_held_for_good: u64,
     /// Reads other than a blit's that found an import released and the device unable to import
@@ -7872,13 +7884,16 @@ pub struct WorkCounts {
     /// frame's commands name. Counted at the commit, on the committing thread.
     pub host_imports_used: u64,
     /// The live host imports some read other than a blit's took (their Metal address or
-    /// `VkBuffer` handed out, a binding, a texture over the bytes, a second buffer lying in the
-    /// import): those a release while idle could never take, as the device keeps a releasable
-    /// import for good after such a read. Of imports of any kind.
+    /// `VkBuffer` handed out, a binding, a texture over the bytes, a buffer bound inside the
+    /// import or sharing its buffer's range, a heap's bytes or a rebound buffer lying in it):
+    /// those a release while idle could never take, as the device keeps a releasable import for
+    /// good after such a read. A no-copy buffer made over the import's bytes is none: it reads the
+    /// import as its first buffer does (`host_imports_joined_releasable`). Of imports of any
+    /// kind.
     pub host_imports_read_apart: u64,
     /// Of those, the ones whose buffer's Metal address was handed out: `gpu_address` (a heap's
     /// over the import's bytes too), or written for the caller into an argument buffer or an
-    /// indirect command buffer. Each of these six counts an import once for its reason, so an
+    /// indirect command buffer. Each of these nine counts an import once for its reason, so an
     /// import read apart for several reasons counts in each.
     pub host_imports_read_apart_address: u64,
     /// Of those, the ones whose buffer's `VkBuffer` was handed out (`Buffer::vk_buffer`).
@@ -7890,9 +7905,19 @@ pub struct WorkCounts {
     /// Of those, the ones a texture over the bytes was made over: an image bound to the import's
     /// memory, or a texel view or a shadow's copies over its `VkBuffer`.
     pub host_imports_read_apart_texture: u64,
-    /// Of those, the ones a second no-copy buffer lies in (`host_aliases.rs`), or that a buffer
-    /// made over the same host memory shares its range with (`BufferDescriptor::range_of`).
-    pub host_imports_read_apart_second_buffer: u64,
+    /// Of those, the ones a buffer is bound inside, with a `VkBuffer` of its own: one whose pages
+    /// the import holds all of, not over the same bytes (`host_aliases.rs`, "One page, one
+    /// import").
+    pub host_imports_read_apart_inside: u64,
+    /// Of those, the ones whose buffer a buffer made over the same host memory shares its range
+    /// with (`BufferDescriptor::range_of`), its Metal address handed to that buffer.
+    pub host_imports_read_apart_shared_range: u64,
+    /// Of those, the ones a no-copy heap's own bytes lie in, over the bytes a buffer of the
+    /// import was made over: the heap's placed buffers' addresses are the heap's.
+    pub host_imports_read_apart_heap: u64,
+    /// Of those, the ones a rebound buffer lies in (`Buffer::rebind_bytes_no_copy` onto the
+    /// bytes a buffer of the import was made over).
+    pub host_imports_read_apart_rebound: u64,
     /// Of those, the releasable ones kept imported because the host could start no thread to
     /// release them.
     pub host_imports_read_apart_unreleased: u64,
@@ -10224,6 +10249,8 @@ impl Device {
             host_imports_released_over_most: (counters.host_imports_released_over_most)
                 .load(Ordering::Relaxed),
             host_imports_reimported: counters.host_imports_reimported.load(Ordering::Relaxed),
+            host_imports_joined_releasable: (counters.host_imports_joined_releasable)
+                .load(Ordering::Relaxed),
             host_imports_resident: counters.host_imports_resident.load(Ordering::Relaxed),
             host_imports_held_for_good: (counters.host_imports_held_for_good)
                 .load(Ordering::Relaxed),
@@ -10233,7 +10260,10 @@ impl Device {
             host_imports_read_apart_vk_buffer: read_apart(ReadApart::VkBuffer),
             host_imports_read_apart_binding: read_apart(ReadApart::Binding),
             host_imports_read_apart_texture: read_apart(ReadApart::Texture),
-            host_imports_read_apart_second_buffer: read_apart(ReadApart::SecondBuffer),
+            host_imports_read_apart_inside: read_apart(ReadApart::Inside),
+            host_imports_read_apart_shared_range: read_apart(ReadApart::SharedRange),
+            host_imports_read_apart_heap: read_apart(ReadApart::Heap),
+            host_imports_read_apart_rebound: read_apart(ReadApart::Rebound),
             host_imports_read_apart_unreleased: read_apart(ReadApart::Unreleased),
             host_imports_kept_of_heap: kept(KeptBecause::Heap),
             host_imports_kept_rebound: kept(KeptBecause::Rebind),

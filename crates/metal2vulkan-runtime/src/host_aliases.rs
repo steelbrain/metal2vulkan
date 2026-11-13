@@ -25,6 +25,9 @@
 //! - **One memory, one import.** A buffer that joins a memory, of the memory class of a live
 //!   import of it, lies in that import's `VkBuffer` (`HostImport`, `Device::buffer_in_import`):
 //!   one resource to the driver, where the tracker's barriers are not all the ordering there is.
+//!   It reads the import as the first buffer does, through the import, so an import the device
+//!   may release while idle stays releasable beside it (`host_residency.rs`, "Several buffers in
+//!   one import").
 //!   A copied host buffer (`copied.rs`) joins the memory as an import does, and a later buffer of
 //!   either class lies in its copy while no import of its class lives ([`Kind::Copy`]): the copy
 //!   is the runtime's own memory of one class whatever the storage mode, and two copies of one
