@@ -19,6 +19,7 @@ mod entry;
 pub mod key;
 mod numbered;
 mod partition;
+mod stage_bound;
 #[cfg(test)]
 mod tests;
 
@@ -1645,6 +1646,25 @@ pub(crate) fn compile_bitcode_kept(
     })
 }
 
+/// [`compile_bitcode_kept`] under the stage bound `weight_cap` in place of
+/// [`stage_bound::SERIALIZED_STAGE_WEIGHT`], so a test reaches the bound with a small module.
+#[cfg(test)]
+pub(crate) fn compile_bitcode_bounded(
+    bitcode: &[u8],
+    entry: EntryRef<'_>,
+    p: &DeviceProfile,
+    m: &mut Meter,
+    weight_cap: u64,
+) -> Result<(CompiledFunction, Plan, TypedModule), Error> {
+    guarded(|| {
+        let consts = FunctionConstantValues::defaults();
+        let inputs = LowerInputs::new();
+        let r = Request::bitcode(bitcode, entry, &consts, &[], &inputs);
+        compile_bounded(&r, p, m, (SPIRV_WORDS, weight_cap), TypedModule::clone)
+            .map(|(artifact, plan, module)| (CompiledFunction::new(artifact), plan, module))
+    })
+}
+
 /// The stage `fd` compiled for `p` as [`compile_stage`] compiles it (its linked functions and
 /// dynamic libraries included), returning the finished typed module its words were serialized
 /// from, for the CPU interpreter.
@@ -1680,7 +1700,8 @@ pub(crate) fn plan_bitcode(
 ) -> Result<Plan, Error> {
     guarded(|| {
         let r = Request::bitcode(bitcode, entry, consts, &[], inputs);
-        plan_one(&r, p, m).map(|planned| planned.plan)
+        let widest = crate::lower::simd::WidestPin::Weighed;
+        plan_one(&r, p, widest, m).map(|planned| planned.plan)
     })
 }
 
@@ -2680,7 +2701,12 @@ pub(crate) fn specialized_bitcode_entry(
 }
 
 /// [`ordered_entry`], then analyze and select.
-fn plan_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Planned, Error> {
+fn plan_one(
+    r: &Request<'_>,
+    p: &DeviceProfile,
+    widest: crate::lower::simd::WidestPin,
+    m: &mut Meter,
+) -> Result<Planned, Error> {
     let Specialized {
         air_hash,
         entry,
@@ -2726,7 +2752,7 @@ fn plan_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Planned
         (&linked, &r.dynamic.key()),
     );
     let memory = crate::memory::plan::analyze_memory(&spec, p, m)?;
-    let plan = crate::lower::select::select(&spec, &memory, p, &inputs, m)?;
+    let plan = crate::lower::select::select(&spec, &memory, p, (&inputs, widest), m)?;
     let kernel = KernelFacts {
         max_total_threads: spec.ep.stage.max_total_threads(),
         work_group_size: spec.ep.stage.work_group_size(),
@@ -2774,19 +2800,29 @@ fn compile_kept<K>(
     word_cap: u64,
     keep: impl FnOnce(&TypedModule) -> K,
 ) -> Result<(Arc<FunctionArtifact>, Plan, K), Error> {
-    let Planned {
-        key,
-        spec,
-        before,
-        plan,
-        kernel,
-    } = plan_one(r, p, m)?;
-    plan.estimate.check(word_cap)?;
-    let crate::lower::emit::Emitted { mut module, merged } =
-        crate::lower::emit::emit_module(&spec, &plan, m)?;
-    // Every driver compiles each repeated region of the entry again; above the measured size,
-    // repeated regions are written once, as a loop.
-    crate::spirv::roll::roll_entry(&mut module, m)?;
+    let caps = (word_cap, stage_bound::SERIALIZED_STAGE_WEIGHT);
+    compile_bounded(r, p, m, caps, keep)
+}
+
+/// [`compile_kept`] under the stage bound `weight_cap` where the profile needs one
+/// (`stage_bound`; [`stage_bound::SERIALIZED_STAGE_WEIGHT`] in production).
+fn compile_bounded<K>(
+    r: &Request<'_>,
+    p: &DeviceProfile,
+    m: &mut Meter,
+    (word_cap, weight_cap): (u64, u64),
+    keep: impl FnOnce(&TypedModule) -> K,
+) -> Result<(Arc<FunctionArtifact>, Plan, K), Error> {
+    let (
+        Planned {
+            key,
+            spec,
+            before,
+            plan,
+            kernel,
+        },
+        crate::lower::emit::Emitted { mut module, merged },
+    ) = stage_bound::emit(r, p, (word_cap, weight_cap), m)?;
     // On a driver whose compiler loses a simdgroup's storage writes after an `optnone` call only
     // its helper invocations make, those invocations take another arm where that is exact, and
     // each such call left is fenced once every analysis below has read the module.

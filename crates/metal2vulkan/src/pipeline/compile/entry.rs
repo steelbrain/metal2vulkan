@@ -168,7 +168,9 @@ impl DeviceProfile {
     }
 
     /// Everything [`DeviceProfile::compile_entry`] does before emission (decode, specialize,
-    /// analyze, select), and what it cost against `budget`.
+    /// analyze, select), and what it cost against `budget`: its first plan, which a kernel whose
+    /// emitted module passes the bound its driver compiles intact replaces
+    /// (`DriverWorkaround::SerializedStageWrapsLargeModules`).
     pub fn plan_entry(
         &self,
         d: &EntryDescriptor<'_>,
@@ -177,7 +179,9 @@ impl DeviceProfile {
     ) -> (Result<EntryPlan, Error>, CompileReport) {
         let mut m = Meter::new(budget);
         let planned = guarded(|| {
-            plan_one(&d.request(InputsFrom::Given(inputs)), self, &mut m).map(|planned| EntryPlan {
+            let r = d.request(InputsFrom::Given(inputs));
+            let widest = crate::lower::simd::WidestPin::Weighed;
+            plan_one(&r, self, widest, &mut m).map(|planned| EntryPlan {
                 stage: planned.plan.stage,
                 strategies: census(&planned.plan).entries,
                 estimated_words: planned.plan.estimate.words,

@@ -13500,6 +13500,7 @@ variant	metal2vulkan::device::DriverWorkaround::NarrowMaskAfterSignedClamp	Narro
 variant	metal2vulkan::device::DriverWorkaround::OppositeZeroProductsMerged	OppositeZeroProductsMerged
 variant	metal2vulkan::device::DriverWorkaround::PerspectiveReadsExtrapolated	PerspectiveReadsExtrapolated
 variant	metal2vulkan::device::DriverWorkaround::RegisterAllocatorOverflowsLargeModules	RegisterAllocatorOverflowsLargeModules
+variant	metal2vulkan::device::DriverWorkaround::SerializedStageWrapsLargeModules	SerializedStageWrapsLargeModules
 variant	metal2vulkan::device::DriverWorkaround::TessellatorNotMetals	TessellatorNotMetals
 variant	metal2vulkan::device::DriverWorkaround::VertexGroupingNotApples	VertexGroupingNotApples
 variant	metal2vulkan::device::Exposure::Core	Core(ApiVersion)
@@ -14294,6 +14295,7 @@ variant	metal2vulkan::error::Feature::SimdgroupMatrix	SimdgroupMatrix
 variant	metal2vulkan::error::Feature::SparseTexture	SparseTexture { slot: SlotRef }
 variant	metal2vulkan::error::Feature::SparseTextures	SparseTextures { missing: SparseNeed }
 variant	metal2vulkan::error::Feature::Stage	Stage(u8)
+variant	metal2vulkan::error::Feature::StageSize	StageSize
 variant	metal2vulkan::error::Feature::StageStoresAndAtomics	StageStoresAndAtomics
 variant	metal2vulkan::error::Feature::StaticInitializer	StaticInitializer
 variant	metal2vulkan::error::Feature::StencilExport	StencilExport

@@ -1261,6 +1261,9 @@ pub enum Feature {
     ImageAtomics,
     /// Too many descriptors of one kind in a stage or pipeline.
     DescriptorCount,
+    /// A stage module larger than the device's driver compiles intact (`Needs::DriverDefect`
+    /// names the defect).
+    StageSize,
     /// A buffer window beyond the descriptor range limits.
     BufferRange,
 

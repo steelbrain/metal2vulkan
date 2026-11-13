@@ -339,6 +339,18 @@ pub struct SimdPlan {
 /// The census name of the places the device's simdgroup lockstep orders, with no words.
 pub const DEVICE_LOCKSTEP: &str = "barrier.lockstep.device";
 
+/// Whether [`widest_pin`] weighs a kernel for the `Emulated` tier, or the kernel keeps the
+/// `Direct` tier's pin to the device's widest mode whatever its pressure: a kernel whose emulated
+/// module passed the bound its driver compiles intact is planned again keeping it
+/// (`pipeline::compile`'s stage bound, `DriverWorkaround::SerializedStageWrapsLargeModules`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WidestPin {
+    /// [`widest_pin`] weighs the kernel.
+    Weighed,
+    /// The kernel keeps the `Direct` tier's pin.
+    Kept,
+}
+
 /// The census name of a kernel that took the `Emulated` tier in place of the `Direct` tier's pin
 /// to the device's widest mode ([`widest_pin`]): one use, no words.
 pub const WIDEST_PIN: &str = "simd.emulated.widest-pin";

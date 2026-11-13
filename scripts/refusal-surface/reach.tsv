@@ -36,6 +36,7 @@ feature	CoherentMemory	rare	coherent(device) accesses
 feature	Int64Atomics	rare	64-bit atomics
 feature	ImageAtomics	rare	texture atomics beyond 32-bit integers
 feature	DescriptorCount	app	many textures or buffers in one stage on a smaller device
+feature	StageSize	rare	a kernel too large for a driver's compiler, on a driver measured to corrupt one past its bound
 feature	BufferRange	app	a buffer window past a device's descriptor range
 feature	Int64Arithmetic	rare	64-bit integers on a device without shaderInt64
 feature	Float64Arithmetic	rare	doubles (MSL has none outside Apple's own code)

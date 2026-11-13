@@ -27,7 +27,7 @@ Columns:
 
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 129 | 129 | 7 | 32 | 71 | 19 | 0 |
+| Translator and front-end refusals | 130 | 130 | 7 | 32 | 72 | 19 | 0 |
 | Runtime gaps | 79 | 79 | 1 | 10 | 46 | 22 | 0 |
 | Apple-only calls | 4 | 4 | 0 | 0 | 0 | 4 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
@@ -41,7 +41,7 @@ Columns:
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 48 | 58 | 0 | 0 | 23 |
+| Translator and front-end refusals | 0 | 0 | 0 | 49 | 58 | 0 | 0 | 23 |
 | Runtime gaps | 0 | 0 | 0 | 0 | 79 | 0 | 0 | 0 |
 | Apple-only calls | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
@@ -89,6 +89,7 @@ Columns:
 | `Int64Atomics` | 64-bit atomics | devices short of a Vulkan feature the site names; devices without buffer device addresses (`addressed_needs`) | `device` | 2: `crates/metal2vulkan/src/lower/access/atomic.rs (select, 2 sites)` | `rare`: 64-bit atomics |
 | `ImageAtomics` | Image atomics beyond 32-bit integers | devices without a capability the site computes (`gaps`); every device (no Vulkan mechanism) | `device` | 3: `crates/metal2vulkan-runtime/src/families/formats.rs (atomic_gap, 2 sites)`, `crates/metal2vulkan/src/lower/texture/slot.rs (atomic_format)` | `rare`: texture atomics beyond 32-bit integers |
 | `DescriptorCount` | Too many descriptors of one kind in a stage or pipeline | devices short of a device limit the site names; devices without VkLimit::MaxUniformBufferRange | `device` | 3: `crates/metal2vulkan/src/lower/access/mod.rs (accept_placement)`, `crates/metal2vulkan/src/lower/select.rs (finish)` (+1) | `app`: many textures or buffers in one stage on a smaller device |
+| `StageSize` | A stage module larger than the device's driver compiles intact (`Needs::DriverDefect` names the defect) | drivers with a defect | `device` | 1: `crates/metal2vulkan/src/pipeline/compile/stage_bound.rs (emit)` | `rare`: a kernel too large for a driver's compiler, on a driver measured to corrupt one past its bound |
 | `BufferRange` | A buffer window beyond the descriptor range limits | devices without a capability the site computes (`needs`); devices without buffer device addresses (`addressed_needs`); every device (no Vulkan mechanism) | `device` | 8: `crates/metal2vulkan-runtime/src/function_table.rs (past_storage_buffer_range)`, `crates/metal2vulkan/src/bind/graphics.rs (patch_binding, 3 sites)` (+4) | `app`: a buffer window past a device's descriptor range |
 | `Int64Arithmetic` | 64-bit integer arithmetic | devices without VkFeature::ShaderInt64 | `device` | 2: `crates/metal2vulkan/src/lower/arith/legal.rs (check_scalar)`, `crates/metal2vulkan/src/lower/select.rs (selector_form)` | `rare`: 64-bit integers on a device without shaderInt64 |
 | `Float64Arithmetic` | 64-bit float arithmetic | devices without VkFeature::ShaderFloat64 | `device` | 2: `crates/metal2vulkan/src/device/metal.rs (unsupported_features)`, `crates/metal2vulkan/src/lower/arith/legal.rs (check_scalar)` | `rare`: doubles (MSL has none outside Apple's own code) |
@@ -614,6 +615,7 @@ Each refusal's sites, with the function that builds it.
 - `feature::Int64Atomics`: `crates/metal2vulkan/src/lower/access/atomic.rs (select, 2 sites)`
 - `feature::ImageAtomics`: `crates/metal2vulkan-runtime/src/families/formats.rs (atomic_gap, 2 sites)`; `crates/metal2vulkan/src/lower/texture/slot.rs (atomic_format)`
 - `feature::DescriptorCount`: `crates/metal2vulkan/src/lower/access/mod.rs (accept_placement)`; `crates/metal2vulkan/src/lower/select.rs (finish)`; `crates/metal2vulkan/src/pipeline/link.rs (limit_error)`
+- `feature::StageSize`: `crates/metal2vulkan/src/pipeline/compile/stage_bound.rs (emit)`
 - `feature::BufferRange`: `crates/metal2vulkan-runtime/src/function_table.rs (past_storage_buffer_range)`; `crates/metal2vulkan/src/bind/graphics.rs (patch_binding, 3 sites)`; `crates/metal2vulkan/src/bind/graphics.rs (rebind_with)`; `crates/metal2vulkan/src/bind/instantiate.rs (bind_buffers)`; `crates/metal2vulkan/src/lower/access/function_table.rs (select)`; `crates/metal2vulkan/src/lower/access/mod.rs (place_slots)`
 - `feature::Int64Arithmetic`: `crates/metal2vulkan/src/lower/arith/legal.rs (check_scalar)`; `crates/metal2vulkan/src/lower/select.rs (selector_form)`
 - `feature::Float64Arithmetic`: `crates/metal2vulkan/src/device/metal.rs (unsupported_features)`; `crates/metal2vulkan/src/lower/arith/legal.rs (check_scalar)`

@@ -2319,6 +2319,73 @@ fn a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode() {
     );
 }
 
+/// On a driver that corrupts a stage past the size it compiles intact
+/// (`DriverWorkaround::SerializedStageWrapsLargeModules`, ANV: the Iris Xe of RPL-P), a module
+/// whose entry weighs more than the stage bound (`pipeline::compile`'s `stage_bound`, here a bound
+/// the test sets) is never emitted: the pressured kernel of
+/// `a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode`, whose emulated
+/// module passes the bound, is planned again keeping the `Direct` tier's pin to 32 lanes, its
+/// answers Metal's; under a bound its `Direct` module passes too, it is refused
+/// (`Feature::StageSize`, the defect named). The same description under another driver, which
+/// has no such defect, emits the emulated module under either bound.
+#[test]
+fn a_kernel_past_the_stage_bound_keeps_the_widest_pin_or_is_refused() {
+    use crate::device::profile::DriverWorkaround;
+    use crate::device::Device;
+    use crate::error::{Feature, Needs, Unsupported};
+    use crate::lower::simd::{WIDEST_PIN, WIDEST_PIN_FLOOR, WIDEST_PIN_WORDS};
+    use crate::pipeline::compile::compile_bitcode_bounded;
+    use crate::pipeline::testing::meter;
+    use crate::spirv::roll::entry_weight;
+    let half = |t: u32| if t & 31 < 16 { t ^ 1 } else { t };
+    let fan = Padding::Fan((WIDEST_PIN_FLOOR / 2 + 16).max(WIDEST_PIN_WORDS as usize + 8));
+    let Some(bc) = assemble("device_half", &device_half_padded(fan, None)) else {
+        return;
+    };
+    let entry = EntryRef::Name("device_half");
+    let weight = |module: &TypedModule| entry_weight(module, &mut meter()).expect("weight");
+    let defect = DriverWorkaround::SerializedStageWrapsLargeModules;
+    let iris_desc = crate::pipeline::testing::description("intel-irisxe-rplp-anv").unwrap();
+    let iris = Device::new(iris_desc.clone(), DevicePolicy::default()).unwrap();
+    let iris = iris.profile();
+    assert!(iris.workarounds().contains(&defect));
+    let mut other_desc = iris_desc;
+    other_desc.driver_id = Some(crate::vk::DriverId::MESA_RADV);
+    let other = Device::new(other_desc, DevicePolicy::default()).unwrap();
+    let other = other.profile();
+    assert!(!other.workarounds().contains(&defect));
+    // Unbounded, the kernel emulates its simdgroups in place of the widest mode on both.
+    let compile = |p, cap| compile_bitcode_bounded(&bc, entry, p, &mut meter(), cap);
+    let (_, plan, emulated) = compile(iris, u64::MAX).expect("emulated on the Iris Xe");
+    assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 1));
+    let emulated = weight(&emulated);
+    // Under a bound the emulated module passes: planned again keeping the pin, exact at 32 lanes.
+    let (_, plan, module) = compile(iris, emulated - 1).expect("planned again");
+    assert_eq!(plan.simd.1, Tier::Direct);
+    assert_eq!(uses(&plan, WIDEST_PIN), 0);
+    assert_eq!(plan.subgroup.size, Some(32));
+    let pinned = weight(&module);
+    assert!(pinned < emulated, "pinned {pinned}, emulated {emulated}");
+    let want: Vec<u32> = (0..64).map(half).collect();
+    assert_eq!(run_words(&plan, &module, 64, SubgroupSize::W32), want);
+    // Under a bound the pinned module passes too: refused, the defect named.
+    let refused = compile(iris, pinned - 1).expect_err("past the bound");
+    let Error::Unsupported(Unsupported { feature, needs, .. }) = refused else {
+        panic!("{refused:?}");
+    };
+    assert_eq!(feature, Feature::StageSize);
+    assert_eq!(needs, Needs::DriverDefect(defect));
+    // Without the defect, the emulated module is emitted under either bound.
+    for cap in [emulated - 1, pinned - 1] {
+        let (_, plan, module) = compile(other, cap).expect("emitted without the defect");
+        assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 1));
+        assert!(weight(&module) > cap, "{cap}");
+        for lanes in CHUNKED {
+            assert_eq!(run_words(&plan, &module, 64, lanes), want, "{lanes:?}");
+        }
+    }
+}
+
 /// Texture calls take no device barrier: their pointer is the texture's handle.
 #[test]
 fn texture_calls_take_no_device_barrier() {

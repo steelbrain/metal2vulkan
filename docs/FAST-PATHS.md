@@ -606,6 +606,16 @@ driver's. Each is open work.
   ANV then writes through a null state inside `vkCmdDraw*` instead of failing the command
   buffer. What spare pools keep of such recordings is freed as they go
   back (`RECORDED`); what command buffers alive at once record is not bounded.
+- **On ANV, a stage module heavier than the driver compiles intact is refused, or keeps the
+  widest mode's pin** (`pipeline/compile/stage_bound.rs`,
+  `DriverWorkaround::SerializedStageWrapsLargeModules`). Mesa's common pipeline runtime writes
+  each stage into a precompiled shader and reads it back before compiling it, naming each of its
+  objects by a 20-bit index that wraps without a word past 2^20 objects in a release build (Mesa
+  26.2.6: the driver faults inside `vkCreateComputePipelines`). A module whose entry weighs more
+  than `SERIALIZED_STAGE_WEIGHT` (786,432 instructions, every call counted as its callee's body)
+  is never handed to the driver: a kernel that emulated its simdgroups only in place of the
+  widest mode's pin is compiled pinned to 32 lanes again, and every other one is refused
+  (`Feature::StageSize`), where Metal compiles it.
 
 - **A rate-mapped pass's work is cut into bounded pieces only between its executed commands'
   draws, and between ranges of a draw's indices where the draw is cut so**

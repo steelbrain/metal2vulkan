@@ -1102,31 +1102,36 @@ fn radv_carries_the_fused_half_conversion() {
     assert!(!profile_of(&desc).workarounds().contains(&defect));
 }
 
-/// `DriverWorkaround::RegisterAllocatorOverflowsLargeModules` is keyed on ANV, whatever its GPU
-/// and release; every committed ANV profile carries it, and no other profile does. The UHD 770's
-/// description under RADV or NVIDIA's driver loses it.
+/// `DriverWorkaround::RegisterAllocatorOverflowsLargeModules` and
+/// `DriverWorkaround::SerializedStageWrapsLargeModules` are keyed on ANV, whatever its GPU and
+/// release; every committed ANV profile carries them, and no other profile does. The Iris Xe's
+/// description under RADV or NVIDIA's driver loses them.
 #[test]
-fn register_allocator_overflow_is_keyed_on_anv() {
+fn large_module_defects_are_keyed_on_anv() {
     use crate::device::profile::DriverWorkaround;
-    let fact = DriverWorkaround::RegisterAllocatorOverflowsLargeModules;
     let profile_of = |desc: &DeviceDescription| {
         Device::new(desc.clone(), DevicePolicy::default())
             .unwrap()
             .profile()
             .clone()
     };
-    for (stem, text) in committed_profiles() {
-        let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let anv = desc.driver_id == Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA);
-        let p = profile_of(&desc);
-        assert_eq!(p.workarounds().contains(&fact), anv, "{stem}");
-    }
-    let mut desc = profile("intel-irisxe-rplp-anv");
-    assert!(profile_of(&desc).workarounds().contains(&fact));
-    for other in [vk::DriverId::MESA_RADV, vk::DriverId::NVIDIA_PROPRIETARY] {
-        desc.driver_id = Some(other);
-        let p = profile_of(&desc);
-        assert!(!p.workarounds().contains(&fact), "{other:?}");
+    for fact in [
+        DriverWorkaround::RegisterAllocatorOverflowsLargeModules,
+        DriverWorkaround::SerializedStageWrapsLargeModules,
+    ] {
+        for (stem, text) in committed_profiles() {
+            let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
+            let anv = desc.driver_id == Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA);
+            let p = profile_of(&desc);
+            assert_eq!(p.workarounds().contains(&fact), anv, "{fact:?} on {stem}");
+        }
+        let mut desc = profile("intel-irisxe-rplp-anv");
+        assert!(profile_of(&desc).workarounds().contains(&fact));
+        for other in [vk::DriverId::MESA_RADV, vk::DriverId::NVIDIA_PROPRIETARY] {
+            desc.driver_id = Some(other);
+            let p = profile_of(&desc);
+            assert!(!p.workarounds().contains(&fact), "{fact:?} under {other:?}");
+        }
     }
 }
 

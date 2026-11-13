@@ -1181,12 +1181,13 @@ fn function_storage(
     Ok((required > storage.bytes()).then_some(PrecisionNote::FunctionStorageAssumed))
 }
 
-/// Select the plan of `e`.
+/// Select the plan of `e` under `inputs`, a kernel weighed for the `Emulated` tier in place of its
+/// widest mode's pin or keeping it as `widest_pin` says.
 pub fn select(
     e: &Entry,
     mp: &MemoryPlan,
     p: &DeviceProfile,
-    inputs: &LowerInputs,
+    (inputs, widest_pin): (&LowerInputs, simd::WidestPin),
     m: &mut Meter,
 ) -> Result<Plan, Error> {
     let func = e
@@ -1667,11 +1668,15 @@ fn finish(
     // tier the profile's subgroups give them, and depends on that variant. A kernel whose lockstep
     // order is only exact on emulated simdgroups emulates them on every dispatch, which no variant
     // selects, and so does a large kernel whose `Direct` tier pins the device's widest mode
-    // (`simd::widest_pin`), unless the emulated tier refuses it below.
+    // (`simd::widest_pin`), unless the emulated tier refuses it below or the kernel keeps the pin
+    // (`widest_pin`, a plan made again past its driver's stage bound).
     let model = &p.fields().subgroup;
     let variant = cx.inputs.emulated_simdgroups && stage == Stage::Kernel;
     let lockstep = cx.entry.lockstep.emulated && stage == Stage::Kernel;
-    let widest = !variant && !lockstep && simd::widest_pin(&cx, m)?;
+    let widest = !variant
+        && !lockstep
+        && widest_pin == simd::WidestPin::Weighed
+        && simd::widest_pin(&cx, m)?;
     let mut tier = if variant || lockstep || widest {
         if variant {
             cx.facts.insert(RuntimeFact::EmulatedSimdgroups);

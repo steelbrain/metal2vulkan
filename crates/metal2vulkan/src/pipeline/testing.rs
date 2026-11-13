@@ -406,7 +406,8 @@ fn typed_module_of(
         m,
     )?;
     let memory = crate::memory::static_root::analyze_memory(&spec, p, m)?;
-    let plan = crate::lower::select::select(&spec, &memory, p, inputs, m)?;
+    let widest = crate::lower::simd::WidestPin::Weighed;
+    let plan = crate::lower::select::select(&spec, &memory, p, (inputs, widest), m)?;
     let crate::lower::emit::Emitted { mut module, .. } =
         crate::lower::emit::emit_module(&spec, &plan, m)?;
     crate::spirv::roll::roll_entry(&mut module, m)?;
