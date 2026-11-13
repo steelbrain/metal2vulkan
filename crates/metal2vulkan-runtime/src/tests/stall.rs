@@ -15,7 +15,9 @@
 //! - Where the probe is answered but the front does not advance within the watchdog's bound, as
 //!   on NVIDIA's driver after an Xid 109 (its copy engine running on), the command buffer fails
 //!   as Metal's timed-out one (`GpuHang`) no sooner than the bound, the generation stops and is
-//!   parked, and a command buffer runs after it.
+//!   parked, and a command buffer runs after it. So it does where the front batch is not its
+//!   command buffer's last, the last held by the scheduler, and one committed behind it fails as
+//!   its victim (`GpuRecoveryVictim`).
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). No GPU fault and no spin: the stuck work is a semaphore
@@ -407,6 +409,82 @@ fn a_front_past_the_watchdog_fails_as_metals_timeout() {
         .value(counter);
     // SAFETY: the parked `VkDevice` and its semaphore, both live (never destroyed); the counter
     // the reservation named, which nothing before it waits for.
+    unsafe { parked.signal_semaphore(&info) }.unwrap();
+}
+
+/// The command buffer whose front batch goes past the watchdog's bound fails as the hang
+/// (`GpuHang`) when that batch is not its last: its later batch waits for a plain event's value
+/// nothing signals, so the scheduler holds it, and fails it with the loss
+/// (`scheduler::fail_lost`). A command buffer committed behind it on its queue fails as its victim
+/// (`GpuRecoveryVictim`), and the recovery's notice counts that one victim.
+#[test]
+fn the_watchdog_s_hang_fails_as_the_hang_with_its_last_batch_held() {
+    let scratch = Scratch::new();
+    let heard = Arc::new(Mutex::new(Heard::default()));
+    let device = device(&scratch.0, &heard, false, Some(WATCHDOG));
+    // SAFETY: as in `a_front_past_the_watchdog_fails_as_metals_timeout`.
+    let parked = unsafe { device.raw() }.device.clone();
+    let event = device.new_event().unwrap();
+    // SAFETY: as there.
+    let semaphore = unsafe { event.vk_semaphore() };
+    let never = device.new_event().unwrap();
+    let buffer = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    // SAFETY: as in `stuck`.
+    let reserved = unsafe { event.reserve_vk_signal(10) }.unwrap();
+    let VkEventSignal::Counter { counter, .. } = reserved else {
+        panic!("a first reservation names a counter: {reserved:?}");
+    };
+    let queue = device.new_command_queue().unwrap();
+    let fill = |command_buffer: &crate::CommandBuffer, value: u8| {
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(&buffer, 0..4096, value).unwrap();
+        blit.end_encoding().unwrap();
+    };
+    // Its first batch waits on its `VkQueue` for the reserved signal; its second for `never`.
+    let hang = queue.command_buffer().unwrap();
+    hang.encode_wait_for_event((&event).into(), 10).unwrap();
+    fill(&hang, 1);
+    hang.encode_wait_for_event((&never).into(), 1).unwrap();
+    fill(&hang, 2);
+    hang.commit().unwrap();
+    let victim = queue.command_buffer().unwrap();
+    fill(&victim, 3);
+    victim.commit().unwrap();
+    assert!(
+        until(&device, |counts| counts.watchdog_timeouts == 1),
+        "the watchdog did not fire in {WAIT:?}"
+    );
+    // The next call recovers, failing what was in flight first.
+    let after = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    for command_buffer in [&hang, &victim] {
+        assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
+    }
+    let errors = [hang.error(), victim.error()];
+    let heard = heard.lock().unwrap();
+    let recovered: Vec<&String> = (heard.notices.iter())
+        .filter(|notice| notice.degradation == Degradation::DeviceRecovered)
+        .map(|notice| &notice.reason)
+        .collect();
+    eprintln!(
+        "STALL-WATCHDOG-HELD {}: {errors:?}; {recovered:?}",
+        device.name()
+    );
+    assert_eq!(
+        errors,
+        [
+            Some(CommandBufferError::GpuHang),
+            Some(CommandBufferError::GpuRecoveryVictim)
+        ]
+    );
+    assert!(
+        (recovered.iter()).any(|reason| reason.contains("and 1 more in flight as its victims")),
+        "the recovery's notice does not count the one victim: {recovered:?}"
+    );
+    drop(after);
+    let info = vk::SemaphoreSignalInfo::default()
+        .semaphore(semaphore)
+        .value(counter);
+    // SAFETY: as in `a_front_past_the_watchdog_fails_as_metals_timeout`.
     unsafe { parked.signal_semaphore(&info) }.unwrap();
 }
 
