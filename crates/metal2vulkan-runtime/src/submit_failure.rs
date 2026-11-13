@@ -172,9 +172,35 @@ impl TypeFlags {
     /// Memory type `index` with its flags, where known: "type 2 (DEVICE_LOCAL)".
     pub(crate) fn of(&self, index: u32) -> String {
         match (self.0.as_ref()).and_then(|types| types.get(index as usize)) {
-            Some(flags) => format!("type {index} ({flags:?})"),
+            Some(&flags) => format!("type {index} ({})", flag_names(flags)),
             None => format!("type {index}"),
         }
+    }
+}
+
+/// `flags` by their names, `|` between them, any bit without one by its value; "none" for none.
+pub(crate) fn flag_names(flags: vk::MemoryPropertyFlags) -> String {
+    use vk::MemoryPropertyFlags as F;
+    let named = [
+        (F::DEVICE_LOCAL, "DEVICE_LOCAL"),
+        (F::HOST_VISIBLE, "HOST_VISIBLE"),
+        (F::HOST_COHERENT, "HOST_COHERENT"),
+        (F::HOST_CACHED, "HOST_CACHED"),
+        (F::LAZILY_ALLOCATED, "LAZILY_ALLOCATED"),
+        (F::PROTECTED, "PROTECTED"),
+    ];
+    let mut names: Vec<String> = (named.iter())
+        .filter(|(flag, _)| flags.contains(*flag))
+        .map(|(_, name)| (*name).to_owned())
+        .collect();
+    let known = named.iter().fold(F::empty(), |all, (flag, _)| all | *flag);
+    let other = flags & !known;
+    if !other.is_empty() {
+        names.push(format!("{:#x}", other.as_raw()));
+    }
+    match names.is_empty() {
+        true => "none".to_owned(),
+        false => names.join("|"),
     }
 }
 

@@ -2,8 +2,8 @@
 //! back from it as it was handed to the call, and the line's words for what it holds, bounded.
 
 use crate::submit_failure::{
-    lists, Carried, InfoLists, InfoReport, Report, Resources, Role, SemaphoreUse, Standing, NAMED,
-    NAMED_SEMAPHORES,
+    flag_names, lists, Carried, InfoLists, InfoReport, Report, Resources, Role, SemaphoreUse,
+    Standing, NAMED, NAMED_SEMAPHORES,
 };
 use ash::vk::{self, Handle};
 
@@ -137,6 +137,16 @@ fn the_line_names_what_the_failed_submission_held_and_flags_invalid_values() {
     ] {
         assert!(line.contains(expected), "{expected:?} missing from {line}");
     }
+}
+
+#[test]
+fn memory_flags_are_named_and_an_unnamed_bit_is_given_by_its_value() {
+    use vk::MemoryPropertyFlags as F;
+    let flags = F::DEVICE_LOCAL | F::HOST_VISIBLE | F::HOST_COHERENT;
+    assert_eq!(flag_names(flags), "DEVICE_LOCAL|HOST_VISIBLE|HOST_COHERENT");
+    assert_eq!(flag_names(F::empty()), "none");
+    let unnamed = F::from_raw(0x100);
+    assert_eq!(flag_names(F::HOST_CACHED | unnamed), "HOST_CACHED|0x100");
 }
 
 #[test]
