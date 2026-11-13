@@ -347,6 +347,7 @@ pub(crate) struct Counters {
     kept_draws_carry_capped: AtomicU64,
     kept_draws_uncarried_attached: AtomicU64,
     encoders_uncarried: [AtomicU64; Uncarried::COUNT],
+    encoders_none_kept_next: [AtomicU64; NoneKeptNext::COUNT],
     inline_split_instances: AtomicU64,
     inline_memoryless_write_splits: AtomicU64,
     passes_not_inline: [AtomicU64; NotInline::COUNT],
@@ -923,6 +924,37 @@ pub(crate) enum Uncarried {
 impl Uncarried {
     /// How many there are.
     pub(crate) const COUNT: usize = 13;
+}
+
+/// What a render encoder that drew but ended with no kept draw ([`Uncarried::NoneKept`]) came to
+/// for its command buffer's next render encoder, as a kept draw of it would have carried
+/// (`render/carried.rs`, `WorkCounts::encoders_none_kept_next_*`): the first that held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NoneKeptNext {
+    /// Its end is not one a kept draw carries from, first because its pass split
+    /// ([`Uncarried::Split`]).
+    Split,
+    /// Its end is not one a kept draw carries from, first for another reason of [`Uncarried`]'s.
+    Ends,
+    /// Another call of the command buffer came before its next render encoder's opening: another
+    /// encoder's opening, an event, or any other that settles its end, but the commit.
+    Between,
+    /// The command buffer committed with no render encoder after it.
+    Last,
+    /// The next render encoder's pass is another's ([`CarryDropped::Layout`]), or it turned a
+    /// color's texture to its other face.
+    Layout,
+    /// What changes with no call changed by the next render encoder's opening
+    /// ([`CarryDropped::Under`]).
+    Under,
+    /// The next render encoder's pass, and what changes with no call, are as they were: a kept
+    /// draw of it would have carried into it.
+    Fits,
+}
+
+impl NoneKeptNext {
+    /// How many there are.
+    pub(crate) const COUNT: usize = 7;
 }
 
 /// Where the rebind of a render encoder's first draw of the kept draw its command buffer's last
@@ -3361,6 +3393,12 @@ impl Counters {
     /// (`WorkCounts::encoders_uncarried_*`).
     pub(crate) fn encoder_uncarried(&self, why: Uncarried) {
         self.encoders_uncarried[why as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A render encoder that drew but ended with no kept draw came to `next` for its command
+    /// buffer's next render encoder (`WorkCounts::encoders_none_kept_next_*`).
+    pub(crate) fn encoder_none_kept_next(&self, next: NoneKeptNext) {
+        self.encoders_none_kept_next[next as usize].fetch_add(1, Ordering::Relaxed);
     }
 
     /// A render pass's first instance did not record inline, for `why` (`NotInline`).
@@ -7095,6 +7133,28 @@ pub struct WorkCounts {
     pub encoders_uncarried_unrebound: u64,
     /// Their last kept draw holds a depth/stencil state that fails every fragment.
     pub encoders_uncarried_failing_state: u64,
+    /// Render encoders that drew but ended with no kept draw (`encoders_uncarried_none_kept`), by
+    /// what a kept draw of theirs would have come to, carried into their command buffer's next
+    /// render encoder (`render/carried.rs`), the first that held: their end is not one a kept
+    /// draw carries from, first because their pass split (`encoders_uncarried_split`'s reason).
+    pub encoders_none_kept_next_split: u64,
+    /// Their end is not one a kept draw carries from, first for another of the reasons
+    /// `encoders_uncarried_*` count after `encoders_uncarried_none_kept`.
+    pub encoders_none_kept_next_ends: u64,
+    /// Another call of the command buffer came before its next render encoder's opening: another
+    /// encoder's opening, an event, or any other call but the commit.
+    pub encoders_none_kept_next_between: u64,
+    /// Their command buffer committed with no render encoder after them.
+    pub encoders_none_kept_next_last: u64,
+    /// The next render encoder's pass is another's (as `kept_draws_carry_dropped_layout` counts),
+    /// or it turned a color's texture to its other face.
+    pub encoders_none_kept_next_layout: u64,
+    /// What changes with no call changed by the next render encoder's opening (as
+    /// `kept_draws_carry_dropped_under` counts).
+    pub encoders_none_kept_next_under: u64,
+    /// The next render encoder's pass, and what changes with no call, were as they were: a kept
+    /// draw of theirs would have carried into it.
+    pub encoders_none_kept_next_fits: u64,
     /// Those of them that ended with more than one instance.
     pub inline_passes_split: u64,
     /// The instances after a split of such passes that recorded their draws inline too, in the
@@ -9762,6 +9822,9 @@ impl Device {
         };
         let uncarried =
             |why: Uncarried| counters.encoders_uncarried[why as usize].load(Ordering::Relaxed);
+        let none_kept_next = |next: NoneKeptNext| {
+            counters.encoders_none_kept_next[next as usize].load(Ordering::Relaxed)
+        };
         let group_end = |end: GroupEnd| counters.group_ends[end as usize].load(Ordering::Relaxed);
         let unswapped = |cause: Unturned| {
             let at = cause as usize;
@@ -10354,6 +10417,13 @@ impl Device {
             encoders_uncarried_instance: uncarried(Uncarried::Instance),
             encoders_uncarried_unrebound: uncarried(Uncarried::Unrebound),
             encoders_uncarried_failing_state: uncarried(Uncarried::FailingState),
+            encoders_none_kept_next_split: none_kept_next(NoneKeptNext::Split),
+            encoders_none_kept_next_ends: none_kept_next(NoneKeptNext::Ends),
+            encoders_none_kept_next_between: none_kept_next(NoneKeptNext::Between),
+            encoders_none_kept_next_last: none_kept_next(NoneKeptNext::Last),
+            encoders_none_kept_next_layout: none_kept_next(NoneKeptNext::Layout),
+            encoders_none_kept_next_under: none_kept_next(NoneKeptNext::Under),
+            encoders_none_kept_next_fits: none_kept_next(NoneKeptNext::Fits),
             inline_passes_split: counters.inline_passes_split.load(Ordering::Relaxed),
             inline_split_instances: counters.inline_split_instances.load(Ordering::Relaxed),
             inline_memoryless_write_splits: (counters.inline_memoryless_write_splits)

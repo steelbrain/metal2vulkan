@@ -2899,6 +2899,13 @@ field	metal2vulkan-runtime::WorkCounts.empty_memory_blocks_live	pub empty_memory
 field	metal2vulkan-runtime::WorkCounts.encoder_command_buffers_begun	pub encoder_command_buffers_begun: u64
 field	metal2vulkan-runtime::WorkCounts.encoder_primaries_begun_ahead	pub encoder_primaries_begun_ahead: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_barriered_at_open	pub encoders_barriered_at_open: u64
+field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_between	pub encoders_none_kept_next_between: u64
+field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_ends	pub encoders_none_kept_next_ends: u64
+field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_fits	pub encoders_none_kept_next_fits: u64
+field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_last	pub encoders_none_kept_next_last: u64
+field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_layout	pub encoders_none_kept_next_layout: u64
+field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_split	pub encoders_none_kept_next_split: u64
+field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_under	pub encoders_none_kept_next_under: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_reencoded	pub encoders_reencoded: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_uncarried_commands	pub encoders_uncarried_commands: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_uncarried_drawless	pub encoders_uncarried_drawless: u64

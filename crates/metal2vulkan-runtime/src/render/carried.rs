@@ -85,6 +85,15 @@
 //!   begins it (`render/inline_first.rs`), where no draw before it began it. What it compares at
 //!   a draw again is the encoder's: the command buffer its instance records into, and what it
 //!   read that changes with no call (`Under`), as of the opening.
+//! - **None kept.** An encoder that drew but ended with no kept draw carries nothing, and counts
+//!   what a kept draw of it would have come to (`WorkCounts::encoders_none_kept_next_*`): where
+//!   its end is not one a kept draw carries from (`carry_ends`), the first reason, a split or
+//!   another; else its command buffer holds its pass's shape and layers and what changes with no
+//!   call as it ended ([`NoneKept`]), until the next call. Another call than a render encoder's
+//!   opening counts it as one that came between, the commit as the command buffer's last, and an
+//!   opening by the checks a carry meets ([`carried_fits`]): another pass, or a turn of a
+//!   color's texture to its other face, what changed with no call, or a fit. It changes nothing
+//!   recorded: a count alone.
 //! - **Checked in builds with debug assertions.** As a draw rebound is: the first carried draw and
 //!   every second one after it takes every step instead, which must keep the same draw, with the
 //!   same commands, writes, offsets, push bytes, vertex buffers, uses and draw state; the count of
@@ -95,7 +104,7 @@ use super::{Lowering, Opening, RenderLowering, ViewSetup};
 use crate::device::Device;
 use crate::live_bind::LiveBind;
 use crate::render_target::PassShape;
-use crate::work_counts::{CarryDropped, Uncarried};
+use crate::work_counts::{CarryDropped, NoneKeptNext, Uncarried};
 
 /// The most pipeline states whose kept draws a render encoder carries into its command buffer's
 /// next render encoder: its last draw's and those of the three drawn most lately before it, of the
@@ -138,6 +147,57 @@ impl Carried {
     }
 }
 
+/// The end of a render encoder that drew but kept no draw, held by its command buffer for its
+/// next render encoder's opening to count what a kept draw of it would have come to (the module
+/// docs): its pass's shape and layers, and what changes with no call as it ended.
+pub(crate) struct NoneKept {
+    shape: PassShape,
+    layers: u32,
+    /// The no-copy buffers' moves, its residency's generation and its device's sampler IDs'
+    /// slots' changes, at its end.
+    under: (u64, u64, u64),
+}
+
+impl NoneKept {
+    /// What a kept draw of it carried into the render encoder `opening` opens would have come
+    /// to, its device's sampler IDs' slots changed `samplers` times: the checks [`carried_fits`]
+    /// makes.
+    fn next(&self, opening: &Opening, samplers: u64) -> NoneKeptNext {
+        if !same_pass(&self.shape, self.layers, opening) {
+            return NoneKeptNext::Layout;
+        }
+        let moved = crate::buffer::host_cells_moved();
+        match self.under == (moved, opening.residency.generation(), samplers) {
+            true => NoneKeptNext::Fits,
+            false => NoneKeptNext::Under,
+        }
+    }
+}
+
+/// What a render encoder's opening takes from its command buffer's last render encoder's end:
+/// the kept draw it carried ([`Carried`]), and its end where it kept none ([`NoneKept`]).
+#[derive(Default)]
+pub(super) struct Handed {
+    pub(super) carried: Option<Box<Carried>>,
+    pub(super) none_kept: Option<Box<NoneKept>>,
+}
+
+impl Handed {
+    /// It, where the opening turned a color's texture to its other face (`render/face_swap.rs`):
+    /// nothing, the kept draw carried let go, as it bound the face presented before, and an end
+    /// that kept none counted as one of another pass.
+    pub(super) fn turned(self, device: &Device) -> Handed {
+        if let Some(carried) = self.carried {
+            carried.let_go(device);
+        }
+        if self.none_kept.is_some() {
+            let counts = &device.shared().counts;
+            counts.encoder_none_kept_next(NoneKeptNext::Layout);
+        }
+        Handed::default()
+    }
+}
+
 /// What a render encoder starts from: the bind state and kept draw its command buffer's last
 /// render encoder carried, where it fits the encoder's pass ([`fitting`]), else the bind state of
 /// its device's last ended render encoder (`live_bind::SpareLiveBinds`).
@@ -146,20 +206,24 @@ pub(super) enum Start {
     Spare(Box<LiveBind>),
 }
 
-/// Whether `carried` fits the render encoder `opening` opens, its device's sampler IDs' slots
-/// changed `samplers` times (the module docs); else why it is let go.
-fn carried_fits(carried: &Carried, opening: &Opening, samplers: u64) -> Result<(), CarryDropped> {
+/// Whether the render encoder `opening` opens draws a pass of `shape` and `layers` in everything
+/// a kept draw's settle and recording read (the module docs).
+fn same_pass(shape: &PassShape, layers: u32, opening: &Opening) -> bool {
     let layout = &opening.layout;
-    let colors = layout.colors.iter().flatten();
-    let same_pass = opening.shape == carried.shape
-        && layout.layers == carried.layers
+    opening.shape == *shape
+        && layout.layers == layers
         && opening.rate_map.is_none()
         && opening.grouped.is_none()
         && layout.visibility.is_none()
         && layout.sample_positions.is_empty()
         && !opening.extended.any()
-        && colors.clone().all(|color| !color.memoryless);
-    if !same_pass {
+        && (layout.colors.iter().flatten()).all(|color| !color.memoryless)
+}
+
+/// Whether `carried` fits the render encoder `opening` opens, its device's sampler IDs' slots
+/// changed `samplers` times (the module docs); else why it is let go.
+fn carried_fits(carried: &Carried, opening: &Opening, samplers: u64) -> Result<(), CarryDropped> {
+    if !same_pass(&carried.shape, carried.layers, opening) {
         return Err(CarryDropped::Layout);
     }
     let moved = crate::buffer::host_cells_moved();
@@ -185,6 +249,9 @@ impl RenderLowering {
                 0 => Uncarried::Drawless,
                 _ => Uncarried::NoneKept,
             });
+            if self.draw_calls > 0 {
+                self.hold_none_kept(live);
+            }
             return None;
         };
         if let Err(why) = self.carry_ends(live) {
@@ -207,6 +274,29 @@ impl RenderLowering {
         counts.kept_draws_carry_capped(capped);
         counts.kept_draws_uncarried_attached(attached);
         self.take_kept()
+    }
+
+    /// Of the encoder, with its bind state `live`, drawn but ending with no kept draw: where its
+    /// end is not one a kept draw carries from, the first reason counted; else its end held by its
+    /// command buffer for its next render encoder's opening ([`NoneKept`], the module docs).
+    fn hold_none_kept(&self, live: &LiveBind) {
+        let counts = &self.core.device().shared().counts;
+        match self.carry_ends(live) {
+            Err(Uncarried::Split) => counts.encoder_none_kept_next(NoneKeptNext::Split),
+            Err(_) => counts.encoder_none_kept_next(NoneKeptNext::Ends),
+            Ok(()) => {
+                let none_kept = Box::new(NoneKept {
+                    shape: (*self.current.shape).clone(),
+                    layers: self.layout.layers,
+                    under: (
+                        crate::buffer::host_cells_moved(),
+                        self.residency.generation(),
+                        self.core.generation().sampler_slots_changed(),
+                    ),
+                });
+                self.core.command_buffer().hold_none_kept(none_kept);
+            }
+        }
     }
 
     /// Whether the encoder ends in a state its kept draw carries from (the module docs): its
@@ -333,14 +423,20 @@ impl Lowering {
     }
 }
 
-/// `carried` where it fits the encoder `opening` opens (`carried_fits`), its device's sampler
-/// IDs' slots changed `samplers` times, else `None`, let go to `device` and counted.
+/// The kept draw `handed` carried where it fits the encoder `opening` opens (`carried_fits`), its
+/// device's sampler IDs' slots changed `samplers` times, else `None`, let go to `device` and
+/// counted; and where `handed` holds an end that kept none, what a kept draw of it would have come
+/// to, counted ([`NoneKept`]).
 pub(super) fn fitting(
-    carried: Option<Box<Carried>>,
+    handed: Handed,
     opening: &Opening,
     (device, samplers): (&Device, u64),
 ) -> Option<Box<Carried>> {
-    let carried = carried?;
+    if let Some(none_kept) = handed.none_kept {
+        let next = none_kept.next(opening, samplers);
+        device.shared().counts.encoder_none_kept_next(next);
+    }
+    let carried = handed.carried?;
     match carried_fits(&carried, opening, samplers) {
         Ok(()) => Some(carried),
         Err(why) => {

@@ -9,9 +9,10 @@
 //! (`draws_carry_stopped_stale`) or where the draw reads an attachment of its pass through a slot
 //! narrowed to other levels (`draws_carry_stopped_attached`); and the carry is let go where a call
 //! comes between the encoders (`kept_draws_carry_dropped_between`) or the next pass is of another
-//! layout (`kept_draws_carry_dropped_layout`). In builds with debug assertions the first carried
-//! draw, and every second one after it, takes every step and is checked against the rebound (the
-//! module's check), so these tests run that check too.
+//! layout (`kept_draws_carry_dropped_layout`). An encoder that keeps none counts what a kept draw
+//! of it would have come to (`encoders_none_kept_next_*`). In builds with debug assertions the
+//! first carried draw, and every second one after it, takes every step and is checked against the
+//! rebound (the module's check), so these tests run that check too.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixtures
@@ -123,6 +124,21 @@ impl Frame {
     /// The render encoders that opened from a carry their queue held (`kept_draws_carried_across`).
     fn across(&self) -> u64 {
         self.counted(|c| c.kept_draws_carried_across)
+    }
+
+    /// What the render encoders that ended keeping no draw came to for their command buffer's
+    /// next render encoder (`encoders_none_kept_next_*`): split, other ends, between, last,
+    /// another layout, under, fits.
+    fn none_kept_next(&self) -> [u64; 7] {
+        [
+            self.counted(|c| c.encoders_none_kept_next_split),
+            self.counted(|c| c.encoders_none_kept_next_ends),
+            self.counted(|c| c.encoders_none_kept_next_between),
+            self.counted(|c| c.encoders_none_kept_next_last),
+            self.counted(|c| c.encoders_none_kept_next_layout),
+            self.counted(|c| c.encoders_none_kept_next_under),
+            self.counted(|c| c.encoders_none_kept_next_fits),
+        ]
     }
 
     /// The render encoders that ended carrying nothing, by reason (`encoders_uncarried_*`, in
@@ -931,6 +947,96 @@ fn a_pass_of_another_layout_drops_the_carry() {
         left_out: Vec::new(),
     };
     assert_eq!(ran.carries(), [0, 0, 0, 0, 0, 0, 1, 0], "the counts");
+}
+
+/// Passes whose one draw is indirect, which keeps nothing (its use reads indirect arguments), end
+/// carrying nothing as none kept (`encoders_uncarried_none_kept`), each counting what a kept draw
+/// of it would have come to (`encoders_none_kept_next_*`): in one command buffer each but the last
+/// fits the next pass, and the read back's blit encoder comes after the last; with a blit encoder
+/// between each two, each is one between; in command buffers of their own, of one queue or of
+/// queues of their own, each but the last ends its command buffer; and a pass of another layout
+/// (an `R8Unorm` target) after one is of another layout. The pixels are the same each way.
+#[test]
+fn an_encoder_that_keeps_none_counts_what_its_carry_would_come_to() {
+    let scratch = Scratch::new("carried-none-kept");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let queue = device.new_command_queue().unwrap();
+    let state = adding_state(&device);
+    let color = colors(&device, &[[1.0 / 16.0; 4]]);
+    // `MTLDrawPrimitivesIndirectArguments`: six vertices, one instance.
+    let arguments = bytes_of(&[6u32, 1, 0, 0], u32::to_le_bytes);
+    let arguments = (device.new_buffer_with_bytes(&arguments, ResourceOptions::shared())).unwrap();
+    let pass = |encoder: &mut RenderCommandEncoder| {
+        encoder.set_render_pipeline_state(&state).unwrap();
+        let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
+        encoder.set_vertex_bytes(&corners, 0).unwrap();
+        (encoder.set_fragment_buffer(Some(&color), 0, 0)).unwrap();
+        let drawn = encoder.draw_primitives_indirect(PrimitiveType::Triangle, &arguments, 0);
+        assert_eq!(drawn, Ok(()));
+    };
+    warm(&device, pass);
+    const PASSES: usize = 3;
+    let passes: [Pass<'_>; PASSES] = [&pass; PASSES];
+    let together = frame(&queue, &passes, Apart::Together);
+    let blits = frame(&queue, &passes, Apart::Blits);
+    let across = frame(&queue, &passes, Apart::CommandBuffers);
+    let alone = frame(&queue, &passes, Apart::Queues);
+    let (ended, next) = (PASSES as u64, PASSES as u64 - 1);
+    let frames = [
+        (&together, "together"),
+        (&blits, "blits between"),
+        (&across, "in command buffers of their own"),
+        (&alone, "in command buffers of queues of their own"),
+    ];
+    for (frame, name) in frames {
+        assert_eq!(frame.uncarried(), [0, ended, 0], "{name}");
+        assert_eq!(frame.words, alone.words, "{name}: the pixels of the passes");
+    }
+    assert_eq!(
+        together.none_kept_next(),
+        [0, 0, 1, 0, 0, 0, next],
+        "together"
+    );
+    assert_eq!(blits.none_kept_next(), [0, 0, ended, 0, 0, 0, 0], "blits");
+    let apart = [0, 0, 1, next, 0, 0, 0];
+    assert_eq!(across.none_kept_next(), apart, "in command buffers");
+    assert_eq!(alone.none_kept_next(), apart, "in queues");
+    // Each pass added its color, about 16 in each channel (as the device rounds each blend).
+    let pixel = channels(together.words[0]);
+    let least = 15 * PASSES as u8;
+    assert!(
+        pixel.iter().all(|&c| c >= least),
+        "every pass's color added: {pixel:?}"
+    );
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::R8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::RENDER_TARGET;
+    descriptor.resource_options = ResourceOptions::private();
+    let narrow = device.new_texture(&descriptor).unwrap();
+    let target = target(&device);
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder =
+        (command_buffer.render_command_encoder(&pass_over((&target, 0), true))).unwrap();
+    pass(&mut encoder);
+    encoder.end_encoding().unwrap();
+    let other = pass_over((&narrow, 0), true);
+    let encoder = command_buffer.render_command_encoder(&other).unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    let ran = Frame {
+        words: Vec::new(),
+        before,
+        after: device.work_counts(),
+        left_out: Vec::new(),
+    };
+    assert_eq!(
+        ran.none_kept_next(),
+        [0, 0, 0, 0, 1, 0, 0],
+        "another layout"
+    );
 }
 
 /// The texture's levels, and every byte of level `l`'s texels.

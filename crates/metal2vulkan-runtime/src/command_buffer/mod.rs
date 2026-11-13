@@ -102,7 +102,7 @@ use super::predication::{Event, Predication};
 use super::program_objects;
 use super::queue::{QueueGen, Slot};
 use super::rebind::{Holds, SubmittedHolds, Taken};
-use super::render::{Carried, EndInFlight};
+use super::render::{Carried, EndInFlight, NoneKept};
 use super::replay::Replay;
 use super::residency::Residency;
 use super::resource::{ObjectId, ResourceKey};
@@ -119,7 +119,7 @@ use super::unique_identifier::ScheduledWork;
 use super::upload::{Upload, Uploads};
 use super::used_resources::{names_any, names_of, EncoderKind, EncoderRecord, Reached, ReadRecord};
 use super::values::CommandBufferStatus;
-use super::work_counts::{CarryDropped, Counters};
+use super::work_counts::{CarryDropped, Counters, NoneKeptNext};
 use super::write_routes::{AtCommit, Routes};
 use super::{Buffer, CommandQueue, Device};
 use crate::release;
@@ -733,6 +733,11 @@ pub(super) struct State {
     /// encoder's bind state (`render/carried.rs`): let go by every call that settles the end
     /// ([`CommandBuffer::settle_end`]) but a render encoder's opening, which takes it.
     carried: Option<Box<Carried>>,
+    /// The end of its last render encoder where that drew and kept no draw, for its next render
+    /// encoder's opening to count what a kept draw of it would have come to (`render/carried.rs`,
+    /// `WorkCounts::encoders_none_kept_next_*`): counted by every call that settles the end
+    /// ([`CommandBuffer::settle_end`]) but a render encoder's opening, which takes it.
+    none_kept: Option<Box<NoneKept>>,
     /// The commits' own work fails this many more times (a device test's injection of an out of
     /// memory, `tests::deferred_calls`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -2405,6 +2410,7 @@ impl CommandBuffer {
                 ending: None,
                 end_lowered: false,
                 carried: None,
+                none_kept: None,
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 failures_injected: 0,
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -2876,10 +2882,12 @@ impl CommandBuffer {
     /// read of what its encoders left), as if the end had been lowered inside its call.
     ///
     /// A kept draw the last render encoder carried for the next is let go (`render/carried.rs`),
-    /// counted as one another call came before (`WorkCounts::kept_draws_carry_dropped_between`).
+    /// counted as one another call came before (`WorkCounts::kept_draws_carry_dropped_between`),
+    /// and so is the end of one that kept none (`WorkCounts::encoders_none_kept_next_between`).
     pub(crate) fn settle_end(&self) {
         self.settle_ended();
         self.let_go_carried(CarryDropped::Between);
+        self.count_none_kept(NoneKeptNext::Between);
     }
 
     /// [`settle_end`](Self::settle_end) at a commit: a kept draw carried goes to the queue, for a
@@ -2888,6 +2896,7 @@ impl CommandBuffer {
     fn settle_end_committing(&self) {
         commit_times::phase(Phase::Lowering, || {
             self.settle_ended();
+            self.count_none_kept(NoneKeptNext::Last);
             let carried = self.state().carried.take();
             let earlier = carried.and_then(|carried| self.0.queue.hold_carried(carried.across()));
             if let Some(earlier) = earlier {
@@ -2913,6 +2922,26 @@ impl CommandBuffer {
     pub(crate) fn take_carried(&self) -> Option<Box<Carried>> {
         let own = self.state().carried.take();
         own.or_else(|| self.0.queue.take_carried())
+    }
+
+    /// The end of the last render encoder where it kept no draw, taken (`render/carried.rs`).
+    pub(crate) fn take_none_kept(&self) -> Option<Box<NoneKept>> {
+        self.state().none_kept.take()
+    }
+
+    /// Hold `none_kept`, the end of a render encoder ending that kept no draw, for the next
+    /// render encoder's opening (`render/carried.rs`).
+    pub(crate) fn hold_none_kept(&self, none_kept: Box<NoneKept>) {
+        self.state().none_kept = Some(none_kept);
+    }
+
+    /// Count the end of the last render encoder where it kept no draw, where it holds one, as
+    /// `next` says, and let it go (`render/carried.rs`).
+    fn count_none_kept(&self, next: NoneKeptNext) {
+        let none_kept = self.state().none_kept.take();
+        if none_kept.is_some() {
+            self.0.device.shared().counts.encoder_none_kept_next(next);
+        }
     }
 
     /// Hold `carried`, the kept draw of a render encoder ending, for the next render encoder

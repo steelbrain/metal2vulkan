@@ -448,7 +448,7 @@ mod vertex_strides;
 #[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use bound::dynamic_compares;
 use bound::{Bound, EqualShapes, Now, Recorded};
-pub(crate) use carried::Carried;
+pub(crate) use carried::{Carried, NoneKept};
 pub(crate) use deferral::{lowering, DeferredEncoders, EndInFlight};
 use deferral::{Logged, OwnLowering};
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -2176,12 +2176,16 @@ impl CommandBuffer {
     ) -> Result<RenderCommandEncoder, Error> {
         let _for = self.notices_for();
         // The last render encoder's end, where its call left it to the device's lowering thread,
-        // and the kept draw it carried (`render/carried.rs`), which nothing came between.
+        // and the kept draw it carried, or its end where it kept none (`render/carried.rs`),
+        // which nothing came between.
         self.settle_ended();
-        let carried = self.take_carried();
+        let handed = carried::Handed {
+            carried: self.take_carried(),
+            none_kept: self.take_none_kept(),
+        };
         // Metal's process ends here under some protection options (`command_buffer/protection.rs`).
         self.refuse_protected_encoder("render_command_encoder")?;
-        self.open_render(descriptor, None, None, carried)
+        self.open_render(descriptor, None, None, handed)
             .map(RenderCommandEncoder::new)
     }
 
@@ -2198,7 +2202,7 @@ impl CommandBuffer {
         given: &RenderPassDescriptor,
         again: Option<Residency>,
         screen: Option<[u32; 2]>,
-        carried: Option<Box<carried::Carried>>,
+        handed: carried::Handed,
     ) -> Result<Lowering, Error> {
         const CALL: &str = "render_command_encoder";
         let device = self.device();
@@ -2279,12 +2283,9 @@ impl CommandBuffer {
             passes.then_some(Unturned::Pass),
             again.is_some(),
         );
-        let carried = match carried {
-            Some(carried) if turns.turned() => {
-                carried.let_go(device);
-                None
-            }
-            carried => carried,
+        let handed = match turns.turned() {
+            true => handed.turned(device),
+            false => handed,
         };
         core.take_turns(turns);
         if let Some(pass) = &rate_map {
@@ -2332,7 +2333,7 @@ impl CommandBuffer {
             log,
             grouped,
         );
-        Ok(RenderLowering::assemble(core, draws, opening, carried))
+        Ok(RenderLowering::assemble(core, draws, opening, handed))
     }
 }
 
@@ -2396,17 +2397,17 @@ impl RenderLowering {
     /// An encoder over `core` of the pass `opening` describes, its first instance's draws
     /// recording into `draws` (null where it records inline), made in its box: the box is
     /// allocated first and the lowering written into it, where `Box::new` of a lowering makes it
-    /// on the stack and copies its thousands of bytes in. It starts from `carried`, the kept draw
-    /// its command buffer's last render encoder carried, where that fits its pass
-    /// (`render/carried.rs`).
+    /// on the stack and copies its thousands of bytes in. It starts from the kept draw its
+    /// command buffer's last render encoder carried, of `handed`, where that fits its pass, and
+    /// counts what one would have come to where that encoder kept none (`render/carried.rs`).
     fn assemble(
         core: Box<EncoderCore>,
         draws: vk::CommandBuffer,
         opening: Opening,
-        carried: Option<Box<carried::Carried>>,
+        handed: carried::Handed,
     ) -> Lowering {
         let samplers = core.generation().sampler_slots_changed();
-        let carried = carried::fitting(carried, &opening, (core.device(), samplers));
+        let carried = carried::fitting(handed, &opening, (core.device(), samplers));
         let Opening {
             layout,
             render_target_array_length,
@@ -4494,7 +4495,7 @@ impl RenderLowering {
         residency: Residency,
         screen: Option<[u32; 2]>,
     ) -> Result<Lowering, Error> {
-        command_buffer.open_render(descriptor, Some(residency), screen, None)
+        command_buffer.open_render(descriptor, Some(residency), screen, Default::default())
     }
 
     /// Refuse `call` as its lowering refused it, after it returned, for `error`
