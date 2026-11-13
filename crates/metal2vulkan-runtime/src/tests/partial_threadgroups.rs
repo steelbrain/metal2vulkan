@@ -223,13 +223,15 @@ fn ragged_grids_of_a_kernel_run_partial_threadgroups_on_one_pipeline() {
             partial_made,
             split_made,
         );
-        // The split: its interior's and each remainder's edge; the variant: its one.
-        assert_eq!(split_made, 1 + GRIDS.len() as u64, "simd {simd}: the split");
+        // The split: its interior's and each remainder's edge; the variant: its one. Where the
+        // variant does not run, both states split, and the device makes the split's `VkPipeline`s
+        // once, for the state that dispatches first.
+        let split = 1 + GRIDS.len() as u64;
         let want = match runs {
-            true => 1,
-            false => split_made,
+            true => (1, split),
+            false => (split, 0),
         };
-        assert_eq!(partial_made, want, "simd {simd}: partial threadgroups");
+        assert_eq!((partial_made, split_made), want, "simd {simd}");
     }
 }
 
