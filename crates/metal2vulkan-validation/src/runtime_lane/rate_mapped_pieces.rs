@@ -12,7 +12,9 @@
 //! second, so a device that cut nothing would still not reach amdgpu's 2 s job timeout: at the
 //! host step, 514 ms of an Iris Xe's GPU, in 20 pieces of at most 32 ms, and 462 ms of a Radeon
 //! 780M's, in 20 pieces of at most 47 ms (Mesa 26.2.6). Fanned out it is 111 ms and 125 ms, after
-//! probes of 1.1 ms and 0.5 ms. Printed as a `RATE-MAP-PIECES` line: the map's regions, the
+//! probes of 1.1 ms and 0.5 ms. On an RTX 3090 (NVIDIA 620.70.06) it is 54 ms, in 20 pieces of at
+//! most 2.6 ms, and fanned out 98 ms, after a probe of 14 ms. Printed as a `RATE-MAP-PIECES` line:
+//! the map's regions, the
 //! command buffer's GPU time, the pieces and ranges it was cut into, and its pieces' GPU times
 //! where the device times them. Checked: the command buffer was cut into pieces and its largest
 //! command into ranges, and no piece ran past [`PIECE_LIMIT`]. Twice: over a range the call
@@ -31,7 +33,9 @@
 //! the consumer's was recorded in on an RTX 3090), the host step's frame is
 //! `rate_mapped_pieces_guest_scale` (fanned out) and `rate_mapped_pieces_guest_scale_exact`: a GPU
 //! hazard, whose command buffer may run for a second or more, compiled only under
-//! `m2v_gpu_hazards`. They print the same line and check the same bounds.
+//! `m2v_gpu_hazards`. They print the same line and check the same bounds. On the RTX 3090 the
+//! region-by-region frame is 332 ms, in 117 pieces of at most 2.7 ms, and fanned out 174 ms,
+//! after a probe of 74 ms.
 //!
 //! Ignored by default: a measurement on a GPU, far too slow on a CPU device. Run it by name with
 //! `--run-ignored all`. The fixture's text is compiled in, so the binary also runs on a machine
