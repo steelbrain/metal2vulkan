@@ -245,6 +245,7 @@ surface! {
         enum DontCareColorPolicy N;
         enum UnstoredDontCarePolicy N;
         enum VertexReachPolicy N;
+        enum RateMapRegionPolicy N;
         struct DeviceProfile O;
         struct SpirvValidation N;
         struct EnabledCaps N;

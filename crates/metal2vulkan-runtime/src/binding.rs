@@ -549,6 +549,18 @@ pub(super) struct Command<'a> {
     /// An emulated tessellation draw's work buffer and records, for its `TessellationWork` and
     /// `TessellationRecords` writes.
     pub(super) tessellation: Option<MeshRegions>,
+    /// A fan-out draw's region table and a probe's flags (`render/fan_out.rs`), for its
+    /// `RateMapRegions` and `RateMapFlags` writes.
+    pub(super) fan_out: Option<FanOutBuffers>,
+}
+
+/// Where a fan-out draw's region table and a probe's flags lie (`render/fan_out.rs`), each bound
+/// whole.
+#[derive(Clone, Copy)]
+pub(super) struct FanOutBuffers {
+    pub(super) regions: vk::DescriptorBufferInfo,
+    /// A probe's flags; `None` for a draw.
+    pub(super) flags: Option<vk::DescriptorBufferInfo>,
 }
 
 /// Where an emulated mesh or tessellation draw's work buffer and records lie (`render/mesh.rs`,
@@ -2423,6 +2435,17 @@ fn descriptor(
                 .ok_or_else(|| internal("a tessellation work write without the draw's scan"))?
                 .work
         }
+        // A fan-out draw's region table, and a probe's flags (`render/fan_out.rs`).
+        WriteSource::RateMapRegions => {
+            command
+                .fan_out
+                .ok_or_else(|| internal("a region table write without the draw's fan-out"))?
+                .regions
+        }
+        WriteSource::RateMapFlags => command
+            .fan_out
+            .and_then(|fan| fan.flags)
+            .ok_or_else(|| internal("a probe's flags write without the probe's"))?,
         // An indexed patch draw's control-point index buffer.
         WriteSource::ControlPointIndices => {
             let (buffer, _) = tables.control_point_indices.ok_or_else(|| {

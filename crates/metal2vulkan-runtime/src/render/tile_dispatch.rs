@@ -1068,6 +1068,7 @@ impl RenderLowering {
                 .collect(),
             mesh: None,
             tessellation: None,
+            fan_out: None,
         };
         let stages = [(Stage::Kernel, &self.tile)];
         let mut tables = binding::Tables::new(&stages)

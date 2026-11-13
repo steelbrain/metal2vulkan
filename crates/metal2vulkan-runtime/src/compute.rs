@@ -2479,6 +2479,7 @@ fn record(
             .collect(),
         mesh: None,
         tessellation: None,
+        fan_out: None,
     };
     // An encoder's own dispatch makes its uses over the last one's, in their storage
     // (`LiveDispatch::uses`), those of what the encoder made resident kept where they are the

@@ -273,6 +273,7 @@
 //!   own draw reads such a buffer at stride 0 (`render/vertex_strides.rs`).
 
 use super::bound::Bound;
+use super::fan_out::{self, FanOutRoutes, FanOutRun, Probe};
 use super::mesh::MeshGrid;
 use super::pass_start_reads::{PassStartReads, PassStartTables};
 use super::pass_steps::PassSteps;
@@ -1025,7 +1026,13 @@ struct Snapshot {
 }
 
 /// A command to run: its record, and the render pipeline state it names (`None`: none).
-type Command = (CommandRecord, Option<RenderPipelineState>);
+pub(super) type Command = (CommandRecord, Option<RenderPipelineState>);
+
+/// An execution's probe at a host step that fans the pass's triangles out
+/// ([`RenderExecution::probe`]): its secondary, ended, and the index of each command's draw among
+/// the probe's draws, by its place among the commands that run, where it was probed; `None` where
+/// its commands are drawn region by region.
+type ProbeRun = Option<(vk::CommandBuffer, Vec<Option<u32>>)>;
 
 /// What an execution's recording found: resident-set misses and faults, and the runs its draws
 /// that reach the tile threadgroup memory began, those its draws that reach interlocked storage
@@ -1979,7 +1986,7 @@ impl RenderLowering {
                 PrivateForm::default(),
                 ProvokingForms::default(),
                 &BTreeSet::new(),
-                region_viewports,
+                (region_viewports, None),
             ),
             (&pass_start, &sampler_maps),
             (&mut argument_samplers, &mut None),
@@ -2119,13 +2126,15 @@ impl RenderExecution {
     /// part `None` where no draw made it yet), in a pass whose instances `rendered` lays out,
     /// with `residency`, the command buffer's (`residency.rs`): from the CPU's records as they
     /// stand now, or, for the host step (`step`), from the records as the GPU and the CPU left
-    /// them; or in its GPU form (`gpu`), whose records the host never reads (`gpu.rs`). Commands
-    /// that run as several back the pass's memoryless attachments (`Rendered::back_memoryless`).
+    /// them; or in its GPU form (`gpu`), whose records the host never reads (`gpu.rs`); or, at a
+    /// host step that fans the pass's triangles out, from the records it read once (`routes`,
+    /// [`record_routes`](Self::record_routes)). Commands that run as several back the pass's
+    /// memoryless attachments (`Rendered::back_memoryless`).
     fn record(
         &self,
         core: EncoderCore,
         (command_buffer, residency): (&CommandBuffer, &Residency),
-        (step, gpu): (bool, Option<&GpuForm>),
+        (step, gpu, routes): (bool, Option<&GpuForm>, Option<Arc<FanOutRoutes>>),
         found: &mut Found,
         (storage, rendered): (PassStorage, &mut Rendered),
     ) -> Result<Recorded, Error> {
@@ -2135,6 +2144,10 @@ impl RenderExecution {
             let encoder =
                 self.record_gpu(core, (command_buffer, residency), form, (storage, rendered))?;
             return self.finish(encoder, found, rendered, &device);
+        }
+        if let Some(routes) = routes {
+            let at = (command_buffer, residency);
+            return self.record_routes(core, at, routes, found, (storage, rendered));
         }
         // Commands their chunks' kept recordings may run (`kept.rs`): the CPU's records at
         // commit, and at the host step those the GPU may write.
@@ -2160,15 +2173,6 @@ impl RenderExecution {
         let check = self.check.as_ref().filter(|_| self.check_sees_now());
         let reports = command_buffer.reports_executed();
         let whole = step || check.is_some() || reports;
-        let draws = command_buffer.begin_draws(&snapshot.compatible)?;
-        let raw = device.shared().vk();
-        // The query the commands' draws count in, begun here and ended after the last of them.
-        let visibility = Visibility::borrowing(
-            snapshot.layout.visibility.clone(),
-            self.lent.clone(),
-            raw,
-            draws,
-        );
         // The host step's draws take the large-buffer form, whose variants `commit` settled
         // (`RenderExecution::settle`).
         let forms = match step {
@@ -2178,12 +2182,8 @@ impl RenderExecution {
         // The call's layout, its memoryless attachments in the backings an earlier execution's
         // runs gave the pass.
         let layout = rendered.backing(&snapshot.layout)?;
-        let mut encoder = self.replay_encoder(
-            core,
-            (draws, visibility),
-            (storage, layout, residency.clone()),
-            forms,
-        );
+        let lent = (command_buffer, self.lent.clone());
+        let mut encoder = self.begin_replay(core, lent, (storage, layout, residency), forms)?;
         // The commands' draws start from an empty bind state, as an encoder's first draw may.
         let mut live = LiveBind::default();
         if !step {
@@ -2231,6 +2231,127 @@ impl RenderExecution {
             }
             self.replay((&mut encoder, &mut live), &commands, residency, found)?;
         }
+        self.finish(encoder, found, rendered, &device)
+    }
+
+    /// An encoder of `core` that replays the commands into a secondary of `command_buffer` begun
+    /// against the execution's instance, its draws counting in the query `lent` lends, over the
+    /// pass's `storage`, in `layout`, with `residency`, the command buffer's, its draws' variants
+    /// in `forms` ([`replay_encoder`](Self::replay_encoder)).
+    fn begin_replay(
+        &self,
+        core: EncoderCore,
+        (command_buffer, lent): (&CommandBuffer, Option<Lent>),
+        (storage, layout, residency): (PassStorage, PassLayout, &Residency),
+        forms: BufferForms,
+    ) -> Result<RenderLowering, Error> {
+        let snapshot = &self.snapshot;
+        let draws = command_buffer.begin_draws(&snapshot.compatible)?;
+        let raw = command_buffer.device().shared().vk();
+        // The query the commands' draws count in, begun here and ended after the last of them.
+        let layout_visibility = snapshot.layout.visibility.clone();
+        let visibility = Visibility::borrowing(layout_visibility, lent, raw, draws);
+        let replaying = (storage, layout, residency.clone());
+        Ok(self.replay_encoder(core, (draws, visibility), replaying, forms))
+    }
+
+    /// The host step's commands where it fans the pass's triangles out, read once for the probe
+    /// and for the recording (`render/fan_out.rs`), as [`record`](Self::record) reads them at the
+    /// step, each seen by the check before any is recorded: the commands, `None` where a record
+    /// runs nothing for a fault, the command they start at, and the faults the range and the
+    /// records hold.
+    fn step_commands(
+        &self,
+        device: &Device,
+    ) -> Result<(Vec<Option<Command>>, u32, ReplayFaults), Error> {
+        let (range, faults) = self.range.commands(self.icb.size());
+        let check = self.check.as_ref().filter(|_| self.check_sees_now());
+        let start = range.start;
+        let (commands, written) = self.written_commands(device, range, check)?;
+        Ok((commands, start, ReplayFaults(faults.0 | written.0)))
+    }
+
+    /// Record the probe of `commands`, the host step's ([`step_commands`](Self::step_commands)),
+    /// through an encoder of `core` into a secondary begun against the execution's instance, over
+    /// the pass's `storage`, with `residency`, the command buffer's, its draws taking indices of
+    /// `flags` from `from` (`render/fan_out.rs`): the core back, the index the next execution's
+    /// draws take, and the secondary, ended, with each command's index among the probe's draws,
+    /// where the commands recorded in one run of the instance's shape and probed a draw; `None`
+    /// where not, and every command is drawn region by region.
+    fn probe(
+        &self,
+        core: EncoderCore,
+        (command_buffer, residency): (&CommandBuffer, &Residency),
+        commands: &[Option<Command>],
+        (flags, from, storage): (vk::DescriptorBufferInfo, u32, PassStorage),
+    ) -> Result<(EncoderCore, u32, ProbeRun), Error> {
+        let snapshot = &self.snapshot;
+        let layout = snapshot.layout.clone();
+        let large = BufferForms::Large;
+        let lent = (command_buffer, None);
+        let mut encoder = self.begin_replay(core, lent, (storage, layout, residency), large)?;
+        encoder.fan_run = Some(FanOutRun::Probe(Probe::new(flags, from)));
+        let mut found = Found::default();
+        let mut live = LiveBind::default();
+        let replaying = (&mut encoder, &mut live);
+        self.replay(replaying, commands.iter().flatten(), residency, &mut found)?;
+        let raw = command_buffer.device().shared().vk();
+        encoder.visibility.end(raw, encoder.current.draws);
+        encoder.visibility.close_spares(raw, encoder.current.draws);
+        let RenderLowering {
+            core,
+            earlier,
+            current,
+            fan_run,
+            ..
+        } = encoder;
+        for run in earlier.iter().chain([&current]) {
+            // SAFETY: only this recording records the secondary command buffers.
+            unsafe { core.command_buffer().end_raw(run.draws) }.map_err(vulkan)?;
+        }
+        let core = EncoderCore::unboxed(core);
+        let Some(FanOutRun::Probe(probe)) = fan_run else {
+            return Err(internal("a probe's recording without its probe"));
+        };
+        let (next, slots) = probe.finish();
+        let one = earlier.is_empty()
+            && !current.shadow
+            && current.before.is_empty()
+            && *current.shape == snapshot.shape
+            && current.views == ViewSetup::default();
+        match one && next > from {
+            true => Ok((core, next, Some((current.draws, slots)))),
+            false => Ok((core, from, None)),
+        }
+    }
+
+    /// [`record`](Self::record) at a host step that fans the pass's triangles out, of the commands
+    /// `routes` holds, read once for the probe and for this recording (`render/fan_out.rs`): each
+    /// command's draw the probe probed and flagged none of the triangles of, fanned out, and the
+    /// others region by region, in order.
+    fn record_routes(
+        &self,
+        core: EncoderCore,
+        (command_buffer, residency): (&CommandBuffer, &Residency),
+        routes: Arc<FanOutRoutes>,
+        found: &mut Found,
+        (storage, rendered): (PassStorage, &mut Rendered),
+    ) -> Result<Recorded, Error> {
+        let device = command_buffer.device().clone();
+        found.faults = ReplayFaults(found.faults.0 | routes.faults.0);
+        if command_buffer.reports_executed() {
+            let executed = routes.commands.iter().map(Option::as_ref);
+            let read = (RecordsRead::HostStep, residency);
+            self.report(command_buffer, read, routes.start, executed);
+        }
+        let layout = rendered.backing(&self.snapshot.layout)?;
+        let lent = (command_buffer, self.lent.clone());
+        let large = BufferForms::Large;
+        let mut encoder = self.begin_replay(core, lent, (storage, layout, residency), large)?;
+        encoder.fan_run = Some(FanOutRun::Route(Arc::clone(&routes)));
+        let mut live = LiveBind::default();
+        let commands = routes.commands.iter().flatten();
+        self.replay((&mut encoder, &mut live), commands, residency, found)?;
         self.finish(encoder, found, rendered, &device)
     }
 
@@ -2286,7 +2407,11 @@ impl RenderExecution {
             measured.unwrap_or(RateMapRegions::MAX_REGIONS as u64)
         };
         let mut regions = note(0);
-        for (record, own) in commands {
+        // The probe's run of the commands at a host step that fans the pass's triangles out
+        // records its probes alone, in one run, before the pass (`render/fan_out.rs`): it begins
+        // no piece and cuts no draw into ranges.
+        let probing = encoder.fan_run.as_ref().is_some_and(FanOutRun::probes);
+        for (place, (record, own)) in commands.into_iter().enumerate() {
             // A command's barrier: its draw records into the execution's next run, which its
             // pass runs in a render pass instance of its own after a barrier from everything
             // before, so it sees the earlier draws' writes as plain Metal's does; but where the
@@ -2301,9 +2426,20 @@ impl RenderExecution {
                     found.faults = ReplayFaults(found.faults.0 | ReplayFaults::RECORD.0);
                     continue;
                 }
-                encoder.run_barrier |= encoder.current.recorded || encoder.earlier.is_empty();
+                // The probe probes no command from a barrier on, which the routes' run draws
+                // region by region.
+                match encoder.fan_run.as_mut().filter(|run| run.probes()) {
+                    Some(run) => run.barrier(),
+                    None => {
+                        encoder.run_barrier |=
+                            encoder.current.recorded || encoder.earlier.is_empty()
+                    }
+                }
             }
             encoder.command_barrier = record.barrier;
+            // What the command's draw records where the host step fans the pass's triangles out.
+            encoder.fan_out = encoder.fan_run.as_ref().and_then(|run| run.begin(place));
+            encoder.fanned = (false, false);
             let asked = Asked::of(&record.action, &self.icb);
             let draw = match asked {
                 Asked::Draw(draw) => draw,
@@ -2327,6 +2463,14 @@ impl RenderExecution {
                     continue;
                 }
             };
+            // The probe probes no mesh or patch draw, nor a command after one: its functions run in
+            // dispatches before the pass, which may write what a later vertex function reads.
+            if probing && matches!(draw, Draw::Mesh(..) | Draw::Patches { .. }) {
+                if let Some(run) = &mut encoder.fan_run {
+                    run.barrier();
+                }
+                continue;
+            }
             // A patch draw that scales its factors runs on its state's factor-scaling twin, the
             // encoder's scale the command's.
             let scale = match &draw {
@@ -2379,15 +2523,19 @@ impl RenderExecution {
             }
             // A command after the work its piece holds begins the next piece of a rate-mapped
             // pass (`rate_mapped_pass.rs`, **Pieces**).
-            found.piece_before(encoder);
+            if !probing {
+                found.piece_before(encoder);
+            }
             match draw {
                 Draw::Primitives(assembly, draw) => {
                     encoder.draw(live, CALL, assembly, draw, DrawBuffers::default(), false)?
                 }
                 Draw::Indexed(mut draw, (buffer, mut offset)) => {
                     // A draw that would hold more than a piece's work, drawn as consecutive ranges
-                    // of its indices, each a draw a piece may begin before; the last below.
-                    let per_primitive = (encoder.rate_map.is_some())
+                    // of its indices, each a draw a piece may begin before; the last below. A
+                    // fanned-out draw, and a probe, is drawn whole.
+                    let cut = encoder.rate_map.is_some() && !probing && encoder.fan_out.is_none();
+                    let per_primitive = cut
                         .then(|| index_ranges_of(encoder.pipeline.as_ref()?, &draw))
                         .flatten();
                     if let Some(per_primitive) = per_primitive {
@@ -2451,7 +2599,16 @@ impl RenderExecution {
                     encoder.draw_patch_range(live, CALL, draw, patch_indices, points)?;
                 }
             }
-            regions = note(found.piece_after(encoder));
+            if let Some(run) = &mut encoder.fan_run {
+                let (fanned, writes) = encoder.fanned;
+                run.end(place, fanned, writes);
+                if fanned && !probing {
+                    (encoder.core.device().shared().counts).rate_map_fanned_draw();
+                }
+            }
+            if !probing {
+                regions = note(found.piece_after(encoder));
+            }
         }
         Ok(())
     }
@@ -2676,6 +2833,10 @@ impl RenderExecution {
             piece_split: false,
             piece_work: 0,
             piece_regions: 0,
+            fan_run: None,
+            fan_out: None,
+            fanned: (false, false),
+            fan_table: None,
             command_barrier: false,
             unordered: UnorderedWrites::new(),
             zero_indices: None,
@@ -3394,6 +3555,12 @@ impl DeferredPass {
         // Its tile dispatches' pipelines, waiting for those being made; a failed one fails the
         // command buffer (`render/pending_tile.rs`).
         let tiles = self.steps.tiles_made(command_buffer)?;
+        // At the host step, the executions' commands read once, and their draws probed, the probe
+        // submitted and waited for, where it fans the pass's triangles out (`render/fan_out.rs`).
+        let (routes, probed) = match step {
+            true => self.fan_out_routes(command_buffer, &residency)?,
+            false => (Vec::new(), None),
+        };
         let mut core = EncoderCore::segment(command_buffer, false)?;
         let mut found = Found::default();
         let mut recorded = Vec::with_capacity(self.executions.len());
@@ -3409,10 +3576,11 @@ impl DeferredPass {
         };
         for (at, execution) in self.executions.iter().enumerate() {
             let gpu = forms.get(at).and_then(Option::as_ref);
+            let routes = routes.get(at).cloned().flatten();
             let back = execution.record(
                 core,
                 (command_buffer, &residency),
-                (step, gpu),
+                (step, gpu, routes),
                 &mut found,
                 (storage, &mut rendered),
             )?;
@@ -3765,7 +3933,187 @@ impl DeferredPass {
         let mut segment = core.end_segment()?;
         segment.resident_misses = found.misses;
         segment.faults = found.faults;
+        // The probe's recording, which ran: what it used and took, held with the pass's.
+        if let Some(probed) = probed {
+            segment.join(probed);
+        }
         Ok(segment)
+    }
+
+    /// Where the host step fans the pass's triangles out (`render/fan_out.rs`: the device's policy
+    /// and features), in a pass of no memoryless attachment and no shadowed texture: each
+    /// execution's routes, by index, its commands read once here (`None` for one recorded as
+    /// without: over no rate map, or using a shadowed texture), and the probe of their draws,
+    /// recorded, submitted and waited for, its command buffers taken out of it, which the pass's
+    /// segment joins. Nothing where it does not.
+    fn fan_out_routes(
+        &self,
+        command_buffer: &CommandBuffer,
+        residency: &Residency,
+    ) -> Result<(Vec<Option<Arc<FanOutRoutes>>>, Option<RecordedSegment>), Error> {
+        let device = command_buffer.device();
+        let layout = &self.layout;
+        let memoryless = (layout.colors.iter().flatten().map(|color| &color.target))
+            .chain(layout.depth_stencil.iter().map(|ds| &ds.target))
+            .any(super::memoryless);
+        if !fan_out::fans_out(device) || !self.shadows.is_empty() || memoryless {
+            return Ok((Vec::new(), None));
+        }
+        // Each execution's instance, by index.
+        let mut homes = vec![None; self.executions.len()];
+        for (at, instance) in self.instances.iter().enumerate() {
+            for piece in &instance.pieces {
+                if let Piece::Execution(index) = *piece {
+                    if let Some(home) = homes.get_mut(index) {
+                        *home = Some(at);
+                    }
+                }
+            }
+        }
+        let mut reads = Vec::with_capacity(self.executions.len());
+        for execution in &self.executions {
+            let fans = execution.snapshot.rate_map.is_some() && execution.shadows.is_empty();
+            reads.push(match fans {
+                true => Some(execution.step_commands(device)?),
+                false => None,
+            });
+        }
+        // Two words a probed draw, at most one a command.
+        let commands: usize = (reads.iter().flatten())
+            .map(|(commands, ..)| commands.len())
+            .sum();
+        let mut probes: Vec<ProbeRun> = Vec::with_capacity(reads.len());
+        let mut words: Arc<[u32]> = Arc::from([]);
+        let mut probed = None;
+        if commands > 0 {
+            let len = 8 * commands as u64;
+            let flags = command_buffer.state().uploads.upload(device, &[], len)?;
+            let info = vk::DescriptorBufferInfo::default()
+                .buffer(flags.raw())
+                .offset(flags.offset())
+                .range(flags.len());
+            let mut core = EncoderCore::segment(command_buffer, false)?;
+            let mut next = 0;
+            for ((execution, read), home) in self.executions.iter().zip(&reads).zip(&homes) {
+                let (Some((commands, ..)), Some(_)) = (read, home) else {
+                    probes.push(None);
+                    continue;
+                };
+                let at = (command_buffer, residency);
+                let probing = (info, next, self.storage.clone());
+                let (back, after, probe) = execution.probe(core, at, commands, probing)?;
+                core = back;
+                next = after;
+                probes.push(probe);
+            }
+            if next > 0 {
+                let (recorded, completed) =
+                    self.submit_probe(core, command_buffer, (&homes, &probes))?;
+                if completed {
+                    let mut read_words = vec![0u32; 2 * next as usize];
+                    // SAFETY: the probe that wrote the flags completed, its writes made visible to
+                    // the host by its last barrier; the words are writable and apart from the
+                    // region.
+                    unsafe {
+                        flags.copy_out(0, read_words.as_mut_ptr().cast(), 8 * u64::from(next))
+                    };
+                    let flagged = read_words.chunks(2).filter(|pair| pair[0] != 0).count();
+                    device.shared().counts.rate_map_probe(flagged as u64);
+                    words = read_words.into();
+                }
+                probed = Some(recorded);
+            }
+        }
+        let routes = (reads.into_iter().enumerate())
+            .map(|(at, read)| {
+                let (commands, start, faults) = read?;
+                let slots = (probes.get(at).cloned().flatten()).map_or_else(Vec::new, |(_, s)| s);
+                Some(Arc::new(FanOutRoutes {
+                    commands,
+                    start,
+                    faults,
+                    slots,
+                    words: Arc::clone(&words),
+                }))
+            })
+            .collect();
+        Ok((routes, probed))
+    }
+
+    /// Record the probes of the pass's executions, `probes` (each with its instance among
+    /// `homes`), into `core`, each instance's in a render pass instance of its instance's
+    /// framebuffer that loads and stores every attachment, then submit and wait for them
+    /// (`render/fan_out.rs`): the recording, its command buffers taken out, and whether they
+    /// completed.
+    fn submit_probe(
+        &self,
+        mut core: EncoderCore,
+        command_buffer: &CommandBuffer,
+        (homes, probes): (&[Option<usize>], &[ProbeRun]),
+    ) -> Result<(RecordedSegment, bool), Error> {
+        let device = command_buffer.device();
+        let mut passes = Vec::new();
+        let mut runs = Vec::new();
+        for (index, instance) in self.instances.iter().enumerate() {
+            let draws: Vec<vk::CommandBuffer> = (homes.iter().zip(probes))
+                .filter(|(home, _)| **home == Some(index))
+                .filter_map(|(_, probe)| probe.as_ref().map(|(draws, _)| *draws))
+                .collect();
+            if draws.is_empty() {
+                continue;
+            }
+            let own = super::instance_layout(&self.layout, self.bare.as_ref(), &instance.shape);
+            let between = Position {
+                first: false,
+                last: false,
+            };
+            let (none, general) = (Feedback::NONE, vk::ImageLayout::GENERAL);
+            let pass =
+                render_target::final_pass(device, own, &instance.shape, between, none, general)?;
+            runs.push((pass.raw, instance.framebuffer, draws));
+            passes.push(pass);
+        }
+        let times = rate_mapped_pass::PieceTimes::probe(device);
+        let render_area = self.steps.render_area;
+        core.command(render_target::ATTACHMENT_STAGES, &[], |raw, cb| {
+            // SAFETY: the segment's command buffer is recording outside a render pass; the passes
+            // are held with it, and each framebuffer and its attachments with the pass's
+            // instances, until the command buffer completes; each secondary was recorded against
+            // a pass compatible with its instance's and ended; every image rests in `GENERAL`
+            // before the pass, which loads and stores each attachment and draws no fragment; the
+            // probe's times are held until it completed.
+            unsafe {
+                if let Some(times) = &times {
+                    times.begin(raw, cb, 0);
+                }
+                for (pass, framebuffer, draws) in &runs {
+                    let begin = vk::RenderPassBeginInfo::default()
+                        .render_pass(*pass)
+                        .framebuffer(*framebuffer)
+                        .render_area(render_area);
+                    let contents = vk::SubpassContents::SECONDARY_COMMAND_BUFFERS;
+                    raw.cmd_begin_render_pass(cb, &begin, contents);
+                    raw.cmd_execute_commands(cb, draws);
+                    raw.cmd_end_render_pass(cb);
+                }
+                Barrier::to_host().record(raw, cb);
+                if let Some(times) = &times {
+                    times.end(raw, cb, 0);
+                }
+            }
+        });
+        core.retain(passes);
+        let mut recorded = core.end_segment()?;
+        // SAFETY: the segment's command buffers, of the command buffer's pool, ended and
+        // recorded for this submission alone; what they use the segment holds, which the pass's
+        // joins.
+        let completed = unsafe { command_buffer.submit_waited(&recorded.raws) }?;
+        // Its time read and counted, its submission done.
+        drop(times);
+        recorded.raws.clear();
+        recorded.piece_ends.clear();
+        recorded.executions.clear();
+        Ok((recorded, completed))
     }
 
     /// Settle at commit what the host step that records the pass would compile

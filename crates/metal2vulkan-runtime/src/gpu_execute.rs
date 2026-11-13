@@ -710,6 +710,7 @@ fn variant_uses(
         blobs: Vec::new(),
         mesh: None,
         tessellation: None,
+        fan_out: None,
     };
     let mut uses = Vec::new();
     for p in prepared {

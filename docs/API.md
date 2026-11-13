@@ -5652,7 +5652,17 @@ each item named states the rule in full.
   one below its `maxMultiDrawCount` in one `vkCmdDrawMultiEXT` or `vkCmdDrawMultiIndexedEXT`, its
   vertex function's variant storing `ViewportIndex` as `DrawIndex` (`BindState::region_viewports`,
   `VariantKey::region_viewports`): the same pixels in fewer commands. A region whose scissor, cut
-  to the guest's viewport and the render area, holds no pixel is not recorded.
+  to the guest's viewport and the render area, holds no pixel is not recorded. At a host step,
+  under `RateMapRegionPolicy::FanOut` (the default) on a device that enables `geometryShader`,
+  `shaderClipDistance` and `vertexPipelineStoresAndAtomics`, an executed command's draw of
+  triangles is drawn once instead where a probe finds that none of its triangles crosses `w = 0`
+  or touches more regions than the fan-out's copies: its variant's geometry stage emits a copy of
+  each triangle for each region it touches (`VariantKey::region_fan_out`), a pixel centre within a
+  rounding error of an edge possibly covered otherwise (`docs/FAST-PATHS.md`). The probe costs
+  the host step a submission it waits for before the pass, which runs each probed draw's vertex
+  function and geometry stage once and shades nothing (`WorkCounts::rate_map_probes`,
+  `rate_map_probe_gpu_nanos`); a fanned-out draw runs its vertex function once where region by
+  region it runs once per region (`rate_mapped_pass.rs`, **Fan-out**).
 - **A pass over a map of a zero screen extent is refused**, `RegionError::RegionExtent` on that
   axis: the layer has no physical pixel there, so no attachment of the map's physical size can be
   made, and what Metal rasterizes in such a pass is not measured.

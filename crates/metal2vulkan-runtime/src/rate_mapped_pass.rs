@@ -185,6 +185,33 @@
 //!   still runs within 2 s there. Where the device writes timestamps each piece of a pass recorded
 //!   in several is timed (`WorkCounts::rate_map_piece_gpu_nanos_most`), and the pieces are counted
 //!   (`WorkCounts::rate_map_pieces`).
+//! - **Fan-out.** Drawn region by region, a draw runs its vertex function once per region of the
+//!   plan, which may hold thousands. Where a host step records an execution's commands
+//!   (`render/executions.rs`), under `RateMapRegionPolicy::FanOut` (the default) on a device that
+//!   enables `geometryShader`, `shaderClipDistance` and `vertexPipelineStoresAndAtomics`, a draw
+//!   of triangles filled, of one amplification, without a compensation or a band, whose pipeline
+//!   chooses no slice or viewport, over a map whose layers are alike and whose plan is a grid of
+//!   at most 128 columns and rows (`bind::fan_out::table`), is drawn once instead: its variant's
+//!   geometry stage (`VariantKey::region_fan_out`) emits a copy of each triangle for each region
+//!   it touches, through one viewport over the render area, each copy's window coordinates its
+//!   region viewport's and four clip distances keeping it to its region's pixels. Before the
+//!   pass, the step records the commands' draws once more as a probe whose geometry stage emits
+//!   nothing: for each draw it flags a triangle that crosses `w = 0` or touches more regions than
+//!   the fan-out's copies (each region widened by an eighth of a pixel), and counts the copies of
+//!   the others. The probe is submitted on its own and waited for (`WorkCounts::rate_map_probes`,
+//!   its GPU time `WorkCounts::rate_map_probe_gpu_nanos`); then a flagged draw is drawn region by
+//!   region (`WorkCounts::rate_map_flagged_draws`) and the others fanned out
+//!   (`WorkCounts::rate_map_fanned_draws`), each in its command's place, so a pixel's fragments
+//!   keep their order: a pixel lies in one region. A fanned-out draw's work is its vertices, its
+//!   triangles' geometry stage and three vertices per copy ([`fan_out_work`]), and it is never
+//!   cut into ranges. The probe stops at a command's barrier, and after a draw whose pipeline
+//!   writes memory, as it runs before every draw of the pass: the later commands are drawn region
+//!   by region. A pass whose attachments are memoryless or that uses a shadowed texture is not
+//!   probed, nor an execution whose commands record as several runs. A copy's window coordinates
+//!   are computed in the geometry stage, so a pixel centre within a rounding error of a
+//!   triangle's edge may be covered by one route and not by the other. The encoder's own draws,
+//!   and the commands `commit` records, are drawn region by region (`docs/FAST-PATHS.md`, known
+//!   gaps).
 //! - **What the plan refuses** is `NotImplemented(RuntimeGap::RateMapRegions)`, naming the
 //!   compile layer's reason ([`RegionRefusal`]): a viewport of no extent or a flipped one, a
 //!   scissor as above, a plan past its bound or past the device's viewport limits, a pipeline whose
@@ -565,7 +592,20 @@ pub(super) fn piece_work() -> u64 {
 /// vertices or indices times its instances, an indirect or mesh draw's counted as none.
 pub(super) fn draw_work(scissors: &[vk::Rect2D], draw: &DrawCommand) -> u64 {
     let regions = region_draws(scissors);
-    let vertices = match *draw {
+    regions.saturating_mul(vertices(draw).saturating_add(REGION_DRAW_WORK))
+}
+
+/// The work a fanned-out `draw` holds past [`draw_work`]'s of its one recording (the module docs,
+/// **Fan-out**): its geometry stage's invocations, at most one a vertex, and the three vertices
+/// of each of the `copies` the probe counted.
+pub(super) fn fan_out_work(draw: &DrawCommand, copies: u32) -> u64 {
+    vertices(draw).saturating_add(3 * u64::from(copies))
+}
+
+/// The vertices or indices of `draw` times its instances, an indirect or mesh draw's counted as
+/// none.
+fn vertices(draw: &DrawCommand) -> u64 {
+    match *draw {
         DrawCommand::Draw {
             vertex_count,
             instance_count,
@@ -581,8 +621,7 @@ pub(super) fn draw_work(scissors: &[vk::Rect2D], draw: &DrawCommand) -> u64 {
         | DrawCommand::DrawMeshTasks { .. }
         | DrawCommand::DrawMeshTasksIndirect { .. }
         | DrawCommand::DrawMeshTasksIndirectCount { .. } => 0,
-    };
-    regions.saturating_mul(vertices.saturating_add(REGION_DRAW_WORK))
+    }
 }
 
 /// The region draws a recording through `scissors` makes (the module docs, **Pieces**): one for
@@ -608,10 +647,13 @@ pub(super) fn index_range(regions: u64, per_primitive: u32) -> u32 {
 /// The GPU times of a pass's pieces (the module docs, **Pieces**): a timestamp slot of the
 /// device's for each (`gpu_time::Slot`), its start written before the piece's first command and
 /// its end after its last; read, counted (`WorkCounts::rate_map_piece_gpu_nanos`) and given back
-/// as the command buffer lets go of what it retained, once its work completed or it failed.
+/// as the command buffer lets go of what it retained, once its work completed or it failed. Or
+/// the GPU time of a host step's probe (the module docs, **Fan-out**), one piece, counted
+/// (`WorkCounts::rate_map_probe_gpu_nanos`) and given back once the step waited for it.
 pub(super) struct PieceTimes {
     device: Device,
     slots: Vec<Slot>,
+    probe: bool,
 }
 
 impl PieceTimes {
@@ -619,8 +661,22 @@ impl PieceTimes {
     /// device resets them there; `None` where it has fewer than two, the device writes no
     /// timestamps or answers GPU times from the host, or a slot cannot be had.
     pub(super) fn take(device: &Device, pieces: usize) -> Option<PieceTimes> {
+        if pieces < 2 {
+            return None;
+        }
+        PieceTimes::slots(device, pieces, false)
+    }
+
+    /// A slot for a host step's probe recorded on `device` (the module docs, **Fan-out**), its one
+    /// piece; `None` as for [`take`](Self::take).
+    pub(super) fn probe(device: &Device) -> Option<PieceTimes> {
+        PieceTimes::slots(device, 1, true)
+    }
+
+    /// `pieces` slots of `device`'s, a probe's where `probe` says.
+    fn slots(device: &Device, pieces: usize, probe: bool) -> Option<PieceTimes> {
         let shared = device.shared();
-        if pieces < 2 || shared.timing.answers_from_host() {
+        if shared.timing.answers_from_host() {
             return None;
         }
         let raw = shared.vk();
@@ -631,6 +687,7 @@ impl PieceTimes {
         Some(PieceTimes {
             device: device.clone(),
             slots,
+            probe,
         })
     }
 
@@ -699,9 +756,11 @@ impl Drop for PieceTimes {
             exit_guard::called(Call::GetQueryPoolResults);
             let [[start, started], [end, ended]] = result;
             if matches!(read, Ok(()) | Err(vk::Result::NOT_READY)) && started != 0 && ended != 0 {
-                shared
-                    .counts
-                    .rate_map_piece_time(clock.duration(start, end));
+                let nanos = clock.duration(start, end);
+                match self.probe {
+                    true => shared.counts.rate_map_probe_time(nanos),
+                    false => shared.counts.rate_map_piece_time(nanos),
+                }
             }
         }
     }

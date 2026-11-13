@@ -387,75 +387,109 @@ impl LoopCheck {
 
     /// Submit `raws` (ended, in order) on `buffer`'s `VkQueue` and wait for them to complete.
     fn submit(&self, buffer: &CommandBufferShared, raws: &[vk::CommandBuffer]) -> Result<(), Stop> {
-        let device = &buffer.device;
-        let Some(busy) = exit_guard::enter() else {
-            return Err(Stop::Exiting);
-        };
-        let shared = device.shared();
-        let raw = shared.vk();
-        // SAFETY: the device's fences, inside a section.
-        let fence = unsafe { shared.fences.take(raw) }
-            .map_err(|error| Stop::Failed(submission_error(device, error)))?;
-        let queue = buffer.queue.vk_queue();
-        let submits = [vk::SubmitInfo::default().command_buffers(raws)];
-        shared.counts.queue_submitted(1, raws.len());
-        // SAFETY: the `VkQueue` is used under its lock; each command buffer was begun to be
-        // submitted again (the laying's) or recorded for this submission alone (a run again's),
-        // ended, and is in no pending submission: the laying's batch completed before the check's
-        // step, and each submission of a run again before the next; the fence is unsignaled and
-        // in no pending submission.
-        let submitted = shared.submit_logged(
-            (queue, None),
-            Some(fence),
-            &buffer.relayed,
-            |vk_queue| unsafe { raw.queue_submit(vk_queue, &submits, fence) },
-        );
-        exit_guard::called(Call::QueueSubmit);
-        if let Err(error) = submitted {
-            // SAFETY: a fence no submission took.
-            unsafe { crate::release::object(raw, fence) };
-            return Err(Stop::Failed(submission_error(device, error)));
+        // SAFETY: each command buffer was begun to be submitted again (the laying's) or recorded
+        // for this submission alone (a run again's), ended, and is in no pending submission: the
+        // laying's batch completed before the check's step, and each submission of a run again
+        // before the next.
+        match unsafe { submit_waited(buffer, raws) } {
+            Waited::Completed => Ok(()),
+            Waited::Relayed => Err(Stop::Relayed),
+            Waited::Failed(error) => Err(Stop::Failed(submission_error(&buffer.device, error))),
+            Waited::Exiting => Err(Stop::Exiting),
         }
-        drop(busy);
-        loop {
-            let Some(_busy) = exit_guard::enter() else {
-                return Err(Stop::Exiting);
-            };
-            // SAFETY: the device's fence, submitted above.
-            let waited =
-                unsafe { raw.wait_for_fences(&[fence], true, WAIT_SLICE.as_nanos() as u64) };
-            exit_guard::called(Call::WaitForFences);
-            match waited {
-                Ok(()) => break,
-                Err(vk::Result::TIMEOUT) => continue,
-                // The fence stays in the relay's log, as a failed batch's does, never released.
-                Err(error) => return Err(Stop::Failed(submission_error(device, error))),
-            }
-        }
+    }
+}
+
+/// How a submission the host waited for ended ([`submit_waited`]).
+pub(super) enum Waited {
+    Completed,
+    /// A failure the driver relayed for it: the command buffer fails with it at its completion.
+    Relayed,
+    /// Its submission or its wait failed so.
+    Failed(vk::Result),
+    /// The process is exiting: nothing more is done.
+    Exiting,
+}
+
+/// Submit `raws` (ended, in order) on `buffer`'s `VkQueue` and wait for them to complete, in
+/// slices: a predicated loop's run again ([`LoopCheck`]), a host step's probe of a rate-mapped
+/// pass (`rate_mapped_pass.rs`, **Fan-out**).
+///
+/// # Safety
+///
+/// Each of `raws` is a command buffer of `buffer`'s device, ended, in no pending submission, and
+/// begun to be submitted again or recorded for this submission alone; what it uses lives until
+/// it completes.
+pub(super) unsafe fn submit_waited(
+    buffer: &CommandBufferShared,
+    raws: &[vk::CommandBuffer],
+) -> Waited {
+    let device = &buffer.device;
+    let Some(busy) = exit_guard::enter() else {
+        return Waited::Exiting;
+    };
+    let shared = device.shared();
+    let raw = shared.vk();
+    // SAFETY: the device's fences, inside a section.
+    let fence = match unsafe { shared.fences.take(raw) } {
+        Ok(fence) => fence,
+        Err(error) => return Waited::Failed(error),
+    };
+    let queue = buffer.queue.vk_queue();
+    let submits = [vk::SubmitInfo::default().command_buffers(raws)];
+    shared.counts.queue_submitted(1, raws.len());
+    // SAFETY: the `VkQueue` is used under its lock; each command buffer is the caller's; the
+    // fence is unsignaled and in no pending submission.
+    let submitted = shared.submit_logged(
+        (queue, None),
+        Some(fence),
+        &buffer.relayed,
+        |vk_queue| unsafe { raw.queue_submit(vk_queue, &submits, fence) },
+    );
+    exit_guard::called(Call::QueueSubmit);
+    if let Err(error) = submitted {
+        // SAFETY: a fence no submission took.
+        unsafe { crate::release::object(raw, fence) };
+        return Waited::Failed(error);
+    }
+    drop(busy);
+    loop {
         let Some(_busy) = exit_guard::enter() else {
-            return Err(Stop::Exiting);
+            return Waited::Exiting;
         };
-        // Out of the relay's log before it goes back: its submission completed.
-        if let Some(flights) = shared.flights(queue) {
-            flights.let_go(fence);
+        // SAFETY: the device's fence, submitted above.
+        let waited = unsafe { raw.wait_for_fences(&[fence], true, WAIT_SLICE.as_nanos() as u64) };
+        exit_guard::called(Call::WaitForFences);
+        match waited {
+            Ok(()) => break,
+            Err(vk::Result::TIMEOUT) => continue,
+            // The fence stays in the relay's log, as a failed batch's does, never released.
+            Err(error) => return Waited::Failed(error),
         }
-        // SAFETY: the fence is signaled and its submission completed.
-        let reset = unsafe { raw.reset_fences(&[fence]) };
-        exit_guard::called(Call::ResetFences);
-        let mut fences = vec![fence];
-        match reset {
-            // SAFETY: unsignaled and in no pending submission; inside a section.
-            Ok(()) => unsafe { shared.fences.give(raw, &mut fences) },
-            Err(_) => {
-                // SAFETY: in no pending submission.
-                unsafe { crate::release::object(raw, fence) };
-            }
+    }
+    let Some(_busy) = exit_guard::enter() else {
+        return Waited::Exiting;
+    };
+    // Out of the relay's log before it goes back: its submission completed.
+    if let Some(flights) = shared.flights(queue) {
+        flights.let_go(fence);
+    }
+    // SAFETY: the fence is signaled and its submission completed.
+    let reset = unsafe { raw.reset_fences(&[fence]) };
+    exit_guard::called(Call::ResetFences);
+    let mut fences = vec![fence];
+    match reset {
+        // SAFETY: unsignaled and in no pending submission; inside a section.
+        Ok(()) => unsafe { shared.fences.give(raw, &mut fences) },
+        Err(_) => {
+            // SAFETY: in no pending submission.
+            unsafe { crate::release::object(raw, fence) };
         }
-        // A failure the driver relayed for it fails the command buffer at its completion.
-        match buffer.relayed.failure() {
-            Some(_) => Err(Stop::Relayed),
-            None => Ok(()),
-        }
+    }
+    // A failure the driver relayed for it fails the command buffer at its completion.
+    match buffer.relayed.failure() {
+        Some(_) => Waited::Relayed,
+        None => Waited::Completed,
     }
 }
 

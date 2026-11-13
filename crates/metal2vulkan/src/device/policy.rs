@@ -7,9 +7,10 @@ use std::time::Duration;
 /// Policy inputs of `Device::new`. Every field but `heap_compression`, `heap_answers`,
 /// `completion`, `batch_order`, `render_lowering`, `host_page_textures`, `pipeline_waits`,
 /// `pipeline_creation_wait`, `pipeline_commit_wait`, `wide_lines`, `extended_range_blits`,
-/// `queue_sharing`, `unshared_isolation`, `dont_care_colors`, `unstored_dont_care_loads` and
-/// `vertex_reach` can change emitted code, so the profile carries it (containment as the encoding
-/// it selects) and its fingerprint covers it; those sixteen are the runtime's alone (a heap's
+/// `queue_sharing`, `unshared_isolation`, `dont_care_colors`, `unstored_dont_care_loads`,
+/// `vertex_reach` and `rate_map_regions` can change emitted code, so the profile carries it
+/// (containment as the encoding it selects) and its fingerprint covers it; those seventeen are the
+/// runtime's alone (a heap's
 /// compressed texture's image, what a heap texture's size query answers, when the host sees a
 /// command buffer complete, how a batch begins after the earlier ones
 /// of its queue, where a render encoder's calls are lowered, what holds a sampled texture over host
@@ -17,9 +18,9 @@ use std::time::Duration;
 /// draw a wide line, what a blit through a compressed extended-range texture writes, which
 /// `VkQueue` a command queue submits to, how much of other queues' work goes ahead of an unshared
 /// queue's on a `VkQueue` they share, what a colour attachment stored `DontCare` keeps, what a pass
-/// reads of an attachment it loads `DontCare` and does not store, and which draws fetch a vertex
-/// layout in the shader where the device's fixed-function input would wrap past 4 GiB), and no
-/// profile carries them.
+/// reads of an attachment it loads `DontCare` and does not store, which draws fetch a vertex
+/// layout in the shader where the device's fixed-function input would wrap past 4 GiB, and how a
+/// rate-mapped pass's draws reach its regions), and no profile carries them.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -136,6 +137,12 @@ pub struct DevicePolicy {
     /// of 32-bit indices, an indirect draw. The runtime's choice alone: no emitted code of a
     /// pipeline changes, the pulled layouts being a variant of their own.
     pub vertex_reach: VertexReachPolicy,
+    /// Whether a rate-mapped pass's triangles that a host step records are drawn once, a
+    /// geometry stage fanning each out to the regions it touches where a probe of the draw found
+    /// it can (the default), or every draw recorded once per region of the map's plan. The
+    /// runtime's choice alone: no emitted code of a pipeline changes, the fan-out and its probe
+    /// being variants of their own.
+    pub rate_map_regions: RateMapRegionPolicy,
 }
 
 impl DevicePolicy {
@@ -150,8 +157,10 @@ impl DevicePolicy {
     /// `VkQueue`s where the device's GPU idles between work of different ones, other queues' work
     /// held to about 2 ms ahead of an unshared queue's on a `VkQueue` they share, a colour stored
     /// `DontCare` stored as the driver stores it, an attachment loaded `DontCare` and not stored
-    /// cleared where its driver clears it no slower, and a vertex layout pulled past a wrapping
-    /// fixed-function input only where the draw's own values reach past 4 GiB.
+    /// cleared where its driver clears it no slower, a vertex layout pulled past a wrapping
+    /// fixed-function input only where the draw's own values reach past 4 GiB, and a rate-mapped
+    /// pass's triangles a host step records fanned out to its regions where a probe finds they
+    /// can be.
     pub const UNTRUSTED: DevicePolicy = DevicePolicy {
         pointer_domain: PointerDomain::ResidentTable,
         handle_domain: HandleDomain::Table,
@@ -175,6 +184,7 @@ impl DevicePolicy {
         dont_care_colors: DontCareColorPolicy::Driver,
         unstored_dont_care_loads: UnstoredDontCarePolicy::Driver,
         vertex_reach: VertexReachPolicy::Bounded,
+        rate_map_regions: RateMapRegionPolicy::FanOut,
     };
 
     /// This policy with Metal's answer wherever the choices offer it: a heap's texture whose bytes
@@ -202,7 +212,8 @@ impl DevicePolicy {
     /// in a pass whose draws reach a tile ([`UnstoredDontCarePolicy::Cleared`]), and every vertex
     /// layout a draw may fetch past 4 GiB of its bind offset pulled where the device's
     /// fixed-function input wraps there, wherever the draw's reach is stated
-    /// ([`VertexReachPolicy::Exact`]). Every other field is kept, `unshared_isolation` among
+    /// ([`VertexReachPolicy::Exact`]), and every draw of a rate-mapped pass recorded once per
+    /// region ([`RateMapRegionPolicy::Exact`]). Every other field is kept, `unshared_isolation` among
     /// them: its default is the one nearer Metal's, whose queues do not wait for each other's
     /// whole command buffers.
     pub const fn exact_answers(self) -> DevicePolicy {
@@ -222,6 +233,7 @@ impl DevicePolicy {
             dont_care_colors: DontCareColorPolicy::Kept,
             unstored_dont_care_loads: UnstoredDontCarePolicy::Cleared,
             vertex_reach: VertexReachPolicy::Exact,
+            rate_map_regions: RateMapRegionPolicy::Exact,
             ..self
         }
     }
@@ -723,5 +735,29 @@ pub enum VertexReachPolicy {
     /// such a driver, so every element reads Metal's bytes. Such a draw runs the pipeline's
     /// pulled-vertex-buffer variant, one more pipeline beside the fixed-function one where the
     /// state also draws otherwise, and fetches those layouts in its vertex shader.
+    Exact,
+}
+
+/// How a rasterization-rate-mapped pass's draws reach the regions of the map's plan. Drawn region
+/// by region, a draw runs its vertex function once per region (a plan may hold thousands); fanned
+/// out, once, a geometry stage emitting a copy of each triangle for each region it touches, through
+/// one viewport over the whole target, clip distances keeping each copy to its region's pixels.
+/// A copy's window coordinates are the region viewport's computed in the geometry stage, so a
+/// pixel centre within a rounding error of a triangle's edge may be covered by one route and not
+/// the other. The runtime's choice alone: no emitted code of a pipeline changes, the fan-out and
+/// its probe being variants of their own (`VariantKey::region_fan_out`).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum RateMapRegionPolicy {
+    /// Fanned out (the default) where a host step records the draw (an execution whose records
+    /// the GPU writes) and the device has the fan-out's features: a probe of the step's draws,
+    /// submitted and waited for first, flags each draw a triangle of which crosses `w = 0` or
+    /// touches more regions than the fan-out's copies, and counts the copies of the others; a
+    /// flagged draw is drawn region by region, the others once each, fanned out. Every other draw
+    /// is drawn region by region.
+    #[default]
+    FanOut,
+    /// Every draw region by region, each region's through its own viewport and scissor.
     Exact,
 }

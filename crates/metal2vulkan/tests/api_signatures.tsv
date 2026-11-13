@@ -1460,6 +1460,7 @@ enum	metal2vulkan::device::Independence	#[cfg_attr(feature = "serde", derive(ser
 enum	metal2vulkan::device::PipelineWaitPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PipelineWaitPolicy
 enum	metal2vulkan::device::PointerDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PointerDomain
 enum	metal2vulkan::device::QueueSharingPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum QueueSharingPolicy
+enum	metal2vulkan::device::RateMapRegionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RateMapRegionPolicy
 enum	metal2vulkan::device::RenderLoweringPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderLoweringPolicy
 enum	metal2vulkan::device::ResolveMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ResolveMode
 enum	metal2vulkan::device::Robustness	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Robustness
@@ -3209,11 +3210,15 @@ field	metal2vulkan-runtime::WorkCounts.queue_switch_checks_recalled	pub queue_sw
 field	metal2vulkan-runtime::WorkCounts.queue_switch_checks_run	pub queue_switch_checks_run: u64
 field	metal2vulkan-runtime::WorkCounts.queues_gone_long	pub queues_gone_long: u64
 field	metal2vulkan-runtime::WorkCounts.queues_sharing_a_vk_queue	pub queues_sharing_a_vk_queue: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_fanned_draws	pub rate_map_fanned_draws: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_flagged_draws	pub rate_map_flagged_draws: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_index_ranges	pub rate_map_index_ranges: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_piece_gpu_nanos	pub rate_map_piece_gpu_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_piece_gpu_nanos_most	pub rate_map_piece_gpu_nanos_most: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_pieces	pub rate_map_pieces: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_pieces_timed	pub rate_map_pieces_timed: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_probe_gpu_nanos	pub rate_map_probe_gpu_nanos: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_probes	pub rate_map_probes: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_by_coverage	pub reading_draws_by_coverage: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_in_place	pub reading_draws_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_pinned	pub reading_draws_pinned: u64
@@ -4287,6 +4292,7 @@ field	metal2vulkan::device::DevicePolicy.pipeline_creation_wait	pub pipeline_cre
 field	metal2vulkan::device::DevicePolicy.pipeline_waits	pub pipeline_waits: PipelineWaitPolicy
 field	metal2vulkan::device::DevicePolicy.pointer_domain	pub pointer_domain: PointerDomain
 field	metal2vulkan::device::DevicePolicy.queue_sharing	pub queue_sharing: QueueSharingPolicy
+field	metal2vulkan::device::DevicePolicy.rate_map_regions	pub rate_map_regions: RateMapRegionPolicy
 field	metal2vulkan::device::DevicePolicy.render_lowering	pub render_lowering: RenderLoweringPolicy
 field	metal2vulkan::device::DevicePolicy.unshared_isolation	pub unshared_isolation: UnsharedIsolationPolicy
 field	metal2vulkan::device::DevicePolicy.unstored_dont_care_loads	pub unstored_dont_care_loads: UnstoredDontCarePolicy
@@ -13477,6 +13483,8 @@ variant	metal2vulkan::device::PipelineWaitPolicy::Exact	Exact
 variant	metal2vulkan::device::PointerDomain::ResidentTable	ResidentTable
 variant	metal2vulkan::device::QueueSharingPolicy::Adaptive	Adaptive
 variant	metal2vulkan::device::QueueSharingPolicy::PerQueue	PerQueue
+variant	metal2vulkan::device::RateMapRegionPolicy::Exact	Exact
+variant	metal2vulkan::device::RateMapRegionPolicy::FanOut	FanOut
 variant	metal2vulkan::device::RenderLoweringPolicy::AtCall	AtCall
 variant	metal2vulkan::device::RenderLoweringPolicy::Worker	Worker
 variant	metal2vulkan::device::ResolveMode::Average	Average

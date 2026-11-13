@@ -839,7 +839,7 @@ impl RenderLowering {
                 PrivateForm::default(),
                 ProvokingForms::default(),
                 &far.pulled,
-                false,
+                (false, None),
             ),
             (&pass_start, &sampler_maps),
             (&mut argument_samplers, &mut None),

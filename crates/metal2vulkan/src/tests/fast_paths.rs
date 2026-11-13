@@ -8,8 +8,9 @@
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DevicePolicy, DontCareColorPolicy, ExtendedRangeBlitPolicy,
     HalfChainPolicy, HeapAnswerPolicy, HeapCompressionPolicy, HostPageTexturePolicy,
-    PipelineWaitPolicy, QueueSharingPolicy, RenderLoweringPolicy, UnsharedIsolationPolicy,
-    UnstoredDontCarePolicy, VertexReachPolicy, WideLinePolicy, YCbCrInPlacePolicy,
+    PipelineWaitPolicy, QueueSharingPolicy, RateMapRegionPolicy, RenderLoweringPolicy,
+    UnsharedIsolationPolicy, UnstoredDontCarePolicy, VertexReachPolicy, WideLinePolicy,
+    YCbCrInPlacePolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -68,8 +69,8 @@ fn choices() -> Vec<Choice> {
         // blit through a compressed extended-range texture writes, which `VkQueue` a command
         // queue submits to, how much of other queues' work goes ahead of an unshared queue's, what
         // a colour attachment stored `DontCare` keeps, what a pass reads of an attachment it loads
-        // `DontCare` and does not store, and which draws pull a vertex layout past a wrapping
-        // fixed-function input.
+        // `DontCare` and does not store, which draws pull a vertex layout past a wrapping
+        // fixed-function input, and how a rate-mapped pass's draws reach its regions.
         heap_compression: _,
         heap_answers: _,
         completion: _,
@@ -86,6 +87,7 @@ fn choices() -> Vec<Choice> {
         dont_care_colors: _,
         unstored_dont_care_loads: _,
         vertex_reach: _,
+        rate_map_regions: _,
         // The translator's: how a `half` chain rounds without `shaderFloat16`, and how planes of a
         // two-plane YCbCr texture read in place are sampled.
         half_chains: _,
@@ -108,6 +110,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.dont_care_colors: DontCareColorPolicy { Driver, Kept }),
         choice!(p.unstored_dont_care_loads: UnstoredDontCarePolicy { Driver, Cleared }),
         choice!(p.vertex_reach: VertexReachPolicy { Bounded, Exact }),
+        choice!(p.rate_map_regions: RateMapRegionPolicy { FanOut, Exact }),
     ]
 }
 
@@ -743,6 +746,39 @@ fn exact_answers_pull_every_stated_reach_past_a_wrapping_fetch() {
     assert_eq!(
         DevicePolicy::UNTRUSTED.exact_answers().vertex_reach,
         VertexReachPolicy::Exact
+    );
+}
+
+/// The runtime's choice of how a rate-mapped pass's draws reach its regions (`rate_map_regions`)
+/// moves no committed profile's fingerprint: no profile carries it, the fan-out and its probe
+/// being variants of their own.
+#[test]
+fn the_runtime_s_rate_map_regions_choice_keys_no_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let fan_out = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let exact = committed_profiles_with(DevicePolicy {
+        rate_map_regions: RateMapRegionPolicy::Exact,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(fan_out.len(), exact.len());
+    for ((stem, f), (other, e)) in fan_out.iter().zip(&exact) {
+        assert_eq!(stem, other);
+        assert_eq!(f.fingerprint(), e.fingerprint(), "{stem}");
+    }
+}
+
+/// `DevicePolicy::exact_answers()` draws every draw of a rate-mapped pass region by region, and
+/// the default fans a host step's triangles out where its probe finds they can be.
+#[test]
+fn exact_answers_draw_every_rate_mapped_draw_region_by_region() {
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.rate_map_regions,
+        RateMapRegionPolicy::FanOut
+    );
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.exact_answers().rate_map_regions,
+        RateMapRegionPolicy::Exact
     );
 }
 

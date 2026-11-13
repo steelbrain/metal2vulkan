@@ -2530,6 +2530,25 @@ impl CommandBuffer {
         &self.0.root
     }
 
+    /// Submit `raws`, ended, in order, on its `VkQueue`, and wait for them to complete: a host
+    /// step's own submission, its probe of a rate-mapped pass's draws (`rate_mapped_pass.rs`,
+    /// **Fan-out**), as a predicated loop's run again's (`rerun.rs`). Whether they completed:
+    /// `false` where the driver relayed a failure for them, which fails the command buffer at its
+    /// completion, or the process is exiting.
+    ///
+    /// # Safety
+    ///
+    /// Each of `raws` is a command buffer of its pool, ended, in no pending submission, and
+    /// recorded for this submission alone; what it uses lives until it completes.
+    pub(crate) unsafe fn submit_waited(&self, raws: &[vk::CommandBuffer]) -> Result<bool, Error> {
+        // SAFETY: the caller's.
+        match unsafe { rerun::submit_waited(&self.0, raws) } {
+            rerun::Waited::Completed => Ok(true),
+            rerun::Waited::Relayed | rerun::Waited::Exiting => Ok(false),
+            rerun::Waited::Failed(error) => Err(self.device().failed(error)),
+        }
+    }
+
     /// Its queue's place on the generation it was made on, which its commands' pools and kept
     /// images are of (`queue.rs`).
     pub(crate) fn queue_place(&self) -> &QueueGen {

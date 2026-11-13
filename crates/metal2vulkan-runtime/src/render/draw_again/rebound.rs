@@ -934,6 +934,7 @@ impl RenderLowering {
             blobs: Vec::new(),
             mesh: None,
             tessellation: None,
+            fan_out: None,
         };
         // Set 0's writes and dynamic offsets: a draw moved whose descriptor ranges are the kept
         // draw's binds the same buffers over the same ranges (`binding::rebind_into` writes a
