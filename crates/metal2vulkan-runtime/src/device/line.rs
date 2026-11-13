@@ -16,10 +16,10 @@
 //!   [`Device::at_serving_taking`]). A *generation* handle holds one generation: the device of
 //!   every object made on it (a buffer's, a pipeline state's), through which the object's Vulkan
 //!   calls reach its own `VkDevice` alone, its drop included. So no object's Vulkan handle ever
-//!   reaches another generation's `VkDevice`: the recovery carries the program's events, `Private`
-//!   buffers and buffers in fresh pages to the new generation, each with new Vulkan objects there
-//!   (`carry.rs`), and any other object made before it is refused where it meets the new
-//!   generation (`RuntimeGap::MadeBeforeRecovery`, `error.rs`).
+//!   reaches another generation's `VkDevice`: the recovery carries the program's objects of the
+//!   kinds `carry.rs` lists to the new generation, each the same object with its own parts there,
+//!   and any other object made before it is refused where it meets the new generation
+//!   (`RuntimeGap::MadeBeforeRecovery`, `error.rs`).
 //! - **The states.** [`State`]: the line serves one generation (`Live`); once it is lost, the
 //!   first call that needs the device recovers it (`Lost`, then claimed), while every other call
 //!   waits for that recovery, the first to wait past [`RECOVERY_NOTICE`] announcing it and waiting
@@ -609,11 +609,10 @@ impl Device {
     /// its queue as Metal counts a hang, so a queue's second revokes it, `AccessRevoked`) and the
     /// rest as its victims (`GpuRecoveryVictim`); the runtime makes a new `VkDevice` of the same
     /// physical device, options, queue families and extensions, and every later call of the
-    /// device, and of its command queues, goes to it. The events, `Private` buffers and buffers in
-    /// the runtime's own pages made before go on there (`device/carry.rs`); any other object made
-    /// before is
-    /// refused where it meets it (`RuntimeGap::MadeBeforeRecovery`). Announced
-    /// (`Degradation::DeviceRecovered`).
+    /// device, and of its command queues, goes to it. The objects made before of the kinds the
+    /// recovery carries go on there as the same objects (`device/carry.rs` lists the kinds); any
+    /// other object made before is refused where it meets it (`RuntimeGap::MadeBeforeRecovery`).
+    /// Announced (`Degradation::DeviceRecovered`).
     /// Returns once the new `VkDevice` serves; where it could not be made, `DeviceLost`, and the
     /// device answers as a lost one from then on.
     ///

@@ -2144,13 +2144,14 @@ pub enum RuntimeGap {
     /// textures of `Device::new_texture` (their contents lost), those over the buffers it carried
     /// (reading the buffers' bytes) and the views of either; and the pipeline states (their base
     /// variants made again there from what their creations compiled; a bind of one whose making
-    /// there failed is refused, `RemadeAfterRecoveryFailed`). Every other object's Vulkan objects
+    /// there failed is refused, `RemadeAfterRecoveryFailed`); and the sampler states (their
+    /// `VkSampler`s made there as their binds need them). Every other object's Vulkan objects
     /// are the lost `VkDevice`'s, which serves nothing more: a pooled `Shared` or `Managed` buffer
     /// in memory the device allocated, whose `contents` pointer is its lost memory's mapping, a
     /// detached no-copy buffer, a `Shared`, no-copy or sparse heap and the buffers placed in it, a
     /// heap's texture or one over a heap's buffer, a texture over the caller's `VkImage`, a sparse
-    /// or shareable texture, a texture over a buffer left, a view of any of them, a sampler state,
-    /// an indirect command buffer, a buffer over the caller's `VkBuffer` or in exportable memory,
+    /// or shareable texture, a texture over a buffer left, a view of any of them, an indirect
+    /// command buffer, a buffer over the caller's `VkBuffer` or in exportable memory,
     /// and an event made exportable. A call that meets such an object with the new generation (an
     /// encoder's bind, a pipeline's making from its functions, a buffer or texture placed in its
     /// heap) or that needs its own lost `VkDevice` (its placements, its imports again, its event

@@ -85,8 +85,17 @@
 //! reduction, anisotropy, or through an argument buffer, the dispatch or draw that samples through
 //! it is refused `NotImplemented(SamplerBicubicFilter)`: Metal's level rule through it is not
 //! modelled, and the others are not measured.
+//!
+//! **Across a recovery** (`device/carry.rs`). A state is the same state on the generation its
+//! device's recovery made ([`SamplerState::carry`]): its descriptor, ID and element, held line-wide,
+//! go on, and it is placed there as at its making, in every heap set and sampler table and in the
+//! map of live states an equal request shares. A bind makes its Vulkan samplers on the generation
+//! it writes for, and keeps them for the generation the state was carried to last alone: a write
+//! of another generation's (a command buffer of the lost one, recording after the carry) holds the
+//! neutral sampler, as that command buffer fails as its device's lost one does.
 
 use super::degradation::Degradation;
+use super::device::carry::{LineDevice, LostParts};
 use super::device::lock;
 use super::error::{Error, SamplerLimit};
 use super::exit_guard;
@@ -107,6 +116,7 @@ use metal2vulkan::metal::{
 };
 use std::any::Any;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::hash::{BuildHasher, BuildHasherDefault, Hash, Hasher};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -458,6 +468,11 @@ impl<T> KeptSamplers<T> {
         );
     }
 
+    /// Forget every sampler kept: handed back, to drop once the cache's lock is free.
+    fn forget_all(&mut self) -> Vec<Arc<T>> {
+        self.kept.drain().map(|(_, kept)| kept.sampler).collect()
+    }
+
     /// The samplers kept now.
     #[cfg(test)]
     pub(super) fn samplers_kept(&self) -> usize {
@@ -594,13 +609,44 @@ impl Drop for OwnedSampler {
     }
 }
 
+/// A carried sampler state's placement on a lost generation, in its heap sets and sampler tables
+/// (`heap_sets.rs`), taken out once none of the generation's command buffers may record, as the
+/// state's going takes it out (`heap_sets::sampler_gone`): the Vulkan samplers its sets hold at the
+/// state's element go, and with them their holds of the lost generation.
+struct LostPlacement {
+    device: Device,
+    id: u64,
+    serial: u64,
+    element: u64,
+}
+
+impl LostParts for LostPlacement {
+    fn release(self: Box<Self>) {
+        let LostPlacement {
+            device,
+            id,
+            serial,
+            element,
+        } = *self;
+        // As the state's going: one without an ID was placed nowhere.
+        if id != 0 {
+            super::heap_sets::sampler_gone(&device, id, serial, element);
+        }
+    }
+}
+
 /// A Metal sampler state (`MTLSamplerState`). Cheap to clone (a retain); `Send + Sync`. Two
 /// handles are equal when they are the same state.
 #[derive(Clone)]
 pub struct SamplerState(Arc<SamplerShared>);
 
 pub(super) struct SamplerShared {
-    device: Device,
+    /// The device: the generation the state was made on, then each one its device's recoveries
+    /// carried it to ([`SamplerState::carry`]), which its binds are checked against.
+    device: LineDevice,
+    /// What an equal request shares the state by ([`SamplerKey`]): the map of live states of each
+    /// generation it is carried to holds it so.
+    key: SamplerKey,
     /// The descriptor the state samples with ([`taken_descriptor`]).
     descriptor: SamplerDescriptor,
     /// Its binds add its LOD bias to every sample's level: the device presents a Mac with an
@@ -610,7 +656,8 @@ pub(super) struct SamplerShared {
     id: IdHold,
     /// The state's element of the set-1 sampler arrays (`resource_ids.rs`).
     element: ElementHold,
-    /// The Vulkan samplers made for binds, by their description ([`KeptSamplers`]).
+    /// The Vulkan samplers made for binds on the generation it was carried to last, by their
+    /// description ([`KeptSamplers`]).
     kept: Mutex<KeptSamplers<OwnedSampler>>,
     /// The encoder core that holds it from an argument table's retain (`retained::HeldBy`).
     held_by: HeldBy,
@@ -627,7 +674,7 @@ impl Drop for SamplerShared {
         let id = self.id.id().0;
         if id != 0 {
             super::heap_sets::sampler_gone(
-                &self.device,
+                self.device.generation(),
                 id,
                 self.id.serial(),
                 self.element.element(),
@@ -829,7 +876,8 @@ impl Device {
         let id = IdHold::take(&shared.resource_ids, IdSpace::Sampler, options.placement);
         let element = ElementHold::take(&shared.resource_ids);
         let state = SamplerState(Arc::new(SamplerShared {
-            device: self.clone(),
+            device: LineDevice::unkept(self),
+            key,
             descriptor: taken,
             lod_bias,
             id,
@@ -844,6 +892,11 @@ impl Device {
         drop(live);
         // Every heap set holds it, and the sampler tables map its ID to it (`heap_sets.rs`).
         super::heap_sets::place_sampler(self, &state);
+        // Kept for the device's recovery to carry, or carried now where a recovery took the
+        // generation's objects before.
+        if shared.carry.sampler_state(&state) {
+            self.carry_late(|serving| Ok::<_, Infallible>(state.carry(serving)));
+        }
         let id = hold.id().0;
         let element = state.heap_element();
         // A device with no set-1 sampler array refuses every function reading one, so no array
@@ -976,9 +1029,12 @@ impl SamplerState {
         &self.0.held_by
     }
 
-    /// `device`: the device that made the state.
+    /// `device`: a generation handle of the device: of the generation the state was made on, then
+    /// of each one the device's recoveries carried the state to. A handle taken of it keeps
+    /// meaning that generation: its raw handles are that generation's `VkDevice`'s, kept alive
+    /// while held.
     pub fn device(&self) -> &Device {
-        &self.0.device
+        self.0.device.generation()
     }
 
     /// `gpuResourceID`: what an argument buffer holds to name the state (`resource_ids.rs`).
@@ -1037,18 +1093,28 @@ impl SamplerState {
         !self.0.descriptor.normalized_coordinates
     }
 
-    /// The Vulkan sampler of `desc` (one of this state's binds, its view mapping included): the
-    /// one the state keeps, else a new one, kept once the cache has room for it ([`KeptSamplers`],
-    /// at most [`KEPT`] and at most as many as the device allows live). Where the device already
-    /// holds as many samplers as it allows, one this state keeps that no command buffer holds goes
-    /// to make room, else a released variant's kept instance that holds immutable samplers
-    /// (`pipeline/kept.rs`); `Error::SamplerLimit` is the answer only where every one it keeps is
-    /// held and no kept instance holds one ([`SamplerCount`]).
-    pub(super) fn vk_sampler(&self, desc: &HashedDesc) -> Result<Arc<OwnedSampler>, Error> {
-        let device = &self.0.device;
+    /// The Vulkan sampler of `desc` (one of this state's binds, its view mapping included) on
+    /// `device`, the generation the bind writes for: the one the state keeps, else a new one,
+    /// kept once the cache has room for it ([`KeptSamplers`], at most [`KEPT`] and at most as many
+    /// as the device allows live). Where the device already holds as many samplers as it allows,
+    /// one this state keeps that no command buffer holds goes to make room, else a released
+    /// variant's kept instance that holds immutable samplers (`pipeline/kept.rs`);
+    /// `Error::SamplerLimit` is the answer only where every one it keeps is held and no kept
+    /// instance holds one ([`SamplerCount`]). `None` where `device` is not the generation the
+    /// state was carried to last: the bind writes the neutral sampler (the module docs). Read
+    /// under the cache's lock, which the state's carry forgets the lost generation's under.
+    pub(super) fn vk_sampler(
+        &self,
+        device: &Device,
+        desc: &HashedDesc,
+    ) -> Result<Option<Arc<OwnedSampler>>, Error> {
         let mut kept = lock(&self.0.kept);
+        // The generation the sampler would be made on, a root handle's the one serving.
+        if !std::ptr::eq(self.0.device.generation().shared(), device.shared()) {
+            return Ok(None);
+        }
         if let Some(sampler) = kept.found(desc) {
-            return Ok(sampler);
+            return Ok(Some(sampler));
         }
         kept.make_room(KEPT.min(device.shared().sampler_count.limit() as usize));
         let mut reduction = vk::SamplerReductionModeCreateInfo::default();
@@ -1079,7 +1145,48 @@ impl SamplerState {
             raw,
         });
         kept.keep(*desc, &sampler);
-        Ok(sampler)
+        Ok(Some(sampler))
+    }
+
+    /// Carry the state, made on a generation of its device that a recovery leaves, to `to`, the
+    /// generation that recovery made (the module docs): its handle of the device linked to `to`'s,
+    /// the Vulkan samplers it kept forgotten, and the state placed there as at its making, then
+    /// kept there for a later recovery to carry on. Its placement on the lost generation goes at
+    /// that generation's rest ([`LostPlacement`]). `None` where it was carried there already;
+    /// `Some(false)` where it stays the lost generation's, `to` compiling otherwise than it
+    /// (`pipeline/carry.rs`'s `compiles_alike`): its binds there are refused
+    /// (`MadeBeforeRecovery`).
+    pub(crate) fn carry(&self, to: &Device) -> Option<bool> {
+        let shared = &self.0;
+        let from = shared.device.generation().clone();
+        if from.same(to) {
+            return None;
+        }
+        if !crate::pipeline::carry::compiles_alike(&from, to) {
+            return Some(false);
+        }
+        // Linked under the cache's lock, which a bind reads the state's generation under: no
+        // bind keeps a sampler of the lost generation from now on, nor finds one (`vk_sampler`).
+        let (handle, forgotten) = {
+            let mut kept = lock(&shared.kept);
+            let handle = shared.device.link_unkept(to)?;
+            (handle, kept.forget_all())
+        };
+        drop(forgotten);
+        from.shared().carry.lost(from.shared(), handle);
+        lock(&to.shared().samplers).keep(shared.key, shared);
+        super::heap_sets::place_sampler(to, self);
+        let placement = LostPlacement {
+            device: from.clone(),
+            id: shared.id.id().0,
+            serial: shared.id.serial(),
+            element: shared.element.element(),
+        };
+        from.shared().carry.lost(from.shared(), Box::new(placement));
+        if to.shared().carry.sampler_state(self) {
+            to.carry_late(|serving| Ok::<_, Infallible>(self.carry(serving)));
+        }
+        Some(true)
     }
 
     /// What its cache of Vulkan samplers has done ([`KeptCounts`]), and how many it keeps now: the

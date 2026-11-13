@@ -2019,7 +2019,11 @@ fn image_descriptor(
                 desc
             }
         };
-        let owned = state.vk_sampler(&desc)?;
+        // A state its device's recovery carried past this generation: the neutral
+        // (`sampler.rs`).
+        let Some(owned) = state.vk_sampler(device, &desc)? else {
+            return device.neutral_sampler(use_.compare);
+        };
         let raw = owned.raw();
         samplers.push(owned);
         Ok::<_, Error>(raw)
@@ -2212,9 +2216,16 @@ fn image_descriptor(
                     None,
                 )
                 .map_err(Error::Bind)?;
-                let owned = state.vk_sampler(&HashedDesc::new(desc))?;
-                let raw = owned.raw();
-                samplers.push(owned);
+                let raw = match state.vk_sampler(device, &HashedDesc::new(desc))? {
+                    Some(owned) => {
+                        let raw = owned.raw();
+                        samplers.push(owned);
+                        raw
+                    }
+                    // A state its device's recovery carried past this generation
+                    // (`sampler.rs`).
+                    None => device.neutral_sampler(*compare)?,
+                };
                 vk::DescriptorImageInfo::default().sampler(raw)
             }
             // An element past the listed states: no handle names it.

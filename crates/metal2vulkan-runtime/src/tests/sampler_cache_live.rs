@@ -27,7 +27,8 @@ fn a_streaming_states_samplers_are_made_once_and_found_at_every_bind_after() {
     assert_eq!(stream.len(), 128, "the state's streaming descriptions");
     for _ in 0..4 {
         for desc in &stream {
-            state.vk_sampler(desc).expect("a Vulkan sampler");
+            (state.vk_sampler(&device, desc).expect("a Vulkan sampler"))
+                .expect("of the state's generation");
         }
     }
     assert_eq!(

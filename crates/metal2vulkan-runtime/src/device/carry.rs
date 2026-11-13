@@ -2,8 +2,8 @@
 //! uses of guest RAM, its no-copy buffers, the buffers of the runtime's memory whose bytes no
 //! pointer of the program's reaches or whose pages the runtime owns, its `Private` heaps with
 //! the buffers placed in them, its textures made by a call the recovery makes again
-//! (`texture/carry.rs`), and its pipeline states (`pipeline/carry.rs`), each the
-//! same object on the new `VkDevice`, as Metal keeps its objects across its GPU's recovery. A fence, a depth/stencil state, a library, a function, an address
+//! (`texture/carry.rs`), its pipeline states (`pipeline/carry.rs`) and its sampler states
+//! (`sampler.rs`), each the same object on the new `VkDevice`, as Metal keeps its objects across its GPU's recovery. A fence, a depth/stencil state, a library, a function, an address
 //! pool, a dynamic library and a binary archive hold no Vulkan object (`fence.rs`,
 //! `depth_stencil.rs`, `library.rs`, `address_pool.rs`, `dynamic_library.rs`, `binary_archive`):
 //! the recovery carries their handle of the device alone ([`LineDevice`]).
@@ -60,7 +60,13 @@
 //!   alike (`PipelineMemo::carry_from`), where alone a state is made again; its identity, ID,
 //!   `uniqueIdentifier` and label kept (`ComputePipelineState::carry`, `GraphicsState::carry`).
 //!   One whose making there failed stays the lost generation's, refused where bound
-//!   (`RuntimeGap::RemadeAfterRecoveryFailed`).
+//!   (`RuntimeGap::RemadeAfterRecoveryFailed`). A sampler state, first after the handles: its
+//!   handle of the device linked to the new generation's, the `VkSampler`s it kept forgotten (its
+//!   binds make them there as they need them), and the state placed there as at its making, in
+//!   every heap set and sampler table and in the map of live states an equal request shares; its
+//!   descriptor, resource ID and element kept (`SamplerState::carry`), its placement on the lost
+//!   generation taken out at that generation's rest. Where the generations compile otherwise, it
+//!   stays the lost generation's.
 //! - **The bytes kept are the pages'.** A buffer or texture carried with its contents reads the
 //!   pages it lies in, imported again. Vulkan makes the content of external memory imported to a
 //!   lost device undefined (vkspec 5.2.3, "Lost Device"): read here as the hung work's writes,
@@ -132,6 +138,7 @@ use crate::pipeline::{
 };
 use crate::queue::Slots;
 use crate::resource::ObjectId;
+use crate::sampler::{SamplerShared, SamplerState};
 use crate::texture::carry::{Remade, TextureLeft, WeakTexture};
 use crate::texture::Texture;
 use crate::Error;
@@ -188,6 +195,8 @@ struct State {
     /// The program's drawing states, mesh ones and twins among them (`pipeline/render/carry.rs`),
     /// held weakly.
     render_states: Vec<WeakRenderPipelineState>,
+    /// The program's sampler states (`sampler.rs`), held weakly.
+    samplers: Vec<Weak<SamplerShared>>,
     /// The size at which the next keeping drops the gone events' entries.
     prune_at: usize,
     /// The size at which the next keeping drops the gone textures' entries.
@@ -198,6 +207,8 @@ struct State {
     states_prune_at: usize,
     /// The size at which the next keeping drops the gone drawing states' entries.
     render_states_prune_at: usize,
+    /// The size at which the next keeping drops the gone sampler states' entries.
+    samplers_prune_at: usize,
     /// The recovery took the generation's objects ([`Carry::take`]): what is kept from now on,
     /// its maker carries.
     taken: bool,
@@ -247,6 +258,7 @@ pub(crate) struct Taken {
     links: Vec<Arc<GenerationLink>>,
     compute_states: Vec<ComputePipelineState>,
     render_states: Vec<GraphicsState>,
+    samplers: Vec<SamplerState>,
 }
 
 impl Carry {
@@ -340,6 +352,18 @@ impl Carry {
         state_list.taken
     }
 
+    /// Keep `state`, a sampler state made or carried here (`sampler.rs`): as
+    /// [`compute_state`](Self::compute_state).
+    pub(crate) fn sampler_state(&self, state: &SamplerState) -> bool {
+        let mut state_list = lock(&self.state);
+        if state_list.samplers.len() >= state_list.samplers_prune_at {
+            state_list.samplers.retain(|state| state.strong_count() > 0);
+            state_list.samplers_prune_at = (2 * state_list.samplers.len()).max(PRUNE_FLOOR);
+        }
+        state_list.samplers.push(state.downgrade());
+        state_list.taken
+    }
+
     /// Keep `link`, this generation's handle of the device an object holding no Vulkan object
     /// answers ([`LineDevice`]): as [`event`](Self::event), its gone entries dropped as the
     /// registry grows.
@@ -376,6 +400,9 @@ impl Carry {
                 .collect(),
             render_states: (state.render_states.iter())
                 .filter_map(WeakRenderPipelineState::graphics)
+                .collect(),
+            samplers: (state.samplers.iter())
+                .filter_map(SamplerState::upgrade)
                 .collect(),
         }
     }
@@ -594,6 +621,8 @@ pub(crate) struct Carried {
     textures_left: [u64; 7],
     /// The pipeline states made again there, and those whose making there failed.
     states: (u64, u64),
+    /// The sampler states carried, and those left the lost generation's: it compiles otherwise.
+    samplers: (u64, u64),
 }
 
 impl Carried {
@@ -647,6 +676,12 @@ impl Carried {
                 (ram_uses_left > 0)
                     .then(|| format!("{ram_uses_left} guest RAM uses the new device refused")),
             )
+            .chain((self.samplers.1 > 0).then(|| {
+                format!(
+                    "{} sampler states of a device that compiles otherwise",
+                    self.samplers.1
+                )
+            }))
             .collect::<Vec<_>>()
             .join(", ");
         let ram = match ram_uses {
@@ -677,10 +712,14 @@ impl Carried {
                  `RemadeAfterRecoveryFailed`)"
             ),
         };
+        let samplers = match self.samplers.0 {
+            0 => String::new(),
+            carried => format!(", and {carried} sampler states"),
+        };
         format!(
             "it carried {} events, {ram}{} buffers with their contents and {lost} `Private` \
              buffers ({lost_bytes} bytes) whose contents were lost (they read zero){heaps}\
-             {textures}{states}; left refused (`MadeBeforeRecovery`): {left}",
+             {textures}{states}{samplers}; left refused (`MadeBeforeRecovery`): {left}",
             self.events, self.kept
         )
     }
@@ -727,6 +766,15 @@ impl Carried {
         }
     }
 
+    /// One sampler state's carry.
+    fn sampler(&mut self, carried: Option<bool>) {
+        match carried {
+            Some(true) => self.samplers.0 += 1,
+            Some(false) => self.samplers.1 += 1,
+            None => {}
+        }
+    }
+
     /// One event's carry.
     fn event(&mut self, carried: Result<(), Error>) {
         match carried {
@@ -759,9 +807,15 @@ impl Device {
             links,
             compute_states,
             render_states,
+            samplers,
         } = shared.carry.take(shared);
         for link in &links {
             link.carry(next);
+        }
+        let mut carried = Carried::default();
+        // The sampler states: each placed there as at its making (`sampler.rs`).
+        for state in &samplers {
+            carried.sampler(state.carry(next));
         }
         // The lost generation's compiled functions and pipelines, the next's too where both
         // compile alike: a creation there, or a state's remaking, translates nothing again.
@@ -771,7 +825,6 @@ impl Device {
                 .memo
                 .carry_from(&shared.shader_cache.memo);
         }
-        let mut carried = Carried::default();
         for event in &events {
             carried.event(event.carry(next));
         }
@@ -916,6 +969,16 @@ impl LineDevice {
         }
     }
 
+    /// The device of an object made on `made_on` whose own carry carries its handle, as it does
+    /// more there than carry the handle (a sampler state, `sampler.rs`): as [`new`](Self::new),
+    /// kept by no registry ([`link_unkept`](Self::link_unkept)).
+    pub(crate) fn unkept(made_on: &Device) -> LineDevice {
+        LineDevice {
+            root: made_on.root(),
+            first: GenerationLink::unkept(made_on),
+        }
+    }
+
     /// The root handle: of whatever generation serves, as the object is no generation's.
     pub(crate) fn root(&self) -> &Device {
         &self.root
@@ -924,11 +987,28 @@ impl LineDevice {
     /// The generation handle of the generation the object was carried to last, else of the one
     /// it was made on.
     pub(crate) fn generation(&self) -> &Device {
+        &self.last().device
+    }
+
+    /// The link of the generation the object was carried to last, else of the one it was made on.
+    fn last(&self) -> &Arc<GenerationLink> {
         let mut link = &self.first;
         while let Some(next) = link.next.get() {
             link = next;
         }
-        &link.device
+        link
+    }
+
+    /// Link an [`unkept`](Self::unkept) handle to `to`, the generation a recovery made, after the
+    /// last: the lost generation's handle, to hand that generation's registry (`Carry::lost`) with
+    /// no lock of the object's held, which lets go of it at the generation's rest. `None` where it
+    /// was linked there already, or another carry linked one first.
+    pub(crate) fn link_unkept(&self, to: &Device) -> Option<Box<dyn LostParts>> {
+        let last = self.last();
+        if last.device.same(to) || last.next.set(GenerationLink::unkept(to)).is_err() {
+            return None;
+        }
+        Some(Box::new(LostHandle(Arc::clone(last))))
     }
 }
 
@@ -942,10 +1022,7 @@ impl GenerationLink {
     /// `device`'s handle, a generation handle, kept by its generation's registry; carried by
     /// this maker where that generation's recovery took its objects before.
     fn kept(device: &Device) -> Arc<GenerationLink> {
-        let link = Arc::new(GenerationLink {
-            device: MadeOn::new(device.clone()),
-            next: OnceLock::new(),
-        });
+        let link = GenerationLink::unkept(device);
         if device.shared().carry.link(&link) {
             device.carry_late(|serving| {
                 link.carry(serving);
@@ -953,6 +1030,14 @@ impl GenerationLink {
             });
         }
         link
+    }
+
+    /// `device`'s handle, a generation handle, kept by no registry.
+    fn unkept(device: &Device) -> Arc<GenerationLink> {
+        Arc::new(GenerationLink {
+            device: MadeOn::new(device.clone()),
+            next: OnceLock::new(),
+        })
     }
 
     /// Carry the handle to `to`, the generation this one's recovery made: `to`'s handle linked
@@ -979,8 +1064,8 @@ struct LostHandle(Arc<GenerationLink>);
 impl LostParts for LostHandle {
     fn release(self: Box<Self>) {
         // SAFETY: its next link is set, so the object's device answers a later generation's handle
-        // (`LineDevice::generation`), and its own calls and checks go through its root handle: no
-        // reach of the object reads this handle any more.
+        // (`LineDevice::generation`), and its own calls and checks go through its root handle or
+        // that later one: no reach of the object reads this handle any more.
         unsafe { self.0.device.let_go() };
     }
 }

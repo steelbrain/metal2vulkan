@@ -1551,12 +1551,14 @@ fn sampler_writes(
             None,
         )
         .map_err(Error::Bind)
-        .and_then(|desc| state.vk_sampler(&HashedDesc::new(desc)));
+        .and_then(|desc| state.vk_sampler(device, &HashedDesc::new(desc)));
         let (info, keeper) = match made {
-            Ok(sampler) => (
+            Ok(Some(sampler)) => (
                 sampler_info(sampler.raw()),
                 Some(Box::new(sampler) as Keeper),
             ),
+            // A state its device's recovery carried past this generation (`sampler.rs`).
+            Ok(None) => (sampler_info(array.neutral), None),
             Err(error) => {
                 notes.sampler_unmade(id, &error);
                 (sampler_info(array.neutral), None)

@@ -2312,7 +2312,7 @@ degradations! {
              the device's checks found a held host-page import costs its submissions nothing and \
              textures over such pages take what they take over its own memory), `Private` heaps \
              with the buffers placed in them, textures of `new_texture`, textures over the \
-             buffers carried and views of them, and pipeline states made before it go on, the \
+             buffers carried and views of them, and pipeline and sampler states made before it go on, the \
              contents of a `Private` \
              buffer or heap lost (it reads zero) and of a texture of `new_texture` of any \
              storage mode (it reads as a new one) but a texture buffer over its texels' buffer \

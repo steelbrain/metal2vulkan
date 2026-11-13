@@ -841,13 +841,15 @@ meanwhile wait for it.
   functions, the dynamic libraries, the binary archives, the address pools (`AddressPool`, whose slots take buffers after it as before), the
   uses of guest RAM (`HostRamUse`), the no-copy buffers, the `Private` buffers, the buffers in the
   runtime's own pages, the `Private` heaps with the buffers placed in them, the textures of
-  `new_texture`, the textures over the buffers it carried and the views of either, and the
-  compute, tile, drawing and mesh pipeline states to the new `VkDevice`: the same objects, at the
-  same addresses and resource IDs. A pipeline state's base variant is made again there from what its creation
+  `new_texture`, the textures over the buffers it carried and the views of either, the compute,
+  tile, drawing and mesh pipeline states, and the sampler states to the new `VkDevice`: the same
+  objects, at the same addresses and resource IDs. A pipeline state's base variant is made again there from what its creation
   compiled, with no translation, and the `VkPipeline` its creation predicted is queued with no
   wait; a bind of one whose making there failed is refused
   (`RuntimeGap::RemadeAfterRecoveryFailed`). Its objects on the lost `VkDevice` stay with it, and
-  keep it alive, until it goes.
+  keep it alive, until it goes. A sampler state is placed there as at its making, so an argument
+  buffer naming its resource ID reads it, and an equal request gets it; its `VkSampler`s are made
+  there as its binds need them.
   An event keeps the value the host saw and its listeners' notifications. A buffer in the
   runtime's own pages keeps its bytes and its `contents` pointer: a long host-visible buffer's
   fresh pages, and, on a device whose checks found that a held import of host pages costs its
