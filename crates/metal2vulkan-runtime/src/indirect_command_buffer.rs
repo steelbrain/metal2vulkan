@@ -1876,12 +1876,9 @@ impl IndirectCommandBuffer {
     /// pipeline state, `set` as the state the CPU set on it: the field's words alone, in place, as
     /// Metal's setter writes its field, the rest of the record as the GPU and the CPU left it
     /// (`CommandRecord::write_field`); then what the record holds joins what its records may
-    /// (`grown_writes`, `add_written`). All of it under one hold of `pipelines`, but a buffer
-    /// slot's on a buffer the GPU may not have written ([`edit_unlocked`](Self::edit_unlocked)).
+    /// (`grown_writes`, `add_written`). All of it under one hold of `pipelines`; a buffer slot's
+    /// takes [`edit_slot`](Self::edit_slot).
     fn edit(&self, index: u32, field: RecordField, set: Option<CommandState>) -> Result<(), Error> {
-        if set.is_none() && matches!(field, RecordField::Buffer { .. }) && !self.gpu_written() {
-            return self.edit_unlocked(index, field);
-        }
         let mut commands = lock(&self.0.pipelines);
         // SAFETY: the record of a command below the size lies inside the mapped storage, and the
         // CPU's writes of the records are one at a time (`pipelines`, held while the slice lives),
@@ -1908,6 +1905,18 @@ impl IndirectCommandBuffer {
         // naming a state that may write records marks now (`write_routes.rs`), without its lock.
         followed.mark();
         Ok(())
+    }
+
+    /// [`edit`](Self::edit) of `field`, a buffer slot: without `pipelines`
+    /// ([`edit_unlocked`](Self::edit_unlocked)) on a buffer the GPU may not have written, else
+    /// under it. Apart from `edit`, whose other writes then compile as they did before the
+    /// unlocked write: beside it in `edit`, a draw took about 5 ns more
+    /// (`tests::icb_encode_bench`).
+    fn edit_slot(&self, index: u32, field: RecordField) -> Result<(), Error> {
+        match self.gpu_written() {
+            false => self.edit_unlocked(index, field),
+            true => self.edit(index, field, None),
+        }
     }
 
     /// [`edit`](Self::edit) of `field`, a buffer slot, into command `index`'s record (below the
@@ -2078,7 +2087,7 @@ impl IndirectCommandBuffer {
             slot: slot as usize,
             binding: Some(binding),
         };
-        self.edit(index, field, None)
+        self.edit_slot(index, field)
     }
 
     /// Where Metal keeps threadgroup length `slot` of command `index` of a compute buffer: at
