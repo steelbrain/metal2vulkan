@@ -32,6 +32,7 @@ use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
 use crate::library::FunctionConstantValues;
 use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs, Plan};
+use crate::lower::simd::WidestPin;
 use crate::memory::static_root::analyze_memory;
 use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
@@ -1102,7 +1103,7 @@ fn typed_module_with(
     };
     let spec = air::specialize(decoded, &req, m).expect("specialize");
     let memory = analyze_memory(&spec, p, m).expect("analyze");
-    let plan = select(&spec, &memory, p, inputs, m).expect("select");
+    let plan = select(&spec, &memory, p, (inputs, WidestPin::Weighed), m).expect("select");
     let module = emit_module(&spec, &plan, m).expect("emit").module;
     verify(&module, p, m).expect("verify");
     (plan, module)

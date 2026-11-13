@@ -21,6 +21,7 @@ use crate::error::DriverDeviation;
 use crate::lower::arith::narrow::{controlled_modes, native_rounding, quantize_form};
 use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs};
+use crate::lower::simd::WidestPin;
 use crate::memory::static_root::analyze_memory;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
@@ -144,7 +145,14 @@ fn interpret_bytes(bitcode: &[u8], entry: &str, p: &DeviceProfile, bytes: Vec<u8
     };
     let spec = air::specialize(decoded, &req, &mut m).expect("specialize");
     let memory = analyze_memory(&spec, p, &mut m).expect("memory");
-    let plan = select(&spec, &memory, p, &LowerInputs::new(), &mut m).expect("select");
+    let plan = select(
+        &spec,
+        &memory,
+        p,
+        (&LowerInputs::new(), WidestPin::Weighed),
+        &mut m,
+    )
+    .expect("select");
     let module = emit_module(&spec, &plan, &mut m).expect("emit").module;
     let res = Resources {
         buffers: vec![Buffer {

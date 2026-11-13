@@ -23,6 +23,7 @@ use crate::error::{Capability, Error, Feature, LowerFamily, Needs};
 use crate::library::FunctionConstantValues;
 use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs};
+use crate::lower::simd::WidestPin;
 use crate::memory::static_root::analyze_memory;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::compile::{plan_bitcode, EntryRef};
@@ -1099,7 +1100,14 @@ fn interpret(bitcode: &[u8], entry: &str, p: &DeviceProfile) -> u32 {
     };
     let spec = air::specialize(decoded, &req, &mut m).expect("specialize");
     let memory = analyze_memory(&spec, p, &mut m).expect("memory");
-    let plan = select(&spec, &memory, p, &LowerInputs::new(), &mut m).expect("select");
+    let plan = select(
+        &spec,
+        &memory,
+        p,
+        (&LowerInputs::new(), WidestPin::Weighed),
+        &mut m,
+    )
+    .expect("select");
     let module = emit_module(&spec, &plan, &mut m).expect("emit").module;
     let res = Resources {
         buffers: vec![Buffer {

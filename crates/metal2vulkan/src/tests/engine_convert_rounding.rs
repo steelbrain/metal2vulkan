@@ -20,6 +20,7 @@ use crate::device::requirements::VkFeature;
 use crate::device::{Device, DevicePolicy, DeviceProfile};
 use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs};
+use crate::lower::simd::WidestPin;
 use crate::memory::static_root::analyze_memory;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
@@ -310,7 +311,7 @@ fn interpret(
     let memory = analyze_memory(&spec, p, &mut m).expect("memory");
     let mut inputs = LowerInputs::new();
     inputs.open_cl_mode = open_cl_mode;
-    let plan = select(&spec, &memory, p, &inputs, &mut m).expect("select");
+    let plan = select(&spec, &memory, p, (&inputs, WidestPin::Weighed), &mut m).expect("select");
     let module = emit_module(&spec, &plan, &mut m).expect("emit").module;
     let input: Vec<u8> = operands
         .iter()

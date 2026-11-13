@@ -18,6 +18,7 @@ use crate::device::profile::{DeviceProfile, FloatFunctions};
 use crate::device::DevicePolicy;
 use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs};
+use crate::lower::simd::WidestPin;
 use crate::memory::static_root::analyze_memory;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
@@ -162,7 +163,14 @@ fn interpret(bitcode: &[u8], entry: &str, p: &DeviceProfile, x: [f32; 3]) -> f32
     };
     let spec = air::specialize(decoded, &req, &mut m).expect("specialize");
     let memory = analyze_memory(&spec, p, &mut m).expect("memory");
-    let plan = select(&spec, &memory, p, &LowerInputs::new(), &mut m).expect("select");
+    let plan = select(
+        &spec,
+        &memory,
+        p,
+        (&LowerInputs::new(), WidestPin::Weighed),
+        &mut m,
+    )
+    .expect("select");
     let module = emit_module(&spec, &plan, &mut m).expect("emit").module;
     let bytes = [x[0], x[1], x[2], 0.0]
         .iter()

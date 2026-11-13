@@ -25,6 +25,7 @@ use crate::device::{DevicePolicy, DeviceProfile};
 use crate::lower::arith::narrow::quantize_form;
 use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs};
+use crate::lower::simd::WidestPin;
 use crate::memory::static_root::analyze_memory;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
@@ -219,7 +220,14 @@ fn emitted_entry(bitcode: &[u8], entry: &str, p: &DeviceProfile) -> (TypedModule
     };
     let spec = air::specialize(decoded, &req, &mut m).expect("specialize");
     let memory = analyze_memory(&spec, p, &mut m).expect("memory");
-    let plan = select(&spec, &memory, p, &LowerInputs::new(), &mut m).expect("select");
+    let plan = select(
+        &spec,
+        &memory,
+        p,
+        (&LowerInputs::new(), WidestPin::Weighed),
+        &mut m,
+    )
+    .expect("select");
     let module = emit_module(&spec, &plan, &mut m).expect("emit").module;
     let push = plan.push.push_range.map_or(4, |(_, end)| end as usize);
     (module, push)
