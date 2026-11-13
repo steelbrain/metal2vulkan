@@ -985,8 +985,25 @@ struct DrawState {
     blend_color: [f32; 4],
     /// The draws one command records, each through the viewport and scissor at its index: 1 for
     /// a plain draw, and the regions of a rate-mapped pass a multi-draw records several at a
-    /// time (`rate_mapped_pass.rs`, `MultiDraws`), at most its viewports.
+    /// time (`rate_mapped_pass.rs`, `MultiDraws`), at most its viewports; or, through a
+    /// region-copy variant, as many regions from `region_first`, each through the viewport over
+    /// the render area at its index and its region's scissor there.
     draws: u32,
+    /// The first of a rate-mapped pass's regions, in its region table's order, it draws through
+    /// its region-copy variant, which its recording pushes, drawing `draws` regions from it
+    /// (`render/fan_out.rs`, **Region-copy variant**); `None` for any other.
+    region_first: Option<u32>,
+}
+
+impl DrawState {
+    /// The region draws its recording makes (`rate_mapped_pass::region_draws`): its `draws`
+    /// where it draws through its region-copy variant.
+    fn region_draws(&self) -> u64 {
+        match self.region_first {
+            Some(_) => u64::from(self.draws),
+            None => rate_mapped_pass::region_draws(&self.scissors),
+        }
+    }
 }
 
 impl PartialEq for DrawState {
@@ -1002,6 +1019,7 @@ impl PartialEq for DrawState {
             && self.depth_bias == other.depth_bias
             && self.blend_color == other.blend_color
             && self.draws == other.draws
+            && self.region_first == other.region_first
     }
 }
 
@@ -1782,9 +1800,10 @@ pub(crate) struct RenderLowering {
     /// The last draw ran its fan-out variant, and whether its pipeline writes memory: what
     /// `fan_run` hears of it.
     fanned: (bool, bool),
-    /// The region table a fan-out draw binds, by the viewport and scissor it was made for, and
-    /// `None` where their regions make none (`fan_out::table`).
-    fan_table: Option<(FanTableKey, Option<FanTable>)>,
+    /// The region table a fan-out draw binds and its regions' scissors in its order, by the
+    /// viewport and scissor it was made for, and `None` where their regions make none
+    /// (`fan_out::table`).
+    fan_table: Option<(FanTableKey, Option<(FanTable, Vec<vk::Rect2D>)>)>,
     /// The encoder records an execution's commands and the command it draws holds a barrier,
     /// which orders its draw after every draw before it (`render/executions.rs`).
     command_barrier: bool,
@@ -8724,10 +8743,12 @@ impl RenderLowering {
         // A fan-out variant's draw, or its probe (`render/fan_out.rs`). The probe's run records
         // its probes alone: a draw whose variant does not fan out, or whose vertex function
         // writes memory (the probe and the draw would each run it), records nothing there, and the
-        // routes' run draws it region by region.
+        // routes' run draws it region by region. A draw through its region-copy variant draws
+        // region by region (`render/fan_out.rs`, **Region-copy variant**).
         let writes = graphics.vertex_writes_memory || graphics.fragment_writes_memory;
         let fans = (variant.key().region_fan_out).filter(|_| !graphics.vertex_writes_memory);
-        self.fanned = (fans.is_some(), writes);
+        let region_copies = fans == Some(RegionFanOut::RegionCopies);
+        self.fanned = (fans.is_some() && !region_copies, writes);
         if fans.is_none()
             && self
                 .fan_run
@@ -8745,10 +8766,15 @@ impl RenderLowering {
             None => None,
         };
         // A fan-out draw's work is its vertices, its triangles' geometry stage and the copies the
-        // probe counted (`rate_mapped_pass::fan_out_work`).
+        // probe counted (`rate_mapped_pass::fan_out_work`); a draw through its region-copy
+        // variant's, its region draws (`DrawState::region_draws`), each recording pushing its first
+        // region.
+        let region_offset = (graphics.region_fan_out)
+            .filter(|fan| fan.mode == RegionFanOut::RegionCopies)
+            .map(|fan| fan.push_offset);
         let fan_copies = match fans {
             Some(RegionFanOut::Draw | RegionFanOut::DrawFew) => self.fan_out.map(|fan| fan.copies),
-            Some(RegionFanOut::Probe) | None => None,
+            Some(RegionFanOut::Probe | RegionFanOut::RegionCopies) | None => None,
         };
         // A fragment function that runs the draw's depth test itself computes and clamps its
         // depth by the draw's own Vulkan depth range, read as push data.
@@ -9944,6 +9970,14 @@ impl RenderLowering {
         // Where its plan's variant draws them so, the draw records those regions several at a
         // time (`region_batch`).
         let batch = region_batch(&variant, &device)?;
+        // A draw through its region-copy variant sets as many viewports as a multi-draw takes
+        // (one without the multi-draw commands), and draws as many regions a recording where it
+        // is direct, else one (`render/fan_out.rs`, **Region-copy variant**).
+        let copy_viewports = fan_out::copy_viewports(&device);
+        let copy_batch = match draw {
+            DrawCall::Primitives { .. } | DrawCall::Indexed { .. } => copy_viewports,
+            _ => 1,
+        };
         // A rate-mapped pass records the draw once per region of the map's layer of the slice
         // it renders (`rate_mapped_pass.rs`): each amplification drawn one at a time its own
         // slice's, else the draw's one slice, or none known where its primitives choose.
@@ -9951,6 +9985,44 @@ impl RenderLowering {
         // the whole draw.
         let mut draw_states = match (&self.rate_map, fans) {
             (None, _) => DrawStates::Whole([draw_state]),
+            // A draw through its region-copy variant records the table's regions in its order, each
+            // recording pushing its first region and drawing as many from it as a direct draw's
+            // multi-draw takes, else one; it sets `copy_viewports` viewports, every one over the
+            // render area of the draw's depth range, and each draw's scissor its region's, past
+            // its regions an empty one (`render/fan_out.rs`, **Region-copy variant**).
+            (Some(_), Some(_)) if region_copies => {
+                let depth = (draw_state.viewports.iter().next())
+                    .map_or([0.0, 1.0], |v| [v.min_depth, v.max_depth]);
+                let (viewport, _) = fan_out::target(render_area, depth);
+                let Some((_, Some((_, scissors)))) = &self.fan_table else {
+                    return Err(internal(
+                        "a draw through its region-copy variant without its region table",
+                    ));
+                };
+                let (each, per) = (copy_viewports as usize, copy_batch as usize);
+                let recordings: Vec<DrawState> = ((0u32..).step_by(per))
+                    .zip(scissors.chunks(per))
+                    .map(|(first, chunk)| DrawState {
+                        viewports: std::iter::repeat_n(viewport, each).collect(),
+                        scissors: (chunk.iter().copied())
+                            .chain(std::iter::repeat(vk::Rect2D::default()))
+                            .take(each)
+                            .collect(),
+                        fixed: FixedState {
+                            viewports: copy_viewports,
+                            ..draw_state.fixed
+                        },
+                        draws: chunk.len() as u32,
+                        region_first: Some(first),
+                        ..draw_state.clone()
+                    })
+                    .collect();
+                device
+                    .shared()
+                    .counts
+                    .rate_map_region_copy_draw(recordings.len() as u64);
+                DrawStates::Regions(vec![recordings])
+            }
             // A fan-out draw, or its probe, records once, through one viewport over the render
             // area of the draw's depth range (`render/fan_out.rs`).
             (Some(_), Some(_)) => {
@@ -9995,6 +10067,9 @@ impl RenderLowering {
         // map's regions (`region_states`).
         if let Some(batch) = batch {
             fixed.viewports = batch as u32;
+        }
+        if region_copies {
+            fixed.viewports = copy_viewports;
         }
         // A draw that reaches no fragment runs its vertex function alone, through empty scissors,
         // and so do unsized points.
@@ -10403,7 +10478,8 @@ impl RenderLowering {
             )),
         };
         let vk_draws = &vk_draws[..count];
-        // Regions drawn several at a time are direct draws' alone (`draws_region_batches`).
+        // Regions drawn several at a time are direct draws' alone (`draws_region_batches`, and a
+        // region-copy variant's `copy_batch`).
         let direct = |&(_, _, draw): &(_, _, metal2vulkan::vk::DrawCommand)| {
             matches!(
                 draw,
@@ -10411,7 +10487,7 @@ impl RenderLowering {
                     | metal2vulkan::vk::DrawCommand::DrawIndexed { .. }
             )
         };
-        if batch.is_some() && !vk_draws.iter().all(direct) {
+        if (batch.is_some() || (region_copies && copy_batch > 1)) && !vk_draws.iter().all(direct) {
             return Err(internal(
                 "regions drawn several at a time by a draw of another command",
             ));
@@ -11184,16 +11260,27 @@ impl RenderLowering {
                 for a in 0..entries {
                     let (push, vk_draws) = entry(a);
                     for state in draw_states.of(a) {
+                        // A recording through the region-copy variant pushes its first region
+                        // (`render/fan_out.rs`, **Region-copy variant**).
+                        let region_push;
+                        let push = match (state.region_first, region_offset) {
+                            (Some(first), Some(offset)) => {
+                                region_push = fan_out::region_push(push, offset, first)?;
+                                &region_push[..]
+                            }
+                            _ => push,
+                        };
                         for &(index, indirect, draw) in vk_draws {
                             draws_recorded += 1;
                             if counts_work {
-                                let mut work = rate_mapped_pass::draw_work(&state.scissors, &draw);
+                                let regions = state.region_draws();
+                                let mut work = rate_mapped_pass::draw_work(regions, &draw);
                                 if let Some(copies) = fan_copies {
                                     let fanned = rate_mapped_pass::fan_out_work(&draw, copies);
                                     work = work.saturating_add(fanned);
                                 }
                                 piece_work = piece_work.saturating_add(work);
-                                piece_regions += rate_mapped_pass::region_draws(&state.scissors);
+                                piece_regions += regions;
                             }
                             if indirect.is_some()
                                 && phase != Some(snapshot::Phase::Snapshot)
@@ -11795,21 +11882,36 @@ impl RenderLowering {
         })
     }
 
-    /// The fan-out a draw of `pipeline` under `settings` as `assembly` asks for
-    /// (`BindState::region_fan_out`, `render/fan_out.rs`): the next command's, where the encoder
-    /// records an execution's commands at a host step that fans the pass's triangles out, for a
-    /// draw of triangles filled, of one amplification, without a compensation or a band, of a
-    /// pipeline whose vertex function chooses no slice, over a map whose layers are alike, whose
-    /// regions make a region table ([`fan_table`](Self::fan_table)); `None` for any other.
+    /// The fan-out a draw of `pipeline` under `settings` as `assembly` asks for, and the word it
+    /// binds (`BindState::region_fan_out`, `render/fan_out.rs`): the next command's, where the
+    /// encoder records an execution's commands at a host step that fans the pass's triangles out,
+    /// a probe's at its index and a draw's 0; else, in a rate-mapped pass on a device that fans out
+    /// (`fan_out::fans_out`), outside a probe's run, for a pipeline whose vertex function writes no
+    /// memory, its region-copy variant, 0 until each recording pushes its first region
+    /// (`render/fan_out.rs`, **Region-copy variant**). Either for a draw of triangles filled, of
+    /// one amplification, without a compensation or a band, of a pipeline whose vertex function
+    /// chooses no slice, over a map whose layers are alike, whose regions make a region table
+    /// ([`fan_table`](Self::fan_table)); `None` for any other.
     fn fan_out_asked(
         &mut self,
         pipeline: &DrawingState,
         settings: &DrawSettings,
         assembly: Assembly,
     ) -> Result<Option<(RegionFanOut, u32)>, Error> {
-        let Some(fan) = self.fan_out else {
-            return Ok(None);
+        let fan = match self.fan_out {
+            Some(fan) => Some(fan),
+            // The probe's run records its probes alone.
+            None if (self.fan_run.as_ref()).is_some_and(fan_out::FanOutRun::probes) => {
+                return Ok(None)
+            }
+            None => None,
         };
+        let regions = self.rate_map.is_some()
+            && fan_out::copies_regions(self.core.device())
+            && !pipeline.base().graphics.vertex_writes_memory;
+        if fan.is_none() && !regions {
+            return Ok(None);
+        }
         let triangles = matches!(
             assembly,
             Assembly::Primitives(PrimitiveType::Triangle | PrimitiveType::TriangleStrip)
@@ -11827,12 +11929,11 @@ impl RenderLowering {
         if !asks || !self.fan_table(pipeline)? {
             return Ok(None);
         }
-        // A draw binds no index: only a probe writes its words.
-        let index = match fan.mode {
-            RegionFanOut::Probe => fan.index,
-            RegionFanOut::Draw | RegionFanOut::DrawFew => 0,
-        };
-        Ok(Some((fan.mode, index)))
+        Ok(Some(match fan {
+            Some(fan) if fan.mode == RegionFanOut::Probe => (fan.mode, fan.index),
+            Some(fan) => (fan.mode, 0),
+            None => (RegionFanOut::RegionCopies, 0),
+        }))
     }
 
     /// Whether the encoder's first viewport and scissor plan regions that make a fan-out draw of
@@ -11863,7 +11964,8 @@ impl RenderLowering {
             &device.shared().region_limits,
             extent,
         )?;
-        let table = fan_out::table(&regions, extent).map(FanTable::Bytes);
+        let table = (fan_out::table(&regions, extent))
+            .map(|(bytes, scissors)| (FanTable::Bytes(bytes), scissors));
         let made = table.is_some();
         self.fan_table = Some((key, table));
         Ok(made)
@@ -11872,7 +11974,7 @@ impl RenderLowering {
     /// The region table the next fan-out draw binds ([`fan_table`](Self::fan_table)), uploaded to
     /// the command buffer by the encoder's first draw that binds it.
     fn fan_table_bound(&mut self) -> Result<vk::DescriptorBufferInfo, Error> {
-        let Some((_, Some(table))) = &mut self.fan_table else {
+        let Some((_, Some((table, _)))) = &mut self.fan_table else {
             return Err(internal("a fan-out draw without its region table"));
         };
         let bytes = match table {

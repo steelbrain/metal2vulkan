@@ -11,15 +11,14 @@
 //! (`render/fan_out.rs`, **Parts**), each in its place: each grid with the wide triangles in five,
 //! the blocks of `bind::fan_out::BLOCK_TRIANGLES` that hold them region by region, from each wide
 //! triangle to its block's end and from its block's start, and the triangles before, between and
-//! after them fanned out; and each single triangle region by region; under `Exact` no probe runs
-//! and every command is drawn region by region. Either way the target's bytes are those of the
-//! same commands drawn on the encoder, region by region as `Exact` draws them: a command or a
-//! triangle lost, drawn twice or out of order, or a copy drawn into another region or left out of
-//! its own, changes the pixels.
-//! The
-//! probe's and the fanned-out draws' pipelines are begun at commit (`RenderExecution::settle`):
-//! the host step takes them made or waits for them, and makes no more pipelines itself than it
-//! makes for the same frame under `Exact`.
+//! after them fanned out; and each single triangle region by region, through its region-copy
+//! variant (`render/fan_out.rs`, **Region-copy variant**), as the encoder draws every command;
+//! under `Exact` no probe runs and every command is drawn region by region, each region through its
+//! own viewport. Either way the target's bytes are those of the same commands drawn on the encoder:
+//! a command or a triangle lost, drawn twice or out of order, or a copy drawn into another region
+//! or left out of its own, changes the pixels. The probe's and the fanned-out draws' pipelines are
+//! begun at commit (`RenderExecution::settle`): the host step takes them made or waits for them,
+//! and makes no more pipelines itself than it makes for the same frame under `Exact`.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_triangle` and
@@ -28,6 +27,7 @@
 //! each vertex where its buffer holds it (`llvm-as`).
 
 use super::blit_holds::{options, Scratch, WAIT};
+use super::encoder_holds::library;
 use crate::write_routes::GpuWriter;
 use crate::{
     Buffer, ClearColor, CommandBufferStatus, CommandQueue, Device, IndirectCommandBuffer,
@@ -106,14 +106,10 @@ fn draw_of(
 
 impl Workload {
     fn new(device: Device) -> Workload {
-        let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../metal2vulkan-validation/fixtures/public/engine/tob_renders.ll");
-        let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
-        let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
-        let library = device.new_library_with_compile_library(library);
+        let renders = library(&device, "engine/tob_renders.ll");
         let function = |name| {
             StageSource::Function(
-                library
+                renders
                     .new_function_with_name(name)
                     .unwrap()
                     .function_descriptor(),
@@ -133,11 +129,7 @@ impl Workload {
             .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
             .unwrap();
         // The command across `w = 0`: the same colour stage, each vertex where its buffer holds it.
-        let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../metal2vulkan-validation/fixtures/public/engine/cfb_sample_depth.ll");
-        let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
-        let depth = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
-        let depth = device.new_library_with_compile_library(depth);
+        let depth = library(&device, "engine/cfb_sample_depth.ll");
         let vertex = depth.new_function_with_name("cfb_depth_vertex").unwrap();
         descriptor.vertex = StageSource::Function(vertex.function_descriptor());
         let behind_pipeline = device
@@ -384,6 +376,15 @@ fn fan_counts(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
     ]
 }
 
+/// The draws through the region-copy variant and their recordings between two counts
+/// (`render/fan_out.rs`, **Region-copy variant**).
+fn copy_counts(before: &WorkCounts, after: &WorkCounts) -> [u64; 2] {
+    [
+        after.rate_map_region_copy_draws - before.rate_map_region_copy_draws,
+        after.rate_map_region_copy_recordings - before.rate_map_region_copy_recordings,
+    ]
+}
+
 /// The texels of `a` and `b` that differ: how many, and the first's index and its bytes in each.
 fn differing<'a>(a: &'a [u8], b: &'a [u8]) -> (usize, Option<(usize, &'a [u8], &'a [u8])>) {
     let mut differ = (a.chunks(4).zip(b.chunks(4)).enumerate()).filter(|(_, (a, b))| a != b);
@@ -394,18 +395,21 @@ fn differing<'a>(a: &'a [u8], b: &'a [u8]) -> (usize, Option<(usize, &'a [u8], &
 /// Under `FanOut` the host step probes once, fans the grid commands out and draws the four it
 /// flagged in parts between them, each grid's two wide triangles in runs of their own blocks
 /// region by region and the triangles between them fanned out, with the pipelines `commit` began:
-/// the fan-out's and the regions variant's, so the step makes none. The grid commands are drawn
-/// through the variant of few copies and the medium one through the most copies'. Its probe and
-/// its fanned-out draws each upload the region table once, the commit's settle none. The pixels
-/// are the encoder's region-by-region draws', `Exact`'s.
+/// the fan-out's, its runs region by region through the region-copy variant, so the step makes
+/// none. The grid commands are drawn through the variant of few copies and the medium one
+/// through the most copies'. Its probe and its fanned-out draws each upload the region table
+/// once, the commit's settle none. The encoder draws every command through the region-copy
+/// variant. The pixels are the encoder's.
 #[test]
 fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     let scratch = Scratch::new("rate-mapped-fan-out");
     let workload = Workload::new(device_under(&scratch.0, RateMapRegionPolicy::FanOut));
     let (drawn, before, after) = workload.frame(false);
     assert_eq!(fan_counts(&before, &after), [0; 4], "the encoder's draws");
+    let encoder_copies = copy_counts(&before, &after);
     let (fanned, before, after) = workload.frame(true);
     let counts = fan_counts(&before, &after);
+    let copies = copy_counts(&before, &after);
     let probe_nanos = after.rate_map_probe_gpu_nanos - before.rate_map_probe_gpu_nanos;
     let made = after.host_step_pipelines_made - before.host_step_pipelines_made;
     let ready = after.rate_map_fan_out_pipelines_ready - before.rate_map_fan_out_pipelines_ready;
@@ -422,11 +426,25 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
          {flagged} flagged triangles; \
          fan-out pipelines {ready} ready, {waited} waited for; {made} made at the step; {tables} \
          region tables uploaded; {few} drawn of few copies; {by_regions} triangles of draws in \
-         parts region by region, in {runs} runs"
+         parts region by region, in {runs} runs; draws through the region-copy variant and \
+         their recordings: the encoder's {encoder_copies:?}, the execution's {copies:?}"
     );
     assert_eq!(made, 0, "pipelines the host step made");
     match fans_out(&workload.device) {
         true => {
+            assert_eq!(
+                encoder_copies[0],
+                u64::from(COMMANDS),
+                "the encoder's draws"
+            );
+            assert!(
+                encoder_copies[1] >= encoder_copies[0],
+                "the encoder's recordings"
+            );
+            assert_eq!(
+                copies[0], runs,
+                "the runs drawn through the region-copy variant"
+            );
             assert_eq!(counts, [1, 4, u64::from(COMMANDS - 4), 4]);
             assert_eq!(tables, 2, "region tables uploaded");
             assert!(
@@ -449,7 +467,14 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
             assert_eq!(flagged, 6, "the triangles the probe flagged");
             assert!(wait > 0, "the host's wait for the probe");
         }
-        false => assert_eq!(counts, [0; 4]),
+        false => {
+            assert_eq!(counts, [0; 4]);
+            assert_eq!(
+                [encoder_copies, copies],
+                [[0; 2]; 2],
+                "draws through the region-copy variant"
+            );
+        }
     }
     // Every pixel took the commands' blends: none is the clear's black.
     assert!(
@@ -489,16 +514,22 @@ fn the_encoder_trail_fans_out_the_same_pixels() {
     );
 }
 
-/// Under `Exact` no probe runs and every command is drawn region by region, with the regions
-/// variant's pipelines `commit` began: the host step makes none. The pixels are the encoder's
-/// draws'.
+/// Under `Exact` no probe runs and every command is drawn region by region, each region through
+/// its own viewport, none through the region-copy variant, with the regions variant's pipelines
+/// `commit` began: the host step makes none. The pixels are the encoder's draws'.
 #[test]
 fn exact_regions_draw_every_command_region_by_region() {
     let scratch = Scratch::new("rate-mapped-fan-out-exact");
     let workload = Workload::new(device_under(&scratch.0, RateMapRegionPolicy::Exact));
-    let (drawn, _, _) = workload.frame(false);
+    let (drawn, before, after) = workload.frame(false);
+    assert_eq!(copy_counts(&before, &after), [0; 2], "the encoder's draws");
     let (exact, before, after) = workload.frame(true);
     assert_eq!(fan_counts(&before, &after), [0; 4]);
+    assert_eq!(
+        copy_counts(&before, &after),
+        [0; 2],
+        "the execution's draws"
+    );
     let made = after.host_step_pipelines_made - before.host_step_pipelines_made;
     eprintln!("RATE-MAP-EXACT {made} made at the step");
     assert_eq!(made, 0, "pipelines the host step made");

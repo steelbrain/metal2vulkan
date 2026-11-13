@@ -14,8 +14,25 @@
 //! indices, so each triangle keeps its vertices, its `vertex_id`s and its place among the draw's:
 //! a pixel takes the draw's fragments in the draw's order. A flagged draw of any other kind is
 //! drawn region by region whole.
+//!
+//! **Region-copy variant.** On a device that fans the pass's triangles out and enabled what the
+//! variant takes ([`copies_regions`]), a draw of the pass that is not fanned out (the encoder's
+//! own, a command the probe did not probe or whose host step does not probe, a flagged draw's
+//! runs and a flagged draw drawn whole) is drawn region by region through its region-copy variant
+//! (`RegionFanOut::RegionCopies`), whose vertex function puts each vertex in its region as a
+//! fan-out stage puts a copy's. The regions go in the table's order, each recording pushing its
+//! first region ([`region_push`]) and drawing as many regions from it as a direct draw's
+//! multi-draw takes (`DrawIndex` the region past the first, which the vertex function stores as
+//! `ViewportIndex`), else one. Each recording sets as many viewports as a multi-draw takes, every
+//! one the target's over the render area ([`target`]), and each draw's scissor its region's
+//! ([`table`]), so the rasterizer rejects a triangle outside the region by its scissor
+//! (`bind::fan_out`, **One route per pass**). Every route of the pass hands the rasterizer the
+//! same position for a vertex in a region, so a draw that tests `Equal` the depth another stored
+//! meets it whichever route each took.
 
 use super::executions::Command;
+use crate::binding::PushWrite;
+use crate::error::{internal, Error};
 use crate::rate_mapped_pass::RUN_GAP;
 use crate::render_values::{ScissorRect, Viewport};
 use crate::Device;
@@ -349,8 +366,13 @@ fn target_rect([width, height]: [u32; 2]) -> [f32; 4] {
 
 /// The region table of a fan-out draw over `regions`, each a region's viewport and scissor as the
 /// device draws it (`RateMappedPass::draws`), through one viewport over the render area `extent`
-/// (`bind::fan_out::table`): `None` where they are not a grid of segments or hold no pixel.
-pub(super) fn table(regions: &[(vk::Viewport, vk::Rect2D)], extent: [u32; 2]) -> Option<Vec<u8>> {
+/// (`bind::fan_out::table`), and its regions' scissors in its order (`bind::fan_out::scissors`),
+/// which a draw through the region-copy variant draws through (the module docs, **Region-copy
+/// variant**): `None` where they are not a grid of segments or hold no pixel.
+pub(super) fn table(
+    regions: &[(vk::Viewport, vk::Rect2D)],
+    extent: [u32; 2],
+) -> Option<(Vec<u8>, Vec<vk::Rect2D>)> {
     if !(regions.iter()).any(|(_, s)| s.extent.width > 0 && s.extent.height > 0) {
         return None;
     }
@@ -365,7 +387,69 @@ pub(super) fn table(regions: &[(vk::Viewport, vk::Rect2D)], extent: [u32; 2]) ->
             Some(([v.x, v.y, v.width, v.height], scissor))
         })
         .collect::<Option<_>>()?;
-    metal2vulkan::bind::fan_out::table(target_rect(extent), &regions)
+    let table = metal2vulkan::bind::fan_out::table(target_rect(extent), &regions)?;
+    let scissors = (metal2vulkan::bind::fan_out::scissors(&regions)?.into_iter())
+        .map(|[x, y, width, height]| {
+            Some(vk::Rect2D {
+                offset: vk::Offset2D {
+                    x: i32::try_from(x).ok()?,
+                    y: i32::try_from(y).ok()?,
+                },
+                extent: vk::Extent2D { width, height },
+            })
+        })
+        .collect::<Option<_>>()?;
+    Some((table, scissors))
+}
+
+/// The viewports a recording of a draw through its region-copy variant sets, every one the
+/// target's: as many as one multi-draw command takes, one without the multi-draw commands (the
+/// module docs, **Region-copy variant**). Its `VkPipeline` takes as many
+/// (`FixedState::viewports`).
+pub(super) fn copy_viewports(device: &Device) -> u32 {
+    (device.shared().multi_draws)
+        .as_ref()
+        .map_or(1, |multi| multi.batch().max(1))
+}
+
+/// Whether `device` draws a fanning pass's region-by-region draws through their region-copy
+/// variant (the module docs, **Region-copy variant**): it fans out ([`fans_out`]), and it enabled
+/// what the variant's vertex function takes to store its draw's index as `ViewportIndex` and its
+/// several viewports (`LoweringInputs::region_copies`).
+pub(super) fn copies_regions(device: &Device) -> bool {
+    let compile = device.compile_device();
+    let features = &compile.profile().enabled().features;
+    fans_out(device)
+        && [
+            VkFeature::MultiViewport,
+            VkFeature::ShaderOutputViewportIndex,
+            VkFeature::ShaderDrawParameters,
+        ]
+        .iter()
+        .all(|feature| features.contains(feature))
+}
+
+/// The push writes of a recording of a draw through its region-copy variant from region `first`
+/// (the module docs, **Region-copy variant**): the draw's, `push`, with the vertex stage's word at
+/// `offset` (`PushField::RegionFirst`) holding `first`.
+pub(super) fn region_push(
+    push: &[PushWrite],
+    offset: u32,
+    first: u32,
+) -> Result<Vec<PushWrite>, Error> {
+    let mut pushed = push.to_vec();
+    let write = (pushed.iter_mut())
+        .find(|(stages, at, bytes)| {
+            stages.contains(vk::ShaderStageFlags::VERTEX)
+                && *at <= offset
+                && offset + 4 <= *at + bytes.len() as u32
+        })
+        .ok_or_else(|| {
+            internal("a draw through its region-copy variant without its region's push")
+        })?;
+    let from = (offset - write.1) as usize;
+    write.2[from..from + 4].copy_from_slice(&first.to_le_bytes());
+    Ok(pushed)
 }
 
 /// The viewport and scissor a fan-out draw records through: one over the whole render area

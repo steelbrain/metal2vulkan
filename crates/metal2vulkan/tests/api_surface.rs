@@ -838,6 +838,7 @@ surface! {
         const WIDEN_PIXELS;
         fn clip_entry;
         fn line_entry;
+        fn scissors;
         fn table;
     }
     "bind::indirect_commands" => metal2vulkan::bind::indirect_commands {

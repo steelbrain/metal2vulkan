@@ -489,6 +489,7 @@ mod serde_round_trips {
             }),
             object_payload: Some(64),
             region_viewports: true,
+            region_copies: true,
         });
     }
 

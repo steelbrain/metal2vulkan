@@ -640,6 +640,7 @@ impl ShapeInputs<'_> {
             depth_bias,
             blend_color: self.state.blend_color(),
             draws: 1,
+            region_first: None,
         };
         Ok(ShapedState {
             state,

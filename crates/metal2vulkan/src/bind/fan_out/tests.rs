@@ -130,6 +130,41 @@ fn each_copy_lands_where_its_region_draws_and_clips_to_its_pixels() {
     }
 }
 
+/// The scissors of the table's regions, in its order, are those its lines and clips draw: region
+/// `k`'s the pixels of x segment `k mod nx` and y segment `k / nx`; and they are the plan's
+/// regions' scissors, each once.
+#[test]
+fn each_region_s_scissor_is_its_segments_pixels_in_the_table_s_order() {
+    let (regions, target) = falling([3648, 1734]);
+    let table = table(target, &regions).expect("table");
+    let scissors = scissors(&regions).expect("scissors");
+    let [nx, ny] = counts(&table);
+    assert_eq!(scissors.len(), (nx * ny) as usize);
+    // The pixels of segment `k` of axis `a`: those of the region whose viewport the line maps.
+    let pixels = |a: u32, k: u32| {
+        let au = a as usize;
+        let [_, _, sa, sb] = entry(&table, line_entry(a, k));
+        (regions.iter())
+            .find(|&&(v, _)| {
+                let (x, ex) = (f64::from(v[au]), f64::from(v[au + 2]));
+                let (t0, tw) = (f64::from(target[au]), f64::from(target[au + 2]));
+                (ex / tw - f64::from(sa)).abs() < 1e-6
+                    && ((2.0 * x + ex - 2.0 * t0) / tw - 1.0 - f64::from(sb)).abs() < 1e-5
+            })
+            .map(|&(_, s)| [s[au], s[au] + s[au + 2]])
+            .expect("the segment's region")
+    };
+    for (k, scissor) in (0u32..).zip(&scissors) {
+        let ([x0, x1], [y0, y1]) = (pixels(0, k % nx), pixels(1, k / nx));
+        assert_eq!(*scissor, [x0, y0, x1 - x0, y1 - y0], "region {k}");
+    }
+    let mut theirs: Vec<[u32; 4]> = regions.iter().map(|&(_, s)| s).collect();
+    let mut ours = scissors;
+    theirs.sort_unstable();
+    ours.sort_unstable();
+    assert_eq!(ours, theirs);
+}
+
 /// The segments the bisection finds for an interval of normalized device coordinates hold every
 /// segment with a pixel centre inside it.
 #[test]
@@ -176,4 +211,5 @@ fn regions_off_the_grid_take_no_table() {
     let (regions, target) = falling([1024, 1024]);
     assert!(table(target, &regions[1..]).is_none());
     assert!(table(target, &[]).is_none());
+    assert!(scissors(&regions[1..]).is_none());
 }

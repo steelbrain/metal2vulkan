@@ -224,7 +224,9 @@ pub fn plan(
         layer: selects(IoRole::SelectedLayer),
         viewport: selects(IoRole::SelectedViewport),
     };
-    if let Some(mode) = fan_out {
+    // A variant that draws its regions' copies from its vertex function synthesizes no stage
+    // for them (`LoweringInputs::region_copies`).
+    if let Some(mode) = fan_out.filter(|&mode| mode != RegionFanOut::RegionCopies) {
         return fan_plan(ifaces, (why, mode), (amplification, mesh), p).map(Some);
     }
     if !why.weights && !why.layer && !why.viewport {
@@ -449,7 +451,9 @@ impl GeometryStages {
             }
             let most = match fan.mode {
                 RegionFanOut::DrawFew => crate::bind::fan_out::FEW_COPIES,
-                RegionFanOut::Draw | RegionFanOut::Probe => fan_out::MOST_COPIES,
+                RegionFanOut::Draw | RegionFanOut::Probe | RegionFanOut::RegionCopies => {
+                    fan_out::MOST_COPIES
+                }
             };
             fan.copies = room.min(u64::from(most)) as u32;
         }

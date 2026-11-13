@@ -248,6 +248,8 @@ pub(crate) struct Counters {
     rate_map_fan_out_pipelines_ready: AtomicU64,
     rate_map_fan_out_pipelines_waited: AtomicU64,
     rate_map_fan_tables_uploaded: AtomicU64,
+    rate_map_region_copy_draws: AtomicU64,
+    rate_map_region_copy_recordings: AtomicU64,
     encoder_primaries_begun_ahead: AtomicU64,
     primaries_begun_ahead: AtomicU64,
     barrier_buffers_kept: AtomicU64,
@@ -3007,6 +3009,13 @@ impl Counters {
     /// (`render/fan_out.rs`).
     pub(crate) fn rate_map_fan_table_uploaded(&self) {
         (self.rate_map_fan_tables_uploaded).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A draw of a rate-mapped pass recorded region by region through its region-copy variant, in
+    /// `recordings` recordings (`render/fan_out.rs`, **Region-copy variant**).
+    pub(crate) fn rate_map_region_copy_draw(&self, recordings: u64) {
+        (self.rate_map_region_copy_draws).fetch_add(1, Ordering::Relaxed);
+        (self.rate_map_region_copy_recordings).fetch_add(recordings, Ordering::Relaxed);
     }
 
     /// A host step's probe ran for `nanos` of GPU time, read from its timestamps once it completed
@@ -7438,6 +7447,17 @@ pub struct WorkCounts {
     /// that binds it: one for a host step's probe and one for its fanned-out draws, none for
     /// `commit`'s settle, which records nothing (`rate_mapped_pass.rs`, **Fan-out**).
     pub rate_map_fan_tables_uploaded: u64,
+    /// Draws in rate-mapped passes drawn region by region through their region-copy variant, on a
+    /// device that fans the pass's triangles out: its vertex function puts each vertex in its
+    /// region as a fanned-out draw's geometry stage puts a copy's, each region through a viewport
+    /// over the render area and its own scissor (`rate_mapped_pass.rs`, **Fan-out**): the
+    /// encoder's own draws, executed
+    /// commands the probe did not probe or whose host step does not probe, and a flagged draw's
+    /// runs or the whole of one drawn so.
+    pub rate_map_region_copy_draws: u64,
+    /// The recordings they made: one per region, or per as many regions as one multi-draw
+    /// command draws where the draw is direct and the device has the multi-draw commands.
+    pub rate_map_region_copy_recordings: u64,
     /// Render passes whose first instance did not record inline, its draws in a secondary command
     /// buffer, by the first check that ruled it out (`render/inline_first.rs`), counted as the pass
     /// opens or at its first draw that records: here, the encoder encodes an ended encoder's calls
@@ -10684,6 +10704,10 @@ impl Device {
             rate_map_fan_out_pipelines_waited: (counters.rate_map_fan_out_pipelines_waited)
                 .load(Ordering::Relaxed),
             rate_map_fan_tables_uploaded: (counters.rate_map_fan_tables_uploaded)
+                .load(Ordering::Relaxed),
+            rate_map_region_copy_draws: (counters.rate_map_region_copy_draws)
+                .load(Ordering::Relaxed),
+            rate_map_region_copy_recordings: (counters.rate_map_region_copy_recordings)
                 .load(Ordering::Relaxed),
             passes_not_inline_encoders: not_inline(NotInline::Encoders),
             passes_not_inline_layouts: not_inline(NotInline::Layouts),

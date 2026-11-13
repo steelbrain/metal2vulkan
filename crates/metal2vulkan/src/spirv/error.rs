@@ -206,8 +206,8 @@ pub enum GlobalRule {
     /// implicitly laid-out variables (`SPV_KHR_workgroup_memory_explicit_layout` allows all or
     /// none).
     MixedWorkgroupLayout,
-    /// `Invariant` on a variable other than the `Position`, `FragDepth`, `SampleMask` and
-    /// `FragStencilRefEXT` outputs.
+    /// `Invariant` on a variable other than the `Position`, `ClipDistance`, `FragDepth`,
+    /// `SampleMask` and `FragStencilRefEXT` outputs.
     InvariantTarget,
     /// `PerPrimitiveEXT` on a variable other than a user varying.
     PerPrimitiveTarget,

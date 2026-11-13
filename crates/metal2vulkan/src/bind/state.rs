@@ -157,7 +157,11 @@ pub struct BindState {
     /// touches (`VariantKey::region_fan_out`, `GraphicsState::region_fan_out`), or probing which
     /// of the draw's triangles it cannot ([`RegionFanOut::Probe`](crate::pipeline::RegionFanOut)),
     /// and the index of the pair of words a probe writes (`PushField::RegionProbe`,
-    /// `WriteSource::RateMapFlags`; 0 for a draw). The
+    /// `WriteSource::RateMapFlags`; 0 for a draw); or records them region by region through that
+    /// viewport, its vertex function putting each vertex in its region as the triangle stage
+    /// puts a copy's ([`RegionFanOut::RegionCopies`](crate::pipeline::RegionFanOut)), and the first
+    /// region, in the region table's order, of the draw's recording (`PushField::RegionFirst`),
+    /// which the consumer pushes again for each of its recordings. The
     /// consumer sets it only for a draw of triangles. The plan's variant fans out only a vertex
     /// pipeline without tessellation drawn in one pass of no views, whose stages synthesize no
     /// geometry stage of their own and draw no band (`bind::graphics`'s module docs). Its variant
@@ -1873,8 +1877,8 @@ pub struct BindShape {
     #[cfg_attr(feature = "serde", serde(default))]
     pub region_viewports: bool,
     /// `BindState.region_fan_out`'s variant: a draw of a rate-mapped pass's triangles once, its
-    /// variant's triangle stage fanning them out to their regions, or probing which it cannot
-    /// (`VariantKey::region_fan_out`).
+    /// variant's triangle stage fanning them out to their regions, or probing which it cannot, or
+    /// region by region through its vertex function's copies (`VariantKey::region_fan_out`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub region_fan_out: Option<crate::pipeline::RegionFanOut>,
 }

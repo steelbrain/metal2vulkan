@@ -5878,7 +5878,17 @@ each item named states the rule in full.
   and after them fanned out (`WorkCounts::rate_map_parted_draws`, the runs
   `rate_map_region_runs`, their triangles `rate_map_parted_region_triangles` and of those the
   ones the probe flagged `rate_map_flagged_triangles`); another flagged draw is drawn region by
-  region. The
+  region. On such a device every draw of the pass the fan-out's variant takes and does not fan
+  out (the encoder's own, those the probe flags or does not probe) is drawn region by region
+  through its region-copy variant where the device also enables `multiViewport`,
+  `shaderOutputViewportIndex` and `shaderDrawParameters`, whose vertex function puts each vertex
+  in its region by the instructions that put a fanned-out copy's, a region a recording or as many
+  as a direct draw's multi-draw takes, each through a viewport over the render area and its own
+  scissor (`WorkCounts::rate_map_region_copy_draws`, the recordings
+  `rate_map_region_copy_recordings`), so the pass's routes rasterize a vertex at one
+  position and a depth `Equal` test across them holds where both pipelines compute the position
+  alike; a draw the variant does not take is drawn through each region's viewport
+  (`docs/FAST-PATHS.md`, known gaps). The
   probe costs the host step a submission it waits for before the pass, which runs each probed
   draw's vertex function and geometry stage once and shades nothing (`WorkCounts::rate_map_probes`,
   `rate_map_probe_gpu_nanos`, the host's wait `rate_map_probe_wait_nanos`); a fanned-out draw

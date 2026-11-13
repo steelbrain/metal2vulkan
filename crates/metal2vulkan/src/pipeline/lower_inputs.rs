@@ -878,6 +878,28 @@ pub struct LoweringInputs {
     /// function that writes none. Any other stage compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub region_viewports: bool,
+    /// The function's render pipeline draws a rasterization-rate-mapped pass's regions through
+    /// the target's viewport, each region's copy of each vertex computed in the vertex function
+    /// (`VariantKey::region_fan_out`, `RegionFanOut::RegionCopies`), as a fanned-out copy's is:
+    /// region `first + DrawIndex` of the region table (`SyntheticBinding::RateMapRegions`,
+    /// `bind::fan_out`), `first` its recording's `PushField::RegionFirst` and `DrawIndex` its
+    /// draw's among a `vkCmdDrawMultiEXT`'s (0 for any other draw). The vertex function stores the
+    /// position the region's line moves (`pipeline::link::fan_out::region_copy`, the emitter the
+    /// fan-out stage shares, its operations `NoContraction`), four clip distances past its own
+    /// that keep the region's pixels, and `DrawIndex` as `ViewportIndex`: every viewport the
+    /// runtime sets is the target's and each scissor its region's. It needs the device to store
+    /// `ViewportIndex` from a vertex function (`shaderOutputViewportIndex`), read `DrawIndex`
+    /// (`shaderDrawParameters`) and take several viewports (`multiViewport`), and to write clip
+    /// distances (`shaderClipDistance`), four more within `maxClipDistances` and
+    /// `maxCombinedClipAndCullDistances`: `Unsupported(RasterizationRateMap)` names them otherwise.
+    /// A function that writes its own `[[viewport_array_index]]` or
+    /// `[[render_target_array_index]]`, one compiled under `amplification_draws`,
+    /// `viewport_compensation`, `replay_bindings` or `merged_draws`, a post-tessellation vertex
+    /// function and one that returns no outputs are `NotImplemented(RasterizationRateMap)` under
+    /// it: the runtime draws those region by region through each region's viewport. Any other stage
+    /// compiles as without it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub region_copies: bool,
 }
 
 /// One group of a render pipeline's color attachments (`LoweringInputs::color_group`,

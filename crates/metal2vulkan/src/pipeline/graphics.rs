@@ -420,6 +420,12 @@ pub enum RegionFanOut {
     /// [`Draw`](Self::Draw) through a stage of at most `bind::fan_out::FEW_COPIES` copies, for a
     /// draw the probe found none of whose triangles reaches more pairs of segments.
     DrawFew,
+    /// Draw the plan's regions region by region, each region's copy of each vertex computed by
+    /// the vertex function as a fanned-out copy's is, the draw's index stored as `ViewportIndex`
+    /// (`LoweringInputs::region_copies`): no geometry stage. A draw of a pass whose triangles a
+    /// draw fans out that is not fanned out itself, so that every route of the pass puts a vertex
+    /// in a region at the same position (`bind::fan_out`, **One route per pass**).
+    RegionCopies,
 }
 
 /// What a consumer and the binder need of a render pipeline variant that draws a rate-mapped
@@ -429,7 +435,15 @@ pub enum RegionFanOut {
 ///
 /// Draw triangles alone, through one Vulkan viewport over the whole target and a scissor over it,
 /// with the region table (`bind::fan_out::table`, `SyntheticBinding::RateMapRegions`) of that
-/// viewport over the plan's regions bound. A probe ([`RegionFanOut::Probe`]) draws nothing. Of
+/// viewport over the plan's regions bound. A draw of [`RegionFanOut::RegionCopies`] records the
+/// plan's regions in the table's order, `k` of them a recording (one draw of a
+/// `vkCmdDrawMultiEXT` or `vkCmdDrawMultiIndexedEXT` each, or a draw alone), each recording
+/// pushing the index of its first region to its vertex function's `PushField::RegionFirst`, at
+/// [`push_offset`](Self::push_offset) of its stage `VERTEX`: the vertex function draws region
+/// `first + DrawIndex` and stores `DrawIndex` as `ViewportIndex`. Such a recording sets every
+/// viewport its pipeline takes to the one over the whole target, and at each draw's index its
+/// region's scissor (`bind::fan_out::scissors`, in the table's order). A probe
+/// ([`RegionFanOut::Probe`]) draws nothing. Of
 /// the flags buffer's (`SyntheticBinding::RateMapFlags`) `bind::fan_out::PROBE_DRAW_WORDS`
 /// `u32`s from `PROBE_DRAW_WORDS·i`, `i` its pushed index (`PushField::RegionProbe`, at
 /// [`push_offset`](Self::push_offset) for stage `GEOMETRY`), it writes 1 into the first where a
@@ -451,10 +465,13 @@ pub enum RegionFanOut {
 pub struct FanOutState {
     /// What the variant does.
     pub mode: RegionFanOut,
-    /// The most copies of a triangle its stage emits.
+    /// The most copies of a triangle its stage emits; 0 for [`RegionFanOut::RegionCopies`], which
+    /// emits each vertex once.
     pub copies: u32,
     /// Byte offset of the probe's push range (`PipelineLayout::push_constants`, stage
-    /// `GEOMETRY`, [`PUSH_BYTES`](Self::PUSH_BYTES)); 0 for a draw.
+    /// `GEOMETRY`, [`PUSH_BYTES`](Self::PUSH_BYTES)); of the vertex function's
+    /// `PushField::RegionFirst` in its push window for [`RegionFanOut::RegionCopies`]; 0 for a
+    /// draw.
     pub push_offset: u32,
 }
 

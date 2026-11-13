@@ -752,10 +752,10 @@ pub enum VertexReachPolicy {
 /// by region, a draw runs its vertex function once per region (a plan may hold thousands); fanned
 /// out, once, a geometry stage emitting a copy of each triangle for each region it touches, through
 /// one viewport over the whole target, clip distances keeping each copy to its region's pixels.
-/// A copy's window coordinates are the region viewport's computed in the geometry stage, so a
-/// pixel centre within a rounding error of a triangle's edge may be covered by one route and not
-/// the other. The runtime's choice alone: no emitted code of a pipeline changes, the fan-out and
-/// its probe being variants of their own (`VariantKey::region_fan_out`).
+/// A copy's window coordinates are the region viewport's computed in the shader, so a pixel
+/// centre within a rounding error of a triangle's edge may be covered under one value and not
+/// the other. The runtime's choice alone: no emitted code of a pipeline changes, the fan-out, its
+/// probe and the region-copy variant being variants of their own (`VariantKey::region_fan_out`).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -765,7 +765,12 @@ pub enum RateMapRegionPolicy {
     /// submitted and waited for first, flags each draw a triangle of which crosses `w = 0` or
     /// touches more regions than the fan-out's copies, and counts the copies of the others; a
     /// flagged draw is drawn region by region, the others once each, fanned out. Every other draw
-    /// is drawn region by region.
+    /// is drawn region by region: on such a device that also enables `multiViewport`,
+    /// `shaderOutputViewportIndex` and `shaderDrawParameters`, one the fan-out's variant takes
+    /// through its region-copy variant, whose vertex function puts each vertex in its region as a
+    /// fanned-out draw's copy is put, each region through a viewport over the render area and its
+    /// own scissor, so every route of the pass rasterizes a vertex at one position; any other
+    /// through each region's viewport and scissor.
     #[default]
     FanOut,
     /// Every draw region by region, each region's through its own viewport and scissor.

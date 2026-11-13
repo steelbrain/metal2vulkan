@@ -3315,6 +3315,8 @@ field	metal2vulkan-runtime::WorkCounts.rate_map_pieces_timed	pub rate_map_pieces
 field	metal2vulkan-runtime::WorkCounts.rate_map_probe_gpu_nanos	pub rate_map_probe_gpu_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_probe_wait_nanos	pub rate_map_probe_wait_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_probes	pub rate_map_probes: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_region_copy_draws	pub rate_map_region_copy_draws: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_region_copy_recordings	pub rate_map_region_copy_recordings: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_region_runs	pub rate_map_region_runs: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_by_coverage	pub reading_draws_by_coverage: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_in_place	pub reading_draws_in_place: u64
@@ -4939,6 +4941,7 @@ field	metal2vulkan::pipeline::LoweringInputs.private_list	pub private_list: bool
 field	metal2vulkan::pipeline::LoweringInputs.psb_slots	pub psb_slots: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.quad_primitive_ids	pub quad_primitive_ids: bool
 field	metal2vulkan::pipeline::LoweringInputs.read_only_tests	pub read_only_tests: bool
+field	metal2vulkan::pipeline::LoweringInputs.region_copies	pub region_copies: bool
 field	metal2vulkan::pipeline::LoweringInputs.region_viewports	pub region_viewports: bool
 field	metal2vulkan::pipeline::LoweringInputs.render_target_array_index_varying	pub render_target_array_index_varying: bool
 field	metal2vulkan::pipeline::LoweringInputs.replay_bindings	pub replay_bindings: bool
@@ -5349,6 +5352,7 @@ fn	metal2vulkan::bind::extended_range_canonical	pub fn extended_range_canonical(
 fn	metal2vulkan::bind::extended_shadow_module	pub fn extended_shadow_module(device: &Device, form: ExtendedRange) -> Result<ExtendedShadowModule, Error>
 fn	metal2vulkan::bind::fan_out::clip_entry	pub const fn clip_entry(axis: u32, k: u32) -> u32
 fn	metal2vulkan::bind::fan_out::line_entry	pub const fn line_entry(axis: u32, k: u32) -> u32
+fn	metal2vulkan::bind::fan_out::scissors	pub fn scissors(regions: &[([f32; 4], [u32; 4])]) -> Option<Vec<[u32; 4]>>
 fn	metal2vulkan::bind::fan_out::table	pub fn table(target: [f32; 4], regions: &[([f32; 4], [u32; 4])]) -> Option<Vec<u8>>
 fn	metal2vulkan::bind::flat_dispatch_module	pub fn flat_dispatch_module(device: &Device) -> Result<FlatDispatchModule, Error>
 fn	metal2vulkan::bind::fold_object_grid	pub fn fold_object_grid(groups: [u32; 3], threads: [u32; 3], task: MeshGridLimits, direct: bool) -> Option<ObjectFold>
@@ -14848,6 +14852,7 @@ variant	metal2vulkan::pipeline::PushField::MergedDrawAddress	MergedDrawAddress
 variant	metal2vulkan::pipeline::PushField::PatchIndexBound	PatchIndexBound
 variant	metal2vulkan::pipeline::PushField::PatchIndexOffset	PatchIndexOffset
 variant	metal2vulkan::pipeline::PushField::PointGuard	PointGuard
+variant	metal2vulkan::pipeline::PushField::RegionFirst	RegionFirst
 variant	metal2vulkan::pipeline::PushField::RegionProbe	RegionProbe
 variant	metal2vulkan::pipeline::PushField::RenderTargetArrayLength	RenderTargetArrayLength
 variant	metal2vulkan::pipeline::PushField::ReplayRegionAddress	ReplayRegionAddress
@@ -14889,6 +14894,7 @@ variant	metal2vulkan::pipeline::RecordValue::ViewportIndex	ViewportIndex
 variant	metal2vulkan::pipeline::RegionFanOut::Draw	Draw
 variant	metal2vulkan::pipeline::RegionFanOut::DrawFew	DrawFew
 variant	metal2vulkan::pipeline::RegionFanOut::Probe	Probe
+variant	metal2vulkan::pipeline::RegionFanOut::RegionCopies	RegionCopies
 variant	metal2vulkan::pipeline::ResourceKind::AccelerationStructure	AccelerationStructure(AccelerationStructureLevel)
 variant	metal2vulkan::pipeline::ResourceKind::Buffer	Buffer
 variant	metal2vulkan::pipeline::ResourceKind::CombinedTextureSampler	CombinedTextureSampler(CombinedSampler)

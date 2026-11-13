@@ -1028,16 +1028,21 @@ fn a_push_block_that_is_not_std430_uses_scalar_layout() {
     assert_eq!(m.push_members().len(), 2);
 }
 
-/// Only the `Position` output (Metal `[[invariant]]`) and a fragment's per-fragment outputs (the
-/// variants of a render pipeline's color groups) can be decorated `Invariant`.
+/// Only the `Position` output (Metal `[[invariant]]`), the `ClipDistance` output (a rate-mapped
+/// pass's copies) and a fragment's per-fragment outputs (the variants of a render pipeline's
+/// color groups) can be decorated `Invariant`.
 #[test]
-fn only_the_position_and_per_fragment_outputs_are_invariant() {
+fn only_the_position_clip_distances_and_per_fragment_outputs_are_invariant() {
     let mut t = T::new();
     let f = t.f32();
     let v4 = t.vec(f, 4);
     let pos =
         t.b.builtin(BuiltIn::Position, IoDir::Output, v4)
             .expect("position");
+    let clips = t.array(f, 4, None);
+    let clips =
+        t.b.builtin(BuiltIn::ClipDistance, IoDir::Output, clips)
+            .expect("clip distances");
     let depth =
         t.b.builtin(BuiltIn::FragDepth, IoDir::Output, f)
             .expect("depth");
@@ -1048,6 +1053,7 @@ fn only_the_position_and_per_fragment_outputs_are_invariant() {
         t.b.io(key("color"), IoDir::Output, v4, IoDecor::default())
             .expect("varying");
     assert_eq!(t.b.invariant(pos), Ok(()));
+    assert_eq!(t.b.invariant(clips), Ok(()));
     assert_eq!(t.b.invariant(depth), Ok(()));
     for g in [size, color] {
         assert_eq!(

@@ -1986,7 +1986,8 @@ impl RenderLowering {
     /// A tessellation or mesh pipeline's draws, and a state the pass refuses, are left to the
     /// step, which meets them as they are then. Announces nothing: it draws nothing. The draws
     /// settle with the bind state `live`. Under the encoder's fan-out (`render/fan_out.rs`), the
-    /// probe's or the fanned-out draw's variant of each draw it takes, none of another.
+    /// probe's or the fanned-out draw's variant of each draw it takes, none of another; outside
+    /// it, a draw's region-copy variant where the device fans out.
     fn settle_draws(
         &mut self,
         live: &mut LiveBind,
@@ -2060,8 +2061,11 @@ impl RenderLowering {
         // (`render/vertex_reach.rs`), are the step's: none here. A command's draw is direct, and
         // draws a rate-mapped pass's regions as the encoder's direct draw would.
         let region_viewports = self.draws_region_batches(state, &settings, true);
+        // Outside the encoder's fan-out, the region-copy variant the step records where the device
+        // fans out (`render/fan_out.rs`, **Region-copy variant**), else its region by region
+        // variant.
         let region_fan_out = match self.fan_out {
-            None => None,
+            None => self.fan_out_asked(state, &settings, assembly)?,
             Some(_) => match self.fan_out_asked(state, &settings, assembly)? {
                 Some(fan) => Some(fan),
                 None => return Ok(None),
@@ -2135,6 +2139,13 @@ impl RenderLowering {
         // regions several at a time, as the step's draw keys it.
         if let Some(batch) = super::region_batch(&variant, self.core.device())? {
             fixed.viewports = batch as u32;
+        }
+        // And as many as its draw through its region-copy variant sets (`render/fan_out.rs`,
+        // **Region-copy variant**).
+        if variant.key().region_fan_out == Some(RegionFanOut::RegionCopies)
+            && !graphics.vertex_writes_memory
+        {
+            fixed.viewports = fan_out::copy_viewports(self.core.device());
         }
         // The class's list topology where the pipeline makes the topology dynamic.
         let (topology, primitive_restart) = crate::pipeline::keyed_assembly(

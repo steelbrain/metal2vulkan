@@ -531,6 +531,10 @@ pub fn function_key(
     if inputs.region_viewports {
         h.bytes(b"region-viewports");
     }
+    // Appended only when set.
+    if inputs.region_copies {
+        h.bytes(b"region-copies");
+    }
     // Appended only when present, so a stage that links nothing keeps its key: the tag's length
     // prefix keeps the encoding unambiguous.
     if !linked.is_empty() {

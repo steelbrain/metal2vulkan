@@ -1015,6 +1015,11 @@ pub enum PushField {
     /// window holds it (at most 44 bytes before it there: `SnapshotPhase` is a fragment
     /// function's): the draw of each chunk writes it alone, between its draws.
     TessellationChunk,
+    /// The first region a recording of a rate-mapped pass's regions draws, in the region table's
+    /// order (`u32`; `RegionFanOut::RegionCopies`, `LoweringInputs::region_copies`): its vertex
+    /// function draws region `first + DrawIndex`. Placed with the amplification fields, so the
+    /// vertex window holds it, as a recording writes it before its draws.
+    RegionFirst,
     /// Region base and grid of a multi-region dispatch.
     DispatchRegion,
     /// Device address (`u64`) of the region record a device-replay variant's dispatch reads its

@@ -918,6 +918,7 @@ codec_enum! {
         YCbCrInPlace(f0),
         LineBand,
         RegionProbe,
+        RegionFirst,
     }
     Symbol { Binding(f0), DescriptorSet(f0), Location(f0), Component(f0), SpecId(f0) }
 }
@@ -1447,7 +1448,7 @@ codec_enum! {
     StorageAttachmentView { Attachment, SamplePlanes { layers } }
     StandInView { Image, SamplePlanes { layers } }
     BandPrimitive { Lines, Triangles }
-    RegionFanOut { Draw, Probe, DrawFew }
+    RegionFanOut { Draw, Probe, DrawFew, RegionCopies }
     PrecisionNote {
         F16FmaDoubleRounding, F16IntConvDoubleRounding, GradFromBias,
         DeviceTranscendentals, ReductionOrder, DeviceDenormals,

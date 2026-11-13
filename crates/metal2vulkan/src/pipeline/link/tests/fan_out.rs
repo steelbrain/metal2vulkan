@@ -56,8 +56,9 @@ fn count_ops(words: &[u32], op: u32) -> usize {
 }
 
 /// A draw's triangle stage emits three vertices a copy, in a loop of as many copies as its state
-/// says, its output vertices three a copy, and a probe's none and pushes its flag's index in the
-/// geometry stage's own range; every class's module is valid on the device.
+/// says, its output vertices three a copy, its copies' arithmetic `NoContraction`, and a probe's
+/// none and pushes its flag's index in the geometry stage's own range; its `Position` and
+/// `ClipDistance` are `Invariant`; every class's module is valid on the device.
 #[test]
 fn a_fan_out_variant_s_triangle_stage_emits_its_copies() {
     for stem in ["lavapipe", "intel-irisxe-rplp-anv", "nvidia-pascal-linux"] {
@@ -74,7 +75,7 @@ fn a_fan_out_variant_s_triangle_stage_emits_its_copies() {
             let fan = g.fan_out.expect("the fan-out stage");
             let most = match mode {
                 RegionFanOut::DrawFew => crate::bind::fan_out::FEW_COPIES,
-                RegionFanOut::Draw | RegionFanOut::Probe => 16,
+                _ => 16,
             };
             assert!((1..=most).contains(&fan.copies), "{stem}: {}", fan.copies);
             let state = linked
@@ -92,10 +93,8 @@ fn a_fan_out_variant_s_triangle_stage_emits_its_copies() {
                 .map(|r| (r.offset, r.size))
                 .collect::<Vec<_>>();
             match mode {
-                RegionFanOut::Draw | RegionFanOut::DrawFew => {
-                    assert!(pushes.is_empty(), "{stem}")
-                }
                 RegionFanOut::Probe => assert_eq!(pushes, [(fan.push_offset, 4)], "{stem}"),
+                _ => assert!(pushes.is_empty(), "{stem} {mode:?}"),
             }
             let made = g
                 .stages(&linked, &p, &mut crate::pipeline::testing::meter())
@@ -107,8 +106,8 @@ fn a_fan_out_variant_s_triangle_stage_emits_its_copies() {
                 let (expected, outputs) = match (class, mode) {
                     (Class::Point, _) => (1, 1),
                     (Class::Line, _) => (2, 2),
-                    (_, RegionFanOut::Draw | RegionFanOut::DrawFew) => (3, 3 * fan.copies),
                     (_, RegionFanOut::Probe) => (0, 3),
+                    (_, _) => (3, 3 * fan.copies),
                 };
                 assert_eq!(emits, expected, "{stem} {mode:?} {class:?}");
                 let loops = count_ops(&module.spirv, crate::spv::Op::LoopMerge as u32);
@@ -122,6 +121,24 @@ fn a_fan_out_variant_s_triangle_stage_emits_its_copies() {
                     .map(|m| m[2])
                     .collect::<Vec<u32>>();
                 assert_eq!(declared, [outputs], "{stem} {mode:?} {class:?}");
+                if class != Class::Triangle {
+                    continue;
+                }
+                let decorated = |decoration: crate::spv::Decoration| {
+                    (instructions(&module.spirv, crate::spv::Op::Decorate).into_iter())
+                        .filter(|d| d.get(1) == Some(&(decoration as u32)))
+                        .count()
+                };
+                // Of each of a copy's three vertices, each axis's coordinate and its two clip
+                // distances: five products and three sums.
+                let contracted = match mode {
+                    RegionFanOut::Probe => 0,
+                    _ => 3 * 2 * 8,
+                };
+                let no_contraction = decorated(crate::spv::Decoration::NoContraction);
+                assert_eq!(no_contraction, contracted, "{stem} {mode:?}");
+                let invariant = decorated(crate::spv::Decoration::Invariant);
+                assert_eq!(invariant, 2, "{stem} {mode:?}");
             }
         }
     }
@@ -274,4 +291,35 @@ fn what_the_fan_out_cannot_carry_is_refused() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+/// A region-copy variant draws no geometry stage: its vertex function draws its region's copy, at
+/// the first region it reads pushed (`PushField::RegionFirst`), which its graphics state names; a
+/// vertex function that reads none is refused.
+#[test]
+fn a_regions_variant_draws_its_vertex_function_s_copies() {
+    let p = profile("lavapipe");
+    let (mut v, f) = pipeline();
+    let regions = fanned(RegionFanOut::RegionCopies);
+    not_implemented(link(&[&v, &f], &regions, &p).unwrap_err());
+    let fields = BTreeSet::from([PushField::RegionFirst]);
+    v.interface.push = crate::lower::push::place(Stage::Vertex, &fields);
+    let offset = match v.interface.push.fields.as_slice() {
+        [placed] => match placed.loc {
+            crate::pipeline::interface::PushLoc::Push { offset } => offset,
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    };
+    let linked = link(&[&v, &f], &regions, &p).unwrap_or_else(|e| panic!("{e}"));
+    assert!(linked.geometry.is_none());
+    let fan = linked.graphics.and_then(|g| g.region_fan_out);
+    assert_eq!(
+        fan,
+        Some(crate::pipeline::graphics::FanOutState {
+            mode: RegionFanOut::RegionCopies,
+            copies: 0,
+            push_offset: offset,
+        })
+    );
 }

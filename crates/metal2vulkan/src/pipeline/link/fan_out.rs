@@ -14,7 +14,10 @@
 //! - **Draw** ([`RegionFanOut::Draw`]): a triangle every `w` of which is positive emits one copy
 //!   per pair of segments its bounds reach, at most [`FanOutStage::copies`]; one with no positive
 //!   `w`, or one past the segments, emits none, and so does one with some `w` not positive, which
-//!   the probe found. The copies are a loop the driver is asked not to unroll (`DontUnroll`): its
+//!   the probe found. Each copy's vertices are [`region_copy`]'s, the emitter a vertex function
+//!   that draws its region's copy shares (`LoweringInputs::region_copies`), and the stage's
+//!   `Position` and `ClipDistance` outputs are `Invariant`. The copies are a loop the driver is
+//!   asked not to unroll (`DontUnroll`): its
 //!   body compiled once, the pipeline is made in about a third of the time 16 unrolled copies
 //!   took (on an RTX 3090 45.2 against 81.3 ms for the probe's and the draw's, Iris Xe 20.0
 //!   against 66.9 ms, Radeon 780M 14.4 against 44.5 ms), with the same GPU time. A draw of few
@@ -184,37 +187,99 @@ fn extreme(fb: &mut FunctionBuilder<'_>, op: GlslOp, v: [Value; 3]) -> BResult<V
     fb.glsl(op, &[two, v[2]])
 }
 
-/// Emit the copy of the triangle for segments `sx` and `sy`: each vertex through their lines,
-/// with their clip distances past the vertex function's.
-fn emit_copy(fb: &mut FunctionBuilder<'_>, c: &Copies, (sx, sy): (Value, Value)) -> BResult<()> {
-    let table = (c.table, c.f32_);
-    let mut axes = Vec::with_capacity(2);
+/// Declare the region table (`SyntheticBinding::RateMapRegions`, [`REGIONS_SLOT`]) in `mb`: a
+/// `Block { uint[] }` storage buffer, which a fan-out stage reads and a vertex function that
+/// draws its region's copy (`LoweringInputs::region_copies`) reads alike.
+pub(crate) fn declare_table(mb: &mut ModuleBuilder) -> BResult<GlobalId> {
+    let u32_ = mb.ty(Type::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let words = mb.ty(Type::RuntimeArray {
+        elem: u32_,
+        stride: Some(4),
+    })?;
+    let layout = natural_layout(mb.types(), LayoutRule::Std430, true, &[words])?;
+    let block = mb.ty(Type::Struct {
+        members: [words].into(),
+        layout: Some(layout),
+    })?;
+    mb.resource(REGIONS_SLOT, StorageClass::StorageBuffer, block)
+}
+
+/// The segments of region `k` (a `uint`) of the table `table`, in its order (`bind::fan_out`,
+/// **One route per pass**): `(k mod nx, k / nx)`, `nx` its segments of axis x.
+pub(crate) fn region_segments(
+    fb: &mut FunctionBuilder<'_>,
+    table: GlobalId,
+    k: Value,
+) -> BResult<(Value, Value)> {
+    let header = ku(fb, 0)?;
+    let nx = word(fb, table, header)?;
+    let sx = fb.binary(BinOp::UMod, k, nx)?;
+    let sy = fb.binary(BinOp::UDiv, k, nx)?;
+    Ok((sx, sy))
+}
+
+/// The terms of the copy for segments `sx` and `sy` (`uint`s) of the table `table` (its global
+/// and `float` type), of axis x then y: `[a, b, W/2, X + W/2 − p₀, p₁ − X − W/2]`, its line's
+/// `a` and `b` and its clip (the layout of `bind::fan_out`).
+pub(crate) fn region_terms(
+    fb: &mut FunctionBuilder<'_>,
+    table: (GlobalId, TypeId),
+    (sx, sy): (Value, Value),
+) -> BResult<[[Value; 5]; 2]> {
+    let mut axes = [[sx; 5]; 2];
     for (axis, s) in [(0, sx), (1, sy)] {
-        let a = component(fb, table, line_entry(axis, 0), Some(s), 2)?;
-        let b = component(fb, table, line_entry(axis, 0), Some(s), 3)?;
-        let half = component(fb, table, clip_entry(axis, 0), Some(s), 0)?;
-        let lo = component(fb, table, clip_entry(axis, 0), Some(s), 1)?;
-        let hi = component(fb, table, clip_entry(axis, 0), Some(s), 2)?;
-        axes.push((a, b, half, lo, hi));
+        let terms = &mut axes[axis as usize];
+        terms[0] = component(fb, table, line_entry(axis, 0), Some(s), 2)?;
+        terms[1] = component(fb, table, line_entry(axis, 0), Some(s), 3)?;
+        for (t, c) in [(2, 0), (3, 1), (4, 2)] {
+            terms[t] = component(fb, table, clip_entry(axis, 0), Some(s), c)?;
+        }
     }
+    Ok(axes)
+}
+
+/// The copy of the clip-space position `p` (a `vec4` of type `vec4`) through `terms`
+/// ([`region_terms`]): `(a·x + b·w, a·y + b·w, z, w)`, each axis's own `a` and `b`, and the clip
+/// distances `W/2·v + lo·w` and `hi·w − W/2·v` of x then y. The one emitter of a region's copy:
+/// a fan-out stage's of each vertex it emits, and a vertex function's that draws its region's
+/// copy (`LoweringInputs::region_copies`). Each operation is decorated `NoContraction`, so each
+/// is correctly rounded on its own (Vulkan's *Precision and Operation of SPIR-V Instructions*)
+/// and both put a vertex in a region at the same bits (`bind::fan_out`, **One route per pass**).
+pub(crate) fn region_copy(
+    fb: &mut FunctionBuilder<'_>,
+    terms: &[[Value; 5]; 2],
+    p: Value,
+    vec4: TypeId,
+) -> BResult<(Value, [Value; 4])> {
+    let w = fb.composite_extract(p, &[3])?;
+    let z = fb.composite_extract(p, &[2])?;
+    let mut moved = [w; 2];
+    let mut distances = [w; 4];
+    for (axis, &[a, b, half, lo, hi]) in terms.iter().enumerate() {
+        let v = fb.composite_extract(p, &[axis as u32])?;
+        let av = fb.binary_no_contraction(BinOp::FMul, a, v)?;
+        let bw = fb.binary_no_contraction(BinOp::FMul, b, w)?;
+        moved[axis] = fb.binary_no_contraction(BinOp::FAdd, av, bw)?;
+        let hv = fb.binary_no_contraction(BinOp::FMul, half, v)?;
+        let low = fb.binary_no_contraction(BinOp::FMul, lo, w)?;
+        distances[2 * axis] = fb.binary_no_contraction(BinOp::FAdd, hv, low)?;
+        let high = fb.binary_no_contraction(BinOp::FMul, hi, w)?;
+        distances[2 * axis + 1] = fb.binary_no_contraction(BinOp::FSub, high, hv)?;
+    }
+    let position = fb.composite_construct(vec4, &[moved[0], moved[1], z, w])?;
+    Ok((position, distances))
+}
+
+/// Emit the copy of the triangle for segments `sx` and `sy`: each vertex through their lines,
+/// with their clip distances past the vertex function's ([`region_copy`]).
+fn emit_copy(fb: &mut FunctionBuilder<'_>, c: &Copies, (sx, sy): (Value, Value)) -> BResult<()> {
+    let terms = region_terms(fb, (c.table, c.f32_), (sx, sy))?;
     for (k, &p) in c.positions.iter().enumerate() {
         let at = ku(fb, k as u32)?;
-        let w = fb.composite_extract(p, &[3])?;
-        let z = fb.composite_extract(p, &[2])?;
-        let mut moved = Vec::with_capacity(2);
-        let mut distances = Vec::with_capacity(4);
-        for (axis, &(a, b, half, lo, hi)) in axes.iter().enumerate() {
-            let v = fb.composite_extract(p, &[axis as u32])?;
-            let av = fb.binary(BinOp::FMul, a, v)?;
-            let bw = fb.binary(BinOp::FMul, b, w)?;
-            moved.push(fb.binary(BinOp::FAdd, av, bw)?);
-            let hv = fb.binary(BinOp::FMul, half, v)?;
-            let low = fb.binary(BinOp::FMul, lo, w)?;
-            distances.push(fb.binary(BinOp::FAdd, hv, low)?);
-            let high = fb.binary(BinOp::FMul, hi, w)?;
-            distances.push(fb.binary(BinOp::FSub, high, hv)?);
-        }
-        let position = fb.composite_construct(c.vec4, &[moved[0], moved[1], z, w])?;
+        let (position, distances) = region_copy(fb, &terms, p, c.vec4)?;
         let to = fb.module().global_value(c.position)?;
         fb.store(to, position, MemAccess::default())?;
         let clips = fb.module().global_value(c.clips)?;
@@ -261,6 +326,7 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
     let ty = array(&mut mb, vec4, 3)?;
     let positions = mb.builtin(B::Position, IoDir::Input, ty)?;
     let position = mb.builtin(B::Position, IoDir::Output, vec4)?;
+    mb.invariant(position)?;
     let own = stages.clip_distances;
     let own_clips = match own {
         0 => None,
@@ -272,6 +338,7 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
     };
     let ty = array(&mut mb, f32_, own + 4)?;
     let clips = mb.builtin(B::ClipDistance, IoDir::Output, ty)?;
+    mb.invariant(clips)?;
     let packed = IoDecor {
         packed: true,
         ..IoDecor::default()
@@ -296,18 +363,18 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
         )),
         false => None,
     };
-    let words = mb.ty(Type::RuntimeArray {
-        elem: u32_,
-        stride: Some(4),
-    })?;
-    let block_layout = natural_layout(mb.types(), LayoutRule::Std430, true, &[words])?;
-    let block = mb.ty(Type::Struct {
-        members: [words].into(),
-        layout: Some(block_layout),
-    })?;
-    let table = mb.resource(REGIONS_SLOT, StorageClass::StorageBuffer, block)?;
+    let table = declare_table(&mut mb)?;
     let probe = match fan.mode {
         RegionFanOut::Probe => {
+            let words = mb.ty(Type::RuntimeArray {
+                elem: u32_,
+                stride: Some(4),
+            })?;
+            let layout = natural_layout(mb.types(), LayoutRule::Std430, true, &[words])?;
+            let block = mb.ty(Type::Struct {
+                members: [words].into(),
+                layout: Some(layout),
+            })?;
             let flags = mb.resource(FLAGS_SLOT, StorageClass::StorageBuffer, block)?;
             let member = (mb.push_member(PushField::RegionProbe, u32_, fan.push_offset)?).index;
             // The probe picks a triangle's count by its `PrimitiveId`.
@@ -317,7 +384,7 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
             };
             Some((flags, member, mb.push_global()?, id))
         }
-        RegionFanOut::Draw | RegionFanOut::DrawFew => None,
+        RegionFanOut::Draw | RegionFanOut::DrawFew | RegionFanOut::RegionCopies => None,
     };
     let mut fb = mb.function(void)?;
     let mut loaded = Vec::with_capacity(3);
@@ -532,7 +599,7 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
     fb.ret(None)?;
     let f = fb.finish()?;
     let vertices = match fan.mode {
-        RegionFanOut::Draw | RegionFanOut::DrawFew => 3 * copies,
+        RegionFanOut::Draw | RegionFanOut::DrawFew | RegionFanOut::RegionCopies => 3 * copies,
         RegionFanOut::Probe => 3,
     };
     let modes = vec![

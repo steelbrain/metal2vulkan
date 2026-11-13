@@ -6,7 +6,10 @@
 //!   variant, which the base pipeline does not draw (`BindError::NeedsVariant`); compiled, its
 //!   modules pass L3, its graphics state states the fan-out, it states no synthesized-geometry
 //!   fact, and its plan settles on itself. A draw binds the region table; a probe binds its flags
-//!   too and pushes its flag's index to the geometry stage.
+//!   too and pushes its flag's index to the geometry stage. A region-copy variant draws no geometry
+//!   stage: its vertex function draws its region's copy, sixteen more `NoContraction`
+//!   operations than the plain one's and its clip distances `Invariant` too, binds the region
+//!   table and pushes its first region to the vertex stage.
 //! - Drawn amplified, the plan keeps the plain variant, and draws the regions one at a time.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly. No GPU is used.
@@ -85,10 +88,15 @@ fn a_fanned_out_draw_runs_its_variant() {
         let base = dev
             .compile_render_pipeline(&d, &budget)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let plain = (base.stages.iter())
+            .find(|m| m.stage == vk::ShaderStage::VERTEX)
+            .map(|m| decorated(&m.spirv))
+            .expect("a vertex module");
         for mode in [
             RegionFanOut::Draw,
             RegionFanOut::Probe,
             RegionFanOut::DrawFew,
+            RegionFanOut::RegionCopies,
         ] {
             let state = BindState {
                 region_fan_out: Some((mode, 5)),
@@ -119,7 +127,11 @@ fn a_fanned_out_draw_runs_its_variant() {
             let geometry = (p.stages.iter())
                 .filter(|m| m.stage == vk::ShaderStage::GEOMETRY)
                 .count();
-            assert_eq!(geometry, 3, "{stem} {mode:?}");
+            let stages = match mode {
+                RegionFanOut::RegionCopies => 0,
+                _ => 3,
+            };
+            assert_eq!(geometry, stages, "{stem} {mode:?}");
             let fan = p.graphics.region_fan_out.expect("the fan-out state");
             assert_eq!(fan.mode, mode, "{stem}");
             assert!(
@@ -146,13 +158,61 @@ fn a_fanned_out_draw_runs_its_variant() {
                 .map(|w| (w.offset, w.bytes.clone()))
                 .collect();
             match mode {
-                RegionFanOut::Draw | RegionFanOut::DrawFew => assert!(pushed.is_empty(), "{stem}"),
                 RegionFanOut::Probe => {
                     assert_eq!(pushed, [(fan.push_offset, 5u32.to_le_bytes().to_vec())])
                 }
+                _ => assert!(pushed.is_empty(), "{stem}"),
             }
+            if mode != RegionFanOut::RegionCopies {
+                continue;
+            }
+            // Its first region, in the vertex stage's push range.
+            let at = fan.push_offset;
+            let first = (commands.push_constants.iter())
+                .filter(|w| w.stages.contains(vk::ShaderStageFlags::VERTEX))
+                .find(|w| w.offset <= at && at + 4 <= w.offset + w.bytes.len() as u32)
+                .map(|w| w.bytes[(at - w.offset) as usize..][..4].to_vec());
+            assert_eq!(first, Some(5u32.to_le_bytes().to_vec()), "{stem}");
+            let vertex = (p.stages.iter())
+                .find(|m| m.stage == vk::ShaderStage::VERTEX)
+                .map(|m| decorated(&m.spirv))
+                .expect("a vertex module");
+            // Of each axis's coordinate and its two clip distances, five products and three sums.
+            assert_eq!(vertex[0], plain[0] + 2 * 8, "{stem}");
+            assert_eq!(vertex[1], plain[1] + 1, "{stem}");
+            // It stores its draw's index as the viewport's, its region's scissor's.
+            assert_eq!(vertex[2], plain[2] + 1, "{stem}");
         }
     }
+}
+
+/// How many `NoContraction`, `Invariant` and `BuiltIn ViewportIndex` decorations module `words`
+/// holds.
+fn decorated(words: &[u32]) -> [usize; 3] {
+    use crate::spv::{BuiltIn, Decoration};
+    let mut n = [0; 3];
+    let mut i = 5;
+    while let Some(&w) = words.get(i) {
+        let len = (w >> 16) as usize;
+        if w & 0xFFFF == crate::spv::Op::Decorate as u32 {
+            match words.get(i + 2).copied() {
+                Some(d) if d == Decoration::NoContraction as u32 => n[0] += 1,
+                Some(d) if d == Decoration::Invariant as u32 => n[1] += 1,
+                Some(d)
+                    if d == Decoration::BuiltIn as u32
+                        && words.get(i + 3).copied() == Some(BuiltIn::ViewportIndex as u32) =>
+                {
+                    n[2] += 1
+                }
+                _ => {}
+            }
+        }
+        if len == 0 {
+            break;
+        }
+        i += len;
+    }
+    n
 }
 
 /// Drawn amplified, a plan whose shape fans triangles out keeps the plain variant.

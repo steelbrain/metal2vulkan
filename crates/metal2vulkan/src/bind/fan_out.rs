@@ -18,10 +18,34 @@
 //!   a pixel centre lies half a pixel from every scissor edge, so each pixel the triangle covers is
 //!   shaded by the one copy of its region.
 //!
-//! A copy's fragments are the region route's up to rounding: its window coordinates are the
+//! A copy's fragments are its region viewport's up to rounding: its window coordinates are the
 //! region viewport's computed another way, so a pixel centre that lies within a rounding error of
-//! a triangle's edge may be covered by one route and not the other (a near-equivalent, rule 1's
-//! fast default; the regions route is the exact one).
+//! a triangle's edge may be covered by the copy and not through the region's own viewport (a
+//! near-equivalent, rule 1's fast default; `RateMapRegionPolicy::Exact`, which draws every region
+//! through its own viewport, is the exact one).
+//!
+//! **One route per pass.** Where a pass fans its triangles out, the draws it records region by
+//! region take their region-copy variant (`RegionFanOut::RegionCopies`): region `k` of a
+//! recording the first it pushes (`PushField::RegionFirst`) plus its draw's `DrawIndex` among a
+//! multi-draw's (0 for a draw that is no multi-draw's), the segments `(k mod nx, k / nx)`, and
+//! the vertex function putting each vertex in region `k` by the emitter of the fan-out stage's
+//! copies (`pipeline::link::fan_out::region_copy`). It stores `DrawIndex` as `ViewportIndex`, and
+//! every viewport the recording sets is the target's, each scissor its region's ([`scissors`]):
+//! the rasterizer rejects a triangle outside the region by its scissor, as it does through a
+//! region's own viewport, and the viewport transform is the fan-out's whatever the index,
+//! Vulkan's being "determined by the selected viewport's width and height in pixels, px and py,
+//! respectively, and its center (ox, oy) (also in pixels), as well as its depth range"
+//! (*Controlling the Viewport*). Every route then hands the rasterizer the same position and clip
+//! distances for a vertex in a region, through the same viewport transform: a later pass that
+//! tests `Equal` the depth one draw stored meets it where the other route drew it. The copy's
+//! arithmetic is decorated `NoContraction`, each operation correctly rounded on its own (Vulkan's
+//! *Precision and Operation of SPIR-V Instructions*), and its `Position` and `ClipDistance`
+//! outputs are `Invariant`. The routes run the copy in different pipelines and different stages
+//! (the region-copy variant's vertex function, the fan-out variant's geometry stage), each on the
+//! position its own vertex function computes: the identity rests on those correctly rounded
+//! operations and on the guest's position computation compiling alike in both pipelines, which
+//! Vulkan's invariance appendix does not promise across pipelines (its Rule 4), and which is
+//! checked by running it (`docs/FAST-PATHS.md`, known gaps).
 //!
 //! The table holds, for each axis, the segments of the plan's regions that hold a pixel, in the
 //! order of their normalized device coordinates: a region is a segment of each axis. The stage
@@ -148,12 +172,9 @@ impl Segment {
     }
 }
 
-/// The region table of a fan-out draw through the Vulkan viewport `target` (`[x, y, width,
-/// height]`, its height negative where the consumer flips y) over the regions `regions`, each its
-/// Vulkan viewport and its scissor `[x, y, width, height]`, those that hold a pixel (the module
-/// docs). `None` where the regions are not one segment of each axis per pair (a plan's are), or an
-/// axis has more than [`MAX_SEGMENTS`] or none.
-pub fn table(target: [f32; 4], regions: &[([f32; 4], [u32; 4])]) -> Option<Vec<u8>> {
+/// The segments of each axis of `regions` ([`table`]'s), in the order of their normalized device
+/// coordinates, or `None` where they make no table.
+fn segments(regions: &[([f32; 4], [u32; 4])]) -> Option<[Vec<Segment>; 2]> {
     let axis = |a: usize| {
         let mut segments: Vec<Segment> = Vec::new();
         for &(viewport, scissor) in regions {
@@ -174,6 +195,16 @@ pub fn table(target: [f32; 4], regions: &[([f32; 4], [u32; 4])]) -> Option<Vec<u
     if !fits(&xs) || !fits(&ys) || xs.len() * ys.len() != regions.len() {
         return None;
     }
+    Some([xs, ys])
+}
+
+/// The region table of a fan-out draw through the Vulkan viewport `target` (`[x, y, width,
+/// height]`, its height negative where the consumer flips y) over the regions `regions`, each its
+/// Vulkan viewport and its scissor `[x, y, width, height]`, those that hold a pixel (the module
+/// docs). `None` where the regions are not one segment of each axis per pair (a plan's are), or an
+/// axis has more than [`MAX_SEGMENTS`] or none.
+pub fn table(target: [f32; 4], regions: &[([f32; 4], [u32; 4])]) -> Option<Vec<u8>> {
+    let [xs, ys] = segments(regions)?;
     let mut entries = vec![[0u32; 4]; (TABLE_BYTES / 16) as usize];
     entries[0] = [xs.len() as u32, ys.len() as u32, 0, 0];
     // A physical pixel is `2 / |W|` of normalized device coordinates; the widening is the least
@@ -198,6 +229,23 @@ pub fn table(target: [f32; 4], regions: &[([f32; 4], [u32; 4])]) -> Option<Vec<u
             .iter()
             .flatten()
             .flat_map(|w| w.to_le_bytes())
+            .collect(),
+    )
+}
+
+/// The scissors `[x, y, width, height]` of the regions of [`table`]'s table over `regions`, in
+/// the table's order: region `k` of segments `(k mod nx, k / nx)` (the module docs, **One route
+/// per pass**), the scissor a region-copy variant's draw of region `k` takes. `None` where
+/// [`table`] makes none.
+pub fn scissors(regions: &[([f32; 4], [u32; 4])]) -> Option<Vec<[u32; 4]>> {
+    let [xs, ys] = segments(regions)?;
+    let scissor = |x: &Segment, y: &Segment| {
+        let ([x0, x1], [y0, y1]) = (x.pixels, y.pixels);
+        [x0, y0, x1 - x0, y1 - y0]
+    };
+    Some(
+        (ys.iter())
+            .flat_map(|y| xs.iter().map(|x| scissor(x, y)))
             .collect(),
     )
 }
