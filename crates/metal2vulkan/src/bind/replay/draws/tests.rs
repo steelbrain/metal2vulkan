@@ -1104,30 +1104,66 @@ fn a_merged_replay_of_the_most_chunks_its_first_draw_holds_draws_them() {
     }
 }
 
-/// The merge passes divide no `u64`: the last pass divides the total by a chunk in `u32` words
-/// (`merged::divide_words`), where NVIDIA's compiler (615.71.09) ran its `u64` division wrong.
+/// The merge passes compute no `u64` but addresses: every count they hold is two `u32` words
+/// (`merged::Count`, `merged::divide_words`), and a `u64` value is built only by `OpIAdd`,
+/// `OpIMul`, `OpUConvert` of a `u32`, a constant or a load of the push constants, and used only
+/// to build another or as a pointer (`OpConvertUToPtr`). NVIDIA's compilers ran the passes' `u64`
+/// arithmetic on counts wrong (the module docs).
 #[test]
-fn the_merge_passes_divide_no_u64() {
-    const TYPE_INT: u32 = 21;
-    const UDIV: u32 = 134;
-    const UMOD: u32 = 137;
+fn the_merge_passes_compute_no_u64_but_addresses() {
+    use crate::spirv_binary::{parse_bytes, Operand};
+    use crate::spv::Op;
+    use std::collections::{BTreeMap, BTreeSet};
+    const PUSH_CONSTANT: u32 = 9;
     let dev = device();
     for phase in [MergePhase::Blocks, MergePhase::Starts] {
         let words = draw_merge_module(&dev, phase).expect("module").spirv;
-        let mut wide = std::collections::BTreeSet::new();
-        let mut divided = 0;
-        let mut i = 5;
-        while let Some(&w) = words.get(i) {
-            let (len, op) = ((w >> 16) as usize, w & 0xFFFF);
-            if op == TYPE_INT && words[i + 2] == 64 {
-                wide.insert(words[i + 1]);
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let module = parse_bytes(&bytes).expect("parse");
+        let (mut wide, mut pushed) = (BTreeSet::new(), BTreeSet::new());
+        let mut type_of = BTreeMap::new();
+        for inst in &module.instructions {
+            match (inst.opcode, inst.result_id, &inst.operands[..]) {
+                (Op::TypeInt, Some(id), [Operand::Word(64), ..]) => {
+                    wide.insert(id);
+                }
+                (
+                    Op::TypePointer,
+                    Some(id),
+                    [Operand::Word(PUSH_CONSTANT), Operand::IdRef(pointee)],
+                ) if wide.contains(pointee) => {
+                    pushed.insert(id);
+                }
+                _ => {}
             }
-            if (op == UDIV || op == UMOD) && wide.contains(&words[i + 1]) {
-                divided += 1;
+            if let (Some(id), Some(ty)) = (inst.result_id, inst.result_type) {
+                type_of.insert(id, ty);
             }
-            i += len.max(1);
         }
-        assert_eq!(divided, 0, "{phase:?}: u64 divisions");
+        let is_wide = |id: &u32| type_of.get(id).is_some_and(|ty| wide.contains(ty));
+        let mut computed = BTreeSet::new();
+        for inst in &module.instructions {
+            let built = match inst.opcode {
+                Op::IAdd | Op::IMul | Op::UConvert | Op::Constant => true,
+                Op::Load => matches!(
+                    inst.operands.first(),
+                    Some(Operand::IdRef(p)) if type_of.get(p).is_some_and(|ty| pushed.contains(ty))
+                ),
+                _ => false,
+            };
+            if inst.result_type.is_some_and(|ty| wide.contains(&ty)) && !built {
+                computed.insert(format!("{:?} makes a u64", inst.opcode));
+            }
+            let takes = matches!(inst.opcode, Op::IAdd | Op::IMul | Op::ConvertUToPtr);
+            let wide_operand = inst
+                .operands
+                .iter()
+                .any(|o| matches!(o, Operand::IdRef(id) if is_wide(id)));
+            if wide_operand && !takes {
+                computed.insert(format!("{:?} takes a u64", inst.opcode));
+            }
+        }
+        assert!(computed.is_empty(), "{phase:?}: {computed:?}");
     }
 }
 

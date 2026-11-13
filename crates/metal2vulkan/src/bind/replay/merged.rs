@@ -15,6 +15,14 @@
 //!   [`MergePhase::Starts`] runs one invocation per block again, which adds the corners of every
 //!   block before its own to its commands' offsets. The last block's invocation writes the total
 //!   and the merged draw's two `VkDrawIndirectCommand`s.
+//! - **Counts in words.** The passes hold every count of corners as its two `u32` words, low
+//!   first, as the prefix and the block sums lay out a `u64`: a command's corners are the
+//!   `OpUMulExtended` product of its whole vertices and its instances, a sum adds the low words
+//!   and carries into the high ones, and the last pass divides in words (`divide_words`). A
+//!   `u64` they compute is an address alone. NVIDIA's compilers ran `u64` counts in these passes
+//!   wrong: an RTX 5080 laptop GPU's (615.71.09) `u64` division, and on an RTX 3090 (620.70.06) a
+//!   guest's two executions' totals read `2^33` above the sum of their commands' corners (no sum
+//!   of whole triangles), so each first draw drew 4 chunks, seconds of vertices.
 //! - **The merged draw** is two draws, recorded in this order: the first draws
 //!   [`MERGED_CHUNK`] vertices in each of `⌊total / MERGED_CHUNK⌋` instances (none where the total
 //!   is below it), the second the remaining `total mod MERGED_CHUNK` vertices from first vertex
@@ -71,9 +79,7 @@
 use std::sync::Arc;
 
 use super::draws::{DrawReplay, DrawReplayLayout, DRAW_ARGUMENT_BYTES};
-use super::{
-    at, count_loop, counter, k32, k64, load32, load64, report, store32, store64, wide, Types,
-};
+use super::{at, count_loop, counter, k32, k64, load32, load64, report, store32, wide, Types};
 use crate::bind::status::ReplayFaults;
 use crate::budget::{Budget, Meter};
 use crate::device::profile::BufferAccess;
@@ -306,29 +312,85 @@ fn no_binding(_: &Symbol) -> Option<u32> {
     None
 }
 
-/// `a + b` (`u64`s), held at `u64::MAX` where it would wrap.
-fn saturating_add(fb: &mut FunctionBuilder<'_>, a: Value, b: Value) -> BResult<Value> {
-    let s = fb.binary(BinOp::IAdd, a, b)?;
-    let wrapped = fb.binary(BinOp::ULessThan, s, a)?;
-    let most = k64(fb, u64::MAX)?;
-    fb.select(wrapped, most, s)
+/// A count of corners, a `u64`, as the passes hold it (the module docs): its two `u32` words,
+/// low first, as the prefix and the block sums lay it out.
+#[derive(Clone, Copy)]
+struct Count {
+    lo: Value,
+    hi: Value,
+}
+
+impl Count {
+    /// The count at the 8-aligned device address `addr`, read as two `u32`s.
+    fn load(fb: &mut FunctionBuilder<'_>, t: Types, addr: Value) -> BResult<Count> {
+        let lo = load32(fb, t, addr)?;
+        let hi_at = at(fb, addr, 4)?;
+        let hi = load32(fb, t, hi_at)?;
+        Ok(Count { lo, hi })
+    }
+
+    /// Store the count at the 8-aligned device address `addr` as two `u32`s.
+    fn store(self, fb: &mut FunctionBuilder<'_>, t: Types, addr: Value) -> BResult<()> {
+        store32(fb, t, addr, self.lo)?;
+        let hi_at = at(fb, addr, 4)?;
+        store32(fb, t, hi_at, self.hi)
+    }
+
+    /// `self + other`, held at `u64::MAX` where it would wrap: the low words' sum, its carry
+    /// into the high words' sum, in `u32` arithmetic alone.
+    fn saturating_add(self, fb: &mut FunctionBuilder<'_>, other: Count) -> BResult<Count> {
+        let (zero, one) = (k32(fb, 0)?, k32(fb, 1)?);
+        let lo = fb.binary(BinOp::IAdd, self.lo, other.lo)?;
+        let carried = fb.binary(BinOp::ULessThan, lo, self.lo)?;
+        let carry = fb.select(carried, one, zero)?;
+        let high = fb.binary(BinOp::IAdd, self.hi, other.hi)?;
+        let wrapped = fb.binary(BinOp::ULessThan, high, self.hi)?;
+        let hi = fb.binary(BinOp::IAdd, high, carry)?;
+        let carried_out = fb.binary(BinOp::ULessThan, hi, high)?;
+        let wrapped = fb.binary(BinOp::LogicalOr, wrapped, carried_out)?;
+        let most = k32(fb, u32::MAX)?;
+        Ok(Count {
+            lo: fb.select(wrapped, most, lo)?,
+            hi: fb.select(wrapped, most, hi)?,
+        })
+    }
+}
+
+/// A [`Count`] in two `u32` function variables, zero.
+fn count_var(fb: &mut FunctionBuilder<'_>, t: Types) -> BResult<(Value, Value)> {
+    Ok((counter(fb, t, 0)?, counter(fb, t, 0)?))
+}
+
+fn load_var(fb: &mut FunctionBuilder<'_>, (lo, hi): (Value, Value)) -> BResult<Count> {
+    Ok(Count {
+        lo: fb.load(lo, MemAccess::default())?,
+        hi: fb.load(hi, MemAccess::default())?,
+    })
+}
+
+fn store_var(fb: &mut FunctionBuilder<'_>, (lo, hi): (Value, Value), c: Count) -> BResult<()> {
+    fb.store(lo, c.lo, MemAccess::default())?;
+    fb.store(hi, c.hi, MemAccess::default())
 }
 
 /// The corners of the command whose `VkDrawIndirectCommand` is at `args`, drawing `corners`
-/// vertices per primitive: its whole primitives' vertices times its instances, a `u64`.
+/// vertices per primitive: its whole primitives' vertices times its instances, their product's
+/// two words (`OpUMulExtended`).
 fn command_corners(
     fb: &mut FunctionBuilder<'_>,
     t: Types,
     args: Value,
     corners: Value,
-) -> BResult<Value> {
+) -> BResult<Count> {
     let vertices = load32(fb, t, args)?;
     let instances_at = at(fb, args, 4)?;
     let instances = load32(fb, t, instances_at)?;
     let whole = whole_vertices(fb, vertices, corners)?;
-    let whole = wide(fb, t, whole)?;
-    let instances = wide(fb, t, instances)?;
-    fb.binary(BinOp::IMul, whole, instances)
+    let product = fb.binary(BinOp::UMulExtended, whole, instances)?;
+    Ok(Count {
+        lo: fb.composite_extract(product, &[0])?,
+        hi: fb.composite_extract(product, &[1])?,
+    })
 }
 
 /// `⌊n / d⌋` and `n mod d` (`u32`s) of the `u64` `n` whose words are `(high, low)`, for a `d`
@@ -664,8 +726,7 @@ pub fn typed_module(phase: MergePhase) -> BResult<TypedModule> {
     let block64 = wide(fb, t, block)?;
     let sum_rel = fb.binary(BinOp::IMul, block64, eight)?;
     let sum_at = fb.binary(BinOp::IAdd, sums, sum_rel)?;
-    let running = fb.local_var(u64_, None)?;
-    let running = fb.var_ptr(running)?;
+    let running = count_var(fb, t)?;
     let command_at = move |fb: &mut FunctionBuilder<'_>, i: Value| -> BResult<(Value, Value)> {
         let c = fb.binary(BinOp::IAdd, first, i)?;
         let c64 = wide(fb, t, c)?;
@@ -679,53 +740,46 @@ pub fn typed_module(phase: MergePhase) -> BResult<TypedModule> {
     };
     match phase {
         MergePhase::Blocks => {
-            let zero = k64(fb, 0)?;
-            fb.store(running, zero, MemAccess::default())?;
             count_loop(fb, t, n, move |fb, i| {
                 let (offset_at, args) = command_at(fb, i)?;
-                let r = fb.load(running, MemAccess::default())?;
-                store64(fb, t, offset_at, r)?;
+                let r = load_var(fb, running)?;
+                r.store(fb, t, offset_at)?;
                 let mine = command_corners(fb, t, args, corners)?;
-                let r = saturating_add(fb, r, mine)?;
-                fb.store(running, r, MemAccess::default())
+                let r = r.saturating_add(fb, mine)?;
+                store_var(fb, running, r)
             })?;
-            let r = fb.load(running, MemAccess::default())?;
-            store64(fb, t, sum_at, r)?;
+            let r = load_var(fb, running)?;
+            r.store(fb, t, sum_at)?;
         }
         MergePhase::Starts => {
             // The block's first corner: the corners of every block before it.
-            let zero = k64(fb, 0)?;
-            fb.store(running, zero, MemAccess::default())?;
             count_loop(fb, t, block, move |fb, i| {
                 let i64_ = wide(fb, t, i)?;
                 let eight = k64(fb, 8)?;
                 let rel = fb.binary(BinOp::IMul, i64_, eight)?;
                 let a = fb.binary(BinOp::IAdd, sums, rel)?;
-                let s = load64(fb, t, a)?;
-                let r = fb.load(running, MemAccess::default())?;
-                let r = saturating_add(fb, r, s)?;
-                fb.store(running, r, MemAccess::default())
+                let s = Count::load(fb, t, a)?;
+                let r = load_var(fb, running)?;
+                let r = r.saturating_add(fb, s)?;
+                store_var(fb, running, r)
             })?;
-            let start = fb.load(running, MemAccess::default())?;
+            let start = load_var(fb, running)?;
             count_loop(fb, t, n, move |fb, i| {
                 let (offset_at, _) = command_at(fb, i)?;
-                let local = load64(fb, t, offset_at)?;
-                let global = saturating_add(fb, local, start)?;
-                store64(fb, t, offset_at, global)
+                let local = Count::load(fb, t, offset_at)?;
+                let global = local.saturating_add(fb, start)?;
+                global.store(fb, t, offset_at)
             })?;
             // The last block's invocation writes the total's draws.
             let one = k32(fb, 1)?;
             let last = fb.binary(BinOp::ISub, blocks, one)?;
             let is_last = fb.binary(BinOp::IEqual, block, last)?;
             let draws: ArmFn<'_, ()> = Box::new(move |fb, _| {
-                let own = load64(fb, t, sum_at)?;
-                let total = saturating_add(fb, start, own)?;
+                let own = Count::load(fb, t, sum_at)?;
+                let total = start.saturating_add(fb, own)?;
                 let chunk = word(fb, H_CHUNK)?;
                 // The whole chunks fit in a `u32` where the total's high word is below a chunk.
-                let low = fb.convert(ConvOp::UConvert, total, u32_)?;
-                let shift = k64(fb, 32)?;
-                let high = fb.binary(BinOp::ShiftRightLogical, total, shift)?;
-                let high = fb.convert(ConvOp::UConvert, high, u32_)?;
+                let (low, high) = (total.lo, total.hi);
                 let fits = fb.binary(BinOp::ULessThan, high, chunk)?;
                 let (chunks32, rest32) = divide_words(fb, t, (high, low), chunk)?;
                 let zero = k32(fb, 0)?;
