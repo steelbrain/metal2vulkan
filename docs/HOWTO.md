@@ -386,7 +386,10 @@ verdicts are known. A program that routes each surface either to a texture over 
 copy of its own asks `Buffer::texture_placement` (or `texture_placement_with_iosurface_plane`)
 with the arguments it would make the texture with: the answer (`TexturePlacement`: in place,
 pending, a shadow and why, no host pages, another shape) is the making's own decision, so no report
-string needs parsing. A texture a shader writes of texels of a width the check stores none of
+string needs parsing. Before it makes the no-copy buffer, `Device::host_pages_texture_placement`
+answers for a surface's plane over the pages, by the same steps up to the import: `InPlace` there
+means nothing before the import refuses the image, which the buffer's own query, once it is made,
+answers in full. A texture a shader writes of texels of a width the check stores none of
 (`host_texture_shadows_store_width`), one the check failed or could not cover, and one
 no image in place serves (a pitch the device's linear images do not take --
 `host_texture_shadows_refused_pitch`; over dma-buf pages, a source that makes no one dma-buf of

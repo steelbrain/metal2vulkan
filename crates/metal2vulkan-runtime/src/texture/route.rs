@@ -5,9 +5,12 @@
 //! levels past the first, texels past the buffer's length, a buffer of no host pages, a device
 //! copy, bytes detached, and over host pages (or a copied host buffer's copy of them) the in-place
 //! decision (`in_place::in_place`) against the device's check's verdicts. Where that takes the image in
-//! place, the query also runs the image's making up to the bind (`texture/in_place_image.rs`), so
-//! a pitch, an image, a placement or rows the device refuses answer the shadow the texture then
-//! is.
+//! place, the query asks what the device answers before it makes an image
+//! (`Device::in_place_unmade`), then runs the image's making up to the bind
+//! (`texture/in_place_image.rs`), so a pitch, an image, a placement or rows the device refuses
+//! answer the shadow the texture then is. Over host pages not imported yet
+//! (`Device::host_pages_texture_placement`) the same functions answer up to the import:
+//! [`Device::host_route`] for the route, and that image-free answer alone.
 
 use super::image_error;
 use crate::buffer::CallerMemory;

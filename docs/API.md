@@ -478,8 +478,12 @@ else a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch where the device's check p
 memory; a texture over that memory that takes neither answers its shadow's cause); or a shape no
 image in place takes; `Buffer::tiled_texture_placement` answers it for `new_tiled_texture`'s. The
 making's own route answers it (`texture/route.rs`), after every check the making runs before it
-makes anything, so the same arguments are refused with the same errors; where the route is the image in
-place, the query runs the image's making up to the bind (`texture/in_place_image.rs`): it makes the
+makes anything, so the same arguments are refused with the same errors. Where the route is the image
+in place, the query asks first what the device answers without an image: rows that share bytes, and
+the format, feature and limit queries the image steps run before `vkCreateImage`, for every plan the
+making would try. Where those refuse every plan, that refusal is the answer and no image is
+made. Otherwise the query runs the image's making up to the bind
+(`texture/in_place_image.rs`): it makes the
 driver's linear image, and the `DRM_FORMAT_MOD_LINEAR` one where the driver lays the first out at
 another pitch, checks their requirements against the bytes' place and memory type, and releases
 them unbound, so a pitch, an image, a placement or rows the device refuses answer
@@ -492,6 +496,14 @@ verdict starts the check, as a texture's making does. `Device::settle_in_place_c
 check and says when the verdicts are known (a zero timeout waits for nothing). They become known
 once per `VkDevice`: a GPU recovery's new one reads them from the record as it is made, or checks
 again where the lost one's check left none.
+`Device::host_pages_texture_placement` answers the same question for a texture
+`new_texture_with_iosurface_plane` would make over a no-copy buffer of host pages not made yet
+(`start` and `length`, imported by pointer or as dma-bufs), by the same steps up to the import:
+where those decide (the shape and the call's refusals, the policy, the texel width, the verdicts
+for texels laid out from `start`, texels past `length`, rows that share bytes, and the device's
+format, feature and limit queries), its answer is the one `texture_placement_with_iosurface_plane`
+gives once the buffer is made; where only an image or the import decides, `InPlace`. It makes no
+buffer, import or image.
 `Buffer::new_tiled_texture` (Metal's private `newTiledTextureWithDescriptor:offset:bytesPerRow:`)
 makes what `new_texture` makes, and a 2D texture of more than one level, which is a copy of the
 buffer's rows at the offset and pitch, taken at its first use, as on an x86 Mac (an AMD Radeon Pro

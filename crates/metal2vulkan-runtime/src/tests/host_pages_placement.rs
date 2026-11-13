@@ -6,8 +6,9 @@
 //! `Placement`, `Source`, `DmaBuf`).
 //!
 //! Over a spread of shapes: texels of 1, 4 and 16 bytes; rows at their own width and padded past
-//! it; at the pages' first byte and past a page; `ShaderRead` and `Unknown` usage; texels past the
-//! buffer's length. By pointer, on the device the cfg selects once its check settled, and under
+//! it; rows of 8 bytes (a plane under 16 bytes a row, `linear_plan.rs`); at the pages' first byte
+//! and past a page; `ShaderRead` and `Unknown` usage; and a plane past the buffer's length,
+//! refused alike. By pointer, on the device the cfg selects once its check settled, and under
 //! `HostPageTexturePolicy::Shadow`; as dma-bufs on Linux, on a device made without
 //! `VK_EXT_external_memory_host` (`tests/no_pointer_import.rs`), where `/dev/udmabuf` opens. Each
 //! pre-import answer makes no `VkImage` on the asking thread
@@ -18,7 +19,7 @@
 
 use super::blit_holds::{device, over_host, shadow_device, Host, Scratch, BYTES};
 use crate::{
-    Buffer, Device, HostBacking, InPlaceRefusal, IoSurfacePlane, ResourceOptions,
+    Buffer, Device, Error, HostBacking, InPlaceRefusal, IoSurfacePlane, ResourceOptions,
     TextureDescriptor, TexturePlacement, TextureShadowReason,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -30,11 +31,13 @@ use std::time::Duration;
 const SETTLE: Duration = Duration::from_secs(120);
 
 /// A shape: its format, width and height, the plane's `bytesPerRow`, and its offset from the
-/// pages' first byte (`None`: the last 4096 bytes of `length`, so its texels run past it).
+/// pages' first byte (`None`: the last 4096 bytes of `length`, so its texels run past it, which
+/// both calls refuse alike).
 type Shape = (PixelFormat, u64, u64, u64, Option<u64>);
 
 /// The shapes asked, each with `ShaderRead` and `Unknown` usage.
-const SHAPES: [Shape; 7] = [
+const SHAPES: [Shape; 8] = [
+    (PixelFormat::R8Unorm, 8, 8, 8, Some(0)),
     (PixelFormat::R8Unorm, 64, 32, 64, Some(0)),
     (PixelFormat::R8Unorm, 60, 32, 64, Some(4096)),
     (PixelFormat::RGBA8Unorm, 64, 32, 256, Some(0)),
@@ -62,14 +65,14 @@ fn import_decides(after: TexturePlacement) -> bool {
 
 /// Ask every shape of [`SHAPES`] of `device` before (`host_pages_texture_placement`, `backing`,
 /// from `start`) and after (`buffer`, of the same `length` bytes over the same pages) the buffer,
-/// `label` naming the run: each pre-import answer made no image, and equals the buffer's where it
-/// is not `InPlace`. The pre-import answers.
+/// `label` naming the run: each pre-import answer made no image, and equals the buffer's (a
+/// refusal included) where it is not `InPlace`. The pre-import answers.
 fn ask_each(
     device: &Device,
     label: &str,
     (backing, buffer): (HostBacking, &Buffer),
     (start, length): (u64, u64),
-) -> Vec<TexturePlacement> {
+) -> Vec<Result<TexturePlacement, Error>> {
     let mut answers = Vec::new();
     for (format, width, height, bytes_per_row, offset) in SHAPES {
         let offset = offset.unwrap_or(length - 4096);
@@ -81,23 +84,21 @@ fn ask_each(
             let made = || device.work_counts().object_churn.vk_images_made_this_thread;
             let images = made();
             let before =
-                (device.host_pages_texture_placement(backing, &descriptor, plane, start, length))
-                    .unwrap_or_else(|error| panic!("{label}: refused before the buffer: {error}"));
+                device.host_pages_texture_placement(backing, &descriptor, plane, start, length);
             let images = made() - images;
-            let after = (buffer.texture_placement_with_iosurface_plane(&descriptor, plane))
-                .unwrap_or_else(|error| panic!("{label}: refused after the buffer: {error}"));
+            let after = buffer.texture_placement_with_iosurface_plane(&descriptor, plane);
             println!(
                 "HOST-PAGES-PLACEMENT {} {label}: {format:?} {width}x{height} at {offset}, {bytes_per_row} \
                  a row, {usage:?}: before the buffer {before:?}, after {after:?}",
                 device.name()
             );
             assert_eq!(images, 0, "{label}: the pre-import answer made an image");
-            match before {
-                TexturePlacement::InPlace => assert!(
-                    import_decides(after),
+            match (&before, &after) {
+                (Ok(TexturePlacement::InPlace), Ok(after)) => assert!(
+                    import_decides(*after),
                     "{label}: {format:?} {width}x{height} at {offset}: InPlace before, {after:?} after"
                 ),
-                before => assert_eq!(
+                _ => assert_eq!(
                     before, after,
                     "{label}: {format:?} {width}x{height} at {offset}, {usage:?}"
                 ),
@@ -144,13 +145,12 @@ fn before_the_buffer_the_placement_is_the_buffer_s_where_no_import_decides() {
         };
         let pages = (HostBacking::ImportedByPointer, &buffer);
         let answers = ask_each(&device, label, pages, (start, length));
-        let past = TexturePlacement::Shadow(TextureShadowReason::PastLength);
         assert!(
-            answers.contains(&past),
-            "{label}: no shape ran past the length"
+            answers.iter().any(Result::is_err),
+            "{label}: no shape was refused"
         );
         if shadow {
-            let policy = TexturePlacement::Shadow(TextureShadowReason::Policy);
+            let policy = Ok(TexturePlacement::Shadow(TextureShadowReason::Policy));
             assert!(
                 answers.contains(&policy),
                 "{label}: the policy answered nothing"
@@ -210,10 +210,9 @@ fn before_the_buffer_the_placement_over_dma_bufs_is_the_buffer_s_where_no_import
     }
     let dma_buf = (HostBacking::ImportedAsDmaBuf, &buffer);
     let answers = ask_each(&device, "as dma-bufs", dma_buf, (start, length));
-    let past = TexturePlacement::Shadow(TextureShadowReason::PastLength);
     assert!(
-        answers.contains(&past),
-        "as dma-bufs: no shape ran past the length"
+        answers.iter().any(Result::is_err),
+        "as dma-bufs: no shape was refused"
     );
     drop(buffer);
 }

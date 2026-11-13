@@ -774,12 +774,17 @@ impl Buffer {
     /// the `DRM_FORMAT_MOD_LINEAR` one, its requirements against the bytes' place and memory
     /// type, rows that share bytes), taken after every check the making runs before it makes
     /// anything: an argument `new_texture` refuses is refused here alike, with the same error.
-    /// Where the image in place is the answer, the query makes it unbound and releases it: one or
-    /// two `VkImage`s where the texture's declared plan is made in place, a pair more for each
-    /// wider plan the making would try first (the feedback loop usage, and the storage usage)
-    /// where it is refused; nothing is bound or submitted. What only the bind shows is not known
-    /// here: over pages imported as dma-bufs, the caller's source's dma-buf and the driver's
-    /// import of it ([`TexturePlacement::InPlace`]); and a making that runs out of memory or meets
+    /// Where the route is the image in place, the query asks first what the device answers
+    /// without an image (rows that share bytes, and its format, feature and limit queries for each
+    /// plan the making would try), and where those refuse every plan answers that refusal, making
+    /// no image; else it makes the image unbound and releases it: one or two `VkImage`s where the
+    /// texture's declared plan is made in place, a pair more for each wider plan the making would
+    /// try first (the feedback loop usage, and the storage usage) where it is refused; nothing is
+    /// bound or submitted. Before a no-copy buffer is made,
+    /// [`Device::host_pages_texture_placement`] answers by the same steps up to the import. What
+    /// only the bind shows is not known here: over pages imported as dma-bufs, the caller's
+    /// source's dma-buf and the driver's import of it ([`TexturePlacement::InPlace`]); and a
+    /// making that runs out of memory or meets
     /// a lost device fails, as this query may in making those images. The answer is the buffer's
     /// and the device's state as the call reads them: a detach, a rebind, or the check's verdicts
     /// after it may change what a texture made later takes. A pending verdict starts the device's
@@ -1064,28 +1069,35 @@ impl Device {
     /// The answer is [`Buffer::texture_placement_with_iosurface_plane`]'s over such a buffer
     /// wherever the steps before an import or an image decide it, by the same functions: the
     /// texture's shape and the call's refusals (the same errors), [`TexturePlacement::OtherShape`],
-    /// the device's policy ([`TextureShadowReason::Policy`]), a shader's writes of a texel width
-    /// the device's check stores none of ([`TextureShadowReason::StoreWidth`]), the check's
-    /// verdicts for the pages' kind, the texture's accesses and how its texels lie in the device's
-    /// lines of memory from `start` ([`TexturePlacement::Pending`],
-    /// [`TextureShadowReason::CheckFailed`], [`TextureShadowReason::Unchecked`]), texels past
-    /// `length` ([`TextureShadowReason::PastLength`]), rows that share bytes
-    /// ([`InPlaceRefusal::Rows`]), and the refusals the device's format, feature and limit queries
-    /// give before it makes an image ([`InPlaceRefusal::Image`], [`InPlaceRefusal::Pitch`], and
-    /// over dma-bufs [`InPlaceRefusal::DmaBuf`]). Where only an image or the import decides (the
-    /// driver's linear image's layout, a `DRM_FORMAT_MOD_LINEAR` image's plane, their
-    /// requirements against the import's offset, size and memory type, the source's dma-buf and
-    /// the driver's import of it), it answers [`TexturePlacement::InPlace`]: the texture made then
-    /// may be a shadow for one of those, as the query of the buffer once made answers. It makes
-    /// no buffer, import or image, and binds or submits nothing; a pending verdict starts the
-    /// device's check, as the making's does
-    /// ([`Device::settle_in_place_checks`](crate::Device::settle_in_place_checks) says when its
-    /// verdicts are known). The buffer's resource options are not asked: a texture over an
-    /// IOSurface plane takes its descriptor's.
+    /// the device's policy ([`Policy`]), a shader's writes of a texel width the device's check
+    /// stores none of ([`StoreWidth`]), the check's verdicts for the pages' kind, the texture's
+    /// accesses and how its texels lie in the device's lines of memory from `start`
+    /// ([`TexturePlacement::Pending`], [`CheckFailed`], [`Unchecked`]), texels past `length`
+    /// ([`PastLength`]), rows that share bytes ([`Rows`]), and the refusals the device's format,
+    /// feature and limit queries give before it makes an image ([`Image`], [`Pitch`], and over
+    /// dma-bufs [`DmaBuf`]). Where only an image or the import decides (the driver's linear
+    /// image's layout, a `DRM_FORMAT_MOD_LINEAR` image's plane, their requirements against the
+    /// import's offset, size and memory type, the source's dma-buf and the driver's import of
+    /// it), it answers [`TexturePlacement::InPlace`]: the texture made then may be a shadow for
+    /// one of those, as the query of the buffer once made answers. It makes no buffer, import or
+    /// image, and binds or submits nothing; a pending verdict starts the device's check, as the
+    /// making's does ([`Device::settle_in_place_checks`] says when its verdicts are known). The
+    /// buffer's resource options are not asked: a texture over an IOSurface plane takes its
+    /// descriptor's.
     ///
     /// Refused as `new_texture_with_iosurface_plane` refuses its arguments, as
     /// `new_buffer_with_bytes_no_copy` refuses `length` (`Nil`, `BufferLength`), and (`Invalid`,
     /// `HostPagesBacking`) for another `backing`.
+    ///
+    /// [`Policy`]: crate::TextureShadowReason::Policy
+    /// [`StoreWidth`]: crate::TextureShadowReason::StoreWidth
+    /// [`CheckFailed`]: crate::TextureShadowReason::CheckFailed
+    /// [`Unchecked`]: crate::TextureShadowReason::Unchecked
+    /// [`PastLength`]: crate::TextureShadowReason::PastLength
+    /// [`Rows`]: crate::InPlaceRefusal::Rows
+    /// [`Image`]: crate::InPlaceRefusal::Image
+    /// [`Pitch`]: crate::InPlaceRefusal::Pitch
+    /// [`DmaBuf`]: crate::InPlaceRefusal::DmaBuf
     pub fn host_pages_texture_placement(
         &self,
         backing: HostBacking,

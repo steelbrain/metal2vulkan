@@ -686,12 +686,25 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   `new_texture_with_iosurface_plane` makes of the same arguments lies if made now: in place over
   host pages, a shadow pending the device's in-place check, a shadow and why, no host pages, or
   another shape. The making's own route answers it, after every check the making runs before it
-  makes anything, so the same arguments are refused with the same errors; an answer in place runs
-  the image's making up to its bind (one or two unbound `VkImage`s, released), so a pitch or an
-  image the device refuses answers the shadow the texture then is.
+  makes anything, so the same arguments are refused with the same errors. An answer in place asks
+  the device's format, feature and limit queries first, which make no image; where they refuse
+  every plan the making would try, that refusal is the answer. Otherwise the query runs the image's
+  making up to its bind (one or two unbound `VkImage`s, released), so a pitch or an image the device
+  refuses answers the shadow the texture then is.
   `Device::settle_in_place_checks` starts the check and says when its verdicts are known (a zero
   timeout waits for nothing). `Buffer::tiled_texture_placement` answers it for
   `new_tiled_texture`'s arguments.
+- `Device::host_pages_texture_placement`: the same answer for a texture
+  `new_texture_with_iosurface_plane` would make over a no-copy buffer of host pages (`start`,
+  `length`) imported by pointer or as dma-bufs (`HostBacking::ImportedByPointer`,
+  `ImportedAsDmaBuf`), asked before the buffer exists. It makes no buffer, import or image. Where
+  the steps before an import or an image decide the answer (the texture's shape and refusals, the
+  policy, the texel width, the check's verdicts for texels laid out from `start`, texels past
+  `length`, rows that share bytes, and the refusals of the device's format, feature and limit
+  queries), it answers what `texture_placement_with_iosurface_plane` answers once the buffer is
+  made. Where only an image or the import decides (the driver's linear image's layout, a
+  `DRM_FORMAT_MOD_LINEAR` plane, their requirements against the import, the dma-buf's source and
+  import), it answers `InPlace`. No Metal counterpart.
 - `HostRam`, `Device::use_host_ram` (with `HostRamUse`) and `HostMemory::with_runs` (with
   `RunResolver`): a guest's RAM imported whole, in 64 MiB chunks, for a device that refuses views
   of guest pages made through dma-bufs; a no-copy object whose pages the consumer resolves to one

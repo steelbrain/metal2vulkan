@@ -27,7 +27,13 @@ pub enum TexturePlacement {
     /// the texture is then a shadow, its notice (`shadowed-texture`) naming why. Over a copied host
     /// buffer ([`HostBacking::Copied`](crate::HostBacking::Copied)), the image lies over the copy
     /// the GPU uses in the pages' stead, in the copy's memory, where the check passed for the
-    /// pages' kind and that memory's (`WorkCounts::copied_textures_in_place`).
+    /// pages' kind and that memory's (`WorkCounts::copied_textures_in_place`). As
+    /// [`Device::host_pages_texture_placement`](crate::Device::host_pages_texture_placement)
+    /// answers it, before any buffer of the pages: every step before an import or an image took
+    /// the image in place, and only an image or the import decides the rest (the driver's linear
+    /// image's layout, a `DRM_FORMAT_MOD_LINEAR` plane, their requirements against the import, the
+    /// source's dma-buf and the driver's import of it), as the buffer's query answers once it is
+    /// made.
     InPlace,
     /// A shadow now, as the device's check has not answered for the pages' kind and the
     /// texture's accesses: once it does, at the commit of the device's only uncommitted command
@@ -177,7 +183,11 @@ pub enum InPlaceRowEnds {
 /// them. [`Buffer::texture_placement`](crate::Buffer::texture_placement) answers each one the
 /// image's making decides before it binds memory, by the same steps: all but `Source`, and
 /// `DmaBuf` where the driver refuses the dma-buf's import, which only the bind finds over pages
-/// imported as dma-bufs ([`TexturePlacement::InPlace`]). A runtime extension: Metal has none.
+/// imported as dma-bufs ([`TexturePlacement::InPlace`]).
+/// [`Device::host_pages_texture_placement`](crate::Device::host_pages_texture_placement), before
+/// any buffer of the pages, answers `Rows`, and `Image`, `Pitch` and `DmaBuf` where the device's
+/// format, feature and limit queries decide them without an image. A runtime extension: Metal has
+/// none.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InPlaceRefusal {
