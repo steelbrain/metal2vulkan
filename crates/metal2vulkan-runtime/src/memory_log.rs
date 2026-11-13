@@ -34,6 +34,12 @@
 //!   resident as it is asked (about 25 ms a GiB on an M3 Max), whose destroy fails a submission
 //!   encoding meanwhile (`DestroyedAddressBufferFailsSubmission`). On NVIDIA's drivers a buffer's
 //!   device address is the GPU virtual address the driver's fault reports name.
+//! - **glibc's heap.** Where the process's allocator is glibc's (Linux, the GNU environment),
+//!   every line ends with its heap at that moment, every arena's, as `mallinfo2` states it: the
+//!   bytes in use, the bytes free, what its arenas hold of the system, what it mapped apart for
+//!   large allocations, and the `malloc_trim` calls the process's large makings made
+//!   (`pipeline/compile_memory.rs`'s `heap`). So a resident set that grows and stays reads as free
+//!   heap glibc keeps, heap in use, or memory `malloc` did not map.
 //! - **Off, it costs nothing.** The switch is read once; no line is formatted.
 
 use super::driver_facts::inform_through;
@@ -90,8 +96,13 @@ impl MemoryLog {
         ));
     }
 
-    /// Deliver `text`, a line of the log.
+    /// Deliver `text`, a line of the log, glibc's heap after it where the allocator is glibc's
+    /// (the module docs).
     pub(super) fn line(&self, text: String) {
+        let text = match crate::pipeline::compile_memory::heap() {
+            Some(heap) => format!("{text}; {heap}"),
+            None => text,
+        };
         inform_through(self.sink.as_ref(), ID_NAME, text);
     }
 }

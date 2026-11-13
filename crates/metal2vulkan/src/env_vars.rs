@@ -80,7 +80,9 @@ pub const REGISTRY: &[EnvVar] = &[
                  frees blocks; one line per placement that takes a kept empty dedicated \
                  block: its memory class, bytes, block and memory type; and one line per copy of \
                  a no-copy object's host pages as it is made and as it goes: the caller's \
-                 pointer and length, and the copy's host address; set to anything but empty or 0",
+                 pointer and length, and the copy's host address; on Linux with glibc each line \
+                 ends with glibc's heap (bytes in use, free, held by its arenas, mapped apart) \
+                 and the heap trims the process made; set to anything but empty or 0",
     },
     EnvVar {
         name: "METAL2VULKAN_PENDING_AUDIT",

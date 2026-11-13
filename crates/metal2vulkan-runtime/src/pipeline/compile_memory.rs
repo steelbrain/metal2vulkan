@@ -39,10 +39,15 @@
 //!   where it would have reused the free heap; the floor spares makings that leave less. Only
 //!   where the process's allocator is glibc's (Linux, the GNU environment): on any other nothing is
 //!   called, and a host whose `malloc` is not glibc's sees no change.
+//! - **Stated by the memory log** ([`heap`]). Each line of `METAL2VULKAN_LOG_MEMORY`'s log
+//!   (`memory_log.rs`) ends with glibc's heap as `mallinfo2` states it then and the trims the
+//!   process made so far, so a resident set that grows and stays reads as free heap, heap in use,
+//!   or neither (memory `malloc` did not map).
 
 use super::budget::{self, Rank, Urgency};
 use crate::device::lock;
 use crate::work_counts::Counters;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -92,6 +97,10 @@ impl Drop for LargeMaking<'_> {
     }
 }
 
+/// The `malloc_trim` calls the process's large makings made ([`return_free_heap`]), every
+/// device's: the memory log's count ([`heap`]). `WorkCounts::heap_trims` counts a device's.
+static TRIMS: AtomicU64 = AtomicU64::new(0);
+
 /// Hand glibc's free heap back to the system where it holds more than [`FREE_FLOOR`] bytes free,
 /// every arena's: whether it called `malloc_trim` (the module docs).
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -103,7 +112,32 @@ fn return_free_heap() -> bool {
     }
     // SAFETY: no precondition; it returns free pages only.
     unsafe { libc::malloc_trim(0) };
+    TRIMS.fetch_add(1, Ordering::Relaxed);
     true
+}
+
+/// glibc's heap now, every arena's, as `mallinfo2` states it, and the trims the process's large
+/// makings made: the end of a memory log line (the module docs). `None` where the process's
+/// allocator is not glibc's. `mallinfo2` takes each arena's lock and walks its free chunks, which
+/// only the log, a default-off diagnostic, asks for.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub(crate) fn heap() -> Option<String> {
+    // SAFETY: no precondition.
+    let info = unsafe { libc::mallinfo2() };
+    Some(format!(
+        "glibc heap: {} bytes in use, {} free, of {} its arenas hold, {} mapped apart; {} trims",
+        info.uordblks,
+        info.fordblks,
+        info.arena,
+        info.hblkhd,
+        TRIMS.load(Ordering::Relaxed)
+    ))
+}
+
+/// Nothing where the process's allocator is not glibc's (the module docs).
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+pub(crate) fn heap() -> Option<String> {
+    None
 }
 
 /// Nothing where the process's allocator is not glibc's (the module docs).

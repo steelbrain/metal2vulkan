@@ -156,3 +156,19 @@ fn a_making_waiting_for_words_lends_its_turn() {
     until(|| budget.census() == (0, 0));
     assert_eq!(limit.census(), (0, 0));
 }
+
+/// The memory log's lines end with glibc's heap where the process's allocator is glibc's:
+/// `mallinfo2`'s figures and the trims the process's large makings made; elsewhere with nothing
+/// (`compile_memory::heap`).
+#[test]
+fn the_memory_log_states_glibcs_heap_where_it_is_the_allocator() {
+    let heap = crate::pipeline::compile_memory::heap();
+    if cfg!(all(target_os = "linux", target_env = "gnu")) {
+        let heap = heap.expect("glibc's heap");
+        assert!(heap.starts_with("glibc heap: "), "{heap}");
+        assert!(heap.contains(" bytes in use, "), "{heap}");
+        assert!(heap.ends_with(" trims"), "{heap}");
+    } else {
+        assert_eq!(heap, None);
+    }
+}

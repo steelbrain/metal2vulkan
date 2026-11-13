@@ -1851,7 +1851,10 @@ or a buffer, its memory class where placed, its bytes, its offset and its block'
 and each placement that takes a kept empty dedicated block, which allocates nothing: its class,
 bytes, block and memory type; and each copy of a no-copy object's host pages (`copied-host-pages`)
 as it is made and as it goes: the caller's pointer and length and the copy's host address, the
-two ranges the runtime's comparisons write on the CPU.
+two ranges the runtime's comparisons write on the CPU. On Linux with glibc's allocator each line
+ends with glibc's heap then, every arena's (`mallinfo2`: bytes in use, bytes free, what its arenas
+hold, what it mapped apart) and the `malloc_trim` calls the process's large pipeline makings made,
+so a resident set that grows and stays reads as free heap, heap in use, or neither.
 With `METAL2VULKAN_LOG_SHADOWS` set, a device logs one line per shadow it makes of a texture (id
 name `metal2vulkan-shadows`, `Info` severity): the call (an IOSurface plane's among them, or the
 binding's or pass's call for a shadow made at its first use), the texture's format, size, levels
