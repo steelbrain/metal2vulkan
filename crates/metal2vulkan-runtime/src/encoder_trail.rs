@@ -34,7 +34,9 @@
 //!   and the command buffer's execution status words. It reads host-visible, host-coherent
 //!   memory the pending command buffer holds (`upload.rs`), already mapped, and only reads it: a
 //!   word the GPU writes meanwhile may read either value. It takes no lock and waits for
-//!   nothing. An encoder encoded again (`command_buffer/reencode.rs`) names none of its own.
+//!   nothing. The note holds the scratch's chunk and the status words' until the command buffer
+//!   goes, past its completion. An encoder encoded again (`command_buffer/reencode.rs`) names
+//!   none of its own.
 //! - A submission
 //!   the step makes and waits for itself (a rasterization-rate map's fan-out probe,
 //!   `render/fan_out.rs`, or a predicated loop's check run again, `command_buffer/rerun.rs`)
@@ -445,7 +447,8 @@ impl GpuForm {
             None => "its range given".to_owned(),
         };
         let mut text = format!(
-            "an execution's GPU form, recorded {when}: {merged}{indexed}, of primitive type {:?},              over {} command(s) from {}, {range}; read while the work is pending:",
+            "an execution's GPU form, recorded {when}: {merged}{indexed}, of primitive type {:?}, \
+             over {} command(s) from {}, {range}; read while the work is pending:",
             self.primitive_type, layout.commands, self.first
         );
         if self.range_from.is_some() {
@@ -498,7 +501,8 @@ impl GpuForm {
         if let Some((_, command, [vertices, instances, first, base])) = most {
             let _ = write!(
                 text,
-                ", the most command {command}'s: {vertices} x {instances} from {first}, instance                  {base}"
+                ", the most command {command}'s: {vertices} x {instances} from {first}, instance \
+                 {base}"
             );
             if let Some(merged) = layout.merged.filter(|_| self.indexed) {
                 let entry = merged.indices_offset + u64::from(command) * 16;
