@@ -12,8 +12,7 @@
 //!   (median) from its commit to `Scheduled` on an M3 Max, where `vkCmdFillBuffer` takes 0.6 ms,
 //!   and Metal schedules the same fills 0.04 to 0.18 ms after the commit.
 //! - **Counted.** Each fill counts once (`WorkCounts::fills_recorded`); a new buffer's first zeros
-//!   filled on a device without unified memory count apart (`WorkCounts::new_buffer_zero_fills`,
-//!   `texture/first_move.rs`).
+//!   filled count apart (`WorkCounts::new_buffer_zero_fills`, `texture/first_move.rs`).
 
 use crate::device::functions::Vk;
 use crate::Device;

@@ -8581,7 +8581,7 @@ pub struct WorkCounts {
     pub new_buffer_bytes_cleared: u64,
     /// New buffers' bytes the host cannot write (`Private` storage, a `Managed` buffer's device
     /// copy, the device's neutral buffers) that a submission's first work set to zero with one
-    /// `vkCmdFillBuffer`, on a device without unified memory, in place of copies of the device's host-visible zeros, which such a device reads over the bus
+    /// `vkCmdFillBuffer`, on every device, in place of copies of the device's host-visible zeros
     /// (`texture/first_move.rs`); fills apart from `fills_recorded`.
     pub new_buffer_zero_fills: u64,
     /// Copies between a shadowed texture's truth and its shadow that encoders planned

@@ -94,9 +94,9 @@
 //!   byte over such pages (`in_place.rs`); elsewhere it is a shadow, whose copies address its texels
 //!   alone (`texture.rs`'s `storage_over_buffer`).
 //! - **The work.** A barrier from every command before (memory other commands wrote), then the
-//!   buffers' fills with zeros (copies of the device's zeros; on a device without unified memory,
-//!   which would read those over the bus, one `vkCmdFillBuffer` each, counted:
-//!   `WorkCounts::new_buffer_zero_fills`, `FirstFill::zeros`), then their copies of staged bytes
+//!   buffers' fills with zeros (one `vkCmdFillBuffer` each, counted:
+//!   `WorkCounts::new_buffer_zero_fills`; copies of the device's zeros for a range whose ends are
+//!   not multiples of 4, `FirstFill::zeros`), then their copies of staged bytes
 //!   after a barrier, then a
 //!   barrier carrying each image's move (after the fills: an image placed in a new heap moves
 //!   after the heap's fill, so the fill never overwrites what the move wrote), then the images'
@@ -853,9 +853,8 @@ pub(crate) struct FirstFill {
     buffer: vk::Buffer,
     source: vk::Buffer,
     copies: Vec<vk::BufferCopy>,
-    /// The words one `vkCmdFillBuffer` sets to zero in place of the copies (none then): on a
-    /// device without unified memory, whose zeros (`Zeros`, host-visible) a copy would read over
-    /// the bus ([`FirstFill::zeros`]).
+    /// The words one `vkCmdFillBuffer` sets to zero in place of the copies (none then)
+    /// ([`FirstFill::zeros`]).
     filled: Option<std::ops::Range<u64>>,
     /// What keeps the staging buffer `source` is, held until the submission that makes the fill
     /// completed; `None` where `source` is the device's zeros.
@@ -913,13 +912,14 @@ impl FirstFill {
         }
     }
 
-    /// The zeros of `range` of `buffer` on `device`: one `vkCmdFillBuffer` of its words on a
-    /// device without unified memory (`word_fill.rs`), where the range's ends are multiples of 4;
-    /// else copies of the device's zeros, made now if they are not yet. A discrete GPU reads those
-    /// host-visible zeros over the bus: on the RX 7900 XTX (RADV) 512 KiB of them took 66 us to
-    /// copy and 11 us more in the barrier after it, where a fill of the same bytes took 0.7 us and
-    /// 2.5 us. The copy stays where the device shares the host's memory, whose zeros lie in the
-    /// memory the GPU reads anyway (not measured there).
+    /// The zeros of `range` of `buffer` on `device`: one `vkCmdFillBuffer` of its words
+    /// (`word_fill.rs`), where the range's ends are multiples of 4; else copies of the device's
+    /// zeros, made now if they are not yet. A copy reads the zeros, host-visible, as well as it
+    /// writes the range: on an RX 7900 XTX (RADV) 512 KiB of them took 66 us to copy and 11 us
+    /// more in the barrier after it, where a fill of the same bytes took 0.7 us and 2.5 us. On a
+    /// device that shares the host's memory a fill costs no more: zeroing 17.9 MB in one blit took
+    /// 0.53 ms of GPU time as a fill and 0.75 ms as copies on a Radeon 780M (RADV), and 0.52 ms and
+    /// 0.53 ms on an Iris Xe (ANV), medians of 20.
     fn zeros(
         device: &Device,
         moves: &FirstMoves,
@@ -927,8 +927,7 @@ impl FirstFill {
         range: std::ops::Range<u64>,
     ) -> Result<FirstFill, Error> {
         let words = range.start.is_multiple_of(4) && range.end.is_multiple_of(4);
-        let discrete = !device.properties().has_unified_memory;
-        if words && discrete {
+        if words {
             return Ok(FirstFill {
                 buffer,
                 source: vk::Buffer::null(),

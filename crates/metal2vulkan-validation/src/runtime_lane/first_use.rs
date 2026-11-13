@@ -1056,9 +1056,8 @@ fn a_new_resource_s_zeros_come_before_every_use_on_every_queue() {
 
 /// A new `Private` buffer larger than the device's zeros (`ZERO_BYTES`, 4 MiB), made where one
 /// whose every byte was `0xa7` was just released (most likely its memory), reads all zero after
-/// the submission that took its first work: zeroed by one `vkCmdFillBuffer` on a device without
-/// unified memory whose fills are not transfers (`WorkCounts::new_buffer_zero_fills` counts
-/// exactly one), by copies of the device's zeros elsewhere (it counts none).
+/// the submission that took its first work: zeroed by one `vkCmdFillBuffer` on every device, of
+/// unified memory or not (`WorkCounts::new_buffer_zero_fills` counts exactly one).
 #[test]
 fn a_new_private_buffer_reads_zero_through_its_first_fill() {
     on_device(|device| {
@@ -1084,12 +1083,10 @@ fn a_new_private_buffer_reads_zero_through_its_first_fill() {
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.error(), None, "on {name}");
         let filled = device.work_counts().new_buffer_zero_fills - before;
-        let fills = !device.properties().has_unified_memory;
         println!(
             "FIRST-USE on {name}: a new {len}-byte Private buffer {} the released one's memory, \
-             its zeros {}",
-            if reused { "took" } else { "did not take" },
-            if fills { "a fill" } else { "copies" }
+             its zeros {filled} fills",
+            if reused { "took" } else { "did not take" }
         );
         let bytes = read_buffer(&out, 0, len).unwrap();
         let other = bytes.iter().filter(|&&b| b != 0).count();
@@ -1098,8 +1095,7 @@ fn a_new_private_buffer_reads_zero_through_its_first_fill() {
             "bytes of a new Private buffer that read other than zero on {name}"
         );
         assert_eq!(
-            filled,
-            u64::from(fills),
+            filled, 1,
             "fills of the new Private buffer's zeros on {name}"
         );
     });
