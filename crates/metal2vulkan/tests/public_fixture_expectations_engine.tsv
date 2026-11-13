@@ -412,6 +412,8 @@ engine/buffer_end_byte_store.air.ll	buffer_end_byte_store	ok	ok	ok	ok	ok	ok	ok	o
 engine/buffer_end_byte_store.ll	buffer_end_byte_store	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/buffer_end_half_load.air.ll	buffer_end_half_load	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/buffer_end_half_load.ll	buffer_end_half_load	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/ccb_conv_array.air.ll	ccb_conv_array	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}
+engine/ccb_conv_array.ll	ccb_conv_array	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}
 engine/cfb_depth_never.air.ll	cfb_dn_full	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/cfb_depth_never.air.ll	cfb_dn_count_vertices	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}
 engine/cfb_depth_never.air.ll	cfb_dn_count	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(FragmentStoresAndAtomics)]]}

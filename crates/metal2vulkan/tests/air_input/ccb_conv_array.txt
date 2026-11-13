@@ -1,0 +1,1555 @@
+target triple = "air64_v28-apple-macosx26.0.0"
+source_filename = "-"
+; datalayout DataLayout { endian: Little, pointers: {0: PointerSpec { size_bits: 64, abi_bits: 64, pref_bits: 64, index_bits: 64 }}, ints: {1: AlignSpec { abi_bits: 8, pref_bits: 8 }, 8: AlignSpec { abi_bits: 8, pref_bits: 8 }, 16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }}, floats: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }}, vectors: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 24: AlignSpec { abi_bits: 32, pref_bits: 32 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 48: AlignSpec { abi_bits: 64, pref_bits: 64 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 96: AlignSpec { abi_bits: 128, pref_bits: 128 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }, 192: AlignSpec { abi_bits: 256, pref_bits: 256 }, 256: AlignSpec { abi_bits: 256, pref_bits: 256 }, 512: AlignSpec { abi_bits: 512, pref_bits: 512 }, 1024: AlignSpec { abi_bits: 1024, pref_bits: 1024 }}, aggregate: AlignSpec { abi_bits: 0, pref_bits: 64 }, native_ints: [8, 16, 32], stack_align_bits: None, alloca_space: 0, program_space: 0, globals_space: 0, mangling: None, fn_ptr_align: None, non_integral: [] }
+%t7 = type { i32, ptr addrspace(0), ptr addrspace(0) }
+%t8 = type [1 x %t7]
+%t9 = type [1 x ptr addrspace(0)]
+%t13 = type void (ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(2), <3 x i32>)
+%t14 = type i8 (i8)
+%t16 = type <2 x i32> (<2 x i16>)
+%t17 = type i32 (ptr addrspace(1), i32)
+%t18 = type <2 x i32> (<2 x i32>, <2 x i32>, <2 x i32>)
+%t21 = type i1 (<2 x i1>)
+%t22 = type ptr addrspace(2) ()
+%t25 = type { <4 x half>, i8 }
+%t26 = type %t25 (ptr addrspace(1), ptr addrspace(2), <2 x i32>, i32, <2 x i32>, i32, i32)
+%t27 = type half (<4 x half>, <4 x half>)
+%t28 = type <4 x half> (<4 x half>, <4 x half>)
+%t29 = type <4 x half> (<4 x half>)
+%t30 = type <4 x half> (<4 x half>, <4 x half>, <4 x half>)
+%t31 = type void (ptr addrspace(1), <2 x i32>, i32, <4 x half>, i32, i32)
+%t32 = type void ()
+%t34 = type [2 x i32]
+%t36 = type { <2 x i32>, i32, float } ; "struct.CcbParams"
+c50 = %t7 [65535, @f17, zeroinitializer]
+c51 = %t8 [c50]
+c52 = ptr addrspace(0) addrspacecast (@g20)
+c53 = %t9 [c52]
+c54 = %t34 [27, 2]
+c80 = <2 x i32> [0, 1]
+c84 = <2 x i32> [4294967295, 4294967295]
+c86 = <2 x i32> [1, 0]
+c87 = <2 x i32> [2, 0]
+c88 = <2 x i32> [0, 2]
+c89 = <2 x i32> [1, 1]
+c102 = <4 x half> [0x3C00, 0x3C00, 0x3C00, 0x3C00]
+c103 = <4 x half> [0x3155, 0x3155, 0x3155, 0x3155]
+c104 = <4 x half> [0x3800, 0x3800, 0x3800, 0x3800]
+@g0 "_ZL16ccb_kernel_width" = internal addrspace(2) global i16 undef, align 2
+@g1 "_Z16ccb_kernel_width.MTL_FC_INIT_0_t" = linkonce_odr externally_initialized addrspace(2) constant i16 undef, align 2, section air.fc_initializer
+@g2 "_ZL17ccb_kernel_height" = internal addrspace(2) global i16 undef, align 2
+@g3 "_Z17ccb_kernel_height.MTL_FC_INIT_1_t" = linkonce_odr externally_initialized addrspace(2) constant i16 undef, align 2, section air.fc_initializer
+@g4 "_ZL10ccb_stride" = internal addrspace(2) global <2 x i16> undef, align 4
+@g5 "_Z10ccb_stride.MTL_FC_INIT_2_Dv2_t" = linkonce_odr externally_initialized addrspace(2) constant <2 x i16> undef, align 4, section air.fc_initializer
+@g6 "_ZL12ccb_dilation" = internal addrspace(2) global <2 x i16> undef, align 4
+@g7 "_Z12ccb_dilation.MTL_FC_INIT_3_Dv2_t" = linkonce_odr externally_initialized addrspace(2) constant <2 x i16> undef, align 4, section air.fc_initializer
+@g8 "_ZL12ccb_has_bias" = internal addrspace(2) global i8 undef, align 1
+@g9 "_Z12ccb_has_bias.MTL_FC_INIT_4_b" = linkonce_odr externally_initialized addrspace(2) constant i8 undef, align 1, section air.fc_initializer
+@g10 "_ZL14ccb_activation" = internal addrspace(2) global i16 undef, align 2
+@g11 "_Z14ccb_activation.MTL_FC_INIT_5_t" = linkonce_odr externally_initialized addrspace(2) constant i16 undef, align 2, section air.fc_initializer
+@g12 "_ZL10ccb_offset" = internal addrspace(2) global <2 x i16> undef, align 4
+@g13 "_Z10ccb_offset.MTL_FC_INIT_6_Dv2_s" = linkonce_odr externally_initialized addrspace(2) constant <2 x i16> undef, align 4, section air.fc_initializer
+@g14 "_ZL16ccb_input_slices" = internal addrspace(2) global i16 undef, align 2
+@g15 "_Z16ccb_input_slices.MTL_FC_INIT_7_t" = linkonce_odr externally_initialized addrspace(2) constant i16 undef, align 2, section air.fc_initializer
+@g16 "_ZL15ccb_clamp_edges" = internal addrspace(2) global i8 undef, align 1
+@g17 "_Z15ccb_clamp_edges.MTL_FC_INIT_8_b" = linkonce_odr externally_initialized addrspace(2) constant i8 undef, align 1, section air.fc_initializer
+@g18 "_ZL9ccb_alpha" = internal addrspace(2) global float undef, align 4
+@g19 "_Z9ccb_alpha.MTL_FC_INIT_9_f" = linkonce_odr externally_initialized addrspace(2) constant float undef, align 4, section air.fc_initializer
+@g20 "__metal_implicit_fc_pred_0" = internal addrspace(2) global i8 0, align 1
+@g21 "llvm.global_ctors" = appending addrspace(0) global %t8 c51
+@g22 "llvm.compiler.used" = appending addrspace(0) global %t9 c53, section "llvm.metadata"
+
+define %t13 @f0 "ccb_conv_array" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="96" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Ref nocapture ) %a2( Ref "air-buffer-no-alias"="" ) %a3( Ref nocapture "air-buffer-no-alias"="" ) %a4( align 8 dereferenceable(16) Ref nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = extractelement %a5, i64 0
+  %i1 = getelementptr inbounds %t36, %a4, i64 0, i32 0
+  %i2 = load <2 x i32>, %i1, align 8
+  %i3 = extractelement %i2, i64 0
+  %i4 = icmp ult %i0, %i3
+  %i5 = extractelement %a5, i64 1
+  %i6 = extractelement %i2, i64 1
+  %i7 = icmp ult %i5, %i6
+  %i8 = select i1 %i4, %i7, i1 0
+  br %i8, bb1, bb99
+bb1:
+  %i10 = getelementptr inbounds %t36, %a4, i64 0, i32 1
+  %i11 = load i32, %i10, align 8
+  %i12 = extractelement %a5, i64 2
+  %i13 = shl i32 %i12, i32 2
+  %i14 = shufflevector <2 x i32> %a5, <3 x i32> poison, <0, 1>
+  %i15 = load <2 x i16>, ptr addrspace(2) @g4, align 4
+  %i16 = tail call <2 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Signed, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i15)
+  %i17 = mul <2 x i32> %i16, %i14
+  %i18 = load <2 x i16>, ptr addrspace(2) @g12, align 4
+  %i19 = tail call <2 x i32> @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Signed, src: NumTy { elem: I16, lanes: 2 }, src_kind: Signed, src_fp8: None, rounding: None, saturate: false })](%i18)
+  %i20 = add <2 x i32> %i19, %i17
+  %i21 = load i16, ptr addrspace(2) @g0, align 2
+  %i22 = icmp eq %i21, i16 3
+  %i23 = load i16, ptr addrspace(2) @g2, align 2
+  %i24 = icmp eq %i23, i16 3
+  %i25 = select i1 %i22, %i24, i1 0
+  %i26 = load i16, ptr addrspace(2) @g14, align 2
+  %i27 = zext %i26 to i32
+  %i28 = icmp eq %i26, i16 0
+  br %i25, bb4, bb2
+bb2:
+  br %i28, bb64, bb3
+bb3:
+  %i31 = icmp eq %i23, i16 0
+  %i32 = icmp eq %i21, i16 0
+  %i33 = load <2 x i16>, ptr addrspace(2) @g6, align 4
+  %i34 = load i8, ptr addrspace(2) @g16, align 1
+  %i35 = icmp eq %i34, i8 0
+  %i36 = zext %i23 to i32
+  %i37 = zext %i21 to i32
+  br bb52
+bb4:
+  br %i28, bb64, bb5
+bb5:
+  %i40 = tail call i32 @f4 [air Texture(Texture { op: Query(Width), image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: None, coord16: false, form: Current, status: true, access: None, states_access: true })](%a0, i32 0) arg0( Ref nocapture )
+  %i41 = insertelement <2 x i32> undef, %i40, i64 0
+  %i42 = tail call i32 @f5 [air Texture(Texture { op: Query(Height), image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: None, coord16: false, form: Current, status: true, access: None, states_access: true })](%a0, i32 0) arg0( Ref nocapture )
+  %i43 = insertelement %i41, %i42, i64 1
+  %i44 = add <2 x i32> %i43, <2 x i32> c84
+  %i45 = load i8, ptr addrspace(2) @g16, align 1, !range [(0, 2)]
+  %i46 = icmp eq %i45, i8 0
+  %i47 = icmp slt %i20, <2 x i32> zeroinitializer
+  %i48 = icmp slt %i44, %i20
+  %i49 = load <2 x i16>, ptr addrspace(2) @g6, align 4
+  %i50 = tail call <2 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Signed, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i49)
+  %i51 = mul nuw <2 x i32> %i50, <2 x i32> c86
+  %i52 = add <2 x i32> %i51, %i20
+  %i53 = icmp slt %i52, <2 x i32> zeroinitializer
+  %i54 = icmp slt %i44, %i52
+  %i55 = mul <2 x i32> %i50, <2 x i32> c87
+  %i56 = add <2 x i32> %i55, %i20
+  %i57 = icmp slt %i56, <2 x i32> zeroinitializer
+  %i58 = icmp slt %i44, %i56
+  %i59 = mul nuw <2 x i32> %i50, <2 x i32> c80
+  %i60 = add <2 x i32> %i59, %i20
+  %i61 = icmp slt %i60, <2 x i32> zeroinitializer
+  %i62 = icmp slt %i44, %i60
+  %i63 = add <2 x i32> %i50, %i20
+  %i64 = icmp slt %i63, <2 x i32> zeroinitializer
+  %i65 = icmp slt %i44, %i63
+  %i66 = shl <2 x i32> %i50, <2 x i32> c86
+  %i67 = add <2 x i32> %i66, %i20
+  %i68 = icmp slt %i67, <2 x i32> zeroinitializer
+  %i69 = icmp slt %i44, %i67
+  %i70 = mul <2 x i32> %i50, <2 x i32> c88
+  %i71 = add <2 x i32> %i70, %i20
+  %i72 = icmp slt %i71, <2 x i32> zeroinitializer
+  %i73 = icmp slt %i44, %i71
+  %i74 = shl <2 x i32> %i50, <2 x i32> c80
+  %i75 = add <2 x i32> %i74, %i20
+  %i76 = icmp slt %i75, <2 x i32> zeroinitializer
+  %i77 = icmp slt %i44, %i75
+  %i78 = shl <2 x i32> %i50, <2 x i32> c89
+  %i79 = add <2 x i32> %i78, %i20
+  %i80 = icmp slt %i79, <2 x i32> zeroinitializer
+  %i81 = icmp slt %i44, %i79
+  br bb6
+bb6:
+  %i83 = phi <4 x half> [<4 x half> zeroinitializer, bb5], [%i810, bb51]
+  %i84 = phi <4 x half> [<4 x half> zeroinitializer, bb5], [%i827, bb51]
+  %i85 = phi <4 x half> [<4 x half> zeroinitializer, bb5], [%i844, bb51]
+  %i86 = phi <4 x half> [<4 x half> zeroinitializer, bb5], [%i861, bb51]
+  %i87 = phi i32 [i32 0, bb5], [%i862, bb51]
+  br %i46, bb8, bb7
+bb7:
+  %i89 = tail call <2 x i32> @f6 [air Math(Math { f: IClamp(Signed), precision: Precise, ty: NumTy { elem: I32, lanes: 2 } })](%i20, <2 x i32> zeroinitializer, %i44)
+  br bb10
+bb8:
+  %i91 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i47)
+  br %i91, bb11, bb9
+bb9:
+  %i93 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i48)
+  br %i93, bb11, bb10
+bb10:
+  %i95 = phi <2 x i32> [%i89, bb7], [%i20, bb9]
+  %i96 = tail call ptr addrspace(2) @f8 [air Sampler(GetReadSampler)]()
+  %i97 = tail call %t25 @f9 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a0, %i96, %i95, %i87, <2 x i32> zeroinitializer, i32 0, i32 1) arg0( Ref nocapture )
+  %i98 = extractvalue <4 x half> %i97, 0
+  br bb11
+bb11:
+  %i100 = phi <4 x half> [%i98, bb10], [<4 x half> zeroinitializer, bb9], [<4 x half> zeroinitializer, bb8]
+  %i101 = mul nuw nsw i32 %i87, i32 9
+  %i102 = mul i32 %i101, %i11
+  %i103 = add i32 %i102, %i13
+  %i104 = shl i32 %i103, i32 2
+  %i105 = zext %i104 to i64
+  %i106 = getelementptr inbounds <4 x half>, %a2, %i105
+  %i107 = load <4 x half>, %i106, align 8
+  %i108 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i107)
+  %i109 = insertelement <4 x half> undef, %i108, i64 0
+  %i110 = getelementptr inbounds <4 x half>, %i106, i64 1
+  %i111 = load <4 x half>, %i110, align 8
+  %i112 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i111)
+  %i113 = insertelement %i109, %i112, i64 1
+  %i114 = getelementptr inbounds <4 x half>, %i106, i64 2
+  %i115 = load <4 x half>, %i114, align 8
+  %i116 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i115)
+  %i117 = insertelement %i113, %i116, i64 2
+  %i118 = getelementptr inbounds <4 x half>, %i106, i64 3
+  %i119 = load <4 x half>, %i118, align 8
+  %i120 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i119)
+  %i121 = insertelement %i117, %i120, i64 3
+  %i122 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i121, %i83
+  %i123 = getelementptr inbounds <4 x half>, %i106, i64 4
+  %i124 = load <4 x half>, %i123, align 8
+  %i125 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i124)
+  %i126 = insertelement <4 x half> undef, %i125, i64 0
+  %i127 = getelementptr inbounds <4 x half>, %i123, i64 1
+  %i128 = load <4 x half>, %i127, align 8
+  %i129 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i128)
+  %i130 = insertelement %i126, %i129, i64 1
+  %i131 = getelementptr inbounds <4 x half>, %i123, i64 2
+  %i132 = load <4 x half>, %i131, align 8
+  %i133 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i132)
+  %i134 = insertelement %i130, %i133, i64 2
+  %i135 = getelementptr inbounds <4 x half>, %i123, i64 3
+  %i136 = load <4 x half>, %i135, align 8
+  %i137 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i136)
+  %i138 = insertelement %i134, %i137, i64 3
+  %i139 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i138, %i84
+  %i140 = getelementptr inbounds <4 x half>, %i106, i64 8
+  %i141 = load <4 x half>, %i140, align 8
+  %i142 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i141)
+  %i143 = insertelement <4 x half> undef, %i142, i64 0
+  %i144 = getelementptr inbounds <4 x half>, %i140, i64 1
+  %i145 = load <4 x half>, %i144, align 8
+  %i146 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i145)
+  %i147 = insertelement %i143, %i146, i64 1
+  %i148 = getelementptr inbounds <4 x half>, %i140, i64 2
+  %i149 = load <4 x half>, %i148, align 8
+  %i150 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i149)
+  %i151 = insertelement %i147, %i150, i64 2
+  %i152 = getelementptr inbounds <4 x half>, %i140, i64 3
+  %i153 = load <4 x half>, %i152, align 8
+  %i154 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i153)
+  %i155 = insertelement %i151, %i154, i64 3
+  %i156 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i155, %i85
+  %i157 = getelementptr inbounds <4 x half>, %i106, i64 12
+  %i158 = load <4 x half>, %i157, align 8
+  %i159 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i158)
+  %i160 = insertelement <4 x half> undef, %i159, i64 0
+  %i161 = getelementptr inbounds <4 x half>, %i157, i64 1
+  %i162 = load <4 x half>, %i161, align 8
+  %i163 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i162)
+  %i164 = insertelement %i160, %i163, i64 1
+  %i165 = getelementptr inbounds <4 x half>, %i157, i64 2
+  %i166 = load <4 x half>, %i165, align 8
+  %i167 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i166)
+  %i168 = insertelement %i164, %i167, i64 2
+  %i169 = getelementptr inbounds <4 x half>, %i157, i64 3
+  %i170 = load <4 x half>, %i169, align 8
+  %i171 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i100, %i170)
+  %i172 = insertelement %i168, %i171, i64 3
+  %i173 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i172, %i86
+  br %i46, bb13, bb12
+bb12:
+  %i175 = tail call <2 x i32> @f6 [air Math(Math { f: IClamp(Signed), precision: Precise, ty: NumTy { elem: I32, lanes: 2 } })](%i52, <2 x i32> zeroinitializer, %i44)
+  br bb15
+bb13:
+  %i177 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i53)
+  br %i177, bb16, bb14
+bb14:
+  %i179 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i54)
+  br %i179, bb16, bb15
+bb15:
+  %i181 = phi <2 x i32> [%i175, bb12], [%i52, bb14]
+  %i182 = tail call ptr addrspace(2) @f8 [air Sampler(GetReadSampler)]()
+  %i183 = tail call %t25 @f9 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a0, %i182, %i181, %i87, <2 x i32> zeroinitializer, i32 0, i32 1) arg0( Ref nocapture )
+  %i184 = extractvalue <4 x half> %i183, 0
+  br bb16
+bb16:
+  %i186 = phi <4 x half> [%i184, bb15], [<4 x half> zeroinitializer, bb14], [<4 x half> zeroinitializer, bb13]
+  %i187 = add nuw nsw i32 %i101, i32 1
+  %i188 = mul i32 %i187, %i11
+  %i189 = add i32 %i188, %i13
+  %i190 = shl i32 %i189, i32 2
+  %i191 = zext %i190 to i64
+  %i192 = getelementptr inbounds <4 x half>, %a2, %i191
+  %i193 = load <4 x half>, %i192, align 8
+  %i194 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i193)
+  %i195 = insertelement <4 x half> undef, %i194, i64 0
+  %i196 = getelementptr inbounds <4 x half>, %i192, i64 1
+  %i197 = load <4 x half>, %i196, align 8
+  %i198 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i197)
+  %i199 = insertelement %i195, %i198, i64 1
+  %i200 = getelementptr inbounds <4 x half>, %i192, i64 2
+  %i201 = load <4 x half>, %i200, align 8
+  %i202 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i201)
+  %i203 = insertelement %i199, %i202, i64 2
+  %i204 = getelementptr inbounds <4 x half>, %i192, i64 3
+  %i205 = load <4 x half>, %i204, align 8
+  %i206 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i205)
+  %i207 = insertelement %i203, %i206, i64 3
+  %i208 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i122, %i207
+  %i209 = getelementptr inbounds <4 x half>, %i192, i64 4
+  %i210 = load <4 x half>, %i209, align 8
+  %i211 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i210)
+  %i212 = insertelement <4 x half> undef, %i211, i64 0
+  %i213 = getelementptr inbounds <4 x half>, %i209, i64 1
+  %i214 = load <4 x half>, %i213, align 8
+  %i215 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i214)
+  %i216 = insertelement %i212, %i215, i64 1
+  %i217 = getelementptr inbounds <4 x half>, %i209, i64 2
+  %i218 = load <4 x half>, %i217, align 8
+  %i219 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i218)
+  %i220 = insertelement %i216, %i219, i64 2
+  %i221 = getelementptr inbounds <4 x half>, %i209, i64 3
+  %i222 = load <4 x half>, %i221, align 8
+  %i223 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i222)
+  %i224 = insertelement %i220, %i223, i64 3
+  %i225 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i139, %i224
+  %i226 = getelementptr inbounds <4 x half>, %i192, i64 8
+  %i227 = load <4 x half>, %i226, align 8
+  %i228 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i227)
+  %i229 = insertelement <4 x half> undef, %i228, i64 0
+  %i230 = getelementptr inbounds <4 x half>, %i226, i64 1
+  %i231 = load <4 x half>, %i230, align 8
+  %i232 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i231)
+  %i233 = insertelement %i229, %i232, i64 1
+  %i234 = getelementptr inbounds <4 x half>, %i226, i64 2
+  %i235 = load <4 x half>, %i234, align 8
+  %i236 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i235)
+  %i237 = insertelement %i233, %i236, i64 2
+  %i238 = getelementptr inbounds <4 x half>, %i226, i64 3
+  %i239 = load <4 x half>, %i238, align 8
+  %i240 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i239)
+  %i241 = insertelement %i237, %i240, i64 3
+  %i242 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i156, %i241
+  %i243 = getelementptr inbounds <4 x half>, %i192, i64 12
+  %i244 = load <4 x half>, %i243, align 8
+  %i245 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i244)
+  %i246 = insertelement <4 x half> undef, %i245, i64 0
+  %i247 = getelementptr inbounds <4 x half>, %i243, i64 1
+  %i248 = load <4 x half>, %i247, align 8
+  %i249 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i248)
+  %i250 = insertelement %i246, %i249, i64 1
+  %i251 = getelementptr inbounds <4 x half>, %i243, i64 2
+  %i252 = load <4 x half>, %i251, align 8
+  %i253 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i252)
+  %i254 = insertelement %i250, %i253, i64 2
+  %i255 = getelementptr inbounds <4 x half>, %i243, i64 3
+  %i256 = load <4 x half>, %i255, align 8
+  %i257 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i186, %i256)
+  %i258 = insertelement %i254, %i257, i64 3
+  %i259 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i173, %i258
+  br %i46, bb18, bb17
+bb17:
+  %i261 = tail call <2 x i32> @f6 [air Math(Math { f: IClamp(Signed), precision: Precise, ty: NumTy { elem: I32, lanes: 2 } })](%i56, <2 x i32> zeroinitializer, %i44)
+  br bb20
+bb18:
+  %i263 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i57)
+  br %i263, bb21, bb19
+bb19:
+  %i265 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i58)
+  br %i265, bb21, bb20
+bb20:
+  %i267 = phi <2 x i32> [%i261, bb17], [%i56, bb19]
+  %i268 = tail call ptr addrspace(2) @f8 [air Sampler(GetReadSampler)]()
+  %i269 = tail call %t25 @f9 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a0, %i268, %i267, %i87, <2 x i32> zeroinitializer, i32 0, i32 1) arg0( Ref nocapture )
+  %i270 = extractvalue <4 x half> %i269, 0
+  br bb21
+bb21:
+  %i272 = phi <4 x half> [%i270, bb20], [<4 x half> zeroinitializer, bb19], [<4 x half> zeroinitializer, bb18]
+  %i273 = add nuw nsw i32 %i101, i32 2
+  %i274 = mul i32 %i273, %i11
+  %i275 = add i32 %i274, %i13
+  %i276 = shl i32 %i275, i32 2
+  %i277 = zext %i276 to i64
+  %i278 = getelementptr inbounds <4 x half>, %a2, %i277
+  %i279 = load <4 x half>, %i278, align 8
+  %i280 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i279)
+  %i281 = insertelement <4 x half> undef, %i280, i64 0
+  %i282 = getelementptr inbounds <4 x half>, %i278, i64 1
+  %i283 = load <4 x half>, %i282, align 8
+  %i284 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i283)
+  %i285 = insertelement %i281, %i284, i64 1
+  %i286 = getelementptr inbounds <4 x half>, %i278, i64 2
+  %i287 = load <4 x half>, %i286, align 8
+  %i288 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i287)
+  %i289 = insertelement %i285, %i288, i64 2
+  %i290 = getelementptr inbounds <4 x half>, %i278, i64 3
+  %i291 = load <4 x half>, %i290, align 8
+  %i292 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i291)
+  %i293 = insertelement %i289, %i292, i64 3
+  %i294 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i208, %i293
+  %i295 = getelementptr inbounds <4 x half>, %i278, i64 4
+  %i296 = load <4 x half>, %i295, align 8
+  %i297 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i296)
+  %i298 = insertelement <4 x half> undef, %i297, i64 0
+  %i299 = getelementptr inbounds <4 x half>, %i295, i64 1
+  %i300 = load <4 x half>, %i299, align 8
+  %i301 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i300)
+  %i302 = insertelement %i298, %i301, i64 1
+  %i303 = getelementptr inbounds <4 x half>, %i295, i64 2
+  %i304 = load <4 x half>, %i303, align 8
+  %i305 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i304)
+  %i306 = insertelement %i302, %i305, i64 2
+  %i307 = getelementptr inbounds <4 x half>, %i295, i64 3
+  %i308 = load <4 x half>, %i307, align 8
+  %i309 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i308)
+  %i310 = insertelement %i306, %i309, i64 3
+  %i311 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i225, %i310
+  %i312 = getelementptr inbounds <4 x half>, %i278, i64 8
+  %i313 = load <4 x half>, %i312, align 8
+  %i314 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i313)
+  %i315 = insertelement <4 x half> undef, %i314, i64 0
+  %i316 = getelementptr inbounds <4 x half>, %i312, i64 1
+  %i317 = load <4 x half>, %i316, align 8
+  %i318 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i317)
+  %i319 = insertelement %i315, %i318, i64 1
+  %i320 = getelementptr inbounds <4 x half>, %i312, i64 2
+  %i321 = load <4 x half>, %i320, align 8
+  %i322 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i321)
+  %i323 = insertelement %i319, %i322, i64 2
+  %i324 = getelementptr inbounds <4 x half>, %i312, i64 3
+  %i325 = load <4 x half>, %i324, align 8
+  %i326 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i325)
+  %i327 = insertelement %i323, %i326, i64 3
+  %i328 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i242, %i327
+  %i329 = getelementptr inbounds <4 x half>, %i278, i64 12
+  %i330 = load <4 x half>, %i329, align 8
+  %i331 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i330)
+  %i332 = insertelement <4 x half> undef, %i331, i64 0
+  %i333 = getelementptr inbounds <4 x half>, %i329, i64 1
+  %i334 = load <4 x half>, %i333, align 8
+  %i335 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i334)
+  %i336 = insertelement %i332, %i335, i64 1
+  %i337 = getelementptr inbounds <4 x half>, %i329, i64 2
+  %i338 = load <4 x half>, %i337, align 8
+  %i339 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i338)
+  %i340 = insertelement %i336, %i339, i64 2
+  %i341 = getelementptr inbounds <4 x half>, %i329, i64 3
+  %i342 = load <4 x half>, %i341, align 8
+  %i343 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i272, %i342)
+  %i344 = insertelement %i340, %i343, i64 3
+  %i345 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i259, %i344
+  br %i46, bb23, bb22
+bb22:
+  %i347 = tail call <2 x i32> @f6 [air Math(Math { f: IClamp(Signed), precision: Precise, ty: NumTy { elem: I32, lanes: 2 } })](%i60, <2 x i32> zeroinitializer, %i44)
+  br bb25
+bb23:
+  %i349 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i61)
+  br %i349, bb26, bb24
+bb24:
+  %i351 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i62)
+  br %i351, bb26, bb25
+bb25:
+  %i353 = phi <2 x i32> [%i347, bb22], [%i60, bb24]
+  %i354 = tail call ptr addrspace(2) @f8 [air Sampler(GetReadSampler)]()
+  %i355 = tail call %t25 @f9 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a0, %i354, %i353, %i87, <2 x i32> zeroinitializer, i32 0, i32 1) arg0( Ref nocapture )
+  %i356 = extractvalue <4 x half> %i355, 0
+  br bb26
+bb26:
+  %i358 = phi <4 x half> [%i356, bb25], [<4 x half> zeroinitializer, bb24], [<4 x half> zeroinitializer, bb23]
+  %i359 = add nuw nsw i32 %i101, i32 3
+  %i360 = mul i32 %i359, %i11
+  %i361 = add i32 %i360, %i13
+  %i362 = shl i32 %i361, i32 2
+  %i363 = zext %i362 to i64
+  %i364 = getelementptr inbounds <4 x half>, %a2, %i363
+  %i365 = load <4 x half>, %i364, align 8
+  %i366 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i365)
+  %i367 = insertelement <4 x half> undef, %i366, i64 0
+  %i368 = getelementptr inbounds <4 x half>, %i364, i64 1
+  %i369 = load <4 x half>, %i368, align 8
+  %i370 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i369)
+  %i371 = insertelement %i367, %i370, i64 1
+  %i372 = getelementptr inbounds <4 x half>, %i364, i64 2
+  %i373 = load <4 x half>, %i372, align 8
+  %i374 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i373)
+  %i375 = insertelement %i371, %i374, i64 2
+  %i376 = getelementptr inbounds <4 x half>, %i364, i64 3
+  %i377 = load <4 x half>, %i376, align 8
+  %i378 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i377)
+  %i379 = insertelement %i375, %i378, i64 3
+  %i380 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i294, %i379
+  %i381 = getelementptr inbounds <4 x half>, %i364, i64 4
+  %i382 = load <4 x half>, %i381, align 8
+  %i383 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i382)
+  %i384 = insertelement <4 x half> undef, %i383, i64 0
+  %i385 = getelementptr inbounds <4 x half>, %i381, i64 1
+  %i386 = load <4 x half>, %i385, align 8
+  %i387 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i386)
+  %i388 = insertelement %i384, %i387, i64 1
+  %i389 = getelementptr inbounds <4 x half>, %i381, i64 2
+  %i390 = load <4 x half>, %i389, align 8
+  %i391 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i390)
+  %i392 = insertelement %i388, %i391, i64 2
+  %i393 = getelementptr inbounds <4 x half>, %i381, i64 3
+  %i394 = load <4 x half>, %i393, align 8
+  %i395 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i394)
+  %i396 = insertelement %i392, %i395, i64 3
+  %i397 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i311, %i396
+  %i398 = getelementptr inbounds <4 x half>, %i364, i64 8
+  %i399 = load <4 x half>, %i398, align 8
+  %i400 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i399)
+  %i401 = insertelement <4 x half> undef, %i400, i64 0
+  %i402 = getelementptr inbounds <4 x half>, %i398, i64 1
+  %i403 = load <4 x half>, %i402, align 8
+  %i404 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i403)
+  %i405 = insertelement %i401, %i404, i64 1
+  %i406 = getelementptr inbounds <4 x half>, %i398, i64 2
+  %i407 = load <4 x half>, %i406, align 8
+  %i408 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i407)
+  %i409 = insertelement %i405, %i408, i64 2
+  %i410 = getelementptr inbounds <4 x half>, %i398, i64 3
+  %i411 = load <4 x half>, %i410, align 8
+  %i412 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i411)
+  %i413 = insertelement %i409, %i412, i64 3
+  %i414 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i328, %i413
+  %i415 = getelementptr inbounds <4 x half>, %i364, i64 12
+  %i416 = load <4 x half>, %i415, align 8
+  %i417 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i416)
+  %i418 = insertelement <4 x half> undef, %i417, i64 0
+  %i419 = getelementptr inbounds <4 x half>, %i415, i64 1
+  %i420 = load <4 x half>, %i419, align 8
+  %i421 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i420)
+  %i422 = insertelement %i418, %i421, i64 1
+  %i423 = getelementptr inbounds <4 x half>, %i415, i64 2
+  %i424 = load <4 x half>, %i423, align 8
+  %i425 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i424)
+  %i426 = insertelement %i422, %i425, i64 2
+  %i427 = getelementptr inbounds <4 x half>, %i415, i64 3
+  %i428 = load <4 x half>, %i427, align 8
+  %i429 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i358, %i428)
+  %i430 = insertelement %i426, %i429, i64 3
+  %i431 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i345, %i430
+  br %i46, bb28, bb27
+bb27:
+  %i433 = tail call <2 x i32> @f6 [air Math(Math { f: IClamp(Signed), precision: Precise, ty: NumTy { elem: I32, lanes: 2 } })](%i63, <2 x i32> zeroinitializer, %i44)
+  br bb30
+bb28:
+  %i435 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i64)
+  br %i435, bb31, bb29
+bb29:
+  %i437 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i65)
+  br %i437, bb31, bb30
+bb30:
+  %i439 = phi <2 x i32> [%i433, bb27], [%i63, bb29]
+  %i440 = tail call ptr addrspace(2) @f8 [air Sampler(GetReadSampler)]()
+  %i441 = tail call %t25 @f9 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a0, %i440, %i439, %i87, <2 x i32> zeroinitializer, i32 0, i32 1) arg0( Ref nocapture )
+  %i442 = extractvalue <4 x half> %i441, 0
+  br bb31
+bb31:
+  %i444 = phi <4 x half> [%i442, bb30], [<4 x half> zeroinitializer, bb29], [<4 x half> zeroinitializer, bb28]
+  %i445 = add nuw nsw i32 %i101, i32 4
+  %i446 = mul i32 %i445, %i11
+  %i447 = add i32 %i446, %i13
+  %i448 = shl i32 %i447, i32 2
+  %i449 = zext %i448 to i64
+  %i450 = getelementptr inbounds <4 x half>, %a2, %i449
+  %i451 = load <4 x half>, %i450, align 8
+  %i452 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i451)
+  %i453 = insertelement <4 x half> undef, %i452, i64 0
+  %i454 = getelementptr inbounds <4 x half>, %i450, i64 1
+  %i455 = load <4 x half>, %i454, align 8
+  %i456 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i455)
+  %i457 = insertelement %i453, %i456, i64 1
+  %i458 = getelementptr inbounds <4 x half>, %i450, i64 2
+  %i459 = load <4 x half>, %i458, align 8
+  %i460 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i459)
+  %i461 = insertelement %i457, %i460, i64 2
+  %i462 = getelementptr inbounds <4 x half>, %i450, i64 3
+  %i463 = load <4 x half>, %i462, align 8
+  %i464 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i463)
+  %i465 = insertelement %i461, %i464, i64 3
+  %i466 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i380, %i465
+  %i467 = getelementptr inbounds <4 x half>, %i450, i64 4
+  %i468 = load <4 x half>, %i467, align 8
+  %i469 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i468)
+  %i470 = insertelement <4 x half> undef, %i469, i64 0
+  %i471 = getelementptr inbounds <4 x half>, %i467, i64 1
+  %i472 = load <4 x half>, %i471, align 8
+  %i473 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i472)
+  %i474 = insertelement %i470, %i473, i64 1
+  %i475 = getelementptr inbounds <4 x half>, %i467, i64 2
+  %i476 = load <4 x half>, %i475, align 8
+  %i477 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i476)
+  %i478 = insertelement %i474, %i477, i64 2
+  %i479 = getelementptr inbounds <4 x half>, %i467, i64 3
+  %i480 = load <4 x half>, %i479, align 8
+  %i481 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i480)
+  %i482 = insertelement %i478, %i481, i64 3
+  %i483 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i397, %i482
+  %i484 = getelementptr inbounds <4 x half>, %i450, i64 8
+  %i485 = load <4 x half>, %i484, align 8
+  %i486 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i485)
+  %i487 = insertelement <4 x half> undef, %i486, i64 0
+  %i488 = getelementptr inbounds <4 x half>, %i484, i64 1
+  %i489 = load <4 x half>, %i488, align 8
+  %i490 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i489)
+  %i491 = insertelement %i487, %i490, i64 1
+  %i492 = getelementptr inbounds <4 x half>, %i484, i64 2
+  %i493 = load <4 x half>, %i492, align 8
+  %i494 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i493)
+  %i495 = insertelement %i491, %i494, i64 2
+  %i496 = getelementptr inbounds <4 x half>, %i484, i64 3
+  %i497 = load <4 x half>, %i496, align 8
+  %i498 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i497)
+  %i499 = insertelement %i495, %i498, i64 3
+  %i500 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i414, %i499
+  %i501 = getelementptr inbounds <4 x half>, %i450, i64 12
+  %i502 = load <4 x half>, %i501, align 8
+  %i503 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i502)
+  %i504 = insertelement <4 x half> undef, %i503, i64 0
+  %i505 = getelementptr inbounds <4 x half>, %i501, i64 1
+  %i506 = load <4 x half>, %i505, align 8
+  %i507 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i506)
+  %i508 = insertelement %i504, %i507, i64 1
+  %i509 = getelementptr inbounds <4 x half>, %i501, i64 2
+  %i510 = load <4 x half>, %i509, align 8
+  %i511 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i510)
+  %i512 = insertelement %i508, %i511, i64 2
+  %i513 = getelementptr inbounds <4 x half>, %i501, i64 3
+  %i514 = load <4 x half>, %i513, align 8
+  %i515 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i444, %i514)
+  %i516 = insertelement %i512, %i515, i64 3
+  %i517 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i431, %i516
+  br %i46, bb33, bb32
+bb32:
+  %i519 = tail call <2 x i32> @f6 [air Math(Math { f: IClamp(Signed), precision: Precise, ty: NumTy { elem: I32, lanes: 2 } })](%i67, <2 x i32> zeroinitializer, %i44)
+  br bb35
+bb33:
+  %i521 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i68)
+  br %i521, bb36, bb34
+bb34:
+  %i523 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i69)
+  br %i523, bb36, bb35
+bb35:
+  %i525 = phi <2 x i32> [%i519, bb32], [%i67, bb34]
+  %i526 = tail call ptr addrspace(2) @f8 [air Sampler(GetReadSampler)]()
+  %i527 = tail call %t25 @f9 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a0, %i526, %i525, %i87, <2 x i32> zeroinitializer, i32 0, i32 1) arg0( Ref nocapture )
+  %i528 = extractvalue <4 x half> %i527, 0
+  br bb36
+bb36:
+  %i530 = phi <4 x half> [%i528, bb35], [<4 x half> zeroinitializer, bb34], [<4 x half> zeroinitializer, bb33]
+  %i531 = add nuw nsw i32 %i101, i32 5
+  %i532 = mul i32 %i531, %i11
+  %i533 = add i32 %i532, %i13
+  %i534 = shl i32 %i533, i32 2
+  %i535 = zext %i534 to i64
+  %i536 = getelementptr inbounds <4 x half>, %a2, %i535
+  %i537 = load <4 x half>, %i536, align 8
+  %i538 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i537)
+  %i539 = insertelement <4 x half> undef, %i538, i64 0
+  %i540 = getelementptr inbounds <4 x half>, %i536, i64 1
+  %i541 = load <4 x half>, %i540, align 8
+  %i542 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i541)
+  %i543 = insertelement %i539, %i542, i64 1
+  %i544 = getelementptr inbounds <4 x half>, %i536, i64 2
+  %i545 = load <4 x half>, %i544, align 8
+  %i546 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i545)
+  %i547 = insertelement %i543, %i546, i64 2
+  %i548 = getelementptr inbounds <4 x half>, %i536, i64 3
+  %i549 = load <4 x half>, %i548, align 8
+  %i550 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i549)
+  %i551 = insertelement %i547, %i550, i64 3
+  %i552 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i466, %i551
+  %i553 = getelementptr inbounds <4 x half>, %i536, i64 4
+  %i554 = load <4 x half>, %i553, align 8
+  %i555 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i554)
+  %i556 = insertelement <4 x half> undef, %i555, i64 0
+  %i557 = getelementptr inbounds <4 x half>, %i553, i64 1
+  %i558 = load <4 x half>, %i557, align 8
+  %i559 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i558)
+  %i560 = insertelement %i556, %i559, i64 1
+  %i561 = getelementptr inbounds <4 x half>, %i553, i64 2
+  %i562 = load <4 x half>, %i561, align 8
+  %i563 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i562)
+  %i564 = insertelement %i560, %i563, i64 2
+  %i565 = getelementptr inbounds <4 x half>, %i553, i64 3
+  %i566 = load <4 x half>, %i565, align 8
+  %i567 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i566)
+  %i568 = insertelement %i564, %i567, i64 3
+  %i569 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i483, %i568
+  %i570 = getelementptr inbounds <4 x half>, %i536, i64 8
+  %i571 = load <4 x half>, %i570, align 8
+  %i572 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i571)
+  %i573 = insertelement <4 x half> undef, %i572, i64 0
+  %i574 = getelementptr inbounds <4 x half>, %i570, i64 1
+  %i575 = load <4 x half>, %i574, align 8
+  %i576 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i575)
+  %i577 = insertelement %i573, %i576, i64 1
+  %i578 = getelementptr inbounds <4 x half>, %i570, i64 2
+  %i579 = load <4 x half>, %i578, align 8
+  %i580 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i579)
+  %i581 = insertelement %i577, %i580, i64 2
+  %i582 = getelementptr inbounds <4 x half>, %i570, i64 3
+  %i583 = load <4 x half>, %i582, align 8
+  %i584 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i583)
+  %i585 = insertelement %i581, %i584, i64 3
+  %i586 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i500, %i585
+  %i587 = getelementptr inbounds <4 x half>, %i536, i64 12
+  %i588 = load <4 x half>, %i587, align 8
+  %i589 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i588)
+  %i590 = insertelement <4 x half> undef, %i589, i64 0
+  %i591 = getelementptr inbounds <4 x half>, %i587, i64 1
+  %i592 = load <4 x half>, %i591, align 8
+  %i593 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i592)
+  %i594 = insertelement %i590, %i593, i64 1
+  %i595 = getelementptr inbounds <4 x half>, %i587, i64 2
+  %i596 = load <4 x half>, %i595, align 8
+  %i597 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i596)
+  %i598 = insertelement %i594, %i597, i64 2
+  %i599 = getelementptr inbounds <4 x half>, %i587, i64 3
+  %i600 = load <4 x half>, %i599, align 8
+  %i601 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i530, %i600)
+  %i602 = insertelement %i598, %i601, i64 3
+  %i603 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i517, %i602
+  br %i46, bb38, bb37
+bb37:
+  %i605 = tail call <2 x i32> @f6 [air Math(Math { f: IClamp(Signed), precision: Precise, ty: NumTy { elem: I32, lanes: 2 } })](%i71, <2 x i32> zeroinitializer, %i44)
+  br bb40
+bb38:
+  %i607 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i72)
+  br %i607, bb41, bb39
+bb39:
+  %i609 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i73)
+  br %i609, bb41, bb40
+bb40:
+  %i611 = phi <2 x i32> [%i605, bb37], [%i71, bb39]
+  %i612 = tail call ptr addrspace(2) @f8 [air Sampler(GetReadSampler)]()
+  %i613 = tail call %t25 @f9 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a0, %i612, %i611, %i87, <2 x i32> zeroinitializer, i32 0, i32 1) arg0( Ref nocapture )
+  %i614 = extractvalue <4 x half> %i613, 0
+  br bb41
+bb41:
+  %i616 = phi <4 x half> [%i614, bb40], [<4 x half> zeroinitializer, bb39], [<4 x half> zeroinitializer, bb38]
+  %i617 = add nuw nsw i32 %i101, i32 6
+  %i618 = mul i32 %i617, %i11
+  %i619 = add i32 %i618, %i13
+  %i620 = shl i32 %i619, i32 2
+  %i621 = zext %i620 to i64
+  %i622 = getelementptr inbounds <4 x half>, %a2, %i621
+  %i623 = load <4 x half>, %i622, align 8
+  %i624 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i623)
+  %i625 = insertelement <4 x half> undef, %i624, i64 0
+  %i626 = getelementptr inbounds <4 x half>, %i622, i64 1
+  %i627 = load <4 x half>, %i626, align 8
+  %i628 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i627)
+  %i629 = insertelement %i625, %i628, i64 1
+  %i630 = getelementptr inbounds <4 x half>, %i622, i64 2
+  %i631 = load <4 x half>, %i630, align 8
+  %i632 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i631)
+  %i633 = insertelement %i629, %i632, i64 2
+  %i634 = getelementptr inbounds <4 x half>, %i622, i64 3
+  %i635 = load <4 x half>, %i634, align 8
+  %i636 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i635)
+  %i637 = insertelement %i633, %i636, i64 3
+  %i638 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i552, %i637
+  %i639 = getelementptr inbounds <4 x half>, %i622, i64 4
+  %i640 = load <4 x half>, %i639, align 8
+  %i641 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i640)
+  %i642 = insertelement <4 x half> undef, %i641, i64 0
+  %i643 = getelementptr inbounds <4 x half>, %i639, i64 1
+  %i644 = load <4 x half>, %i643, align 8
+  %i645 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i644)
+  %i646 = insertelement %i642, %i645, i64 1
+  %i647 = getelementptr inbounds <4 x half>, %i639, i64 2
+  %i648 = load <4 x half>, %i647, align 8
+  %i649 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i648)
+  %i650 = insertelement %i646, %i649, i64 2
+  %i651 = getelementptr inbounds <4 x half>, %i639, i64 3
+  %i652 = load <4 x half>, %i651, align 8
+  %i653 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i652)
+  %i654 = insertelement %i650, %i653, i64 3
+  %i655 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i569, %i654
+  %i656 = getelementptr inbounds <4 x half>, %i622, i64 8
+  %i657 = load <4 x half>, %i656, align 8
+  %i658 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i657)
+  %i659 = insertelement <4 x half> undef, %i658, i64 0
+  %i660 = getelementptr inbounds <4 x half>, %i656, i64 1
+  %i661 = load <4 x half>, %i660, align 8
+  %i662 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i661)
+  %i663 = insertelement %i659, %i662, i64 1
+  %i664 = getelementptr inbounds <4 x half>, %i656, i64 2
+  %i665 = load <4 x half>, %i664, align 8
+  %i666 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i665)
+  %i667 = insertelement %i663, %i666, i64 2
+  %i668 = getelementptr inbounds <4 x half>, %i656, i64 3
+  %i669 = load <4 x half>, %i668, align 8
+  %i670 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i669)
+  %i671 = insertelement %i667, %i670, i64 3
+  %i672 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i586, %i671
+  %i673 = getelementptr inbounds <4 x half>, %i622, i64 12
+  %i674 = load <4 x half>, %i673, align 8
+  %i675 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i674)
+  %i676 = insertelement <4 x half> undef, %i675, i64 0
+  %i677 = getelementptr inbounds <4 x half>, %i673, i64 1
+  %i678 = load <4 x half>, %i677, align 8
+  %i679 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i678)
+  %i680 = insertelement %i676, %i679, i64 1
+  %i681 = getelementptr inbounds <4 x half>, %i673, i64 2
+  %i682 = load <4 x half>, %i681, align 8
+  %i683 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i682)
+  %i684 = insertelement %i680, %i683, i64 2
+  %i685 = getelementptr inbounds <4 x half>, %i673, i64 3
+  %i686 = load <4 x half>, %i685, align 8
+  %i687 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i616, %i686)
+  %i688 = insertelement %i684, %i687, i64 3
+  %i689 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i603, %i688
+  br %i46, bb43, bb42
+bb42:
+  %i691 = tail call <2 x i32> @f6 [air Math(Math { f: IClamp(Signed), precision: Precise, ty: NumTy { elem: I32, lanes: 2 } })](%i75, <2 x i32> zeroinitializer, %i44)
+  br bb45
+bb43:
+  %i693 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i76)
+  br %i693, bb46, bb44
+bb44:
+  %i695 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i77)
+  br %i695, bb46, bb45
+bb45:
+  %i697 = phi <2 x i32> [%i691, bb42], [%i75, bb44]
+  %i698 = tail call ptr addrspace(2) @f8 [air Sampler(GetReadSampler)]()
+  %i699 = tail call %t25 @f9 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a0, %i698, %i697, %i87, <2 x i32> zeroinitializer, i32 0, i32 1) arg0( Ref nocapture )
+  %i700 = extractvalue <4 x half> %i699, 0
+  br bb46
+bb46:
+  %i702 = phi <4 x half> [%i700, bb45], [<4 x half> zeroinitializer, bb44], [<4 x half> zeroinitializer, bb43]
+  %i703 = add nuw nsw i32 %i101, i32 7
+  %i704 = mul i32 %i703, %i11
+  %i705 = add i32 %i704, %i13
+  %i706 = shl i32 %i705, i32 2
+  %i707 = zext %i706 to i64
+  %i708 = getelementptr inbounds <4 x half>, %a2, %i707
+  %i709 = load <4 x half>, %i708, align 8
+  %i710 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i709)
+  %i711 = insertelement <4 x half> undef, %i710, i64 0
+  %i712 = getelementptr inbounds <4 x half>, %i708, i64 1
+  %i713 = load <4 x half>, %i712, align 8
+  %i714 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i713)
+  %i715 = insertelement %i711, %i714, i64 1
+  %i716 = getelementptr inbounds <4 x half>, %i708, i64 2
+  %i717 = load <4 x half>, %i716, align 8
+  %i718 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i717)
+  %i719 = insertelement %i715, %i718, i64 2
+  %i720 = getelementptr inbounds <4 x half>, %i708, i64 3
+  %i721 = load <4 x half>, %i720, align 8
+  %i722 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i721)
+  %i723 = insertelement %i719, %i722, i64 3
+  %i724 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i638, %i723
+  %i725 = getelementptr inbounds <4 x half>, %i708, i64 4
+  %i726 = load <4 x half>, %i725, align 8
+  %i727 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i726)
+  %i728 = insertelement <4 x half> undef, %i727, i64 0
+  %i729 = getelementptr inbounds <4 x half>, %i725, i64 1
+  %i730 = load <4 x half>, %i729, align 8
+  %i731 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i730)
+  %i732 = insertelement %i728, %i731, i64 1
+  %i733 = getelementptr inbounds <4 x half>, %i725, i64 2
+  %i734 = load <4 x half>, %i733, align 8
+  %i735 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i734)
+  %i736 = insertelement %i732, %i735, i64 2
+  %i737 = getelementptr inbounds <4 x half>, %i725, i64 3
+  %i738 = load <4 x half>, %i737, align 8
+  %i739 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i738)
+  %i740 = insertelement %i736, %i739, i64 3
+  %i741 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i655, %i740
+  %i742 = getelementptr inbounds <4 x half>, %i708, i64 8
+  %i743 = load <4 x half>, %i742, align 8
+  %i744 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i743)
+  %i745 = insertelement <4 x half> undef, %i744, i64 0
+  %i746 = getelementptr inbounds <4 x half>, %i742, i64 1
+  %i747 = load <4 x half>, %i746, align 8
+  %i748 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i747)
+  %i749 = insertelement %i745, %i748, i64 1
+  %i750 = getelementptr inbounds <4 x half>, %i742, i64 2
+  %i751 = load <4 x half>, %i750, align 8
+  %i752 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i751)
+  %i753 = insertelement %i749, %i752, i64 2
+  %i754 = getelementptr inbounds <4 x half>, %i742, i64 3
+  %i755 = load <4 x half>, %i754, align 8
+  %i756 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i755)
+  %i757 = insertelement %i753, %i756, i64 3
+  %i758 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i672, %i757
+  %i759 = getelementptr inbounds <4 x half>, %i708, i64 12
+  %i760 = load <4 x half>, %i759, align 8
+  %i761 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i760)
+  %i762 = insertelement <4 x half> undef, %i761, i64 0
+  %i763 = getelementptr inbounds <4 x half>, %i759, i64 1
+  %i764 = load <4 x half>, %i763, align 8
+  %i765 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i764)
+  %i766 = insertelement %i762, %i765, i64 1
+  %i767 = getelementptr inbounds <4 x half>, %i759, i64 2
+  %i768 = load <4 x half>, %i767, align 8
+  %i769 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i768)
+  %i770 = insertelement %i766, %i769, i64 2
+  %i771 = getelementptr inbounds <4 x half>, %i759, i64 3
+  %i772 = load <4 x half>, %i771, align 8
+  %i773 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i702, %i772)
+  %i774 = insertelement %i770, %i773, i64 3
+  %i775 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i689, %i774
+  br %i46, bb48, bb47
+bb47:
+  %i777 = tail call <2 x i32> @f6 [air Math(Math { f: IClamp(Signed), precision: Precise, ty: NumTy { elem: I32, lanes: 2 } })](%i79, <2 x i32> zeroinitializer, %i44)
+  br bb50
+bb48:
+  %i779 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i80)
+  br %i779, bb51, bb49
+bb49:
+  %i781 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i81)
+  br %i781, bb51, bb50
+bb50:
+  %i783 = phi <2 x i32> [%i777, bb47], [%i79, bb49]
+  %i784 = tail call ptr addrspace(2) @f8 [air Sampler(GetReadSampler)]()
+  %i785 = tail call %t25 @f9 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a0, %i784, %i783, %i87, <2 x i32> zeroinitializer, i32 0, i32 1) arg0( Ref nocapture )
+  %i786 = extractvalue <4 x half> %i785, 0
+  br bb51
+bb51:
+  %i788 = phi <4 x half> [%i786, bb50], [<4 x half> zeroinitializer, bb49], [<4 x half> zeroinitializer, bb48]
+  %i789 = add nuw nsw i32 %i101, i32 8
+  %i790 = mul i32 %i789, %i11
+  %i791 = add i32 %i790, %i13
+  %i792 = shl i32 %i791, i32 2
+  %i793 = zext %i792 to i64
+  %i794 = getelementptr inbounds <4 x half>, %a2, %i793
+  %i795 = load <4 x half>, %i794, align 8
+  %i796 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i795)
+  %i797 = insertelement <4 x half> undef, %i796, i64 0
+  %i798 = getelementptr inbounds <4 x half>, %i794, i64 1
+  %i799 = load <4 x half>, %i798, align 8
+  %i800 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i799)
+  %i801 = insertelement %i797, %i800, i64 1
+  %i802 = getelementptr inbounds <4 x half>, %i794, i64 2
+  %i803 = load <4 x half>, %i802, align 8
+  %i804 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i803)
+  %i805 = insertelement %i801, %i804, i64 2
+  %i806 = getelementptr inbounds <4 x half>, %i794, i64 3
+  %i807 = load <4 x half>, %i806, align 8
+  %i808 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i807)
+  %i809 = insertelement %i805, %i808, i64 3
+  %i810 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i724, %i809
+  %i811 = getelementptr inbounds <4 x half>, %i794, i64 4
+  %i812 = load <4 x half>, %i811, align 8
+  %i813 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i812)
+  %i814 = insertelement <4 x half> undef, %i813, i64 0
+  %i815 = getelementptr inbounds <4 x half>, %i811, i64 1
+  %i816 = load <4 x half>, %i815, align 8
+  %i817 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i816)
+  %i818 = insertelement %i814, %i817, i64 1
+  %i819 = getelementptr inbounds <4 x half>, %i811, i64 2
+  %i820 = load <4 x half>, %i819, align 8
+  %i821 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i820)
+  %i822 = insertelement %i818, %i821, i64 2
+  %i823 = getelementptr inbounds <4 x half>, %i811, i64 3
+  %i824 = load <4 x half>, %i823, align 8
+  %i825 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i824)
+  %i826 = insertelement %i822, %i825, i64 3
+  %i827 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i741, %i826
+  %i828 = getelementptr inbounds <4 x half>, %i794, i64 8
+  %i829 = load <4 x half>, %i828, align 8
+  %i830 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i829)
+  %i831 = insertelement <4 x half> undef, %i830, i64 0
+  %i832 = getelementptr inbounds <4 x half>, %i828, i64 1
+  %i833 = load <4 x half>, %i832, align 8
+  %i834 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i833)
+  %i835 = insertelement %i831, %i834, i64 1
+  %i836 = getelementptr inbounds <4 x half>, %i828, i64 2
+  %i837 = load <4 x half>, %i836, align 8
+  %i838 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i837)
+  %i839 = insertelement %i835, %i838, i64 2
+  %i840 = getelementptr inbounds <4 x half>, %i828, i64 3
+  %i841 = load <4 x half>, %i840, align 8
+  %i842 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i841)
+  %i843 = insertelement %i839, %i842, i64 3
+  %i844 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i758, %i843
+  %i845 = getelementptr inbounds <4 x half>, %i794, i64 12
+  %i846 = load <4 x half>, %i845, align 8
+  %i847 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i846)
+  %i848 = insertelement <4 x half> undef, %i847, i64 0
+  %i849 = getelementptr inbounds <4 x half>, %i845, i64 1
+  %i850 = load <4 x half>, %i849, align 8
+  %i851 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i850)
+  %i852 = insertelement %i848, %i851, i64 1
+  %i853 = getelementptr inbounds <4 x half>, %i845, i64 2
+  %i854 = load <4 x half>, %i853, align 8
+  %i855 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i854)
+  %i856 = insertelement %i852, %i855, i64 2
+  %i857 = getelementptr inbounds <4 x half>, %i845, i64 3
+  %i858 = load <4 x half>, %i857, align 8
+  %i859 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i788, %i858)
+  %i860 = insertelement %i856, %i859, i64 3
+  %i861 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i775, %i860
+  %i862 = add nuw nsw i32 %i87, i32 1
+  %i863 = icmp eq %i862, %i27
+  br %i863, bb64, bb6, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb52:
+  %i865 = phi <4 x half> [<4 x half> zeroinitializer, bb3], [%i891, bb56]
+  %i866 = phi <4 x half> [<4 x half> zeroinitializer, bb3], [%i890, bb56]
+  %i867 = phi <4 x half> [<4 x half> zeroinitializer, bb3], [%i889, bb56]
+  %i868 = phi <4 x half> [<4 x half> zeroinitializer, bb3], [%i888, bb56]
+  %i869 = phi i32 [i32 0, bb3], [%i892, bb56]
+  br %i31, bb56, bb53
+bb53:
+  %i871 = mul nuw i32 %i869, %i36
+  br bb54
+bb54:
+  %i873 = phi i32 [i32 0, bb53], [%i899, bb57]
+  %i874 = phi <4 x half> [%i865, bb53], [%i898, bb57]
+  %i875 = phi <4 x half> [%i866, bb53], [%i897, bb57]
+  %i876 = phi <4 x half> [%i867, bb53], [%i896, bb57]
+  %i877 = phi <4 x half> [%i868, bb53], [%i895, bb57]
+  br %i32, bb57, bb55
+bb55:
+  %i879 = tail call <2 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Signed, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i33)
+  %i880 = tail call i32 @f4 [air Texture(Texture { op: Query(Width), image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: None, coord16: false, form: Current, status: true, access: None, states_access: true })](%a0, i32 0) arg0( Ref nocapture )
+  %i881 = insertelement <2 x i32> undef, %i880, i64 0
+  %i882 = tail call i32 @f5 [air Texture(Texture { op: Query(Height), image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: None, coord16: false, form: Current, status: true, access: None, states_access: true })](%a0, i32 0) arg0( Ref nocapture )
+  %i883 = insertelement %i881, %i882, i64 1
+  %i884 = add <2 x i32> %i883, <2 x i32> c84
+  %i885 = add nuw i32 %i873, %i871
+  %i886 = mul i32 %i885, %i37
+  br bb58
+bb56:
+  %i888 = phi <4 x half> [%i868, bb52], [%i895, bb57]
+  %i889 = phi <4 x half> [%i867, bb52], [%i896, bb57]
+  %i890 = phi <4 x half> [%i866, bb52], [%i897, bb57]
+  %i891 = phi <4 x half> [%i865, bb52], [%i898, bb57]
+  %i892 = add nuw nsw i32 %i869, i32 1
+  %i893 = icmp eq %i892, %i27
+  br %i893, bb64, bb52, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb57:
+  %i895 = phi <4 x half> [%i877, bb54], [%i998, bb63]
+  %i896 = phi <4 x half> [%i876, bb54], [%i981, bb63]
+  %i897 = phi <4 x half> [%i875, bb54], [%i964, bb63]
+  %i898 = phi <4 x half> [%i874, bb54], [%i947, bb63]
+  %i899 = add nuw nsw i32 %i873, i32 1
+  %i900 = icmp eq %i899, %i36
+  br %i900, bb56, bb54, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb58:
+  %i902 = phi i32 [i32 0, bb55], [%i999, bb63]
+  %i903 = phi <4 x half> [%i874, bb55], [%i947, bb63]
+  %i904 = phi <4 x half> [%i875, bb55], [%i964, bb63]
+  %i905 = phi <4 x half> [%i876, bb55], [%i981, bb63]
+  %i906 = phi <4 x half> [%i877, bb55], [%i998, bb63]
+  %i907 = insertelement <2 x i32> undef, %i902, i64 0
+  %i908 = insertelement %i907, %i873, i64 1
+  %i909 = mul <2 x i32> %i908, %i879
+  %i910 = add <2 x i32> %i909, %i20
+  br %i35, bb60, bb59
+bb59:
+  %i912 = tail call <2 x i32> @f6 [air Math(Math { f: IClamp(Signed), precision: Precise, ty: NumTy { elem: I32, lanes: 2 } })](%i910, <2 x i32> zeroinitializer, %i884)
+  br bb62
+bb60:
+  %i914 = icmp slt %i910, <2 x i32> zeroinitializer
+  %i915 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i914)
+  br %i915, bb63, bb61
+bb61:
+  %i917 = icmp slt %i884, %i910
+  %i918 = tail call i1 @f7 [air BoolReduce(BoolReduce { all: false, lanes: 2 })](%i917)
+  br %i918, bb63, bb62
+bb62:
+  %i920 = phi <2 x i32> [%i912, bb59], [%i910, bb61]
+  %i921 = tail call ptr addrspace(2) @f8 [air Sampler(GetReadSampler)]()
+  %i922 = tail call %t25 @f9 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a0, %i921, %i920, %i869, <2 x i32> zeroinitializer, i32 0, i32 1) arg0( Ref nocapture )
+  %i923 = extractvalue <4 x half> %i922, 0
+  br bb63
+bb63:
+  %i925 = phi <4 x half> [%i923, bb62], [<4 x half> zeroinitializer, bb61], [<4 x half> zeroinitializer, bb60]
+  %i926 = add i32 %i902, %i886
+  %i927 = mul i32 %i926, %i11
+  %i928 = add i32 %i927, %i13
+  %i929 = shl i32 %i928, i32 2
+  %i930 = zext %i929 to i64
+  %i931 = getelementptr inbounds <4 x half>, %a2, %i930
+  %i932 = load <4 x half>, %i931, align 8
+  %i933 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i932)
+  %i934 = insertelement <4 x half> undef, %i933, i64 0
+  %i935 = getelementptr inbounds <4 x half>, %i931, i64 1
+  %i936 = load <4 x half>, %i935, align 8
+  %i937 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i936)
+  %i938 = insertelement %i934, %i937, i64 1
+  %i939 = getelementptr inbounds <4 x half>, %i931, i64 2
+  %i940 = load <4 x half>, %i939, align 8
+  %i941 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i940)
+  %i942 = insertelement %i938, %i941, i64 2
+  %i943 = getelementptr inbounds <4 x half>, %i931, i64 3
+  %i944 = load <4 x half>, %i943, align 8
+  %i945 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i944)
+  %i946 = insertelement %i942, %i945, i64 3
+  %i947 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i946, %i903
+  %i948 = getelementptr inbounds <4 x half>, %i931, i64 4
+  %i949 = load <4 x half>, %i948, align 8
+  %i950 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i949)
+  %i951 = insertelement <4 x half> undef, %i950, i64 0
+  %i952 = getelementptr inbounds <4 x half>, %i948, i64 1
+  %i953 = load <4 x half>, %i952, align 8
+  %i954 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i953)
+  %i955 = insertelement %i951, %i954, i64 1
+  %i956 = getelementptr inbounds <4 x half>, %i948, i64 2
+  %i957 = load <4 x half>, %i956, align 8
+  %i958 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i957)
+  %i959 = insertelement %i955, %i958, i64 2
+  %i960 = getelementptr inbounds <4 x half>, %i948, i64 3
+  %i961 = load <4 x half>, %i960, align 8
+  %i962 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i961)
+  %i963 = insertelement %i959, %i962, i64 3
+  %i964 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i963, %i904
+  %i965 = getelementptr inbounds <4 x half>, %i931, i64 8
+  %i966 = load <4 x half>, %i965, align 8
+  %i967 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i966)
+  %i968 = insertelement <4 x half> undef, %i967, i64 0
+  %i969 = getelementptr inbounds <4 x half>, %i965, i64 1
+  %i970 = load <4 x half>, %i969, align 8
+  %i971 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i970)
+  %i972 = insertelement %i968, %i971, i64 1
+  %i973 = getelementptr inbounds <4 x half>, %i965, i64 2
+  %i974 = load <4 x half>, %i973, align 8
+  %i975 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i974)
+  %i976 = insertelement %i972, %i975, i64 2
+  %i977 = getelementptr inbounds <4 x half>, %i965, i64 3
+  %i978 = load <4 x half>, %i977, align 8
+  %i979 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i978)
+  %i980 = insertelement %i976, %i979, i64 3
+  %i981 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i980, %i905
+  %i982 = getelementptr inbounds <4 x half>, %i931, i64 12
+  %i983 = load <4 x half>, %i982, align 8
+  %i984 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i983)
+  %i985 = insertelement <4 x half> undef, %i984, i64 0
+  %i986 = getelementptr inbounds <4 x half>, %i982, i64 1
+  %i987 = load <4 x half>, %i986, align 8
+  %i988 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i987)
+  %i989 = insertelement %i985, %i988, i64 1
+  %i990 = getelementptr inbounds <4 x half>, %i982, i64 2
+  %i991 = load <4 x half>, %i990, align 8
+  %i992 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i991)
+  %i993 = insertelement %i989, %i992, i64 2
+  %i994 = getelementptr inbounds <4 x half>, %i982, i64 3
+  %i995 = load <4 x half>, %i994, align 8
+  %i996 = tail call reassoc nnan ninf nsz arcp contract afn half @f10 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i925, %i995)
+  %i997 = insertelement %i993, %i996, i64 3
+  %i998 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i997, %i906
+  %i999 = add nuw nsw i32 %i902, i32 1
+  %i1000 = icmp eq %i999, %i37
+  br %i1000, bb57, bb58, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb64:
+  %i1002 = phi <4 x half> [<4 x half> zeroinitializer, bb4], [<4 x half> zeroinitializer, bb2], [%i861, bb51], [%i888, bb56]
+  %i1003 = phi <4 x half> [<4 x half> zeroinitializer, bb4], [<4 x half> zeroinitializer, bb2], [%i844, bb51], [%i889, bb56]
+  %i1004 = phi <4 x half> [<4 x half> zeroinitializer, bb4], [<4 x half> zeroinitializer, bb2], [%i827, bb51], [%i890, bb56]
+  %i1005 = phi <4 x half> [<4 x half> zeroinitializer, bb4], [<4 x half> zeroinitializer, bb2], [%i810, bb51], [%i891, bb56]
+  %i1006 = getelementptr inbounds %t36, %a4, i64 0, i32 2
+  %i1007 = load float, %i1006, align 4
+  %i1008 = fptrunc %i1007 to half
+  %i1009 = insertelement <4 x half> poison, %i1008, i64 0
+  %i1010 = shufflevector <4 x half> %i1009, <4 x half> poison, <0, 0, 0, 0>
+  %i1011 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1010, %i1005
+  %i1012 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1010, %i1004
+  %i1013 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1010, %i1003
+  %i1014 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1010, %i1002
+  %i1015 = load i8, ptr addrspace(2) @g8, align 1, !range [(0, 2)]
+  %i1016 = icmp eq %i1015, i8 0
+  br %i1016, bb66, bb65
+bb65:
+  %i1018 = zext %i13 to i64
+  %i1019 = getelementptr inbounds <4 x half>, %a3, %i1018
+  %i1020 = load <4 x half>, %i1019, align 8
+  %i1021 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1020, %i1011
+  %i1022 = or i32 %i13, i32 1
+  %i1023 = zext %i1022 to i64
+  %i1024 = getelementptr inbounds <4 x half>, %a3, %i1023
+  %i1025 = load <4 x half>, %i1024, align 8
+  %i1026 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1025, %i1012
+  %i1027 = or i32 %i13, i32 2
+  %i1028 = zext %i1027 to i64
+  %i1029 = getelementptr inbounds <4 x half>, %a3, %i1028
+  %i1030 = load <4 x half>, %i1029, align 8
+  %i1031 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1030, %i1013
+  %i1032 = or i32 %i13, i32 3
+  %i1033 = zext %i1032 to i64
+  %i1034 = getelementptr inbounds <4 x half>, %a3, %i1033
+  %i1035 = load <4 x half>, %i1034, align 8
+  %i1036 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1035, %i1014
+  br bb66
+bb66:
+  %i1038 = phi <4 x half> [%i1036, bb65], [%i1014, bb64]
+  %i1039 = phi <4 x half> [%i1031, bb65], [%i1013, bb64]
+  %i1040 = phi <4 x half> [%i1026, bb65], [%i1012, bb64]
+  %i1041 = phi <4 x half> [%i1021, bb65], [%i1011, bb64]
+  %i1042 = load i16, ptr addrspace(2) @g10, align 2
+  switch %i1042, bb74 [ 1: bb67 2: bb68 3: bb69 4: bb70 5: bb71 6: bb72 7: bb73 ]
+bb67:
+  %i1044 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f11 [air Math(Math { f: FMax, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1041, <4 x half> zeroinitializer)
+  br bb74
+bb68:
+  %i1046 = load float, ptr addrspace(2) @g18, align 4
+  %i1047 = fptrunc %i1046 to half
+  %i1048 = insertelement <4 x half> poison, %i1047, i64 0
+  %i1049 = shufflevector <4 x half> %i1048, <4 x half> poison, <0, 0, 0, 0>
+  %i1050 = fcmp reassoc nnan ninf nsz arcp contract afn ogt %i1041, <4 x half> zeroinitializer
+  %i1051 = select reassoc nnan ninf nsz arcp contract afn <4 x half> %i1050, <4 x half> c102, %i1049
+  %i1052 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1051, %i1041
+  br bb74
+bb69:
+  %i1054 = fneg reassoc nnan ninf nsz arcp contract afn <4 x half> %i1041
+  %i1055 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f12 [air Math(Math { f: Exp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1054)
+  %i1056 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1055, <4 x half> c102
+  %i1057 = fdiv reassoc nnan ninf nsz arcp contract afn <4 x half> <4 x half> c102, %i1056
+  br bb74
+bb70:
+  %i1059 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f13 [air Math(Math { f: Tanh, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1041)
+  br bb74
+bb71:
+  %i1061 = load float, ptr addrspace(2) @g18, align 4
+  %i1062 = fptrunc %i1061 to half
+  %i1063 = insertelement <4 x half> poison, %i1062, i64 0
+  %i1064 = shufflevector <4 x half> %i1063, <4 x half> poison, <0, 0, 0, 0>
+  %i1065 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f14 [air Math(Math { f: Clamp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1041, <4 x half> zeroinitializer, %i1064)
+  br bb74
+bb72:
+  %i1067 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1041, <4 x half> c103
+  %i1068 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1067, <4 x half> c104
+  %i1069 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f14 [air Math(Math { f: Clamp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1068, <4 x half> zeroinitializer, <4 x half> c102)
+  %i1070 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1069, %i1041
+  br bb74
+bb73:
+  %i1072 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f12 [air Math(Math { f: Exp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1041)
+  %i1073 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1072, <4 x half> c102
+  %i1074 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f15 [air Math(Math { f: Log, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1073)
+  br bb74
+bb74:
+  %i1076 = phi <4 x half> [%i1074, bb73], [%i1070, bb72], [%i1065, bb71], [%i1059, bb70], [%i1057, bb69], [%i1052, bb68], [%i1044, bb67], [%i1041, bb66]
+  tail call void @f16 [air Texture(Texture { op: Write, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Write), states_access: true })](%a1, %i14, %i13, %i1076, i32 0, i32 2) arg0( nocapture )
+  switch %i1042, bb82 [ 1: bb75 2: bb76 3: bb77 4: bb78 5: bb79 6: bb80 7: bb81 ]
+bb75:
+  %i1079 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f11 [air Math(Math { f: FMax, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1040, <4 x half> zeroinitializer)
+  br bb82
+bb76:
+  %i1081 = load float, ptr addrspace(2) @g18, align 4
+  %i1082 = fptrunc %i1081 to half
+  %i1083 = insertelement <4 x half> poison, %i1082, i64 0
+  %i1084 = shufflevector <4 x half> %i1083, <4 x half> poison, <0, 0, 0, 0>
+  %i1085 = fcmp reassoc nnan ninf nsz arcp contract afn ogt %i1040, <4 x half> zeroinitializer
+  %i1086 = select reassoc nnan ninf nsz arcp contract afn <4 x half> %i1085, <4 x half> c102, %i1084
+  %i1087 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1086, %i1040
+  br bb82
+bb77:
+  %i1089 = fneg reassoc nnan ninf nsz arcp contract afn <4 x half> %i1040
+  %i1090 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f12 [air Math(Math { f: Exp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1089)
+  %i1091 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1090, <4 x half> c102
+  %i1092 = fdiv reassoc nnan ninf nsz arcp contract afn <4 x half> <4 x half> c102, %i1091
+  br bb82
+bb78:
+  %i1094 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f13 [air Math(Math { f: Tanh, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1040)
+  br bb82
+bb79:
+  %i1096 = load float, ptr addrspace(2) @g18, align 4
+  %i1097 = fptrunc %i1096 to half
+  %i1098 = insertelement <4 x half> poison, %i1097, i64 0
+  %i1099 = shufflevector <4 x half> %i1098, <4 x half> poison, <0, 0, 0, 0>
+  %i1100 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f14 [air Math(Math { f: Clamp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1040, <4 x half> zeroinitializer, %i1099)
+  br bb82
+bb80:
+  %i1102 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1040, <4 x half> c103
+  %i1103 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1102, <4 x half> c104
+  %i1104 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f14 [air Math(Math { f: Clamp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1103, <4 x half> zeroinitializer, <4 x half> c102)
+  %i1105 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1104, %i1040
+  br bb82
+bb81:
+  %i1107 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f12 [air Math(Math { f: Exp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1040)
+  %i1108 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1107, <4 x half> c102
+  %i1109 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f15 [air Math(Math { f: Log, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1108)
+  br bb82
+bb82:
+  %i1111 = phi <4 x half> [%i1109, bb81], [%i1105, bb80], [%i1100, bb79], [%i1094, bb78], [%i1092, bb77], [%i1087, bb76], [%i1079, bb75], [%i1040, bb74]
+  %i1112 = or i32 %i13, i32 1
+  tail call void @f16 [air Texture(Texture { op: Write, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Write), states_access: true })](%a1, %i14, %i1112, %i1111, i32 0, i32 2) arg0( nocapture )
+  switch %i1042, bb90 [ 1: bb83 2: bb84 3: bb85 4: bb86 5: bb87 6: bb88 7: bb89 ]
+bb83:
+  %i1115 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f11 [air Math(Math { f: FMax, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1039, <4 x half> zeroinitializer)
+  br bb90
+bb84:
+  %i1117 = load float, ptr addrspace(2) @g18, align 4
+  %i1118 = fptrunc %i1117 to half
+  %i1119 = insertelement <4 x half> poison, %i1118, i64 0
+  %i1120 = shufflevector <4 x half> %i1119, <4 x half> poison, <0, 0, 0, 0>
+  %i1121 = fcmp reassoc nnan ninf nsz arcp contract afn ogt %i1039, <4 x half> zeroinitializer
+  %i1122 = select reassoc nnan ninf nsz arcp contract afn <4 x half> %i1121, <4 x half> c102, %i1120
+  %i1123 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1122, %i1039
+  br bb90
+bb85:
+  %i1125 = fneg reassoc nnan ninf nsz arcp contract afn <4 x half> %i1039
+  %i1126 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f12 [air Math(Math { f: Exp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1125)
+  %i1127 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1126, <4 x half> c102
+  %i1128 = fdiv reassoc nnan ninf nsz arcp contract afn <4 x half> <4 x half> c102, %i1127
+  br bb90
+bb86:
+  %i1130 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f13 [air Math(Math { f: Tanh, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1039)
+  br bb90
+bb87:
+  %i1132 = load float, ptr addrspace(2) @g18, align 4
+  %i1133 = fptrunc %i1132 to half
+  %i1134 = insertelement <4 x half> poison, %i1133, i64 0
+  %i1135 = shufflevector <4 x half> %i1134, <4 x half> poison, <0, 0, 0, 0>
+  %i1136 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f14 [air Math(Math { f: Clamp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1039, <4 x half> zeroinitializer, %i1135)
+  br bb90
+bb88:
+  %i1138 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1039, <4 x half> c103
+  %i1139 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1138, <4 x half> c104
+  %i1140 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f14 [air Math(Math { f: Clamp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1139, <4 x half> zeroinitializer, <4 x half> c102)
+  %i1141 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1140, %i1039
+  br bb90
+bb89:
+  %i1143 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f12 [air Math(Math { f: Exp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1039)
+  %i1144 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1143, <4 x half> c102
+  %i1145 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f15 [air Math(Math { f: Log, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1144)
+  br bb90
+bb90:
+  %i1147 = phi <4 x half> [%i1145, bb89], [%i1141, bb88], [%i1136, bb87], [%i1130, bb86], [%i1128, bb85], [%i1123, bb84], [%i1115, bb83], [%i1039, bb82]
+  %i1148 = or i32 %i13, i32 2
+  tail call void @f16 [air Texture(Texture { op: Write, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Write), states_access: true })](%a1, %i14, %i1148, %i1147, i32 0, i32 2) arg0( nocapture )
+  switch %i1042, bb98 [ 1: bb91 2: bb92 3: bb93 4: bb94 5: bb95 6: bb96 7: bb97 ]
+bb91:
+  %i1151 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f11 [air Math(Math { f: FMax, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1038, <4 x half> zeroinitializer)
+  br bb98
+bb92:
+  %i1153 = load float, ptr addrspace(2) @g18, align 4
+  %i1154 = fptrunc %i1153 to half
+  %i1155 = insertelement <4 x half> poison, %i1154, i64 0
+  %i1156 = shufflevector <4 x half> %i1155, <4 x half> poison, <0, 0, 0, 0>
+  %i1157 = fcmp reassoc nnan ninf nsz arcp contract afn ogt %i1038, <4 x half> zeroinitializer
+  %i1158 = select reassoc nnan ninf nsz arcp contract afn <4 x half> %i1157, <4 x half> c102, %i1156
+  %i1159 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1158, %i1038
+  br bb98
+bb93:
+  %i1161 = fneg reassoc nnan ninf nsz arcp contract afn <4 x half> %i1038
+  %i1162 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f12 [air Math(Math { f: Exp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1161)
+  %i1163 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1162, <4 x half> c102
+  %i1164 = fdiv reassoc nnan ninf nsz arcp contract afn <4 x half> <4 x half> c102, %i1163
+  br bb98
+bb94:
+  %i1166 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f13 [air Math(Math { f: Tanh, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1038)
+  br bb98
+bb95:
+  %i1168 = load float, ptr addrspace(2) @g18, align 4
+  %i1169 = fptrunc %i1168 to half
+  %i1170 = insertelement <4 x half> poison, %i1169, i64 0
+  %i1171 = shufflevector <4 x half> %i1170, <4 x half> poison, <0, 0, 0, 0>
+  %i1172 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f14 [air Math(Math { f: Clamp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1038, <4 x half> zeroinitializer, %i1171)
+  br bb98
+bb96:
+  %i1174 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1038, <4 x half> c103
+  %i1175 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1174, <4 x half> c104
+  %i1176 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f14 [air Math(Math { f: Clamp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1175, <4 x half> zeroinitializer, <4 x half> c102)
+  %i1177 = fmul reassoc nnan ninf nsz arcp contract afn <4 x half> %i1176, %i1038
+  br bb98
+bb97:
+  %i1179 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f12 [air Math(Math { f: Exp, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1038)
+  %i1180 = fadd reassoc nnan ninf nsz arcp contract afn <4 x half> %i1179, <4 x half> c102
+  %i1181 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f15 [air Math(Math { f: Log, precision: Precise, ty: NumTy { elem: F16, lanes: 4 } })](%i1180)
+  br bb98
+bb98:
+  %i1183 = phi <4 x half> [%i1181, bb97], [%i1177, bb96], [%i1172, bb95], [%i1166, bb94], [%i1164, bb93], [%i1159, bb92], [%i1151, bb91], [%i1038, bb90]
+  %i1184 = or i32 %i13, i32 3
+  tail call void @f16 [air Texture(Texture { op: Write, image: ImageShape { dim: D2, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Write), states_access: true })](%a1, %i14, %i1184, %i1183, i32 0, i32 2) arg0( nocapture )
+  br bb99
+bb99:
+  ret void
+}
+
+declare %t14 @f1 "air.normalize_function_constant_predicate.i8" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t16 @f2 "air.convert.s.v2i32.u.v2i16" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t16 @f3 "air.convert.s.v2i32.s.v2i16" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t17 @f4 "air.get_width_texture_2d_array" memory(Ref, NoModRef, NoModRef) %a0( Ref nocapture )
+
+declare %t17 @f5 "air.get_height_texture_2d_array" memory(Ref, NoModRef, NoModRef) %a0( Ref nocapture )
+
+declare %t18 @f6 "air.clamp.s.v2i32" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t21 @f7 "air.any.v2i1" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t22 @f8 "air.get_read_sampler" memory(NoModRef, Ref, NoModRef)
+
+declare %t26 @f9 "air.read_texture_2d_array.v4f16" memory(Ref, NoModRef, NoModRef) %a0( Ref nocapture )
+
+declare %t27 @f10 "air.dot.v4f16" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t28 @f11 "air.fmax.v4f16" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t29 @f12 "air.exp.v4f16" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t29 @f13 "air.tanh.v4f16" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t30 @f14 "air.clamp.v4f16" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t29 @f15 "air.log.v4f16" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t31 @f16 "air.write_texture_2d_array.v4f16" memory(ModRef, NoModRef, NoModRef) %a0( nocapture )
+
+define internal %t32 @f17 "_GLOBAL__sub_I__" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true", section air.static_init {
+bb0:
+  %i0 = load i16, ptr addrspace(2) @g1, align 2
+  store %i0, ptr addrspace(2) @g0, align 2
+  %i2 = load i16, ptr addrspace(2) @g3, align 2
+  store %i2, ptr addrspace(2) @g2, align 2
+  %i4 = load <2 x i16>, ptr addrspace(2) @g5, align 4
+  store %i4, ptr addrspace(2) @g4, align 4
+  %i6 = load <2 x i16>, ptr addrspace(2) @g7, align 4
+  store %i6, ptr addrspace(2) @g6, align 4
+  %i8 = load i8, ptr addrspace(2) @g9, align 1, !range [(0, 2)]
+  store %i8, ptr addrspace(2) @g8, align 1
+  %i10 = load i16, ptr addrspace(2) @g11, align 2
+  store %i10, ptr addrspace(2) @g10, align 2
+  %i12 = load <2 x i16>, ptr addrspace(2) @g13, align 4
+  store %i12, ptr addrspace(2) @g12, align 4
+  %i14 = load i16, ptr addrspace(2) @g15, align 2
+  store %i14, ptr addrspace(2) @g14, align 2
+  %i16 = load i8, ptr addrspace(2) @g17, align 1, !range [(0, 2)]
+  store %i16, ptr addrspace(2) @g16, align 1
+  %i18 = load float, ptr addrspace(2) @g19, align 4
+  store %i18, ptr addrspace(2) @g18, align 4
+  %i20 = tail call i8 @f1 [air FunctionConstant(NormalizePredicate(I8))](%i8)
+  store %i20, ptr addrspace(2) @g20, align 1
+  ret void
+}
+!md0 = !"SDK Version"
+!md1 = !"wchar_size"
+!md2 = !"frame-pointer"
+!md3 = !"air.max_device_buffers"
+!md4 = !"air.max_constant_buffers"
+!md5 = !"air.max_threadgroup_buffers"
+!md6 = !"air.max_textures"
+!md7 = !"air.max_read_write_textures"
+!md8 = !"air.max_samplers"
+!md9 = !"air.texture"
+!md10 = !"air.location_index"
+!md11 = !"air.read"
+!md12 = !"air.arg_type_name"
+!md13 = !"texture2d_array<half, read>"
+!md14 = !"air.arg_name"
+!md15 = !"src"
+!md16 = !"air.write"
+!md17 = !"texture2d_array<half, write>"
+!md18 = !"dst"
+!md19 = !"air.buffer"
+!md20 = !"air.address_space"
+!md21 = !"air.arg_type_size"
+!md22 = !"air.arg_type_align_size"
+!md23 = !"half4"
+!md24 = !"weights"
+!md25 = !"air.function_constant"
+!md26 = !"bool"
+!md27 = !"ccb_has_bias"
+!md28 = !"bias"
+!md29 = !"air.buffer_size"
+!md30 = !"air.struct_type_info"
+!md31 = !"uint2"
+!md32 = !"size"
+!md33 = !"uint"
+!md34 = !"output_slices"
+!md35 = !"float"
+!md36 = !"scale"
+!md37 = !"CcbParams"
+!md38 = !"params"
+!md39 = !"air.thread_position_in_grid"
+!md40 = !"uint3"
+!md41 = !"gid"
+!md42 = !"air.compile.denorms_disable"
+!md43 = !"air.compile.fast_math_enable"
+!md44 = !"air.compile.framebuffer_fetch_enable"
+!md45 = !"ushort"
+!md46 = !"ccb_kernel_width"
+!md47 = !"ccb_kernel_height"
+!md48 = !"ushort2"
+!md49 = !"ccb_stride"
+!md50 = !"ccb_dilation"
+!md51 = !"ccb_activation"
+!md52 = !"short2"
+!md53 = !"ccb_offset"
+!md54 = !"ccb_input_slices"
+!md55 = !"ccb_clamp_edges"
+!md56 = !"ccb_alpha"
+!md57 = !"Apple metal version 32023.922 (metalfe-32023.922.4)"
+!md58 = !"Metal"
+!md59 = !"omnipotent char"
+!md60 = !"Simple C++ TBAA"
+!md61 = !"short"
+!md62 = i32 2
+!md63 = %t34 c54
+!md64 = i32 1
+!md65 = i32 4
+!md66 = i32 7
+!md67 = i32 31
+!md68 = i32 128
+!md69 = i32 8
+!md70 = i32 16
+!md71 = ptr addrspace(0) @f0
+!md72 = i32 0
+!md73 = i32 3
+!md74 = ptr addrspace(2) @g20
+!md75 = i32 12
+!md76 = i32 5
+!md77 = ptr addrspace(2) @g1
+!md78 = ptr addrspace(2) @g3
+!md79 = ptr addrspace(2) @g5
+!md80 = ptr addrspace(2) @g7
+!md81 = ptr addrspace(2) @g9
+!md82 = ptr addrspace(2) @g11
+!md83 = ptr addrspace(2) @g13
+!md84 = i32 6
+!md85 = ptr addrspace(2) @g15
+!md86 = ptr addrspace(2) @g17
+!md87 = ptr addrspace(2) @g19
+!md88 = i32 9
+!md89 = i64 0
+!md90 = i8 0
+!md91 = i8 2
+!md92 = !{!md62, !md0, !md63}
+!md93 = !{!md64, !md1, !md65}
+!md94 = !{!md66, !md2, !md62}
+!md95 = !{!md66, !md3, !md67}
+!md96 = !{!md66, !md4, !md67}
+!md97 = !{!md66, !md5, !md67}
+!md98 = !{!md66, !md6, !md68}
+!md99 = !{!md66, !md7, !md69}
+!md100 = !{!md66, !md8, !md70}
+!md101 = !{}
+!md102 = !{!md72, !md9, !md10, !md72, !md64, !md11, !md12, !md13, !md14, !md15}
+!md103 = !{!md64, !md9, !md10, !md64, !md64, !md16, !md12, !md17, !md14, !md18}
+!md104 = !{!md62, !md19, !md10, !md72, !md64, !md11, !md20, !md64, !md21, !md69, !md22, !md69, !md12, !md23, !md14, !md24}
+!md105 = !{!md74, !md26, !md27}
+!md106 = !{!md73, !md25, !md105, !md19, !md10, !md64, !md64, !md11, !md20, !md64, !md21, !md69, !md22, !md69, !md12, !md23, !md14, !md28}
+!md107 = !{!md72, !md69, !md72, !md31, !md32, !md69, !md65, !md72, !md33, !md34, !md75, !md65, !md72, !md35, !md36}
+!md108 = !{!md65, !md19, !md29, !md70, !md10, !md62, !md64, !md11, !md20, !md62, !md30, !md107, !md21, !md70, !md22, !md69, !md12, !md37, !md14, !md38}
+!md109 = !{!md76, !md39, !md12, !md40, !md14, !md41}
+!md110 = !{!md102, !md103, !md104, !md106, !md108, !md109}
+!md111 = !{!md71, !md101, !md110}
+!md112 = !{!md42}
+!md113 = !{!md43}
+!md114 = !{!md44}
+!md115 = !{!md77, !md45, !md46, !md72}
+!md116 = !{!md78, !md45, !md47, !md64}
+!md117 = !{!md79, !md48, !md49, !md62}
+!md118 = !{!md80, !md48, !md50, !md73}
+!md119 = !{!md81, !md26, !md27, !md65}
+!md120 = !{!md82, !md45, !md51, !md76}
+!md121 = !{!md83, !md52, !md53, !md84}
+!md122 = !{!md85, !md45, !md54, !md66}
+!md123 = !{!md86, !md26, !md55, !md69}
+!md124 = !{!md87, !md35, !md56, !md88}
+!md125 = !{!md57}
+!md126 = !{!md62, !md69, !md72}
+!md127 = !{!md58, !md65, !md72, !md72}
+!md128 = !{!md60}
+!md129 = !{!md59, !md128, !md89}
+!md130 = !{!md35, !md129, !md89}
+!md131 = !{!md129, !md129, !md89}
+!md132 = !{!md61, !md129, !md89}
+!md133 = !{!md132, !md132, !md89}
+!md134 = !{!md26, !md129, !md89}
+!md135 = !{!md134, !md134, !md89}
+!md136 = !{!md90, !md91}
+!md137 = !{!md130, !md130, !md89}
+!"llvm.module.flags" = !{!md92, !md93, !md94, !md95, !md96, !md97, !md98, !md99, !md100}
+!"air.kernel" = !{!md111}
+!"air.compile_options" = !{!md112, !md113, !md114}
+!"air.function_constants" = !{!md115, !md116, !md117, !md118, !md119, !md120, !md121, !md122, !md123, !md124}
+!"llvm.ident" = !{!md125}
+!"air.version" = !{!md126}
+!"air.language_version" = !{!md127}
