@@ -1484,6 +1484,8 @@ fn poll(device: &Device, queue: usize, front: Front) -> Result<u64, CommandBuffe
             reaches(value)
         },
     )?;
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    trace::at(trace::Point::Publish);
     slot.completed(value, &shared.counts);
     // Freed memory that waits for the batches in flight goes once they completed, on a handler
     // thread (`freed_memory.rs`).
@@ -1630,6 +1632,70 @@ pub(crate) mod trace {
         if let Some(pause) = pause {
             std::thread::sleep(pause);
         }
+    }
+
+    /// A point of the runtime's threads a test holds a thread at ([`hold_at`]) until it lets it go
+    /// ([`release`]), to force an interleaving.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub(crate) enum Point {
+        /// A queue's waiter, before it publishes a value its queue's timeline completed (`poll`).
+        Publish,
+        /// The scheduler's thread, once `Group::keeps` kept the group held past its pass and
+        /// before it leaves the group's gate for the completion turns (`scheduler/mod.rs`).
+        KeptGate,
+        /// A queue's waiter, once it published a value its queue's timeline completed and before
+        /// the batches at or below it leave the `VkQueue`'s flight (`QueueSlot::completed`).
+        Leave,
+    }
+
+    /// Of each [`Point`]: whether a test holds threads there, and whether one reached it since.
+    static POINTS: Mutex<[(bool, bool); 3]> = Mutex::new([(false, false); 3]);
+    static POINTS_CHANGED: std::sync::Condvar = std::sync::Condvar::new();
+
+    /// Hold every thread that reaches `point` from now on, until [`release`].
+    pub(crate) fn hold_at(point: Point) {
+        POINTS.lock().unwrap()[point as usize] = (true, false);
+    }
+
+    /// Let go of the threads held at `point`, and hold none there any more.
+    pub(crate) fn release(point: Point) {
+        POINTS.lock().unwrap()[point as usize].0 = false;
+        POINTS_CHANGED.notify_all();
+    }
+
+    /// Whether a thread reached `point`, held there, within `timeout`.
+    pub(crate) fn reached(point: Point, timeout: std::time::Duration) -> bool {
+        let points = POINTS.lock().unwrap();
+        let (points, _) = POINTS_CHANGED
+            .wait_timeout_while(points, timeout, |points| !points[point as usize].1)
+            .unwrap();
+        points[point as usize].1
+    }
+
+    /// A runtime thread is at `point`: held there while a test holds it.
+    pub(crate) fn at(point: Point) {
+        let mut points = POINTS.lock().unwrap();
+        if !points[point as usize].0 {
+            return;
+        }
+        points[point as usize].1 = true;
+        POINTS_CHANGED.notify_all();
+        drop(POINTS_CHANGED.wait_while(points, |points| points[point as usize].0));
+    }
+
+    /// Whether the completion turns wake the scheduler's thread for a met wait no more
+    /// ([`drop_completion_wakes`]).
+    static COMPLETION_WAKES_DROPPED: AtomicBool = AtomicBool::new(false);
+
+    /// From now on (`true`), or no more, the completion turns never wake the scheduler's thread
+    /// for what a head waited for (`Scheduler::completions`): a wake lost, whatever its cause.
+    pub(crate) fn drop_completion_wakes(drop: bool) {
+        COMPLETION_WAKES_DROPPED.store(drop, Ordering::SeqCst);
+    }
+
+    /// Whether a test drops the completion turns' wakes ([`drop_completion_wakes`]).
+    pub(crate) fn completion_wakes_dropped() -> bool {
+        COMPLETION_WAKES_DROPPED.load(Ordering::SeqCst)
     }
 
     /// Keep the commit's step `what` on its way to its submission, now.

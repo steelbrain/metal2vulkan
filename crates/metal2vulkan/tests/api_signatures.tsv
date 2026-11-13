@@ -3381,6 +3381,7 @@ field	metal2vulkan-runtime::WorkCounts.scheduler_passes	pub scheduler_passes: u6
 field	metal2vulkan-runtime::WorkCounts.scheduler_passes_at_commit	pub scheduler_passes_at_commit: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_passes_by_waiters	pub scheduler_passes_by_waiters: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_sleep_slices	pub scheduler_sleep_slices: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_slice_rescues	pub scheduler_slice_rescues: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_sleeps	pub scheduler_sleeps: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_wakes_commit	pub scheduler_wakes_commit: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_wakes_completion	pub scheduler_wakes_completion: u64

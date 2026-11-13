@@ -7,9 +7,10 @@
 //! - **The flight.** Other queues' batches count their expected runs, an unshared queue's none;
 //!   the oldest one's run so far counts against its own expected run alone; a batch may go while
 //!   less than the budget is left and none of unknown length is in flight, else it waits for the
-//!   next completion, or for the time the oldest one's expected run brings the work left under
-//!   the budget; a run several batches complete in is shared among the other queues' batches, an
-//!   unshared queue's taking none.
+//!   oldest one's completion, or for the time the oldest one's expected run brings the work left
+//!   under the budget; a batch whose completion was published counts as left before it leaves; a
+//!   run several batches complete in is shared among the other queues' batches, an unshared
+//!   queue's taking none.
 
 use crate::unshared_hold::{Expected, Flies, Flight, Room, BUDGET};
 use std::sync::Arc;
@@ -35,22 +36,23 @@ fn a_queue_with_no_run_seen_has_no_expected_run() {
 fn a_batch_of_unknown_length_holds_the_next_back_until_it_completes() {
     let app = Arc::new(Expected::default());
     let mut flight = Flight::default();
-    assert_eq!(flight.ahead(0), Room::Go, "the first goes");
+    assert_eq!(flight.ahead(0, 0), Room::Go, "the first goes");
     flight.taken(1, Flies::Other(&app));
-    assert_eq!(flight.ahead(0), Room::Hold { after: None });
-    assert_eq!(
-        flight.ahead(500 * MS),
-        Room::Hold { after: None },
-        "however long it has run"
-    );
+    let first = Room::Hold {
+        after: None,
+        through: 1,
+    };
+    assert_eq!(flight.ahead(0, 0), first);
+    assert_eq!(flight.ahead(500 * MS, 0), first, "however long it has run");
     flight.completed(1, 30 * MS);
     assert_eq!(app.nanos(), Some(30 * MS));
-    assert_eq!(flight.ahead(0), Room::Go);
+    assert_eq!(flight.ahead(0, 0), Room::Go);
     flight.taken(2, Flies::Other(&app));
     assert_eq!(
-        flight.ahead(0),
+        flight.ahead(0, 0),
         Room::Hold {
-            after: Some(28 * MS + 1)
+            after: Some(28 * MS + 1),
+            through: 2
         }
     );
 }
@@ -84,7 +86,7 @@ fn a_queue_whose_batches_got_short_is_let_ahead_again_within_five_of_them() {
         value += 1;
         flight.taken(value, Flies::Other(&app));
         // Another of its batches is ready as this one starts.
-        if flight.ahead(0) == Room::Go {
+        if flight.ahead(0, 0) == Room::Go {
             break;
         }
         flight.completed(value, MS);
@@ -108,7 +110,7 @@ fn an_unshared_queue_s_batches_count_no_work_ahead() {
     for value in 1..=8 {
         flight.taken(value, Flies::Unshared);
     }
-    assert_eq!(flight.ahead(0), Room::Go);
+    assert_eq!(flight.ahead(0, 0), Room::Go);
     flight.taken(9, Flies::Not);
     assert_eq!(flight.len(), 8, "a batch that flies not is not kept");
 }
@@ -120,30 +122,36 @@ fn a_batch_goes_while_less_than_the_budget_is_left_ahead() {
     flight.taken(1, Flies::Other(&app));
     // 30 ms left at its start: held until 28 ms of it ran, or its completion.
     assert_eq!(
-        flight.ahead(0),
+        flight.ahead(0, 0),
         Room::Hold {
-            after: Some(28 * MS + 1)
+            after: Some(28 * MS + 1),
+            through: 1
         }
     );
     assert_eq!(
-        flight.ahead(10 * MS),
+        flight.ahead(10 * MS, 0),
         Room::Hold {
-            after: Some(18 * MS + 1)
+            after: Some(18 * MS + 1),
+            through: 1
         }
     );
-    assert_eq!(flight.ahead(28 * MS + 1), Room::Go);
+    assert_eq!(flight.ahead(28 * MS + 1, 0), Room::Go);
     // The next one went: 30 ms more ahead, which the oldest's run left does not cover.
     flight.taken(2, Flies::Other(&app));
-    assert_eq!(flight.ahead(29 * MS), Room::Hold { after: None });
+    let both = Room::Hold {
+        after: None,
+        through: 1,
+    };
+    assert_eq!(flight.ahead(29 * MS, 0), both);
     // An overrun counts the oldest's expected run alone.
-    assert_eq!(flight.ahead(90 * MS), Room::Hold { after: None });
+    assert_eq!(flight.ahead(90 * MS, 0), both);
     flight.completed(1, 31 * MS);
     assert_eq!(
         app.nanos(),
         Some(31 * MS),
         "its run raised the queue's expected one"
     );
-    assert_eq!(flight.ahead(29 * MS + 1), Room::Go);
+    assert_eq!(flight.ahead(29 * MS + 1, 0), Room::Go);
 }
 
 #[test]
@@ -164,10 +172,10 @@ fn a_run_several_batches_complete_in_is_shared_among_the_other_queues_batches() 
     assert_eq!(second.nanos(), Some(4 * MS + MS / 2));
     assert_eq!(flight.len(), 1, "the fourth is still in flight");
     // Its own expected run was taken at its submission: 1 ms, under the budget.
-    assert_eq!(flight.ahead(0), Room::Go);
+    assert_eq!(flight.ahead(0, 0), Room::Go);
     flight.completed(4, MS);
     assert_eq!(flight.len(), 0);
-    assert_eq!(flight.ahead(0), Room::Go);
+    assert_eq!(flight.ahead(0, 0), Room::Go);
 }
 
 /// An application's 30 ms batch and the compositor's light one behind it, seen complete together:
@@ -183,9 +191,10 @@ fn an_unshared_batch_seen_complete_with_another_queue_s_leaves_it_the_whole_run(
     assert_eq!(app.nanos(), Some(30 * MS));
     flight.taken(3, Flies::Other(&app));
     assert_eq!(
-        flight.ahead(14 * MS),
+        flight.ahead(14 * MS, 0),
         Room::Hold {
-            after: Some(14 * MS + 1)
+            after: Some(14 * MS + 1),
+            through: 3
         },
         "half way through the next one, no other goes"
     );
@@ -194,4 +203,36 @@ fn an_unshared_batch_seen_complete_with_another_queue_s_leaves_it_the_whole_run(
     flight.completed(3, 30 * MS);
     flight.completed(4, MS / 10);
     assert_eq!(app.nanos(), Some(30 * MS));
+}
+
+/// A completion publishes its value before it takes its batches out of the flight
+/// (`QueueSlot::completed`): the batches at or below it count as left already, so a held batch's
+/// gate is never one the published value passed, and the oldest batch past them has no run yet.
+#[test]
+fn a_batch_whose_completion_was_published_counts_as_left_before_it_leaves() {
+    let app = Arc::new(Expected::default());
+    let mut flight = Flight::default();
+    flight.taken(1, Flies::Other(&app));
+    assert_eq!(
+        flight.ahead(0, 0),
+        Room::Hold {
+            after: None,
+            through: 1
+        }
+    );
+    assert_eq!(flight.ahead(0, 1), Room::Go, "published, not yet out");
+    let long = queue(30 * MS);
+    let mut flight = Flight::default();
+    flight.taken(1, Flies::Other(&long));
+    flight.taken(2, Flies::Other(&long));
+    assert_eq!(
+        flight.ahead(20 * MS, 1),
+        Room::Hold {
+            after: Some(28 * MS + 1),
+            through: 2
+        },
+        "the second's run counts from the first's completion, not the first's run"
+    );
+    assert_eq!(flight.ahead(0, 2), Room::Go);
+    assert_eq!(flight.len(), 2, "neither left");
 }

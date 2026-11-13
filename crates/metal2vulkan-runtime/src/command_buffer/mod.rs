@@ -4692,10 +4692,11 @@ impl CommandBufferShared {
     }
 
     /// Where a batch of it, otherwise ready, is held back from its `VkQueue` for an unshared
-    /// queue there (`unshared_hold.rs`): that `VkQueue`'s index, and in how many nanoseconds the
-    /// work left ahead there falls under the budget where it does before its next completion;
-    /// `None` where it may go, as on a lost device, whose submissions fail at once.
-    pub(crate) fn held_for_unshared(&self) -> Option<(usize, Option<u64>)> {
+    /// queue there (`unshared_hold.rs`): that `VkQueue`'s index, the value of the oldest batch in
+    /// flight there the host has not seen complete, and in how many nanoseconds the work left
+    /// ahead there falls under the budget where it does before that batch completes; `None` where
+    /// it may go, as on a lost device, whose submissions fail at once.
+    pub(crate) fn held_for_unshared(&self) -> Option<(usize, u64, Option<u64>)> {
         if self.queue.unshared() || self.device.is_lost() {
             return None;
         }
@@ -4703,9 +4704,10 @@ impl CommandBufferShared {
         if !self.device.holds_back_for_unshared(index) {
             return None;
         }
-        match self.device.shared().queues[index].waits.hold_ahead() {
+        let slot = &self.device.shared().queues[index];
+        match slot.waits.hold_ahead(|| slot.completed_value()) {
             crate::unshared_hold::Room::Go => None,
-            crate::unshared_hold::Room::Hold { after } => Some((index, after)),
+            crate::unshared_hold::Room::Hold { after, through } => Some((index, through, after)),
         }
     }
 

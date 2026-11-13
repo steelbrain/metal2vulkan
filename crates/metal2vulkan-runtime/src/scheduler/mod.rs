@@ -141,7 +141,9 @@
 //!   or its group, no head's bound and no driver's stall to take, nothing else can give it work,
 //!   so it sleeps with no timeout: an idle device's scheduler does not wake at all
 //!   (`WorkCounts::scheduler_sleep_slices`). With a batch held it still wakes at least every
-//!   [`WAIT_SLICE`], beside the completion that lets its batch go.
+//!   [`WAIT_SLICE`], beside the completion that lets its batch go, and passes: a batch whose
+//!   wait was met goes then even where the wake for it never came, counted
+//!   (`WorkCounts::scheduler_slice_rescues`, 0 where every wake comes).
 //! - **The driver's stalls taken idle** (`device/submit_stalls.rs`). Where the driver stalls in
 //!   one signalling submission of every 1024 to a `VkQueue` (NVIDIA's), and a queue's next stall
 //!   may be due, the thread wakes once it has had nothing to submit for `IDLE_NANOS`, and
@@ -608,6 +610,10 @@ pub(crate) struct State {
     /// A host signal marked the state since the thread last looked (a commit and a nudge are
     /// the inbox's, `inbox.rs`).
     dirty: bool,
+    /// The thread's last sleep ended at [`WAIT_SLICE`], nothing having woken it, with a batch
+    /// held: the state is marked for a pass, which counts itself where it lets a batch go
+    /// (`WorkCounts::scheduler_slice_rescues`).
+    sliced: bool,
     stopping: bool,
     /// The textures whose decoded twins have CPU decodes queued or running, each with how many
     /// (`texture/twin_decode.rs`): a batch whose footprint names one waits for them.
@@ -635,6 +641,13 @@ pub(crate) struct State {
 }
 
 impl State {
+    /// The thread's sleep ended at [`WAIT_SLICE`] with nothing having woken it: marked for a pass
+    /// (the module docs).
+    fn mark_sliced(&mut self) {
+        self.dirty = true;
+        self.sliced = true;
+    }
+
     /// The ticket of a pass that took batches with submission handlers ([`Turns`]), taken under
     /// the lock in the order the passes ran.
     fn handler_ticket(&mut self) -> u64 {
@@ -793,6 +806,7 @@ impl Scheduler {
                 waited: vec![vec![0; queues + crate::device::OWN_TIMELINES]; queues],
                 binary: BinarySignals::default(),
                 dirty: false,
+                sliced: false,
                 stopping: false,
                 decodes: BTreeMap::new(),
                 untracked_decodes: 0,
@@ -1149,6 +1163,10 @@ impl Scheduler {
                 .zip(gate)
                 .all(|(queue, &value)| queue.completed_value() >= value)
         };
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        if trace::completion_wakes_dropped() {
+            return;
+        }
         // Where the thread waits for the GPU, it waits for the signals the turn saw land: it is
         // nudged only for a lost device.
         if device.is_lost() {
@@ -1320,6 +1338,11 @@ fn run(shared: &Arc<SchedulerShared>) {
                 shared.wakings[Woken::Slice as usize].fetch_add(1, Ordering::Relaxed);
             }
             state = lock(shared.inbox.state());
+            // A batch held, and a slice gone with no waking: a pass looks again, so a batch whose
+            // wait was met goes even where the wake for it never came (the module docs).
+            if timed_out && !short {
+                state.mark_sliced();
+            }
         }
         if state.stopping {
             return;
@@ -1395,6 +1418,7 @@ fn wait_for_gpu<'a>(
         Some(Ok(())) => {}
         Some(Err(vk::Result::TIMEOUT)) if !short => {
             shared.wakings[Woken::Slice as usize].fetch_add(1, Ordering::Relaxed);
+            state.mark_sliced();
         }
         Some(Err(vk::Result::TIMEOUT)) => {}
         // A failed wait (a lost device) or an exit: a pass finds out.
@@ -1554,7 +1578,10 @@ fn pass(
 ) -> usize {
     let taken = take_in(state, commits, &mut passed.spent);
     state.dirty = false;
+    let sliced = state.sliced;
+    state.sliced = false;
     fail_lost(state, left, (&mut passed.spent, &mut passed.settled));
+    let let_go = passed.spent.len();
     let before = passed.handlers.len();
     let ready = submit_ready(
         state,
@@ -1563,6 +1590,10 @@ fn pass(
         &mut passed.handlers,
         awaits,
     );
+    // A pass after a slice, taking no commit in, that let a batch go: the wake for it never came.
+    if let Some(buffer) = (passed.spent.get(let_go)).filter(|_| sliced && taken == 0) {
+        buffer.device().shared().counts.scheduler_slice_rescued();
+    }
     // Its submission handlers run in this pass's turn ([`Turns`]).
     if passed.handlers.len() > before {
         let ticket = state.handler_ticket();
@@ -1700,8 +1731,9 @@ fn submit_ready(
         let binary = &state.binary;
         let decodes = &state.decodes;
         let untracked_decodes = state.untracked_decodes;
-        // The earliest time a head held back for an unshared queue may go before its `VkQueue`'s
-        // next completion ([`await_unshared_room`]), and whether one was.
+        // The earliest time a head held back for an unshared queue may go before the completion
+        // of the oldest batch in flight on its `VkQueue` ([`await_unshared_room`]), and whether
+        // one was.
         let (mut unshared_wake, mut isolating) = (None, false);
         let behind = |order: &Order<Held>, sequence| is_behind(order, binary, &mut memo, sequence);
         let next = state.order.next(goes_first, behind, |held| {
@@ -1738,9 +1770,9 @@ fn submit_ready(
             }
             // Held back from a `VkQueue` an unshared queue holds, while other queues' work enough
             // is in flight there.
-            if let Some((queue, after)) = held.buffer.held_for_unshared() {
+            if let Some(room) = held.buffer.held_for_unshared() {
                 held.held_for(HeldFor::UnsharedIsolation);
-                await_unshared_room(held, (queue, after), awaits, &mut unshared_wake);
+                await_unshared_room(held, room, awaits, &mut unshared_wake);
                 isolating = true;
                 return None;
             }
@@ -1775,8 +1807,17 @@ fn submit_ready(
             drop(busy);
             if !waiting && !landing && !holds_back_another_queue(&state.grouped, handlers) {
                 if let Some(value) = state.group.keeps() {
+                    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                    trace::at(trace::Point::KeptGate);
+                    // The gate goes to `awaits` before the completed value is read again, as
+                    // [`Scheduler::completions`] says: a completion published since `keeps` read
+                    // it, whose turn found no gate to wake the thread for, is seen here, and the
+                    // group goes now.
                     awaits.gate_on(state.group.queue(), value, state.values.len());
-                    return Ok(More(false));
+                    fence(Ordering::SeqCst);
+                    if state.group.pending_through(value) {
+                        return Ok(More(false));
+                    }
                 }
             }
             let end = match (state.order.is_empty(), left.is_empty()) {
@@ -1896,23 +1937,26 @@ fn goes_first(held: &Held) -> bool {
     held.buffer.goes_ahead_of_held_work()
 }
 
-/// A head held back from `VkQueue` `queue` for an unshared queue there (`unshared_hold.rs`), the
-/// work left ahead falling under the budget in `after` nanoseconds where it does before the next
-/// completion: the thread waits for that `VkQueue`'s next completion (`awaits`), and until then at
-/// most (`wake`). The gate goes to `awaits` before the completed value is read again, as
-/// [`Scheduler::completions`] says: a completion published meanwhile wakes the thread at once.
+/// A head held back from `VkQueue` `queue` for an unshared queue there (`unshared_hold.rs`) until
+/// the batch there of value `through` completes, the oldest in flight past the completed value the
+/// hold read, or, where the work left ahead falls under the budget before then, `after`
+/// nanoseconds from now: the thread waits for that value (`awaits`), and until then at most
+/// (`wake`). The gate is the value the hold read past, never one past a value read here: a
+/// completion of `through` published between the hold's read and this one would leave a gate
+/// above every batch in flight, which no completion meets. The gate goes to `awaits` before the
+/// completed value is read again, as [`Scheduler::completions`] says: a completion published
+/// before it wakes the thread at once, one after meets it.
 fn await_unshared_room(
     held: &Held,
-    (queue, after): (usize, Option<u64>),
+    (queue, through, after): (usize, u64, Option<u64>),
     awaits: &Awaits,
     wake: &mut Option<Instant>,
 ) {
     let queues = &held.buffer.device().shared().queues;
-    let seen = queues[queue].completed_value();
-    awaits.gate_on(queue, seen + 1, queues.len());
+    awaits.gate_on(queue, through, queues.len());
     fence(Ordering::SeqCst);
     let now = Instant::now();
-    let at = match queues[queue].completed_value() > seen {
+    let at = match queues[queue].completed_value() >= through {
         true => Some(now),
         false => after.map(|nanos| now + Duration::from_nanos(nanos)),
     };

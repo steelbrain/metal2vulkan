@@ -1393,6 +1393,10 @@ impl QueueSlot {
     /// queues' batches it ends are timed (`queue_wait.rs`).
     pub(super) fn completed(&self, value: u64, counts: &crate::work_counts::Counters) {
         if self.completed.fetch_max(value, Ordering::AcqRel) < value {
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            crate::command_buffer::completion::trace::at(
+                crate::command_buffer::completion::trace::Point::Leave,
+            );
             self.share.completed();
             self.waits.completed(value, counts);
         }

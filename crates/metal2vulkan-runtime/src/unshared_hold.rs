@@ -34,10 +34,13 @@
 //!   gives its queue a run. So an application that commits several command buffers at once does
 //!   not put them all ahead of a compositor's before the first is seen; it costs the GPU one
 //!   completion's turn, once per such queue.
-//! - **When it goes.** A pass that holds a batch so leaves the scheduler's thread waiting for its
-//!   `VkQueue`'s next completion (a gate, `scheduler/mod.rs`'s `Awaits`), and, where the oldest
-//!   batch's expected run still covers it, for the time the work left ahead falls under the
-//!   budget. A committing or waiting thread's own pass leaves such a batch to the scheduler's
+//! - **When it goes.** A pass that holds a batch so leaves the scheduler's thread waiting for the
+//!   completion of the oldest batch in flight there (a gate on its value, `scheduler/mod.rs`'s
+//!   `Awaits`), and, where the oldest batch's expected run still covers it, for the time the work
+//!   left ahead falls under the budget. The hold is decided on the value the host published as
+//!   completed: a batch at or below it counts as left, though the completion that published it
+//!   has yet to take it out of the flight ([`Flight::ahead`]), so the gate a hold leaves is one
+//!   that value has not reached, and its completion wakes the thread. A committing or waiting thread's own pass leaves such a batch to the scheduler's
 //!   thread, which it wakes. A pass that finds such a batch let go and an unshared queue's
 //!   command buffer ready together on its `VkQueue` sends the unshared one first
 //!   (`scheduler/order.rs`, "Heads put first"): a pass the host ran late, after the room came,
@@ -130,10 +133,11 @@ pub(crate) struct Flight {
 pub(crate) enum Room {
     /// Less than [`BUDGET`] of other queues' expected work is left in flight.
     Go,
-    /// [`BUDGET`] or more, or a batch of unknown length is in flight: held until the `VkQueue`'s
-    /// next completion, or, where only the budget holds it, until `after` nanoseconds from now,
-    /// where the oldest batch's expected run brings the work left under the budget then.
-    Hold { after: Option<u64> },
+    /// [`BUDGET`] or more, or a batch of unknown length is in flight: held until the oldest batch
+    /// in flight, of value `through`, completes, or, where only the budget holds it, until `after`
+    /// nanoseconds from now, where the oldest batch's expected run brings the work left under the
+    /// budget then.
+    Hold { after: Option<u64>, through: u64 },
 }
 
 impl Flight {
@@ -181,20 +185,45 @@ impl Flight {
     }
 
     /// Whether another queue's batch may go now, the oldest batch in flight having run `ran`
-    /// nanoseconds since it became so (the module docs).
-    pub(crate) fn ahead(&self, ran: u64) -> Room {
-        if self.unseen > 0 {
-            return Room::Hold { after: None };
+    /// nanoseconds since it became so (the module docs), the host having seen the timeline reach
+    /// `completed`. A batch at or below `completed` counts as left: its completion was published
+    /// before it takes it out ([`Flight::completed`]), so the answer follows the published value
+    /// alone, which a held batch's gate is read against. The oldest batch past it became so at
+    /// that completion, so none of its run counts yet.
+    pub(crate) fn ahead(&self, ran: u64, completed: u64) -> Room {
+        let left_already = self
+            .batches
+            .iter()
+            .take_while(|batch| batch.value <= completed);
+        let (gone, gone_expected, gone_unseen) =
+            left_already.fold((0, 0, 0), |(gone, expected, unseen), batch| {
+                (
+                    gone + 1,
+                    expected + batch.expected,
+                    unseen + usize::from(batch.unseen),
+                )
+            });
+        let Some(oldest) = self.batches.get(gone) else {
+            return Room::Go;
+        };
+        let through = oldest.value;
+        if self.unseen > gone_unseen {
+            return Room::Hold {
+                after: None,
+                through,
+            };
         }
-        let front = self.batches.front().map_or(0, |batch| batch.expected);
-        let credit = ran.min(front);
-        let left = self.expected - credit;
+        let credit = match gone {
+            0 => ran.min(oldest.expected),
+            _ => 0,
+        };
+        let left = self.expected - gone_expected - credit;
         if left < BUDGET {
             return Room::Go;
         }
         let over = left - BUDGET + 1;
-        let after = (front - credit >= over).then_some(over);
-        Room::Hold { after }
+        let after = (oldest.expected - credit >= over).then_some(over);
+        Room::Hold { after, through }
     }
 
     /// The batches in flight, of every queue.

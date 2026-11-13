@@ -441,6 +441,17 @@ impl Group {
         Some(value)
     }
 
+    /// Whether its `VkQueue` has not completed `value` yet, as the host saw ([`keeps`]'s value),
+    /// read again after the scheduler left its gate for the completion turns.
+    ///
+    /// [`keeps`]: Group::keeps
+    pub(crate) fn pending_through(&self, value: u64) -> bool {
+        (self.members.first()).is_some_and(|first| {
+            let device = first.submission.buffer().device();
+            device.shared().queues[self.queue].completed_value() < value
+        })
+    }
+
     /// What the group's last submission did, for the scheduler to publish its batches
     /// ([`made`](Group::made)) or fail them.
     pub(crate) fn take_outcome(&mut self) -> Option<Result<(), CommandBufferError>> {

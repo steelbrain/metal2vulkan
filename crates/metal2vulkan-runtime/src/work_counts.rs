@@ -271,6 +271,7 @@ pub(crate) struct Counters {
     batches_by_pending: [AtomicU64; 4],
     groups_kept_pending: AtomicU64,
     groups_sent_for_waits: AtomicU64,
+    scheduler_slice_rescues: AtomicU64,
     /// By `HeldFor`, in its order: the looks that found a line's head held for each reason.
     heads_held_for: [AtomicU64; HeldFor::COUNT],
     heads_waiting_at_their_gate: AtomicU64,
@@ -3073,6 +3074,12 @@ impl Counters {
     /// (`command_buffer/group.rs`).
     pub(crate) fn group_ended(&self, end: GroupEnd) {
         self.group_ends[end as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A pass after the scheduler's sleep ended at its longest wait let a batch go: a wake that
+    /// should have come did not (`scheduler/mod.rs`).
+    pub(crate) fn scheduler_slice_rescued(&self) {
+        self.scheduler_slice_rescues.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A group of batches stayed held past the pass that found no batch ready, for the work its
@@ -6766,8 +6773,13 @@ pub struct WorkCounts {
     /// for made, a texture decode finished, a command buffer encoded again after a rebind, the
     /// rest of a pass a thread about to block or a committing thread left it, a lost device.
     pub scheduler_wakes_host: u64,
-    /// Sleeps that ended at the thread's longest wait with nothing having woken it.
+    /// Sleeps that ended at the thread's longest wait with nothing having woken it. Each, with a
+    /// batch held, is followed by a pass.
     pub scheduler_sleep_slices: u64,
+    /// Of the passes after those sleeps, the ones that let a batch go (submitted, held in a
+    /// group, or failed): what it waited for was met, and the wake that should have come with it
+    /// did not (`scheduler/mod.rs`). 0 where every wake comes.
+    pub scheduler_slice_rescues: u64,
     /// Passes a thread about to block for a command buffer's completion made over the scheduler's
     /// order itself, instead of waiting for the scheduler's thread to make one
     /// (`CommandBuffer::wait_until_completed`, `scheduler/mod.rs`): one where the batches it
@@ -10327,6 +10339,7 @@ impl Device {
             scheduler_wakes_completion: by_completion,
             scheduler_wakes_host: by_host,
             scheduler_sleep_slices: by_slice,
+            scheduler_slice_rescues: counters.scheduler_slice_rescues.load(Ordering::Relaxed),
             scheduler_gpu_waits: gpu_waits,
             scheduler_passes: self.shared().scheduler.passes(),
             scheduler_passes_by_waiters: counters

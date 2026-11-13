@@ -1679,6 +1679,7 @@ impl Gpu for Runtime {
             ("registrations_waited", c.registrations_waited),
             ("scheduler_wakes_completion", c.scheduler_wakes_completion),
             ("scheduler_sleep_slices", c.scheduler_sleep_slices),
+            ("scheduler_slice_rescues", c.scheduler_slice_rescues),
             ("scheduler_gpu_waits", c.scheduler_gpu_waits),
             ("wakes_completion_waiters", c.wakes_completion_waiters),
             (

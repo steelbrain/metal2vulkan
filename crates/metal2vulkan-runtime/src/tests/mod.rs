@@ -604,6 +604,8 @@ mod sampler_sets;
 mod sampler_table_binders;
 mod scheduler;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod scheduler_held_wakes;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod scheduler_wakes;
 #[cfg(all(m2v_gpu, target_os = "linux"))]
 mod scroll_bos;
