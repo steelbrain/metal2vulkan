@@ -8433,6 +8433,7 @@ method	metal2vulkan-runtime::Device::fresh_pages_pay	pub fn fresh_pages_pay(&sel
 method	metal2vulkan-runtime::Device::from_raw	pub unsafe fn from_raw(raw: RawDevice, policy: DevicePolicy) -> Result<Device, Error>
 method	metal2vulkan-runtime::Device::heap_buffer_size_and_align	pub fn heap_buffer_size_and_align(&self, length: u64, _options: ResourceOptions) -> SizeAndAlign
 method	metal2vulkan-runtime::Device::heap_texture_size_and_align	pub fn heap_texture_size_and_align(&self, descriptor: &TextureDescriptor) -> Result<SizeAndAlign, Error>
+method	metal2vulkan-runtime::Device::host_pages_texture_placement	pub fn host_pages_texture_placement(&self, backing: HostBacking, descriptor: &TextureDescriptor, plane: IoSurfacePlane, start: u64, length: u64) -> Result<TexturePlacement, Error>
 method	metal2vulkan-runtime::Device::host_range_remapped	pub fn host_range_remapped(&self, bytes: NonNull<u8>, length: u64)
 method	metal2vulkan-runtime::Device::identities_with	pub fn identities_with(options: &DeviceOptions) -> Result<Vec<PhysicalDeviceIdentity>, Error>
 method	metal2vulkan-runtime::Device::imports_shared_host_pointers	pub fn imports_shared_host_pointers(&self) -> Result<bool, Error>
@@ -12670,6 +12671,7 @@ variant	metal2vulkan-runtime::Problem::ForeignObject	ForeignObject
 variant	metal2vulkan-runtime::Problem::FunctionTable	FunctionTable(FunctionTableProblem)
 variant	metal2vulkan-runtime::Problem::HandlerAfterCommit	HandlerAfterCommit
 variant	metal2vulkan-runtime::Problem::Heap	Heap(HeapProblem)
+variant	metal2vulkan-runtime::Problem::HostPagesBacking	HostPagesBacking
 variant	metal2vulkan-runtime::Problem::HostRam	HostRam
 variant	metal2vulkan-runtime::Problem::ImageblockSize	ImageblockSize { width: u64, height: u64 }
 variant	metal2vulkan-runtime::Problem::IndexOutOfRange	IndexOutOfRange { index: u32, limit: u32 }

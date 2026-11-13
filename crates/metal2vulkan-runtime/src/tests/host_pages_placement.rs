@@ -10,7 +10,8 @@
 //! buffer's length. By pointer, on the device the cfg selects once its check settled, and under
 //! `HostPageTexturePolicy::Shadow`; as dma-bufs on Linux, on a device made without
 //! `VK_EXT_external_memory_host` (`tests/no_pointer_import.rs`), where `/dev/udmabuf` opens. Each
-//! pre-import answer makes no `VkImage` (`WorkCounts::vk_images_made`).
+//! pre-import answer makes no `VkImage` on the asking thread
+//! (`ObjectChurn::vk_images_made_this_thread`).
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects. Printed (`HOST-PAGES-PLACEMENT`): each shape's two answers.
@@ -77,7 +78,7 @@ fn ask_each(
             descriptor.usage = usage;
             descriptor.resource_options = ResourceOptions::default();
             let plane = IoSurfacePlane::new(offset, bytes_per_row, false);
-            let made = || device.work_counts().vk_images_made;
+            let made = || device.work_counts().object_churn.vk_images_made_this_thread;
             let images = made();
             let before =
                 (device.host_pages_texture_placement(backing, &descriptor, plane, start, length))
