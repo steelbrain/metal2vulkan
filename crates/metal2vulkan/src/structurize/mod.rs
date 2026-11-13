@@ -66,6 +66,7 @@ use crate::budget::{output_blocks_cap, Meter};
 use crate::error::{Error, Limit, Location};
 use crate::graph::Graph;
 use crate::spirv::ids::DemoteTy;
+use crate::spirv::ir::Unrolling;
 
 /// The shape of a block's terminator. Its targets are the block's [`Graph::successors`], in that
 /// order, so the shape carries only what the edges do not:
@@ -101,6 +102,11 @@ pub trait CfgView: Graph<Node = BlockId> {
     fn phis(&self) -> &[(ValueId, DemoteTy)];
     /// Where block `b` is, for typed refusals that name a block.
     fn location(&self, b: BlockId) -> Location;
+    /// What block `b`'s terminator asks of the driver's unrolling of the loop it closes (the
+    /// AIR's `llvm.loop.unroll.*` on a latch): nothing by default.
+    fn unrolling(&self, _b: BlockId) -> Unrolling {
+        Unrolling::Driver
+    }
 }
 
 /// The result of P0–P2: a reducible working graph and its loop nest.
@@ -156,11 +162,53 @@ fn structure_prepared(
     meter: &mut Meter,
 ) -> Result<tree::Structured, Error> {
     let (sc, loops) = (&prepared.cfg, &prepared.loops);
+    let charged = loops.loops().len() * std::mem::size_of::<Unrolling>();
+    meter.charge(charged)?;
+    let result = loop_unrolling(view, sc, loops, meter)
+        .and_then(|unrolling| structure_loops(view, prepared, &unrolling, meter));
+    meter.release(charged);
+    result
+}
+
+/// What each loop's `OpLoopMerge` asks of the driver's unrolling, by loop: the request
+/// ([`CfgView::unrolling`]) of the first of its own blocks (not a nested loop's) whose original
+/// block's terminator makes one, as a latch's `!llvm.loop` does. The caller charges its bytes.
+fn loop_unrolling(
+    view: &impl CfgView,
+    sc: &cfg::StructCfg,
+    loops: &loops::Loops,
+    meter: &mut Meter,
+) -> Result<Vec<Unrolling>, Error> {
+    let mut out = Vec::with_capacity(loops.loops().len());
+    for l in loops.loops() {
+        let mut asked = Unrolling::Driver;
+        for node in loops.own_blocks(l) {
+            meter.tick(1)?;
+            if let cfg::Content::Code(b) = sc.block(node)?.content {
+                asked = view.unrolling(b);
+                if asked != Unrolling::Driver {
+                    break;
+                }
+            }
+        }
+        out.push(asked);
+    }
+    Ok(out)
+}
+
+/// P4–P7 over a prepared graph whose loops ask `unrolling`.
+fn structure_loops(
+    view: &impl CfgView,
+    prepared: &Prepared,
+    unrolling: &[Unrolling],
+    meter: &mut Meter,
+) -> Result<tree::Structured, Error> {
+    let (sc, loops) = (&prepared.cfg, &prepared.loops);
     let demoted = demote::demote(view, meter)?;
     let first_selector = cfg::to_u32(sc.selector_count())?;
     let lowered =
         normalize::Normalizer::new(loops, sc.len(), first_selector, meter).and_then(|mut norm| {
-            let tree = regions::structure(sc, loops, &mut norm, meter).and_then(|p6| {
+            let tree = regions::structure(sc, loops, unrolling, &mut norm, meter).and_then(|p6| {
                 let p7 = pending::place(&p6.tree, p6.labels, meter);
                 meter.release(p6.tree.ledger_bytes());
                 p7

@@ -299,7 +299,7 @@ pub fn run_tree(
                         .ok_or_else(|| format!("{id:?}: {sel:?} = {v} out of range"))?,
                 );
             }
-            Stmt::Loop { body } => {
+            Stmt::Loop { body, .. } => {
                 quiet("loop entry", pending)?;
                 frames.push(Frame::Loop(*body));
                 next = Some(*body);

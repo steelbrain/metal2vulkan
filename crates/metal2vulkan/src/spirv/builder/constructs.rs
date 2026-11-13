@@ -36,7 +36,7 @@ use crate::spirv::error::{BResult, BuildError, ControlRule, Dangling, EntryRule,
 use crate::spirv::ids::{BlockId, FuncId, TypeId, Value, VarId};
 use crate::spirv::ir::{
     Block, EntryPoint, ExecModel, Function, Inst, LoopMeta, Merge, Phi, Shape, Terminator, Type,
-    ValueOrigin,
+    Unrolling, ValueOrigin,
 };
 
 /// An arm of `if_`/`switch_`: runs with the arm's first block open and says how it ends.
@@ -66,9 +66,8 @@ pub struct Merged(pub Vec<Value>);
 pub struct LoopSpec {
     /// The structurizer's multi-exit dispatch variable (a `u32`/`i32` `Function` variable).
     pub exit_sel: Option<VarId>,
-    /// Whether the loop asks the driver not to unroll it (`LoopControl` `DontUnroll`): a loop
-    /// written so that the driver compiles its body once.
-    pub dont_unroll: bool,
+    /// What the loop asks of the driver's unrolling (`LoopControl`).
+    pub unrolling: Unrolling,
 }
 
 /// The exits of one open loop, handed to its body. `break_` and `continue_` are valid only while
@@ -385,7 +384,7 @@ impl FunctionBuilder<'_> {
             cont,
             preheader,
             exit_sel: spec.exit_sel,
-            dont_unroll: spec.dont_unroll,
+            unrolling: spec.unrolling,
         });
         self.enter(first)?;
         self.cs.loops.push(OpenLoop { header, breaks: 0 });

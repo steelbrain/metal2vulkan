@@ -15,6 +15,7 @@ use super::demote::{DemoteVar, PhiVar};
 use crate::air::ir::{BlockId, ValueId};
 use crate::budget::Meter;
 use crate::error::Error;
+use crate::spirv::ir::Unrolling;
 
 /// A statement of a [`StructTree`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -81,9 +82,11 @@ pub enum Stmt {
         arms: Box<[StmtId]>,
     },
     /// `loop { body }`: empty header, one continue block, fresh merge. The body never falls out;
-    /// it ends every path in `Break`, `Continue`, `Return`, or `Unreachable`.
+    /// it ends every path in `Break`, `Continue`, `Return`, or `Unreachable`. `unrolling` is what
+    /// its `OpLoopMerge` asks of the driver (`CfgView::unrolling`).
     Loop {
         body: StmtId,
+        unrolling: Unrolling,
     },
     /// Leave the innermost loop.
     Break,
@@ -116,7 +119,7 @@ impl Stmt {
             Stmt::Dispatch { arms, .. } => (None, arms),
             Stmt::If { then, .. } => (Some(*then), &[]),
             Stmt::Switch { default, .. } => (Some(*default), &[]),
-            Stmt::Loop { body } | Stmt::Block { body, .. } | Stmt::GuardPending(body) => {
+            Stmt::Loop { body, .. } | Stmt::Block { body, .. } | Stmt::GuardPending(body) => {
                 (Some(*body), &[])
             }
             _ => (None, &[]),

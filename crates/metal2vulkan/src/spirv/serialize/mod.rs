@@ -229,19 +229,19 @@ fn write(m: TypedModule, options: Options) -> BResult<RelocatableModule> {
     // Header; the bound is patched below.
     w.words
         .extend_from_slice(&[crate::spv::MAGIC_NUMBER, SPIRV_VERSION, 0, 0, 0]);
-    let mut dont_unroll: Vec<BlockId> = m
+    let mut controls: Vec<(BlockId, u32)> = m
         .loops
         .iter()
-        .filter(|l| l.dont_unroll)
-        .map(|l| l.header)
+        .map(|l| (l.header, l.unrolling.control()))
+        .filter(|&(_, control)| control != 0)
         .collect();
-    dont_unroll.sort_unstable();
+    controls.sort_unstable();
     let s = Ser {
         m: &m,
         ids: &ids,
         dont_inline: options.dont_inline,
         keeps_calls: options.keeps_calls,
-        dont_unroll,
+        controls,
     };
     s.preamble(&mut w)?;
     s.annotations(&mut w)?;
@@ -273,7 +273,8 @@ fn write(m: TypedModule, options: Options) -> BResult<RelocatableModule> {
 /// insert's composite, and each load, extract, or shuffle where it materializes loads). Where it
 /// materializes loads past atomics and calls: one byte per function (the storage classes it writes
 /// and those whose writes it holds unseen), and every load in the materialized values' map. One
-/// `BlockId` per loop that asks `DontUnroll` (the sorted headers the loop merges look up).
+/// `BlockId` and control word per loop that asks `Unroll` or `DontUnroll` (the sorted headers the
+/// loop merges look up).
 pub fn id_table_bytes(m: &TypedModule, p: &DeviceProfile) -> usize {
     let dense = m
         .types
@@ -345,9 +346,9 @@ pub fn id_table_bytes(m: &TypedModule, p: &DeviceProfile) -> usize {
         .saturating_add(
             m.loops
                 .iter()
-                .filter(|l| l.dont_unroll)
+                .filter(|l| l.unrolling.control() != 0)
                 .count()
-                .saturating_mul(std::mem::size_of::<BlockId>()),
+                .saturating_mul(std::mem::size_of::<(BlockId, u32)>()),
         )
 }
 
@@ -1338,9 +1339,9 @@ struct Ser<'a> {
     dont_inline: bool,
     /// Each sampling routine is declared `DontInline` ([`Options::keeps_calls`]).
     keeps_calls: bool,
-    /// The headers of the loops whose `OpLoopMerge` asks `DontUnroll`, sorted
-    /// ([`crate::spirv::ir::LoopMeta::dont_unroll`]).
-    dont_unroll: Vec<BlockId>,
+    /// The headers of the loops whose `OpLoopMerge` asks something of the driver's unrolling,
+    /// with the `LoopControl` they ask, sorted ([`crate::spirv::ir::LoopMeta::unrolling`]).
+    controls: Vec<(BlockId, u32)>,
 }
 
 impl Ser<'_> {
@@ -2087,9 +2088,9 @@ impl Ser<'_> {
                 w.inst(Op::SelectionMerge, &[self.ids.block(merge)?, 0])?
             }
             Some(Merge::Loop { merge, cont }) => {
-                // `DontUnroll` (0x2) for a loop that compiles a repeated region once.
-                let control = match self.dont_unroll.binary_search(&id) {
-                    Ok(_) => 0x2,
+                // What the loop asks of the driver's unrolling (`Unrolling`).
+                let control = match self.controls.binary_search_by_key(&id, |&(h, _)| h) {
+                    Ok(at) => self.controls[at].1,
                     Err(_) => 0,
                 };
                 w.inst(

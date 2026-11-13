@@ -18,7 +18,7 @@ pub use inst::{
 pub use module::{
     Block, Decl, EntryPoint, ExecMode, ExecModel, Function, GlobalKind, GlobalVar, Inst, InstNode,
     Interpolation, IoDecor, LocalVar, LoopMeta, MemAccess, Merge, Phi, PushMember, Sampling,
-    Terminator, TypedModule, ValueDef, ValueOrigin,
+    Terminator, TypedModule, Unrolling, ValueDef, ValueOrigin,
 };
 pub use types::{
     natural_layout, Dim, ImageType, ImageUsage, IoDir, LayoutRule, MemberLayout, Shape,

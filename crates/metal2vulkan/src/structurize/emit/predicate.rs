@@ -52,7 +52,7 @@ use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopCtx, LoopFn, LoopSpec
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, ControlRule};
 use crate::spirv::ids::{Value, VarId};
-use crate::spirv::ir::{BinOp, ConstBits, Constant, MemAccess, Type, UnOp};
+use crate::spirv::ir::{BinOp, ConstBits, Constant, MemAccess, Type, UnOp, Unrolling};
 
 use super::super::tree::{Stmt, StmtId, StructTree};
 
@@ -601,7 +601,9 @@ fn stmt<E: CodeEmitter>(
             let arms = matches(cx, fb, x, &lits, *default)?;
             branches(cx, fb, w, id, st, &arms, flags)
         }
-        Stmt::Loop { body } => predicated_loop(cx, fb, w, id, *body, next, st),
+        Stmt::Loop { body, unrolling } => {
+            predicated_loop(cx, fb, w, id, (*body, *unrolling), next, st)
+        }
         Stmt::Seq(_) | Stmt::Block { .. } | Stmt::Jump(_) => {
             Err(BuildError::Control(ControlRule::NoCurrentBlock))
         }
@@ -648,7 +650,7 @@ fn plain<E: CodeEmitter>(
     let run = move |fb: &mut FunctionBuilder<'_>, cx: &mut Cx<'_, E>| -> BResult<()> {
         match cx.tree.stmt(id) {
             // A loop takes the exit selector of the dispatch after it (P5).
-            Ok(Stmt::Loop { body }) => emit_loop(cx, fb, *body, next),
+            Ok(Stmt::Loop { body, unrolling }) => emit_loop(cx, fb, *body, *unrolling, next),
             _ => list(cx, fb, id, None),
         }
     };
@@ -880,7 +882,7 @@ fn predicated_loop<E: CodeEmitter>(
     fb: &mut FunctionBuilder<'_>,
     w: &W<'_>,
     id: StmtId,
-    body: StmtId,
+    (body, unrolling): (StmtId, Unrolling),
     next: Option<StmtId>,
     st: St,
 ) -> BResult<Option<St>> {
@@ -950,7 +952,7 @@ fn predicated_loop<E: CodeEmitter>(
         cx,
         LoopSpec {
             exit_sel,
-            dont_unroll: false,
+            unrolling,
         },
         lf,
     )?;

@@ -124,7 +124,7 @@ fn lower(
                     down.visit(id, c, tail, depth)?;
                 }
             }
-            Stmt::Loop { body } => down.visit(id, *body, NONE, depth)?,
+            Stmt::Loop { body, .. } => down.visit(id, *body, NONE, depth)?,
             Stmt::Block { label, body } => {
                 let slot = at_mut(&mut label_depth, label.index())?;
                 if *slot != NONE {
@@ -271,9 +271,10 @@ fn lower(
                 }
                 Some(out.dispatch(meter, *sel, &acc)?)
             }
-            Stmt::Loop { body } => {
+            Stmt::Loop { body, unrolling } => {
                 let body = materialize(out, meter, &new_of, *body)?;
-                Some(out.push(meter, Stmt::Loop { body })?)
+                let unrolling = *unrolling;
+                Some(out.push(meter, Stmt::Loop { body, unrolling })?)
             }
             leaf @ (Stmt::Code(_)
             | Stmt::SetSel { .. }

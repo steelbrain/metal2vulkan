@@ -92,6 +92,7 @@ mod engine_line_band;
 mod engine_link;
 mod engine_linked_signatures;
 mod engine_linking;
+mod engine_loop_unrolling;
 mod engine_matmul2d;
 mod engine_mesh;
 mod engine_mesh_barriers;

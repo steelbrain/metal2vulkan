@@ -959,7 +959,7 @@ fn filtered(
     });
     let spec = LoopSpec {
         exit_sel: None,
-        dont_unroll: true,
+        unrolling: crate::spirv::ir::Unrolling::DontUnroll,
     };
     fb.loop_(cx, spec, body)?;
     fb.load(sum, MemAccess::default())

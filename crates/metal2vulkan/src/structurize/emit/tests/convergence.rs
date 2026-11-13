@@ -203,7 +203,7 @@ impl Simt<'_> {
                 e.fall.sort_unstable();
                 e
             }
-            Stmt::Loop { body } => {
+            Stmt::Loop { body, .. } => {
                 let mut active = mask;
                 let mut exits = Vec::new();
                 while !active.is_empty() {

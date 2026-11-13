@@ -120,7 +120,7 @@ pub fn check_structured(s: &Structured, originals: &BTreeSet<BlockId>) -> Result
             Stmt::If { .. } | Stmt::Switch { .. } | Stmt::Dispatch { .. } => {
                 (kids().any(|k| completes[k]), kids().any(|k| breaks[k]))
             }
-            Stmt::Loop { body } => {
+            Stmt::Loop { body, .. } => {
                 if completes[body.index()] {
                     return Err(format!("{id:?}: the loop body can fall out"));
                 }

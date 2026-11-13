@@ -305,7 +305,10 @@ fn three_regions_roll_into_one_loop_that_computes_the_same() {
     controls.sort_unstable();
     assert_eq!(controls, [0, 2]);
     assert_eq!(
-        m.loops().iter().filter(|l| l.dont_unroll).count(),
+        m.loops()
+            .iter()
+            .filter(|l| l.unrolling == Unrolling::DontUnroll)
+            .count(),
         1,
         "the rolled loop"
     );
@@ -872,7 +875,7 @@ fn a_chain_inside_two_selections_rolls_with_its_offsets_computed_before_the_loop
         assert_eq!(muls(&orig), k as usize);
         assert_eq!(muls(&m), 1, "{k} regions: every region in the loop");
         assert_eq!(m.loops().len(), 1);
-        assert!(m.loops()[0].dont_unroll);
+        assert_eq!(m.loops()[0].unrolling, Unrolling::DontUnroll);
         assert_valid(m.clone(), &moltenvk());
         for input in nested_inputs() {
             let want = nested_expected(k, false, &input);
@@ -991,7 +994,10 @@ fn a_switch_on_a_selector_from_before_the_run_takes_its_trips_selector() {
     let loops = roll(&mut m, 0, 1, &mut meter()).expect("roll");
     assert_eq!(loops, 1, "one run rolled");
     assert_eq!(
-        m.loops().iter().filter(|l| l.dont_unroll).count(),
+        m.loops()
+            .iter()
+            .filter(|l| l.unrolling == Unrolling::DontUnroll)
+            .count(),
         1,
         "the rolled loop"
     );

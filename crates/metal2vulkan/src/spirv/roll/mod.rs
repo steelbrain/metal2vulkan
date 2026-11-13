@@ -85,8 +85,8 @@ use crate::error::{Error, InternalError, InternalKind};
 use crate::spirv::ids::{BlockId, ConstId, FuncId, GlobalId, TypeId, Value, VarId};
 use crate::spirv::ir::{
     BinOp, Block, ConstBits, Constant, Contraction, Decl, GlobalKind, Inst, InstNode, LocalVar,
-    LoopMeta, MemAccess, Merge, Phi, Shape, StorageClass, Terminator, Type, TypedModule, ValueDef,
-    ValueOrigin,
+    LoopMeta, MemAccess, Merge, Phi, Shape, StorageClass, Terminator, Type, TypedModule, Unrolling,
+    ValueDef, ValueOrigin,
 };
 
 /// The entry's inlined size, in instructions ([`entry_weight`]), above which runs are rolled:
@@ -2800,7 +2800,7 @@ fn apply(m: &mut TypedModule, plan: &Plan) -> Result<(), Error> {
         preheader: plan.s,
         exit_sel: None,
         // Its trips are the regions it compiles once: unrolled, they are written out again.
-        dont_unroll: true,
+        unrolling: Unrolling::DontUnroll,
     });
     // Where the first region's operands are now.
     let moved = Moved {

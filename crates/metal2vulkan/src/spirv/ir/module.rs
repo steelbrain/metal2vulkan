@@ -1239,9 +1239,35 @@ pub struct LoopMeta {
     pub cont: BlockId,
     pub preheader: BlockId,
     pub exit_sel: Option<VarId>,
-    /// The loop's `OpLoopMerge` asks `DontUnroll`: a loop `spirv::roll` wrote to compile a
-    /// repeated region once, which a downstream compiler that unrolled it would write out again.
-    pub dont_unroll: bool,
+    /// What the loop's `OpLoopMerge` asks of the driver's unrolling.
+    pub unrolling: Unrolling,
+}
+
+/// What a loop's `OpLoopMerge` asks of the driver's unrolling: its `LoopControl`, a hint the
+/// driver may take; the loop computes the same either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Unrolling {
+    /// Nothing (`None`): the driver decides.
+    #[default]
+    Driver,
+    /// `Unroll`: the loop's AIR latch carries `llvm.loop.unroll.full`, the program's request to
+    /// unroll it fully (Metal's compiler writes it for `#pragma clang loop unroll(full)`).
+    Unroll,
+    /// `DontUnroll`: a loop written so that the driver compiles its body once (a region
+    /// `spirv::roll` rolled, a routine's own loop), or one whose AIR latch carries
+    /// `llvm.loop.unroll.disable` (`#pragma nounroll`).
+    DontUnroll,
+}
+
+impl Unrolling {
+    /// The `LoopControl` bits.
+    pub const fn control(self) -> u32 {
+        match self {
+            Unrolling::Driver => 0,
+            Unrolling::Unroll => 0x1,
+            Unrolling::DontUnroll => 0x2,
+        }
+    }
 }
 
 /// The execution models the new core emits.

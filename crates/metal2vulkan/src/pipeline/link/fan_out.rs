@@ -505,7 +505,7 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
                 fb.store(at, next, MemAccess::default())
             });
             let spec = LoopSpec {
-                dont_unroll: true,
+                unrolling: crate::spirv::ir::Unrolling::DontUnroll,
                 ..LoopSpec::default()
             };
             fb.loop_(&mut ctx, spec, body)?;

@@ -38,6 +38,7 @@ use super::tree::{Label, Stmt, StmtId, StructTree};
 use crate::budget::Meter;
 use crate::error::Error;
 use crate::graph::{Cfg, DomTree, Graph};
+use crate::spirv::ir::Unrolling;
 
 /// P6's result: the tree (with `Block`/`Jump`) and the number of labels it uses.
 #[derive(Debug)]
@@ -50,6 +51,7 @@ pub struct RegionTree {
 pub(super) fn structure(
     sc: &StructCfg,
     loops: &Loops,
+    unrolling: &[Unrolling],
     norm: &mut Normalizer,
     meter: &mut Meter,
 ) -> Result<RegionTree, Error> {
@@ -59,6 +61,7 @@ pub(super) fn structure(
         let mut b = Builder {
             sc,
             loops,
+            unrolling,
             local: scratch.filled(meter, sc.len(), NONE)?,
             body: scratch.filled(meter, loops.len(), None)?,
             items: Vec::new(),
@@ -178,6 +181,8 @@ struct Place<'r> {
 struct Builder<'a> {
     sc: &'a StructCfg,
     loops: &'a Loops,
+    /// Loop -> what its `OpLoopMerge` asks of the driver's unrolling (none where absent).
+    unrolling: &'a [Unrolling],
     /// Node -> local index in the region being built (own block, or a child loop's header).
     local: Vec<u32>,
     /// Loop -> its structured body, once built.
@@ -334,7 +339,8 @@ impl Builder<'_> {
                     let body = at(&self.body, c.index())?.ok_or_else(|| {
                         invariant(format!("loop {c:?} structured after its parent"))
                     })?;
-                    Some(Stmt::Loop { body })
+                    let unrolling = self.unrolling.get(c.index()).copied().unwrap_or_default();
+                    Some(Stmt::Loop { body, unrolling })
                 }
             };
             if let Some(stmt) = content {

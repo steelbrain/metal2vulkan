@@ -5,11 +5,12 @@
 //! types are the lowered representations.
 
 use crate::air::error::Location;
-use crate::air::ir::{BlockId, Body, InstKind, ValueId};
+use crate::air::ir::{BlockId, Body, InstKind, Unroll, ValueId};
 use crate::air::Entry;
 use crate::graph::Graph;
 use crate::lower::select::Plan;
 use crate::spirv::ids::DemoteTy;
+use crate::spirv::ir::Unrolling;
 use crate::structurize::{CfgView, TermShape};
 
 /// An entry body plus its plan, as the structurizer's `CfgView`.
@@ -83,5 +84,14 @@ impl CfgView for EntryView<'_> {
 
     fn location(&self, b: BlockId) -> Location {
         Location::function(self.entry.ep.name.clone(), Some(b.raw()), None)
+    }
+
+    fn unrolling(&self, b: BlockId) -> Unrolling {
+        let hints = self.body.terminator(b).and_then(|t| t.kind.loop_hints());
+        match hints.map(|h| h.unroll) {
+            Some(Unroll::Full) => Unrolling::Unroll,
+            Some(Unroll::Disable) => Unrolling::DontUnroll,
+            _ => Unrolling::Driver,
+        }
     }
 }

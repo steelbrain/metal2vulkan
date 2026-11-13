@@ -1718,7 +1718,7 @@ impl KernelDecl {
         });
         let spec = LoopSpec {
             exit_sel: None,
-            dont_unroll: true,
+            unrolling: crate::spirv::ir::Unrolling::DontUnroll,
         };
         fb.loop_(&mut (), spec, body)?;
         let q_lo = fb.load(q, MemAccess::default())?;

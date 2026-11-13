@@ -35,7 +35,7 @@ pub(super) fn check_stages(g: &TestCfg, prepared: &Prepared, seeds: Range<u64>, 
     let start = m.ledger();
     let (sc, loops) = (&prepared.cfg, &prepared.loops);
     let mut norm = Normalizer::new(loops, sc.len(), sc.selector_count() as u32, m).unwrap();
-    let p6 = regions::structure(sc, loops, &mut norm, m)
+    let p6 = regions::structure(sc, loops, &[], &mut norm, m)
         .unwrap_or_else(|e| panic!("P6 refused {e:?} for {g:?}"));
     let selectors = norm.selectors() as usize;
     check_tree_equivalence(g, &p6.tree, selectors, seeds.clone(), EVENTS).unwrap_or_else(|e| {

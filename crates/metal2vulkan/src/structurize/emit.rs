@@ -38,7 +38,7 @@ use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopCtx, LoopFn, LoopSpec
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::{BResult, BuildError, ControlRule};
 use crate::spirv::ids::{DemoteTy, TypeId, Value, VarId};
-use crate::spirv::ir::{BinOp, ConstBits, Constant, MemAccess, Type};
+use crate::spirv::ir::{BinOp, ConstBits, Constant, MemAccess, Type, Unrolling};
 
 use super::cfg::SelVar;
 use super::tree::{Stmt, StmtId, StructTree, Structured};
@@ -469,7 +469,7 @@ fn list<E: CodeEmitter>(
             Stmt::If { .. } => emit_if(cx, fb, st, lc)?,
             Stmt::Switch { .. } => emit_switch(cx, fb, st, lc)?,
             Stmt::Dispatch { .. } => emit_dispatch(cx, fb, st, lc)?,
-            Stmt::Loop { body } => emit_loop(cx, fb, *body, next)?,
+            Stmt::Loop { body, unrolling } => emit_loop(cx, fb, *body, *unrolling, next)?,
             Stmt::GuardPending(body) => emit_guard(cx, fb, *body, lc)?,
             _ => simple(cx, fb, st, lc)?,
         }
@@ -618,6 +618,7 @@ fn emit_loop<E: CodeEmitter>(
     cx: &mut Cx<'_, E>,
     fb: &mut FunctionBuilder<'_>,
     body: StmtId,
+    unrolling: Unrolling,
     next: Option<StmtId>,
 ) -> BResult<()> {
     let exit_sel = match next.map(|n| cx.tree.stmt(n)) {
@@ -633,7 +634,7 @@ fn emit_loop<E: CodeEmitter>(
         cx,
         LoopSpec {
             exit_sel,
-            dont_unroll: false,
+            unrolling,
         },
         f,
     )
