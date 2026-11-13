@@ -18,6 +18,7 @@
 //! three states over two runs; `metal_release.rs`). What the ID names on Apple10, a depth/stencil
 //! state an indirect render command sets, is not built.
 
+use super::device::carry::LineDevice;
 use super::error::{Error, IndirectRule, RuntimeGap};
 use super::families::GpuFamily;
 use super::metal_release::DEPTH_STENCIL_RESOURCE_ID;
