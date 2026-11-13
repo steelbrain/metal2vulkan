@@ -18,6 +18,14 @@
 //   clang -fobjc-arc -O1 -fmodules -o overlapping_derived_slots overlapping_derived_slots.m \
 //     -framework Foundation -framework Metal
 // Run: ./overlapping_derived_slots, MTL_DEBUG_LAYER unset.
+//
+// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1, one run):
+// - kind 0, batch 0: Metal refuses the function: "texture argument src has invalid location
+//   (<0,1>) in overlapping_derived_slots".
+// - kind 0, batch 1: the function and pipeline are made; `dst` reads 1 2 3 4.
+// - kind 2, batch 0: made; `dst`, gated off, reads 0 0 0 0.
+// The runtime makes this check at the pipeline state rather than at the function
+// (`Library::new_function_with_name_constant_values`).
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>
