@@ -23,11 +23,15 @@
 //!   (`copied.rs`), which would be a third. `contents` is the caller's pointer, and the
 //!   deallocator and keep-alive go as a no-copy buffer's do.
 //! - **Copies in.** The buffer's bytes and the rest of their last page ([`CallerCopy::reach`])
-//!   are copied in as it is made, a `did_modify_range`'s range at the next commit of a command
-//!   buffer that may use the buffer, as the pages hold it then (`managed.rs`: staged by the CPU,
-//!   [`CallerCopy::copy_in_now`]), and a rebind copies the new pages in whole: each by the
-//!   device's next submission whose commands may use the buffer (or an internal one), before any
-//!   of its commands, after the commands before it on its `VkQueue`
+//!   are copied in as it is made, as a new buffer's first fill is made (`texture/first_move.rs`'s
+//!   `register_bytes`; on a device without a fill queue, by the device's next submission, whatever
+//!   its commands reach): no command buffer can have read the bytes the copy replaces
+//!   (`Replaces::Unread`), and the copy's source (the import, below) is held only until the
+//!   submission that took it completed. A `did_modify_range`'s range is copied in at the next
+//!   commit of a command buffer that may use the buffer, as the pages hold it then (`managed.rs`:
+//!   staged by the CPU, [`CallerCopy::copy_in_now`]), and a rebind copies the new pages in whole:
+//!   each by the device's next submission whose commands may use the buffer (or an internal one),
+//!   before any of its commands, after the commands before it on its `VkQueue`
 //!   (`texture/first_move.rs`'s `register_upload`), which the call does not wait for, so every
 //!   command buffer committed after the call that uses the buffer reads them, and none submitted
 //!   before that submission on its `VkQueue` sees the copy land under it. A command buffer of
@@ -68,7 +72,7 @@
 //!   does, announced (`device-memory-overflow`), never refused.
 //! - **On unified memory** a `Managed` no-copy buffer lies in its pages, as Apple silicon's does.
 
-use super::buffer::{Buffer, HostCopy, Naming};
+use super::buffer::{Buffer, HostCopy, Naming, Replaces};
 use super::device::lock;
 use super::error::{internal, Error};
 use super::exit_guard;
@@ -263,7 +267,8 @@ impl AtCompletion {
                 if let Some(caller) = buffer.caller_copy() {
                     buffer.generation().shared().counts.managed_write_undone();
                     // Unbounded: the completion makes no submission (the next one takes it).
-                    let _ = caller.copy_in(&buffer, 0..caller.reach, false, 0);
+                    let replaces = Replaces::Read(0);
+                    let _ = caller.copy_in(&buffer, 0..caller.reach, false, replaces);
                 }
             }
         }
@@ -387,15 +392,14 @@ impl CallerCopy {
     /// Copy `range` of the pages into `buffer`'s device copy (the module docs, **Copies in**),
     /// clamped to the pages' reach. Where `bounded`, past the bound of what is staged, a
     /// submission waited for makes the copies now; else (a command buffer's completion, which
-    /// makes no submission) they wait for the device's next. `commit` is the stamp of the commit
-    /// that took the range (`managed.rs`), 0 where none did (`Buffer::upload`). Nothing while the
-    /// pages are detached.
+    /// makes no submission) they wait for the device's next. `replaces` says which batch takes
+    /// them ([`Replaces`]). Nothing while the pages are detached.
     pub(super) fn copy_in(
         &self,
         buffer: &Buffer,
         range: Range<u64>,
         bounded: bool,
-        commit: u64,
+        replaces: Replaces,
     ) -> Result<(), Error> {
         let range = range.start..range.end.min(self.reach);
         if range.is_empty() {
@@ -417,15 +421,15 @@ impl CallerCopy {
                     let pointer = import
                         .mapped_contents()
                         .ok_or_else(|| internal("a copied host buffer without contents"))?;
-                    return stage_in(buffer, pointer, range, bounded, commit);
+                    return stage_in(buffer, pointer, range, bounded, replaces);
                 }
                 let ((source, at), hold) = import.blit_at(range.start)?;
                 let held: Box<dyn std::any::Any + Send + Sync> = Box::new((import, hold));
-                buffer.copy_in_from((source, at), range, held, (bounded, commit))
+                buffer.copy_in_from((source, at), range, held, (bounded, replaces))
             }
             Side::Pages(pages, false) => {
                 let range = range.start..range.end.min(pages.reach);
-                stage_in(buffer, pages.pointer, range, bounded, commit)
+                stage_in(buffer, pages.pointer, range, bounded, replaces)
             }
             Side::Pages(_, true) => Ok(()),
         }
@@ -449,7 +453,7 @@ impl CallerCopy {
         let Some(pointer) = self.mapped_contents() else {
             return Ok(());
         };
-        stage_in(buffer, pointer, range, true, commit)
+        stage_in(buffer, pointer, range, true, Replaces::Read(commit))
     }
 
     /// `detach_backing` of the buffer: the host copy's (the module docs). An import's detach
@@ -497,7 +501,7 @@ impl CallerCopy {
         // call where nothing does, as Metal runs it at the replace.
         let old = std::mem::replace(&mut *lock(&self.side), side);
         drop(old);
-        self.copy_in(buffer, 0..self.reach, true, 0)
+        self.copy_in(buffer, 0..self.reach, true, Replaces::Read(0))
     }
 }
 
@@ -508,14 +512,14 @@ impl Drop for CallerCopy {
 }
 
 /// Copy `range` of the bytes at `pointer` (the buffer's byte 0) into `buffer`'s device copy
-/// through staging buffers of [`STAGED_CHUNK`] bytes at most, read now, for the commit stamped
-/// `commit` (0: none, [`Buffer::upload`]).
+/// through staging buffers of [`STAGED_CHUNK`] bytes at most, read now, for the batch `replaces`
+/// says ([`Replaces`]).
 pub(super) fn stage_in(
     buffer: &Buffer,
     pointer: NonNull<u8>,
     range: Range<u64>,
     bounded: bool,
-    commit: u64,
+    replaces: Replaces,
 ) -> Result<(), Error> {
     let device = buffer.generation();
     let mut start = range.start;
@@ -535,7 +539,7 @@ pub(super) fn stage_in(
         }
         let source = staging.buffer.at(0);
         let held: Box<dyn std::any::Any + Send + Sync> = Box::new(staging);
-        buffer.copy_in_from(source, start..start + bytes, held, (bounded, commit))?;
+        buffer.copy_in_from(source, start..start + bytes, held, (bounded, replaces))?;
         start += bytes;
     }
     Ok(())
@@ -732,8 +736,9 @@ impl Device {
             again: None,
             naming,
         });
-        // The pages' bytes reach every command buffer committed from now on.
-        caller.copy_in(&buffer, 0..reach, true, 0)?;
+        // The pages' bytes reach every command buffer committed from now on, with the device's
+        // next submission: no command buffer can have read the bytes they replace.
+        caller.copy_in(&buffer, 0..reach, true, Replaces::Unread)?;
         Ok(buffer)
     }
 

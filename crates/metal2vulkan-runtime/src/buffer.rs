@@ -2257,6 +2257,42 @@ pub(super) enum HostCopy {
     Caller(Arc<CallerCopy>),
 }
 
+/// What a copy from a buffer's host copy into its own bytes replaces, which says the batch that
+/// takes it (`texture/first_move.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Replaces {
+    /// Bytes no command buffer can have read: the buffer's making, or its device copy's making
+    /// on a recovery's new `VkDevice`. Taken as a new buffer's first fill is
+    /// (`FirstMoves::register_bytes`; on a device without a fill queue, by the device's next
+    /// submission, whatever its commands reach), so what it copies from (an import of the
+    /// caller's pages, a staging buffer, the host copy) is held no longer than that.
+    Unread,
+    /// Bytes the program's command buffers may have read already, with the stamp of the commit
+    /// that took the range (`managed.rs`; 0 where none did: a completion's undo, a rebind): only
+    /// a batch whose commands may reach the buffer takes it, of a command buffer committed at or
+    /// after that commit (`FirstMoves::register_upload`).
+    Read(u64),
+}
+
+/// Register with `device`'s first work the copy of `length` bytes of `source` onto `keeper`'s
+/// bytes at `onto` (its `VkBuffer`, and where), `held` until the submission that makes it
+/// completed, for the batch `replaces` says: whether the copies staged now passed their bound.
+fn register_copy_in(
+    device: &Device,
+    keeper: Weak<BufferShared>,
+    (onto, source): ((vk::Buffer, u64), (vk::Buffer, u64)),
+    length: u64,
+    held: Box<dyn Any + Send + Sync>,
+    replaces: Replaces,
+) -> bool {
+    let keeper: Weak<dyn Filled> = keeper;
+    let moves = &device.shared().textures.first_moves;
+    match replaces {
+        Replaces::Unread => moves.register_bytes(keeper, onto, source, length, held),
+        Replaces::Read(commit) => moves.register_upload(keeper, onto, source, length, held, commit),
+    }
+}
+
 /// A `Managed` buffer's host copy on a device without unified memory (`managed.rs`): a
 /// `VkBuffer` of the buffer's padded length in host-visible, coherent memory, cached where the
 /// device has such ([`MemoryClass::Managed`]), which `contents` maps. The GPU uses the buffer's
@@ -4314,17 +4350,17 @@ impl Buffer {
     /// (`texture/first_move.rs`'s `register_upload`), which the call does not wait for: every
     /// command buffer committed after the call reads the bytes, and none submitted before that
     /// submission on its `VkQueue` sees them land under it. The copy reads the host copy as that
-    /// submission runs, and the submission holds the host copy until it completed. `commit` is
-    /// the stamp of the commit that took the range (`managed.rs`), which no batch committed before
-    /// it takes the copy for; 0 where none did, which any batch takes.
+    /// submission runs, and the submission holds the host copy until it completed. `replaces`
+    /// says which batch takes it ([`Replaces`]): where no command buffer can have read the
+    /// bytes, one that takes a new buffer's first fill (`register_bytes`).
     /// Past the bound of what is staged, a submission waited for makes it now. Nothing for a
     /// buffer without a host copy, nor for an empty range.
-    pub(super) fn upload(&self, range: Range<u64>, commit: u64) -> Result<(), Error> {
+    pub(super) fn upload(&self, range: Range<u64>, replaces: Replaces) -> Result<(), Error> {
         let s = self.s();
         let mirror = match self.mirror() {
             Some(HostCopy::Own(mirror)) => mirror,
             // The caller's pages, through their import or staging (`managed_copy.rs`).
-            Some(HostCopy::Caller(caller)) => return caller.copy_in(self, range, true, commit),
+            Some(HostCopy::Caller(caller)) => return caller.copy_in(self, range, true, replaces),
             None => return Ok(()),
         };
         if range.is_empty() {
@@ -4333,14 +4369,13 @@ impl Buffer {
         let device = &s.device;
         s.staged.store(true, Ordering::Relaxed);
         let weak: Weak<BufferShared> = Arc::downgrade(s);
-        let keeper: Weak<dyn Filled> = weak;
-        let past = (device.shared().textures.first_moves).register_upload(
-            keeper,
-            self.at(range.start),
-            (mirror.raw, range.start),
+        let past = register_copy_in(
+            device,
+            weak,
+            (self.at(range.start), (mirror.raw, range.start)),
             range.end - range.start,
             Box::new(Arc::clone(mirror)),
-            commit,
+            replaces,
         );
         match past {
             true => device.submit_internal(|_, _| {}),
@@ -4360,7 +4395,8 @@ impl Buffer {
             Some(HostCopy::Caller(caller)) => caller.copy_in_now(self, range.clone(), commit),
             Some(HostCopy::Own(_)) => match self.mapped_contents() {
                 Some(contents) => {
-                    super::managed_copy::stage_in(self, contents, range.clone(), true, commit)
+                    let replaces = Replaces::Read(commit);
+                    super::managed_copy::stage_in(self, contents, range.clone(), true, replaces)
                 }
                 None => Ok(()),
             },
@@ -4369,7 +4405,7 @@ impl Buffer {
         // A failed submission past the bound fails the device, which the commit's own
         // submission reports.
         if staged.is_err() {
-            let _ = self.upload(range, commit);
+            let _ = self.upload(range, Replaces::Read(commit));
         }
     }
 
@@ -4379,29 +4415,28 @@ impl Buffer {
     /// commands before it on its `VkQueue`, as [`upload`](Self::upload) copies, the submission holding `held` until it completed: a
     /// two-copy buffer's copy in from the caller's pages (`managed_copy.rs`), counted
     /// (`WorkCounts::managed_bytes_copied_in`), or from staging buffers of a host copy's bytes
-    /// ([`upload_now`](Self::upload_now)), for the commit stamped `commit` (0: none,
-    /// [`upload`](Self::upload)). Where `bounded`, past the bound of what is staged, a
-    /// submission waited for makes it now; else it waits for the device's next.
+    /// ([`upload_now`](Self::upload_now)), taken by the batch `replaces` says ([`Replaces`]).
+    /// Where `bounded`, past the bound of what is staged, a submission waited for makes it now;
+    /// else it waits for the device's next.
     pub(super) fn copy_in_from(
         &self,
         source: (vk::Buffer, u64),
         range: Range<u64>,
         held: Box<dyn Any + Send + Sync>,
-        (bounded, commit): (bool, u64),
+        (bounded, replaces): (bool, Replaces),
     ) -> Result<(), Error> {
         let s = self.s();
         let device = &s.device;
         let bytes = range.end - range.start;
         s.staged.store(true, Ordering::Relaxed);
         let weak: Weak<BufferShared> = Arc::downgrade(s);
-        let keeper: Weak<dyn Filled> = weak;
-        let past = (device.shared().textures.first_moves).register_upload(
-            keeper,
-            self.at(range.start),
-            source,
+        let past = register_copy_in(
+            device,
+            weak,
+            (self.at(range.start), source),
             bytes,
             held,
-            commit,
+            replaces,
         );
         if self.caller_copy().is_some() {
             device.shared().counts.managed_copied(bytes, true);
@@ -5307,7 +5342,7 @@ impl Buffer {
         // lost with the `VkDevice` (`managed_copy.rs`).
         if let Some(caller) = carried.caller_copy() {
             if caller
-                .copy_in(&carried, 0..caller.reach(), true, 0)
+                .copy_in(&carried, 0..caller.reach(), true, Replaces::Unread)
                 .is_err()
             {
                 if let Bytes::Own(parts) = &carried.0.bytes {

@@ -12,7 +12,7 @@ use super::address::{
 use super::address_pool::AddressPool;
 use super::buffer::{
     usage, Buffer, BufferParts, HostCell, HostImport, HostPages, Lying, Modes, Naming, Owner,
-    ReadApart,
+    ReadApart, Replaces,
 };
 #[cfg(unix)]
 use super::buffer::{ImportPages, Pages};
@@ -674,7 +674,7 @@ impl Device {
         };
         if buffer.storage_mode() != StorageMode::Private {
             fill(&buffer)?;
-            buffer.upload(0..length, 0)?;
+            buffer.upload(0..length, Replaces::Unread)?;
             return Ok(buffer);
         }
         let staging = self.own_buffer(length, ResourceOptions::shared())?;
