@@ -786,3 +786,103 @@ fn padding_unobserved_is_refused_over_the_callers_memory() {
         made.err()
     );
 }
+
+/// An IOSurface plane's texture that renders (`ShaderRead | RenderTarget`, the guests' surface
+/// tiles), 101x48 at 416 bytes a row over a buffer of the runtime's memory whose first byte lies
+/// on a line and whose last row ends at its length: its rows end inside the device's lines, at a
+/// pitch no device's own linear image lays them at but MoltenVK's. With the device's pooled
+/// verdicts set so that renders keeping every byte beside the texels fail and renders over
+/// padding declared unobserved pass, over a buffer that declares its padding unobserved it is a
+/// `DRM_FORMAT_MOD_LINEAR` image at the pitch (`WorkCounts::pooled_pitched_images`): the plane
+/// takes the declaration as a buffer's rows do (`Texels::padding_owned`), and a blit reads the
+/// CPU's texels through it. Over one that does not, a shadow. Where the device makes no such
+/// image, or its lines hold the rows' ends, printed.
+#[test]
+fn a_surface_plane_over_declared_padding_takes_the_check_of_renders_over_unobserved_padding() {
+    use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
+    use crate::IoSurfacePlane;
+    const TEST: &str = "SURFACE-UNOBSERVED-PADDING";
+    let (width, height, pitch) = (WIDTH, HEIGHT, 416);
+    let scratch = Scratch::new("padding-unobserved-surface");
+    let device = device(&scratch.0);
+    assert!(
+        device.settle_in_place_checks(CHECK_WAIT),
+        "the check settles"
+    );
+    let line = device.shared().in_place.line();
+    let layout = crate::linear_plan::BufferLayout {
+        offset: 0,
+        row_pitch: pitch,
+        slice_pitch: pitch * height,
+        row_bytes: width * 4,
+        rows: height,
+        slices: 1,
+    };
+    if !device.makes_modifier_images() || RowEnds::of(0, &layout, line) != RowEnds::InLines {
+        eprintln!(
+            "{TEST} on {}: modifier images {}, rows {:?} in lines of {line}; not run",
+            device.name(),
+            device.makes_modifier_images(),
+            RowEnds::of(0, &layout, line)
+        );
+        return;
+    }
+    let in_place = &device.shared().in_place;
+    let (pooled, rows) = (PagesClass::Pooled, RowEnds::InLines);
+    in_place.set(pooled, Access::Renders, rows, Verdict::Failed);
+    in_place.set(pooled, Access::UnobservedRenders, rows, Verdict::Passed);
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
+    descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+    descriptor.resource_options = ResourceOptions::shared();
+    for declared in [true, false] {
+        let length = pitch * height;
+        let made = BufferDescriptor::new(length, ResourceOptions::shared(), BufferContents::Zero)
+            .with_aligned_byte(0);
+        let made = match declared {
+            true => made.with_padding_unobserved(),
+            false => made,
+        };
+        let buffer = device.new_buffer_with_descriptor(made).unwrap();
+        // SAFETY: the buffer's mapped bytes, which no command uses yet.
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(buffer.contents().unwrap().as_ptr(), length as usize)
+        };
+        for (at, byte) in bytes.iter_mut().enumerate() {
+            *byte = texel_byte(at as u64 % pitch, at as u64 / pitch);
+        }
+        let before = device.work_counts();
+        let plane = IoSurfacePlane::new(0, pitch, false);
+        let texture = buffer
+            .new_texture_with_iosurface_plane(&descriptor, plane)
+            .unwrap();
+        let after = device.work_counts();
+        let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
+        let aliases = texture.aliases_buffer();
+        eprintln!(
+            "{TEST} on {}: declared {declared}: {}",
+            device.name(),
+            match (aliases, pitched) {
+                (true, 0) => "the device's linear image",
+                (true, _) => "a DRM_FORMAT_MOD_LINEAR image at the pitch",
+                (false, _) => "a shadow",
+            }
+        );
+        assert_eq!(
+            (aliases, pitched),
+            (declared, u64::from(declared)),
+            "{TEST}: declared {declared}: in place at the pitch where declared, else a shadow"
+        );
+        let read = blitted(&device, &texture);
+        let row = width * 4;
+        for y in 0..height {
+            for x in 0..row {
+                assert_eq!(
+                    read[(y * row + x) as usize],
+                    texel_byte(x, y),
+                    "{TEST}: declared {declared}: byte {x} of row {y} read through the texture"
+                );
+            }
+        }
+    }
+}
