@@ -15,16 +15,19 @@
 //!   per pair of segments its bounds reach, at most [`FanOutStage::copies`]; one with no positive
 //!   `w`, or one past the segments, emits none, and so does one with some `w` not positive, which
 //!   the probe found.
-//! - **Probe** ([`RegionFanOut::Probe`]): emits nothing. Of the flags buffer's pair of words at
-//!   the index the draw pushes (`PushField::RegionProbe`; words `2i` and `2i + 1`), it writes 1
-//!   into the first for a triangle the draw cannot fan out: one with some `w` not positive and
-//!   another positive, or whose bounds, widened by the table's widening, reach more pairs than the
-//!   copies; and adds to the second the copies the draw emits of each triangle it fans out, the
-//!   pairs its bounds reach unwidened, so the consumer counts the draw's work. Its writes need
-//!   `vertexPipelineStoresAndAtomics`.
+//! - **Probe** ([`RegionFanOut::Probe`]): emits nothing. Of the flags buffer's words of the
+//!   index `i` the draw pushes (`PushField::RegionProbe`; [`PROBE_DRAW_WORDS`] of them from
+//!   `PROBE_DRAW_WORDS·i`), it writes 1 into the first for a triangle the draw cannot fan out: one
+//!   with some `w` not positive and another positive, or whose bounds, widened by the table's
+//!   widening, reach more pairs than the copies; and adds the copies the draw emits of each
+//!   triangle it fans out, the pairs its bounds reach unwidened, into the count its `PrimitiveId`
+//!   picks of the [`PROBE_COUNT_WORDS`] after it, so the consumer sums the draw's work and no
+//!   word takes every triangle's add. Its writes need `vertexPipelineStoresAndAtomics`.
 
 use super::geometry::{array, kf, ku, scalar, GeometryStages};
-use crate::bind::fan_out::{clip_entry, line_entry, MAX_SEGMENTS};
+use crate::bind::fan_out::{
+    clip_entry, line_entry, MAX_SEGMENTS, PROBE_COUNT_WORDS, PROBE_DRAW_WORDS,
+};
 use crate::pipeline::graphics::RegionFanOut;
 use crate::pipeline::stage_io::IoNumeric;
 use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage, SyntheticBinding};
@@ -292,7 +295,12 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
         RegionFanOut::Probe => {
             let flags = mb.resource(FLAGS_SLOT, StorageClass::StorageBuffer, block)?;
             let member = (mb.push_member(PushField::RegionProbe, u32_, fan.push_offset)?).index;
-            Some((flags, member, mb.push_global()?))
+            // The probe picks a triangle's count by its `PrimitiveId`.
+            let id = match primitive {
+                Some((input, _)) => input,
+                None => mb.builtin(B::PrimitiveId, IoDir::Input, u32_)?,
+            };
+            Some((flags, member, mb.push_global()?, id))
         }
         RegionFanOut::Draw => None,
     };
@@ -360,21 +368,27 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
     let copies = fan.copies.max(1);
     let mut ctx = ();
     match probe {
-        Some((flags, member, push)) => {
+        Some((flags, member, push, id)) => {
             // Some `w` not positive beside a positive one, or more pairs than the copies.
             let straddles = fb.unary(UnOp::LogicalNot, every)?;
             let straddles = fb.binary(BinOp::LogicalAnd, some, straddles)?;
             let most = ku(&mut fb, copies)?;
             let over = fb.binary(BinOp::UGreaterThan, count, most)?;
             let flagged = fb.binary(BinOp::LogicalOr, straddles, over)?;
-            // The draw's pair of words: its flag, then the copies its triangles emit.
+            // The draw's words: its flag, then the counts of the copies its triangles emit, this
+            // triangle's the one its `PrimitiveId` picks.
             let base = fb.module().global_value(push)?;
             let index = ku(&mut fb, member)?;
             let ptr = fb.access_chain(base, &[index])?;
             let pushed = fb.load(ptr, MemAccess::default())?;
-            let two = ku(&mut fb, 2)?;
-            let flag_at = fb.binary(BinOp::IMul, pushed, two)?;
-            let count_at = fb.binary(BinOp::IAdd, flag_at, one)?;
+            let draw_words = ku(&mut fb, PROBE_DRAW_WORDS)?;
+            let flag_at = fb.binary(BinOp::IMul, pushed, draw_words)?;
+            let from = fb.module().global_value(id)?;
+            let id = fb.load(from, MemAccess::default())?;
+            let mask = ku(&mut fb, PROBE_COUNT_WORDS - 1)?;
+            let lane = fb.binary(BinOp::BitwiseAnd, id, mask)?;
+            let lane = fb.binary(BinOp::IAdd, lane, one)?;
+            let count_at = fb.binary(BinOp::IAdd, flag_at, lane)?;
             let word_ptr = move |fb: &mut FunctionBuilder<'_>, at: Value| {
                 let base = fb.module().global_value(flags)?;
                 let zero = ku(fb, 0)?;

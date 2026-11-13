@@ -36,6 +36,18 @@
 //! then y's: a line `vec4(ndc_lo, ndc_hi, a, b)`, a clip `vec4(W/2, X + W/2 − p₀, p₁ − X − W/2,
 //! 0)`.
 
+/// The words of a probe's flags each probed draw takes: its flag, then the
+/// [`PROBE_COUNT_WORDS`] its triangles add their copies into (`pipeline::link::fan_out`, the
+/// probe), from word `PROBE_DRAW_WORDS·i` for the draw of index `i`. The consumer sums a draw's
+/// counts.
+pub const PROBE_DRAW_WORDS: u32 = 1 + PROBE_COUNT_WORDS;
+
+/// The words a probed draw's triangles add their copies into, a triangle the one its
+/// `PrimitiveId` picks (`PrimitiveId mod PROBE_COUNT_WORDS`): one word every triangle of a draw
+/// added into made the probe 15.4 to 20.7 ms of an RTX 3090's GPU time for 64 draws of 306,036
+/// triangles; spread over these, 1.45 ms (NVIDIA 620.70.06, the pieces lane).
+pub const PROBE_COUNT_WORDS: u32 = 32;
+
 /// The most segments an axis holds: [`RateMapRegions::MAX_REGIONS`](crate::bind::RateMapRegions) is
 /// this many per axis squared.
 pub const MAX_SEGMENTS: u32 = 128;

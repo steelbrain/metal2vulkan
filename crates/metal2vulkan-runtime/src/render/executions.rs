@@ -343,7 +343,9 @@ use cause::HostStepCause;
 use gpu::GpuForm;
 pub(super) use gpu::ReplayedDraws;
 use metal2vulkan::bind::indirect_commands::{Action, BufferStage, CommandRecord};
-use metal2vulkan::bind::{DrawCall, RateMapRegions, ReplayFaults, ViewSetup};
+use metal2vulkan::bind::{
+    fan_out::PROBE_DRAW_WORDS, DrawCall, RateMapRegions, ReplayFaults, ViewSetup,
+};
 use metal2vulkan::metal::{
     IndexType, IndirectCommandType, PrimitiveTopologyClass, PrimitiveType, VertexStepFunction,
 };
@@ -3978,15 +3980,16 @@ impl DeferredPass {
                 false => None,
             });
         }
-        // Two words a probed draw, at most one a command.
+        // `PROBE_DRAW_WORDS` words a probed draw, at most one a command.
         let commands: usize = (reads.iter().flatten())
             .map(|(commands, ..)| commands.len())
             .sum();
+        let draw_words = u64::from(PROBE_DRAW_WORDS);
         let mut probes: Vec<ProbeRun> = Vec::with_capacity(reads.len());
         let mut words: Arc<[u32]> = Arc::from([]);
         let mut probed = None;
         if commands > 0 {
-            let len = 8 * commands as u64;
+            let len = 4 * draw_words * commands as u64;
             let flags = command_buffer.state().uploads.upload(device, &[], len)?;
             let info = vk::DescriptorBufferInfo::default()
                 .buffer(flags.raw())
@@ -4010,16 +4013,23 @@ impl DeferredPass {
                 let (recorded, completed) =
                     self.submit_probe(core, command_buffer, (&homes, &probes))?;
                 if completed {
-                    let mut read_words = vec![0u32; 2 * next as usize];
+                    let read = draw_words * u64::from(next);
+                    let mut read_words = vec![0u32; read as usize];
                     // SAFETY: the probe that wrote the flags completed, its writes made visible to
                     // the host by its last barrier; the words are writable and apart from the
                     // region.
-                    unsafe {
-                        flags.copy_out(0, read_words.as_mut_ptr().cast(), 8 * u64::from(next))
-                    };
-                    let flagged = read_words.chunks(2).filter(|pair| pair[0] != 0).count();
+                    unsafe { flags.copy_out(0, read_words.as_mut_ptr().cast(), 4 * read) };
+                    // Each draw's flag, and the copies its triangles emit: its counts' sum.
+                    let pairs: Vec<u32> = (read_words.chunks(PROBE_DRAW_WORDS as usize))
+                        .flat_map(|draw| {
+                            let copies =
+                                (draw.iter().skip(1)).fold(0u32, |a, &w| a.saturating_add(w));
+                            [draw[0], copies]
+                        })
+                        .collect();
+                    let flagged = pairs.chunks(2).filter(|pair| pair[0] != 0).count();
                     device.shared().counts.rate_map_probe(flagged as u64);
-                    words = read_words.into();
+                    words = pairs.into();
                 }
                 probed = Some(recorded);
             }

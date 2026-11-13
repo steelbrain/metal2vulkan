@@ -30,7 +30,7 @@ pub(super) fn fans_out(device: &Device) -> bool {
 
 /// What the draw of an execution's next command records where its host step fans the pass's
 /// triangles out (the module docs): its probe, or its draw fanned out; a probe at the index of its
-/// pair of words in the probe's flags (`BindState::region_fan_out`).
+/// words in the probe's flags (`bind::fan_out::PROBE_DRAW_WORDS`, `BindState::region_fan_out`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct FanOutDraw {
     pub(super) mode: RegionFanOut,
@@ -49,7 +49,7 @@ pub(super) enum FanOutRun {
 
 /// The probe's run of an execution's commands.
 pub(super) struct Probe {
-    /// The probe's flags, two words a probed draw, bound whole.
+    /// The probe's flags, `bind::fan_out::PROBE_DRAW_WORDS` words a probed draw, bound whole.
     flags: vk::DescriptorBufferInfo,
     /// The index the next probed draw takes.
     next: u32,
@@ -143,7 +143,8 @@ impl FanOutRun {
 /// The routes of an execution's commands at its host step (the module docs): the commands as the
 /// step read them, once, for the probe and the routes alike, from command `start`; the faults the
 /// read found; the index of each command's draw among the probe's, by its place among the
-/// commands that run, where it was probed; and the probe's words.
+/// commands that run, where it was probed; and the probe's words, two a probed draw: its flag
+/// and the copies its triangles emit, its counts summed.
 pub(super) struct FanOutRoutes {
     pub(super) commands: Vec<Option<Command>>,
     pub(super) start: u32,

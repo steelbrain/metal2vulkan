@@ -1,6 +1,7 @@
 //! The fan-out variant's geometry stages (`link::fan_out`): its triangle class's stage emits as
 //! many copies as the device's limits leave room for, a probe's none, each module valid on the
-//! device; a probe pushes its flag's index; and the refusals.
+//! device; a probe pushes its flag's index and adds a triangle's copies into the count its
+//! primitive's index picks; and the refusals.
 
 use super::*;
 use crate::error::Needs;
@@ -102,6 +103,64 @@ fn a_fan_out_variant_s_triangle_stage_emits_its_copies() {
                 assert_eq!(emits, expected, "{stem} {mode:?} {class:?}");
             }
         }
+    }
+}
+
+/// The instructions of `words` with opcode `op`, each its operand words after the opcode's.
+fn instructions(words: &[u32], op: crate::spv::Op) -> Vec<&[u32]> {
+    let mut i = 5;
+    let mut found = Vec::new();
+    while let Some(&w) = words.get(i) {
+        let len = (w >> 16) as usize;
+        if len == 0 {
+            break;
+        }
+        if w & 0xFFFF == op as u32 {
+            found.extend(words.get(i + 1..i + len));
+        }
+        i += len;
+    }
+    found
+}
+
+/// A probe's triangle stage adds each triangle's copies once, into the count of its draw's
+/// [`PROBE_COUNT_WORDS`](crate::bind::fan_out::PROBE_COUNT_WORDS) that its `PrimitiveId` picks
+/// (masked by their number less one), whether or not the fragment function reads the primitive's
+/// index: no one word takes every triangle's add.
+#[test]
+fn a_probe_adds_a_triangle_s_copies_into_the_count_its_primitive_picks() {
+    use crate::spv::{BuiltIn, Decoration, Op};
+    let p = profile("nvidia-pascal-linux");
+    let f4 = io_ty(IoNumeric::Float, 4);
+    let (v, reads_id) = pipeline();
+    let fio = stage_io(vec![varying("a", f4, SMOOTH)], vec![color(0, 0, f4)]);
+    let reads_none = stage(Stage::Fragment, fio);
+    for (f, reads) in [(&reads_id, true), (&reads_none, false)] {
+        let linked = link(&[&v, f], &fanned(RegionFanOut::Probe), &p).expect("linked");
+        let g = linked.geometry.as_ref().expect("geometry stages");
+        let made = (g.stages(&linked, &p, &mut crate::pipeline::testing::meter())).expect("made");
+        let ((module, _), _) = (made.iter().zip(CLASSES))
+            .find(|(_, class)| *class == Class::Triangle)
+            .expect("the triangle stage");
+        let words = &module.spirv;
+        assert_eq!(instructions(words, Op::AtomicIAdd).len(), 1, "one add");
+        let primitive = (instructions(words, Op::Decorate).into_iter())
+            .filter(|d| d[1..] == [Decoration::BuiltIn as u32, BuiltIn::PrimitiveId as u32])
+            .count();
+        // Its input, and the output it passes on where the fragment function reads it.
+        assert_eq!(
+            primitive,
+            1 + usize::from(reads),
+            "the primitive's index read"
+        );
+        let mask = crate::bind::fan_out::PROBE_COUNT_WORDS - 1;
+        let masks: Vec<u32> = (instructions(words, Op::Constant).into_iter())
+            .filter(|c| c.get(2) == Some(&mask))
+            .map(|c| c[1])
+            .collect();
+        let masked = (instructions(words, Op::BitwiseAnd).into_iter())
+            .any(|a| a[2..].iter().any(|operand| masks.contains(operand)));
+        assert!(masked, "the primitive's index masked to the counts");
     }
 }
 
