@@ -496,7 +496,8 @@ recorded here.
   (`WorkCounts::managed_device_copy_bytes`), and copies across the bus, as GPU transfers from the
   pages' import, else through staging buffers of at most 32 MiB, 256 MiB staged at most before the
   call submits them and waits: the pages whole at the making and at each rebind, a
-  `did_modify_range`'s range as the next commit finds it (staged by the CPU there), the buffer
+  `did_modify_range`'s range as the next commit of a command buffer that uses the buffer finds
+  it (staged by the CPU there), the buffer
   whole at each
   `synchronize_resource` of it (of a texture over it, or its `synchronize_texture`, the texels'
   bytes)

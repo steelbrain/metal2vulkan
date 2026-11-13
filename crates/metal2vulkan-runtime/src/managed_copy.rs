@@ -23,15 +23,21 @@
 //!   (`copied.rs`), which would be a third. `contents` is the caller's pointer, and the
 //!   deallocator and keep-alive go as a no-copy buffer's do.
 //! - **Copies in.** The buffer's bytes and the rest of their last page ([`CallerCopy::reach`])
-//!   are copied in as it is made, a `did_modify_range`'s range at the device's next commit, as
-//!   the pages hold it then (`managed.rs`: staged by the CPU, [`CallerCopy::copy_in_now`]), and a
-//!   rebind copies the new pages in whole: each by the device's next submission, before any of its
-//!   commands, after the commands before it on its `VkQueue` (`texture/first_move.rs`), which the
-//!   call does not wait for, so every command buffer committed after the call reads them, and none
-//!   in flight on that queue sees the copy land under it. A command buffer in flight on another queue that
-//!   reads the buffer meanwhile races the copy, as on Metal. On a device with a fill queue (a copy
-//!   engine's second queue, `device/staging.rs`), a batch's copies in run there, before the batch,
-//!   which waits for them, after the batches before it on its `VkQueue`. Not on the staging queue,
+//!   are copied in as it is made, a `did_modify_range`'s range at the next commit of a command
+//!   buffer that may use the buffer, as the pages hold it then (`managed.rs`: staged by the CPU,
+//!   [`CallerCopy::copy_in_now`]), and a rebind copies the new pages in whole: each by the
+//!   device's next submission whose commands may use the buffer (or an internal one), before any
+//!   of its commands, after the commands before it on its `VkQueue`
+//!   (`texture/first_move.rs`'s `register_upload`), which the call does not wait for, so every
+//!   command buffer committed after the call that uses the buffer reads them, and none submitted
+//!   before that submission on its `VkQueue` sees the copy land under it. A command buffer of
+//!   another queue that uses none of the buffer neither takes the copy nor waits for it, so the
+//!   copy never lands under the program's command buffers still to read the bytes on the queue
+//!   it uses; one of another queue that uses the buffer meanwhile, unordered with the first by
+//!   the program, races it, as two queues' unordered uses of a resource do on Metal. On a device
+//!   with a fill queue (a copy engine's second queue, `device/staging.rs`), a batch's copies in
+//!   run there, before the batch, which waits for them, after the batches before it on its
+//!   `VkQueue`. Not on the staging queue,
 //!   which waits for no work in flight. From an import, the copy's source is
 //!   the import's `VkBuffer`, held (imported again where the device released it) until the
 //!   submission completed; from pages no import maps, the call copies the bytes on the CPU into

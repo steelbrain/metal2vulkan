@@ -4300,10 +4300,12 @@ impl Buffer {
     }
 
     /// Copy the bytes `range` of a buffer with a host copy ([`Mirror`]) from that copy to the
-    /// buffer's own, by the device's next submission, before any of its commands, after the
-    /// commands before it on its `VkQueue` (`texture/first_move.rs`), which the call does not wait
-    /// for: every command buffer committed after the call reads the bytes. The copy reads the host
-    /// copy as that submission runs, and the submission holds the host copy until it completed.
+    /// buffer's own, by the device's next submission whose commands may reach the buffer (or an
+    /// internal one), before any of its commands, after the commands before it on its `VkQueue`
+    /// (`texture/first_move.rs`'s `register_upload`), which the call does not wait for: every
+    /// command buffer committed after the call reads the bytes, and none submitted before that
+    /// submission on its `VkQueue` sees them land under it. The copy reads the host copy as that
+    /// submission runs, and the submission holds the host copy until it completed.
     /// Past the bound of what is staged, a submission waited for makes it now. Nothing for a
     /// buffer without a host copy, nor for an empty range.
     pub(super) fn upload(&self, range: Range<u64>) -> Result<(), Error> {
@@ -4321,7 +4323,7 @@ impl Buffer {
         s.staged.store(true, Ordering::Relaxed);
         let weak: Weak<BufferShared> = Arc::downgrade(s);
         let keeper: Weak<dyn Filled> = weak;
-        let past = (device.shared().textures.first_moves).register_bytes(
+        let past = (device.shared().textures.first_moves).register_upload(
             keeper,
             self.at(range.start),
             (mirror.raw, range.start),
@@ -4359,9 +4361,9 @@ impl Buffer {
     }
 
     /// Copy `range` of the bytes of `source` (a `VkBuffer`, and where the buffer's byte
-    /// `range.start` lies in it) into the buffer's own, by the device's next submission, before
-    /// any of its commands, after the commands before it on its `VkQueue`, as
-    /// [`upload`](Self::upload) copies, the submission holding `held` until it completed: a
+    /// `range.start` lies in it) into the buffer's own, by the device's next submission whose
+    /// commands may reach the buffer (or an internal one), before any of its commands, after the
+    /// commands before it on its `VkQueue`, as [`upload`](Self::upload) copies, the submission holding `held` until it completed: a
     /// two-copy buffer's copy in from the caller's pages (`managed_copy.rs`), counted
     /// (`WorkCounts::managed_bytes_copied_in`), or from staging buffers of a host copy's bytes
     /// ([`upload_now`](Self::upload_now)). Where `bounded`, past the bound of what is staged, a
@@ -4379,7 +4381,7 @@ impl Buffer {
         s.staged.store(true, Ordering::Relaxed);
         let weak: Weak<BufferShared> = Arc::downgrade(s);
         let keeper: Weak<dyn Filled> = weak;
-        let past = (device.shared().textures.first_moves).register_bytes(
+        let past = (device.shared().textures.first_moves).register_upload(
             keeper,
             self.at(range.start),
             source,

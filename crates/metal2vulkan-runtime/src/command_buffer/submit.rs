@@ -693,6 +693,7 @@ impl CommandBufferShared {
             },
             false => FillTake::Owned {
                 owner_of: &owner_of,
+                reaches: &reaches,
             },
         };
         let hold = || crate::heap_sets::hold(device);

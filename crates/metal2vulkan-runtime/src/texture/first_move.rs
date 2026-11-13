@@ -59,7 +59,11 @@
 //!   its start, after them. There a batch takes only the fills of memory its commands may reach,
 //!   of the device's own buffers, and every fill where it takes a move of an image in memory
 //!   another resource owns, or a staged copy ([`FillTake::Reached`]); the rest wait for a batch
-//!   that may reach them (`device/staging.rs`).
+//!   that may reach them (`device/staging.rs`). On every device an upload into a buffer the
+//!   program's command buffers may have read already (a `Managed` buffer's copy in,
+//!   [`FirstMoves::register_upload`]) goes only with a batch whose commands may reach the buffer,
+//!   or an internal submission: so it lands after the command buffers before that batch on its
+//!   `VkQueue`, never under one of another queue still to read the bytes it replaces.
 //! - **Staged copies**. `replace_region` of a texture whose `VkImage` is its own for good (in
 //!   memory of its own, or a heap's own pages) and takes no host or staging-queue copies (those
 //!   are queued for the staging queue instead, whose submission of them every submission of the
@@ -760,6 +764,12 @@ pub(crate) struct FirstFill {
     /// What owns that memory (`used_resources::owner_of`), as the batch that took it last found
     /// it ([`FillTake::Reached`]); `None` where none did, or none owns it.
     owner: Option<ObjectId>,
+    /// An upload into a buffer the program's command buffers may have read already
+    /// ([`FirstMoves::register_upload`]): a batch takes it only where its commands may reach the
+    /// memory, so it lands on that batch's `VkQueue`, after the command buffers before it there,
+    /// never because the batch takes every fill ([`Taken::every_fill`]); an internal
+    /// submission's take ([`FillTake::All`]) takes it too.
+    reached_only: bool,
 }
 
 impl FirstFill {
@@ -851,6 +861,7 @@ impl FirstFill {
             acquire: None,
             key: None,
             owner: None,
+            reached_only: false,
         }
     }
 
@@ -1005,9 +1016,12 @@ pub(crate) enum FillTake<'r> {
     /// handle's.
     All,
     /// Every one, knowing what owns the memory of what it takes by `owner_of` (the owner under a
-    /// key, `used_resources::owner_of`): a batch's on a device without a fill queue.
+    /// key, `used_resources::owner_of`), but an upload whose memory its commands do not reach, as
+    /// `reaches` answers for what owns it (`FirstFill::reached_only`): a batch's on a device
+    /// without a fill queue.
     Owned {
         owner_of: &'r dyn Fn(ResourceKey) -> Option<ObjectId>,
+        reaches: &'r dyn Fn(ObjectId) -> bool,
     },
     /// A batch's on a device with a fill queue (the module docs): the fills of memory its commands
     /// may reach, as `reaches` answers for what owns it (`owner_of` naming the owner under a
@@ -1025,7 +1039,9 @@ impl FillTake<'_> {
     fn owner_of(&self) -> Option<&dyn Fn(ResourceKey) -> Option<ObjectId>> {
         match self {
             FillTake::All => None,
-            FillTake::Owned { owner_of } | FillTake::Reached { owner_of, .. } => Some(*owner_of),
+            FillTake::Owned { owner_of, .. } | FillTake::Reached { owner_of, .. } => {
+                Some(*owner_of)
+            }
         }
     }
 }
@@ -1304,6 +1320,34 @@ impl FirstMoves {
         staging: Box<dyn Any + Send + Sync>,
     ) -> bool {
         let fill = FirstFill::bytes(buffer, start, source, length, staging).keyed(&keeper);
+        self.register_fill_of_bytes(keeper, fill)
+    }
+
+    /// As [`register_bytes`](Self::register_bytes), of an upload into a buffer the program's
+    /// command buffers may have read already (a `Managed` buffer's copy in, `managed.rs`): a
+    /// batch takes it only where its commands may reach the buffer's memory
+    /// (`FirstFill::reached_only`), so it lands after the command buffers before that batch on
+    /// its `VkQueue`, which may still read the bytes it replaces, and before that batch's
+    /// commands. A batch of another queue that reaches none of the buffer leaves it waiting.
+    pub(crate) fn register_upload(
+        &self,
+        keeper: Weak<dyn Filled>,
+        (buffer, start): (vk::Buffer, u64),
+        source: (vk::Buffer, u64),
+        length: u64,
+        staging: Box<dyn Any + Send + Sync>,
+    ) -> bool {
+        let fill = FirstFill::bytes(buffer, start, source, length, staging).keyed(&keeper);
+        let fill = FirstFill {
+            reached_only: true,
+            ..fill
+        };
+        self.register_fill_of_bytes(keeper, fill)
+    }
+
+    /// Register `fill`, a copy of staged bytes into `keeper`'s buffer: whether the copies staged
+    /// now passed their bound.
+    fn register_fill_of_bytes(&self, keeper: Weak<dyn Filled>, fill: FirstFill) -> bool {
         let _order = self.registration_place();
         let mut waiting = lock(&self.waiting);
         waiting.push(Waiting::Fill(keeper, fill));
@@ -1468,11 +1512,16 @@ impl FirstMoves {
                     Sorted::Fill(weak, mut fill, buffer) => {
                         fill.owner =
                             (fills.owner_of()).and_then(|owner_of| fill.key.and_then(owner_of));
-                        let taken = every_fill
-                            || match (&fills, fill.owner) {
-                                (FillTake::Reached { reaches, .. }, Some(owner)) => reaches(owner),
-                                _ => true,
-                            };
+                        let reached = match (&fills, fill.owner) {
+                            (FillTake::Reached { reaches, .. }, Some(owner)) => reaches(owner),
+                            (FillTake::Owned { reaches, .. }, Some(owner)) if fill.reached_only => {
+                                reaches(owner)
+                            }
+                            _ => true,
+                        };
+                        // An upload goes only with a batch that may reach its memory, whatever
+                        // else the batch takes.
+                        let taken = reached || (every_fill && !fill.reached_only);
                         match taken {
                             // The submission holds the buffer's memory; the buffer goes as the
                             // program lets go of it, once the lock is free.
@@ -1501,13 +1550,15 @@ impl FirstMoves {
 
     /// Whether a batch whose commands name nothing takes no work waiting: none waits but fills
     /// of memory whose key `named_only` says only a batch that may reach it takes
-    /// ([`FillTake::Reached`]). A command buffer that needs no GPU work then goes with no
+    /// ([`FillTake::Reached`]), and uploads, which only such a batch takes on any device
+    /// (`FirstFill::reached_only`). A command buffer that needs no GPU work then goes with no
     /// submission, and one that finds work waiting carries it as before
     /// (`command_buffer/submit.rs`).
     pub(crate) fn none_waiting_but(&self, named_only: impl Fn(ResourceKey) -> bool) -> bool {
-        lock(&self.waiting).iter().all(
-            |entry| matches!(entry, Waiting::Fill(_, fill) if fill.key.is_some_and(&named_only)),
-        )
+        lock(&self.waiting).iter().all(|entry| {
+            matches!(entry, Waiting::Fill(_, fill)
+                if fill.reached_only || fill.key.is_some_and(&named_only))
+        })
     }
 
     /// Let go of the fills and copies that wait for what is at `keeper` (the address of what
@@ -2518,6 +2569,78 @@ mod tests {
         assert!(moves.none_waiting_but(|_| false));
     }
 
+    /// As [`keyed_fill`], an upload into a buffer the program may have read already
+    /// (`FirstMoves::register_upload`).
+    fn upload(moves: &FirstMoves, raw: u64, key: ResourceKey) -> Arc<Unit> {
+        let buffer = keyed_fill(moves, raw, Some(key));
+        if let Some(Waiting::Fill(_, fill)) = lock(&moves.waiting).last_mut() {
+            fill.reached_only = true;
+        }
+        buffer
+    }
+
+    /// An upload goes only with a batch whose commands may reach its memory, on a device with a
+    /// fill queue or without one, even where the batch takes every other fill (a move of an
+    /// image in another resource's memory, or a device without a fill queue); a batch that
+    /// reaches none of it leaves it waiting, and so does one that needs no GPU work; an internal
+    /// submission takes it.
+    #[test]
+    fn an_upload_goes_only_with_a_batch_that_reaches_its_buffer() {
+        let moves = FirstMoves::default();
+        let (used, unused) = (ResourceKey::new(), ResourceKey::new());
+        let (used_id, unused_id) = (ObjectId::new(), ObjectId::new());
+        let owner_of = |key: ResourceKey| match key == used {
+            true => Some(used_id),
+            false => Some(unused_id),
+        };
+        let reaches = |of: ObjectId| of == used_id;
+        let none = |_: ObjectId| false;
+        // Without a fill queue: a batch that reaches the other buffer takes every fill but the
+        // upload.
+        let _buffers = [
+            upload(&moves, 1, unused),
+            keyed_fill(&moves, 2, Some(used)),
+            upload(&moves, 3, used),
+        ];
+        let fills = FillTake::Owned {
+            owner_of: &owner_of,
+            reaches: &reaches,
+        };
+        let taken = moves.take_with(|_| true, fills, || None, |_| true);
+        assert!(taken.every_fill());
+        assert_eq!(filled(&taken), [2, 3]);
+        drop(taken.submitted(None));
+        assert!(moves.none_waiting_but(|_| false), "only an upload waits");
+        // With a fill queue, a move of an image in another resource's memory takes every fill but
+        // the upload no command of the batch reaches.
+        let placed = Arc::new(Placed(Mutex::new(vec![first(4, false)])));
+        let weak: Weak<Placed> = Arc::downgrade(&placed);
+        moves.register(weak);
+        let fills = FillTake::Reached {
+            owner_of: &owner_of,
+            reaches: &none,
+        };
+        let taken = moves.take_with(|_| true, fills, || None, |_| true);
+        assert!(taken.every_fill());
+        assert!(filled(&taken).is_empty());
+        drop(taken.submitted(None));
+        // A batch that reaches it takes it.
+        let reaches_unused = |of: ObjectId| of == unused_id;
+        let fills = FillTake::Owned {
+            owner_of: &owner_of,
+            reaches: &reaches_unused,
+        };
+        let taken = moves.take_with(|_| true, fills, || None, |_| true);
+        assert_eq!(filled(&taken), [1]);
+        drop(taken.submitted(None));
+        // An internal submission takes one whatever reaches it.
+        let _later = upload(&moves, 5, unused);
+        let taken = moves.take(|_| true);
+        assert_eq!(filled(&taken), [5]);
+        drop(taken.submitted(None));
+        assert!(moves.none_waiting_but(|_| false));
+    }
+
     /// An image of the program's whose uses name its key, holding its move.
     struct Owned(Mutex<Vec<FirstMove>>, ResourceKey);
 
@@ -2561,6 +2684,7 @@ mod tests {
         let take = || {
             let fills = FillTake::Owned {
                 owner_of: &owner_of,
+                reaches: &|_| true,
             };
             moves.take_with(|_| true, fills, || None, |_| true)
         };

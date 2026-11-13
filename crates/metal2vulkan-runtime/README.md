@@ -450,7 +450,10 @@ after it, and 0 of 80 with the device dropped first
   command reads and writes, and the caller's pages, which `contents` answers. The pages are
   copied in as the buffer is made and by a rebind (whole), before any command of a command
   buffer committed after the call, and a `did_modify_range`'s range as the pages hold it at the
-  device's next commit (copied there on the CPU into staging buffers); a CPU write no
+  next commit of a command buffer that uses the buffer (copied there on the CPU into staging
+  buffers), copied in on that command buffer's queue after the command buffers before it there,
+  so a later range never lands under an earlier command buffer still to read the buffer; a CPU
+  write no
   `did_modify_range` names is not seen by the GPU, as on a Mac with a discrete GPU. A blit's
   `synchronize_resource` copies the GPU's copy out to the pages in its command buffer's order.
   The copies run from an import of the pages where the device makes one, else (the gate refused

@@ -3344,6 +3344,22 @@ impl CommandBuffer {
         self.commit_as("commit_failed", Some(failure), Hand::Wake)
     }
 
+    /// Whether its commands may use `buffer`'s memory, for the copies in of a `Managed` buffer's
+    /// ranges at its commit (`managed.rs`): where a command may reach memory no use names, where
+    /// its last encoder's end is still with the device's lowering thread (its uses not read yet),
+    /// where nothing owns the buffer's key, or where its encoders' uses name the buffer or made it
+    /// resident (`State::uses`).
+    fn may_use(&self, buffer: &Buffer) -> bool {
+        let shared = self.0.device.shared();
+        let Some(owner) = crate::used_resources::owner_of(shared, buffer.identity().key) else {
+            return true;
+        };
+        let state = self.state();
+        state.reaches_unnamed
+            || (state.ending.is_some() && !state.end_lowered)
+            || state.uses(shared, None, &[owner])
+    }
+
     /// [`commit`](Self::commit) for `call`, or, with `failure`,
     /// [`commit_failed`](Self::commit_failed), its batches handed to the scheduler as `hand` says.
     fn commit_as(
@@ -3352,10 +3368,11 @@ impl CommandBuffer {
         failure: Option<CommitFailure>,
         hand: Hand,
     ) -> Result<(), Error> {
-        // The bytes of the ranges `did_modify_range` noted since the last commit, as the host
-        // copies hold them now, for this command buffer's submission or one before it
-        // (`managed.rs`).
-        self.0.device.shared().modified.take_at_commit();
+        // The bytes of the ranges `did_modify_range` noted of the buffers this command buffer may
+        // use, as the host copies hold them now, for its submission, or one before it, that may
+        // use them (`managed.rs`).
+        let modified = &self.0.device.shared().modified;
+        modified.take_at_commit(|buffer| self.may_use(buffer));
         // Left to wait for the last render encoder's end, where its call left it to the device's
         // lowering thread and the thread has not lowered it, or for the commits left so.
         if failure.is_none() && self.queue_commit(call, hand)? {

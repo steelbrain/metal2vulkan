@@ -524,11 +524,15 @@ On a discrete GPU (no unified memory), a `Managed` no-copy buffer is two copies,
 device-local memory, which every command reads and writes, at the buffer's `gpu_address`, and the
 caller's pages, which `contents` answers. The pages reach the GPU's copy as the buffer is made
 and at a rebind (whole), each before any command of a command buffer committed after the call,
-and a `did_modify_range`'s range as the pages hold it at the device's next commit, before any
-command of that command buffer: a CPU write of the range after that commit reaches no command
-buffer committed before it, however late the GPU reaches it, as on an AMD Radeon Pro 5300M
-(macOS 26.7.1). That commit copies each range on the CPU into staging buffers, a cost of the
-range's bytes. A CPU write that no `did_modify_range` names is not seen by the GPU. A blit encoder's `synchronize_resource` copies the GPU's copy out to the pages in its
+and a `did_modify_range`'s range as the pages hold it at the next commit of a command buffer
+that uses the buffer (its encoders' uses or `use_resource` name it, or a command reaches memory
+no use names), before any command of that command buffer, on its queue after the command buffers
+before it there: a CPU write of the range after that commit reaches no command buffer committed
+before it, however late the GPU reaches it, as on an AMD Radeon Pro 5300M (macOS 26.7.1), and the
+copy in of a later range never lands under an earlier command buffer still to read the buffer.
+A commit of a command buffer that uses none of the buffer leaves the range for the next that
+does. That commit copies each range on the CPU into staging buffers, a cost of the range's
+bytes. A CPU write that no `did_modify_range` names is not seen by the GPU. A blit encoder's `synchronize_resource` copies the GPU's copy out to the pages in its
 command buffer's order, which the CPU sees once the command buffer completed. The copies run
 from an import of the pages where the device makes one (never a copy of them), else through
 staging buffers the runtime frees once their work completed, at most 256 MiB staged ahead

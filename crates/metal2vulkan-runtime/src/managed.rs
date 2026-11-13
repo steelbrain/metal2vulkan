@@ -15,17 +15,25 @@
 //! - **Without unified memory** (a discrete GPU), it has two copies, as Metal's managed resources
 //!   have on such a device: its own bytes in device-local memory, which the GPU uses, and a host
 //!   copy in such cached memory, which `contents` maps (`buffer.rs`'s `Mirror`). `did_modify_range`
-//!   notes the range ([`Modified`]); the device's next commit, of a command buffer of any of its
-//!   queues, takes the range's bytes as the host copy holds them then, before that call returns,
-//!   and copies them to the device's own by the next submission, before any of its commands
-//!   (`synchronize_resource` copies the buffer back where the command buffer runs it). A program
+//!   notes the range ([`Modified`]); the next commit of a command buffer whose commands may use
+//!   the buffer (its encoders' uses name it, `use_resource` made it resident, or a command may
+//!   reach memory no use names), of any of the device's queues, takes the range's bytes as the
+//!   host copy holds them then, before that call returns, and copies them to the device's own by
+//!   the next submission whose commands may use the buffer, before any of them, after the
+//!   command buffers before it on its `VkQueue` (`texture/first_move.rs`'s `register_upload`):
+//!   Metal's shape, the upload made before the GPU uses the buffer, on the user's own queue. A
+//!   commit that uses none of it leaves the range noted, and its submission leaves the copy
+//!   waiting, so the copy never lands under a command buffer of another queue still to read the
+//!   bytes it replaces (`synchronize_resource` copies the buffer back where the command buffer
+//!   runs it). A program
 //!   that skips them sees stale bytes there, as on a Mac with a discrete GPU. A GPU writing
 //!   host-cached memory across the bus ran a kernel's writes at 0.03 to 0.1 GB/s on an RTX 3090
 //!   and an RTX 5080, where a device-local write and a copy back ran at several GB/s. A `Managed`
 //!   no-copy buffer is two copies the same way, its host copy the caller's pages
 //!   (`managed_copy.rs`).
-//! - **The bytes a command buffer reads** are the host copy's at the commit after the
-//!   `did_modify_range`, Metal's answer on a Mac with a discrete GPU: on an AMD Radeon Pro 5300M
+//! - **The bytes a command buffer reads** are the host copy's at the commit, after the
+//!   `did_modify_range`, of the first command buffer that may use the buffer, Metal's answer on a
+//!   Mac with a discrete GPU: on an AMD Radeon Pro 5300M
 //!   (macOS 26.7.1), a kernel copying a 4 KiB `Managed` buffer behind a spin kernel read the CPU's
 //!   write made before the commit (after the call, and with the command buffer encoded before the
 //!   write), and not one made 30 ms after the commit while the GPU still spun. On an Intel UHD
@@ -47,8 +55,9 @@ use std::sync::Mutex;
 impl Buffer {
     /// `didModifyRange:`: the CPU wrote `range` of a managed buffer; command buffers committed
     /// after this call see it. Where the buffer has a host copy (a device without unified memory),
-    /// the range's bytes are taken from it at the device's next commit and copied to its own bytes
-    /// by the submission after it, before any of its commands (the module docs); the call does not
+    /// the range's bytes are taken from it at the next commit of a command buffer that may use the
+    /// buffer and copied to its own bytes by that command buffer's submission, or one before it
+    /// that may use the buffer, before any of its commands (the module docs); the call does not
     /// wait for the GPU. On a buffer of another storage mode it does nothing, whatever the range,
     /// as plain Metal does (RT2 `managed.didmodify.shared`: `Shared` and `Private` buffers, in
     /// range and past it; Metal's validation stops it). Refused for a managed buffer's range past
@@ -72,7 +81,7 @@ impl Buffer {
             ));
         }
         // A two-copy buffer over the caller's pages (`managed_copy.rs`): the range the program
-        // asked, which the next commit copies in.
+        // asked, which the next commit that may use the buffer copies in.
         if self.caller_copy().is_some() && !range.is_empty() {
             let counts = &self.device().shared().counts;
             counts.managed_asked(range.end - range.start, true);
@@ -81,8 +90,8 @@ impl Buffer {
         Ok(())
     }
 
-    /// The CPU wrote `range` of the buffer's host copy, where it has one: the device's next
-    /// commit takes the bytes and copies them in ([`Modified`]).
+    /// The CPU wrote `range` of the buffer's host copy, where it has one: the next commit of a
+    /// command buffer that may use the buffer takes the bytes and copies them in ([`Modified`]).
     pub(super) fn modified(&self, range: Range<u64>) {
         if self.mirror().is_none() || range.is_empty() {
             return;
@@ -92,35 +101,78 @@ impl Buffer {
 }
 
 /// The ranges of buffers with a host copy the CPU wrote and named (`did_modify_range`, a CPU
-/// write through a texture over the buffer) since the device's last commit: the next commit
-/// copies each in, as the host copy holds it then (the module docs). A buffer gone meanwhile
-/// takes its ranges with it.
+/// write through a texture over the buffer) that no commit of a command buffer that may use
+/// their buffer took yet: the next such commit copies each in, as the host copy holds it then
+/// (the module docs). A buffer gone meanwhile takes its ranges with it.
 #[derive(Default)]
-pub(super) struct Modified(Mutex<Vec<(WeakBuffer, Range<u64>)>>);
+pub(super) struct Modified(Mutex<Noted<WeakBuffer>>);
 
 impl Modified {
     /// Note `range` of `buffer`: once, where a range noted of it already holds it.
     fn note(&self, buffer: &Buffer, range: Range<u64>) {
-        let mut noted = lock(&self.0);
-        let held = noted.iter().any(|(of, at)| {
-            at.start <= range.start
-                && range.end <= at.end
-                && of.upgrade().is_some_and(|of| of == *buffer)
-        });
-        if !held {
-            noted.push((buffer.downgrade(), range));
-        }
+        let same = |of: &WeakBuffer| of.upgrade().is_some_and(|of| of == *buffer);
+        lock(&self.0).note(buffer.downgrade(), range, same);
     }
 
-    /// A commit: take every range noted so far and copy its bytes in as its host copy holds them
-    /// now (staged, `Buffer::upload_now`), before the commit's command buffer is submitted, so the
-    /// submission that carries its work, or one before it, copies them in.
-    pub(crate) fn take_at_commit(&self) {
-        let noted: Vec<(WeakBuffer, Range<u64>)> = lock(&self.0).drain(..).collect();
-        for (buffer, range) in noted {
+    /// A commit of a command buffer whose commands may use a buffer as `uses` answers: take the
+    /// ranges noted of those it may use, and copy their bytes in as their host copies hold them
+    /// now (staged, `Buffer::upload_now`), before the command buffer is submitted, so its own
+    /// submission that may use the buffer, or one before it that may, copies them in. The ranges
+    /// of the rest stay noted, in their order.
+    pub(crate) fn take_at_commit(&self, uses: impl Fn(&Buffer) -> bool) {
+        // Each buffer read here, let go of once the lock is free.
+        let mut read = Vec::new();
+        let taken = lock(&self.0).take(|of| {
+            let buffer = of.upgrade()?;
+            let used = uses(&buffer);
+            read.push(buffer);
+            Some(used)
+        });
+        for (buffer, range) in taken {
             if let Some(buffer) = buffer.upgrade() {
                 buffer.upload_now(range);
             }
         }
+        drop(read);
+    }
+}
+
+/// Ranges of buffers named by `B`, in the order they were noted ([`Modified`]).
+pub(super) struct Noted<B>(Vec<(B, Range<u64>)>);
+
+impl<B> Default for Noted<B> {
+    fn default() -> Self {
+        Noted(Vec::new())
+    }
+}
+
+impl<B> Noted<B> {
+    /// Note `range` of `of`: once, where a range noted of a buffer `same` says is `of` already
+    /// holds it.
+    pub(super) fn note(&mut self, of: B, range: Range<u64>, same: impl Fn(&B) -> bool) {
+        let held = (self.0.iter())
+            .any(|(noted, at)| at.start <= range.start && range.end <= at.end && same(noted));
+        if !held {
+            self.0.push((of, range));
+        }
+    }
+
+    /// The ranges whose buffer `taken` answers true for, in their order; those it answers
+    /// `None` for (their buffer gone) go, and the rest stay, in their order.
+    pub(super) fn take(
+        &mut self,
+        mut taken: impl FnMut(&B) -> Option<bool>,
+    ) -> Vec<(B, Range<u64>)> {
+        let mut out = Vec::new();
+        let mut kept = Vec::new();
+        for (of, range) in self.0.drain(..) {
+            match taken(&of) {
+                Some(true) => out.push((of, range)),
+                Some(false) => kept.push((of, range)),
+                None => {}
+            }
+        }
+        self.0 = kept;
+        out
     }
 }
