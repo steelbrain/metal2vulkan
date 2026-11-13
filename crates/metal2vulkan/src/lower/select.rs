@@ -1296,7 +1296,7 @@ fn select_entry(
     // The specialized notes' clauses are held until `finish` resolves them, and the facts until it
     // moves them into the plan.
     let noted = cx.noted;
-    let result = selected.and_then(|sel| finish(cx, sel, &mut fact_bytes, m));
+    let result = selected.and_then(|sel| finish(cx, sel, widest_pin, &mut fact_bytes, m));
     m.release(noted);
     m.release(fact_bytes.charged());
     m.release(bytes);
@@ -1610,6 +1610,7 @@ fn select_body(
 fn finish(
     mut cx: SelectCx<'_>,
     mut sel: BodySelection,
+    widest_pin: simd::WidestPin,
     fact_bytes: &mut Growth,
     m: &mut Meter,
 ) -> Result<Plan, Error> {
