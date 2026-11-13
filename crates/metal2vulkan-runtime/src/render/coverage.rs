@@ -295,7 +295,7 @@ impl SparePools {
             .into_iter()
             .collect();
         all.extend(pools.full.drain(..).map(|(pool, _)| pool));
-        all.extend(pools.spares.drain(..));
+        all.append(&mut pools.spares);
         for pool in all {
             // SAFETY: the caller's.
             unsafe { crate::release::object(device, pool) };
