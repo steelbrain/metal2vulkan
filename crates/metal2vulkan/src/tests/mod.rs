@@ -71,6 +71,7 @@ mod engine_generic_pointers;
 mod engine_gep_index;
 mod engine_global_builtins;
 mod engine_graphics_binder;
+mod engine_half_hold;
 mod engine_half_moves;
 mod engine_half_storage_notes;
 mod engine_handles;

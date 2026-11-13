@@ -28,9 +28,9 @@
 //!   of exact halves whose every use narrows it to 16 bits (a `half` computed in `float` and
 //!   rounded) is the device's 16-bit instruction. A sum, difference and product are correctly
 //!   rounded under the float controls, the same `half` as the `float` one rounded once (`f32`
-//!   carries at least `2p + 2` bits); a dot product and a `mix` are within the device's precision
-//!   bounds, which `pipeline/compile.rs` records as `PrecisionNote::DeviceArithmetic`
-//!   ([`rounds_in_16_bits`]).
+//!   carries at least `2p + 2` bits); a dot product and a `mix` are the device's 16-bit `OpDot`
+//!   and `FMix`, within the bounds `PrecisionNote::NativeDot` and `PrecisionNote::NativeMix`
+//!   record for them, which every `half` one records.
 //! - A comparison, a NaN or infinity test, or a conversion to an integer of exact halves reads
 //!   their twins.
 //!
@@ -254,23 +254,6 @@ fn float_operands(m: &TypedModule, inst: &Inst) -> Vec<Value> {
         }
     });
     out
-}
-
-/// Whether module `m` computes a dot product or a `mix` at 16 bits, what [`hold`] moves to 16 bits
-/// from `float` within the device's precision bounds (`PrecisionNote::DeviceArithmetic`). One pass
-/// over the instructions.
-pub fn rounds_in_16_bits(m: &TypedModule) -> bool {
-    m.blocks.iter().flat_map(|b| &b.insts).any(|n| {
-        let bounded = matches!(
-            n.inst,
-            Inst::Binary { op: BinOp::Dot, .. }
-                | Inst::Glsl {
-                    op: GlslOp::FMix,
-                    ..
-                }
-        );
-        bounded && n.result.is_some_and(|r| is_f16(m, r))
-    })
 }
 
 /// A variable [`hold`] may hold at 16 bits.

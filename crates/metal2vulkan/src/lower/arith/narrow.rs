@@ -24,7 +24,10 @@
 //! that instruction between exact conversions instead, with no rounding here (`ops::f16_binary`):
 //! where it is measured to be (`DriverDeviation::MetalHalfArithmetic`), and under the float
 //! controls of [`QuantizeForm::Controlled`], which make it so by the Vulkan spec and which the
-//! entry then declares ([`computes_in_16_bits`]). For `+ - * /` and square root the double
+//! entry then declares ([`computes_in_16_bits`]); there the emitted module holds every exact
+//! `half` at 16 bits, its moves, minimums, maximums and clamps, its demotion variables and thread
+//! arrays, and its `dot` and `mix`, 16-bit instructions (`spirv::half_hold`). For `+ - * /` and
+//! square root the double
 //! rounding (the exact result to `f32`, then to the narrow format) is innocuous, because `f32`
 //! carries at least `2p + 2` significand bits for both formats; a `half` fused multiply-add's is
 //! not, so it is the device's 16-bit one where that is Metal's, and else the device's `f32` one

@@ -2458,8 +2458,9 @@ fn float_call_of(
     // `dot(float2(a, b), float2(b, c))`), noted `NativeMix` and `NativeDot`, Vulkan's bounds
     // inherited from `x * (1 - a) + y * a` and the sum of products. Where the profile's `float`
     // functions are Metal's, a `float` one reaches Metal's own `mix` and `dot`; a `half` one is
-    // the instruction on its `float` container, rounded once, noted. Their NaN is the device's,
-    // noted as for any function.
+    // the instruction on its `float` container, rounded once, or the 16-bit instruction where the
+    // module holds its operands at 16 bits (`spirv::half_hold`), noted. Their NaN is the
+    // device's, noted as for any function.
     if matches!(op, FloatFn::Mix | FloatFn::Dot) {
         let fmt = f.float_fmt()?;
         let own = metal_functions && fmt == FloatFmt::F32;

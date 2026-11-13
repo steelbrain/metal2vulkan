@@ -2038,23 +2038,30 @@ pub enum PrecisionNote {
     /// whose first two operands are NaNs beside a `+0`). Validation derives no tolerance from it.
     NativeMinMax,
     /// Native device maths: Metal's `dot` on `float` and `half` is the device's `OpDot` (a `half`
-    /// one summed in `float` and rounded once to `half`), not Metal's fused chain of its products,
-    /// on every device but for a `float` one where the device's functions are Metal's own
-    /// (MoltenVK, Metal's own `dot`). **Recorded bound:** a `float` `dot` of `n`
-    /// lanes within `(3n - 1) * 2^-24 * sum |a_i * b_i|` of Metal's chain, plus `n * 2^-126` where
-    /// a product is an `f32` denormal the device keeps (Vulkan's `OpDot` inherits `OpFMul`'s and
-    /// `OpFAdd`'s rounding, `2n - 1` roundings, where Metal's chain rounds `n` times); a `half`
-    /// one within `(n + 3) * 2^-11 * sum |a_i * b_i| + (n + 2) * 2^-25` of Metal's chain of `half`
-    /// fused multiply-adds. Validation derives no tolerance from it.
+    /// one summed in `float` and rounded once to `half`, or the device's 16-bit `OpDot` where the
+    /// module computes `half` in 16 bits under the 16-bit float controls and holds its operands
+    /// there, `spirv::half_hold`), not Metal's fused chain of its products, on every device but
+    /// for a `float` one where the device's functions are Metal's own (MoltenVK, Metal's own
+    /// `dot`). **Recorded bound:** a `float` `dot` of `n` lanes within
+    /// `(3n - 1) * 2^-24 * sum |a_i * b_i|` of Metal's chain, plus `n * 2^-126` where a product is
+    /// an `f32` denormal the device keeps (Vulkan's `OpDot` inherits `OpFMul`'s and `OpFAdd`'s
+    /// rounding, `2n - 1` roundings, where Metal's chain rounds `n` times); a `half` one rounded
+    /// from `float` within `(n + 3) * 2^-11 * sum |a_i * b_i| + (n + 2) * 2^-25` of Metal's chain of
+    /// `half` fused multiply-adds, and a 16-bit one within
+    /// `(3n - 1) * 2^-11 * sum |a_i * b_i| + (3n - 1) * 2^-25` (`2n - 1` correctly rounded 16-bit
+    /// roundings under the controls). Validation derives no tolerance from it.
     NativeDot,
     /// Native device maths: Metal's `mix(x, y, t)` on `float` and `half` is the device's `FMix`
-    /// (a `half` one computed in `float` and rounded once to `half`), not Metal's
-    /// `fma(t, y, fma(-t, x, x))`, on every device but for a `float` one where the device's
-    /// functions are Metal's own (MoltenVK, Metal's own `mix`). **Recorded bound:** a `float`
-    /// result within `2^-21 * (|x * (1 - t)| + |y * t|)` of Metal's (Vulkan's `FMix` inherits
-    /// `x * (1 - t) + y * t`'s rounding, four roundings, where Metal's rounds twice); a `half`
-    /// one within `3 * 2^-10 * (|x * (1 - t)| + |y * t|) + 2^-23`. Validation derives no
-    /// tolerance from it.
+    /// (a `half` one computed in `float` and rounded once to `half`, or the device's 16-bit `FMix`
+    /// where the module computes `half` in 16 bits under the 16-bit float controls and holds its
+    /// operands there, `spirv::half_hold`), not Metal's `fma(t, y, fma(-t, x, x))`, on every
+    /// device but for a `float` one where the device's functions are Metal's own (MoltenVK,
+    /// Metal's own `mix`). **Recorded bound:** a `float` result within
+    /// `2^-21 * (|x * (1 - t)| + |y * t|)` of Metal's (Vulkan's `FMix` inherits
+    /// `x * (1 - t) + y * t`'s rounding, four roundings, where Metal's rounds twice); a `half` one
+    /// rounded from `float` within `3 * 2^-10 * (|x * (1 - t)| + |y * t|) + 2^-23`, and a 16-bit
+    /// one within `2^-8 * (|x * (1 - t)| + |y * t|) + 2^-22`. Validation derives no tolerance
+    /// from it.
     NativeMix,
     /// Native device maths (a conversion): `air.pack` or `air.unpack` of a normalized format is
     /// the device's: `GLSL.std.450`'s `PackUnorm4x8`, `PackSnorm4x8`, `PackUnorm2x16` and

@@ -4689,12 +4689,14 @@ bound.
   answers the second NaN. MSL leaves a NaN operand under fast math undefined (section 8.1).
 - `metal2vulkan-degrade-native-dot` (precision). `PrecisionNote::NativeDot`: Native device maths:
   Metal's `dot` on `float` and `half` is the device's `OpDot` (a `half` one summed in `float` and
-  rounded once to `half`), not Metal's fused chain of its products, on every device but for a
-  `float` one where the device's functions are Metal's own (MoltenVK).
+  rounded once to `half`, or the device's 16-bit `OpDot` where the module computes `half` in 16
+  bits under the 16-bit float controls), not Metal's fused chain of its products, on every device
+  but for a `float` one where the device's functions are Metal's own (MoltenVK).
 - `metal2vulkan-degrade-native-mix` (precision). `PrecisionNote::NativeMix`: Native device maths:
   Metal's `mix(x, y, t)` on `float` and `half` is the device's `FMix` (a `half` one computed in
-  `float` and rounded once to `half`), not Metal's `fma(t, y, fma(-t, x, x))`, on every device but
-  for a `float` one where the device's functions are Metal's own (MoltenVK).
+  `float` and rounded once to `half`, or the device's 16-bit `FMix` where the module computes
+  `half` in 16 bits under the 16-bit float controls), not Metal's `fma(t, y, fma(-t, x, x))`, on
+  every device but for a `float` one where the device's functions are Metal's own (MoltenVK).
 - `metal2vulkan-degrade-native-logic-operation` (precision).
   `PrecisionNote::NativeLogicOperation`: A render pipeline's private logic operation (other than
   copy and no-op) is drawn by the device's `logicOp` into an `RGB10A2Unorm`, `BGR10A2Unorm` or
