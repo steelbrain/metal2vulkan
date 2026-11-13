@@ -735,6 +735,7 @@ emulated, one run each (compile times varied up to twice between runs):
 | `0 32 64`  |            7,050 |              40 |              6,652 |      282 |          1.061 |    0.107 |
 | `1 16 16`  |            1,042 |              46 |                971 |      300 |          0.070 |    0.015 |
 | `1 16 64`  |            4,066 |              46 |             11,987 |    2,585 |          0.319 |    0.074 |
+| `0 48 8`   |            1,362 |              56 |                458 |       38 |          0.168 |    0.021 |
 | `1 48 32`  |            5,186 |              78 |             25,799 |    1,277 |          1.985 |    0.081 |
 
 At 34 estimated words or fewer the two compile alike and the pinned kernel runs as fast or
