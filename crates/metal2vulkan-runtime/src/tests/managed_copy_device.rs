@@ -35,11 +35,12 @@
 
 use super::blit_holds::{device, options, Scratch, WAIT};
 use super::host_ram_device::gate;
+use super::layer_claim::Watched;
 use crate::{
     BlitCommandEncoder, BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue,
     CpuCacheMode, Deallocator, Device, DeviceOptions, HazardTrackingMode, HostBacking, HostMemory,
-    ImportRequest, MessageSeverity, MessageSink, Origin, Region, ResourceOptions, ResourceRef,
-    Size, StorageMode, TextureDescriptor, WorkCounts,
+    ImportRequest, Origin, Region, ResourceOptions, ResourceRef, Size, StorageMode,
+    TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::metal::PixelFormat;
 use std::ptr::NonNull;
@@ -948,9 +949,9 @@ fn rounds(
 /// the command buffers before it on its queue: so each command buffer reads the bytes its host
 /// copy held at its commit, none written after it, and none of a later round's, whose copy in
 /// never lands under it. Every fourth round lets its buffer go with its command buffer pending.
-/// No command buffer fails, no message the device hears is an error (a validation layer's, where
-/// `VK_INSTANCE_LAYERS` loads one), and the staging buffers go once all completed. Printed
-/// (`MANAGED-ROUNDS`): the rounds that read other bytes, and the messages.
+/// No command buffer fails, the validation layer the device asks for reports nothing
+/// (`layer_claim.rs`, which passes its whole-pool report of a host query reset), and the staging
+/// buffers go once all completed. Printed (`MANAGED-ROUNDS`): the rounds that read other bytes.
 fn named_rounds(route: Route, two: bool) {
     let generations = usize::from(ROUNDS / 4);
     let pages: Vec<Pages> = (0..generations).map(|_| Pages::new(BYTES)).collect();
@@ -959,15 +960,10 @@ fn named_rounds(route: Route, two: bool) {
         .map(|pages| pages.at.as_ptr() as usize)
         .collect();
     let scratch = Scratch::new("managed-across-queues");
-    let errors: Arc<Mutex<Vec<String>>> = Arc::default();
-    let heard = Arc::clone(&errors);
+    let watched = Watched::default();
     let options = DeviceOptions {
-        messages: Some(MessageSink::new(move |message| {
-            if message.severity == MessageSeverity::Error {
-                let text = format!("{}: {}", message.id_name, message.text);
-                heard.lock().unwrap().push(text);
-            }
-        })),
+        layers: watched.layers(),
+        messages: Some(watched.sink(|_| {})),
         ..options(&scratch.0)
     };
     let device = Device::system_default_with(&options).unwrap();
@@ -1037,24 +1033,22 @@ fn named_rounds(route: Route, two: bool) {
     );
     let rest = staged_down_to(&device, before.managed_staging_bytes);
     assert_eq!(rest.managed_staging_bytes, before.managed_staging_bytes);
-    let errors = errors.lock().unwrap().clone();
     eprintln!(
         "MANAGED-ROUNDS {} {route:?}, {} queue(s): {} rounds each of two buffers, ranges named \
-         {}; rounds that read other bytes {} {wrong:?}; error messages {}",
+         {}; rounds that read other bytes {} {wrong:?}",
         device.name(),
         1 + usize::from(two),
         ROUNDS,
         rest.managed_ranges_modified - before.managed_ranges_modified,
         wrong.len(),
-        errors.len()
     );
     assert!(
         wrong.is_empty(),
         "{route:?}: rounds read other bytes: {wrong:?}"
     );
-    assert!(errors.is_empty(), "{route:?}: {errors:#?}");
     drop(device);
     drop(pages);
+    watched.layer_reported_nothing(&format!("did_modify_range rounds {route:?}"));
 }
 
 #[test]
