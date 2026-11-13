@@ -470,7 +470,7 @@ impl ResourceStateCommandEncoder {
                 overwrites: Vec::new(),
                 trail: (open.command_buffer.device().shared().encoder_trail).then(|| {
                     let id = open.command_buffer.object_id().get();
-                    std::sync::Arc::from(format!(
+                    crate::encoder_trail::Named::new(format!(
                         "ResourceState encoder {encoder} of command buffer {id}"
                     ))
                 }),
