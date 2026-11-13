@@ -414,7 +414,7 @@ mod executions;
 pub(crate) mod extended_shadow;
 pub(crate) mod face_swap;
 mod fan_out;
-use fan_out::FanTableKey;
+use fan_out::{FanTable, FanTableKey};
 mod heap_part;
 mod inline_first;
 mod inline_splits;
@@ -1777,7 +1777,7 @@ pub(crate) struct RenderLowering {
     fanned: (bool, bool),
     /// The region table a fan-out draw binds, by the viewport and scissor it was made for, and
     /// `None` where their regions make none (`fan_out::table`).
-    fan_table: Option<(FanTableKey, Option<vk::DescriptorBufferInfo>)>,
+    fan_table: Option<(FanTableKey, Option<FanTable>)>,
     /// The encoder records an execution's commands and the command it draws holds a barrier,
     /// which orders its draw after every draw before it (`render/executions.rs`).
     command_barrier: bool,
@@ -8618,9 +8618,7 @@ impl RenderLowering {
         // A fan-out draw's region table, and a probe's flags.
         let fan_buffers = match fans {
             Some(_) => Some(binding::FanOutBuffers {
-                regions: (self.fan_table.as_ref())
-                    .and_then(|&(_, table)| table)
-                    .ok_or_else(|| internal("a fan-out draw without its region table"))?,
+                regions: self.fan_table_bound()?,
                 flags: self.fan_run.as_ref().and_then(fan_out::FanOutRun::flags),
             }),
             None => None,
@@ -11653,7 +11651,7 @@ impl RenderLowering {
                 .rate_map
                 .as_ref()
                 .is_some_and(RateMappedPass::layers_alike);
-        if !asks || self.fan_table(pipeline)?.is_none() {
+        if !asks || !self.fan_table(pipeline)? {
             return Ok(None);
         }
         // A draw binds no index: only a probe writes its words.
@@ -11664,15 +11662,14 @@ impl RenderLowering {
         Ok(Some((fan.mode, index)))
     }
 
-    /// The region table a fan-out draw of `pipeline` binds (`fan_out::table`): of the regions the
-    /// encoder's first viewport and scissor plan, as a draw records them region by region, over
-    /// the render area; made once for each viewport and scissor, and `None` where they make none.
-    fn fan_table(
-        &mut self,
-        pipeline: &DrawingState,
-    ) -> Result<Option<vk::DescriptorBufferInfo>, Error> {
+    /// Whether the encoder's first viewport and scissor plan regions that make a fan-out draw of
+    /// `pipeline` a region table (`fan_out::table`): of the regions as a draw records them region
+    /// by region, over the render area; its bytes made once for each viewport and scissor, and
+    /// uploaded only by a draw that binds them ([`fan_table_bound`](Self::fan_table_bound)), so
+    /// an execution's settle at commit, which records nothing, uploads none.
+    fn fan_table(&mut self, pipeline: &DrawingState) -> Result<bool, Error> {
         let Some(pass) = &self.rate_map else {
-            return Ok(None);
+            return Ok(false);
         };
         let viewport = self.state.used_viewports(false)[0];
         let scissor = *self.scissors.first();
@@ -11680,7 +11677,7 @@ impl RenderLowering {
         let key = FanTableKey::new(&viewport, &scissor, extent);
         if let Some((kept, table)) = &self.fan_table {
             if *kept == key {
-                return Ok(*table);
+                return Ok(table.is_some());
             }
         }
         let device = self.core.device().clone();
@@ -11693,21 +11690,32 @@ impl RenderLowering {
             &device.shared().region_limits,
             extent,
         )?;
-        let table = match fan_out::table(&regions, extent) {
-            Some(bytes) => {
-                let mut state = self.core.command_buffer().state();
-                let region = state.uploads.upload(&device, &bytes, bytes.len() as u64)?;
-                Some(
-                    vk::DescriptorBufferInfo::default()
-                        .buffer(region.raw())
-                        .offset(region.offset())
-                        .range(region.len()),
-                )
-            }
-            None => None,
-        };
+        let table = fan_out::table(&regions, extent).map(FanTable::Bytes);
+        let made = table.is_some();
         self.fan_table = Some((key, table));
-        Ok(table)
+        Ok(made)
+    }
+
+    /// The region table the next fan-out draw binds ([`fan_table`](Self::fan_table)), uploaded to
+    /// the command buffer by the encoder's first draw that binds it.
+    fn fan_table_bound(&mut self) -> Result<vk::DescriptorBufferInfo, Error> {
+        let Some((_, Some(table))) = &mut self.fan_table else {
+            return Err(internal("a fan-out draw without its region table"));
+        };
+        let bytes = match table {
+            FanTable::Bound(bound) => return Ok(*bound),
+            FanTable::Bytes(bytes) => bytes,
+        };
+        let device = self.core.device();
+        let mut state = self.core.command_buffer().state();
+        let region = state.uploads.upload(device, bytes, bytes.len() as u64)?;
+        device.shared().counts.rate_map_fan_table_uploaded();
+        let bound = vk::DescriptorBufferInfo::default()
+            .buffer(region.raw())
+            .offset(region.offset())
+            .range(region.len());
+        *table = FanTable::Bound(bound);
+        Ok(bound)
     }
 
     /// Whether a draw of `pipeline` under `settings`, `direct` (not from an indirect buffer), asks

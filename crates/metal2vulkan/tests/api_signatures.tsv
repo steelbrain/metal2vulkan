@@ -3226,6 +3226,7 @@ field	metal2vulkan-runtime::WorkCounts.queues_gone_long	pub queues_gone_long: u6
 field	metal2vulkan-runtime::WorkCounts.queues_sharing_a_vk_queue	pub queues_sharing_a_vk_queue: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_fan_out_pipelines_ready	pub rate_map_fan_out_pipelines_ready: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_fan_out_pipelines_waited	pub rate_map_fan_out_pipelines_waited: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_fan_tables_uploaded	pub rate_map_fan_tables_uploaded: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_fanned_draws	pub rate_map_fanned_draws: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_flagged_draws	pub rate_map_flagged_draws: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_index_ranges	pub rate_map_index_ranges: u64

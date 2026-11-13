@@ -235,6 +235,7 @@ pub(crate) struct Counters {
     rate_map_fanned_draws: AtomicU64,
     rate_map_fan_out_pipelines_ready: AtomicU64,
     rate_map_fan_out_pipelines_waited: AtomicU64,
+    rate_map_fan_tables_uploaded: AtomicU64,
     encoder_primaries_begun_ahead: AtomicU64,
     primaries_begun_ahead: AtomicU64,
     barrier_buffers_kept: AtomicU64,
@@ -2777,6 +2778,12 @@ impl Counters {
             false => &self.rate_map_fan_out_pipelines_waited,
         };
         counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An encoder's first fan-out draw or probe uploaded its region table to the command buffer
+    /// (`render/fan_out.rs`).
+    pub(crate) fn rate_map_fan_table_uploaded(&self) {
+        (self.rate_map_fan_tables_uploaded).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A host step's probe ran for `nanos` of GPU time, read from its timestamps once it completed
@@ -6974,6 +6981,10 @@ pub struct WorkCounts {
     pub rate_map_fan_out_pipelines_ready: u64,
     /// Those a host step fanning the pass out found still being made, and waited for.
     pub rate_map_fan_out_pipelines_waited: u64,
+    /// Region tables uploaded to command buffers, each by an encoder's first fan-out draw or probe
+    /// that binds it: one for a host step's probe and one for its fanned-out draws, none for
+    /// `commit`'s settle, which records nothing (`rate_mapped_pass.rs`, **Fan-out**).
+    pub rate_map_fan_tables_uploaded: u64,
     /// Render passes whose first instance did not record inline, its draws in a secondary command
     /// buffer, by the first check that ruled it out (`render/inline_first.rs`), counted as the pass
     /// opens or at its first draw that records: here, the encoder encodes an ended encoder's calls
@@ -10047,6 +10058,8 @@ impl Device {
             rate_map_fan_out_pipelines_ready: (counters.rate_map_fan_out_pipelines_ready)
                 .load(Ordering::Relaxed),
             rate_map_fan_out_pipelines_waited: (counters.rate_map_fan_out_pipelines_waited)
+                .load(Ordering::Relaxed),
+            rate_map_fan_tables_uploaded: (counters.rate_map_fan_tables_uploaded)
                 .load(Ordering::Relaxed),
             passes_not_inline_encoders: not_inline(NotInline::Encoders),
             passes_not_inline_layouts: not_inline(NotInline::Layouts),

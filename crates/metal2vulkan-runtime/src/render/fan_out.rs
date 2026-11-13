@@ -153,6 +153,14 @@ pub(super) struct FanOutRoutes {
     pub(super) words: Arc<[u32]>,
 }
 
+/// An encoder's region table ([`table`]): its bytes, until its first draw that binds it uploads
+/// them, then the region of the command buffer's uploads that holds them
+/// (`RenderLowering::fan_table_bound`).
+pub(super) enum FanTable {
+    Bytes(Vec<u8>),
+    Bound(vk::DescriptorBufferInfo),
+}
+
 /// What a region table was made for: the encoder's first viewport and scissor, and the render
 /// area (`RenderLowering::fan_table`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

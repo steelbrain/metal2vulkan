@@ -292,7 +292,8 @@ fn differing(a: &[u8], b: &[u8]) -> usize {
 
 /// Under `FanOut` the host step probes once, fans the grid commands out and draws the large one
 /// region by region between them, with the pipelines `commit` began: the fan-out's and the
-/// regions variant's, so the step makes none. The pixels are the encoder's region-by-region
+/// regions variant's, so the step makes none. Its probe and its fanned-out draws each upload the
+/// region table once, the commit's settle none. The pixels are the encoder's region-by-region
 /// draws'.
 #[test]
 fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
@@ -306,14 +307,17 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     let made = after.host_step_pipelines_made - before.host_step_pipelines_made;
     let ready = after.rate_map_fan_out_pipelines_ready - before.rate_map_fan_out_pipelines_ready;
     let waited = after.rate_map_fan_out_pipelines_waited - before.rate_map_fan_out_pipelines_waited;
+    let tables = after.rate_map_fan_tables_uploaded - before.rate_map_fan_tables_uploaded;
     eprintln!(
         "RATE-MAP-FAN-OUT counts {counts:?} probe_gpu_nanos {probe_nanos}; fan-out pipelines \
-         {ready} ready, {waited} waited for; {made} made at the step"
+         {ready} ready, {waited} waited for; {made} made at the step; {tables} region tables \
+         uploaded"
     );
     assert_eq!(made, 0, "pipelines the host step made");
     match fans_out(&workload.device) {
         true => {
             assert_eq!(counts, [1, 1, u64::from(COMMANDS - 1)]);
+            assert_eq!(tables, 2, "region tables uploaded");
             assert!(
                 ready + waited >= 2,
                 "the commit began no probe or draw pipeline"

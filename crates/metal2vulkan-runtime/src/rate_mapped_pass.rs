@@ -215,9 +215,12 @@
 //!   `VkPipeline`s on the device's pool beside the draws' own, so the step takes them made, or
 //!   waits for them (`WorkCounts::rate_map_fan_out_pipelines_ready`,
 //!   `rate_map_fan_out_pipelines_waited`), and makes none itself for the states the settle
-//!   foresaw, the regions variant a flagged draw takes included. A copy's window coordinates are
-//!   computed in the geometry stage, so a pixel centre within a rounding error of a triangle's
-//!   edge may be covered by one route and not by the other. The encoder's own draws,
+//!   foresaw, the regions variant a flagged draw takes included. The probe and the fanned-out
+//!   draws each upload the region table to the command buffer as they first bind it
+//!   (`WorkCounts::rate_map_fan_tables_uploaded`); the settle, which records nothing, uploads
+//!   none. A copy's window coordinates are computed in the geometry stage, so a pixel centre
+//!   within a rounding error of a triangle's edge may be covered by one route and not by the
+//!   other. The encoder's own draws,
 //!   and the commands `commit` records, are drawn region by region (`docs/FAST-PATHS.md`, known
 //!   gaps).
 //! - **What the plan refuses** is `NotImplemented(RuntimeGap::RateMapRegions)`, naming the
