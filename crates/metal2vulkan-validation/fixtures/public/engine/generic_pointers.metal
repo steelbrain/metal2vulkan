@@ -38,6 +38,13 @@
 // of generic pointers: out[4t + j] is [0] weigh(r.p[0], t) = t + 100; [1] weigh(r.q, 1) = t + 201
 // (r.q = local); [2] space(r.p[2]): 1 for t < 4, 4 for the rest; [3] r.n = t.
 //
+// `generic_captured` and `generic_functor`: as `generic_slots`, `r` read through the address of
+// it another thread object holds, as MPS's kernels read their `array_ref`s through the lambdas
+// that capture them: `generic_captured` by a lambda that captures `r`, `out + 4t` and `t` by
+// reference (Clang makes its call operator take its object as a thread pointer),
+// `generic_functor` by a `reader` holding `&r`, `out + 4t` and `t`, whose call operator, out of
+// line, takes its object as a generic pointer. Each writes out[4t + j] as `generic_slots` does.
+//
 // The locals are declared ahead of the switch's only label (on t >> 31, zero for every thread),
 // so every path into the switch bypasses their declarations and Clang emits no lifetime markers
 // for them (as in ob2_sized_array.metal). Loop-free.
@@ -202,5 +209,64 @@ kernel void generic_array(device float *out [[buffer(0)]],
         r.q = local;
         r.n = t;
         read_ptrs(r, out + 4 * t, t);
+    }
+}
+
+kernel void generic_captured(device float *out [[buffer(0)]],
+                             device const float *in [[buffer(1)]],
+                             uint t [[thread_position_in_grid]]) {
+    switch (t >> 31) {
+        float local[2];
+        refs r;
+    default:
+        local[0] = float(t);
+        local[1] = float(t) + 1.0f;
+        r.a = in;
+        r.b = local;
+        r.c = in[t] < 4.0f ? in + 8 : nullptr;
+        r.n = t;
+        device float *o = out + 4 * t;
+        auto read = [&]() __attribute__((noinline)) {
+            o[0] = weigh(r.a, t);
+            o[1] = weigh(r.b, 1);
+            o[2] = space(r.c);
+            o[3] = float(r.n);
+        };
+        read();
+    }
+}
+
+struct reader {
+    thread const refs *r;
+    device float *o;
+    uint t;
+    __attribute__((noinline)) void operator()() const;
+};
+
+void reader::operator()() const {
+    o[0] = weigh(r->a, t);
+    o[1] = weigh(r->b, 1);
+    o[2] = space(r->c);
+    o[3] = float(r->n);
+}
+
+kernel void generic_functor(device float *out [[buffer(0)]],
+                            device const float *in [[buffer(1)]],
+                            uint t [[thread_position_in_grid]]) {
+    switch (t >> 31) {
+        float local[2];
+        refs r;
+        reader read;
+    default:
+        local[0] = float(t);
+        local[1] = float(t) + 1.0f;
+        r.a = in;
+        r.b = local;
+        r.c = in[t] < 4.0f ? in + 8 : nullptr;
+        r.n = t;
+        read.r = &r;
+        read.o = out + 4 * t;
+        read.t = t;
+        read();
     }
 }

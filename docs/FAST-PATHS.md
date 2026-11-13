@@ -1621,8 +1621,10 @@ driver's. Each is open work.
   a call, alone or in an aggregate) or `Integer` (`inttoptr`).
   Vulkan's logical addressing has no pointer into either of two storage classes. A generic
   pointer that every path gives one space becomes that space's pointer, through a thread
-  allocation's slots and a struct's, array's or vector's elements too, and its space queries are
-  answered as Metal answers them, including no space for a null pointer
+  allocation's slots (reached through its address, or through that address stored into a slot of
+  another thread allocation that holds no other, as a lambda's by-reference capture and a
+  functor's member hold it) and a struct's, array's or vector's elements too, and its space
+  queries are answered as Metal answers them, including no space for a null pointer
   (`runtime_lane::generic_pointers`).
 - **A loop that sums its counter fails to make through MoltenVK.** Apple's MSL front end rewrites a
   loop whose running sum adds its 32-bit counter (`1 + 2 + ... + n`) into a closed form in 33-bit

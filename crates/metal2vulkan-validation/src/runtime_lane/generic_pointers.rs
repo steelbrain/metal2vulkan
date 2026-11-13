@@ -2,9 +2,10 @@
 //! fixture `generic_pointers`'s `generic_spaces` (generic pointers into the device, thread and
 //! threadgroup spaces, read, written and asked their space) and `generic_null` (generic pointers
 //! the run keeps or makes null, asked their space) answer what the M3 Max answers
-//! (`generic_pointers.m`), and so do `generic_slots`, `generic_fields` and `generic_array` (generic
-//! pointers a struct holds, read back from the thread's struct by reference, passed by value and
-//! passed in an array member).
+//! (`generic_pointers.m`), and so do `generic_slots`, `generic_fields`, `generic_array`,
+//! `generic_captured` and `generic_functor` (generic pointers a struct holds, read back from the
+//! thread's struct by reference, passed by value, passed in an array member, and read through the
+//! struct's address a lambda's by-reference capture or a functor holds).
 //!
 //! Each kernel runs eight threads in one threadgroup over `in[i] = i` (16 words); the fixture's
 //! header says what each word is. Every answer is a small integer or a half, exact in `float`.
@@ -121,8 +122,9 @@ fn generic_pointers_answer_as_metal() {
     layer_reported_nothing_at_all(&messages);
 }
 
-/// What the M3 Max answers (macOS 27.0.1) for `generic_slots`, `generic_fields` and
-/// `generic_array` alike, four words a thread: a read through a device pointer and through the
+/// What the M3 Max answers (macOS 27.0.1) for `generic_slots`, `generic_fields`,
+/// `generic_array`, `generic_captured` and `generic_functor` alike, four words a thread: a read
+/// through a device pointer and through the
 /// thread pointer the struct holds, the space of a second device pointer it holds or of null (1,
 /// then 4), and its count.
 #[rustfmt::skip]
@@ -138,15 +140,23 @@ const SLOTS: [[f32; 4]; THREADS] = [
 ];
 
 /// Generic pointers a struct holds, stored into the thread's struct and read back by reference
-/// (`generic_slots`), passed by value (`generic_fields`) or passed in an array member that is one
-/// aggregate (`generic_array`), read and answer their spaces as Metal does.
+/// (`generic_slots`), passed by value (`generic_fields`), passed in an array member that is one
+/// aggregate (`generic_array`), or read through the struct's address that another thread object
+/// holds (`generic_captured`, a lambda's capture; `generic_functor`, a functor's member, its call
+/// operator taking the functor as a generic pointer), read and answer their spaces as Metal does.
 #[test]
 fn generic_pointers_a_struct_holds_answer_as_metal() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
-        for entry in ["generic_slots", "generic_fields", "generic_array"] {
+        for entry in [
+            "generic_slots",
+            "generic_fields",
+            "generic_array",
+            "generic_captured",
+            "generic_functor",
+        ] {
             let got = dispatched(&device, entry, 4 * THREADS);
             for (t, (got, want)) in got.chunks(4).zip(SLOTS.iter()).enumerate() {
                 assert_eq!(got, want, "{entry}: thread {t}");

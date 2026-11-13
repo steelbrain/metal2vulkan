@@ -3,15 +3,18 @@
 // functions that take them, and asked which space they point into (`is_device_addrspace`,
 // `is_thread_addrspace`, `is_threadgroup_addrspace`). The owned fixture
 // `engine/generic_pointers.metal` holds the same source for `generic_spaces`, `generic_mixed`,
-// `generic_null`, `generic_slots`, `generic_fields` and `generic_array` (its header gives each
-// word); `generic_null` asks which space a null generic pointer answers, where the run decides
-// whether a pointer is null, and the last three read generic pointers a struct holds, by
-// reference, by value and in an array member passed as one aggregate.
+// `generic_null`, `generic_slots`, `generic_fields`, `generic_array`, `generic_captured` and
+// `generic_functor` (its header gives each word); `generic_null` asks which space a null generic
+// pointer answers, where the run decides whether a pointer is null, and the last five read
+// generic pointers a struct holds, by reference, by value, in an array member passed as one
+// aggregate, through a lambda that captures the struct by reference, and through a functor that
+// holds its address and whose call operator takes the functor as a generic pointer.
 //
 // Build (no cargo target needed):
 //   clang -fobjc-arc -O1 -fmodules -o generic_pointers generic_pointers.m \
 //     -framework Foundation -framework Metal
-// Run: ./generic_pointers spaces   (or mixed, null, slots, fields, array), one case a process,
+// Run: ./generic_pointers spaces   (or mixed, null, slots, fields, array, captured, functor), one
+// case a process,
 // MTL_DEBUG_LAYER unset.
 //
 // Each case compiles the source as MSL 4.1, runs its kernel over 8 threads in one threadgroup
@@ -172,6 +175,61 @@ static const char *SOURCE =
     "        r.n = t;\n"
     "        read_ptrs(r, out + 4 * t, t);\n"
     "    }\n"
+    "}\n"
+    "kernel void generic_captured(device float *out [[buffer(0)]],\n"
+    "                             device const float *in [[buffer(1)]],\n"
+    "                             uint t [[thread_position_in_grid]]) {\n"
+    "    switch (t >> 31) {\n"
+    "        float local[2];\n"
+    "        refs r;\n"
+    "    default:\n"
+    "        local[0] = float(t);\n"
+    "        local[1] = float(t) + 1.0f;\n"
+    "        r.a = in;\n"
+    "        r.b = local;\n"
+    "        r.c = in[t] < 4.0f ? in + 8 : nullptr;\n"
+    "        r.n = t;\n"
+    "        device float *o = out + 4 * t;\n"
+    "        auto read = [&]() __attribute__((noinline)) {\n"
+    "            o[0] = weigh(r.a, t);\n"
+    "            o[1] = weigh(r.b, 1);\n"
+    "            o[2] = space(r.c);\n"
+    "            o[3] = float(r.n);\n"
+    "        };\n"
+    "        read();\n"
+    "    }\n"
+    "}\n"
+    "struct reader {\n"
+    "    thread const refs *r;\n"
+    "    device float *o;\n"
+    "    uint t;\n"
+    "    __attribute__((noinline)) void operator()() const;\n"
+    "};\n"
+    "void reader::operator()() const {\n"
+    "    o[0] = weigh(r->a, t);\n"
+    "    o[1] = weigh(r->b, 1);\n"
+    "    o[2] = space(r->c);\n"
+    "    o[3] = float(r->n);\n"
+    "}\n"
+    "kernel void generic_functor(device float *out [[buffer(0)]],\n"
+    "                            device const float *in [[buffer(1)]],\n"
+    "                            uint t [[thread_position_in_grid]]) {\n"
+    "    switch (t >> 31) {\n"
+    "        float local[2];\n"
+    "        refs r;\n"
+    "        reader read;\n"
+    "    default:\n"
+    "        local[0] = float(t);\n"
+    "        local[1] = float(t) + 1.0f;\n"
+    "        r.a = in;\n"
+    "        r.b = local;\n"
+    "        r.c = in[t] < 4.0f ? in + 8 : nullptr;\n"
+    "        r.n = t;\n"
+    "        read.r = &r;\n"
+    "        read.o = out + 4 * t;\n"
+    "        read.t = t;\n"
+    "        read();\n"
+    "    }\n"
     "}\n";
 
 enum { THREADS = 8, WORDS = 8 };
@@ -197,6 +255,8 @@ int main(int argc, char **argv) {
                      : strcmp(c, "slots") == 0  ? @"generic_slots"
                      : strcmp(c, "fields") == 0 ? @"generic_fields"
                      : strcmp(c, "array") == 0  ? @"generic_array"
+                     : strcmp(c, "captured") == 0 ? @"generic_captured"
+                     : strcmp(c, "functor") == 0  ? @"generic_functor"
                                                 : @"generic_spaces";
     id<MTLFunction> f = [lib newFunctionWithName:name];
     id<MTLComputePipelineState> ps = [D newComputePipelineStateWithFunction:f error:&e];

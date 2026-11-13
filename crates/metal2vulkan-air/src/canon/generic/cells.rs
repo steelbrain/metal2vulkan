@@ -3,19 +3,29 @@
 //! pointer loaded from the slot is in their group.
 //!
 //! A *cell* is an `alloca` that a generic pointer is loaded from or stored into. Its address
-//! reaches each use through `getelementptr`s, bitcasts and `freeze`s, at a byte offset from the
-//! cell's start that is a translation-time constant or unknown. A generic access at a constant
-//! offset is at that offset's *slot*; one at an unknown offset may be at any slot of its cell, and
-//! the cell's slots then share one group.
+//! reaches each use through `getelementptr`s, bitcasts, `freeze`s and casts between the thread and
+//! the generic space, at a byte offset from the cell's start that is a translation-time constant
+//! or unknown. A generic access at a constant offset is at that offset's *slot*; one at an unknown
+//! offset may be at any slot of its cell, and the cell's slots then share one group.
+//!
+//! An address also reaches its uses through thread memory: a thread pointer stored into a
+//! *followed* slot and loaded back is the address stored ([`follow`]), as a lambda that captures
+//! a struct by reference holds the struct's address, and its call operator, inlined, loads it
+//! from the lambda's object to read the struct's fields. A slot is followed where every pointer
+//! stored into it is the address of one `alloca` at one offset (null among them or not), no other
+//! write, copy or read at another offset or width meets its bytes, and no use of its own
+//! `alloca`'s address is other than an access or address arithmetic. Storing an address into a
+//! followed slot is no use of it that leaves the translation's sight.
 //!
 //! A cell is *open*, and a generic pointer loaded from it has a space only the run knows
 //! ([`GenericPointer::Memory`]), where a use of its address is other than a load's or a store's
 //! address, a memory intrinsic's destination or source, a comparison or address arithmetic (the
-//! address stored as a value, cast to an integer or to another space, passed to another call,
-//! merged by a `phi` or a `select`, or held in an aggregate), or where bytes other than a generic
-//! pointer's may be read as one: two slots overlap, a write of anything else (a store of another
-//! type, an atomic operation, a copy or a `memset`) overlaps a slot or writes bytes the
-//! translation cannot place, or a generic access at an unknown offset meets any such write.
+//! address stored as a value into a slot not followed, cast to an integer or to another space,
+//! passed to another call, merged by a `phi` or a `select`, or held in an aggregate), or where
+//! bytes other than a generic pointer's may be read as one: two slots overlap, a write of
+//! anything else (a store of another type, an atomic operation, a copy or a `memset`) overlaps a
+//! slot or writes bytes the translation cannot place, or a generic access at an unknown offset
+//! meets any such write.
 //!
 //! [`GenericPointer::Memory`]: crate::error::GenericPointer::Memory
 
@@ -23,7 +33,9 @@ use crate::budget::Meter;
 use crate::error::Error;
 use crate::intrinsics::LlvmIntrinsic;
 use crate::ir::Value;
-use crate::ir::{AddrSpace, Callee, CastOp, Idx, InstId, InstKind, Layout, TypeId, TypeLayouts};
+use crate::ir::{
+    AddrSpace, Callee, CastOp, Const, Idx, InstId, InstKind, Layout, Type, TypeId, TypeLayouts,
+};
 
 use super::super::pieces::{gep_offset, int};
 use super::super::rewrite::{filled, invariant};
@@ -35,6 +47,14 @@ const NONE: u32 = u32::MAX;
 /// Where an address lies: in the `alloca` it is an instruction of, at a byte offset from its
 /// start (`None` where not a translation-time constant).
 type Place = Option<(u32, Option<u64>)>;
+
+/// A slot of an `alloca` that thread pointers pass through: the `alloca`'s index and the slot's
+/// byte offset.
+type Slot = (u32, u64);
+
+/// The followed slots, sorted, each with the address every pointer stored there is
+/// ([`follow`]).
+type Followed = Vec<(Slot, (u32, Option<u64>))>;
 
 /// The generic loads and stores of thread allocations, and the slots they reach.
 pub(super) struct Cells {
@@ -84,8 +104,8 @@ pub(super) fn find(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Optio
         return Ok(None);
     }
     let layouts = TypeLayouts::new(&cx.parts.data_layout, &cx.parts.types, m)?;
-    let found =
-        places(cx, &layouts, m, held).and_then(|place| cells(cx, &layouts, &place, m, held));
+    let found = followed_places(cx, &layouts, m, held)
+        .and_then(|(place, followed)| cells(cx, &layouts, (&place, &followed), m, held));
     m.release(cx.parts.types.len() * std::mem::size_of::<Option<Layout>>());
     found
 }
@@ -99,12 +119,99 @@ fn generic_access(cx: &Cx<'_>, kind: &InstKind, ty: TypeId) -> Option<Value> {
     }
 }
 
-/// Each instruction's [`Place`]: an `alloca`'s start, and what a `getelementptr`, a bitcast or a
-/// `freeze` derives from an address that has one. Passes run in instruction order until none
-/// changes, so an operand defined later is placed too.
+/// Whether `ty` is a thread pointer.
+fn thread(cx: &Cx<'_>, ty: TypeId) -> bool {
+    matches!(
+        cx.parts.types.get(ty),
+        Some(Type::Ptr {
+            space: AddrSpace::Thread
+        })
+    )
+}
+
+/// Whether `kind` stores a thread pointer.
+fn pointer_store(cx: &Cx<'_>, kind: &InstKind) -> bool {
+    matches!(kind, InstKind::Store { val, .. } if cx.ty(*val).is_some_and(|t| thread(cx, t)))
+}
+
+/// Whether an `addrspacecast` of `v` to `ty` goes between the thread and the generic space, so
+/// its result points where `v` does.
+fn thread_generic(cx: &Cx<'_>, v: Value, ty: TypeId) -> bool {
+    let Some(from) = cx.ty(v) else {
+        return false;
+    };
+    (thread(cx, from) && cx.generic(ty)) || (cx.generic(from) && thread(cx, ty))
+}
+
+/// Whether `v` is a null pointer constant.
+fn null(cx: &Cx<'_>, v: Value) -> bool {
+    match v {
+        Value::Const(c) => matches!(cx.parts.consts.get(c).map(|k| &k.value), Some(Const::Null)),
+        _ => false,
+    }
+}
+
+/// Each instruction's [`Place`] and the slots followed, found together: the slots [`follow`]
+/// takes from the places so far, then the places they lead to, until neither changes. A slot
+/// followed once and not after is never followed again, so the rounds end; past their bound no
+/// slot is followed.
+fn followed_places(
+    cx: &Cx<'_>,
+    layouts: &TypeLayouts,
+    m: &mut Meter,
+    held: &mut usize,
+) -> Result<(Vec<Place>, Followed), Error> {
+    let stores = cx
+        .body
+        .insts
+        .values()
+        .filter(|inst| pointer_store(cx, &inst.kind))
+        .count();
+    let mut followed = Followed::new();
+    let mut ruled_out: Vec<Slot> = Vec::new();
+    for _ in 0..=2 * stores + 1 {
+        let place = places(cx, layouts, &followed, m, held)?;
+        let next = follow(cx, layouts, (&place, &followed, &ruled_out), m, held)?;
+        if next == followed {
+            give_back(m, held, next);
+            give_back(m, held, ruled_out);
+            return Ok((place, followed));
+        }
+        for &(slot, _) in &followed {
+            if next.binary_search_by_key(&slot, |&(s, _)| s).is_err() {
+                m.reserve(&mut ruled_out, 1)?;
+                *held = held.saturating_add(std::mem::size_of::<Slot>());
+                ruled_out.push(slot);
+            }
+        }
+        ruled_out.sort_unstable();
+        ruled_out.dedup();
+        give_back(m, held, place);
+        give_back(m, held, followed);
+        followed = next;
+    }
+    give_back(m, held, followed);
+    give_back(m, held, ruled_out);
+    let none = Followed::new();
+    Ok((places(cx, layouts, &none, m, held)?, none))
+}
+
+/// Give back what the meter charged for `v`: its elements, each charged as [`filled`] and a
+/// one-element `reserve` charge them.
+fn give_back<T>(m: &mut Meter, held: &mut usize, v: Vec<T>) {
+    let bytes = v.len().saturating_mul(std::mem::size_of::<T>());
+    m.release(bytes);
+    *held = held.saturating_sub(bytes);
+}
+
+/// Each instruction's [`Place`]: an `alloca`'s start, what a `getelementptr`, a bitcast, a
+/// `freeze` or a cast between the thread and the generic space derives from an address that has
+/// one, and a thread pointer loaded from a slot of `followed`. Passes run in instruction order
+/// until none changes, so an operand defined later is placed too.
 fn places(
     cx: &Cx<'_>,
     layouts: &TypeLayouts,
+    followed: &Followed,
     m: &mut Meter,
     held: &mut usize,
 ) -> Result<Vec<Place>, Error> {
@@ -143,6 +250,18 @@ fn places(
                     v,
                 }
                 | InstKind::Freeze(v) => of(*v),
+                InstKind::Cast {
+                    op: CastOp::AddrSpaceCast,
+                    v,
+                } if thread_generic(cx, *v, inst.ty) => of(*v),
+                InstKind::Load { ptr, .. } if thread(cx, inst.ty) => match of(*ptr) {
+                    Some((a, Some(at))) => followed
+                        .binary_search_by_key(&(a, at), |&(s, _)| s)
+                        .ok()
+                        .and_then(|k| followed.get(k))
+                        .map(|&(_, to)| to),
+                    _ => None,
+                },
                 _ => None,
             };
             if let Some(slot) = place.get_mut(i.index()) {
@@ -156,10 +275,209 @@ fn places(
     Ok(place)
 }
 
+/// One slot thread pointers may pass through: where the pointers stored into it point, while
+/// they agree, and whether anything rules it out.
+struct Candidate {
+    slot: Slot,
+    to: Option<(u32, Option<u64>)>,
+    ok: bool,
+}
+
+/// The slots thread pointers pass through, under `place` and the slots `followed` so far (the
+/// module docs): an `alloca`'s slot at a constant offset that a thread pointer is stored into,
+/// whose stores all store a null or the address of one `alloca` at one offset, that no other
+/// store, atomic operation, copy, `memset` or load at another offset or width meets (a load or
+/// a copy of the bytes elsewhere reads them as no pointer the translation follows), that no
+/// other such slot overlaps, of an `alloca` whose address no use but an access and address
+/// arithmetic takes (a store of it into a slot of `followed` among them). No slot of
+/// `ruled_out` is one.
+fn follow(
+    cx: &Cx<'_>,
+    layouts: &TypeLayouts,
+    (place, followed, ruled_out): (&[Place], &Followed, &[Slot]),
+    m: &mut Meter,
+    held: &mut usize,
+) -> Result<Followed, Error> {
+    let n = cx.body.insts.len();
+    let at = |v: Value| match v {
+        Value::Inst(j) => place.get(j.index()).copied().flatten(),
+        _ => None,
+    };
+    let width = u64::from(
+        cx.parts
+            .data_layout
+            .pointer(AddrSpace::Thread.raw())
+            .size_bits
+            .div_ceil(8),
+    );
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for inst in cx.body.insts.values() {
+        m.tick(1)?;
+        let InstKind::Store { val, ptr, .. } = &inst.kind else {
+            continue;
+        };
+        if !cx.ty(*val).is_some_and(|t| thread(cx, t)) {
+            continue;
+        }
+        let Some((a, Some(off))) = at(*ptr) else {
+            continue;
+        };
+        if ruled_out.binary_search(&(a, off)).is_ok() {
+            continue;
+        }
+        m.reserve(&mut candidates, 1)?;
+        *held = held.saturating_add(std::mem::size_of::<Candidate>());
+        let to = at(*val);
+        let ok = to.is_some() || null(cx, *val);
+        candidates.push(Candidate {
+            slot: (a, off),
+            to,
+            ok,
+        });
+    }
+    if candidates.is_empty() {
+        return Ok(Followed::new());
+    }
+    // One candidate a slot: its stores' addresses agree, and a null joins any.
+    candidates.sort_by_key(|c| c.slot);
+    let stored = candidates
+        .len()
+        .saturating_mul(std::mem::size_of::<Candidate>());
+    let mut merged: Vec<Candidate> = Vec::new();
+    for c in candidates {
+        match merged.last_mut() {
+            Some(last) if last.slot == c.slot => {
+                last.ok &= c.ok;
+                match (last.to, c.to) {
+                    (Some(x), Some(y)) if x != y => last.ok = false,
+                    (None, y) => last.to = y,
+                    _ => {}
+                }
+            }
+            _ => {
+                m.reserve(&mut merged, 1)?;
+                *held = held.saturating_add(std::mem::size_of::<Candidate>());
+                merged.push(c);
+            }
+        }
+    }
+    m.release(stored);
+    *held = held.saturating_sub(stored);
+    // Two slots of one `alloca` whose pointers overlap.
+    for k in 1..merged.len() {
+        let (before, after) = merged.split_at_mut(k);
+        if let (Some(a), Some(b)) = (before.last_mut(), after.first_mut()) {
+            if a.slot.0 == b.slot.0 && b.slot.1 - a.slot.1 < width {
+                a.ok = false;
+                b.ok = false;
+            }
+        }
+    }
+    // Rule out the candidates that `(a, off, len)` meets: every one of `a` where the offset or
+    // the length is unknown.
+    let meets = |merged: &mut [Candidate], (a, off, len): (u32, Option<u64>, Option<u64>)| {
+        let lo = merged.partition_point(|c| c.slot.0 < a);
+        let rest = merged.get_mut(lo..).unwrap_or_default();
+        for c in rest.iter_mut().take_while(|c| c.slot.0 == a) {
+            let hit = match off.zip(len) {
+                Some((o, l)) => {
+                    o < c.slot.1.saturating_add(width) && c.slot.1 < o.saturating_add(l)
+                }
+                None => true,
+            };
+            if hit {
+                c.ok = false;
+            }
+        }
+    };
+    let size = |v: Value| cx.ty(v).and_then(|t| layouts.store_size(t));
+    let mut open: Vec<bool> = filled(m, held, n, false)?;
+    let exempt = |ptr: Value| {
+        at(ptr).is_some_and(|(a, off)| {
+            off.is_some_and(|o| followed.binary_search_by_key(&(a, o), |&(s, _)| s).is_ok())
+        })
+    };
+    for inst in cx.body.insts.values() {
+        m.tick(1)?;
+        match &inst.kind {
+            InstKind::Store { val, ptr, .. } => {
+                let pointer = cx.ty(*val).is_some_and(|t| thread(cx, t));
+                if let Some((a, off)) = at(*ptr) {
+                    if !pointer || off.is_none() {
+                        meets(&mut merged, (a, off, size(*val)));
+                    }
+                }
+            }
+            InstKind::Load { ptr, .. } => {
+                if let Some((a, off)) = at(*ptr) {
+                    let pointer = thread(cx, inst.ty) && off.is_some();
+                    let exact =
+                        pointer && off.is_some_and(|o| merged.iter().any(|c| c.slot == (a, o)));
+                    if !exact {
+                        meets(&mut merged, (a, off, layouts.store_size(inst.ty)));
+                    }
+                }
+            }
+            InstKind::AtomicRmw { ptr, val, .. } => {
+                if let Some((a, off)) = at(*ptr) {
+                    meets(&mut merged, (a, off, size(*val)));
+                }
+            }
+            InstKind::CmpXchg { ptr, new, .. } => {
+                if let Some((a, off)) = at(*ptr) {
+                    meets(&mut merged, (a, off, size(*new)));
+                }
+            }
+            InstKind::Call(call) => {
+                if let (
+                    Callee::Llvm {
+                        op:
+                            LlvmIntrinsic::Memset { .. }
+                            | LlvmIntrinsic::Memcpy { .. }
+                            | LlvmIntrinsic::Memmove { .. },
+                        ..
+                    },
+                    [dst, src, len, ..],
+                ) = (&call.callee, &*call.args)
+                {
+                    let len = int(cx.parts, *len);
+                    for v in [*dst, *src] {
+                        if let Some((a, off)) = at(v) {
+                            meets(&mut merged, (a, off, len));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        uses(cx, layouts, (&inst.kind, inst.ty), &exempt, |u| {
+            if let Use::Escape(v) = u {
+                if let Some((a, _)) = at(v) {
+                    if let Some(o) = open.get_mut(a as usize) {
+                        *o = true;
+                    }
+                }
+            }
+        });
+    }
+    let mut next = Followed::new();
+    for c in &merged {
+        let closed = !open.get(c.slot.0 as usize).copied().unwrap_or(true);
+        if let (true, true, Some(to)) = (c.ok, closed, c.to) {
+            m.reserve(&mut next, 1)?;
+            *held = held.saturating_add(std::mem::size_of::<(Slot, (u32, Option<u64>))>());
+            next.push((c.slot, to));
+        }
+    }
+    give_back(m, held, merged);
+    give_back(m, held, open);
+    Ok(next)
+}
+
 fn cells(
     cx: &Cx<'_>,
     layouts: &TypeLayouts,
-    place: &[Place],
+    (place, followed): (&[Place], &Followed),
     m: &mut Meter,
     held: &mut usize,
 ) -> Result<Option<Cells>, Error> {
@@ -199,10 +517,15 @@ fn cells(
         let c = *index.get(a as usize)?;
         (c != NONE).then_some((c, off))
     };
+    let exempt = |ptr: Value| {
+        at(ptr).is_some_and(|(a, off)| {
+            off.is_some_and(|o| followed.binary_search_by_key(&(a, o), |&(s, _)| s).is_ok())
+        })
+    };
     let mut failed = None;
     for inst in cx.body.insts.values() {
         m.tick(1)?;
-        uses(cx, layouts, &inst.kind, |u| {
+        uses(cx, layouts, (&inst.kind, inst.ty), &exempt, |u| {
             let (v, write) = match u {
                 Use::Escape(v) => (v, None),
                 Use::Write(v, len) => (v, Some(len)),
@@ -317,10 +640,18 @@ enum Use {
     Write(Value, Option<u64>),
 }
 
-/// The [`Use`]s `kind` makes of its operands. A generic store writes a generic pointer, and a
-/// load, a copy's source and a comparison only read; a `getelementptr`, a bitcast and a `freeze`
-/// derive the address their result is ([`places`]).
-fn uses(cx: &Cx<'_>, layouts: &TypeLayouts, kind: &InstKind, mut on: impl FnMut(Use)) {
+/// The [`Use`]s `kind` (of result type `ty`) makes of its operands. A generic store writes a
+/// generic pointer, and a load, a copy's source and a comparison only read; a `getelementptr`, a
+/// bitcast, a `freeze` and a cast between the thread and the generic space derive the address
+/// their result is ([`places`]). A store into an address `exempt` takes, a followed slot's, is no
+/// escape of the address it stores ([`follow`]).
+fn uses(
+    cx: &Cx<'_>,
+    layouts: &TypeLayouts,
+    (kind, ty): (&InstKind, TypeId),
+    exempt: &dyn Fn(Value) -> bool,
+    mut on: impl FnMut(Use),
+) {
     let size = |v: Value| cx.ty(v).and_then(|t| layouts.store_size(t));
     match kind {
         InstKind::Gep { .. }
@@ -331,8 +662,14 @@ fn uses(cx: &Cx<'_>, layouts: &TypeLayouts, kind: &InstKind, mut on: impl FnMut(
         | InstKind::Freeze(_)
         | InstKind::Load { .. }
         | InstKind::ICmp { .. } => {}
+        InstKind::Cast {
+            op: CastOp::AddrSpaceCast,
+            v,
+        } if thread_generic(cx, *v, ty) => {}
         InstKind::Store { val, ptr, .. } => {
-            on(Use::Escape(*val));
+            if !exempt(*ptr) {
+                on(Use::Escape(*val));
+            }
             if !cx.is_generic(*val) {
                 on(Use::Write(*ptr, size(*val)));
             }

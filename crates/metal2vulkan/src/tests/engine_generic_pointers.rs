@@ -1,9 +1,12 @@
 //! MSL 4.1's generic pointers, as compute pipelines of the owned fixture `engine/generic_pointers`
 //! on committed profiles: `generic_spaces` (generic pointers into the device, thread and
 //! threadgroup spaces, each of one space, read, written and asked their space), `generic_null`
-//! (generic pointers the run may make null), and `generic_slots`, `generic_fields` and
+//! (generic pointers the run may make null), `generic_slots`, `generic_fields` and
 //! `generic_array` (generic pointers a struct holds: in the thread's struct read by reference, its
-//! fields passed by value, and an array member passed as one aggregate) compile; `generic_mixed`
+//! fields passed by value, and an array member passed as one aggregate), and `generic_captured`
+//! and `generic_functor` (the struct read through its address another thread object holds: a
+//! lambda's by-reference capture, and a functor whose call operator takes it as a generic
+//! pointer) compile; `generic_mixed`
 //! (one generic pointer into the thread or the device space as the run decides) is refused as a
 //! generic pointer of two spaces (`GenericPointer::TwoSpaces`).
 
@@ -67,6 +70,8 @@ fn generic_pointers_of_one_space_compile() {
             "generic_slots",
             "generic_fields",
             "generic_array",
+            "generic_captured",
+            "generic_functor",
         ] {
             if let Err(e) = compiled(&library, stem, entry) {
                 panic!("{stem} {entry}: {e}\n{}", specialized(&bc, stem, entry));
