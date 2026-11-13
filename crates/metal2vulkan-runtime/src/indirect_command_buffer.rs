@@ -1082,8 +1082,9 @@ struct IcbShared {
     /// weakly until it is (`watch`, `written_by_gpu`).
     unforeseen: Mutex<Vec<Weak<Unforeseen>>>,
     /// The CPU's writes of the records and of the slots past them so far, counted
-    /// ([`cpu_writes`](IndirectCommandBuffer::cpu_writes)). Each adds under `pipelines`, after it
-    /// wrote.
+    /// ([`cpu_writes`](IndirectCommandBuffer::cpu_writes)). Each adds one under `pipelines`,
+    /// after it wrote, by a load and a store: every writer holds the lock, so no locked
+    /// instruction is needed, and its readers load it without the lock.
     cpu_writes: AtomicU64,
     /// The CPU set a render command's barrier: an execution's render pass instance may split at
     /// it (`render/executions.rs`), for good.
@@ -1630,7 +1631,11 @@ impl IndirectCommandBuffer {
     /// and forget the kept recordings of the chunks they lie in (`kept_commands.rs`), under
     /// `commands`, the caller's hold of `pipelines`.
     fn wrote(&self, commands: &mut CommandStates, range: Range<u32>) {
-        self.0.cpu_writes.fetch_add(1, Ordering::Release);
+        // Every write of the counter is under `pipelines` (`commands` is its hold), so a load and
+        // a store count it: a locked add would wait for the setter's stores into the record
+        // (`tests::icb_encode_bench` measures a setter's cost).
+        let writes = self.0.cpu_writes.load(Ordering::Relaxed);
+        self.0.cpu_writes.store(writes + 1, Ordering::Release);
         commands.kept.wrote(range);
     }
 

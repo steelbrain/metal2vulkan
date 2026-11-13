@@ -873,11 +873,14 @@ impl CommandRecord {
     /// have changed.
     pub fn write_field(bytes: &mut [u8], field: RecordField) -> Result<Range<usize>, RecordError> {
         let view = RecordView::new(bytes)?;
-        let (action, retained) = (view.action(), view.retained_pipeline().is_some());
-        let (stage_in, lengths) = (
-            view.stage_in_region(),
-            [0, 1].map(|index| view.threadgroup_memory_length(index).unwrap_or(0)),
-        );
+        // The stage-in region and the first two lengths are read only for an action, which checks
+        // them: a setter of another field reads no more of the record than `RecordView::new` does.
+        let action = view.action();
+        let retained = view.retained_pipeline().is_some();
+        let stage_in = |view: &RecordView<'_>| view.stage_in_region();
+        let lengths = |view: &RecordView<'_>| {
+            [0, 1].map(|index| view.threadgroup_memory_length(index).unwrap_or(0))
+        };
         let word_bytes = |word: usize, words: usize| word * 4..(word + words) * 4;
         match field {
             RecordField::Barrier(barrier) => {
@@ -959,6 +962,7 @@ impl CommandRecord {
                 Ok(at..at + 4)
             }
             RecordField::Action(new) => {
+                let (stage_in, lengths) = (stage_in(&view), lengths(&view));
                 let wide = new.takes_stage_in_words();
                 if wide && stage_in != [0; 6] {
                     return Err(RecordError::StageInRegion);
