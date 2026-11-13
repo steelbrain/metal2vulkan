@@ -1,6 +1,6 @@
 //! The work host calls stage for the device's next submission (`texture/first_move.rs`).
 
-use crate::texture::first_move::{Filled, FirstMoves, Mine, TexelCopy};
+use crate::texture::first_move::{Filled, FirstMoves, Keeps, Mine, TexelCopy};
 use ash::vk;
 use ash::vk::Handle;
 use std::any::Any;
@@ -53,7 +53,8 @@ fn a_hand_out_takes_its_own_first_work_alone() {
     };
     let source = (vk::Buffer::from_raw(3), 0);
     for (buffer, raw) in buffers.iter().zip([mine, other, mine]) {
-        assert!(!firsts.register_bytes(keeper(buffer), (raw, 0), source, 16, Box::new(())));
+        let keeps = Keeps::Staging(Box::new(()));
+        assert!(!firsts.register_bytes(keeper(buffer), (raw, 0), source, 16, keeps));
     }
     let images: Vec<Arc<u32>> = vec![Arc::new(0), Arc::new(1)];
     let at = |image: &Arc<u32>| Arc::as_ptr(image).cast::<()>();
@@ -109,7 +110,7 @@ fn a_resource_s_staged_work_goes_with_it() {
     let source = (vk::Buffer::from_raw(3), 0);
     for (buffer, raw) in buffers.iter().zip([gone, kept]) {
         let weak: Weak<NewBuffer> = Arc::downgrade(buffer);
-        let held = Box::new(Arc::clone(&device));
+        let held = Keeps::Staging(Box::new(Arc::clone(&device)));
         assert!(!firsts.register_bytes(weak, (raw, 0), source, 16, held));
     }
     let images: Vec<Arc<u32>> = vec![Arc::new(0), Arc::new(1)];
