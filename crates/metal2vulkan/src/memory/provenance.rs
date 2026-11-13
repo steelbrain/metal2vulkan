@@ -1331,9 +1331,14 @@ impl<'a> Cx<'a> {
         const_index(self.e, v)
     }
 
-    /// The fact of `getelementptr src_ty, base, idx..`.
+    /// The fact of `getelementptr src_ty, base, idx..`. Over a base not reached yet
+    /// ([`PtrFact::BOTTOM`]) it is not reached either, whatever its indices' alignment: every check
+    /// of an operand not reached compares the fact with [`PtrFact::BOTTOM`] whole.
     fn gep(&self, base: PtrFact, src_ty: TypeId, idx: &[Value]) -> Result<PtrFact, Error> {
         let (delta, strides) = gep_displacement(self.e, self.layouts, src_ty, idx)?;
+        if base == PtrFact::BOTTOM {
+            return Ok(PtrFact::BOTTOM);
+        }
         let range = match (base.range, delta, strides.is_empty()) {
             (OffsetRange::Empty, _, _) => OffsetRange::Empty,
             (OffsetRange::Span { lo, hi }, Some(d), true) => {
