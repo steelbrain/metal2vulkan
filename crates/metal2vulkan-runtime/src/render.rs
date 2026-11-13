@@ -1734,6 +1734,10 @@ pub(crate) struct RenderLowering {
     replay_plain: bool,
     /// The draw being drawn reached that keep's test and passed it ([`replay_plain`](Self::replay_plain)).
     plain_drawn: bool,
+    /// The direct draw being drawn read through snapshots in its instance as it stood and wrote
+    /// nothing but them: keeping nothing, it forgets only the kept draws that read its pass's
+    /// colors (`render/draw_again.rs`).
+    snapshots_alone: bool,
     /// The heap set versions the plain draws it replayed bound (`heap_sets::Bound`), each once,
     /// which a kept recording of them binds again (`kept_commands::KeptEffects`).
     replayed_heaps: Vec<Weak<SetVersion>>,
@@ -2514,6 +2518,7 @@ impl RenderLowering {
                 replaying: false,
                 replay_plain: false,
                 plain_drawn: false,
+                snapshots_alone: false,
                 replayed_heaps: Vec::new(),
                 rerouting: false,
                 forms: BufferForms::Bound,
@@ -8313,6 +8318,7 @@ impl RenderLowering {
             }
         }
         self.drop_kept();
+        self.snapshots_alone = false;
         let watch = EachWatch::start();
         // And whether it rasterizes, without which its primitives reach no tile (`no_raster_t11`).
         // And whether it chooses its viewport.
@@ -8347,9 +8353,14 @@ impl RenderLowering {
         }
         // A draw that kept nothing may have changed what a draw set aside with another pipeline
         // state's bind state reads: every kept draw is forgotten, as at a call. One kept
-        // recorded as a draw again of it would, into its instance as it stood.
+        // recorded as a draw again of it would, into its instance as it stood. One that read
+        // through snapshots and wrote nothing else wrote only its pass's colors and its
+        // snapshots: it forgets the kept draws that read those alone (`render/draw_again.rs`).
         if self.again_kept().is_none() {
-            self.forget_again();
+            match self.snapshots_alone {
+                true => self.forget_readers(live)?,
+                false => self.forget_again(),
+            }
         }
         // Every draw, one of nothing too; an execution's commands announce at the
         // execution (`executions.rs`).
@@ -9809,6 +9820,14 @@ impl RenderLowering {
         if let Some(imageblock) = imageblock {
             uses.extend(imageblock.draw_uses()?);
         }
+        // A direct draw that reads through snapshots, and whose every use but its snapshots'
+        // writes nothing, writes its pass's colors and its snapshots alone: where it records into
+        // its instance as it stood (below), it forgets only the kept draws that read them
+        // (`render/draw_again.rs`).
+        let snapshots_alone = matches!(&snapshot, Some(wanted) if !wanted.in_place)
+            && !self.replaying
+            && !self.rerouting
+            && uses.iter().all(|used| used.write.is_empty());
         uses.extend(snapshot_texels.iter().map(Texture::snapshot_use));
         // A draw that names a detached buffer records nothing: its submission fails.
         let named = uses
@@ -10804,6 +10823,7 @@ impl RenderLowering {
             || made_imageblock.is_some()
             || pending.is_some();
         let stepless = !later_instance && !own_steps;
+        self.snapshots_alone = snapshots_alone && !begun && !later_instance;
         // Recording starts here: nothing below can be refused.
         if let Some(written) = written {
             self.core.keep_set_zero(written, &writes);

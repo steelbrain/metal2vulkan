@@ -3045,6 +3045,7 @@ impl RenderExecution {
             replaying: true,
             replay_plain: true,
             plain_drawn: false,
+            snapshots_alone: false,
             replayed_heaps: Vec::new(),
             rerouting: false,
             forms,

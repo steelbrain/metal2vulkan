@@ -39,7 +39,7 @@
 //!   which every call does: at the call, on the device's lowering thread, and encoded again),
 //!   refused or not, whatever it changes, with every kept draw set aside (below); so does a draw
 //!   that keeps nothing (a draw again, a draw rebound and a draw kept are the only draws that
-//!   leave them). A bind changes its
+//!   leave them), but a reader through snapshots that writes nothing else (below). A bind changes its
 //!   stage table's slots alone (and a bytes bind takes room in its command buffer's uploads), and
 //!   a table's stamp tells each change apart (`argument_table::Stamp`): the kept draw keeps the
 //!   four tables' stamps as it read them, and a draw whose tables kept them is the kept draw
@@ -63,13 +63,28 @@
 //!   wrote (`LiveBind::select`, `RenderLowering::select_kept`), and the draw starts from its own
 //!   state's, with the draw kept beside it, where one is under the encoder's epoch (which every
 //!   forgetting draws afresh: `DrawAgain`). Such a draw is between (`Kept::between`): draws of
-//!   other states recorded since, each a draw kept or drawn again, into the same instance, whose
-//!   steps only add to what the encoder holds (below). Its next draw is rebound whatever its
+//!   other states recorded since, each a draw kept or drawn again, or a reader through snapshots
+//!   that wrote none of what it reads (below), into the same instance, whose steps only add to
+//!   what the encoder holds (below). Its next draw is rebound whatever its
 //!   tables' stamps (`rebound.rs`), the changes of its tables since it read them brought in, its
 //!   uses noted, added to the pass's reads and gathered whole, and every state command its
 //!   record does not hold recorded; it takes no shortcut of a draw moved, which reads what the
 //!   encoder's last draw left. Each state's bind state is its own, though states of one function
 //!   pair share an interface, so the draw kept of one is never the other's.
+//! - **Past a reader through snapshots.** A draw that reads through snapshots
+//!   (`render/snapshot.rs`) keeps nothing. Where it records into its instance as it stood, of the
+//!   encoder's own colors, as a direct draw, and no use of it but its snapshots' writes, what it
+//!   writes is its pass's colors and its snapshots: it forgets only the kept draws set aside that
+//!   read them (`RenderLowering::forget_readers`), each that reads a color's texture through its
+//!   copy (`Kept::through_copies`) or at levels apart from the attached ones
+//!   (`render/attached_levels.rs`), or whose uses meet a color's memory
+//!   (`render_target::shares_attachment`). No kept draw reads a snapshot: only a draw that reads
+//!   through snapshots binds one. The others stay kept under the epoch, between, so the next draw
+//!   of each is rebound (`rebound.rs`), recording every state command its instance's record does
+//!   not hold, as after a draw kept of another state. The reader's other steps add to what the
+//!   encoder holds as a kept draw's do; its barriers are inside the subpass, by region; and its
+//!   snapshots are images, so the pass's fragments still wrote no buffer bytes a stage before
+//!   them reads (`render/pass_start_reads.rs`). `tests::snapshot_reader_keeps` checks it.
 //! - **Of other arguments.** A draw that differs from the kept draw only in its arguments (its
 //!   call of the same primitive type, with indices or without, its vertex or index counts and
 //!   starts, its index buffer, index type or index buffer's offset, each read in place, its
@@ -565,6 +580,21 @@ impl RenderLowering {
     pub(super) fn forget_again(&mut self) {
         self.again.kept = None;
         self.again.epoch = Stamp::fresh();
+    }
+
+    /// Forget the kept draws set aside with other pipeline states' bind states (`live`) that read
+    /// what a draw that read through snapshots, keeping nothing, wrote: its pass's colors, read
+    /// through their textures' copies, at levels apart from the attached ones, or by a use of
+    /// their memory (`render_target::shares_attachment`). No kept draw reads a snapshot. The
+    /// others stay kept under the encoder's epoch (the module docs).
+    pub(super) fn forget_readers(&mut self, live: &mut LiveBind) -> Result<(), Error> {
+        self.again.kept = None;
+        let (memo, layout) = (&mut self.attached, &self.layout);
+        let version = layout.version();
+        live.forget_kept_where(|kept, uses| {
+            let attached = kept.through_copies.0 || kept.reads_attached();
+            Ok(attached || memo.shares((layout, version), uses)?)
+        })
     }
 
     /// The epoch a draw kept now is kept under ([`DrawAgain`]).

@@ -675,6 +675,24 @@ impl LiveBind {
         self.draw_kept.take()
     }
 
+    /// Let go of each kept draw set aside with the state of another pipeline state that `forgets`
+    /// tells, given the draw and that state's last draw's uses (the kept draw's own), and keep
+    /// the others (`RenderLowering::forget_readers`).
+    pub(super) fn forget_kept_where<E>(
+        &mut self,
+        mut forgets: impl FnMut(&DrawKept, &CommandUses) -> Result<bool, E>,
+    ) -> Result<(), E> {
+        for aside in &mut self.set_aside {
+            let Some(kept) = aside.draw_kept.as_ref() else {
+                continue;
+            };
+            if forgets(kept, &aside.uses)? {
+                aside.draw_kept = None;
+            }
+        }
+        Ok(())
+    }
+
     /// Of the kept draws set aside with the states of other pipeline states, keep for the next
     /// render encoder of its encoder's command buffer (`render/carried.rs`) those that `carries`
     /// tells carry (given each and whether its state holds its settle), of the `most` states set
