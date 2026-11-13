@@ -15,6 +15,11 @@
 //! - **Bounded.** A 256 MiB buffer over pages no import maps holds its 256 MiB of device-local
 //!   memory and, across cycles of a whole `did_modify_range` and a command buffer, at most the
 //!   bound of what is staged, none once the cycle completed.
+//! - **Past the bound.** A commit of a command buffer that reads ranges `did_modify_range` named,
+//!   more bytes than the bound of what is staged, over the runtime's own host copy and an import
+//!   of the caller's pages, makes no internal submission and stages nothing under the default
+//!   (the copies go with its own batch), and the GPU reads the CPU's bytes; under
+//!   `ManagedCopyInPolicy::AtCommit` it stages them within the bound, and the GPU reads them too.
 //! - **Rebind.** A rebind copies the new pages in whole before the next command buffer:
 //!   `contents` is the new pointer, the Metal address stays, the old pages' deallocator runs.
 //! - **Detach.** The device copy stays, which the GPU reads and writes; `contents` is `None`, and
@@ -32,9 +37,9 @@
 //!   stages one (`WorkCounts::managed_bytes_copied_in`, `managed_staging_bytes`), and the command
 //!   buffer after it reads the CPU's write.
 //! - **The copy-in bench** (ignored, `MANAGED-COPY-IN`; run in release): what a
-//!   `did_modify_range` of 256 KiB, 4 MiB and 32 MiB, written by the CPU before each commit of a
-//!   command buffer that reads the range's last bytes, costs the commit call and the wall time to
-//!   the completion, over the runtime's own `Managed` buffer and one over the caller's pages
+//!   `did_modify_range` of 256 KiB, 4 MiB, 32 MiB and 265 MiB (past the bound of what is staged),
+//!   written by the CPU before each commit of a command buffer that reads the range's last bytes,
+//!   costs the commit call and the wall time to the completion, over the runtime's own `Managed` buffer and one over the caller's pages
 //!   through their import, on the default device and on one of `DevicePolicy::exact_answers()`:
 //!   the medians, the range over the median wall time, and the counts of the bytes copied in and
 //!   of the buffers the device parked, took again and destroyed past its bounds.
@@ -581,6 +586,114 @@ fn a_large_buffer_stages_within_the_bound() {
     }
     drop(buffer);
     assert!(ran_to(&ran, 1));
+}
+
+/// A commit of a command buffer that reads ranges `did_modify_range` named past the bound of what
+/// is staged (`texture/first_move.rs`'s `STAGED_BYTES`, **Bounded**), over host copies the GPU
+/// copies them from (the runtime's own `Managed` buffer, and the caller's pages through their
+/// import), on a device of `policy` (`DevicePolicy::managed_copy_in`): the GPU reads the CPU's
+/// bytes in both buffers, and under the default no internal submission is made for them
+/// (`WorkCounts::internal_submissions`): the copies stage nothing, so they go with the commit's
+/// own batch, which the commit call does not wait for. Under `ManagedCopyInPolicy::AtCommit` the
+/// commit stages them on the CPU, and the bound holds for that staging. Printed
+/// (`MANAGED-PAST-BOUND`): the commit call's time and the internal submissions it made.
+fn ranges_past_the_bound(policy: ManagedCopyInPolicy) {
+    const PAST: u64 = LARGE + (8 << 20);
+    let pages = Pages::new(PAST);
+    let scratch = Scratch::new("managed-past-bound");
+    let mut options = options(&scratch.0);
+    options.policy.managed_copy_in = policy;
+    let device = Device::system_default_with(&options).unwrap();
+    if device.properties().has_unified_memory {
+        eprintln!(
+            "MANAGED-PAST-BOUND {}: the device has unified memory; one copy",
+            device.name()
+        );
+        return;
+    }
+    let queue = device.new_command_queue().unwrap();
+    let ran = Ran::default();
+    let own = device.new_buffer(PAST, managed()).unwrap();
+    let caller = no_copy(&device, &pages, Route::Import, managed(), &ran);
+    assert_eq!(caller.host_backing(), Some(HostBacking::DeviceCopy));
+    // The CPU's bytes in both host copies, then each range named whole: more than the bound of
+    // what is staged, across the two.
+    let own_contents = own.contents().unwrap();
+    // SAFETY: the buffer's host copy, which no command reads or writes now.
+    unsafe { std::ptr::write_bytes(own_contents.as_ptr(), 0x5a, PAST as usize) };
+    pages.write(0..PAST, 0xa5);
+    own.did_modify_range(0..PAST).unwrap();
+    caller.did_modify_range(0..PAST).unwrap();
+    // The targets are made before the count: a target's making submits nothing of its own.
+    let tail = PAST - BYTES..PAST;
+    let targets: Vec<Buffer> = (0..4)
+        .map(|_| device.new_buffer(BYTES, ResourceOptions::shared()).unwrap())
+        .collect();
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    let sources = [
+        (&own, 0),
+        (&own, tail.start),
+        (&caller, 0),
+        (&caller, tail.start),
+    ];
+    for ((source, at), target) in sources.iter().zip(&targets) {
+        blit.copy_from_buffer_to_buffer(source, *at, target, 0, BYTES)
+            .unwrap();
+    }
+    blit.end_encoding().unwrap();
+    let began = Instant::now();
+    command_buffer.commit().unwrap();
+    let call = began.elapsed();
+    let at_commit = device.work_counts();
+    if command_buffer.wait_until_completed_for(WAIT).is_err() {
+        panic!("the command buffer did not complete in {WAIT:?}");
+    }
+    assert_eq!(
+        (command_buffer.status(), command_buffer.error()),
+        (CommandBufferStatus::Completed, None)
+    );
+    let internal = at_commit.internal_submissions - before.internal_submissions;
+    let staged = (at_commit.managed_staging_bytes).saturating_sub(before.managed_staging_bytes);
+    eprintln!(
+        "MANAGED-PAST-BOUND {} {policy:?}: {} bytes named, the commit call {call:?}, {internal} \
+         internal submission(s) and {staged} bytes staged at it",
+        device.name(),
+        2 * PAST
+    );
+    let bytes = |target: &Buffer| {
+        let contents = target.contents().unwrap();
+        // SAFETY: the target's bytes, which no command writes now.
+        unsafe { std::slice::from_raw_parts(contents.as_ptr(), BYTES as usize) }.to_vec()
+    };
+    let read: Vec<Vec<u8>> = targets.iter().map(bytes).collect();
+    let expected = [0x5a, 0x5a, 0xa5, 0xa5].map(|byte| vec![byte; BYTES as usize]);
+    assert!(
+        read.iter()
+            .zip(&expected)
+            .all(|(read, expected)| read == expected),
+        "the GPU read other bytes than the CPU's"
+    );
+    if policy == ManagedCopyInPolicy::AtSubmission {
+        assert_eq!(staged, 0, "the commit staged copies from host copies");
+        assert_eq!(
+            internal, 0,
+            "the commit made an internal submission for copies that stage nothing"
+        );
+    }
+    drop((own, caller, targets));
+    assert!(ran_to(&ran, 1));
+}
+
+#[test]
+fn ranges_past_the_bound_go_with_the_commit_s_batch() {
+    ranges_past_the_bound(ManagedCopyInPolicy::AtSubmission);
+}
+
+#[test]
+fn ranges_past_the_bound_at_the_commit_are_staged_within_it() {
+    ranges_past_the_bound(ManagedCopyInPolicy::AtCommit);
 }
 
 /// A rebind copies the new pages in whole (the module docs, **Rebind**).
@@ -1236,7 +1349,7 @@ fn a_did_modify_range_on_unified_memory_copies_nothing() {
 }
 
 /// The ranges of the copy-in bench (the module docs), each named whole before every commit.
-const BENCH_RANGES: [u64; 3] = [256 << 10, 4 << 20, 32 << 20];
+const BENCH_RANGES: [u64; 4] = [256 << 10, 4 << 20, 32 << 20, 265 << 20];
 
 /// The commits of each leg of the copy-in bench.
 const BENCH_COMMITS: usize = 40;
