@@ -676,60 +676,63 @@ fn a_buffer_over_host_pages_made_while_a_draw_takes_every_step_is_met_by_the_nex
     // debug assertions; else the run's first draw, the only one that does.
     let held = u64::from(cfg!(debug_assertions));
     let (ask, asked) = std::sync::mpsc::channel::<()>();
-    let (tell, told) = std::sync::mpsc::channel::<()>();
-    let (end, ended) = std::sync::mpsc::channel::<()>();
+    let (tell, told) = std::sync::mpsc::channel::<Result<Buffer, Error>>();
     // SAFETY: the page outlives the buffer made over it (dropped after the device), and no
     // command uses the buffer.
     let memory = unsafe { page.memory() };
-    let on = &device;
-    let (made, ran, moved) = std::thread::scope(|scope| {
-        let maker = scope.spawn(move || {
+    // The maker ends once it made the buffer, so a draw that fails its check fails the test,
+    // waiting for no thread.
+    let maker = {
+        let device = device.clone();
+        std::thread::spawn(move || {
             asked.recv().ok()?;
-            let before = on.shared().aliases.version();
+            let before = device.shared().aliases.version();
             // SAFETY: as above.
             let made = unsafe {
-                on.new_buffer_with_bytes_no_copy(
+                device.new_buffer_with_bytes_no_copy(
                     memory,
                     BYTES as u64,
                     ResourceOptions::shared(),
                     None,
                 )
             };
-            let moved = on.shared().aliases.version() != before;
-            tell.send(()).ok()?;
-            match made {
-                // It goes once the run ended, so the version moves once inside the run.
-                Ok(buffer) => {
-                    ended.recv().ok()?;
-                    drop(buffer);
-                    Some(moved)
-                }
-                Err(Error::Unsupported(gap)) => {
-                    eprintln!("DRAW-AGAIN: the device imports no host memory: {gap:?}");
-                    None
-                }
-                Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
-            }
-        });
-        let hook: crate::device::line::hooks::AtKeep = Box::new(move || {
-            ask.send(()).unwrap();
-            told.recv().unwrap();
-        });
-        *device.line().hooks.at_keep.lock().unwrap() = Some((held, hook));
-        let made = run(&device, plain);
-        // A hook that did not run goes, with its sender: the maker then ends at once.
-        let unran = device.line().hooks.at_keep.lock().unwrap().take();
-        let ran = unran.is_none();
-        drop(unran);
-        // Sent to a maker that made a buffer; one that made none ended already.
-        let _ = end.send(());
-        (made, ran, maker.join().unwrap())
-    });
-    assert!(ran, "the hook ran");
-    let Some(moved) = moved else {
-        return;
+            let moved = device.shared().aliases.version() != before;
+            tell.send(made).ok()?;
+            Some(moved)
+        })
     };
-    assert!(moved, "the buffer's making moved the host aliases' version");
+    // The buffer goes once the run ended, so the version moves once inside the run.
+    let made_meanwhile = Arc::new(Mutex::new(None));
+    let hook: crate::device::line::hooks::AtKeep = {
+        let made_meanwhile = Arc::clone(&made_meanwhile);
+        Box::new(move || {
+            ask.send(()).unwrap();
+            *made_meanwhile.lock().unwrap() = told.recv().ok();
+        })
+    };
+    *device.line().hooks.at_keep.lock().unwrap() = Some((held, hook));
+    let made = run(&device, plain);
+    // A hook that did not run goes, with its sender: the maker then ends at once.
+    let unran = device.line().hooks.at_keep.lock().unwrap().take();
+    let ran = unran.is_none();
+    drop(unran);
+    let moved = maker.join().unwrap();
+    assert!(ran, "the hook ran");
+    let meanwhile = made_meanwhile.lock().unwrap().take();
+    match meanwhile {
+        Some(Ok(_)) => {}
+        Some(Err(Error::Unsupported(gap))) => {
+            eprintln!("DRAW-AGAIN: the device imports no host memory: {gap:?}");
+            return;
+        }
+        Some(Err(error)) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+        None => panic!("the maker made nothing"),
+    }
+    assert_eq!(
+        moved,
+        Some(true),
+        "the buffer's making moved the host aliases' version"
+    );
     // The draw after the held one took every step, finding the version moved; the rest drew
     // again as before.
     assert_eq!(made.counted(under), 1);
