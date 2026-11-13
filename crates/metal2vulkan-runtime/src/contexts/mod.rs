@@ -293,6 +293,21 @@ impl<I: Run> Contexts<I> {
         lock(&self.shared.state).lines.leads(queue, is, posted)
     }
 
+    /// Hold the context of logical queue `queue`, which holds no item and runs on no thread (a
+    /// command queue's new place's, `queue.rs`), as a thread that runs it does: what is posted
+    /// there waits until [`release`](Self::release). False where it held an item or ran, changing
+    /// nothing.
+    pub(crate) fn hold(&self, queue: u64) -> bool {
+        lock(&self.shared.state).lines.take_idle(queue)
+    }
+
+    /// Let the context [`hold`](Self::hold) held run what was posted there meanwhile, in order.
+    pub(crate) fn release(&self, queue: u64) {
+        let mut state = lock(&self.shared.state);
+        state.lines.done(queue);
+        self.serve(state);
+    }
+
     /// Run `item` in the context of logical queue `queue` on this thread, where no thread runs
     /// that context, it holds no item, and `item` is [`plain`](Run::plain): the context runs on
     /// this thread meanwhile, so the items posted to it wait for `item`, then run on the pool's

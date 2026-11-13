@@ -27,7 +27,9 @@
 //!   new `VkDevice` failed) answers as the lost device does (`Failed`).
 //! - **The recovery** ([`Line::recover`]), on the program's thread whose call claimed it: the lost
 //!   generation's command buffers in flight fail through its completion path, the oldest
-//!   incomplete batch's as the hang and the others as its victims (`command_buffer/completion.rs`);
+//!   incomplete batch's as the hang and the others as its victims (`command_buffer/completion.rs`),
+//!   and so do those its scheduler holds unsubmitted, whatever they wait for (an event value, a
+//!   making, a host step), in each queue's commit order (`scheduler/mod.rs`'s `fail_lost`);
 //!   its queues waited idle, each under its lock; then a new `VkDevice` of the same physical
 //!   device, options, queue families and extensions (`create.rs`, the same making as the first),
 //!   whose device-level objects are made as the first generation's were, the shader cache's
@@ -747,8 +749,11 @@ impl Device {
     }
 
     /// The device's command buffers in flight fail through its completion path, and the batches
-    /// its scheduler holds through their submission, and this waits until its completion took
-    /// them (`command_buffer/completion.rs`): the first step of a recovery, the device lost.
+    /// its scheduler holds, whatever each waits for, through the same (`scheduler/mod.rs`'s
+    /// `fail_lost`), and this waits until its scheduler holds none and its completion took them
+    /// all (`command_buffer/completion.rs`): the first step of a recovery, the device lost. So
+    /// every command buffer committed before the loss that did not complete fails, as the hang or
+    /// its victim, before the next generation serves its queue's later ones.
     fn fail_in_flight(&self) {
         let shared = self.shared();
         shared.completion.fail_in_flight();
@@ -756,7 +761,9 @@ impl Device {
         let began = Instant::now();
         let after = self.line().notice_after();
         let mut announced = false;
-        while !shared.completion.settled() {
+        // The scheduler's first: what it failed was watched before it holds none, so the
+        // completion's look after sees it.
+        while !(shared.scheduler.holds_none() && shared.completion.settled()) {
             std::thread::sleep(Duration::from_millis(1));
             // Once per recovery: only the call that claimed it fails its command buffers.
             if !announced && began.elapsed() >= after {

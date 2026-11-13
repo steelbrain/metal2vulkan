@@ -173,6 +173,15 @@
 //!   [`waits_on_gpu`] says which. Counted:
 //!   `WorkCounts::scheduler_gpu_waits`; checked by `runtime_lane::event_round_trips`, a host
 //!   signal included.
+//! - **A lost device's batches fail, whatever they wait for** ([`fail_lost`]). Once the device is
+//!   lost, each pass fails every batch the order holds in commit order, as a batch whose
+//!   submission met the loss fails: an event value no signal reaches now, a making, a host step's
+//!   gate or a binary semaphore holds none of them back, nor its earlier commits. Its command
+//!   buffer finishes through the completion, which answers it as the recovery's victim
+//!   (`command_buffer/completion.rs`), its completed handlers run. A head whose host step or
+//!   checks run, or whose encoders a rebind encodes again, fails once that ends. The recovery
+//!   waits until the order holds none (`device/line.rs`), so no command buffer committed before
+//!   it is left behind on the lost generation.
 //! - **Exit.** Each submission is a section of the exit guard ([`exit_guard`]); once the process
 //!   is exiting, the thread ends, and what it holds stays held.
 //! - **Let go without the lock.** A submitted batch's hold of its command buffer goes after the
@@ -1545,6 +1554,7 @@ fn pass(
 ) -> usize {
     let taken = take_in(state, commits, &mut passed.spent);
     state.dirty = false;
+    fail_lost(state, left, (&mut passed.spent, &mut passed.settled));
     let before = passed.handlers.len();
     let ready = submit_ready(
         state,
@@ -1567,6 +1577,58 @@ fn pass(
         Err(Exiting) => passed.exiting = true,
     }
     taken
+}
+
+/// Where the device is lost, fail the batches the order holds, whatever each waits for (an event
+/// value no signal will reach now, a binary semaphore, its pipelines' making, a decode, room on
+/// its `VkQueue`, an earlier commit), as a batch whose submission met the loss fails
+/// ([`submit_ready`]): its command buffer's rest dropped, and the command buffer finished with
+/// the loss through the completion, which answers it as the recovery's victim
+/// (`command_buffer/completion.rs`); in commit order, so each logical queue's in its own. A head
+/// whose host step or checks run, or wait in `left` to, or whose encoders a rebind encodes again,
+/// stays until that ends, its line behind it: a later pass fails them. The recovery waits until
+/// the order holds none (`device/line.rs`), so none is left behind on the lost generation.
+fn fail_lost(state: &mut State, left: &Left<Work>, (spent, settled): (&mut Spent, &mut Settled)) {
+    let State {
+        order,
+        binary,
+        values,
+        ..
+    } = state;
+    let lost = (order.heads_mut(&[]).next()).is_some_and(|held| held.buffer.device().is_lost());
+    if !lost {
+        return;
+    }
+    let busy = |held: &Held| {
+        let (buffer, index) = (&held.buffer, held.index);
+        buffer.reencode_pending()
+            || (held.segments && buffer.stepping(index))
+            || (held.checks_taken.is_some() && buffer.needs_check(index))
+            || left.holds(Kind::Step, |(other, at)| other.same(buffer) && *at == index)
+    };
+    while let Some((queue, held)) = order.pop_first_where(|held| !busy(held)) {
+        let Held {
+            buffer,
+            index,
+            binary_needs,
+            waits: events,
+            ..
+        } = held;
+        drop(events);
+        binary.dropped(&binary_needs);
+        // The rest of the command buffer never runs.
+        let rest = order.drop_head(queue, |next| next.buffer.same(&buffer));
+        for held in &rest {
+            binary.dropped(&held.binary_needs);
+        }
+        spent.extend(rest.into_iter().map(|held| held.buffer));
+        buffer.never_runs_from(index);
+        buffer.failed(CommandBufferError::DeviceLost, values);
+        if buffer.settle_storage_forms() {
+            settled.push(buffer.hold());
+        }
+        spent.push(buffer);
+    }
 }
 
 /// Whether a pass of [`submit_ready`] stopped at [`PASS_SUBMISSIONS`], with batches perhaps still

@@ -365,6 +365,24 @@ impl<B> Order<B> {
         }
     }
 
+    /// The head committed first among those `take` holds of, taken from its line, with its
+    /// logical queue; `None` where `take` holds of no head (a lost device's batches, failed in
+    /// commit order whatever they wait for, `scheduler/mod.rs`'s `fail_lost`).
+    pub(crate) fn pop_first_where(&mut self, mut take: impl FnMut(&B) -> bool) -> Option<(u64, B)> {
+        let (_, at) = (self.lines.iter().enumerate())
+            .filter_map(|(at, (_, line))| {
+                let (sequence, head) = line.front()?;
+                take(head).then_some((*sequence, at))
+            })
+            .min()?;
+        let queue = self.lines[at].0;
+        let (_, batch) = self.lines[at].1.pop_front()?;
+        if self.lines[at].1.is_empty() {
+            self.remove_line(at);
+        }
+        Some((queue, batch))
+    }
+
     /// Drop the batches at the head of `queue`'s line while `drop` holds (the rest of a command
     /// buffer that failed), and give them back.
     pub(crate) fn drop_head(&mut self, queue: u64, mut drop: impl FnMut(&B) -> bool) -> Vec<B> {

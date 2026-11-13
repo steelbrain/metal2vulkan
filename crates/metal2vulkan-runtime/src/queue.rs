@@ -85,7 +85,11 @@
 //! (`device/line.rs`): its `VkQueue`, its slots, its pools and its hangs in flight, which its
 //! command buffers hold. A recovery retires every queue's place; the queue takes a new one on the
 //! new generation, as it took its first, at its next command buffer (or lent `VkQueue`), and its
-//! label and its count of the GPU errors its command buffers caused (`revocation.rs`) go on.
+//! label and its count of the GPU errors its command buffers caused (`revocation.rs`) go on. The
+//! new place's context runs nothing until every command buffer committed on the retired place
+//! completed or failed, as the recovery fails them all (`device/line.rs`): one Metal queue's
+//! transitions and handlers run in commit order across the recovery, though each place's run on
+//! its own generation's handler threads.
 //!
 //! **The runtime's own queues.** The device's in-place check of render targets takes its passes on
 //! a queue of its own (`in_place_check.rs`), made as a program's is but for Metal's device ID
@@ -150,8 +154,9 @@ enum Place {
     /// Its place on a generation of the device.
     Serving(QueueGen),
     /// A recovery made the generation of its place lost: it takes a new place at its next
-    /// command buffer.
-    Retired,
+    /// command buffer, whose context waits for the lost place's committed command buffers, the
+    /// slots here ([`QueueGen::follow`]).
+    Retired(Arc<Slots>),
 }
 
 /// A command queue's place on one generation of its device: what the command buffers made there
@@ -260,6 +265,24 @@ pub(crate) struct Slots {
     /// What its last slot to come back tells its generation, for that generation's rest once its
     /// recovery carried its objects (`device/carry.rs`): set as the queue's place is made.
     rest: OnceLock<RestWatch>,
+    /// The context of the queue's next place, held while a command buffer committed here holds
+    /// its slot ([`QueueGen::follow`]): released as the last of them gives its slot back. Taken
+    /// under `held`'s lock.
+    next: Mutex<Option<HeldContext>>,
+}
+
+/// A command queue's context on the place a recovery gave it, held until the command buffers
+/// committed on the place before completed (`Contexts::hold`, [`QueueGen::follow`]): released as
+/// it drops.
+struct HeldContext {
+    contexts: contexts::Contexts<crate::command_buffer::Item>,
+    queue: u64,
+}
+
+impl Drop for HeldContext {
+    fn drop(&mut self) {
+        self.contexts.release(self.queue);
+    }
 }
 
 /// The command buffers of a device's queues made and not committed (nor dropped): its slots open,
@@ -299,7 +322,17 @@ impl Slots {
             freed: Condvar::new(),
             uncommitted,
             rest: OnceLock::new(),
+            next: Mutex::new(None),
         })
+    }
+
+    /// Hold `next` until no command buffer committed here holds its slot: dropped at once where
+    /// none does.
+    fn hold_next(&self, next: HeldContext) {
+        let held = self.lock();
+        if held.all > held.open {
+            *lock(&self.next) = Some(next);
+        }
     }
 
     /// Whether a command buffer holds one of its slots.
@@ -340,15 +373,21 @@ impl Slot {
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        let none = {
+        let (none, next) = {
             let mut held = self.slots.lock();
             held.all -= 1;
             if self.open {
                 held.open -= 1;
                 self.slots.uncommitted.0.fetch_sub(1, Ordering::SeqCst);
             }
-            held.all == 0
+            // The last committed here completed: the next place's context runs on.
+            let next = match held.all == held.open {
+                true => lock(&self.slots.next).take(),
+                false => None,
+            };
+            (held.all == 0, next)
         };
+        drop(next);
         self.slots.freed.notify_one();
         // The last of its command buffers that may record on the generation: its rest, where its
         // recovery carried its objects (`device/carry.rs`).
@@ -640,6 +679,12 @@ impl QueueLine {
             }
         }
         let place = device.queue_place((self.count, self.kind, self.made_for), &self.common);
+        // Before another thread can take it: the command buffers committed on the place before
+        // complete first.
+        place.follow(match &*cell {
+            Place::Serving(before) => &before.0.slots,
+            Place::Retired(slots) => slots,
+        });
         let retired = std::mem::replace(&mut *cell, Place::Serving(place.clone()));
         drop(cell);
         drop(retired);
@@ -649,7 +694,14 @@ impl QueueLine {
     /// A recovery made the generation of the queue's place lost: it takes a new place at its next
     /// command buffer (`device/line.rs`). The place goes once the command buffers made there went.
     pub(crate) fn retire(&self) {
-        let retired = std::mem::replace(&mut *lock(&self.cell), Place::Retired);
+        let mut cell = lock(&self.cell);
+        let slots = match &*cell {
+            Place::Serving(place) => Arc::clone(&place.0.slots),
+            // A later recovery before its next command buffer: the first place's go on.
+            Place::Retired(slots) => Arc::clone(slots),
+        };
+        let retired = std::mem::replace(&mut *cell, Place::Retired(slots));
+        drop(cell);
         drop(retired);
     }
 }
@@ -751,6 +803,21 @@ impl QueueGen {
     /// (`Device::generation_serves`).
     fn serves(&self) -> bool {
         self.0.device.generation_serves()
+    }
+
+    /// This place, new, made after a recovery retired the queue's place whose slots are `before`:
+    /// its context waits until every command buffer committed there completed (or failed, as the
+    /// recovery fails them, `device/line.rs`), so their transitions and handlers run before any
+    /// of this place's, as one Metal queue's run in commit order. Nothing waits where none of them
+    /// is left.
+    fn follow(&self, before: &Slots) {
+        let contexts = self.0.device.shared().contexts.clone();
+        if contexts.hold(self.0.id) {
+            before.hold_next(HeldContext {
+                contexts,
+                queue: self.0.id,
+            });
+        }
     }
 
     /// Hold `carried`, of a command buffer committing, for a later command buffer's render
