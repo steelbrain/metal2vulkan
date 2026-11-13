@@ -83,9 +83,13 @@
 //!   the start of its work, after the first work's `VkSubmitInfo`, each copy after the writes before
 //!   it, and holds the image and the staging buffer until it completed.
 //! - **Bounded**. Past [`STAGED_BYTES`] bytes, or [`STAGED_COPIES`] copies, staged for the next
-//!   submission (staged bytes' copies into buffers, a `Managed` buffer's uploads, and staged texel
-//!   copies), the call that staged the last makes a submission for them and waits
-//!   (`FirstMoves::register_bytes` and `register_texels` answer when).
+//!   submission (copies into buffers from staging buffers of their own, and staged texel copies),
+//!   the call that staged the last makes a submission for them and waits
+//!   (`FirstMoves::register_bytes` and `register_texels` answer when). The bound is on the
+//!   memory staged: a copy from a host copy the buffer holds whatever the copy (a `Managed`
+//!   buffer's upload from its mirror, or from an import of the caller's pages: [`Keeps::HostCopy`])
+//!   stages nothing, counts toward neither bound, and makes no submission, so a commit's uploads
+//!   of the ranges `did_modify_range` named go with its own batch however many bytes they are.
 //! - **Over host pages.** An image bound to imported host memory starts in `UNDEFINED`
 //!   (`VUID-VkImageCreateInfo-pNext-01443`), and its move "may perform read and write accesses
 //!   on all memory bound to the image subresource range": a no-copy heap's texture bound to the
@@ -845,6 +849,18 @@ pub(super) const STAGED_BYTES: u64 = 256 << 20;
 /// them, waited for (the module docs): a bound on the work waiting, whatever its bytes.
 pub(super) const STAGED_COPIES: usize = 4096;
 
+/// What a copy of bytes into a buffer keeps until the submission that makes it completed
+/// ([`FirstMoves::register_bytes`], [`FirstMoves::register_upload`]).
+pub(crate) enum Keeps {
+    /// A staging buffer of its own, which holds the bytes: memory that waits on the submission,
+    /// which the bound counts ([`STAGED_BYTES`], [`STAGED_COPIES`]).
+    Staging(Box<dyn Any + Send + Sync>),
+    /// The host copy it reads, which the buffer holds whatever the copy (a `Managed` buffer's
+    /// mirror, an import of the caller's pages): it stages nothing, and the bound counts none of
+    /// it.
+    HostCopy(Box<dyn Any + Send + Sync>),
+}
+
 /// A new buffer's fill: copies of the device's zeros onto `range` of `buffer`, or a fill of its
 /// words with zeros (`word_fill.rs`), or copies of the bytes a staging buffer holds, or a
 /// `Managed` buffer's upload from its host copy; or an exportable buffer's acquire from the
@@ -856,9 +872,12 @@ pub(crate) struct FirstFill {
     /// The words one `vkCmdFillBuffer` sets to zero in place of the copies (none then)
     /// ([`FirstFill::zeros`]).
     filled: Option<std::ops::Range<u64>>,
-    /// What keeps the staging buffer `source` is, held until the submission that makes the fill
-    /// completed; `None` where `source` is the device's zeros.
+    /// What keeps the staging buffer or host copy `source` is, held until the submission that
+    /// makes the fill completed; `None` where `source` is the device's zeros.
     staging: Option<Box<dyn Any + Send + Sync>>,
+    /// Whether `source` is a staging buffer of the fill's own ([`Keeps::Staging`]), whose bytes
+    /// count toward the bound ([`past_bound`]); false for the device's zeros and a host copy.
+    staged: bool,
     /// The queue families of an acquire of the whole `VkBuffer` (source, a family reserved for
     /// external memory; target), recorded in the barrier before every fill, in place of copies
     /// (none then).
@@ -905,6 +924,7 @@ impl FirstFill {
             copies,
             filled: None,
             staging: None,
+            staged: false,
             acquire: None,
             key: None,
             owner: None,
@@ -934,6 +954,7 @@ impl FirstFill {
                 copies: Vec::new(),
                 filled: Some(range),
                 staging: None,
+                staged: false,
                 acquire: None,
                 key: None,
                 owner: None,
@@ -950,14 +971,18 @@ impl FirstFill {
     }
 
     /// The copy of `length` bytes of `source` from byte `from` onto `buffer` from byte `start`,
-    /// `staging` keeping `source`.
+    /// `keeps` keeping `source`.
     fn bytes(
         buffer: vk::Buffer,
         start: u64,
         (source, from): (vk::Buffer, u64),
         length: u64,
-        staging: Box<dyn Any + Send + Sync>,
+        keeps: Keeps,
     ) -> FirstFill {
+        let (staging, staged) = match keeps {
+            Keeps::Staging(staging) => (staging, true),
+            Keeps::HostCopy(copy) => (copy, false),
+        };
         FirstFill {
             buffer,
             source,
@@ -968,6 +993,7 @@ impl FirstFill {
             }],
             filled: None,
             staging: Some(staging),
+            staged,
             acquire: None,
             key: None,
             owner: None,
@@ -985,6 +1011,7 @@ impl FirstFill {
             copies: Vec::new(),
             filled: None,
             staging: None,
+            staged: false,
             acquire: Some((source, target)),
             key: None,
             owner: None,
@@ -1317,11 +1344,12 @@ struct Scratch {
 pub(crate) const PATTERN_BYTES: u64 = 256 << 10;
 
 /// Whether the host calls' copies `waiting` stages passed [`STAGED_BYTES`] or [`STAGED_COPIES`]:
-/// copies of staged bytes into buffers, uploads, and texel copies.
+/// copies into buffers from staging buffers of their own, and texel copies. A copy from a host
+/// copy ([`Keeps::HostCopy`]) stages nothing and counts toward neither.
 fn past_bound(waiting: &[Waiting]) -> bool {
     let staged = waiting.iter().filter_map(|entry| match entry {
         Waiting::Fill(_, fill) => {
-            (fill.staging.as_ref()).map(|_| fill.copies.iter().map(|copy| copy.size).sum())
+            (fill.staged).then(|| fill.copies.iter().map(|copy| copy.size).sum())
         }
         Waiting::Texels(_, copy) => Some(copy.bytes),
         Waiting::Moves(_) => None,
@@ -1430,19 +1458,20 @@ impl FirstMoves {
     }
 
     /// The buffer `keeper`, whose bytes the host cannot write, waits for the copy of `length`
-    /// bytes of `source` (a buffer and its byte the copy starts at), which `staging` keeps, onto
+    /// bytes of `source` (a buffer and its byte the copy starts at), which `keeps` keeps, onto
     /// its `VkBuffer` `buffer` from byte `start`: after every fill with zeros waiting, its own
     /// among them where it is new, and after the copies registered before it. Whether the copies
-    /// staged now passed their bound, so the caller makes a submission for them.
+    /// staged now passed their bound, so the caller makes a submission for them: never where it
+    /// keeps a host copy ([`Keeps::HostCopy`]), which stages nothing.
     pub(crate) fn register_bytes(
         &self,
         keeper: Weak<dyn Filled>,
         (buffer, start): (vk::Buffer, u64),
         source: (vk::Buffer, u64),
         length: u64,
-        staging: Box<dyn Any + Send + Sync>,
+        keeps: Keeps,
     ) -> bool {
-        let fill = FirstFill::bytes(buffer, start, source, length, staging).keyed(&keeper);
+        let fill = FirstFill::bytes(buffer, start, source, length, keeps).keyed(&keeper);
         self.register_fill_of_bytes(keeper, fill)
     }
 
@@ -1461,10 +1490,10 @@ impl FirstMoves {
         (buffer, start): (vk::Buffer, u64),
         source: (vk::Buffer, u64),
         length: u64,
-        staging: Box<dyn Any + Send + Sync>,
+        keeps: Keeps,
         commit: u64,
     ) -> bool {
-        let fill = FirstFill::bytes(buffer, start, source, length, staging).keyed(&keeper);
+        let fill = FirstFill::bytes(buffer, start, source, length, keeps).keyed(&keeper);
         let fill = FirstFill {
             upload: Some(commit),
             ..fill
@@ -1472,13 +1501,14 @@ impl FirstMoves {
         self.register_fill_of_bytes(keeper, fill)
     }
 
-    /// Register `fill`, a copy of staged bytes into `keeper`'s buffer: whether the copies staged
-    /// now passed their bound.
+    /// Register `fill`, a copy of bytes into `keeper`'s buffer: whether it staged them
+    /// ([`Keeps::Staging`]) and the copies staged now passed their bound.
     fn register_fill_of_bytes(&self, keeper: Weak<dyn Filled>, fill: FirstFill) -> bool {
         let _order = self.registration_place();
+        let staged = fill.staged;
         let mut waiting = lock(&self.waiting);
         waiting.push(Waiting::Fill(keeper, fill));
-        past_bound(&waiting)
+        staged && past_bound(&waiting)
     }
 
     /// The host call's `copy` into the images of `keeper` waits for the device's next
@@ -3101,7 +3131,7 @@ mod tests {
             (raw(2), 16),
             (raw(3), 0),
             64,
-            Box::new(staging.clone()),
+            Keeps::Staging(Box::new(staging.clone())),
         );
         let taken = moves.take(|_| false);
         let copies: Vec<(vk::Buffer, u64, u64, u64)> = (taken.held.iter())
@@ -3197,7 +3227,7 @@ mod tests {
         let bytes = |moves: &FirstMoves| {
             let to = (vk::Buffer::from_raw(7), 0);
             let from = (vk::Buffer::from_raw(8), 0);
-            moves.register_bytes(keeper.clone(), to, from, 4, Box::new(()))
+            moves.register_bytes(keeper.clone(), to, from, 4, Keeps::Staging(Box::new(())))
         };
         for _ in 0..STAGED_COPIES {
             assert!(!bytes(&moves));
@@ -3210,6 +3240,37 @@ mod tests {
             .collect();
         assert!(!past_bound(&lock(&moves.waiting)));
         drop(held);
+    }
+
+    /// A copy from a host copy the buffer holds (`Keeps::HostCopy`: a `Managed` buffer's upload
+    /// from its mirror or its pages' import) stages nothing: past the bytes' bound, and past the
+    /// count's, in copies at the making and uploads a commit took, it passes neither bound, and a
+    /// staged copy after them is counted alone.
+    #[test]
+    fn copies_from_a_host_copy_pass_no_bound() {
+        let moves = FirstMoves::default();
+        let keeper: Weak<dyn Filled> = Weak::<Unit>::new();
+        let to = (vk::Buffer::from_raw(7), 0);
+        let from = (vk::Buffer::from_raw(8), 0);
+        let host_copy = || Keeps::HostCopy(Box::new(()));
+        assert!(!moves.register_bytes(keeper.clone(), to, from, STAGED_BYTES + 1, host_copy()));
+        for commit in 1..=STAGED_COPIES as u64 + 1 {
+            let upload =
+                moves.register_upload(keeper.clone(), to, from, 1 << 20, host_copy(), commit);
+            assert!(!upload, "an upload from a host copy passed the bound");
+        }
+        assert!(!past_bound(&lock(&moves.waiting)));
+        assert!(!moves.register_bytes(
+            keeper.clone(),
+            to,
+            from,
+            STAGED_BYTES,
+            Keeps::Staging(Box::new(()))
+        ));
+        assert!(
+            moves.register_bytes(keeper.clone(), to, from, 1, Keeps::Staging(Box::new(()))),
+            "one staged byte past the bytes' bound"
+        );
     }
 
     #[test]

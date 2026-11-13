@@ -54,7 +54,9 @@
 //!   submission completed, and of a power-of-two length, so a later copy's of a like size takes
 //!   one the device parked (`recycle.rs`) rather than new memory. Past the bound of what is staged
 //!   (`texture/first_move.rs`'s `STAGED_BYTES`), the call makes a submission for them and
-//!   waits.
+//!   waits. A copy from an import stages nothing and counts toward no bound, so a commit's copies
+//!   in of the ranges named go with its own batch however many bytes they are, and the commit
+//!   waits for none of them.
 //! - **Copies out.** `synchronize_resource` copies the buffer's bytes to the import in the blit
 //!   encoder's command stream, a blit's write of the import (`blit.rs`); to pages no import maps,
 //!   into a staging buffer there, which the command buffer's completion copies to the pages before
@@ -84,6 +86,7 @@ use super::device::lock;
 use super::error::{internal, Error};
 use super::exit_guard;
 use super::host_memory::{HostMemory, HostParts, Release};
+use super::texture::first_move::Keeps;
 use super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
 use super::Device;
 use ash::vk;
@@ -409,10 +412,11 @@ impl CallerCopy {
     }
 
     /// Copy `range` of the pages into `buffer`'s device copy (the module docs, **Copies in**),
-    /// clamped to the pages' reach. Where `bounded`, past the bound of what is staged, a
-    /// submission waited for makes the copies now; else (a command buffer's completion, which
-    /// makes no submission) they wait for the device's next. `replaces` says which batch takes
-    /// them ([`Replaces`]). Nothing while the pages are detached.
+    /// clamped to the pages' reach. From an import the copies stage nothing and wait for the
+    /// device's next submission; staged, where `bounded`, past the bound of what is staged, a
+    /// submission waited for makes them now, else (a command buffer's completion, which makes no
+    /// submission) they wait for the device's next too. `replaces` says which batch takes them
+    /// ([`Replaces`]). Nothing while the pages are detached.
     pub(super) fn copy_in(
         &self,
         buffer: &Buffer,
@@ -443,7 +447,7 @@ impl CallerCopy {
                     return stage_in(buffer, pointer, range, bounded, replaces);
                 }
                 let ((source, at), hold) = import.blit_at(range.start)?;
-                let held: Box<dyn std::any::Any + Send + Sync> = Box::new((import, hold));
+                let held = Keeps::HostCopy(Box::new((import, hold)));
                 buffer.copy_in_from((source, at), range, held, (bounded, replaces))
             }
             Side::Pages(pages, false) => {
@@ -557,7 +561,7 @@ pub(super) fn stage_in(
             );
         }
         let source = staging.buffer.at(0);
-        let held: Box<dyn std::any::Any + Send + Sync> = Box::new(staging);
+        let held = Keeps::Staging(Box::new(staging));
         buffer.copy_in_from(source, start..start + bytes, held, (bounded, replaces))?;
         start += bytes;
     }
