@@ -27,9 +27,9 @@ use super::blit_holds::{device, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::framebuffer_fetch::{through_inputs, through_storage};
 use crate::{
-    BlitOption, CommandQueue, CpuCacheMode, Device, HazardTrackingMode, LoadAction, Origin,
-    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StorageMode,
-    StoreAction, Texture, TextureDescriptor, VisibilityResultMode, WorkCounts,
+    BlitOption, CommandBuffer, CommandQueue, CpuCacheMode, Device, HazardTrackingMode, LoadAction,
+    Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size,
+    StorageMode, StoreAction, Texture, TextureDescriptor, VisibilityResultMode, WorkCounts,
 };
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::metal::{BarrierScope, PixelFormat, PrimitiveType, RenderStages, TextureUsage};
@@ -103,10 +103,24 @@ fn corners([x0, y0, x1, y1]: [u64; 4]) -> Vec<u8> {
 fn pass_over(
     queue: &CommandQueue,
     target: &Texture,
+    states: (&RenderPipelineState, &RenderPipelineState),
+    drawn: (usize, [u64; 4]),
+    visibility: Option<&crate::Buffer>,
+) -> Vec<u8> {
+    let (command_buffer, back) = pass_into(queue, target, states, drawn, visibility);
+    command_buffer.commit().unwrap();
+    reds_after(&command_buffer, &back)
+}
+
+/// [`pass_over`]'s command buffer, encoded and not committed, and the buffer its target's texels
+/// are copied into after the pass.
+fn pass_into(
+    queue: &CommandQueue,
+    target: &Texture,
     (fill, read): (&RenderPipelineState, &RenderPipelineState),
     (pass, rect): (usize, [u64; 4]),
     visibility: Option<&crate::Buffer>,
-) -> Vec<u8> {
+) -> (CommandBuffer, crate::Buffer) {
     let device = queue.device();
     let row = SIDE * 4;
     let back = device
@@ -154,10 +168,15 @@ fn pass_over(
     ))
     .unwrap();
     blit.end_encoding().unwrap();
-    command_buffer.commit().unwrap();
+    (command_buffer, back)
+}
+
+/// The red at each pixel of the target [`pass_into`]'s `command_buffer`, committed, copied into
+/// `back`, once it completed.
+fn reds_after(command_buffer: &CommandBuffer, back: &crate::Buffer) -> Vec<u8> {
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
-    let texels = super::merge_scratch::read(&back, SIDE * row);
+    let texels = super::merge_scratch::read(back, SIDE * SIDE * 4);
     // `BGRA8Unorm`'s red is its third byte.
     texels.chunks(4).map(|texel| texel[2]).collect()
 }
@@ -339,6 +358,68 @@ fn a_readers_form_follows_what_it_covered_in_the_pass_before() {
         rects.len()
     );
     assert!(pools <= 2, "{pools} pools made over {} passes", rects.len());
+}
+
+/// Readers of passes in flight together take queries of one pool (`render/coverage.rs`'s
+/// `SparePools`): command buffers of one pass each, every one encoded before the first is
+/// committed, so none completes before the last pass's reader took its query, make no more than
+/// one pool between them, where a pool for each pass held its pool until its command buffer
+/// completed; each pass's reader measured, and its pixels Metal's answer.
+#[test]
+fn readers_in_flight_together_take_queries_of_one_pool() {
+    let cache = Scratch::new("learned-coverage-in-flight");
+    let (device, queue, states) = prepared(&cache);
+    let (_, measures) = answers(&device);
+    let target = target(&device, true);
+    const PASSES: usize = 8;
+    let before = device.work_counts();
+    let encoded: Vec<_> = (0..PASSES)
+        .map(|pass| {
+            pass_into(
+                &queue,
+                &target,
+                (&states[0], &states[1]),
+                (pass, SPARSE),
+                None,
+            )
+        })
+        .collect();
+    for (command_buffer, _) in &encoded {
+        command_buffer.commit().unwrap();
+    }
+    for (pass, (command_buffer, back)) in encoded.iter().enumerate() {
+        let reds = reds_after(command_buffer, back);
+        let [x0, y0, x1, y1] = SPARSE;
+        let want = |i: usize| {
+            let (x, y) = (i as u64 % SIDE, i as u64 / SIDE);
+            match (x0..x1).contains(&x) && (y0..y1).contains(&y) {
+                true => red_of(pass),
+                false => CLEARED,
+            }
+        };
+        if let Some(i) = (0..reds.len()).find(|&i| reds[i] != want(i)) {
+            panic!(
+                "pass {pass}: pixel {i} holds red {}, not {}",
+                reds[i],
+                want(i)
+            );
+        }
+    }
+    let after = device.work_counts();
+    let queries = after.coverage_queries - before.coverage_queries;
+    let pools = after.coverage_pools_made - before.coverage_pools_made;
+    eprintln!(
+        "LEARNED-COVERAGE {}: {PASSES} passes in flight together: {queries} queries, {pools} \
+         pools made",
+        device.name()
+    );
+    if measures {
+        assert_eq!(queries, PASSES as u64, "each pass's reader measured");
+        assert!(
+            pools <= 1,
+            "{pools} pools made for {PASSES} passes in flight together"
+        );
+    }
 }
 
 #[test]

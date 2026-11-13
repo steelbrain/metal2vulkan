@@ -9,8 +9,9 @@
 //!   snapshot for both, which costs the second about twice the split on the Radeon 780M.
 //! - **Measured.** Each reader the rule weighs (a draw that could read through snapshots, of a
 //!   private color, every check before the rule passed: `RenderLowering::snapshot_wanted`) records
-//!   its drawing commands inside a precise occlusion query of a pool its pass holds, one of the
-//!   device's spares where it has one ([`SparePools`]) (Vulkan's
+//!   its drawing commands inside a precise occlusion query, the next of the pool the device's
+//!   readers take queries from, which every pass of every command buffer shares, a spare it reset
+//!   once all its queries came back where it has one ([`SparePools`]) (Vulkan's
 //!   `VK_QUERY_CONTROL_PRECISE_BIT`: "the query result will be the number of samples that passed"),
 //!   whichever form it took: its snapshot draws' fragments are its drawing draws' (the snapshot
 //!   module's docs), and the pass has one sample (the rule's checks). As the command buffer
@@ -52,7 +53,7 @@ use metal2vulkan::device::VkFeature;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-/// The readers one pass measures, at most: its pool's queries.
+/// The readers one pass measures, at most, and the queries of a pool ([`SparePools`]).
 const MEASURED: u32 = 64;
 
 /// The spare pools a device keeps, at most ([`SparePools`]): one that comes back past them is
@@ -108,15 +109,14 @@ pub(crate) fn snapshot_covers(covered: u64, copied: u64) -> bool {
 
 /// A reader one pass measures: its query, its first color's texture and its identity.
 struct Measured {
-    query: u32,
+    query: Query,
     texture: Texture,
     key: ReaderKey,
 }
 
 /// One pass's readers: each one's place among its state's readers of its texture, and, where
-/// the device measures them, the pool its first measured reader took and the readers measured.
-/// Nothing (and no allocation) in a pass without readers: a pass's lowering holds a pointer's
-/// width of it.
+/// the device measures them, the readers measured with their queries. Nothing (and no
+/// allocation) in a pass without readers: a pass's lowering holds a pointer's width of it.
 #[derive(Default)]
 pub(super) struct Readers(Option<Box<PassReaders>>);
 
@@ -126,8 +126,6 @@ struct PassReaders {
     ordinals: Vec<((usize, usize), u32)>,
     /// The device measures readers: `None` until the pass's first reader asks.
     measures: Option<bool>,
-    pool: Option<Pool>,
-    used: u32,
     measured: Vec<Measured>,
 }
 
@@ -150,9 +148,9 @@ impl Readers {
         ReaderKey { state, ordinal }
     }
 
-    /// Measure the reader `key` of `texture` where `device` measures readers and the pass has a
-    /// query left: the query its drawing commands record inside, from the pass's pool, taken at
-    /// its first ([`SparePools::take`]). `None` where it is not measured.
+    /// Measure the reader `key` of `texture` where `device` measures readers and the pass
+    /// measured fewer than [`MEASURED`]: the query its drawing commands record inside, the next of
+    /// the device's pool ([`SparePools::take`]). `None` where it is not measured.
     pub(super) fn measure(
         &mut self,
         device: &Device,
@@ -168,126 +166,173 @@ impl Readers {
                     .description
                     .has(VkFeature::OcclusionQueryPrecise)
         });
-        if !measures || readers.used == MEASURED {
+        if !measures || readers.measured.len() == MEASURED as usize {
             return Ok(None);
         }
-        let pool = match &readers.pool {
-            Some(pool) => pool.raw,
-            None => readers.pool.insert(Pool::new(device)?).raw,
-        };
-        let query = readers.used;
-        readers.used += 1;
+        let query = device.shared().coverage_pools.take(device)?;
+        let at = (query.pool, query.index);
         readers.measured.push(Measured {
             query,
             texture: texture.clone(),
             key,
         });
-        Ok(Some((pool, query)))
+        Ok(Some(at))
     }
 
     /// What the pass's command buffer holds until it completes, to read its readers' counts
     /// then: `None` where the pass measured none.
     pub(super) fn readback(self) -> Option<Readback> {
-        let readers = *self.0?;
-        Some(Readback {
-            pool: readers.pool?,
-            measured: readers.measured,
-        })
+        let measured = self.0?.measured;
+        (!measured.is_empty()).then_some(Readback { measured })
     }
 }
 
-/// A device's occlusion query pools of [`MEASURED`] queries that no pass holds, [`SPARE_POOLS`]
-/// at most, which the next pass that measures a reader takes before making one: a pool made
-/// and released for each pass slows the GPU work running as it is released. On the Iris Xe, in
-/// `runtime_lane::attachment_read_costs::snapshot_crossover` (four command buffers committed back
-/// to back), readers measured from a pool made for each pass took 1.07 to 1.19 times the GPU
-/// time of the same forms unmeasured, and from spare pools 1.00 to 1.06. Released as the device
-/// ends.
+/// A device's occlusion query pools of [`MEASURED`] queries: the one readers take queries from,
+/// in turn, whichever pass and command buffer they are of; those whose every query was taken,
+/// until the last comes back; and the spares, [`SPARE_POOLS`] at most, whose every query came
+/// back, reset on the host as the next pool is taken from them. So a command buffer of many
+/// passes that each measure a reader, and command buffers committed ahead of the GPU, take a
+/// pool for every [`MEASURED`] readers rather than one for each pass, and make none once spares
+/// have come back: a pool made and released for each pass slows the GPU work running as it is
+/// released (on the Iris Xe, in `runtime_lane::attachment_read_costs::snapshot_crossover`, four
+/// command buffers committed back to back, readers measured from a pool made for each pass took
+/// 1.07 to 1.19 times the GPU time of the same forms unmeasured, and from spare pools 1.00 to
+/// 1.06), and costs RADV a buffer object's allocation at each (a window server's walk on the
+/// XTX made 222 pools in 14 s, one pass each, under 16 spares). Released as the device ends.
 #[derive(Default)]
-pub(crate) struct SparePools(Mutex<Vec<vk::QueryPool>>);
+pub(crate) struct SparePools(Mutex<Pools>);
+
+/// The pools of [`SparePools`].
+#[derive(Default)]
+struct Pools {
+    /// The pool readers take queries from: its next query, and its queries taken that have not
+    /// come back.
+    current: Option<(vk::QueryPool, u32, u32)>,
+    /// Pools whose every query was taken, with their queries that have not come back.
+    full: Vec<(vk::QueryPool, u32)>,
+    /// Pools whose every query came back.
+    spares: Vec<vk::QueryPool>,
+}
 
 impl SparePools {
-    /// A pool of [`MEASURED`] occlusion queries, each unavailable (reset on the host, on a device
-    /// that resets queries there: `Readers::measure`): a spare where the device has one, else a
-    /// new one.
-    fn take(&self, device: &Device) -> Result<vk::QueryPool, Error> {
+    /// The next query of the device's current pool, unavailable (each pool is reset on the host
+    /// as it becomes the current one, on a device that resets queries there: `Readers::measure`):
+    /// a spare's or a new pool's where the current one has none left.
+    fn take(&self, device: &Device) -> Result<Query, Error> {
         let raw = device.shared().vk();
-        let spare = crate::device::lock(&self.0).pop();
-        let pool = match spare {
-            Some(pool) => pool,
-            None => {
-                let info = vk::QueryPoolCreateInfo::default()
-                    .query_type(vk::QueryType::OCCLUSION)
-                    .query_count(MEASURED);
-                // SAFETY: the device is live and `info` valid.
-                let pool = unsafe { raw.create_query_pool(&info, None) }.map_err(vulkan)?;
-                exit_guard::called(Call::CreateQueryPool);
-                device.shared().counts.coverage_pool_made();
-                pool
+        let mut pools = crate::device::lock(&self.0);
+        let current = match pools.current {
+            Some(current) if current.1 < MEASURED => current,
+            used => {
+                if let Some((pool, _, held)) = used {
+                    match held {
+                        0 => pools.spare(raw, pool),
+                        held => pools.full.push((pool, held)),
+                    }
+                }
+                let pool = match pools.spares.pop() {
+                    Some(pool) => pool,
+                    None => {
+                        let info = vk::QueryPoolCreateInfo::default()
+                            .query_type(vk::QueryType::OCCLUSION)
+                            .query_count(MEASURED);
+                        // SAFETY: the device is live and `info` valid.
+                        let pool = unsafe { raw.create_query_pool(&info, None) }.map_err(vulkan)?;
+                        exit_guard::called(Call::CreateQueryPool);
+                        device.shared().counts.coverage_pool_made();
+                        pool
+                    }
+                };
+                // SAFETY: the device enables `hostQueryReset`; no pending command uses the pool,
+                // nor does any other thread: a spare's every query came back once the command
+                // buffer that recorded it completed or went unsubmitted, after its result was
+                // read ([`Readback`]), and a new one none used.
+                unsafe { raw.reset_query_pool(pool, 0, MEASURED) };
+                exit_guard::called(Call::ResetQueryPool);
+                (pool, 0, 0)
             }
         };
-        // SAFETY: the device enables `hostQueryReset`; no pending command uses the pool: a spare
-        // came back once the command buffer of the pass that held it completed or went
-        // unsubmitted ([`Readback`]), and a new one none used; no other thread holds it.
-        unsafe { raw.reset_query_pool(pool, 0, MEASURED) };
-        exit_guard::called(Call::ResetQueryPool);
-        Ok(pool)
+        let (pool, index, held) = current;
+        pools.current = Some((pool, index + 1, held + 1));
+        Ok(Query {
+            device: device.clone(),
+            pool,
+            index,
+        })
     }
 
-    /// Take back `pool`, which no pending command uses: a spare, or released past
-    /// [`SPARE_POOLS`].
+    /// Take back a query of `pool`: the pool a spare once its every query came back and it is not
+    /// the current one, or released past [`SPARE_POOLS`].
     fn give(&self, device: &ash::Device, pool: vk::QueryPool) {
-        let mut spares = crate::device::lock(&self.0);
-        if spares.len() < SPARE_POOLS {
-            spares.push(pool);
-            return;
+        let mut pools = crate::device::lock(&self.0);
+        if let Some((current, _, held)) = pools.current.as_mut() {
+            if *current == pool {
+                *held -= 1;
+                return;
+            }
         }
-        drop(spares);
-        // SAFETY: the caller's: no pending command uses the pool.
-        unsafe { crate::release::object(device, pool) };
+        let Some(at) = pools.full.iter().position(|&(full, _)| full == pool) else {
+            return;
+        };
+        pools.full[at].1 -= 1;
+        if pools.full[at].1 == 0 {
+            pools.full.swap_remove(at);
+            pools.spare(device, pool);
+        }
     }
 
-    /// Release every spare, as the device ends.
+    /// Release every pool, as the device ends.
     ///
     /// # Safety
     ///
     /// No pending command uses them: the device's queues are idle.
     pub(crate) unsafe fn release(&self, device: &ash::Device) {
-        for pool in crate::device::lock(&self.0).drain(..) {
+        let mut pools = crate::device::lock(&self.0);
+        let mut all: Vec<vk::QueryPool> = pools
+            .current
+            .take()
+            .map(|(pool, ..)| pool)
+            .into_iter()
+            .collect();
+        all.extend(pools.full.drain(..).map(|(pool, _)| pool));
+        all.extend(pools.spares.drain(..));
+        for pool in all {
             // SAFETY: the caller's.
             unsafe { crate::release::object(device, pool) };
         }
     }
 }
 
-/// A pass's occlusion query pool, given back to its device's spares as it drops.
-struct Pool {
-    device: Device,
-    raw: vk::QueryPool,
-}
-
-impl Pool {
-    /// A pool of [`MEASURED`] occlusion queries, each unavailable, on a device that resets
-    /// queries on the host ([`SparePools::take`]).
-    fn new(device: &Device) -> Result<Pool, Error> {
-        let raw = device.shared().coverage_pools.take(device)?;
-        Ok(Pool {
-            device: device.clone(),
-            raw,
-        })
+impl Pools {
+    /// Keep `pool`, whose every query came back, as a spare, or release it past [`SPARE_POOLS`].
+    fn spare(&mut self, device: &ash::Device, pool: vk::QueryPool) {
+        if self.spares.len() < SPARE_POOLS {
+            self.spares.push(pool);
+            return;
+        }
+        // SAFETY: no pending command uses the pool: its every query came back.
+        unsafe { crate::release::object(device, pool) };
     }
 }
 
-impl Drop for Pool {
+/// A query a reader took of its device's current pool ([`SparePools::take`]), given back as it
+/// drops, once its result was read where it ran.
+struct Query {
+    device: Device,
+    pool: vk::QueryPool,
+    index: u32,
+}
+
+impl Drop for Query {
     fn drop(&mut self) {
         // Once the process is exiting, the pool is left to its end (`exit_guard`).
         let Some(_busy) = exit_guard::enter() else {
             return;
         };
-        // No pending command uses the pool: its pass's command buffer held it until it
+        // No pending command uses the query: its pass's command buffer held it until it
         // completed, or never recorded it.
         let shared = self.device.shared();
-        shared.coverage_pools.give(shared.vk(), self.raw);
+        shared.coverage_pools.give(shared.vk(), self.pool);
     }
 }
 
@@ -295,7 +340,6 @@ impl Drop for Pool {
 /// ([`Readers::readback`]): as it drops, each query that ran gives its reader's count to its
 /// texture.
 pub(super) struct Readback {
-    pool: Pool,
     measured: Vec<Measured>,
 }
 
@@ -307,29 +351,31 @@ impl Drop for Readback {
         let Some(_busy) = exit_guard::enter() else {
             return;
         };
-        // The measured readers took the pool's first queries, in turn.
-        let mut results = [[0u64; 2]; MEASURED as usize];
-        let results = &mut results[..self.measured.len()];
-        // SAFETY: the pool's queries, each recorded by the pass whose command buffer completed or
-        // never ran: 64-bit values, each with its availability, so one that never ran reads as
-        // unavailable ("If VK_QUERY_RESULT_WAIT_BIT and VK_QUERY_RESULT_PARTIAL_BIT are both not
-        // set then no result values are written to pData for queries that are in the unavailable
-        // state ... However, availability state is still written").
-        let read = unsafe {
-            self.pool.device.shared().vk().get_query_pool_results(
-                self.pool.raw,
-                0,
-                results,
-                vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WITH_AVAILABILITY,
-            )
-        };
-        exit_guard::called(Call::GetQueryPoolResults);
-        if !matches!(read, Ok(()) | Err(vk::Result::NOT_READY)) {
-            return;
-        }
+        // Each reader's query, read before it goes back to its pool (`Query`'s drop, after this).
         for measured in &self.measured {
-            let [covered, available] = results[measured.query as usize];
-            if available != 0 {
+            let Query {
+                device,
+                pool,
+                index,
+            } = &measured.query;
+            let mut result = [[0u64; 2]; 1];
+            // SAFETY: a query of `pool`, recorded by the pass whose command buffer completed or
+            // never ran, which no other thread reads or resets while it is taken: a 64-bit value
+            // with its availability, so one that never ran reads as unavailable ("If
+            // VK_QUERY_RESULT_WAIT_BIT and VK_QUERY_RESULT_PARTIAL_BIT are both not set then no
+            // result values are written to pData for queries that are in the unavailable state
+            // ... However, availability state is still written").
+            let read = unsafe {
+                device.shared().vk().get_query_pool_results(
+                    *pool,
+                    *index,
+                    &mut result,
+                    vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WITH_AVAILABILITY,
+                )
+            };
+            exit_guard::called(Call::GetQueryPoolResults);
+            let [covered, available] = result[0];
+            if matches!(read, Ok(()) | Err(vk::Result::NOT_READY)) && available != 0 {
                 measured.texture.learn_coverage(measured.key, covered);
             }
         }
