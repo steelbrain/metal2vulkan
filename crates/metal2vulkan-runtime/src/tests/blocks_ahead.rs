@@ -16,6 +16,10 @@
 //! GPU's work: threads that commit and wait leave a pause of 1 ms wherever the host delays them,
 //! which ended each making's wait before the call came on a loaded host.
 //!
+//! At the device's allocation limit the blocks made ahead and not yet added go back
+//! (`allocations.rs`): an object's allocation there takes theirs rather than being refused while
+//! they hold them.
+//!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
 use super::freed_memory::device;
@@ -592,4 +596,72 @@ fn the_host_copies_block_made_ahead_joins_its_pool_at_its_placement_alone() {
         "the texture's placement did not take the host copies' block made ahead"
     );
     drop((texture, queues));
+}
+
+/// Buffers of blocks of their own, each past a whole block so that no pooled block's room takes
+/// one, made until one is refused, on a device held to the most allocations that leave the
+/// runtime's work ahead no room even once its blocks made ahead went (`Allocations::room_ahead`),
+/// while such blocks, not yet added, hold some of its allocations: the buffers have the whole rest
+/// of the limit, the blocks given back as the device's allocations came within the margin. The
+/// order is forced: no block made ahead goes within 10 s but by that give-back, and nothing else
+/// makes or frees an allocation meanwhile, so an allocation refused while they held theirs fails
+/// this every time.
+#[test]
+fn an_allocation_at_the_limit_takes_back_the_blocks_made_ahead() {
+    let scratch = Scratch::new("at-the-limit");
+    let device = device(&scratch.0);
+    let _settled = device.settle_submit_checks(Duration::from_secs(60));
+    let memory = &device.shared().memory;
+    let ahead = || crate::device::lock(memory).blocks_made_ahead_held() as u32;
+    // The buffers' pool grown until a block is made ahead for it, or for any pool.
+    let mut held = Vec::new();
+    while ahead() == 0 {
+        make(&device, &mut held);
+    }
+    let allocations = &device.shared().allocations.allocations;
+    let device_limit = allocations.limit();
+    let made_ahead = ahead();
+    let others = allocations.live() - made_ahead;
+    let margin = |limit: u32| (limit / 4).max(1);
+    let limit = (others + 1..)
+        .take_while(|&limit| others + 1 + margin(limit) > limit)
+        .last()
+        .unwrap();
+    allocations.limit_to(limit);
+    let room = limit - others;
+    let before = device.work_counts();
+    let mut made = Vec::new();
+    let refused = loop {
+        match device.new_buffer(BLOCK_BYTES + (64 << 10), ResourceOptions::private()) {
+            Ok(buffer) => made.push(buffer),
+            Err(error) => break error,
+        }
+        assert!(allocations.live() <= limit, "the limit holds");
+        assert!(made.len() <= room as usize, "the limit holds");
+    };
+    let full = device.work_counts();
+    allocations.limit_to(device_limit);
+    let given = full.blocks_ahead_unused - before.blocks_ahead_unused;
+    println!(
+        "BLOCKS-AHEAD {}: a limit of {limit}, {others} allocations live beside {made_ahead} \
+         block(s) made ahead: {} buffers of blocks of their own made of a room of {room}, the \
+         next refused ({refused:?}); {given} block(s) made ahead given back",
+        device.name(),
+        made.len(),
+    );
+    assert_eq!(
+        made.len(),
+        room as usize,
+        "the objects lacked part of the rest of the limit ({refused:?})"
+    );
+    assert_eq!(
+        given,
+        u64::from(made_ahead),
+        "the blocks made ahead were not given back"
+    );
+    assert!(
+        full.memory_allocations_refused_at_limit > before.memory_allocations_refused_at_limit,
+        "refused at the limit: {refused:?}"
+    );
+    drop((made, held));
 }

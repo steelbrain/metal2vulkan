@@ -5199,7 +5199,9 @@ pub struct MemoryFrees {
     /// placement (`memory.rs`'s `KEPT_EMPTY_FOR`): a working set that shrank for good.
     pub kept_stale: u64,
     /// Kept empty blocks, pooled and dedicated, freed so that a block of their memory type could
-    /// be made, as one failed to be made: the allocator giving memory back under pressure.
+    /// be made, as one failed to be made, and blocks made ahead and not yet added, freed as the
+    /// device's allocations came near its `maxMemoryAllocationCount` (`allocations.rs`): the
+    /// allocator giving memory back under pressure.
     pub kept_for_room: u64,
     /// Imports of the caller's host memory, a dedicated block each, freed as their placement went
     /// (`memory::import_host`).
@@ -5961,9 +5963,11 @@ pub struct WorkCounts {
     /// reached its bound (50 ms), made all the same: the device submitted with no gap of 1 ms
     /// between its bursts (`device/queue_quiet.rs`).
     pub blocks_ahead_past_quiet_wait: u64,
-    /// The blocks made ahead that went unused and were freed, their pool having stopped growing
-    /// 10 s before with room for half a block (`memory/ready.rs`): counted in
-    /// `pooled_memory_blocks_made` and `pooled_memory_blocks_freed`.
+    /// The blocks made ahead that went unused and were freed: their pool having stopped growing
+    /// 10 s before with room for half a block, or given back, no call waiting for them, as the
+    /// device's allocations came within a quarter of its `maxMemoryAllocationCount`, so that an
+    /// object's allocation at the limit takes theirs (`memory/ready.rs`, `allocations.rs`):
+    /// counted in `pooled_memory_blocks_made` and `pooled_memory_blocks_freed`.
     pub blocks_ahead_unused: u64,
     /// Every block its allocator freed so far, by what made it go (`MemoryFrees`): one
     /// `vkFreeMemory` each, and the allocator's whole share of

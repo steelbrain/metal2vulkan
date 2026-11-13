@@ -81,15 +81,22 @@
 //!   call makes its own block (`WorkCounts::buffer_blocks_made_in_place`,
 //!   `image_blocks_made_in_place`) only where no making serves it: a placement in the host copies'
 //!   pool while its thread reads; a call whose makings failed twice (a making that ended without
-//!   its block, as one no call waited for as it began does within the allocation margin below,
-//!   dropping the sizes queued behind it, is waited for once more on a making the call waits for
-//!   from its start), or whose host starts no thread; and
+//!   its block, as one no placement waited for as it began does within the allocation margin
+//!   below, dropping the sizes queued behind it, is waited for once more on a making the call
+//!   waits for from its start), or whose host starts no thread; and
 //!   a placement before the device's first creation call, which gives the makings the device's
 //!   functions and queues. A pool's blocks change only at those calls, never as a making here
 //!   ends.
-//! - **Within the allocation margin, none.** A making no call waits for yet makes no block while
-//!   the device's allocations are within the margin of its `maxMemoryAllocationCount` the
-//!   runtime's work ahead leaves to the objects (`allocations.rs`'s `Allocations::room_ahead`).
+//! - **Within the allocation margin, none.** A making no placement waits for (a creation call
+//!   keeping room in its pool is no placement: [`Waits::Room`]) is the runtime's work ahead of
+//!   any object. It makes no block while the device's allocations are within the margin of its
+//!   `maxMemoryAllocationCount` the runtime's work ahead leaves to the objects
+//!   (`allocations.rs`'s `Allocations::room_ahead`): its allocation is admitted only in one step
+//!   with their count, never waiting at the limit (`allocations::Ahead`). Its block, made and
+//!   not yet added while no call waits for it, goes back once the device's allocations come
+//!   within that margin (`Memory::give_back_ahead`, on the give-back's thread): an object's
+//!   allocation at the limit waits for that rather than being refused while the block holds
+//!   one. A making a placement waits for is that placement's allocation.
 //! - **Bounded.** One thread a pool at most, which makes its blocks one after another and ends
 //!   with the last; the next starts once it ended. The bytes of the blocks made and not yet added,
 //!   and of those still to make, count against their heap's budget of kept empty blocks
@@ -161,6 +168,9 @@ struct Shared {
     go: AtomicU8,
     /// The calls waiting for a block ([`Waiter`]), each counted from its making to its drop.
     waiting: AtomicUsize,
+    /// Of them, the placements ([`Waits::Placement`]): while one waits, a making is the
+    /// allocation of the resource it places, not the runtime's work ahead of any object.
+    placing: AtomicUsize,
     /// The thread reads a block's pages now ([`ready`]).
     reading: AtomicBool,
     /// Its blocks made and not yet added, the one being made, those still to make, and whether
@@ -216,21 +226,36 @@ pub(super) struct Made {
     pub(super) making: Duration,
 }
 
+/// The call that waits for a block made ahead ([`Waiter`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Waits {
+    /// A placement that found no room (`memory::place`): the block is its resource's.
+    Placement,
+    /// A creation call that keeps room in a pool the runtime's encodings and commits place in
+    /// (`memory::keep_room`): the block is still the runtime's work ahead of any object.
+    Room,
+}
+
 /// A call's wait for a readying's block of `least` bytes or more ([`Readying::waiter`]), with no
 /// lock of the memory held: counted among the waiting from its making to its drop, so that the
-/// thread reads no page meanwhile.
+/// thread reads no page meanwhile, and among the placing where it is a placement's.
 pub(super) struct Waiter {
     shared: Arc<Shared>,
     least: u64,
+    waits: Waits,
 }
 
 impl Waiter {
-    /// A wait on `shared` for a block of `least` bytes or more, counted from now.
-    fn new(shared: &Arc<Shared>, least: u64) -> Waiter {
+    /// A wait of `waits` on `shared` for a block of `least` bytes or more, counted from now.
+    fn new(shared: &Arc<Shared>, least: u64, waits: Waits) -> Waiter {
         shared.waiting.fetch_add(1, Ordering::SeqCst);
+        if waits == Waits::Placement {
+            shared.placing.fetch_add(1, Ordering::SeqCst);
+        }
         Waiter {
             shared: Arc::clone(shared),
             least,
+            waits,
         }
     }
 
@@ -251,6 +276,9 @@ impl Waiter {
 
 impl Drop for Waiter {
     fn drop(&mut self) {
+        if self.waits == Waits::Placement {
+            self.shared.placing.fetch_sub(1, Ordering::SeqCst);
+        }
         self.shared.waiting.fetch_sub(1, Ordering::SeqCst);
     }
 }
@@ -266,14 +294,14 @@ pub(super) struct MadeWith {
 
 impl Readying {
     /// Start making blocks of `sizes` bytes for `pool`, one after another, on a thread of its own:
-    /// once a burst of the device's queue uses ended, or at once for a call that waits for a
-    /// block of `need` bytes or more, whose wait it gives back. `None` where the host cannot start
-    /// a thread.
+    /// once a burst of the device's queue uses ended, or at once for a call (of `Waits`) that
+    /// waits for a block of `need` bytes or more, whose wait it gives back. `None` where the host
+    /// cannot start a thread.
     pub(super) fn start(
         making: MadeWith,
         pool: (Holds, u32),
         sizes: VecDeque<u64>,
-        need: Option<u64>,
+        need: Option<(u64, Waits)>,
     ) -> Option<(Readying, Option<Waiter>)> {
         let go = match need {
             Some(_) => NOW,
@@ -282,6 +310,7 @@ impl Readying {
         let shared = Arc::new(Shared {
             go: AtomicU8::new(go),
             waiting: AtomicUsize::new(0),
+            placing: AtomicUsize::new(0),
             reading: AtomicBool::new(false),
             state: Mutex::new(State {
                 made: VecDeque::new(),
@@ -292,7 +321,7 @@ impl Readying {
             changed: Condvar::new(),
         });
         // Counted before the thread runs, which so reads none of that block's pages.
-        let waiter = need.map(|need| Waiter::new(&shared, need));
+        let waiter = need.map(|(need, waits)| Waiter::new(&shared, need, waits));
         let thread = spawn(making, &shared, pool).ok()?;
         let readying = Readying {
             pool,
@@ -399,11 +428,16 @@ impl Readying {
         state.made.remove(at)
     }
 
-    /// A wait for its block of `least` bytes or more, to run with no lock of the memory held.
-    /// `None` where `unless_reading` and its thread reads a block's pages now: a page's first
-    /// touch may wait behind the program's GPU work (the module docs).
-    pub(super) fn waiter(&self, least: u64, unless_reading: bool) -> Option<Waiter> {
-        let waiter = Waiter::new(&self.shared, least);
+    /// Whether a call waits for one of its blocks now.
+    pub(super) fn waited(&self) -> bool {
+        self.shared.waiting.load(Ordering::SeqCst) > 0
+    }
+
+    /// A wait of `waits` for its block of `least` bytes or more, to run with no lock of the
+    /// memory held. `None` where `unless_reading` and its thread reads a block's pages now: a
+    /// page's first touch may wait behind the program's GPU work (the module docs).
+    pub(super) fn waiter(&self, least: u64, unless_reading: bool, waits: Waits) -> Option<Waiter> {
+        let waiter = Waiter::new(&self.shared, least, waits);
         // Counted first: a thread that begins its reads after this sees the wait and reads none,
         // and one that began them before is seen here.
         match unless_reading && self.shared.reading.load(Ordering::SeqCst) {
@@ -455,6 +489,7 @@ fn spawn(
             _ => None,
         };
         let wanted = || shared.waiting.load(Ordering::SeqCst) > 0 || go() == STOP;
+        let placing = || shared.placing.load(Ordering::SeqCst) > 0;
         loop {
             if go() == STOP {
                 break;
@@ -479,7 +514,7 @@ fn spawn(
                 &functions,
                 addressed.as_deref(),
                 (pool, bytes),
-                (&shared.reading, &wanted),
+                (&shared.reading, &wanted, &placing),
             );
             let waited_for = shared.waiting.load(Ordering::SeqCst) > 0;
             let after = crate::churn_counts::this_thread_makings();
@@ -512,21 +547,26 @@ fn spawn(
 /// given, and read every page of its mapping (the module docs), `reading` set meanwhile, until
 /// `wanted` says a call waits for a block (or the device's teardown stops the making): that call
 /// waits for the allocation alone, and the pages left unread fault in at their first touch, as a
-/// block made in place does.
+/// block made in place does. The runtime's work ahead of any object unless `placing` says a
+/// placement waits for it.
 fn ready(
     maker: &BlockMaker,
     functions: &Functions,
     addressed: Option<&Counters>,
     (pool, bytes): ((Holds, u32), u64),
-    (reading, wanted): (&AtomicBool, &dyn Fn() -> bool),
+    (reading, wanted, placing): (&AtomicBool, &dyn Fn() -> bool, &dyn Fn() -> bool),
 ) -> Option<Block> {
     let busy = exit_guard::enter()?;
     // Ahead of any placement, none within the margin of the device's allocations the runtime's
-    // work ahead leaves (`allocations.rs`); a call waiting for it has its allocation made.
-    if !wanted() && !crate::allocations::room_ahead(functions.get().handle()) {
+    // work ahead leaves, its allocation admitted in one step with their count and never waiting
+    // at the limit (`allocations.rs`); a placement waiting for it has its allocation made.
+    let ahead = (!placing()).then(crate::allocations::Ahead::begin);
+    if ahead.is_some() && !crate::allocations::room_ahead(functions.get().handle()) {
         return None;
     }
-    let block = maker.make(functions.get(), pool, bytes, addressed).ok()?;
+    let made = maker.make(functions.get(), pool, bytes, addressed);
+    drop(ahead);
+    let block = made.ok()?;
     if let Some(mapped) = block.mapped {
         // Set before the first look at `wanted`, which a waiting call counted before it looked at
         // this ([`Readying::waiter`]).

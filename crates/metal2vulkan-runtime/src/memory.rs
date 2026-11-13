@@ -1547,7 +1547,9 @@ pub(super) enum FreeCause {
     /// ([`Pool::stale`]).
     KeptStale = 2,
     /// A kept empty pooled block freed so that a block of its memory type can be made
-    /// ([`Memory::release_kept`]).
+    /// ([`Memory::release_kept`]), or a block made ahead and not yet added, freed so that an
+    /// object's allocation can be made at the device's allocation limit
+    /// ([`Memory::give_back_ahead`]).
     KeptForRoom = 3,
     /// The caller's host memory, imported as a dedicated block ([`import_host`]) and
     /// freed as its placement went.
@@ -3029,6 +3031,12 @@ impl Memory {
         self.readying.iter().all(ready::Readying::finished)
     }
 
+    /// The blocks made ahead and not yet added, of every pool (`memory/ready.rs`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn blocks_made_ahead_held(&self) -> usize {
+        self.readying.iter().map(|ready| ready.made().len()).sum()
+    }
+
     /// The place of the block made ahead for `pool` among those held, where one is.
     fn readying_at(&self, pool: (Holds, u32)) -> Option<usize> {
         self.readying.iter().position(|ready| ready.pool() == pool)
@@ -3126,14 +3134,19 @@ impl Memory {
     /// one queued first for the call, its thread started where it has none. A pool's first block
     /// is made alone. `None` where the pool host copies place in reads a block's pages now, as a
     /// page's first touch may wait behind the program's GPU work, before [`keep_room`] gave the
-    /// makings what they are made through, or where no thread starts.
-    fn wait_for(&mut self, pool: (Holds, u32), least: u64) -> Option<ready::Waiter> {
+    /// makings what they are made through, or where no thread starts. The call `waits`.
+    fn wait_for(
+        &mut self,
+        pool: (Holds, u32),
+        least: u64,
+        waits: ready::Waits,
+    ) -> Option<ready::Waiter> {
         let making = self.making(pool)?;
         let host_copies = self.host_copy_pool == Some(Some(pool));
         match self.readying_at(pool) {
             Some(at) => {
                 let readying = &mut self.readying[at];
-                let waiter = readying.waiter(least, host_copies)?;
+                let waiter = readying.waiter(least, host_copies, waits)?;
                 match readying.will_hold(least) || readying.queue(making, &[least], true) {
                     true => Some(waiter),
                     false => None,
@@ -3141,7 +3154,8 @@ impl Memory {
             }
             None => {
                 let sizes = [least].into();
-                let (readying, waiter) = ready::Readying::start(making, pool, sizes, Some(least))?;
+                let need = Some((least, waits));
+                let (readying, waiter) = ready::Readying::start(making, pool, sizes, need)?;
                 self.readying.push(readying);
                 self.readying_started();
                 waiter
@@ -3750,6 +3764,29 @@ impl Memory {
                 }
                 // SAFETY: nothing was placed in the block, and no command reads it.
                 drop(unsafe { self.let_go(device, block, FreeCause::KeptStale, None) });
+            }
+        }
+    }
+
+    /// Free the blocks made ahead and not yet added that no call waits for, their makings stopped
+    /// and joined with the lock held: the device's allocations came within the margin of their
+    /// limit, and an object's allocation at the limit waits for this to take theirs
+    /// (`allocations.rs`). A making under way ends first: no placement waits for it, so its
+    /// allocation is the runtime's work ahead of any object, which never waits at the limit
+    /// (`allocations::Ahead`), and the making takes no lock of the memory. A pool's next block is
+    /// made ahead again as it was ([`Memory::keep_ahead`]), outside the margin alone. Counted with
+    /// those that went unused (`WorkCounts::blocks_ahead_unused`).
+    pub(super) fn give_back_ahead(&mut self, device: &ash::Device) {
+        let mut at = 0;
+        while at < self.readying.len() {
+            if self.readying[at].waited() {
+                at += 1;
+                continue;
+            }
+            for block in self.readying.swap_remove(at).stop() {
+                self.ahead.unused += 1;
+                // SAFETY: nothing was placed in the block, and no command reads it.
+                drop(unsafe { self.let_go(device, block, FreeCause::KeptForRoom, None) });
             }
         }
     }
@@ -5507,7 +5544,10 @@ fn place(
             // being made or still to make, or else one the ready thread makes first for it. Made
             // here: one of the pool host copies place in while that pool's making reads a block's
             // pages, which may wait behind the program's GPU work, which no placement waits for.
-            if !dedicated && guard.makes_ahead(pool) && take_ready(memory, guard, pool, block_size)
+            let placing = (pool, ready::Waits::Placement);
+            if !dedicated
+                && guard.makes_ahead(pool)
+                && take_ready(memory, guard, placing, block_size)
             {
                 let mut guard = lock(memory);
                 if let Some(placement) =
@@ -5571,6 +5611,14 @@ fn make_room(memory: &Mutex<Memory>, device: &ash::Device, type_index: u32) -> b
     };
     let waited = frees.is_some_and(|frees| frees.wait());
     released > 0 || waited
+}
+
+/// Give back `memory`'s blocks made ahead and not yet added that no call waits for
+/// ([`Memory::give_back_ahead`]): on the thread of the give-back of what the device allocated
+/// ahead, as its allocations came within the margin of their limit (`allocations.rs`), in a
+/// section of the exit guard (`exit_guard.rs`).
+pub(super) fn give_back_ahead(memory: &Mutex<Memory>, device: &ash::Device) {
+    lock(memory).give_back_ahead(device);
 }
 
 /// Let `memory` keep no block from now on ([`Memory::keep_none`]): those it keeps empty freed, and
@@ -5700,11 +5748,15 @@ fn keep_pool_room(
     }
     // A block made ahead, or one the call waits for: the one being made or still to make, or
     // else one the ready thread makes first for it (`memory/ready.rs`).
-    if take_ready(memory, guard, pool, bytes) {
+    if take_ready(memory, guard, (pool, ready::Waits::Room), bytes) {
         return;
     }
-    // No making serves the call (its making failed, or no thread started): made here.
-    let Ok(block) = maker.make(device, pool, bytes, addressed) else {
+    // No making serves the call (its making failed, or no thread started): made here, as the
+    // runtime's work ahead of any object (`allocations.rs`).
+    let ahead = crate::allocations::Ahead::begin();
+    let made = maker.make(device, pool, bytes, addressed);
+    drop(ahead);
+    let Ok(block) = made else {
         return;
     };
     let mut guard = lock(memory);
@@ -5768,16 +5820,16 @@ fn ready_ahead(memory: &Mutex<Memory>, device: &ash::Device, copies: impl FnOnce
 /// (`memory/ready.rs`): at once where one is made; else once one is, waited for with the lock
 /// released ([`Memory::wait_for`]), and waited for again where another call took the block made
 /// meanwhile, or where the pool's thread ended without one. A thread ends so without a failure:
-/// a making no call waited for as it began makes no block within the margin of the device's
-/// allocations (`allocations.rs`'s `Allocations::room_ahead`), and its ending drops the sizes
-/// queued behind it, the call's among them; the second wait is on a making the call waits for
-/// from its start, which makes its block. Whether one was added: not where no making serves the
-/// call, or the makings of both waits ended without its block. The lock is released as it
-/// returns.
+/// a making no placement waited for as it began makes no block within the margin of the
+/// device's allocations (`allocations.rs`'s `Allocations::room_ahead`), and its ending drops the
+/// sizes queued behind it, the call's among them; the second wait is on a making the call waits
+/// for from its start, which makes its block where the call is a placement ([`ready::Waits`]).
+/// Whether one was added: not where no making serves the call, or the makings of both waits ended
+/// without its block. The lock is released as it returns.
 fn take_ready<'a>(
     memory: &'a Mutex<Memory>,
     mut guard: MutexGuard<'a, Memory>,
-    pool: (Holds, u32),
+    (pool, waits): ((Holds, u32), ready::Waits),
     need: u64,
 ) -> bool {
     let mut ended_without = false;
@@ -5785,7 +5837,7 @@ fn take_ready<'a>(
         if guard.add_ready(pool, need) {
             return true;
         }
-        let Some(waiter) = guard.wait_for(pool, need) else {
+        let Some(waiter) = guard.wait_for(pool, need, waits) else {
             return false;
         };
         drop(guard);

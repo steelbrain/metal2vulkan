@@ -1884,11 +1884,13 @@ fn shared_memory(_: Range<u64>) -> bool {
 
 impl Device {
     /// Give the chunks the device's thread imported ahead and no object took back once the
-    /// device's allocations come within a quarter of its limit (`allocations.rs`): on a thread of
-    /// its own, started then, which frees them with no lock of the allocating caller held, so
-    /// that they are gone before they could take the last allocations; an allocation that finds
-    /// the limit reached first waits for that thread. An object over one later imports it as it
-    /// is made. Counted: `WorkCounts::host_ram_chunks_given_back`.
+    /// device's allocations come within a quarter of its limit (`allocations.rs`), and the blocks
+    /// its memory made ahead that are not yet in a pool and that no call waits for
+    /// (`memory::give_back_ahead`): on a thread of its own, started then, which frees them with
+    /// no lock of the allocating caller held, so that they are gone before they could take the
+    /// last allocations; an allocation that finds the limit reached first waits for that thread.
+    /// An object over one later imports it as it is made. Counted:
+    /// `WorkCounts::host_ram_chunks_given_back`, `WorkCounts::blocks_ahead_unused`.
     pub(crate) fn give_back_ahead_near_the_limit(&self) {
         let weak = self.downgrade();
         let give_back = move |giving: GiveBack| {
@@ -1907,7 +1909,8 @@ impl Device {
 
 /// [`Device::give_back_ahead_near_the_limit`]'s thread: every RAM's untaken chunks out of their
 /// slots, then let go of in turn, each freed as its last holder goes, paced ([`let_go_paced`])
-/// but while an allocation at the limit waits for the give-back.
+/// but while an allocation at the limit waits for the give-back; then the memory's blocks made
+/// ahead and not yet added.
 fn give_back_untaken(device: WeakDevice) {
     crate::step_aside::mark_a_paced_thread();
     let Some(device) = device.upgrade() else {
@@ -1924,6 +1927,13 @@ fn give_back_untaken(device: WeakDevice) {
     }
     let allocations = &shared.allocations.allocations;
     let_go_paced(&device, gone, || allocations.give_back_awaited());
+    // In a section of the exit guard, which the device's functions are reached in: once the
+    // process exits, no block is given back.
+    let Some(busy) = exit_guard::enter() else {
+        return;
+    };
+    crate::memory::give_back_ahead(&shared.memory, shared.vk());
+    drop(busy);
 }
 
 /// Let go of each of `gone` in turn, on one of the device's guest RAM threads, each after the

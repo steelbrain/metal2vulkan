@@ -23,10 +23,13 @@
 //!   runtime makes ahead of any object (`host_ram.rs`'s ahead import, and the pooled blocks
 //!   `memory.rs`'s `keep_room` and `memory/ready.rs` make before anything is placed in them) stop
 //!   while fewer than a quarter of the limit are left, so the objects and their imports have
-//!   those. Once the
-//!   device's allocations reach that quarter, it gives back the chunks it imported ahead that no
-//!   object took ([`Allocations::made`]), on a thread of the device's, so they are gone before
-//!   they could take the last. Objects that allocate faster than that thread runs (a loaded host
+//!   those. The pooled blocks are made under an [`Ahead`] mark: each is admitted only where one
+//!   more leaves that quarter, in one step with the count, so that no allocation counted
+//!   meanwhile takes the margin's share twice, and none waits at the limit. Once the device's
+//!   allocations reach that quarter, it gives back the chunks it imported ahead that no object
+//!   took and the blocks made ahead that are not yet in a pool and that no placement waits for
+//!   ([`Allocations::made`]), on a thread of the device's, so they are gone before they could
+//!   take the last. Objects that allocate faster than that thread runs (a loaded host
 //!   may leave it unscheduled) reach the limit first: an allocation that finds the limit reached
 //!   starts the give-back where one is due and waits for those under way
 //!   ([`GiveBack`]), then for the frees posted, then asks again, before it is refused. The
@@ -37,11 +40,35 @@
 use crate::free_thread::FreeThread;
 use crate::step_aside::{Activity, OwnCall};
 use ash::vk;
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 
 /// The registered devices' counts, by handle: a few at most, so a list.
 static DEVICES: Mutex<Vec<(vk::Device, Arc<Allocations>)>> = Mutex::new(Vec::new());
+
+thread_local! {
+    /// The allocations this thread makes now are the runtime's work ahead of any object
+    /// ([`Ahead`]).
+    static AHEAD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The allocations made on this thread while this lives are the runtime's work ahead of any
+/// object (the module docs): each is counted only where one more leaves the margin of the limit
+/// ([`Allocations::take_ahead`]), else refused at once, never waiting for a give-back or a free.
+pub(crate) struct Ahead(bool);
+
+impl Ahead {
+    pub(crate) fn begin() -> Ahead {
+        Ahead(AHEAD.with(|ahead| ahead.replace(true)))
+    }
+}
+
+impl Drop for Ahead {
+    fn drop(&mut self) {
+        AHEAD.with(|ahead| ahead.set(self.0));
+    }
+}
 
 /// One device's live allocations and its limit.
 pub(crate) struct Allocations {
@@ -117,6 +144,25 @@ impl Allocations {
         let given = self.giving_back.wait();
         let freed = self.frees.get().is_some_and(|frees| frees.wait());
         given || freed
+    }
+
+    /// Count one more live allocation made ahead of any object where one more leaves the margin
+    /// ([`Allocations::room_ahead`]), in one step with the count: what was allocated ahead is
+    /// due to be given back from then on, its making still under way. Never refused as an
+    /// object's allocation is: no wait, nothing counted as refused.
+    fn take_ahead(&self) -> bool {
+        let limit = self.limit.load(Ordering::Relaxed);
+        let margin = Self::margin(limit);
+        let taken = self
+            .live
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |live| {
+                (live.saturating_add(1).saturating_add(margin) <= limit).then_some(live + 1)
+            })
+            .is_ok();
+        if taken {
+            self.ahead.store(true, Ordering::Release);
+        }
+        taken
     }
 
     /// Count one more live allocation where the limit leaves room for it.
@@ -339,14 +385,18 @@ fn lock() -> std::sync::MutexGuard<'static, Vec<(vk::Device, Arc<Allocations>)>>
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// One allocation of `device` about to be made: `None` where the limit leaves it no room, so
-/// the caller refuses it without calling the driver; else what the caller hands
-/// [`allocated`] with the driver's answer.
+/// One allocation of `device` about to be made: `None` where the limit leaves it no room (or,
+/// under an [`Ahead`] mark, where one more leaves less than the margin), so the caller refuses it
+/// without calling the driver; else what the caller hands [`allocated`] with the driver's answer.
 pub(crate) fn before_allocation(device: vk::Device) -> Option<Option<Arc<Allocations>>> {
-    match of(device) {
-        Some(allocations) => allocations.take().then_some(Some(allocations)),
-        None => Some(None),
-    }
+    let Some(allocations) = of(device) else {
+        return Some(None);
+    };
+    let taken = match AHEAD.with(Cell::get) {
+        true => allocations.take_ahead(),
+        false => allocations.take(),
+    };
+    taken.then_some(Some(allocations))
 }
 
 /// The driver answered an allocation [`before_allocation`] admitted: `made` or not.
@@ -469,6 +519,37 @@ mod tests {
         assert!(count.take(), "refused while the give-back was under way");
         assert_eq!((count.live(), count.refused()), (7, 0));
         assert!(count.take() && !count.take(), "the limit holds after it");
+    }
+
+    #[test]
+    fn an_allocation_ahead_takes_the_room_past_the_margin_alone_and_is_given_back() {
+        let handle = vk::Device::from_raw(0xa4ead);
+        let registered = register(handle, 8);
+        let count = &registered.allocations;
+        let given = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&given);
+        count.give_back_with(Box::new(move |_| {
+            seen.fetch_add(1, Ordering::Relaxed);
+        }));
+        // A margin of 2 of 8: allocations ahead are counted while one more leaves 2, then refused
+        // at once, as no object's is.
+        let ahead = super::Ahead::begin();
+        let mut taken = 0;
+        while let Some(admitted) = before_allocation(handle) {
+            allocated(admitted, true);
+            taken += 1;
+            assert!(taken <= 8, "the margin holds");
+        }
+        drop(ahead);
+        assert_eq!((taken, count.live(), count.refused()), (6, 6, 0));
+        assert_eq!(given.load(Ordering::Relaxed), 0, "not within the margin");
+        // The objects have the margin, and their first allocation inside it gives back what was
+        // allocated ahead.
+        allocated(before_allocation(handle).unwrap(), true);
+        assert_eq!(given.load(Ordering::Relaxed), 1);
+        allocated(before_allocation(handle).unwrap(), true);
+        assert!(before_allocation(handle).is_none(), "the limit holds");
+        assert_eq!(count.refused(), 1);
     }
 
     #[test]
