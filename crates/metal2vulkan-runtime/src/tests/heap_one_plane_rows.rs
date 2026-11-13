@@ -13,7 +13,8 @@
 //!
 //! A shape Metal lays no one way lies otherwise, announced `heap-one-plane-layout`: a 2D texture
 //! of rows under 16 bytes in packed rows, and a mipmapped one in memory of its own, the heap's
-//! bytes untouched.
+//! bytes untouched, which reads zero as it is made, what a new heap's bytes read, never the texels
+//! of a released texture whose image it takes.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -356,4 +357,93 @@ fn a_one_plane_ycbcr_heap_texture_metal_lays_no_one_way_is_announced() {
         heard.contains(&Degradation::HeapOnePlaneLayout),
         "{heard:?}"
     );
+}
+
+/// A mipmapped one-plane YCbCr heap texture lies in memory of its own, apart from the heap's
+/// bytes (`AliasRoute::Unaliased`): one made in a new heap after such a texture was written and
+/// released takes the released one's parked image (`recycle.rs`) and reads zero, what a new
+/// heap's bytes read, never the released texture's texels (on a consumer whose processes share
+/// the device, another process's). Prints `HEAP-UNALIASED-FRESH` with what it read.
+#[test]
+fn an_unaliased_heap_texture_reads_zero_never_a_released_one_s_texels() {
+    let (pf, unit) = FORMATS[0];
+    let shape = Shape {
+        levels: 3,
+        ..Shape::new(TextureType::Type2D, 16, 16, 1)
+    };
+    let (device, _) = listening();
+    let queue = device.new_command_queue().unwrap();
+    let options =
+        ResourceOptions::private().with_hazard_tracking_mode(HazardTrackingMode::Untracked);
+    let descriptor = shape.descriptor(pf, options);
+    let (row, rows) = shape.packed(unit);
+    let size = Size::new(shape.width, shape.height, 1);
+    let at = Origin::new(0, 0, 0);
+    let made = || {
+        let heap = device
+            .new_heap(&HeapDescriptor::new(HeapType::Placement, HEAP, options))
+            .unwrap();
+        let texture = heap.new_texture_at_offset(&descriptor, 0).unwrap();
+        (heap, texture)
+    };
+    let first_level = |texture: &Texture| {
+        let out = device.new_buffer(rows, ResourceOptions::shared()).unwrap();
+        run(&queue, |blit| {
+            (blit.copy_from_texture_to_buffer(
+                texture,
+                0,
+                0,
+                at,
+                size,
+                &out,
+                0,
+                row,
+                rows,
+                BlitOption::None,
+            ))
+            .unwrap()
+        });
+        read(&out, rows)
+    };
+    let (heap, first) = made();
+    let written: Vec<u8> = (0..rows).map(|i| pattern(5, i) | 1).collect();
+    let source = holding(&device, &written);
+    run(&queue, |blit| {
+        (blit.copy_from_buffer_to_texture(
+            &source,
+            0,
+            row,
+            rows,
+            size,
+            &first,
+            0,
+            0,
+            at,
+            BlitOption::None,
+        ))
+        .unwrap()
+    });
+    assert_eq!(first_level(&first), written, "the first texture's texels");
+    let before = device.work_counts().object_churn;
+    drop((first, heap));
+    let until = std::time::Instant::now() + WAIT;
+    while device.work_counts().object_churn.images_parked == before.images_parked {
+        assert!(std::time::Instant::now() < until, "the image was parked");
+        std::thread::yield_now();
+    }
+    let (_heap, second) = made();
+    let after = device.work_counts().object_churn;
+    assert_eq!(
+        after.images_recycled - before.images_recycled,
+        1,
+        "the second texture took the first one's parked image"
+    );
+    let read = first_level(&second);
+    let what = match (read == written, read.iter().all(|&byte| byte == 0)) {
+        (true, _) => "the released texture's texels",
+        (false, true) => "zero",
+        (false, false) => "other bytes",
+    };
+    println!("HEAP-UNALIASED-FRESH on {}: {what}", device.name());
+    assert_eq!(what, "zero", "a new unaliased heap texture reads zero");
 }
