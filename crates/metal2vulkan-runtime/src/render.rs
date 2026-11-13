@@ -7677,14 +7677,16 @@ impl RenderLowering {
     /// would, and it stays in the instance (`WorkCounts::attachment_read_splits_spared`). It may
     /// unless the instance is one of draws alone (not continuing another, no execution, no
     /// stand-in of another format) in a pass of no rasterization-rate map or views, and every such
-    /// texture has a usage shadow, its draws wrote its truth only as the colors it presents,
-    /// which change only inside the draws' scissors there (`render/shadows.rs`'s
-    /// `drawn_alone`, loaded), and the instance's drawn area (`clear_reach::DrawnArea`) meets
-    /// none of the texels the draw reads: those around its scissors where it reads the texture at
-    /// its fragments' own pixels alone (as `bound_own_pixel_reads` bounds them), else every one.
+    /// texture has the shadow its read takes (`Texture::attached_shadow_copies`, made now where
+    /// the draw's binding has not made it yet), the instance's draws wrote its truth only as the
+    /// colors it presents, which change only inside the draws' scissors there
+    /// (`render/shadows.rs`'s `drawn_alone`, loaded), and the instance's drawn area
+    /// (`clear_reach::DrawnArea`) meets none of the texels the draw reads: those around its
+    /// scissors where it reads the texture at its fragments' own pixels alone (as
+    /// `bound_own_pixel_reads` bounds them), else every one.
     fn reads_what_the_instance_drew(
         &self,
-        device: &Device,
+        (device, call): (&Device, &'static str),
         facts: &PlanFacts,
         (plan, compiled): (&BindingPlan, &metal2vulkan::pipeline::RenderPipeline),
     ) -> bool {
@@ -7719,7 +7721,7 @@ impl RenderLowering {
                         && shadows::drawn_alone(color, &self.layout)
                 })
             });
-            let Some(copies) = texture.usage_shadow_copies() else {
+            let Some(copies) = texture.attached_shadow_copies(call) else {
                 return true;
             };
             if !loaded_alone || current.shadows.writes_truth(device, &copies) {
@@ -9330,8 +9332,8 @@ impl RenderLowering {
         // A draw after a barrier inside the instance that reads nothing the instance drew reads
         // the copy taken before the instance, which holds what a split's would.
         let inside = attached && self.current.barriers && !self.barrier && !behind_loads;
-        let spared =
-            inside && !self.reads_what_the_instance_drew(&device, &facts, (&*plan, compiled));
+        let spared = inside
+            && !self.reads_what_the_instance_drew((&device, call), &facts, (&*plan, compiled));
         let after_barrier =
             (attached && (self.current.barriers || self.barrier) && !spared) || behind_loads;
         let snapshot_split = snapshot.as_ref().is_some_and(|w| self.snapshot_apart(w));
