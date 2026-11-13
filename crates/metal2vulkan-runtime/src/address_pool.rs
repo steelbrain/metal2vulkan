@@ -8,6 +8,7 @@
 //! its model gives (`BufferDescriptor::with_pool_slot`): the buffer answers Metal's address.
 
 use super::address::{AddressPlacement, AddressSpace, GpuAddress};
+use super::device::carry::LineDevice;
 use super::device::lock;
 use super::error::Error;
 use super::Device;
@@ -24,9 +25,9 @@ use std::sync::{Arc, Mutex};
 /// device shares, and holds no Vulkan object, so buffers made after the recovery take its slots
 /// as before.
 pub struct AddressPool {
-    /// A root handle (`device/line.rs`): of the device, never of the `VkDevice` it was reserved
-    /// on.
-    device: Device,
+    /// The device: its root handle, which a buffer's placement in a slot matches by its line,
+    /// and the generation handle `device` answers.
+    device: LineDevice,
     /// The device's address space, which its span is of.
     addresses: Arc<Mutex<AddressSpace>>,
     address: GpuAddress,
@@ -44,10 +45,17 @@ impl AddressPool {
         self.length
     }
 
-    /// The device whose address space the pool is of: a handle of the device whose calls go to
-    /// the `VkDevice` that serves it, across its recoveries.
+    /// The device whose address space the pool is of: a generation handle of the device: of the generation the pool was made on, then of
+    /// each one the device's recoveries carried the pool to. A handle taken of it keeps meaning that
+    /// generation: its raw handles are that generation's `VkDevice`'s, kept alive while held.
     pub fn device(&self) -> &Device {
-        &self.device
+        self.device.generation()
+    }
+
+    /// A root handle of the pool's device, which a buffer's placement in a slot matches by its
+    /// line.
+    pub(crate) fn root_device(&self) -> &Device {
+        self.device.root()
     }
 }
 
@@ -92,7 +100,7 @@ impl Device {
     ) -> Result<AddressPool, Error> {
         let address = (self.address_space_for(placement)).reserve_pool(placement, length)?;
         Ok(AddressPool {
-            device: self.root(),
+            device: LineDevice::new(self),
             addresses: Arc::clone(&self.shared().addresses),
             address,
             length,

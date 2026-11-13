@@ -600,9 +600,9 @@ impl Device {
         function: &Function,
         options: &PipelineOptions,
     ) -> Result<ComputePipelineState, Error> {
-        if !function.device().same(self) {
+        if !function.root_device().same(self) {
             return Err(function
-                .device()
+                .root_device()
                 .foreign("new_compute_pipeline_state_with_function", self));
         }
         self.new_compute_pipeline_state_now(
@@ -722,8 +722,8 @@ impl Device {
         function: &Function,
         options: &PipelineOptions,
     ) -> Result<(ComputePipelineState, Option<ComputePipelineReflection>), Error> {
-        if !function.device().same(self) {
-            return Err(function.device().foreign(
+        if !function.root_device().same(self) {
+            return Err(function.root_device().foreign(
                 "new_compute_pipeline_state_with_function_and_reflection",
                 self,
             ));

@@ -867,6 +867,10 @@ meanwhile wait for it.
   answered its handles, a later `raw` call answered the new one's: `WorkCounts::vk_devices_live`
   reads 2 until then. A carried object holds nothing of it once none of its command buffers
   records. `vk_devices_made` and `device_recoveries` count the rest.
+- An object's `device` is a generation handle: of the `VkDevice` it was made on, else of the one
+  a recovery carried it to last. A handle taken of it before the recovery keeps meaning the lost
+  `VkDevice`: its `raw` answers that one's handles, kept alive while the consumer holds the
+  handle, so the consumer destroys what it made with them through it.
 - Each recovery is announced (`device-recovered`), naming the hang's command buffer.
 - `Device::raw` answers the new `VkDevice`'s handles once a later call asks; the handles it
   answered before stay valid until then, and the lost `VkDevice` stays alive until then, so the

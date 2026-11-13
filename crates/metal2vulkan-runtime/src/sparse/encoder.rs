@@ -371,9 +371,9 @@ impl ResourceStateCommandEncoder {
     /// Refused (`Invalid`): a fence of another device.
     pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error> {
         let _for = self.open.command_buffer.notices_for();
-        if !fence.device().same(self.open.command_buffer.device()) {
+        if !fence.root_device().same(self.open.command_buffer.device()) {
             return Err(fence
-                .device()
+                .root_device()
                 .foreign("update_fence", self.open.command_buffer.device()));
         }
         let key = fence.key();
@@ -393,9 +393,9 @@ impl ResourceStateCommandEncoder {
     pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error> {
         let _for = self.open.command_buffer.notices_for();
         const CALL: &str = "wait_for_fence";
-        if !fence.device().same(self.open.command_buffer.device()) {
+        if !fence.root_device().same(self.open.command_buffer.device()) {
             return Err(fence
-                .device()
+                .root_device()
                 .foreign(CALL, self.open.command_buffer.device()));
         }
         let key = fence.key();

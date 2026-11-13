@@ -3574,7 +3574,7 @@ impl RenderLowering {
         });
         if let Some(state) = state {
             self.core
-                .check_device("set_depth_stencil_state", state.device())?;
+                .check_device("set_depth_stencil_state", state.root_device())?;
         }
         // One boolean: a pass that sets one but draws under none keeps a depth's signs.
         self.depth_writes |= state.is_some_and(|s| s.descriptor().depth_write_enabled);

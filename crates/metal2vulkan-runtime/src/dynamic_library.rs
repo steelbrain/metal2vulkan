@@ -59,8 +59,8 @@ impl Device {
         &self,
         library: &Library,
     ) -> Result<DynamicLibrary, Error> {
-        if !library.device().same(self) {
-            return Err(library.device().foreign("new_dynamic_library", self));
+        if !library.root_device().same(self) {
+            return Err(library.root_device().foreign("new_dynamic_library", self));
         }
         self.dynamic_library(library.compile_library().clone())
     }

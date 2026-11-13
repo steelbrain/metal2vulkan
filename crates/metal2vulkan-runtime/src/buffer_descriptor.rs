@@ -370,8 +370,8 @@ impl Device {
                 self.shared_place(CALL, other, &contents, length, placement, in_pool)?
             }
             (None, Some((pool, offset))) => {
-                if !pool.device().same(self) {
-                    return Err(pool.device().foreign(CALL, self));
+                if !pool.root_device().same(self) {
+                    return Err(pool.root_device().foreign(CALL, self));
                 }
                 Place::InPool {
                     pool: pool.gpu_address().0,

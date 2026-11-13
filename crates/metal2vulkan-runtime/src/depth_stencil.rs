@@ -7,8 +7,8 @@
 //! pipeline's static depth/stencil state, or as dynamic state where the pipeline makes it dynamic
 //! (`render.rs`). Metal makes a state of any descriptor, masks wider than the 8-bit stencil
 //! included (measured on an M4), so creation refuses nothing. A state holds no Vulkan object, so
-//! it is no generation's (`device/line.rs`): it holds a root handle of its device and goes on past
-//! the device's recovery, as Metal's state does.
+//! it goes on past the device's recovery, as Metal's state does, the recovery carrying its handle
+//! of the device alone (`device/carry.rs`'s `LineDevice`).
 //!
 //! A state's `gpuResourceID` below Apple10 is the release's answer, not a refusal: Metal's API
 //! validation stops the call ("Obtaining the resourceID of a DepthStencilState object requires
@@ -32,8 +32,9 @@ use std::sync::Arc;
 pub struct DepthStencilState(Arc<Shared>);
 
 struct Shared {
-    /// A root handle of the device (`device/line.rs`): of whatever generation serves.
-    device: Device,
+    /// The device: its root handle, which the encoders' checks match by its line, and the
+    /// generation handle `device` answers.
+    device: LineDevice,
     descriptor: DepthStencilDescriptor,
     vulkan: metal2vulkan::metal::state::DepthStencilState,
 }
@@ -68,7 +69,7 @@ impl Device {
         descriptor: &DepthStencilDescriptor,
     ) -> Result<DepthStencilState, Error> {
         Ok(DepthStencilState(Arc::new(Shared {
-            device: self.root(),
+            device: LineDevice::new(self),
             descriptor: *descriptor,
             vulkan: depth_stencil_state(descriptor),
         })))
@@ -76,10 +77,16 @@ impl Device {
 }
 
 impl DepthStencilState {
-    /// `device`: the device that made the state, as a root handle, whose calls go to the
-    /// generation that serves (the module docs).
+    /// `device`: a generation handle of the device: of the generation the state was made on, then of
+    /// each one the device's recoveries carried the state to. A handle taken of it keeps meaning that
+    /// generation: its raw handles are that generation's `VkDevice`'s, kept alive while held.
     pub fn device(&self) -> &Device {
-        &self.0.device
+        self.0.device.generation()
+    }
+
+    /// A root handle of the state's device, which an encoder of any of its generations matches.
+    pub(super) fn root_device(&self) -> &Device {
+        self.0.device.root()
     }
 
     /// The descriptor the state was made with. No Metal counterpart: Metal's state keeps none.
@@ -92,7 +99,7 @@ impl DepthStencilState {
     /// `NotImplemented(IndirectRenderCommands)` on a device that claims Apple10: indirect render
     /// commands that set a depth/stencil state are not built.
     pub fn gpu_resource_id(&self) -> Result<ResourceId, Error> {
-        if self.0.device.supports_family(GpuFamily::Apple10.raw()) {
+        if (self.0.device.root()).supports_family(GpuFamily::Apple10.raw()) {
             return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
                 IndirectRule::CommandRenderStates,
             )));

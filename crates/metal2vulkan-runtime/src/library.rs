@@ -9,10 +9,11 @@
 //! it with, as its stage or as a function the stage links ([`Function::linked_function`],
 //! `MTLLinkedFunctions`), and the options it was made with (`newFunctionWithDescriptor:`): one
 //! compiled to a binary is what Metal takes in a stage's `binaryFunctions` and adds to a made
-//! pipeline state. A library and its functions hold no Vulkan object, so they are no generation's
-//! (`device/line.rs`): they hold a root handle of their device and go on past the device's
-//! recovery, as Metal's do.
+//! pipeline state. A library and its functions hold no Vulkan object, so they go on past the
+//! device's recovery, as Metal's do, the recovery carrying their handle of the device alone
+//! (`device/carry.rs`'s `LineDevice`), which a library's functions share.
 
+use super::device::carry::LineDevice;
 use super::device::device_error;
 use super::error::{invalid, Problem, RuntimeGap};
 use super::Device;
@@ -33,8 +34,9 @@ use std::sync::{Arc, Mutex};
 /// A Metal library (`MTLLibrary`). Cheap to clone; `Send + Sync`.
 #[derive(Clone, Debug)]
 pub struct Library {
-    /// A root handle of the device (`device/line.rs`): of whatever generation serves.
-    device: Device,
+    /// The device: its root handle, which the checks of the calls that take the library match
+    /// by its line, and the generation handle `device` answers.
+    device: LineDevice,
     library: metal2vulkan::library::Library,
     /// What the library holds of the sampler IDs its functions' pipeline states numbered, shared
     /// with every live library of the same content (`resource_ids/numbered.rs`).
@@ -56,8 +58,8 @@ pub struct Library {
 /// Cheap to clone; `Send + Sync`.
 #[derive(Clone, Debug)]
 pub struct Function {
-    /// A root handle of the device (`device/line.rs`), its library's.
-    device: Device,
+    /// The device, its library's.
+    device: LineDevice,
     function: metal2vulkan::library::Function,
     constants: FunctionConstantValues,
     /// Whether the function was made with constant values (`newFunctionWithName:constantValues:`),
@@ -196,7 +198,7 @@ impl Device {
     ) -> Library {
         let holds = LibraryHolds::of(&self.shared().resource_ids, *library.content_hash());
         Library {
-            device: self.root(),
+            device: LineDevice::new(self),
             library,
             holds,
             reflections: Arc::default(),
@@ -205,9 +207,16 @@ impl Device {
 }
 
 impl Library {
-    /// `device`: a root handle, whose calls go to the generation that serves (the module docs).
+    /// `device`: a generation handle of the device: of the generation the library was made on, then of
+    /// each one the device's recoveries carried the library to. A handle taken of it keeps meaning that
+    /// generation: its raw handles are that generation's `VkDevice`'s, kept alive while held.
     pub fn device(&self) -> &Device {
-        &self.device
+        self.device.generation()
+    }
+
+    /// A root handle of the library's device, which the calls that take it match by its line.
+    pub(crate) fn root_device(&self) -> &Device {
+        self.device.root()
     }
 
     /// `functionNames`, in the library's table order. A Core Image kernel library's extern
@@ -413,9 +422,16 @@ impl Library {
 }
 
 impl Function {
-    /// `device`: a root handle, whose calls go to the generation that serves (the module docs).
+    /// `device`: a generation handle of the device: of the generation its library was made on, then of
+    /// each one the device's recoveries carried its library to. A handle taken of it keeps meaning that
+    /// generation: its raw handles are that generation's `VkDevice`'s, kept alive while held.
     pub fn device(&self) -> &Device {
-        &self.device
+        self.device.generation()
+    }
+
+    /// A root handle of the function's device, which the calls that take it match by its line.
+    pub(crate) fn root_device(&self) -> &Device {
+        self.device.root()
     }
 
     /// `name`: the specialized name a [`FunctionDescriptor`] made the function with, else the

@@ -195,8 +195,10 @@ impl Maker {
     /// link in `functions` or `binary_functions`. A function of another device is refused
     /// (`Invalid(ForeignObject)`).
     fn function_handle(self, function: &Function) -> Result<Option<FunctionHandle>, Error> {
-        if !function.device().same(self.device()) {
-            return Err(function.device().foreign("function_handle", self.device()));
+        if !function.root_device().same(self.device()) {
+            return Err(function
+                .root_device()
+                .foreign("function_handle", self.device()));
         }
         let handle = self
             .linked_functions()

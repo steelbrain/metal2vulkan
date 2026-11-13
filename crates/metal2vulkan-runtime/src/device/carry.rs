@@ -3,8 +3,8 @@
 //! pointer of the program's reaches or whose pages the runtime owns, and its `Private` heaps with
 //! the buffers placed in them, each the same object on the new `VkDevice`, as Metal keeps its
 //! objects across its GPU's recovery. A fence, a depth/stencil state, a library, a function and
-//! an address pool, which hold no Vulkan object, are no generation's (`fence.rs`,
-//! `depth_stencil.rs`, `library.rs`, `address_pool.rs`): nothing here carries them.
+//! an address pool hold no Vulkan object (`fence.rs`, `depth_stencil.rs`, `library.rs`,
+//! `address_pool.rs`): the recovery carries their handle of the device alone ([`LineDevice`]).
 //!
 //! - **Kept as made.** Each event (`EventShared::new`) and heap (`Device::new_heap`) is kept here,
 //!   held weakly, by the generation it was made on; each buffer the program made of its own (`Device::visible`) is
@@ -101,9 +101,10 @@ use crate::resource::ObjectId;
 use crate::Error;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
+use std::convert::Infallible;
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 /// The least size at which the registry drops gone objects' entries.
 const PRUNE_FLOOR: usize = 256;
@@ -139,8 +140,13 @@ struct State {
     ram_uses: Vec<Weak<RamUseCell>>,
     /// The program's heaps, held weakly: as `ram_uses`.
     heaps: Vec<WeakHeap>,
+    /// The handles of the device that the objects holding no Vulkan object answer
+    /// ([`LineDevice`]), held weakly.
+    links: Vec<Weak<GenerationLink>>,
     /// The size at which the next keeping drops the gone events' entries.
     prune_at: usize,
+    /// The size at which the next keeping drops the gone handles' entries.
+    links_prune_at: usize,
     /// The recovery took the generation's objects ([`Carry::take`]): what is kept from now on,
     /// its maker carries.
     taken: bool,
@@ -186,6 +192,7 @@ pub(crate) struct Taken {
     events: Vec<Arc<EventShared>>,
     ram_uses: Vec<Arc<RamUseCell>>,
     heaps: Vec<Heap>,
+    links: Vec<Arc<GenerationLink>>,
 }
 
 impl Carry {
@@ -230,6 +237,19 @@ impl Carry {
         state.taken
     }
 
+    /// Keep `link`, this generation's handle of the device an object holding no Vulkan object
+    /// answers ([`LineDevice`]): as [`event`](Self::event), its gone entries dropped as the
+    /// registry grows.
+    fn link(&self, link: &Arc<GenerationLink>) -> bool {
+        let mut state = lock(&self.state);
+        if state.links.len() >= state.links_prune_at {
+            state.links.retain(|link| link.strong_count() > 0);
+            state.links_prune_at = (2 * state.links.len()).max(PRUNE_FLOOR);
+        }
+        state.links.push(Arc::downgrade(link));
+        state.taken
+    }
+
     /// The live objects of `shared`, this generation, for its recovery to carry: its events, its
     /// uses of guest RAM, its heaps and its program resources' buffers (`Owners::buffers`). From
     /// now on, each one made is its maker's to carry.
@@ -244,6 +264,7 @@ impl Carry {
             events: state.events.iter().filter_map(Weak::upgrade).collect(),
             ram_uses: state.ram_uses.iter().filter_map(Weak::upgrade).collect(),
             heaps: state.heaps.iter().filter_map(WeakHeap::upgrade).collect(),
+            links: state.links.iter().filter_map(Weak::upgrade).collect(),
         }
     }
 
@@ -566,7 +587,11 @@ impl Device {
             events,
             ram_uses,
             heaps,
+            links,
         } = shared.carry.take(shared);
+        for link in &links {
+            link.carry(next);
+        }
         let mut carried = Carried::default();
         for event in &events {
             carried.event(event.carry(next));
@@ -661,5 +686,107 @@ impl Drop for MadeOn {
             // SAFETY: not let go of, and the last reference.
             unsafe { ManuallyDrop::drop(self.device.get_mut()) };
         }
+    }
+}
+
+/// The device of an object that holds no Vulkan object (a fence, a depth/stencil state, a library
+/// and its functions, an address pool), which a recovery carries as its handle of the device
+/// alone: a root handle, which the object's own calls and checks go through
+/// ([`root`](Self::root): of whatever generation serves, matched by its line), and the generation
+/// handle its `device` answers ([`generation`](Self::generation)): the generation it was made on,
+/// then each one the device's recoveries carried it to. A handle taken of it keeps meaning that
+/// generation, as any object's device does: its raw handles are that generation's `VkDevice`'s,
+/// kept alive while the caller holds it. The object lets go of a lost generation's handle at that
+/// generation's rest ([`MadeOn`]), so it holds nothing of it after.
+#[derive(Clone)]
+pub(crate) struct LineDevice {
+    root: Device,
+    first: Arc<GenerationLink>,
+}
+
+/// One generation's handle of a [`LineDevice`], linked to the next generation's once a recovery
+/// carried the object there.
+pub(crate) struct GenerationLink {
+    device: MadeOn,
+    next: OnceLock<Arc<GenerationLink>>,
+}
+
+impl LineDevice {
+    /// The device of an object made on `made_on`, a generation handle: its handle kept by the
+    /// generation's registry for its recovery to carry ([`Carry::take`]), or carried by its maker
+    /// where the recovery took the generation's objects before then ([`Device::carry_late`]).
+    pub(crate) fn new(made_on: &Device) -> LineDevice {
+        LineDevice {
+            root: made_on.root(),
+            first: GenerationLink::kept(made_on),
+        }
+    }
+
+    /// The root handle: of whatever generation serves, as the object is no generation's.
+    pub(crate) fn root(&self) -> &Device {
+        &self.root
+    }
+
+    /// The generation handle of the generation the object was carried to last, else of the one
+    /// it was made on.
+    pub(crate) fn generation(&self) -> &Device {
+        let mut link = &self.first;
+        while let Some(next) = link.next.get() {
+            link = next;
+        }
+        &link.device
+    }
+}
+
+impl std::fmt::Debug for LineDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.generation().fmt(f)
+    }
+}
+
+impl GenerationLink {
+    /// `device`'s handle, a generation handle, kept by its generation's registry; carried by
+    /// this maker where that generation's recovery took its objects before.
+    fn kept(device: &Device) -> Arc<GenerationLink> {
+        let link = Arc::new(GenerationLink {
+            device: MadeOn::new(device.clone()),
+            next: OnceLock::new(),
+        });
+        if device.shared().carry.link(&link) {
+            device.carry_late(|serving| {
+                link.carry(serving);
+                Ok::<(), Infallible>(())
+            });
+        }
+        link
+    }
+
+    /// Carry the handle to `to`, the generation this one's recovery made: `to`'s handle linked
+    /// after it, and this one let go of at the lost generation's rest. Nothing where it was
+    /// carried already.
+    fn carry(self: &Arc<Self>, to: &Device) {
+        if self.next.get().is_some() {
+            return;
+        }
+        if self.next.set(GenerationLink::kept(to)).is_err() {
+            // Another carry of it came first.
+            return;
+        }
+        let lost = Device::clone(&self.device);
+        let parts = Box::new(LostHandle(Arc::clone(self)));
+        lost.shared().carry.lost(lost.shared(), parts);
+    }
+}
+
+/// A [`LineDevice`]'s handle of a lost generation, let go of once none of the generation's command
+/// buffers may record.
+struct LostHandle(Arc<GenerationLink>);
+
+impl LostParts for LostHandle {
+    fn release(self: Box<Self>) {
+        // SAFETY: its next link is set, so the object's device answers a later generation's handle
+        // (`LineDevice::generation`), and its own calls and checks go through its root handle: no
+        // reach of the object reads this handle any more.
+        unsafe { self.0.device.let_go() };
     }
 }

@@ -278,7 +278,7 @@ impl CallChecks {
             C::DepthStencilState(held) => {
                 let state = held.map(|held| log.depth_stencil(held));
                 if let Some(state) = state {
-                    check_device(device, "set_depth_stencil_state", state.device())?;
+                    check_device(device, "set_depth_stencil_state", state.root_device())?;
                 }
                 self.state.set_depth_stencil(state);
                 Ok(Checked::Logged)

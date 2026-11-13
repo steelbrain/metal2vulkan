@@ -5,10 +5,10 @@
 //!   "after this encoder's work" in the device's submission order, and a later encoder's
 //!   `wait_for_fence` becomes a barrier from that work's stages, or a wait for its `VkQueue` when
 //!   the update ran on another ([`tracker`](super::tracker)). A fence has no Vulkan object: it is
-//!   an identity the tracker keys on. So it is no generation's (`device/line.rs`): it holds a
-//!   root handle of its device, and goes on past the device's recovery as Metal's fence does, an
-//!   encoder of any generation updating and waiting for it, its updates on a lost generation
-//!   gone with that generation's work.
+//!   an identity the tracker keys on. So it goes on past the device's recovery as Metal's fence
+//!   does, the recovery carrying its handle of the device alone (`device/carry.rs`'s
+//!   `LineDevice`): an encoder of any generation updates and waits for it, its updates on a lost
+//!   generation gone with that generation's work.
 //! - **Resource barriers** order dispatches of one compute encoder: one global memory barrier,
 //!   as for a scope barrier.
 //! - **A render encoder's** fences order the render stages its calls name, as the M3 Max's do
@@ -72,6 +72,7 @@
 
 use super::blit::BlitCommandEncoder;
 use super::compute::ComputeCommandEncoder;
+use super::device::carry::LineDevice;
 use super::device::{lock, Device};
 use super::encoder::EncoderCore;
 use super::error::Error;
@@ -93,8 +94,9 @@ use std::sync::{Arc, Mutex};
 pub struct Fence(Arc<FenceShared>);
 
 struct FenceShared {
-    /// A root handle of the device (`device/line.rs`): of whatever generation serves.
-    device: Device,
+    /// The device: its root handle, which the encoders' checks match by its line, and the
+    /// generation handle `device` answers.
+    device: LineDevice,
     key: ResourceKey,
     label: Mutex<Option<String>>,
 }
@@ -128,10 +130,10 @@ impl Device {
     }
 
     /// [`Device::new_fence`] on the generation that serves (`device/line.rs`): a fence of the
-    /// device whatever generation serves, which holds none (the module docs).
+    /// device whatever generation serves (the module docs).
     pub(crate) fn new_fence_now(&self) -> Fence {
         Fence(Arc::new(FenceShared {
-            device: self.root(),
+            device: LineDevice::new(self),
             key: ResourceKey::new(),
             label: Mutex::new(None),
         }))
@@ -139,10 +141,16 @@ impl Device {
 }
 
 impl Fence {
-    /// `device`: a root handle, whose calls go to the generation that serves, as the fence is no
-    /// generation's (the module docs).
+    /// `device`: a generation handle of the device: of the generation the fence was made on, then of
+    /// each one the device's recoveries carried the fence to. A handle taken of it keeps meaning that
+    /// generation: its raw handles are that generation's `VkDevice`'s, kept alive while held.
     pub fn device(&self) -> &Device {
-        &self.0.device
+        self.0.device.generation()
+    }
+
+    /// A root handle of the fence's device, which an encoder of any of its generations matches.
+    pub(super) fn root_device(&self) -> &Device {
+        self.0.device.root()
     }
 
     /// `setLabel:`.
@@ -170,7 +178,7 @@ impl EncoderCore {
         fence: &Fence,
         draws: Option<vk::PipelineStageFlags2>,
     ) -> Result<(), Error> {
-        self.check_device(call, fence.device())?;
+        self.check_device(call, fence.root_device())?;
         self.uses().update_fence(fence.0.key, draws);
         Ok(())
     }
@@ -185,7 +193,7 @@ impl EncoderCore {
         fence: &Fence,
         draws: Option<vk::PipelineStageFlags2>,
     ) -> Result<(), Error> {
-        self.check_device(call, fence.device())?;
+        self.check_device(call, fence.root_device())?;
         self.uses().wait_for_fence(fence.0.key, draws);
         // Metal shows the work the wait orders after it the bytes the update's writer left, so
         // no shadowed texture's image is carried on (`shadow::ShadowCarry`).
