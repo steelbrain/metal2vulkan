@@ -14,6 +14,10 @@
 //!   in its memo;
 //! - **warm, new device**: [`PASSES`] rounds, each on a new device over the same shader cache
 //!   directory, which finds each translation on disk;
+//! - **after a warm pass, memo of 1 byte**: [`PASSES`] rounds, each on a new device whose memo
+//!   keeps nothing, after a warm pass over the cold round's records: a program's states after its
+//!   warm pass made them and its memo let them go, each found on disk with its variant's objects
+//!   made again;
 //! - **warm, memo of 1 byte**: [`PASSES`] rounds on one device whose memo keeps nothing past a
 //!   round, as a device whose memo a run's many states evicted: each round finds each on disk.
 //!
@@ -30,12 +34,13 @@
 //! assembled by `llvm-as`.
 
 use super::blit_holds::{options, Scratch};
-use crate::{ComputePipelineState, Device, Library, PipelineOptions, WorkCounts};
+use crate::{ComputePipelineState, Device, Library, PipelineOptions, PipelineRecord, WorkCounts};
 use metal2vulkan::cache::PipelineArtifact;
 use metal2vulkan::library::{CompiledFunction, FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::DataType;
 use metal2vulkan::pipeline::{ComputePipeline, ComputePipelineDescriptor, StageSource};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// A kernel of the bench: its fixture's directory under `validation/fixtures/public`, its name,
@@ -179,11 +184,45 @@ fn report(device: &Device, kernel: &Kernel, kind: &str, times: &Times, work: &st
     );
 }
 
-/// A device over the shader cache in `scratch`, whose memo holds `memo` bytes at most.
-fn device_of(scratch: &Scratch, memo: u64) -> Device {
+/// A device over the shader cache in `scratch`, whose memo holds `memo` bytes at most, handing
+/// the records of its creations to `records` where given.
+fn device_of(scratch: &Scratch, memo: u64, records: Option<&Records>) -> Device {
     let mut options = options(&scratch.0);
     options.shader_cache.memory_capacity = memo;
+    if let Some(records) = records {
+        let records = Arc::clone(records);
+        options.pipeline_records = Some(Arc::new(move |record| {
+            records.lock().unwrap().push(record);
+        }));
+    }
     Device::system_default_with(&options).unwrap()
+}
+
+/// The records a device's creations handed over.
+type Records = Arc<Mutex<Vec<PipelineRecord>>>;
+
+/// Warm `device` over `records`, and wait until the pass counted each in an outcome.
+fn warm_over(device: &Device, records: &[PipelineRecord]) {
+    device.warm(records.to_vec(), u64::MAX);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let s = device.warm_statistics();
+        let done = s.records_warmed
+            + s.records_translated
+            + s.records_failed
+            + s.records_unread
+            + s.records_not_warmable
+            + s.records_not_run;
+        if done >= records.len() as u64 {
+            assert_eq!(s.records_warmed, records.len() as u64, "{s:?}");
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the warm pass did not finish: {s:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// The default bound of a device's memo.
@@ -195,12 +234,16 @@ const MEMO: u64 = crate::shader_cache::DEFAULT_MEMORY_CAPACITY;
 fn compute_create_bench() {
     for kernel in [SMALL, CONV] {
         let scratch = Scratch::new("compute-create");
-        let first = device_of(&scratch, MEMO);
+        let records = Records::default();
+        let first = device_of(&scratch, MEMO, Some(&records));
         let library_first = library(&first, &kernel);
         let (before, mut times) = (first.work_counts(), Times::default());
         round(&kernel, &library_first, &first, &mut times);
         let work_cold = work(&before, &first.work_counts());
         report(&first, &kernel, "cold", &times, &work_cold);
+        // The cold round's records, one a state, which the warm passes below are handed.
+        let warm_records = records.lock().unwrap().clone();
+        assert_eq!(warm_records.len(), usize::from(STATES));
         let (before, mut times) = (first.work_counts(), Times::default());
         for _ in 0..PASSES {
             round(&kernel, &library_first, &first, &mut times);
@@ -211,7 +254,7 @@ fn compute_create_bench() {
         let mut times = Times::default();
         let mut works = Vec::new();
         for _ in 0..PASSES {
-            let device = device_of(&scratch, MEMO);
+            let device = device_of(&scratch, MEMO, None);
             let library = library(&device, &kernel);
             let before = device.work_counts();
             round(&kernel, &library, &device, &mut times);
@@ -226,8 +269,29 @@ fn compute_create_bench() {
                 );
             }
         }
+        // A program's states after its warm pass made them, on a device whose memo of one byte
+        // let each go: each finds its translation on disk, and makes its variant's objects.
+        let mut times = Times::default();
+        let mut works = Vec::new();
+        for _ in 0..PASSES {
+            let device = device_of(&scratch, 1, None);
+            let library = library(&device, &kernel);
+            warm_over(&device, &warm_records);
+            let before = device.work_counts();
+            round(&kernel, &library, &device, &mut times);
+            works.push(work(&before, &device.work_counts()));
+            if works.len() == PASSES {
+                report(
+                    &device,
+                    &kernel,
+                    "after a warm pass, memo of 1 byte",
+                    &times,
+                    &works.join(" | "),
+                );
+            }
+        }
         // A memo of one byte keeps nothing past a round: each round finds each on disk.
-        let device = device_of(&scratch, 1);
+        let device = device_of(&scratch, 1, None);
         let library = library(&device, &kernel);
         let (before, mut times) = (device.work_counts(), Times::default());
         for _ in 0..PASSES {
@@ -320,7 +384,7 @@ const PROFILE_ROUNDS: usize = 2000;
 #[ignore = "a release-mode profile target"]
 fn compute_create_profile() {
     let scratch = Scratch::new("compute-create-profile");
-    let device = device_of(&scratch, 1);
+    let device = device_of(&scratch, 1, None);
     let library = library(&device, &CONV);
     round(&CONV, &library, &device, &mut Times::default());
     let (before, mut times) = (device.work_counts(), Times::default());
