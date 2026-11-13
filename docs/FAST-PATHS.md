@@ -740,6 +740,24 @@ driver's. Each is open work.
   on the RTX 3090 (620.70.06) that check makes no image of its own, its verdicts unchecked, so an
   `RGBA8Unorm` 38x8 render target at rows 256 bytes apart over either is a shadow there, where
   one that only reads is the driver's linear image in place.
+- **On NVIDIA, a no-copy object across a guest RAM's chunk end, both chunks imported, is a copy**
+  (`copied-host-pages`, `CopiedBecause::OverRamChunk`, `host_ram.rs`), which costs what any
+  copied host buffer costs (below). The consumer's guest boot makes one on the RTX 2080 and the
+  RTX 3090: a 2 MiB `Shared` heap 0xde000 bytes before a 64 MiB chunk's end. A device whose held
+  pointer imports cost a submission nothing (NVIDIA's) imports the RAM's chunks by their pointers
+  ahead of the objects (`Plan::AHEAD`), so both chunks' imports hold such an object's pages when
+  it is made. An import of its own pointer would import those pages again, which
+  `VK_EXT_external_memory_host` leaves undefined (its issue 6), and Vulkan defines no alias between
+  a host pointer's import and a dma-buf of the same pages. No `VkBuffer` binds the two imports: a
+  plain one binds one memory, its whole size inside it (VUID-vkBindBufferMemory-buffer-07459,
+  VUID-vkBindBufferMemory-None-10741), and a sparse one binds only memory of a type its
+  requirements take (VUID-VkSparseMemoryBind-memory-01096), which on the RTX 2080 (620.70.06) is
+  type 1 alone, device-local, for every usage, with the host handle type or without, where a host
+  pointer imports as type 3 or 4, of system memory (`tests::sparse_host_pages`). A chunk's end
+  cannot follow the objects: each chunk is imported before the objects over it, and binds others
+  by the time a straddling one is made. Where the plan is listed (the consumer's RADV and ANV
+  devices, its RAM given a source of dma-bufs), a chunk is imported only for a copy over it, and
+  an object over chunks no copy imported takes its own import.
 - **A copied host buffer costs O(its size) at every batch's completion that may have written it, and
   at every commit where its pages carry no log** (`copied.rs`, `copied-host-pages`), and again at
   the submission of each batch that waits for an event value its commit found not reached
