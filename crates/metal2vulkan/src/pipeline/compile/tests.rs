@@ -709,6 +709,7 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", absent_varyings: {}", "")
                 .replace(", viewport_compensation: None", "")
                 .replace(", folded_groups: false", "")
+                .replace(", partial_threadgroups: false", "")
                 .replace(", extended_range: {}", "")
                 .replace(", extended_range_colors: {}", "")
                 .replace(", word_colors: {}", "")
