@@ -396,6 +396,11 @@ impl<V> Clone for Pending<V> {
 }
 
 impl<V> Pending<V> {
+    /// Whether `other` looks at the same making.
+    pub(crate) fn same(&self, other: &Pending<V>) -> bool {
+        Arc::ptr_eq(&self.turn, &other.turn)
+    }
+
     /// Its outcome, once it finished; `None` while it is being made.
     pub(crate) fn outcome(&self) -> Option<Result<Arc<V>, Error>> {
         self.turn.outcome()

@@ -6,7 +6,10 @@
 //! commands are fanned out and the large one is drawn region by region, in its place; under `Exact`
 //! no probe runs and every command is drawn region by region. Either way the target's bytes are
 //! those of the same commands drawn on the encoder, region by region: a command lost, drawn twice
-//! or out of order, or a copy drawn into another region, changes the pixels.
+//! or out of order, or a copy drawn into another region, changes the pixels. The probe's and the
+//! fanned-out draws' pipelines are begun at commit (`RenderExecution::settle`): the host step
+//! takes them made or waits for them, and makes no more pipelines itself than it makes for the
+//! same frame under `Exact`.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_triangle` and
@@ -288,7 +291,9 @@ fn differing(a: &[u8], b: &[u8]) -> usize {
 }
 
 /// Under `FanOut` the host step probes once, fans the grid commands out and draws the large one
-/// region by region between them; the pixels are the encoder's region-by-region draws'.
+/// region by region between them, with the fan-out's pipelines `commit` began: the step makes
+/// as many as it makes for the frame under `Exact`. The pixels are the encoder's
+/// region-by-region draws'.
 #[test]
 fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     let scratch = Scratch::new("rate-mapped-fan-out");
@@ -298,9 +303,31 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     let (fanned, before, after) = workload.frame(true);
     let counts = fan_counts(&before, &after);
     let probe_nanos = after.rate_map_probe_gpu_nanos - before.rate_map_probe_gpu_nanos;
-    eprintln!("RATE-MAP-FAN-OUT counts {counts:?} probe_gpu_nanos {probe_nanos}");
+    let made = after.host_step_pipelines_made - before.host_step_pipelines_made;
+    let ready = after.rate_map_fan_out_pipelines_ready - before.rate_map_fan_out_pipelines_ready;
+    let waited = after.rate_map_fan_out_pipelines_waited - before.rate_map_fan_out_pipelines_waited;
+    eprintln!(
+        "RATE-MAP-FAN-OUT counts {counts:?} probe_gpu_nanos {probe_nanos}; fan-out pipelines \
+         {ready} ready, {waited} waited for; {made} made at the step"
+    );
     match fans_out(&workload.device) {
-        true => assert_eq!(counts, [1, 1, u64::from(COMMANDS - 1)]),
+        true => {
+            assert_eq!(counts, [1, 1, u64::from(COMMANDS - 1)]);
+            assert!(
+                ready + waited >= 2,
+                "the commit began no probe or draw pipeline"
+            );
+            // The same frame on a device of the other policy: the step's own makings there.
+            let scratch = Scratch::new("rate-mapped-fan-out-made");
+            let exact = Workload::new(device_under(&scratch.0, RateMapRegionPolicy::Exact));
+            exact.frame(false);
+            let (_, before, after) = exact.frame(true);
+            let exact_made = after.host_step_pipelines_made - before.host_step_pipelines_made;
+            assert_eq!(
+                made, exact_made,
+                "pipelines the host step made for the fan-out"
+            );
+        }
         false => assert_eq!(counts, [0; 3]),
     }
     // Every pixel took the commands' blends: none is the clear's black.

@@ -210,7 +210,12 @@
 //!   cut into ranges. The probe stops at a command's barrier, and after a draw whose pipeline
 //!   writes memory, as it runs before every draw of the pass: the later commands are drawn region
 //!   by region. A pass whose attachments are memoryless or that uses a shadowed texture is not
-//!   probed, nor an execution whose commands record as several runs. A copy's window coordinates
+//!   probed, nor an execution whose commands record as several runs. `commit`'s settle of the
+//!   pass (`RenderExecution::settle`) begins the probe's and the fanned-out draws' variants and
+//!   `VkPipeline`s on the device's pool beside the draws' own, so the step takes them made, or
+//!   waits for them (`WorkCounts::rate_map_fan_out_pipelines_ready`,
+//!   `rate_map_fan_out_pipelines_waited`), and makes none itself for the states the settle
+//!   foresaw. A copy's window coordinates
 //!   are computed in the geometry stage, so a pixel centre within a rounding error of a
 //!   triangle's edge may be covered by one route and not by the other. The encoder's own draws,
 //!   and the commands `commit` records, are drawn region by region (`docs/FAST-PATHS.md`, known

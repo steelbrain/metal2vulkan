@@ -36,7 +36,9 @@
 //! - **An execution's replay.** A draw of an execution's commands records as the replay runs
 //!   (the host step, or `commit` for records the CPU writes), so it takes no pending recording:
 //!   its pipeline, most begun on the device's pool by the execution's settle at commit
-//!   (`RenderExecution::settle`), which the batch's host step waits for as for a pending draw's.
+//!   (`RenderExecution::settle`), which the batch's host step waits for as for a pending draw's;
+//!   a fan-out's probe's and fanned-out draw's (`render/fan_out.rs`), which the settle begins
+//!   too, the step takes where it fans the pass out, waiting for one still being made.
 //!   A making the replay begins itself, one the settle did not foresee, is waited for in a host
 //!   step until it is made, on the step's thread; in `commit`, until its command buffer's bound
 //!   at most, past which the replay stops, before anything of the draw is tracked, and leaves

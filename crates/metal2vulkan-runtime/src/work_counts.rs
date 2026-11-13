@@ -232,6 +232,8 @@ pub(crate) struct Counters {
     rate_map_probe_gpu_nanos: AtomicU64,
     rate_map_flagged_draws: AtomicU64,
     rate_map_fanned_draws: AtomicU64,
+    rate_map_fan_out_pipelines_ready: AtomicU64,
+    rate_map_fan_out_pipelines_waited: AtomicU64,
     encoder_primaries_begun_ahead: AtomicU64,
     primaries_begun_ahead: AtomicU64,
     barrier_buffers_kept: AtomicU64,
@@ -2756,6 +2758,17 @@ impl Counters {
     pub(crate) fn rate_map_probe(&self, flagged: u64) {
         (self.rate_map_probes).fetch_add(1, Ordering::Relaxed);
         (self.rate_map_flagged_draws).fetch_add(flagged, Ordering::Relaxed);
+    }
+
+    /// A host step that fans its pass's triangles out took the making of a probe's or a
+    /// fanned-out draw's pipeline the commit's settle began on the device's pool: made already
+    /// (`ready`), or waited for (`rate_mapped_pass.rs`, **Fan-out**).
+    pub(crate) fn rate_map_fan_out_pipeline_taken(&self, ready: bool) {
+        let counter = match ready {
+            true => &self.rate_map_fan_out_pipelines_ready,
+            false => &self.rate_map_fan_out_pipelines_waited,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A host step's probe ran for `nanos` of GPU time, read from its timestamps once it completed
@@ -6928,6 +6941,12 @@ pub struct WorkCounts {
     /// Executed commands' draws in rate-mapped passes drawn once, fanned out to the regions their
     /// triangles touch.
     pub rate_map_fanned_draws: u64,
+    /// `VkPipeline`s of probes' and fanned-out draws' variants that `commit` began making on the
+    /// device's pool, settling what the host step that records the pass compiles, and that a
+    /// host step fanning the pass out found made already (`rate_mapped_pass.rs`, **Fan-out**).
+    pub rate_map_fan_out_pipelines_ready: u64,
+    /// Those a host step fanning the pass out found still being made, and waited for.
+    pub rate_map_fan_out_pipelines_waited: u64,
     /// Render passes whose first instance did not record inline, its draws in a secondary command
     /// buffer, by the first check that ruled it out (`render/inline_first.rs`), counted as the pass
     /// opens or at its first draw that records: here, the encoder encodes an ended encoder's calls
@@ -9977,6 +9996,10 @@ impl Device {
             rate_map_probe_gpu_nanos: counters.rate_map_probe_gpu_nanos.load(Ordering::Relaxed),
             rate_map_flagged_draws: counters.rate_map_flagged_draws.load(Ordering::Relaxed),
             rate_map_fanned_draws: counters.rate_map_fanned_draws.load(Ordering::Relaxed),
+            rate_map_fan_out_pipelines_ready: (counters.rate_map_fan_out_pipelines_ready)
+                .load(Ordering::Relaxed),
+            rate_map_fan_out_pipelines_waited: (counters.rate_map_fan_out_pipelines_waited)
+                .load(Ordering::Relaxed),
             passes_not_inline_encoders: not_inline(NotInline::Encoders),
             passes_not_inline_layouts: not_inline(NotInline::Layouts),
             passes_not_inline_memoryless: not_inline(NotInline::Memoryless),

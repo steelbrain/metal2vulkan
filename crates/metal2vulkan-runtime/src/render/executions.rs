@@ -273,7 +273,7 @@
 //!   own draw reads such a buffer at stride 0 (`render/vertex_strides.rs`).
 
 use super::bound::Bound;
-use super::fan_out::{self, FanOutRoutes, FanOutRun, Probe};
+use super::fan_out::{self, FanOutDraw, FanOutRoutes, FanOutRun, Probe};
 use super::mesh::MeshGrid;
 use super::pass_start_reads::{PassStartReads, PassStartTables};
 use super::pass_steps::PassSteps;
@@ -349,7 +349,7 @@ use metal2vulkan::bind::{
 use metal2vulkan::metal::{
     IndexType, IndirectCommandType, PrimitiveTopologyClass, PrimitiveType, VertexStepFunction,
 };
-use metal2vulkan::pipeline::{CommandWrites, VertexStride};
+use metal2vulkan::pipeline::{CommandWrites, RegionFanOut, VertexStride};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -1910,7 +1910,8 @@ impl RenderLowering {
     /// execution's instance, an indexed draw's alike ([`settle_draw_of`](Self::settle_draw_of)).
     /// A tessellation or mesh pipeline's draws, and a state the pass refuses, are left to the
     /// step, which meets them as they are then. Announces nothing: it draws nothing. The draws
-    /// settle with the bind state `live`.
+    /// settle with the bind state `live`. Under the encoder's fan-out (`render/fan_out.rs`), the
+    /// probe's or the fanned-out draw's variant of each draw it takes, none of another.
     fn settle_draws(
         &mut self,
         live: &mut LiveBind,
@@ -1946,7 +1947,7 @@ impl RenderLowering {
         // The encoder's pipeline state, which its bind state reads, as a command's draw sets it.
         self.pipeline = Some(pipeline.clone());
         for &primitive_type in types {
-            if let Ok(settled) = self.settle_draw_of(live, state, primitive_type) {
+            if let Ok(Some(settled)) = self.settle_draw_of(live, state, primitive_type) {
                 made.push(settled);
             }
         }
@@ -1963,13 +1964,15 @@ impl RenderLowering {
     /// slots); here none is made where the draw records into a run of another shape than the
     /// instance's (it fetches attachments, tests the stencil in the shader, renders views of its
     /// own, or places its colors elsewhere), or a command's own vertex strides key the pipeline
-    /// (a layout of per-bind strides that are not dynamic state).
+    /// (a layout of per-bind strides that are not dynamic state). Under the encoder's fan-out,
+    /// its variant of the draw, `None` where the fan-out does not take the draw
+    /// (`fan_out_asked`).
     fn settle_draw_of(
-        &self,
+        &mut self,
         live: &mut LiveBind,
         state: &DrawingState,
         primitive_type: PrimitiveType,
-    ) -> Result<SettledDraw, Error> {
+    ) -> Result<Option<SettledDraw>, Error> {
         let assembly = Assembly::Primitives(primitive_type);
         // A command's lines at a width other than 1 are the device's own at the nearest width they
         // draw, never the band (`render/line_width.rs`).
@@ -1982,6 +1985,13 @@ impl RenderLowering {
         // (`render/vertex_reach.rs`), are the step's: none here. A command's draw is direct, and
         // draws a rate-mapped pass's regions as the encoder's direct draw would.
         let region_viewports = self.draws_region_batches(state, &settings, true);
+        let region_fan_out = match self.fan_out {
+            None => None,
+            Some(_) => match self.fan_out_asked(state, &settings, assembly)? {
+                Some(fan) => Some(fan),
+                None => return Ok(None),
+            },
+        };
         let settled = self.settle_draw(
             live,
             (
@@ -1991,7 +2001,7 @@ impl RenderLowering {
                 PrivateForm::default(),
                 ProvokingForms::default(),
                 &BTreeSet::new(),
-                (region_viewports, None),
+                (region_viewports, region_fan_out),
             ),
             (&pass_start, &sampler_maps),
             (&mut argument_samplers, &mut None),
@@ -2022,7 +2032,7 @@ impl RenderLowering {
             || *self.current.shape.locations != *settings.routing.locations
             || own_strides
         {
-            return Ok((variant, None));
+            return Ok(Some((variant, None)));
         }
         let (_, stencil) = self.layout.aspects();
         let failing = match &settings.failing_state {
@@ -2086,7 +2096,7 @@ impl RenderLowering {
         if let DrawPipeline::Made(raw) = &drawn {
             variant.first_use(raw, &key.specialization, &formats);
         }
-        Ok((variant, Some(drawn)))
+        Ok(Some((variant, Some(drawn))))
     }
 }
 
@@ -2917,7 +2927,7 @@ impl RenderExecution {
         &self,
         core: EncoderCore,
         (storage, residency): (PassStorage, &Residency),
-        made: &mut Vec<SettledDraw>,
+        (made, fanned): (&mut Vec<SettledDraw>, Option<&mut Vec<SettledDraw>>),
     ) -> EncoderCore {
         let draws = IndirectCommandType::DRAW.union(IndirectCommandType::DRAW_INDEXED);
         if !self.icb.descriptor().command_types.intersects(draws) {
@@ -2952,6 +2962,21 @@ impl RenderExecution {
         let mut live = LiveBind::default();
         for pipeline in named {
             encoder.settle_draws(&mut live, pipeline, made);
+        }
+        // Where the host step fans the pass's triangles out, the probe's and the fanned-out
+        // draws' variants of the same draws, into `fanned` (`render/fan_out.rs`).
+        let fans = self.snapshot.rate_map.is_some() && self.shadows.is_empty();
+        if let Some(fanned) = fanned.filter(|_| fans) {
+            for mode in [RegionFanOut::Probe, RegionFanOut::Draw] {
+                encoder.fan_out = Some(FanOutDraw {
+                    mode,
+                    index: 0,
+                    copies: 0,
+                });
+                for pipeline in named {
+                    encoder.settle_draws(&mut live, pipeline, fanned);
+                }
+            }
         }
         let RenderLowering { core, .. } = encoder;
         EncoderCore::unboxed(core)
@@ -3113,6 +3138,11 @@ pub(crate) struct DeferredPass {
     /// made at its command buffer's bound ([`left_for_makings`](Self::left_for_makings)): its
     /// host step records the pass once they are made, as for its draws' pipelines.
     settled: Mutex<Vec<Pending<RawPipeline>>>,
+    /// The makings of the probe's and the fanned-out draws' pipelines its executions' settle at
+    /// commit handed to the device's pool ([`settle`](Self::settle)): the host step that fans
+    /// the pass's triangles out takes them made, or waits for them, as it would for a making of
+    /// its own ([`fan_out_routes`](Self::fan_out_routes)); one that does not leaves them.
+    fan_settled: Mutex<Vec<Pending<RawPipeline>>>,
     /// Where `commit` recorded the pass with executions in their GPU form (`gpu.rs`), what each
     /// such execution's buffer's records may hold as the decision found it: a route encoded
     /// since that adds to it sends the pass to the host step ([`outgrown`](Self::outgrown)),
@@ -3193,6 +3223,7 @@ impl DeferredPass {
             shadows,
             ahead: OnceLock::new(),
             settled: Mutex::new(Vec::new()),
+            fan_settled: Mutex::new(Vec::new()),
             on_gpu: Mutex::new(Vec::new()),
             cause: Mutex::new(None),
         }
@@ -3970,12 +4001,23 @@ impl DeferredPass {
         residency: &Residency,
     ) -> Result<(Vec<Option<Arc<FanOutRoutes>>>, Option<RecordedSegment>), Error> {
         let device = command_buffer.device();
-        let layout = &self.layout;
-        let memoryless = (layout.colors.iter().flatten().map(|color| &color.target))
-            .chain(layout.depth_stencil.iter().map(|ds| &ds.target))
-            .any(super::memoryless);
-        if !fan_out::fans_out(device) || !self.shadows.is_empty() || memoryless {
+        if !self.fans_out(device) {
             return Ok((Vec::new(), None));
+        }
+        // The probe's and the fanned-out draws' pipelines the settle at commit began: made by
+        // now, or waited for here, hastened, as the step's own makings are; then the draws find
+        // them made.
+        let fan_settled = lock(&self.fan_settled).clone();
+        for pending in &fan_settled {
+            let ready = pending.outcome().is_some();
+            device
+                .shared()
+                .counts
+                .rate_map_fan_out_pipeline_taken(ready);
+            if !ready {
+                // Its outcome is the draw's to read.
+                drop(pending.wait());
+            }
         }
         // Each execution's instance, by index.
         let mut homes = vec![None; self.executions.len()];
@@ -4143,6 +4185,17 @@ impl DeferredPass {
         Ok((recorded, completed))
     }
 
+    /// Whether the host step that records it fans its triangles out, where its executions' draws
+    /// take the fan-out (`render/fan_out.rs`): the device's policy and features ask it, and the
+    /// pass has no memoryless attachment and uses no shadowed texture.
+    fn fans_out(&self, device: &Device) -> bool {
+        let layout = &self.layout;
+        let memoryless = (layout.colors.iter().flatten().map(|color| &color.target))
+            .chain(layout.depth_stencil.iter().map(|ds| &ds.target))
+            .any(super::memoryless);
+        fan_out::fans_out(device) && self.shadows.is_empty() && !memoryless
+    }
+
     /// Settle at commit what the host step that records the pass would compile
     /// ([`RenderExecution::settle`]): for each execution, the variants and `VkPipeline`s of the
     /// draws of each state its records name as the CPU wrote them, the encoder's where its buffer
@@ -4168,15 +4221,34 @@ impl DeferredPass {
         let Ok(mut core) = EncoderCore::segment(command_buffer, false) else {
             return made;
         };
+        let mut fanned = Vec::new();
+        let fans = self.fans_out(command_buffer.device());
         for execution in &self.executions {
             let inputs = (self.storage.clone(), &residency);
-            core = execution.settle(core, inputs, &mut made);
+            let into = (&mut made, fans.then_some(&mut fanned));
+            core = execution.settle(core, inputs, into);
         }
-        // The makings handed to the pool, which the host step waits for.
-        lock(&self.settled).extend(made.iter().filter_map(|(_, drawn)| match drawn {
-            Some(DrawPipeline::Making(pending)) => Some(pending.clone()),
-            _ => None,
-        }));
+        let makings = |made: &[SettledDraw]| -> Vec<Pending<RawPipeline>> {
+            (made.iter())
+                .filter_map(|(_, drawn)| match drawn {
+                    Some(DrawPipeline::Making(pending)) => Some(pending.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        // The makings handed to the pool: the host step waits for the draws' before it records
+        // the pass, and takes the fan-out's where it fans the pass out.
+        lock(&self.settled).extend(makings(&made));
+        // Each making once: a strip's draw and a list's settle to one key where the pipeline
+        // makes the topology dynamic.
+        let mut fan_settled = lock(&self.fan_settled);
+        for pending in makings(&fanned) {
+            if !fan_settled.iter().any(|kept| kept.same(&pending)) {
+                fan_settled.push(pending);
+            }
+        }
+        drop(fan_settled);
+        made.extend(fanned);
         made
     }
 
