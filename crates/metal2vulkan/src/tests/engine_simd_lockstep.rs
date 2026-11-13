@@ -2645,8 +2645,8 @@ fn steps_cost(steps: usize, accs: usize, pointers: bool) -> Option<(u64, u64, Re
 }
 
 /// A long barrier-free kernel's lockstep tables grow with its blocks, not with their square: the
-/// pair search keeps one block's reachable blocks at a time. Four times the steps (and blocks)
-/// takes at most five times the ledger peak; the search that kept every block's list took
+/// pair search keeps no block's reachable blocks beyond its walk. Four times the steps (and
+/// blocks) takes at most five times the ledger peak; the search that kept every block's list took
 /// sixteen times its share.
 #[test]
 fn a_long_barrier_free_kernel_s_ledger_grows_with_its_blocks() {
@@ -2665,15 +2665,37 @@ fn a_long_barrier_free_kernel_s_ledger_grows_with_its_blocks() {
     );
 }
 
-/// The authored kernel of 2,048 steps through loaded pointers, 16 accumulators (about 129,000
-/// instructions and 6,000 blocks), compiles inside the standard budget's work and ledger bounds,
-/// which stand for the 20 s and 500 MiB ceilings; the search that kept every block's reachable
-/// blocks refused it past the ledger's bound.
+/// A long barrier-free kernel's lockstep work grows with its blocks, not with their square: a
+/// pair whose barrier is already wanted is not tried, and a walk stops where every pair beyond it
+/// has its barrier. Each written block of `grow` conflicts with every later one, so trying each
+/// reached pair took about fourteen times the whole compilation's work for four times the steps,
+/// and refused 4,096 steps past the work cap; the search takes at most six times.
 #[test]
-fn the_authored_2048_step_kernel_compiles_inside_the_budget() {
-    let Some((work, peak, compiled)) = steps_cost(2048, 16, true) else {
+fn a_long_barrier_free_kernel_s_work_grows_with_its_blocks() {
+    let Some((short, _, compiled)) = steps_cost(1024, 1, false) else {
         return;
     };
-    eprintln!("BARRIER-FREE-STEPS: 2048 steps: {work} work units, ledger peak {peak}");
-    compiled.expect("2048 steps inside the standard budget");
+    compiled.expect("1024 steps");
+    let Some((long, _, compiled)) = steps_cost(4096, 1, false) else {
+        return;
+    };
+    compiled.expect("4096 steps inside the standard budget");
+    eprintln!("BARRIER-FREE-STEPS: work {short} at 1024 steps, {long} at 4096");
+    assert!(
+        long <= 6 * short,
+        "the work grew {long} / {short} for four times the blocks"
+    );
+}
+
+/// The authored kernel of 4,096 steps through loaded pointers, 16 accumulators (about 258,000
+/// instructions and 12,000 blocks), compiles inside the standard budget's work and ledger bounds,
+/// which stand for the 20 s and 500 MiB ceilings. The search that tried every reached pair
+/// refused it past the work cap, and the one before refused 2,048 steps past the ledger's bound.
+#[test]
+fn the_authored_4096_step_kernel_compiles_inside_the_budget() {
+    let Some((work, peak, compiled)) = steps_cost(4096, 16, true) else {
+        return;
+    };
+    eprintln!("BARRIER-FREE-STEPS: 4096 steps: {work} work units, ledger peak {peak}");
+    compiled.expect("4096 steps inside the standard budget");
 }

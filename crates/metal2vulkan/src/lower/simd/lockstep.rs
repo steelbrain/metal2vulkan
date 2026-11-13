@@ -137,9 +137,12 @@
 //! a branch its threads diverge on; neither is visible in the IR, and Metal defines neither.
 //!
 //! The analysis is metered: work per instruction, per block reached, and per pair, and its tables
-//! are charged while they live.
+//! are charged while they live. The pair search ([`search`]) does not try a pair whose barrier is
+//! already wanted, and stops walking where every pair beyond has its barrier, so a long
+//! barrier-free body whose pairs conflict costs about linear work in its blocks.
 
 mod facts;
+mod search;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -161,6 +164,7 @@ use crate::pipeline::sym::Stage;
 
 use super::uniform::{Among, Uniformity};
 use facts::{Access, Accesses, Addr, AddrFacts, Row, Space, Spread};
+use search::Search;
 
 fn invariant(what: &'static str) -> Error {
     Error::Internal(InternalError::new(InternalKind::Invariant, what))
@@ -525,121 +529,6 @@ fn apart(
     }
 }
 
-/// The blocks reachable from the end of a block on barrier-free paths, with how ([`via`]),
-/// computed on demand; or, walked back (`back`), the blocks whose end reaches the start of a
-/// block so. Only the last block's list is kept: [`pairs`] asks for one block's at a time (the
-/// accesses go in block order), so a block is walked at most once a pass over them, and the
-/// tables stay linear in the blocks. Keeping every block's list held one entry for each block
-/// every walked block reaches, quadratic in the blocks of a long barrier-free body: 6,000 blocks
-/// of one charged past the ledger's bound.
-struct Reach {
-    /// The block whose list is kept, and the list.
-    last: Option<(BlockId, Vec<(BlockId, u8)>)>,
-    /// Scratch: by block, the states reached in the current walk.
-    seen: Vec<u8>,
-    /// The walk follows edges back, from a block's start to the blocks whose end reaches it.
-    back: bool,
-}
-
-impl Reach {
-    fn new(nb: usize, back: bool, m: &mut Meter) -> Result<Reach, Error> {
-        let mut seen = Vec::new();
-        m.reserve(&mut seen, nb)?;
-        seen.resize(nb, 0u8);
-        Ok(Reach {
-            last: None,
-            seen,
-            back,
-        })
-    }
-
-    /// The blocks reached from the end of `x`; walked back, the blocks whose end reaches the
-    /// start of `x`. The list of the block asked for before is released.
-    fn of(&mut self, x: BlockId, s: &Shape<'_>, m: &mut Meter) -> Result<&[(BlockId, u8)], Error> {
-        if self.last.as_ref().is_none_or(|(at, _)| *at != x) {
-            if let Some((_, list)) = &self.last {
-                m.release(crate::budget::vec_bytes(list));
-            }
-            self.last = None;
-            let list = self.walk(x, s, m)?;
-            self.last = Some((x, list));
-        }
-        Ok(self.last.as_ref().map_or(&[], |(_, list)| list.as_slice()))
-    }
-
-    /// The ledger bytes its tables hold.
-    fn ledger_bytes(&self) -> usize {
-        let list = self
-            .last
-            .as_ref()
-            .map_or(0, |(_, list)| crate::budget::vec_bytes(list));
-        crate::budget::vec_bytes(&self.seen) + list
-    }
-
-    fn walk(
-        &mut self,
-        x: BlockId,
-        s: &Shape<'_>,
-        m: &mut Meter,
-    ) -> Result<Vec<(BlockId, u8)>, Error> {
-        let cfg = &s.e.cfg;
-        let back = self.back;
-        // A state is a block and whether the path to it crossed a retreating edge ([`via`]).
-        let flag = |cross: bool| if cross { via::CROSS } else { via::SAME };
-        let mut stack: Vec<(BlockId, bool)> = Vec::new();
-        let mut touched: Vec<BlockId> = Vec::new();
-        let degree = |at: BlockId| {
-            if back {
-                cfg.predecessors(at).len()
-            } else {
-                cfg.successors(at).len()
-            }
-        };
-        let edges = |at: BlockId, cross: bool, stack: &mut Vec<_>| {
-            if back {
-                for from in cfg.predecessors(at) {
-                    stack.push((from, cross || cfg.is_retreating(from, at)));
-                }
-            } else {
-                for to in cfg.successors(at) {
-                    stack.push((to, cross || cfg.is_retreating(at, to)));
-                }
-            }
-        };
-        m.grow(&mut stack, degree(x))?;
-        edges(x, false, &mut stack);
-        while let Some((y, cross)) = stack.pop() {
-            m.tick(1)?;
-            let Some(seen) = self.seen.get_mut(y.index()) else {
-                continue;
-            };
-            let f = flag(cross);
-            if *seen & f != 0 {
-                continue;
-            }
-            if *seen == 0 {
-                m.grow(&mut touched, 1)?;
-                touched.push(y);
-            }
-            *seen |= f;
-            if !s.acc.has_barrier(y) {
-                m.grow(&mut stack, degree(y))?;
-                edges(y, cross, &mut stack);
-            }
-        }
-        let mut out = Vec::new();
-        m.reserve_exact(&mut out, touched.len())?;
-        for &y in &touched {
-            if let Some(seen) = self.seen.get_mut(y.index()) {
-                out.push((y, *seen));
-                *seen = 0;
-            }
-        }
-        m.release(crate::budget::vec_bytes(&stack) + crate::budget::vec_bytes(&touched));
-        Ok(out)
-    }
-}
-
 /// By a block and a block to avoid: the blocks reached from the end of the first on
 /// barrier-free paths that never enter the second, computed on demand and kept.
 struct Avoid {
@@ -843,7 +732,7 @@ fn decide(
 }
 
 /// Collect into `wants` where barriers must order the conflicting pairs of `acc`, the accesses of
-/// one memory space: each pair is searched within that space's barrier intervals.
+/// one memory space: each pair is searched within that space's barrier intervals ([`search`]).
 fn pairs<'a>(
     e: &'a Entry,
     acc: &'a Accesses,
@@ -868,35 +757,11 @@ fn pairs<'a>(
         pdom,
         loops,
     };
-    let mut reach = Reach::new(acc.range.len(), false, m)?;
-    let mut back = Reach::new(acc.range.len(), true, m)?;
-    let mut avoid = Avoid {
-        memo: BTreeMap::new(),
-    };
-    let want_bytes = tree_bytes(1, std::mem::size_of::<Want>());
-    let empty = Addr::default();
-    let mut consider = |(ai, bi): (usize, usize), inb: bool, flags: u8, m: &mut Meter| {
-        m.tick(1)?;
-        let (Some(a), Some(b)) = (acc.list.get(ai), acc.list.get(bi)) else {
-            return Ok::<(), Error>(());
-        };
-        let (fa, fb) = (
-            addrs.get(ai).unwrap_or(&empty),
-            addrs.get(bi).unwrap_or(&empty),
-        );
-        if !shape.conflict((a, fa), (b, fb), flags & via::CROSS != 0) {
-            return Ok(());
-        }
-        let w = shape.place((a, b), inb, &mut avoid, m)?;
-        if wants.insert(w) {
-            m.charge(want_bytes)?;
-        }
-        Ok(())
-    };
+    let mut s = Search::new(&shape, &addrs, wants, m)?;
     // Two reads never conflict, so a pair holds a write: a write's pairs are searched from it
     // forward, and a read's from the writes it reaches, walked back from their blocks. A body of
-    // many reads and few writes costs walks from the writes' blocks alone, linear in the body
-    // (the contract, which the device pass's reads of every buffer access keep).
+    // many reads and few writes costs walks from the writes' blocks alone (the contract, which
+    // the device pass's reads of every buffer access keep).
     let mut writes: Vec<u32> = Vec::new();
     for (i, a) in acc.list.iter().enumerate() {
         if a.write {
@@ -910,44 +775,28 @@ fn pairs<'a>(
         let hi = writes.partition_point(|&i| i < e);
         writes.get(lo..hi).unwrap_or(&[])
     };
+    // The pairs inside a block: an access and the later ones before its next barrier, and those
+    // reached around a loop into the block's start (`around`: how the block's end reaches its
+    // start).
     for (ai, a) in acc.list.iter().enumerate() {
         let next = acc.barrier_after(a.block, a.pos);
         let escapes = next.is_none();
         let start = acc.range.get(a.block.index()).map_or(0, |r| r.0 as usize);
         let first_bar = acc.first_barrier(a.block);
-        // Accesses of `a`'s block: later ones before its next barrier, and those reached around
-        // a loop into the block's start (`around`: how the block's end reaches its start).
         let in_block = |b: &Access, self_flags: u8| {
             let inb = b.pos > a.pos && next.is_none_or(|p| b.pos < p);
             let around = self_flags != 0 && first_bar.is_none_or(|p| b.pos < p);
             (inb || around).then_some((inb, if around { self_flags } else { 0 }))
         };
         if a.write {
-            let reached: &[(BlockId, u8)] = if escapes {
-                reach.of(a.block, &shape, m)?
+            let self_flags = if escapes {
+                s.self_flags(a.block, m)?
             } else {
-                &[]
+                0
             };
-            let self_flags = reached
-                .iter()
-                .find(|&&(y, _)| y == a.block)
-                .map_or(0, |&(_, f)| f);
             for (k, b) in acc.in_block(a.block).iter().enumerate() {
                 if let Some((inb, flags)) = in_block(b, self_flags) {
-                    consider((ai, start + k), inb, flags, m)?;
-                }
-            }
-            for &(y, flags) in reached {
-                if y == a.block {
-                    continue;
-                }
-                let start = acc.range.get(y.index()).map_or(0, |r| r.0 as usize);
-                let first_bar = acc.first_barrier(y);
-                for (k, b) in acc.in_block(y).iter().enumerate() {
-                    if first_bar.is_some_and(|p| b.pos >= p) {
-                        break;
-                    }
-                    consider((ai, start + k), false, flags, m)?;
+                    s.consider((ai, start + k), inb, flags, m)?;
                 }
             }
         } else {
@@ -957,10 +806,7 @@ fn pairs<'a>(
                 continue;
             }
             let self_flags = if escapes {
-                back.of(a.block, &shape, m)?
-                    .iter()
-                    .find(|&&(x, _)| x == a.block)
-                    .map_or(0, |&(_, f)| f)
+                s.self_flags(a.block, m)?
             } else {
                 0
             };
@@ -969,51 +815,46 @@ fn pairs<'a>(
                     continue;
                 };
                 if let Some((inb, flags)) = in_block(b, self_flags) {
-                    consider((ai, bi as usize), inb, flags, m)?;
+                    s.consider((ai, bi as usize), inb, flags, m)?;
                 }
             }
         }
     }
-    // A read in another block than a write it reaches: from each block's writes before its first
-    // barrier, back to the blocks whose end reaches its start, and their reads after their last.
-    let mut done: Option<BlockId> = None;
-    for &wi in &writes {
-        let Some(y) = acc.list.get(wi as usize).map(|w| w.block) else {
-            continue;
-        };
-        if done == Some(y) {
-            continue;
-        }
-        done = Some(y);
-        let first_bar = acc.first_barrier(y);
-        // The block's writes before its first barrier.
-        let before_bar = |&&i: &&u32| {
-            acc.list
-                .get(i as usize)
-                .is_some_and(|w| first_bar.is_none_or(|p| w.pos < p))
-        };
-        let ws = writes_of(y);
-        if !ws.iter().any(|i| before_bar(&i)) {
-            continue;
-        }
-        let from = back.of(y, &shape, m)?;
-        for &(x, flags) in from {
-            if x == y {
+    // Across blocks: from each block's writes after its last barrier forward, and from each
+    // block's writes before its first barrier back to the reads that reach them.
+    let blocks = u32::try_from(acc.range.len()).unwrap_or(u32::MAX);
+    let mut ends: Vec<u32> = Vec::new();
+    for ahead in [true, false] {
+        for raw in 0..blocks {
+            let x = BlockId::new(raw);
+            let bar = if ahead { None } else { acc.first_barrier(x) };
+            ends.clear();
+            for &i in writes_of(x) {
+                let Some(w) = acc.list.get(i as usize) else {
+                    continue;
+                };
+                let open = if ahead {
+                    acc.barrier_after(x, w.pos).is_none()
+                } else {
+                    bar.is_none_or(|p| w.pos < p)
+                };
+                if open {
+                    m.grow(&mut ends, 1)?;
+                    ends.push(i);
+                }
+            }
+            if ends.is_empty() {
                 continue;
             }
-            let start = acc.range.get(x.index()).map_or(0, |r| r.0 as usize);
-            let last_bar = acc.barriers.get(x.index()).and_then(|v| v.last().copied());
-            for (k, a) in acc.in_block(x).iter().enumerate() {
-                if a.write || last_bar.is_some_and(|p| a.pos < p) {
-                    continue;
-                }
-                for &bi in ws.iter().filter(before_bar) {
-                    consider((start + k, bi as usize), false, flags, m)?;
-                }
+            if ahead {
+                s.ahead(x, &ends, m)?;
+            } else {
+                s.behind(x, &ends, m)?;
             }
         }
     }
-    m.release(reach.ledger_bytes() + back.ledger_bytes());
+    m.release(crate::budget::vec_bytes(&ends));
+    s.finish(m);
     Ok(())
 }
 
