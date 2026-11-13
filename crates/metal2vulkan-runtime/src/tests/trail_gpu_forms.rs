@@ -1,8 +1,9 @@
 //! The encoder trail's GPU forms (`encoder_trail.rs`, **GPU forms**): an execution of render
-//! commands through a range read from a buffer, which `commit` records in its merged GPU form
-//! (`render/executions/gpu.rs`), is named by its shape, and its scratch reads as the GPU left it
-//! once the command buffer completed: the range the GPU copied, the merged draw's corners, the
-//! arguments of the commands inside the range and the most of them, and status words of no fault.
+//! commands the GPU wrote (a blit's copy of commands the CPU encoded) through a range read from a
+//! buffer, which `commit` records in its merged GPU form (`render/executions/gpu.rs`), is named by
+//! its shape, and its scratch reads as the GPU left it once the command buffer completed: the
+//! range the GPU copied, the merged draw's corners, the arguments of the commands inside the range
+//! and the most of them, and status words of no fault.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). Its functions are `tob_rect` and `tob_solid` of
@@ -44,9 +45,10 @@ fn trail_device(cache: &std::path::Path) -> Device {
     Device::system_default_with(&options).unwrap()
 }
 
-/// Four commands of triangles the CPU wrote, executed through the range `RANGE` a buffer holds:
-/// `commit` records the execution in its merged GPU form, and its trail names it with its range
-/// read from the buffer at offset 0. Once the command buffer completed, its scratch holds the
+/// Four commands of triangles the CPU wrote, copied by a blit into a second buffer, whose records
+/// the GPU then wrote, executed through the range `RANGE` a buffer holds: `commit` records the
+/// execution in its merged GPU form, and its trail names it with its range read from the buffer
+/// at offset 0. Once the command buffer completed, its scratch holds the
 /// range the GPU copied, the merged draw of commands 1 and 2's whole triangles (7 vertices make
 /// 2 triangles, times 2 instances; 12 make 4, times 3: 48 corners) in its second draw, from
 /// vertex `2^31`, the arguments of those two commands alone (7 times 2 and 12 times 3, the most
@@ -99,8 +101,15 @@ fn a_merged_gpu_form_names_its_range_and_draws_as_its_scratch_holds_them() {
     target.usage = TextureUsage::RENDER_TARGET;
     target.resource_options = ResourceOptions::private();
     let target = device.new_texture(&target).unwrap();
+    let written = device
+        .new_indirect_command_buffer(&commands, DRAWS.len() as u64, shared)
+        .unwrap();
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_indirect_command_buffer(&icb, 0..DRAWS.len() as u64, &written, 0)
+        .unwrap();
+    blit.end_encoding().unwrap();
     let mut encoder = command_buffer
         .render_command_encoder(&pass(&target))
         .unwrap();
@@ -113,7 +122,7 @@ fn a_merged_gpu_form_names_its_range_and_draws_as_its_scratch_holds_them() {
         .use_resource(color.as_resource(), read, RenderStages::FRAGMENT)
         .unwrap();
     encoder
-        .execute_commands_in_buffer_indirect(&icb, &range, 0)
+        .execute_commands_in_buffer_indirect(&written, &range, 0)
         .unwrap();
     encoder.end_encoding().unwrap();
     command_buffer.commit().unwrap();
