@@ -67,6 +67,7 @@
 //!   image bound to the pages (`detach.rs`).
 
 use super::attached_reads::feedback_candidate;
+use super::route::HostLie;
 use super::{
     first_color_subresource, pages_hold, FirstMove, Image, ImageObjects, ImageSwap, KeptResolves,
     KeyMap, LinearMade, LinearRefusal, ObjectsToken, Owner, Raw, Remade, Storage, Texture,
@@ -75,6 +76,7 @@ use crate::binding_view::VkView;
 use crate::buffer::{Buffer, InPlaceWatch, ReadApart};
 use crate::buffer_texture::Texels;
 use crate::device::lock;
+use crate::dma_buf::ModifierMemory;
 use crate::error::{internal, vulkan, Error, RuntimeGap};
 use crate::framebuffer_fetch::storage_candidate;
 use crate::image_plan::{plan_image, ImageFacts, ImagePlan};
@@ -141,13 +143,58 @@ fn shared_rows(layout: &BufferLayout) -> Option<(Refusal, String)> {
 }
 
 /// The refusal of an image in place over dma-buf pages of `kind` (`dma_buf.rs`).
-#[cfg(unix)]
 fn dma_buf_refusal(kind: crate::dma_buf::DmaBufRefusal) -> Refusal {
     use crate::dma_buf::DmaBufRefusal as D;
     match kind {
         D::Pitch => Refusal::Pitch,
         D::Source => Refusal::Source,
         D::Image | D::Pages | D::Import => Refusal::DmaBuf,
+    }
+}
+
+/// [`dma_buf_refusal`] of a refusal's kind, with its words.
+fn dma_buf_refused((kind, why): (crate::dma_buf::DmaBufRefusal, String)) -> (Refusal, String) {
+    (dma_buf_refusal(kind), why)
+}
+
+/// The refusal of a linear image whose tiling lacks a feature the plan's usage needs (`lack`).
+fn lack_refusal(LinearLack { format, features }: LinearLack) -> LinearRefusal {
+    LinearRefusal::Need(LinearNeed::Features { format, features })
+}
+
+/// Why no image in place is made in host allocations or memory of the device's own
+/// ([`Device::unbound_in`]): the driver's linear image refused (`linear`, in words), or made and
+/// laid out otherwise than the texels (`elsewhere`), and the `DRM_FORMAT_MOD_LINEAR` one refused
+/// for `pitched`'s kind and words. The pitch where the driver laid its linear image out
+/// otherwise, else the `DRM_FORMAT_MOD_LINEAR` image's kind; both named.
+fn neither(
+    linear: String,
+    elsewhere: bool,
+    (kind, pitched): (Refusal, String),
+) -> (Refusal, String) {
+    let kind = if elsewhere { Refusal::Pitch } else { kind };
+    (kind, format!("{linear}; and {pitched}"))
+}
+
+/// The memory an image in place over `texels`, host pages of `class`, is made for and bound in
+/// ([`Device::unplaced`]): over a copied host buffer (`copied.rs`), its copy's: host allocations
+/// where the copy lies in fresh pages the runtime imported (`fresh_pages.rs`), else memory of the
+/// device's own; over any other buffer, dma-bufs over pages imported as such, host allocations
+/// over those imported by their pointer and fresh pages. A texture over the runtime's pooled or
+/// exported memory takes its image there (`Device::alias_image`), never over host pages.
+fn in_place_memory(texels: &Texels, class: PagesClass) -> Result<ModifierMemory, Error> {
+    let copied = texels.buffer.copied();
+    match class {
+        _ if copied && !texels.copy_in_fresh_pages() => Ok(ModifierMemory::Own),
+        _ if copied => Ok(ModifierMemory::Host),
+        PagesClass::DmaBuf => Ok(ModifierMemory::DmaBuf),
+        PagesClass::Pointer | PagesClass::Fresh => Ok(ModifierMemory::Host),
+        PagesClass::Pooled
+        | PagesClass::ExportedFd
+        | PagesClass::ExportedDmaBuf
+        | PagesClass::FdBlocks => Err(internal(
+            "an image in place over the runtime's pooled or exported memory",
+        )),
     }
 }
 
@@ -350,8 +397,8 @@ impl Device {
             Err(refused) => Ok(Err(refused)),
         };
         let mut made = None;
-        let pages = (texels, class, storable);
-        for wider in &self.in_place_plans(plan, descriptor, pages, facts) {
+        let lie = texels.host_lie(class, self.shared().in_place.line());
+        for wider in &self.in_place_plans(plan, descriptor, (&lie, storable), facts) {
             if let Ok(image) = make(wider)? {
                 made = Some(image);
                 break;
@@ -383,9 +430,11 @@ impl Device {
 
     /// Whether [`in_place_image`](Self::in_place_image) makes an image in place of the same
     /// arguments (`plan` the texture's declared plan, made with `descriptor`), its declared plan's
-    /// refusal where it makes none: the same steps up to the bind,
-    /// each image it makes released unbound. The declared plan is asked first, so where it is made
-    /// in place the answer costs its one or two images (the driver's linear image, and the
+    /// refusal where it makes none: the same steps up to the bind. The device's own answers come
+    /// first, which make no image ([`in_place_unmade`](Self::in_place_unmade)): where they refuse
+    /// every image the making would make, that refusal is the answer. Else each image the steps
+    /// make is released unbound: the declared plan is asked first, so where it is made in place
+    /// the answer costs its one or two images (the driver's linear image, and the
     /// `DRM_FORMAT_MOD_LINEAR` one where the driver lays the first out otherwise); the wider plans
     /// are asked only where it is refused, as the making takes the first plan made of them all.
     /// Over pages imported as dma-bufs it asks no source of the caller's: the source's answer and
@@ -396,7 +445,10 @@ impl Device {
         (texels, class, storable): (&Texels, PagesClass, bool),
         facts: &ImageFacts<'_>,
     ) -> Result<Result<(), (Refusal, String)>, Error> {
-        if let Some(refused) = shared_rows(&texels.layout) {
+        let lie = texels.host_lie(class, self.shared().in_place.line());
+        let over = (&texels.layout, in_place_memory(texels, class)?);
+        let made = (plan, descriptor);
+        if let Some(refused) = self.in_place_unmade(made, (&lie, storable), over, facts)? {
             return Ok(Err(refused));
         }
         let refused = match self.unplaced(plan, texels, class, facts)? {
@@ -406,14 +458,70 @@ impl Device {
             }
             Err(refused) => refused,
         };
-        let pages = (texels, class, storable);
-        for wider in &self.in_place_plans(plan, descriptor, pages, facts) {
+        for wider in &self.in_place_plans(plan, descriptor, (&lie, storable), facts) {
             if let Ok(unplaced) = self.unplaced(wider, texels, class, facts)? {
                 self.release_unplaced(unplaced);
                 return Ok(Ok(()));
             }
         }
         Ok(Err(refused))
+    }
+
+    /// What the device answers, before any image is made or any memory read, of the images in
+    /// place the making of a texture of `plan` (its declared plan, made with `descriptor`) over
+    /// host pages would try, whose texels lie as `lie` and `layout` say (`storable` as its route
+    /// takes it), in `memory` (host allocations, dma-bufs, or a copy's memory of the device's
+    /// own): the declared plan's refusal, as [`in_place_image`](Self::in_place_image) then answers
+    /// it, where the rows share bytes, or where its format, feature and limit queries refuse
+    /// every image it would make of each plan it would try ([`in_place_plans`](Self::in_place_plans),
+    /// [`unmade`](Self::unmade)); `None` where an image the making makes decides: the driver's
+    /// linear image's layout, a `DRM_FORMAT_MOD_LINEAR` image's plane, and their requirements
+    /// against the bytes' place. Both placement queries ask it (`texture/route.rs`): a texture
+    /// over a buffer's bytes, before its images are made, and one over host pages not imported
+    /// yet, alone (`Device::host_pages_texture_placement`).
+    pub(crate) fn in_place_unmade(
+        &self,
+        (plan, descriptor): (&ImagePlan, &TextureDescriptor),
+        (lie, storable): (&HostLie, bool),
+        (layout, memory): (&BufferLayout, ModifierMemory),
+        facts: &ImageFacts<'_>,
+    ) -> Result<Option<(Refusal, String)>, Error> {
+        if let Some(refused) = shared_rows(layout) {
+            return Ok(Some(refused));
+        }
+        let Some(refused) = self.unmade(plan, memory, facts)? else {
+            return Ok(None);
+        };
+        for wider in &self.in_place_plans(plan, descriptor, (lie, storable), facts) {
+            if self.unmade(wider, memory, facts)?.is_none() {
+                return Ok(None);
+            }
+        }
+        Ok(Some(refused))
+    }
+
+    /// Why the device makes no image in place of `plan` in `memory`, where its format, feature
+    /// and limit queries refuse each image [`unplaced`](Self::unplaced) would make, by the checks
+    /// that run before it makes them: for host allocations or memory of its own, the driver's
+    /// linear image ([`linear_unmade`](Self::linear_unmade)) and then the
+    /// `DRM_FORMAT_MOD_LINEAR` one ([`pitched_unmade`](Self::pitched_unmade)), named as
+    /// [`unbound_in`](Self::unbound_in) names them; for dma-bufs, the `DRM_FORMAT_MOD_LINEAR`
+    /// image over them (`Device::dma_buf_unmade`). `None` where an image it makes decides.
+    fn unmade(
+        &self,
+        plan: &ImagePlan,
+        memory: ModifierMemory,
+        facts: &ImageFacts<'_>,
+    ) -> Result<Option<(Refusal, String)>, Error> {
+        if memory == ModifierMemory::DmaBuf {
+            return Ok((self.dma_buf_unmade(plan, facts)?.err()).map(dma_buf_refused));
+        }
+        let linear = match self.linear_unmade(plan, facts, memory)? {
+            Ok(()) => return Ok(None),
+            Err(refusal) => refusal.describe(plan),
+        };
+        let pitched = self.pitched_unmade(plan, facts, memory)?;
+        Ok(pitched.err().map(|pitched| neither(linear, false, pitched)))
     }
 
     /// The plans wider than `plan`, of a texture that renders, an image in place is tried with
@@ -452,7 +560,7 @@ impl Device {
         &self,
         plan: &ImagePlan,
         descriptor: &TextureDescriptor,
-        (texels, class, storable): (&Texels, PagesClass, bool),
+        (lie, storable): (&HostLie, bool),
         facts: &ImageFacts<'_>,
     ) -> Vec<ImagePlan> {
         let usage = descriptor.usage;
@@ -465,10 +573,8 @@ impl Device {
         let Ok(layout) = descriptor.check(self.properties().texture_rules()) else {
             return Vec::new();
         };
-        let writable = !Access::Writes.takes(usage) && self.writes_reach(texels, class);
-        let line = self.shared().in_place.line();
-        let rendered = Access::rendered(texels.padding(line));
-        let renders = self.passes_over(texels, class, rendered);
+        let writable = !Access::Writes.takes(usage) && self.writes_reach(lie);
+        let renders = self.passes_over(lie, Access::rendered(lie.padding));
         let own = texture_usage(usage, descriptor.swizzle);
         let lacking = [
             (TextureUsage::SHADER_WRITE, writable),
@@ -495,32 +601,29 @@ impl Device {
             .collect()
     }
 
-    /// Whether a shader's writes of `texels` of a texture that does not render, over host pages
-    /// of `class`, may reach them in place: they are of a width the device's check's kernel stores
-    /// (`in_place::STORED_TEXEL_BYTES`), and its check passed for such writes over the class, of
-    /// texels of their width that lie in lines as these do, those that let their rows' padding
-    /// change where it is free (`in_place::Access::written`, as `in_place::in_place` asks it)
-    /// ([`passes_over`](Self::passes_over)).
-    fn writes_reach(&self, texels: &Texels, class: PagesClass) -> bool {
-        let line = self.shared().in_place.line();
-        let Some(written) = Access::written(texels.texel_bytes(), texels.padding(line)) else {
+    /// Whether a shader's writes of the texels of a texture that does not render, over host pages
+    /// whose texels lie as `lie` says, may reach them in place: they are of a width the device's
+    /// check's kernel stores (`in_place::STORED_TEXEL_BYTES`), and its check passed for such
+    /// writes over the pages' class, of texels of their width that lie in lines as these do, those
+    /// that let their rows' padding change where it is free (`in_place::Access::written`, as
+    /// `in_place::in_place` asks it) ([`passes_over`](Self::passes_over)).
+    fn writes_reach(&self, lie: &HostLie) -> bool {
+        let Some(written) = Access::written(lie.texel, lie.padding) else {
             return false;
         };
-        self.passes_over(texels, class, written)
+        self.passes_over(lie, written)
     }
 
-    /// Whether the device's check passed for `access` over host pages of `class`, for texels that
-    /// lie in lines as `texels` do; over a copied host buffer's copy (`copied.rs`), for the
-    /// caller's pages too, for texels that lie in lines as they lie there, as the route asks
-    /// (`texture/route.rs`): a rebind may import the pages, and the image then lies over them
-    /// with the usage it was made with.
-    fn passes_over(&self, texels: &Texels, class: PagesClass, access: Access) -> bool {
+    /// Whether the device's check passed for `access` over host pages whose texels lie as `lie`
+    /// says, for their class and texels that lie in lines as they do; over a copied host buffer's
+    /// copy (`copied.rs`), for the caller's pages too, for texels that lie in lines as they lie
+    /// there (`HostLie::caller`), as the route asks (`texture/route.rs`): a rebind may import the
+    /// pages, and the image then lies over them with the usage it was made with.
+    fn passes_over(&self, lie: &HostLie, access: Access) -> bool {
         let check = &self.shared().in_place;
-        let line = check.line();
         let passes = |class, rows| check.verdict(class, access, rows) == Verdict::Passed;
-        let caller = texels.over_caller_pages(line);
-        passes(class, texels.rows(line))
-            && caller.is_none_or(|(rows, _)| passes(PagesClass::Pointer, rows))
+        passes(lie.class, lie.rows)
+            && (lie.caller).is_none_or(|(rows, _)| passes(PagesClass::Pointer, rows))
     }
 
     /// The image in place of `plan` over `texels`, host pages of `class`, made and checked before
@@ -536,28 +639,21 @@ impl Device {
         class: PagesClass,
         facts: &ImageFacts<'_>,
     ) -> Result<Result<Unplaced, (Refusal, String)>, Error> {
-        if texels.buffer.copied() {
-            return self.copy_unplaced(plan, texels, facts);
-        }
-        match class {
-            PagesClass::DmaBuf => self.dma_buf_unplaced(plan, texels, facts),
-            PagesClass::Pointer | PagesClass::Fresh => self.host_unplaced(plan, texels, facts),
-            // A texture over the runtime's pooled or exported memory takes its image there
-            // (`Device::alias_image`), never over host pages.
-            PagesClass::Pooled
-            | PagesClass::ExportedFd
-            | PagesClass::ExportedDmaBuf
-            | PagesClass::FdBlocks => Err(internal(
-                "an image in place over the runtime's pooled or exported memory",
+        match in_place_memory(texels, class)? {
+            ModifierMemory::Own => self.copy_unplaced(plan, texels, facts),
+            ModifierMemory::DmaBuf => self.dma_buf_unplaced(plan, texels, facts),
+            ModifierMemory::Host => self.host_unplaced(plan, texels, facts),
+            ModifierMemory::Exported(_) => Err(internal(
+                "an image in place over the runtime's exported memory",
             )),
         }
     }
 
     /// [`unplaced`](Self::unplaced) over a copied host buffer's copy of the caller's pages
-    /// (`copied.rs`), which the GPU uses in the stead of the pages: over a copy in fresh pages the
-    /// runtime imported (`fresh_pages.rs`), the image made for host allocations, as over the
-    /// caller's pages ([`host_unplaced`](Self::host_unplaced)); over one in memory the device
-    /// allocates, the image made for memory of its own ([`own_unbound`](Self::own_unbound)): the
+    /// (`copied.rs`), which the GPU uses in the stead of the pages, in memory the device
+    /// allocates (a copy in fresh pages the runtime imported takes
+    /// [`host_unplaced`](Self::host_unplaced), as over the caller's pages: [`in_place_memory`]):
+    /// the image made for memory of its own ([`own_unbound`](Self::own_unbound)): the
     /// driver's linear image, which keeps the copy's bytes at its first move, or else the
     /// `DRM_FORMAT_MOD_LINEAR` one, made `UNDEFINED`, where the device's check passed for its
     /// pooled memory and the image's accesses, as an image at Metal's pitch there takes it
@@ -569,9 +665,6 @@ impl Device {
         texels: &Texels,
         facts: &ImageFacts<'_>,
     ) -> Result<Result<Unplaced, (Refusal, String)>, Error> {
-        if texels.copy_in_fresh_pages() {
-            return self.host_unplaced(plan, texels, facts);
-        }
         let layout = texels.layout;
         let (memory, buffer_offset, type_index) = texels.buffer.memory();
         let at = buffer_offset + layout.offset;
@@ -850,7 +943,7 @@ impl Device {
         layout: &BufferLayout,
         facts: &ImageFacts<'_>,
     ) -> Result<Unbound, Error> {
-        self.unbound_in(plan, layout, facts, crate::dma_buf::ModifierMemory::Host)
+        self.unbound_in(plan, layout, facts, ModifierMemory::Host)
     }
 
     /// As [`in_place_unbound`](Self::in_place_unbound), the image made for memory of the device's
@@ -865,7 +958,7 @@ impl Device {
         layout: &BufferLayout,
         facts: &ImageFacts<'_>,
     ) -> Result<Unbound, Error> {
-        self.unbound_in(plan, layout, facts, crate::dma_buf::ModifierMemory::Own)
+        self.unbound_in(plan, layout, facts, ModifierMemory::Own)
     }
 
     /// The unbound image of `plan` for texels laid out as `layout` in `memory` (host allocations,
@@ -876,7 +969,7 @@ impl Device {
         plan: &ImagePlan,
         layout: &BufferLayout,
         facts: &ImageFacts<'_>,
-        memory: crate::dma_buf::ModifierMemory,
+        memory: ModifierMemory,
     ) -> Result<Unbound, Error> {
         let lies = |report: &vk::SubresourceLayout| {
             report.offset == 0
@@ -884,14 +977,9 @@ impl Device {
                 && (layout.slices == 1 || report.array_pitch == layout.slice_pitch)
         };
         let made = match linear_lack(plan, facts) {
-            Some(LinearLack { format, features }) => {
-                Err(LinearRefusal::Need(LinearNeed::Features {
-                    format,
-                    features,
-                }))
-            }
+            Some(lack) => Err(lack_refusal(lack)),
             None => match memory {
-                crate::dma_buf::ModifierMemory::Own => self.linear_image(plan)?,
+                ModifierMemory::Own => self.linear_image(plan)?,
                 _ => self.external_linear_image(plan, memory)?,
             },
         };
@@ -919,11 +1007,30 @@ impl Device {
             Ok(made) => Ok((made, true)),
             // A linear image the driver lays out otherwise is refused for its pitch; else the
             // pitched image's refusal names why.
-            Err((kind, pitched)) => {
-                let kind = if elsewhere { Refusal::Pitch } else { kind };
-                Err((kind, format!("{linear}; and {pitched}")))
-            }
+            Err(pitched) => Err(neither(linear, elsewhere, pitched)),
         })
+    }
+
+    /// What the device's queries answer of the driver's linear image of `plan` made for `memory`
+    /// (host allocations, or memory of the device's own) before it is made, by the checks
+    /// [`unbound_in`](Self::unbound_in) runs first: its linear tiling's features for the plan's
+    /// usage (`linear_lack`), and for host allocations its image format query's answer and limits
+    /// for such memory ([`external_linear`](Self::external_linear)); why not. A linear image of
+    /// the device's own memory is checked against its limits as it is made
+    /// (`Device::linear_image`).
+    fn linear_unmade(
+        &self,
+        plan: &ImagePlan,
+        facts: &ImageFacts<'_>,
+        memory: ModifierMemory,
+    ) -> Result<Result<(), LinearRefusal>, Error> {
+        if let Some(lack) = linear_lack(plan, facts) {
+            return Ok(Err(lack_refusal(lack)));
+        }
+        match memory {
+            ModifierMemory::Own => Ok(Ok(())),
+            _ => self.external_linear(plan, memory, |_| Ok(Ok(()))),
+        }
     }
 
     /// A linear image of `plan` made for `memory`'s handle type (host allocations, or the
@@ -936,9 +1043,22 @@ impl Device {
     pub(super) fn external_linear_image(
         &self,
         plan: &ImagePlan,
-        memory: crate::dma_buf::ModifierMemory,
+        memory: ModifierMemory,
     ) -> Result<Result<LinearMade, LinearRefusal>, Error> {
-        let raw_device = self.shared().vk();
+        self.external_linear(plan, memory, |info| self.external_linear_made(info, memory))
+    }
+
+    /// `make` of the create info of a linear image of `plan` for `memory`'s handle type, made
+    /// `UNDEFINED`, where the device's image format query takes that memory for such an image
+    /// without a dedicated allocation and the plan lies within its limits for it; why not where it
+    /// does not, `make` not called: [`external_linear_image`](Self::external_linear_image)'s
+    /// checks before it makes the image.
+    fn external_linear<T>(
+        &self,
+        plan: &ImagePlan,
+        memory: ModifierMemory,
+        make: impl FnOnce(&vk::ImageCreateInfo<'_>) -> Result<Result<T, LinearRefusal>, Error>,
+    ) -> Result<Result<T, LinearRefusal>, Error> {
         let view_formats = plan.ash_view_formats();
         let mut list = vk::ImageFormatListCreateInfo::default();
         let handle = (memory.handle_type())
@@ -956,9 +1076,21 @@ impl Device {
         if let Err(need) = check_linear_limits(plan, &limits) {
             return Ok(Err(LinearRefusal::Need(need)));
         }
+        make(&info)
+    }
+
+    /// The linear image of `info` ([`external_linear`](Self::external_linear)'s, for `memory`),
+    /// unbound, with its requirements and its first subresource's layout; why not where it asks a
+    /// dedicated allocation.
+    fn external_linear_made(
+        &self,
+        info: &vk::ImageCreateInfo<'_>,
+        memory: ModifierMemory,
+    ) -> Result<Result<LinearMade, LinearRefusal>, Error> {
+        let raw_device = self.shared().vk();
         // SAFETY: the device is live and `info` (with its chain) valid and within the device's
         // limits for an image of that memory.
-        let raw = unsafe { crate::creation::image(raw_device, &info) }?;
+        let raw = unsafe { crate::creation::image(raw_device, info) }?;
         let (requirements, dedicated) = requirements_of(raw_device, raw);
         if dedicated {
             // SAFETY: the image is live and unbound, and no command uses it.
@@ -996,26 +1128,15 @@ impl Device {
         plan: &ImagePlan,
         layout: &BufferLayout,
         facts: &ImageFacts<'_>,
-        memory: crate::dma_buf::ModifierMemory,
+        memory: ModifierMemory,
     ) -> Result<Result<LinearMade, (Refusal, String)>, Error> {
         use crate::dma_buf::{memory_plane_0, DRM_FORMAT_MOD_LINEAR};
         let (row_pitch, slice_pitch) = (layout.row_pitch, layout.slice_pitch);
         let raw_device = self.shared().vk();
-        if !self.makes_modifier_images() {
-            return Ok(Err((
-                Refusal::Pitch,
-                "the device enables no VK_EXT_image_drm_format_modifier for an image at Metal's \
-                 row pitch"
-                    .to_owned(),
-            )));
-        }
-        let view_formats = match self.modifier_image_checks(plan, facts, memory)? {
+        let view_formats = match self.pitched_unmade(plan, facts, memory)? {
             Ok(view_formats) => view_formats,
-            Err(why) => return Ok(Err((Refusal::Image, why))),
+            Err(refused) => return Ok(Err(refused)),
         };
-        if let Some(why) = self.explicit_plane_rows(plan) {
-            return Ok(Err((Refusal::Pitch, why)));
-        }
         let array_pitch = if plan.layers > 1 { slice_pitch } else { 0 };
         let planes = [vk::SubresourceLayout {
             offset: 0,
@@ -1087,19 +1208,65 @@ impl Device {
         }))
     }
 
+    /// What the device answers of a `DRM_FORMAT_MOD_LINEAR` image of `plan` for `memory` before
+    /// it makes one, by the checks [`pitched_image`](Self::pitched_image) runs first: whether it
+    /// enables `VK_EXT_image_drm_format_modifier`, its format and limit queries for such an image
+    /// (`Device::modifier_image_checks`: the formats it lists for its views), and a driver that
+    /// renders an explicit plane's rows past its height (`Device::explicit_plane_rows`); why not.
+    #[cfg(unix)]
+    fn pitched_unmade(
+        &self,
+        plan: &ImagePlan,
+        facts: &ImageFacts<'_>,
+        memory: ModifierMemory,
+    ) -> Result<Result<Vec<vk::Format>, (Refusal, String)>, Error> {
+        if !self.makes_modifier_images() {
+            return Ok(Err((
+                Refusal::Pitch,
+                "the device enables no VK_EXT_image_drm_format_modifier for an image at Metal's \
+                 row pitch"
+                    .to_owned(),
+            )));
+        }
+        let view_formats = match self.modifier_image_checks(plan, facts, memory)? {
+            Ok(view_formats) => view_formats,
+            Err(why) => return Ok(Err((Refusal::Image, why))),
+        };
+        if let Some(why) = self.explicit_plane_rows(plan) {
+            return Ok(Err((Refusal::Pitch, why)));
+        }
+        Ok(Ok(view_formats))
+    }
+
     /// No image is laid out by DRM format modifier on this system.
     #[cfg(not(unix))]
-    pub(super) fn pitched_image(
+    fn pitched_unmade(
         &self,
         _plan: &ImagePlan,
-        _layout: &BufferLayout,
         _facts: &ImageFacts<'_>,
-        _memory: crate::dma_buf::ModifierMemory,
-    ) -> Result<Result<LinearMade, (Refusal, String)>, Error> {
+        _memory: ModifierMemory,
+    ) -> Result<Result<Vec<vk::Format>, (Refusal, String)>, Error> {
         Ok(Err((
             Refusal::Pitch,
             "the system lays out no image by DRM format modifier".to_owned(),
         )))
+    }
+
+    /// No image is laid out by DRM format modifier on this system.
+    #[cfg(not(unix))]
+    pub(super) fn pitched_image(
+        &self,
+        plan: &ImagePlan,
+        _layout: &BufferLayout,
+        facts: &ImageFacts<'_>,
+        memory: ModifierMemory,
+    ) -> Result<Result<LinearMade, (Refusal, String)>, Error> {
+        match self.pitched_unmade(plan, facts, memory)? {
+            Err(refused) => Ok(Err(refused)),
+            Ok(_) => Err(internal(
+                "a DRM format modifier's image on a system of none",
+            )),
+        }
     }
 
     /// The images in place over a no-copy buffer's (or a no-copy heap's) host pages that `watches`

@@ -48,6 +48,21 @@ pub(crate) enum Route {
     },
 }
 
+/// How the texels of a texture over host pages lie, as [`Device::host_route`] decides their route:
+/// the pages' `class`; how the texels lie in the device's lines of memory (`rows`) and whether a
+/// shader's writes may change their rows' padding there (`padding`); a texel's bytes; whether the
+/// bytes were detached from their pages (`detach.rs`); and over a copied host buffer
+/// (`copied.rs`) how they lie over the caller's pages, which a rebind may import (`caller`).
+#[derive(Clone, Copy)]
+pub(crate) struct HostLie {
+    pub(crate) class: PagesClass,
+    pub(crate) rows: RowEnds,
+    pub(crate) padding: Padding,
+    pub(crate) texel: u64,
+    pub(crate) detached: bool,
+    pub(crate) caller: Option<(RowEnds, Padding)>,
+}
+
 /// How a texture over host pages goes ([`Route::Host`]).
 pub(crate) enum HostWay {
     /// A device copy (`Texels::device_copy`): a shadow whose copies in a log decides.
@@ -222,17 +237,41 @@ impl Device {
         // How the texels lie in the device's lines of memory, each checked apart
         // (`in_place::RowEnds`), and whether a shader's writes may change their rows' padding
         // (`in_place::Padding`).
-        let line = self.shared().in_place.line();
-        let (rows, padding) = (texels.rows(line), texels.padding(line));
+        let lie = texels.host_lie(class, self.shared().in_place.line());
+        self.host_route(&lie, usage, || texels.device_copy(self))
+    }
+
+    /// The route of a texture of Metal `usage` over host pages whose texels lie as `lie` says, as
+    /// [`route_over_buffer`](Self::route_over_buffer) decides it once it knows their class: a
+    /// device copy where `device_copy` says one serves (asked last, as it looks at the pages);
+    /// else the shadow where the bytes were detached; else as the device's policy, the usage and
+    /// the device's check of the class for each access take it (`in_place.rs`), asking the
+    /// verdicts (a pending one starts the check), over a copy for the caller's pages too
+    /// (`HostLie::caller`). The device's check's own textures take the image in place whatever
+    /// the policy and the verdicts. Before any import of the pages, a texture over them is
+    /// decided by this alone (`Device::host_pages_texture_placement`).
+    pub(crate) fn host_route(
+        &self,
+        lie: &HostLie,
+        usage: TextureUsage,
+        device_copy: impl FnOnce() -> bool,
+    ) -> Route {
+        let HostLie {
+            class,
+            rows,
+            padding,
+            texel,
+            detached,
+            caller,
+        } = *lie;
         let host = |way| Route::Host {
             class,
             rows,
             padding,
             way,
         };
-        let pages = (class, rows, texels.texel_bytes(), padding);
+        let pages = (class, rows, texel, padding);
         let checking = in_place::checking();
-        let detached = texels.buffer.detached();
         let policy = self.compile_device().policy().host_page_textures;
         // On a discrete GPU, a `Managed` texture over a buffer's bytes that only samples or reads
         // whose policy takes the image in place, over pages whose memory carries a log, is a
@@ -245,7 +284,7 @@ impl Device {
             let passed = |_, _, _| Verdict::Passed;
             let copy = Access::Reads.takes(usage)
                 && in_place::in_place(policy, usage, pages, passed).is_ok()
-                && texels.device_copy(self);
+                && device_copy();
             if copy {
                 return host(HostWay::DeviceCopy);
             }
@@ -273,7 +312,6 @@ impl Device {
         // the caller's pages' too, for texels that lie in lines as they lie there: a rebind may
         // import the pages by their pointer, the image made again over that import as an image in
         // place over them is (`Device::rebound_in_place_images`).
-        let caller = texels.over_caller_pages(line);
         let decided = in_place::in_place(policy, usage, pages, verdict).and_then(|()| {
             caller.map_or(Ok(()), |(rows, padding)| {
                 let pages = (PagesClass::Pointer, rows, pages.2, padding);

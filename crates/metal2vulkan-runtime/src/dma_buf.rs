@@ -1324,6 +1324,27 @@ impl Device {
         }
     }
 
+    /// What the device answers of [`Device::dma_buf_image`]'s image of `plan` before it makes
+    /// one, by the checks [`dma_buf_image_unbound`](Self::dma_buf_image_unbound) runs first: the
+    /// host's page and the formats it lists for its views
+    /// ([`dma_buf_image_checks`](Self::dma_buf_image_checks)), and a driver that renders an
+    /// explicit plane's rows past its height ([`explicit_plane_rows`](Self::explicit_plane_rows));
+    /// why not, of the kind it is counted by.
+    pub(super) fn dma_buf_unmade(
+        &self,
+        plan: &ImagePlan,
+        facts: &ImageFacts<'_>,
+    ) -> Result<Result<(u64, Vec<vk::Format>), (DmaBufRefusal, String)>, Error> {
+        let checked = match self.dma_buf_image_checks(plan, facts)? {
+            Ok(checked) => checked,
+            Err(why) => return Ok(Err((DmaBufRefusal::Image, why))),
+        };
+        if let Some(why) = self.explicit_plane_rows(plan) {
+            return Ok(Err((DmaBufRefusal::Pitch, why)));
+        }
+        Ok(Ok(checked))
+    }
+
     /// [`Device::dma_buf_image`]'s image made and checked, unbound, with the request for its
     /// pages; why not where the device makes none before the source is asked.
     pub(super) fn dma_buf_image_unbound(
@@ -1334,13 +1355,10 @@ impl Device {
     ) -> Result<Result<Unbound, (DmaBufRefusal, String)>, Error> {
         let shared = self.shared();
         let raw_device = shared.vk();
-        let (page, view_formats) = match self.dma_buf_image_checks(plan, facts)? {
+        let (page, view_formats) = match self.dma_buf_unmade(plan, facts)? {
             Ok(checked) => checked,
-            Err(why) => return Ok(Err((DmaBufRefusal::Image, why))),
+            Err(refused) => return Ok(Err(refused)),
         };
-        if let Some(why) = self.explicit_plane_rows(plan) {
-            return Ok(Err((DmaBufRefusal::Pitch, why)));
-        }
         let offset = texels.at % page;
         let pitches = (texels.row_pitch, texels.slice_pitch);
         let (raw, requirements, bound_at) =

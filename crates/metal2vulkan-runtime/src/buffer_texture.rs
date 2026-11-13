@@ -56,7 +56,7 @@ use super::degradation::Degradation;
 use super::device::lock;
 use super::error::{internal, invalid, nil, vulkan, Error, Problem, RuntimeGap};
 use super::exit_guard;
-use super::in_place::{Padding, RowEnds};
+use super::in_place::{Padding, PagesClass, RowEnds};
 use super::key_hash::KeyMap;
 use super::linear_plan::{
     apart_from_plane, is_linear, plan_buffer_texture, plane_rows_share_bytes, BufferFacts,
@@ -75,7 +75,7 @@ use super::shadow_merge::UnormView;
 use super::shadow_standing::StandingAcross;
 use super::texture::carry::Remake;
 use super::texture::surface_two_planes;
-use super::texture::{IdUse, Texture};
+use super::texture::{HostLie, IdUse, Texture};
 use super::texture_descriptor::{
     Creator, Refused, TextureDescriptor, TextureLayout, TextureProblem,
 };
@@ -1701,6 +1701,22 @@ impl Texels {
             RowEnds::of(start, &self.layout, line),
             padding.declared(self.buffer.padding_unobserved()),
         ))
+    }
+
+    /// How the texels lie over host pages of `class`, in the device's lines of memory of `line`
+    /// bytes, as the route of a texture over them takes it ([`HostLie`]): their row ends
+    /// ([`rows`](Self::rows)), their rows' padding ([`padding`](Self::padding)), a texel's bytes,
+    /// whether their bytes were detached, and over a copied host buffer how they lie over the
+    /// caller's pages ([`over_caller_pages`](Self::over_caller_pages)).
+    pub(super) fn host_lie(&self, class: PagesClass, line: u64) -> HostLie {
+        HostLie {
+            class,
+            rows: self.rows(line),
+            padding: self.padding(line),
+            texel: self.texel_bytes,
+            detached: self.buffer.detached(),
+            caller: self.over_caller_pages(line),
+        }
     }
 
     /// Whether the texels' buffer is a copied host buffer (`copied.rs`) whose copy lies in fresh
