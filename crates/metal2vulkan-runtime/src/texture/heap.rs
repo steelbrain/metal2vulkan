@@ -68,8 +68,8 @@
 //!   heap's bytes by the multisampled blits' interleave copies; where the device runs none (a 16-bit
 //!   depth on a device whose multisampled copies go by draws), or its image holds other bytes than
 //!   Metal's elements, or its sample count's layout is not measured, it is its optimal image in
-//!   memory of its own (`AliasRoute::Lossless`), holding what that memory held, as a heap's texture
-//!   holds what its bytes held, the heap's bytes keeping what they held
+//!   memory of its own (`AliasRoute::Lossless`), reading zero as a new heap's bytes do (that
+//!   memory may have held a released texture's samples), the heap's bytes keeping what they held
 //!   (`heap-texture-lossless-layout` or `heap-texture-untiled-layout` per texture, as Metal keeps
 //!   it compressed or not).
 //! - **Where Metal's answer is not its image's** (the consumer's report): Metal answers a 4:2:2
@@ -233,7 +233,7 @@ use super::requirements::Query;
 use super::stand_in::StandIn;
 use super::{
     image_aspects, image_error, pages_hold, texel_units, DetachedImage, IdUse, Image, ImageObjects,
-    ImagePlacement, ImageSwap, KeptResolves, Owner, Raw, Remade, Storage, Texture,
+    ImagePlacement, ImageSwap, KeptResolves, Owner, Raw, Remade, Start, Storage, Texture,
     TextureDescriptor, ViewRecord,
 };
 use crate::address::ObjectsToken;
@@ -4101,15 +4101,13 @@ impl Device {
             own.resource_options = options;
             let owner =
                 |placement, _| Owner::HeapUnaliased(Box::new(HeapUnaliased { placement, place }));
-            // A heap's texture holds what its bytes held (the module docs): a compressed
-            // multisample texture's image in memory of its own starts as that memory lies, as
-            // Vulkan copies no zeros into a multisampled image.
-            match route {
-                AliasRoute::Lossless => {
-                    self.new_image_as_it_lies(p.image.plan, &p.layout, &own, identity, owner)?
-                }
-                _ => self.new_image_owned(p.image.plan, &p.layout, &own, identity, owner)?,
-            }
+            // Its image lies in memory of its own, apart from the heap's bytes, which may have
+            // held a released texture's texels, of another process of a consumer whose processes
+            // share the device (a recycled image's, `recycle.rs`): it reads zero in every texel,
+            // what a new heap's bytes read, written at its first use (a multisampled one's by a
+            // clear).
+            let start = Start::ZeroUnpatterned;
+            self.new_image_starting(p.image.plan, &p.layout, &own, identity, start, owner)?
         } else {
             // The range is the image's from here: its last texture object, or the place's drop
             // on an early failure, gives it back. The image holds the heap's memory it is bound to,
