@@ -36,14 +36,29 @@
 //! - **What runs.** Before the pass, the replay's preprocess (`bind::draw_replay_module`, an
 //!   owned kernel) over the range: it reads each record where the GPU and the CPU left it, checks
 //!   it as the host's decode does, and writes the command's vertex and fragment slot tables and
-//!   its `VkDrawIndirectCommand` into the scratch, a region of the command buffer's upload arena;
-//!   then a barrier from everything before to everything after. In the execution's instance, one
+//!   its `VkDrawIndirectCommand` into the scratch (**Scratch**, below); then a barrier from
+//!   everything before to everything after. In the execution's instance, one
 //!   draw per command, in order, of the inherited state's replay variant: the first command's
 //!   draws through the encoder's draw (`RenderCommandEncoder::draw`, `BufferForms::Replay`), which
 //!   binds the pipeline, the sets, the dynamic state and the push constants with its slot tables,
 //!   and each later command's pushes its own slot tables and draws (`vkCmdDrawIndirect` of one
 //!   draw at its arguments). Its `vertex_id`, `instance_id` and `base_instance` are the command's
 //!   own, as Metal's, and so are the vertex and instance its attributes step by.
+//! - **Scratch** (`bind::DrawReplayLayout`). A buffer of the runtime's own in `Private` memory
+//!   (`Device::scratch_buffer`), device-local, held until the command buffer completes: the GPU
+//!   alone reads and writes it, the merge passes' serial loops many times a command and every
+//!   draw its slot tables and arguments, where the upload arena on a discrete GPU is system
+//!   memory, read across the bus (`upload.rs`). The host writes its head alone
+//!   (`DrawReplayLayout::uploaded`: the parameters, the resident root table and its set, their
+//!   extents, the encoder's buffers and a merged replay's header) into a region of the command
+//!   buffer's upload arena, which a copy carries into the scratch, between barriers, before the
+//!   preprocess and any range's copy. The command buffer's first submission points the table in
+//!   that region at the resident set as it lies then (`command_buffer/first_submission.rs`),
+//!   before the copy runs; in the scratch, the table lies at a multiple of an entry
+//!   (`RootTable::ENTRY_ALIGNMENT`), as the set it is pointed at. Counted:
+//!   `WorkCounts::gpu_form_device_local_bytes`. With the encoder trail on, the GPU copies the
+//!   words its line reads into the upload arena once the passes that write them ended
+//!   (`encoder_trail.rs`, **GPU forms**).
 //! - **Shadowed textures.** In a pass with one, the pass's copies go around its instances as for
 //!   the host step and any draw (`render/shadows.rs`): a shadow is copied in before the instance
 //!   that reads it and copied back, or merged, after the pass where it writes it; the commands'
@@ -111,6 +126,7 @@ use crate::pipeline::{BufferForms, GraphicsState, RenderStateKind, Settled};
 use crate::residency::Residency;
 use crate::sampler::ArgumentSamplers;
 use crate::tracker::{Access, Barrier};
+use crate::upload::Upload;
 use crate::visibility::Visibility;
 use crate::Device;
 use crate::RenderPipelineState;
@@ -119,7 +135,7 @@ use metal2vulkan::bind::{
     draw_replay_draw, draw_replay_indexed, draw_replay_merges, draw_replay_preprocess,
     draw_replay_primitive_type, draw_replay_slots, draw_replay_state, draw_replay_vertex_layouts,
     BindState, DrawCall, DrawMergeModule, DrawReplay, DrawReplayLayout, DrawReplayPreprocess,
-    IndirectRef, MergePhase, NeutralResource, PushHole, DRAW_ARGUMENT_BYTES,
+    IndirectRef, MergePhase, NeutralResource, PushHole, RootTable, DRAW_ARGUMENT_BYTES,
 };
 use metal2vulkan::metal::PrimitiveType;
 use metal2vulkan::pipeline::CommandWrites;
@@ -244,7 +260,7 @@ impl ReplayedDraws {
         let (raw, command_buffer, layout) = (first.raw, first.command_buffer, first.layout);
         if let Some(merged) = self.layout.merged {
             // SAFETY: the caller's contract; the draw lies in the scratch, which holds
-            // `INDIRECT_BUFFER` usage as every upload chunk does.
+            // `INDIRECT_BUFFER` usage as every buffer of the runtime's does (`buffer::usage`).
             unsafe {
                 raw.cmd_draw_indirect(
                     command_buffer,
@@ -268,7 +284,7 @@ impl ReplayedDraws {
             }
             // SAFETY: the caller's contract; each write lies in a push range of its stages under
             // `layout`, as the first command's write it lies in did, and the arguments lie in the
-            // scratch, which holds `INDIRECT_BUFFER` usage as every upload chunk does.
+            // scratch, which holds `INDIRECT_BUFFER` usage as every buffer of the runtime's does.
             unsafe {
                 let pushed = match writes.is_empty() {
                     true => None,
@@ -508,7 +524,8 @@ impl RenderExecution {
         let no_address = || internal("a draw replay on a device without device addresses");
         let records = self.icb.storage();
         let records_address = records.device_address().ok_or_else(no_address)?;
-        let (scratch, status) = {
+        let trail = device.shared().encoder_trail;
+        let (head, mirror, status) = {
             let mut cb = command_buffer.state();
             let sink = cb
                 .uploads
@@ -516,22 +533,41 @@ impl RenderExecution {
                 .device_address()
                 .ok_or_else(no_address)?;
             let head = scratch_head(pre, sink)?;
-            let scratch = cb.uploads.upload(&device, &head, pre.layout.bytes)?;
-            (scratch, cb.status_words(&device)?)
+            let head = cb.uploads.upload(&device, &head, pre.layout.uploaded)?;
+            // The trail's copy of the words its line reads, at the scratch's offsets.
+            let mirror = match trail {
+                true => Some(cb.uploads.upload(&device, &[], pre.layout.bytes)?),
+                false => None,
+            };
+            (head, mirror, cb.status_words(&device)?)
         };
-        let address = scratch.device_address().ok_or_else(no_address)?;
-        if device.shared().encoder_trail {
+        // The scratch in device memory (the module docs, **Scratch**), its resident root table at
+        // a multiple of an entry, as the set a first submission points it at.
+        let entry = RootTable::ENTRY_ALIGNMENT;
+        let scratch = device.scratch_buffer(pre.layout.bytes + entry)?;
+        let base = scratch.device_address().ok_or_else(no_address)?;
+        let table = base + pre.layout.resident_offset;
+        let lead = table.next_multiple_of(entry) - table;
+        let address = base + lead;
+        if scratch.own_pages_device_local() == Some(true) {
+            (device.shared().counts).gpu_form_device_local_bytes(pre.layout.bytes);
+        }
+        core.retain(scratch.clone());
+        let mut sections = Vec::new();
+        if let Some(mirror) = &mirror {
             let (first, range_from) = match &self.range {
                 ExecutionRange::Fixed(range) => (range.start, None),
                 ExecutionRange::Indirect { offset, .. } => (0, Some(*offset)),
             };
             let indexed = draw_replay_indexed(form.decided);
-            let mut notes = crate::encoder_trail::Notes::default();
-            notes.gpu_form(crate::encoder_trail::GpuForm::new(
+            let noted = crate::encoder_trail::GpuForm::new(
                 (!step, indexed, form.primitive_type),
                 (first, range_from),
-                (scratch.clone(), pre.layout, status.clone()),
-            ));
+                (mirror.clone(), pre.layout, status.clone()),
+            );
+            sections = noted.sections();
+            let mut notes = crate::encoder_trail::Notes::default();
+            notes.gpu_form(noted);
             command_buffer.trail_step(notes);
         }
         let status = status.device_address().ok_or_else(no_address)?;
@@ -553,14 +589,17 @@ impl RenderExecution {
                 .ok_or_else(|| internal("a draw replay preprocess hole past its push bytes"))?
                 .copy_from_slice(&value.to_le_bytes());
         }
-        // The preprocess reads the records and writes the scratch past what the host uploaded.
-        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
-        let (chunk, at) = scratch.buffer();
-        // A range read from a buffer: its bytes into the parameters, for the preprocess.
+        // What the host uploaded into the scratch's head; then a range read from a buffer: its
+        // bytes into the parameters. Both for the preprocess.
+        let (chunk, at) = head.buffer();
+        let into = (&scratch, lead);
+        copy_bytes(&mut core, (chunk, at), into, pre.layout.uploaded);
         if let ExecutionRange::Indirect { buffer, offset } = &self.range {
-            let into = at + pre.layout.range_offset();
-            copy_range(&mut core, (buffer, *offset), (chunk, into));
+            let into = (&scratch, lead + pre.layout.range_offset());
+            copy_bytes(&mut core, (buffer, *offset), into, RANGE_BYTES);
         }
+        // The preprocess reads the records and writes the scratch past its head.
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let uses = [
             reads_by(
                 records,
@@ -568,8 +607,8 @@ impl RenderExecution {
                 Access::new(compute, vk::AccessFlags2::SHADER_STORAGE_READ),
             ),
             writes_by(
-                chunk,
-                at + pre.layout.uploaded..at + pre.layout.bytes,
+                &scratch,
+                lead + pre.layout.uploaded..lead + pre.layout.bytes,
                 Access::new(compute, vk::AccessFlags2::SHADER_STORAGE_WRITE),
             ),
         ];
@@ -601,8 +640,8 @@ impl RenderExecution {
         if let Some(merged) = pre.layout.merged {
             let push = DrawMergeModule::push_constants(address + merged.header_offset, status);
             let uses = [writes_by(
-                chunk,
-                at + merged.header_offset..at + pre.layout.bytes,
+                &scratch,
+                lead + merged.header_offset..lead + pre.layout.bytes,
                 Access::new(
                     compute,
                     vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::SHADER_STORAGE_WRITE,
@@ -634,10 +673,14 @@ impl RenderExecution {
                 core.barrier(Barrier::everything());
             }
         }
+        if let Some(mirror) = &mirror {
+            copy_sections(&mut core, (&scratch, lead), mirror, &sections);
+        }
         // Its resident set as the live buffers and what its encoders made resident lie now: the
-        // command buffer's first submission points its table at the set as it lies then.
+        // command buffer's first submission points its table at the set as it lies then, in the
+        // head the copy carries in as it runs.
         command_buffer.state().replay_table(ReplayTable {
-            upload: scratch.clone(),
+            upload: head,
             at: pre.layout.resident_offset,
             address: address + pre.layout.resident_offset,
         });
@@ -658,15 +701,23 @@ impl RenderExecution {
         );
         // The first draw reads its arguments where the preprocess (or the last merge pass)
         // wrote them.
-        let first = DrawSource::new(chunk, at + first_at, DRAW_ARGUMENT_BYTES, 4, false, false)?;
+        let first = DrawSource::new(
+            &scratch,
+            lead + first_at,
+            DRAW_ARGUMENT_BYTES,
+            4,
+            false,
+            false,
+        )?;
         let draw = DrawCall::Indirect {
             indirect: IndirectRef::new(0, first.at),
             indexed: None,
         };
+        let (buffer, offset) = scratch.at(lead);
         encoder.replayed = Some(ReplayedDraws {
             address,
-            buffer: scratch.raw(),
-            offset: scratch.offset(),
+            buffer,
+            offset,
             layout: pre.layout,
         });
         (encoder.shape_inputs()).check_pipeline(CALL, pipeline, &encoder.layout)?;
@@ -702,25 +753,27 @@ fn capacity(icb: &IndirectCommandBuffer) -> Result<u32, HostStepCause> {
         .map_err(|_| HostStepCause::Rule("the buffer holds 2^32 commands or more"))
 }
 
-/// Record into `core` the copy of a range read from a buffer, the [`RANGE_BYTES`] at `offset` of
-/// `buffer` where the encoder read them (`indirect_execute::range_from`), to `into` of `chunk`
-/// (a replay scratch's parameters, `DrawReplayLayout::range_offset`), between barriers: from
-/// everything before (the segment's own), and to the preprocess that reads it.
-fn copy_range(
+/// Record into `core` a copy of `size` bytes at `offset` of `buffer` to `into` of `scratch`, a
+/// replay scratch, between barriers: from everything before (the segment's own), and to the
+/// preprocess that reads them. The scratch's head from its upload (`scratch_head`), or a range
+/// read from a buffer, its [`RANGE_BYTES`] where the encoder read them
+/// (`indirect_execute::range_from`), into its parameters (`DrawReplayLayout::range_offset`).
+fn copy_bytes(
     core: &mut EncoderCore,
     (buffer, offset): (&Buffer, u64),
-    (chunk, into): (&Buffer, u64),
+    (scratch, into): (&Buffer, u64),
+    size: u64,
 ) {
     let (from, at) = buffer.at(offset);
-    let (to, start) = chunk.at(into);
+    let (to, start) = scratch.at(into);
     let region = vk::BufferCopy {
         src_offset: at,
         dst_offset: start,
-        size: RANGE_BYTES,
+        size,
     };
     let uses = [
-        reads(buffer, offset..offset + RANGE_BYTES),
-        writes(chunk, into..into + RANGE_BYTES),
+        reads(buffer, offset..offset + size),
+        writes(scratch, into..into + size),
     ];
     core.barrier(Barrier::everything());
     core.command(
@@ -728,13 +781,59 @@ fn copy_range(
         &uses,
         |raw, command_buffer| {
             // SAFETY: the segment's command buffer is recording outside a render pass; both buffers
-            // live until it completes (the encoder that read the range holds it, the arena the
-            // scratch), and the region lies in both: `check_range_buffer` held the range inside the
-            // buffer, and the parameters inside the scratch.
+            // live until it completes (the arena holds the head's upload, the encoder that read
+            // the range its buffer, and the segment's encoder the scratch), and the region lies in
+            // both: the head in its upload and in the scratch, and `check_range_buffer` held the
+            // range inside its buffer.
             unsafe { raw.cmd_copy_buffer(command_buffer, from, to, &[region]) };
         },
     );
     core.barrier(Barrier::everything());
+}
+
+/// Record into `core` a copy of `sections` of `scratch` (from `lead` of its buffer) into
+/// `mirror`, at the same offsets: the words the encoder trail's line reads
+/// (`encoder_trail::GpuForm::sections`), after the barrier that follows the last pass that wrote
+/// them. The draws only read the scratch, and nothing on the GPU reads the mirror.
+fn copy_sections(
+    core: &mut EncoderCore,
+    (scratch, lead): (&Buffer, u64),
+    mirror: &Upload,
+    sections: &[Range<u64>],
+) {
+    let (chunk, at) = mirror.buffer();
+    let (from, src) = scratch.at(lead);
+    let (to, dst) = chunk.at(at);
+    let sections = || sections.iter().filter(|section| !section.is_empty());
+    let regions: Vec<vk::BufferCopy> = sections()
+        .map(|section| vk::BufferCopy {
+            src_offset: src + section.start,
+            dst_offset: dst + section.start,
+            size: section.end - section.start,
+        })
+        .collect();
+    if regions.is_empty() {
+        return;
+    }
+    let uses: Vec<_> = sections()
+        .flat_map(|section| {
+            [
+                reads(scratch, lead + section.start..lead + section.end),
+                writes(chunk, at + section.start..at + section.end),
+            ]
+        })
+        .collect();
+    core.command(
+        vk::PipelineStageFlags2::TRANSFER,
+        &uses,
+        |raw, command_buffer| {
+            // SAFETY: the segment's command buffer is recording outside a render pass; the
+            // scratch lives until it completes (the segment's encoder holds it) and so does the
+            // mirror (the arena), and every section lies in both: the mirror is as long as the
+            // scratch's layout.
+            unsafe { raw.cmd_copy_buffer(command_buffer, from, to, &regions) };
+        },
+    );
 }
 
 /// The bytes of a draw replay's scratch the host uploads: the parameters, the resident root

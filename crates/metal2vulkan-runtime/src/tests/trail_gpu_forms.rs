@@ -1,10 +1,12 @@
 //! The encoder trail's GPU forms (`encoder_trail.rs`, **GPU forms**): an execution of render
 //! commands the GPU wrote (a blit's copy of commands the CPU encoded) through a range read from a
 //! buffer, which `commit` records in its merged GPU form (`render/executions/gpu.rs`), is named by
-//! its shape, and its scratch reads as the GPU left it once the command buffer completed: the
-//! range the GPU copied, the merged draw's corners, the arguments of the commands inside the range
-//! and the most of them, and status words of no fault; of draws of primitives, and of indexed
-//! draws over many blocks of the merge passes (`bind/replay/merged.rs`).
+//! its shape, and its scratch, which lies in device-local memory
+//! (`WorkCounts::gpu_form_device_local_bytes`), reads through the GPU's copy of it as the GPU
+//! left it once the command buffer completed: the range the GPU copied, the merged draw's
+//! corners, the arguments of the commands inside the range and the most of them, and status
+//! words of no fault; of draws of primitives, and of indexed draws over many blocks of the merge
+//! passes (`bind/replay/merged.rs`).
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). Its functions are `tob_rect` and `tob_solid` of
@@ -68,7 +70,8 @@ fn inherited_state(device: &Device) -> RenderPipelineState {
 /// and `tob_solid`'s color bound, copied by a blit into a second buffer, whose records the GPU
 /// then wrote, executed over an 8x8 target through `range`, which a buffer holds, with
 /// `resident` resident to the vertex stage too: the command buffer completed, and the texts of
-/// its trail's GPU forms; empty, printed, where the device records no execution in its GPU form.
+/// its trail's GPU forms, whose scratches lay in device-local memory; empty, printed, where the
+/// device records no execution in its GPU form.
 fn executed_through_range(
     device: &Device,
     (types, capacity): (IndirectCommandType, u64),
@@ -133,13 +136,20 @@ fn executed_through_range(
     );
     let forms = command_buffer.trail_form_texts();
     let gpu = command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap();
+    let counts = device.work_counts();
+    let local = counts.gpu_form_device_local_bytes;
     eprintln!(
-        "TRAIL-GPU-FORMS {}: GPU {:.3} ms; {forms:?}",
+        "TRAIL-GPU-FORMS {}: GPU {:.3} ms, {local} scratch bytes device-local; {forms:?}",
         device.name(),
         gpu * 1e3
     );
-    if forms.is_empty() && device.work_counts().gpu_form_commands == 0 {
+    if forms.is_empty() && counts.gpu_form_commands == 0 {
         eprintln!("TRAIL-GPU-FORMS: the device records no execution in its GPU form");
+    } else {
+        assert!(
+            local > 0,
+            "a GPU form's scratch outside device-local memory"
+        );
     }
     forms
 }

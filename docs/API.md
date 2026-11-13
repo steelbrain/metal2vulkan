@@ -1996,8 +1996,10 @@ while some was pending, it logs one line for each `VkQueue` whose oldest batch i
 `metal2vulkan-encoder-trail`, `Info` severity): that batch's encoders, with each GPU form's scratch
 read while its work is pending (the range the GPU copied, the merged draw's two indirect draws,
 the commands whose arguments draw, their vertices or indices times instances and the most of them,
-and the command buffer's execution status words: only reads of host-visible memory already mapped,
-taking no lock and waiting for nothing, each word as it stood when read), the last batch the queue
+and the command buffer's execution status words: the scratch lies in device memory, so the GPU
+copies those words into host-visible memory once the passes that write them ended, before the
+draws, and they read zero until then; only reads of host-visible memory already mapped, taking no
+lock and waiting for nothing, each word as it stood when read), the last batch the queue
 completed, with how long before, and the device's pipeline pool's makings waiting and under way;
 once a stall. A
 submission a host step makes and waits for itself (a rasterization-rate map's fan-out probe, a

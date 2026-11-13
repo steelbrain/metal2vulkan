@@ -28,14 +28,17 @@
 //!   step (`render/executions/gpu.rs`), whose records the host never reads, is named by its
 //!   shape: merged into one draw or a draw per command, indexed or not, its primitive type, the
 //!   commands its preprocess runs over and where its range comes from. Where its batch is the
-//!   oldest pending one, the line reads the scratch the GPU writes, as it stands while the work
-//!   is pending: the range the GPU copied, the merged draw's two `VkDrawIndirectCommand`s, the
-//!   commands with arguments and their vertices or indices times instances, the most of them,
-//!   and the command buffer's execution status words. It reads host-visible, host-coherent
-//!   memory the pending command buffer holds (`upload.rs`), already mapped, and only reads it: a
-//!   word the GPU writes meanwhile may read either value. It takes no lock and waits for
-//!   nothing. The note holds the scratch's chunk and the status words' until the command buffer
-//!   goes, past its completion. An encoder encoded again (`command_buffer/reencode.rs`) names
+//!   oldest pending one, the line reads what the GPU wrote of its scratch, as it stands while
+//!   the work is pending: the range the GPU copied, the merged draw's two
+//!   `VkDrawIndirectCommand`s, the commands with arguments and their vertices or indices times
+//!   instances, the most of them, and the command buffer's execution status words. The scratch
+//!   lies in device memory, so with the trail on the GPU copies those words
+//!   ([`GpuForm::sections`]) into a region of the command buffer's upload arena once the passes
+//!   that write them ended, before the draws: until that copy runs, they read zero. The line
+//!   reads that region and the status words, host-visible, host-coherent memory the pending
+//!   command buffer holds (`upload.rs`), already mapped, and only reads it: a word the GPU
+//!   writes meanwhile may read either value. It takes no lock and waits for nothing. The note
+//!   holds both regions' chunks until the command buffer goes, past its completion. An encoder encoded again (`command_buffer/reencode.rs`) names
 //!   none of its own.
 //! - A submission
 //!   the step makes and waits for itself (a rasterization-rate map's fan-out probe,
@@ -53,10 +56,11 @@ use crate::pipeline::{ComputePipelineState, RenderPipelineState};
 use crate::render_pass::PassLayout;
 use crate::upload::Upload;
 use crate::used_resources::EncoderKind;
-use metal2vulkan::bind::DrawReplayLayout;
+use metal2vulkan::bind::{DrawReplayLayout, DRAW_ARGUMENT_BYTES};
 use metal2vulkan::metal::PrimitiveType;
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -69,6 +73,10 @@ const KEPT: usize = 16;
 
 /// The most commands of a GPU form's arguments the line reads.
 const READ_COMMANDS: u32 = 1 << 20;
+
+/// The bytes of a merged indexed replay's index entry, one a command: its indices' device
+/// address, then its whole indices and index size (`bind::replay`'s merged docs).
+const INDEX_ENTRY_BYTES: u64 = 16;
 
 /// The id name of the trail's lines.
 pub(crate) const ID_NAME: &str = "metal2vulkan-encoder-trail";
@@ -319,7 +327,7 @@ impl Notes {
 
 /// What a batch's encoders (or parts of them) were, as the trail names them: the text, and the
 /// executions of theirs recorded in their GPU form (the module docs, **GPU forms**), whose
-/// scratch the line reads where the batch is the oldest pending one.
+/// scratch's copy the line reads where the batch is the oldest pending one.
 #[derive(Clone)]
 pub(crate) struct Named {
     text: Arc<str>,
@@ -366,8 +374,8 @@ impl Named {
         })
     }
 
-    /// Its text, then each GPU form's shape and its scratch as it stands now, its work pending
-    /// (the module docs, **GPU forms**).
+    /// Its text, then each GPU form's shape and its scratch's copy as it stands now, its work
+    /// pending (the module docs, **GPU forms**).
     pub(crate) fn pending(&self) -> String {
         let mut text = self.text.to_string();
         for form in &self.forms {
@@ -384,7 +392,7 @@ impl Named {
 }
 
 /// An execution recorded in its GPU form (`render/executions/gpu.rs`), as the trail names it (the
-/// module docs, **GPU forms**): its shape, and where its scratch lies.
+/// module docs, **GPU forms**): its shape, and where the copy of its scratch lies.
 pub(crate) struct GpuForm {
     /// Recorded at `commit`, else by a host step.
     at_commit: bool,
@@ -396,8 +404,9 @@ pub(crate) struct GpuForm {
     first: u32,
     /// The offset in its buffer of the range read from one; `None` for a range given.
     range_from: Option<u64>,
-    /// Its scratch (`bind::DrawReplayLayout`), and the command buffer's execution status words.
-    scratch: Upload,
+    /// The copy of its scratch's [`sections`](Self::sections), at the offsets of its layout
+    /// (`bind::DrawReplayLayout`), and the command buffer's execution status words.
+    mirror: Upload,
     layout: DrawReplayLayout,
     status: Upload,
 }
@@ -405,11 +414,12 @@ pub(crate) struct GpuForm {
 impl GpuForm {
     /// The GPU form of an execution of commands from `first`, drawing `primitive_type`, `indexed`
     /// or not, its range read at `range_from` of a buffer or given, recorded `at_commit` or by a
-    /// host step, into `scratch` of `layout`, with the command buffer's status words `status`.
+    /// host step, whose scratch of `layout` the GPU copies the sections the line reads of into
+    /// `mirror`, with the command buffer's status words `status`.
     pub(crate) fn new(
         (at_commit, indexed, primitive_type): (bool, bool, PrimitiveType),
         (first, range_from): (u32, Option<u64>),
-        (scratch, layout, status): (Upload, DrawReplayLayout, Upload),
+        (mirror, layout, status): (Upload, DrawReplayLayout, Upload),
     ) -> GpuForm {
         GpuForm {
             at_commit,
@@ -417,17 +427,39 @@ impl GpuForm {
             primitive_type,
             first,
             range_from,
-            scratch,
+            mirror,
             layout,
             status,
         }
     }
 
-    /// Its shape, then its scratch's words as they stand now: the range the GPU copied, the
-    /// merged draw's two `VkDrawIndirectCommand`s, the commands whose arguments draw and their
-    /// vertices or indices times instances, the most of them (with its index entry's whole indices
-    /// and index size where indexed), and the command buffer's status words. Each word read once,
-    /// as it stood (`Upload::glimpse`).
+    /// The byte ranges of its scratch the line reads (`described`): the range the GPU copied,
+    /// where it reads one from a buffer; the merged draw's two `VkDrawIndirectCommand`s; the
+    /// arguments of the first [`READ_COMMANDS`]; and, merged and indexed, their index entries.
+    pub(crate) fn sections(&self) -> Vec<Range<u64>> {
+        let layout = &self.layout;
+        let read = u64::from(layout.commands.min(READ_COMMANDS));
+        let at = |start: u64, bytes: u64| start..start + bytes;
+        let mut sections = Vec::new();
+        if self.range_from.is_some() {
+            sections.push(at(layout.range_offset(), 8));
+        }
+        if let Some(merged) = layout.merged {
+            sections.push(at(merged.draw_offset(0), 2 * DRAW_ARGUMENT_BYTES));
+        }
+        let arguments = read * u64::from(layout.types) * DRAW_ARGUMENT_BYTES;
+        sections.push(at(layout.argument_offset(0, 0), arguments));
+        if let Some(merged) = layout.merged.filter(|_| self.indexed) {
+            sections.push(at(merged.indices_offset, read * INDEX_ENTRY_BYTES));
+        }
+        sections
+    }
+
+    /// Its shape, then its scratch's words as its mirror holds them now: the range the GPU
+    /// copied, the merged draw's two `VkDrawIndirectCommand`s, the commands whose arguments draw
+    /// and their vertices or indices times instances, the most of them (with its index entry's
+    /// whole indices and index size where indexed), and the command buffer's status words. Each
+    /// word read once, as it stood (`Upload::glimpse`).
     pub(crate) fn described(&self) -> String {
         let layout = &self.layout;
         let when = match self.at_commit {
@@ -452,11 +484,11 @@ impl GpuForm {
             self.primitive_type, layout.commands, self.first
         );
         if self.range_from.is_some() {
-            let [location, length] = word_pair(&self.scratch.glimpse(layout.range_offset(), 2));
+            let [location, length] = word_pair(&self.mirror.glimpse(layout.range_offset(), 2));
             let _ = write!(text, " the range copied {location}+{length},");
         }
         if let Some(merged) = layout.merged {
-            let draws = self.scratch.glimpse(merged.draw_offset(0), 8);
+            let draws = self.mirror.glimpse(merged.draw_offset(0), 8);
             let draw = |words: &[u32]| match words {
                 [vertices, instances, first, base] => {
                     format!(
@@ -474,7 +506,7 @@ impl GpuForm {
         }
         let read = layout.commands.min(READ_COMMANDS);
         let words = (read as usize) * (layout.types as usize) * 4;
-        let arguments = self.scratch.glimpse(layout.argument_offset(0, 0), words);
+        let arguments = self.mirror.glimpse(layout.argument_offset(0, 0), words);
         let (mut drawing, mut work) = (0u64, 0u64);
         let mut most: Option<(u64, u32, [u32; 4])> = None;
         for (at, draw) in arguments.as_chunks::<4>().0.iter().enumerate() {
@@ -505,8 +537,8 @@ impl GpuForm {
                  {base}"
             );
             if let Some(merged) = layout.merged.filter(|_| self.indexed) {
-                let entry = merged.indices_offset + u64::from(command) * 16;
-                let entry = self.scratch.glimpse(entry, 4);
+                let entry = merged.indices_offset + u64::from(command) * INDEX_ENTRY_BYTES;
+                let entry = self.mirror.glimpse(entry, 4);
                 if let [_, _, whole, size] = entry[..] {
                     let _ = write!(text, " ({whole} whole indices of {size} byte(s))");
                 }
