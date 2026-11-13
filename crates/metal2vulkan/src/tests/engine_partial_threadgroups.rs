@@ -6,9 +6,12 @@
 //! splits it into its interior and edge regions (on the emulated-simdgroups variant where an edge
 //! is not whole subgroups, as the runtime runs it), and on the partial-threadgroups variant's,
 //! which runs the threadgroups its threads fill at the call's size, per chunk of group counts,
-//! flagged `lower::dispatch::NONUNIFORM`. Each region runs on the interpreter under Vulkan's
-//! barrier rule (`BarrierRule::Vulkan`: an invocation that returned while others wait at a barrier
-//! traps), in both scheduling orders, at the subgroup width the region pins. Both give Metal's
+//! flagged `lower::dispatch::NONUNIFORM`. A grid of whole threadgroups, of either dispatch form,
+//! runs on the variant's plan as the same regions unflagged, every thread live, on the one
+//! specialization its threadgroup size's ragged grids take. Each region runs on the interpreter
+//! under Vulkan's barrier rule (`BarrierRule::Vulkan`: an invocation that returned while others
+//! wait at a barrier traps), in both scheduling orders, at the subgroup width the region pins.
+//! Both give Metal's
 //! words: the partial threadgroup's `threads_per_threadgroup`, its threads' positions and indices
 //! over its own size, its simdgroups' indices, and, behind a threadgroup barrier, a neighbour's
 //! threadgroup word and its simdgroup's sum over the live lanes alone. The variant's module passes
@@ -282,21 +285,59 @@ fn partial_inputs(dev: &Device, bc: &[u8], entry: &str, l: [u32; 3]) -> Option<V
     Some(key)
 }
 
+/// A `dispatchThreads` of `threads` in threadgroups of `l`.
+fn threads(threads: [u32; 3], l: [u32; 3]) -> Dispatch {
+    Dispatch::Threads {
+        threads,
+        threads_per_group: l,
+    }
+}
+
+/// A `dispatchThreadgroups` of `groups` threadgroups of `l`.
+fn groups(groups: [u32; 3], l: [u32; 3]) -> Dispatch {
+    Dispatch::Threadgroups {
+        groups,
+        threads_per_group: l,
+    }
+}
+
+/// The grid and the threadgroup of a direct dispatch.
+fn grid_of(d: &Dispatch) -> ([u32; 3], [u32; 3]) {
+    match *d {
+        Dispatch::Threads {
+            threads,
+            threads_per_group,
+        } => (threads, threads_per_group),
+        Dispatch::Threadgroups {
+            groups,
+            threads_per_group,
+        } => (
+            std::array::from_fn(|i| groups[i] * threads_per_group[i]),
+            threads_per_group,
+        ),
+        _ => panic!("not a direct dispatch"),
+    }
+}
+
 /// Check the partial-threadgroups variant of `entry` on `stem` against the split and `metal` for
-/// every grid of `grids` (threads, threadgroup, the split's regions, the variant's): both give
-/// Metal's words, on the region counts given. The variant's module is valid, walks no workgroup
-/// barrier in non-uniform control flow, is within its estimate and states its fact. `false`
-/// where the variant is refused or its key would emulate simdgroups (the split stays).
+/// every dispatch of `grids` (the dispatch, the split's regions, the variant's): both give
+/// Metal's words, on the region counts given, and every region of the variant's plan of a
+/// threadgroup size takes one specialization, whatever its grid. The variant's module is valid,
+/// walks no workgroup barrier in non-uniform control flow, is within its estimate and states its
+/// fact. `false` where the variant is refused or its key would emulate simdgroups (the split
+/// stays).
 fn check(
     stem: &str,
     (bc, entry): (&[u8], &str),
-    grids: &[([u32; 3], [u32; 3], usize, usize)],
+    grids: &[(Dispatch, usize, usize)],
     metal: impl Fn([u32; 3], [u32; 3]) -> Vec<u32>,
     words_out: impl Fn([u32; 3]) -> usize,
 ) -> bool {
     let dev = device(stem, |d| d.limits.max_compute_work_group_count = [4, 4, 4]);
     let mut ran = false;
-    for &(threads, l, split_regions, partial_regions) in grids {
+    let mut specializations = Vec::new();
+    for (d, split_regions, partial_regions) in grids {
+        let (threads, l) = grid_of(d);
         let Some(key) = partial_inputs(&dev, bc, entry, l) else {
             continue;
         };
@@ -331,29 +372,35 @@ fn check(
             );
             ran = true;
         }
-        let d = Dispatch::Threads {
-            threads,
-            threads_per_group: l,
-        };
         let n = words_out(threads);
         let want = metal(threads, l);
-        let (sc, split_words) = split(&dev, bc, entry, n, &d);
+        let (sc, split_words) = split(&dev, bc, entry, n, d);
         let (pc, partial_words) =
-            run_on(&dev, (&pipe, &m), n, &d).unwrap_or_else(|e| panic!("{stem} {entry}: {e:?}"));
-        let tag = format!("{stem} {entry} {threads:?} in {l:?}");
+            run_on(&dev, (&pipe, &m), n, d).unwrap_or_else(|e| panic!("{stem} {entry}: {e:?}"));
+        let form = match d {
+            Dispatch::Threadgroups { .. } => "threadgroups",
+            _ => "threads",
+        };
+        let tag = format!("{stem} {entry} {threads:?} in {l:?} ({form})");
         assert_eq!(&split_words[..want.len()], &want[..], "{tag}: the split");
         assert_eq!(&partial_words[..want.len()], &want[..], "{tag}: partial");
         assert_eq!(
             sc.regions.len(),
-            split_regions,
+            *split_regions,
             "{tag}: the split's regions"
         );
-        assert_eq!(pc.regions.len(), partial_regions, "{tag}: partial regions");
-        // Every partial region runs the call's threadgroup size: one specialization.
+        assert_eq!(pc.regions.len(), *partial_regions, "{tag}: partial regions");
+        // Every partial region runs the call's threadgroup size: one specialization, a whole
+        // grid's the ragged ones'.
+        let first = &pc.regions[0].specialization;
         assert!(
-            (pc.regions.iter()).all(|r| r.specialization == pc.regions[0].specialization),
+            (pc.regions.iter()).all(|r| r.specialization == *first),
             "{tag}: one specialization"
         );
+        match specializations.iter().find(|(size, _)| *size == l) {
+            Some((_, kept)) => assert!(kept == first, "{tag}: its threadgroup size's"),
+            None => specializations.push((l, first.clone())),
+        }
     }
     ran
 }
@@ -368,17 +415,17 @@ fn a_ragged_grid_runs_partial_threadgroups_as_the_split_runs_its_edges() {
     let Some(bc) = assemble_text("shape", &shape()) else {
         return;
     };
-    // (threads, threadgroup, the split's regions, the variant's).
+    // (dispatch, the split's regions, the variant's).
     let grids = [
         // 3 by 2 threadgroups of 8x8, the last column 5 wide and the last row 5 high.
-        ([21, 13, 1], [8, 8, 1], 4, 1),
+        (threads([21, 13, 1], [8, 8, 1]), 4, 1),
         // A grid narrower and shorter than one threadgroup: the split's corner alone.
-        ([5, 3, 1], [8, 4, 1], 1, 1),
+        (threads([5, 3, 1], [8, 4, 1]), 1, 1),
         // 10 threadgroups of 32 in chunks of at most 4, the last of 2 threads: the split's 9
         // whole ones in 3 chunks and its edge.
-        ([290, 1, 1], [32, 1, 1], 4, 3),
+        (threads([290, 1, 1], [32, 1, 1]), 4, 3),
         // One row of 100 in threadgroups of 64.
-        ([100, 1, 1], [64, 1, 1], 2, 1),
+        (threads([100, 1, 1], [64, 1, 1]), 2, 1),
     ];
     let mut ran = Vec::new();
     for stem in PROFILES {
@@ -411,11 +458,11 @@ fn a_barrier_and_a_simdgroup_sum_run_partial_threadgroups_as_metal() {
     ) else {
         return;
     };
-    // (threads, threadgroup, the split's regions, the variant's).
+    // (dispatch, the split's regions, the variant's).
     let grids = [
-        ([100, 1, 1], [64, 1, 1], 2, 1),
-        ([45, 1, 1], [32, 1, 1], 2, 1),
-        ([16, 1, 1], [64, 1, 1], 1, 1),
+        (threads([100, 1, 1], [64, 1, 1]), 2, 1),
+        (threads([45, 1, 1], [32, 1, 1]), 2, 1),
+        (threads([16, 1, 1], [64, 1, 1]), 1, 1),
     ];
     for (bc, simd) in [(&sum, true), (&plain, false)] {
         let metal = |t: [u32; 3], l: [u32; 3]| metal_neighbour(t[0], l[0], simd);
@@ -433,6 +480,65 @@ fn a_barrier_and_a_simdgroup_sum_run_partial_threadgroups_as_metal() {
         }
         println!("PARTIAL-THREADGROUPS neighbour simd {simd}: the variant ran on {ran:?}");
     }
+}
+
+/// A grid of whole threadgroups, of a `dispatchThreads` or a `dispatchThreadgroups`, runs on the
+/// partial-threadgroups variant's plan as its ragged grids do, every thread live: as the same
+/// regions unflagged, on the one specialization a ragged grid of its threadgroup size takes, with
+/// the plain pipeline's words and Metal's. `metal2vulkan-runtime` runs a large kernel's whole
+/// grids so.
+#[test]
+fn whole_grids_run_on_the_partial_plan_with_every_thread_live() {
+    let (Some(shape_bc), Some(neighbour_bc)) = (
+        assemble_text("shape_whole", &shape()),
+        assemble_text("neighbour_whole", &neighbour(true)),
+    ) else {
+        return;
+    };
+    // (dispatch, the split's regions, the variant's): a ragged grid, then whole ones of its
+    // threadgroup size; 10 threadgroups of 32 in chunks of at most 4.
+    let shapes = [
+        (threads([21, 13, 1], [8, 8, 1]), 4, 1),
+        (threads([24, 16, 1], [8, 8, 1]), 1, 1),
+        (groups([3, 2, 1], [8, 8, 1]), 1, 1),
+        (threads([290, 1, 1], [32, 1, 1]), 4, 3),
+        (threads([320, 1, 1], [32, 1, 1]), 3, 3),
+        (groups([10, 1, 1], [32, 1, 1]), 3, 3),
+    ];
+    let neighbours = [
+        (threads([100, 1, 1], [64, 1, 1]), 2, 1),
+        (threads([128, 1, 1], [64, 1, 1]), 1, 1),
+        (groups([2, 1, 1], [64, 1, 1]), 1, 1),
+    ];
+    let metal = |t: [u32; 3], l: [u32; 3]| metal_neighbour(t[0], l[0], true);
+    let mut ran = Vec::new();
+    for stem in PROFILES {
+        let words = |t: [u32; 3]| 2 * (t[0] * t[1]) as usize;
+        let shape = check(stem, (&shape_bc, "shape"), &shapes, metal_shape, words);
+        let runs = tier_of(stem, &shape_bc, "shape") != Tier::Emulated;
+        assert_eq!(shape, runs, "{stem}: shape runs partial threadgroups");
+        let words = |t: [u32; 3]| t[0] as usize;
+        let neighbour = check(
+            stem,
+            (&neighbour_bc, "neighbour"),
+            &neighbours,
+            metal,
+            words,
+        );
+        let runs = tier_of(stem, &neighbour_bc, "neighbour") != Tier::Emulated;
+        assert_eq!(
+            neighbour, runs,
+            "{stem}: neighbour runs partial threadgroups"
+        );
+        if shape && neighbour {
+            ran.push(stem);
+        }
+    }
+    println!("PARTIAL-THREADGROUPS whole grids: the variant ran on {ran:?}");
+    assert!(
+        ran.len() >= 4,
+        "the subgroup profiles run the variant: {ran:?}"
+    );
 }
 
 /// The simd tier `stem` compiles `bc`'s `entry` in.

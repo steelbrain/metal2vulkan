@@ -436,6 +436,20 @@ pub(super) struct Program {
     dispatch_records: OnceLock<dispatch_record::DispatchRecords>,
 }
 
+/// [`ComputePipelineState::whole_on_partial`] of a state whose base variant is `base` and whose
+/// creation compiled its kernel as `compiled`: what its creation's prediction asks too
+/// (`dispatch_making.rs`).
+fn whole_on_partial(base: &Variant, compiled: &Kernel, one_row: bool) -> bool {
+    if base.pipeline().stage.spirv.len() < compile_memory::COUNTED_WORDS {
+        return false;
+    }
+    let StageSource::Compiled(kernel) = compiled.stage() else {
+        return false;
+    };
+    kernel.observes_threadgroup_partition()
+        && !(one_row && kernel.observes_partition_through_simdgroups_alone())
+}
+
 /// What a direct dispatch of a compute state planned (`compute::settle_dispatch`): the variant
 /// `dispatch` of a bind state of `shape` runs on in `forms`, and its plan for `shape`, as
 /// [`ComputePipelineState::settle`] answers them, a function of those three alone; and the
@@ -972,7 +986,7 @@ impl ComputePipelineState {
         // stand-in compile is never dispatched.
         let pieces = piece_holds::PieceHolds::new();
         if let (Kernel::Compute(descriptor), false) = (&kernel, stand_in) {
-            base.make_predicted(device, descriptor, &pieces, true);
+            base.make_predicted(device, (descriptor, &compiled), &pieces, true);
         }
         device.degrade_absent_reads(&base.shared_pipeline().dependencies, |_| {
             function.function.info().name.to_string()
@@ -1849,19 +1863,20 @@ impl ComputePipelineState {
         Ok(Some((variant, plan)))
     }
 
-    /// Run the state's direct dispatches of a ragged grid split, as where the compile layer
-    /// refused it the partial-threadgroups variant ([`Self::settle_partial`]): what
-    /// `tests::partial_threadgroups` compares the variant's answers with.
+    /// Run the state's direct dispatches without its partial-threadgroups variant, as where the
+    /// compile layer refused it ([`Self::settle_partial`]): a ragged grid split and a whole one on
+    /// the plain pipeline, what `tests::partial_threadgroups` compares the variant's answers with.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn split_ragged_grids(&self) {
         self.0.partial_refused.store(true, Ordering::Relaxed);
     }
 
     /// The partial-threadgroups variant (`VariantKey::partial_threadgroups`) `dispatch`, a direct
-    /// `dispatchThreads:` of a ragged grid in threadgroups of `local` threads of a bind state of
-    /// `shape`, runs on, with its plan for `shape`: the variant the first plan names for a
-    /// threadgroup dispatch of `local` threads, with the partial threadgroups, compiled when first
-    /// needed (`compute::partial_direct`); the variant's plan must run that very dispatch, which
+    /// dispatch in threadgroups of `local` threads of a bind state of `shape` (a `dispatchThreads:`
+    /// of a ragged grid, or a large kernel's whole grid, [`Self::whole_on_partial`]), runs on, with
+    /// its plan for `shape`: the variant the first plan names for a threadgroup dispatch of `local`
+    /// threads, with the partial threadgroups, compiled when first needed
+    /// (`compute::partial_direct`); the variant's plan must run that very dispatch, which
     /// the check against `key` states. `None` where that variant has emulated simdgroups, which no
     /// partial-threadgroups variant runs, unremembered (another threadgroup size may not); and
     /// where the compile layer refuses the kernel the variant (a tile function, a stage-input
@@ -1903,6 +1918,21 @@ impl ComputePipelineState {
             ));
         }
         Ok(Some((variant, plan)))
+    }
+
+    /// Whether the state runs its whole grids, direct dispatches of whole threadgroups, on its
+    /// partial-threadgroups variant too, every thread live (`compute::partial_direct`): where its
+    /// base module holds `compile_memory::COUNTED_WORDS` SPIR-V words or more, whose plain pipeline
+    /// beside the variant's would be a second large compile, and where its ragged grids of the
+    /// dispatch's form run on the variant, as no flat variant runs them (`compute::flat_direct`):
+    /// the kernel observes its threadgroup partition, and, where `one_row` (a grid of one row in
+    /// threadgroups of one row), otherwise than through its simdgroups alone, as the call's flat
+    /// variant runs such a grid of such a kernel. Decided from the state's creation alone: where a
+    /// flat variant the kernel would take is refused (a device that reaches no memory by device
+    /// address, a module that would hold a workgroup barrier there), its ragged grids run on the
+    /// variant and its whole grids keep the plain pipeline.
+    pub(super) fn whole_on_partial(&self, one_row: bool) -> bool {
+        whole_on_partial(&self.0.base, &self.0.compiled, one_row)
     }
 
     /// The variant of `key`: the first one where it is that one's (and not a stand-in's), else

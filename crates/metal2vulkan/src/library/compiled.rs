@@ -295,6 +295,31 @@ impl CompiledFunction {
         self.0.subgroup.full_subgroups
     }
 
+    /// Whether the function, a kernel, observes its threadgroup partition: it may compute
+    /// otherwise in another partition of its grid into threadgroups, as it holds threadgroup
+    /// memory, a barrier, a fence or atomic of threadgroup or simdgroup scope, a simdgroup or quad
+    /// function, or reads a builtin of the partition. Decided from its AIR alone. A kernel that
+    /// does not runs any grid in threadgroups of a consumer's choosing (`LoweringInputs`'s
+    /// `flat_grid`); one that does runs a grid that is not a whole number of threadgroups on its
+    /// partial-threadgroups variant (`partial_threadgroups`) or split. `true` for a function that
+    /// is not a kernel.
+    pub fn observes_threadgroup_partition(&self) -> bool {
+        !self.0.kernel.partition_oblivious
+    }
+
+    /// Whether the function, a kernel, observes its threadgroup partition through its simdgroups
+    /// alone: its only observations are barriers of simdgroup execution scope, fences and atomics
+    /// of simdgroup scope, simdgroup and quad functions, `is_uniform`, the simdgroup size, and the
+    /// builtins `thread_index_in_simdgroup`, `thread_index_in_quadgroup` and
+    /// `threads_per_simdgroup`. It computes the same in any partition that keeps its threadgroups,
+    /// so a one-row grid in threadgroups of one row may run flat in the call's threadgroups
+    /// (`LoweringInputs`'s `call_threadgroups`). `false` for a kernel that does not observe its
+    /// partition ([`observes_threadgroup_partition`](Self::observes_threadgroup_partition)).
+    /// Decided as that one is.
+    pub fn observes_partition_through_simdgroups_alone(&self) -> bool {
+        self.0.kernel.partition_simdgroups
+    }
+
     /// The function's own `[[max_total_threads_per_threadgroup(n)]]` (`air.max_work_group_size`),
     /// `None` without one: the most threads Metal compiles a threadgroup of the function for.
     pub fn max_total_threads_attribute(&self) -> Option<u32> {

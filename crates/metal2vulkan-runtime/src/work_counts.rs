@@ -740,6 +740,7 @@ struct CommandCounters {
     dispatch_used_resources_listed: AtomicU64,
     dispatches_settled_as_before: AtomicU64,
     dispatches_planned_as_before: AtomicU64,
+    whole_dispatches_on_partial_variants: AtomicU64,
     dispatches_pushing_set_zero: AtomicU64,
     baked_sampler_dispatches_apart: AtomicU64,
     argument_tables_retained: AtomicU64,
@@ -1620,6 +1621,13 @@ impl Counting<'_> {
     /// planned and took what that one planned (`pipeline::Planned`).
     pub(crate) fn dispatch_planned_as_before(&self) {
         self.0.add(|counts| &counts.dispatches_planned_as_before, 1);
+    }
+
+    /// A direct dispatch of whole threadgroups that ran on a large kernel's partial-threadgroups
+    /// variant, every thread live (`compute::partial_direct`).
+    pub(crate) fn whole_dispatch_on_partial_variant(&self) {
+        self.0
+            .add(|counts| &counts.whole_dispatches_on_partial_variants, 1);
     }
 
     /// A dispatch of a variant that bakes samplers, its pipelines made, recorded in a
@@ -7853,6 +7861,13 @@ pub struct WorkCounts {
     /// encoder's first dispatch of a state dispatched before, for two. Not counted in
     /// `dispatches_settled_as_before`.
     pub dispatches_planned_as_before: u64,
+    /// Direct dispatches of whole threadgroups, a `dispatchThreadgroups:` or a `dispatchThreads:`
+    /// of a whole number of threadgroups, that ran on their kernel's partial-threadgroups variant
+    /// with every thread live: a kernel whose module holds 65,536 SPIR-V words or more and whose
+    /// ragged grids run on that variant, so one `VkPipeline` of a threadgroup size runs its whole
+    /// and ragged grids (`compute::partial_direct`). Zero for smaller kernels, whose whole grids
+    /// take the plain pipeline.
+    pub whole_dispatches_on_partial_variants: u64,
     /// Dispatches of a kernel's variant whose layout bakes immutable samplers (constexpr
     /// samplers'), their pipelines made, recorded in a `VkCommandBuffer` of their own, as a
     /// dispatch whose pipeline is still being made is (`pending_dispatch.rs`): on a device whose
@@ -10344,6 +10359,9 @@ impl Device {
             host_holds_looked_up: commands(|counts| &counts.host_holds_looked_up),
             dispatches_settled_as_before: commands(|counts| &counts.dispatches_settled_as_before),
             dispatches_planned_as_before: commands(|counts| &counts.dispatches_planned_as_before),
+            whole_dispatches_on_partial_variants: commands(|counts| {
+                &counts.whole_dispatches_on_partial_variants
+            }),
             baked_sampler_dispatches_apart: commands(|counts| {
                 &counts.baked_sampler_dispatches_apart
             }),

@@ -1492,8 +1492,20 @@ which `LoweringInputs::partial_threadgroups` compiles) runs such a grid as the t
 threads fill at the dispatch's threadgroup size instead, the last along an axis Metal's partial
 threadgroup, so every remainder takes the same `VkPipeline`; a kernel the variant cannot run
 exactly (a tile function, a stage-input region, compute derivatives, emulated simdgroups) is
-refused it, `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`, and keeps the edges. A kernel that steps a stage-in attribute by thread position, or reads
-`[[grid_origin]]` or `[[grid_size]]`, needs the encoder's stage-in region:
+refused it, `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`, and keeps the edges. On
+that plan a grid of whole threadgroups, of `Threads` or `Threadgroups`, takes the same regions
+unflagged (each `MultiRegion` 1, every thread live), so one `VkPipeline` of a threadgroup size runs
+all of a kernel's direct dispatches. `metal2vulkan-runtime` runs a kernel's whole grids there where
+its module holds 65,536 SPIR-V words or more and its ragged grids run there too: it observes its
+threadgroup partition (`CompiledFunction::observes_threadgroup_partition`), and for a one-row grid
+in threadgroups of one row otherwise than through its simdgroups alone
+(`observes_partition_through_simdgroups_alone`, whose such grids run flat). That is one driver
+compile of the module instead of two: on a guest's run on an RX 7900 XTX, the plain pipeline's
+compile of a kernel of 2,415,531 words was 26.9 s of a 39.8 s warm pass. Measured once on that GPU
+(RADV) over four straight-line kernels, the variant ran their whole grids at 0.997 to 1.020 times
+the plain pipeline's GPU time. Smaller kernels keep the plain pipeline for whole grids. A kernel
+that steps a stage-in attribute by thread position, or reads `[[grid_origin]]` or `[[grid_size]]`,
+needs the encoder's stage-in region:
 
 ```rust
 match plan.instantiate_dispatch(&state, &dispatch) {

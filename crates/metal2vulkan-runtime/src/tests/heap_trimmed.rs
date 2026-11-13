@@ -1,7 +1,8 @@
 //! The free heap a large making's compile leaves is handed back (`pipeline/compile_memory.rs`): a
 //! kernel of [`STEPS`] fused multiply-adds with [`WINDOW`] values live at once, past the registers,
-//! made as three `VkPipeline`s (its state's, for a grid of whole threadgroups, and a ragged grid's
-//! interior and edge regions), each a large making. glibc keeps what the driver's compile frees in
+//! made as two `VkPipeline`s of its partial-threadgroups variant, which runs a large kernel's whole
+//! and ragged grids alike (`compute::partial_direct`), one per threadgroup size, each a large
+//! making. glibc keeps what the driver's compile frees in
 //! the compiling thread's arena; handed back after each, the process's resident set stays within
 //! [`BOUND_MIB`] of what it was before the first, and the device counts the trims.
 //!
@@ -81,8 +82,8 @@ fn state(device: &Device) -> ComputePipelineState {
         .unwrap()
 }
 
-/// Dispatch `n` threads in threadgroups of 128 and wait.
-fn dispatch(device: &Device, state: &ComputePipelineState, n: u32) {
+/// Dispatch `n` threads in threadgroups of `group` and wait.
+fn dispatch(device: &Device, state: &ComputePipelineState, n: u32, group: u32) {
     let out = words_buffer(device, &[0; 256]);
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
@@ -90,7 +91,10 @@ fn dispatch(device: &Device, state: &ComputePipelineState, n: u32) {
     encoder.set_compute_pipeline_state(state).unwrap();
     encoder.set_buffer(Some(&out), 0, 0).unwrap();
     encoder
-        .dispatch_threads(Size::new(u64::from(n), 1, 1), Size::new(128, 1, 1))
+        .dispatch_threads(
+            Size::new(u64::from(n), 1, 1),
+            Size::new(u64::from(group), 1, 1),
+        )
         .unwrap();
     encoder.end_encoding().unwrap();
     command_buffer.commit().unwrap();
@@ -110,10 +114,10 @@ fn a_large_makings_free_heap_is_handed_back() {
     let before = resident_mib();
     let trims = || device.work_counts().heap_trims;
     let state = state(&device);
-    dispatch(&device, &state, 128);
+    dispatch(&device, &state, 128, 128);
     idle(&device);
     let first = resident_mib();
-    dispatch(&device, &state, 129);
+    dispatch(&device, &state, 129, 64);
     idle(&device);
     let second = resident_mib();
     println!(
@@ -125,6 +129,6 @@ fn a_large_makings_free_heap_is_handed_back() {
     assert!(trims() > 0, "no large making handed its free heap back");
     assert!(
         second <= before + BOUND_MIB,
-        "the resident set grew from {before} MiB to {second} over three makings"
+        "the resident set grew from {before} MiB to {second} over two makings"
     );
 }

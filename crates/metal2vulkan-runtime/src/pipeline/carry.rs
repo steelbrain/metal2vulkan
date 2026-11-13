@@ -271,7 +271,7 @@ impl Program {
         let base = Variant::of(to, self.base.key.clone(), found, &self.function)?;
         let pieces = piece_holds::PieceHolds::new();
         if let (Kernel::Compute(descriptor), false) = (&self.descriptor, self.stand_in) {
-            base.make_predicted(to, descriptor, &pieces, false);
+            base.make_predicted(to, (descriptor, &self.compiled), &pieces, false);
         }
         let interface = &base.shared_pipeline().interface;
         let at_bind_views = AtBindViews::new(to, interface, ReadSlots::every());

@@ -94,7 +94,9 @@
 //! last one of a partial threadgroup is Metal's partial simdgroup: its lanes past the threads are
 //! inactive, and every lane read ballots its live lanes (`simd::partly_live`). One variant of
 //! the call's threadgroup size runs every ragged grid, where the split runs an edge region of each
-//! remainder, a `VkPipeline` of its own.
+//! remainder, a `VkPipeline` of its own. A whole grid, and a threadgroup dispatch, run on the
+//! variant's plan as the same regions unflagged: every invocation is live, and
+//! `threads_per_threadgroup` is the call's.
 //!
 //! **Flat grids**. A flat variant (`LoweringInputs::flat_grid`, of a device replay or not) of a
 //! kernel that does not observe its threadgroup partition runs any grid in threadgroups of its own

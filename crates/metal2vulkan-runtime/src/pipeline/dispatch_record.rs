@@ -20,8 +20,9 @@
 //!   plans its first one (nothing bound but Metal's default sampler at each runtime sampler slot
 //!   that does not compare), with the recorded threadgroup memory lengths, settles its variant as
 //!   the program's direct dispatch does (`compute::settle_direct`: a ragged grid's flat variant
-//!   where it takes one, else its partial-threadgroups variant where it takes that, compiled
-//!   where it is not the base), and makes each region's `VkPipeline`
+//!   where it takes one, else its partial-threadgroups variant where it takes that, as a large
+//!   kernel's whole grid does too, compiled where it is not the base), and makes each region's
+//!   `VkPipeline`
 //!   on the pass's thread, below every other making: its translation lands in the shader cache and
 //!   its driver data in its record, under the names a later dispatch of the same shape asks for. A
 //!   dispatch whose bindings specialize its regions otherwise (a bound texture's format the

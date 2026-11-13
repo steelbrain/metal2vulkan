@@ -9,6 +9,12 @@
 //! live lanes alone. Where they are not (lavapipe's 8-lane subgroups, which emulate them), that
 //! kernel is refused the variant and splits.
 //!
+//! A kernel whose module holds `compile_memory::COUNTED_WORDS` SPIR-V words or more runs its whole
+//! grids on the variant too, every thread live (`ComputePipelineState::whole_on_partial`): one
+//! `VkPipeline` of the call's threadgroup size runs its whole grids of either dispatch form and its
+//! ragged grid, with the plain pipeline's words and Metal's. A smaller kernel's whole grids take the
+//! plain pipeline.
+//!
 //! Under `m2v_gpu`, a kernel heavy enough that its driver's compile is the cost: its ragged grids'
 //! creation time on the variant and split, one run each.
 //!
@@ -156,6 +162,16 @@ fn full_subgroups(device: &Device, text: &str) -> bool {
 /// Dispatch `state` over `threads` threads in threadgroups of [`GROUP`] and wait: the
 /// `VkPipeline`s the dispatch made and the words it wrote.
 fn run(device: &Device, state: &ComputePipelineState, threads: u32) -> (u64, Vec<u32>) {
+    run_as(device, state, threads, false)
+}
+
+/// [`run`], as a `dispatchThreadgroups:` of `threads / GROUP` threadgroups where `groups`.
+fn run_as(
+    device: &Device,
+    state: &ComputePipelineState,
+    threads: u32,
+    groups: bool,
+) -> (u64, Vec<u32>) {
     let out: Buffer = device
         .new_buffer_with_bytes(&[0xff; 4 * WORDS], ResourceOptions::shared())
         .unwrap();
@@ -165,12 +181,12 @@ fn run(device: &Device, state: &ComputePipelineState, threads: u32) -> (u64, Vec
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
     encoder.set_compute_pipeline_state(state).unwrap();
     encoder.set_buffer(Some(&out), 0, 0).unwrap();
-    encoder
-        .dispatch_threads(
-            Size::new(u64::from(threads), 1, 1),
-            Size::new(u64::from(GROUP), 1, 1),
-        )
-        .unwrap();
+    let group = Size::new(u64::from(GROUP), 1, 1);
+    let dispatched = match groups {
+        true => encoder.dispatch_threadgroups(Size::new(u64::from(threads / GROUP), 1, 1), group),
+        false => encoder.dispatch_threads(Size::new(u64::from(threads), 1, 1), group),
+    };
+    dispatched.unwrap();
     encoder.end_encoding().unwrap();
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
@@ -244,28 +260,96 @@ const STEPS: usize = 40_000;
 #[cfg(m2v_gpu)]
 const WINDOW: usize = 400;
 
-/// The heavy body: `%x` the sign bit of the chain's last value, which is positive (every step's
-/// operands are), so the words stay Metal's while no compiler can drop the chain.
+/// The fused multiply-adds of a large kernel's chain: enough that its module holds
+/// `compile_memory::COUNTED_WORDS` SPIR-V words or more, which its test checks.
+const LARGE_STEPS: usize = 8_000;
+
+/// The heavy body: [`chain`] of [`STEPS`] steps, [`WINDOW`] values live at once.
 #[cfg(m2v_gpu)]
 fn heavy() -> String {
+    chain(STEPS, WINDOW)
+}
+
+/// A body of `steps` fused multiply-adds, each step's operand `window` steps behind it: `%x` the
+/// sign bit of the chain's last value, which is positive (every step's operands are), so the
+/// words stay Metal's while no compiler can drop the chain.
+fn chain(steps: usize, window: usize) -> String {
     use std::fmt::Write;
     let hex = |v: f32| format!("0x{:016X}", f64::from(v).to_bits());
     let mut body = String::from("  %f0 = uitofp i32 %t to float\n");
-    for i in 0..STEPS {
+    for i in 0..steps {
         let c = hex(1.0f32 + (i as f32 + 1.0) * 2f32.powi(-22));
-        let (x, y) = match i < WINDOW {
+        let (x, y) = match i < window {
             true => ("%f0".to_owned(), hex((i % 1024) as f32 * 0.25)),
-            false => (format!("%f{i}"), format!("%f{}", i + 1 - WINDOW)),
+            false => (format!("%f{i}"), format!("%f{}", i + 1 - window)),
         };
-        let a = match i < WINDOW {
+        let a = match i < window {
             true => format!("{x}, float {c}, float {y}"),
             false => format!("{x}, float {y}, float {c}"),
         };
         writeln!(body, "  %f{} = call float @llvm.fma.f32(float {a})", i + 1).unwrap();
     }
-    writeln!(body, "  %xb = bitcast float %f{STEPS} to i32").unwrap();
+    writeln!(body, "  %xb = bitcast float %f{steps} to i32").unwrap();
     body.push_str("  %x = lshr i32 %xb, 31\n");
     body
+}
+
+/// A large kernel's whole grids, `dispatchThreads:` of one and two threadgroups and a
+/// `dispatchThreadgroups:` of two, run on its partial-threadgroups variant, every thread live, and
+/// its ragged grid too: one `VkPipeline` of [`GROUP`], three whole dispatches on the variant
+/// (`WorkCounts::whole_dispatches_on_partial_variants`), their words the plain pipeline's (the same
+/// kernel's state made to split, `ComputePipelineState::split_ragged_grids`) and Metal's. The
+/// smaller kernel's whole grids take the plain pipeline, a `VkPipeline` beside the variant's, which
+/// its ragged grid takes.
+#[test]
+fn a_large_kernel_s_whole_grids_run_on_its_partial_variant() {
+    let scratch = Scratch::new("partial-threadgroups-whole");
+    let device = device(&scratch.0);
+    // (threads, as a `dispatchThreadgroups:`).
+    let dispatches = [(64, false), (128, false), (128, true), (100, false)];
+    for large in [true, false] {
+        let extra = match large {
+            true => chain(LARGE_STEPS, 8),
+            false => String::new(),
+        };
+        let text = kernel(false, &extra);
+        let partial = state(&device, &text);
+        assert_eq!(
+            partial.whole_on_partial(false),
+            large,
+            "large {large}: the rule"
+        );
+        let plain = state(&device, &text);
+        plain.split_ragged_grids();
+        let counted = || device.work_counts().whole_dispatches_on_partial_variants;
+        let before = counted();
+        let mut made = 0;
+        for (threads, groups) in dispatches {
+            let want = metal(threads, false);
+            let tag = format!("large {large}: {threads} threads, threadgroups {groups}");
+            let (n, got) = run_as(&device, &partial, threads, groups);
+            made += n;
+            assert_eq!(&got[..want.len()], &want[..], "{tag}: the state");
+            let (_, got) = run_as(&device, &plain, threads, groups);
+            assert_eq!(&got[..want.len()], &want[..], "{tag}: the plain pipeline");
+        }
+        let whole = counted() - before;
+        println!(
+            "PARTIAL-THREADGROUPS-WHOLE {}: large {large}: VkPipelines made over {} dispatches: \
+             {made}; whole dispatches on the variant: {whole}",
+            device.name(),
+            dispatches.len(),
+        );
+        let want = match large {
+            true => (1, 3),
+            false => (2, 0),
+        };
+        assert_eq!(
+            (made, whole),
+            want,
+            "large {large}: made, whole on the variant"
+        );
+    }
 }
 
 #[test]

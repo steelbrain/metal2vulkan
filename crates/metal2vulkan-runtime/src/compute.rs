@@ -1940,35 +1940,73 @@ fn flat_direct(
 /// one `VkPipeline` beside its state's, and with no `Degradation::SplitDispatch` where its group
 /// counts fit the device's.
 ///
-/// `None`, so the dispatch keeps its exact split, where its grid is a whole number of
-/// threadgroups or empty, in the large-buffer form, where the variant would emulate its
-/// simdgroups (`ComputePipelineState::settle_partial`), or where the compile layer refuses the
-/// kernel the variant, which the state remembers.
+/// **A large kernel's whole grids.** A kernel whose base module holds `compile_memory`'s
+/// `COUNTED_WORDS` (65,536) SPIR-V words or more runs its whole grids there too, every thread live
+/// (`ComputePipelineState::whole_on_partial`): a `dispatchThreads:` of a whole number of
+/// threadgroups and a `dispatchThreadgroups:`, where its ragged grids of the same form run on the
+/// variant (no flat variant runs them, [`flat_direct`]). So one `VkPipeline` of a threadgroup size
+/// runs all its direct dispatches, where the plain pipeline's for its whole grids would be a second
+/// driver compile of the module: on a guest's run on an RX 7900 XTX, the plain pipeline's compile
+/// of a kernel of 2,415,531 words was 26.9 s of a 39.8 s warm pass. Its cost on the GPU, measured
+/// once on the same GPU (RADV) over 1,048,576 threads in threadgroups of 64, the fastest of three
+/// command buffers of eight dispatches each: 0.997 to 1.020 times the plain pipeline's time over
+/// four straight-line kernels, three of 40,000 fused multiply-adds (behind a threadgroup barrier
+/// and a simdgroup sum, a threadgroup barrier alone, or neither) and a light one, their words the
+/// plain pipeline's. A smaller kernel's whole grids keep the plain pipeline and its speed: its
+/// compile is cheap. Both forms give the same answers, so no switch chooses between them.
+///
+/// `None`, so the dispatch keeps its exact split or its plain pipeline, where its grid is empty or,
+/// but for such a kernel, a whole number of threadgroups, in the large-buffer form, where the
+/// variant would emulate its simdgroups (`ComputePipelineState::settle_partial`), where the
+/// compile layer refuses the kernel the variant, which the state remembers, or where the device's
+/// limits cannot hold its threadgroups.
 fn partial_direct(
     pipeline: &ComputePipelineState,
     shape: &BindShape,
     dispatch: &Dispatch,
     forms: BufferForms,
 ) -> Result<Option<(Arc<Variant>, Arc<BindingPlan>)>, Error> {
-    let Dispatch::Threads {
-        threads,
-        threads_per_group,
-    } = *dispatch
-    else {
-        return Ok(None);
-    };
     if forms != BufferForms::Bound {
         return Ok(None);
     }
-    let empty = (0..3).any(|i| threads[i] == 0 || threads_per_group[i] == 0);
-    if empty || (0..3).all(|i| threads[i].is_multiple_of(threads_per_group[i])) {
+    let (grid, local) = match *dispatch {
+        Dispatch::Threads {
+            threads,
+            threads_per_group,
+        } => (threads, threads_per_group),
+        Dispatch::Threadgroups {
+            groups,
+            threads_per_group,
+        } => (groups, threads_per_group),
+        _ => return Ok(None),
+    };
+    if (0..3).any(|i| grid[i] == 0 || local[i] == 0) {
         return Ok(None);
     }
-    match pipeline.settle_partial(shape, threads_per_group, dispatch) {
+    // A grid of one row in threadgroups of one row, which the call's flat variant runs for a
+    // kernel that observes its partition through its simdgroups alone (`flat_direct`).
+    let one_row = grid[1..] == [1, 1] && local[1..] == [1, 1];
+    if whole_grid(dispatch) && !pipeline.whole_on_partial(one_row) {
+        return Ok(None);
+    }
+    match pipeline.settle_partial(shape, local, dispatch) {
         Ok(settled) => Ok(settled),
         // Threadgroups the device's limits cannot hold: the split's own refusal answers.
         Err(Error::Bind(BindError::Unsupported(_))) => Ok(None),
         Err(error) => Err(error),
+    }
+}
+
+/// Whether `dispatch` is a direct dispatch of whole threadgroups: a `dispatchThreadgroups:`, or a
+/// `dispatchThreads:` whose grid is a whole number of threadgroups on every axis.
+fn whole_grid(dispatch: &Dispatch) -> bool {
+    match *dispatch {
+        Dispatch::Threadgroups { .. } => true,
+        Dispatch::Threads {
+            threads,
+            threads_per_group,
+        } => (0..3).all(|i| threads[i].is_multiple_of(threads_per_group[i])),
+        _ => false,
     }
 }
 
@@ -2859,6 +2897,10 @@ fn record(
     let emulated = variant.emulates_simdgroups();
     let split = (regions.len(), variant.runs_partial_threadgroups());
     degrade_dispatch(&device, kernel, &dispatch, split, emulated);
+    // A large kernel's whole grid on its partial-threadgroups variant ([`partial_direct`]).
+    if variant.runs_partial_threadgroups() && whole_grid(&dispatch) {
+        core.counts().whole_dispatch_on_partial_variant();
+    }
     if let Some(unlisted) = unlisted {
         heap_sets::degrade_unlisted(
             &device,

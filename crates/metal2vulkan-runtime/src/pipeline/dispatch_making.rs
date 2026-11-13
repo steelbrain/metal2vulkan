@@ -40,7 +40,10 @@
 //!   variant and the device past the program's last drop, which Metal's never does. Its
 //!   specialized notices wait for the first dispatch that takes it, which announces them naming
 //!   what it binds. A creation inside a host step, a tile function's state and a stand-in compile
-//!   make nothing here.
+//!   make nothing here, nor does the creation of a large kernel's state whose dispatches of whole
+//!   threadgroups run on its partial-threadgroups variant (`compute::partial_direct`), which the
+//!   creation does not compile: no dispatch would take the base's region, and its first dispatch
+//!   hands the variant's making to the pool.
 //! - **Where the request states no threadgroup, the creation predicts nothing**, because nothing
 //!   in the request answers what the dispatch will ask for. The local size is the dispatch's own
 //!   call, and a size guessed from the state instead -- Apple's guide to threadgroup sizes
@@ -75,7 +78,7 @@ use super::objects::RawPipeline;
 use super::piece_holds::PieceHolds;
 use super::pool::Place;
 use super::region_ledger;
-use super::{ComputePipelineState, RegionKey, Variant};
+use super::{ComputePipelineState, Kernel, RegionKey, Variant};
 use crate::degradation::{BoundFormats, Occurrence};
 use crate::error::Error;
 use crate::Device;
@@ -239,19 +242,21 @@ impl Variant {
     /// most (a recovery's making again of the state waits for none, `pipeline/carry.rs`); under
     /// `Exact` made on this thread. A descriptor that requires no threadgroup size predicts no
     /// region at all, and a prediction the plan refuses or that runs on another variant makes
-    /// nothing; a failed making is not kept and refuses nothing, its dispatch meeting it as
-    /// before.
+    /// nothing, the partial-threadgroups variant of a large kernel among them (`compiled`, the
+    /// creation's compile of the descriptor's kernel, says whether its kernel is such:
+    /// `ComputePipelineState::whole_on_partial`); a failed making is not kept and refuses
+    /// nothing, its dispatch meeting it as before.
     pub(super) fn make_predicted(
         self: &Arc<Self>,
         device: &Device,
-        descriptor: &ComputePipelineDescriptor,
+        (descriptor, compiled): (&ComputePipelineDescriptor, &Kernel),
         holds: &Arc<PieceHolds<RegionHeld>>,
         waited: bool,
     ) {
         if crate::exit_guard::in_host_step() {
             return;
         }
-        let Some(key) = self.predicted_region(device, descriptor) else {
+        let Some(key) = self.predicted_region(device, descriptor, compiled) else {
             return;
         };
         let Begun::Yours(ticket) = self.pipelines.begin(&key) else {
@@ -288,15 +293,21 @@ impl Variant {
     /// (the module docs): one `dispatchThreadgroups:` threadgroup of [`predicted_threads`],
     /// planned for [`predicted_bindings`]. `None` where `descriptor` requires no threadgroup
     /// size, so the request names none to predict; and where it plans or instantiates no region,
-    /// or runs on another variant (a threadgroup the kernel's simd tier cannot run whole).
+    /// or runs on another variant (a threadgroup the kernel's simd tier cannot run whole, or a
+    /// large kernel's dispatch of whole threadgroups, on its partial-threadgroups variant).
     fn predicted_region(
         &self,
         device: &Device,
         descriptor: &ComputePipelineDescriptor,
+        compiled: &Kernel,
     ) -> Option<RegionKey> {
         // The threadgroup first, before anything is planned: where the request states none there
         // is no region to predict, and the plan below would be built for a key nobody makes.
         let threads_per_group = predicted_threads(descriptor.required_threads_per_threadgroup)?;
+        // One threadgroup, a grid of one row where it is one row.
+        if super::whole_on_partial(self, compiled, threads_per_group[1..] == [1, 1]) {
+            return None;
+        }
         let state = predicted_bindings(&self.pipeline);
         let plan = self.plan(device, &state.shape()).ok()?;
         let dispatch = Dispatch::Threadgroups {
