@@ -575,7 +575,11 @@ driver's. Each is open work.
   NVIDIA's copy engine stops with the rest after an Xid 109 is not yet measured: where it runs
   on, the probe completes and the stop is not found. The stopped `VkDevice` is parked
   (`release.rs`): it and every object of it stay to the process's end, with the host pages its
-  imports hold (`WorkCounts::wedges_declared`, `Device::is_parked`).
+  imports hold (`WorkCounts::wedges_declared`, `Device::is_parked`). NVIDIA's driver (620.70.06)
+  tears down every `VkDevice` left at the process's exit in an exit handler of `libEGL_nvidia`,
+  which waits for its work: on an RTX 3090 it spun without end on a parked `VkDevice` whose batch
+  waited for a semaphore signal that never came (`tests/stall.rs`, where the stuck work is that
+  wait). Whether the exit waits likewise for a GPU that truly stopped is not measured.
 
 - **A two-copy buffer over read-only pages keeps the GPU's writes until the command buffer that
   made them completed** (`managed_copy.rs`, `WorkCounts::managed_writes_undone`): its pages are

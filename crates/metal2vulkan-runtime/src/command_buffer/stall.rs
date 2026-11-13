@@ -39,7 +39,8 @@
 //!   released from then on, the device itself included, and nothing waits for its queues
 //!   (`DeviceShared::queues_idle`). A consumer that holds its handles (`Device::raw`) asks
 //!   [`Device::is_parked`](crate::Device::is_parked) to leave them likewise. A leak of what the
-//!   generation held (docs/FAST-PATHS.md, known gaps).
+//!   generation held, and a driver may wait for its work at the process's exit (NVIDIA's did:
+//!   docs/FAST-PATHS.md, known gaps).
 //! - **Bounds.** [`STALL`] is 10 s, twice the M3 Max's bound and under the x86 Macs'; a stopped
 //!   generation fails after 12 s at least. A device without a staging queue sends no probe, and
 //!   a stop there is not detected (docs/FAST-PATHS.md, known gaps).

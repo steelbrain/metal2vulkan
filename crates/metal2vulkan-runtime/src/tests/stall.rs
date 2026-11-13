@@ -13,7 +13,10 @@
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). No GPU fault and no spin: the stuck work is a semaphore
-//! wait.
+//! wait. The stopped test signals it on the parked `VkDevice` once it has checked the recovery, so
+//! the parked generation's queue drains before the process exits: NVIDIA's driver (620.70.06, an
+//! RTX 3090) tears down every `VkDevice` left at exit in an exit handler of `libEGL_nvidia`, which
+//! spun without end on the parked one while its batch waited.
 
 use super::device_recovery::Scratch;
 use crate::{
@@ -175,15 +178,22 @@ fn a_stall_no_probe_answers_stops_and_parks_the_generation() {
     let scratch = Scratch::new();
     let heard = Arc::new(Mutex::new(Heard::default()));
     let device = device(&scratch.0, &heard, true);
-    // SAFETY: the handle is compared alone, never used.
-    let stopped = unsafe { device.raw() }.device.handle();
+    // SAFETY: the functions and handle of the generation that stops, used only to signal the
+    // event's semaphore below, on the parked `VkDevice`, which is never destroyed.
+    let parked = unsafe { device.raw() }.device.clone();
+    let stopped = parked.handle();
     let event = device.new_event().unwrap();
+    // SAFETY: the stopping generation's semaphore of the event, which stays that generation's
+    // (`Event::vk_semaphore`), signalled once from the host to the reserved counter below.
+    let semaphore = unsafe { event.vk_semaphore() };
     let buffer = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
-    let (command_buffer, _) = stuck(&device, &event, &buffer);
+    let began = Instant::now();
+    let (command_buffer, counter) = stuck(&device, &event, &buffer);
     assert!(
         command_buffer.wait_until_completed_for(WAIT).is_ok(),
         "the stuck command buffer did not fail in {WAIT:?}"
     );
+    let failed = began.elapsed();
     assert_eq!(
         (command_buffer.status(), command_buffer.error()),
         (
@@ -202,6 +212,7 @@ fn a_stall_no_probe_answers_stops_and_parks_the_generation() {
     runs.commit().unwrap();
     assert!(runs.wait_until_completed_for(WAIT).is_ok());
     assert_eq!(runs.error(), None);
+    let ran = began.elapsed();
     // SAFETY: as above.
     let serving = unsafe { device.raw() }.device.handle();
     assert_ne!(serving, stopped);
@@ -215,7 +226,8 @@ fn a_stall_no_probe_answers_stops_and_parks_the_generation() {
         .filter(|text| text.contains("a probe on the staging queue"))
         .collect();
     eprintln!(
-        "STALL-STOPPED {}: probes {}, wedges {}, recoveries {}, longest stall {:?}; {said:?}; {:?}",
+        "STALL-STOPPED {}: failed after {failed:?}, the next ran after {ran:?}; probes {}, wedges \
+         {}, recoveries {}, longest stall {:?}; {said:?}; {:?}",
         device.name(),
         counts.stall_probes_sent,
         counts.wedges_declared,
@@ -238,4 +250,10 @@ fn a_stall_no_probe_answers_stops_and_parks_the_generation() {
             .any(|notice| notice.reason.contains("stopped")),
         "the recovery's notice does not say the generation stopped"
     );
+    let info = vk::SemaphoreSignalInfo::default()
+        .semaphore(semaphore)
+        .value(counter);
+    // SAFETY: the parked `VkDevice` and its semaphore, both live (never destroyed); the counter
+    // the reservation named, which nothing before it waits for.
+    unsafe { parked.signal_semaphore(&info) }.unwrap();
 }
