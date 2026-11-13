@@ -50,6 +50,7 @@
 use super::budget::{self, Rank, Urgency};
 use crate::device::lock;
 use crate::work_counts::Counters;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -103,6 +104,7 @@ impl Drop for LargeMaking<'_> {
 /// The `malloc_trim` calls the process made ([`trim`]: its large makings' and its devices' idle
 /// sweeps'), every device's: the memory log's count ([`heap`]). `WorkCounts::heap_trims` counts a
 /// device's.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
 static TRIMS: AtomicU64 = AtomicU64::new(0);
 
 /// Hand glibc's free heap back to the system where it holds more than [`FREE_FLOOR`] bytes free,
