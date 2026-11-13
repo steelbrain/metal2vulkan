@@ -25,9 +25,24 @@
 //!   program sees stay the callers'; the limit only delays a driver call.
 //! - **Counted.** A making that waited counts in `WorkCounts::makings_held_for_compile_memory`,
 //!   and its wait in `WorkCounts::compile_memory_held_nanos`.
+//! - **The free heap handed back** ([`LargeMaking`]). What the compiler took it frees when the
+//!   making returns, and glibc's `malloc` keeps what a thread frees in that thread's arena, so a
+//!   process whose threads each made a large pipeline holds each one's peak as free heap until it
+//!   ends: on an RX 7900 XTX (RADV, Mesa 26.2.6), one kernel of 200,000 fused multiply-adds with 600
+//!   values live at once made as 9 `VkPipeline`s took the process's resident set from 105 MiB to
+//!   7.3 GiB, of which `malloc_trim` handed back all but 327 MiB (one run; the `VkPipeline`s and the
+//!   driver's caches held about 170 MiB of it). So where a large making's return leaves glibc more
+//!   than [`FREE_FLOOR`] bytes free (`mallinfo2`'s `fordblks`, every arena's), the making's thread
+//!   calls `malloc_trim(0)` before it gives its words back, counted in `WorkCounts::heap_trims`.
+//!   It trims glibc's own arenas, process-wide: the host's free heap goes back with ours. The
+//!   trade: the next large making faults its working set in again, about 1 s per 3.5 GiB of it,
+//!   where it would have reused the free heap; the floor spares makings that leave less. Only
+//!   where the process's allocator is glibc's (Linux, the GNU environment): on any other nothing is
+//!   called, and a host whose `malloc` is not glibc's sees no change.
 
 use super::budget::{self, Rank, Urgency};
 use crate::device::lock;
+use crate::work_counts::Counters;
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -55,6 +70,46 @@ struct State {
     waiting: Vec<(u64, Rank, usize)>,
     /// The id of the next waiter.
     next: u64,
+}
+
+/// The most free heap a large making's return leaves glibc before it is handed back: 256 MiB
+/// (the module docs).
+pub(crate) const FREE_FLOOR: usize = 256 << 20;
+
+/// A large making's words of the process's limit, held around its driver call: when dropped, it
+/// hands glibc's free heap back where it holds more than [`FREE_FLOOR`] bytes (the module docs),
+/// then gives the words back.
+pub(crate) struct LargeMaking<'a> {
+    pub(crate) _words: Words<'static>,
+    pub(crate) counts: &'a Counters,
+}
+
+impl Drop for LargeMaking<'_> {
+    fn drop(&mut self) {
+        if return_free_heap() {
+            self.counts.heap_trimmed();
+        }
+    }
+}
+
+/// Hand glibc's free heap back to the system where it holds more than [`FREE_FLOOR`] bytes free,
+/// every arena's: whether it called `malloc_trim` (the module docs).
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn return_free_heap() -> bool {
+    // SAFETY: no precondition.
+    let free = unsafe { libc::mallinfo2() }.fordblks;
+    if free <= FREE_FLOOR {
+        return false;
+    }
+    // SAFETY: no precondition; it returns free pages only.
+    unsafe { libc::malloc_trim(0) };
+    true
+}
+
+/// Nothing where the process's allocator is not glibc's (the module docs).
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn return_free_heap() -> bool {
+    false
 }
 
 /// The words a making holds, given back when dropped.

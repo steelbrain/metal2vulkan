@@ -280,6 +280,8 @@ mod heap_tiled;
 mod heap_tiled_blocks;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod heap_tiled_scratch;
+#[cfg(all(m2v_gpu, target_os = "linux", target_env = "gnu"))]
+mod heap_trimmed;
 mod heap_usage;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod heap_use_released;

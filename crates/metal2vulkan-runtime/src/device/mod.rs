@@ -819,15 +819,20 @@ impl DeviceShared {
     /// SPIR-V words holds around its driver call (`pipeline/compile_memory.rs`): `None` where it
     /// does not count. One that waited for them counts in
     /// `WorkCounts::makings_held_for_compile_memory`, its wait in `compile_memory_held_nanos`.
+    /// Dropped after the call, it hands the free heap the compile left back where it is large
+    /// (`WorkCounts::heap_trims`).
     pub(crate) fn compile_memory(
         &self,
         words: usize,
-    ) -> Option<crate::pipeline::compile_memory::Words<'static>> {
+    ) -> Option<crate::pipeline::compile_memory::LargeMaking<'_>> {
         let (held, waited) = crate::pipeline::compile_memory::hold(words)?;
         if let Some(waited) = waited {
             self.counts.making_held_for_compile_memory(waited);
         }
-        Some(held)
+        Some(crate::pipeline::compile_memory::LargeMaking {
+            _words: held,
+            counts: &self.counts,
+        })
     }
 
     /// The compute pipeline of `info`, made as

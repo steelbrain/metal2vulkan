@@ -117,6 +117,7 @@ pub(crate) struct Counters {
     flights_followed: AtomicU64,
     makings_held_for_compile_memory: AtomicU64,
     compile_memory_held_nanos: AtomicU64,
+    heap_trims: AtomicU64,
     predicated_loop_runs_again: AtomicU64,
     variants_taken_back: AtomicU64,
     unlisted_argument_sampler_buffers: AtomicU64,
@@ -2297,6 +2298,11 @@ impl Counters {
             u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX),
             Ordering::Relaxed,
         );
+    }
+
+    /// A large making's return handed glibc's free heap back (`pipeline/compile_memory.rs`).
+    pub(crate) fn heap_trimmed(&self) {
+        self.heap_trims.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A predicated loop's check ran its laying again (`command_buffer/rerun.rs`).
@@ -5609,6 +5615,12 @@ pub struct WorkCounts {
     pub makings_held_for_compile_memory: u64,
     /// The time those makings waited, in nanoseconds, summed.
     pub compile_memory_held_nanos: u64,
+    /// Large makings (65,536 SPIR-V words or more) whose return left glibc's `malloc` more than
+    /// 256 MiB of free heap, which the making's thread then handed back to the system with
+    /// `malloc_trim` (`pipeline/compile_memory.rs`): glibc keeps what a driver's compile frees in
+    /// the compiling thread's arena. Always 0 where the process's allocator is not glibc's (Linux,
+    /// the GNU environment). No Metal counterpart.
+    pub heap_trims: u64,
     /// The runs again of predicated loops' layings that a check submitted, the loop still running
     /// past its copies (`command_buffer/rerun.rs`).
     pub predicated_loop_runs_again: u64,
@@ -9572,6 +9584,7 @@ impl Device {
                 .makings_held_for_compile_memory
                 .load(Ordering::Relaxed),
             compile_memory_held_nanos: counters.compile_memory_held_nanos.load(Ordering::Relaxed),
+            heap_trims: counters.heap_trims.load(Ordering::Relaxed),
             predicated_loop_runs_again: counters.predicated_loop_runs_again.load(Ordering::Relaxed),
             variants_taken_back: counters.variants_taken_back.load(Ordering::Relaxed),
             unlisted_argument_sampler_buffers: counters
