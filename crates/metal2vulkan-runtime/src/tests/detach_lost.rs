@@ -5,6 +5,13 @@
 //! (`device/line.rs`), and the buffer, made before, is refused
 //! (`NotImplemented(MadeBeforeRecovery)`).
 //!
+//! The kernel stores its count into the no-copy buffer's bytes once it sees the word, so they stay
+//! mapped until its command buffer completed (`HostMemory::new`'s contract), which the test waits
+//! for before they go: dropping the device's handle does not wait for its work in flight. The
+//! word is raised late, on a thread of its own, so that a test that let the bytes go first would
+//! fault there every time (`Host` unmaps them): a heap allocation freed under the store took the
+//! count into its free list's link, and the process faulted in `exit`'s frees.
+//!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects, and on a GPU only with `m2v_gpu_hazards` too (docs/VALIDATION.md). It is a GPU
 //! hazard: one dispatch spins up to 2^25 loads (about 4.5 s on the M3 Max, 2 s on RADV) where the
@@ -15,7 +22,6 @@ use crate::{
     ComputePipelineState, Device, DeviceKind, DeviceOptions, HostMemory, PipelineOptions,
     ResourceOptions, ShaderCacheOptions, Size,
 };
-use std::alloc::Layout;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
@@ -25,6 +31,10 @@ const WAIT: Duration = Duration::from_secs(60);
 
 /// The no-copy buffer's bytes: a whole page of any host.
 const BYTES: usize = 64 << 10;
+
+/// How long after the detach answered the word is raised: past the test's own steps, while the
+/// command buffer's wait holds the bytes mapped.
+const RAISE_LATE: Duration = Duration::from_millis(200);
 
 /// A scratch directory for the device's shader cache, removed when dropped.
 struct Scratch(PathBuf);
@@ -43,28 +53,46 @@ impl Drop for Scratch {
     }
 }
 
-/// Page-aligned host memory of [`BYTES`], freed when dropped: declared first, after the device
-/// that used it.
+/// [`BYTES`] of pages of their own, mapped private and zeroed, unmapped when dropped, so that a
+/// write after they went faults at once: declared first, dropped last.
 struct Host(NonNull<u8>);
 
 impl Host {
-    fn layout() -> Layout {
-        Layout::from_size_align(BYTES, BYTES).unwrap()
-    }
-
     fn new() -> Host {
-        // SAFETY: the layout's size is not zero.
-        let pointer = unsafe { std::alloc::alloc_zeroed(Host::layout()) };
-        Host(NonNull::new(pointer).unwrap())
+        // SAFETY: a new anonymous mapping, unmapped as the host drops.
+        let mapped = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                BYTES,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(
+            mapped,
+            libc::MAP_FAILED,
+            "{}",
+            std::io::Error::last_os_error()
+        );
+        Host(NonNull::new(mapped.cast()).unwrap())
     }
 }
 
 impl Drop for Host {
     fn drop(&mut self) {
-        // SAFETY: allocated with this layout in `Host::new`.
-        unsafe { std::alloc::dealloc(self.0.as_ptr(), Host::layout()) };
+        // SAFETY: mapped with this length in `Host::new`; nothing reads or writes it any more.
+        unsafe { libc::munmap(self.0.as_ptr().cast(), BYTES) };
     }
 }
+
+/// The flag's word, for the thread that raises it.
+struct Word(*mut u32);
+
+// SAFETY: the word is the flag's `Shared` bytes, mapped while the command buffer that loads it is
+// in flight, and only written through this.
+unsafe impl Send for Word {}
 
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU, its shader cache
 /// in `cache`.
@@ -105,14 +133,16 @@ fn spin(device: &Device) -> ComputePipelineState {
 }
 
 /// A buffer's detach blocked on submitted work that took it answers once the device is lost, the
-/// work not yet complete: refused as made before the device's recovery.
+/// work not yet complete: refused as made before the device's recovery. The bytes go once the
+/// work completed, the word raised late (the module docs).
 #[test]
 fn a_detach_waiting_for_submitted_work_settles_on_a_lost_device() {
     let host = Host::new();
     let scratch = Scratch::new();
     let device = device(&scratch.0);
-    // SAFETY: the memory outlives the device (dropped after it, below), and nothing else uses
-    // it meanwhile.
+    // SAFETY: the memory stays mapped until the command buffer that uses the buffer completed (the
+    // wait below) and the buffer was dropped (dropped after it, below), and nothing else uses it
+    // meanwhile.
     let made = unsafe {
         device.new_buffer_with_bytes_no_copy(
             HostMemory::new(host.0),
@@ -150,24 +180,30 @@ fn a_detach_waiting_for_submitted_work_settles_on_a_lost_device() {
         );
         std::thread::sleep(Duration::from_millis(1));
     }
-    let raise = || {
-        let word = flag.contents().unwrap().as_ptr().cast::<u32>();
-        // SAFETY: the flag's `Shared` bytes are mapped for its life, aligned for a word, and the
-        // GPU only loads them.
-        unsafe { word.write_volatile(1) };
-    };
-    std::thread::scope(|scope| {
+    let word = Word(flag.contents().unwrap().as_ptr().cast::<u32>());
+    let (waited, answer) = std::thread::scope(|scope| {
         let detaching = scope.spawn(|| buffer.detach_backing());
         std::thread::sleep(Duration::from_millis(100));
         let waited = !detaching.is_finished();
         device.mark_lost();
-        let answer = detaching.join().unwrap();
-        // The GPU is never left spinning.
-        raise();
-        assert!(waited, "the detach did not wait for the submitted work");
-        assert_eq!(
-            answer,
-            Err(Error::NotImplemented(RuntimeGap::MadeBeforeRecovery))
-        );
+        (waited, detaching.join().unwrap())
     });
+    // The GPU is never left spinning: the word is raised late, whatever the test finds.
+    let raising = std::thread::spawn(move || {
+        std::thread::sleep(RAISE_LATE);
+        let word = word;
+        // SAFETY: the flag's `Shared` bytes stay mapped while the command buffer that loads them
+        // is in flight, aligned for a word, and the GPU only loads them.
+        unsafe { word.0.write_volatile(1) };
+    });
+    // The kernel stores into the bytes once it sees the word: they go only after its command
+    // buffer completed.
+    let completed = command_buffer.wait_until_completed();
+    raising.join().unwrap();
+    assert!(waited, "the detach did not wait for the submitted work");
+    assert_eq!(
+        answer,
+        Err(Error::NotImplemented(RuntimeGap::MadeBeforeRecovery))
+    );
+    assert!(completed.is_ok(), "{completed:?}");
 }
