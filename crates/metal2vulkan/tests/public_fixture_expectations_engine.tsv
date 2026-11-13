@@ -2968,9 +2968,9 @@ engine/tns_mm_flags.air.ll	tns_mm_flags	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	o
 engine/tns_mm_flags.ll	tns_mm_flags	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/tns_mm_float.air.ll	tns_mm_float	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/tns_mm_float.ll	tns_mm_float	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/tns_mm_fp8.air.ll	tns_mm_fp8	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{Tensors; NotImplemented}	Unsupported{Tensors; NotImplemented}	ok	ok	ok
+engine/tns_mm_fp8.air.ll	tns_mm_fp8	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/tns_mm_fp8.air.ll	tns_coop_fp8	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/tns_mm_fp8.ll	tns_mm_fp8	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{Tensors; NotImplemented}	Unsupported{Tensors; NotImplemented}	ok	ok	ok
+engine/tns_mm_fp8.ll	tns_mm_fp8	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/tns_mm_fp8.ll	tns_coop_fp8	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/tns_mm_int.air.ll	tns_mm_int	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/tns_mm_int.ll	tns_mm_int	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
