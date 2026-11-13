@@ -3157,6 +3157,7 @@ field	metal2vulkan-runtime::WorkCounts.memory_frees	pub memory_frees: MemoryFree
 field	metal2vulkan-runtime::WorkCounts.memory_frees_paced	pub memory_frees_paced: u64
 field	metal2vulkan-runtime::WorkCounts.memory_frees_paced_nanos	pub memory_frees_paced_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.memory_frees_posted	pub memory_frees_posted: u64
+field	metal2vulkan-runtime::WorkCounts.memoryless_textures_zeroed	pub memoryless_textures_zeroed: u64
 field	metal2vulkan-runtime::WorkCounts.merged_draw_commands	pub merged_draw_commands: u64
 field	metal2vulkan-runtime::WorkCounts.mipmap_first_levels_fetched	pub mipmap_first_levels_fetched: u64
 field	metal2vulkan-runtime::WorkCounts.mipmaps_filtered	pub mipmaps_filtered: u64

@@ -15,7 +15,9 @@
 //!   `Managed` texture, a stand-in) with the copies of the device's zeros ([`Zeros`]) that write
 //!   every texel. A new texture of every storage mode but `Memoryless` reads zero, a `Private` one
 //!   too; its image of a format a clear writes is cleared ([`FirstMove::cleared`]) rather than
-//!   copied over, single- or multisampled. An image that takes a rebind's new `VkImage` notes that
+//!   copied over, single- or multisampled. A new `Memoryless` one in memory that is not lazily
+//!   allocated is cleared to zero in render passes of each level alone
+//!   ([`FirstMove::zero_in_passes`]), as no transfer writes a transient attachment. An image that takes a rebind's new `VkImage` notes that
 //!   one's (`rebind.rs`). The image (or stand-in) is registered weakly once it is shared
 //!   ([`FirstMoves::register`]); an image that copies on the device's staging queue queues its
 //!   move and zeros there instead, which every submission of the device's makes there before its
@@ -158,6 +160,7 @@ use super::super::heap_sets::HeldSlots;
 use super::super::image_barrier::{image_barrier, ImageDst};
 use super::super::memory::{Memory, MemoryClass, Placement};
 use super::super::release;
+use super::super::render_target::{FramebufferObject, RenderPassObject};
 use super::super::resource::{ObjectId, ResourceKey};
 use super::super::tracker::Point;
 use super::super::work_counts::Counters;
@@ -438,6 +441,19 @@ impl FirstMove {
         self
     }
 
+    /// Have the move also clear every texel of every aspect to zero in `passes`, which cover every
+    /// level and layer a pass may attach: a new memoryless texture's image, a transient
+    /// attachment, which no transfer writes (`Device::new_texture_image`).
+    pub(crate) fn zero_in_passes(&mut self, passes: Vec<PassClear>) {
+        self.zero = Some(Zero::Passes(passes));
+    }
+
+    /// Whether its zeros are written in render passes ([`zero_in_passes`](Self::zero_in_passes)):
+    /// the barrier after them is from the attachments' stages.
+    fn clears_in_passes(&self) -> bool {
+        matches!(self.zero, Some(Zero::Passes(_)))
+    }
+
     /// The move, which also writes `patterned`'s pattern into its levels; its zeros then write
     /// only the levels after them. Its zeros' copies, if any, cover every level from the first.
     pub(crate) fn patterned(mut self, patterned: Patterned) -> FirstMove {
@@ -513,6 +529,48 @@ impl FirstMove {
                         );
                     }
                     exit_guard::called(Call::CmdCopyBufferToImage);
+                }
+            }
+            Some(Zero::Passes(passes)) => {
+                let attachments = [vk::ClearAttachment {
+                    aspect_mask: self.aspects,
+                    color_attachment: 0,
+                    clear_value: vk::ClearValue::default(),
+                }];
+                for clear in passes {
+                    let [width, height] = clear.extent;
+                    let area = vk::Rect2D {
+                        offset: vk::Offset2D { x: 0, y: 0 },
+                        extent: vk::Extent2D { width, height },
+                    };
+                    let begin = vk::RenderPassBeginInfo::default()
+                        .render_pass(clear.pass.raw)
+                        .framebuffer(clear.framebuffer.raw)
+                        .render_area(area);
+                    let rects = [vk::ClearRect {
+                        rect: area,
+                        base_array_layer: 0,
+                        layer_count: clear.layers,
+                    }];
+                    // SAFETY: the caller's; the command buffer is outside a render pass, of a
+                    // family with graphics (every queue but the staging queue's, which records no
+                    // such move: a memoryless image copies nothing there); the pass and its
+                    // framebuffer, of a view of the image's level and layers in `GENERAL`, the
+                    // pass's layout, live as long as the move, which the submission holds until
+                    // it completed; the aspects are the image format's, the subpass's one
+                    // attachment's; the rectangle is the framebuffer's area and its layers.
+                    unsafe {
+                        device.cmd_begin_render_pass(
+                            command_buffer,
+                            &begin,
+                            vk::SubpassContents::INLINE,
+                        );
+                        device.cmd_clear_attachments(command_buffer, &attachments, &rects);
+                        device.cmd_end_render_pass(command_buffer);
+                    }
+                    exit_guard::called(Call::CmdBeginRenderPass);
+                    exit_guard::called(Call::CmdClearAttachments);
+                    exit_guard::called(Call::CmdEndRenderPass);
                 }
             }
             Some(Zero::Clear) if !past_pattern => {}
@@ -729,6 +787,18 @@ enum Zero {
     Copies(vk::Buffer, Vec<vk::BufferImageCopy>),
     /// A clear ([`FirstMove::cleared`]).
     Clear,
+    /// Clears in render passes ([`FirstMove::zero_in_passes`]).
+    Passes(Vec<PassClear>),
+}
+
+/// A clear of one level of an image, over `extent` and `layers` layers from its first, in a
+/// render pass of the attachment alone and its framebuffer of a view of them
+/// (`render_target::clear_alone`), which the move holds ([`FirstMove::zero_in_passes`]).
+pub(crate) struct PassClear {
+    pub(crate) pass: RenderPassObject,
+    pub(crate) framebuffer: FramebufferObject,
+    pub(crate) extent: [u32; 2],
+    pub(crate) layers: u32,
 }
 
 /// The most bytes host calls' copies stage for the device's next submission before one is made
@@ -2160,12 +2230,22 @@ impl<'a> Taken<'a> {
         }
         for first in moves().filter(|first| first.writes()) {
             // SAFETY: as above; the image is in `GENERAL` now and has `TRANSFER_DST` usage where
-            // it reads zero.
+            // it reads zero by a transfer.
             unsafe { first.record_zero(device, command_buffer, family) };
             copied = true;
         }
         if copied {
             transfer_barrier(device, command_buffer, false);
+            exit_guard::called(Call::CmdPipelineBarrier);
+        }
+        // Zeros cleared in render passes, from their attachments' stages, visible to every
+        // command after.
+        if moves().any(FirstMove::clears_in_passes) {
+            // SAFETY: the caller's contract.
+            unsafe {
+                let flags = vk::DependencyFlags::empty();
+                device.cmd_pipeline_barrier(command_buffer, all, all, flags, &written(), &[], &[]);
+            }
             exit_guard::called(Call::CmdPipelineBarrier);
         }
     }

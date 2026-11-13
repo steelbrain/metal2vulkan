@@ -128,7 +128,9 @@ use crate::release;
 use ash::vk;
 use ash::vk::Handle;
 use decoded_twin::{Decoded, PassScratch};
-use first_move::{FirstMove, Fresh, GpuKeep, Mine, Pattern, Patterned, TexelCopy, PATTERN_BYTES};
+use first_move::{
+    FirstMove, Fresh, GpuKeep, Mine, PassClear, Pattern, Patterned, TexelCopy, PATTERN_BYTES,
+};
 use heap_tiled::{FreshDepth, FreshPattern};
 use heap_two_planes::TwoPlaneHeapLayout;
 use metal2vulkan::bind::{AstcDecode, EtcDecode, ImageViewDesc, PvrtcDecode, TextureFacts};
@@ -1188,6 +1190,19 @@ impl Image {
     /// (`texture/storage_form.rs`), the same but for `STORAGE` usage.
     fn plan(&self) -> &ImagePlan {
         self.form.plan().unwrap_or(&self.plan)
+    }
+
+    /// Whether it lies in lazily allocated memory: a memoryless texture's, where the device has
+    /// such memory (`image_plan.rs`). MoltenVK runs such an image as Metal's memoryless storage,
+    /// which keeps no texels past the render pass that renders them.
+    fn lazily_allocated(&self) -> bool {
+        let (_, placement) = self.owner.releases();
+        placement.is_some_and(|placement| {
+            let memory = lock(&self.device.shared().memory);
+            memory
+                .type_flags(placement.type_index())
+                .is_some_and(|flags| flags.contains(vk::MemoryPropertyFlags::LAZILY_ALLOCATED))
+        })
     }
 
     /// Count, under the views lock, that the image lets its views go, or that its texture, a
@@ -3948,7 +3963,10 @@ impl Device {
     /// [`new_image`](Self::new_image)'s image for a texture of its own memory the program made
     /// (`newTextureWithDescriptor:`, `newSharedTextureWithDescriptor:`), as Metal's new texture
     /// starts on the Mac the device presents (`MacClass`). `Shared` and `Managed` ones read zero
-    /// in every texel, and a `Memoryless` one holds nothing. A `Private` one, on a device that
+    /// in every texel. A `Memoryless` one holds nothing past a pass on Metal; where its memory is
+    /// not lazily allocated, its first move clears it to zero in render passes
+    /// ([`zero_memoryless`](Self::zero_memoryless)), so a first pass that loads it `DontCare`
+    /// never reads what its memory held. A `Private` one, on a device that
     /// presents a Mac keeping textures compressed
     /// ([`metal_compresses_textures`](Self::metal_compresses_textures)), reads zero where Metal
     /// keeps it uncompressed and Metal's fixed pattern where it compresses it (an Apple M4 under
@@ -3994,7 +4012,80 @@ impl Device {
         if uncompressed {
             self.shared().counts.private_texture_zero_filled();
         }
+        if memoryless && !image.lazily_allocated() {
+            self.zero_memoryless(&image)?;
+        }
         Ok(image)
+    }
+
+    /// Give `image`, a new memoryless texture's in memory that is not lazily allocated, its
+    /// zeros at its first move: a transient attachment takes no transfer, so a render pass of
+    /// each level's view alone clears every aspect over its layers (in runs of the device's
+    /// framebuffer layers), counted (`WorkCounts::memoryless_textures_zeroed`). A level larger
+    /// than the device's framebuffers is no pass's attachment, which no command reads, and takes
+    /// none.
+    fn zero_memoryless(&self, image: &Image) -> Result<(), Error> {
+        let plan = &image.plan;
+        let aspect = image_aspects(plan.format);
+        let depth_stencil = !aspect.contains(ImageAspectFlags::COLOR);
+        let usage = match depth_stencil {
+            true => ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            false => ImageUsageFlags::COLOR_ATTACHMENT,
+        };
+        let one_d = plan.image_type == metal2vulkan::vk::ImageType::TYPE_1D;
+        let volume = plan.image_type == metal2vulkan::vk::ImageType::TYPE_3D;
+        let [max_width, max_height, max_layers] = self.shared().max_framebuffer;
+        let shape = (plan.format, plan.samples.as_raw(), depth_stencil);
+        let mut passes = Vec::new();
+        for level in 0..plan.levels {
+            let extent = [
+                (plan.extent[0] >> level).max(1),
+                (plan.extent[1] >> level).max(1),
+            ];
+            if extent[0] > max_width || extent[1] > max_height {
+                continue;
+            }
+            // A 3D image's depth planes are its attachments' layers (a 2D-array-compatible one).
+            let layers = match volume {
+                true => (plan.extent[2] >> level).max(1),
+                false => plan.layers,
+            };
+            let mut base = 0;
+            while base < layers {
+                let count = (layers - base).min(max_layers.max(1));
+                let view_type = match (one_d, count > 1) {
+                    (true, true) => ImageViewType::TYPE_1D_ARRAY,
+                    (true, false) => ImageViewType::TYPE_1D,
+                    (false, true) => ImageViewType::TYPE_2D_ARRAY,
+                    (false, false) => ImageViewType::TYPE_2D,
+                };
+                let view = image.own_view(&VkView {
+                    view_type,
+                    format: plan.format,
+                    components: ComponentMapping::IDENTITY,
+                    aspect,
+                    base_level: level,
+                    level_count: 1,
+                    base_layer: base,
+                    layer_count: count,
+                    usage,
+                })?;
+                let (pass, framebuffer) =
+                    crate::render_target::clear_alone(self, shape, view, extent, count)?;
+                passes.push(PassClear {
+                    pass,
+                    framebuffer,
+                    extent,
+                    layers: count,
+                });
+                base += count;
+            }
+        }
+        if let Some(first) = lock(&image.first_move).as_mut() {
+            first.zero_in_passes(passes);
+            self.shared().counts.memoryless_texture_zeroed();
+        }
+        Ok(())
     }
 
     /// Whether the Mac this device presents keeps textures losslessly compressed, as an Apple
@@ -5835,16 +5926,7 @@ impl Texture {
     /// where the device has such memory (`image_plan.rs`). MoltenVK runs such an image as Metal's
     /// memoryless storage, which keeps no texels past the render pass that renders them.
     pub(super) fn lazily_allocated(&self) -> bool {
-        let Ok(image) = self.image() else {
-            return false;
-        };
-        let (_, placement) = image.owner.releases();
-        placement.is_some_and(|placement| {
-            let memory = lock(&image.device.shared().memory);
-            memory
-                .type_flags(placement.type_index())
-                .is_some_and(|flags| flags.contains(vk::MemoryPropertyFlags::LAZILY_ALLOCATED))
-        })
+        self.image().is_ok_and(|image| image.lazily_allocated())
     }
 
     /// The texture's `VkImage`; refused as [`image`](Self::image) is.

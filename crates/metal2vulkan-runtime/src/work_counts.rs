@@ -343,6 +343,7 @@ pub(crate) struct Counters {
     images_started_on_the_host: AtomicU64,
     images_started_zeroed: AtomicU64,
     private_textures_zero_filled: AtomicU64,
+    memoryless_textures_zeroed: AtomicU64,
     host_texel_copies: AtomicU64,
     heap_shadow_cpu_copies: AtomicU64,
     depth_uploads_clamped: AtomicU64,
@@ -4866,6 +4867,12 @@ impl Counters {
         (self.private_textures_zero_filled).fetch_add(1, Ordering::Relaxed);
     }
 
+    /// A new memoryless texture in memory that is not lazily allocated was made to be zeroed at
+    /// its first move, by render passes (`Device::new_texture_image`).
+    pub(crate) fn memoryless_texture_zeroed(&self) {
+        (self.memoryless_textures_zeroed).fetch_add(1, Ordering::Relaxed);
+    }
+
     /// A texture's CPU copy ran on the host (`texture/host_copy.rs`).
     pub(crate) fn host_texel_copy(&self) {
         self.host_texel_copies.fetch_add(1, Ordering::Relaxed);
@@ -7042,6 +7049,15 @@ pub struct WorkCounts {
     /// reads. Zero on a device that presents an Apple silicon Mac's compression, whose new
     /// `Private` textures start as that Mac's.
     pub private_textures_zero_filled: u64,
+    /// New memoryless textures zeroed at their first move, on a device whose memoryless memory
+    /// is not lazily allocated: a render pass of each level alone clears every aspect over its
+    /// layers, as no transfer writes a transient attachment. Its first use, a pass that loads it
+    /// `DontCare` (whose draws test against its depth, or whose resolve reads it), so reads zero,
+    /// never what its memory held, which may be a released texture's samples of another process
+    /// of a consumer whose processes share the device; later passes read what earlier ones left,
+    /// as before. Zero where memoryless memory is lazily allocated (MoltenVK), whose memoryless
+    /// images hold nothing past a pass.
+    pub memoryless_textures_zeroed: u64,
     /// `replace_region` and `get_bytes` copies that ran on the host, with no submission
     /// (`texture/host_copy.rs`).
     pub host_texel_copies: u64,
@@ -10033,6 +10049,8 @@ impl Device {
             images_started_on_the_host: counters.images_started_on_the_host.load(Ordering::Relaxed),
             images_started_zeroed: counters.images_started_zeroed.load(Ordering::Relaxed),
             private_textures_zero_filled: (counters.private_textures_zero_filled)
+                .load(Ordering::Relaxed),
+            memoryless_textures_zeroed: (counters.memoryless_textures_zeroed)
                 .load(Ordering::Relaxed),
             host_texel_copies: counters.host_texel_copies.load(Ordering::Relaxed),
             heap_shadow_cpu_copies: counters.heap_shadow_cpu_copies.load(Ordering::Relaxed),

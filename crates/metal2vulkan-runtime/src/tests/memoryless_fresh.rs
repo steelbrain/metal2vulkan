@@ -6,8 +6,10 @@
 //!   `Depth32Float` depth, each cleared by a pass of no draw call and resolved, then released, and
 //!   a memoryless texture of the same descriptor made: it takes the parked image
 //!   (`WorkCounts::object_churn.images_recycled`), and a pass of no draw call that loads it
-//!   `DontCare` and resolves it writes zero into its resolve texture, never the earlier clear.
-//!   Its resolve is the only command that reads it.
+//!   `DontCare` and resolves it writes zero into its resolve texture, never the earlier clear,
+//!   its making counted (`WorkCounts::memoryless_textures_zeroed`). Its resolve is the only
+//!   command that reads it. Where memoryless memory is lazily allocated (MoltenVK) nothing is
+//!   zeroed and the reading is printed alone.
 //! - **Cost** (a measurement, ignored): the GPU span of one such pass over a 1920x1080 4x
 //!   attachment, made once and passed again and again (each pass after its first),
 //!   `MEMORYLESS-COST`.
@@ -164,7 +166,9 @@ fn a_recycled_memoryless_texture_s_resolve_reads_zero_never_the_old_samples() {
             assert!(Instant::now() < until, "{pf:?}: the image was parked");
             std::thread::yield_now();
         }
+        let zeroed = device.work_counts().memoryless_textures_zeroed;
         let second = device.new_texture(&memoryless(pf, SIDE, SIDE)).unwrap();
+        let zeroed = device.work_counts().memoryless_textures_zeroed - zeroed;
         let after = device.work_counts().object_churn;
         assert_eq!(
             after.images_recycled - before.images_recycled,
@@ -183,6 +187,13 @@ fn a_recycled_memoryless_texture_s_resolve_reads_zero_never_the_old_samples() {
             (false, false) => "other bytes",
         };
         println!("MEMORYLESS-FRESH {pf:?} on {}: {what}", device.name());
+        // Lazily allocated memoryless memory (MoltenVK) holds nothing past a pass and is not
+        // zeroed.
+        if second.lazily_allocated() {
+            assert_eq!(zeroed, 0, "{pf:?}: a lazily allocated texture zeroed");
+            continue;
+        }
+        assert_eq!(zeroed, 1, "{pf:?}: the making counted as zeroed");
         assert_eq!(what, "zero", "{pf:?}");
     }
 }

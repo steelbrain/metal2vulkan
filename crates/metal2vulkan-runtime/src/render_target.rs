@@ -1577,24 +1577,31 @@ pub(super) fn later_resolve(
     Ok((pass, framebuffer))
 }
 
-/// The render pass and framebuffer in which `vkCmdClearAttachments` clears `target`, a pass's
-/// attachment (its depth/stencil attachment where `depth_stencil`), over `extent` from the origin
-/// before its pass (`clear_reach.rs`), and the uses they make: one subpass of the attachment
-/// alone, over the pass's layers, every aspect loaded and stored. Not a load operation's clear: a
-/// device that renders through Metal (MoltenVK) clears a pass without a draw over the whole
-/// attachment, as Metal does (lane `clear_reach` on MoltenVK).
-pub(super) fn reach_pass(
+/// The render pass of one attachment of `format` and `samples` alone (its depth/stencil
+/// attachment where `depth_stencil`), every aspect loaded and stored, in `GENERAL`, in which
+/// `vkCmdClearAttachments` clears it ([`reach_pass`], [`clear_alone`]); and the usage, stages and
+/// accesses of the attachment there.
+fn alone_pass(
     device: &Device,
-    target: &Target,
+    format: metal2vulkan::vk::Format,
+    samples: u32,
     depth_stencil: bool,
-    extent: [u32; 2],
-) -> Result<(RenderPassObject, FramebufferObject, Vec<Use<ResourceKey>>), Error> {
+) -> Result<
+    (
+        RenderPassObject,
+        metal2vulkan::vk::ImageUsageFlags,
+        vk::PipelineStageFlags2,
+        vk::AccessFlags2,
+        vk::AccessFlags2,
+    ),
+    Error,
+> {
     let load = vk::AttachmentLoadOp::LOAD;
     let store = vk::AttachmentStoreOp::STORE;
     let shape = PassShape {
         colors: ColorList::new(),
         depth_stencil: None,
-        samples: target.samples,
+        samples,
         color_resolves: ColorList::new(),
         depth_stencil_resolve: None,
         fetch_inputs: false,
@@ -1603,10 +1610,10 @@ pub(super) fn reach_pass(
         view_mask: 0,
         locations: ColorList::new(),
     };
-    let (pass, usage, stages, read, write) = match depth_stencil {
+    let made = match depth_stencil {
         false => {
             let shape = PassShape {
-                colors: ColorList::of([Some(target.format)])?,
+                colors: ColorList::of([Some(format)])?,
                 color_resolves: ColorList::of([None])?,
                 ..shape
             };
@@ -1636,7 +1643,7 @@ pub(super) fn reach_pass(
         }
         true => {
             let shape = PassShape {
-                depth_stencil: Some(target.format),
+                depth_stencil: Some(format),
                 ..shape
             };
             let ops = Ops {
@@ -1664,6 +1671,39 @@ pub(super) fn reach_pass(
             )
         }
     };
+    Ok(made)
+}
+
+/// The render pass and framebuffer in which `vkCmdClearAttachments` clears every aspect of
+/// `view`, a view of one level and `layers` layers of an image of `format` and `samples`, over
+/// `extent` from the origin: [`alone_pass`]'s pass. A new memoryless image's zeros, which no
+/// transfer writes into a transient attachment (`Device::new_texture_image`, `FirstMove::zero_in_passes`).
+pub(super) fn clear_alone(
+    device: &Device,
+    (format, samples, depth_stencil): (metal2vulkan::vk::Format, u32, bool),
+    view: vk::ImageView,
+    extent: [u32; 2],
+    layers: u32,
+) -> Result<(RenderPassObject, FramebufferObject), Error> {
+    let (pass, ..) = alone_pass(device, format, samples, depth_stencil)?;
+    let framebuffer = made_framebuffer(device, &pass, &[view], extent, layers)?;
+    Ok((pass, framebuffer))
+}
+
+/// The render pass and framebuffer in which `vkCmdClearAttachments` clears `target`, a pass's
+/// attachment (its depth/stencil attachment where `depth_stencil`), over `extent` from the origin
+/// before its pass (`clear_reach.rs`), and the uses they make: one subpass of the attachment
+/// alone, over the pass's layers, every aspect loaded and stored. Not a load operation's clear: a
+/// device that renders through Metal (MoltenVK) clears a pass without a draw over the whole
+/// attachment, as Metal does (lane `clear_reach` on MoltenVK).
+pub(super) fn reach_pass(
+    device: &Device,
+    target: &Target,
+    depth_stencil: bool,
+    extent: [u32; 2],
+) -> Result<(RenderPassObject, FramebufferObject, Vec<Use<ResourceKey>>), Error> {
+    let (pass, usage, stages, read, write) =
+        alone_pass(device, target.format, target.samples, depth_stencil)?;
     let framebuffer = made_framebuffer(
         device,
         &pass,
