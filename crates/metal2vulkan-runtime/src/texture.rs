@@ -2776,8 +2776,11 @@ impl Device {
         };
         let hazard = texels.options().hazard_tracking_mode()?;
         // A depth or stencil texture over a surface's plane copies the aspect the plane holds
-        // alone (`copy_plan::surface_depth_unit`); its image's other aspect stays the zeros it
-        // was made with, as Metal reads the stencil of `Depth32Float_Stencil8` there.
+        // alone (`copy_plan::surface_depth_unit`); its image's other aspect, which no copy writes,
+        // starts at zero in every storage mode, as Metal reads the stencil of
+        // `Depth32Float_Stencil8` there: a `Private` image's memory may hold a released
+        // texture's texels, of another process of a consumer whose processes share the device (a
+        // recycled image's, `recycle.rs`).
         let every = texture_aspects(&plan);
         let held = surface_depth_unit(layout.pixel_format).map(|unit| unit.aspect.into());
         let aspects = match held {
@@ -2787,16 +2790,21 @@ impl Device {
         // Every other shadow's copy in writes each of its texels before any command reads it
         // (`shadow.rs`), so it starts as its memory lies: zeros there would never be read, and
         // writing them took most of the making (the host's zeros copied into a 1307x512 image
-        // took 0.9 ms of 1 ms on ANV). A tiled texture's levels past the first are no copy's:
-        // its image starts as a new texture of its storage mode does.
-        let apart = aspects != every || levels > 1;
-        let image = match apart {
-            true => self.new_image(plan, layout, descriptor, hazard)?,
-            false => {
-                let identity = Identity::new(hazard, false);
-                let owner = Device::runtime_owner;
-                self.new_image_as_it_lies(plan, layout, descriptor, identity, owner)?
+        // took 0.9 ms of 1 ms on ANV). A tiled texture's levels past the first are no copy's
+        // where its takes leave them (`LaterLevels::Kept`): its image starts as a new texture of
+        // its storage mode does, a `Private` one's never as its memory lies.
+        let start = match (aspects != every, levels > 1) {
+            (true, _) => Some(Start::ZeroUnpatterned),
+            (false, true) => Some(Start::Zero),
+            (false, false) => None,
+        };
+        let identity = Identity::new(hazard, false);
+        let owner = Device::runtime_owner;
+        let image = match start {
+            Some(start) => {
+                self.new_image_starting(plan, layout, descriptor, identity, start, owner)?
             }
+            None => self.new_image_as_it_lies(plan, layout, descriptor, identity, owner)?,
         };
         // A view the device does not make leaves the copies back copies. The copies hold it as
         // long as the image, which keeps it through a detach (`Image::own_view`).

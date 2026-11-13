@@ -14,10 +14,11 @@
 //! elements' bytes alone ([`element_runs`]: a tile of partial extent leaves bytes between its
 //! elements), up to the last element's byte. A view in the texture's own format (the whole of
 //! it: such a texture has one level and one slice) renders into the texture's twin. The twin's
-//! other aspect is never copied: it starts as zeros and a pass's store of it reaches no byte.
-//! An `X32_Stencil8` view of a `Depth32Float_Stencil8` texture, whose stencil the plane does not
-//! hold, renders into a private image of its own, which no byte reaches: Metal's pass on it loads
-//! 0 and changes no byte, and a kernel reads 0 through it. Refused as the
+//! other aspect is never copied: it starts at zero, never as its memory lies, and a pass's store of
+//! it reaches no byte. An `X32_Stencil8` view of a `Depth32Float_Stencil8` texture, whose stencil
+//! the plane does not hold, renders into a private image of its own, which starts at zero and
+//! which no byte reaches: Metal's pass on it loads 0 and changes no byte, and a kernel reads 0
+//! through it. Refused as the
 //! runtime's gap (`NotImplemented(SurfaceDepthStencil)`): a device the moves do not fit, and a
 //! view in another format of a plane that holds its stencil (an `X32_Stencil8` texture's view
 //! as `Depth32Float_Stencil8`, unmeasured). A blit through a view takes the plane's unit
@@ -28,15 +29,17 @@ use super::super::buffer_texture::Texels;
 use super::super::copy_plan::{surface_depth_unit, CopyUnit};
 use super::super::error::{internal, Error, RuntimeGap};
 use super::super::image_plan::{plan_image, ImagePlan};
+use super::super::resource::Identity;
 use super::super::shadow::{ShadowBuffer, ShadowCopies, ShadowSource, ShadowTarget};
 use super::super::shadow_merge::ScratchSpares;
 use super::super::texture_descriptor::{texture_usage, TextureDescriptor, TextureLayout};
 use super::super::tracker::UseRange;
 use super::super::values::ResourceOptions;
 use super::super::view_plan::ViewRecord;
+use super::super::Device;
 use super::heap::{copies_into, heap_plane_layout};
 use super::heap_tiled::{Elements, HeapTiledCopies, TiledLayout, TiledTexture};
-use super::{image_error, IdUse, Image, Storage, Texture};
+use super::{image_error, IdUse, Image, Start, Storage, Texture};
 use ash::vk;
 use metal2vulkan::metal::format::aspects;
 use metal2vulkan::metal::TextureType;
@@ -227,7 +230,14 @@ impl Texture {
             resource_options: ResourceOptions::private(),
             ..descriptor
         };
-        let image = device.new_image(plan, &layout, &private, hazard)?;
+        // It starts at zero: no copy writes its other aspect (the module docs), whose memory may
+        // hold a released texture's texels, of another process of a consumer whose processes
+        // share the device (a recycled image's, `recycle.rs`), and a pass whose `DontCare` load
+        // of it the driver leaves (`Degradation::DontCareUnstoredLoad`) reads them.
+        let identity = Identity::new(hazard, false);
+        let start = Start::ZeroUnpatterned;
+        let owner = Device::runtime_owner;
+        let image = device.new_image_starting(plan, &layout, &private, identity, start, owner)?;
         Ok((image, layout, descriptor))
     }
 

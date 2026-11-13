@@ -2108,7 +2108,8 @@ compares with Metal's.
 - **A tiled texture's later levels in a format `generate_mipmaps` leaves or refuses**
   (`Buffer::new_tiled_texture`, more than one level, `shadow.rs`'s **Copies taken at use**,
   `LaterLevels::Kept`): its copy taken at use moves the bytes into its first level alone, and its
-  later levels keep what they hold (zero from the making, or what was written into them), where
+  later levels keep what they hold (what a new texture of its storage mode reads, from the making,
+  or what was written into them), where
   Metal makes them from the first. Such a format is one `generate_mipmaps` leaves as it is (a depth
   or stencil format) or refuses on the device (`mipmap_plan.rs`: a compressed, YCbCr or RGBX
   format, or one neither the device's blits filter nor the compute filter computes), or one whose
