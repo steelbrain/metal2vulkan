@@ -202,10 +202,8 @@ fn run(device: &Device, state: &ComputePipelineState, offset: u64, buffers: &[Bu
     let command_buffer = queue.command_buffer().unwrap();
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
     encoder.set_compute_pipeline_state(state).unwrap();
-    for (index, buffer) in buffers.iter().enumerate() {
-        encoder
-            .set_buffer(Some(buffer), offset, index as u64)
-            .unwrap();
+    for (index, buffer) in (0u32..).zip(buffers) {
+        encoder.set_buffer(Some(buffer), offset, index).unwrap();
     }
     encoder
         .dispatch_threads(Size::new(THREADS, 1, 1), Size::new(THREADS, 1, 1))
