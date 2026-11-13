@@ -820,7 +820,7 @@ pub enum Feature {
 }
 
 /// How a refused generic pointer comes to hold an address space only the run knows
-/// ([`Feature::GenericPointer`]).
+/// (`Feature::GenericPointer`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum GenericPointer {
