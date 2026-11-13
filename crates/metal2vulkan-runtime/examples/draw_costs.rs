@@ -3,7 +3,7 @@
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|pass1|pass17|scene|rebinds]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--threads N] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|pass1|pass17|scene|rebinds]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--states N] [--threads N] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -46,7 +46,8 @@
 //!   compositor's are (`--pages` too), sets its viewport and draws the compositor's plain quads,
 //!   each after the pipeline state (once a pass: the next of 6 plain ones of their own blend
 //!   factors, so the state a pass draws through is none of the four the last passes drew
-//!   through, and its first draw takes every step, no kept draw of its state carried in), its
+//!   through, and its first draw takes every step, no kept draw of its state carried in; with
+//!   `--states N`, the first N of them), its
 //!   vertex buffers 0 and 1 and fragment buffer 0, fragment texture 0 (the next of its sampled
 //!   surfaces), its sampler and a scissor rectangle. A pass's cost is the first's figure a draw
 //!   less the draw's, which the second's gives: (17 draws and a pass) less (1 draw and a pass),
@@ -435,7 +436,7 @@ impl Bench {
         device: Device,
         library: &Library,
         shadowed: bool,
-        (compositor, scene): (Option<bool>, bool),
+        (compositor, scene): (Option<(bool, usize)>, bool),
     ) -> Result<Bench> {
         let function = |name: &str| -> Result<StageSource> {
             let function = library.new_function_with_name(name)?;
@@ -503,7 +504,7 @@ impl Bench {
         color.store_action = StoreAction::Store;
         color.clear_color = ClearColor::new(0.0, 0.0, 0.0, 1.0);
         let compositor = match compositor {
-            Some(pages) => Some(Compositor::new(&device, library, pages)?),
+            Some(made) => Some(Compositor::new(&device, library, made)?),
             None => None,
         };
         let scene = match scene {
@@ -861,7 +862,11 @@ struct Compositor {
 }
 
 impl Compositor {
-    fn new(device: &Device, library: &Library, pages: bool) -> Result<Compositor> {
+    fn new(
+        device: &Device,
+        library: &Library,
+        (pages, states): (bool, usize),
+    ) -> Result<Compositor> {
         let function = |name: &str| -> Result<StageSource> {
             let function = library.new_function_with_name(name)?;
             Ok(StageSource::Function(function.function_descriptor()))
@@ -886,7 +891,7 @@ impl Compositor {
         .iter()
         .map(|fragment| pipeline(fragment, SMALL_BLENDS[0]))
         .collect::<Result<Vec<_>>>()?;
-        let plain = (SMALL_BLENDS.iter())
+        let plain = (SMALL_BLENDS.iter().take(states))
             .map(|&blend| pipeline("draw_costs_quad", blend))
             .collect::<Result<Vec<_>>>()?;
         let mut sampler = SamplerDescriptor::new();
@@ -1832,6 +1837,7 @@ fn compile(scratch: &Path) -> Result<PathBuf> {
 fn main() -> Result<()> {
     let mut shapes = Vec::new();
     let (mut runs, mut metallib, mut shadowed, mut pages) = (RUNS, None, false, false);
+    let mut states = SMALL_BLENDS.len();
     let mut options = Options {
         calls: false,
         counts: false,
@@ -1847,6 +1853,12 @@ fn main() -> Result<()> {
             "--heap" => options.heap = true,
             "--shadowed" => shadowed = true,
             "--pages" => pages = true,
+            "--states" => {
+                states = args.next().ok_or("--states N")?.parse()?;
+                if !(1..=SMALL_BLENDS.len()).contains(&states) {
+                    return Err(format!("--states N: 1 to {}", SMALL_BLENDS.len()).into());
+                }
+            }
             "--threads" => {
                 options.threads = args.next().ok_or("--threads N")?.parse()?;
                 if options.threads == 0 {
@@ -1894,7 +1906,7 @@ fn main() -> Result<()> {
     let library = library(&device, metallib.as_deref())?;
     let compositor = (shapes.iter())
         .any(|shape| matches!(shape.stream, Stream::Composited | Stream::Passes(_)))
-        .then_some(pages);
+        .then_some((pages, states));
     let scene = (shapes.iter()).any(|shape| matches!(shape.stream, Stream::Scene { .. }));
     let bench = Bench::new(device, &library, shadowed, (compositor, scene))?;
     for shape in shapes {
