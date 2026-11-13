@@ -108,6 +108,11 @@ second process does not translate it again. It cannot be turned off.
   more record names than that makes the rest a cache for the one making, as every making once had.
   On drivers that report `pipelineBinaryInternalCacheControl` (NVIDIA's), a device the runtime
   makes turns the driver's own internal cache off; an adopted device keeps what its creator chose.
+  A record of 256 KiB or more is kept as chunks cut by its content, in `chunks` beside the
+  layout's directory, so a run of bytes several records hold is on disk once (NVIDIA's data
+  repeats a 1.85 MB section across records: one node's 8,061 MB of its records are 180 MB so);
+  the chunks count against `capacity`, and the sweep at a device's creation removes those no
+  record names any more, and the records of an older record version.
 - **Written in the background.** A creation hands its entries to the device's cache thread and
   does not wait for the directory: the same bytes under the same name, committed by the same
   rename, after the call returns. An entry still queued answers that device's own lookups, and the

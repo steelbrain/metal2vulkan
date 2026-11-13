@@ -59,7 +59,10 @@
 //!   Records live in the content directory, which no build owns (`store.rs`): a new build of the
 //!   runtime or the translator that leaves a pipeline's SPIR-V and state as they were finds its
 //!   record. The driver keys each pipeline by everything its creation reads, so a description
-//!   that covers a making loosely costs a compile, never a wrong pipeline.
+//!   that covers a making loosely costs a compile, never a wrong pipeline. A record of 256 KiB
+//!   or more is kept as a manifest over content-defined chunks that every record shares where
+//!   their bytes do (`chunks.rs`: NVIDIA's data repeats one 1.85 MB section across families),
+//!   and read whole again; the frame below is what a read gives back.
 //! - **No figure of the driver's to meet.** A record holds one family's data (an Xgc pipeline's
 //!   1.7 MB on an RTX 3090), so how much of a large cache's initial data a
 //!   driver keeps does not decide which pipelines are kept. The shader cache's cap and its scans,
@@ -85,7 +88,7 @@
 //!   off (NVIDIA's `__GL_SHADER_DISK_CACHE=0`, Mesa's `MESA_SHADER_CACHE_DISABLE=true`).
 //!
 //! ```text
-//! magic        8 bytes   "M2VPPLC\0"
+//! magic        8 bytes   "M2VPPL4\0"
 //! identity     28 bytes  vendorID, deviceID, driverVersion (u32 each), pipelineCacheUUID
 //! data length  u64
 //! data         vkGetPipelineCacheData's bytes
@@ -112,12 +115,17 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
-const MAGIC: [u8; 8] = *b"M2VPPLC\0";
+const MAGIC: [u8; 8] = *b"M2VPPL4\0";
+/// The magics of the records of older versions, which no build of this one names: the store's
+/// cleanup removes them from the content directory (`chunks.rs`), so an upgrade does not keep
+/// them beside the records that replace them.
+pub(crate) const RETIRED: [[u8; 8]; 1] = [*b"M2VPPLC\0"];
 /// The version of what a record's name covers and how a record is framed: a change to either
-/// bumps it, so no build opens a record another build names or frames otherwise. A record of an
-/// older version is named otherwise, so it is never found and never read: a bump costs a family
-/// its records, never a misread.
-pub(crate) const VERSION: u32 = 3;
+/// bumps it, and the frame's magic with it ([`RETIRED`] takes the old one), so no build opens a
+/// record another build names or frames otherwise. A record of an older version is named
+/// otherwise, so it is never found and never read: a bump costs a family its records, never a
+/// misread. Version 4 keeps a large record's data as chunks (`chunks.rs`).
+pub(crate) const VERSION: u32 = 4;
 
 /// The most `VkPipelineCache`es a device keeps live, one per record name. Past it a making of a
 /// further name is handed a cache of its own, destroyed once the making returned, so a program

@@ -58,6 +58,7 @@
 //!   variant's link asks once per stage; the answer is kept under exactly that key (`held.rs`),
 //!   so a sweep of pipeline states over one function pair asks it once rather than once a state.
 
+mod chunks;
 mod creation;
 mod libraries;
 /// The name of a creation's record under a runtime version, which `tests::shader_cache` reads.

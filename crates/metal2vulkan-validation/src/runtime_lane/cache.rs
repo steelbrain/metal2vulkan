@@ -72,7 +72,7 @@ struct CacheRun {
     run: Duration,
 }
 
-/// The makings' pipeline cache records (`M2VPPLC\0`, `shader_cache/driver.rs`) under `cache`'s
+/// The makings' pipeline cache records (`M2VPPL4\0`, `shader_cache/driver.rs`) under `cache`'s
 /// layout directory, by path, with their bytes (It counted them).
 fn driver_records(cache: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut found = BTreeMap::new();
@@ -84,7 +84,7 @@ fn driver_records(cache: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
             for entry in std::fs::read_dir(group.unwrap().path()).unwrap() {
                 let path = entry.unwrap().path();
                 let bytes = std::fs::read(&path).unwrap();
-                if bytes.starts_with(b"M2VPPLC\0") {
+                if bytes.starts_with(b"M2VPPL4\0") {
                     found.insert(path, bytes);
                 }
             }

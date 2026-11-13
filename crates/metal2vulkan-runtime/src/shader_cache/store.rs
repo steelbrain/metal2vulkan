@@ -10,7 +10,11 @@
 //!   owns, named by the content they describe: the driver's pipeline cache data (It was the
 //!   build's; one record per pipeline making), named by what each making reads and read as an entry
 //!   is, with its counts (`driver.rs`), and the libraries pipeline records name, by their content
-//!   hash (`libraries.rs`); the scans bound them with the rest.
+//!   hash (`libraries.rs`); the scans bound them with the rest. A record of `chunks::WHOLE` bytes
+//!   or more is kept as a manifest over content-defined chunks in `<root>/chunks`, outside the
+//!   layout directory, each run of bytes the records share kept once, and read as its chunks
+//!   joined (`chunks.rs`); the chunks count against the cap, and a cleanup in the scans removes
+//!   those no manifest names.
 //! - An entry's name is the SHA-256 of a domain tag, the build, the entry's kind, its key and the
 //!   profile fingerprint ([`entry_name`]). The decoder the caller hands to [`Store::load`] checks
 //!   the contents against the request byte for byte; contents it refuses are removed.
@@ -33,11 +37,13 @@
 //!   creation the scan also removes other builds' directories that nothing used for
 //!   [`UNUSED_BUILD`].
 
+use super::chunks::{self, Chunks};
 use super::worker::{Asked, Write as Queued, QUEUED_BYTES};
 use super::EntryKind;
 use crate::{DebugMessage, Degradation, DegradeNotice, MessageKind, MessageSeverity, MessageSink};
 use metal2vulkan::cache::Hash256;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -129,10 +135,23 @@ impl Directory {
 
     /// The path of the record named `name` in the content directory.
     pub(crate) fn record_path(&self, name: &str) -> PathBuf {
-        self.layout_dir()
-            .join(hex(&content()))
-            .join(&name[..2])
-            .join(name)
+        self.content_dir().join(&name[..2]).join(name)
+    }
+
+    /// `<root>/v1/<content>`: the content directory ([`content`]).
+    fn content_dir(&self) -> PathBuf {
+        self.layout_dir().join(hex(&content()))
+    }
+
+    /// Whether `path` is a record's in the content directory, which a large one's write keeps
+    /// as chunks (`chunks.rs`).
+    fn is_record(&self, path: &Path) -> bool {
+        path.parent().and_then(Path::parent) == Some(self.content_dir().as_path())
+    }
+
+    /// The chunks the content directory's large records are kept as (`chunks.rs`).
+    fn chunks(&self) -> Chunks {
+        Chunks::of(&self.root)
     }
 }
 
@@ -586,6 +605,14 @@ impl Store {
             }
             let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or(0));
             match (&file).take(limit + 1).read_to_end(&mut bytes) {
+                // A record kept as chunks is read as its chunks joined; one that names a chunk
+                // not there is a miss, which a making writes again (`chunks.rs`).
+                Ok(_) if bytes.starts_with(&chunks::MAGIC) && self.directory.is_record(path) => {
+                    match self.directory.chunks().read(&bytes, limit) {
+                        Some(joined) => Found::Bytes(joined, file),
+                        None => Found::Absent,
+                    }
+                }
                 Ok(_) if bytes.len() as u64 <= limit => Found::Bytes(bytes, file),
                 Ok(_) => {
                     remove(path);
@@ -646,33 +673,25 @@ impl Store {
     }
 
     /// Write `bytes` as the entry at `path`, named `name`, on the calling thread: a temporary
-    /// file beside it, flushed and renamed over it. The bytes written, or the failure (the
-    /// temporary file is removed). An entry larger than [`Store::entry_limit`] fails.
+    /// file beside it, flushed and renamed over it; a content record of [`chunks::WHOLE`] bytes
+    /// or more as its chunks and then its manifest there (`chunks.rs`). The bytes written, or the
+    /// failure (the temporary file is removed). An entry larger than [`Store::entry_limit`]
+    /// fails.
     fn write_at(&self, path: &Path, name: &str, bytes: &[u8]) -> io::Result<u64> {
-        let length = bytes.len() as u64;
-        if length > self.entry_limit() {
+        if bytes.len() as u64 > self.entry_limit() {
             return Err(io::Error::other("the entry is larger than the cache takes"));
         }
-        let parent = path.parent().expect("an entry has a directory");
-        create_private_dir_all(parent)?;
-        let temporary = parent.join(format!(".{name}.{}.tmp", unique()));
-        let written = (|| {
-            let mut file = new_private_file(&temporary)?;
-            file.write_all(bytes)?;
-            drop(file);
-            fs::rename(&temporary, path)?;
-            Ok(length)
-        })();
-        match &written {
-            Ok(bytes) => {
-                self.used.fetch_add(*bytes, Ordering::Relaxed);
-                self.counters
-                    .written_bytes
-                    .fetch_add(*bytes, Ordering::Relaxed);
+        let written = match bytes.len() >= chunks::WHOLE && self.directory.is_record(path) {
+            true => {
+                (self.directory.chunks()).write(bytes, |manifest| write_file(path, name, manifest))
             }
-            Err(_) => {
-                let _ = fs::remove_file(&temporary);
-            }
+            false => write_file(path, name, bytes),
+        };
+        if let Ok(bytes) = &written {
+            self.used.fetch_add(*bytes, Ordering::Relaxed);
+            self.counters
+                .written_bytes
+                .fetch_add(*bytes, Ordering::Relaxed);
         }
         written
     }
@@ -701,9 +720,18 @@ impl Store {
     fn scan(&self, stop: &AtomicBool, unused_builds: bool) {
         let now = SystemTime::now();
         let own = hex(&self.directory.build);
+        let chunks = self.directory.chunks();
+        let content = self.directory.content_dir();
+        let retired = &super::driver::RETIRED;
+        // The sweep's cleanup of the chunks where it is due (`chunks.rs`), first: it removes the
+        // content records of a retired frame, which the survey would count.
+        if unused_builds && chunks.due() {
+            chunks.cleanup(&content, retired, stop);
+        }
         let Ok(builds) = fs::read_dir(self.directory.layout_dir()) else {
             return;
         };
+        let mut content_removed = false;
         let mut entries = Vec::new();
         for build in builds.flatten() {
             if stop.load(Ordering::Relaxed) {
@@ -718,27 +746,58 @@ impl Store {
             let unused = now.duration_since(newest).unwrap_or_default() >= UNUSED_BUILD;
             if unused_builds && unused && build.file_name().to_str() != Some(own.as_str()) {
                 entries.truncate(start);
+                content_removed |= path == content;
                 let _ = fs::remove_dir_all(&path);
             }
         }
         if stop.load(Ordering::Relaxed) {
             return;
         }
-        let total: u64 = entries.iter().map(|entry| entry.bytes).sum();
-        let remaining = if total > self.directory.capacity {
-            self.remove_oldest(entries, total)
-        } else {
-            total
+        // The chunks count against the cap with the entries; a removed manifest frees the bytes
+        // of the chunks no other names, which the cleanup after removes.
+        let chunk_bytes = chunks.bytes();
+        let total: u64 = entries.iter().map(|entry| entry.bytes).sum::<u64>() + chunk_bytes;
+        let mut freed_chunks = content_removed && chunk_bytes > 0;
+        let remaining = match total > self.directory.capacity {
+            true => match chunks.manifests(&content, retired, stop) {
+                Some(manifests) => {
+                    let (remaining, freed) =
+                        self.remove_oldest(entries, total, (&manifests, chunk_bytes));
+                    freed_chunks |= freed;
+                    remaining
+                }
+                None => return,
+            },
+            false => total,
         };
+        if freed_chunks {
+            chunks.cleanup(&content, retired, stop);
+        }
         // Writes since the scan began may be counted twice: the next scan corrects it.
         self.used.store(remaining, Ordering::Relaxed);
         self.scanned.store(true, Ordering::Release);
     }
 
-    /// Remove the least recently used of `entries` (holding `total` bytes) until what remains
-    /// is at most [`LOW_WATER`] of the cap; the bytes that remain.
-    fn remove_oldest(&self, mut entries: Vec<Entry>, mut total: u64) -> u64 {
+    /// Remove the least recently used of `entries` (holding `total` bytes, of which the chunks
+    /// `chunk_bytes`, which `manifests` name) until what remains is at most [`LOW_WATER`] of the
+    /// cap: the bytes that remain, counting the chunks no remaining manifest names as freed, and
+    /// whether any are, which the cleanup after removes (`chunks.rs`).
+    fn remove_oldest(
+        &self,
+        mut entries: Vec<Entry>,
+        mut total: u64,
+        (manifests, chunk_bytes): (&HashMap<PathBuf, chunks::Listed>, u64),
+    ) -> (u64, bool) {
         let target = self.directory.capacity / 100 * LOW_WATER;
+        // Each chunk's manifests and length; the bytes of chunks none names go at the cleanup.
+        let mut named: HashMap<&Hash256, (usize, u64)> = HashMap::new();
+        for (digest, length) in manifests.values().flatten() {
+            named.entry(digest).or_insert((0, u64::from(*length))).0 += 1;
+        }
+        let held: u64 = named.values().map(|(_, length)| length).sum();
+        let unnamed = chunk_bytes.saturating_sub(held);
+        total = total.saturating_sub(unnamed);
+        let mut freed = unnamed > 0;
         entries.sort_by_key(|entry| entry.used);
         for entry in entries {
             if total <= target {
@@ -765,9 +824,37 @@ impl Store {
                 }
             }
             total = total.saturating_sub(entry.bytes);
+            for (digest, _) in manifests.get(&entry.path).into_iter().flatten() {
+                if let Some((count, length)) = named.get_mut(digest) {
+                    *count -= 1;
+                    if *count == 0 {
+                        total = total.saturating_sub(*length);
+                        freed = true;
+                    }
+                }
+            }
         }
-        total
+        (total, freed)
     }
+}
+
+/// Write `bytes` as the file at `path`, named `name`: a temporary file beside it, flushed and
+/// renamed over it. Their length, or the failure (the temporary file is removed).
+fn write_file(path: &Path, name: &str, bytes: &[u8]) -> io::Result<u64> {
+    let parent = path.parent().expect("an entry has a directory");
+    create_private_dir_all(parent)?;
+    let temporary = parent.join(format!(".{name}.{}.tmp", unique()));
+    let written = (|| {
+        let mut file = new_private_file(&temporary)?;
+        file.write_all(bytes)?;
+        drop(file);
+        fs::rename(&temporary, path)?;
+        Ok(bytes.len() as u64)
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    written
 }
 
 /// Remove the file at `path` (another process may have removed it first).
@@ -854,7 +941,7 @@ fn touch(file: &fs::File) {
 }
 
 /// A name no other writer uses: this process's id, a per-process sequence number, and the time.
-fn unique() -> String {
+pub(super) fn unique() -> String {
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -879,7 +966,7 @@ pub(super) fn create_private_dir_all(dir: &Path) -> io::Result<()> {
 }
 
 /// Create the new file `path`, which only its owner may read; fails if it exists.
-fn new_private_file(path: &Path) -> io::Result<fs::File> {
+pub(super) fn new_private_file(path: &Path) -> io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]

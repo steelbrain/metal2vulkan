@@ -103,7 +103,7 @@ use std::process::Command;
 /// The render target's side.
 const SIDE: u64 = 8;
 /// The magic a making's record begins with (`shader_cache/driver.rs`).
-const RECORD_MAGIC: &[u8] = b"M2VPPLC\0";
+const RECORD_MAGIC: &[u8] = b"M2VPPL4\0";
 /// The environment variable that names the cache directory to [`record_maker_process`].
 const MAKER_DIR: &str = "M2V_LANE_PIPELINE_RECORDS_DIR";
 /// The line [`record_maker_process`] reports on.
@@ -167,7 +167,7 @@ impl Makings {
     }
 }
 
-/// The records (`M2VPPLC\0`) under `cache`'s layout directory, by their paths under it, with
+/// The records (`M2VPPL4\0`) under `cache`'s layout directory, by their paths under it, with
 /// their bytes.
 fn records(cache: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut found = BTreeMap::new();

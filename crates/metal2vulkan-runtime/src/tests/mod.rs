@@ -586,6 +586,7 @@ mod self_read_storage;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod set_zero_at_offsets;
 mod shader_cache;
+mod shader_cache_chunks;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod shader_cache_off_thread;
 mod shader_cache_queue;
