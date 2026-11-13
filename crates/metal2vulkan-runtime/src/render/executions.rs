@@ -1100,13 +1100,13 @@ fn trail_draw(action: &Action) -> Option<(bool, u32, u32, u32)> {
             vertex_count,
             instance_count,
             ..
-        } => Some((false, primitive_type.into(), vertex_count, instance_count)),
+        } => Some((false, primitive_type, vertex_count, instance_count)),
         Action::DrawIndexedPrimitives {
             primitive_type,
             index_count,
             instance_count,
             ..
-        } => Some((true, primitive_type.into(), index_count, instance_count)),
+        } => Some((true, primitive_type, index_count, instance_count)),
         _ => None,
     }
 }
