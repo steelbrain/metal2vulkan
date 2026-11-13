@@ -319,6 +319,8 @@ mod host_ram_dma_buf;
 mod host_ram_first_fill_bench;
 #[cfg(all(m2v_gpu, target_os = "linux"))]
 mod host_ram_listed_bench;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod host_ram_managed;
 #[cfg(all(m2v_gpu, target_os = "linux"))]
 mod host_ram_surface_fill_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

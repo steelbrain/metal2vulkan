@@ -77,6 +77,7 @@ use crate::{
     HeapDescriptor, HeapType, HostBacking, HostMemory, HostRam, ImportGate, ImportRequest,
     KeepAlive, MessageSink, Problem, ResourceOptions, RunResolver, Size,
 };
+use metal2vulkan::device::DevicePolicy;
 use std::collections::BTreeSet;
 use std::ops::Range;
 use std::ptr::NonNull;
@@ -84,8 +85,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const WAIT: Duration = Duration::from_secs(60);
-const MIB: u64 = 1 << 20;
+pub(super) const WAIT: Duration = Duration::from_secs(60);
+pub(super) const MIB: u64 = 1 << 20;
 /// The RAM's bytes: two whole chunks and a short third.
 const RAM_BYTES: u64 = 128 * MIB + 256 * 1024;
 
@@ -106,7 +107,7 @@ impl Drop for Mapping {
 }
 
 /// A RAM of `RAM_BYTES` in a pattern, its first byte, and whether its keep-alive was dropped.
-fn new_ram() -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
+pub(super) fn new_ram() -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
     // SAFETY: a fresh private anonymous mapping.
     let start = unsafe {
         libc::mmap(
@@ -138,7 +139,7 @@ fn pattern(address: u64) -> u8 {
 }
 
 /// Write the pattern over `range` of host addresses, while no command buffer runs.
-fn fill_pattern(range: Range<u64>) {
+pub(super) fn fill_pattern(range: Range<u64>) {
     for address in range {
         // SAFETY: bytes of the test's RAM, which no command buffer uses now.
         unsafe { *(address as *mut u8) = pattern(address) };
@@ -146,7 +147,7 @@ fn fill_pattern(range: Range<u64>) {
 }
 
 /// The bytes of `range` of host addresses, while no command buffer runs.
-fn bytes(range: Range<u64>) -> Vec<u8> {
+pub(super) fn bytes(range: Range<u64>) -> Vec<u8> {
     let length = (range.end - range.start) as usize;
     // SAFETY: as above.
     unsafe { std::slice::from_raw_parts(range.start as *const u8, length) }.to_vec()
@@ -155,21 +156,27 @@ fn bytes(range: Range<u64>) -> Vec<u8> {
 /// A device of the cfg's kind whose uses of a RAM start no thread importing its chunks ahead
 /// (`Device::hold_host_ram_imports`); `None` where it imports no host memory.
 fn device() -> Option<Device> {
-    let device = ahead_device()?;
+    held_device(DevicePolicy::default())
+}
+
+/// [`device`], of `policy`.
+pub(super) fn held_device(policy: DevicePolicy) -> Option<Device> {
+    let device = ahead_device_with(None, BTreeSet::new(), policy)?;
     device.hold_host_ram_imports();
     Some(device)
 }
 
 /// A device of the cfg's kind, as the product makes it; `None` where it imports no host memory.
 pub(super) fn ahead_device() -> Option<Device> {
-    ahead_device_with(None, BTreeSet::new())
+    ahead_device_with(None, BTreeSet::new(), DevicePolicy::default())
 }
 
-/// [`ahead_device`], its messages given to `messages`, announcing the kinds of `announce_each`
-/// at each occurrence.
+/// [`ahead_device`], of `policy`, its messages given to `messages`, announcing the kinds of
+/// `announce_each` at each occurrence.
 fn ahead_device_with(
     messages: Option<MessageSink>,
     announce_each: BTreeSet<Degradation>,
+    policy: DevicePolicy,
 ) -> Option<Device> {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
@@ -182,6 +189,7 @@ fn ahead_device_with(
         },
         messages,
         announce_each,
+        policy,
         ..DeviceOptions::default()
     };
     let device = Device::system_default_with(&options).unwrap();
@@ -257,7 +265,7 @@ fn buffer(
 }
 
 /// Commit one command buffer whose blit encoder `encode` fills, and wait for it.
-fn blit(device: &Device, encode: impl FnOnce(&mut crate::BlitCommandEncoder)) {
+pub(super) fn blit(device: &Device, encode: impl FnOnce(&mut crate::BlitCommandEncoder)) {
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let mut encoder = command_buffer.blit_command_encoder().unwrap();
@@ -269,7 +277,7 @@ fn blit(device: &Device, encode: impl FnOnce(&mut crate::BlitCommandEncoder)) {
 }
 
 /// The buffer's first `length` bytes as the GPU reads them.
-fn gpu_bytes(device: &Device, buffer: &Buffer, length: u64) -> Vec<u8> {
+pub(super) fn gpu_bytes(device: &Device, buffer: &Buffer, length: u64) -> Vec<u8> {
     let own = device
         .new_buffer(length, ResourceOptions::shared())
         .unwrap();
@@ -284,7 +292,7 @@ fn gpu_bytes(device: &Device, buffer: &Buffer, length: u64) -> Vec<u8> {
 }
 
 /// Wait until `flag` is set, a release on a handler thread having run.
-fn settles(flag: &AtomicBool) -> bool {
+pub(super) fn settles(flag: &AtomicBool) -> bool {
     let started = Instant::now();
     while !flag.load(Ordering::SeqCst) {
         if started.elapsed() > Duration::from_secs(20) {
@@ -980,7 +988,11 @@ fn the_window_ahead_moves_with_the_objects_and_imports_no_more() {
 #[test]
 fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_copies_its_objects() {
     let heard = Arc::new(AtomicUsize::new(0));
-    let Some(device) = ahead_device_with(Some(copies_heard(&heard)), BTreeSet::new()) else {
+    let Some(device) = ahead_device_with(
+        Some(copies_heard(&heard)),
+        BTreeSet::new(),
+        DevicePolicy::default(),
+    ) else {
         return;
     };
     if device.imports_shared_host_pointers().unwrap() {
@@ -2973,7 +2985,7 @@ fn pages_refused_before_the_driver_with_no_source_are_copied() {
         }
     });
     let each = BTreeSet::from([Degradation::CopiedHostPages]);
-    let Some(device) = ahead_device_with(Some(sink), each) else {
+    let Some(device) = ahead_device_with(Some(sink), each, DevicePolicy::default()) else {
         return;
     };
     device.hold_host_ram_imports();
