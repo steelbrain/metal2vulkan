@@ -132,8 +132,9 @@ fn the_line_names_what_the_failed_submission_held_and_flags_invalid_values() {
         "info 1: waits none, runs [0xa2 end], signals [0x20 VkQueue 0's timeline to 42 (at 42) \
          NOT ABOVE ITS VALUE (VUID-VkSubmitInfo-pSignalSemaphores-03242)]",
         "of 1 command buffer: #12 command buffer `probe`",
-        "resources: 3 stated, 1 gone, 1 detached or released; 3 keys of the runtime's own: \
-         buffer #7 of 4096 bytes, Shared; buffer #8 GONE; buffer #9, no-copy, DETACHED",
+        "resources: 3 stated, 1 gone, 1 detached or released, and 3 keys of the runtime's own \
+         not stated; stated: buffer #7 of 4096 bytes, Shared; buffer #8 GONE; buffer #9, \
+         no-copy, DETACHED",
     ] {
         assert!(line.contains(expected), "{expected:?} missing from {line}");
     }

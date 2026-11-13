@@ -514,8 +514,8 @@ impl Report {
         let resources = &self.carried.resources;
         let _ = write!(
             line,
-            "; resources: {} stated, {} gone, {} detached or released; {} key{} of the runtime's \
-             own",
+            "; resources: {} stated, {} gone, {} detached or released, and {} key{} of the \
+             runtime's own not stated",
             resources.stated,
             resources.gone,
             resources.released,
@@ -523,7 +523,7 @@ impl Report {
             plural(resources.own),
         );
         if !resources.named.is_empty() {
-            line.push_str(": ");
+            line.push_str("; stated: ");
             line.push_str(&resources.named.join("; "));
             if resources.stated > resources.named.len() {
                 let _ = write!(
