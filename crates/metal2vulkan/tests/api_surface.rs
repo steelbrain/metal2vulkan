@@ -829,6 +829,7 @@ surface! {
         const MAX_SEGMENTS;
         const PROBE_COUNT_WORDS;
         const PROBE_DRAW_WORDS;
+        const PROBE_SETS;
         const TABLE_BYTES;
         const WIDEN_PIXELS;
         fn clip_entry;

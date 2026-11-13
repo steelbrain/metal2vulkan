@@ -36,16 +36,21 @@
 //! then y's: a line `vec4(ndc_lo, ndc_hi, a, b)`, a clip `vec4(W/2, X + W/2 − p₀, p₁ − X − W/2,
 //! 0)`.
 
-/// The words of a probe's flags each probed draw takes: its flag, then the
-/// [`PROBE_COUNT_WORDS`] its triangles add their copies into, then as many its triangles that it
-/// does not flag and that reach more than [`FEW_COPIES`] pairs of segments mark, then as many
-/// that hold the greatest `u32::MAX − PrimitiveId` of its flagged triangles, then as many that
-/// hold the greatest `PrimitiveId + 1` of them (`pipeline::link::fan_out`, the probe), from word
-/// `PROBE_DRAW_WORDS·i` for the draw of index `i`, each zero before the probe. The consumer sums
-/// a draw's counts, draws a draw none of whose wide words is marked through its variant of few
-/// copies (`RegionFanOut::DrawFew`), and takes the first and the last flagged primitive of a
-/// flagged draw from the least and the greatest of the last two sets.
-pub const PROBE_DRAW_WORDS: u32 = 1 + 4 * PROBE_COUNT_WORDS;
+/// The words of a probe's flags each probed draw takes: its flag, then [`PROBE_SETS`] sets of
+/// [`PROBE_COUNT_WORDS`] (`pipeline::link::fan_out`, the probe), from word `PROBE_DRAW_WORDS·i`
+/// for the draw of index `i`, each zero before the probe. The consumer sums a draw's counts,
+/// draws a draw none of whose wide words is marked through its variant of few copies
+/// (`RegionFanOut::DrawFew`), takes the first and the last flagged primitive of a flagged draw
+/// from the least of the third set and the greatest of the fourth, and sums the fifth for its
+/// flagged triangles.
+pub const PROBE_DRAW_WORDS: u32 = 1 + PROBE_SETS * PROBE_COUNT_WORDS;
+
+/// The sets of [`PROBE_COUNT_WORDS`] after a probed draw's flag ([`PROBE_DRAW_WORDS`]), in
+/// order: the counts its triangles add their copies into; the marks of its triangles that it
+/// does not flag and that reach more than [`FEW_COPIES`] pairs of segments; the greatest
+/// `u32::MAX − PrimitiveId` of its flagged triangles; the greatest `PrimitiveId + 1` of them;
+/// and the counts its flagged triangles add one each into.
+pub const PROBE_SETS: u32 = 5;
 
 /// The words a probed draw's triangles add their copies into, and in each of the other sets of
 /// its words ([`PROBE_DRAW_WORDS`]) as many, a triangle the one of each set its `PrimitiveId`

@@ -235,6 +235,7 @@ pub(crate) struct Counters {
     rate_map_probe_gpu_nanos: AtomicU64,
     rate_map_probe_wait_nanos: AtomicU64,
     rate_map_flagged_draws: AtomicU64,
+    rate_map_flagged_triangles: AtomicU64,
     rate_map_fanned_draws: AtomicU64,
     rate_map_fanned_few_draws: AtomicU64,
     rate_map_parted_draws: AtomicU64,
@@ -2838,10 +2839,12 @@ impl Counters {
     }
 
     /// A host step's probe of a rate-mapped pass's draws was submitted and waited for
-    /// (`rate_mapped_pass.rs`, **Fan-out**), of which it flagged `flagged` draws.
-    pub(crate) fn rate_map_probe(&self, flagged: u64) {
+    /// (`rate_mapped_pass.rs`, **Fan-out**), of which it flagged `flagged` draws, of `triangles`
+    /// flagged triangles.
+    pub(crate) fn rate_map_probe(&self, flagged: u64, triangles: u64) {
         (self.rate_map_probes).fetch_add(1, Ordering::Relaxed);
         (self.rate_map_flagged_draws).fetch_add(flagged, Ordering::Relaxed);
+        (self.rate_map_flagged_triangles).fetch_add(triangles, Ordering::Relaxed);
     }
 
     /// A host step that fans its pass's triangles out took the making of a probe's or a
@@ -7171,6 +7174,12 @@ pub struct WorkCounts {
     /// ([`rate_map_parted_draws`](Self::rate_map_parted_draws)), or region by region whole where
     /// it cannot be (`render/fan_out.rs`, **Parts**).
     pub rate_map_flagged_draws: u64,
+    /// Their triangles the probes flagged, each of each instance once: against
+    /// [`rate_map_parted_region_triangles`](Self::rate_map_parted_region_triangles), how many
+    /// of the triangles a draw in parts draws region by region, from its first flagged one to
+    /// its last, are flagged themselves (a flagged draw drawn whole region by region counts
+    /// its flagged triangles here, its triangles there not).
+    pub rate_map_flagged_triangles: u64,
     /// Executed commands' draws in rate-mapped passes drawn once, fanned out to the regions their
     /// triangles touch.
     pub rate_map_fanned_draws: u64,
@@ -10327,6 +10336,8 @@ impl Device {
             rate_map_probe_gpu_nanos: counters.rate_map_probe_gpu_nanos.load(Ordering::Relaxed),
             rate_map_probe_wait_nanos: (counters.rate_map_probe_wait_nanos).load(Ordering::Relaxed),
             rate_map_flagged_draws: counters.rate_map_flagged_draws.load(Ordering::Relaxed),
+            rate_map_flagged_triangles: (counters.rate_map_flagged_triangles)
+                .load(Ordering::Relaxed),
             rate_map_fanned_draws: counters.rate_map_fanned_draws.load(Ordering::Relaxed),
             rate_map_fanned_few_draws: (counters.rate_map_fanned_few_draws).load(Ordering::Relaxed),
             rate_map_parted_draws: (counters.rate_map_parted_draws).load(Ordering::Relaxed),

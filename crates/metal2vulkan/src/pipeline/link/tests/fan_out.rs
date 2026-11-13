@@ -148,7 +148,7 @@ fn instructions(words: &[u32], op: crate::spv::Op) -> Vec<&[u32]> {
 /// [`PROBE_COUNT_WORDS`](crate::bind::fan_out::PROBE_COUNT_WORDS) that its `PrimitiveId` picks
 /// (masked by their number less one), whether or not the fragment function reads the primitive's
 /// index: no one word takes every triangle's add. A flagged triangle raises its draw's first's and
-/// last's words once each.
+/// last's words once each, and adds one into its flagged count once.
 #[test]
 fn a_probe_adds_a_triangle_s_copies_into_the_count_its_primitive_picks() {
     use crate::spv::{BuiltIn, Decoration, Op};
@@ -165,7 +165,8 @@ fn a_probe_adds_a_triangle_s_copies_into_the_count_its_primitive_picks() {
             .find(|(_, class)| *class == Class::Triangle)
             .expect("the triangle stage");
         let words = &module.spirv;
-        assert_eq!(instructions(words, Op::AtomicIAdd).len(), 1, "one add");
+        // The copies' add, and a flagged triangle's count.
+        assert_eq!(instructions(words, Op::AtomicIAdd).len(), 2, "two adds");
         // The flag's store, and the wide word's.
         assert_eq!(instructions(words, Op::AtomicStore).len(), 2, "two stores");
         // A flagged triangle's raise of the first's and the last's words.

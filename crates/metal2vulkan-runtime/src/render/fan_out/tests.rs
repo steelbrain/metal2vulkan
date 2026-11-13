@@ -53,8 +53,8 @@ fn a_flagged_draw_s_parts_take_each_triangle_once_in_order() {
     }
 }
 
-/// A probed draw's words: the counts summed, a wide mark, and the first and last flagged triangle
-/// from the least and the greatest of their raised words.
+/// A probed draw's words: the counts summed, a wide mark, the first and last flagged triangle
+/// from the least and the greatest of their raised words, and the flagged counts summed.
 #[test]
 fn a_probed_draw_s_words_name_its_first_and_last_flagged_triangle() {
     let lanes = PROBE_COUNT_WORDS as usize;
@@ -67,6 +67,7 @@ fn a_probed_draw_s_words_name_its_first_and_last_flagged_triangle() {
             copies: 7,
             wide: false,
             flagged: None,
+            flagged_triangles: 0,
         }
     );
     words[0] = 1;
@@ -76,12 +77,16 @@ fn a_probed_draw_s_words_name_its_first_and_last_flagged_triangle() {
     words[1 + 2 * lanes + 8] = u32::MAX - 40;
     words[1 + 3 * lanes + 9] = 10;
     words[1 + 3 * lanes + 8] = 41;
+    // Their counts, and a third flagged triangle's in triangle 9's lane.
+    words[1 + 4 * lanes + 9] = 2;
+    words[1 + 4 * lanes + 8] = 1;
     assert_eq!(
         Probed::of(&words),
         Probed {
             copies: 7,
             wide: true,
             flagged: Some((9, 40)),
+            flagged_triangles: 3,
         }
     );
 }

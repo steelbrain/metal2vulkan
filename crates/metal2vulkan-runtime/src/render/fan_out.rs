@@ -56,13 +56,15 @@ pub(super) struct FanOutDraw {
 
 /// What the probe found of a draw it probed, from its words (`bind::fan_out::PROBE_DRAW_WORDS`):
 /// the copies its triangles emit (its counts summed), whether a triangle it does not flag is too
-/// wide for few copies (`bind::fan_out::FEW_COPIES`, a wide word marked), and the first and the
-/// last of its triangles it flagged, where it flagged one.
+/// wide for few copies (`bind::fan_out::FEW_COPIES`, a wide word marked), the first and the
+/// last of its triangles it flagged, where it flagged one, and how many it flagged (its flagged
+/// counts summed), each of each instance once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Probed {
     pub(super) copies: u32,
     pub(super) wide: bool,
     pub(super) flagged: Option<(u32, u32)>,
+    pub(super) flagged_triangles: u32,
 }
 
 impl Probed {
@@ -77,6 +79,7 @@ impl Probed {
             wide: set(1).any(|w| w != 0),
             flagged: (words.first().is_some_and(|&flag| flag != 0))
                 .then(|| (u32::MAX - first, last.saturating_sub(1))),
+            flagged_triangles: set(4).fold(0u32, u32::saturating_add),
         }
     }
 }

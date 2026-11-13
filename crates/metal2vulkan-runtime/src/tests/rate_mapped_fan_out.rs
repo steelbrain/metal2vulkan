@@ -403,8 +403,10 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     let by_regions =
         after.rate_map_parted_region_triangles - before.rate_map_parted_region_triangles;
     let wait = after.rate_map_probe_wait_nanos - before.rate_map_probe_wait_nanos;
+    let flagged = after.rate_map_flagged_triangles - before.rate_map_flagged_triangles;
     eprintln!(
         "RATE-MAP-FAN-OUT counts {counts:?} probe_gpu_nanos {probe_nanos}, waited {wait} ns; \
+         {flagged} flagged triangles; \
          fan-out pipelines {ready} ready, {waited} waited for; {made} made at the step; {tables} \
          region tables uploaded; {few} drawn of few copies; {by_regions} triangles of draws in \
          parts region by region"
@@ -423,6 +425,7 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
                 by_regions, 4,
                 "triangles of draws in parts region by region"
             );
+            assert_eq!(flagged, 4, "the triangles the probe flagged");
             assert!(wait > 0, "the host's wait for the probe");
         }
         false => assert_eq!(counts, [0; 4]),

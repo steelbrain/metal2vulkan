@@ -434,9 +434,10 @@ pub enum RegionFanOut {
 /// `u32`s from `PROBE_DRAW_WORDS·i`, `i` its pushed index (`PushField::RegionProbe`, at
 /// [`push_offset`](Self::push_offset) for stage `GEOMETRY`), it writes 1 into the first where a
 /// triangle of the draw touches more regions than [`copies`](Self::copies), or crosses `w = 0`,
-/// and raises the words after those below to that triangle's `PrimitiveId`; the consumer draws
-/// such a draw's triangles from the first flagged one to the last region by region, the others
-/// fanned out, or, where it cannot draw the draw in parts, the whole draw region by region. It
+/// and raises the words after those below to that triangle's `PrimitiveId` and adds one into
+/// its flagged count; the consumer draws such a draw's triangles from the first flagged one to
+/// the last region by region, the others fanned out, or, where it cannot draw the draw in parts,
+/// the whole draw region by region, and counts its flagged triangles. It
 /// adds the copies the draw emits of each triangle it fans out into one of the
 /// `bind::fan_out::PROBE_COUNT_WORDS` after the flag, which the draw's work counts; and writes 1
 /// into one of the as many after those where a triangle it does not flag touches more regions

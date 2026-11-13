@@ -5817,7 +5817,8 @@ each item named states the rule in full.
   flags, a list of triangles of one instance whose pipeline reads no `[[primitive_id]]` and
   writes no memory, is drawn in parts in its place: its triangles from the first the probe
   flagged to the last region by region, those before and after fanned out
-  (`WorkCounts::rate_map_parted_draws`); another flagged draw is drawn region by region. The
+  (`WorkCounts::rate_map_parted_draws`, and of those triangles the ones the probe flagged
+  `rate_map_flagged_triangles`); another flagged draw is drawn region by region. The
   probe costs the host step a submission it waits for before the pass, which runs each probed
   draw's vertex function and geometry stage once and shades nothing (`WorkCounts::rate_map_probes`,
   `rate_map_probe_gpu_nanos`, the host's wait `rate_map_probe_wait_nanos`); a fanned-out draw

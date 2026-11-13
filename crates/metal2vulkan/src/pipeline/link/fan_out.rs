@@ -32,7 +32,9 @@
 //!   as many after those, which mark the draw one its variant of few copies cannot draw; and for
 //!   a triangle it flags, raises the word its `PrimitiveId` picks of the as many after those to
 //!   `u32::MAX − PrimitiveId`, and of the as many after them to `PrimitiveId + 1`, so the
-//!   consumer finds the draw's first and last flagged triangle. Its writes need
+//!   consumer finds the draw's first and last flagged triangle, and adds one into the word it
+//!   picks of the last set ([`PROBE_SETS`](crate::bind::fan_out::PROBE_SETS)), so the
+//!   consumer counts them. Its writes need
 //!   `vertexPipelineStoresAndAtomics`.
 
 use super::geometry::{array, kf, ku, scalar, GeometryStages};
@@ -405,12 +407,14 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
                 let zero = ku(fb, 0)?;
                 fb.access_chain(base, &[zero, at])
             };
-            // A flagged triangle: the draw's flag, and its `PrimitiveId` raised into the first's
-            // and the last's words it picks.
+            // A flagged triangle: the draw's flag, its `PrimitiveId` raised into the first's and
+            // the last's words it picks, and one added into the flagged count it picks: the
+            // sets after the counts, its word the same lane of each.
             let lanes = ku(&mut fb, PROBE_COUNT_WORDS)?;
             let wide_at = fb.binary(BinOp::IAdd, count_at, lanes)?;
             let first_at = fb.binary(BinOp::IAdd, wide_at, lanes)?;
             let last_at = fb.binary(BinOp::IAdd, first_at, lanes)?;
+            let flagged_at = fb.binary(BinOp::IAdd, last_at, lanes)?;
             let most_id = ku(&mut fb, u32::MAX)?;
             let first = fb.binary(BinOp::ISub, most_id, id)?;
             let last = fb.binary(BinOp::IAdd, id, one)?;
@@ -428,6 +432,8 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
                         value,
                     )?;
                 }
+                let ptr = word_ptr(fb, flagged_at)?;
+                fb.atomic(AtomicOp::IAdd, ptr, Scope::Device, Semantics::RELAXED, one)?;
                 Ok(ArmEnd::FallThrough(Vec::new()))
             });
             fb.if_(&mut ctx, flagged, arm, None)?;

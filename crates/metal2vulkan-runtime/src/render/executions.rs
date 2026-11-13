@@ -4278,7 +4278,8 @@ impl DeferredPass {
                         .map(Probed::of)
                         .collect();
                     let flagged = draws.iter().filter(|draw| draw.flagged.is_some()).count();
-                    device.shared().counts.rate_map_probe(flagged as u64);
+                    let triangles = draws.iter().map(|d| u64::from(d.flagged_triangles));
+                    (device.shared().counts).rate_map_probe(flagged as u64, triangles.sum());
                     found_draws = draws.into();
                 }
                 probed = Some(recorded);

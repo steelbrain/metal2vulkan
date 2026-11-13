@@ -702,7 +702,8 @@ pub enum WriteSource {
     /// consumer keeps for its probes, `bind::fan_out::PROBE_DRAW_WORDS` zeros at each draw's index
     /// (`BindState::region_fan_out`) before the draw, where the draw writes 1 into the first for
     /// a triangle it cannot fan out, adds into the counts after it the copies it would emit of
-    /// the others, and marks those after them for a triangle too wide for few copies
+    /// the others, marks those after them for a triangle too wide for few copies, and for a
+    /// flagged triangle raises its first's and last's words and adds one into its flagged count
     /// (`GraphicsState::region_fan_out`); bound whole.
     RateMapFlags,
     /// The top-level structure of the acceleration structure bound at buffer slot `slot`
