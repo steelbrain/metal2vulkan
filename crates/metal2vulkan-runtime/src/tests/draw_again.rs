@@ -678,16 +678,18 @@ fn a_buffer_over_host_pages_made_while_a_draw_takes_every_step_is_met_by_the_nex
     let (ask, asked) = std::sync::mpsc::channel::<()>();
     let (tell, told) = std::sync::mpsc::channel::<()>();
     let (end, ended) = std::sync::mpsc::channel::<()>();
-    let (on, over) = (&device, &page);
+    // SAFETY: the page outlives the buffer made over it (dropped after the device), and no
+    // command uses the buffer.
+    let memory = unsafe { page.memory() };
+    let on = &device;
     let (made, ran, moved) = std::thread::scope(|scope| {
         let maker = scope.spawn(move || {
             asked.recv().ok()?;
             let before = on.shared().aliases.version();
-            // SAFETY: the page outlives the buffer (dropped after the device), and no command
-            // uses the buffer.
+            // SAFETY: as above.
             let made = unsafe {
                 on.new_buffer_with_bytes_no_copy(
-                    over.memory(),
+                    memory,
                     BYTES as u64,
                     ResourceOptions::shared(),
                     None,
