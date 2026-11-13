@@ -44,10 +44,13 @@
 //!   view of icons: 8 command buffers of 16 passes of 1 draw, and of 4 passes of 17 draws. Each
 //!   pass loads and stores one of 8 surfaces of 256x256 over buffers of their own as the
 //!   compositor's are (`--pages` too), sets its viewport and draws the compositor's plain quads,
-//!   each after the pipeline state (once a pass), its vertex buffers 0 and 1 and fragment buffer
-//!   0, fragment texture 0 (the next of its sampled surfaces), its sampler and a scissor
-//!   rectangle. A pass's cost is the first's figure a draw less the draw's, which the second's
-//!   gives: (17 draws and a pass) less (1 draw and a pass), over 16.
+//!   each after the pipeline state (once a pass: the next of 6 plain ones of their own blend
+//!   factors, so the state a pass draws through is none of the four the last passes drew
+//!   through, and its first draw takes every step, no kept draw of its state carried in), its
+//!   vertex buffers 0 and 1 and fragment buffer 0, fragment texture 0 (the next of its sampled
+//!   surfaces), its sampler and a scissor rectangle. A pass's cost is the first's figure a draw
+//!   less the draw's, which the second's gives: (17 draws and a pass) less (1 draw and a pass),
+//!   over 16.
 //! - **scene**, a 3D engine's frame as a layer over another graphics API issues it: 8 command
 //!   buffers of 10 passes and 24 draws each, every pass over the same four 512x512 color
 //!   targets (`BGRA8Unorm`, `RGBA8Unorm` and two `RGBA16Float`), the first cleared, the rest
@@ -832,14 +835,26 @@ struct FrameDraw {
     size: (u64, u64),
 }
 
+/// The plain pipeline states of the small passes ([`Stream::Passes`]), by their color's source
+/// and destination blend factors: more than the four a render encoder carries kept draws of.
+const SMALL_BLENDS: [(BlendFactor, BlendFactor); 6] = [
+    (BlendFactor::One, BlendFactor::OneMinusSourceAlpha),
+    (BlendFactor::SourceAlpha, BlendFactor::OneMinusSourceAlpha),
+    (BlendFactor::One, BlendFactor::Zero),
+    (BlendFactor::One, BlendFactor::One),
+    (BlendFactor::DestinationColor, BlendFactor::Zero),
+    (BlendFactor::OneMinusDestinationColor, BlendFactor::One),
+];
+
 /// The compositor shape's objects (the module docs): its passes with their viewports, their
-/// targets, the sampled surfaces, its three pipeline states, its sampler and the buffer of its
-/// per-draw data, and the buffers its surfaces lie in.
+/// targets, the sampled surfaces, its three pipeline states and the small passes' plain ones, its
+/// sampler and the buffer of its per-draw data, and the buffers its surfaces lie in.
 struct Compositor {
     passes: Vec<(RenderPassDescriptor, Viewport)>,
     targets: Vec<Texture>,
     sources: Vec<Texture>,
     pipelines: Vec<RenderPipelineState>,
+    plain: Vec<RenderPipelineState>,
     sampler: SamplerState,
     data: Buffer,
     _surfaces: Vec<Buffer>,
@@ -851,25 +866,29 @@ impl Compositor {
             let function = library.new_function_with_name(name)?;
             Ok(StageSource::Function(function.function_descriptor()))
         };
+        let pipeline = |fragment: &str, (source, destination)| -> Result<RenderPipelineState> {
+            let mut descriptor = RenderPipelineDescriptor::new(function("draw_costs_quad_vertex")?);
+            descriptor.fragment = Some(function(fragment)?);
+            let mut color = ColorAttachmentDescriptor::new(PixelFormat::BGRA8Unorm);
+            color.blending_enabled = true;
+            color.source_rgb_blend_factor = source;
+            color.source_alpha_blend_factor = source;
+            color.destination_rgb_blend_factor = destination;
+            color.destination_alpha_blend_factor = destination;
+            descriptor.color_attachments[0] = Some(color);
+            Ok(device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())?)
+        };
         let pipelines = [
             "draw_costs_quad",
             "draw_costs_quad_masked",
             "draw_costs_quad_backdrop",
         ]
         .iter()
-        .map(|fragment| {
-            let mut descriptor = RenderPipelineDescriptor::new(function("draw_costs_quad_vertex")?);
-            descriptor.fragment = Some(function(fragment)?);
-            let mut color = ColorAttachmentDescriptor::new(PixelFormat::BGRA8Unorm);
-            color.blending_enabled = true;
-            color.source_rgb_blend_factor = BlendFactor::One;
-            color.source_alpha_blend_factor = BlendFactor::One;
-            color.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
-            color.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
-            descriptor.color_attachments[0] = Some(color);
-            Ok(device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())?)
-        })
+        .map(|fragment| pipeline(fragment, SMALL_BLENDS[0]))
         .collect::<Result<Vec<_>>>()?;
+        let plain = (SMALL_BLENDS.iter())
+            .map(|&blend| pipeline("draw_costs_quad", blend))
+            .collect::<Result<Vec<_>>>()?;
         let mut sampler = SamplerDescriptor::new();
         sampler.min_filter = SamplerMinMagFilter::Linear;
         sampler.mag_filter = SamplerMinMagFilter::Linear;
@@ -1007,6 +1026,7 @@ impl Compositor {
             targets,
             sources,
             pipelines,
+            plain,
             sampler,
             data,
             _surfaces: surfaces,
@@ -1098,14 +1118,15 @@ impl Compositor {
 
 impl Compositor {
     /// Command buffer `buffer`'s steps of a window server's frame ([`Stream::Passes`]): `passes`
-    /// passes of `each` plain quads, each pass over the next of the small surfaces, each draw's
-    /// slots the next of the buffer's.
+    /// passes of `each` plain quads, each pass over the next of the small surfaces through the
+    /// next of the plain pipeline states, each draw's slots the next of the buffer's.
     fn small_passes(&self, buffer: usize, passes: usize, each: usize) -> Vec<Step<'_>> {
         let first = LAYERS.len() + 1;
         let mut steps = Vec::new();
         for pass in 0..passes {
-            steps.push(Step::Pass(first + (buffer * passes + pass) % SMALL_TARGETS));
-            steps.push(Step::Pipeline(&self.pipelines[Quad::Plain as usize]));
+            let at = buffer * passes + pass;
+            steps.push(Step::Pass(first + at % SMALL_TARGETS));
+            steps.push(Step::Pipeline(&self.plain[at % self.plain.len()]));
             for k in 0..each {
                 let d = pass * each + k;
                 let slot = (buffer * passes * each + d) as u64 % COMPOSITOR_SLOTS;
