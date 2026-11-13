@@ -3,9 +3,10 @@
 //! pointer of the program's reaches or whose pages the runtime owns, its `Private` heaps with
 //! the buffers placed in them, and its textures made by a call the recovery makes again
 //! (`texture/carry.rs`), each the same object on the new `VkDevice`, as Metal keeps its objects
-//! across its GPU's recovery. A fence, a depth/stencil state, a library, a function and an
-//! address pool hold no Vulkan object (`fence.rs`, `depth_stencil.rs`, `library.rs`,
-//! `address_pool.rs`): the recovery carries their handle of the device alone ([`LineDevice`]).
+//! across its GPU's recovery. A fence, a depth/stencil state, a library, a function, an address
+//! pool, a dynamic library and a binary archive hold no Vulkan object (`fence.rs`,
+//! `depth_stencil.rs`, `library.rs`, `address_pool.rs`, `dynamic_library.rs`, `binary_archive`):
+//! the recovery carries their handle of the device alone ([`LineDevice`]).
 //!
 //! - **Kept as made.** Each event (`EventShared::new`), heap (`Device::new_heap`) and texture of
 //!   the program's (`Texture::made`) is kept here, held weakly, by the generation it was made on;
@@ -783,7 +784,7 @@ impl Drop for MadeOn {
 }
 
 /// The device of an object that holds no Vulkan object (a fence, a depth/stencil state, a library
-/// and its functions, an address pool), which a recovery carries as its handle of the device
+/// and its functions, an address pool, a dynamic library, a binary archive), which a recovery carries as its handle of the device
 /// alone: a root handle, which the object's own calls and checks go through
 /// ([`root`](Self::root): of whatever generation serves, matched by its line), and the generation
 /// handle its `device` answers ([`generation`](Self::generation)): the generation it was made on,

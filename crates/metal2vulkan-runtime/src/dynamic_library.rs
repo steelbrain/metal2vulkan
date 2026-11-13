@@ -22,8 +22,12 @@
 //!   library. A device made with `DeviceOptions::load_no_dynamic_library_file` opens no such file
 //!   at all: its creations link only the libraries their function descriptors give, and
 //!   `new_dynamic_library_with_url` is refused (`NoFileLoading`).
+//! - **Across a recovery.** A dynamic library holds no Vulkan object, so it goes on past its
+//!   device's recovery, as Metal's does, the recovery carrying its handle of the device alone
+//!   (`device/carry.rs`'s `LineDevice`).
 
 use super::binary_archive::container::{read_file, write_file, ReadFailure, WriteFailure};
+use super::device::carry::LineDevice;
 use super::device::{device_error, lock};
 use super::error::{DynamicLibraryError, Error};
 use super::library::Library;
@@ -39,7 +43,7 @@ pub struct DynamicLibrary(Arc<Shared>);
 
 #[derive(Debug)]
 struct Shared {
-    device: Device,
+    device: LineDevice,
     library: metal2vulkan::library::DynamicLibrary,
     label: Mutex<Option<String>>,
 }
@@ -116,7 +120,7 @@ impl Device {
         let library = metal2vulkan::library::DynamicLibrary::new(library, &Budget::standard())
             .map_err(device_error)?;
         Ok(DynamicLibrary(Arc::new(Shared {
-            device: self.clone(),
+            device: LineDevice::new(self),
             library,
             label: Mutex::new(None),
         })))
@@ -124,9 +128,11 @@ impl Device {
 }
 
 impl DynamicLibrary {
-    /// `device`.
+    /// `device`: a generation handle of the device: of the generation the library was made on, then of
+    /// each one the device's recoveries carried the library to. A handle taken of it keeps meaning that
+    /// generation: its raw handles are that generation's `VkDevice`'s, kept alive while held.
     pub fn device(&self) -> &Device {
-        &self.0.device
+        self.0.device.generation()
     }
 
     /// `setLabel:`.

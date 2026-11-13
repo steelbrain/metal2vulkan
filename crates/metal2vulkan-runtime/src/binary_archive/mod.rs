@@ -25,6 +25,10 @@
 //!   an empty one, whose lookups miss as Metal's do. An archive of another profile or build
 //!   loads, and its entries miss, as Metal's archive of another device or OS does. Labels are not
 //!   written, as Metal's are not.
+//! - **Across a recovery.** An archive holds no Vulkan object, so it goes on past its device's
+//!   recovery, as Metal's does, the recovery carrying its handle of the device alone
+//!   (`device/carry.rs`'s `LineDevice`): a creation of any generation lists it, and an add makes
+//!   its state on the generation that serves.
 //! - **Differences from Metal**, accepted (docs/API.md §10): the file is read whole at load, so an
 //!   archive serializes after its file was deleted, where Metal's fails; and a file is a path,
 //!   so a URL that is not a file cannot be named, where Metal answers it as an invalid URL.
@@ -32,6 +36,7 @@
 pub(super) mod container;
 pub(super) mod metal_key;
 
+use super::device::carry::LineDevice;
 use super::device::lock;
 use super::error::{ArchivedPipeline, BinaryArchiveError, BinaryArchiveMiss, Error};
 use super::pipeline::{
@@ -71,7 +76,9 @@ impl BinaryArchiveDescriptor {
 pub struct BinaryArchive(Arc<Shared>);
 
 struct Shared {
-    device: Device,
+    /// The device: its root handle, which a creation's check matches by its line and an add's
+    /// creation goes through, and the generation handle `device` answers.
+    device: LineDevice,
     label: Mutex<Option<String>>,
     contents: Mutex<Contents>,
 }
@@ -123,7 +130,7 @@ impl Device {
             Some(path) => container::read(path)?,
         };
         Ok(BinaryArchive(Arc::new(Shared {
-            device: self.clone(),
+            device: LineDevice::new(self),
             label: Mutex::new(None),
             contents: Mutex::new(contents),
         })))
@@ -131,9 +138,17 @@ impl Device {
 }
 
 impl BinaryArchive {
-    /// `device`.
+    /// `device`: a generation handle of the device: of the generation the archive was made on, then of
+    /// each one the device's recoveries carried the archive to. A handle taken of it keeps meaning that
+    /// generation: its raw handles are that generation's `VkDevice`'s, kept alive while held.
     pub fn device(&self) -> &Device {
-        &self.0.device
+        self.0.device.generation()
+    }
+
+    /// A root handle of the archive's device, which a creation of any of its generations
+    /// matches.
+    fn root_device(&self) -> &Device {
+        self.0.device.root()
     }
 
     /// `setLabel:`.
@@ -153,13 +168,12 @@ impl BinaryArchive {
         &self,
         descriptor: &ComputePipelineDescriptor,
     ) -> Result<(), Error> {
-        let used = Used::default();
-        ComputePipelineState::create(
-            self.device(),
-            descriptor,
-            &PipelineOptions::default(),
-            Some(&used),
-        )?;
+        let used = self.root_device().at_serving(|device| {
+            let used = Used::default();
+            let options = PipelineOptions::default();
+            ComputePipelineState::create(device, descriptor, &options, Some(&used))?;
+            Ok(used)
+        })?;
         let profile = self.profile();
         self.keep(
             used.into_inner(),
@@ -176,13 +190,12 @@ impl BinaryArchive {
         &self,
         descriptor: &RenderPipelineDescriptor,
     ) -> Result<(), Error> {
-        let used = Used::default();
-        let state = GraphicsState::create(
-            self.device(),
-            descriptor,
-            &PipelineOptions::default(),
-            Some(&used),
-        )?;
+        let (state, used) = self.root_device().at_serving(|device| {
+            let used = Used::default();
+            let options = PipelineOptions::default();
+            let state = GraphicsState::create(device, descriptor, &options, Some(&used))?;
+            Ok((state, used))
+        })?;
         let profile = self.profile();
         let keys = metal_key::render(&profile, descriptor);
         let kind = if crate::tessellation::patches(&state.base().graphics).is_some() {
@@ -209,13 +222,12 @@ impl BinaryArchive {
         &self,
         descriptor: &TileRenderPipelineDescriptor,
     ) -> Result<(), Error> {
-        let used = Used::default();
-        TileState::create(
-            self.device(),
-            descriptor,
-            &PipelineOptions::default(),
-            Some(&used),
-        )?;
+        let used = self.root_device().at_serving(|device| {
+            let used = Used::default();
+            let options = PipelineOptions::default();
+            TileState::create(device, descriptor, &options, Some(&used))?;
+            Ok(used)
+        })?;
         let profile = self.profile();
         self.keep(
             used.into_inner(),
@@ -238,7 +250,9 @@ impl BinaryArchive {
         &self,
         descriptor: &MeshPipelineDescriptor,
     ) -> Result<(), Error> {
-        GraphicsState::create_mesh(self.device(), descriptor, &PipelineOptions::default())?;
+        self.root_device().at_serving(|device| {
+            GraphicsState::create_mesh(device, descriptor, &PipelineOptions::default())
+        })?;
         let profile = self.profile();
         self.keep(
             Vec::new(),
@@ -366,9 +380,9 @@ pub(crate) fn check<'a>(
     let archives = &options.binary_archives;
     if let Some(archive) = archives
         .iter()
-        .find(|archive| !archive.device().same(device))
+        .find(|archive| !archive.root_device().same(device))
     {
-        return Err(archive.device().foreign(call, device));
+        return Err(archive.root_device().foreign(call, device));
     }
     if archives.is_empty()
         || !options
