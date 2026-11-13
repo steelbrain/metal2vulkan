@@ -20,6 +20,11 @@
 //! filled by coordinate, over 16 x 32 x 32 and 32 x 32 x 32 with B transposed or not, in device or
 //! threadgroup memory or a cooperative right input: its float sums are the same reference's.
 //!
+//! The owned fixture `tns_mm_fp8` (built for macOS 27) multiplies 8-bit floats (e4m3 and e5m2)
+//! into float over 32 x 32 x 32 on one simdgroup, B transposed or not, accumulating C or not, A or
+//! B staged in threadgroup memory: each element decodes exactly, subnormals kept (an e4m3 `0x7F`
+//! reads 480, as measured on the M3 Max), and its float sums are the same reference's.
+//!
 //! The owned fixtures `tns_init` and `tns_init_left` (`tns_mm_left`'s second kernel) construct a
 //! cooperative tensor (a destination, a right input, or a left input) in a loop's body: each
 //! construction zeroes the elements the thread holds, the second after the first set them, as on
@@ -161,6 +166,21 @@ fn construction_zeroes_cooperative_left_inputs_on_moltenvk() {
 #[test]
 fn construction_zeroes_cooperative_left_inputs_on_lavapipe() {
     construction_zeroes_cooperative_left_inputs(LAVAPIPE);
+}
+
+#[test]
+fn fp8_products_are_metals_sequential_fused_sums_on_moltenvk() {
+    fp8_fused_sums(MOLTENVK);
+}
+
+#[test]
+fn fp8_products_are_metals_sequential_fused_sums_on_radv() {
+    fp8_fused_sums(RADV);
+}
+
+#[test]
+fn fp8_products_are_metals_sequential_fused_sums_on_lavapipe() {
+    fp8_fused_sums(LAVAPIPE);
 }
 
 fn bitcode(name: &str) -> Option<Vec<u8>> {
@@ -700,6 +720,110 @@ fn left_cooperative_fused_sums((stem, widths): (&str, &[SubgroupSize])) {
                     f32::from_bits(*w)
                 );
             }
+        }
+    }
+}
+
+/// An 8-bit float format: `metal_fp8_e4m3_format` (4 exponent bits, bias 7, no infinity or NaN)
+/// or `metal_fp8_e5m2_format` (5 exponent bits, bias 15).
+#[derive(Clone, Copy, Debug)]
+enum Fp8 {
+    E4M3,
+    E5M2,
+}
+
+impl Fp8 {
+    /// A random finite byte: any e4m3 byte (Metal reads `0x7F` and `0xFF` as ±480, measured), an
+    /// e5m2 byte below the all-ones exponent.
+    fn random(self, rng: &mut Rng) -> u8 {
+        loop {
+            let b = (rng.next() >> 24) as u8;
+            if matches!(self, Fp8::E4M3) || (b >> 2) & 0x1f != 0x1f {
+                return b;
+            }
+        }
+    }
+
+    /// The value of byte `b` as a float, exactly, subnormals kept (measured on the M3 Max).
+    fn widen(self, b: u8) -> f32 {
+        let (mantissa, bias) = match self {
+            Fp8::E4M3 => (3, 7),
+            Fp8::E5M2 => (2, 15),
+        };
+        let sign = if b >> 7 == 1 { -1.0 } else { 1.0 };
+        let e = i32::from((b & 0x7f) >> mantissa);
+        let scale = (1u32 << mantissa) as f32;
+        let m = f32::from(b & ((1u8 << mantissa) - 1)) / scale;
+        match e {
+            0 => sign * m * 2f32.powi(1 - bias),
+            _ => sign * (1.0 + m) * 2f32.powi(e - bias),
+        }
+    }
+}
+
+/// `tns_mm_fp8`'s variant `v`: its format, whether B is transposed, and whether the product
+/// accumulates C (`multiply_accumulate`) or sums from `+0` (`multiply`).
+fn fp8_variant(v: u32) -> (Fp8, bool, bool) {
+    let format = if v < 7 { Fp8::E4M3 } else { Fp8::E5M2 };
+    let (transposed, accumulates) = match v % 7 {
+        0 | 4 => (false, true),
+        2 => (false, false),
+        3 => (true, false),
+        _ => (true, true),
+    };
+    (format, transposed, accumulates)
+}
+
+/// Products of 8-bit floats into float are Metal's sequential fused sums on `profile`, of the
+/// exact decode of each byte, A and B in device memory or either in threadgroup memory
+/// (`tns_mm_fp8`, one 32 x 32 x 32 tile).
+fn fp8_fused_sums((stem, widths): (&str, &[SubgroupSize])) {
+    let Some(bc) = bitcode("tns_mm_fp8") else {
+        return;
+    };
+    let mut rng = Rng(0xf8e4);
+    for v in 0..14 {
+        let (format, transposed, accumulates) = fp8_variant(v);
+        let kernel = kernel(&bc, "tns_mm_fp8", v, stem);
+        let a: Vec<u8> = (0..1024).map(|_| format.random(&mut rng)).collect();
+        let b: Vec<u8> = (0..1024).map(|_| format.random(&mut rng)).collect();
+        let c: Vec<f32> = (0..1024)
+            .map(|_| f32::from_bits(Format::Float.random(&mut rng, 6)))
+            .collect();
+        let mut want = vec![0u32; 1024];
+        for row in 0..32 {
+            for col in 0..32 {
+                let mut acc = if accumulates { c[row * 32 + col] } else { 0.0 };
+                for k in 0..32 {
+                    let x = format.widen(a[row * 32 + k]);
+                    let at = if transposed {
+                        col * 32 + k
+                    } else {
+                        k * 32 + col
+                    };
+                    acc = x.mul_add(format.widen(b[at]), acc);
+                }
+                want[row * 32 + col] = acc.to_bits();
+            }
+        }
+        let init = [
+            a,
+            b,
+            le_bytes(&c, f32::to_le_bytes),
+            vec![0xa5; 4096],
+            le_bytes(&[0u32, 0, 0, 0], u32::to_le_bytes),
+        ];
+        let out = kernel.run(widths, 32, &init);
+        let got = words(&out[3]);
+        for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+            assert_eq!(
+                g,
+                w,
+                "{} ({format:?}): out[{i}] {} != {}",
+                kernel.what,
+                f32::from_bits(*g),
+                f32::from_bits(*w)
+            );
         }
     }
 }
