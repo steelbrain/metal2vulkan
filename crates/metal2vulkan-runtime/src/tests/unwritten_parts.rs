@@ -19,6 +19,14 @@
 //!   second level written by a blit, is released, and one more over another buffer takes its
 //!   parked image: a blit of that one's second level reads what a new texture's of the same
 //!   descriptor reads.
+//! - **Separate depth and stencil textures' scratch image.** A pass of a `Private`
+//!   `Depth32Float` texture and a `Private` `Stencil8` one renders through a scratch image of the
+//!   combined format (`depth_stencil_scratch.rs`). One pass clears the stencil to 0xA5 and stores
+//!   it, its textures and scratch image released; a pass of two new textures takes the three
+//!   parked images and loads its stencil `DontCare`, stores nothing and draws where the stencil
+//!   is 0xA5: it draws nothing, where the device leaves that load to the driver's `DONT_CARE`
+//!   (`clear_reach::UnstoredLoads`, lavapipe's, which leaves the image's texels) as where it
+//!   clears it.
 //!
 //! Printed (`UNWRITTEN-PARTS`): what each read found.
 
@@ -104,6 +112,8 @@ struct Tools {
     queue: CommandQueue,
     read: ComputePipelineState,
     draw: RenderPipelineState,
+    /// [`draw`](Self::draw)'s state for separate `Depth32Float` and `Stencil8` textures.
+    separate: RenderPipelineState,
     equal: DepthStencilState,
 }
 
@@ -126,6 +136,11 @@ impl Tools {
         let draw = device
             .new_render_pipeline_state(&descriptor, &options)
             .unwrap();
+        descriptor.depth_format = Some(PixelFormat::Depth32Float);
+        descriptor.stencil_format = Some(PixelFormat::Stencil8);
+        let separate = device
+            .new_render_pipeline_state(&descriptor, &options)
+            .unwrap();
         let mut equal = DepthStencilDescriptor::default();
         for face in [&mut equal.front_face_stencil, &mut equal.back_face_stencil] {
             face.stencil_compare_function = CompareFunction::Equal;
@@ -134,6 +149,7 @@ impl Tools {
             queue: device.new_command_queue().unwrap(),
             read,
             draw,
+            separate,
             equal: device.new_depth_stencil_state(&equal).unwrap(),
         }
     }
@@ -211,6 +227,50 @@ impl Tools {
         let command_buffer = self.queue.command_buffer().unwrap();
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
         encoder.set_render_pipeline_state(&self.draw).unwrap();
+        encoder.set_depth_stencil_state(&self.equal).unwrap();
+        encoder.set_stencil_reference_value(MARK);
+        (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
+        encoder.end_encoding().unwrap();
+        commit(&command_buffer);
+        level_bytes(&self.queue, color, 0)
+    }
+}
+
+impl Tools {
+    /// A new `Private` texture of `format` that renders, `SIDE` square.
+    fn attachment(&self, format: PixelFormat) -> Texture {
+        let mut descriptor = TextureDescriptor::texture_2d(format, SIDE, SIDE, false);
+        descriptor.usage = TextureUsage::RENDER_TARGET;
+        descriptor.resource_options = ResourceOptions::private();
+        self.queue.device().new_texture(&descriptor).unwrap()
+    }
+
+    /// What a pass into `color`, cleared to zero and stored, beside `depth` and `stencil` loaded
+    /// with `load` (a `Clear` to 0.5 and [`MARK`]) and stored with `store`, draws over the whole
+    /// target where the stencil is [`MARK`].
+    fn separate(
+        &self,
+        (depth, stencil): (&Texture, &Texture),
+        color: &Texture,
+        (load, store): (LoadAction, StoreAction),
+    ) -> Vec<u8> {
+        let mut pass = RenderPassDescriptor::new();
+        let target = &mut pass.color_attachments[0];
+        target.texture = Some(color.clone());
+        target.load_action = LoadAction::Clear;
+        target.store_action = StoreAction::Store;
+        target.clear_color = ClearColor::new(0.0, 0.0, 0.0, 0.0);
+        let attachment = &mut pass.depth_attachment;
+        attachment.texture = Some(depth.clone());
+        (attachment.load_action, attachment.store_action) = (load, store);
+        attachment.clear_depth = 0.5;
+        let attachment = &mut pass.stencil_attachment;
+        attachment.texture = Some(stencil.clone());
+        (attachment.load_action, attachment.store_action) = (load, store);
+        attachment.clear_stencil = MARK;
+        let command_buffer = self.queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        encoder.set_render_pipeline_state(&self.separate).unwrap();
         encoder.set_depth_stencil_state(&self.equal).unwrap();
         encoder.set_stencil_reference_value(MARK);
         (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
@@ -340,4 +400,42 @@ fn a_tiled_texture_s_later_level_reads_as_a_new_texture_s_never_a_released_textu
     );
     assert_eq!(taken, 1, "the texture took the parked image");
     assert_eq!(what, "a new texture's");
+}
+
+#[test]
+fn separate_depth_and_stencil_textures_read_no_released_texture_s_stencil() {
+    let scratch = Scratch::new("unwritten-separate");
+    let device = device(&scratch.0);
+    let tools = Tools::new(&device);
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::RENDER_TARGET;
+    descriptor.resource_options = ResourceOptions::shared();
+    let color = device.new_texture(&descriptor).unwrap();
+    let textures = || {
+        let depth = tools.attachment(PixelFormat::Depth32Float);
+        (depth, tools.attachment(PixelFormat::Stencil8))
+    };
+    // A pass whose scratch image's stencil is the mark, it and its textures released.
+    let before = device.work_counts().object_churn;
+    let (depth, stencil) = textures();
+    let marked = (LoadAction::Clear, StoreAction::Store);
+    let drawn = tools.separate((&depth, &stencil), &color, marked);
+    assert_ne!(found(&drawn, 0x40), "zero", "the marking pass drew nothing");
+    drop((depth, stencil));
+    parked(&device, before.images_parked, 3);
+    let taken = device.work_counts().object_churn.images_recycled;
+    let (depth, stencil) = textures();
+    let unstored = (LoadAction::DontCare, StoreAction::DontCare);
+    let drawn = tools.separate((&depth, &stencil), &color, unstored);
+    let taken = device.work_counts().object_churn.images_recycled - taken;
+    let drawn = found(&drawn, 0x40);
+    println!(
+        "UNWRITTEN-PARTS separate stencil on {}: images taken {taken}, draw {drawn}",
+        device.name()
+    );
+    assert_eq!(
+        taken, 3,
+        "the two textures and the scratch took the parked images"
+    );
+    assert_eq!(drawn, "zero");
 }
