@@ -1108,8 +1108,9 @@ fn radv_carries_the_fused_half_conversion() {
     assert!(!profile_of(&desc).workarounds().contains(&defect));
 }
 
-/// `DriverWorkaround::RegisterAllocatorOverflowsLargeModules` and
-/// `DriverWorkaround::SerializedStageWrapsLargeModules` are keyed on ANV, whatever its GPU and
+/// `DriverWorkaround::RegisterAllocatorOverflowsLargeModules`,
+/// `DriverWorkaround::SerializedStageWrapsLargeModules` and
+/// `DriverWorkaround::CompilerMemoryGrowsWithStageSize` are keyed on ANV, whatever its GPU and
 /// release; every committed ANV profile carries them, and no other profile does. The Iris Xe's
 /// description under RADV or NVIDIA's driver loses them.
 #[test]
@@ -1124,6 +1125,7 @@ fn large_module_defects_are_keyed_on_anv() {
     for fact in [
         DriverWorkaround::RegisterAllocatorOverflowsLargeModules,
         DriverWorkaround::SerializedStageWrapsLargeModules,
+        DriverWorkaround::CompilerMemoryGrowsWithStageSize,
     ] {
         for (stem, text) in committed_profiles() {
             let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();

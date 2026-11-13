@@ -412,12 +412,14 @@ fn by_identity(desc: &DeviceDescription) -> Vec<DriverWorkaround> {
         // drives.
         Some(vk::DriverId::MESA_RADV) => vec![DriverWorkaround::HalfConversionFusedWithArithmetic],
         // A register allocator that faults compiling a module past a word bound, products of one
-        // value by zeros of opposite sign kept as one, and a stage past 2^20 objects of its
-        // serialized form corrupted, on every GPU it drives.
+        // value by zeros of opposite sign kept as one, a stage past 2^20 objects of its
+        // serialized form corrupted, and a compiler whose memory outgrows the stage, on every GPU
+        // it drives.
         Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA) => vec![
             DriverWorkaround::RegisterAllocatorOverflowsLargeModules,
             DriverWorkaround::OppositeZeroProductsMerged,
             DriverWorkaround::SerializedStageWrapsLargeModules,
+            DriverWorkaround::CompilerMemoryGrowsWithStageSize,
         ],
         _ => Vec::new(),
     }

@@ -2326,22 +2326,24 @@ fn a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode() {
     );
 }
 
-/// On a driver that corrupts a stage past the size it compiles intact
-/// (`DriverWorkaround::SerializedStageWrapsLargeModules`, ANV: the Iris Xe of RPL-P), a module
-/// whose entry weighs more than the stage bound (`pipeline::compile`'s `stage_bound`, here a bound
-/// the test sets) is never emitted: the pressured kernel of
-/// `a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode`, whose emulated
-/// module passes the bound, is planned again keeping the `Direct` tier's pin to 32 lanes, its
-/// answers Metal's; under a bound its `Direct` module passes too, it is refused
-/// (`Feature::StageSize`, the defect named). The same description under another driver, which
-/// has no such defect, emits the emulated module under either bound.
+/// On a driver with a stage bound's defect (`DriverWorkaround::SerializedStageWrapsLargeModules`,
+/// a stage corrupted past the size it compiles intact, and
+/// `DriverWorkaround::CompilerMemoryGrowsWithStageSize`, a compile past the size measured within
+/// host-sized memory; ANV: the Iris Xe of RPL-P), a module whose entry weighs more than either
+/// bound (`pipeline::compile`'s `stage_bound`, here bounds the test sets) is never emitted: the
+/// pressured kernel of `a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode`,
+/// whose emulated module passes a bound, is planned again keeping the `Direct` tier's pin to 32
+/// lanes, its answers Metal's; under a bound its `Direct` module passes too, it is refused
+/// (`Feature::StageSize`, that bound's defect named), and past both, the serialized stage's
+/// defect, which faults the driver, is named. The same description under another driver, which
+/// has neither defect, emits the emulated module under every bound.
 #[test]
 fn a_kernel_past_the_stage_bound_keeps_the_widest_pin_or_is_refused() {
     use crate::device::profile::DriverWorkaround;
     use crate::device::Device;
     use crate::error::{Feature, Needs, Unsupported};
     use crate::lower::simd::{WIDEST_PIN, WIDEST_PIN_FLOOR, WIDEST_PIN_WORDS};
-    use crate::pipeline::compile::compile_bitcode_bounded;
+    use crate::pipeline::compile::{compile_bitcode_bounded, StageBounds};
     use crate::pipeline::testing::meter;
     use crate::spirv::roll::entry_weight;
     let half = |t: u32| if t & 31 < 16 { t ^ 1 } else { t };
@@ -2351,46 +2353,75 @@ fn a_kernel_past_the_stage_bound_keeps_the_widest_pin_or_is_refused() {
     };
     let entry = EntryRef::Name("device_half");
     let weight = |module: &TypedModule| entry_weight(module, &mut meter()).expect("weight");
-    let defect = DriverWorkaround::SerializedStageWrapsLargeModules;
+    let serialized = DriverWorkaround::SerializedStageWrapsLargeModules;
+    let memory = DriverWorkaround::CompilerMemoryGrowsWithStageSize;
     let iris_desc = crate::pipeline::testing::description("intel-irisxe-rplp-anv").unwrap();
     let iris = Device::new(iris_desc.clone(), DevicePolicy::default()).unwrap();
     let iris = iris.profile();
-    assert!(iris.workarounds().contains(&defect));
+    assert!(iris.workarounds().contains(&serialized));
+    assert!(iris.workarounds().contains(&memory));
     let mut other_desc = iris_desc;
     other_desc.driver_id = Some(crate::vk::DriverId::MESA_RADV);
     let other = Device::new(other_desc, DevicePolicy::default()).unwrap();
     let other = other.profile();
-    assert!(!other.workarounds().contains(&defect));
+    assert!(!other.workarounds().contains(&serialized));
+    assert!(!other.workarounds().contains(&memory));
+    // One defect's bound at `cap`, the other's past every module.
+    let at = |defect, cap| match defect == serialized {
+        true => StageBounds {
+            serialized: cap,
+            compiled: u64::MAX,
+        },
+        false => StageBounds {
+            serialized: u64::MAX,
+            compiled: cap,
+        },
+    };
+    let refused_for = |refused: Error| match refused {
+        Error::Unsupported(Unsupported {
+            feature: Feature::StageSize,
+            needs: Needs::DriverDefect(defect),
+            ..
+        }) => defect,
+        refused => panic!("{refused:?}"),
+    };
     // Unbounded, the kernel emulates its simdgroups in place of the widest mode on both.
-    let compile = |p, cap| compile_bitcode_bounded(&bc, entry, p, &mut meter(), cap);
-    let (_, plan, emulated) = compile(iris, u64::MAX).expect("emulated on the Iris Xe");
+    let compile = |p, bounds| compile_bitcode_bounded(&bc, entry, p, &mut meter(), bounds);
+    let (_, plan, emulated) = compile(iris, at(serialized, u64::MAX)).expect("emulated");
     assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 1));
     let emulated = weight(&emulated);
-    // Under a bound the emulated module passes: planned again keeping the pin, exact at 32 lanes.
-    let (_, plan, module) = compile(iris, emulated - 1).expect("planned again");
-    assert_eq!(plan.simd.1, Tier::Direct);
-    assert_eq!(uses(&plan, WIDEST_PIN), 0);
-    assert_eq!(plan.subgroup.size, Some(32));
-    let pinned = weight(&module);
-    assert!(pinned < emulated, "pinned {pinned}, emulated {emulated}");
     let want: Vec<u32> = (0..64).map(half).collect();
-    assert_eq!(run_words(&plan, &module, 64, SubgroupSize::W32), want);
-    // Under a bound the pinned module passes too: refused, the defect named.
-    let refused = compile(iris, pinned - 1).expect_err("past the bound");
-    let Error::Unsupported(Unsupported { feature, needs, .. }) = refused else {
-        panic!("{refused:?}");
-    };
-    assert_eq!(feature, Feature::StageSize);
-    assert_eq!(needs, Needs::DriverDefect(defect));
-    // Without the defect, the emulated module is emitted under either bound.
-    for cap in [emulated - 1, pinned - 1] {
-        let (_, plan, module) = compile(other, cap).expect("emitted without the defect");
-        assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 1));
-        assert!(weight(&module) > cap, "{cap}");
-        for lanes in CHUNKED {
-            assert_eq!(run_words(&plan, &module, 64, lanes), want, "{lanes:?}");
+    let mut pinned = 0;
+    for defect in [serialized, memory] {
+        // Under a bound the emulated module passes: planned again keeping the pin, exact at 32
+        // lanes.
+        let (_, plan, module) = compile(iris, at(defect, emulated - 1)).expect("planned again");
+        assert_eq!(plan.simd.1, Tier::Direct, "{defect:?}");
+        assert_eq!(uses(&plan, WIDEST_PIN), 0);
+        assert_eq!(plan.subgroup.size, Some(32));
+        pinned = weight(&module);
+        assert!(pinned < emulated, "pinned {pinned}, emulated {emulated}");
+        assert_eq!(run_words(&plan, &module, 64, SubgroupSize::W32), want);
+        // Under a bound the pinned module passes too: refused, the bound's defect named.
+        let refused = compile(iris, at(defect, pinned - 1)).expect_err("past the bound");
+        assert_eq!(refused_for(refused), defect);
+        // Without the defect, the emulated module is emitted under either bound.
+        for cap in [emulated - 1, pinned - 1] {
+            let (_, plan, module) = compile(other, at(defect, cap)).expect("emitted");
+            assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 1));
+            assert!(weight(&module) > cap, "{cap}");
+            for lanes in CHUNKED {
+                assert_eq!(run_words(&plan, &module, 64, lanes), want, "{lanes:?}");
+            }
         }
     }
+    // Past both bounds, the serialized stage's defect is named.
+    let both = StageBounds {
+        serialized: pinned - 1,
+        compiled: pinned - 1,
+    };
+    let refused = compile(iris, both).expect_err("past both bounds");
+    assert_eq!(refused_for(refused), serialized);
 }
 
 /// One input, one answer, whichever path compiles it: on the Iris Xe, the pressured kernel of
@@ -2410,7 +2441,7 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
     use crate::library::Library;
     use crate::lower::simd::{WIDEST_PIN_FLOOR, WIDEST_PIN_WORDS};
     use crate::pipeline::compile::{
-        compile_bitcode_bounded, compile_stage_bounded, plan_bitcode, StageEntries,
+        compile_bitcode_bounded, compile_stage_bounded, plan_bitcode, StageBounds, StageEntries,
     };
     use crate::pipeline::testing::meter;
     use crate::pipeline::FunctionDescriptor;
@@ -2424,9 +2455,19 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
     let iris = iris.profile();
     let library = Library::from_air(&bc).expect("library");
     let fd = FunctionDescriptor::new(library.function("device_half").expect("the kernel"));
+    // The serialized stage's bound at `cap`; the compiled one past every module.
+    let at = |cap| StageBounds {
+        serialized: cap,
+        compiled: u64::MAX,
+    };
     let weight = |cap| {
-        let compiled =
-            compile_bitcode_bounded(&bc, EntryRef::Name("device_half"), iris, &mut meter(), cap);
+        let compiled = compile_bitcode_bounded(
+            &bc,
+            EntryRef::Name("device_half"),
+            iris,
+            &mut meter(),
+            at(cap),
+        );
         let (_, _, module) = compiled.expect("compiled");
         entry_weight(&module, &mut meter()).expect("weight")
     };
@@ -2447,7 +2488,7 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
         let entries = StageEntries::new();
         let work = |entries: Option<&StageEntries>| {
             let mut m = meter();
-            let got = answer(compile_stage_bounded(&fd, iris, entries, &mut m, cap));
+            let got = answer(compile_stage_bounded(&fd, iris, entries, &mut m, at(cap)));
             (got, m.work())
         };
         let (alone, made, found) = (work(None), work(Some(&entries)), work(Some(&entries)));
@@ -2467,7 +2508,7 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
         for (budget, expected) in [(w, want.clone()), (w - 1, Err(Err(Limit::WorkUnits)))] {
             for via in [None, Some(&entries)] {
                 let mut m = capped(budget);
-                let got = answer(compile_stage_bounded(&fd, iris, via, &mut m, cap));
+                let got = answer(compile_stage_bounded(&fd, iris, via, &mut m, at(cap)));
                 let shared = via.is_some();
                 assert_eq!(
                     got, expected,
@@ -2481,7 +2522,7 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
         let consts = FunctionConstantValues::defaults();
         let entry = EntryRef::Name("device_half");
         plan_bitcode(&bc, entry, &consts, iris, &LowerInputs::new(), &mut m).expect("planned");
-        let got = answer(compile_stage_bounded(&fd, iris, None, &mut m, cap));
+        let got = answer(compile_stage_bounded(&fd, iris, None, &mut m, at(cap)));
         assert_eq!(
             got,
             Err(Err(Limit::WorkUnits)),

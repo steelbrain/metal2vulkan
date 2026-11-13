@@ -1518,6 +1518,20 @@ pub enum DriverWorkaround {
     /// the `Direct` simdgroup tier where it took the `Emulated` one only in place of the widest
     /// mode's pin, and refused otherwise (`Needs::DriverDefect`), never handed to the driver.
     SerializedStageWrapsLargeModules,
+    /// The driver's shader compiler takes memory that grows faster than the stage it compiles,
+    /// inside the process that creates the pipeline: past the largest stage measured to compile in
+    /// host-sized memory, one pipeline creation may take the host's memory. Measured with ANV
+    /// (`VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA`), Mesa 26.2.6, on the Iris Xe of RPL-P, compute
+    /// kernels created cold through `vkCreateComputePipelines` (job m3-max-26147): modules of
+    /// entry weight 73,814, 75,886 and 99,109 were created in 45 s, 47 s and 132 s at peak
+    /// resident sets of 1.76, 2.24 and 3.65 GiB; one of entry weight 532,213 passed 16 GiB at
+    /// 358 s without finishing, where it was stopped. Keyed on the driver whatever its GPU and
+    /// release, in `device::derive`. A module whose entry weighs more than the largest measured
+    /// to compile (`pipeline::compile`'s stage bound) is planned again in the `Direct` simdgroup
+    /// tier where it took the `Emulated` one only in place of the widest mode's pin, and refused
+    /// otherwise (`Needs::DriverDefect`), never handed to the driver. The bound rises when a larger
+    /// compile is measured within host-sized memory.
+    CompilerMemoryGrowsWithStageSize,
 }
 
 #[cfg(test)]

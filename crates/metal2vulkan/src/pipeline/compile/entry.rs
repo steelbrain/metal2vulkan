@@ -169,8 +169,9 @@ impl DeviceProfile {
 
     /// Everything [`DeviceProfile::compile_entry`] does before emission (decode, specialize,
     /// analyze, select), and what it cost against `budget`: its first plan, which a kernel whose
-    /// emitted module passes the bound its driver compiles intact replaces
-    /// (`DriverWorkaround::SerializedStageWrapsLargeModules`).
+    /// emitted module passes a bound its driver compiles within replaces
+    /// (`DriverWorkaround::SerializedStageWrapsLargeModules`,
+    /// `DriverWorkaround::CompilerMemoryGrowsWithStageSize`).
     pub fn plan_entry(
         &self,
         d: &EntryDescriptor<'_>,
