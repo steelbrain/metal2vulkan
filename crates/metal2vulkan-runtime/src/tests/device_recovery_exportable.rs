@@ -1,20 +1,25 @@
 //! What a device's recovery carries of its exportable buffers (`exported_memory.rs`): a `Private`
 //! buffer in memory another API imports is the same buffer on the new `VkDevice`, over its own
 //! memory imported again, as the recovery's notice counts. Its exports after the recovery answer
-//! the same memory (the same file, allocation size, offset and memory type), a texture over it
-//! is carried over it, and the GPU's writes to the buffer there read back through the texture.
+//! the allocation size, offset and memory type of one before; another API's import of the export
+//! taken before the recovery still writes the buffer's memory, which the buffer and a texture over
+//! it read once `Buffer::external_write_done` announces it; and the GPU's writes to the buffer on
+//! the new `VkDevice` read back through the texture. The descriptor's file is not compared: the
+//! recovery exports the memory again from the lost `VkDevice`, Vulkan does not say that two
+//! exports of one memory answer one file, and NVIDIA's driver answers a new dma-buf to each.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). No GPU fault: the loss is marked (`Device::recover_for_test`).
 //! Each handle type the device exports runs; one it does not is named and skipped.
 
 use super::device_recovery::{heard_device, outcome, recovery_notices, Heard, Scratch};
+use super::exported_memory::Writer;
 use crate::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBufferStatus, CommandQueue, Error,
-    MemoryExport, Origin, ResourceOptions, RuntimeGap, Size, Texture, TextureDescriptor,
+    ExportedMemory, MemoryExport, Origin, ResourceOptions, RuntimeGap, Size, Texture,
+    TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
-use std::os::unix::fs::MetadataExt;
 
 /// The texture's texels a row.
 const WIDTH: u64 = 64;
@@ -29,23 +34,20 @@ const ROW: u64 = 4 * WIDTH;
 /// The buffer's bytes, the texture's whole.
 const LENGTH: u64 = ROW * HEIGHT;
 
-/// What an export of `buffer`'s memory as `export` answers: the allocation's size, the buffer's
-/// offset in it, its memory type, and the descriptor's file's inode, which every descriptor of
-/// one memory shares.
-fn exported(buffer: &Buffer, export: MemoryExport) -> (u64, u64, u32, u64) {
+/// An export of `buffer`'s memory as `export`, and what it answers: the allocation's size, the
+/// buffer's offset in it and its memory type.
+fn exported(buffer: &Buffer, export: MemoryExport) -> (ExportedMemory, (u64, u64, u32)) {
     let memory = match export {
         MemoryExport::OpaqueFd => buffer.export_memory_fd(),
         _ => buffer.export_memory_dma_buf(),
     }
     .unwrap();
-    let file = std::fs::File::from(memory.fd);
-    let inode = file.metadata().unwrap().ino();
-    (
+    let answers = (
         memory.allocation_size,
         memory.offset,
         memory.memory_type_index,
-        inode,
-    )
+    );
+    (memory, answers)
 }
 
 /// `queue`'s blit of `value` into every byte of `buffer`, completed.
@@ -61,26 +63,38 @@ fn fill(queue: &CommandQueue, buffer: &Buffer, value: u8) {
     );
 }
 
-/// `texture`'s texels as `queue`'s blit copies them into a `Shared` buffer, completed.
-fn read(queue: &CommandQueue, texture: &Texture) -> Vec<u8> {
+/// What a read copies from.
+enum Source<'a> {
+    /// A texture's texels.
+    Texels(&'a Texture),
+    /// A buffer's bytes.
+    Bytes(&'a Buffer),
+}
+
+/// What `queue`'s blit copies into a `Shared` buffer of [`LENGTH`] bytes from `from`,
+/// completed.
+fn read(queue: &CommandQueue, from: Source) -> Vec<u8> {
     let device = queue.device();
     let read = device
         .new_buffer(LENGTH, ResourceOptions::shared())
         .unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
-    blit.copy_from_texture_to_buffer(
-        texture,
-        0,
-        0,
-        Origin::new(0, 0, 0),
-        Size::new(WIDTH, HEIGHT, 1),
-        &read,
-        0,
-        ROW,
-        LENGTH,
-        BlitOption::None,
-    )
+    match from {
+        Source::Texels(texture) => blit.copy_from_texture_to_buffer(
+            texture,
+            0,
+            0,
+            Origin::new(0, 0, 0),
+            Size::new(WIDTH, HEIGHT, 1),
+            &read,
+            0,
+            ROW,
+            LENGTH,
+            BlitOption::None,
+        ),
+        Source::Bytes(buffer) => blit.copy_from_buffer_to_buffer(buffer, 0, &read, 0, LENGTH),
+    }
     .unwrap();
     blit.end_encoding().unwrap();
     command_buffer.commit().unwrap();
@@ -96,8 +110,10 @@ fn read(queue: &CommandQueue, texture: &Texture) -> Vec<u8> {
 /// A `Private` buffer exportable as each handle type the device exports, with a texture over it,
 /// made before a recovery, is carried over its own memory: the notice leaves no buffer in
 /// exportable memory refused and counts the texture among those over carried buffers; an export
-/// after the recovery answers the same file, allocation size, offset and memory type as one
-/// before; and a fill of the buffer on the new `VkDevice` reads back through the texture.
+/// after the recovery answers the allocation size, offset and memory type of one before; a fill of
+/// the buffer on the new `VkDevice` reads back through the texture; and a second `VkDevice`'s
+/// write through its import of the export taken before the recovery, announced, reads back
+/// through the buffer and the texture.
 #[test]
 fn a_recovery_carries_a_private_exportable_buffer_over_its_own_memory() {
     let scratch = Scratch::new();
@@ -127,11 +143,13 @@ fn a_recovery_carries_a_private_exportable_buffer_over_its_own_memory() {
         let texture = buffer.new_texture(&texture, 0, ROW).unwrap();
         fill(&queue, &buffer, 0x11);
         assert_eq!(
-            read(&queue, &texture),
+            read(&queue, Source::Texels(&texture)),
             [0x11; LENGTH as usize],
             "{export:?}"
         );
-        let before = exported(&buffer, export);
+        let usage = crate::buffer::usage(device.shared().device_address);
+        let (memory, before) = exported(&buffer, export);
+        let writer = Writer::import(&device, memory, usage, export);
         let from = heard.lock().unwrap().len();
         device.recover_for_test().unwrap();
         let said = recovery_notices(&heard, from, "the device");
@@ -144,17 +162,36 @@ fn a_recovery_carries_a_private_exportable_buffer_over_its_own_memory() {
                 && !said[0].contains("opaque-fd"),
             "{export:?}: {said:?}"
         );
-        let after = exported(&buffer, export);
+        let (_, after) = exported(&buffer, export);
         eprintln!(
-            "EXPORT-CARRY on {name}: {export:?}: before (allocation, offset, type, inode) \
-             {before:?}, after {after:?}"
+            "EXPORT-CARRY on {name}: {export:?}: before (allocation, offset, type) {before:?}, \
+             after {after:?}"
         );
         assert_eq!(after, before, "{export:?}: the export's memory");
         fill(&queue, &buffer, 0x5a);
         assert_eq!(
-            read(&queue, &texture),
+            read(&queue, Source::Texels(&texture)),
             [0x5a; LENGTH as usize],
             "{export:?}"
+        );
+        // The other API's import of the export taken before the recovery reaches the carried
+        // buffer's memory: its write, released to the family the runtime acquires from and
+        // announced, is what the buffer and the texture over it hold.
+        writer.fill(0xc3);
+        buffer.external_write_done().unwrap();
+        assert_eq!(
+            read(&queue, Source::Bytes(&buffer)),
+            [0xc3; LENGTH as usize],
+            "{export:?}: the buffer after the import's write"
+        );
+        assert_eq!(
+            read(&queue, Source::Texels(&texture)),
+            [0xc3; LENGTH as usize],
+            "{export:?}: the texture after the import's write"
+        );
+        eprintln!(
+            "EXPORT-CARRY on {name}: {export:?}: the import before the recovery wrote the \
+             carried buffer"
         );
         carried += 1;
     }

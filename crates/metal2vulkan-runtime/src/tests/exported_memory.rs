@@ -12,10 +12,10 @@
 
 use super::blit_holds::{device, Scratch, WAIT};
 use crate::error::{Error, Problem, RuntimeGap};
-use crate::{Buffer, Device, ResourceOptions};
+use crate::{Buffer, Device, MemoryExport, ResourceOptions};
 use ash::vk;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
-use std::os::fd::IntoRawFd;
+use std::os::fd::{AsRawFd, IntoRawFd};
 use std::time::{Duration, Instant};
 
 /// The buffer's length: a 3840 x 2160 NV12 picture's bytes, the consumer's decoded frame.
@@ -272,27 +272,44 @@ fn an_exportable_buffer_s_memory_crosses_to_a_second_device() {
 }
 
 /// A second `VkDevice` of the runtime's physical device that writes an exportable buffer's memory
-/// through an import of its opaque descriptor, as a video decoder writes its pictures: each write
-/// a fill on its own queue, waited for, releasing the memory to `VK_QUEUE_FAMILY_EXTERNAL`.
-struct Writer {
+/// through an import of its descriptor of either handle type, as a video decoder writes its
+/// pictures: each write a fill on its own queue, waited for, releasing the memory to the family
+/// the runtime acquires it from (`Buffer::external_write_done`): `VK_QUEUE_FAMILY_EXTERNAL` for an
+/// opaque descriptor, `VK_QUEUE_FAMILY_FOREIGN_EXT` for a dma-buf.
+pub(super) struct Writer {
     device: ash::Device,
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
     pool: vk::CommandPool,
     queue: vk::Queue,
     family: u32,
-    length: u64,
+    /// The family its writes are released to.
+    released_to: u32,
+    /// The exported buffer's first byte in `buffer`, and its length.
+    range: (u64, u64),
 }
 
 impl Writer {
-    /// The writer of `exported`'s `length` bytes, the memory of a buffer of `usage` of `device`.
-    fn import(
+    /// The writer of `exported`'s `length` bytes, the memory of a buffer of `usage` of `device`
+    /// exported as `export`.
+    pub(super) fn import(
         device: &Device,
         exported: crate::ExportedMemory,
         usage: vk::BufferUsageFlags,
+        export: MemoryExport,
     ) -> Writer {
         let device_address = device.shared().device_address;
         let length = exported.length;
+        let (handle, released_to) = match export {
+            MemoryExport::OpaqueFd => (
+                vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+                vk::QUEUE_FAMILY_EXTERNAL,
+            ),
+            _ => (
+                vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+                vk::QUEUE_FAMILY_FOREIGN_EXT,
+            ),
+        };
         // SAFETY: the handles are used while the device lives; the second device is the test's own
         // and destroyed as the writer drops.
         let handles = unsafe { device.raw() };
@@ -305,47 +322,129 @@ impl Writer {
         let queues = [vk::DeviceQueueCreateInfo::default()
             .queue_family_index(family)
             .queue_priorities(&priorities)];
-        let extensions = [ash::khr::external_memory_fd::NAME.as_ptr()];
+        // A dma-buf's import names the extensions the runtime's export needed, which the device
+        // lists (the export ran): its handle type, and the foreign family its writes go to.
+        let extensions = match export {
+            MemoryExport::OpaqueFd => vec![ash::khr::external_memory_fd::NAME.as_ptr()],
+            _ => vec![
+                ash::khr::external_memory_fd::NAME.as_ptr(),
+                ash::ext::external_memory_dma_buf::NAME.as_ptr(),
+                ash::ext::queue_family_foreign::NAME.as_ptr(),
+            ],
+        };
         let mut features12 =
             vk::PhysicalDeviceVulkan12Features::default().buffer_device_address(device_address);
         let info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queues)
             .enabled_extension_names(&extensions)
             .push_next(&mut features12);
-        // SAFETY: the physical device is the instance's; the extension is listed (the export ran).
+        // SAFETY: the physical device is the instance's; the extensions are listed (the export
+        // ran).
         let second = unsafe { instance.create_device(physical, &info, None) }.unwrap();
-        let mut external = vk::ExternalMemoryBufferCreateInfo::default()
-            .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
-        let buffer_info = device.shared().sharing().buffer(
-            vk::BufferCreateInfo::default()
-                .size(length.next_multiple_of(16))
-                .usage(usage)
-                .push_next(&mut external),
-        );
-        // SAFETY: the second device is live and `buffer_info` valid for it.
-        let buffer = unsafe { second.create_buffer(&buffer_info, None) }.unwrap();
+        let buffer_of = |size: u64| {
+            let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle);
+            let buffer_info = device.shared().sharing().buffer(
+                vk::BufferCreateInfo::default()
+                    .size(size)
+                    .usage(usage)
+                    .push_next(&mut external),
+            );
+            // SAFETY: the second device is live and `buffer_info` valid for it.
+            unsafe { second.create_buffer(&buffer_info, None) }.unwrap()
+        };
+        // An opaque descriptor's import is dedicated where its allocation is, to a buffer made as
+        // the exported one was (`VUID-VkMemoryDedicatedAllocateInfo-buffer-01879`). A dma-buf's is
+        // dedicated there too, and where this device imports one only so or requires it of the
+        // buffer; a dedicated import is of the buffer's size (`-buffer-02965`), so its buffer spans
+        // the allocation, and the exported bytes lie at their offset in it.
+        let dedicated = exported.dedicated
+            || export != MemoryExport::OpaqueFd && {
+                let query = vk::PhysicalDeviceExternalBufferInfo::default()
+                    .usage(usage)
+                    .handle_type(handle);
+                let mut properties = vk::ExternalBufferProperties::default();
+                // SAFETY: the physical device is the instance's, at Vulkan 1.2.
+                unsafe {
+                    instance.get_physical_device_external_buffer_properties(
+                        physical,
+                        &query,
+                        &mut properties,
+                    )
+                };
+                let probe = buffer_of(length.next_multiple_of(16));
+                let mut needs = vk::MemoryDedicatedRequirements::default();
+                let mut requirements = vk::MemoryRequirements2::default().push_next(&mut needs);
+                let asked = vk::BufferMemoryRequirementsInfo2::default().buffer(probe);
+                // SAFETY: the probe is the second device's, unused, and destroyed at once.
+                unsafe {
+                    second.get_buffer_memory_requirements2(&asked, &mut requirements);
+                    second.destroy_buffer(probe, None);
+                }
+                let only = (properties
+                    .external_memory_properties
+                    .external_memory_features)
+                    .contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY);
+                only || needs.requires_dedicated_allocation == vk::TRUE
+            };
+        let (size, bound_at, range) = match (dedicated, export) {
+            (true, MemoryExport::OpaqueFd) | (false, _) => {
+                (length.next_multiple_of(16), exported.offset, (0, length))
+            }
+            (true, _) => (exported.allocation_size, 0, (exported.offset, length)),
+        };
+        let buffer = buffer_of(size);
+        // A dma-buf's import takes a memory type its query answers (`vkGetMemoryFdPropertiesKHR`)
+        // and the buffer takes: the exported memory's own where it is among them.
+        // SAFETY: the buffer is the second device's.
+        let takes = unsafe { second.get_buffer_memory_requirements(buffer) }.memory_type_bits;
+        let memory_type_index = match export {
+            MemoryExport::OpaqueFd => exported.memory_type_index,
+            _ => {
+                let loader = ash::khr::external_memory_fd::Device::new(instance, &second);
+                let mut properties = vk::MemoryFdPropertiesKHR::default();
+                // SAFETY: a dma-buf the export handed over, read and not taken.
+                unsafe {
+                    loader.get_memory_fd_properties(
+                        handle,
+                        exported.fd.as_raw_fd(),
+                        &mut properties,
+                    )
+                }
+                .unwrap();
+                let types = properties.memory_type_bits & takes;
+                assert_ne!(
+                    types, 0,
+                    "no memory type imports the dma-buf for the buffer"
+                );
+                match types & 1 << exported.memory_type_index {
+                    0 => types.trailing_zeros(),
+                    _ => exported.memory_type_index,
+                }
+            }
+        };
         let mut import = vk::ImportMemoryFdInfoKHR::default()
-            .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+            .handle_type(handle)
             .fd(exported.fd.into_raw_fd());
-        let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().buffer(buffer);
+        let mut dedication = vk::MemoryDedicatedAllocateInfo::default().buffer(buffer);
         let mut flags =
             vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
         let mut allocate = vk::MemoryAllocateInfo::default()
             .allocation_size(exported.allocation_size)
-            .memory_type_index(exported.memory_type_index)
+            .memory_type_index(memory_type_index)
             .push_next(&mut import);
-        if exported.dedicated {
-            allocate = allocate.push_next(&mut dedicated);
+        if dedicated {
+            allocate = allocate.push_next(&mut dedication);
         }
         if device_address {
             allocate = allocate.push_next(&mut flags);
         }
-        // SAFETY: the descriptor is the export's of the same physical device, its size and type
-        // the allocation's; a successful import owns it.
+        // SAFETY: the descriptor is the export's of the same physical device, its size the
+        // allocation's and its type one it imports as; a successful import owns it.
         let memory = unsafe { second.allocate_memory(&allocate, None) }.unwrap();
         // SAFETY: the buffer and the memory are the second device's, the memory as long as the
-        // buffer requires (the allocation the exported buffer is bound to at its offset).
-        unsafe { second.bind_buffer_memory(buffer, memory, exported.offset) }.unwrap();
+        // buffer requires (the allocation the exported buffer is bound to at its offset, or the
+        // buffer's dedicated import of it at 0).
+        unsafe { second.bind_buffer_memory(buffer, memory, bound_at) }.unwrap();
         let pool_info = vk::CommandPoolCreateInfo::default()
             .queue_family_index(family)
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
@@ -360,12 +459,13 @@ impl Writer {
             pool,
             queue,
             family,
-            length,
+            released_to,
+            range,
         }
     }
 
-    /// Fill every byte of the buffer with `value`, and wait for it.
-    fn fill(&self, value: u8) {
+    /// Fill every byte of the exported buffer with `value`, and wait for it.
+    pub(super) fn fill(&self, value: u8) {
         let device = &self.device;
         let allocate = vk::CommandBufferAllocateInfo::default()
             .command_pool(self.pool)
@@ -379,13 +479,14 @@ impl Writer {
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             device.begin_command_buffer(command_buffer, &begin).unwrap();
             let word = u32::from_ne_bytes([value; 4]);
-            device.cmd_fill_buffer(command_buffer, self.buffer, 0, self.length, word);
-            // The writes released to the external family the runtime's device acquires them from
+            let (offset, length) = self.range;
+            device.cmd_fill_buffer(command_buffer, self.buffer, offset, length, word);
+            // The writes released to the family the runtime's device acquires them from
             // (`Buffer::external_write_done`).
             let release = vk::BufferMemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
                 .src_queue_family_index(self.family)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_EXTERNAL)
+                .dst_queue_family_index(self.released_to)
                 .buffer(self.buffer)
                 .offset(0)
                 .size(vk::WHOLE_SIZE);
@@ -468,7 +569,8 @@ fn a_shadow_over_an_exported_buffer_reads_each_announced_write() {
         texture.shadow().is_some(),
         "{name}: padded rows make a shadow"
     );
-    let writer = Writer::import(&device, buffer.export_memory_fd().unwrap(), usage);
+    let exported = buffer.export_memory_fd().unwrap();
+    let writer = Writer::import(&device, exported, usage, MemoryExport::OpaqueFd);
     for value in [0x11, 0x22, 0x33] {
         writer.fill(value);
         buffer.external_write_done().unwrap();
