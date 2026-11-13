@@ -36,6 +36,12 @@
 //! ranges, so only the region-by-region frames are checked for ranges and pieces, and a
 //! fanned-out frame for its probe and its fanned-out draws.
 //!
+//! With wide triangles among the grid's (`rate_mapped_pieces_host_step_wide` and its `_exact`
+//! twin), one triangle of every [`WIDE_EVERY`] is replaced by one [`WIDE`] quads a side, which
+//! touches more regions than the fan-out's copies: the probe flags each command whose indices
+//! reach one, as a guest's frame had about a quarter of its probed draws flagged
+//! (`rate_map_flagged_draws`).
+//!
 //! At a guest frame's scale ([`GUEST_SCALE`] times the commands, about the 126 pieces a frame of
 //! the consumer's was recorded in on an RTX 3090), the host step's frame is
 //! `rate_mapped_pieces_guest_scale` (fanned out) and `rate_mapped_pieces_guest_scale_exact`: a GPU
@@ -87,6 +93,17 @@ const GUEST_SCALE: u32 = 6;
 /// The grid's quads on a side: its triangles' indices hold the most indices a command draws.
 const GRID: u32 = 165;
 
+/// With wide triangles, the grid's triangles each wide one replaces one of, and its quads a side.
+const WIDE_EVERY: u32 = 8192;
+const WIDE: u32 = 48;
+
+/// The grid's triangles: all small, or one of every [`WIDE_EVERY`] wide.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Triangles {
+    Small,
+    Wide,
+}
+
 /// The longest a piece may run: half amdgpu's job timeout.
 const PIECE_LIMIT: Duration = Duration::from_secs(1);
 
@@ -117,7 +134,7 @@ fn counts(work: &WorkCounts) -> [u64; 15] {
 #[test]
 #[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
 fn rate_mapped_pieces() {
-    pieces_frame(false, RateMapRegionPolicy::FanOut, 1);
+    pieces_frame(false, RateMapRegionPolicy::FanOut, 1, Triangles::Small);
 }
 
 /// One frame of the commands, their records ones the GPU may write, cut into pieces at the host
@@ -125,7 +142,7 @@ fn rate_mapped_pieces() {
 #[test]
 #[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
 fn rate_mapped_pieces_host_step() {
-    pieces_frame(true, RateMapRegionPolicy::FanOut, 1);
+    pieces_frame(true, RateMapRegionPolicy::FanOut, 1, Triangles::Small);
 }
 
 /// One frame of the commands at the host step, every draw drawn region by region and cut into
@@ -133,7 +150,23 @@ fn rate_mapped_pieces_host_step() {
 #[test]
 #[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
 fn rate_mapped_pieces_host_step_exact() {
-    pieces_frame(true, RateMapRegionPolicy::Exact, 1);
+    pieces_frame(true, RateMapRegionPolicy::Exact, 1, Triangles::Small);
+}
+
+/// The host step's frame with wide triangles among the grid's, fanned out: printed and bounded
+/// (the module docs).
+#[test]
+#[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
+fn rate_mapped_pieces_host_step_wide() {
+    pieces_frame(true, RateMapRegionPolicy::FanOut, 1, Triangles::Wide);
+}
+
+/// The host step's frame with wide triangles among the grid's, every draw region by region:
+/// printed and bounded (the module docs).
+#[test]
+#[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
+fn rate_mapped_pieces_host_step_wide_exact() {
+    pieces_frame(true, RateMapRegionPolicy::Exact, 1, Triangles::Wide);
 }
 
 /// The host step's frame at a guest frame's scale, fanned out: printed and bounded (the module
@@ -142,7 +175,12 @@ fn rate_mapped_pieces_host_step_exact() {
 #[test]
 #[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
 fn rate_mapped_pieces_guest_scale() {
-    pieces_frame(true, RateMapRegionPolicy::FanOut, GUEST_SCALE);
+    pieces_frame(
+        true,
+        RateMapRegionPolicy::FanOut,
+        GUEST_SCALE,
+        Triangles::Small,
+    );
 }
 
 /// The host step's frame at a guest frame's scale, every draw region by region: printed and
@@ -151,13 +189,18 @@ fn rate_mapped_pieces_guest_scale() {
 #[test]
 #[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
 fn rate_mapped_pieces_guest_scale_exact() {
-    pieces_frame(true, RateMapRegionPolicy::Exact, GUEST_SCALE);
+    pieces_frame(
+        true,
+        RateMapRegionPolicy::Exact,
+        GUEST_SCALE,
+        Triangles::Small,
+    );
 }
 
 /// One frame of the commands, `scale` times [`COUNTS`]', recorded at the host step where a blit
 /// encoder may write their records before the pass (`step`), else at `commit`, the device's draws
-/// reaching the regions as `policy` says.
-fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32) {
+/// reaching the regions as `policy` says, the grid's triangles `triangles`.
+fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32, triangles: Triangles) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
@@ -216,7 +259,15 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32) {
                 corner(x, y + 1),
                 corner(x + 1, y + 1),
             ];
-            [a, b, c, b, d, c]
+            // A wide triangle in place of the quad's first, every `WIDE_EVERY` triangles.
+            let (b0, c0) = match triangles == Triangles::Wide && (2 * quad) % WIDE_EVERY == 0 {
+                true => (
+                    corner((x + WIDE).min(GRID), y),
+                    corner(x, (y + WIDE).min(GRID)),
+                ),
+                false => (b, c),
+            };
+            [a, b0, c0, b, d, c]
         })
         .flat_map(u32::to_le_bytes)
         .collect();
@@ -334,10 +385,12 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32) {
         let most = Duration::from_nanos(after[4]);
         let indices: u64 = draws.iter().map(|&count| u64::from(count)).sum();
         let mean = Duration::from_nanos(nanos / timed.max(1));
-        let at = match (step, policy) {
-            (true, RateMapRegionPolicy::FanOut) => "host step, fan-out",
-            (true, _) => "host step, exact",
-            (false, _) => "commit",
+        let at = match (step, policy, triangles) {
+            (true, RateMapRegionPolicy::FanOut, Triangles::Small) => "host step, fan-out",
+            (true, RateMapRegionPolicy::FanOut, Triangles::Wide) => "host step, fan-out, wide",
+            (true, _, Triangles::Small) => "host step, exact",
+            (true, _, Triangles::Wide) => "host step, exact, wide",
+            (false, _, _) => "commit",
         };
         eprintln!(
             "RATE-MAP-PIECES {name} ({at}, {frame}): screen {}x{}, physical {}x{}, {regions} \
@@ -365,6 +418,11 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32) {
             true => {
                 assert_eq!(probes, 1, "the host step probed the pass once");
                 assert!(fanned > 0, "no draw was fanned out");
+                assert_eq!(
+                    flagged > 0,
+                    triangles == Triangles::Wide,
+                    "draws flagged: {flagged}"
+                );
             }
             false => {
                 assert_eq!((probes, fanned), (0, 0), "a draw was fanned out");
