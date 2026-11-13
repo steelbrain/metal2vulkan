@@ -17,7 +17,11 @@
 //! which differs from the CPU's (the granule of the coordinate plus half a pixel, two roundings
 //! where the CPU fuses, denormals flushed, the layer unclamped). Measured on an Apple M4: the bytes
 //! of 45 maps, and every CPU and GPU answer probed over them, bit for bit, the sign of a zero
-//! included. The translated decoder's `float` arithmetic is the device's: it computes the shader's
+//! included. A shader's `uint2` overloads answer as `air::canon::rate_map_data`'s
+//! `shader_screen_to_physical_integer` and `shader_physical_to_screen_integer` (measured on an
+//! Apple M3 Max): the `float2` decoder at the pixel's centre converted to `uint`, and the bits of
+//! a `float` the coordinate's granule gives, not a screen coordinate. The translated decoder's
+//! `float` arithmetic is the device's: it computes the shader's
 //! answers bit for bit on a device that reads `float` denormals as Metal does, and with the
 //! device's own denormals elsewhere (`PrecisionNote::DeviceDenormals`), as the SPIR-V interpreter
 //! keeps them. The buffer is then bound like any other ([`BoundBuffer::Buffer`]).
@@ -800,4 +804,4 @@ pub use regions::{RateMapRegion, RateMapRegions, RegionError, RegionLimits};
 mod tests;
 
 #[cfg(test)]
-mod apple_tests;
+pub(crate) mod apple_tests;

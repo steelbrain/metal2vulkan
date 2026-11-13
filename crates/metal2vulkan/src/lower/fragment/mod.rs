@@ -52,9 +52,8 @@
 //! - **Pull-model interpolation** (`interpolate`): each `interpolate_at_*` call of an
 //!   `interpolant` reads the interpolant's variable where it says (`stage_io::interpolate`); the
 //!   interpolant itself is planned by `lower::stage_io`.
-//! - Refused: the `uint2` overloads of `map_screen_to_physical_coordinates` and its inverse
-//!   (canon compiles the `float2` ones to the rate map's decoder; no reading of the
-//!   physical-to-screen `uint2` one is established).
+//! - `map_screen_to_physical_coordinates` and its inverse never reach lowering: canon compiles
+//!   every overload, `float2` and `uint2`, to the rate map's decoder (`air::canon::rate_map`).
 
 mod color;
 mod coverage;
@@ -1016,9 +1015,9 @@ pub fn select(cx: &mut SelectCx<'_>, at: InstId, inst: &Inst) -> Result<Fragment
             Ok(FragmentStrategy::Discard)
         }
         Fragment::Discard => Err(not_lowered()),
-        // Canon compiled every `float2` map; the `uint2` ones reach here.
+        // Canon compiled every map, `float2` and `uint2`, to its decoder.
         Fragment::MapCoordinates { .. } => {
-            Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into())
+            Err(cx.invariant("a rasterization-rate map call canon compiles reached lowering"))
         }
         Fragment::NumSamples if cx.stage == Stage::Fragment => num_samples(cx, inst, &call.args),
         Fragment::NumSamples => Err(not_lowered()),

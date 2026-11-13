@@ -3,7 +3,8 @@
 //! and GPU answers, bit for bit, the sign of a zero and a `NaN`'s bits included: inside the screen,
 //! in the half pixel before a tile boundary at a multiple of 32, past both ends, at denormals,
 //! `NaN`s, infinities and far values, at offsets that lie near a half step, and a shader's layers 1
-//! to 5 over the bytes followed by a pattern.
+//! to 5 over the bytes followed by a pattern. A shader's `uint2` answers, measured on an Apple M3
+//! Max by our probe `rate_map_integer_overloads`, are `apple_integer_vectors.txt`.
 
 use super::*;
 use crate::air::canon::rate_map_data as format;
@@ -11,6 +12,8 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 const VECTORS: &str = include_str!("apple_vectors.txt");
+/// A shader's `uint2` answers on an Apple M3 Max (the file's header has its format).
+pub(crate) const INTEGER_VECTORS: &str = include_str!("apple_integer_vectors.txt");
 
 /// The words past the parameter data in the probe's padded buffer: word `i` of the buffer.
 fn pattern(i: u32) -> u32 {
@@ -35,7 +38,7 @@ fn sha(bytes: &[u8]) -> String {
 }
 
 /// The descriptor of a vector line's layers: `h:...|v:...` per layer, `;` between, `-` for none.
-fn descriptor(width: &str, height: &str, layers: &str) -> RateMapDescriptor {
+pub(crate) fn descriptor(width: &str, height: &str, layers: &str) -> RateMapDescriptor {
     let size = |v: &str| v.parse::<u32>().expect("extent");
     let mut d = RateMapDescriptor::new([size(width), size(height)]);
     if layers != "-" {
@@ -117,6 +120,58 @@ fn metals_bytes_and_answers() {
         }
     }
     assert!(points > 4000, "{points}");
+    assert!(
+        mismatches.is_empty(),
+        "{} of {points} answers are not Metal's:\n{}",
+        mismatches.len(),
+        mismatches[..mismatches.len().min(20)].join("\n")
+    );
+}
+
+/// A shader's `uint2` maps answer as Metal's, bit for bit, over each measured map's bytes, which
+/// are Metal's (`apple_integer_vectors.txt`, an Apple M3 Max under macOS 27.0.1): screen to
+/// physical the `float2` decoder's answer at the pixel's centre converted to `uint`, physical to
+/// screen the bits of a `float` the granule's entry gives, at the maps' layers and two past them.
+#[test]
+fn metals_integer_answers() {
+    let mut maps = BTreeMap::new();
+    let (mut points, mut mismatches) = (0usize, Vec::new());
+    for line in INTEGER_VECTORS.lines().filter(|l| !l.starts_with('#')) {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        match f.as_slice() {
+            ["map", id, width, height, layers, want] => {
+                let map = RasterizationRateMap::new(&descriptor(width, height, layers))
+                    .unwrap_or_else(|e| panic!("{id}: {e}"));
+                assert_eq!(
+                    sha(&map.to_bytes()),
+                    *want,
+                    "{id}: the bytes are not Metal's"
+                );
+                maps.insert(id.to_string(), map);
+            }
+            [id, layer, axis, input, to_physical, to_screen] => {
+                let words = maps[*id].words();
+                let number = |v: &str| v.parse::<u32>().expect("number");
+                let (layer, axis) = (number(layer), number(axis) as usize);
+                let mut c = [0u32; 2];
+                c[axis] = number(input);
+                let got = [
+                    format::shader_screen_to_physical_integer(words, layer, c)[axis],
+                    format::shader_physical_to_screen_integer(words, layer, c)[axis],
+                ];
+                let want = [
+                    number(to_physical),
+                    u32::from_str_radix(to_screen, 16).expect("bits"),
+                ];
+                points += 1;
+                if got != want {
+                    mismatches.push(format!("{line}: got {} {:08x}", got[0], got[1]));
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(points, 1561, "the file's answers, every one read");
     assert!(
         mismatches.is_empty(),
         "{} of {points} answers are not Metal's:\n{}",

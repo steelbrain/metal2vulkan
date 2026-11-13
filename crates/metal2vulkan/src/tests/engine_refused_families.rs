@@ -285,38 +285,6 @@ fn imageblocks_are_refused() {
     assert_at_instruction(&u, "k");
 }
 
-/// The `uint2` rasterization-rate map overloads are refused at the coordinate mapping, in both
-/// directions (canon compiles the `float2` ones; no reading of the physical-to-screen `uint2` one
-/// is established).
-#[test]
-fn integer_rasterization_rate_maps_are_refused() {
-    for name in [
-        "map_physical_to_screen_coordinates",
-        "map_screen_to_physical_coordinates",
-    ] {
-        let text = format!(
-            "define void @k(ptr addrspace(2) %0, ptr addrspace(1) %1) {{\n  %m = call <2 x i32> \
-             @air.{name}.v2i32.p2i8.i32(<2 x i32> zeroinitializer, ptr addrspace(2) %0, i32 0)\n  \
-             %x = extractelement <2 x i32> %m, i64 0\n  store i32 %x, ptr addrspace(1) %1, align \
-             4\n  ret void\n}}\n\ndeclare <2 x i32> @air.{name}.v2i32.p2i8.i32(<2 x i32>, ptr \
-             addrspace(2), i32)\n\n!air.kernel = !{{!0}}\n!0 = !{{ptr @k, !1, !2}}\n!1 = !{{}}\n\
-             !2 = !{{!3, !4}}\n!3 = !{{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 \
-             1, !\"air.read\", !\"air.address_space\", i32 2, !\"air.arg_type_name\", \
-             !\"metal::rasterization_rate_map_data\", !\"air.arg_name\", !\"map\"}}\n!4 = !{{i32 \
-             1, !\"air.buffer\", !\"air.location_index\", i32 1, i32 1, !\"air.read_write\", \
-             !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, \
-             !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", \
-             !\"air.arg_name\", !\"out\"}}\n"
-        );
-        let Some(bc) = assemble(&format!("rate-map-{name}"), &text) else {
-            return;
-        };
-        let u = refusal(&bc, "k");
-        assert_refused(&u, Feature::RasterizationRateMap);
-        assert_at_instruction(&u, "k");
-    }
-}
-
 /// A fragment function's threadgroup memory (a `[[threadgroup(0)]]` buffer, which the corpus's
 /// splat rasterizers set bits in) is its tile's memory, kept across the render pass: it compiles on
 /// every committed profile with `fragmentStoresAndAtomics`, binding the pass's tile memory buffer

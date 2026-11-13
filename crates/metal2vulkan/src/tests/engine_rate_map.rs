@@ -20,7 +20,8 @@
 //! The kernel is the shape Apple's compiler emits for
 //! `out[tid] = float4(dec.map_screen_to_physical_coordinates(in[tid], layer),
 //! dec.map_physical_to_screen_coordinates(in[tid], layer))` (fast math, denormals off).
-//! `llvm-as` assembles it; without it the tests skip visibly.
+//! `llvm-as` assembles it; without it the tests skip visibly. The `uint2` overloads are
+//! `integer`'s.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -38,6 +39,8 @@ use crate::pipeline::testing::{
 };
 use crate::pipeline::PrecisionNote;
 use crate::spirv::interp::{run, Buffer, Config, Resources};
+
+mod integer;
 
 const PROFILES: [&str; 4] = [
     "moltenvk-m3",
@@ -146,9 +149,10 @@ fn kept(words: &[u32], layer: u32, c: [f32; 2], to_physical: bool) -> [f32; 2] {
             return (x - f32::from_bits(offset)) * f32::from_bits(reciprocal);
         }
         let j = format::shader_index((x + format::SHADER_GRANULE_OFFSET) * format::INV_GRANULARITY);
-        let boundary = entry(table, j).1 & format::NO_BOUNDARY;
+        let packed = entry(table, j).1;
+        let (byte, boundary) = (packed & format::NO_BOUNDARY, packed & format::BOUNDARY_MASK);
         let into = (x - j as f32 * format::GRANULARITY as f32) * 2.0;
-        let j = if boundary != format::NO_BOUNDARY && into >= boundary as f32 {
+        let j = if byte != format::NO_BOUNDARY && into >= boundary as f32 {
             j.wrapping_add(1)
         } else {
             j

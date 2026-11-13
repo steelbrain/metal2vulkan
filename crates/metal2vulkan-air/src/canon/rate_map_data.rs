@@ -68,7 +68,8 @@
 //! - screen to physical, as the map answers it (Apple's CPU, `physicalCoordinates`, the layer
 //!   clamped to the map's by the caller): `j` the integer part of `s / 32` clamped to the table's
 //!   last written entry (`NaN` reading 0); where the entry's boundary byte `b` is not
-//!   [`NO_BOUNDARY`] and `2·(s - 32·j) ≥ b`, entry `j + 1` instead; the result is
+//!   [`NO_BOUNDARY`] and `2·(s - 32·j) ≥ b`, `b` read as its low seven bits
+//!   ([`BOUNDARY_MASK`]), entry `j + 1` instead; the result is
 //!   `fma(s, scale, O / 256)`, one rounding. Past either end of the screen the first or last
 //!   tile's line extends without limit;
 //! - screen to physical, as a shader answers it (Apple's GPU, `map_screen_to_physical_coordinates`):
@@ -80,7 +81,17 @@
 //!   `⌈E/32⌉·32 + 32` physical to screen it answers 0 where the data's entries end;
 //! - physical to screen: `k` the integer part of `p / 32`, the map's clamped to the table's last
 //!   written entry, a shader's saturating and unclamped as above, and `(p - offset) · reciprocal`,
-//!   two roundings.
+//!   two roundings;
+//! - a shader's `uint2` overloads (`.v2i32`): screen to physical answers the `float2` decoder's
+//!   answer at the pixel's centre, `c + 1/2`, converted to `uint` (its integer part, saturating);
+//!   physical to screen reads the entry of granule `c >> 5` as the `float2` decoder does and
+//!   answers the bits of the `float` `(0 - offset) · reciprocal`, two roundings: the coordinate's
+//!   value is not read, so every coordinate of a granule answers alike and the answer is a
+//!   `float`'s bits, not a screen coordinate. Measured on an Apple M3 Max under macOS 27.0.1 (our
+//!   probe `rate_map_integer_overloads`): every coordinate along each axis of four maps (64 by 64
+//!   of quality 1; 256 by 128 falling to 0.25; 200 by 96 of two layers; 3648 by 1734 falling to
+//!   0.3), from 0 to 48 past the larger of the axis's screen and physical extents, at each map's
+//!   layers and two past them, 20,114 coordinates in all, both overloads, every answer.
 //!
 //! The shader's operations read Metal's `float` denormals: each operand and result that is
 //! denormal is the zero of its sign, and a `NaN` result is Metal's `0x7fc00000` (the translated
@@ -120,10 +131,17 @@ pub const VERTICAL_TO_PHYSICAL: u32 = VERTICAL_TO_SCREEN + TABLE_WORDS;
 pub const GRANULARITY: u32 = 32;
 /// `1 / GRANULARITY`, exact.
 pub const INV_GRANULARITY: f32 = 1.0 / 32.0;
+/// `GRANULARITY`'s power of two: a shader's `uint` physical coordinate's granule is the
+/// coordinate shifted right this many bits.
+pub const GRANULE_SHIFT: u32 = GRANULARITY.trailing_zeros();
 /// The largest screen extent the tables hold (512 granules; entry 512 lies past it).
 pub const MAX_EXTENT: u32 = LAST_ENTRY * GRANULARITY;
 /// A screen-to-physical entry's boundary byte where no tile starts inside its granule.
 pub const NO_BOUNDARY: u32 = 0xff;
+/// The bits of a boundary byte the decoders compare: its low seven. A boundary is at most 64 half
+/// pixels; a byte of `0x80`, which a shader reads only in another table's words (a layer past the
+/// map's), compares as 0 on Apple's GPU (measured on an Apple M3 Max, macOS 27.0.1).
+pub const BOUNDARY_MASK: u32 = 0x7f;
 /// A screen-to-physical entry's second word holds the boundary byte below this many bits.
 pub const OFFSET_SHIFT: u32 = 8;
 /// The unit of a screen-to-physical entry's offset: `1/256` pixel.
@@ -373,10 +391,10 @@ fn axis_to_physical(words: &[u32], table: u32, s: f32, decoder: Decoder) -> f32 
     };
     let j = decoder.index(t);
     let (_, packed) = entry(words, table, j);
-    let boundary = packed & NO_BOUNDARY;
+    let (byte, boundary) = (packed & NO_BOUNDARY, packed & BOUNDARY_MASK);
     let start = r(j as f32 * GRANULARITY as f32);
     let into = r(r(s - start) * 2.0);
-    let j = if boundary != NO_BOUNDARY && into >= boundary as f32 {
+    let j = if byte != NO_BOUNDARY && into >= boundary as f32 {
         j.wrapping_add(1)
     } else {
         j
@@ -451,6 +469,28 @@ pub fn shader_physical_to_screen(words: &[u32], layer: u32, c: [f32; 2]) -> [f32
         axis_to_screen(words, table(layer, 0, false), x, Decoder::Shader),
         axis_to_screen(words, table(layer, 1, false), y, Decoder::Shader),
     ]
+}
+
+/// A shader's `uint2` `map_screen_to_physical_coordinates(c, layer)` over parameter data
+/// `words`, as Apple's GPU answers it (the module docs): per axis, the `float2` decoder's answer
+/// at the pixel's centre, `c + 1/2`, converted to `uint` as a shader converts, saturating.
+pub fn shader_screen_to_physical_integer(words: &[u32], layer: u32, c: [u32; 2]) -> [u32; 2] {
+    let centre = c.map(|v| v as f32 + 0.5);
+    shader_screen_to_physical(words, layer, centre).map(shader_index)
+}
+
+/// A shader's `uint2` `map_physical_to_screen_coordinates(c, layer)` over parameter data
+/// `words`, as Apple's GPU answers it (the module docs): per axis, the bits of the `float`
+/// `(0 - offset) · reciprocal` of the entry of granule `c >> 5`, the coordinate's own value not
+/// read.
+pub fn shader_physical_to_screen_integer(words: &[u32], layer: u32, c: [u32; 2]) -> [u32; 2] {
+    let r = |x| Decoder::Shader.read(x);
+    let axis = |axis: u32, p: u32| {
+        let (reciprocal, offset) = entry(words, table(layer, axis, false), p >> GRANULE_SHIFT);
+        let (reciprocal, offset) = (r(f32::from_bits(reciprocal)), r(f32::from_bits(offset)));
+        canonical(r(r(0.0 - offset) * reciprocal)).to_bits()
+    };
+    [axis(0, c[0]), axis(1, c[1])]
 }
 
 #[cfg(test)]

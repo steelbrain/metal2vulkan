@@ -67,9 +67,9 @@
 //! 9. **Arm speculation**: a branch whose short arms Metal's backend runs in every lane of the
 //!    branch's block, and whose arms hold a group operation that answers differently there,
 //!    becomes a jump into its arms with a `select` for each value they join with (`speculate`).
-//!    **Rasterization-rate maps**: each `float2` `air.map_*_coordinates` call becomes Apple's GPU
-//!    decoder of Metal's parameter data (`rate_map_data`) in plain AIR: word loads through the
-//!    call's map pointer and Apple's arithmetic. **AIR 2.7 simdgroup-matrix block loads and
+//!    **Rasterization-rate maps**: each `air.map_*_coordinates` call, `float2` or `uint2`, becomes
+//!    Apple's GPU decoder of Metal's parameter data (`rate_map_data`) in plain AIR: word loads
+//!    through the call's map pointer and Apple's arithmetic. **AIR 2.7 simdgroup-matrix block loads and
 //!    stores** take their AIR 2.8 form, their extent, stride and origin built from the elements per
 //!    row, the origin and the constant transpose flag (`legacy_matrix`). **Aggregate accesses**: a
 //!    load or store of a whole array or struct in buffer or threadgroup memory becomes its scalar
@@ -722,8 +722,8 @@ pub fn specialize_dynamic(
         };
         speculate::expand(body, (&parts.types, &parts.consts), (tys, &f.params), m)?
     };
-    // Rasterization-rate maps: each `float2` map call becomes Apple's GPU decoder of the parameter
-    // data, word loads through its own map pointer.
+    // Rasterization-rate maps: each map call, `float2` or `uint2`, becomes Apple's GPU decoder of
+    // the parameter data, word loads through its own map pointer.
     let body = rate_map::expand(body, &mut parts, m)?;
     // The AIR 2.7 simdgroup-matrix block loads and stores in their AIR 2.8 form.
     let body = legacy_matrix::expand(body, &mut parts, m)?;

@@ -16,10 +16,12 @@
 //! `NaN`: Metal's on a device measured to read them so, the device's own elsewhere, noted. The
 //! call's fast-math flags are not carried: the decoder's arithmetic is Apple's, not the source's.
 //!
-//! The `uint2` overloads (`.v2i32`) stay calls and lowering refuses them
-//! (`Unsupported{RasterizationRateMap, NotImplemented}`): on Apple M3 the screen-to-physical one
-//! answers `⌊map(x + 0.5)⌋` and the physical-to-screen one words of Apple's tables, so no reading
-//! of the latter is established.
+//! The `uint2` overloads (`.v2i32`) become Apple's GPU answers too, measured on an Apple M3 Max
+//! (`rate_map_data`'s `shader_screen_to_physical_integer` and `shader_physical_to_screen_integer`):
+//! screen to physical, per axis, the `float2` decoder at the pixel's centre (`uitofp` of the
+//! coordinate plus 1/2) and the saturating conversion of its answer to `uint`; physical to screen,
+//! the entry of granule `c >> 5` and the bits of `(0 - offset) · reciprocal`, the coordinate's
+//! value not read, as Apple's GPU answers.
 
 use crate::budget::Meter;
 use crate::error::Error;
@@ -40,8 +42,36 @@ enum Direction {
     ToScreen,
 }
 
-/// The call's decoded direction, when it is a `float2` map.
-fn decoded(kind: &InstKind) -> Option<(Direction, &Call)> {
+/// What a decoded call maps: its direction, and whether it is a `uint2` overload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Shape {
+    dir: Direction,
+    integer: bool,
+}
+
+impl Shape {
+    const ALL: [Shape; 4] = [
+        Shape {
+            dir: Direction::ToPhysical,
+            integer: false,
+        },
+        Shape {
+            dir: Direction::ToScreen,
+            integer: false,
+        },
+        Shape {
+            dir: Direction::ToPhysical,
+            integer: true,
+        },
+        Shape {
+            dir: Direction::ToScreen,
+            integer: true,
+        },
+    ];
+}
+
+/// The call's decoded shape, when it is a rate-map call.
+fn decoded(kind: &InstKind) -> Option<(Shape, &Call)> {
     let InstKind::Call(call) = kind else {
         return None;
     };
@@ -50,29 +80,31 @@ fn decoded(kind: &InstKind) -> Option<(Direction, &Call)> {
             op:
                 AirIntrinsic::Fragment(Fragment::MapCoordinates {
                     to_physical,
-                    integer: false,
+                    integer,
                 }),
             ..
-        } => Some((
-            if to_physical {
+        } => {
+            let dir = if to_physical {
                 Direction::ToPhysical
             } else {
                 Direction::ToScreen
-            },
-            call,
-        )),
+            };
+            Some((Shape { dir, integer }, call))
+        }
         _ => None,
     }
 }
 
 /// The integer constants the decoder uses.
-const INTS: [u32; 10] = [
+const INTS: [u32; 12] = [
     0,
     1,
     u32::MAX,
     format::ENTRY_WORDS,
+    format::GRANULE_SHIFT,
     format::OFFSET_SHIFT,
     format::NO_BOUNDARY,
+    format::BOUNDARY_MASK,
     format::TABLE_WORDS,
     format::HORIZONTAL_TO_PHYSICAL,
     format::VERTICAL_TO_SCREEN,
@@ -87,6 +119,7 @@ struct Vocab {
     i1t: TypeId,
     ptr: TypeId,
     v2f32: TypeId,
+    v2i32: TypeId,
     ints: Vec<(u32, ConstId)>,
     zero_f: ConstId,
     saturation_f: ConstId,
@@ -96,6 +129,7 @@ struct Vocab {
     two_f: ConstId,
     offset_unit_f: ConstId,
     poison_v2: ConstId,
+    poison_v2i: ConstId,
 }
 
 impl Vocab {
@@ -111,6 +145,7 @@ impl Vocab {
             m,
         )?;
         let v2f32 = parts.types.intern(Type::Vector { elem: f32t, len: 2 }, m)?;
+        let v2i32 = parts.types.intern(Type::Vector { elem: i32t, len: 2 }, m)?;
         let mut c = |ty, value| parts.consts.intern(Constant { ty, value }, m);
         let mut ints = Vec::new();
         for v in INTS {
@@ -124,6 +159,7 @@ impl Vocab {
             i1t,
             ptr,
             v2f32,
+            v2i32,
             ints,
             zero_f: f(0.0)?,
             saturation_f: f(format::SHADER_INDEX_SATURATION)?,
@@ -133,6 +169,7 @@ impl Vocab {
             two_f: f(2.0)?,
             offset_unit_f: f(format::OFFSET_UNIT)?,
             poison_v2: c(v2f32, Const::Poison)?,
+            poison_v2i: c(v2i32, Const::Poison)?,
         })
     }
 
@@ -304,9 +341,11 @@ impl Sink<'_> {
                 let at = self.entry(table, j, m)?;
                 let at = self.int_k(BinOp::Add, at, 1, m)?;
                 let packed = self.load(map, at, i32t, m)?;
-                let boundary = self.int_k(BinOp::And, packed, format::NO_BOUNDARY, m)?;
+                let byte = self.int_k(BinOp::And, packed, format::NO_BOUNDARY, m)?;
                 let none = self.v.int(format::NO_BOUNDARY)?;
-                let some = self.icmp(IntPredicate::Ne, boundary, none, m)?;
+                let some = self.icmp(IntPredicate::Ne, byte, none, m)?;
+                // Its low seven bits are compared (`rate_map_data::BOUNDARY_MASK`).
+                let boundary = self.int_k(BinOp::And, packed, format::BOUNDARY_MASK, m)?;
                 let jf = self.cast(CastOp::UIToFP, f32t, j, m)?;
                 let g = Value::Const(self.v.granularity_f);
                 let start = self.float(BinOp::FMul, jf, g, m)?;
@@ -342,33 +381,72 @@ impl Sink<'_> {
         }
     }
 
-    /// The decoder of one call: coordinate `c`, map pointer `map`, layer `layer`. Its last
-    /// instruction is the result.
-    fn decode(
+    /// One axis of a `uint2` overload over the table at word `table`, of the `uint` coordinate
+    /// `c` (`rate_map_data`'s `shader_screen_to_physical_integer` and
+    /// `shader_physical_to_screen_integer`).
+    fn integer_axis(
         &mut self,
         dir: Direction,
+        map: Value,
+        table: Value,
+        c: Value,
+        m: &mut Meter,
+    ) -> Result<Value, Error> {
+        let (i32t, f32t) = (self.v.i32t, self.v.f32t);
+        match dir {
+            Direction::ToPhysical => {
+                // The `float2` decoder at the pixel's centre, its answer converted saturating.
+                let cf = self.cast(CastOp::UIToFP, f32t, c, m)?;
+                let half = Value::Const(self.v.half_f);
+                let centre = self.float(BinOp::FAdd, cf, half, m)?;
+                let r = self.axis(Direction::ToPhysical, map, table, centre, m)?;
+                self.index(r, m)
+            }
+            Direction::ToScreen => {
+                // The granule's entry; the coordinate's value is not read.
+                let k = self.int_k(BinOp::LShr, c, format::GRANULE_SHIFT, m)?;
+                let at = self.entry(table, k, m)?;
+                let reciprocal = self.load(map, at, f32t, m)?;
+                let at = self.int_k(BinOp::Add, at, 1, m)?;
+                let offset = self.load(map, at, f32t, m)?;
+                let zero = Value::Const(self.v.zero_f);
+                let d = self.float(BinOp::FSub, zero, offset, m)?;
+                let r = self.float(BinOp::FMul, d, reciprocal, m)?;
+                self.cast(CastOp::Bitcast, i32t, r, m)
+            }
+        }
+    }
+
+    /// The decoder of one call of `shape`: coordinate `c`, map pointer `map`, layer `layer`. Its
+    /// last instruction is the result.
+    fn decode(
+        &mut self,
+        shape: Shape,
         c: Value,
         map: Value,
         layer: Value,
         m: &mut Meter,
     ) -> Result<Value, Error> {
+        let Shape { dir, integer } = shape;
         let to_physical = dir == Direction::ToPhysical;
         // The layer's horizontal table, unclamped (`rate_map_data::table`); the vertical one is
         // every layer's.
         let offset = self.int_k(BinOp::Mul, layer, format::TABLE_WORDS, m)?;
         let horizontal = self.int_k(BinOp::Add, offset, format::table(0, 0, to_physical), m)?;
         let vertical = self.v.int(format::table(0, 1, to_physical))?;
-        let mut v = Value::Const(self.v.poison_v2);
+        let (elem, vec, mut v) = match integer {
+            false => (self.v.f32t, self.v.v2f32, Value::Const(self.v.poison_v2)),
+            true => (self.v.i32t, self.v.v2i32, Value::Const(self.v.poison_v2i)),
+        };
         for (axis, table) in [(0u32, horizontal), (1, vertical)] {
             let lane = self.v.int(axis)?;
-            let ca = self.push(
-                self.v.f32t,
-                InstKind::ExtractElement { vec: c, idx: lane },
-                m,
-            )?;
-            let r = self.axis(dir, map, table, ca, m)?;
+            let ca = self.push(elem, InstKind::ExtractElement { vec: c, idx: lane }, m)?;
+            let r = match integer {
+                false => self.axis(dir, map, table, ca, m)?,
+                true => self.integer_axis(dir, map, table, ca, m)?,
+            };
             v = self.push(
-                self.v.v2f32,
+                vec,
                 InstKind::InsertElement {
                     vec: v,
                     elt: r,
@@ -381,38 +459,43 @@ impl Sink<'_> {
     }
 }
 
-/// The number of instructions one call of `dir` becomes.
-fn decoder_len(dir: Direction, v: &Vocab, m: &mut Meter) -> Result<u32, Error> {
+/// The number of instructions one call of `shape` becomes.
+fn decoder_len(shape: Shape, v: &Vocab, m: &mut Meter) -> Result<u32, Error> {
     let mut scratch = Body::default();
     let mut s = Sink {
         out: &mut scratch,
         v,
     };
     let any = Value::Const(v.poison_v2);
-    s.decode(dir, any, any, any, m)?;
+    s.decode(shape, any, any, any, m)?;
     let len = scratch.insts.len();
     scratch.release(m);
     u32::try_from(len).map_err(|_| invariant("decoder length"))
 }
 
-/// Replace every `float2` rate-map call of `body` by its decoder.
+/// Replace every rate-map call of `body` by its decoder.
 pub(super) fn expand(body: Body, parts: &mut ModuleParts, m: &mut Meter) -> Result<Body, Error> {
     if !body.insts.iter().any(|(_, i)| decoded(&i.kind).is_some()) {
         return Ok(body);
     }
     let v = Vocab::new(parts, m)?;
-    let lens = [
-        decoder_len(Direction::ToPhysical, &v, m)?,
-        decoder_len(Direction::ToScreen, &v, m)?,
-    ];
+    let mut lens = [0u32; Shape::ALL.len()];
+    for (len, shape) in lens.iter_mut().zip(Shape::ALL) {
+        *len = decoder_len(shape, &v, m)?;
+    }
+    let len_of = |shape: Shape| {
+        (Shape::ALL.iter().zip(lens))
+            .find(|&(s, _)| *s == shape)
+            .map(|(_, len)| len)
+            .ok_or_else(|| invariant("a decoder shape not measured"))
+    };
     // Each old instruction's id in the output: a decoded call's is its decoder's last.
     let mut result = Vec::new();
     m.reserve(&mut result, body.insts.len())?;
     let mut next = 0u32;
     for (_, inst) in body.insts.iter() {
         let n = match decoded(&inst.kind) {
-            Some((Direction::ToPhysical, _)) => lens[0],
-            Some((Direction::ToScreen, _)) => lens[1],
+            Some((shape, _)) => len_of(shape)?,
             None => 1,
         };
         next = next
@@ -439,7 +522,7 @@ pub(super) fn expand(body: Body, parts: &mut ModuleParts, m: &mut Meter) -> Resu
                 .get(i)
                 .ok_or_else(|| invariant("instruction out of range"))?;
             match decoded(&inst.kind) {
-                Some((dir, call)) => {
+                Some((shape, call)) => {
                     let [c, ptr, layer] = call.args.as_ref() else {
                         return Err(invariant("a rate-map call without three operands"));
                     };
@@ -448,7 +531,7 @@ pub(super) fn expand(body: Body, parts: &mut ModuleParts, m: &mut Meter) -> Resu
                         out: &mut out,
                         v: &v,
                     };
-                    s.decode(dir, c, ptr, layer, m)?;
+                    s.decode(shape, c, ptr, layer, m)?;
                 }
                 None => {
                     let mut kind = inst.kind.clone();
