@@ -73,9 +73,9 @@ impl IndirectCommandBuffer {
         if let Contents::Lost(_) = contents {
             // Every command reset, as a new buffer's: the states the CPU set on them go.
             self.write_header().map_err(|_| Left::Failed)?;
-            commands.states.clear();
+            commands.states.clear_all();
         }
-        for state in commands.states.values_mut() {
+        for state in commands.states.entries_mut() {
             *state = state.carried(to);
         }
         commands.kept.clear();

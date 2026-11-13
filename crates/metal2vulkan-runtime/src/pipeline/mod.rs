@@ -1579,7 +1579,13 @@ impl ComputePipelineState {
 
     /// What the state runs, held without its ID (`ComputeProgram`).
     pub(crate) fn program(&self) -> ComputeProgram {
-        let _held = self.hold();
+        let held = self.hold();
+        self.program_held(&held)
+    }
+
+    /// [`program`](Self::program), under `_held`, the caller's hold of the state
+    /// ([`hold`](Self::hold)): a call that reads more of the state under one hold.
+    pub(crate) fn program_held(&self, _held: &CallHold<'_>) -> ComputeProgram {
         ComputeProgram(Arc::clone(self.0.program()))
     }
 

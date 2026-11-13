@@ -4,6 +4,11 @@
 //! outgrow a CPU's last-level cache) and on one of [`CACHED`] (whose records fit in its L2), its
 //! commands encoded in turn over and over:
 //!
+//! - **full slot**: `indirect_render_command_at(i)`, a render pipeline state, two vertex buffers
+//!   (one at `(i % 16) * 16`), a fragment buffer and a draw of primitives, the consumer's
+//!   `icb_slots_cost` loop through the runtime alone;
+//! - **compute slot**: `indirect_compute_command_at(i)` of a buffer of dispatches, a compute
+//!   pipeline state, two kernel buffers (one at `(i % 16) * 16`) and a dispatch of threadgroups;
 //! - **three fields**: `indirect_render_command_at(i)`, a vertex buffer at `(i % 8) * 256`, a
 //!   fragment buffer at `(i % 4) * 64` and a draw of primitives, a consumer's loop;
 //! - **draw only**: the command and its draw;
@@ -16,9 +21,10 @@
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
 use super::blit_holds::{device, Scratch};
+use super::indirect_command_buffer_device::{compute_state, render_state, EXAMPLES};
 use crate::{
     DrawPrimitiveType, Error, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
-    ResourceOptions,
+    ResourceOptions, Size,
 };
 use metal2vulkan::bind::indirect_commands::COMMAND_BYTES;
 use metal2vulkan::metal::IndirectCommandType;
@@ -73,6 +79,13 @@ fn icb_encode_costs() {
         device.new_buffer(65536, shared).unwrap(),
     );
     let strip = DrawPrimitiveType::from_raw(4).unwrap();
+    let triangle = DrawPrimitiveType::from_raw(3).unwrap();
+    let render = render_state(&device, true);
+    let compute = compute_state(&device, EXAMPLES, "scale_and_offset", true);
+    let mut compute_descriptor = IndirectCommandBufferDescriptor::new();
+    compute_descriptor.command_types = IndirectCommandType::CONCURRENT_DISPATCH;
+    compute_descriptor.max_kernel_buffer_bind_count = 2;
+    let group = Size::new(1, 1, 1);
     eprintln!(
         "ICB-ENCODE {}: Result<(), Error> {} bytes, Error {} bytes, a record {COMMAND_BYTES} \
          bytes, {COMMANDS} commands a loop",
@@ -86,7 +99,37 @@ fn icb_encode_costs() {
             .unwrap();
         let records = size * COMMAND_BYTES as u64 / 1024;
         print(
-            &format!("{size} commands ({records} KiB of records), three fields"),
+            &format!("{size} commands ({records} KiB of records), full slot"),
+            per_command(size, |i| {
+                let command = icb.indirect_render_command_at(i).unwrap();
+                command.set_render_pipeline_state(&render).unwrap();
+                command
+                    .set_vertex_buffer(Some(&vertex), (i % 16) * 16, 0)
+                    .unwrap();
+                command.set_vertex_buffer(Some(&fragment), 0, 1).unwrap();
+                command.set_fragment_buffer(Some(&vertex), 256, 0).unwrap();
+                command.draw_primitives(triangle, 0, 3, 1, 0).unwrap();
+            }),
+        );
+        let dispatches: IndirectCommandBuffer = device
+            .new_indirect_command_buffer(&compute_descriptor, size, shared)
+            .unwrap();
+        print(
+            &format!("{size} commands, compute slot"),
+            per_command(size, |i| {
+                let command = dispatches.indirect_compute_command_at(i).unwrap();
+                command.set_compute_pipeline_state(&compute).unwrap();
+                command
+                    .set_kernel_buffer(Some(&vertex), (i % 16) * 16, 0)
+                    .unwrap();
+                command.set_kernel_buffer(Some(&fragment), 0, 1).unwrap();
+                command
+                    .concurrent_dispatch_threadgroups(group, group)
+                    .unwrap();
+            }),
+        );
+        print(
+            &format!("{size} commands, three fields"),
             per_command(size, |i| {
                 let command = icb.indirect_render_command_at(i).unwrap();
                 command

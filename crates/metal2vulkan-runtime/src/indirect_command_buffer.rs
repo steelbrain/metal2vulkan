@@ -110,6 +110,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 pub(crate) mod carry;
+mod set_states;
+
+use set_states::{Keyed, SetStates, StateKey};
 
 /// The threadgroup lengths a fresh descriptor binds, as Metal's answers.
 const DEFAULT_THREADGROUP_LENGTHS: u32 = 31;
@@ -652,7 +655,7 @@ impl Device {
             inheritance,
             size,
             options,
-            pipelines: Mutex::default(),
+            pipelines: Mutex::new(CommandStates::new(size)),
             unlocked: UnlockedWrites::new(size),
             gpu_written: AtomicBool::new(false),
             gpu_writer: OnceLock::new(),
@@ -694,14 +697,13 @@ enum CommandState {
 
 /// What the CPU left beside a buffer's records: the pipeline state it set on each command it
 /// set one on (`CommandState`), by index, none for the rest, so a buffer of commands never
-/// encoded holds nothing for them; the kept recordings of its chunks (`kept_commands.rs`),
-/// which each write of a command forgets, and those host steps kept; and what the CPU's edits added to what the records may
-/// hold (`added`).
-#[derive(Default)]
+/// encoded holds nothing for them ([`SetStates`]); the kept recordings of its chunks
+/// (`kept_commands.rs`), which each write of a command forgets, and those host steps kept; and
+/// what the CPU's edits added to what the records may hold (`added`).
 struct CommandStates {
     /// Only an edit sets a state here, adding it to `added` (`IndirectCommandBuffer::edit`); a
     /// reset keeps or drops the one it finds.
-    states: BTreeMap<u32, CommandState>,
+    states: SetStates<CommandState>,
     kept: KeptChunks,
     /// The kept recordings of its chunks a host step made from the records as the GPU and the CPU
     /// left them (`render/executions/kept.rs`), each with the bytes it was recorded from: no write
@@ -714,26 +716,34 @@ struct CommandStates {
 }
 
 impl CommandStates {
+    /// What the CPU left beside the records of a buffer of `size` commands as made: nothing.
+    fn new(size: u32) -> CommandStates {
+        CommandStates {
+            states: SetStates::new(size),
+            kept: KeptChunks::default(),
+            step_kept: KeptChunks::default(),
+            added: Default::default(),
+        }
+    }
+
     /// The state the CPU set on command `index`.
     fn state(&self, index: u32) -> Option<CommandState> {
-        self.states.get(&index).cloned()
+        self.states.get(index).cloned()
     }
 
     /// The states the CPU set on commands `range`, in order.
     fn states_in(&self, range: Range<u32>) -> Vec<CommandState> {
-        self.states
-            .range(range)
-            .map(|(_, set)| set.clone())
-            .collect()
+        self.states.in_range(range).cloned().collect()
     }
+}
 
-    /// Set `set` as the state the CPU set on command `index` (none: none).
-    fn set(&mut self, index: u32, set: Option<CommandState>) {
-        match set {
-            Some(set) => self.states.insert(index, set),
-            None => self.states.remove(&index),
-        };
-    }
+/// A pipeline state a setter sets on a command ([`IndirectCommandBuffer::edit`]): its key, what
+/// it may do to indirect command buffers, and the command's state made of it, which only a set
+/// where no command names the state yet makes ([`SetStates::set`]).
+struct StateSet<'s> {
+    key: StateKey,
+    named: Named,
+    make: &'s dyn Fn() -> CommandState,
 }
 
 /// The ID a state had when the CPU set it on a command, and the serial of its hold of the ID,
@@ -744,6 +754,17 @@ struct IdStamp {
     id: u64,
     serial: u64,
     identifier: u64,
+}
+
+impl Keyed for CommandState {
+    fn key(&self) -> StateKey {
+        let (id, serial) = self.stamp();
+        StateKey {
+            compute: matches!(self, CommandState::Compute(..)),
+            id,
+            serial,
+        }
+    }
 }
 
 impl CommandState {
@@ -1687,7 +1708,7 @@ impl IndirectCommandBuffer {
         let mut commands = lock(&self.0.pipelines);
         for index in range.clone() {
             self.write(&mut commands, index, &CommandRecord::default())?;
-            commands.set(index, None);
+            commands.states.clear(index);
         }
         self.clear_overflow(&mut commands, range)
     }
@@ -1882,12 +1903,12 @@ impl IndirectCommandBuffer {
     }
 
     /// Write `field` into command `index`'s record (below the size), and where the field names a
-    /// pipeline state, `set` as the state the CPU set on it: the field's words alone, in place, as
+    /// pipeline state, `set`'s as the state the CPU set on it: the field's words alone, in place, as
     /// Metal's setter writes its field, the rest of the record as the GPU and the CPU left it
     /// (`CommandRecord::write_field`); then what the record holds joins what its records may
     /// (`grown_writes`, `add_written`). All of it under one hold of `pipelines`; a buffer slot's
     /// takes [`edit_slot`](Self::edit_slot).
-    fn edit(&self, index: u32, field: RecordField, set: Option<CommandState>) -> Result<(), Error> {
+    fn edit(&self, index: u32, field: RecordField, set: Option<StateSet<'_>>) -> Result<(), Error> {
         let mut commands = lock(&self.0.pipelines);
         // SAFETY: the record of a command below the size lies inside the mapped storage, and the
         // CPU's writes of the records are one at a time (`pipelines`, held while the slice lives),
@@ -1904,12 +1925,12 @@ impl IndirectCommandBuffer {
             _ => internal("an indirect command's record does not take a setter's field"),
         })?;
         self.wrote(&mut commands, index..index + 1);
-        let named = set.as_ref().map(CommandState::named);
+        let named = set.as_ref().map(|set| set.named);
         // Read before the state is set, so a state set is always added: only a GPU write since
         // the field's, the program's race, leaves a record that does not decode here.
         let grown = self.grown_writes(&commands, bytes, field, named)?;
         if let Some(set) = set {
-            commands.set(index, Some(set));
+            commands.states.set(index, set.key, set.make);
         }
         let followed = match grown {
             Some(writes) => self.add_written(&mut commands, index, writes, named),
@@ -2010,7 +2031,7 @@ impl IndirectCommandBuffer {
         writes: CommandWrites,
         set: Option<Named>,
     ) -> Followed {
-        let named = set.or_else(|| commands.states.get(&index).map(CommandState::named));
+        let named = set.or_else(|| commands.states.get(index).map(CommandState::named));
         let followed = self.0.written.add_record(writes, named);
         let pipeline = CommandWrites {
             operations: named.map_or(0, |_| CommandWrites::PIPELINE),
@@ -2024,19 +2045,19 @@ impl IndirectCommandBuffer {
         followed
     }
 
-    /// Reset command `index` (below the size) by `reset`, which changes its whole record and the
-    /// pipeline state the CPU set on it, and clear its slots past the record's, as Metal's reset
-    /// clears every slot.
+    /// Reset command `index` (below the size) by `reset`, which changes its whole record and
+    /// answers whether the pipeline state the CPU set on it stays, and clear its slots past the
+    /// record's, as Metal's reset clears every slot.
     fn reset_command(
         &self,
         index: u32,
-        reset: impl FnOnce(&mut CommandRecord, &mut Option<CommandState>),
+        reset: impl FnOnce(&mut CommandRecord) -> bool,
     ) -> Result<(), Error> {
         let mut commands = lock(&self.0.pipelines);
         let mut record = self.record(index)?;
-        let mut set = commands.states.remove(&index);
-        reset(&mut record, &mut set);
-        commands.set(index, set);
+        if !reset(&mut record) {
+            commands.states.clear(index);
+        }
         self.write(&mut commands, index, &record)?;
         self.clear_overflow(&mut commands, index..index + 1)
     }
@@ -3464,8 +3485,7 @@ impl IndirectCommandBuffer {
         let mut stamps = BTreeSet::new();
         let sets: Vec<CommandState> = lock(&self.0.pipelines)
             .states
-            .range(range)
-            .map(|(_, set)| set)
+            .in_range(range)
             .filter(|set| stamps.insert(set.stamp()))
             .cloned()
             .collect();
@@ -4080,7 +4100,7 @@ pub struct IndirectComputeCommand {
 impl IndirectComputeCommand {
     /// Write `field` into the record, with `set` as the state the CPU set where it names one
     /// (`IndirectCommandBuffer::edit`).
-    fn edit(&self, field: RecordField, set: Option<CommandState>) -> Result<(), Error> {
+    fn edit(&self, field: RecordField, set: Option<StateSet<'_>>) -> Result<(), Error> {
         self.icb.edit(self.index, field, set)
     }
 
@@ -4094,8 +4114,9 @@ impl IndirectComputeCommand {
     pub fn set_compute_pipeline_state(&self, state: &ComputePipelineState) -> Result<(), Error> {
         const CALL: &str = "set_compute_pipeline_state";
         self.icb.check_command_types(CALL)?;
-        // The state's program, held while the command takes it (`pipeline/carry.rs`).
-        let _held = state.hold();
+        // The state's program, held while the command takes it (`pipeline/carry.rs`): one hold
+        // for every read of the state below.
+        let held = state.hold();
         let device = state.bound_device()?;
         if !device.same(self.icb.generation()) {
             return Err(device.foreign(CALL, self.icb.generation()));
@@ -4120,11 +4141,23 @@ impl IndirectComputeCommand {
             serial,
             identifier: state.identifier_value(),
         };
+        // `can_encode_indirect_commands` and `indirect_command_writes`, under the hold.
+        let interface = state.interface();
         let named = Named {
-            encodes: state.can_encode_indirect_commands(),
-            writes: state.indirect_command_writes(),
+            encodes: interface.reaches_command_buffers,
+            writes: interface.command_writes,
         };
-        let set = CommandState::Compute(state.downgrade(), state.program(), stamp, named);
+        let set = StateSet {
+            key: StateKey {
+                compute: true,
+                id: id.get(),
+                serial,
+            },
+            named,
+            make: &|| {
+                CommandState::Compute(state.downgrade(), state.program_held(&held), stamp, named)
+            },
+        };
         self.edit(RecordField::Pipeline(id), Some(set))
     }
 
@@ -4300,13 +4333,14 @@ impl IndirectComputeCommand {
     /// integration consumer on an M3 without API validation).
     pub fn reset(&self) -> Result<(), Error> {
         self.icb.check_command_types("reset")?;
-        self.icb.reset_command(self.index, |record, _| {
+        self.icb.reset_command(self.index, |record| {
             let retained = record.bindings.pipeline.or(record.retained_pipeline);
             *record = CommandRecord {
                 retained_pipeline: retained,
                 imageblock_size: record.imageblock_size,
                 ..CommandRecord::default()
             };
+            true
         })
     }
     /// `getCommandType`, Apple's private getter: the command's
@@ -4700,7 +4734,7 @@ impl IndirectRenderCommand {
         &self,
         call: &'static str,
         field: RecordField,
-        set: Option<CommandState>,
+        set: Option<StateSet<'_>>,
     ) -> Result<(), Error> {
         if self.of_compute() {
             return Err(problem(call, IndirectCommandBufferProblem::CommandKind));
@@ -4716,8 +4750,9 @@ impl IndirectRenderCommand {
     pub fn set_render_pipeline_state(&self, state: &RenderPipelineState) -> Result<(), Error> {
         const CALL: &str = "set_render_pipeline_state";
         self.icb.check_command_types(CALL)?;
-        // The state's program, held while the command takes it (`pipeline/carry.rs`).
-        let _held = state.hold();
+        // The state's program, held while the command takes it (`pipeline/carry.rs`): one hold
+        // for every read of the state below.
+        let held = state.hold();
         let device = state.bound_device()?;
         if !device.same(self.icb.generation()) {
             return Err(device.foreign(CALL, self.icb.generation()));
@@ -4747,8 +4782,7 @@ impl IndirectRenderCommand {
             return Err(problem(CALL, IndirectCommandBufferProblem::PipelineKind));
         }
         // A tile pipeline's state has no ID, refused above.
-        let (Some(named), Some(program), Some(serial)) =
-            (state.downgrade(), state.program(), state.id_serial())
+        let (RenderStateKind::Graphics(graphics), Some(serial)) = (state.kind(), state.id_serial())
         else {
             return Err(problem(
                 CALL,
@@ -4760,11 +4794,28 @@ impl IndirectRenderCommand {
             serial,
             identifier: state.identifier_value(),
         };
-        let can = Named {
-            encodes: state.can_encode_indirect_commands(),
-            writes: state.indirect_command_writes(),
+        // `can_encode_indirect_commands` and `indirect_command_writes`, under the hold.
+        let interface = &graphics.base().interface;
+        let named = Named {
+            encodes: interface.reaches_command_buffers,
+            writes: interface.command_writes,
         };
-        let set = CommandState::Render(named, program, stamp, can);
+        let set = StateSet {
+            key: StateKey {
+                compute: false,
+                id: id.get(),
+                serial,
+            },
+            named,
+            make: &|| {
+                CommandState::Render(
+                    graphics.downgrade(),
+                    graphics.program_held(&held),
+                    stamp,
+                    named,
+                )
+            },
+        };
         self.edit(CALL, RecordField::Pipeline(id), Some(set))
     }
 
@@ -5346,9 +5397,9 @@ impl IndirectRenderCommand {
         if self.of_compute() && !self.icb.has_no_command_types() {
             return Err(problem("reset", IndirectCommandBufferProblem::CommandKind));
         }
-        self.icb.reset_command(self.index, |record, pipeline| {
+        self.icb.reset_command(self.index, |record| {
             *record = CommandRecord::default();
-            *pipeline = None;
+            false
         })
     }
 

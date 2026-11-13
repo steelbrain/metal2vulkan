@@ -37,7 +37,7 @@ use std::num::NonZeroU64;
 const COMMANDS: u32 = 6;
 
 /// The owned fixtures' paths under `validation/fixtures/public/`.
-const EXAMPLES: &str = "examples/runtime_examples.ll";
+pub(super) const EXAMPLES: &str = "examples/runtime_examples.ll";
 const ENCODES: &str = "engine/icb_replay_encode_dispatch.ll";
 
 /// What a setter's call leaves, as the model has it.
@@ -231,7 +231,7 @@ fn bound(stage: BufferStage, slot: usize, buffer: Option<&Buffer>, offset: u64) 
 
 /// A state drawing into `RGBA8Unorm` with the examples' `colored_vertex` and `colored_fragment`,
 /// made for indirect command buffers where `icb`.
-fn render_state(device: &Device, icb: bool) -> RenderPipelineState {
+pub(super) fn render_state(device: &Device, icb: bool) -> RenderPipelineState {
     let library = library(device, EXAMPLES);
     let vertex = library.new_function_with_name("colored_vertex").unwrap();
     let fragment = library.new_function_with_name("colored_fragment").unwrap();
@@ -246,7 +246,12 @@ fn render_state(device: &Device, icb: bool) -> RenderPipelineState {
 }
 
 /// A state of `kernel` of the fixture at `path`, made for indirect command buffers where `icb`.
-fn compute_state(device: &Device, path: &str, kernel: &str, icb: bool) -> ComputePipelineState {
+pub(super) fn compute_state(
+    device: &Device,
+    path: &str,
+    kernel: &str,
+    icb: bool,
+) -> ComputePipelineState {
     let function = library(device, path)
         .new_function_with_name(kernel)
         .unwrap();

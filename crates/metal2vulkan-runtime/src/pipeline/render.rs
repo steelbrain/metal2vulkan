@@ -1374,8 +1374,8 @@ impl RenderPipelineState {
     pub(crate) fn program(&self) -> Option<RenderProgram> {
         match &self.0 {
             Kind::Graphics(state) => {
-                let _held = state.hold();
-                Some(RenderProgram(Arc::clone(state.0.program())))
+                let held = state.hold();
+                Some(state.program_held(&held))
             }
             Kind::Tile(_) => None,
         }
@@ -2383,6 +2383,13 @@ impl GraphicsState {
     /// left under (`live_bind.rs`), which [`WeakRenderPipelineState::is`] tells apart.
     pub(crate) fn downgrade(&self) -> WeakRenderPipelineState {
         WeakRenderPipelineState(Arc::downgrade(&self.0))
+    }
+
+    /// What it runs, held without its ID ([`RenderPipelineState::program`]), under `_held`, the
+    /// caller's hold of it ([`hold`](Self::hold)): a call that reads more of the state under one
+    /// hold.
+    pub(crate) fn program_held(&self, _held: &CallHold<'_>) -> RenderProgram {
+        RenderProgram(Arc::clone(self.0.program()))
     }
 
     /// Its program, named without holding it: what a draw's encoder keeps the state's last
