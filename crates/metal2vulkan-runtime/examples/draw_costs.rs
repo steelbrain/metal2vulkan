@@ -3,7 +3,7 @@
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|pass1|pass17|scene|rebinds]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--states N] [--threads N] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|pass1|pass17|scene|rebinds]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--states N] [--worker] [--threads N] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -83,6 +83,9 @@
 //! With `METAL2VULKAN_LOG_SHADOWS=1` (`metal2vulkan::env_vars`), each shadow the device makes is
 //! printed on stderr with why, and so is each degrade notice's text.
 //!
+//! With `--worker`, the device lowers render encoders' calls on its lowering thread
+//! (`RenderLoweringPolicy::Worker`), after each call returned.
+//!
 //! With `--shadowed`, the target is a texture over a no-copy buffer of host pages, as a guest's
 //! window surface is, each pass loading it rather than clearing it, and the device is opened with
 //! `HostPageTexturePolicy::Shadow`, so the target is a shadow on every device: each pass's end
@@ -124,7 +127,7 @@
 //! `xcrun metal` in a scratch directory, removed once read.
 
 use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::device::HostPageTexturePolicy;
+use metal2vulkan::device::{HostPageTexturePolicy, RenderLoweringPolicy};
 use metal2vulkan::metal::{
     BlendFactor, IndexType, PixelFormat, PrimitiveType, SamplerAddressMode, SamplerMinMagFilter,
     TextureUsage, VertexFormat,
@@ -1837,7 +1840,7 @@ fn compile(scratch: &Path) -> Result<PathBuf> {
 fn main() -> Result<()> {
     let mut shapes = Vec::new();
     let (mut runs, mut metallib, mut shadowed, mut pages) = (RUNS, None, false, false);
-    let mut states = SMALL_BLENDS.len();
+    let (mut states, mut worker) = (SMALL_BLENDS.len(), false);
     let mut options = Options {
         calls: false,
         counts: false,
@@ -1853,6 +1856,7 @@ fn main() -> Result<()> {
             "--heap" => options.heap = true,
             "--shadowed" => shadowed = true,
             "--pages" => pages = true,
+            "--worker" => worker = true,
             "--states" => {
                 states = args.next().ok_or("--states N")?.parse()?;
                 if !(1..=SMALL_BLENDS.len()).contains(&states) {
@@ -1890,6 +1894,9 @@ fn main() -> Result<()> {
     device_options.gpu_times_from_host = true;
     if shadowed {
         device_options.policy.host_page_textures = HostPageTexturePolicy::Shadow;
+    }
+    if worker {
+        device_options.policy.render_lowering = RenderLoweringPolicy::Worker;
     }
     // With the shadow log on, its lines and each notice's text on stderr.
     let log = metal2vulkan::env_vars::log_shadows();
