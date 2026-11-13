@@ -595,11 +595,14 @@ pub(super) struct DeviceShared {
     /// device memory: for the tests of `copied.rs` (`Device::fail_next_host_imports`).
     #[cfg(test)]
     pub(crate) failing_host_imports: std::sync::atomic::AtomicU64,
-    /// How many of the next `vkQueueSubmit`s of its command buffers' work fail as the driver's
-    /// out of device memory, never made: for the device tests of a failed submission
-    /// (`Device::fail_next_submissions`).
+    /// How many of the next `vkQueueSubmit`s of its command buffers' work fail, never made: for
+    /// the device tests of a failed submission (`Device::fail_next_submissions`).
     #[cfg(test)]
     pub(crate) failing_submissions: std::sync::atomic::AtomicU64,
+    /// The `VkResult` they fail with: the driver's out of device memory where 0
+    /// (`Device::fail_next_submissions_with`).
+    #[cfg(test)]
+    pub(crate) failing_result: std::sync::atomic::AtomicI32,
     /// Every linear image of a render target renders as a color attachment only under
     /// `VK_NV_linear_color_attachment`'s rule, whatever the device's facts: for the tests of
     /// `merge_scratch.rs` on a device that renders one beside any other
@@ -1528,6 +1531,12 @@ impl Device {
     /// (`DeviceShared::submit_logged`).
     pub(crate) fn fail_next_submissions(&self, count: u64) {
         (self.shared().failing_submissions).store(count, Ordering::Relaxed);
+    }
+
+    /// [`fail_next_submissions`](Self::fail_next_submissions), each failing with `result`.
+    pub(crate) fn fail_next_submissions_with(&self, count: u64, result: vk::Result) {
+        (self.shared().failing_result).store(result.as_raw(), Ordering::Relaxed);
+        self.fail_next_submissions(count);
     }
 }
 
@@ -3047,6 +3056,8 @@ impl Device {
             failing_host_imports: Default::default(),
             #[cfg(test)]
             failing_submissions: Default::default(),
+            #[cfg(test)]
+            failing_result: Default::default(),
             #[cfg(test)]
             linear_rule_forced: Default::default(),
             #[cfg(test)]

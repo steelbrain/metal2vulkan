@@ -489,7 +489,10 @@ impl super::DeviceShared {
                 let failing = &self.failing_submissions;
                 match failing.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
                 {
-                    Ok(_) => Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY),
+                    Ok(_) => Err(match self.failing_result.load(Ordering::Relaxed) {
+                        0 => vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+                        raw => vk::Result::from_raw(raw),
+                    }),
                     Err(_) => f(vk_queue),
                 }
             };

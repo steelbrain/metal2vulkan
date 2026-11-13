@@ -49,6 +49,7 @@ use super::rebind::{ImportHold, Unexact};
 use super::recycle::{self, BufferMaking};
 use super::resource::{Identity, ObjectId, ResourceKey};
 use super::retained::HeldBy;
+use super::submit_failure::{try_lock, Standing, TypeFlags};
 use super::texture::first_move::{Filled, Keeps, Mine};
 use super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
 use super::Device;
@@ -2439,6 +2440,119 @@ impl Filled for BufferShared {
             Bytes::Own(own) => own.identity.key,
             Bytes::Heap(placed) => placed.bytes.identity().key,
         })
+    }
+}
+
+impl Buffer {
+    /// What a failed submission's line states of the buffer (`submit_failure.rs`): its identity,
+    /// length and storage mode, whether its `VkBuffer` or memory was handed out, and where its
+    /// bytes lie (a heap's range, its memory with `types`' flags for its type, the caller's
+    /// `VkBuffer`, or a no-copy buffer's host pages and their import), and how that stands: read
+    /// without waiting for any lock and with no import made again.
+    pub(super) fn failure_facts(&self, types: &TypeFlags) -> (String, Standing) {
+        let s = self.s();
+        let mut facts = format!(
+            "buffer #{} of {} bytes, {:?}",
+            s.object_id.get(),
+            s.length,
+            self.storage_mode(),
+        );
+        if s.handed_out.load(Ordering::Relaxed) {
+            facts.push_str(", handed out");
+        }
+        let standing = match &s.bytes {
+            Bytes::Heap(placed) => {
+                let heap = placed.heap.object_id().get();
+                facts.push_str(&format!(", in heap #{heap} at {}", placed.offset));
+                Standing::Held
+            }
+            Bytes::Own(own) => match &own.lie {
+                Lie::Fixed(fixed) => {
+                    facts.push_str(", ");
+                    facts.push_str(&fixed.pages.memory.placement.failure_facts(types));
+                    if matches!(own.owner, Owner::Vulkan) {
+                        facts.push_str(", the caller's VkBuffer");
+                    }
+                    match fixed.released.load(Ordering::Acquire) {
+                        true => {
+                            facts.push_str(", RELEASED with its lost generation");
+                            Standing::Released
+                        }
+                        false => Standing::Held,
+                    }
+                }
+                Lie::Host(cell) => cell.failure_facts(&mut facts, types),
+            },
+        };
+        (facts, standing)
+    }
+}
+
+impl HostCell {
+    /// [`Buffer::failure_facts`] of a no-copy buffer's pages, added to `facts`.
+    fn failure_facts(&self, facts: &mut String, types: &TypeFlags) -> Standing {
+        facts.push_str(", no-copy");
+        if self.drops_writes {
+            facts.push_str(", its GPU writes dropped");
+        }
+        let Some(lying) = try_lock(&self.pages) else {
+            facts.push_str(", its pages busy");
+            return Standing::Held;
+        };
+        match &*lying {
+            Lying::In(pages) => pages.import.failure_facts(facts, types),
+            Lying::Detached(_) => {
+                facts.push_str(", DETACHED");
+                Standing::Released
+            }
+            Lying::Gone(_) => {
+                facts.push_str(", its pages GONE with its lost generation");
+                Standing::Gone
+            }
+        }
+    }
+}
+
+impl HostImport {
+    /// [`Buffer::failure_facts`] of the import a no-copy buffer's pages lie in, added to
+    /// `facts`: what it imported, its memory, and whether it is released now
+    /// (`host_residency.rs`).
+    fn failure_facts(&self, facts: &mut String, types: &TypeFlags) -> Standing {
+        let shape = &self.shape;
+        let what = match (self.copied(), shape.over_dma_buf, shape.in_ram_chunk) {
+            (true, _, _) => "a copy of the caller's pages",
+            (false, true, _) => "the caller's pages as dma-bufs",
+            (false, false, true) => "the caller's pages in a guest RAM chunk's import",
+            (false, false, false) => "the caller's pages by their pointer",
+        };
+        facts.push_str(", over ");
+        facts.push_str(what);
+        match &*self.objects {
+            Objects::Fixed(imported) => {
+                facts.push_str(", imported for good: ");
+                facts.push_str(&imported.pages.memory.placement.failure_facts(types));
+                Standing::Held
+            }
+            #[cfg(unix)]
+            Objects::Releasable(residency) => {
+                facts.push_str(", releasable, memory ");
+                facts.push_str(&types.of(shape.type_index));
+                match residency.held_now() {
+                    Some(true) => {
+                        facts.push_str(", imported now");
+                        Standing::Held
+                    }
+                    Some(false) => {
+                        facts.push_str(", RELEASED now");
+                        Standing::Released
+                    }
+                    None => {
+                        facts.push_str(", its residency busy");
+                        Standing::Held
+                    }
+                }
+            }
+        }
     }
 }
 

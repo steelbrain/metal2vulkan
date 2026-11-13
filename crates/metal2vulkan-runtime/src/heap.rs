@@ -69,6 +69,7 @@ use super::resource::{ObjectId, ResourceKey};
 use super::sparse::heap::SparseHeap;
 use super::sparse::texture::sparse_refusal;
 use super::sparse::SparsePageSize;
+use super::submit_failure::{Standing, TypeFlags};
 use super::texture::{Retain, Texture};
 use super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
 use super::Device;
@@ -296,6 +297,24 @@ impl WeakHeap {
 }
 
 impl Heap {
+    /// What a failed submission's line states of the heap (`submit_failure.rs`): its identity,
+    /// size and storage mode, and its bytes as [`Buffer::failure_facts`] states its own buffer.
+    pub(super) fn failure_facts(&self, types: &TypeFlags) -> (String, Standing) {
+        let heap = format!(
+            "heap #{} of {} bytes, {:?}",
+            self.object_id().get(),
+            self.size(),
+            self.storage_mode(),
+        );
+        match self.bytes() {
+            Some(bytes) => {
+                let (facts, standing) = bytes.failure_facts(types);
+                (format!("{heap}, its bytes {facts}"), standing)
+            }
+            None => (format!("{heap}, sparse"), Standing::Held),
+        }
+    }
+
     /// A handle that does not keep the heap (`WeakHeap`).
     pub(super) fn downgrade(&self) -> WeakHeap {
         WeakHeap(Arc::downgrade(&self.0))
@@ -418,6 +437,13 @@ impl HeapKeys {
                 .filter(|(heap, id)| wanted(*id) && heap.strong_count() > 0)
                 .map(|(_, id)| *id),
         );
+    }
+
+    /// The heap whose own buffer's key is `key`, held weakly, with its identity: no heap is let
+    /// go under this lock.
+    pub(super) fn entry(&self, key: ResourceKey) -> Option<(WeakHeap, ObjectId)> {
+        let heaps = lock(&self.heaps);
+        (heaps.get(&key)).map(|(heap, id)| (WeakHeap(heap.clone()), *id))
     }
 
     /// The identity of the heap whose own buffer's key is `key`, while it lives.

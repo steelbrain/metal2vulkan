@@ -2074,6 +2074,39 @@ impl Placement {
         self.type_index
     }
 
+    /// What a failed submission's line states of the placement (`submit_failure.rs`): its memory,
+    /// offset and bytes, its memory type with `types`' flags for it, and whose memory it is.
+    pub(super) fn failure_facts(&self, types: &crate::submit_failure::TypeFlags) -> String {
+        use ash::vk::Handle as _;
+        let mut facts = format!(
+            "memory {:#x} at {} of {} bytes, {}",
+            self.memory.as_raw(),
+            self.offset,
+            self.size,
+            types.of(self.type_index),
+        );
+        let kinds = [
+            (self.block.is_none(), "the caller's memory"),
+            (self.over_dma_buf(), "imports of the caller's dma-bufs"),
+            (self.over_ram_chunk(), "a guest RAM chunk's import"),
+            (
+                self.in_import.is_some(),
+                "a live import of the caller's pages",
+            ),
+            (
+                self.own_pages || self.pooled_pages,
+                "pages the runtime mapped and imported",
+            ),
+            (self.read_only_view, "an import of a read-only view"),
+            (self.overflowed, "overflowed past its class's memory types"),
+        ];
+        for (_, kind) in kinds.iter().filter(|(is, _)| *is) {
+            facts.push_str(", ");
+            facts.push_str(kind);
+        }
+        facts
+    }
+
     /// What the pool its block lies in holds.
     pub(super) fn holds(&self) -> Holds {
         self.holds

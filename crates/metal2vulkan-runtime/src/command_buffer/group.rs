@@ -108,6 +108,7 @@ use crate::device::relay::Relayed;
 use crate::error::CommandBufferError;
 use crate::exit_guard::{self, Call};
 use crate::gpu_time;
+use crate::submit_failure::{submit_failed, try_lock, Carried, Failed, TypeFlags};
 use crate::Device;
 use ash::vk;
 use metal2vulkan::device::CompletionPolicy;
@@ -323,6 +324,9 @@ pub(crate) struct After<'a> {
     pub(crate) value: u64,
     pub(crate) fence: Option<vk::Fence>,
     pub(crate) relayed: &'a Arc<Relayed>,
+    /// What it carried, for the line its failed submission logs (`submit_failure.rs`): called
+    /// only once the call failed.
+    pub(crate) carry: &'a dyn Fn(&mut Carried, &TypeFlags),
 }
 
 impl Group {
@@ -571,6 +575,35 @@ impl Group {
                 Ok(())
             }
             Err(error) => {
+                // Its line, before the end's signals alone move the timelines on.
+                let what = match alone {
+                    true => "the batches a group held",
+                    false => "the batches a group held, and a batch after them",
+                };
+                let failed = Failed {
+                    what,
+                    queue: Some(queue),
+                    result: error,
+                    infos: submits,
+                    fence,
+                };
+                let (members, events) = (&self.members, &self.end_semaphores);
+                let after = after.as_ref().map(|after| after.carry);
+                submit_failed(device, &failed, |carried, types| {
+                    carried.events.extend_from_slice(events);
+                    for member in members {
+                        let buffer = member.submission.buffer();
+                        // The batch after them may be of one of their command buffers, whose
+                        // state its submitter holds: that one states it.
+                        match try_lock(&buffer.state) {
+                            Some(state) => buffer.carry(&state, (None, None), carried, types),
+                            None => carried.buffers.push(format!("#{}", buffer.id.get())),
+                        }
+                    }
+                    if let Some(carry) = after {
+                        carry(carried, types);
+                    }
+                });
                 for member in self.members.drain(..) {
                     self.spare.push(member.infos);
                 }
@@ -623,6 +656,7 @@ fn submit_alone(device: &Device, after: After<'_>) -> Result<u64, vk::Result> {
         value,
         fence,
         relayed,
+        carry,
     } = after;
     let mut called = 0;
     // SAFETY: the batch's submission's own (`submit.rs`).
@@ -632,6 +666,16 @@ fn submit_alone(device: &Device, after: After<'_>) -> Result<u64, vk::Result> {
         raw.queue_submit(vk_queue, infos, fence.unwrap_or(vk::Fence::null()))
     });
     exit_guard::called(Call::QueueSubmit);
+    if let Err(result) = submitted {
+        let failed = Failed {
+            what: "a batch of a command buffer",
+            queue: Some(queue),
+            result,
+            infos,
+            fence,
+        };
+        submit_failed(device, &failed, carry);
+    }
     submitted.map(|()| called)
 }
 
@@ -653,10 +697,23 @@ fn signal_alone(
         .push_next(&mut timeline);
     // SAFETY: a submission of the signals a failed group's end held, each above its semaphore's
     // value (no batch signalled them); the `VkQueue` is used under its lock.
+    let infos = [info];
     let submitted = shared.submit_logged((queue, value), None, relayed, |vk_queue| unsafe {
         shared.counts.queue_submitted(1, 0);
-        raw.queue_submit(vk_queue, &[info], vk::Fence::null())
+        raw.queue_submit(vk_queue, &infos, vk::Fence::null())
     });
     exit_guard::called(Call::QueueSubmit);
+    if let Err(result) = submitted {
+        let failed = Failed {
+            what: "the end of a failed group's batches, its signals alone",
+            queue: Some(queue),
+            result,
+            infos: &infos,
+            fence: None,
+        };
+        submit_failed(device, &failed, |carried, _| {
+            carried.events.extend_from_slice(semaphores);
+        });
+    }
     submitted
 }

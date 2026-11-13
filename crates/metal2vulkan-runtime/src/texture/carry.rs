@@ -336,7 +336,7 @@ impl Texture {
         self.0.carried.store(true, Ordering::Release);
         // Among the program's resources there, its ID's slot there naming its parts there.
         if !self.is_view() {
-            to.shared().owners.texture(self);
+            (to.shared().owners).texture(self, to.shared().counts.submissions_made());
         }
         if self.0.id.id().0 != 0 {
             heap_sets::place(to, self);

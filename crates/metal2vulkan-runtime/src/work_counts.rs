@@ -2811,6 +2811,13 @@ impl Counters {
         (self.command_buffers_submitted).fetch_add(command_buffers as u64, Ordering::Relaxed);
     }
 
+    /// The `vkQueueSubmit` and `vkQueueBindSparse` calls made so far, the checks' left out
+    /// ([`queue_submitted`](Self::queue_submitted)): the clock a resource's age runs on in a
+    /// failed submission's line (`submit_failure.rs`).
+    pub(crate) fn submissions_made(&self) -> u64 {
+        self.queue_submissions.load(Ordering::Relaxed)
+    }
+
     /// A batch's `vkQueueSubmit` (or a group's, or a command buffer's fence's) spent `nanos`
     /// nanoseconds in the driver (`device/relay.rs`).
     pub(crate) fn batch_submitted_in(&self, nanos: u64) {

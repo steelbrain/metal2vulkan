@@ -40,6 +40,7 @@ use super::rebind::Taken;
 use super::replay::Replay;
 use super::residency::{Residency, Used};
 use super::resource::{ObjectId, ResourceKey};
+use super::submit_failure::{Resources, Standing, TypeFlags};
 use super::texture::{Texture, TextureMemory, TextureShared};
 use super::Device;
 use std::collections::{BTreeSet, HashSet};
@@ -205,6 +206,22 @@ impl Owner {
         }
     }
 
+    /// What a failed submission's line states of the owner, whose identity is `id`, with
+    /// `types`' flags for memory types: its own facts while it lives, else that it is gone.
+    fn failure_facts(&self, id: ObjectId, types: &TypeFlags) -> (String, Standing) {
+        let gone = |kind: &str| (format!("{kind} #{} GONE", id.get()), Standing::Gone);
+        match self {
+            Owner::Buffer(buffer, _) => (buffer.upgrade())
+                .map_or_else(|| gone("buffer"), |buffer| buffer.failure_facts(types)),
+            Owner::Texture(texture) => {
+                Texture::failure_facts(texture, types).unwrap_or_else(|| gone("texture"))
+            }
+            Owner::Heap(heap) => {
+                (heap.upgrade()).map_or_else(|| gone("heap"), |heap| heap.failure_facts(types))
+            }
+        }
+    }
+
     /// Whether the owner lives.
     fn lives(&self) -> bool {
         match self {
@@ -245,8 +262,10 @@ pub(super) struct Owners {
 
 #[derive(Default)]
 struct Registry {
-    /// Each key's owner, with the owner's identity.
-    owners: KeyMap<ResourceKey, (Owner, ObjectId)>,
+    /// Each key's owner, with the owner's identity and the device's submissions made before it
+    /// was kept (`WorkCounts::submissions_made`), its age's start in a failed submission's line
+    /// (`submit_failure.rs`).
+    owners: KeyMap<ResourceKey, (Owner, ObjectId, u64)>,
     /// The size at which the next insertion drops the gone owners' entries.
     prune_at: usize,
 }
@@ -255,32 +274,34 @@ struct Registry {
 const PRUNE_FLOOR: usize = 256;
 
 impl Owners {
-    /// Keep `key` with `owner`, whose identity is `id`, unless the key has one (a texture over a
-    /// buffer of the program's may share the buffer's key: the buffer owns it).
-    fn insert(&self, key: ResourceKey, owner: Owner, id: ObjectId) {
+    /// Keep `key` with `owner`, whose identity is `id`, made after `made` submissions, unless the
+    /// key has one (a texture over a buffer of the program's may share the buffer's key: the
+    /// buffer owns it).
+    fn insert(&self, key: ResourceKey, owner: Owner, id: ObjectId, made: u64) {
         let mut registry = lock(&self.inner);
         if registry.owners.len() >= registry.prune_at {
-            registry.owners.retain(|_, (owner, _)| owner.lives());
+            registry.owners.retain(|_, (owner, ..)| owner.lives());
             registry.prune_at = (2 * registry.owners.len()).max(PRUNE_FLOOR);
         }
-        registry.owners.entry(key).or_insert((owner, id));
+        registry.owners.entry(key).or_insert((owner, id, made));
     }
 
-    /// Keep a buffer the program made, by its key: a heap's buffer has its heap's, which
-    /// `HeapKeys` holds.
-    pub(super) fn buffer(&self, buffer: &Buffer) {
+    /// Keep a buffer the program made after `made` submissions, by its key: a heap's buffer has
+    /// its heap's, which `HeapKeys` holds.
+    pub(super) fn buffer(&self, buffer: &Buffer, made: u64) {
         if buffer.heap().is_none() {
             let id = Owner::id_of_buffer(buffer);
-            self.insert(buffer.identity().key, Owner::of_buffer(buffer), id);
+            self.insert(buffer.identity().key, Owner::of_buffer(buffer), id, made);
         }
     }
 
     /// Keep a texture the program made, not a view, by the key its uses name, with what owns
-    /// the memory its texels lie in: where that key is a buffer's (a texture buffer, an image
-    /// aliasing a buffer's bytes) the buffer or its heap has it already.
-    pub(super) fn texture(&self, texture: &Texture) {
+    /// the memory its texels lie in, made after `made` submissions: where that key is a buffer's
+    /// (a texture buffer, an image aliasing a buffer's bytes) the buffer or its heap has it
+    /// already.
+    pub(super) fn texture(&self, texture: &Texture, made: u64) {
         let id = Owner::id_of_texture(texture);
-        self.insert(texture.use_key(), Owner::of_texture(texture), id);
+        self.insert(texture.use_key(), Owner::of_texture(texture), id, made);
     }
 
     /// Add the owners of `keys` that a commit lists among the live buffers once used to
@@ -290,15 +311,22 @@ impl Owners {
         let owners = keys.into_iter().filter_map(|key| registry.owners.get(key));
         reached.0.extend(
             owners
-                .filter(|(owner, _)| owner.reached())
-                .map(|(owner, _)| owner.clone()),
+                .filter(|(owner, ..)| owner.reached())
+                .map(|(owner, ..)| owner.clone()),
         );
+    }
+
+    /// The owner of the memory under `key`, held weakly, with its identity and the submissions
+    /// made before it was kept: no owner is let go under this lock.
+    fn entry(&self, key: ResourceKey) -> Option<(Owner, ObjectId, u64)> {
+        let registry = lock(&self.inner);
+        (registry.owners.get(&key)).map(|(owner, id, made)| (owner.clone(), *id, *made))
     }
 
     /// The identity of what owns the memory under `key`, while it lives.
     pub(super) fn id_of(&self, key: ResourceKey) -> Option<ObjectId> {
         let registry = lock(&self.inner);
-        (registry.owners.get(&key)).and_then(|(owner, id)| owner.lives().then_some(*id))
+        (registry.owners.get(&key)).and_then(|(owner, id, _)| owner.lives().then_some(*id))
     }
 
     /// The live buffers the program made (`Device::visible`), for the device's recovery to carry
@@ -306,7 +334,7 @@ impl Owners {
     pub(super) fn buffers(&self) -> Vec<Buffer> {
         let registry = lock(&self.inner);
         (registry.owners.values())
-            .filter_map(|(owner, _)| match owner {
+            .filter_map(|(owner, ..)| match owner {
                 Owner::Buffer(buffer, _) => buffer.upgrade(),
                 Owner::Texture(_) | Owner::Heap(_) => None,
             })
@@ -318,7 +346,7 @@ impl Owners {
         let owners: Vec<Owner> = {
             let registry = lock(&self.inner);
             keys.iter()
-                .filter_map(|key| registry.owners.get(key).map(|(owner, _)| owner.clone()))
+                .filter_map(|key| registry.owners.get(key).map(|(owner, ..)| owner.clone()))
                 .collect()
         };
         for owner in &owners {
@@ -338,8 +366,8 @@ impl Owners {
         let owners = keys.into_iter().filter_map(|key| registry.owners.get(key));
         found.extend(
             owners
-                .filter(|(owner, id)| wanted(*id) && owner.lives())
-                .map(|(_, id)| *id),
+                .filter(|(owner, id, _)| wanted(*id) && owner.lives())
+                .map(|(_, id, _)| *id),
         );
     }
 
@@ -353,7 +381,7 @@ impl Owners {
         let registry = lock(&self.inner);
         keys.into_iter()
             .filter_map(|key| registry.owners.get(key))
-            .any(|(owner, id)| objects.contains(id) && owner.lives())
+            .any(|(owner, id, _)| objects.contains(id) && owner.lives())
     }
 }
 
@@ -375,6 +403,63 @@ pub(super) fn names_of<'a>(
         .filter_map(Owner::id_of_resident)
         .chain(residency.used_heaps().map(Heap::object_id));
     found.extend(resident.filter(|id| wanted(*id)));
+}
+
+/// The keys of what `residency` made resident, added to `keys`: each resource's, each heap's own
+/// buffer's (`HeapKeys`), for a failed submission's line ([`failure_facts`]).
+pub(super) fn resident_keys(residency: &Residency, keys: &mut BTreeSet<ResourceKey>) {
+    for used in residency.resources() {
+        match used {
+            Used::Buffer(buffer) => {
+                keys.insert(buffer.identity().key);
+            }
+            Used::Texture(texture) => {
+                keys.insert(texture.use_key());
+            }
+            Used::Heap { heap, .. } => keys.extend(heap.bytes().map(|bytes| bytes.identity().key)),
+            Used::IndirectCommandBuffer(icb) => {
+                let heap = icb.heap().and_then(Heap::bytes);
+                keys.extend(heap.map(|bytes| bytes.identity().key));
+            }
+        }
+    }
+    let heaps = residency.used_heaps().filter_map(Heap::bytes);
+    keys.extend(heaps.map(|bytes| bytes.identity().key));
+}
+
+/// What a failed submission's line states of the resources under `keys` (`submit_failure.rs`),
+/// added to `resources`: each once (`stated` holds the identities stated so far), as what owns
+/// its memory, with its age in the device's submissions since it was kept; a key no program
+/// resource owns is the runtime's own, counted. Each is held only while it is stated, and a
+/// command buffer that names it holds it (`retained.rs`), so no hold taken here is its last.
+pub(super) fn failure_facts<'a>(
+    shared: &super::device::DeviceShared,
+    keys: impl IntoIterator<Item = &'a ResourceKey>,
+    types: &TypeFlags,
+    (resources, stated): (&mut Resources, &mut BTreeSet<ObjectId>),
+) {
+    let now = shared.counts.submissions_made();
+    for &key in keys {
+        if let Some((owner, id, made)) = shared.owners.entry(key) {
+            if stated.insert(id) {
+                let (facts, standing) = owner.failure_facts(id, types);
+                let age = now.saturating_sub(made);
+                resources.state(format!("{facts}, made {age} submissions before"), standing);
+            }
+            continue;
+        }
+        let Some((heap, id)) = shared.heap_keys.entry(key) else {
+            resources.own += 1;
+            continue;
+        };
+        if stated.insert(id) {
+            let (facts, standing) = match heap.upgrade() {
+                Some(heap) => heap.failure_facts(types),
+                None => (format!("heap #{} GONE", id.get()), Standing::Gone),
+            };
+            resources.state(facts, standing);
+        }
+    }
 }
 
 /// What owns the memory under `key`, by its identity, while it lives: the program's buffer, or
@@ -663,7 +748,9 @@ impl Device {
     /// generation never recovered.
     pub(super) fn visible(&self, buffer: Buffer) -> Buffer {
         let shared = self.shared();
-        shared.owners.buffer(&buffer);
+        shared
+            .owners
+            .buffer(&buffer, shared.counts.submissions_made());
         shared.live_buffers.made(&buffer);
         if shared.carry.taken() && shared.carry.late_buffer(&buffer) {
             self.carry_late(|serving| buffer.carry(serving));

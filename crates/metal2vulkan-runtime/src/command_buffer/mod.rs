@@ -32,6 +32,7 @@
 //! the arena and what it retained.
 
 pub(super) mod batches;
+mod carried;
 pub(super) mod checks;
 pub(super) mod completion;
 mod copies_again;
@@ -111,6 +112,7 @@ use super::shadow::{ShadowCarry, Takes};
 use super::spares::CommandPool;
 use super::sparse::encoder::SparseUpdate;
 use super::sparse::indirect;
+use super::submit_failure::{submit_failed, try_lock, Failed};
 use super::texture::faces::TurnPoint;
 use super::texture::storage_form::Riding;
 use super::texture::Texture;
@@ -5776,6 +5778,19 @@ impl CommandBufferShared {
         match submitted {
             Ok(()) => Some(fence),
             Err(error) => {
+                let failed = Failed {
+                    what: "a fence after the VkQueue's work, for a command buffer",
+                    queue: Some(queue),
+                    result: error,
+                    infos: &[],
+                    fence: Some(fence),
+                };
+                submit_failed(&self.device, &failed, |carried, types| {
+                    match try_lock(&self.state) {
+                        Some(state) => self.carry(&state, (None, None), carried, types),
+                        None => carried.buffers.push(format!("#{}", self.id.get())),
+                    }
+                });
                 // SAFETY: as for a failed batch's fence (`submit.rs`).
                 unsafe { release::object(raw, fence) };
                 let _ = self.device.failed(error);
@@ -6598,17 +6613,29 @@ pub(super) fn hand_out(
 /// The command-buffer error of a barrier command buffer that could not be allocated, or of a
 /// recording that failed otherwise (a heap texture's moves' images, `EncoderCore::sample_moves`),
 /// recording a lost device. `allocate_raw` fails only with a Vulkan result; any other error is
-/// internal.
+/// internal, `VK_ERROR_UNKNOWN` as a submission's would be. Either is logged as a warning
+/// (`submit_failure.rs`, id name `metal2vulkan-recording-failed`) with the error it was, which
+/// the command buffer's error does not keep: so a command buffer failed with a raw `VkResult`
+/// says whether its `vkQueueSubmit` failed (that call's own line) or its recording did.
 pub(super) fn recording_error(device: &Device, error: Error) -> CommandBufferError {
-    match error {
-        Error::DeviceLost => submission_error(device, vk::Result::ERROR_DEVICE_LOST),
-        Error::OutOfMemory(_) => CommandBufferError::OutOfMemory,
+    let failed = match error {
+        Error::DeviceLost => return submission_error(device, vk::Result::ERROR_DEVICE_LOST),
+        Error::OutOfMemory(_) => return CommandBufferError::OutOfMemory,
         Error::Vulkan(code) => CommandBufferError::Internal(code),
         _ => CommandBufferError::Internal(super::error::VkResultCode(
             vk::Result::ERROR_UNKNOWN.as_raw(),
         )),
-    }
+    };
+    let text = format!(
+        "metal2vulkan: a command buffer's recording failed: {error} ({error:?}); it fails as \
+         {failed:?}, with no vkQueueSubmit"
+    );
+    crate::submit_failure::warn(device, RECORDING_FAILED, text);
+    failed
 }
+
+/// The id name of a failed recording's warning ([`recording_error`]).
+pub(crate) const RECORDING_FAILED: &str = "metal2vulkan-recording-failed";
 
 /// The command-buffer error of a host step whose recording failed with `error`: a refusal, what
 /// `commit` refuses where the CPU wrote the records, is [`CommandBufferError::Refused`], kept in

@@ -672,6 +672,9 @@ mod storage_form_recycle;
 mod submit_check;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod submit_check_device;
+mod submit_failure;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod submit_failure_device;
 mod submit_stalls;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod submit_stalls_idle;

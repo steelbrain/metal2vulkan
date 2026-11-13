@@ -130,6 +130,7 @@ use crate::exit_guard::{self, Call};
 use crate::release;
 use crate::resource::ObjectId;
 use crate::sharing::Sharing;
+use crate::submit_failure::{submit_failed, Failed};
 use crate::texture::first_move::Fills;
 use crate::work_counts::Begun;
 use ash::vk;
@@ -389,14 +390,31 @@ impl StagingLock<'_> {
         // timeline is above its value.
         shared.counts.queue_submitted(1, buffers.len());
         shared.queue_quiet.began();
+        let submits = [submit];
         let submitted = unsafe {
             staging.word.restore();
-            raw.queue_submit(queue, &[submit], vk::Fence::null())
+            raw.queue_submit(queue, &submits, vk::Fence::null())
         };
         shared.queue_quiet.ended();
         exit_guard::called(Call::QueueSubmit);
-        if let (Err(_), Some(audit)) = (&submitted, raw.pending_audit()) {
-            audit.withdrawn(carried, &[&buffers[..]]);
+        if let Err(result) = submitted {
+            if let Some(audit) = raw.pending_audit() {
+                audit.withdrawn(carried, &[&buffers[..]]);
+            }
+            let (what, role) = match staging.role {
+                Role::Staging => ("the staging queue's copies", "staged copies"),
+                Role::Fills => ("the fill queue's fills", "fills"),
+            };
+            let failed = Failed {
+                what,
+                queue: None,
+                result,
+                infos: &submits,
+                fence: None,
+            };
+            submit_failed(device, &failed, |carried, _| {
+                carried.roles.push((buffer, role.to_owned()));
+            });
         }
         submitted.map_err(|error| device.failed(error))?;
         made.signalled = value;
@@ -447,12 +465,23 @@ impl StagingLock<'_> {
         // pending audit.
         shared.counts.queue_submitted(1, 0);
         shared.queue_quiet.began();
+        let submits = [submit];
         let submitted = unsafe {
             staging.word.restore();
-            raw.queue_submit(queue, &[submit], vk::Fence::null())
+            raw.queue_submit(queue, &submits, vk::Fence::null())
         };
         shared.queue_quiet.ended();
         exit_guard::called(Call::QueueSubmit);
+        if let Err(result) = submitted {
+            let failed = Failed {
+                what: "a probe of the staging queue's engine",
+                queue: None,
+                result,
+                infos: &submits,
+                fence: None,
+            };
+            submit_failed(device, &failed, |_, _| {});
+        }
         submitted.map_err(|error| device.failed(error))?;
         made.signalled = value;
         staging.submitted.store(value, Ordering::Release);

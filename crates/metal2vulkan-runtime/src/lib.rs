@@ -242,6 +242,7 @@ mod stencil_copy;
 mod step_aside;
 mod storage_placeholder;
 mod submit_check;
+mod submit_failure;
 mod tessellation;
 mod texture;
 mod texture_descriptor;

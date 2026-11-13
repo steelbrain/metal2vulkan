@@ -27,6 +27,7 @@ use crate::error::{vulkan, Error};
 use crate::exit_guard::{self, Call};
 use crate::release;
 use crate::resource::ResourceKey;
+use crate::submit_failure::{submit_failed, Failed};
 use crate::texture::first_move::{last_of_each, FirstMoves, Mine, Taken};
 use crate::tracker::Point;
 use crate::work_counts::Begun;
@@ -79,6 +80,11 @@ impl OwnTimeline {
         let value = self.completed.load(Ordering::Acquire);
         let semaphore = *self.semaphore.get()?;
         (value > 0).then_some((semaphore, value))
+    }
+
+    /// The timeline's semaphore, once made.
+    fn semaphore(&self) -> Option<vk::Semaphore> {
+        self.semaphore.get().copied()
     }
 
     /// The timeline was made: `semaphore`.
@@ -409,6 +415,17 @@ impl Device {
             if let Some(audit) = raw.pending_audit() {
                 audit.withdrawn(carried, &[&buffers[..]]);
             }
+            let failed = Failed {
+                what: "an internal submission",
+                queue: Some(0),
+                result: error,
+                infos: &submits,
+                fence: Some(objects.fence),
+            };
+            submit_failed(self, &failed, |carried, _| {
+                let role = "the internal command buffer: first work, staged copies, a host call's";
+                carried.roles.push((objects.buffer, role.to_owned()));
+            });
             shared.loader_word.end_step(word, mark);
             return Err(self.failed(error));
         }
@@ -494,6 +511,21 @@ impl Device {
             shared.internal_done.completed(),
             done(&shared.staging),
             done(&shared.fill_queue),
+        ]
+    }
+
+    /// The semaphores of the device's own timelines outside the batches, where made, in
+    /// [`own_completed`](Self::own_completed)'s order: what a failed submission's line names
+    /// them by (`submit_failure.rs`).
+    pub(crate) fn own_semaphores(&self) -> [Option<vk::Semaphore>; OWN_TIMELINES] {
+        let shared = self.shared();
+        let semaphore = |queue: &Option<super::staging::StagingQueue>| {
+            queue.as_ref().and_then(|queue| queue.done.semaphore())
+        };
+        [
+            shared.internal_done.semaphore(),
+            semaphore(&shared.staging),
+            semaphore(&shared.fill_queue),
         ]
     }
 

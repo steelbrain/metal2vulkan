@@ -112,6 +112,7 @@ use super::sparse::texture::{sparse_refusal, SparseExtras, SparseImage, SparseSh
 use super::sparse::SparsePageSize;
 use super::sparse::SparseProblem;
 use super::storage_placeholder::Placeholders;
+use super::submit_failure::{try_lock, Standing, TypeFlags};
 use super::texture_descriptor::{
     memoryless_two_plane_cube, texture_usage, TextureDescriptor, TextureLayout, TextureProblem,
     TextureSwizzleChannels,
@@ -1814,6 +1815,86 @@ impl Owner {
             Owner::ViewShadow(shadow) => (true, Some(&shadow.placement)),
             Owner::Buffer { .. } | Owner::Sparse(_) | Owner::Heap(_) => (true, None),
             Owner::Caller(_) => (false, None),
+        }
+    }
+}
+
+impl Texture {
+    /// What a failed submission's line states of the texture object `shared` names, while it
+    /// lives (`submit_failure.rs`): its identity, type, format, extent and storage mode, and its
+    /// storage (its image, where that lies with `types`' flags for its memory type, a buffer's
+    /// bytes), and how that stands, read without waiting for any lock. The object is held without
+    /// its retain, and only while it is stated: a command buffer that names it holds it.
+    pub(super) fn failure_facts(
+        shared: &Weak<TextureShared>,
+        types: &TypeFlags,
+    ) -> Option<(String, Standing)> {
+        use std::fmt::Write as _;
+        let texture = Texture(shared.upgrade()?, None);
+        let mut facts = format!(
+            "texture #{} {:?} {:?} {}x{}x{}, {:?}",
+            texture.object_id().get(),
+            texture.texture_type(),
+            texture.pixel_format(),
+            texture.width(),
+            texture.height(),
+            texture.depth(),
+            texture.storage_mode(),
+        );
+        let over = |texels: &Texels| texels.buffer.object_id().get();
+        let standing = match texture.storage() {
+            Storage::Image(image) => image.failure_facts(&mut facts, types),
+            Storage::Texels(texels) => {
+                let _ = write!(facts, ", a texture buffer over buffer #{}", over(texels));
+                Standing::Held
+            }
+            Storage::Alias { image, texels } => {
+                let _ = write!(facts, ", a linear image aliasing buffer #{}", over(texels));
+                image.failure_facts(&mut facts, types)
+            }
+            Storage::Shadow { image, texels, .. } => {
+                let _ = write!(facts, ", a shadow image of buffer #{}", over(texels));
+                image.failure_facts(&mut facts, types)
+            }
+        };
+        Some((facts, standing))
+    }
+}
+
+impl Image {
+    /// [`Texture::failure_facts`] of the image, added to `facts`: its `VkImage`, whose it is
+    /// and where it lies, and whether it was released or presents a detach's stand-in.
+    fn failure_facts(&self, facts: &mut String, types: &TypeFlags) -> Standing {
+        use std::fmt::Write as _;
+        let owner = match &self.owner {
+            Owner::Runtime { .. } => "its own memory",
+            Owner::Buffer { .. } => "a buffer's memory",
+            Owner::Caller(_) => "the caller's memory, the caller's VkImage",
+            Owner::Sparse(_) => "a sparse heap's memory",
+            Owner::Heap(_) => "its heap's memory",
+            Owner::HeapShadow(_) => "its own memory, shadowing its heap's bytes",
+            Owner::HeapUnaliased(_) => "its own memory, apart from its heap's bytes",
+            Owner::ViewShadow(_) => "its own memory, shadowing the image it views",
+        };
+        let _ = write!(facts, ", image {:#x} in {owner}", self.raw.get().as_raw());
+        if let (_, Some(placement)) = self.owner.releases() {
+            facts.push_str(": ");
+            facts.push_str(&placement.failure_facts(types));
+        }
+        if self.released.load(Ordering::Acquire) {
+            facts.push_str(", RELEASED");
+            return Standing::Released;
+        }
+        match try_lock(&self.detached).map(|detached| detached.is_some()) {
+            Some(true) => {
+                facts.push_str(", DETACHED, presenting a stand-in");
+                Standing::Released
+            }
+            Some(false) => Standing::Held,
+            None => {
+                facts.push_str(", its detach busy");
+                Standing::Held
+            }
         }
     }
 }
@@ -5511,7 +5592,8 @@ impl Texture {
         }
         if let IdUse::Program(placement) = id_use {
             if texture.0.parent.is_none() {
-                device.shared().owners.texture(&texture);
+                let made = device.shared().counts.submissions_made();
+                device.shared().owners.texture(&texture, made);
             }
             // Kept for the generation's recovery to carry or leave (`texture/carry.rs`).
             device.shared().carry.texture(&texture);

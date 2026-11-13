@@ -231,6 +231,7 @@ use crate::shadow::ShadowCopies;
 use crate::shadow_standing::{LetGo, Missed, Unskipped};
 use crate::sparse::bind::{bind_batch, BindFailure, Bound};
 use crate::sparse::encoder::SparseUpdate;
+use crate::submit_failure::{Carried, TypeFlags};
 use crate::texture::decoded_twin::{SecondDecode, TwinWrite};
 use crate::texture::faces::FaceFix;
 use crate::texture::first_move::{last_of_each, FillTake};
@@ -1338,6 +1339,36 @@ impl CommandBufferShared {
                 };
                 shared.counts.group_ended(end);
             }
+            // What the batch carried, for the line its failed submission logs
+            // (`submit_failure.rs`): read only once the call failed.
+            let kept_signals = kept.len();
+            let kept_barriers = &scheduler.kept;
+            let carry = |carried: &mut Carried, types: &TypeFlags| {
+                carried
+                    .binary
+                    .extend(binary_waits.iter().chain(&binary_signals));
+                carried
+                    .events
+                    .extend(event_waits.iter().map(|&(semaphore, _)| semaphore));
+                carried
+                    .events
+                    .extend(signal_semaphores[..kept_signals].iter());
+                carried.events.extend(order_semaphores.iter());
+                self.carry(&state, (Some(index), Some(start..end)), carried, types);
+                let roles = &mut carried.roles;
+                roles.extend(recorded.map(|raw| (raw, "first work".to_owned())));
+                roles.extend(finale.iter().map(|&raw| (raw, "end".to_owned())));
+                for &raw in &work {
+                    if roles.iter().any(|(known, _)| *known == raw) {
+                        continue;
+                    }
+                    let role = match kept_barriers.kept(queue, raw) {
+                        Some(taken) => format!("kept barriers, taken for {taken}"),
+                        None => "barriers".to_owned(),
+                    };
+                    roles.push((raw, role));
+                }
+            };
             let after = After {
                 queue,
                 infos: submits,
@@ -1345,6 +1376,7 @@ impl CommandBufferShared {
                 value: at.value,
                 fence,
                 relayed: &self.relayed,
+                carry: &carry,
             };
             let submitted =
                 scheduler

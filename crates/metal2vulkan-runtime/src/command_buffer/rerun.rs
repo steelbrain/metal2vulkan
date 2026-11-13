@@ -59,6 +59,7 @@ use crate::error::{internal, CommandBufferError, Error};
 use crate::exit_guard::{self, Call};
 use crate::retained::Retained;
 use crate::spares::CommandPool;
+use crate::submit_failure::{submit_failed, try_lock, Failed};
 use crate::tracker::EncoderUses;
 use crate::upload::{Upload, Uploads};
 use ash::vk;
@@ -450,6 +451,20 @@ pub(super) unsafe fn submit_waited(
     );
     exit_guard::called(Call::QueueSubmit);
     if let Err(error) = submitted {
+        let failed = Failed {
+            what,
+            queue: Some(queue),
+            result: error,
+            infos: &submits,
+            fence: Some(fence),
+        };
+        submit_failed(device, &failed, |carried, types| {
+            // Its submitter may hold the command buffer's state: then it is named alone.
+            match try_lock(&buffer.state) {
+                Some(state) => buffer.carry(&state, (None, None), carried, types),
+                None => carried.buffers.push(format!("#{}", buffer.id.get())),
+            }
+        });
         // SAFETY: a fence no submission took.
         unsafe { crate::release::object(raw, fence) };
         return Waited::Failed(error);

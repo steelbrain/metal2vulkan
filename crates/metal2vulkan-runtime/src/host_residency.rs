@@ -318,6 +318,12 @@ struct State {
 }
 
 impl Residency {
+    /// Whether the import holds its `VkBuffer` and memory now, where its state is free to read
+    /// (a failed submission's line, `submit_failure.rs`): it never waits for a sweep.
+    pub(super) fn held_now(&self) -> Option<bool> {
+        crate::submit_failure::try_lock(&self.state).map(|state| state.held.is_some())
+    }
+
     /// The residency of an import of `pages`, imported now, which `again` imports again;
     /// `stand_in` the device's stand-in's pages.
     pub(super) fn new(

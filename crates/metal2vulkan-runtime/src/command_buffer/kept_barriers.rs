@@ -404,6 +404,17 @@ impl KeptBarriers {
         Ok(Some(buffer))
     }
 
+    /// Whether `raw` is one of `VkQueue` `queue`'s kept command buffers, with the timeline value
+    /// of the batch that last took it: what a failed submission's line names it by
+    /// (`submit_failure.rs`).
+    pub(crate) fn kept(&self, queue: usize, raw: vk::CommandBuffer) -> Option<u64> {
+        let kept = self.queues.get(queue)?;
+        (kept.lists.iter().chain(&kept.stamped))
+            .flat_map(|list| &list.buffers)
+            .find(|kept| kept.raw == raw)
+            .map(|kept| kept.after)
+    }
+
     /// Release the pools, with every kept command buffer, as the device is torn down after its
     /// queues are idle.
     pub(crate) fn release(&mut self, raw: &ash::Device) {
