@@ -3977,10 +3977,7 @@ bound.
   constexpr sampler clamped to the edge fetches its texel.
 - `metal2vulkan-degrade-device-arithmetic` (precision). `PrecisionNote::DeviceArithmetic`: Float
   division, remainder, square root, fused multiply-add, and dot products use Vulkan's precision
-  bounds (e.g. 2.5 ULP division, a possibly unfused `Fma`) rather than correct rounding. A `half`
-  square root is the device's 16-bit `Sqrt` where the module computes `half` in 16 bits under the
-  16-bit float controls (inherited from `1 / InverseSqrt`, in `half` ulp), and the `float` one
-  rounded to `half` elsewhere.
+  bounds (e.g. 2.5 ULP division, a possibly unfused `Fma`) rather than correct rounding.
 - `metal2vulkan-degrade-device-signed-zero-inf-nan` (precision).
   `PrecisionNote::DeviceSignedZeroInfNan`: Float operations LLVM requires to keep signed zeros,
   infinities, and NaNs run without `SignedZeroInfNanPreserve`, which the device does not support at
@@ -4555,8 +4552,9 @@ bound.
   Native device maths: the module computes a `float` or `half` math-library function by the device's
   own `GLSL.std.450` instruction (`exp`, `log`, `pow`, `sinh`, `cosh` and `tanh` among them; a
   composition of the device's `Exp2` and `Log2` only for `exp10` and `log10`, which no instruction
-  is) where Metal's function is not the device's own; `fast::sqrt` the device's `Sqrt`; the fast
-  `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh` and `atanh` the device's instructions, not MSL's
+  is) where Metal's function is not the device's own; `fast::sqrt` the device's `Sqrt`, and a
+  `half` `sqrt` its 16-bit `Sqrt` where the module computes `half` in 16 bits under the 16-bit
+  float controls; the fast `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh` and `atanh` the device's instructions, not MSL's
   fast-math formulas (`fast::sin` of `1e7` is the device's sine, where Metal answers `+0`;
   `fast::tanh(45)` is `1`, where Metal answers NaN); `fabs`, `sign` and `fract` the device's
   `FAbs`, `FSign` and `Fract`, their special operands the instruction's (Metal's `sign` of a NaN,

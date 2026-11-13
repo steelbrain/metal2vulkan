@@ -15,7 +15,7 @@
 //!
 //! Under the same controls a `half` division and square root are the device's 16-bit `OpFDiv` and
 //! `Sqrt` (`lower::arith::divide`, `lower::arith::math`), recording `NativeDivision` and
-//! `DeviceArithmetic`; on lavapipe the `float` ones rounded. A second kernel divides a `half2` and
+//! `NativeTranscendentals`; on lavapipe the `float` ones rounded. A second kernel divides a `half2` and
 //! a `half`, a divisor past `2^14` and a denormal one among them (each scaled into Vulkan's range
 //! for the 16-bit quotient), and takes a square root. `llvm-as` assembles the modules; without it
 //! the tests skip visibly.
@@ -419,7 +419,7 @@ fn half_values_are_held_at_16_bits_under_the_float_controls() {
 /// On the Iris Xe and RADV (the 16-bit float controls) a `half` division, on two lanes and on
 /// one, and a `half` square root are the device's 16-bit `OpFDiv` and `Sqrt`, none at 32 bits and
 /// no exact half narrowed, and an undefined `float` vector stays one (no widening of its 16-bit
-/// twin), recording `NativeDivision` and `DeviceArithmetic` and passing L3; a
+/// twin), recording `NativeDivision` and `NativeTranscendentals` and passing L3; a
 /// divisor past `2^14` and a denormal one are scaled into Vulkan's range exactly. On lavapipe
 /// (the conversion alone) they are the `float` instructions. Each answers the exact results on
 /// the interpreter.
@@ -449,7 +449,7 @@ fn half_division_and_sqrt_are_16_bit_under_the_float_controls() {
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         assert!(
             a.precision.contains(&PrecisionNote::NativeDivision)
-                && a.precision.contains(&PrecisionNote::DeviceArithmetic),
+                && a.precision.contains(&PrecisionNote::NativeTranscendentals),
             "{stem}: {:?}",
             a.precision
         );

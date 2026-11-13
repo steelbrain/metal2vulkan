@@ -757,10 +757,7 @@ pub enum PrecisionNote {
     PixelSamplerScaling,
     /// Float division, remainder, square root, fused multiply-add, and dot products use Vulkan's
     /// precision bounds (e.g. 2.5 ULP division, a possibly unfused `Fma`) rather than correct
-    /// rounding. A `half` square root is the device's 16-bit `Sqrt` where the module computes
-    /// `half` in 16 bits under the 16-bit float controls, within Vulkan's bound for it (inherited
-    /// from `1 / InverseSqrt`, 2 then 2.5 `half` ulp), and the `float` one rounded to `half`
-    /// elsewhere. A fast (`arcp`) division is the device's `OpFDiv`, where Metal's is `x` times a
+    /// rounding. A fast (`arcp`) division is the device's `OpFDiv`, where Metal's is `x` times a
     /// reciprocal it rounds within about 0.64 ulp but not correctly. Not recorded by precise
     /// `fmod`, whose answer is the one right value on every device, nor, on a device whose `float`
     /// functions are Metal's own (MoltenVK), in an entry Metal compiles with fast math
@@ -1792,7 +1789,9 @@ pub enum PrecisionNote {
     /// 6 ulp precise and its fast-math table fast (MSL Tables 8.1, 8.2): `Exp2` and `Exp` 3 + 2·|x|
     /// ulp; `Log2` and `Log` 3 ulp outside `[0.5, 2]` and `2^-21` absolute inside; `Pow` inherited
     /// from `Exp2(y · Log2(x))`; `Sqrt` inherited from `1 / InverseSqrt` (`fast::sqrt`'s too, where
-    /// Metal's is `x · rsqrt(x)`); `FAbs` and `FSign` the correct result, `Fract` and `Trunc`
+    /// Metal's is `x · rsqrt(x)`; a `half` `sqrt` the device's 16-bit `Sqrt`, its bound in `half`
+    /// ulp, where the module computes `half` in 16 bits under the 16-bit float controls, and the
+    /// `float` one rounded to `half` elsewhere); `FAbs` and `FSign` the correct result, `Fract` and `Trunc`
     /// correctly rounded, `round`'s and a `half` `fmod`'s zero of either sign; `InverseSqrt` 2 ulp; `Sin` and `Cos` `2^-11` absolute in `[-π,
     /// π]` (both answers in `[-1, 1]` beyond); `Tan` inherited from `Sin / Cos`; `Asin`, `Acos`,
     /// `Atan` and `Atan2` 4096 ulp; the hyperbolic functions inherited from their `Exp` and `Log`

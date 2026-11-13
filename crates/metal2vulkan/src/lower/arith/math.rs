@@ -1328,7 +1328,7 @@ pub fn float_fn(
 /// operand narrowed to 16 bits, exactly since it is a `half`, the instruction, and its result
 /// widened, exactly. Vulkan bounds the 16-bit `Sqrt` as it does the `float` one, inherited from
 /// `1 / InverseSqrt` (2 ulp, then the division's 2.5), here in `half` ulp, where Metal's precise
-/// `sqrt` is correctly rounded (`PrecisionNote::DeviceArithmetic`). The module computes in 16 bits
+/// `sqrt` is correctly rounded (`PrecisionNote::NativeTranscendentals`). The module computes in 16 bits
 /// ([`narrow::computes_in_16_bits`]), so its entry declares the 16-bit float controls, under which
 /// a denormal operand and result are kept and a zero's sign, an infinity and a NaN are IEEE 754's.
 fn sqrt_16(fb: &mut FunctionBuilder<'_>, f: Form, a: Value) -> BResult<Value> {
