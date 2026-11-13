@@ -1217,7 +1217,10 @@ fn line<T: serde::Serialize>(value: &T) -> String {
 
 /// An out directory belongs to one build and venue: a batch claims a fresh one, resumes its own,
 /// and refuses one another build or venue started, or one whose finished runs predate the record
-/// (their build is unknown), so no done-list of an older build counts as this build's.
+/// (their build is unknown), so no done-list of an older build counts as this build's. A build
+/// that changed only this crate's sources (an oracle's or executor's fix, whose product,
+/// semantics, and ABIs are the same) is another build too, and so is a record from before this
+/// crate's fingerprint was recorded.
 #[test]
 fn an_out_directory_resumes_only_its_own_build() {
     let scratch = ScratchDir::new("batch-build").unwrap();
@@ -1241,6 +1244,7 @@ fn an_out_directory_resumes_only_its_own_build() {
     assert_eq!(recorded, BatchBuild::of(&config));
     assert_eq!(recorded.executor_abi, ENGINE_EXECUTOR_ABI);
     assert_eq!(recorded.product, TRANSLATOR_FINGERPRINT);
+    assert_eq!(recorded.validation, VALIDATION_FINGERPRINT);
     assert_eq!(recorded.device_type, "cpu");
     fs::write(
         config.out.join(DONE_LIST),
@@ -1314,9 +1318,47 @@ fn an_out_directory_resumes_only_its_own_build() {
             oracle_abi: "metal-v0".into(),
             ..recorded.clone()
         },
+        BatchBuild {
+            validation: "66".repeat(32),
+            ..recorded.clone()
+        },
     ] {
         assert!(!other.is_this_build(), "{other:?}");
     }
+    // An oracle-only change: the same product, semantics, executor and oracle ABIs, another
+    // validation build. Its out directory, finished runs and all, is not resumed.
+    let oracle_only = BatchBuild {
+        validation: "77".repeat(32),
+        ..recorded.clone()
+    };
+    fs::write(
+        config.out.join(BUILD),
+        serde_json::to_vec(&oracle_only).unwrap(),
+    )
+    .unwrap();
+    let error = BatchBuild::claim(&config).unwrap_err();
+    assert!(error.contains("another build or venue"), "{error}");
+    // A record from before the fingerprint was recorded reads as no build's.
+    let mut before_validation = serde_json::to_value(&recorded).unwrap();
+    before_validation
+        .as_object_mut()
+        .unwrap()
+        .remove("validation");
+    fs::write(
+        config.out.join(BUILD),
+        serde_json::to_vec(&before_validation).unwrap(),
+    )
+    .unwrap();
+    let read = BatchBuild::read(&config.out).unwrap().unwrap();
+    assert_eq!(read.validation, "");
+    assert!(!read.is_this_build());
+    let error = BatchBuild::claim(&config).unwrap_err();
+    assert!(error.contains("another build or venue"), "{error}");
+    fs::write(
+        config.out.join(BUILD),
+        serde_json::to_vec(&recorded).unwrap(),
+    )
+    .unwrap();
     // The venue is not the build: a record of another venue is still this build's.
     assert!(BatchBuild {
         environment_id: "elsewhere".into(),

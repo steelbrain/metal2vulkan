@@ -61,8 +61,8 @@ A last line of done.tsv, rows.jsonl, or refusals.jsonl without its newline (an a
 short) is dropped. --batch-install writes into the store at DIR, for each (case, leg), the\n\
 evidence of its last run that recorded any (its row, or its refusal) through the store's\n\
 validated writes, and prints batch-install rows=N refusals=N store=DIR this_build=yes|no|unrecorded:\n\
-whether DIR/build.json is this build (executor, product, semantics, and oracle), the only build\n\
-whose rows are current once installed. It refuses an out directory of the other\n\
+whether DIR/build.json is this build (executor, product, semantics, oracle, and validation\n\
+sources), the only build whose rows are current once installed. It refuses an out directory of the other\n\
 backend.";
 
 /// Run a batch mode if the command line names one (its first argument): `true` when it did (and

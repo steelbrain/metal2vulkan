@@ -65,6 +65,7 @@ use crate::observation::{
 use crate::refusal::RefusalObservation;
 use crate::source::shard_name_for_hash;
 use crate::store::{refusal_directory, CorpusStore};
+use crate::worker::device::VALIDATION_FINGERPRINT;
 use crate::ScratchDir;
 use base64::Engine as _;
 use serde::de::DeserializeOwned;
@@ -674,10 +675,11 @@ pub struct BatchConfig {
 
 /// The build and venue an out directory's runs belong to ([`BUILD`]): what decides whether a row
 /// or refusal they recorded is current (the executor ABI, the product's source fingerprint and
-/// translation semantics, from which every engine translator fingerprint is derived, and the
-/// Metal oracle), and the venue they ran on (the backend, the Metal and operator environments, the
-/// profile the device was restricted to, and the device type). A batch resumes only an out
-/// directory of its own build and venue.
+/// translation semantics, from which every engine translator fingerprint is derived, the Metal
+/// oracle, and this crate's own sources, which hold the oracle and the executors), and the venue
+/// they ran on (the backend, the Metal and operator environments, the profile the device was
+/// restricted to, and the device type). A batch resumes only an out directory of its own build and
+/// venue.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BatchBuild {
@@ -685,6 +687,13 @@ pub struct BatchBuild {
     pub product: String,
     pub semantics_version: u32,
     pub oracle_abi: String,
+    /// This crate's source fingerprint ([`VALIDATION_FINGERPRINT`]): the oracle's and the
+    /// executors' code, which the product's fingerprint leaves out. So a run that failed under an
+    /// oracle or executor since changed (a Metal qualification its instrumentation made Metal
+    /// refuse) is not resumed as done by a later build. Absent, and so empty, in a record from
+    /// before it was recorded, which is no build's.
+    #[serde(default)]
+    pub validation: String,
     /// Absent in a record of a batch before MoltenVK had one: those were Vulkan.
     #[serde(default = "vulkan")]
     pub backend: BatchBackend,
@@ -725,6 +734,7 @@ impl BatchBuild {
             product: TRANSLATOR_FINGERPRINT.into(),
             semantics_version: metal2vulkan::cache::SEMANTICS_VERSION,
             oracle_abi: ORACLE_ABI.into(),
+            validation: VALIDATION_FINGERPRINT.into(),
             backend,
             metal_environment_id: metal_environment_id.into(),
             environment_id: environment_id.into(),
@@ -733,9 +743,9 @@ impl BatchBuild {
         }
     }
 
-    /// Whether the record's runs are of this build: its executor ABI, product, semantics, and
-    /// oracle are this build's, whatever its venue. Only then are the rows and refusals they
-    /// recorded current here, so only then does installing them add evidence.
+    /// Whether the record's runs are of this build: its executor ABI, product, semantics, oracle,
+    /// and this crate's sources are this build's, whatever its venue. Only then are the rows and
+    /// refusals they recorded current here, so only then does installing them add evidence.
     pub fn is_this_build(&self) -> bool {
         let current = Self::current(
             self.backend,
@@ -748,6 +758,7 @@ impl BatchBuild {
             && self.product == current.product
             && self.semantics_version == current.semantics_version
             && self.oracle_abi == current.oracle_abi
+            && self.validation == current.validation
     }
 
     /// The record of the out directory `out`, if it holds one.
