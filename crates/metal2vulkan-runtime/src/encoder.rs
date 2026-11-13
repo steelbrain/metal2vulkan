@@ -160,9 +160,36 @@ pub(super) struct Recorded {
     /// their second decoded twins after its work (`texture/decoded_twin.rs`); none for any other
     /// encoder.
     pub(super) twin_writes: Vec<TwinWrite>,
+    /// The textures the encoder writes whole before any of its commands reads one
+    /// ([`Overwrite`]), on its first part alone: where the encoder is the first use of one among
+    /// its batch's commands, the batch's submission leaves out the zeros of its first move
+    /// (`command_buffer/submit.rs`). Cleared where the part runs nothing.
+    pub(super) overwrites: Vec<Overwrite>,
     /// What the encoder was, as the encoder trail names it, where the device's trail is on
     /// (`encoder_trail.rs`).
     pub(super) trail: Option<Arc<str>>,
+}
+
+/// A texture whose image an encoder writes whole, every texel of every aspect, before any of its
+/// commands reads it, by its own description, never a shader's ([`EncoderCore::overwrites`]):
+/// noted only for a texture whose first move still waits with zeros that may go
+/// (`Texture::overwritable`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Overwrite {
+    /// The image's key.
+    pub(super) key: ResourceKey,
+    /// How the encoder writes it.
+    pub(super) by: OverwriteBy,
+}
+
+/// How an encoder writes an [`Overwrite`]'s image whole.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum OverwriteBy {
+    /// A render pass that loads every aspect of it `Clear` and stores it, rendering it itself
+    /// over its whole extent: the clear comes before every command of the pass's draws.
+    Pass,
+    /// A blit encoder's copy into its whole extent, every aspect.
+    Blit,
 }
 
 /// Commands an encoder left to record later (`deferred.rs`).
@@ -456,6 +483,10 @@ pub(super) struct EncoderCore {
     /// Its writes into ASTC carriers ([`wrote_twin`](Self::wrote_twin)): `end` hands them to the
     /// command buffer with its last part.
     twin_writes: Vec<TwinWrite>,
+    /// The textures it writes whole before any of its commands reads one
+    /// ([`overwrites`](Self::overwrites)): `end` hands them to the command buffer with its first
+    /// part.
+    overwrites: Vec<Overwrite>,
     /// The commands it records now were called while no buffer of the device was detached: a
     /// render encoder lowers calls it logged (`render/deferral.rs`), whose detachment they judge
     /// as of their calls ([`judges_unattached`](Self::judges_unattached)).
@@ -703,6 +734,7 @@ impl EncoderCore {
             fails_command_buffer: None,
             faults: None,
             twin_writes: Vec::new(),
+            overwrites: Vec::new(),
             unattached_as_called: false,
             aliased_uses: Vec::new(),
             // The keys an ended encoder found, which hold here while the version stands.
@@ -866,6 +898,7 @@ impl EncoderCore {
             fails_command_buffer: None,
             faults: None,
             twin_writes: Vec::new(),
+            overwrites: Vec::new(),
             unattached_as_called: false,
             aliased_uses: Vec::new(),
             aliases_quiet: Quiet::default(),
@@ -1011,6 +1044,14 @@ impl EncoderCore {
     /// submission decodes it into the image's second decoded twin (`texture/decoded_twin.rs`).
     pub(super) fn wrote_twin(&mut self, write: TwinWrite) {
         self.twin_writes.push(write);
+    }
+
+    /// The encoder writes `overwrite`'s image whole before any of its commands reads it
+    /// ([`Overwrite`]), each once.
+    pub(super) fn overwrites(&mut self, overwrite: Overwrite) {
+        if !self.overwrites.contains(&overwrite) {
+            self.overwrites.push(overwrite);
+        }
     }
 
     /// Hold `object`, a shared one (`Buffer::held` and its kin), until the command buffer
@@ -2941,6 +2982,7 @@ impl EncoderCore {
             fails_command_buffer,
             faults,
             twin_writes,
+            overwrites,
             routes,
             aliases_quiet,
             trail,
@@ -3027,6 +3069,7 @@ impl EncoderCore {
                     summary: summary.fences_only(),
                     sparse: Vec::new(),
                     twin_writes: Vec::new(),
+                    overwrites: Vec::new(),
                     trail: (trail.as_ref()).map(|trail| Arc::from(format!("{trail}, left out"))),
                 },
             );
@@ -3035,6 +3078,9 @@ impl EncoderCore {
         // The writes into ASTC carriers go with the last part (a blit encoder's only one).
         let count = parts.len();
         let mut twin_writes = Some(twin_writes);
+        // Its whole writes go with its first part, which records its pass's clears before its
+        // draws; none where a command-predication record left parts out before it.
+        let mut overwrites = (left_out == 0).then_some(overwrites);
         for (at, (raws, segments)) in parts.into_iter().enumerate() {
             let summary = summaries
                 .next()
@@ -3056,6 +3102,7 @@ impl EncoderCore {
                     summary,
                     sparse: Vec::new(),
                     twin_writes,
+                    overwrites: overwrites.take().unwrap_or_default(),
                     trail: (trail.as_ref()).map(|trail| match count {
                         1 => Arc::from(trail.as_str()),
                         _ => Arc::from(format!("{trail}, part {} of {count}", at + 1)),

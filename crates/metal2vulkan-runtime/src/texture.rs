@@ -4011,6 +4011,11 @@ impl Device {
         )?;
         if uncompressed {
             self.shared().counts.private_texture_zero_filled();
+            // Its zeros stand for what no write left, which a first use that writes every texel
+            // first never shows: a submission may leave them out (`texture/first_move.rs`).
+            if let Some(first) = lock(&image.first_move).as_mut() {
+                first.mark_overwritable();
+            }
         }
         if memoryless && !image.lazily_allocated() {
             self.zero_memoryless(&image)?;
@@ -5927,6 +5932,22 @@ impl Texture {
     /// memoryless storage, which keeps no texels past the render pass that renders them.
     pub(super) fn lazily_allocated(&self) -> bool {
         self.image().is_ok_and(|image| image.lazily_allocated())
+    }
+
+    /// The key and extent of the texture's image where its first move still waits with zeros a
+    /// first use writing every texel may stand for (`FirstMove::mark_overwritable`), and the image
+    /// is of one level and one layer, its aspects with them: what an encoder's first use of it
+    /// must write whole for its submission to leave the zeros out (`texture/first_move.rs`).
+    /// `None` otherwise.
+    pub(super) fn overwritable(&self) -> Option<(ResourceKey, [u32; 2], vk::ImageAspectFlags)> {
+        let image = self.image().ok()?;
+        let plan = &image.plan;
+        let single = plan.levels == 1 && plan.layers == 1 && plan.extent[2] == 1;
+        let waiting =
+            single && (lock(&image.first_move).as_ref()).is_some_and(FirstMove::may_go_unzeroed);
+        let [width, height, _] = plan.extent;
+        let aspects = image_aspects(plan.format).into();
+        waiting.then_some((image.identity.key, [width, height], aspects))
     }
 
     /// The texture's `VkImage`; refused as [`image`](Self::image) is.

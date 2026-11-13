@@ -72,6 +72,7 @@ use super::copy_plan::{
 use super::deferred::Deferred;
 use super::degradation::Degradation;
 use super::depth_clamp;
+use super::encoder::{Overwrite, OverwriteBy};
 use super::error::{internal, invalid, Error, Problem, RuntimeGap};
 use super::fresh_unwritten::FreshUnwritten;
 use super::image_plan::copies_between;
@@ -1243,6 +1244,24 @@ impl BlitCommandEncoder {
         written: Vec<(vk::ImageAspectFlags, Written)>,
     ) -> Result<(), Error> {
         FreshUnwritten::wrote(self.core().command_buffer(), texture, &written)?;
+        // A new `Private` texture one box of the command writes whole, every aspect: its batch
+        // may leave out its first move's zeros where the encoder reads none of it
+        // (`texture/first_move.rs`, `command_buffer/submit.rs`).
+        if let Some((key, [width, height], aspects)) = texture.overwritable() {
+            let whole = written.iter().any(|(wrote, texels)| {
+                wrote.contains(aspects)
+                    && texels.level == 0
+                    && texels.layers == (0..1)
+                    && texels.origin == [0, 0, 0]
+                    && texels.size[0] >= width
+                    && texels.size[1] >= height
+                    && texels.size[2] >= 1
+            });
+            if whole {
+                let by = OverwriteBy::Blit;
+                self.core().overwrites(Overwrite { key, by });
+            }
+        }
         let written = || written.into_iter().map(|(_, texels)| texels).collect();
         match Scrub::of(texture, written) {
             Some(scrub) => self.core().defer(Deferred::SparseScrub(Arc::new(scrub))),

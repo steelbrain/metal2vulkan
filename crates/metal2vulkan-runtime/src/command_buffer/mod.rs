@@ -2063,6 +2063,8 @@ impl State {
         for write in part.twin_writes.drain(..) {
             retained.push(Box::new(write));
         }
+        // It writes nothing whole: its batch keeps the zeros (`submit.rs`).
+        part.overwrites.clear();
         part.raws.clear();
         part.summary = part.summary.fences_only();
     }

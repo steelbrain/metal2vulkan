@@ -467,6 +467,7 @@ impl ResourceStateCommandEncoder {
                 summary: Summary::of_fences(waits, fence_updates),
                 sparse: updates,
                 twin_writes: Vec::new(),
+                overwrites: Vec::new(),
                 trail: (open.command_buffer.device().shared().encoder_trail).then(|| {
                     let id = open.command_buffer.object_id().get();
                     std::sync::Arc::from(format!(

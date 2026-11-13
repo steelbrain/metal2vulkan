@@ -5160,8 +5160,11 @@ each item named states the rule in full.
   states it. On a device that presents a Mac with an Intel or AMD GPU (`lossless_compression`
   false), the runtime answers as that Mac:
   - a new `Private` texture reads zero, filled at its first use
-    (`WorkCounts::private_textures_zero_filled` counts each), where an Apple silicon Mac's reads
-    zero or the compressed texture's fixed pattern, so `fresh-pattern-zeroed` is never announced.
+    (`WorkCounts::private_textures_zero_filled` counts each; no fill where that use, a pass
+    that loads it `Clear` and stores it or a blit into its whole extent, writes every texel before
+    any command reads one, `WorkCounts::private_textures_overwritten_unfilled`), where an Apple
+    silicon Mac's reads zero or the compressed texture's fixed pattern, so `fresh-pattern-zeroed`
+    is never announced.
     Such a Mac's holds what its memory held. Measured on Macs with an AMD Radeon Pro 5300M and an
     Intel UHD 630 (the consumer's probes): new `Private` textures read zero; a mipmapped
     `RGBA16Float` one made right after a cleared one of its descriptor was released read the

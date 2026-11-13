@@ -343,6 +343,7 @@ pub(crate) struct Counters {
     images_started_on_the_host: AtomicU64,
     images_started_zeroed: AtomicU64,
     private_textures_zero_filled: AtomicU64,
+    private_textures_overwritten_unfilled: AtomicU64,
     memoryless_textures_zeroed: AtomicU64,
     host_texel_copies: AtomicU64,
     heap_shadow_cpu_copies: AtomicU64,
@@ -4867,6 +4868,13 @@ impl Counters {
         (self.private_textures_zero_filled).fetch_add(1, Ordering::Relaxed);
     }
 
+    /// A new zero-filled `Private` texture's first move went without its zeros: the first use
+    /// among its submission's commands writes every texel before any command reads one
+    /// (`texture/first_move.rs`, `FirstMoves::take_holding`).
+    pub(crate) fn private_texture_overwritten_unfilled(&self) {
+        (self.private_textures_overwritten_unfilled).fetch_add(1, Ordering::Relaxed);
+    }
+
     /// A new memoryless texture in memory that is not lazily allocated was made to be zeroed at
     /// its first move, by render passes (`Device::new_texture_image`).
     pub(crate) fn memoryless_texture_zeroed(&self) {
@@ -7049,6 +7057,17 @@ pub struct WorkCounts {
     /// reads. Zero on a device that presents an Apple silicon Mac's compression, whose new
     /// `Private` textures start as that Mac's.
     pub private_textures_zero_filled: u64,
+    /// Of [`private_textures_zero_filled`](Self::private_textures_zero_filled), those whose zeros
+    /// were left out: the first use of the texture among the commands of the submission that took
+    /// its first move writes every texel before any command reads one, decided from that use's
+    /// own description, never a shader's. That use is the submission's first encoder, or comes
+    /// after blit encoders alone that name nothing of the texture (any other encoder's commands may
+    /// reach a texture through its resource ID, unnamed), and names the texture in no other use
+    /// that reads it: a render pass that loads every aspect of the texture `Clear`, stores it, and
+    /// renders it itself over its whole extent (one level and one layer), or a blit encoder that
+    /// writes its whole extent and reads none of it. A `DontCare` or `Load` first use takes the
+    /// zeros.
+    pub private_textures_overwritten_unfilled: u64,
     /// New memoryless textures zeroed at their first move, on a device whose memoryless memory
     /// is not lazily allocated: a render pass of each level alone clears every aspect over its
     /// layers, as no transfer writes a transient attachment. Its first use, a pass that loads it
@@ -10049,6 +10068,8 @@ impl Device {
             images_started_on_the_host: counters.images_started_on_the_host.load(Ordering::Relaxed),
             images_started_zeroed: counters.images_started_zeroed.load(Ordering::Relaxed),
             private_textures_zero_filled: (counters.private_textures_zero_filled)
+                .load(Ordering::Relaxed),
+            private_textures_overwritten_unfilled: (counters.private_textures_overwritten_unfilled)
                 .load(Ordering::Relaxed),
             memoryless_textures_zeroed: (counters.memoryless_textures_zeroed)
                 .load(Ordering::Relaxed),

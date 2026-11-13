@@ -232,6 +232,8 @@ mod fill_waits_bench;
 mod first_host_texture;
 mod first_moves;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod first_overwrite;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod flat_simdgroups;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod footprint_locks;

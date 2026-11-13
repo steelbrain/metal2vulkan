@@ -37,6 +37,15 @@
 //!   agent wrote notes its acquire from that agent's reserved queue family
 //!   (`Buffer::external_write_done`, [`FirstFill::acquired`]), recorded in the barrier that leads
 //!   the fills.
+//! - **Zeros a first use writes over.** A new zero-filled `Private` texture's zeros
+//!   ([`FirstMove::mark_overwritable`]) stand for what no write left, which a first use that
+//!   writes every texel first never shows. A batch whose first use of such an image among its
+//!   commands writes it whole before any command reads it, by that encoder's own description
+//!   (`encoder.rs`'s `Overwrite`; `command_buffer/submit.rs`'s `first_overwrites`), takes its move
+//!   without them ([`FirstMoves::take_holding`]), counted
+//!   (`WorkCounts::private_textures_overwritten_unfilled`): the move still moves the image, and a
+//!   batch on another `VkQueue` waits for that batch as for any first work, after which the
+//!   texels are written. A submission not made gives the zeros back with the move.
 //! - **Who records it.** The device's next submission that may reach the resource, before any of
 //!   its commands: every batch of the scheduler, whose commands may reach every texture through
 //!   its resource ID and every buffer through its address, unnamed (`heap_sets.rs`), and every
@@ -199,6 +208,12 @@ pub(crate) struct FirstMove {
     /// The bytes of a buffer the image is bound to that the move keeps by copies on the device
     /// around its layout transition ([`FirstMove::kept`]).
     keep: Option<GpuKeep>,
+    /// Its zeros are a new texture's that a first use writing every texel stands for
+    /// ([`FirstMove::mark_overwritable`]).
+    overwritable: bool,
+    /// The submission that took it records no zeros: its first use writes every texel first
+    /// ([`FirstMoves::take_holding`]'s `overwrites`). Undone as it is given back.
+    unzeroed: bool,
 }
 
 /// A first move's keep of the bytes its image is bound to, by copies on the device
@@ -382,6 +397,8 @@ impl FirstMove {
             pattern: None,
             acquire: None,
             keep: None,
+            overwritable: false,
+            unzeroed: false,
         }
     }
 
@@ -400,9 +417,11 @@ impl FirstMove {
         Some(self)
     }
 
-    /// The move, given back by a submission not made: no longer holding its pages.
+    /// The move, given back by a submission not made: no longer holding its pages, its zeros
+    /// still to be written.
     fn unheld(mut self) -> FirstMove {
         self.holding = None;
+        self.unzeroed = false;
         self
     }
 
@@ -461,9 +480,25 @@ impl FirstMove {
         self
     }
 
+    /// Let a submission leave the move's zeros (a new `Private` texture's, which reads zero where
+    /// Metal's reads what no write left, `Device::new_texture_image`) out where the first
+    /// use of the image among its commands writes every texel before any command reads one
+    /// ([`FirstMoves::take_holding`]).
+    pub(crate) fn mark_overwritable(&mut self) {
+        self.overwritable = matches!(self.zero, Some(Zero::Copies(..) | Zero::Clear))
+            && self.pattern.is_none()
+            && self.keep.is_none()
+            && self.acquire.is_none();
+    }
+
+    /// Whether a submission may leave its zeros out ([`mark_overwritable`](Self::mark_overwritable)).
+    pub(crate) fn may_go_unzeroed(&self) -> bool {
+        self.overwritable
+    }
+
     /// Whether it writes anything into its image: zeros or a pattern.
     fn writes(&self) -> bool {
-        self.zero.is_some() || self.pattern.is_some()
+        (self.zero.is_some() && !self.unzeroed) || self.pattern.is_some()
     }
 
     /// Levels `levels` of every aspect and layer of the image.
@@ -511,6 +546,7 @@ impl FirstMove {
         let past_pattern = (self.pattern.as_ref()).is_none_or(|p| p.levels < p.total);
         match &self.zero {
             None => {}
+            Some(_) if self.unzeroed => {}
             Some(Zero::Copies(zeros, copies)) => {
                 let copies: Vec<vk::BufferImageCopy> = (copies.iter())
                     .filter(|copy| copy.image_subresource.mip_level >= first)
@@ -1467,7 +1503,7 @@ impl FirstMoves {
     /// The submission's place in the order is held until it was made or the work given back
     /// ([`Taken`]): every submission takes, whether or not anything waits.
     pub(crate) fn take(&self, named: impl Fn(ResourceKey) -> bool) -> Taken<'_> {
-        self.take_with(named, FillTake::All, || None, |_| true)
+        self.take_with(named, FillTake::All, || None, (|_| true, |_| false))
     }
 
     /// As [`take`](Self::take), for a handle handed out (`Buffer::vk_buffer`,
@@ -1475,21 +1511,27 @@ impl FirstMoves {
     /// it was registered, the rest left waiting for the device's next submission. A move of an
     /// image bound to host pages is taken where `Mine` names its image, whatever its key.
     pub(crate) fn take_mine(&self, mine: Mine) -> Taken<'_> {
-        self.take_with(|_| true, FillTake::All, || None, |entry| mine.names(entry))
+        let wanted = |entry: &Waiting| mine.names(entry);
+        self.take_with(|_| true, FillTake::All, || None, (wanted, |_| false))
     }
 
     /// As [`take`](Self::take), for a submission whose commands may bind the heap sets (a
     /// batch's), taking the fills `fills` says: where registrations do not wait for their place
     /// ([`FirstMoves::ordered`]), it also holds the texture slots' writes (`heap_sets::hold`,
     /// which `hold` makes) from before it takes until its submission was made or the work given
-    /// back (the module docs).
+    /// back (the module docs). The images whose key `overwrites` names are written whole by the
+    /// first use among its commands before any of them reads a texel (`command_buffer/submit.rs`):
+    /// their moves that may go so ([`FirstMove::mark_overwritable`]) record no zeros, counted
+    /// (`WorkCounts::private_textures_overwritten_unfilled`).
     pub(crate) fn take_holding(
         &self,
         named: impl Fn(ResourceKey) -> bool,
         fills: FillTake<'_>,
         hold: impl FnOnce() -> HeldSlots,
+        overwrites: impl Fn(ResourceKey) -> bool,
     ) -> Taken<'_> {
-        self.take_with(named, fills, || (!self.ordered).then(hold), |_| true)
+        let hold = || (!self.ordered).then(hold);
+        self.take_with(named, fills, hold, (|_| true, overwrites))
     }
 
     /// The submissions' order, for a submission: taken, and the wait counted where another
@@ -1524,13 +1566,14 @@ impl FirstMoves {
     /// only the entries `wanted` says, and of the fills those `fills` says: the rest stay waiting,
     /// in their order. A fill's turn is settled once every move taken is known: a move of an
     /// image in memory another resource owns, or a staged copy, takes every fill (the module
-    /// docs).
+    /// docs). The moves of images whose key `overwrites` names record no zeros where they may go
+    /// so ([`take_holding`](Self::take_holding)).
     fn take_with(
         &self,
         named: impl Fn(ResourceKey) -> bool,
         fills: FillTake<'_>,
         hold: impl FnOnce() -> Option<HeldSlots>,
-        wanted: impl Fn(&Waiting) -> bool,
+        (wanted, overwrites): (impl Fn(&Waiting) -> bool, impl Fn(ResourceKey) -> bool),
     ) -> Taken<'_> {
         let order = self.submission_place();
         let slots = hold();
@@ -1565,10 +1608,15 @@ impl FirstMoves {
                             left.push(Box::new(fresh));
                             continue;
                         }
+                        let unzeroed = fresh.key().is_some_and(&overwrites);
                         let moves: Vec<FirstMove> = fresh
                             .take()
                             .into_iter()
                             .filter_map(FirstMove::held)
+                            .map(|mut first| {
+                                first.unzeroed = unzeroed && first.overwritable;
+                                first
+                            })
                             .collect();
                         if moves.is_empty() {
                             left.push(Box::new(fresh));
@@ -2228,7 +2276,13 @@ impl<'a> Taken<'a> {
             counts.first_move_kept(keep.length);
             copied = true;
         }
-        for first in moves().filter(|first| first.writes()) {
+        for first in moves() {
+            if first.unzeroed {
+                counts.private_texture_overwritten_unfilled();
+            }
+            if !first.writes() {
+                continue;
+            }
             // SAFETY: as above; the image is in `GENERAL` now and has `TRANSFER_DST` usage where
             // it reads zero by a transfer.
             unsafe { first.record_zero(device, command_buffer, family) };
@@ -2642,7 +2696,7 @@ mod tests {
             reaches: &reaches,
             commit: 0,
         };
-        let taken = moves.take_with(|_| true, fills, || None, |_| true);
+        let taken = moves.take_with(|_| true, fills, || None, (|_| true, |_| false));
         assert!(!taken.every_fill());
         assert_eq!(filled(&taken), [1, 3, 4]);
         drop(taken.submitted(None));
@@ -2657,7 +2711,7 @@ mod tests {
             reaches: &none,
             commit: 0,
         };
-        let taken = moves.take_with(|_| true, fills, || None, |_| true);
+        let taken = moves.take_with(|_| true, fills, || None, (|_| true, |_| false));
         assert!(taken.every_fill());
         assert_eq!(filled(&taken), [2]);
         drop(taken.submitted(None));
@@ -2674,7 +2728,7 @@ mod tests {
             reaches: &none,
             commit: 0,
         };
-        let taken = moves.take_with(|_| true, fills, || None, |_| true);
+        let taken = moves.take_with(|_| true, fills, || None, (|_| true, |_| false));
         assert!(taken.every_fill());
         assert_eq!(filled(&taken), [6]);
         drop(taken.submitted(None));
@@ -2719,7 +2773,7 @@ mod tests {
             reaches: &reaches,
             commit: 1,
         };
-        let taken = moves.take_with(|_| true, fills, || None, |_| true);
+        let taken = moves.take_with(|_| true, fills, || None, (|_| true, |_| false));
         assert!(taken.every_fill());
         assert_eq!(filled(&taken), [2, 3]);
         drop(taken.submitted(None));
@@ -2734,7 +2788,7 @@ mod tests {
             reaches: &none,
             commit: 1,
         };
-        let taken = moves.take_with(|_| true, fills, || None, |_| true);
+        let taken = moves.take_with(|_| true, fills, || None, (|_| true, |_| false));
         assert!(taken.every_fill());
         assert!(filled(&taken).is_empty());
         drop(taken.submitted(None));
@@ -2745,7 +2799,7 @@ mod tests {
             reaches: &reaches_unused,
             commit: 1,
         };
-        let taken = moves.take_with(|_| true, fills, || None, |_| true);
+        let taken = moves.take_with(|_| true, fills, || None, (|_| true, |_| false));
         assert_eq!(filled(&taken), [1]);
         drop(taken.submitted(None));
         // An internal submission takes one whatever reaches it.
@@ -2783,17 +2837,17 @@ mod tests {
             reaches: &reaches,
             commit,
         };
-        let taken = moves.take_with(|_| true, owned(1), || None, |_| true);
+        let taken = moves.take_with(|_| true, owned(1), || None, (|_| true, |_| false));
         assert!(filled(&taken).is_empty(), "committed before every upload");
         drop(taken.submitted(None));
-        let taken = moves.take_with(|_| true, reached(2), || None, |_| true);
+        let taken = moves.take_with(|_| true, reached(2), || None, (|_| true, |_| false));
         assert_eq!(filled(&taken), [1]);
         drop(taken.submitted(None));
-        let taken = moves.take_with(|_| true, owned(4), || None, |_| true);
+        let taken = moves.take_with(|_| true, owned(4), || None, (|_| true, |_| false));
         assert_eq!(filled(&taken), [2, 3]);
         drop(taken.submitted(None));
         let _made = upload(&moves, 4, used, 0);
-        let taken = moves.take_with(|_| true, reached(1), || None, |_| true);
+        let taken = moves.take_with(|_| true, reached(1), || None, (|_| true, |_| false));
         assert_eq!(filled(&taken), [4]);
         drop(taken.submitted(None));
         assert!(moves.none_waiting_but(|_| false));
@@ -2845,7 +2899,7 @@ mod tests {
                 reaches: &|_| true,
                 commit: 0,
             };
-            moves.take_with(|_| true, fills, || None, |_| true)
+            moves.take_with(|_| true, fills, || None, (|_| true, |_| false))
         };
         let image = owned(1, texture);
         let at = Point { queue: 1, value: 3 };

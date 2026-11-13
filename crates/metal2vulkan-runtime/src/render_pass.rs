@@ -96,10 +96,12 @@ use super::attachment_stand_in::{self, Cause, StandIn};
 use super::binding_view::views_as;
 use super::buffer::Buffer;
 use super::chroma_pairs::is_four_two_two;
+use super::clear_reach;
 use super::clear_value;
 use super::command_buffer::CommandBuffer;
 use super::degradation::Degradation;
 use super::depth_stencil_scratch::{self, Separate};
+use super::encoder::{Overwrite, OverwriteBy};
 use super::error::{invalid, nil, CommandBufferError, Error, Problem, RuntimeGap};
 use super::fresh_unwritten::FreshUnwritten;
 use super::image_plan::{block_family, ImagePlan};
@@ -1049,6 +1051,56 @@ impl Clone for PassLayout {
 }
 
 impl PassLayout {
+    /// The new textures the pass writes whole before its draws, as its load and store actions
+    /// say ([`Overwrite`], `OverwriteBy::Pass`): each attachment of a texture whose first move
+    /// waits with zeros that may go (`Texture::overwritable`), of one level and one layer, that
+    /// the pass renders itself (no stand-in, sample planes or separate depth and stencil
+    /// textures' scratch), over its whole extent, loading every aspect of its image `Clear` (as
+    /// the descriptor set it, before any `DontCare` load takes a clear) and storing it. Its first
+    /// move's zeros may go where the pass is the first use of the texture among its batch's
+    /// commands (`command_buffer/submit.rs`), which also checks that no other use of the pass
+    /// reads the texture.
+    pub(super) fn overwrites(&self) -> Vec<Overwrite> {
+        let whole = |target: &Target| {
+            let (key, extent, aspects) = target.texture.overwritable()?;
+            (self.layers == 1 && self.extent == extent && target.extent == extent)
+                .then_some((key, aspects))
+        };
+        let cleared = |aspect: &AspectTarget| {
+            aspect.load == LoadAction::Clear
+                && clear_reach::stores(aspect.store)
+                && !aspect.memoryless
+                && !aspect.written_nan
+        };
+        let mut overwrites = Vec::new();
+        for color in self.colors.iter().flatten() {
+            let direct = color.stand_in.is_none() && color.planes.is_none() && !color.memoryless;
+            let clears = color.load == LoadAction::Clear && clear_reach::stores(color.store);
+            if let Some((key, _)) = whole(&color.target).filter(|_| direct && clears) {
+                overwrites.push(Overwrite {
+                    key,
+                    by: OverwriteBy::Pass,
+                });
+            }
+        }
+        if let Some(ds) = self.depth_stencil.as_ref() {
+            let direct = ds.stand_in.is_none() && ds.separate.is_none() && !ds.hidden;
+            if let Some((key, aspects)) = whole(&ds.target).filter(|_| direct) {
+                let depth = !aspects.contains(vk::ImageAspectFlags::DEPTH)
+                    || ds.depth.as_ref().is_some_and(cleared);
+                let stencil = !aspects.contains(vk::ImageAspectFlags::STENCIL)
+                    || ds.stencil.as_ref().is_some_and(cleared);
+                if depth && stencil && !ds.keep_depth && !ds.keep_stencil {
+                    overwrites.push(Overwrite {
+                        key,
+                        by: OverwriteBy::Pass,
+                    });
+                }
+            }
+        }
+        overwrites
+    }
+
     /// Whether the pass has a depth and a stencil: of its attachments, or the hidden ones a draw
     /// or an execution gave it.
     pub(super) fn aspects(&self) -> (bool, bool) {

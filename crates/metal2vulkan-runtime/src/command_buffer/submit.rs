@@ -216,7 +216,7 @@ use super::hang;
 use super::kept_barriers::{KeptBarriers, SlotStamps};
 use super::{lock, recording_error, submission_error, CommandBufferShared, State};
 use crate::deferred::Deferred;
-use crate::encoder::{count_shadow_copies, Recorded, RecordedSegment};
+use crate::encoder::{count_shadow_copies, OverwriteBy, Recorded, RecordedSegment};
 use crate::error::CommandBufferError;
 use crate::error::{internal, Error};
 use crate::event::EventShared;
@@ -236,6 +236,7 @@ use crate::texture::first_move::{last_of_each, FillTake};
 use crate::texture::wrapped::Transition;
 use crate::texture::Texture;
 use crate::tracker::{Barrier, Point, Summary};
+use crate::used_resources::{EncoderKind, EncoderRecord};
 use crate::work_counts::Begun;
 use ash::vk;
 use std::collections::BTreeSet;
@@ -706,7 +707,11 @@ impl CommandBufferShared {
             },
         };
         let hold = || crate::heap_sets::hold(device);
-        let mut first_work = firsts.take_holding(|_| true, fill_take, hold);
+        // The new textures its commands' first use writes whole before any reads them: their
+        // moves' zeros go unrecorded (`texture/first_move.rs`).
+        let overwritten = first_overwrites(encoders, &state.ended);
+        let overwrites = |key: ResourceKey| overwritten.contains(&key);
+        let mut first_work = firsts.take_holding(|_| true, fill_take, hold, overwrites);
         let every_fill = first_work.every_fill();
         // What owns the memory of the first work it took, its fills for the fill queue among it.
         let taken_owners = first_work.owners();
@@ -2153,4 +2158,48 @@ fn batch_trail(recorded: &[Recorded]) -> Option<Arc<str>> {
         text.push_str(more);
     }
     Some(Arc::from(text))
+}
+
+/// The images whose first use among `parts` (a batch's, in order) writes every texel before any
+/// command reads one, by its encoder's own description (`Recorded::overwrites`), whose first
+/// moves' zeros the batch's take leaves out (`FirstMoves::take_holding`): an overwrite by a part
+/// with no segment (work recorded later, which may go before its commands), that only blit
+/// parts with no segment naming nothing of the image come before (any other encoder's commands
+/// may reach a texture through its resource ID, unnamed), and whose own uses read nothing of the
+/// image but its attachment's own reads after its load (a pass's; a copy into or out of an image
+/// standing in for it, or a shadow's copy, reads it otherwise) or nothing at all (a blit's). Empty, and
+/// nothing allocated, where no part has an overwrite.
+fn first_overwrites(parts: &[Recorded], ended: &[EncoderRecord]) -> Vec<ResourceKey> {
+    if parts.iter().all(|part| part.overwrites.is_empty()) {
+        return Vec::new();
+    }
+    // An attachment's own reads in its pass, after its load: blending, the depth and stencil
+    // tests, a fetch through an input attachment.
+    let attachment_reads = vk::AccessFlags2::COLOR_ATTACHMENT_READ
+        | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+        | vk::AccessFlags2::INPUT_ATTACHMENT_READ;
+    let mut named = BTreeSet::new();
+    let mut overwritten = Vec::new();
+    for part in parts {
+        for overwrite in &part.overwrites {
+            let reads = (part.summary.uses().iter())
+                .filter(|used| used.key == overwrite.key)
+                .fold(vk::AccessFlags2::NONE, |reads, used| {
+                    reads | used.read.access
+                });
+            let unread = match overwrite.by {
+                OverwriteBy::Pass => (reads & !attachment_reads).is_empty(),
+                OverwriteBy::Blit => reads.is_empty(),
+            };
+            if unread && part.segments.is_empty() && !named.contains(&overwrite.key) {
+                overwritten.push(overwrite.key);
+            }
+        }
+        let blit = (ended.get(part.encoder)).is_some_and(|record| record.kind == EncoderKind::Blit);
+        if !blit || !part.segments.is_empty() {
+            break;
+        }
+        named.extend(part.summary.keys());
+    }
+    overwritten
 }

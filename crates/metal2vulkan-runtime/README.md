@@ -399,7 +399,8 @@ after it, and 0 of 80 with the device dropped first
   Mac on an Apple GPU, a Mac with an Intel or AMD GPU on every other;
   `DeviceProperties::lossless_compression` states it): an Apple silicon Mac's reads zero or that
   Mac's fixed pattern of a compressed texture; a Mac with an Intel or AMD GPU's reads zero,
-  filled at its first use (`WorkCounts::private_textures_zero_filled`), never what its memory
+  filled at its first use (`WorkCounts::private_textures_zero_filled`) unless that use writes
+  every texel first (`WorkCounts::private_textures_overwritten_unfilled`), never what its memory
   held, which may be another process's texels where a consumer's processes share the device
   (docs/API.md, accepted differences). A new
   resource's first GPU work (its image's first layout, its zeros) runs at the start of the next

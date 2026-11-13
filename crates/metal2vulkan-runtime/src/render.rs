@@ -4828,6 +4828,12 @@ impl RenderLowering {
         // another image only where the pass stores the aspect, whose copy back writes it
         // (`fresh_unwritten.rs`). Before its `DontCare` loads take clears below.
         FreshUnwritten::cleared(core.command_buffer(), &layout, called)?;
+        // A new `Private` texture the pass clears whole before its draws: its batch may leave
+        // out its first move's zeros (`texture/first_move.rs`). Before its `DontCare` loads take
+        // clears below, which may reach only some tiles.
+        for overwrite in layout.overwrites() {
+            core.overwrites(overwrite);
+        }
         let count = instances.len();
         // The tiles the pass's draws reach, as far as the host decides them, before the
         // `DontCare` loads below become `Clear` loads (`clear_reach.rs`): where they reach the
