@@ -941,14 +941,17 @@ fn rounds(
     rounds
 }
 
-/// `did_modify_range` across commits of two queues on two threads, each its own two-copy buffers:
-/// the runtime's own host copy on one, the caller's pages by `route` on the other. The device's
-/// next commit, of either queue, takes a range's bytes (`managed.rs`), so each command buffer
-/// reads the bytes its host copy held at its commit, and none written after it. Every fourth round
-/// lets its buffer go with its command buffer pending. No command buffer fails, no message the
-/// device hears is an error (a validation layer's, where `VK_INSTANCE_LAYERS` loads one), and
-/// the staging buffers go once all completed.
-fn across_queues(route: Route) {
+/// `did_modify_range` across commits of two-copy buffers, the runtime's own host copy and the
+/// caller's pages by `route`: on two queues, each on a thread of its own, where `two`, else one
+/// after the other on one queue and thread. A commit takes the ranges of the buffers its command
+/// buffer uses (`managed.rs`), and its copy in goes with a submission that uses the buffer, after
+/// the command buffers before it on its queue: so each command buffer reads the bytes its host
+/// copy held at its commit, none written after it, and none of a later round's, whose copy in
+/// never lands under it. Every fourth round lets its buffer go with its command buffer pending.
+/// No command buffer fails, no message the device hears is an error (a validation layer's, where
+/// `VK_INSTANCE_LAYERS` loads one), and the staging buffers go once all completed. Printed
+/// (`MANAGED-ROUNDS`): the rounds that read other bytes, and the messages.
+fn named_rounds(route: Route, two: bool) {
     let generations = usize::from(ROUNDS / 4);
     let pages: Vec<Pages> = (0..generations).map(|_| Pages::new(BYTES)).collect();
     let addresses: Vec<usize> = pages
@@ -994,12 +997,21 @@ fn across_queues(route: Route) {
         assert_eq!(buffer.host_backing(), Some(HostBacking::DeviceCopy));
         HostCopied { buffer, at }
     };
-    let (first, second) = std::thread::scope(|scope| {
-        let first = scope.spawn(|| rounds(&device, &device.new_command_queue().unwrap(), 0, own));
-        let second =
-            scope.spawn(|| rounds(&device, &device.new_command_queue().unwrap(), 1, callers));
-        (first.join().unwrap(), second.join().unwrap())
-    });
+    let (first, second) = match two {
+        true => std::thread::scope(|scope| {
+            let first =
+                scope.spawn(|| rounds(&device, &device.new_command_queue().unwrap(), 0, own));
+            let second =
+                scope.spawn(|| rounds(&device, &device.new_command_queue().unwrap(), 1, callers));
+            (first.join().unwrap(), second.join().unwrap())
+        }),
+        false => {
+            let queue = device.new_command_queue().unwrap();
+            let first = rounds(&device, &queue, 0, own);
+            (first, rounds(&device, &queue, 1, callers))
+        }
+    };
+    let mut wrong = Vec::new();
     for (thread, done) in [("own", first), ("caller's", second)] {
         for (byte, target, command_buffer) in done {
             assert!(
@@ -1014,11 +1026,9 @@ fn across_queues(route: Route) {
             let contents = target.contents().unwrap();
             // SAFETY: the target's bytes, which no command writes now.
             let seen = unsafe { std::slice::from_raw_parts(contents.as_ptr(), SPAN as usize) };
-            assert!(
-                seen.iter().all(|&seen| seen == byte),
-                "{route:?} {thread}: round of byte {byte:#x} read {:#x?}",
-                &seen[..8]
-            );
+            if !seen.iter().all(|&seen| seen == byte) {
+                wrong.push(format!("{thread} {byte:#x} read {:#x}", seen[0]));
+            }
         }
     }
     assert!(
@@ -1029,11 +1039,18 @@ fn across_queues(route: Route) {
     assert_eq!(rest.managed_staging_bytes, before.managed_staging_bytes);
     let errors = errors.lock().unwrap().clone();
     eprintln!(
-        "MANAGED-ACROSS-QUEUES {} {route:?}: {} rounds a thread, ranges named {}, error messages {}",
+        "MANAGED-ROUNDS {} {route:?}, {} queue(s): {} rounds each of two buffers, ranges named \
+         {}; rounds that read other bytes {} {wrong:?}; error messages {}",
         device.name(),
+        1 + usize::from(two),
         ROUNDS,
         rest.managed_ranges_modified - before.managed_ranges_modified,
+        wrong.len(),
         errors.len()
+    );
+    assert!(
+        wrong.is_empty(),
+        "{route:?}: rounds read other bytes: {wrong:?}"
     );
     assert!(errors.is_empty(), "{route:?}: {errors:#?}");
     drop(device);
@@ -1042,10 +1059,15 @@ fn across_queues(route: Route) {
 
 #[test]
 fn ranges_named_across_two_queues_reach_each_command_buffer_through_an_import() {
-    across_queues(Route::Import);
+    named_rounds(Route::Import, true);
 }
 
 #[test]
 fn ranges_named_across_two_queues_reach_each_command_buffer_over_pages_no_import_maps() {
-    across_queues(Route::Pages);
+    named_rounds(Route::Pages, true);
+}
+
+#[test]
+fn ranges_named_on_one_queue_reach_each_command_buffer_through_an_import() {
+    named_rounds(Route::Import, false);
 }
