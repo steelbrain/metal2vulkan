@@ -49,6 +49,7 @@
 
 pub mod band;
 pub mod contract;
+pub mod fan_out;
 pub mod fetch;
 pub mod geometry;
 pub mod graphics;
@@ -161,6 +162,7 @@ impl LinkInputs {
         r.pull_every = variant.primitive_id_indices.is_some() || variant.private_list;
         r.color_group = group;
         r.line_band = variant.line_band;
+        r.region_fan_out = variant.region_fan_out;
         LinkInputs::Render(Box::new(r))
     }
 
@@ -206,6 +208,10 @@ pub struct RenderLinkInputs {
     /// tessellation stages (`VariantKey::line_band`, [`band`]), each patch one primitive of this
     /// kind; `None` for every other variant.
     pub line_band: Option<crate::pipeline::BandPrimitive>,
+    /// The variant draws a rate-mapped pass's triangles once, its triangle class's geometry stage
+    /// fanning each out to its regions (`VariantKey::region_fan_out`, [`fan_out`]); `None` for
+    /// every other variant.
+    pub region_fan_out: Option<crate::pipeline::RegionFanOut>,
 }
 
 impl RenderLinkInputs {
@@ -228,6 +234,7 @@ impl RenderLinkInputs {
             texture_write_rounding_mode: metal::TextureWriteRoundingMode::TowardZero,
             color_group: None,
             line_band: None,
+            region_fan_out: None,
         }
     }
 }
@@ -257,6 +264,7 @@ impl From<&RenderPipelineDescriptor> for RenderLinkInputs {
             texture_write_rounding_mode: d.texture_write_rounding_mode,
             color_group: None,
             line_band: None,
+            region_fan_out: None,
         }
     }
 }
@@ -370,6 +378,7 @@ pub fn link(
             r.input_primitive_topology,
             r.max_vertex_amplification_count,
             false,
+            r.region_fan_out,
             p,
         )?,
         LinkInputs::Mesh(r) => geometry::plan(
@@ -377,6 +386,7 @@ pub fn link(
             r.input_primitive_topology,
             r.max_vertex_amplification_count,
             true,
+            r.region_fan_out,
             p,
         )?,
         LinkInputs::Standalone | LinkInputs::Compute => None,
@@ -417,6 +427,14 @@ pub fn link(
         synthesized.push((mesh::RECORDS_SLOT, vk::ShaderStageFlags::VERTEX));
         synthesized.push((mesh::WORK_SLOT, vk::ShaderStageFlags::VERTEX));
     }
+    // A fan-out variant's triangle stage reads the region table, and a probe's writes its flags.
+    if let Some(fan) = geometry.as_ref().and_then(|g| g.fan_out) {
+        let stage = vk::ShaderStageFlags::GEOMETRY;
+        synthesized.push((fan_out::REGIONS_SLOT, stage));
+        if fan.mode == crate::pipeline::RegionFanOut::Probe {
+            synthesized.push((fan_out::FLAGS_SLOT, stage));
+        }
+    }
     let mut layout = layout(&ifaces, &synthesized, &mut table, p)?;
     count_variables(&mut layout, stages, &table);
     let control = match plan {
@@ -453,9 +471,27 @@ pub fn link(
         }
         None => None,
     };
+    // A fan-out probe's stage pushes the index of its flag.
+    let mut geometry = geometry;
+    if let Some(fan) = geometry.as_mut().and_then(|g| g.fan_out.as_mut()) {
+        if fan.mode == crate::pipeline::RegionFanOut::Probe {
+            let offset = tessellation::push_offset(
+                &layout.push_constants,
+                (fan_out::PUSH_BYTES, 4),
+                Feature::RasterizationRateMap,
+                p,
+            )?;
+            layout.push_constants.push(PushConstantRange {
+                stages: vk::ShaderStageFlags::GEOMETRY,
+                offset,
+                size: fan_out::PUSH_BYTES,
+            });
+            fan.push_offset = offset;
+        }
+    }
     let specialization = specialize(&ifaces, &mut table)?;
     table.locations = varyings::assign(stages, p)?;
-    if let Some(g) = &geometry {
+    if let Some(g) = &mut geometry {
         g.check_limits(&table.locations, p)?;
     }
     let interface = pipeline_interface(&ifaces);
@@ -508,6 +544,13 @@ pub fn link(
                 gs.line_band = Some(crate::pipeline::graphics::LineBandState {
                     push_offset: b.push_offset,
                     primitive: b.primitive,
+                });
+            }
+            if let Some(fan) = geometry.as_ref().and_then(|g| g.fan_out) {
+                gs.region_fan_out = Some(crate::pipeline::graphics::FanOutState {
+                    mode: fan.mode,
+                    copies: fan.copies,
+                    push_offset: fan.push_offset,
                 });
             }
             (vi, Some(gs))

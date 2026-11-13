@@ -483,6 +483,12 @@ pub struct VariantKey {
     /// (`RuntimeFact::RegionViewports`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub region_viewports: bool,
+    /// The render pipeline draws a rasterization-rate-mapped pass's triangles once, its
+    /// triangle class's synthesized geometry stage emitting a copy of each per region it touches,
+    /// or probing which draws it cannot (`BindShape::region_fan_out`, `pipeline::link::fan_out`).
+    /// Its graphics state states it (`GraphicsState::region_fan_out`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub region_fan_out: Option<crate::pipeline::RegionFanOut>,
 }
 
 impl VariantKey {
@@ -594,6 +600,7 @@ impl VariantKey {
             && self.anisotropic_samplers.is_empty()
             && self.color_group == 0
             && !self.region_viewports
+            && self.region_fan_out.is_none()
     }
 
     /// The lowering inputs of the function of `stage` under this key: its storage-image choices,

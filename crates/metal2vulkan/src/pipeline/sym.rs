@@ -285,6 +285,14 @@ pub enum SyntheticBinding {
     HandleTable,
     /// The pipeline constant blob, a read-only storage buffer.
     ConstantBlob,
+    /// A rate-mapped pass's region table (`bind::fan_out`), a read-only storage buffer of a
+    /// fan-out variant's geometry stage (`GraphicsState::region_fan_out`), declared with the
+    /// vertex stage's symbols.
+    RateMapRegions,
+    /// A fan-out probe's flags (`GraphicsState::region_fan_out`), a storage buffer of `u32`s its
+    /// geometry stage writes 1 into at the pushed index (`PushField::RegionProbe`), declared with
+    /// the vertex stage's symbols.
+    RateMapFlags,
     /// The render encoder's tessellation factor buffer (`setTessellationFactorBuffer:offset:
     /// instanceStride:`), a read-only storage buffer of a tessellation pipeline's synthesized
     /// control stage, declared with the vertex stage's symbols.
@@ -1087,6 +1095,9 @@ pub enum PushField {
     /// height negative, as the runtime's viewports are) and half the band's width in pixels
     /// (`BindState::line_band`).
     LineBand,
+    /// The index a fan-out probe writes its flag at (`u32`; `GraphicsState::region_fan_out`,
+    /// `link::fan_out`): one field of the synthesized geometry stage's own push range.
+    RegionProbe,
     /// The stride (`u32`) the compute encoder binds the kernel buffer at this Metal index with
     /// (`setBuffer:offset:attributeStride:atIndex:` and its forms, its low 32 bits,
     /// `MTLAttributeStrideStatic`'s `2^32 - 1` included), 0 where it binds none, which a

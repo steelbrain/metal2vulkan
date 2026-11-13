@@ -793,6 +793,7 @@ fn encode(words: &mut [u32], axis: &RateMapAxis, to_screen: u32, to_physical: u3
     }
 }
 
+pub mod fan_out;
 mod regions;
 pub use regions::{RateMapRegion, RateMapRegions, RegionError, RegionLimits};
 

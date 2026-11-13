@@ -117,10 +117,10 @@ pub use descriptor::{
     VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
 pub use graphics::{
-    BandPrimitive, BlendState, ColorAttachmentState, EmulatedTessellation, FragmentImageblock,
-    GraphicsState, ImageblockMechanism, InputAttachmentUse, LineBandState, ShaderTestsUse,
-    ShadowStencilUse, StandInUse, StandInView, StorageAttachmentUse, StorageAttachmentView,
-    TessellationState,
+    BandPrimitive, BlendState, ColorAttachmentState, EmulatedTessellation, FanOutState,
+    FragmentImageblock, GraphicsState, ImageblockMechanism, InputAttachmentUse, LineBandState,
+    RegionFanOut, ShaderTestsUse, ShadowStencilUse, StandInUse, StandInView, StorageAttachmentUse,
+    StorageAttachmentView, TessellationState,
 };
 pub use interface::{
     AccessSet, AttributeFetch, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView,

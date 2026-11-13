@@ -160,7 +160,7 @@ fn what_a_geometry_stage_cannot_carry_is_refused() {
                p: &DeviceProfile| {
         let i = ifaces(v, f);
         let refs: Vec<&StageInterface> = i.iter().collect();
-        plan(&refs, class, amplification, mesh, p)
+        plan(&refs, class, amplification, mesh, None, p)
     };
     assert!(run(&v, &f, Class::Triangle, 1, false, &p)
         .unwrap()
@@ -273,6 +273,7 @@ fn planned(
         Class::Triangle,
         amplification,
         mesh,
+        None,
         p,
     )
 }

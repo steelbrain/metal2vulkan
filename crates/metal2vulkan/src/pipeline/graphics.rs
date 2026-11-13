@@ -180,6 +180,11 @@ pub struct GraphicsState {
     /// evaluation stages, then the fragment stage. `None` for every other pipeline.
     #[cfg_attr(feature = "serde", serde(default))]
     pub line_band: Option<LineBandState>,
+    /// A render pipeline variant that draws a rate-mapped pass's triangles once, fanned out to
+    /// their regions by its triangle class's geometry stage (`VariantKey::region_fan_out`,
+    /// `pipeline::link::fan_out`). `None` for every other pipeline.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub region_fan_out: Option<FanOutState>,
     /// The vertex function writes `[[point_size]]` (as its compiled function's
     /// `writes_point_size` answers; a post-tessellation vertex function's is dropped and
     /// answers `false`). Metal sizes a point
@@ -403,6 +408,47 @@ impl BandPrimitive {
     }
 }
 
+/// What a fan-out variant of a render pipeline does with a rate-mapped pass's triangles
+/// (`VariantKey::region_fan_out`, `GraphicsState::region_fan_out`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum RegionFanOut {
+    /// Draw each triangle once per region it touches, at most the stage's copies.
+    Draw,
+    /// Draw nothing, and flag the draw whose triangles the draw cannot fan out.
+    Probe,
+}
+
+/// What a consumer and the binder need of a render pipeline variant that draws a rate-mapped
+/// pass's triangles once, its triangle class's geometry stage fanning each out to the regions it
+/// touches (`GraphicsState::region_fan_out`, `pipeline::link::fan_out`, `bind::fan_out` for the
+/// table).
+///
+/// Draw triangles alone, through one Vulkan viewport over the whole target and a scissor over it,
+/// with the region table (`bind::fan_out::table`, `SyntheticBinding::RateMapRegions`) of that
+/// viewport over the plan's regions bound. A probe ([`RegionFanOut::Probe`]) draws nothing: it
+/// writes 1 at its pushed index (`u32`, `PushField::RegionProbe`, at
+/// [`push_offset`](Self::push_offset) for stage `GEOMETRY`) of the flags buffer
+/// (`SyntheticBinding::RateMapFlags`) where a triangle of the draw touches more regions than
+/// [`copies`](Self::copies), or crosses `w = 0`; the consumer draws such a draw region by region.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct FanOutState {
+    /// What the variant does.
+    pub mode: RegionFanOut,
+    /// The most copies of a triangle its stage emits.
+    pub copies: u32,
+    /// Byte offset of the probe's push range (`PipelineLayout::push_constants`, stage
+    /// `GEOMETRY`, [`PUSH_BYTES`](Self::PUSH_BYTES)); 0 for a draw.
+    pub push_offset: u32,
+}
+
+impl FanOutState {
+    /// The probe's push range's bytes: one `u32`.
+    pub const PUSH_BYTES: u32 = crate::pipeline::link::fan_out::PUSH_BYTES;
+}
+
 /// What a consumer and the binder need of a render pipeline variant that draws its lines, or its
 /// triangles' edges, as bands (`GraphicsState::line_band`): Apple's `setLineWidth:` at a width the
 /// device's own lines do not draw.
@@ -516,6 +562,7 @@ impl GraphicsState {
             mesh_corners: None,
             emulated_tessellation: None,
             line_band: None,
+            region_fan_out: None,
             writes_point_size: false,
             flat_fragment_inputs: false,
             clip_distances: 0,

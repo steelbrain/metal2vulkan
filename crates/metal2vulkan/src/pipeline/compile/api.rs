@@ -1742,6 +1742,12 @@ fn variant_fields(v: &VariantKey) -> String {
         Some(crate::pipeline::BandPrimitive::Lines) => fields.push_str(" line_band"),
         Some(crate::pipeline::BandPrimitive::Triangles) => fields.push_str(" line_band triangles"),
     }
+    // The fan-out's synthesized geometry stages, in no stage's key.
+    match v.region_fan_out {
+        None => {}
+        Some(crate::pipeline::RegionFanOut::Draw) => fields.push_str(" region_fan_out"),
+        Some(crate::pipeline::RegionFanOut::Probe) => fields.push_str(" region_fan_out probe"),
+    }
     fields
 }
 
@@ -1754,7 +1760,9 @@ fn render_fields(d: &RenderPipelineDescriptor) -> String {
             RenderLinkInputs::from(d),
             d.support_indirect_command_buffers
         )
-    );
+    )
+    // A descriptor's inputs never fan out (`variant_fields` keys a variant that does).
+    .replace(", region_fan_out: None", "");
     // Appended only past Metal's defaults, so a default descriptor keeps its key.
     let fields = match (
         d.max_vertex_call_stack_depth,

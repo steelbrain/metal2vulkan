@@ -76,13 +76,26 @@
 //! Each needs `fragmentShaderBarycentric` instead, or `shaderOutputLayer` and
 //! `shaderOutputViewportIndex` for the indices the stage selects. A device without
 //! `geometryShader` either is refused at the function (`lower::stage_io`).
+//!
+//! A variant that draws a rate-mapped pass's triangles once (`VariantKey::region_fan_out`)
+//! carries the stages too, its triangle class's the fan-out stage ([`fan_out`](super::fan_out)),
+//! which needs `geometryShader` and `shaderClipDistance`, four clip distances past the vertex
+//! function's within `maxClipDistances` and `maxCombinedClipAndCullDistances`, and room in
+//! `maxGeometryTotalOutputComponents` for one copy's vertices; and, for the probe,
+//! `vertexPipelineStoresAndAtomics`. Refused as `NotImplemented(RasterizationRateMap)` beside
+//! another reason for the stages, for a mesh or post-tessellation vertex function, and a pipeline
+//! that amplifies its vertices; as `Unsupported{RasterizationRateMap}` needing what the device
+//! lacks otherwise. The consumer draws
+//! such a pipeline region by region instead.
 
+use super::fan_out::{self, FanOutStage};
 use crate::budget::Meter;
 use crate::device::requirements::{Requirements, VkFeature, VkLimit};
 use crate::device::DeviceProfile;
 use crate::error::{Capability, Error, Feature, Unsupported};
 use crate::metal::PrimitiveTopologyClass;
 use crate::pipeline::artifact::{Reconvergence, SpecializationLayout, StageModule, StrategyCensus};
+use crate::pipeline::graphics::RegionFanOut;
 use crate::pipeline::interface::StageInterface;
 use crate::pipeline::link::varyings::Locations;
 use crate::pipeline::stage_io::{IoNumeric, IoRole, IoType, StageBuiltin};
@@ -130,6 +143,8 @@ pub struct GeometryStages {
     pub primitive_id: bool,
     /// The pipeline is drawn as multiview.
     pub multiview: bool,
+    /// The triangle class's stage is the fan-out stage ([`fan_out`](super::fan_out)).
+    pub fan_out: Option<FanOutStage>,
 }
 
 /// Why the stages are made: the fragment stage reads the weights, or else the vertex function
@@ -177,14 +192,16 @@ impl Reason {
 
 /// The geometry stages of the render pipeline of stages `ifaces` (vertex, then fragment when it
 /// has one), drawn as `class` with vertex amplification up to `amplification`, where its fragment
-/// stage reads the weights as varyings or its vertex function selects an index through them;
-/// `None` where neither. Refused as the module docs state. A mesh pipeline (`mesh`) whose fragment
-/// stage reads the weights is not implemented.
+/// stage reads the weights as varyings or its vertex function selects an index through them, or
+/// its variant fans a rate-mapped pass's triangles out (`fan_out`); `None` where none. Refused as
+/// the module docs state. A mesh pipeline (`mesh`) whose fragment stage reads the weights is not
+/// implemented.
 pub fn plan(
     ifaces: &[&StageInterface],
     class: PrimitiveTopologyClass,
     amplification: u32,
     mesh: bool,
+    fan_out: Option<RegionFanOut>,
     p: &DeviceProfile,
 ) -> Result<Option<GeometryStages>, Error> {
     let fragment = ifaces.iter().find(|i| i.stage == Stage::Fragment);
@@ -206,6 +223,9 @@ pub fn plan(
         layer: selects(IoRole::SelectedLayer),
         viewport: selects(IoRole::SelectedViewport),
     };
+    if let Some(mode) = fan_out {
+        return fan_plan(ifaces, (why, mode), (amplification, mesh), p).map(Some);
+    }
     if !why.weights && !why.layer && !why.viewport {
         return Ok(None);
     }
@@ -276,7 +296,91 @@ pub fn plan(
         writes_point_size,
         primitive_id: fragment.is_some_and(|f| f.io.builtins.contains(&StageBuiltin::PrimitiveId)),
         multiview,
+        fan_out: None,
     }))
+}
+
+/// The stages of a fan-out variant (the module docs): refused beside another reason for them
+/// (`why`), and where the pipeline or the device cannot carry the stage, `mode`'s.
+fn fan_plan(
+    ifaces: &[&StageInterface],
+    (why, mode): (Reason, RegionFanOut),
+    (amplification, mesh): (u32, bool),
+    p: &DeviceProfile,
+) -> Result<GeometryStages, Error> {
+    let not_implemented = || Unsupported::not_implemented(Feature::RasterizationRateMap).into();
+    let fragment = ifaces.iter().find(|i| i.stage == Stage::Fragment);
+    let vertex = match ifaces.iter().find(|i| i.stage == Stage::Vertex) {
+        Some(v) if !mesh && v.tessellation.is_none() => v,
+        _ => return Err(not_implemented()),
+    };
+    let builtins = &vertex.io.builtins;
+    if why.weights || why.layer || why.viewport || amplification > 1 {
+        return Err(not_implemented());
+    }
+    let f = p.fields();
+    let enabled = &f.enabled.features;
+    let mut needs = vec![VkFeature::GeometryShader, VkFeature::ShaderClipDistance];
+    if mode == RegionFanOut::Probe {
+        needs.push(VkFeature::VertexPipelineStoresAndAtomics);
+    }
+    if let Some(&lacks) = needs.iter().find(|n| !enabled.contains(n)) {
+        return Err(Unsupported::needs_any_of(
+            Feature::RasterizationRateMap,
+            vec![vec![Capability::Feature(lacks)]],
+        )
+        .into());
+    }
+    let clip_distances = builtins
+        .iter()
+        .find_map(|b| match b {
+            StageBuiltin::ClipDistance { count } => Some(*count),
+            _ => None,
+        })
+        .unwrap_or(0);
+    let l = &f.limits;
+    for (limit, available) in [
+        (VkLimit::MaxClipDistances, l.max_clip_distances),
+        (
+            VkLimit::MaxCombinedClipAndCullDistances,
+            l.max_combined_clip_and_cull_distances,
+        ),
+    ] {
+        let required = u64::from(clip_distances) + 4;
+        if required > u64::from(available) {
+            return Err(Unsupported::needs_any_of(
+                Feature::RasterizationRateMap,
+                vec![vec![Capability::Limit {
+                    limit,
+                    required,
+                    available: u64::from(available),
+                }]],
+            )
+            .into());
+        }
+    }
+    let varyings = vertex
+        .io
+        .outputs
+        .iter()
+        .filter(|o| fragment.is_some_and(|f| f.io.inputs.iter().any(|i| i.key == o.key)))
+        .map(|o| (o.key.clone(), o.ty))
+        .collect();
+    let point_size = builtins
+        .iter()
+        .any(|b| matches!(b, StageBuiltin::PointSize { .. }));
+    Ok(GeometryStages {
+        varyings,
+        forms: Vec::new(),
+        layer: false,
+        viewport: false,
+        clip_distances,
+        point_size,
+        writes_point_size: enabled.contains(&VkFeature::ShaderTessellationAndGeometryPointSize),
+        primitive_id: fragment.is_some_and(|f| f.io.builtins.contains(&StageBuiltin::PrimitiveId)),
+        multiview: false,
+        fan_out: Some(FanOutStage::new(mode)),
+    })
 }
 
 impl GeometryStages {
@@ -299,8 +403,8 @@ impl GeometryStages {
     }
 
     /// Refuses stages whose inputs or outputs at `locations` pass the device's geometry limits
-    /// (the module docs).
-    pub fn check_limits(&self, locations: &Locations, p: &DeviceProfile) -> Result<(), Error> {
+    /// (the module docs); for a fan-out variant, sets the copies its triangle stage emits.
+    pub fn check_limits(&mut self, locations: &Locations, p: &DeviceProfile) -> Result<(), Error> {
         let l = &p.fields().limits;
         let end = |keys: &mut dyn Iterator<Item = &VaryingKey>| -> Result<u64, Error> {
             let mut end = 0u64;
@@ -323,6 +427,24 @@ impl GeometryStages {
         let selected: Vec<VaryingKey> = self.selected().map(|(k, _)| k).collect();
         let inputs = end(&mut self.varyings.iter().map(|(k, _)| k).chain(&selected))?;
         let outputs = end(&mut self.varyings.iter().map(|(k, _)| k).chain(&weights))?;
+        // A copy's vertex: its varyings' locations, its position, its clip distances and its
+        // primitive ID, in components.
+        if let Some(fan) = &mut self.fan_out {
+            let vertex = outputs * 4 + 4 + u64::from(self.clip_distances) + 4 + 1;
+            let room = u64::from(l.max_geometry_total_output_components) / (3 * vertex);
+            if room == 0 {
+                return Err(Unsupported::needs_any_of(
+                    Feature::RasterizationRateMap,
+                    vec![vec![Capability::Limit {
+                        limit: VkLimit::MaxGeometryTotalOutputComponents,
+                        required: 3 * vertex,
+                        available: u64::from(l.max_geometry_total_output_components),
+                    }]],
+                )
+                .into());
+            }
+            fan.copies = room.min(u64::from(fan_out::MOST_COPIES)) as u32;
+        }
         let vertices = 3u64;
         for (limit, required, available) in [
             (
@@ -402,6 +524,9 @@ impl GeometryStages {
 
     /// The geometry stage of `class` (the module docs).
     pub fn module(&self, class: PrimitiveTopologyClass) -> BResult<TypedModule> {
+        if let (PrimitiveTopologyClass::Triangle, Some(fan)) = (class, self.fan_out) {
+            return fan_out::module(self, fan);
+        }
         let (n, input, output) = match class {
             PrimitiveTopologyClass::Point => (1, ExecMode::InputPoints, ExecMode::OutputPoints),
             PrimitiveTopologyClass::Line => (2, ExecMode::InputLines, ExecMode::OutputLineStrip),

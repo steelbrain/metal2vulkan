@@ -265,6 +265,7 @@ pub use plan::{
     GraphicsTemplate, ImageSource, ImageViewDesc, PlanDiagnostic, PushFieldPlacement, PushTemplate,
     ResourceUse, SamplerSource, UseTarget, VertexBufferBind, ViewSetup, WriteSource,
 };
+pub use rate_map::fan_out;
 pub use rate_map::{
     RasterizationRateMap, RateMapAxis, RateMapDescriptor, RateMapError, RateMapLayerDescriptor,
     RateMapRegion, RateMapRegions, RegionError, RegionLimits, UnpinnedCompile, MAX_SCREEN_EXTENT,
