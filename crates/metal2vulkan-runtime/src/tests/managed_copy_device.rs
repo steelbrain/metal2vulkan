@@ -36,6 +36,9 @@
 //!   nothing: neither the runtime's own nor one over the caller's pages copies a byte in or
 //!   stages one (`WorkCounts::managed_bytes_copied_in`, `managed_staging_bytes`), and the command
 //!   buffer after it reads the CPU's write.
+//! - **The take bench** (ignored, `MANAGED-STALE-TAKE`; run in release): what a commit call
+//!   costs with 0, 1,000 and 10,000 `Managed` buffers whose ranges are named and that no commit
+//!   uses, beside a buffer whose range each commit takes.
 //! - **The copy-in bench** (ignored, `MANAGED-COPY-IN`; run in release): what a
 //!   `did_modify_range` of 256 KiB, 4 MiB, 32 MiB and 265 MiB (past the bound of what is staged),
 //!   written by the CPU before each commit of a command buffer that reads the range's last bytes,
@@ -1346,6 +1349,87 @@ fn a_did_modify_range_on_unified_memory_copies_nothing() {
     );
     assert_eq!(after.managed_staging_bytes, 0);
     assert_eq!(after.managed_device_copies_made, 0);
+}
+
+/// The stale buffers of the take bench ([`stale_ranges_take_bench`]): `Managed` buffers whose
+/// ranges are named and that no commit uses.
+const STALE: [usize; 3] = [0, 1000, 10000];
+
+/// What a commit's take of the ranges `did_modify_range` named (`managed.rs`'s `Modified`)
+/// costs the commit call with ranges noted of buffers no commit uses (ignored,
+/// `MANAGED-STALE-TAKE`; run in release): for each count of [`STALE`] such buffers, the median of
+/// 200 commits of a command buffer of 24 blit encoders, each copying between two buffers of their
+/// own, and a copy out of a `Managed` buffer whose range the CPU wrote and named before the
+/// commit, whose bytes the copy reads (checked at each commit).
+#[test]
+#[ignore = "a release-mode benchmark"]
+fn stale_ranges_take_bench() {
+    const COMMITS: usize = 200;
+    const ENCODERS: usize = 24;
+    let scratch = Scratch::new("managed-stale-take");
+    let device = device(&scratch.0);
+    if device.properties().has_unified_memory {
+        eprintln!(
+            "MANAGED-STALE-TAKE {}: unified memory; nothing is noted",
+            device.name()
+        );
+        return;
+    }
+    let queue = device.new_command_queue().unwrap();
+    let small = |options| device.new_buffer(4096, options).unwrap();
+    let pairs: Vec<(Buffer, Buffer)> = (0..ENCODERS)
+        .map(|_| {
+            (
+                small(ResourceOptions::default()),
+                small(ResourceOptions::default()),
+            )
+        })
+        .collect();
+    let used = small(managed());
+    let out = small(ResourceOptions::shared());
+    let mut stale: Vec<Buffer> = Vec::new();
+    for count in STALE {
+        while stale.len() < count {
+            let buffer = small(managed());
+            buffer.did_modify_range(0..64).unwrap();
+            stale.push(buffer);
+        }
+        let mut commits = Vec::with_capacity(COMMITS);
+        for commit in 0..COMMITS {
+            let byte = (commit % 250) as u8 + 1;
+            let contents = used.contents().unwrap();
+            // SAFETY: the buffer's host copy, which no command buffer reads now.
+            unsafe { std::ptr::write_bytes(contents.as_ptr(), byte, 64) };
+            used.did_modify_range(0..64).unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            for (from, to) in &pairs {
+                let mut blit = command_buffer.blit_command_encoder().unwrap();
+                blit.copy_from_buffer_to_buffer(from, 0, to, 0, 64).unwrap();
+                blit.end_encoding().unwrap();
+            }
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.copy_from_buffer_to_buffer(&used, 0, &out, 0, 64)
+                .unwrap();
+            blit.end_encoding().unwrap();
+            let began = Instant::now();
+            command_buffer.commit().unwrap();
+            commits.push(began.elapsed());
+            assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
+            assert_eq!(command_buffer.error(), None);
+            // SAFETY: the out buffer's bytes, which no command writes now.
+            let seen = unsafe { *out.contents().unwrap().as_ptr() };
+            assert_eq!(
+                seen, byte,
+                "{count} stale: commit {commit} read other bytes"
+            );
+        }
+        let most = commits.iter().max().unwrap().as_secs_f64() * 1e3;
+        eprintln!(
+            "MANAGED-STALE-TAKE {}: {count} stale buffers, commit {:.4} ms (most {most:.3})",
+            device.name(),
+            median_ms(commits)
+        );
+    }
 }
 
 /// The ranges of the copy-in bench (the module docs), each named whole before every commit.
