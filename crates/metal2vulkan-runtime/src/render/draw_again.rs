@@ -52,7 +52,12 @@
 //!   and its host aliases' version, the encoder's parts and held images (what noting reads,
 //!   `noted_apart.rs`), with the command buffer the current instance records into, and the count
 //!   of the device's sampler IDs' slots' changes (a sampler state made or gone, which every step
-//!   of a draw lists again: `sampler::ArgumentSamplers`).
+//!   of a draw lists again: `sampler::ArgumentSamplers`). Another thread may change the moves, the
+//!   sampler slots and the buffers over host pages with their aliases' version while a draw takes
+//!   its steps (the device's in-place check makes and lets go buffers over host pages on a thread
+//!   of its own): a draw is kept under them as its steps began, which they read ([`Outside`]),
+//!   and its uses' noting counts only where it was noted under them, so a change made meanwhile
+//!   makes the next draw take every step.
 //! - **One per pipeline state.** A pipeline state set keeps the kept draw: at the next draw
 //!   through another state, it goes aside with its state's bind state and the storage its draws
 //!   wrote (`LiveBind::select`, `RenderLowering::select_kept`), and the draw starts from its own
@@ -113,7 +118,9 @@
 //! - **Checked in builds with debug assertions.** The first draw again of a kept draw, and every
 //!   second one after it, takes every step instead, and checks that it announced nothing, recorded
 //!   no state command, kept an equal draw, retained only its index buffer again, and left the
-//!   encoder's drawn area, coverage, reads, gathered uses, noted uses and instance as they were.
+//!   encoder's drawn area, coverage, reads, gathered uses, noted uses and instance as they were;
+//!   where another thread changed what it reads meanwhile ([`Outside`]), its steps read another
+//!   state than the kept draw's, and it checks nothing.
 
 mod rebound;
 mod restated;
@@ -153,6 +160,9 @@ pub(super) struct DrawAgain {
     /// that sets it ([`restate_again`](RenderLowering::restate_again)), so a kept draw that holds
     /// another is restated (the module docs).
     stated: Stamp,
+    /// What another thread may change of what the encoder's current draw reads, as its steps
+    /// began ([`Outside`], [`RenderLowering::draw_began`]).
+    began: Outside,
     /// Draws again since the draw was kept: in builds with debug assertions, the first and every
     /// second one after it take every step instead (the module docs).
     #[cfg(debug_assertions)]
@@ -432,6 +442,28 @@ pub(super) struct Under {
     samplers: u64,
 }
 
+impl Under {
+    /// What its uses were noted into.
+    pub(super) fn noted_into(&self) -> NotedInto {
+        self.into
+    }
+}
+
+/// What of an [`Under`] another thread may change while a draw takes its steps: the no-copy
+/// buffers' moves, the count of the device's sampler IDs' slots' changes, and whether the device
+/// has buffers over host pages and the host aliases' version, which a buffer over host pages made
+/// or let go on any thread moves (the device's in-place check makes and lets go its own,
+/// `in_place_check.rs`). A draw that takes its steps is kept under these as they were when its
+/// steps began, which they read ([`RenderLowering::kept_under`]): a change made meanwhile makes
+/// the next draw take every step.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct Outside {
+    moved: u64,
+    rebinds: bool,
+    aliases: u64,
+    samplers: u64,
+}
+
 /// Whether a draw is its encoder's kept draw again ([`RenderLowering::draw_again`]).
 pub(super) enum Again {
     /// It is, and was recorded.
@@ -487,6 +519,45 @@ impl RenderLowering {
             into: self.core.noted_into(),
             samplers: self.core.generation().sampler_slots_changed(),
         }
+    }
+
+    /// What of [`under`](Self::under) another thread may change ([`Outside`]), now.
+    fn outside(&self) -> Outside {
+        let Under {
+            moved,
+            into,
+            samplers,
+            ..
+        } = self.under();
+        Outside {
+            moved,
+            rebinds: into.rebinds,
+            aliases: into.aliases,
+            samplers,
+        }
+    }
+
+    /// A draw begins its steps: note what another thread may change of what it reads
+    /// ([`Outside`]), which a draw it keeps is kept under ([`kept_under`](Self::kept_under)).
+    pub(super) fn draw_began(&mut self) {
+        self.again.began = self.outside();
+    }
+
+    /// What a draw that took its steps is kept under: what changes with no call of the encoder
+    /// as [`under`](Self::under) answers now, but what another thread may change as the draw's
+    /// steps began ([`Outside`]), which they read; so one made meanwhile differs from the next
+    /// draw's, which then takes every step.
+    pub(super) fn kept_under(&self) -> Under {
+        let Outside {
+            moved,
+            rebinds,
+            aliases,
+            samplers,
+        } = self.again.began;
+        let mut under = self.under();
+        (under.moved, under.samplers) = (moved, samplers);
+        (under.into.rebinds, under.into.aliases) = (rebinds, aliases);
+        under
     }
 
     /// Forget every kept draw, the last direct draw's and those set aside with other pipeline
@@ -975,6 +1046,14 @@ impl Checked {
             announced,
             expected,
         } = self;
+        // What another thread may change moved while the draw took every step ([`Outside`]): its
+        // steps read the state after the change, which the kept draw never read, so it may note
+        // its uses anew or keep nothing (kept, it is kept under the state its steps began in),
+        // as a draw again after the change takes every step. Nothing is compared.
+        if encoder.outside() != encoder.again.began {
+            encoder.again.hits = hits;
+            return;
+        }
         let rebound = matches!(expected, Expected::Rebound(_));
         match &expected {
             // Its uses differ from the kept draw's: what noting them adds is every step's own.

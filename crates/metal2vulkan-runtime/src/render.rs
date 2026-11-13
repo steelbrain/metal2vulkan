@@ -8206,6 +8206,9 @@ impl RenderLowering {
         if let Some(notes) = self.pass_notes.as_mut() {
             notes.drew(self.pipeline.as_ref(), &self.fragment.textures);
         }
+        // What another thread may change of what its steps read, as they begin: what a draw it
+        // keeps is kept under (`render/draw_again.rs`'s `Outside`).
+        self.draw_began();
         // The encoder's kept draw again, which no call came between: its Vulkan draw alone
         // (`render/draw_again.rs`), the pipeline state's own where the last draw drew through
         // another. Any other draw keeps itself in its place where it can, and forgets every
@@ -11349,7 +11352,9 @@ impl RenderLowering {
             }
             _ => {}
         }
-        // Its uses noted as the next draw would find them noted (`noted_apart.rs`).
+        // Its uses noted as the next draw would find them noted (`noted_apart.rs`), into the
+        // state it is kept under: what another thread may change as its steps began
+        // (`render/draw_again.rs`'s `Outside`), so uses noted after such a change keep nothing.
         let drawn_by = self
             .pipeline
             .as_ref()
@@ -11358,7 +11363,9 @@ impl RenderLowering {
         if !self.replaying {
             device.line().hooks.reach_keep();
         }
-        let keeps = plain && !self.replaying && self.core.noted_now(&live.noted);
+        let under = self.kept_under();
+        let keeps =
+            plain && !self.replaying && self.core.noted_now(&live.noted, under.noted_into());
         // What kept a direct draw of its own from being kept (`WorkCounts::draws_unkept`).
         if !keeps && !self.replaying && !self.rerouting && !empty && !culled {
             let unkept = UnkeptDraw {
@@ -11428,7 +11435,7 @@ impl RenderLowering {
                 assembly,
                 draw,
                 index: index.and_then(draw_again::KeptIndex::of),
-                under: self.under(),
+                under,
                 command_buffer: self.current.draws,
                 command: vk_draws[0].2,
                 again,

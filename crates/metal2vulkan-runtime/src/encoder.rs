@@ -1916,12 +1916,14 @@ impl EncoderCore {
     }
 
     /// Whether the command apart `noted` keeps, the last one [`note_reaching`](Self::note_reaching)
-    /// noted, was noted into the encoder's state now: then a command of its stages and uses,
-    /// reaching the keys it reached through the resident set alone, is noted already, and noting
-    /// it notes only its reads of fresh textures and what the encoder made resident since
+    /// noted, was noted into the encoder's state `into` (as [`noted_into`](Self::noted_into)
+    /// answers, or a kept draw is kept under: `render/draw_again.rs`), with the encoder's uses
+    /// unordered: then, while that state stands, a command of its stages and uses, reaching the
+    /// keys it reached through the resident set alone, is noted already, and noting it notes only
+    /// its reads of fresh textures and what the encoder made resident since
     /// ([`note_again`](Self::note_again)).
-    pub(super) fn noted_now(&self, noted: &NotedApart) -> bool {
-        !self.uses.ordered() && noted.noted_into(self.noted_into())
+    pub(super) fn noted_now(&self, noted: &NotedApart, into: NotedInto) -> bool {
+        !self.uses.ordered() && noted.noted_into(into)
     }
 
     /// Note again a command apart noted already ([`noted_now`](Self::noted_now)) with `uses`, as

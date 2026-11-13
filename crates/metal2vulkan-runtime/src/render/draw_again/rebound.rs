@@ -1465,7 +1465,7 @@ impl RenderLowering {
         }
         self.last_retained
             .retain_samplers(&mut self.core, &mut live.samplers);
-        let under = self.under();
+        let under = self.kept_under();
         if let Some(kept) = self.again.kept.as_mut() {
             kept.under = under;
         }
