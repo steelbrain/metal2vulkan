@@ -698,9 +698,11 @@ pub enum WriteSource {
     /// pass's regions, bound whole.
     RateMapRegions,
     /// A fan-out probe's flags (`SyntheticBinding::RateMapFlags`,
-    /// [`RegionFanOut::Probe`](crate::pipeline::RegionFanOut)): a storage buffer of `u32`s the
-    /// consumer keeps for its probes, zero at each draw's index (`BindState::region_fan_out`)
-    /// before the draw, where the draw writes 1 for a triangle it cannot fan out; bound whole.
+    /// [`RegionFanOut::Probe`](crate::pipeline::RegionFanOut)): a storage buffer of `u32` pairs
+    /// the consumer keeps for its probes, both words zero at each draw's index
+    /// (`BindState::region_fan_out`) before the draw, where the draw writes 1 into the first for
+    /// a triangle it cannot fan out and adds to the second the copies it would emit of the
+    /// others (`GraphicsState::region_fan_out`); bound whole.
     RateMapFlags,
     /// The top-level structure of the acceleration structure bound at buffer slot `slot`
     /// (`setAccelerationStructure:atBufferIndex:`): the bound instance structure itself when

@@ -15,10 +15,13 @@
 //!   per pair of segments its bounds reach, at most [`FanOutStage::copies`]; one with no positive
 //!   `w`, or one past the segments, emits none, and so does one with some `w` not positive, which
 //!   the probe found.
-//! - **Probe** ([`RegionFanOut::Probe`]): emits nothing, and writes 1 into the flags buffer at
-//!   the index the draw pushes (`PushField::RegionProbe`) for a triangle the draw cannot fan out:
-//!   one with some `w` not positive and another positive, or whose bounds, widened by the table's
-//!   widening, reach more pairs than the copies. Its writes need `vertexPipelineStoresAndAtomics`.
+//! - **Probe** ([`RegionFanOut::Probe`]): emits nothing. Of the flags buffer's pair of words at
+//!   the index the draw pushes (`PushField::RegionProbe`; words `2i` and `2i + 1`), it writes 1
+//!   into the first for a triangle the draw cannot fan out: one with some `w` not positive and
+//!   another positive, or whose bounds, widened by the table's widening, reach more pairs than the
+//!   copies; and adds to the second the copies the draw emits of each triangle it fans out, the
+//!   pairs its bounds reach unwidened, so the consumer counts the draw's work. Its writes need
+//!   `vertexPipelineStoresAndAtomics`.
 
 use super::geometry::{array, kf, ku, scalar, GeometryStages};
 use crate::bind::fan_out::{clip_entry, line_entry, MAX_SEGMENTS};
@@ -30,8 +33,8 @@ use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{GlobalId, TypeId, Value};
 use crate::spirv::ir::{
-    natural_layout, BinOp, ConvOp, ExecMode, ExecModel, GlslOp, IoDecor, IoDir, LayoutRule,
-    MemAccess, Scope, Semantics, StorageClass, Type, TypedModule, UnOp,
+    natural_layout, AtomicOp, BinOp, ConvOp, ExecMode, ExecModel, GlslOp, IoDecor, IoDir,
+    LayoutRule, MemAccess, Scope, Semantics, StorageClass, Type, TypedModule, UnOp,
 };
 use crate::spv::BuiltIn as B;
 
@@ -364,19 +367,39 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
             let most = ku(&mut fb, copies)?;
             let over = fb.binary(BinOp::UGreaterThan, count, most)?;
             let flagged = fb.binary(BinOp::LogicalOr, straddles, over)?;
-            let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
-                let base = fb.module().global_value(push)?;
-                let index = ku(fb, member)?;
-                let ptr = fb.access_chain(base, &[index])?;
-                let at = fb.load(ptr, MemAccess::default())?;
+            // The draw's pair of words: its flag, then the copies its triangles emit.
+            let base = fb.module().global_value(push)?;
+            let index = ku(&mut fb, member)?;
+            let ptr = fb.access_chain(base, &[index])?;
+            let pushed = fb.load(ptr, MemAccess::default())?;
+            let two = ku(&mut fb, 2)?;
+            let flag_at = fb.binary(BinOp::IMul, pushed, two)?;
+            let count_at = fb.binary(BinOp::IAdd, flag_at, one)?;
+            let word_ptr = move |fb: &mut FunctionBuilder<'_>, at: Value| {
                 let base = fb.module().global_value(flags)?;
                 let zero = ku(fb, 0)?;
-                let ptr = fb.access_chain(base, &[zero, at])?;
+                fb.access_chain(base, &[zero, at])
+            };
+            let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                let ptr = word_ptr(fb, flag_at)?;
                 let one = ku(fb, 1)?;
                 fb.atomic_store(ptr, Scope::Device, Semantics::RELAXED, one)?;
                 Ok(ArmEnd::FallThrough(Vec::new()))
             });
             fb.if_(&mut ctx, flagged, arm, None)?;
+            let counted = fb.binary(BinOp::UGreaterThan, count, none)?;
+            let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                let ptr = word_ptr(fb, count_at)?;
+                fb.atomic(
+                    AtomicOp::IAdd,
+                    ptr,
+                    Scope::Device,
+                    Semantics::RELAXED,
+                    count,
+                )?;
+                Ok(ArmEnd::FallThrough(Vec::new()))
+            });
+            fb.if_(&mut ctx, counted, arm, None)?;
         }
         None => {
             let c = Copies {

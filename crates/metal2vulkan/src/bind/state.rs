@@ -154,7 +154,8 @@ pub struct BindState {
     /// over the whole target, the variant's triangle stage fanning each out to the regions it
     /// touches (`VariantKey::region_fan_out`, `GraphicsState::region_fan_out`), or probing which
     /// of the draw's triangles it cannot ([`RegionFanOut::Probe`](crate::pipeline::RegionFanOut)),
-    /// and the index of the flag a probe writes (`PushField::RegionProbe`; 0 for a draw). The
+    /// and the index of the pair of words a probe writes (`PushField::RegionProbe`,
+    /// `WriteSource::RateMapFlags`; 0 for a draw). The
     /// consumer sets it only for a draw of triangles. The plan's variant fans out only a vertex
     /// pipeline without tessellation drawn in one pass of no views, whose stages synthesize no
     /// geometry stage of their own and draw no band (`bind::graphics`'s module docs). Its variant
