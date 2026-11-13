@@ -34,10 +34,11 @@
 //! (`live_bind::RecentShapes`), found without listing the resident resources again. It is
 //! ignored by default: run it by name with `--run-ignored all`.
 //!
-//! [`a_replayed_execution_holds_only_what_shares_its_resources`] checks what the frame holds of
-//! other queues' work while its execution is not recorded (the frame behind a loop the test ends,
-//! then held for its host step): a later commit on another queue waits behind it only where Metal
-//! orders the two, as one writes what the other uses.
+//! [`a_waiting_frame_holds_only_what_shares_a_batch_that_keeps_its_place`] checks what the frame
+//! holds of other queues' work while its execution is not recorded (the frame behind a loop the
+//! test ends, then held for its host step): a later commit on another queue waits behind it only
+//! where one writes what the other uses in a batch of the frame that keeps its place; the
+//! execution's batch, held for its host step, gives way.
 
 use super::kept_variants::kernel_state;
 use super::{
@@ -80,8 +81,9 @@ const EACH_VAR: &str = "REPLAYED_FRAMES_CHANGE_EACH";
 /// The commands the pass encodes, one a draw, in [`replayed_frames`].
 const DRAWS: u32 = 5000;
 
-/// The commands the pass encodes in [`a_replayed_execution_holds_only_what_shares_its_resources`]
-/// and [`a_batch_s_footprint_is_built_once_however_many_passes_look`].
+/// The commands the pass encodes in
+/// [`a_waiting_frame_holds_only_what_shares_a_batch_that_keeps_its_place`] and
+/// [`a_batch_s_footprint_is_built_once_however_many_passes_look`].
 const CHECKED_DRAWS: u32 = 256;
 
 /// The target's width and height.
@@ -637,7 +639,7 @@ fn a_batch_s_footprint_is_built_once_however_many_passes_look() {
 }
 
 /// What another queue's command buffer encodes in a case of
-/// [`a_replayed_execution_holds_only_what_shares_its_resources`].
+/// [`a_waiting_frame_holds_only_what_shares_a_batch_that_keeps_its_place`].
 type Encode<'a> = dyn Fn(&CommandBuffer) + 'a;
 
 /// A command buffer of `queue`, committed: a predicated loop of one dispatch of `state` (the
@@ -672,15 +674,20 @@ const LOOP_THREADS: u64 = 64;
 
 /// While the page's frame waits, its execution not recorded, another queue's command buffer
 /// committed after it is held behind it (`WorkCounts::heads_held_for_earlier_commits`) only where
-/// Metal orders the two: a bystander that fills a buffer of its own, and a presenter that copies
-/// out the texture the frame only reads, go at once; a presenter that fills the buffer the
-/// execution's commands inherit waits. The frame is committed on its queue behind a loop that
-/// runs again until the test ends it ([`loop_until`]), once the scheduler answered the other
-/// command buffer (it went: submitted; or it waits: a look held it behind the frame), so the
-/// frame waits whatever the host's timing; then the frame is held for its host step
-/// (`WorkCounts::heads_held_for_host_steps` moves). The validation layer stays silent.
+/// one writes what the other uses in a batch of the frame that keeps its place (the runtime's
+/// `scheduler/order.rs`, **Held batches give way**): a presenter that copies out the target the
+/// encoding pass draws waits behind that pass's batch, which needs no host step. The execution's
+/// batch, held for a host step that has not taken its gate, gives way, as an x86 Mac's GPU may
+/// take a later commit of another queue first: a presenter that fills the buffer the execution's
+/// commands inherit goes at once, as do a bystander that fills a buffer of its own and a
+/// presenter that copies out the texture the frame only reads. The frame is committed on its
+/// queue behind a loop that runs again until the test ends it ([`loop_until`]), once the
+/// scheduler answered the other command buffer (it went: submitted; or it waits: a look held it
+/// behind the frame), so the frame waits whatever the host's timing; then the frame is held for
+/// its host step (`WorkCounts::heads_held_for_host_steps` moves). The validation layer stays
+/// silent.
 #[test]
-fn a_replayed_execution_holds_only_what_shares_its_resources() {
+fn a_waiting_frame_holds_only_what_shares_a_batch_that_keeps_its_place() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
@@ -711,28 +718,19 @@ fn a_replayed_execution_holds_only_what_shares_its_resources() {
             blit.fill_buffer(buffer, 0..256, 7).unwrap();
             blit.end_encoding().unwrap();
         };
-        let copy_out = |command_buffer: &CommandBuffer| {
+        let copy_out = |texture: &Texture, command_buffer: &CommandBuffer| {
             let mut blit = command_buffer.blit_command_encoder().unwrap();
             let size = Size::new(SIDE, SIDE, 1);
             let (row, image) = (SIDE * 4, SIDE * SIDE * 4);
             let origin = Origin::new(0, 0, 0);
             let none = BlitOption::None;
             blit.copy_from_texture_to_buffer(
-                &page.surface,
-                0,
-                0,
-                origin,
-                size,
-                &read,
-                0,
-                row,
-                image,
-                none,
+                texture, 0, 0, origin, size, &read, 0, row, image, none,
             )
             .unwrap();
             blit.end_encoding().unwrap();
         };
-        let cases: [(&str, bool, &Encode); 3] = [
+        let cases: [(&str, bool, &Encode); 4] = [
             (
                 "a bystander that fills a buffer of its own",
                 false,
@@ -741,15 +739,20 @@ fn a_replayed_execution_holds_only_what_shares_its_resources() {
             (
                 "a presenter that copies out the texture the frame reads",
                 false,
-                &copy_out,
+                &|command_buffer| copy_out(&page.surface, command_buffer),
             ),
             (
-                "a presenter that fills the buffer the commands inherit",
-                true,
+                "a presenter that fills the buffer the held execution's commands inherit",
+                false,
                 &|command_buffer| fill(&page.inherited, command_buffer),
             ),
+            (
+                "a presenter that copies out the target the encoding pass draws",
+                true,
+                &|command_buffer| copy_out(&page.target, command_buffer),
+            ),
         ];
-        for (case, shares, encode) in cases {
+        for (case, waits, encode) in cases {
             let word = device.new_buffer(16, ResourceOptions::shared()).unwrap();
             let before = device.work_counts();
             let looping = loop_until(&page_queue, &state, &loop_buffers, &word);
@@ -760,7 +763,7 @@ fn a_replayed_execution_holds_only_what_shares_its_resources() {
             // The scheduler's answer for the other command buffer while the frame waits behind
             // the loop: submitted, or held behind the frame.
             let deadline = Instant::now() + WAIT;
-            let answered = || match shares {
+            let answered = || match waits {
                 true => {
                     let counts = device.work_counts();
                     counts.heads_held_for_earlier_commits > before.heads_held_for_earlier_commits
@@ -780,7 +783,7 @@ fn a_replayed_execution_holds_only_what_shares_its_resources() {
             // SAFETY: the word's first 4 bytes, which the GPU only reads.
             unsafe { contents.as_ptr().cast::<u32>().write_volatile(1) };
             assert_eq!(
-                went, !shares,
+                went, !waits,
                 "{case} on {name}: whether it went while the frame waited"
             );
             for command_buffer in [&looping, &frame, &command_buffer] {
@@ -800,7 +803,7 @@ fn a_replayed_execution_holds_only_what_shares_its_resources() {
             let held = after.heads_held_for_earlier_commits - before.heads_held_for_earlier_commits;
             assert_eq!(
                 held > 0,
-                shares,
+                waits,
                 "{case} on {name}: {held} looks held it behind the frame"
             );
         }
