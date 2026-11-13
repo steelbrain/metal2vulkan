@@ -8,10 +8,10 @@
 //!   after one of the same shape was cleared and released, and zero from an uncompressed
 //!   `Private` or a `Shared` one, never the old texels (the inplace-surface probe's `fresh` mode).
 //!   On a device that presents a Mac keeping no texture compressed
-//!   (`DeviceProperties::lossless_compression` false) a new `Private` texture holds what its
-//!   memory held, written by no command (`WorkCounts::private_textures_unfilled`), as such a
-//!   Mac's does (docs/API.md, the accepted differences): the recycled one reads the parked
-//!   image's texels, the colour, or what a new one read.
+//!   (`DeviceProperties::lossless_compression` false) a new `Private` texture reads zero, written
+//!   at its first use (`WorkCounts::private_textures_zero_filled`): every process of a consumer
+//!   that serves several may share one device, so the memory a texture lies in may have held
+//!   another's texels (docs/API.md, the accepted differences).
 //! - **Each frame's textures, recycled.** Eight such textures made, cleared and released each of
 //!   sixty frames take parked images from the second frame on: no image made after the first
 //!   frame's, and none parked past the bounds.
@@ -119,37 +119,37 @@ fn read(device: &Device, queue: &CommandQueue, texture: &Texture) -> Vec<u8> {
         .to_vec()
 }
 
-/// Check `read`, what the recycled texture `second` of `device` reads, against `fresh` (what a new
-/// texture of the descriptor read) and `cleared` (the parked image's colour): `fresh` where the
-/// device presents compression, else either (the module docs), its making counted as unfilled.
+/// Check `read`, what the recycled texture of `device` reads, against `fresh` (what a new texture
+/// of the descriptor read) and `cleared` (the parked image's colour): `fresh` on every device,
+/// never the old texels; where the device presents no compression, zero, its making counted as
+/// zero-filled (`zero_filled`, the count's change over it; the module docs).
 fn reads_what_a_new_one_reads(
     device: &Device,
-    unfilled: u64,
+    zero_filled: u64,
     read: &[u8],
     fresh: &[u8],
     cleared: &[u8],
 ) {
-    if device.properties().lossless_compression {
-        assert_eq!(unfilled, 0, "a new Private texture counted as unfilled");
-        assert_eq!(
-            read, fresh,
-            "the recycled texture reads what a new one reads, not the old texels"
-        );
-        return;
-    }
-    assert_eq!(
-        unfilled, 1,
-        "the recycled texture's making counted as unfilled"
-    );
-    assert!(
-        read == fresh || read == cleared,
-        "the recycled texture reads what its memory held, the parked image's texels or a new one's"
-    );
-    let what = match read == cleared {
-        true => "the parked image's texels",
-        false => "what a new one reads",
+    let what = match (read == cleared, read == fresh) {
+        (true, _) => "the parked image's texels",
+        (false, true) => "what a new one reads",
+        (false, false) => "other bytes",
     };
-    println!("RECYCLE-UNFILLED on {}: {what}", device.name());
+    println!("RECYCLE-FRESH on {}: {what}", device.name());
+    assert_eq!(
+        read, fresh,
+        "the recycled texture reads what a new one reads, not the old texels"
+    );
+    if !device.properties().lossless_compression {
+        assert!(
+            fresh.iter().all(|&byte| byte == 0),
+            "a new texture reads zero"
+        );
+        assert_eq!(
+            zero_filled, 1,
+            "the recycled texture's making counted as zero-filled"
+        );
+    }
 }
 
 /// Wait until the device parked `count` images in all.
@@ -175,9 +175,9 @@ fn a_recycled_texture_reads_what_a_new_one_reads() {
     let before = device.work_counts().object_churn;
     drop(first);
     parked_at_least(&device, before.images_parked + 1);
-    let unfilled = device.work_counts().private_textures_unfilled;
+    let zero_filled = device.work_counts().private_textures_zero_filled;
     let second = device.new_texture(&descriptor()).unwrap();
-    let unfilled = device.work_counts().private_textures_unfilled - unfilled;
+    let zero_filled = device.work_counts().private_textures_zero_filled - zero_filled;
     let after = device.work_counts().object_churn;
     assert_eq!(
         after.images_recycled - before.images_recycled,
@@ -185,7 +185,7 @@ fn a_recycled_texture_reads_what_a_new_one_reads() {
         "the second texture took the first one's parked image"
     );
     let second = read(&device, &queue, &second);
-    reads_what_a_new_one_reads(&device, unfilled, &second, &fresh, &cleared);
+    reads_what_a_new_one_reads(&device, zero_filled, &second, &fresh, &cleared);
 }
 
 #[test]
@@ -260,7 +260,7 @@ fn a_burst_of_one_off_makings_keeps_the_proven_image() {
         }
         parked_at_least(&device, before.images_parked + ONE_OFF);
         let burst = device.work_counts().object_churn;
-        let unfilled = device.work_counts().private_textures_unfilled;
+        let zero_filled = device.work_counts().private_textures_zero_filled;
         assert_eq!(burst.images_recycled, before.images_recycled);
         assert!(
             burst.images_evicted > before.images_evicted,
@@ -268,7 +268,7 @@ fn a_burst_of_one_off_makings_keeps_the_proven_image() {
         );
         let third = device.new_texture(&descriptor()).unwrap();
         let taken = parking.elapsed();
-        let unfilled = device.work_counts().private_textures_unfilled - unfilled;
+        let zero_filled = device.work_counts().private_textures_zero_filled - zero_filled;
         let after = device.work_counts().object_churn;
         if taken >= recycle::IMAGES.parked_for && tried + 1 < TRIES {
             eprintln!(
@@ -295,7 +295,7 @@ fn a_burst_of_one_off_makings_keeps_the_proven_image() {
             "the proven making's parked image outlasted the burst"
         );
         let third = read(&device, &queue, &third);
-        reads_what_a_new_one_reads(&device, unfilled, &third, &fresh, &cleared);
+        reads_what_a_new_one_reads(&device, zero_filled, &third, &fresh, &cleared);
         eprintln!(
             "RECYCLE: a burst of {ONE_OFF} one-off makings: {} evicted, the proven image kept",
             burst.images_evicted - before.images_evicted
