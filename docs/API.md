@@ -1901,7 +1901,11 @@ buffer's object ID, its place among the command buffer's encoders, a render pass
 count, attachments' formats and sizes, Vulkan render pass instances and whether it is over a
 rasterization-rate map, its executions of indirect commands, and the label hash of each pipeline
 state it bound (the first 8 bytes of the SHA-256 of the state's label and its functions' names; no
-name and no shader text), and of each state its indirect commands named at a host step. Once no
+name and no shader text), and of each state its indirect commands named at a host step, with what
+that step drew: each range it read from a buffer (its location and length as the bytes held them,
+and the commands it ran), its draws, their vertices or indices times their instances summed, the
+draw of the most of those (its primitive type, count and instances), and the kept chunks it ran
+again, whose draws it did not read. Once no
 work of the device advanced for 2 s while some was pending, it logs one line for each `VkQueue`
 whose oldest batch is pending (id name `metal2vulkan-encoder-trail`, `Info` severity): that
 batch's encoders, and the last batch the queue completed, with how long before; once a stall. A

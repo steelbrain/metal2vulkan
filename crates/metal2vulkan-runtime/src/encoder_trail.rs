@@ -17,7 +17,10 @@
 //!   state's label and its functions' names ([`label_hash`]). No name and no shader text.
 //! - **Host steps** ([`Step`]). A host step that records an ended encoder's segment
 //!   (`CommandBuffer::record_host_step`) notes the states its indirect commands name, as the GPU
-//!   and the CPU left the records, and its batch names them after the encoder's own. A submission
+//!   and the CPU left the records, and what it drew of them ([`Drawn`]): each range it read from a
+//!   buffer, the draws it recorded, their vertices or indices times their instances, the draw of
+//!   the most of those, and the kept chunks it ran again (`render/executions/kept.rs`), whose
+//!   draws it did not read. Its batch names them after the encoder's own. A submission
 //!   the step makes and waits for itself (a rasterization-rate map's fan-out probe,
 //!   `render/fan_out.rs`, or a predicated loop's check run again, `command_buffer/rerun.rs`)
 //!   signals no timeline: once it ran for [`AFTER`], one line names it ([`waited_line`]).
@@ -62,6 +65,94 @@ pub(crate) struct Notes {
     indirect: u64,
     /// A render pass's shape, noted at its end ([`pass_named`]).
     pass: Option<String>,
+    /// What a host step drew of its commands.
+    drawn: Drawn,
+}
+
+/// What a host step drew of an execution's commands (the module docs, **Host steps**).
+#[derive(Default)]
+pub(crate) struct Drawn {
+    /// Each range it read from a buffer, at most [`KEPT`]: its location and length as the bytes
+    /// held them, and the commands it ran of them.
+    ranges: Vec<([u32; 2], std::ops::Range<u32>)>,
+    /// The ranges read past [`KEPT`].
+    more_ranges: usize,
+    /// The draws it recorded.
+    draws: u64,
+    /// Their vertices or indices times their instances, summed.
+    work: u64,
+    /// The draw of the most of those: whether indexed, its primitive type's raw value, its
+    /// vertices or indices, and its instances.
+    largest: Option<(bool, u32, u32, u32)>,
+    /// The kept chunks it ran again, and their commands.
+    kept: u64,
+    kept_commands: u64,
+}
+
+impl Drawn {
+    fn join(&mut self, other: Drawn) {
+        for range in other.ranges {
+            match self.ranges.len() < KEPT {
+                true => self.ranges.push(range),
+                false => self.more_ranges += 1,
+            }
+        }
+        self.more_ranges += other.more_ranges;
+        self.draws += other.draws;
+        self.work = self.work.saturating_add(other.work);
+        if let Some(largest) = other.largest {
+            self.largest(largest);
+        }
+        self.kept += other.kept;
+        self.kept_commands += other.kept_commands;
+    }
+
+    fn largest(&mut self, draw: (bool, u32, u32, u32)) {
+        let work = |(_, _, count, instances): (bool, u32, u32, u32)| {
+            u64::from(count) * u64::from(instances)
+        };
+        if self
+            .largest
+            .is_none_or(|largest| work(largest) < work(draw))
+        {
+            self.largest = Some(draw);
+        }
+    }
+
+    fn any(&self) -> bool {
+        !self.ranges.is_empty() || self.draws > 0 || self.kept > 0
+    }
+
+    /// As a line names it.
+    fn described(&self) -> String {
+        let ranges: Vec<String> = (self.ranges.iter())
+            .map(|([location, length], ran)| {
+                format!("{location}+{length} ran {}..{}", ran.start, ran.end)
+            })
+            .collect();
+        let more = match self.more_ranges {
+            0 => String::new(),
+            more => format!(" and {more} more"),
+        };
+        let largest = match self.largest {
+            Some((indexed, primitive, count, instances)) => format!(
+                ", the largest {} of primitive type {primitive}: {count} {} times {instances} \
+                 instance(s)",
+                if indexed { "an indexed draw" } else { "a draw" },
+                if indexed { "indices" } else { "vertices" },
+            ),
+            None => String::new(),
+        };
+        format!(
+            "its host step read ranges [{}]{more}, drew {} draw(s) of {} vertices or indices \
+             times instances{largest}, and ran {} kept chunk(s) of {} command(s) again",
+            ranges.join(", "),
+            self.draws,
+            self.work,
+            self.kept,
+            self.kept_commands
+        )
+    }
 }
 
 impl Notes {
@@ -100,6 +191,30 @@ impl Notes {
             Some(commands) => self.commands += commands,
             None => self.indirect += 1,
         }
+    }
+
+    /// A host step read the range `raw` (location, then length) from a buffer, and ran the
+    /// commands `ran` of it.
+    pub(crate) fn range_read(&mut self, raw: [u32; 2], ran: std::ops::Range<u32>) {
+        match self.drawn.ranges.len() < KEPT {
+            true => self.drawn.ranges.push((raw, ran)),
+            false => self.drawn.more_ranges += 1,
+        }
+    }
+
+    /// A host step recorded a draw, `indexed` or not, of primitive type `primitive` (its raw
+    /// value), of `count` vertices or indices, times `instances`.
+    pub(crate) fn drew(&mut self, indexed: bool, primitive: u32, count: u32, instances: u32) {
+        let drawn = &mut self.drawn;
+        drawn.draws += 1;
+        drawn.work = (drawn.work).saturating_add(u64::from(count) * u64::from(instances));
+        drawn.largest((indexed, primitive, count, instances));
+    }
+
+    /// A host step ran a kept chunk of `commands` again.
+    pub(crate) fn kept_again(&mut self, commands: u64) {
+        self.drawn.kept += 1;
+        self.drawn.kept_commands += commands;
     }
 
     /// Its render pass, as [`pass_named`] names it.
@@ -158,11 +273,12 @@ impl Step {
             self.states.hashed(hash);
         }
         self.states.more += notes.more;
+        self.states.drawn.join(notes.drawn);
     }
 
-    /// Whether its commands named any state.
+    /// Whether its commands named any state, or it drew any.
     fn named(&self) -> bool {
-        !self.states.states.is_empty() || self.states.more > 0
+        !self.states.states.is_empty() || self.states.more > 0 || self.states.drawn.any()
     }
 
     /// The encoder, and the states its commands named where they named any, as a line names it.
@@ -179,7 +295,11 @@ impl Step {
             more => format!(" and {more} more"),
         };
         let states = self.states.states.join(" ");
-        format!("{encoder}, its host step's commands' states [{states}]{more}")
+        let drawn = match self.states.drawn.any() {
+            true => format!("; {}", self.states.drawn.described()),
+            false => String::new(),
+        };
+        format!("{encoder}, its host step's commands' states [{states}]{more}{drawn}")
     }
 
     /// The encoder's name after the step: [`described`](Self::described) where its commands
@@ -337,6 +457,37 @@ mod tests {
         assert_eq!(
             &*stepped,
             format!("Render encoder 3 of command buffer 7, its host step's commands' states [{b}]")
+        );
+        // What the step drew follows: the ranges it read, its draws and their work, the draw of
+        // the most, and the kept chunks it ran again.
+        let mut drawn = Notes::default();
+        drawn.range_read([4, 9], 4..10);
+        drawn.drew(true, 3, 36, 2);
+        drawn.drew(false, 3, 6, u32::MAX);
+        drawn.drew(true, 3, 300, 1);
+        drawn.kept_again(64);
+        step.noted(drawn);
+        let stepped = step.stepped().expect("a state named");
+        let work = 72 + 6 * u64::from(u32::MAX) + 300;
+        assert_eq!(
+            &*stepped,
+            format!(
+                "Render encoder 3 of command buffer 7, its host step's commands' states [{b}]; \
+                 its host step read ranges [4+9 ran 4..10], drew 3 draw(s) of {work} vertices \
+                 or indices times instances, the largest a draw of primitive type 3: 6 vertices \
+                 times {} instance(s), and ran 1 kept chunk(s) of 64 command(s) again",
+                u32::MAX
+            )
+        );
+        // A step that drew and named no state is named too.
+        let mut unnamed = Step::new(None);
+        let mut drawn = Notes::default();
+        drawn.drew(true, 3, 3, 1);
+        unnamed.noted(drawn);
+        let stepped = unnamed.stepped().expect("a draw noted");
+        assert!(
+            stepped.contains("drew 1 draw(s) of 3 vertices"),
+            "{stepped}"
         );
     }
 }

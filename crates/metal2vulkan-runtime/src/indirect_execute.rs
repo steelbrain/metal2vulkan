@@ -266,6 +266,21 @@ impl ExecutionRange {
         matches!(self, ExecutionRange::Indirect { .. })
     }
 
+    /// A range read from a buffer: its location and length as its bytes hold them now, for the
+    /// encoder trail (`encoder_trail.rs`, **Host steps**); `None` for one given, or bytes no
+    /// mapping holds.
+    pub(super) fn raw(&self) -> Option<[u32; 2]> {
+        let ExecutionRange::Indirect { buffer, offset } = self else {
+            return None;
+        };
+        let [l0, l1, l2, l3, n0, n1, n2, n3] =
+            buffer.read_mapped::<{ RANGE_BYTES as usize }>(*offset)?;
+        Some([
+            u32::from_le_bytes([l0, l1, l2, l3]),
+            u32::from_le_bytes([n0, n1, n2, n3]),
+        ])
+    }
+
     /// The commands it runs of a buffer of `size` commands: the range given, or the range its
     /// bytes hold now as Metal's execution takes it (an M3 Max and an M4, for a compute encoder;
     /// a probe, the same chips, for a render encoder): from `location` to `location + length`,

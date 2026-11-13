@@ -614,6 +614,7 @@ impl RenderExecution {
         let device = command_buffer.device().clone();
         let (range, faults) = self.range.commands(self.icb.size());
         found.faults = ReplayFaults(found.faults.0 | faults.0);
+        self.trail_range(command_buffer, &range);
         let Keeping {
             mut key,
             kept,
@@ -655,6 +656,13 @@ impl RenderExecution {
                 Some((kept, held))
             });
             if let Some((kept, held)) = again {
+                // The encoder trail notes the chunk run again, whose draws were not read
+                // (`encoder_trail.rs`, **Host steps**).
+                if step && shared.encoder_trail {
+                    let mut notes = crate::encoder_trail::Notes::default();
+                    notes.kept_again(u64::from(covered.end - covered.start));
+                    command_buffer.trail_step(notes);
+                }
                 core.run_kept(&kept.effects, held)?;
                 found.misses = found.misses.wrapping_add(kept.misses);
                 found.faults = ReplayFaults(found.faults.0 | kept.faults.0);

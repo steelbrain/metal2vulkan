@@ -1090,6 +1090,27 @@ impl Found {
     }
 }
 
+/// A draw `action` asks for, as the encoder trail notes it (`encoder_trail.rs`, **Host steps**):
+/// whether indexed, its primitive type's raw value, its vertices or indices, and its instances;
+/// `None` for any other command.
+fn trail_draw(action: &Action) -> Option<(bool, u32, u32, u32)> {
+    match *action {
+        Action::DrawPrimitives {
+            primitive_type,
+            vertex_count,
+            instance_count,
+            ..
+        } => Some((false, primitive_type.into(), vertex_count, instance_count)),
+        Action::DrawIndexedPrimitives {
+            primitive_type,
+            index_count,
+            instance_count,
+            ..
+        } => Some((true, primitive_type.into(), index_count, instance_count)),
+        _ => None,
+    }
+}
+
 /// The vertices of each primitive of `draw` of `pipeline`, where its indices may be drawn as
 /// consecutive ranges, each a draw of its own, as Metal draws the whole (`rate_mapped_pass.rs`,
 /// **Pieces**): a list of points, lines or triangles, which Metal never restarts, of one
@@ -2185,6 +2206,7 @@ impl RenderExecution {
                 "a range read from a buffer recorded before its host step",
             ));
         }
+        self.trail_range(command_buffer, &range);
         found.faults = ReplayFaults(found.faults.0 | faults.0);
         // The caller's check sees each command the execution will record, before it records any,
         // where it may see something; so do the command buffer's executed-commands handlers,
@@ -2252,6 +2274,20 @@ impl RenderExecution {
             self.replay((&mut encoder, &mut live), &commands, residency, found)?;
         }
         self.finish(encoder, found, rendered, &device)
+    }
+
+    /// Note, for the encoder trail, the range a host step read from a buffer and the commands
+    /// `ran` of it (`encoder_trail.rs`, **Host steps**): nothing where the trail is off, the
+    /// range was given, or no step is under way.
+    pub(super) fn trail_range(&self, command_buffer: &CommandBuffer, ran: &Range<u32>) {
+        if !command_buffer.device().shared().encoder_trail {
+            return;
+        }
+        if let Some(raw) = self.range.raw() {
+            let mut notes = crate::encoder_trail::Notes::default();
+            notes.range_read(raw, ran.clone());
+            command_buffer.trail_step(notes);
+        }
     }
 
     /// An encoder of `core` that replays the commands into a secondary of `command_buffer` begun
@@ -2493,6 +2529,11 @@ impl RenderExecution {
                     continue;
                 }
             };
+            if let (Some((notes, _)), false) = (&mut trail, probing) {
+                if let Some((indexed, primitive, count, instances)) = trail_draw(&record.action) {
+                    notes.drew(indexed, primitive, count, instances);
+                }
+            }
             // The probe probes no mesh or patch draw, nor a command after one: its functions run in
             // dispatches before the pass, which may write what a later vertex function reads.
             if probing && matches!(draw, Draw::Mesh(..) | Draw::Patches { .. }) {
