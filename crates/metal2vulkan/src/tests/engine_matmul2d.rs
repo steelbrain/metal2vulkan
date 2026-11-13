@@ -12,6 +12,10 @@
 //!   per step (56,064 elements in float, half, and bfloat); the same with relaxed precision, and
 //!   from `acc = +0` in `multiply` mode, the fixture's descriptors respelled.
 //!
+//! The owned fixture `tns_mm_v2` is `tns_mm_float` built for macOS 27, whose header spells every
+//! run in its `_v2` form, with a transposed B also as a cooperative right input and in threadgroup
+//! memory: its float sums are the same reference's.
+//!
 //! The owned fixture `tns_init` constructs a cooperative tensor (a destination or a right input)
 //! in a loop's body: each construction zeroes the elements the thread holds, the second after the
 //! first set them, as on Metal (and the gather kernels whose destinations Metal starts from zero in
@@ -78,6 +82,21 @@ fn float_products_are_metals_sequential_fused_sums_on_radv() {
 #[test]
 fn float_products_are_metals_sequential_fused_sums_on_lavapipe() {
     float_products_are_metals_sequential_fused_sums(FloatMode::Plain, LAVAPIPE);
+}
+
+#[test]
+fn v2_float_products_are_metals_sequential_fused_sums_on_moltenvk() {
+    fused_sums_of(V2, FloatMode::Plain, MOLTENVK);
+}
+
+#[test]
+fn v2_float_products_are_metals_sequential_fused_sums_on_radv() {
+    fused_sums_of(V2, FloatMode::Plain, RADV);
+}
+
+#[test]
+fn v2_float_products_are_metals_sequential_fused_sums_on_lavapipe() {
+    fused_sums_of(V2, FloatMode::Plain, LAVAPIPE);
 }
 
 #[test]
@@ -487,24 +506,60 @@ const FLOAT_VARIANTS: [(Format, bool); 10] = [
     (Format::Float, false),
 ];
 
+/// `tns_mm_v2`'s variants: `tns_mm_float`'s, then a transposed B as a cooperative right input and
+/// in threadgroup memory, each in float, half, and bfloat.
+const V2_VARIANTS: [(Format, bool); 16] = [
+    (Format::Float, false),
+    (Format::Half, false),
+    (Format::BFloat, false),
+    (Format::Float, true),
+    (Format::Half, true),
+    (Format::BFloat, true),
+    (Format::Float, false),
+    (Format::Half, false),
+    (Format::BFloat, false),
+    (Format::Float, false),
+    (Format::Float, true),
+    (Format::Half, true),
+    (Format::BFloat, true),
+    (Format::Float, true),
+    (Format::Half, true),
+    (Format::BFloat, true),
+];
+
+/// A float-sums fixture: its name (and its kernel's) and its variants.
+type FloatFixture = (&'static str, &'static [(Format, bool)]);
+
+const FLOAT: FloatFixture = ("tns_mm_float", &FLOAT_VARIANTS);
+const V2: FloatFixture = ("tns_mm_v2", &V2_VARIANTS);
+
 /// Float, half, and bfloat products into float are Metal's sequential fused sums on `profile`, with
 /// B in device or threadgroup memory or a cooperative right input, in `mode`. In `multiply` mode
 /// row 0 of A is `-0`, so its sums start from `+0` only if they end `+0`.
 fn float_products_are_metals_sequential_fused_sums(
     mode: FloatMode,
+    profile: (&str, &[SubgroupSize]),
+) {
+    fused_sums_of(FLOAT, mode, profile);
+}
+
+/// [`float_products_are_metals_sequential_fused_sums`] over `fixture`'s variants.
+fn fused_sums_of(
+    (fixture, variants): FloatFixture,
+    mode: FloatMode,
     (stem, widths): (&str, &[SubgroupSize]),
 ) {
     let bc = if mode == FloatMode::Plain {
-        bitcode("tns_mm_float")
+        bitcode(fixture)
     } else {
-        respelled(mode.respellings())
+        respelled(fixture, mode.respellings())
     };
     let Some(bc) = bc else {
         return;
     };
     let mut rng = Rng(0xf1_0a7);
-    for (v, &(format, tr)) in FLOAT_VARIANTS.iter().enumerate() {
-        let kernels = [(kernel(&bc, "tns_mm_float", v as u32, stem), widths)];
+    for (v, &(format, tr)) in variants.iter().enumerate() {
+        let kernels = [(kernel(&bc, fixture, v as u32, stem), widths)];
         for spread in [3, 12] {
             // One block each: A 16 x 32, B 32 x 16 (or 16 x 32 transposed), C 16 x 16.
             let mut a: Vec<u32> = (0..512).map(|_| format.random(&mut rng, spread)).collect();
@@ -557,11 +612,12 @@ fn float_products_are_metals_sequential_fused_sums(
     }
 }
 
-/// `tns_mm_float` with every spelling of a descriptor's fields `from` respelled `to`, for each
-/// pair (in the descriptor constants and in the helpers' by-value arguments alike), assembled;
-/// `None` without `llvm-as`.
-fn respelled(pairs: &[(&str, &str)]) -> Option<Vec<u8>> {
-    let mut text = std::fs::read_to_string(engine_dir().join("tns_mm_float.ll")).expect("fixture");
+/// `fixture` with every spelling of a descriptor's fields `from` respelled `to`, for each pair (in
+/// the descriptor constants and in the helpers' by-value arguments alike), assembled; `None`
+/// without `llvm-as`.
+fn respelled(fixture: &str, pairs: &[(&str, &str)]) -> Option<Vec<u8>> {
+    let mut text =
+        std::fs::read_to_string(engine_dir().join(format!("{fixture}.ll"))).expect("fixture");
     for (from, to) in pairs {
         assert!(text.contains(from), "{from}");
         text = text.replace(from, to);
@@ -597,7 +653,7 @@ fn unmeasured_forms_are_refused_naming_them() {
     )];
     let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
     for (from, to, why) in cases {
-        let Some(bc) = respelled(&[(from, to)]) else {
+        let Some(bc) = respelled("tns_mm_float", &[(from, to)]) else {
             return;
         };
         let e = compile_bitcode(
