@@ -800,6 +800,7 @@ impl FirstFill {
             acquire: None,
             key: None,
             owner: None,
+            reached_only: false,
         }
     }
 
@@ -828,6 +829,7 @@ impl FirstFill {
                 acquire: None,
                 key: None,
                 owner: None,
+                reached_only: false,
             });
         }
         let zeros = moves.zeros(device, 0)?;
@@ -878,6 +880,7 @@ impl FirstFill {
             acquire: Some((source, target)),
             key: None,
             owner: None,
+            reached_only: false,
         }
     }
 
