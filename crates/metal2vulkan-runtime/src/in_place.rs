@@ -62,7 +62,9 @@
 //!   every byte, but over a buffer that declares its rows' padding unobserved
 //!   (`BufferDescriptor::padding_unobserved`), whose free padding the check of renders that lets
 //!   it change takes ([`Padding::Unobserved`], [`Access::UnobservedRenders`]: never a byte past
-//!   the last row's pitch); an IOSurface plane's rows keep every byte. Plain Metal also writes through a texture beyond its declared usage, and renders
+//!   the last row's pitch); an IOSurface plane's rows keep every byte, but over a buffer that
+//!   declares its rows' padding unobserved, whose padding is free as a buffer's rows' is. Plain
+//!   Metal also writes through a texture beyond its declared usage, and renders
 //!   into one made without `RenderTarget`: such a write binds the texture's usage shadow
 //!   (`texture/usage_shadow.rs`), and such a pass renders through an attachment stand-in
 //!   (`attachment_stand_in.rs`), since the image has neither storage nor attachment usage; the
@@ -513,16 +515,19 @@ impl RowEnds {
 /// buffer may do ([`Access::BufferWrites`]; docs/API.md, section 10, **Kernels**). A render
 /// pass's load and store keep them, but over a buffer that declares them unobserved
 /// (`BufferDescriptor::padding_unobserved`), which lets them change ([`Padding::Unobserved`],
-/// [`Access::UnobservedRenders`]).
+/// [`Access::UnobservedRenders`]): an IOSurface plane's too, as bytes its maker declares
+/// nothing reads cannot tell keeping from changing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Padding {
-    /// Its rows' padding is kept, as every byte beside its texels is: an IOSurface plane's rows,
-    /// a texture whose buffer ends before its last row's pitch, or one whose texels and padding
-    /// share a line of the device's memory with bytes past them ([`Padding::of`]).
+    /// Its rows' padding is kept, as every byte beside its texels is: an IOSurface plane's rows
+    /// over a buffer that does not declare them unobserved, a texture whose buffer ends before
+    /// its last row's pitch, or one whose texels and padding share a line of the device's memory
+    /// with bytes past them ([`Padding::of`]).
     Kept,
-    /// A texture over a buffer's rows, its buffer holding its last row to its pitch, whose
-    /// texels and padding share no line with bytes past them: a shader's writes may change its
-    /// padding.
+    /// A texture over a buffer's rows (an IOSurface plane's only where the buffer declares its
+    /// padding unobserved, which makes it [`Unobserved`](Self::Unobserved)), its buffer holding
+    /// its last row to its pitch, whose texels and padding share no line with bytes past them: a
+    /// shader's writes may change its padding.
     Free,
     /// As [`Free`](Self::Free), of a buffer that declares the bytes between a texture's rows
     /// unobserved (`BufferDescriptor::padding_unobserved`): a render pass's load and store may
@@ -533,9 +538,10 @@ pub(crate) enum Padding {
 
 impl Padding {
     /// The padding of texels laid out as `layout` in a buffer whose first byte lies `start`
-    /// bytes past a multiple of `line` ([`RowEnds::of`]), where `owned` (they lie over a
-    /// buffer's rows, no IOSurface plane's, and the buffer holds their last row to its pitch):
-    /// free where the rows, each to its pitch, share no line with bytes past them.
+    /// bytes past a multiple of `line` ([`RowEnds::of`]), where `owned` (the buffer holds their
+    /// last row to its pitch, and they lie over a buffer's rows, an IOSurface plane's only where
+    /// the buffer declares their padding unobserved: `Texels::padding_owned`): free where the
+    /// rows, each to its pitch, share no line with bytes past them.
     pub(crate) fn of(
         start: u64,
         layout: &crate::linear_plan::BufferLayout,

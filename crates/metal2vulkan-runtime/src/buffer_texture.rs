@@ -1701,9 +1701,10 @@ impl Texels {
 
     /// Whether a shader's writes may change the texels' rows' padding, in the device's lines of
     /// memory of `line` bytes (`in_place::Padding::of`): rows over a buffer's bytes of the CPU's
-    /// or the runtime's memory ([`line_start`](Self::line_start)), no IOSurface plane's
-    /// ([`Texels::padding_owned`]), whose rows, each to its pitch, share no line with bytes past
-    /// them; and a render pass's too, where the buffer declares that padding unobserved
+    /// or the runtime's memory ([`line_start`](Self::line_start)) whose padding is the buffer's
+    /// own ([`Texels::padding_owned`]: an IOSurface plane's only where the buffer declares it
+    /// unobserved), whose rows, each to its pitch, share no line with bytes past them; and a
+    /// render pass's too, where the buffer declares that padding unobserved
     /// (`in_place::Padding::Unobserved`, `BufferDescriptor::padding_unobserved`).
     pub(super) fn padding(&self, line: u64) -> Padding {
         match self.line_start() {
@@ -1715,15 +1716,19 @@ impl Texels {
         }
     }
 
-    /// Whether the texels' rows' padding is their buffer's own (`in_place::Padding`): they lie
-    /// over a buffer's rows, no IOSurface plane's, and the buffer holds their last row to its
-    /// pitch.
+    /// Whether the texels' rows' padding is their buffer's own (`in_place::Padding`): the buffer
+    /// holds their last row to its pitch, and they lie over a buffer's rows, or over an IOSurface
+    /// plane's where the buffer declares the bytes between a texture's rows unobserved
+    /// (`BufferDescriptor::padding_unobserved`). Metal keeps a plane's padding under every
+    /// command, but bytes its maker declares nothing reads cannot tell keeping from changing;
+    /// without the declaration a plane's padding is kept.
     pub(super) fn padding_owned(&self) -> bool {
         let to_pitch = BufferLayout {
             row_bytes: self.layout.row_pitch,
             ..self.layout
         };
-        !self.surface && to_pitch.end() <= self.buffer.length()
+        (!self.surface || self.buffer.padding_unobserved())
+            && to_pitch.end() <= self.buffer.length()
     }
 
     /// The texture's resource options (the `options` field), its hazard tracking mode resolved.

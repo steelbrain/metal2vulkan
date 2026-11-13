@@ -171,8 +171,11 @@ pub struct BufferDescriptor<'a> {
     /// layout moves and a render pass's load and store operations write them, so they may change
     /// to any value whenever the texture is made or used. No other byte changes: one past the
     /// image's subresources is reached by no operation on it, and a texel's bytes are the
-    /// texture's. Only for a buffer of the runtime's own memory (`Zero`, `Copy` or `CopyHost`
-    /// contents); refused (`Invalid`, `PaddingUnobservedNoCopy`) with `NoCopy` contents. A buffer
+    /// texture's. A texture of an IOSurface plane over the buffer
+    /// (`Buffer::new_texture_with_iosurface_plane`) takes the declaration too: Metal keeps a
+    /// plane's padding, but bytes nothing reads cannot tell keeping from changing. Only for a
+    /// buffer of the runtime's own memory (`Zero`, `Copy` or `CopyHost` contents); refused
+    /// (`Invalid`, `PaddingUnobservedNoCopy`) with `NoCopy` contents. A buffer
     /// the runtime lays in fresh pages it imports (a long one on a device whose pointer imports
     /// cost submissions nothing, `WorkCounts::fresh_page_buffers_made`) takes its textures in place
     /// where the device's check of such pages passed: there the declaration lets a render pass's
