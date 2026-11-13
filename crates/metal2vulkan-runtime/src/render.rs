@@ -13560,7 +13560,7 @@ const INPUT_ATTACHMENT: metal2vulkan::vk::ImageUsageFlags =
 
 /// Whether `target`'s texture is memoryless.
 fn memoryless(target: &Target) -> bool {
-    target.texture.storage_mode() == super::values::StorageMode::Memoryless
+    target.texture.is_memoryless()
 }
 
 /// The clears of color attachments a pass's first instance leaves out, recorded before the pass,

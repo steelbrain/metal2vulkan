@@ -249,7 +249,7 @@ use super::resource::ResourceKey;
 use super::texture::{copy_units, image_aspects, Texture};
 use super::texture_descriptor::TextureDescriptor;
 use super::tracker::{Access, Barrier, Use};
-use super::values::{ResourceOptions, StorageMode};
+use super::values::ResourceOptions;
 use super::Device;
 use crate::device::functions::Vk;
 use ash::vk;
@@ -1301,7 +1301,7 @@ pub(super) fn color_copy(
     if destination.target.extent != source.extent {
         return Err(problem(call, RenderPassProblem::ResolveSize(which)));
     }
-    let copied = source.texture.storage_mode() != StorageMode::Memoryless
+    let copied = !source.texture.is_memoryless()
         && source
             .texture
             .image_plan()?
@@ -1333,7 +1333,7 @@ fn destination(
     if !texture.generation().same(device) {
         return Err(texture.generation().foreign(call, device));
     }
-    if texture.storage_mode() == StorageMode::Memoryless {
+    if texture.is_memoryless() {
         return Err(problem(call, RenderPassProblem::MemorylessResolve(which)));
     }
     let facts = Facts::of(texture.record());
@@ -1632,7 +1632,7 @@ impl ResolveSource {
         if !resolved || !first_subresource_only(device) || at_first_subresource(source) {
             return Ok(None);
         }
-        let copied = source.texture.storage_mode() != StorageMode::Memoryless
+        let copied = !source.texture.is_memoryless()
             && source
                 .texture
                 .image_plan()?

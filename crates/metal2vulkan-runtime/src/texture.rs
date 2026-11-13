@@ -457,6 +457,9 @@ pub(super) struct TextureShared {
     retain: Weak<Retain>,
     /// What this texture presents of its image.
     record: ViewRecord,
+    /// Its storage mode is `Memoryless` ([`Texture::is_memoryless`]): as it was made, which no
+    /// storage it moves to or presents later changes, so the answer takes no hold of its parts.
+    memoryless: bool,
     /// The texture a view was made from (`parentTexture`).
     parent: Option<Texture>,
     /// The texture's `gpuResourceID`, its own also for a view (`resource_ids.rs`).
@@ -5444,6 +5447,13 @@ impl Texture {
             },
             Storage::Texels(_) | Storage::Alias { .. } | Storage::Shadow { .. } => None,
         };
+        let options = match &storage {
+            Storage::Image(image) => image.options,
+            Storage::Texels(texels)
+            | Storage::Alias { texels, .. }
+            | Storage::Shadow { texels, .. } => texels.options(),
+        };
+        let memoryless = matches!(options.storage_mode(), Ok(StorageMode::Memoryless));
         let mut retain = None;
         let shared = Arc::new_cyclic(|shared| {
             let made = Arc::new(Retain(Weak::clone(shared)));
@@ -5465,6 +5475,7 @@ impl Texture {
                 }),
                 retain: weak,
                 record,
+                memoryless,
                 parent,
                 id,
                 label: Mutex::new(None),
@@ -5634,7 +5645,7 @@ impl Texture {
     /// Whether the texture is memoryless: it has no memory, so a command that uses it fails its
     /// command buffer, its views are nil, and its CPU access moves nothing (the module docs).
     pub(super) fn is_memoryless(&self) -> bool {
-        self.storage_mode() == StorageMode::Memoryless
+        self.0.memoryless
     }
 
     /// Nil (`Nil`, `StorageMode`) for a view of a memoryless texture, a texture buffer's too, as

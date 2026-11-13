@@ -1414,7 +1414,7 @@ fn taken_actions(descriptor: &RenderPassDescriptor) -> RenderPassDescriptor {
 
 /// Whether `texture` is memoryless.
 fn memoryless(texture: &Texture) -> bool {
-    texture.storage_mode() == super::values::StorageMode::Memoryless
+    texture.is_memoryless()
 }
 
 /// The largest render target width and height Metal renders: a pass without attachments wider or

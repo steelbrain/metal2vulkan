@@ -160,6 +160,9 @@ impl ResourceRef<'_> {
     /// Whether the resource is memoryless: a memoryless texture or texture buffer, whose use
     /// fails Metal's command buffer (`CommandBufferError::InvalidResource`).
     pub(super) fn is_memoryless(&self) -> bool {
-        self.storage_mode() == StorageMode::Memoryless
+        match self {
+            ResourceRef::Texture(texture) => texture.is_memoryless(),
+            _ => self.storage_mode() == StorageMode::Memoryless,
+        }
     }
 }

@@ -131,7 +131,6 @@ use super::resource::ResourceKey;
 use super::texture::heap_tiled::metal_compresses_layout;
 use super::texture_descriptor::TextureLayout;
 use super::tracker::{Barrier, Use};
-use super::values::StorageMode;
 use super::Device;
 use ash::vk;
 use metal2vulkan::device::{DriverFact, UnstoredDontCarePolicy};
@@ -296,7 +295,7 @@ impl PassReach {
 
 /// Whether `target`'s texture is memoryless.
 fn memoryless(target: &Target) -> bool {
-    target.texture.storage_mode() == StorageMode::Memoryless
+    target.texture.is_memoryless()
 }
 
 /// The clear value a `DontCare` load that clears gives a color attachment of `pf`: the format's

@@ -81,7 +81,7 @@ use super::resource::ResourceKey;
 use super::texture::Texture;
 use super::texture_descriptor::TextureDescriptor;
 use super::tracker::{Access, Barrier, Use};
-use super::values::{ResourceOptions, StorageMode};
+use super::values::ResourceOptions;
 use super::view_plan::{keeps_components, reinterpretation_refused};
 use super::Device;
 use crate::device::functions::Vk;
@@ -163,7 +163,7 @@ impl Planes {
         // The copies read and write the attachment's image through its copy-format views. A
         // memoryless attachment's run on its backing, which the pass makes where it splits into
         // instances or merges the planes after its last (`render.rs`), or never run.
-        let memoryless = target.texture.storage_mode() == StorageMode::Memoryless;
+        let memoryless = target.texture.is_memoryless();
         if !memoryless && !framebuffer_fetch::planes_copies(target.texture.image_plan()?) {
             return Err(
                 match framebuffer_fetch::planes_copies_gap(format, profile) {
