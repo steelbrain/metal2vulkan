@@ -139,7 +139,7 @@ fn a_recovery_carries_a_private_exportable_buffer_over_its_own_memory() {
         // The buffers carried with their contents are not counted: a read buffer let go of may
         // be among them. The export after the recovery shows this one's.
         assert!(
-            said[0].contains(" 1 textures over the buffers carried ")
+            said[0].contains(" 1 textures over the buffers carried,")
                 && !said[0].contains("exportable memory")
                 && !said[0].contains("opaque-fd"),
             "{export:?}: {said:?}"
