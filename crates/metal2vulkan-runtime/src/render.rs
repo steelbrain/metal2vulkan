@@ -11354,6 +11354,10 @@ impl RenderLowering {
             .pipeline
             .as_ref()
             .and_then(RenderPipelineState::downgrade);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        if !self.replaying {
+            device.line().hooks.reach_keep();
+        }
         let keeps = plain && !self.replaying && self.core.noted_now(&live.noted);
         // What kept a direct draw of its own from being kept (`WorkCounts::draws_unkept`).
         if !keeps && !self.replaying && !self.rerouting && !empty && !culled {

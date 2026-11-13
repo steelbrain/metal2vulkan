@@ -3,7 +3,8 @@
 //! Vulkan draw command alone (`WorkCounts::draws_as_before`), with the same commands, barriers
 //! and pixels as the same draws with a call between each that changes nothing; and only then: not
 //! a draw of other arguments, an indirect draw, a draw that writes memory, a draw after a no-copy
-//! buffer moved (its binding may read elsewhere), nor a draw that meets a notice its device
+//! buffer moved (its binding may read elsewhere) or after another thread made a buffer over host
+//! pages while the draw before it took every step, nor a draw that meets a notice its device
 //! announces at every occurrence, which announces it at every draw. A draw again after calls that
 //! bound other buffers, offsets or bytes at its buffer slots, or other textures or sampler states
 //! at its texture and sampler slots, rebinds those alone (`render/draw_again/rebound.rs`,
@@ -648,6 +649,90 @@ fn a_draw_after_a_no_copy_buffer_moved_takes_every_step() {
     assert_eq!(moving.counted(as_before), 3 * drawn_alone(2));
     assert_eq!(moving.commands, reference.commands);
     assert_eq!(moving.words, reference.words, "the pixels of the draws");
+}
+
+/// A buffer over host pages made on another thread while a draw takes every step, after its uses'
+/// noting and before its keeping (`device/line.rs`'s `Hooks::at_keep` holds the draw there until
+/// it is made), moves what draws read that changes with no call of the encoder (the host aliases'
+/// version, `noted_apart.rs`), as the device's in-place check does making its own buffers
+/// (`in_place_check.rs`): the draw is kept under the state its steps began in, and the next draw
+/// takes every step, finding it moved. In a build with debug assertions the draw is the first draw
+/// again, whose check compares nothing once the state moved under it. The pixels are those of the
+/// draws with nothing made meanwhile.
+#[test]
+fn a_buffer_over_host_pages_made_while_a_draw_takes_every_step_is_met_by_the_next_draw() {
+    let page = Page::new();
+    let scratch = Scratch::new("draw-again-meanwhile");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = adding_state(&device);
+    let plain = |encoder: &mut RenderCommandEncoder| rectangles(encoder, &state, |_| {});
+    warm(&device, plain);
+    let as_before = |counts: &WorkCounts| counts.draws_as_before;
+    let under = |counts: &WorkCounts| counts.draws_unlike_kept_under;
+    let reference = run(&device, plain);
+    assert_eq!(reference.counted(as_before), drawn_alone(HITS));
+    // The draw held at its keeping: the first draw again, which takes every step, in a build with
+    // debug assertions; else the run's first draw, the only one that does.
+    let held = u64::from(cfg!(debug_assertions));
+    let (ask, asked) = std::sync::mpsc::channel::<()>();
+    let (tell, told) = std::sync::mpsc::channel::<()>();
+    let (end, ended) = std::sync::mpsc::channel::<()>();
+    let (on, over) = (&device, &page);
+    let (made, ran, moved) = std::thread::scope(|scope| {
+        let maker = scope.spawn(move || {
+            asked.recv().ok()?;
+            let before = on.shared().aliases.version();
+            // SAFETY: the page outlives the buffer (dropped after the device), and no command
+            // uses the buffer.
+            let made = unsafe {
+                on.new_buffer_with_bytes_no_copy(
+                    over.memory(),
+                    BYTES as u64,
+                    ResourceOptions::shared(),
+                    None,
+                )
+            };
+            let moved = on.shared().aliases.version() != before;
+            tell.send(()).ok()?;
+            match made {
+                // It goes once the run ended, so the version moves once inside the run.
+                Ok(buffer) => {
+                    ended.recv().ok()?;
+                    drop(buffer);
+                    Some(moved)
+                }
+                Err(Error::Unsupported(gap)) => {
+                    eprintln!("DRAW-AGAIN: the device imports no host memory: {gap:?}");
+                    None
+                }
+                Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+            }
+        });
+        let hook: crate::device::line::hooks::AtKeep = Box::new(move || {
+            ask.send(()).unwrap();
+            told.recv().unwrap();
+        });
+        *device.line().hooks.at_keep.lock().unwrap() = Some((held, hook));
+        let made = run(&device, plain);
+        // A hook that did not run goes, with its sender: the maker then ends at once.
+        let unran = device.line().hooks.at_keep.lock().unwrap().take();
+        let ran = unran.is_none();
+        drop(unran);
+        // Sent to a maker that made a buffer; one that made none ended already.
+        let _ = end.send(());
+        (made, ran, maker.join().unwrap())
+    });
+    assert!(ran, "the hook ran");
+    let Some(moved) = moved else {
+        return;
+    };
+    assert!(moved, "the buffer's making moved the host aliases' version");
+    // The draw after the held one took every step, finding the version moved; the rest drew
+    // again as before.
+    assert_eq!(made.counted(under), 1);
+    assert_eq!(made.counted(as_before), reference.counted(as_before) - 1);
+    assert_eq!(made.words, reference.words, "the pixels of the draws");
 }
 
 /// A draw that meets a notice its device announces at every occurrence (`UnsizedPoints`: points

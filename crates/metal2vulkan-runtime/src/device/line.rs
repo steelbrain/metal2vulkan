@@ -848,13 +848,18 @@ impl Device {
     }
 }
 
-/// The device tests' hooks into a line's recoveries (`tests::device_recovery`), in those tests'
-/// builds only: each set on one device, so a test's settings reach no other test's device.
+/// The device tests' hooks into a line's recoveries (`tests::device_recovery`) and its render
+/// encoders' draws (`tests::draw_again`), in those tests' builds only: each set on one device, so
+/// a test's settings reach no other test's device.
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) mod hooks {
+    use super::lock;
     use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
     use std::time::Duration;
+
+    /// What runs at a draw's keeping ([`Hooks::at_keep`]).
+    pub(crate) type AtKeep = Box<dyn FnOnce() + Send>;
 
     /// What a test set of a line's recoveries.
     #[derive(Default)]
@@ -876,5 +881,29 @@ pub(crate) mod hooks {
         /// as Metal's timed-out command buffer (`command_buffer/stall.rs`), in place of its
         /// `WATCHDOG`.
         pub(crate) watchdog_after: Mutex<Option<Duration>>,
+        /// Run once, on the thread that lowers it, as the draw that is the count's (from zero)
+        /// to take every step since it was set reaches its keeping, after its uses' noting: what
+        /// another thread may do at that moment (`render/draw_again.rs`).
+        pub(crate) at_keep: Mutex<Option<(u64, AtKeep)>>,
+    }
+
+    impl Hooks {
+        /// A draw that took every step reached its keeping: run [`at_keep`](Self::at_keep)'s
+        /// hook where it is this draw's, without its lock.
+        pub(crate) fn reach_keep(&self) {
+            let mut at_keep = lock(&self.at_keep);
+            let hook = match at_keep.as_mut() {
+                Some((0, _)) => at_keep.take(),
+                Some((count, _)) => {
+                    *count -= 1;
+                    None
+                }
+                None => None,
+            };
+            drop(at_keep);
+            if let Some((_, hook)) = hook {
+                hook();
+            }
+        }
     }
 }
