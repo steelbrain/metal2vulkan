@@ -10,16 +10,19 @@
 //! their mean and their most), drawn from a grid of small triangles over the screen
 //! (`tob_triangle`, `tob_solid`). Drawn region by region, its command buffer runs well under a
 //! second, so a device that cut nothing would still not reach amdgpu's 2 s job timeout: at the
-//! host step, cold, 515 ms of an Iris Xe's GPU, in 20 pieces of at most 32 ms, and 300 ms of a
-//! Radeon 780M's, in 20 pieces of at most 36 ms (Mesa 26.2.6). Fanned out it is 110 ms and 84 ms
-//! cold, 40 ms and 35 ms warm, after probes of 1.1 ms and 0.5 ms. On an RTX 3090 (NVIDIA
-//! 620.70.06) it is 62 ms, in 20 pieces of at most 3.0 ms, and fanned out 89 ms cold, 82 ms of it
-//! the step making the fan-out's two pipelines, and 6.0 ms warm, after a probe of 1.5 ms. The
-//! frame runs twice, cold, then warm, the pipelines it draws with made, each printed as a
-//! `RATE-MAP-PIECES` line: the map's
-//! regions, the command buffer's GPU time, the pieces and ranges it was cut into, and its pieces'
-//! GPU times where the device times them, and the host step's time and the pipelines it made
-//! (`WorkCounts::host_step_nanos`, `host_step_pipelines_made`, `render_pipeline_create_nanos`).
+//! host step, cold, 514 ms of an Iris Xe's GPU, in 20 pieces of at most 32 ms, and 299 ms of a
+//! Radeon 780M's, in 20 pieces of at most 36 ms (Mesa 26.2.6). Fanned out it is 47 ms and 42 ms
+//! cold, 41 ms and 29 ms warm, after probes of 1.3 ms and 0.4 ms. On an RTX 3090 (NVIDIA
+//! 620.70.06) it is 71 ms, in 20 pieces of at most 2.7 ms, and fanned out 44 ms cold, the step
+//! waiting for the fan-out's pipelines `commit` began, and 7.5 ms warm, after a probe of 1.5 ms.
+//! The frame runs twice, cold, then warm, the pipelines it draws with made, each printed as a
+//! `RATE-MAP-PIECES` line: the map's regions, the command buffer's GPU time, the pieces and
+//! ranges it was cut into, and its pieces' GPU times where the device times them, and the host
+//! step's time and the pipelines it made
+//! (`WorkCounts::host_step_nanos`, `host_step_pipelines_made`, `render_pipeline_create_nanos`),
+//! and the fan-out's pipelines `commit` began that it found made or waited for
+//! (`rate_map_fan_out_pipelines_ready`, `rate_map_fan_out_pipelines_waited`), and the program's
+//! time in `commit`, on the host's clock.
 //! Checked, each time: the command buffer was cut into pieces and its largest command into
 //! ranges, and no piece ran past [`PIECE_LIMIT`]. Twice: over a range the call
 //! names, from the CPU's records, which `commit` records (`rate_mapped_pieces`), and over a range
@@ -50,7 +53,7 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::{
     RasterizationRateMap as CompiledMap, RateMapDescriptor, RateMapLayerDescriptor, RegionLimits,
 };
-use metal2vulkan::device::{RateMapRegionPolicy, VkFeature};
+use metal2vulkan::device::{PipelineWaitPolicy, RateMapRegionPolicy, VkFeature};
 use metal2vulkan::metal::{
     IndexType, IndirectCommandType, PixelFormat, PrimitiveType, TextureUsage,
 };
@@ -60,7 +63,7 @@ use metal2vulkan_runtime::{
     CommandBufferStatus, IndirectCommandBufferDescriptor, LoadAction, PipelineOptions,
     RenderPassDescriptor, ResourceOptions, StoreAction, TextureDescriptor, WorkCounts,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The map's screen, and its quality samples on both axes.
 const SCREEN: [u32; 2] = [3648, 1734];
@@ -90,7 +93,7 @@ const PIECE_LIMIT: Duration = Duration::from_secs(1);
 /// The counts of `work`: the pieces past the first, the index ranges past the first, the pieces
 /// timed, their GPU time and the longest's; the probes, the draws they flagged, the draws fanned
 /// out and the probes' GPU time.
-fn counts(work: &WorkCounts) -> [u64; 12] {
+fn counts(work: &WorkCounts) -> [u64; 14] {
     [
         work.rate_map_pieces,
         work.rate_map_index_ranges,
@@ -104,6 +107,8 @@ fn counts(work: &WorkCounts) -> [u64; 12] {
         work.host_step_nanos,
         work.host_step_pipelines_made,
         work.render_pipeline_create_nanos,
+        work.rate_map_fan_out_pipelines_ready,
+        work.rate_map_fan_out_pipelines_waited,
     ]
 }
 
@@ -156,8 +161,10 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32) {
     let messages = Messages::default();
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
         options.layers.clear();
-        // A consumer's device keeps no execution record.
+        // A consumer's device keeps no execution record, and makes the pipelines a command
+        // buffer waits for on the device's pool, the bound its default.
         options.record_executions = false;
+        options.policy.pipeline_waits = PipelineWaitPolicy::default();
         options.policy.rate_map_regions = policy;
     })
     .unwrap();
@@ -310,7 +317,9 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32) {
         }
         .unwrap();
         encoder.end_encoding().unwrap();
+        let committing = Instant::now();
         command_buffer.commit().unwrap();
+        let commit = committing.elapsed();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
         let gpu = command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap();
@@ -319,7 +328,7 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32) {
         let delta = |i: usize| after[i] - before[i];
         let [pieces, ranges, timed, nanos] = [0, 1, 2, 3].map(delta);
         let [probes, flagged, fanned, probe_nanos] = [5, 6, 7, 8].map(delta);
-        let [stepped, made, made_nanos] = [9, 10, 11].map(delta);
+        let [stepped, made, made_nanos, ready, waited] = [9, 10, 11, 12, 13].map(delta);
         let most = Duration::from_nanos(after[4]);
         let indices: u64 = draws.iter().map(|&count| u64::from(count)).sum();
         let mean = Duration::from_nanos(nanos / timed.max(1));
@@ -334,7 +343,8 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32) {
              time, {} pieces ({ranges} index ranges past the first); {timed} pieces timed, the \
              longest {:.2} ms, the mean {:.2} ms; {probes} probes of {:.2} ms, {flagged} draws \
              flagged, {fanned} fanned out; the host step {:.1} ms, {made} pipelines made there, \
-             {:.1} ms creating render pipelines",
+             {:.1} ms creating render pipelines; the fan-out's pipelines {ready} ready at the \
+             step, {waited} waited for; the commit {:.1} ms",
             SCREEN[0],
             SCREEN[1],
             size.width,
@@ -346,6 +356,7 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32) {
             probe_nanos as f64 * 1e-6,
             stepped as f64 * 1e-6,
             made_nanos as f64 * 1e-6,
+            commit.as_secs_f64() * 1e3,
         );
         match fans {
             true => {
