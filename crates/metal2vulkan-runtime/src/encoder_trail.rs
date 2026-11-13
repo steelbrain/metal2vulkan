@@ -38,8 +38,8 @@
 //!   reads that region and the status words, host-visible, host-coherent memory the pending
 //!   command buffer holds (`upload.rs`), already mapped, and only reads it: a word the GPU
 //!   writes meanwhile may read either value. It takes no lock and waits for nothing. The note
-//!   holds both regions' chunks until the command buffer goes, past its completion. An encoder encoded again (`command_buffer/reencode.rs`) names
-//!   none of its own.
+//!   holds both regions' chunks until the command buffer goes, past its completion. An encoder
+//!   encoded again (`command_buffer/reencode.rs`) names none of its own.
 //! - A submission
 //!   the step makes and waits for itself (a rasterization-rate map's fan-out probe,
 //!   `render/fan_out.rs`, or a predicated loop's check run again, `command_buffer/rerun.rs`)
