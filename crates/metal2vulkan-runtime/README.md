@@ -839,8 +839,9 @@ meanwhile wait for it.
   recovery.
 - The recovery carries the events, the fences, the depth/stencil states, the libraries and their
   functions, the dynamic libraries, the binary archives, the address pools (`AddressPool`, whose slots take buffers after it as before), the
-  uses of guest RAM (`HostRamUse`), the no-copy buffers, the `Private` buffers, the buffers in the
-  runtime's own pages, the `Private` heaps with the buffers placed in them, the textures of
+  uses of guest RAM (`HostRamUse`), the no-copy buffers, the `Private` buffers (exportable ones
+  among them), the buffers in the runtime's own pages, the `Private` heaps with the buffers placed
+  in them, the textures of
   `new_texture`, the textures over the buffers it carried and the views of either, the compute,
   tile, drawing and mesh pipeline states, and the sampler states to the new `VkDevice`: the same
   objects, at the same addresses and resource IDs. A pipeline state's base variant is made again there from what its creation
@@ -861,7 +862,10 @@ meanwhile wait for it.
   out is lost, as a `Private` buffer's contents are); its import gate, run
   resolver and dma-buf source are asked again, on the thread that recovers, and must not call
   into the device. Its deallocator runs at its release once no `VkDevice` imports its pages. A
-  `Private` buffer's contents are lost: it reads zero. So are a `Private` heap's, whose buffers
+  `Private` buffer's contents are lost: it reads zero, but for an exportable one, made again over
+  its own memory's payload imported on the new `VkDevice`, at its offset there: the other API's
+  imports reach it still, it keeps whatever that memory holds, and its exports after answer the
+  same memory, with the same allocation size, offset and memory type. So are a `Private` heap's, whose buffers
   placed before go on with it and in which buffers and textures are made again; the textures it
   made before are refused. A texture of `new_texture` is made again in new memory, so its
   contents are lost whatever its storage mode, `Shared` included, as its image was their only copy
@@ -879,7 +883,9 @@ meanwhile wait for it.
   `Managed` buffer without unified memory), detached no-copy buffers, `Shared`, no-copy and
   sparse heaps with the buffers placed in them, heaps' textures, textures over the caller's
   `VkImage`, sparse and shareable textures, textures over buffers left and their views, buffers
-  over the caller's `VkBuffer`, and exportable memory or events. Make it again.
+  over the caller's `VkBuffer`, `Shared` and `Managed` buffers in exportable memory, buffers in an
+  opaque descriptor's dedicated allocation (Vulkan defines no buffer of another device identical to
+  its own) and exportable events. Make it again.
   Metal's objects go on. The recovery's notice counts the buffers, heaps, textures and events it
   carried and left, by kind.
 - The lost `VkDevice` is destroyed once the objects left on it went and, where `Device::raw`

@@ -28,7 +28,11 @@
 //!   (`Heap::carry`).
 //! - **What each kind becomes.** An event: a new timeline semaphore at the value the host saw
 //!   (`EventShared::carry`). A `Private` buffer: new memory, its contents lost with the
-//!   `VkDevice` (it reads zero). A buffer in fresh pages (`fresh_pages.rs`): the same pages
+//!   `VkDevice` (it reads zero); but one in exportable memory, which another API imports
+//!   (`exported_memory.rs`): its block's payload, exported once from the lost `VkDevice` and kept,
+//!   imported again once for every buffer carried from the block, the buffer at its offset there,
+//!   the memory the other API's imports reach still, which it reads as it holds it (an
+//!   exportable buffer re-imported over its own memory keeps whatever that memory holds). A buffer in fresh pages (`fresh_pages.rs`): the same pages
 //!   imported again, its contents and its `contents` pointer as they were (`Buffer::carry`). A
 //!   `Shared` or `Managed` buffer in a block of the runtime's own pages (`memory.rs`'s
 //!   `Holds::PageBuffers`): the block's pages imported again, once for every buffer carried from
@@ -89,8 +93,12 @@
 //!   caller's `VkImage`, a sparse or shareable texture, one over a buffer left, and a view of
 //!   each (`texture/carry.rs`); a buffer over the caller's
 //!   `VkBuffer`, an object of the lost `VkDevice` that only the caller can make again on the
-//!   new one; a buffer in exported memory, and an event whose semaphore was made exportable,
-//!   whose importers hold the lost allocation or semaphore. The recovery's notice counts the
+//!   new one; a `Shared` or `Managed` buffer in exported memory, whose `contents` pointer is that
+//!   memory's mapping, and a buffer in an opaque descriptor's dedicated allocation, whose import
+//!   is dedicated to a buffer "identical to the buffer associated with the imported memory"
+//!   (`VUID-VkMemoryDedicatedAllocateInfo-buffer-01879`), which Vulkan defines no buffer of another
+//!   device to be (`exported_memory.rs`); and an event whose semaphore was made exportable,
+//!   whose importers hold the lost semaphore. The recovery's notice counts the
 //!   buffers, heaps, textures and events it carried and left by kind
 //!   (`Degradation::DeviceRecovered`): a heap's buffers with their heap.
 //! - **Each generation's work reaches its own parts** (`NoticesFor::generation`). A command buffer of the
@@ -554,11 +562,17 @@ pub(crate) enum Left {
     /// Over the caller's `VkBuffer` (`wrapped_buffer.rs`), which is an object of the lost
     /// `VkDevice`, made by the caller.
     Caller,
-    /// In memory another API imports (`exported_memory.rs`), allocated exportable on the lost
-    /// `VkDevice`.
+    /// A `Shared` or `Managed` buffer in memory another API imports (`exported_memory.rs`),
+    /// allocated exportable on the lost `VkDevice`, its `contents` pointer that memory's mapping.
     Exported,
     /// Its making on the new generation failed (out of memory, the driver's refusal).
     Failed,
+    /// A buffer whose memory another API imports as an opaque descriptor, which is the buffer's
+    /// dedicated allocation (`exported_memory.rs`): an import of it is dedicated to a buffer
+    /// "identical to the buffer associated with the imported memory"
+    /// (`VUID-VkMemoryDedicatedAllocateInfo-buffer-01879`), and Vulkan defines no buffer of
+    /// another device so.
+    DedicatedOpaqueFd,
 }
 
 /// Why a heap stays the lost generation's, with the buffers placed in it (`Heap::carry`).
@@ -581,7 +595,9 @@ impl HeapLeft {
         match left {
             Left::Pooled => HeapLeft::Pooled,
             Left::NoCopy => HeapLeft::NoCopy,
-            Left::Heap | Left::Caller | Left::Exported | Left::Failed => HeapLeft::Failed,
+            Left::Heap | Left::Caller | Left::Exported | Left::Failed | Left::DedicatedOpaqueFd => {
+                HeapLeft::Failed
+            }
         }
     }
 }
@@ -608,7 +624,7 @@ pub(crate) struct Carried {
     /// The uses of guest RAM carried, and those the new generation refused.
     ram_uses: (u64, u64),
     /// The buffers left the lost generation's, by why.
-    left: [u64; 6],
+    left: [u64; 7],
     /// The `Private` heaps carried, their bytes, which read zero, and the buffers placed in them
     /// carried with them.
     heaps: (u64, u64, u64),
@@ -637,8 +653,10 @@ impl Carried {
             "detached no-copy buffers",
             "heaps' buffers",
             "buffers over the caller's `VkBuffer`",
-            "buffers in exportable memory",
+            "`Shared` or `Managed` buffers in exportable memory",
             "buffers whose making there failed",
+            "buffers in a dedicated opaque-fd allocation (Vulkan defines no identical buffer on \
+             another device)",
         ];
         let heap_kinds = [
             "`Shared` heaps",

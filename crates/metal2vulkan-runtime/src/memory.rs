@@ -1638,9 +1638,18 @@ pub(super) struct Block {
     /// (`BlockMaker::make_pages`), or carried ([`place_carried`]).
     pooled_pages: bool,
     /// It is a carried buffer's pages imported again on the device's next generation
-    /// ([`place_carried`]): the buffers carried from one block of the lost generation lie in it at
-    /// their offsets, and nothing else is placed in it, so it goes once they do.
+    /// ([`place_carried`]), or a carried exportable buffer's payload ([`place_carried_export`]):
+    /// the buffers carried from one block of the lost generation lie in it at their offsets, and
+    /// nothing else is placed in it, so it goes once they do.
     carried: bool,
+    /// The descriptor of its payload, for a block of exportable buffers ([`exported`](Self::exported))
+    /// that a recovery carried buffers from or into (`exported_memory.rs`): exported once, from
+    /// the block of the generation a recovery first carries buffers from ([`carried_payload`]),
+    /// and kept by each block that imports it on a later generation, so that every import takes
+    /// a clone of it and an export of a carried buffer answers one. Closed with the last block
+    /// that keeps it.
+    #[cfg(unix)]
+    payload: Option<Payload>,
     /// How long its making took ([`BlockMaker::make`]): zero for an import. Read by the crate's
     /// tests alone.
     #[cfg(test)]
@@ -2061,6 +2070,11 @@ impl Placement {
     /// The index of the memory type the placement's memory is of.
     pub(super) fn type_index(&self) -> u32 {
         self.type_index
+    }
+
+    /// What the pool its block lies in holds.
+    pub(super) fn holds(&self) -> Holds {
+        self.holds
     }
 
     /// The bytes placed.
@@ -4273,6 +4287,8 @@ impl BlockMaker {
             zeroed: false,
             pooled_pages: true,
             carried: false,
+            #[cfg(unix)]
+            payload: None,
             #[cfg(test)]
             took: Duration::ZERO,
         }))
@@ -4430,6 +4446,8 @@ impl BlockMaker {
             zeroed,
             pooled_pages: false,
             carried: false,
+            #[cfg(unix)]
+            payload: None,
             #[cfg(test)]
             took: began.elapsed(),
         })
@@ -4779,6 +4797,8 @@ pub(super) unsafe fn import_host(
         zeroed: false,
         pooled_pages: false,
         carried: false,
+        #[cfg(unix)]
+        payload: None,
         #[cfg(test)]
         took: Duration::ZERO,
     };
@@ -4820,6 +4840,8 @@ pub(super) fn import_own_pages(
         zeroed: false,
         pooled_pages: false,
         carried: false,
+        #[cfg(unix)]
+        payload: None,
         #[cfg(test)]
         took: Duration::ZERO,
     };
@@ -4884,6 +4906,8 @@ pub(super) fn place_carried(
                 zeroed: false,
                 pooled_pages: true,
                 carried: true,
+                #[cfg(unix)]
+                payload: None,
                 #[cfg(test)]
                 took: Duration::ZERO,
             };
@@ -4923,6 +4947,226 @@ pub(super) fn place_carried(
     }
     let placement = guard.placement(pool, index, offset, size, addressed.is_some());
     guard.say_placement("placed a carried buffer", &placement, None);
+    Ok(placement)
+}
+
+/// The descriptor of an exportable block's payload that a recovery carries buffers with
+/// ([`Block::payload`]).
+#[cfg(unix)]
+pub(super) type Payload = Arc<std::os::fd::OwnedFd>;
+
+/// A block of exportable buffers of a lost generation, as its recovery carries buffers from it
+/// ([`carried_payload`], [`place_carried_export`]): its payload's descriptor, what it was
+/// allocated exportable as, and the size and memory type of its allocation.
+#[cfg(unix)]
+pub(super) struct CarriedFrom {
+    pub(super) payload: Payload,
+    pub(super) exported: Exported,
+    pub(super) size: u64,
+    pub(super) type_index: u32,
+}
+
+impl Memory {
+    /// The descriptor of `placement`'s block's payload, where the block keeps one
+    /// ([`Block::payload`]): a carried exportable buffer's, which its exports answer clones of.
+    #[cfg(unix)]
+    pub(super) fn payload(&self, placement: &Placement) -> Option<Payload> {
+        let pool = self.pool_ref(placement.holds, placement.type_index);
+        pool.payload(placement.block?)?.payload.clone()
+    }
+}
+
+/// `placement`'s block of exportable buffers ([`allocate_exported`], or a carried one), as a
+/// recovery carries a buffer from it ([`CarriedFrom`]): the descriptor of its payload the block
+/// keeps, else one exported now from its memory by `export` (`vkGetMemoryFdKHR`, which a lost
+/// device's memory may still answer: "It is still legal to call any API command on the device and
+/// child objects", vkspec 5.2.3, "Lost Device"), kept by the block from then on, so that the
+/// block is exported once whatever number of buffers are carried from it. The export is made with
+/// `memory`'s lock released. `None` for a placement in no block of exportable buffers; refused with
+/// the driver's failure.
+#[cfg(unix)]
+pub(super) fn carried_payload(
+    memory: &Mutex<Memory>,
+    export: &ash::khr::external_memory_fd::Device,
+    placement: &Placement,
+) -> Result<Option<CarriedFrom>, vk::Result> {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let Some(index) = placement.block else {
+        return Ok(None);
+    };
+    let pool = (placement.holds, placement.type_index);
+    let (raw, exported, size, type_index) = {
+        let memory = lock(memory);
+        let Some(block) = memory.pool_ref(pool.0, pool.1).payload(index) else {
+            return Ok(None);
+        };
+        let Some(exported) = block.exported else {
+            return Ok(None);
+        };
+        if let Some(payload) = &block.payload {
+            return Ok(Some(CarriedFrom {
+                payload: Arc::clone(payload),
+                exported,
+                size: block.size,
+                type_index: block.type_index,
+            }));
+        }
+        (block.memory, exported, block.size, block.type_index)
+    };
+    let info = vk::MemoryGetFdInfoKHR::default()
+        .memory(raw)
+        .handle_type(exported.handle);
+    // SAFETY: the memory is the block's, live while the placement is, allocated exportable as the
+    // handle type (`allocate_exported`); the functions are its device's.
+    let fd = unsafe { export.get_memory_fd(&info) }?;
+    // SAFETY: a new descriptor Vulkan handed over, the block's from here on.
+    let exported_now = Arc::new(unsafe { OwnedFd::from_raw_fd(fd) });
+    let mut memory = lock(memory);
+    // Another carry's export kept first: this one goes.
+    let payload = match memory.pool(pool.0, pool.1).payload_mut(index) {
+        Some(block) => Arc::clone(block.payload.get_or_insert(exported_now)),
+        None => exported_now,
+    };
+    Ok(Some(CarriedFrom {
+        payload,
+        exported,
+        size,
+        type_index,
+    }))
+}
+
+/// The placement of a buffer carried from `from`, a block of exportable buffers of the device's
+/// lost generation (`exported_memory.rs`): `[offset, offset + size)` of `from`'s payload,
+/// imported here once for every buffer carried from it, in a block of its own in `memory`'s pool
+/// of `holds` and the block's memory type that keeps the payload ([`Block::payload`]), with the
+/// block's device address of `offset` where `addressed` gives the counts of buffers of addresses
+/// made. The import is of the block's own memory type and allocation size
+/// (`VUID-VkMemoryAllocateInfo-allocationSize-01742` for an opaque descriptor), and with the
+/// device-address flag where the device's blocks have it; dedicated to `buffer` where the block
+/// was its buffer's dedicated allocation, a dma-buf's alone (the caller's: an opaque descriptor's
+/// would name a buffer "identical to the buffer associated with the imported memory",
+/// `VUID-VkMemoryDedicatedAllocateInfo-buffer-01879`, which no buffer of another device is
+/// defined to be). It hands the driver a clone of the descriptor ([`Handed`]). Nothing else is
+/// placed in the block, and it goes once the buffers carried there do. The import is made with
+/// `memory`'s lock released. Refused with the driver's failure, and where the range was taken
+/// already (an invariant: each range of the lost block is one buffer's).
+#[cfg(unix)]
+pub(super) fn place_carried_export(
+    memory: &Mutex<Memory>,
+    device: &ash::Device,
+    from: &CarriedFrom,
+    (holds, buffer): (Holds, vk::Buffer),
+    (offset, size): (u64, u64),
+    addressed: Option<&Counters>,
+) -> Result<Placement, Error> {
+    use std::os::fd::AsFd;
+    let pool = (holds, from.type_index);
+    let carried_in = |memory: &Memory| {
+        let pool = memory.pool_ref(pool.0, pool.1);
+        (pool.blocks.iter().enumerate()).find_map(|(index, block)| {
+            let block = block.as_ref()?;
+            let theirs = block.payload.carried
+                && (block.payload.payload.as_ref())
+                    .is_some_and(|payload| Arc::ptr_eq(payload, &from.payload));
+            theirs.then_some(index)
+        })
+    };
+    let found = carried_in(&lock(memory));
+    let index = match found {
+        Some(index) => index,
+        None => {
+            let device_address = lock(memory).device_address;
+            let handed = Handed::of(from.payload.as_fd())
+                .map_err(|_| vulkan(vk::Result::ERROR_TOO_MANY_OBJECTS))?;
+            let mut import = vk::ImportMemoryFdInfoKHR::default()
+                .handle_type(from.exported.handle)
+                .fd(handed.number());
+            let mut flags = vk::MemoryAllocateFlagsInfo::default()
+                .flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+            let mut dedication = vk::MemoryDedicatedAllocateInfo::default().buffer(buffer);
+            let mut info = vk::MemoryAllocateInfo::default()
+                .allocation_size(from.size)
+                .memory_type_index(from.type_index)
+                .push_next(&mut import);
+            if from.exported.dedicated {
+                info = info.push_next(&mut dedication);
+            }
+            if device_address {
+                info = info.push_next(&mut flags);
+            }
+            // SAFETY: `info` and its chain live for the call; the type index and size are the
+            // payload's own, of this physical device, and the buffer it may be dedicated to is
+            // unbound and made for the handle type. The descriptor it takes is the clone, whose
+            // fate is the driver's either way.
+            let raw = match unsafe { crate::creation::allocate_memory(device, &info) } {
+                Ok(raw) => {
+                    // A successful import owns the descriptor: Vulkan closes it with the memory.
+                    handed.imported();
+                    raw
+                }
+                Err(error) => {
+                    // Closed where the driver left it open (`import_dma_buf`).
+                    handed.failed();
+                    return Err(vulkan(error));
+                }
+            };
+            let block = Block {
+                memory: raw,
+                size: from.size,
+                mapped: None,
+                addresses: None,
+                imported: false,
+                pages: None,
+                view: None,
+                type_index: from.type_index,
+                exported: Some(from.exported),
+                fd: false,
+                zeroed: false,
+                pooled_pages: false,
+                carried: true,
+                payload: Some(Arc::clone(&from.payload)),
+                #[cfg(test)]
+                took: Duration::ZERO,
+            };
+            let mut guard = lock(memory);
+            match carried_in(&guard) {
+                // Another carry imported it meanwhile: this import, never added, goes.
+                Some(index) => {
+                    drop(guard);
+                    // SAFETY: nothing is placed in the block, and no command reads it.
+                    unsafe { block.release(device) };
+                    index
+                }
+                None => {
+                    guard.say_block(
+                        "imported a carried exportable buffer's payload again",
+                        &block,
+                    );
+                    guard.add_block(pool, block, from.size, true, 0)
+                }
+            }
+        }
+    };
+    let mut guard = lock(memory);
+    if !guard.pool(pool.0, pool.1).claim(index, (offset, size)) {
+        // An empty block of a carried payload goes with the refusal.
+        let of = guard.pool(pool.0, pool.1);
+        let empty = (of.blocks.get(index))
+            .is_some_and(|block| block.as_ref().is_some_and(PoolBlock::empty));
+        if let Some(block) = empty.then(|| of.take(index)).flatten() {
+            // SAFETY: nothing is placed in the block, and no command reads it.
+            drop(unsafe { guard.let_go(device, block, FreeCause::Dedicated, None) });
+        }
+        return Err(internal("a carried buffer's range of its payload is taken"));
+    }
+    if let Some(counts) = addressed {
+        if let Err(error) = guard.address_block(device, pool, index, counts) {
+            drop(guard.release_range(device, pool, index, offset, size, None));
+            return Err(error);
+        }
+    }
+    let placement = guard.placement(pool, index, offset, size, addressed.is_some());
+    guard.say_placement("placed a carried exportable buffer", &placement, None);
     Ok(placement)
 }
 

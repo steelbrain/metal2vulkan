@@ -1154,6 +1154,11 @@ pub(super) struct ExportedTexels {
     pub(super) row_pitch: u64,
     /// The bytes from a slice's first texel to the next slice's, for a plan of several layers.
     pub(super) slice_pitch: u64,
+    /// The descriptor of the memory's payload, where a recovery carried the buffer into it
+    /// imported again (`exported_memory.rs`'s `Buffer::carried_payload`): the dma-buf the image's
+    /// import takes a clone of, as the memory exports none of its own.
+    #[cfg(unix)]
+    pub(super) payload: Option<crate::memory::Payload>,
 }
 
 /// A texture's image over dma-buf pages, made and bound ([`Device::dma_buf_image`]): its
@@ -1649,7 +1654,17 @@ impl Device {
         let Ok(importer) = shared.host_import.as_ref() else {
             return refuse("the device imports no dma-buf".to_owned());
         };
-        let fd = match self.dma_buf_of(texels.memory) {
+        let fd = match &texels.payload {
+            // A carried buffer's memory is its payload imported again: a clone of its dma-buf.
+            Some(payload) => match payload.try_clone() {
+                Ok(fd) => Ok(Ok(fd)),
+                Err(error) => Ok(Err(format!(
+                    "the buffer memory's dma-buf takes no clone ({error})"
+                ))),
+            },
+            None => self.dma_buf_of(texels.memory),
+        };
+        let fd = match fd {
             Ok(Ok(fd)) => fd,
             Ok(Err(why)) => return refuse(why),
             Err(error) => {

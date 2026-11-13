@@ -3320,6 +3320,7 @@ impl Device {
             at: at + texels.layout.offset,
             row_pitch: texels.layout.row_pitch,
             slice_pitch: texels.layout.slice_pitch,
+            payload: texels.buffer.carried_payload(),
         };
         let made = self.exported_dma_buf_image_unbound(plan, facts, &exported_texels)?;
         let (raw, requirements, report) = match made {

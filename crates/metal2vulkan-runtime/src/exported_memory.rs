@@ -82,18 +82,40 @@
 //!   shared block reaches the whole block: the other API is to read and write the buffer's
 //!   `offset` and `length` alone. The other API writes the memory only while no command of the
 //!   runtime's that uses the buffer is in flight.
-//! - **Device loss.** On a device loss the memory's contents are lost for every import of it too.
-//!   The device recovers from the loss with a new `VkDevice` (`device/line.rs`): the buffer, made
-//!   before, is refused (`NotImplemented(MadeBeforeRecovery)`), and the device makes new buffers
-//!   in new allocations, each exported anew, with a new descriptor; the old imports are to be let
-//!   go of. A device the consumer made answers `DeviceLost`.
+//! - **Device loss.** Vulkan makes the memory's contents undefined for every import of it too
+//!   (vkspec 5.2.3, "Lost Device"). The device recovers from the loss with a new `VkDevice`
+//!   (`device/line.rs`), which carries a `Private` buffer over its own memory (`device/carry.rs`):
+//!   the recovery exports the block it lies in once, from the lost `VkDevice` (whose memory may
+//!   still answer `vkGetMemoryFdKHR`: "It is still legal to call any API command on the device and
+//!   child objects"), keeps that descriptor, and imports a clone of it on the new one, as memory
+//!   of the block's own type and size with the device-address flag of the device's blocks (an
+//!   opaque descriptor's import must match the type and size its payload was made with,
+//!   `VUID-VkMemoryAllocateInfo-allocationSize-01742`), once for every buffer carried from the
+//!   block, each bound at its offset there; a dma-buf's own dedicated allocation is imported
+//!   dedicated to the buffer. So the other API's imports reach the buffer's memory still, and the
+//!   buffer keeps its offset, length and Metal address; an export after it answers a clone of the
+//!   kept descriptor, with the same allocation size, offset and memory type, and a texture over
+//!   the buffer is made again over it, its image's dedicated import taking a clone too. Unlike
+//!   another `Private` buffer, which reads zero after a recovery, an exportable buffer re-imported
+//!   over its own memory keeps whatever that memory holds: the other API may be writing it. Left
+//!   refused (`NotImplemented(MadeBeforeRecovery)`): a `Shared` or `Managed` buffer, whose
+//!   `contents` pointer is the lost memory's mapping, and an opaque descriptor's dedicated
+//!   allocation, whose import names a buffer "identical to the buffer associated with the
+//!   imported memory" (`VUID-VkMemoryDedicatedAllocateInfo-buffer-01879`), which Vulkan defines no
+//!   buffer of another device to be; the device makes new buffers in new allocations, each
+//!   exported anew, with a new descriptor, and the old imports are to be let go of. A device the
+//!   consumer made answers `DeviceLost`.
 
 use super::address::Place;
 use super::buffer::LINEAR_IMAGE_ALIGNMENT;
 use super::buffer::{buffer_class, placed, usage, BufferParts, Modes, Naming, Owner};
+use super::device::carry::Left;
 use super::device::lock;
 use super::error::{invalid, nil, vulkan, Error, Problem};
-use super::memory::{allocate_exported, Exported, DMA_BUF_HANDLE, EXPORT_HANDLE};
+use super::memory::{
+    allocate_exported, carried_payload, place_carried_export, Exported, Payload, Placement,
+    DMA_BUF_HANDLE, EXPORT_HANDLE,
+};
 use super::values::ResourceOptions;
 use super::{Buffer, Device};
 use crate::address::AddressPlacement;
@@ -431,6 +453,110 @@ impl Device {
     }
 }
 
+impl Device {
+    /// A `VkBuffer` of `size` bytes, made for the handle type of `lost`'s block as an exportable
+    /// buffer is, bound at `lost`'s offset in that block's payload imported here
+    /// (`memory::place_carried_export`): `lost` the placement of a buffer of `from`, the device's
+    /// lost generation, that its recovery carries here, in a block of exportable buffers (the
+    /// module docs). The buffer and its placement; why it is left where the block is an opaque
+    /// descriptor's dedicated allocation, which Vulkan names no buffer of another device
+    /// identical to (`Left::DedicatedOpaqueFd`), or the export, the buffer, the import or the bind
+    /// fails, or the buffer here takes another memory type, more bytes or another alignment than
+    /// its placement has (`Left::Failed`).
+    pub(super) fn buffer_in_carried_export(
+        &self,
+        size: u64,
+        from: &Device,
+        lost: &Placement,
+    ) -> Result<(vk::Buffer, Placement), Left> {
+        let from_shared = from.shared();
+        let exported = lock(&from_shared.memory).exported(lost);
+        let Some((exported, _)) = exported else {
+            return Err(Left::Failed);
+        };
+        if exported.dedicated && exported.handle == EXPORT_HANDLE {
+            return Err(Left::DedicatedOpaqueFd);
+        }
+        let export = MemoryExport::of_handle(exported.handle).ok_or(Left::Failed)?;
+        let (lost_exports, exports) = match export {
+            MemoryExport::OpaqueFd => (&from_shared.opaque_fd, &self.shared().opaque_fd),
+            MemoryExport::DmaBuf => (&from_shared.dma_buf_export, &self.shared().dma_buf_export),
+        };
+        let (Some(lost_exports), Some(_)) = (lost_exports, exports) else {
+            return Err(Left::Failed);
+        };
+        let block = carried_payload(&from_shared.memory, &lost_exports.functions, lost);
+        let Ok(Some(block)) = block else {
+            return Err(Left::Failed);
+        };
+        let shared = self.shared();
+        let raw_device = shared.vk();
+        // A dma-buf's import takes the memory types its query answers (`vkGetMemoryFdPropertiesKHR`),
+        // which the block's own must be among.
+        if export == MemoryExport::DmaBuf {
+            use std::os::fd::AsFd;
+            let Ok(importer) = shared.host_import.as_ref() else {
+                return Err(Left::Failed);
+            };
+            // SAFETY: the importer is this device's, and the descriptor a dma-buf.
+            let types = unsafe { importer.dma_buf_types(raw_device, block.payload.as_fd()) };
+            if types.map_or(true, |types| types & (1 << block.type_index) == 0) {
+                return Err(Left::Failed);
+            }
+        }
+        let mut external =
+            vk::ExternalMemoryBufferCreateInfo::default().handle_types(exported.handle);
+        let info = shared.sharing().buffer(
+            vk::BufferCreateInfo::default()
+                .size(size)
+                .usage(usage(shared.device_address))
+                .push_next(&mut external),
+        );
+        // SAFETY: the device is live and `info` and its chain valid.
+        let raw =
+            unsafe { crate::creation::buffer(raw_device, &info) }.map_err(|_| Left::Failed)?;
+        shared.counts.buffer_made(info.usage);
+        // SAFETY: `raw` is a live buffer of this device.
+        let requirements = unsafe { raw_device.get_buffer_memory_requirements(raw) };
+        let (offset, placed) = (lost.offset, lost.size());
+        let fits = requirements.memory_type_bits & 1 << block.type_index != 0
+            && requirements.size <= placed
+            && offset % requirements.alignment.max(1) == 0;
+        let addressed = lost.address.is_some().then_some(&*shared.counts);
+        let placement = match fits {
+            true => place_carried_export(
+                &shared.memory,
+                raw_device,
+                &block,
+                (lost.holds(), raw),
+                (offset, placed),
+                addressed,
+            )
+            .ok(),
+            false => None,
+        };
+        let Some(placement) = placement else {
+            // SAFETY: the buffer is unused.
+            unsafe { release::object(raw_device, raw) };
+            return Err(Left::Failed);
+        };
+        // SAFETY: the placement is the payload's memory at the buffer's offset in it, at least the
+        // buffer's size, of a type it takes and at its alignment (its own dedicated import, at 0,
+        // where the block was dedicated); the buffer is unbound.
+        if unsafe {
+            crate::creation::bind_buffer(raw_device, raw, placement.memory, placement.offset)
+        }
+        .is_err()
+        {
+            // SAFETY: the buffer is unused.
+            unsafe { release::object(raw_device, raw) };
+            lock(&shared.memory).free(raw_device, &placement);
+            return Err(Left::Failed);
+        }
+        Ok((raw, placement))
+    }
+}
+
 impl Buffer {
     /// No Metal counterpart (a runtime extension): the buffer's memory as a new opaque file
     /// descriptor (`vkGetMemoryFdKHR`, `VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT`), with what an
@@ -446,9 +572,10 @@ impl Buffer {
     ///
     /// Refused: a buffer not made exportable as an opaque file descriptor
     /// ([`Device::new_exportable_buffer`], or `MemoryExport::OpaqueFd`; `Invalid`,
-    /// `Problem::NotExportable`), one made before its device's recovery
-    /// (`NotImplemented(MadeBeforeRecovery)`) or on a lost device (`DeviceLost`), and the driver's
-    /// failure.
+    /// `Problem::NotExportable`), one made before its device's recovery that the recovery left
+    /// (`NotImplemented(MadeBeforeRecovery)`; the module docs) or on a lost device (`DeviceLost`),
+    /// and the driver's failure. After a recovery that carried the buffer, the descriptor is a
+    /// clone of its payload's, with the allocation size, offset and memory type it had.
     pub fn export_memory_fd(&self) -> Result<ExportedMemory, Error> {
         // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
         let _held = self.held_parts();
@@ -468,9 +595,10 @@ impl Buffer {
     /// ([`Buffer::external_write_done`]).
     ///
     /// Refused: a buffer not made exportable as a dma-buf (`MemoryExport::DmaBuf`; `Invalid`,
-    /// `Problem::NotExportable`), one made before its device's recovery
-    /// (`NotImplemented(MadeBeforeRecovery)`) or on a lost device (`DeviceLost`), and the driver's
-    /// failure.
+    /// `Problem::NotExportable`), one made before its device's recovery that the recovery left
+    /// (`NotImplemented(MadeBeforeRecovery)`; the module docs) or on a lost device (`DeviceLost`),
+    /// and the driver's failure. After a recovery that carried the buffer, the descriptor is a
+    /// clone of its payload's, with the allocation size, offset and memory type it had.
     pub fn export_memory_dma_buf(&self) -> Result<ExportedMemory, Error> {
         // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
         let _held = self.held_parts();
@@ -504,21 +632,40 @@ impl Buffer {
         // The zeros it waits for as it was made go first, alone (`Buffer::settle_first_work`):
         // the other API may write the memory at once.
         self.settle_first_work(self.at(0).0)?;
-        let info = vk::MemoryGetFdInfoKHR::default()
-            .memory(memory)
-            .handle_type(exported.handle);
-        // SAFETY: the memory is the buffer's, live while the buffer is, allocated exportable as
-        // the handle type (`allocate_exported`); the functions are the device's.
-        let fd = unsafe { exports.functions.get_memory_fd(&info) }.map_err(vulkan)?;
+        let fd = match self.carried_payload() {
+            // A buffer a recovery carried lies in its payload imported again: a clone of the
+            // payload's descriptor, the memory every import before reaches (the module docs).
+            Some(payload) => payload
+                .try_clone()
+                .map_err(|_| vulkan(vk::Result::ERROR_TOO_MANY_OBJECTS))?,
+            None => {
+                let info = vk::MemoryGetFdInfoKHR::default()
+                    .memory(memory)
+                    .handle_type(exported.handle);
+                // SAFETY: the memory is the buffer's, live while the buffer is, allocated
+                // exportable as the handle type (`allocate_exported`); the functions are the
+                // device's.
+                let fd = unsafe { exports.functions.get_memory_fd(&info) }.map_err(vulkan)?;
+                // SAFETY: a new descriptor Vulkan handed over, which the caller owns from here on.
+                unsafe { OwnedFd::from_raw_fd(fd) }
+            }
+        };
         Ok(ExportedMemory {
-            // SAFETY: a new descriptor Vulkan handed over, which the caller owns from here on.
-            fd: unsafe { OwnedFd::from_raw_fd(fd) },
+            fd,
             allocation_size,
             offset,
             length: self.length(),
             dedicated: exported.dedicated,
             memory_type_index,
         })
+    }
+
+    /// The descriptor of the payload of the buffer's memory, where a recovery carried the buffer
+    /// into its payload imported again (`memory.rs`'s `Block::payload`): what its exports, and a
+    /// texture's import of its memory, answer clones of.
+    pub(super) fn carried_payload(&self) -> Option<Payload> {
+        let shared = self.device().shared();
+        (self.own_placement(|placement, _| lock(&shared.memory).payload(placement))).flatten()
     }
 
     /// What the buffer's memory was allocated exportable as, with the allocation's size, its
@@ -555,8 +702,8 @@ impl Buffer {
     /// uses the buffer is in flight: the other API writes the memory as its own (the module docs).
     ///
     /// Refused: a buffer not made exportable (`Invalid`, `Problem::NotExportable`), one made
-    /// before its device's recovery (`NotImplemented(MadeBeforeRecovery)`) or on a lost device
-    /// (`DeviceLost`), and the driver's failure.
+    /// before its device's recovery that the recovery left (`NotImplemented(MadeBeforeRecovery)`)
+    /// or on a lost device (`DeviceLost`), and the driver's failure.
     pub fn external_write_done(&self) -> Result<(), Error> {
         // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
         let _held = self.held_parts();

@@ -2139,7 +2139,9 @@ pub enum RuntimeGap {
     /// pointer kept): a long host-visible buffer's fresh pages, and the blocks of pages the
     /// `Shared` and `Managed` buffers lie in where the device's checks found a held host-page
     /// import costs its submissions nothing and textures over such pages take what they take over
-    /// its own memory; and the `Private` heaps with the buffers placed in them (their contents
+    /// its own memory; the `Private` buffers in exportable memory (imported again over their own
+    /// memory, which other APIs' imports reach still and which they read as it holds it); and the
+    /// `Private` heaps with the buffers placed in them (their contents
     /// lost: they read zero), in which buffers and textures are made again after it; and the
     /// textures of `Device::new_texture` (their contents lost), those over the buffers it carried
     /// (reading the buffers' bytes) and the views of either; and the pipeline states (their base
@@ -2151,7 +2153,9 @@ pub enum RuntimeGap {
     /// detached no-copy buffer, a `Shared`, no-copy or sparse heap and the buffers placed in it, a
     /// heap's texture or one over a heap's buffer, a texture over the caller's `VkImage`, a sparse
     /// or shareable texture, a texture over a buffer left, a view of any of them, an indirect
-    /// command buffer, a buffer over the caller's `VkBuffer` or in exportable memory,
+    /// command buffer, a buffer over the caller's `VkBuffer`, a `Shared` or `Managed` buffer in
+    /// exportable memory or one in an opaque descriptor's dedicated allocation (Vulkan defines no
+    /// buffer of another device identical to its own, `VUID-VkMemoryDedicatedAllocateInfo-buffer-01879`),
     /// and an event made exportable. A call that meets such an object with the new generation (an
     /// encoder's bind, a pipeline's making from its functions, a buffer or texture placed in its
     /// heap) or that needs its own lost `VkDevice` (its placements, its imports again, its event

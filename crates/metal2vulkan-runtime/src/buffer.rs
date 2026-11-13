@@ -5076,13 +5076,16 @@ impl Buffer {
     /// same pages there, imported again, its contents and `contents` pointer as they were, and so
     /// does one in a block of the runtime's own pages (`memory.rs`'s `Holds::PageBuffers`), at its
     /// offset in them; a `Private` one in new memory, its contents lost with the `VkDevice` (it
-    /// reads zero). Its parts on the generation it leaves are let go of once none of that
+    /// reads zero), but one in exportable memory over that memory's payload imported again, at its
+    /// offset there, reading what the memory holds (`exported_memory.rs`). Its parts on the
+    /// generation it leaves are let go of once none of that
     /// generation's command buffers may record. Left the lost generation's, refused where it meets
     /// the next (`RuntimeGap::MadeBeforeRecovery`): a buffer of pooled host-visible memory the
     /// device allocated, whose `contents` pointer is its block's mapping (or a `Managed` buffer's
     /// host copy's), a detached no-copy buffer, a heap's (its heap's carry carries it,
-    /// `Heap::carry`), one over the caller's `VkBuffer` or in exportable memory, and one whose
-    /// making there fails.
+    /// `Heap::carry`), one over the caller's `VkBuffer`, a `Shared` or `Managed` one in exportable
+    /// memory or one in an opaque descriptor's dedicated allocation, and one whose making there
+    /// fails.
     pub(crate) fn carry(&self, to: &Device) -> Result<Contents, Left> {
         self.carry_as(to, false)
     }
@@ -5125,11 +5128,9 @@ impl Buffer {
         let placement = &fixed.pages.memory.placement;
         let bound = lock(&from.memory).bound_memory(placement);
         let runtime_s = matches!(bound, BoundMemory::Own | BoundMemory::Blocks);
-        if !runtime_s && !placement.over_own_pages() && !placement.in_page_block() {
-            // Exportable memory, which another API imports (`exported_memory.rs`). A block of the
-            // runtime's own buffers allocated exportable is never exported (`Holds::FdBuffers`).
-            return Err(Left::Exported);
-        }
+        // Exportable memory, which another API imports (`exported_memory.rs`). A block of the
+        // runtime's own buffers allocated exportable is never exported (`Holds::FdBuffers`).
+        let exportable = !runtime_s && !placement.over_own_pages() && !placement.in_page_block();
         let modes = Modes::of(last.options).map_err(|_| Left::Failed)?;
         let class = buffer_class("carry", modes).map_err(|_| Left::Failed)?;
         let (length, lead, reach) = (last.length, fixed.pages.offset, fixed.pages.reach);
@@ -5140,7 +5141,30 @@ impl Buffer {
         };
         // A two-copy buffer's host copy, made again there (`managed_copy.rs`).
         let mut mirror = None;
-        let (raw, placement, contents) = if let Some(HostCopy::Caller(caller)) = &own.mirror {
+        let (raw, placement, contents) = if exportable {
+            // A `Private` buffer's memory is its block's payload, imported again there, the
+            // buffer at its offset in it: the memory the other API imported before, which it
+            // reaches still, read as it holds it (`exported_memory.rs`). A `Shared` or `Managed`
+            // one's `contents` pointer is its block's mapping, which new memory cannot keep.
+            if modes.storage != StorageMode::Private || own.mirror.is_some() {
+                return Err(Left::Exported);
+            }
+            #[cfg(not(unix))]
+            return Err(Left::Exported);
+            #[cfg(unix)]
+            {
+                let (raw, placement) =
+                    to.buffer_in_carried_export(size, &last.device, placement)?;
+                if to.address_space_for(at).place(at, length).is_err() {
+                    let shared = to.shared();
+                    // SAFETY: the buffer is unused.
+                    unsafe { release::object(shared.vk(), raw) };
+                    lock(&shared.memory).free(shared.vk(), &placement);
+                    return Err(Left::Failed);
+                }
+                (raw, placement, Contents::Kept)
+            }
+        } else if let Some(HostCopy::Caller(caller)) = &own.mirror {
             let carried = caller.carry(to, length, last.options).ok_or(Left::NoCopy)?;
             let Ok((raw, placement)) = to.managed_device_copy(carried.device_bytes()) else {
                 return Err(Left::Failed);
