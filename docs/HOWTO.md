@@ -145,7 +145,11 @@ second process does not translate it again. It cannot be turned off.
   dropped, the device's first of each kind said once as the `Warning`
   `metal2vulkan-warm-record-failed`, naming the kind (the runtime's error and, for a translator
   refusal, the refused feature and what it needs) and nothing of the shaders; nothing it meets
-  fails or ends the run.
+  fails or ends the run. A creation refused for good on this device (a typed refusal, such as a
+  kernel past what its driver compiles intact) is kept in the directory, keyed by the record, the
+  driver's identity and version, the profile and the build, and a later boot's pass answers that
+  record as failed at once instead of translating it again (`records_failed_before`); a
+  transient failure is never kept, so hand the pass every record each boot.
   `Device::warm_statistics` counts the records made, those that could not be (a stage the compile
   layer compiled already), the libraries written, each warmed record's outcome, the dispatches'
   `VkPipeline`s made and the driver bytes added.

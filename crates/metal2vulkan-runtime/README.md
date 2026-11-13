@@ -766,10 +766,16 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   `metal2vulkan-warm-record-unread`, and a failed creation is counted and dropped, the device's
   first of each kind announced as the warning `metal2vulkan-warm-record-failed`, which names the
   kind (the runtime's error and, for a translator refusal, the refused feature and what it needs)
-  and nothing of the record's shaders. A mesh render
+  and nothing of the record's shaders. A creation refused for good on the device (a typed
+  refusal, such as a kernel past what its driver compiles intact or past the private memory a
+  thread holds) is kept in the shader cache directory, keyed by the record, the driver's identity
+  and version, the profile, the runtime's version and the translator's build, and a later pass
+  over the directory answers that record as failed at once, not translating it again; a transient
+  failure is never kept. A mesh render
   pipeline's record is not made (its creation keeps nothing past the state), and a layout that
   bakes an immutable sampler is translated only. `Device::warm_statistics` counts the records
-  made, each record's outcome, the dispatches' `VkPipeline`s made and the driver bytes added.
+  made, each record's outcome (`records_failed_before`: the failures answered from a kept
+  refusal), the dispatches' `VkPipeline`s made and the driver bytes added.
 
 [docs/API.md section 10](../../docs/API.md#10-accepted-differences) lists where the runtime
 answers otherwise than Metal on purpose.

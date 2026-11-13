@@ -303,7 +303,13 @@ impl ShaderCache {
     /// an artifact is written (the bytes counted against the directory's cap, the least recently
     /// used entries going past it), but counted as no entry written (it is no translation); a
     /// failed write is counted and said as an artifact's is.
-    fn keep_answer(&self, kind: EntryKind, key: &Hash256, compile: &CompileDevice, bytes: Vec<u8>) {
+    pub(super) fn keep_answer(
+        &self,
+        kind: EntryKind,
+        key: &Hash256,
+        compile: &CompileDevice,
+        bytes: Vec<u8>,
+    ) {
         let name = record_name(
             self.store.directory().build(),
             kind,
@@ -322,7 +328,7 @@ impl ShaderCache {
     /// The directory's entry of `kind` under `key` for `compile`'s profile, as `decode` accepts
     /// it: counted as a hit or a miss by no statistic (it is no translation), a refused or
     /// unreadable entry counted as the store counts it.
-    fn read_answer<T, E>(
+    pub(super) fn read_answer<T, E>(
         &self,
         kind: EntryKind,
         key: &Hash256,

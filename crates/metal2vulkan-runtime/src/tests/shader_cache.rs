@@ -184,6 +184,7 @@ fn a_creation_record_of_another_runtime_version_is_not_found() {
         EntryKind::LinkedAnswers,
         EntryKind::RenderReflection,
         EntryKind::VariantPipeline,
+        EntryKind::WarmRefusal,
     ] {
         let key = [5; 32];
         let written = record_name(&BUILD, kind, &key, &NO_PROFILE, now);
@@ -206,6 +207,44 @@ fn a_creation_record_of_another_runtime_version_is_not_found() {
             "{kind:?}: a record's name is not an artifact's name of the same key"
         );
     }
+}
+
+/// A warm pass's refusal kept for a record on one driver is found by that driver's identity alone
+/// (`warm_refusals.rs`): a driver of another version, `pipelineCacheUUID`, device or vendor
+/// names another entry and finds none, so its pass makes the record's creation again; nor does
+/// another profile find it.
+#[test]
+fn a_warm_refusal_is_found_by_its_own_driver_only() {
+    use crate::shader_cache::warm_refusals::{refusal_kind, refusal_name, refusal_record};
+    let scratch = Scratch::new();
+    let store = store(scratch.path(), BUILD, 1 << 20);
+    let runtime = metal2vulkan::cache::RUNTIME_VERSION;
+    let entry = |identity: &Identity, profile: &[u8; 32]| {
+        let name = refusal_name(identity, b"a record");
+        let entry = record_name(&BUILD, EntryKind::WarmRefusal, &name, profile, runtime);
+        (name, entry)
+    };
+    let kept = Identity::new(0x8086, 0xa7a0, 0x6802006, [1; 16]);
+    let (name, written) = entry(&kept, &NO_PROFILE);
+    let kind = "Unsupported{StageSize; DriverDefect(SerializedStageWrapsLargeModules)}";
+    store
+        .write_soon(&written, refusal_record(&name, kind))
+        .unwrap();
+    let found = |identity: &Identity, profile: &[u8; 32]| {
+        let (name, entry) = entry(identity, profile);
+        store.load(&entry, |bytes| refusal_kind(bytes, &name))
+    };
+    assert_eq!(found(&kept, &NO_PROFILE), Lookup::Hit(kind.to_owned()));
+    for other in [
+        Identity::new(0x8086, 0xa7a0, 0x6802007, [1; 16]),
+        Identity::new(0x8086, 0xa7a0, 0x6802006, [2; 16]),
+        Identity::new(0x8086, 0xa7a1, 0x6802006, [1; 16]),
+        Identity::new(0x1002, 0xa7a0, 0x6802006, [1; 16]),
+    ] {
+        assert_eq!(found(&other, &NO_PROFILE), Lookup::Absent, "{other:?}");
+    }
+    assert_eq!(found(&kept, &[1; 32]), Lookup::Absent, "another profile");
+    assert_eq!(found(&kept, &NO_PROFILE), Lookup::Hit(kind.to_owned()));
 }
 
 /// An entry under the right name holding another key's contents is a miss, and is removed: a

@@ -740,6 +740,147 @@ fn a_failed_creation_is_announced_once_by_its_kind_and_the_pass_goes_on() {
     assert!(!said[0].contains("scale_and_offset"), "{}", said[0]);
 }
 
+/// The compute descriptor of the owned synthetic kernel `words`, which keeps a private array of
+/// 256 KiB a thread, indexed by its thread's position: more than any device holds (the most a
+/// device was measured to hold is 192 KiB, Metal's own, `metal2vulkan`'s
+/// `device::function_storage`), so every device refuses it for good,
+/// `Unsupported{PrivateMemory}`, once its translation has decoded, specialized and planned it.
+fn refused_kernel(device: &Device) -> ComputePipelineDescriptor {
+    const WORDS: u32 = 65536;
+    let text = format!(
+        r#"; Owned synthetic kernel: a private array of {WORDS} words a thread.
+source_filename = "warm_refused.metal"
+
+define void @words(ptr addrspace(1) %out, i32 %gid) {{
+entry:
+  %a = alloca [{WORDS} x i32], align 4
+  %w = urem i32 %gid, {WORDS}
+  %p = getelementptr inbounds [{WORDS} x i32], ptr %a, i32 0, i32 %w
+  store i32 %gid, ptr %p, align 4
+  %r = mul i32 %gid, 7
+  %i = urem i32 %r, {WORDS}
+  %q = getelementptr inbounds [{WORDS} x i32], ptr %a, i32 0, i32 %i
+  %x = load i32, ptr %q, align 4
+  %g = zext i32 %gid to i64
+  %o = getelementptr inbounds i32, ptr addrspace(1) %out, i64 %g
+  store i32 %x, ptr addrspace(1) %o, align 4
+  ret void
+}}
+
+!llvm.module.flags = !{{!0}}
+!air.kernel = !{{!1}}
+!air.version = !{{!6}}
+!air.language_version = !{{!7}}
+!0 = !{{i32 7, !"air.max_device_buffers", i32 31}}
+!1 = !{{ptr @words, !2, !3}}
+!2 = !{{}}
+!3 = !{{!4, !5}}
+!4 = !{{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}}
+!5 = !{{i32 1, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"gid"}}
+!6 = !{{i32 2, i32 8, i32 0}}
+!7 = !{{!"Metal", i32 4, i32 0, i32 0}}
+"#
+    );
+    let air = metal2vulkan_devtools::llvm_assemble_text(&text).unwrap();
+    let function = device
+        .new_library_with_compile_library(metal2vulkan::library::Library::from_air(&air).unwrap())
+        .new_function_with_name("words")
+        .unwrap();
+    ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()))
+}
+
+/// The record of a creation of the compute descriptor `descriptor`.
+fn compute_record(descriptor: &ComputePipelineDescriptor) -> PipelineRecord {
+    let pipeline = crate::warm::Pipeline::Compute(descriptor.clone(), 0, Vec::new());
+    PipelineRecord::of(&pipeline).unwrap()
+}
+
+/// A creation refused for good is kept, and a later pass over the same directory answers its
+/// record from that at once: the first device's pass makes the creation of [`refused_kernel`]'s
+/// record, decoding its stage until the translation refuses it, and counts it failed; a second
+/// device over the directory, as a later boot's, counts the same record failed of the same kind,
+/// announced as the first was, with no stage decoded and no translation looked up
+/// (`WarmStatistics::records_failed_before`), and the program's own creation there still
+/// translates and meets the refusal itself. A failure that is no refusal (Metal's own refusal of
+/// 2048 threads a threadgroup, `Invalid`) is not kept: a pass makes it again each time.
+#[test]
+fn a_refusal_for_good_answers_a_later_pass_at_once() {
+    let scratch = Scratch::new("warm-refusal-kept");
+    let first = device(&scratch.0, None, None);
+    let refused = refused_kernel(&first);
+    let record = compute_record(&refused);
+    first.warm(vec![record.clone()], u64::MAX);
+    let s = warmed(&first, 1);
+    assert_eq!(
+        (s.records_failed, s.records_failed_before),
+        (1, 0),
+        "the first pass made the creation, which failed: {s:?}"
+    );
+    let decoded = first.work_counts().stage_entries_specialized;
+    assert!(
+        decoded > 0,
+        "the first pass decoded the refused stage, or the later leg's zero is vacuous"
+    );
+    // The first device's cache thread writes what it was handed before its drop returns.
+    let started = Instant::now();
+    while first.work_counts().pipeline_pool_busy != 0 {
+        assert!(
+            started.elapsed() < crate::tests::SETTLE,
+            "the pool still busy"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let weak = first.downgrade();
+    drop(first);
+    assert!(
+        weak.upgrade().is_none(),
+        "the first device outlived its drop"
+    );
+
+    let heard = Arc::new(Heard::default());
+    let later = device(&scratch.0, None, Some(&heard));
+    later.warm(vec![record], u64::MAX);
+    let s = warmed(&later, 1);
+    assert_eq!(
+        (s.records_failed, s.records_failed_before),
+        (1, 1),
+        "the later pass answered the record from the kept refusal: {s:?}"
+    );
+    let cache = later.shader_cache_statistics();
+    assert_eq!(
+        (
+            later.work_counts().stage_entries_specialized,
+            cache.hits + cache.misses
+        ),
+        (0, 0),
+        "the later pass decoded no stage and looked no translation up"
+    );
+    let met = later
+        .new_compute_pipeline_state(&refused, &PipelineOptions::default())
+        .expect_err("every device refuses 256 KiB of private memory a thread");
+    let kind = crate::warm::failure_kind(&met);
+    assert!(kind.contains("PrivateMemory"), "{kind}");
+    assert!(
+        later.work_counts().stage_entries_specialized > 0,
+        "the program's own creation translates the kernel"
+    );
+    let said = heard.texts(crate::warm::FAILED);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains(&format!("({kind})")), "{}", said[0]);
+
+    let mut invalid = compute(&later);
+    invalid.max_total_threads_per_threadgroup = Some(2048);
+    let invalid = compute_record(&invalid);
+    later.warm(vec![invalid.clone()], u64::MAX);
+    later.warm(vec![invalid], u64::MAX);
+    let s = warmed(&later, 3);
+    assert_eq!(
+        (s.records_failed, s.records_failed_before),
+        (3, 1),
+        "a failure that is no refusal is made again by each pass: {s:?}"
+    );
+}
+
 /// The threads [`dispatch_pending`]'s buffers hold, and a grid of the same ragged edge in
 /// threadgroups of [`GROUP`] (one threadgroup and the edge of 40).
 const THREADS: u64 = 1000;

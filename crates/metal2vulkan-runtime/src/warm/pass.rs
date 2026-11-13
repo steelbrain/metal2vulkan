@@ -48,6 +48,18 @@
 //!   ([`failure_kind`]: the runtime's error and, for a translator refusal, the refused feature and
 //!   what it needs), never a name, location or text of the record's shaders; past
 //!   [`FAILURE_KINDS`] kinds, later ones are counted alone.
+//! - **A failure for good is kept, and answers later passes.** Where a creation's failure is a
+//!   fact of the record on this device ([`kept_refusal`]: a typed refusal, such as a kernel past
+//!   the stage bound its driver compiles intact or past the private memory a thread holds), its
+//!   kind is kept in the shader cache directory under the record, the driver's identity, the
+//!   profile, the runtime's version and the build (`shader_cache/warm_refusals.rs`). A later pass
+//!   over the same directory looks a record up there before it reads it, and answers one it finds
+//!   as failed of that kind at once, its creation not made
+//!   ([`WarmStatistics::records_failed_before`]), so a refused translation is not run again at
+//!   every boot. A transient failure (out of memory, a device lost, a deadline, a cancellation)
+//!   is never kept; nor is one a later boot can see otherwise (a missing input, such as a dynamic
+//!   library file), so the next pass makes those creations again. The program's own creation of
+//!   such a descriptor still translates, and meets the refusal itself.
 //! - **The byte budget.** The pass stops before its next record once the driver's pipeline cache
 //!   data its makings added (each record's growth as a making writes it, `shader_cache/driver.rs`)
 //!   reaches the call's `byte_budget`; the records left are counted, not made.
@@ -301,6 +313,9 @@ struct Counts {
     dispatch_pipelines: AtomicU64,
     /// The device's first unread record was announced ([`UNREAD`]).
     said_unread: AtomicBool,
+    /// Of `failed`, those answered from a failure an earlier pass kept
+    /// ([`WarmStatistics::records_failed_before`]).
+    failed_before: AtomicU64,
     /// The kinds of failed creation the device announced ([`FAILED`]), at most
     /// [`FAILURE_KINDS`].
     said_failed: Mutex<Vec<String>>,
@@ -321,8 +336,12 @@ enum Outcome {
     /// Made, with the `VkPipeline`s made for the dispatches it names.
     Warmed(u64),
     Translated,
-    /// Its creation failed, of the kind given ([`failure_kind`]).
-    Failed(String),
+    /// Its creation failed, of the kind given ([`failure_kind`]); `before` where the pass answered
+    /// it from the failure an earlier pass kept, not making it.
+    Failed {
+        kind: String,
+        before: bool,
+    },
     /// Not read, for the reason given.
     Unread(&'static str),
     NotWarmable,
@@ -336,6 +355,7 @@ impl Warmer {
         statistics.records_warmed = read(&counts.warmed);
         statistics.records_translated = read(&counts.translated);
         statistics.records_failed = read(&counts.failed);
+        statistics.records_failed_before = read(&counts.failed_before);
         statistics.records_unread = read(&counts.unread);
         statistics.records_not_warmable = read(&counts.not_warmable);
         statistics.records_not_run = read(&counts.not_run);
@@ -358,7 +378,10 @@ impl Warmer {
                 &counts.warmed
             }
             Outcome::Translated => &counts.translated,
-            Outcome::Failed(kind) => {
+            Outcome::Failed { kind, before } => {
+                if before {
+                    counts.failed_before.fetch_add(1, Ordering::Relaxed);
+                }
                 let mut said = lock(&counts.said_failed);
                 if said.len() < FAILURE_KINDS && !said.contains(&kind) {
                     say_failed(device, &kind);
@@ -415,6 +438,12 @@ impl Device {
     ///   feature and what it needs) and nothing of the record's shaders. A mesh
     ///   render pipeline's record is counted and not made (its creation keeps nothing past the
     ///   state); a layout that bakes an immutable sampler is translated only.
+    /// - A creation refused for good on this device (a typed refusal: a kernel past what its
+    ///   driver compiles intact, or past the private memory a thread holds) is kept in the shader
+    ///   cache directory, keyed by the record, the driver's identity (vendor, device, driver
+    ///   version, `pipelineCacheUUID`), the profile, the runtime's version and the translator's
+    ///   build; a later pass over the directory answers that record as failed at once, not making
+    ///   it again ([`WarmStatistics::records_failed_before`]). A transient failure is never kept.
     pub fn warm(&self, records: Vec<PipelineRecord>, byte_budget: u64) {
         self.current().warm_now(records, byte_budget)
     }
@@ -653,6 +682,11 @@ fn warm_record(
     pass: &Pass,
 ) -> Outcome {
     let bytes = record.bytes();
+    let cache = &device.shared().shader_cache;
+    let compile = device.compile_device();
+    if let Some(kind) = cache.warm_refusal(compile, bytes) {
+        return Outcome::Failed { kind, before: true };
+    }
     let read =
         match record.libraries() {
             made if !made.is_empty() => codec::decode(bytes, made),
@@ -670,7 +704,34 @@ fn warm_record(
         Ok(Some(dispatch_pipelines)) => Outcome::Warmed(dispatch_pipelines),
         Ok(None) => Outcome::NotWarmable,
         Err(_) if pass.translation_only.load(Ordering::Relaxed) => Outcome::Translated,
-        Err(error) => Outcome::Failed(failure_kind(&error)),
+        Err(error) => {
+            let kind = failure_kind(&error);
+            if kept_refusal(&error) {
+                cache.keep_warm_refusal(compile, bytes, &kind);
+            }
+            Outcome::Failed {
+                kind,
+                before: false,
+            }
+        }
+    }
+}
+
+/// Whether `error`, a warm creation's, is a fact of its record on this device, so kept for later
+/// passes (the module docs): a typed refusal ([`crate::Error::Unsupported`]: every translator
+/// refusal of the record's stages on this profile reaches the program as one, and the runtime's
+/// own refusals of what the device lacks), or a translator outcome the translator states is
+/// permanent for its input on this profile (`metal2vulkan::error::Error::is_permanent_for`), but
+/// a pipeline input the creation lacks (`NeedsInput`: a dynamic library file a later boot may
+/// find). Never a transient failure: out of memory, a lost device, a Vulkan error, a deadline or
+/// a cancellation (`Permanence::Never`), or any other error of the runtime's.
+fn kept_refusal(error: &crate::Error) -> bool {
+    use metal2vulkan::error::{Error as Translation, Permanence};
+    match error {
+        crate::Error::Unsupported(_) => true,
+        crate::Error::Compile(Translation::NeedsInput(_)) => false,
+        crate::Error::Compile(outcome) => outcome.is_permanent_for() != Permanence::Never,
+        _ => false,
     }
 }
 
@@ -705,8 +766,10 @@ impl Libraries {
 
 #[cfg(test)]
 mod tests {
-    use super::failure_kind;
-    use metal2vulkan::error::{DiagName, Error, Feature, Location, LowerFamily, Unsupported};
+    use super::{failure_kind, kept_refusal};
+    use metal2vulkan::error::{
+        BudgetExceeded, DiagName, Error, Feature, Location, LowerFamily, RuntimeInput, Unsupported,
+    };
 
     /// A failure's kind names the runtime error's variant and a translator refusal's feature and
     /// needs, and nothing the refusal names of the shader: its symbol and its location (which
@@ -727,6 +790,49 @@ mod tests {
         assert_eq!(failure_kind(&crate::Error::DeviceLost), "DeviceLost");
         for kind in [compiled, unsupported] {
             assert!(!kind.contains("a_guest"), "{kind}");
+        }
+    }
+
+    /// A refusal of the record on this device is kept for later passes: a typed refusal (a stage
+    /// past its driver's bound, or past the private memory a thread holds), and a translator
+    /// outcome permanent for its input. A transient failure is not (a deadline, a cancellation, a
+    /// host allocation that failed, out of memory, a lost device), nor a missing input that a
+    /// later boot may supply, nor a runtime error that is no refusal.
+    #[test]
+    fn only_a_refusal_for_good_is_kept() {
+        use metal2vulkan::device::{DriverWorkaround, VkLimit};
+        use metal2vulkan::error::{Capability, InternalError, InternalKind, Limit};
+        let defect = DriverWorkaround::SerializedStageWrapsLargeModules;
+        let stage = Unsupported::driver_defect(Feature::StageSize, defect);
+        let storage = Capability::Limit {
+            limit: VkLimit::FunctionStorageBytesPerThread,
+            required: 256 << 10,
+            available: 32 << 10,
+        };
+        let private = Unsupported::needs(Feature::PrivateMemory, storage);
+        let kept = [
+            crate::Error::Unsupported(stage.clone()),
+            crate::Error::Unsupported(private),
+            crate::Error::Compile(Error::Unsupported(stage)),
+            crate::Error::Compile(Error::LimitExceeded(Limit::WorkUnits)),
+        ];
+        for error in &kept {
+            assert!(kept_refusal(error), "{error:?}");
+        }
+        let library = RuntimeInput::DynamicLibrary {
+            install_name: DiagName::new("/a/library.metallib"),
+        };
+        let allocation = InternalError::new(InternalKind::AllocationFailed, "a host allocation");
+        let retried = [
+            crate::Error::Compile(Error::Budget(BudgetExceeded::Time)),
+            crate::Error::Compile(Error::Cancelled),
+            crate::Error::Compile(Error::Internal(allocation)),
+            crate::Error::Compile(Error::NeedsInput(library)),
+            crate::Error::OutOfMemory(crate::MemoryKind::Device),
+            crate::Error::DeviceLost,
+        ];
+        for error in &retried {
+            assert!(!kept_refusal(error), "{error:?}");
         }
     }
 }

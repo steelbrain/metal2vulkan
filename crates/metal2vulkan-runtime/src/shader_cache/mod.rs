@@ -72,6 +72,7 @@ pub(crate) use creation::VariantStages;
 pub(crate) mod driver;
 mod held;
 pub(super) mod store;
+pub(crate) mod warm_refusals;
 pub(super) mod worker;
 
 use super::error::{invalid, Error, Problem, ShaderCacheError};
@@ -306,6 +307,8 @@ pub(crate) enum EntryKind {
     VariantPipeline = 10,
     /// A library a pipeline record names, in the content directory (`libraries.rs`).
     Library = 11,
+    /// The failure a warm pass's creation of a record met for good (`warm_refusals.rs`).
+    WarmRefusal = 12,
 }
 
 /// The translations this build reads and writes: the SHA-256 of the crate's version, both artifact

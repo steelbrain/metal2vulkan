@@ -66,6 +66,13 @@ pub struct WarmStatistics {
     /// of failure is announced (`metal2vulkan-warm-record-failed`), naming the kind and nothing
     /// of the record's shaders.
     pub records_failed: u64,
+    /// Of [`records_failed`](Self::records_failed), those a pass answered from the failure an
+    /// earlier pass over the same shader cache directory kept for the record, on the same
+    /// device, driver, profile, runtime version and translator: a refusal for good (a kernel
+    /// past what its driver compiles intact, or past the private memory a thread holds), so the
+    /// record's creation was not made again (`shader_cache/warm_refusals.rs`). A transient
+    /// failure is never kept.
+    pub records_failed_before: u64,
     /// Records a warm pass could not read: of another format, damaged, or naming a library the
     /// shader cache directory no longer holds. The device's first is announced
     /// (`metal2vulkan-warm-record-unread`); the pass goes on with the next record.

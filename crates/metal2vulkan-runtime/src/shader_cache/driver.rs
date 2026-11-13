@@ -176,6 +176,11 @@ impl Identity {
         Identity(bytes)
     }
 
+    /// Its bytes: vendor, device and driver version (little-endian), then `pipelineCacheUUID`.
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.0
+    }
+
     /// Whether `data` begins with the `VkPipelineCacheHeaderVersionOne` of this identity, whole:
     /// its size, its version, then vendor, device and UUID (not the driver version, which it does
     /// not hold).
