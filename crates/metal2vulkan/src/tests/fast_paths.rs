@@ -172,6 +172,7 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             ColorAttachmentGroups,
             FastMathRewrites,
             NativeLogicOperation,
+            NativeFloat8,
         ],
         Elsewhere: [
             HalfOutputPrecision,

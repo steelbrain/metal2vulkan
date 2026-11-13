@@ -98,6 +98,9 @@ values StorageBuffer PhysicalStorageBuffer TaskPayloadWorkgroupEXT
 enum Dim
 values D1 D2 D3 Cube Buffer SubpassData
 
+enum FPEncoding
+values Float8E4M3EXT Float8E5M2EXT
+
 enum ImageFormat
 values *
 

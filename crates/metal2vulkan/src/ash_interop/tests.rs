@@ -11,8 +11,8 @@ use ash::vk::{Handle, TaggedStructure};
 
 use super::convert::sampler_create_info;
 use super::query::{
-    DepthClampControlFeatures, Maintenance10Properties, Maintenance8Features, ShaderFmaFeatures,
-    ALL_FEATURES,
+    DepthClampControlFeatures, Maintenance10Properties, Maintenance8Features, ShaderFloat8Features,
+    ShaderFmaFeatures, ALL_FEATURES,
 };
 use crate::device::description::FormatProperties;
 use crate::device::profile::Independence;
@@ -158,6 +158,7 @@ fn feature_struct_size(ty: avk::StructureType) -> usize {
         avk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT<'static>,
         Maintenance8Features,
         ShaderFmaFeatures,
+        ShaderFloat8Features,
         avk::PhysicalDeviceBorderColorSwizzleFeaturesEXT<'static>,
         avk::PhysicalDeviceDepthBiasControlFeaturesEXT<'static>,
         avk::PhysicalDeviceDepthClipEnableFeaturesEXT<'static>,

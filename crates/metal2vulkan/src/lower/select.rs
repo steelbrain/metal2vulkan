@@ -48,7 +48,7 @@ use crate::air::Entry;
 use crate::budget::{tree_bytes, Growth, Meter};
 use crate::device::function_storage;
 use crate::device::profile::Limits;
-use crate::device::requirements::{VkExtension, VkFeature, VkLimit};
+use crate::device::requirements::{VkFeature, VkLimit};
 use crate::device::subgroup::{self, SimdClass, SubgroupRequirement, Tier};
 use crate::device::DeviceProfile;
 use crate::error::{
@@ -1177,28 +1177,6 @@ fn function_storage(
     Ok((required > storage.bytes()).then_some(PrecisionNote::FunctionStorageAssumed))
 }
 
-/// Refuse `e` on `p` where its `matmul2d` expansion reads 8-bit floats
-/// ([`Entry::float8_products`]) and the device has its own 8-bit float type: `VK_EXT_shader_float8`
-/// enabled, whose `shaderFloat8` (the SPIR-V capability `Float8EXT`) Vulkan requires of every
-/// device that lists the extension. There the device's conversion of an 8-bit float is the only
-/// form, and it is not built yet; on a device without the type the expansion's integer decode is
-/// the form.
-fn float8_products(e: &Entry, p: &DeviceProfile) -> Result<(), Error> {
-    if e.float8_products
-        && p.enabled()
-            .extensions
-            .contains(&VkExtension::ExtShaderFloat8)
-    {
-        return Err(Unsupported::not_implemented(Feature::Tensors)
-            .naming(DiagName::new(
-                "a matmul2d of 8-bit floats on a device with its own 8-bit float type \
-                 (VK_EXT_shader_float8): the conversion through the device's type is not built yet",
-            ))
-            .into());
-    }
-    Ok(())
-}
-
 /// Select the plan of `e`.
 pub fn select(
     e: &Entry,
@@ -1216,7 +1194,6 @@ pub fn select(
         .as_ref()
         .ok_or_else(|| invariant("the entry function has no body"))?;
     let storage_note = function_storage(e, mp, p)?;
-    float8_products(e, p)?;
     let stage = static_root::stage_of(e);
     let observed = observed_results(body, m)?;
     let observed_bytes = observed.len();

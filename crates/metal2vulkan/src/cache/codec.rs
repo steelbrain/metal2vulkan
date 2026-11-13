@@ -986,6 +986,7 @@ codec_enum! {
         BresenhamLines,
         WideLines,
         MultiDraw,
+        ShaderFloat8,
     }
     VkExtension {
         ExtRobustness2, ExtImageRobustness, ExtShaderAtomicFloat, ExtShaderAtomicFloat2,
@@ -1104,6 +1105,7 @@ codec_enum! {
         ExtMeshShader,
         KhrQuadControl,
         KhrPostDepthCoverage,
+        ExtFloat8,
     }
     StageCreateFlag { RequireFullSubgroups, AllowVaryingSubgroupSize }
     Independence { Only32Bit, All, None }
@@ -1496,6 +1498,7 @@ codec_enum! {
         ExtrapolatedInterpolation,
         UnorderedFetchWithinDraw,
         NativeLogicOperation,
+        NativeFloat8,
     }
     BindingSource {
         Buffer(f0), Texture(f0), Sampler(f0), CombinedTextureSampler { texture, sampler },

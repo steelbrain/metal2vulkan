@@ -4802,9 +4802,8 @@ fn the_matmul2d_passes_skip_a_module_without_their_declarations() {
         let body = parts.funcs.get(k).and_then(|f| f.body.clone()).unwrap();
         let ep = kernel(k, Vec::new());
         let mut meter = meter();
-        let (body, lanes, float8) = matmul2d::expand(body, &mut parts, &ep, &mut meter).unwrap();
+        let (body, lanes) = matmul2d::expand(body, &mut parts, &ep, &mut meter).unwrap();
         assert!(lanes.is_none());
-        assert!(!float8);
         matmul2d::refuse_left(&body, &parts, &ep.stage, &ep.name, &mut meter).unwrap();
         meter.work()
     };

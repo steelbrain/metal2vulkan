@@ -2067,40 +2067,72 @@ pub fn resize(fb: &mut FunctionBuilder<'_>, from: Form, to: Form, x: Value) -> B
     }
 }
 
+/// What an 8-bit float format's all-ones exponent holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Fp8Specials {
+    /// IEEE-like: an infinity, or with a mantissa a NaN that carries it (`f8e4m3`, `f8e5m2`).
+    Ieee,
+    /// IEEE-like, every NaN the quiet NaN `0x7FC00000` (a tensor's `e5m2` as Metal reads it).
+    IeeeQuiet,
+    /// Finite: only `S.1111.111` is NaN (`f8e4m3fn`).
+    FiniteNan,
+    /// Nothing special: every code is a finite value (a tensor's `e4m3` as Metal reads it).
+    Finite,
+}
+
 /// The layout of an 8-bit float format (`air.convert` sources, carried in `i8` lanes). The
 /// names follow LLVM's `APFloat` semantics of the same spellings: `f8e4m3` and `f8e5m2` are
 /// IEEE-like (an all-ones exponent is infinity or NaN), `f8e4m3fn` is finite (only
-/// `S.1111.111` is NaN).
+/// `S.1111.111` is NaN); a tensor's formats are Metal's (`Fp8::TensorE4M3`, `Fp8::TensorE5M2`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Fp8Layout {
     pub exp: u32,
     pub man: u32,
     pub bias: u32,
-    pub ieee: bool,
+    pub specials: Fp8Specials,
+    /// The device's own 8-bit float the format widens through ([`fp8_native`]), where the device
+    /// has one of its encoding ([`Fp8Layout::on`]): then that widening is the only form (rule 1),
+    /// its answers the device's.
+    pub native: Option<crate::spv::FPEncoding>,
 }
 
 impl Fp8Layout {
+    /// The layout of format `f`, widened by the integer decode ([`fp8_to_f32`]).
     pub fn of(f: crate::air::intrinsics::Fp8) -> Fp8Layout {
         use crate::air::intrinsics::Fp8;
-        match f {
-            Fp8::E4M3 => Fp8Layout {
-                exp: 4,
-                man: 3,
-                bias: 7,
-                ieee: true,
-            },
-            Fp8::E4M3Fn => Fp8Layout {
-                exp: 4,
-                man: 3,
-                bias: 7,
-                ieee: false,
-            },
-            Fp8::E5M2 => Fp8Layout {
-                exp: 5,
-                man: 2,
-                bias: 15,
-                ieee: true,
-            },
+        let (exp, man, bias, specials) = match f {
+            Fp8::E4M3 => (4, 3, 7, Fp8Specials::Ieee),
+            Fp8::E4M3Fn => (4, 3, 7, Fp8Specials::FiniteNan),
+            Fp8::E5M2 => (5, 2, 15, Fp8Specials::Ieee),
+            Fp8::TensorE4M3 => (4, 3, 7, Fp8Specials::Finite),
+            Fp8::TensorE5M2 => (5, 2, 15, Fp8Specials::IeeeQuiet),
+        };
+        Fp8Layout {
+            exp,
+            man,
+            bias,
+            specials,
+            native: None,
+        }
+    }
+
+    /// The layout of format `f` on profile `p`: through the device's own 8-bit float where `p`
+    /// has `shaderFloat8` and an encoding of the format's fields (`Float8E4M3EXT` for `f8e4m3fn`
+    /// and a tensor's `e4m3`, `Float8E5M2EXT` for `f8e5m2` and a tensor's `e5m2`; none for the
+    /// IEEE-like `f8e4m3`), else as [`Fp8Layout::of`]. The device's encoding is OCP's: a tensor's
+    /// `e4m3` reads `0x7F` and `0xFF` as NaN there, where Metal reads 480 and -480, and a NaN's
+    /// bits are the device's (`PrecisionNote::NativeFloat8`).
+    pub fn on(f: crate::air::intrinsics::Fp8, p: &DeviceProfile) -> Fp8Layout {
+        use crate::air::intrinsics::Fp8;
+        use crate::spv::FPEncoding;
+        let encoding = match f {
+            Fp8::E4M3 => None,
+            Fp8::E4M3Fn | Fp8::TensorE4M3 => Some(FPEncoding::Float8E4M3EXT),
+            Fp8::E5M2 | Fp8::TensorE5M2 => Some(FPEncoding::Float8E5M2EXT),
+        };
+        Fp8Layout {
+            native: encoding.filter(|_| p.fields().leaf.float8),
+            ..Fp8Layout::of(f)
         }
     }
 
@@ -2111,14 +2143,15 @@ impl Fp8Layout {
         let e = (u32::from(b) >> self.man) & ((1 << self.exp) - 1);
         let m = u32::from(b) & ((1 << self.man) - 1);
         let top = (1 << self.exp) - 1;
-        if self.ieee && e == top {
+        let ieee = matches!(self.specials, Fp8Specials::Ieee | Fp8Specials::IeeeQuiet);
+        if ieee && e == top {
             return if m == 0 {
                 sign * f64::INFINITY
             } else {
                 f64::NAN
             };
         }
-        if !self.ieee && e == top && m == (1 << self.man) - 1 {
+        if self.specials == Fp8Specials::FiniteNan && e == top && m == (1 << self.man) - 1 {
             return f64::NAN;
         }
         let m = f64::from(m) / f64::from(1u32 << self.man);
@@ -2132,7 +2165,8 @@ impl Fp8Layout {
 
 /// The value (an `f32` of form `to`'s lanes) of 8-bit float bits `b` (zero-extended in `u32`
 /// lanes of form `u`). Exact: every 8-bit float value is an `f32` (and a `half` and a `bfloat`)
-/// value.
+/// value. Through the device's own 8-bit float where the layout names one ([`fp8_native`]), else
+/// by integer arithmetic on the fields, so no device needs an 8-bit or 16-bit float type for it.
 pub fn fp8_to_f32(
     fb: &mut FunctionBuilder<'_>,
     l: Fp8Layout,
@@ -2140,6 +2174,9 @@ pub fn fp8_to_f32(
     to: Form,
     b: Value,
 ) -> BResult<Value> {
+    if let Some(encoding) = l.native {
+        return fp8_native(fb, encoding, u, to, b);
+    }
     let c = |fb: &mut FunctionBuilder<'_>, k: u64| splat(fb, u, k);
     let top = u64::from((1u32 << l.exp) - 1);
     let mmax = u64::from((1u32 << l.man) - 1);
@@ -2176,17 +2213,68 @@ pub fn fp8_to_f32(
     let e_zero = bin(fb, BinOp::IEqual, e, z)?;
     let r = fb.select(e_zero, den, normal)?;
     let e_top = bin(fb, BinOp::IEqual, e, et)?;
-    let r = if l.ieee {
-        let inf = c(fb, 0x7F80_0000)?;
-        let special = bin(fb, BinOp::BitwiseOr, inf, mup)?;
-        fb.select(e_top, special, r)?
-    } else {
-        let m_top = bin(fb, BinOp::IEqual, m, mm)?;
-        let nan_bits = bin(fb, BinOp::LogicalAnd, e_top, m_top)?;
-        let qnan = c(fb, 0x7FC0_0000)?;
-        fb.select(nan_bits, qnan, r)?
+    let r = match l.specials {
+        Fp8Specials::Ieee | Fp8Specials::IeeeQuiet => {
+            let inf = c(fb, 0x7F80_0000)?;
+            let special = bin(fb, BinOp::BitwiseOr, inf, mup)?;
+            fb.select(e_top, special, r)?
+        }
+        Fp8Specials::FiniteNan => {
+            let m_top = bin(fb, BinOp::IEqual, m, mm)?;
+            let nan_bits = bin(fb, BinOp::LogicalAnd, e_top, m_top)?;
+            let qnan = c(fb, 0x7FC0_0000)?;
+            fb.select(nan_bits, qnan, r)?
+        }
+        // The all-ones exponent is a normal one, which the rebias above places.
+        Fp8Specials::Finite => r,
     };
-    let r = bin(fb, BinOp::BitwiseOr, sign, r)?;
+    let mut r = bin(fb, BinOp::BitwiseOr, sign, r)?;
+    if l.specials == Fp8Specials::IeeeQuiet {
+        // Every NaN Metal's quiet NaN, of no sign.
+        let nonzero = bin(fb, BinOp::INotEqual, m, z)?;
+        let nan = bin(fb, BinOp::LogicalAnd, e_top, nonzero)?;
+        let qnan = c(fb, 0x7FC0_0000)?;
+        r = fb.select(nan, qnan, r)?;
+    }
     let ft = ty(fb, to.with(Held::Float(FloatFmt::F32)))?;
     fb.convert(ConvOp::Bitcast, r, ft)
+}
+
+/// The value (an `f32` of form `to`'s lanes) of 8-bit float bits `b` (zero-extended in `u32` lanes
+/// of form `u`) through the device's own 8-bit float of `encoding` (`SPV_EXT_float8`): each lane's
+/// word reinterpreted as four 8-bit floats, of which the first, the word's low byte (`OpBitcast`
+/// maps a component's lower-order bits to the lower-numbered components), widens by `OpFConvert`.
+/// No 8-bit integer type is needed. Exact: every value of either encoding is an `f32` value; a NaN's
+/// bits are the device's.
+pub fn fp8_native(
+    fb: &mut FunctionBuilder<'_>,
+    encoding: crate::spv::FPEncoding,
+    u: Form,
+    to: Form,
+    b: Value,
+) -> BResult<Value> {
+    let f8 = fb.module().ty(Type::Float8 { encoding })?;
+    let quad = fb.module().ty(Type::Vector { elem: f8, len: 4 })?;
+    let f32_ = ty(
+        fb,
+        Form {
+            held: Held::Float(FloatFmt::F32),
+            lanes: 1,
+        },
+    )?;
+    let widen = |fb: &mut FunctionBuilder<'_>, word: Value| -> BResult<Value> {
+        let bytes = fb.convert(ConvOp::Bitcast, word, quad)?;
+        let low = fb.composite_extract(bytes, &[0])?;
+        fb.convert(ConvOp::FConvert, low, f32_)
+    };
+    if u.lanes == 1 {
+        return widen(fb, b);
+    }
+    let mut lanes = Vec::with_capacity(usize::from(u.lanes));
+    for i in 0..u32::from(u.lanes) {
+        let word = fb.composite_extract(b, &[i])?;
+        lanes.push(widen(fb, word)?);
+    }
+    let ft = ty(fb, to.with(Held::Float(FloatFmt::F32)))?;
+    fb.composite_construct(ft, &lanes)
 }

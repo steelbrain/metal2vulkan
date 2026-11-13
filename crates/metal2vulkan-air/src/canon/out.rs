@@ -4,7 +4,7 @@
 
 use crate::budget::Meter;
 use crate::error::Error;
-use crate::intrinsics::{self, Bound, DeclClass};
+use crate::intrinsics::{self, AirIntrinsic, Bound, DeclClass};
 use crate::ir::{
     AddrSpace, Align, BinOp, Block, BlockId, Body, Call, CallConv, Callee, CastOp, Const, Constant,
     FastMath, FnAttrs, FuncId, Function, Inst, InstId, InstKind, IntFlags, IntPredicate, Linkage,
@@ -357,6 +357,31 @@ impl<'p> Out<'p> {
             Bound::Llvm(op) => Callee::Llvm { decl, op },
             Bound::Unknown => return Err(invariant("an expansion intrinsic bound as unknown")),
         };
+        self.call(callee, ret, args, m)
+    }
+
+    /// A call of `op`, an `air.*` operation no AIR name spells (so decode makes none), typed
+    /// `ret (params)` and declared as `name`, which decode does not classify as `op` either.
+    pub fn air_call(
+        &mut self,
+        name: &str,
+        op: AirIntrinsic,
+        ret: TypeId,
+        params: &[TypeId],
+        args: &[Value],
+        m: &mut Meter,
+    ) -> Result<Value, Error> {
+        let (decl, _) = self.declare(name, ret, params, m)?;
+        self.call(Callee::Air { decl, op }, ret, args, m)
+    }
+
+    fn call(
+        &mut self,
+        callee: Callee,
+        ret: TypeId,
+        args: &[Value],
+        m: &mut Meter,
+    ) -> Result<Value, Error> {
         let call = Call {
             callee,
             args: args.into(),

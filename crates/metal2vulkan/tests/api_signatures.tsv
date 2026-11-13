@@ -1604,7 +1604,6 @@ field	metal2vulkan-air::Entry.cfg	pub cfg: Cfg<BlockId>
 field	metal2vulkan-air::Entry.compile	pub compile: CompileOptions
 field	metal2vulkan-air::Entry.dom	pub dom: DomTree<BlockId>
 field	metal2vulkan-air::Entry.ep	pub ep: EntryPoint
-field	metal2vulkan-air::Entry.float8_products	pub float8_products: bool
 field	metal2vulkan-air::Entry.func	pub func: FuncId
 field	metal2vulkan-air::Entry.function_constants	pub function_constants: bool
 field	metal2vulkan-air::Entry.function_tables	pub function_tables: BTreeSet<u32>
@@ -5756,6 +5755,7 @@ macro-member	metal2vulkan-runtime::Degradation::NanDepth	NanDepth = "nan-depth",
 macro-member	metal2vulkan-runtime::Degradation::NarrowSurfaceRows	NarrowSurfaceRows = "narrow-surface-rows", Precision,
 macro-member	metal2vulkan-runtime::Degradation::NativeDivision	NativeDivision = "native-division";
 macro-member	metal2vulkan-runtime::Degradation::NativeDot	NativeDot = "native-dot";
+macro-member	metal2vulkan-runtime::Degradation::NativeFloat8	NativeFloat8 = "native-float8";
 macro-member	metal2vulkan-runtime::Degradation::NativeFma	NativeFma = "native-fma";
 macro-member	metal2vulkan-runtime::Degradation::NativeHalfConversion	NativeHalfConversion = "native-half-conversion";
 macro-member	metal2vulkan-runtime::Degradation::NativeHalfQuantize	NativeHalfQuantize = "native-half-quantize";
@@ -11335,6 +11335,8 @@ variant	metal2vulkan-air::intrinsics::Elem::I8	I8
 variant	metal2vulkan-air::intrinsics::Fp8::E4M3	E4M3
 variant	metal2vulkan-air::intrinsics::Fp8::E4M3Fn	E4M3Fn
 variant	metal2vulkan-air::intrinsics::Fp8::E5M2	E5M2
+variant	metal2vulkan-air::intrinsics::Fp8::TensorE4M3	TensorE4M3
+variant	metal2vulkan-air::intrinsics::Fp8::TensorE5M2	TensorE5M2
 variant	metal2vulkan-air::intrinsics::Fragment::Discard	Discard
 variant	metal2vulkan-air::intrinsics::Fragment::IsHelperThread	IsHelperThread
 variant	metal2vulkan-air::intrinsics::Fragment::MapCoordinates	MapCoordinates { to_physical: bool, integer: bool }
@@ -13538,6 +13540,7 @@ variant	metal2vulkan::device::SimdClass::None	None
 variant	metal2vulkan::device::SimdClass::Quad	Quad
 variant	metal2vulkan::device::SpirvExtension::ExtDemoteToHelperInvocation	ExtDemoteToHelperInvocation
 variant	metal2vulkan::device::SpirvExtension::ExtDescriptorIndexing	ExtDescriptorIndexing
+variant	metal2vulkan::device::SpirvExtension::ExtFloat8	ExtFloat8
 variant	metal2vulkan::device::SpirvExtension::ExtFragmentShaderInterlock	ExtFragmentShaderInterlock
 variant	metal2vulkan::device::SpirvExtension::ExtMeshShader	ExtMeshShader
 variant	metal2vulkan::device::SpirvExtension::ExtShaderAtomicFloat16Add	ExtShaderAtomicFloat16Add
@@ -13740,6 +13743,7 @@ variant	metal2vulkan::device::VkFeature::ShaderDemoteToHelperInvocation	ShaderDe
 variant	metal2vulkan::device::VkFeature::ShaderDrawParameters	ShaderDrawParameters
 variant	metal2vulkan::device::VkFeature::ShaderFloat16	ShaderFloat16
 variant	metal2vulkan::device::VkFeature::ShaderFloat64	ShaderFloat64
+variant	metal2vulkan::device::VkFeature::ShaderFloat8	ShaderFloat8
 variant	metal2vulkan::device::VkFeature::ShaderFmaFloat16	ShaderFmaFloat16
 variant	metal2vulkan::device::VkFeature::ShaderFmaFloat32	ShaderFmaFloat32
 variant	metal2vulkan::device::VkFeature::ShaderImageFloat32AtomicAdd	ShaderImageFloat32AtomicAdd
@@ -14656,6 +14660,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::LoopedSampleOutputs	LoopedSampleO
 variant	metal2vulkan::pipeline::PrecisionNote::MultisamplePosition	MultisamplePosition
 variant	metal2vulkan::pipeline::PrecisionNote::NativeDivision	NativeDivision
 variant	metal2vulkan::pipeline::PrecisionNote::NativeDot	NativeDot
+variant	metal2vulkan::pipeline::PrecisionNote::NativeFloat8	NativeFloat8
 variant	metal2vulkan::pipeline::PrecisionNote::NativeFma	NativeFma
 variant	metal2vulkan::pipeline::PrecisionNote::NativeHalfConversion	NativeHalfConversion
 variant	metal2vulkan::pipeline::PrecisionNote::NativeHalfQuantize	NativeHalfQuantize

@@ -4760,6 +4760,16 @@ bound.
   the fragment function and records none. A signed channel the draw does not write (outside the
   write mask, or every channel under no-op) keeps its lowest code where any draw's unwritten
   texel does (`snorm-minimum-kept`).
+- `metal2vulkan-degrade-native-float8` (precision). `PrecisionNote::NativeFloat8`: A tensor's
+  8-bit float element (`MTLTensorDataTypeFloat8E4M3` or `Float8E5M2`, which a `matmul2d` product
+  reads) widens through the device's own 8-bit float on a device with `shaderFloat8`
+  (`SPV_EXT_float8`'s `Float8E4M3EXT` or `Float8E5M2EXT`, OCP's encodings), the only form there:
+  an e4m3 code `0x7F` or `0xFF` reads as a NaN, where Metal reads 480 and -480 (measured on the M3
+  Max), and an e5m2 NaN's bits are the device's, where Metal reads `0x7FC00000`. Every other code
+  reads Metal's value. A device without `shaderFloat8` decodes the fields with integers, as Metal
+  reads them, and records none. An `air.convert` from `f8e4m3fn` or `f8e5m2` and a
+  simdgroup-matrix cell of those formats widen through the same type there and record none: their
+  formats are OCP's own, and Metal on Apple M3 does not compile them.
 - `metal2vulkan-degrade-device-pack-conversion` (precision). `PrecisionNote::DevicePackConversion`:
   Native device maths (a conversion): `air.pack` or `air.unpack` of a normalized format is the
   device's: `GLSL.std.450`'s `Pack`/`Unpack` `Unorm4x8`, `Snorm4x8`, `Unorm2x16` and `Snorm2x16`,

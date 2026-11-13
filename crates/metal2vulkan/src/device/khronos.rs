@@ -1292,6 +1292,7 @@ fn feature_route(structure: &str) -> Option<Route> {
         }
         "VkPhysicalDeviceMaintenance8FeaturesKHR" => Ext(&["VK_KHR_maintenance8"], None),
         "VkPhysicalDeviceShaderFmaFeaturesKHR" => Ext(&["VK_KHR_shader_fma"], None),
+        "VkPhysicalDeviceShaderFloat8FeaturesEXT" => Ext(&["VK_EXT_shader_float8"], None),
         "VkPhysicalDeviceBorderColorSwizzleFeaturesEXT" => {
             Ext(&["VK_EXT_border_color_swizzle"], None)
         }
@@ -1584,6 +1585,7 @@ pub(super) const FEATURE_MEMBERS: &[(&str, VkFeature)] = {
         ("depthBiasExact", F::DepthBiasExact),
         ("shaderFmaFloat16", F::ShaderFmaFloat16),
         ("shaderFmaFloat32", F::ShaderFmaFloat32),
+        ("shaderFloat8", F::ShaderFloat8),
         ("synchronization2", F::Synchronization2),
         ("extendedDynamicState", F::ExtendedDynamicState),
         ("extendedDynamicState2", F::ExtendedDynamicState2),

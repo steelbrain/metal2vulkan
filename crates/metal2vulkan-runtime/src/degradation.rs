@@ -2826,6 +2826,12 @@ degradations! {
         /// over a signed `0x80` where Metal's gives `0x61`). Not bounded: the result follows the
         /// codes' bits.
         NativeLogicOperation = "native-logic-operation";
+        /// Class: native 8-bit float. A tensor's 8-bit float element widens through the device's
+        /// own 8-bit float (`shaderFloat8`), whose encodings are OCP's: an e4m3 `0x7F` or `0xFF`
+        /// reads as a NaN, where Metal reads 480 and -480, and an e5m2 NaN's bits are the
+        /// device's, where Metal reads `0x7FC00000`. Not bounded: a NaN in a sum makes the sum a
+        /// NaN.
+        NativeFloat8 = "native-float8";
     }
 }
 

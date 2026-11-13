@@ -782,6 +782,9 @@ pub struct LeafCaps {
     pub fma32: bool,
     /// `OpFmaKHR` on 16-bit floats (`shaderFmaFloat16`): a correctly rounded fused multiply-add.
     pub fma16: bool,
+    /// 8-bit floats of the encodings `Float8E4M3EXT` and `Float8E5M2EXT` (`shaderFloat8`,
+    /// `SPV_EXT_float8`): an 8-bit float converts to a wider float through the device's own type.
+    pub float8: bool,
 }
 
 /// Image and sampler capabilities ([`DeviceProfile::images`]). Each field without its own note is

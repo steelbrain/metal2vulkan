@@ -121,6 +121,40 @@ unsafe impl avk::TaggedStructure for ShaderFmaFeatures {
 // SAFETY: the registry lists `VkPhysicalDeviceFeatures2` in the structure's `structextends`.
 unsafe impl avk::ExtendsPhysicalDeviceFeatures2 for ShaderFmaFeatures {}
 
+/// `VkPhysicalDeviceShaderFloat8FeaturesEXT`, which `ash 0.38` predates, laid out as the registry
+/// defines it (`vk.xml`: `sType`, `pNext`, `VkBool32 shaderFloat8`,
+/// `shaderFloat8CooperativeMatrix`; its structure type is
+/// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT8_FEATURES_EXT`, 1000567000). It extends
+/// `VkPhysicalDeviceFeatures2`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct ShaderFloat8Features {
+    s_type: avk::StructureType,
+    p_next: *mut std::ffi::c_void,
+    shader_float8: avk::Bool32,
+    shader_float8_cooperative_matrix: avk::Bool32,
+}
+
+impl Default for ShaderFloat8Features {
+    fn default() -> Self {
+        ShaderFloat8Features {
+            s_type: <Self as avk::TaggedStructure>::STRUCTURE_TYPE,
+            p_next: std::ptr::null_mut(),
+            shader_float8: avk::FALSE,
+            shader_float8_cooperative_matrix: avk::FALSE,
+        }
+    }
+}
+
+// SAFETY: the layout is the registry's `VkPhysicalDeviceShaderFloat8FeaturesEXT`, which begins
+// with `sType` and `pNext` as every chained structure must, and this is its structure type.
+unsafe impl avk::TaggedStructure for ShaderFloat8Features {
+    const STRUCTURE_TYPE: avk::StructureType = avk::StructureType::from_raw(1_000_567_000);
+}
+
+// SAFETY: the registry lists `VkPhysicalDeviceFeatures2` in the structure's `structextends`.
+unsafe impl avk::ExtendsPhysicalDeviceFeatures2 for ShaderFloat8Features {}
+
 /// `VkPhysicalDeviceMaintenance10PropertiesKHR`, which `ash 0.38` predates, laid out as the
 /// registry defines it (`vk.xml`: `sType`, `pNext`, `VkBool32 rgba4OpaqueBlackSwizzled`,
 /// `resolveSrgbFormatAppliesTransferFunction`, `resolveSrgbFormatSupportsTransferFunctionControl`;
@@ -314,6 +348,7 @@ struct FeatureChain {
     feedback_loop: avk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT<'static>,
     maintenance8: Maintenance8Features,
     shader_fma: ShaderFmaFeatures,
+    shader_float8: ShaderFloat8Features,
     border_color_swizzle: avk::PhysicalDeviceBorderColorSwizzleFeaturesEXT<'static>,
     depth_bias_control: avk::PhysicalDeviceDepthBiasControlFeaturesEXT<'static>,
     depth_clip_enable: avk::PhysicalDeviceDepthClipEnableFeaturesEXT<'static>,
@@ -367,6 +402,7 @@ const EXT_DYNAMIC_STATE3: &[&str] = &["VK_EXT_extended_dynamic_state3"];
 const EXT_FEEDBACK_LOOP: &[&str] = &["VK_EXT_attachment_feedback_loop_layout"];
 const EXT_MAINTENANCE8: &[&str] = &["VK_KHR_maintenance8"];
 const EXT_SHADER_FMA: &[&str] = &["VK_KHR_shader_fma"];
+const EXT_SHADER_FLOAT8: &[&str] = &["VK_EXT_shader_float8"];
 const EXT_BORDER_COLOR_SWIZZLE: &[&str] = &["VK_EXT_border_color_swizzle"];
 const EXT_DEPTH_BIAS_CONTROL: &[&str] = &["VK_EXT_depth_bias_control"];
 const EXT_DEPTH_CLIP_ENABLE: &[&str] = &["VK_EXT_depth_clip_enable"];
@@ -415,6 +451,7 @@ pub(crate) struct Chained {
     feedback_loop: bool,
     maintenance8: bool,
     shader_fma: bool,
+    shader_float8: bool,
     border_color_swizzle: bool,
     depth_bias_control: bool,
     depth_clip_enable: bool,
@@ -466,6 +503,7 @@ impl Chained {
             feedback_loop: x.ext(EXT_FEEDBACK_LOOP),
             maintenance8: x.ext(EXT_MAINTENANCE8),
             shader_fma: x.ext(EXT_SHADER_FMA),
+            shader_float8: x.ext(EXT_SHADER_FLOAT8),
             border_color_swizzle: x.ext(EXT_BORDER_COLOR_SWIZZLE),
             depth_bias_control: x.ext(EXT_DEPTH_BIAS_CONTROL),
             depth_clip_enable: x.ext(EXT_DEPTH_CLIP_ENABLE),
@@ -537,6 +575,7 @@ impl FeatureChain {
                 feedback_loop,
                 maintenance8,
                 shader_fma,
+                shader_float8,
                 border_color_swizzle,
                 depth_bias_control,
                 depth_clip_enable,
@@ -795,6 +834,7 @@ feature_sources! { c, x;
     ImageViewFormatSwizzle => on(c.portability_subset.image_view_format_swizzle);
     ShaderFmaFloat16 => on(c.shader_fma.shader_fma_float16);
     ShaderFmaFloat32 => on(c.shader_fma.shader_fma_float32);
+    ShaderFloat8 => on(c.shader_float8.shader_float8);
     Maintenance5 => on(c.maintenance5.maintenance5);
     TaskShader => on(c.mesh_shader.task_shader);
     MeshShader => on(c.mesh_shader.mesh_shader);

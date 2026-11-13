@@ -2338,6 +2338,17 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review.
     NativeLogicOperation,
+    /// A tensor's 8-bit float element (`MTLTensorDataTypeFloat8E4M3` or `Float8E5M2`, which a
+    /// `matmul2d` product reads) widens through the device's own 8-bit float (`shaderFloat8`,
+    /// `SPV_EXT_float8`'s `Float8E4M3EXT` or `Float8E5M2EXT`, OCP's encodings), the only form on
+    /// such a device: an `e4m3` code `0x7F` or `0xFF` reads as a NaN there, where Metal reads 480
+    /// and -480 (measured on the M3 Max), and an `e5m2` NaN's bits are the device's, where Metal
+    /// reads `0x7FC00000`. Every other code reads Metal's value. A device without `shaderFloat8`
+    /// decodes the fields with integers, as Metal reads them, and records none.
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    NativeFloat8,
 }
 
 /// The math mode of an entry's module, which decides, on a device whose `float` functions are

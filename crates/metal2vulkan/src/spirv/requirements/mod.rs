@@ -513,6 +513,11 @@ impl Deriver<'_> {
                     self.cap(Cap::Float64);
                     self.feat(VkFeature::ShaderFloat64);
                 }
+                Type::Float8 { .. } => {
+                    self.cap(Cap::Float8EXT);
+                    self.feat(VkFeature::ShaderFloat8);
+                    self.ext(SpirvExtension::ExtFloat8);
+                }
                 Type::RuntimeArray { stride: None, .. } => {
                     self.cap(Cap::RuntimeDescriptorArray);
                     self.feat(VkFeature::RuntimeDescriptorArray);
@@ -1553,6 +1558,7 @@ pub const ALL_SPIRV_EXTENSIONS: &[SpirvExtension] = &[
     SpirvExtension::ExtMeshShader,
     SpirvExtension::KhrQuadControl,
     SpirvExtension::KhrPostDepthCoverage,
+    SpirvExtension::ExtFloat8,
 ];
 
 /// The `OpExtension` name of a SPIR-V extension.
@@ -1585,5 +1591,6 @@ pub fn spirv_extension_name(e: SpirvExtension) -> &'static str {
         SpirvExtension::ExtMeshShader => "SPV_EXT_mesh_shader",
         SpirvExtension::KhrQuadControl => "SPV_KHR_quad_control",
         SpirvExtension::KhrPostDepthCoverage => "SPV_KHR_post_depth_coverage",
+        SpirvExtension::ExtFloat8 => "SPV_EXT_float8",
     }
 }

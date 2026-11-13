@@ -147,6 +147,42 @@ unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for ShaderFmaFeatures {}
 // SAFETY: as above.
 unsafe impl vk::ExtendsDeviceCreateInfo for ShaderFmaFeatures {}
 
+/// `VkPhysicalDeviceShaderFloat8FeaturesEXT`, which `ash 0.38` predates, laid out as the registry
+/// defines it (`sType`, `pNext`, `VkBool32 shaderFloat8`, `shaderFloat8CooperativeMatrix`;
+/// structure type 1000567000). The product's query reads the same structure
+/// (`ash_interop::query`).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct ShaderFloat8Features {
+    s_type: vk::StructureType,
+    p_next: *mut std::ffi::c_void,
+    shader_float8: vk::Bool32,
+    shader_float8_cooperative_matrix: vk::Bool32,
+}
+
+impl Default for ShaderFloat8Features {
+    fn default() -> Self {
+        ShaderFloat8Features {
+            s_type: <Self as vk::TaggedStructure>::STRUCTURE_TYPE,
+            p_next: std::ptr::null_mut(),
+            shader_float8: vk::FALSE,
+            shader_float8_cooperative_matrix: vk::FALSE,
+        }
+    }
+}
+
+// SAFETY: the layout is the registry's `VkPhysicalDeviceShaderFloat8FeaturesEXT`, which begins
+// with `sType` and `pNext` as every chained structure must, and this is its structure type.
+unsafe impl vk::TaggedStructure for ShaderFloat8Features {
+    const STRUCTURE_TYPE: vk::StructureType = vk::StructureType::from_raw(1_000_567_000);
+}
+
+// SAFETY: the registry lists `VkPhysicalDeviceFeatures2` and `VkDeviceCreateInfo` in the
+// structure's `structextends`.
+unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for ShaderFloat8Features {}
+// SAFETY: as above.
+unsafe impl vk::ExtendsDeviceCreateInfo for ShaderFloat8Features {}
+
 /// `VkPhysicalDeviceDepthClampControlFeaturesEXT`, which `ash 0.38` predates, laid out as the
 /// registry defines it (`sType`, `pNext`, `VkBool32 depthClampControl`; extension number 583, so
 /// its structure type is `1000000000 + 582 * 1000`). The product's query reads the same structure
@@ -212,6 +248,8 @@ pub(super) enum Structure {
     Maintenance8,
     /// `VkPhysicalDeviceShaderFmaFeaturesKHR`.
     ShaderFma,
+    /// `VkPhysicalDeviceShaderFloat8FeaturesEXT`.
+    ShaderFloat8,
     FloatControls2,
     Maintenance5,
     BorderColorSwizzle,
@@ -278,6 +316,7 @@ impl Structure {
         Structure::RasterOrder,
         Structure::Maintenance8,
         Structure::ShaderFma,
+        Structure::ShaderFloat8,
         Structure::FloatControls2,
         Structure::Maintenance5,
         Structure::BorderColorSwizzle,
@@ -339,6 +378,7 @@ impl Structure {
             ],
             Structure::Maintenance8 => &[c"VK_KHR_maintenance8"],
             Structure::ShaderFma => &[c"VK_KHR_shader_fma"],
+            Structure::ShaderFloat8 => &[c"VK_EXT_shader_float8"],
             Structure::FloatControls2 => &[c"VK_KHR_shader_float_controls2"],
             Structure::Maintenance5 => &[c"VK_KHR_maintenance5"],
             Structure::BorderColorSwizzle => &[c"VK_EXT_border_color_swizzle"],
@@ -581,6 +621,7 @@ pub(super) struct FeatureChain {
         vk::PhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT<'static>,
     pub(super) maintenance8: Maintenance8Features,
     pub(super) shader_fma: ShaderFmaFeatures,
+    pub(super) shader_float8: ShaderFloat8Features,
     pub(super) float_controls2: vk::PhysicalDeviceShaderFloatControls2FeaturesKHR<'static>,
     pub(super) maintenance5: vk::PhysicalDeviceMaintenance5FeaturesKHR<'static>,
     pub(super) border_color_swizzle: vk::PhysicalDeviceBorderColorSwizzleFeaturesEXT<'static>,
@@ -635,6 +676,7 @@ macro_rules! link_extensions {
             RasterOrder => raster_order,
             Maintenance8 => maintenance8,
             ShaderFma => shader_fma,
+            ShaderFloat8 => shader_float8,
             FloatControls2 => float_controls2,
             Maintenance5 => maintenance5,
             BorderColorSwizzle => border_color_swizzle,
@@ -701,6 +743,7 @@ impl FeatureChain {
             raster_order,
             maintenance8,
             shader_fma,
+            shader_float8,
             float_controls2,
             maintenance5,
             border_color_swizzle,
@@ -1142,6 +1185,7 @@ members! {
     Maintenance8.maintenance8.maintenance8 => Some(F::Maintenance8);
     ShaderFma.shader_fma.shader_fma_float16 => Some(F::ShaderFmaFloat16);
     ShaderFma.shader_fma.shader_fma_float32 => Some(F::ShaderFmaFloat32);
+    ShaderFloat8.shader_float8.shader_float8 => Some(F::ShaderFloat8);
     FloatControls2.float_controls2.shader_float_controls2 => None,
         registry = "shaderFloatControls2";
     Maintenance5.maintenance5.maintenance5 => Some(F::Maintenance5);

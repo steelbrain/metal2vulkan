@@ -282,11 +282,6 @@ pub struct Entry {
     /// no measurement says whether it speculates them (an arm of an instruction, size or shape no
     /// probe covers). Such a branch keeps the AIR's lanes; Metal's may be the block's.
     pub unmeasured_speculation: bool,
-    /// Whether a `matmul2d` the expansion lowered reads 8-bit float elements
-    /// (`metal_fp8_e4m3_format`, `metal_fp8_e5m2_format`), which its body widens to float through
-    /// integer arithmetic on each element's byte. Lowering refuses such an entry on a device with
-    /// its own 8-bit float type, whose conversion is the only form there.
-    pub float8_products: bool,
 }
 
 /// An entry's explicit call stack: what its recursion through visible functions runs on. Its stacks
@@ -631,7 +626,7 @@ pub fn specialize_dynamic(
         .and_then(recursion::Recursion::call_stack);
     // `matmul2d` and tensor objects: each call modeled gets a body of its own, inlined, before SCCP
     // folds the sizes of the storage it allocates.
-    let (body, lanes, float8_products) = matmul2d::expand(body, &mut parts, ep, m)?;
+    let (body, lanes) = matmul2d::expand(body, &mut parts, ep, m)?;
     // A kernel's simdgroup asynchronous copies complete when their calls return, shared by the
     // simdgroup's lanes, and each wait is a simdgroup barrier.
     let body = async_copy::expand(body, &mut parts, ep, m)?;
@@ -876,7 +871,6 @@ pub fn specialize_dynamic(
         lockstep: Lockstep::default(),
         call_stack,
         unmeasured_speculation,
-        float8_products,
         module,
     })
 }

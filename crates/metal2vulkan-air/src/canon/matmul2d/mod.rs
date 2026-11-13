@@ -23,7 +23,9 @@
 //!   shuffle every lane of the simdgroup runs. An 8-bit float element (`metal_fp8_e4m3_format`,
 //!   `metal_fp8_e5m2_format`, measured over 32 x 32 x 32 on one simdgroup) is read as the float
 //!   of the same value, as Metal reads it: e4m3 has no infinity or NaN (`0x7F` is 480), and an
-//!   e5m2 NaN reads as the quiet NaN `0x7FC00000`.
+//!   e5m2 NaN reads as the quiet NaN `0x7FC00000`. The body widens it by an `air.convert` of the
+//!   tensor's format (`Fp8::TensorE4M3`, `Fp8::TensorE5M2`), which a device with its own 8-bit
+//!   float type widens through that type.
 //!
 //! A call this does not model stays a call. If one survives SCCP, [`refuse_left`] refuses the
 //! kernel as `Unsupported{Tensors, NotImplemented}`, naming what is not modeled: a shape or
@@ -475,17 +477,16 @@ fn classify(
 }
 
 /// Lower every `matmul2d` and tensor call of the inlined entry `body` it models (module doc),
-/// and inline the result. Returns the body; when a lowering reads them, the lane parameters added
-/// to the entry `ep.func`; and whether a lowering reads 8-bit float elements
-/// (`Entry::float8_products`).
+/// and inline the result. Returns the body and, when a lowering reads them, the lane parameters
+/// added to the entry `ep.func`.
 pub(super) fn expand(
     body: Body,
     parts: &mut ModuleParts,
     ep: &EntryPoint,
     m: &mut Meter,
-) -> Result<(Body, Option<Lanes>, bool), Error> {
+) -> Result<(Body, Option<Lanes>), Error> {
     if !declares_sites(parts, m)? {
-        return Ok((body, None, false));
+        return Ok((body, None));
     }
     let mut any = false;
     for inst in body.insts.values() {
@@ -493,7 +494,7 @@ pub(super) fn expand(
         any |= site(parts, &inst.kind).is_some();
     }
     if !any {
-        return Ok((body, None, false));
+        return Ok((body, None));
     }
     let kernel = matches!(ep.stage, Stage::Kernel { .. });
     let copies = descriptor_copies(&body, parts, m)?;
@@ -538,9 +539,6 @@ pub(super) fn expand(
     m.release(copies.len() * OBJECT_BYTES);
     drop(copies);
 
-    let float8 = plans
-        .iter()
-        .any(|(_, p)| matches!(p, Plan::Lower(l) if synth::reads_float8(l)));
     // The lane parameters, appended to the entry's.
     let func = ep.func;
     let lanes = if plans
@@ -620,7 +618,7 @@ pub(super) fn expand(
     drop(plans);
     if calls.is_empty() {
         m.release(calls.capacity() * std::mem::size_of::<(InstId, FuncId, bool)>());
-        return Ok((body, lanes, float8));
+        return Ok((body, lanes));
     }
 
     // The calls rewritten in place to the functions built for them, then inlined.
@@ -673,7 +671,7 @@ pub(super) fn expand(
         m,
     )?
     .ok_or_else(|| invariant("a lowered matmul2d call was not inlined"))?;
-    Ok((inlined, lanes, float8))
+    Ok((inlined, lanes))
 }
 
 /// The integer constant `x` of type `ty`.

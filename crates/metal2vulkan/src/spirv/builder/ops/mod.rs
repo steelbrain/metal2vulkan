@@ -116,6 +116,7 @@ impl FunctionBuilder<'_> {
             Type::Bool => (Kind::Bool, 1),
             Type::Int { width, signed } => (Kind::Int { signed: *signed }, *width),
             Type::Float { width } => (Kind::Float, *width),
+            Type::Float8 { .. } => (Kind::Float, 8),
             _ => return Ok(None),
         };
         Ok(Some(Num {

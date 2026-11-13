@@ -2138,7 +2138,7 @@ fn select_convert(
             .insert(crate::pipeline::artifact::PrecisionNote::Fp8Value);
         return Ok(ArithStrategy::Wide(WideOp::Convert {
             kind: ConvertKind::Fp8ToInt {
-                fp8: narrow::Fp8Layout::of(fmt),
+                fp8: narrow::Fp8Layout::on(fmt, cx.profile),
                 signed: c.dst_kind == NumKind::Signed,
             },
             from,

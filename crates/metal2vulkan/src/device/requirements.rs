@@ -365,6 +365,12 @@ pub enum VkFeature {
     /// The runtime draws a rate-mapped pass's regions through it, several in one command, each
     /// region's viewport selected by its draw's index (`LoweringInputs::region_viewports`).
     MultiDraw,
+    // Appended.
+    /// `VK_EXT_shader_float8`'s `shaderFloat8`: the SPIR-V capability `Float8EXT`, 8-bit floats of
+    /// the encodings `Float8E4M3EXT` and `Float8E5M2EXT` (`SPV_EXT_float8`), which Vulkan requires
+    /// of every device that lists the extension. The lowering converts an 8-bit float to a wider
+    /// one through the device's own type where it has it (`lower::arith::narrow`'s `fp8_native`).
+    ShaderFloat8,
 }
 
 /// A Vulkan device extension the new core can require.
@@ -1210,6 +1216,8 @@ pub enum SpirvExtension {
     KhrQuadControl,
     // Appended.
     KhrPostDepthCoverage,
+    // Appended.
+    ExtFloat8,
 }
 
 /// The SPIR-V capabilities a module's [`Requirements`] list without the feature that enables them,

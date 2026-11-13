@@ -1846,6 +1846,7 @@ impl Ser<'_> {
                 w.inst(Op::TypeInt, &[id, u32::from(*width), u32::from(*signed)])
             }
             Type::Float { width } => w.inst(Op::TypeFloat, &[id, u32::from(*width)]),
+            Type::Float8 { encoding } => w.inst(Op::TypeFloat, &[id, 8, *encoding as u32]),
             Type::Vector { elem, len } => {
                 w.inst(Op::TypeVector, &[id, self.ty(*elem)?, u32::from(*len)])
             }

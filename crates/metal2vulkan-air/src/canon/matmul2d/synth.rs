@@ -11,7 +11,7 @@
 use crate::budget::Meter;
 use crate::error::DiagName;
 use crate::error::{Error, Feature, Unsupported};
-use crate::intrinsics::Tensor;
+use crate::intrinsics::{AirIntrinsic, Convert, Elem, Fp8, NumKind, NumTy, Tensor};
 use crate::ir::{
     AddrSpace, ArgIdx, BinOp, CallConv, CastOp, Const, FnAttrs, FuncId, Function, IntPredicate,
     Linkage, ModuleParts, Param, ParamAttrs, Type, TypeId, UnnamedAddr, Value, Visibility,
@@ -401,19 +401,6 @@ pub(super) enum Lowered {
     },
 }
 
-/// Whether `l`'s body reads 8-bit float elements (`metal_fp8_e4m3_format`,
-/// `metal_fp8_e5m2_format`), each widened to float through integer arithmetic on its byte
-/// ([`fp8_wide`]): a `run` whose left or right input holds them.
-pub(super) fn reads_float8(l: &Lowered) -> bool {
-    let float8 = |t: DataType| matches!(t, DataType::Fp8E4M3 | DataType::Fp8E5M2);
-    match l {
-        Lowered::Run(r) => float8(r.form.left.elem()) || float8(r.form.right.elem()),
-        Lowered::Const { .. } | Lowered::Nothing | Lowered::Helper(_) | Lowered::Tensor { .. } => {
-            false
-        }
-    }
-}
-
 /// Whether `l`'s body reads the lane's and the simdgroup's index.
 pub(super) fn needs_lanes(l: &Lowered) -> bool {
     match l {
@@ -691,57 +678,37 @@ fn load_wide(out: &mut Out<'_>, t: DataType, ptr: Value, m: &mut Meter) -> Resul
         DataType::Fp8E4M3 | DataType::Fp8E5M2 => {
             let i8t = out.int_ty(8, m)?;
             let b = out.load(i8t, ptr, 1, m)?;
-            let b = out.cast(CastOp::ZExt, b, i32t, m)?;
             fp8_wide(out, t, b, m)
         }
         _ => Err(invariant("a lowered matmul2d element type")),
     }
 }
 
-/// The float of the 8-bit float `t` whose byte is `b` (an `i32`, zero-extended), exactly, as
-/// Metal reads it (`tns_mm_fp8`, the M3 Max): a subnormal kept, a signed zero kept; e4m3 has no
-/// infinity or NaN (`0x7F` and `0xFF` are 480 and -480); e5m2's infinities are infinities and its
-/// NaNs the quiet NaN `0x7FC00000`. Integer arithmetic on the byte's fields, so no device needs an
-/// 8-bit or 16-bit float type for it.
+/// The float of the 8-bit float `t` whose byte is `b` (an `i8`), exactly: an `air.convert` of
+/// the tensor's format ([`Fp8::TensorE4M3`], [`Fp8::TensorE5M2`]: Metal's reading, measured on the
+/// M3 Max, a subnormal kept, a signed zero kept; e4m3 has no infinity or NaN, `0x7F` and `0xFF`
+/// reading 480 and -480; e5m2's infinities are infinities and its NaNs the quiet NaN
+/// `0x7FC00000`). Lowering widens it as every 8-bit float conversion: through the device's own
+/// 8-bit float where the device has one of its encoding, else by integer arithmetic on the
+/// fields as Metal reads them.
 fn fp8_wide(out: &mut Out<'_>, t: DataType, b: Value, m: &mut Meter) -> Result<Value, Error> {
-    // The mantissa's bits, float's exponent bias less the format's, the least normal magnitude
-    // (its bits), and the least subnormal's value.
-    let (mantissa, rebias, least_normal, least_subnormal) = match t {
-        DataType::Fp8E4M3 => (3, 127 - 7, 0x08, 2f32.powi(-9)),
-        DataType::Fp8E5M2 => (2, 127 - 15, 0x04, 2f32.powi(-16)),
+    let (format, name) = match t {
+        DataType::Fp8E4M3 => (Fp8::TensorE4M3, "air.convert.f.f32.f.f8e4m3.tensor"),
+        DataType::Fp8E5M2 => (Fp8::TensorE5M2, "air.convert.f.f32.f.f8e5m2.tensor"),
         _ => return Err(invariant("an 8-bit float of another format")),
     };
-    let i32t = out.int_ty(32, m)?;
+    let i8t = out.int_ty(8, m)?;
     let f32t = out.ty(Type::Float, m)?;
-    let sign = out.i32k(BinOp::And, b, 0x80, m)?;
-    let sign = out.i32k(BinOp::Shl, sign, 24, m)?;
-    let magnitude = out.i32k(BinOp::And, b, 0x7F, m)?;
-    // A normal magnitude: its exponent and mantissa fields moved to float's, the exponent
-    // rebiased.
-    let normal = out.i32k(BinOp::Shl, magnitude, 23 - mantissa, m)?;
-    let normal = out.i32k(BinOp::Add, normal, rebias << 23, m)?;
-    // A subnormal one (the exponent field zero, so the magnitude is the mantissa): the mantissa
-    // times the least subnormal, exactly.
-    let sub = out.cast(CastOp::UIToFP, magnitude, f32t, m)?;
-    let scale = out.f32k(least_subnormal, m)?;
-    let sub = out.bin(f32t, BinOp::FMul, sub, scale, m)?;
-    let sub = out.cast(CastOp::Bitcast, sub, i32t, m)?;
-    let least_normal = out.k32(least_normal, m)?;
-    let is_sub = out.icmp(IntPredicate::Ult, magnitude, least_normal, m)?;
-    let bits = out.select(i32t, is_sub, sub, normal, m)?;
-    let mut bits = out.i32op(BinOp::Or, bits, sign, m)?;
-    if t == DataType::Fp8E5M2 {
-        // The exponent field all ones: an infinity, or (with a mantissa) a NaN.
-        let infinite = out.k32(0x7C, m)?;
-        let is_inf = out.icmp(IntPredicate::Eq, magnitude, infinite, m)?;
-        let inf = out.k32(0x7F80_0000, m)?;
-        let inf = out.i32op(BinOp::Or, inf, sign, m)?;
-        bits = out.select(i32t, is_inf, inf, bits, m)?;
-        let is_nan = out.icmp(IntPredicate::Ugt, magnitude, infinite, m)?;
-        let nan = out.k32(0x7FC0_0000, m)?;
-        bits = out.select(i32t, is_nan, nan, bits, m)?;
-    }
-    out.cast(CastOp::Bitcast, bits, f32t, m)
+    let op = AirIntrinsic::Convert(Convert {
+        dst: NumTy::scalar(Elem::F32),
+        dst_kind: NumKind::Float,
+        src: NumTy::scalar(Elem::I8),
+        src_kind: NumKind::Float,
+        src_fp8: Some(format),
+        rounding: None,
+        saturate: false,
+    });
+    out.air_call(name, op, f32t, &[i8t], &[b], m)
 }
 
 /// A tensor operand's fields, read once from its object ([`tensor`]).

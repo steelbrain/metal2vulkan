@@ -51,6 +51,15 @@ pub enum Fp8 {
     E4M3Fn,
     /// `f8e5m2`: 5 exponent bits (bias 15) and 2 mantissa bits, IEEE-like.
     E5M2,
+    /// A tensor's `e4m3` element as Metal reads it (`MTLTensorDataTypeFloat8E4M3`, measured on the
+    /// M3 Max): 4 exponent bits (bias 7) and 3 mantissa bits, with no infinity or NaN (`0x7F` and
+    /// `0xFF` are 480 and -480). No AIR name spells it: canonicalization's `matmul2d` expansion
+    /// makes the conversion of one directly.
+    TensorE4M3,
+    /// A tensor's `e5m2` element as Metal reads it (`MTLTensorDataTypeFloat8E5M2`, measured on the
+    /// M3 Max): IEEE-like, its infinities infinities and every NaN the quiet NaN `0x7FC00000`. No
+    /// AIR name spells it, as [`Fp8::TensorE4M3`].
+    TensorE5M2,
 }
 
 impl Fp8 {

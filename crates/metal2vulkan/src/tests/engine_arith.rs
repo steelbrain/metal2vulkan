@@ -950,6 +950,8 @@ declare i32 @air.convert.u.i32.f.f8e4m3(i8)
 declare i64 @air.convert.u.i64.f.f8e5m2(i8)
 declare i64 @air.convert.s.i64.f.f8e5m2(i8)
 declare float @air.convert.f.f32.f.f8e5m2(i8)
+declare float @air.convert.f.f32.f.f8e4m3fn(i8)
+declare <2 x float> @air.convert.f.v2f32.f.v2f8e5m2(<2 x i8>)
 declare <4 x float> @air.unpack.snorm.rgb10a2.v4f32(i32)
 declare i32 @air.pack.snorm.rgb10a2.v4f32(<4 x float>)
 ";
@@ -1003,6 +1005,86 @@ fn has(p: &DeviceProfile, n: Need) -> bool {
     let l = &p.fields().leaf;
     match n {
         Need::Float64 => l.float64,
+    }
+}
+
+/// An 8-bit float's widening to `float` (`f8e4m3fn`, `f8e5m2`, a scalar and a two-lane vector)
+/// is the device's own conversion where the device has `shaderFloat8` (the RTX 50 profile: the
+/// module declares `Float8EXT`) and the integer decode elsewhere (lavapipe), the same value either
+/// way: `f8e4m3fn`'s largest and a subnormal, its NaN `0x7F`, an `f8e5m2` infinity and subnormal.
+/// Neither form records a note: Metal on Apple M3 does not compile these widenings, so no Metal
+/// answer differs from either.
+#[test]
+fn fp8_widenings_are_the_devices_own_where_it_has_8_bit_floats() {
+    let mut ks: Vec<Kernel> = [
+        ("fp8_e4m3fn_largest", "f8e4m3fn", 0x7Eu32, 448f32),
+        ("fp8_e4m3fn_subnormal", "f8e4m3fn", 0x81, -(2f32.powi(-9))),
+        ("fp8_e4m3fn_nan", "f8e4m3fn", 0x7F, f32::NAN),
+        ("fp8_e5m2_infinity", "f8e5m2", 0xFC, f32::NEG_INFINITY),
+        ("fp8_e5m2_subnormal", "f8e5m2", 0x01, 2f32.powi(-16)),
+    ]
+    .into_iter()
+    .map(|(name, format, bits, want)| Kernel {
+        name,
+        body: format!(
+            "{}  %r = call float @air.convert.f.f32.f.{format}(i8 %a)\n",
+            on("a", 8, bits)
+        ),
+        float: true,
+        want: Some(want.to_bits()),
+        needs: &[],
+        note: None,
+    })
+    .collect();
+    // 1.0 and -5.0, summed.
+    ks.push(Kernel {
+        name: "fp8_e5m2_pair",
+        body: format!(
+            "{}{}  %v0 = insertelement <2 x i8> undef, i8 %a, i32 0\n  \
+             %v = insertelement <2 x i8> %v0, i8 %b, i32 1\n  \
+             %w = call <2 x float> @air.convert.f.v2f32.f.v2f8e5m2(<2 x i8> %v)\n  \
+             %x = extractelement <2 x float> %w, i32 0\n  \
+             %y = extractelement <2 x float> %w, i32 1\n  %r = fadd float %x, %y\n",
+            on("a", 8, 0x3C),
+            on("b", 8, 0xC5)
+        ),
+        float: true,
+        want: Some((-4f32).to_bits()),
+        needs: &[],
+        note: None,
+    });
+    let Some(bitcode) = assemble("fp8-widenings", &module(&ks)) else {
+        return;
+    };
+    let float8 =
+        crate::device::requirements::SpirvCapability::of(crate::spv::Capability::Float8EXT);
+    for (stem, native) in [("nvidia-rtx50-linux", true), ("lavapipe", false)] {
+        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        assert_eq!(p.fields().leaf.float8, native, "{stem}");
+        for kk in &ks {
+            let what = format!("{} on {stem}", kk.name);
+            let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            assert_eq!(
+                a.requirements.spirv_capabilities.contains(&float8),
+                native,
+                "{what}: {:?}",
+                a.requirements.spirv_capabilities
+            );
+            assert!(
+                !a.precision.contains(&PrecisionNote::NativeFloat8),
+                "{what}: {:?}",
+                a.precision
+            );
+            let got = interpret(&bitcode, kk.name, &p);
+            let want = kk.want.expect("a stored word");
+            if f32::from_bits(want).is_nan() {
+                // A NaN's bits are the device's.
+                assert!(f32::from_bits(got).is_nan(), "{what}: {got:#x}");
+            } else {
+                assert_eq!(got, want, "{what}: {got:#x} != {want:#x}");
+            }
+        }
     }
 }
 

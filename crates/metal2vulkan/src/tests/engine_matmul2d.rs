@@ -23,7 +23,10 @@
 //! The owned fixture `tns_mm_fp8` (built for macOS 27) multiplies 8-bit floats (e4m3 and e5m2)
 //! into float over 32 x 32 x 32 on one simdgroup, B transposed or not, accumulating C or not, A or
 //! B staged in threadgroup memory: each element decodes exactly, subnormals kept (an e4m3 `0x7F`
-//! reads 480, as measured on the M3 Max), and its float sums are the same reference's.
+//! reads 480, as measured on the M3 Max), and its float sums are the same reference's. On a device
+//! with its own 8-bit floats (`shaderFloat8`: the RTX 50 profile) each element widens through the
+//! device's type (the module declares `Float8EXT`), whose e4m3 `0x7F` and `0xFF` read NaN, and the
+//! artifact records `PrecisionNote::NativeFloat8`; every other code reads Metal's value.
 //!
 //! The owned fixtures `tns_init` and `tns_init_left` (`tns_mm_left`'s second kernel) construct a
 //! cooperative tensor (a destination, a right input, or a left input) in a loop's body: each
@@ -36,15 +39,17 @@
 //! visibly.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::budget::SPIRV_WORDS;
-use crate::device::requirements::{VkExtension, VkProperty};
+use crate::device::requirements::{SpirvCapability, VkProperty};
 use crate::device::subgroup::Tier;
 use crate::device::DevicePolicy;
 use crate::error::{Error, Feature, Needs};
-use crate::library::{FunctionConstantValue, FunctionConstantValues};
+use crate::library::{FunctionArtifact, FunctionConstantValue, FunctionConstantValues};
 use crate::lower::select::Plan;
 use crate::metal::DataType;
+use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::lower_inputs::LoweringInputs;
@@ -62,6 +67,8 @@ use crate::spirv::ir::TypedModule;
 const MOLTENVK: (&str, &[SubgroupSize]) = ("moltenvk-m3", &[SubgroupSize::W32]);
 const RADV: (&str, &[SubgroupSize]) = ("amd-rdna2-apu-radv", &[SubgroupSize::W32]);
 const LAVAPIPE: (&str, &[SubgroupSize]) = ("lavapipe", &[SubgroupSize::W8]);
+/// A device with its own 8-bit floats (`shaderFloat8`), on 32-lane subgroups.
+const RTX50: (&str, &[SubgroupSize]) = ("nvidia-rtx50-linux", &[SubgroupSize::W32]);
 
 #[test]
 fn integer_products_are_metals_on_moltenvk() {
@@ -183,59 +190,9 @@ fn fp8_products_are_metals_sequential_fused_sums_on_lavapipe() {
     fp8_fused_sums(LAVAPIPE);
 }
 
-/// A product of 8-bit floats is refused, not implemented, where the device has its own 8-bit
-/// float type (`VK_EXT_shader_float8`: the RTX 50 profiles), whose conversion is the only form
-/// there and is not built yet; on a device without one (RADV, lavapipe) it translates through the
-/// integer decode: `tns_mm_fp8`'s first e4m3 and first e5m2 variant.
 #[test]
-fn fp8_products_are_refused_where_the_device_has_its_own_8_bit_floats() {
-    let Some(bc) = bitcode("tns_mm_fp8") else {
-        return;
-    };
-    for (stem, native) in [
-        ("nvidia-rtx50-linux", true),
-        ("nvidia-rtx5080-laptop", true),
-        (RADV.0, false),
-        (LAVAPIPE.0, false),
-    ] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
-        let listed = p
-            .enabled()
-            .extensions
-            .contains(&VkExtension::ExtShaderFloat8);
-        assert_eq!(listed, native, "{stem}");
-        for v in [0, 7] {
-            let made = compile_bitcode(
-                &bc,
-                EntryRef::Name("tns_mm_fp8"),
-                &variant(v),
-                &p,
-                &LoweringInputs::new(),
-                &mut meter(),
-                SPIRV_WORDS,
-            );
-            match (native, made) {
-                (false, Ok(a)) => {
-                    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem} {v}: {e}"));
-                }
-                (true, Err(Error::Unsupported(u))) => {
-                    assert_eq!(u.feature, Feature::Tensors, "{stem} {v}");
-                    assert_eq!(u.needs, Needs::NotImplemented, "{stem} {v}");
-                    let named = u
-                        .symbol
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_default();
-                    assert!(
-                        named.contains("VK_EXT_shader_float8"),
-                        "{stem} {v}: {named}"
-                    );
-                }
-                (_, Ok(_)) => panic!("{stem} {v}: translated"),
-                (_, Err(e)) => panic!("{stem} {v}: {e}"),
-            }
-        }
-    }
+fn fp8_products_are_sequential_fused_sums_of_the_devices_own_8_bit_floats_on_rtx50() {
+    fp8_fused_sums(RTX50);
 }
 
 fn bitcode(name: &str) -> Option<Vec<u8>> {
@@ -301,13 +258,19 @@ fn kernel(bc: &[u8], entry: &str, v: u32, stem: &str) -> Kernel {
         "{what}: {:?}",
         plan.simd
     );
-    Kernel { what, plan, module }
+    Kernel {
+        what,
+        plan,
+        module,
+        artifact: a,
+    }
 }
 
 struct Kernel {
     what: String,
     plan: Plan,
     module: TypedModule,
+    artifact: Arc<FunctionArtifact>,
 }
 
 impl Kernel {
@@ -799,8 +762,13 @@ impl Fp8 {
         }
     }
 
-    /// The value of byte `b` as a float, exactly, subnormals kept (measured on the M3 Max).
-    fn widen(self, b: u8) -> f32 {
+    /// The value of byte `b` as a float, exactly, subnormals kept: as Metal reads it (measured on
+    /// the M3 Max), or through a device's own 8-bit float (`native`), whose e4m3 is OCP's, reading
+    /// `0x7F` and `0xFF` as NaN.
+    fn widen(self, b: u8, native: bool) -> f32 {
+        if native && matches!(self, Fp8::E4M3) && b & 0x7f == 0x7f {
+            return f32::NAN;
+        }
         let (mantissa, bias) = match self {
             Fp8::E4M3 => (3, 7),
             Fp8::E5M2 => (2, 15),
@@ -831,15 +799,39 @@ fn fp8_variant(v: u32) -> (Fp8, bool, bool) {
 
 /// Products of 8-bit floats into float are Metal's sequential fused sums on `profile`, of the
 /// exact decode of each byte, A and B in device memory or either in threadgroup memory
-/// (`tns_mm_fp8`, one 32 x 32 x 32 tile).
+/// (`tns_mm_fp8`, one 32 x 32 x 32 tile). On a device with its own 8-bit floats each byte widens
+/// through the device's type (`Float8EXT` declared, `PrecisionNote::NativeFloat8` recorded), whose
+/// e4m3 reads `0x7F` and `0xFF` as NaN: a sum of one is a NaN, whose bits are the device's.
 fn fp8_fused_sums((stem, widths): (&str, &[SubgroupSize])) {
     let Some(bc) = bitcode("tns_mm_fp8") else {
         return;
     };
+    let native = profile(stem, DevicePolicy::default())
+        .expect("profile")
+        .fields()
+        .leaf
+        .float8;
+    let float8 = SpirvCapability::of(crate::spv::Capability::Float8EXT);
     let mut rng = Rng(0xf8e4);
+    let mut nans = 0;
     for v in 0..14 {
         let (format, transposed, accumulates) = fp8_variant(v);
         let kernel = kernel(&bc, "tns_mm_fp8", v, stem);
+        let artifact = &kernel.artifact;
+        assert_eq!(
+            artifact.requirements.spirv_capabilities.contains(&float8),
+            native,
+            "{}: {:?}",
+            kernel.what,
+            artifact.requirements.spirv_capabilities
+        );
+        assert_eq!(
+            artifact.precision.contains(&PrecisionNote::NativeFloat8),
+            native,
+            "{}: {:?}",
+            kernel.what,
+            artifact.precision
+        );
         let a: Vec<u8> = (0..1024).map(|_| format.random(&mut rng)).collect();
         let b: Vec<u8> = (0..1024).map(|_| format.random(&mut rng)).collect();
         let c: Vec<f32> = (0..1024)
@@ -850,13 +842,13 @@ fn fp8_fused_sums((stem, widths): (&str, &[SubgroupSize])) {
             for col in 0..32 {
                 let mut acc = if accumulates { c[row * 32 + col] } else { 0.0 };
                 for k in 0..32 {
-                    let x = format.widen(a[row * 32 + k]);
+                    let x = format.widen(a[row * 32 + k], native);
                     let at = if transposed {
                         col * 32 + k
                     } else {
                         k * 32 + col
                     };
-                    acc = x.mul_add(format.widen(b[at]), acc);
+                    acc = x.mul_add(format.widen(b[at], native), acc);
                 }
                 want[row * 32 + col] = acc.to_bits();
             }
@@ -871,6 +863,16 @@ fn fp8_fused_sums((stem, widths): (&str, &[SubgroupSize])) {
         let out = kernel.run(widths, 32, &init);
         let got = words(&out[3]);
         for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+            if f32::from_bits(*w).is_nan() {
+                assert!(
+                    f32::from_bits(*g).is_nan(),
+                    "{} ({format:?}): out[{i}] {} is no NaN",
+                    kernel.what,
+                    f32::from_bits(*g)
+                );
+                nans += 1;
+                continue;
+            }
             assert_eq!(
                 g,
                 w,
@@ -881,6 +883,8 @@ fn fp8_fused_sums((stem, widths): (&str, &[SubgroupSize])) {
             );
         }
     }
+    // The device's e4m3 NaNs reach the sums only where the device has its own 8-bit floats.
+    assert_eq!(nans > 0, native, "{stem}: {nans} NaN sums");
 }
 
 /// `fixture` with every spelling of a descriptor's fields `from` respelled `to`, for each pair (in
