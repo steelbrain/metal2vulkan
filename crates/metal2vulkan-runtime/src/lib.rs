@@ -167,6 +167,7 @@ mod loaded;
 mod loader_word;
 mod managed;
 mod managed_copy;
+mod managed_sync;
 mod memory;
 mod memory_log;
 mod merge_scratch;

@@ -223,6 +223,7 @@ use crate::event::EventShared;
 use crate::event_timeline::Signal;
 use crate::exit_guard::{self, Call};
 use crate::gpu_time;
+use crate::managed_sync::{self, SyncOut};
 use crate::release;
 use crate::resource::{ObjectId, ResourceKey};
 use crate::scheduler;
@@ -577,8 +578,15 @@ impl CommandBufferShared {
                 scheduler.values[queue]
             })
         };
-        // The scrubs of emulated textures' writes, as mapped now, then every segment in its place.
+        // The scrubs of emulated textures' writes, as mapped now; the copies out of buffers with a
+        // host copy, of the writes noted so far, its own noted after them; then every segment in
+        // its place.
         self.record_scrubs(&mut state, range.clone())?;
+        let at = Point {
+            queue,
+            value: scheduler.values[queue] + 1,
+        };
+        self.record_syncs_out(&mut state, range.clone(), at)?;
         state
             .place(range.clone())
             .map_err(|error| recording_error(device, error))?;
@@ -593,10 +601,6 @@ impl CommandBufferShared {
         // The copies between textures' faces around its work, for turns whose passes have not
         // run (`texture/faces.rs`).
         self.record_face_fixes(&mut state, range.clone())?;
-        let at = Point {
-            queue,
-            value: scheduler.values[queue] + 1,
-        };
         // What each timeline whose writes the tracker forgets completed through as the host saw
         // it, each `VkQueue`'s, then the device's own (the module docs): read once, for the
         // tracker and for the work's waits alike.
@@ -1866,6 +1870,59 @@ impl CommandBufferShared {
         Ok(())
     }
 
+    /// Record the copies out of buffers with a host copy that the blits of encoders `range` left
+    /// to their batch's submission (`Deferred::SyncOut`), each of the bytes the GPU wrote since
+    /// the buffer's last copy out as the writes noted so far say, its own encoder's among them;
+    /// and note each encoder's writes once its copies out were decided, then the command buffer's
+    /// writes through its residency, and where it may write memory no use names, the batch at
+    /// `at` (`managed_sync.rs`).
+    fn record_syncs_out(
+        &self,
+        state: &mut State,
+        range: std::ops::Range<usize>,
+        at: Point,
+    ) -> Result<(), CommandBufferError> {
+        let shared = self.device.shared();
+        let writes = &shared.gpu_writes;
+        let completed = |point: Point| {
+            (shared.queues.get(point.queue)).is_some_and(|on| on.completed_value() >= point.value)
+        };
+        for encoder in range {
+            let outs: Vec<(usize, Arc<SyncOut>)> = (state.recorded[encoder].segments.iter())
+                .enumerate()
+                .filter_map(|(at, segment)| match (&segment.work, &segment.recorded) {
+                    (Deferred::SyncOut(out), None) => Some((at, Arc::clone(out))),
+                    _ => None,
+                })
+                .collect();
+            for (segment, out) in outs {
+                let raw = self.record_raw(state, |state, buffer| {
+                    let part = &state.recorded[encoder];
+                    let resident = state.resident_writes.as_ref();
+                    let own =
+                        |key| managed_sync::writes_of(part_summaries(part).chain(resident), key);
+                    // SAFETY: the command buffer is recording, outside a render pass; the buffers
+                    // and the copies' targets are held until it completes (their encoder retains
+                    // them).
+                    unsafe { out.record(shared.vk(), buffer, writes, &own, &completed) };
+                    Ok(())
+                })?;
+                state.recorded[encoder].segments[segment].recorded =
+                    Some(RecordedSegment::submitted(vec![raw]));
+            }
+            if writes.keeps_any() {
+                writes.note(part_summaries(&state.recorded[encoder]));
+            }
+        }
+        if writes.keeps_any() {
+            writes.note(state.resident_writes.iter());
+        }
+        if state.writes_unnamed {
+            writes.note_unnamed(at, &completed);
+        }
+        Ok(())
+    }
+
     /// Whether `copies`' image stands across command buffers (`shadow_standing.rs`) for a copy
     /// in of encoder `encoder`, submitted now: it stands, no earlier encoder of the command
     /// buffer wrote the truth or the image, and none of its commands may reach memory no use
@@ -2142,6 +2199,16 @@ fn finishes_after(
         }
     }
     after
+}
+
+/// The summaries of what `part` uses: its own, and its segments' recorded so far, which join it as
+/// its batch's segments are placed (`State::place`).
+fn part_summaries(part: &Recorded) -> impl Iterator<Item = &Summary<ResourceKey>> {
+    std::iter::once(&part.summary).chain(
+        (part.segments.iter())
+            .filter_map(|segment| segment.recorded.as_ref())
+            .map(|recorded| &recorded.summary),
+    )
 }
 
 /// What a batch's encoders (or parts of them) `recorded` were, as the encoder trail names them

@@ -519,6 +519,9 @@ pub(crate) struct Counters {
     managed_bytes_modified: AtomicU64,
     managed_resources_synchronized: AtomicU64,
     managed_bytes_synchronized: AtomicU64,
+    managed_synchronizes_unwritten: AtomicU64,
+    managed_synchronizes_whole: AtomicU64,
+    managed_bytes_unwritten_skipped: AtomicU64,
     managed_staging_bytes: AtomicU64,
     managed_writes_undone: AtomicU64,
     managed_bytes_staged_in: AtomicU64,
@@ -4349,6 +4352,19 @@ impl Counters {
         };
         calls.fetch_add(1, Ordering::Relaxed);
         asked.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A two-copy buffer's copy out was decided (`managed_sync.rs`): `skipped` bytes of its range
+    /// that no GPU write since its last copy out reached go uncopied, it copies nothing where
+    /// `unwritten`, and its range whole where `whole`, the GPU's writes not known.
+    pub(crate) fn managed_synchronize_decided(&self, skipped: u64, unwritten: bool, whole: bool) {
+        (self.managed_bytes_unwritten_skipped).fetch_add(skipped, Ordering::Relaxed);
+        if unwritten {
+            (self.managed_synchronizes_unwritten).fetch_add(1, Ordering::Relaxed);
+        }
+        if whole {
+            (self.managed_synchronizes_whole).fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// A staging buffer of `bytes` bytes of a two-copy buffer's copies was made (`made`), or
@@ -8773,8 +8789,8 @@ pub struct WorkCounts {
     /// `did_modify_range`, rebind, and copy in again after a write the pages drop.
     pub managed_bytes_copied_in: u64,
     /// The bytes copied out of their device copies into their pages, by `synchronize_resource`
-    /// and `synchronize_texture` (counted at the command for an import of the pages, at the
-    /// command buffer's completion for pages no import maps).
+    /// and `synchronize_texture` (counted as the command's copy is decided for an import of the
+    /// pages, at the command buffer's completion for pages no import maps).
     pub managed_bytes_copied_out: u64,
     /// The program's `did_modify_range` calls of a nonempty range on such buffers: each copies
     /// its range in (`managed_bytes_copied_in` counts the bytes copied).
@@ -8783,11 +8799,25 @@ pub struct WorkCounts {
     pub managed_bytes_modified: u64,
     /// The program's `synchronize_resource` commands of such a buffer, or of a texture over one,
     /// and its `synchronize_texture` commands of such a texture, of a nonempty range: the
-    /// buffer's length, or the texture's span in it, which each copies out
-    /// (`managed_bytes_copied_out` counts the bytes copied).
+    /// buffer's length, or the texture's span in it, of which each copies out the bytes the GPU
+    /// wrote since the buffer's last copy out (`managed_sync.rs`; `managed_bytes_copied_out`
+    /// counts the bytes copied).
     pub managed_resources_synchronized: u64,
     /// The bytes those commands asked.
     pub managed_bytes_synchronized: u64,
+    /// Of those commands, those that copied nothing out: no write of the GPU's since the buffer's
+    /// last copy out reached their range (`managed_sync.rs`).
+    pub managed_synchronizes_unwritten: u64,
+    /// Of those commands, those that copied their range whole as the GPU's writes to the buffer
+    /// since its last copy out are not known: an untracked buffer, an exported one or one whose
+    /// `VkBuffer` was handed out, the buffer's first synchronize, a command buffer that may write
+    /// memory no use names submitted since, or a command recorded where its encoder recorded it
+    /// (inside a predicated loop's laying, or where no new `VkCommandBuffer` could be made).
+    pub managed_synchronizes_whole: u64,
+    /// The bytes those commands asked that they did not copy out, as no write of the GPU's since
+    /// the buffer's last copy out reached them: `managed_bytes_synchronized` less the bytes copied
+    /// out of them.
+    pub managed_bytes_unwritten_skipped: u64,
     /// The bytes of the staging buffers of their copies held now: those of copies into or out of
     /// pages no import maps, each held until the submission or command buffer that uses it
     /// completed.
@@ -10939,6 +10969,12 @@ impl Device {
             managed_resources_synchronized: (counters.managed_resources_synchronized)
                 .load(Ordering::Relaxed),
             managed_bytes_synchronized: counters.managed_bytes_synchronized.load(Ordering::Relaxed),
+            managed_synchronizes_unwritten: (counters.managed_synchronizes_unwritten)
+                .load(Ordering::Relaxed),
+            managed_synchronizes_whole: (counters.managed_synchronizes_whole)
+                .load(Ordering::Relaxed),
+            managed_bytes_unwritten_skipped: (counters.managed_bytes_unwritten_skipped)
+                .load(Ordering::Relaxed),
             managed_staging_bytes: counters.managed_staging_bytes.load(Ordering::Relaxed),
             managed_writes_undone: counters.managed_writes_undone.load(Ordering::Relaxed),
             managed_bytes_staged_in: counters.managed_bytes_staged_in.load(Ordering::Relaxed),

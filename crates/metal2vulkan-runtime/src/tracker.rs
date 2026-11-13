@@ -2165,6 +2165,14 @@ impl<K: Copy + Ord> Summary<K> {
             .map(|used| used.key)
     }
 
+    /// Its tracked uses that write, each with its range: what the copies out of buffers with a
+    /// host copy take (`managed_sync.rs`).
+    pub(super) fn writes(&self) -> impl Iterator<Item = (K, &UseRange)> + '_ {
+        (self.uses.iter())
+            .filter(|used| !used.write.is_empty())
+            .map(|used| (used.key, &used.range))
+    }
+
     /// Whether a tracked use writes one of `keys`.
     pub(super) fn writes_any(&self, keys: &[K]) -> bool {
         self.written_keys().any(|key| keys.contains(&key))

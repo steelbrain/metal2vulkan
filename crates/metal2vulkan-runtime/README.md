@@ -459,7 +459,12 @@ after it, and 0 of 80 with the device dropped first
   the CPU at the commit into staging buffers of host-cached memory instead, as the pages hold it
   then (docs/FAST-PATHS.md). A CPU write no
   `did_modify_range` names is not seen by the GPU, as on a Mac with a discrete GPU. A blit's
-  `synchronize_resource` copies the GPU's copy out to the pages in its command buffer's order.
+  `synchronize_resource` copies the GPU's copy out to the pages in its command buffer's order:
+  the bytes the GPU wrote since the buffer's last copy out (every other byte of the pages already
+  holds what the GPU's copy holds), the whole buffer where those writes are not known (an
+  untracked buffer, one whose `VkBuffer` was handed out, its first synchronize,
+  `WorkCounts::managed_synchronizes_whole`). A byte the CPU wrote that the GPU did not keeps the
+  CPU's value.
   The copies run from an import of the pages where the device makes one, else (the gate refused
   it, the device refused the pointer) through staging buffers held until their work completed,
   at most 256 MiB staged ahead (`WorkCounts::managed_staging_bytes`): never through a copy of the

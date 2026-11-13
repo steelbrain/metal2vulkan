@@ -57,6 +57,7 @@ use super::index_rewrite::{
     IndirectGatherRequest, RewriteRunRequest,
 };
 use super::kept_commands::{Held, KeptEffects};
+use super::managed_sync::{SyncCopy, SyncOut};
 use super::noted_apart::{Moved, NotedApart, NotedInto};
 use super::pass_runs::RunKeep;
 use super::pending_dispatch::PendingDispatch;
@@ -2819,6 +2820,64 @@ impl EncoderCore {
             bound: None,
         });
         Ok(())
+    }
+
+    /// A blit's copy out of a buffer with a host copy (`managed_sync.rs`), of `uses`, tracked here
+    /// as a command, its recording left to its batch's submission, which decides its bytes: its
+    /// barrier recorded first there, in the segment of the copies out just before it where the
+    /// encoder recorded nothing since, else in one of its own, the encoder going on in a new
+    /// `VkCommandBuffer`. Recorded here whole instead where the buffer's writes are not known
+    /// (`SyncCopy::writes_known`), inside a predicated loop's laying, or where no new
+    /// `VkCommandBuffer` can be made; nothing where it names a detached buffer, nor after
+    /// ([`skips`](Self::skips)).
+    pub(super) fn sync_out(
+        &mut self,
+        stages: vk::PipelineStageFlags2,
+        uses: &[Use<ResourceKey>],
+        copy: Arc<SyncCopy>,
+    ) {
+        let laying = (self.open.command_buffer.state().predication_mut()).laying();
+        if laying || !copy.writes_known() {
+            self.command_named(stages, uses, &[], |device, raw| {
+                // SAFETY: the encoder's command buffer is recording outside a render pass, and
+                // holds the buffer and the copy's target until it completes.
+                unsafe { copy.record_whole(device, raw) }
+            });
+            return;
+        }
+        let none = BTreeSet::new();
+        let Some(barrier) = self.track(stages, uses, (&none, Reach::Named), &[]) else {
+            return;
+        };
+        if !self.recorded && self.pass.is_none() {
+            if let Some(Segment {
+                at,
+                work: Deferred::SyncOut(out),
+                ..
+            }) = self.segments.last()
+            {
+                if *at == self.ended.len() {
+                    out.push(barrier, copy);
+                    return;
+                }
+            }
+        }
+        let out = SyncOut::default();
+        out.push(barrier, Arc::clone(&copy));
+        if self.defer(Deferred::SyncOut(Arc::new(out))).is_ok() {
+            return;
+        }
+        let Some(raw) = self.recording() else {
+            return;
+        };
+        let device = self.device().shared().vk();
+        // SAFETY: as above; the barrier its tracking planned goes first.
+        unsafe {
+            if let Some(barrier) = barrier {
+                barrier.record(device, raw);
+            }
+            copy.record_whole(device, raw);
+        }
     }
 
     /// Leave `dispatch`, whose pipelines are being made and which the encoder tracked already

@@ -4951,6 +4951,10 @@ impl CommandBufferShared {
                 summaries.push(&encoder.summary);
                 for segment in &encoder.segments {
                     probes.push(SegmentProbe::of(segment));
+                    // A copy out's uses are its encoder's, noted at its call (`managed_sync.rs`).
+                    if matches!(segment.work, Deferred::SyncOut(_)) {
+                        continue;
+                    }
                     // A loop's check may run its laying again: what the laying's parts use
                     // (`rerun.rs`).
                     if let Deferred::Loop(check) = &segment.work {

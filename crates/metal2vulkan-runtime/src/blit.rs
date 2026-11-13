@@ -31,6 +31,7 @@ use super::encoder::{EncoderCore, Replayed};
 use super::error::{invalid, Error, Problem};
 use super::fresh_unwritten::FreshRead;
 use super::managed_copy::{AtCompletion, CopyBack, Staging, SyncTarget};
+use super::managed_sync::{SyncCopy, Target};
 use super::replay::{BlitCall, CallLog, Replay, Resource};
 use super::resource::{ResourceKey, ResourceRef};
 use super::shadow::{self, Covered, ShadowCopies};
@@ -600,7 +601,9 @@ impl BlitCommandEncoder {
     /// with unified memory a managed buffer is host-coherent memory the GPU uses itself, and a
     /// texture's CPU access copies from its image, so nothing more is recorded. On one without, a
     /// managed buffer's bytes, or a texture's over one, are copied to its host copy, which
-    /// `contents` maps (`managed.rs`), after the encoder's earlier commands.
+    /// `contents` maps (`managed.rs`), after the encoder's earlier commands: those the GPU wrote
+    /// since the buffer's last copy out, every other byte holding there what the GPU's copy holds
+    /// (`managed_sync.rs`), all of them where those writes are not known.
     ///
     /// On a resource of another storage mode it records nothing, as plain Metal does (RT2
     /// `managed.synchronize.shared`, `.private`: `Shared` and `Private` buffers
@@ -642,8 +645,9 @@ impl BlitCommandEncoder {
     }
 
     /// The copy of `range` of a `Managed` buffer's own bytes to its host copy, which `contents`
-    /// maps (`managed.rs`), after the encoder's earlier commands; nothing where it has none (a
-    /// device with unified memory) or the range is empty.
+    /// maps (`managed.rs`), after the encoder's earlier commands, of the bytes the GPU wrote since
+    /// the buffer's last copy out (`managed_sync.rs`); nothing where it has none (a device with
+    /// unified memory) or the range is empty.
     fn synchronize_bytes(&mut self, buffer: &Buffer, range: Range<u64>) -> Result<(), Error> {
         let Some(host) = buffer.host_copy() else {
             return Ok(());
@@ -651,58 +655,45 @@ impl BlitCommandEncoder {
         if range.is_empty() {
             return Ok(());
         }
-        let (own, start) = buffer.at(range.start);
+        let device = self.core.device().clone();
+        let own = buffer.at(range.start);
         let bytes = range.end - range.start;
         // A two-copy buffer over the caller's pages (`managed_copy.rs`): the range the program
-        // asked, which the command copies out.
+        // asked, which the command copies out of.
         if buffer.caller_copy().is_some() {
-            (self.core.device().shared().counts).managed_asked(bytes, false);
+            (device.shared().counts).managed_asked(bytes, false);
         }
-        match host {
-            SyncTarget::Own(host) => {
-                let copy = region(start, range.start, bytes);
-                self.command(&[reads(buffer, range)], |device, raw| {
-                    // SAFETY: the encoder's command buffer is recording; the buffer and its host
-                    // copy are live and retained until it completes, and the range lies in both
-                    // (the host copy holds the buffer's bytes from its byte 0).
-                    unsafe { device.cmd_copy_buffer(raw, own, host, &[copy]) };
-                })?;
-            }
+        let read = reads(buffer, range.clone());
+        let (to, uses) = match host {
+            SyncTarget::Own(host) => (Target::Own(host), vec![read]),
             // A blit's copy into the buffer over the caller's pages, their import
             // (`managed_copy.rs`): a write of them, as a copy into a no-copy buffer.
             SyncTarget::Import(import) => {
                 let (host, at) = self.core.blit_at(&import, range.start)?;
-                let copy = region(start, at, bytes);
-                let uses = [reads(buffer, range.clone()), writes(&import, range)];
-                self.command(&uses, |device, raw| {
-                    // SAFETY: the encoder's command buffer is recording; the buffer and the import
-                    // are live and retained until it completes, and the range lies in both, from
-                    // the same byte 0.
-                    unsafe { device.cmd_copy_buffer(raw, own, host, &[copy]) };
-                })?;
-                (self.core.device().shared().counts).managed_copied(bytes, false);
+                (
+                    Target::Import(host, at),
+                    vec![read, writes(&import, range.clone())],
+                )
             }
             // Pages no import maps: a copy into a staging buffer, which the command buffer's
             // completion copies into them (`managed_copy.rs`).
             SyncTarget::Pages(pages) => {
-                let staging = Staging::new(self.core.device(), bytes)?;
-                let (host, at) = staging.buffer.at(0);
-                let copy = region(start, at, bytes);
-                let uses = [
-                    reads(buffer, range.clone()),
-                    writes(&staging.buffer, 0..bytes),
-                ];
-                self.command(&uses, |device, raw| {
-                    // SAFETY: the encoder's command buffer is recording; the buffer is live and
-                    // retained until it completes, the staging buffer held by its completion's
-                    // copy back, and the range lies in both.
-                    unsafe { device.cmd_copy_buffer(raw, own, host, &[copy]) };
-                })?;
+                let staging = Staging::new(&device, bytes)?;
+                let uses = vec![read, writes(&staging.buffer, 0..bytes)];
                 self.core.retain_shared(staging.buffer.held());
-                let back = CopyBack::new(staging, pages, range.start);
-                (self.core.command_buffer()).at_completion(AtCompletion::CopyBack(back));
+                (Target::Pages(CopyBack::new(staging, pages)), uses)
             }
-        }
+        };
+        let copy = Arc::new(SyncCopy::new(&device, buffer, range, own, to));
+        // Its completion copies a staging buffer into the pages and lets go of what it took.
+        (self.core.command_buffer()).at_completion(AtCompletion::Synced(Arc::clone(&copy)));
+        // The heap shadows over the bytes it reads, copied back first, as for any command.
+        let mut shadows = shadow::copies_used(self.shadows.iter(), &uses);
+        shadow::overwritten(&mut shadows, &uses, &[]);
+        let copies = self.core.plan_shadows(&shadows, &uses)?;
+        self.core.shadow_copies(&copies);
+        self.core.sync_out(TRANSFER, &uses, copy);
+        self.core.shadows_used(&shadows, &uses, &[]);
         self.core.retain_shared(buffer.held());
         Ok(())
     }

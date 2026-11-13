@@ -66,11 +66,12 @@
 //!   waits. A copy from an import, or from a RAM's chunks, stages nothing and counts toward no
 //!   bound, so a commit's copies in of the ranges named go with its own batch however many bytes
 //!   they are, and the commit waits for none of them.
-//! - **Copies out.** `synchronize_resource` copies the buffer's bytes to the import in the blit
-//!   encoder's command stream, a blit's write of the import (`blit.rs`); to pages no import maps,
-//!   into a staging buffer there, which the command buffer's completion copies to the pages before
-//!   anything sees it complete (its events, the scheduler, a waiter, its handlers;
-//!   `command_buffer/completion.rs`), freeing the staging buffer.
+//! - **Copies out.** `synchronize_resource` copies the bytes of the buffer the GPU wrote since its
+//!   last copy out (`managed_sync.rs`) to the import in the blit encoder's command stream, a
+//!   blit's write of the import (`blit.rs`); to pages no import maps, into a staging buffer there,
+//!   which the command buffer's completion copies to the pages before anything sees it complete
+//!   (its events, the scheduler, a waiter, its handlers; `command_buffer/completion.rs`), freeing
+//!   the staging buffer.
 //! - **Read-only pages** (a rebind's, `replaceBackingWithRanges:readOnly:`): the GPU's writes are
 //!   dropped, as Metal drops them. `synchronize_resource` copies nothing out, and the pages are
 //!   copied in whole again at the completion of each command buffer that used the buffer, so a
@@ -96,6 +97,7 @@ use super::error::{internal, Error};
 use super::exit_guard;
 use super::host_memory::{HostMemory, HostParts, ImportWindow, Release, RunResolver};
 use super::host_ram::ChunkPiece;
+use super::managed_sync::SyncCopy;
 use super::texture::first_move::Keeps;
 use super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
 use super::Device;
@@ -239,60 +241,68 @@ impl Drop for Staging {
 }
 
 /// A copy out of a two-copy buffer over pages no import maps, from a staging buffer the command
-/// buffer's commands wrote into the pages, made at its completion (`completion.rs`).
+/// buffer's commands wrote into the pages, made at its completion (`managed_sync.rs`).
 pub(super) struct CopyBack {
     staging: Staging,
     pages: Arc<CallerPages>,
-    /// Where the bytes go from the pages' pointer.
-    at: u64,
 }
 
 impl CopyBack {
-    /// The copy of `staging`, which a command buffer's commands write, into `pages` from `at`
-    /// bytes past their pointer.
-    pub(super) fn new(staging: Staging, pages: Arc<CallerPages>, at: u64) -> CopyBack {
-        CopyBack { staging, pages, at }
+    /// The copy of `staging`, which a command buffer's commands write, into `pages`.
+    pub(super) fn new(staging: Staging, pages: Arc<CallerPages>) -> CopyBack {
+        CopyBack { staging, pages }
     }
 
-    /// Copy the staging buffer's bytes into the pages: the command buffer completed, its work
-    /// visible to the host.
-    pub(super) fn run(self) {
+    /// The staging buffer's `VkBuffer`, and where its first byte lies in it: the commands copy
+    /// the range's first byte there.
+    pub(super) fn staging_at(&self) -> (vk::Buffer, u64) {
+        self.staging.buffer.at(0)
+    }
+
+    /// Copy the bytes `regions` of the buffer into the pages from the staging buffer, which holds
+    /// the buffer's bytes from `start`: the command buffer completed, its work visible to the
+    /// host. The bytes copied.
+    pub(super) fn run(&self, start: u64, regions: &[Range<u64>]) -> u64 {
         let Ok(from) = self.staging.contents() else {
-            return;
+            return 0;
         };
-        let bytes = self.staging.bytes;
-        // SAFETY: the staging buffer holds `bytes` bytes the completed command buffer wrote; the
-        // pages hold them at `at`, inside their reach, mapped while `pages` lives
-        // (`HostMemory::new`), and nothing of the runtime's writes them meanwhile.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                from.as_ptr(),
-                self.pages.pointer.as_ptr().add(self.at as usize),
-                bytes as usize,
-            );
+        let mut copied = 0;
+        for region in regions {
+            let bytes = region.end - region.start;
+            // SAFETY: the staging buffer holds the bytes the completed command buffer wrote from
+            // the buffer's `start`, the region among them; the pages hold the region inside their
+            // reach, mapped while `pages` lives (`HostMemory::new`), and nothing of the runtime's
+            // writes them meanwhile.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    from.as_ptr().add((region.start - start) as usize),
+                    self.pages.pointer.as_ptr().add(region.start as usize),
+                    bytes as usize,
+                );
+            }
+            copied += bytes;
         }
-        let counts = &self.staging.buffer.generation().shared().counts;
-        counts.managed_copied(bytes, false);
+        copied
     }
 }
 
 /// What a command buffer does at its completion for the two-copy buffers its commands used,
 /// before anything sees it complete (`completion.rs`).
 pub(super) enum AtCompletion {
-    /// A copy out into pages no import maps.
-    CopyBack(CopyBack),
+    /// A copy out's end (`managed_sync.rs`): into pages no import maps, and the writes it took let
+    /// go of.
+    Synced(Arc<SyncCopy>),
     /// A copy in whole of the pages of a buffer whose host copy drops the GPU's writes: what the
     /// command buffer wrote reaches no later one.
     Undo(Buffer),
 }
 
 impl AtCompletion {
-    /// Do it, where the command buffer completed; a copy back of one that failed is dropped (its
+    /// Do it, where the command buffer completed; a copy out of one that failed is dropped (its
     /// commands may not have run), and a copy in is made whatever its result.
     pub(super) fn run(self, completed: bool) {
         match self {
-            AtCompletion::CopyBack(back) if completed => back.run(),
-            AtCompletion::CopyBack(_) => {}
+            AtCompletion::Synced(copy) => copy.completed(completed),
             AtCompletion::Undo(buffer) => {
                 // A section of the exit guard, on the completion's thread: the copy in reaches
                 // the device (its staging buffers, its first moves). None once the process is

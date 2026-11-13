@@ -12,6 +12,16 @@
 //!   its `contents` pointer, no copy of the pages is made (`copied.rs`), and its deallocator runs
 //!   once, at its release.
 //!   Copies in that wait for one submission land in the order of their calls.
+//! - **Copies out of the GPU's writes** (`managed_sync.rs`), over both host copies and over the
+//!   runtime's own host copy (a `Managed` buffer made with bytes): a buffer's first synchronize
+//!   copies it whole (`WorkCounts::managed_synchronizes_whole`); one after no GPU write copies
+//!   nothing (`managed_synchronizes_unwritten`, `managed_bytes_unwritten_skipped`); one after a
+//!   fill of a range in an earlier command buffer copies that range alone
+//!   (`managed_bytes_copied_out`). The CPU reads every byte as written after each: the GPU's
+//!   writes where it wrote, the earlier bytes elsewhere, a write of a command buffer committed
+//!   before the synchronize's and encoded after it among them, and a CPU write
+//!   `did_modify_range` named, which no copy out overwrites. A write after the synchronize in its
+//!   own encoder reaches the CPU at the next. An untracked buffer is copied whole each time.
 //! - **Bounded.** A 256 MiB buffer over pages no import maps holds its 256 MiB of device-local
 //!   memory and, across cycles of a whole `did_modify_range` and a command buffer, at most the
 //!   bound of what is staged, none once the cycle completed.
@@ -994,6 +1004,204 @@ fn a_recovery_carries_a_two_copy_buffer_with_an_import() {
 #[test]
 fn a_recovery_carries_a_two_copy_buffer_over_pages_no_import_maps() {
     recovery(Route::Pages);
+}
+
+/// The bytes the CPU reads of `buffer` through `contents`: the host copy's.
+fn host_bytes(buffer: &Buffer) -> Vec<u8> {
+    let contents = buffer.contents().unwrap();
+    // SAFETY: the buffer's host copy, `BYTES` long, which no command buffer writes now.
+    unsafe { std::slice::from_raw_parts(contents.as_ptr(), BYTES as usize) }.to_vec()
+}
+
+/// The counts the copies out of the GPU's writes move, from `before` to `after`: the bytes copied
+/// out and skipped, and the synchronizes that copied nothing and that copied their range whole.
+fn copied_out(before: &WorkCounts, after: &WorkCounts) -> (u64, u64, u64, u64) {
+    (
+        after.managed_bytes_copied_out - before.managed_bytes_copied_out,
+        after.managed_bytes_unwritten_skipped - before.managed_bytes_unwritten_skipped,
+        after.managed_synchronizes_unwritten - before.managed_synchronizes_unwritten,
+        after.managed_synchronizes_whole - before.managed_synchronizes_whole,
+    )
+}
+
+/// The copies out of the GPU's writes alone (the module docs, **Copies out of the GPU's writes**)
+/// of a buffer over the caller's pages by `route`, or of the runtime's own `Managed` buffer where
+/// `None`, whose copies are not counted.
+fn copies_out(route: Option<Route>) {
+    let pages = Pages::new(BYTES);
+    pages.write_pattern();
+    let scratch = Scratch::new("managed-copies-out");
+    let Some(device) = two_copy_device(&scratch, "copies-out", route.unwrap_or(Route::Import))
+    else {
+        return;
+    };
+    let queue = device.new_command_queue().unwrap();
+    let ran = Ran::default();
+    let buffer = match route {
+        Some(route) => no_copy(&device, &pages, route, managed(), &ran),
+        None => device
+            .new_buffer_with_bytes(&pattern(BYTES), managed())
+            .unwrap(),
+    };
+    let counted = route.is_some();
+    let leg = format!("{route:?}");
+    let mut expected = pattern(BYTES);
+    let synchronized = |what: &str, expected: &[u8]| {
+        let before = device.work_counts();
+        synchronize(&queue, &buffer);
+        let moved = copied_out(&before, &device.work_counts());
+        assert_eq!(host_bytes(&buffer), expected, "{leg}: {what}");
+        moved
+    };
+
+    // The first copies it whole: its writes before it were not kept.
+    let first = synchronized("first", &expected);
+    if counted {
+        assert_eq!(first, (BYTES, 0, 0, 1), "{leg}: the first synchronize");
+    }
+    // None since: nothing.
+    let unwritten = synchronized("unwritten", &expected);
+    if counted {
+        assert_eq!(
+            unwritten,
+            (0, BYTES, 1, 0),
+            "{leg}: a synchronize after no write"
+        );
+    }
+    // A fill of a range in an earlier command buffer: that range alone.
+    let part = 3 * 4096 + 5..7 * 4096 + 3;
+    blit(&queue, |blit| {
+        blit.fill_buffer(&buffer, part.clone(), 0x5a).unwrap()
+    });
+    expected[part.start as usize..part.end as usize].fill(0x5a);
+    let partly = synchronized("a range written", &expected);
+    let bytes = part.end - part.start;
+    if counted {
+        assert_eq!(
+            partly,
+            (bytes, BYTES - bytes, 0, 0),
+            "{leg}: a range written"
+        );
+    }
+
+    // A write in a command buffer committed before the synchronize's and encoded after it, not
+    // waited for: the synchronize's copy follows it.
+    let later = 9 * 4096 + 1..10 * 4096 + 77;
+    let synced = queue.command_buffer().unwrap();
+    let mut sync = synced.blit_command_encoder().unwrap();
+    sync.synchronize_resource(ResourceRef::Buffer(&buffer))
+        .unwrap();
+    sync.end_encoding().unwrap();
+    let writer = queue.command_buffer().unwrap();
+    let mut fill = writer.blit_command_encoder().unwrap();
+    fill.fill_buffer(&buffer, later.clone(), 0x6b).unwrap();
+    fill.end_encoding().unwrap();
+    let before = device.work_counts();
+    writer.commit().unwrap();
+    synced.commit().unwrap();
+    for command_buffer in [&writer, &synced] {
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    }
+    expected[later.start as usize..later.end as usize].fill(0x6b);
+    assert_eq!(
+        host_bytes(&buffer),
+        expected,
+        "{leg}: a write committed first"
+    );
+    if counted {
+        let moved = copied_out(&before, &device.work_counts()).0;
+        assert_eq!(
+            moved,
+            later.end - later.start,
+            "{leg}: a write committed first"
+        );
+    }
+
+    // In one encoder, a fill, the synchronize, and a fill after it: the first reaches the CPU now,
+    // the second at the next synchronize.
+    let (before_sync, after_sync) = (12 * 4096..13 * 4096, 15 * 4096 + 9..15 * 4096 + 900);
+    blit(&queue, |blit| {
+        blit.fill_buffer(&buffer, before_sync.clone(), 0x7c)
+            .unwrap();
+        blit.synchronize_resource(ResourceRef::Buffer(&buffer))
+            .unwrap();
+        blit.fill_buffer(&buffer, after_sync.clone(), 0x8d).unwrap();
+    });
+    expected[before_sync.start as usize..before_sync.end as usize].fill(0x7c);
+    assert_eq!(host_bytes(&buffer), expected, "{leg}: one encoder's");
+    expected[after_sync.start as usize..after_sync.end as usize].fill(0x8d);
+    synchronized("a write after the synchronize in its encoder", &expected);
+
+    // A CPU write `did_modify_range` names reaches the GPU, and no copy out overwrites it: the GPU
+    // wrote none of it since.
+    let cpu = 20 * 4096..21 * 4096;
+    let contents = buffer.contents().unwrap();
+    // SAFETY: the buffer's host copy, which no command buffer uses now.
+    unsafe {
+        std::ptr::write_bytes(
+            contents.as_ptr().add(cpu.start as usize),
+            0x9e,
+            (cpu.end - cpu.start) as usize,
+        )
+    };
+    buffer.did_modify_range(cpu.clone()).unwrap();
+    expected[cpu.start as usize..cpu.end as usize].fill(0x9e);
+    assert_eq!(
+        read(&device, &queue, &buffer, cpu.clone()),
+        vec![0x9e; 4096]
+    );
+    synchronized("a CPU write named", &expected);
+    // The pages are the buffer's host copy.
+    if route.is_some() {
+        assert_eq!(pages.bytes(), expected, "{leg}: the pages");
+    }
+    eprintln!(
+        "MANAGED-COPY copies-out {leg} {}: (copied, skipped, unwritten, whole) first {first:?}, \
+         unwritten {unwritten:?}, a range written {partly:?}",
+        device.name()
+    );
+}
+
+#[test]
+fn copies_out_through_an_import_move_the_gpu_s_writes_alone() {
+    copies_out(Some(Route::Import));
+}
+
+#[test]
+fn copies_out_into_pages_no_import_maps_move_the_gpu_s_writes_alone() {
+    copies_out(Some(Route::Pages));
+}
+
+#[test]
+fn copies_out_of_the_runtime_s_own_managed_buffer_move_the_gpu_s_writes_alone() {
+    copies_out(None);
+}
+
+/// An untracked two-copy buffer's writes are not kept: each synchronize copies it whole.
+#[test]
+fn an_untracked_buffer_is_copied_out_whole() {
+    let pages = Pages::new(BYTES);
+    pages.write_pattern();
+    let scratch = Scratch::new("managed-untracked");
+    let Some(device) = two_copy_device(&scratch, "untracked", Route::Import) else {
+        return;
+    };
+    let queue = device.new_command_queue().unwrap();
+    let ran = Ran::default();
+    let untracked = ResourceOptions::new(
+        StorageMode::Managed,
+        CpuCacheMode::DefaultCache,
+        HazardTrackingMode::Untracked,
+    );
+    let buffer = no_copy(&device, &pages, Route::Import, untracked, &ran);
+    for round in 0..2 {
+        let before = device.work_counts();
+        synchronize(&queue, &buffer);
+        let moved = copied_out(&before, &device.work_counts());
+        assert_eq!(moved, (BYTES, 0, 0, 1), "round {round}");
+    }
+    assert_eq!(pages.bytes(), pattern(BYTES));
 }
 
 /// The side of the texture leg's `RGBA8Unorm` texture: its rows tight, 256 bytes each.

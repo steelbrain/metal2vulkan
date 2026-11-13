@@ -84,6 +84,13 @@ path = "examples/draw_costs.rs"
 name = "managed_bandwidth"
 path = "examples/managed_bandwidth.rs"
 
+# Not a consumer's example: what `synchronize_resource` of 40 `Managed` buffers over the caller's
+# pages costs a command buffer, by how many of them an earlier encoder wrote
+# (examples/managed_sync_out.rs).
+[[example]]
+name = "managed_sync_out"
+path = "examples/managed_sync_out.rs"
+
 # Not a consumer's example: the GPU's bandwidth through 256 MiB buffers of the runtime's own memory,
 # made after other buffers went (examples/private_bandwidth.rs).
 [[example]]

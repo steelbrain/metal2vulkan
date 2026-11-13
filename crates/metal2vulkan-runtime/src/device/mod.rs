@@ -588,6 +588,9 @@ pub(super) struct DeviceShared {
     /// The ranges of buffers with a host copy the CPU named since the last commit, which the next
     /// commit copies in (`managed.rs`).
     pub(crate) modified: super::managed::Modified,
+    /// The GPU's writes to buffers with a host copy since their last copy out, which decide the
+    /// next copy out of each (`managed_sync.rs`).
+    pub(super) gpu_writes: super::managed_sync::GpuWrites,
     /// How many of the next imports of host pages by their pointer fail as the driver's out of
     /// device memory: for the tests of `copied.rs` (`Device::fail_next_host_imports`).
     #[cfg(test)]
@@ -3039,6 +3042,7 @@ impl Device {
             host_ram: Default::default(),
             copied,
             modified: Default::default(),
+            gpu_writes: Default::default(),
             #[cfg(test)]
             failing_host_imports: Default::default(),
             #[cfg(test)]

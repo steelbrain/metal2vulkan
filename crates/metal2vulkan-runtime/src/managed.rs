@@ -26,8 +26,8 @@
 //!   commit, never takes it, so none reads a range only a later commit took. A
 //!   commit that uses none of it leaves the range noted, and its submission leaves the copy
 //!   waiting, so the copy never lands under a command buffer of another queue still to read the
-//!   bytes it replaces (`synchronize_resource` copies the buffer back where the command buffer
-//!   runs it). A program
+//!   bytes it replaces (`synchronize_resource` copies the GPU's writes back where the command
+//!   buffer runs it, `managed_sync.rs`). A program
 //!   that skips them sees stale bytes there, as on a Mac with a discrete GPU. A GPU writing
 //!   host-cached memory across the bus ran a kernel's writes at 0.03 to 0.1 GB/s on an RTX 3090
 //!   and an RTX 5080, where a device-local write and a copy back ran at several GB/s. A `Managed`

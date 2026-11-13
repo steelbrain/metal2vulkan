@@ -501,10 +501,10 @@ recorded here.
   call submits them and waits: the pages whole at the making and at each rebind, a
   `did_modify_range`'s range as the submission of the next command buffer committed that uses the
   buffer finds it (under `managed_copy_in = ManagedCopyInPolicy::AtCommit`, as the commit finds it,
-  staged by the CPU there into host-cached system memory), the buffer
-  whole at each
-  `synchronize_resource` of it (of a texture over it, or its `synchronize_texture`, the texels'
-  bytes)
+  staged by the CPU there into host-cached system memory), and at each `synchronize_resource` of
+  it (of a texture over it, or its `synchronize_texture`, of the texels' bytes) the bytes the GPU's
+  tracked writes reached since its last copy out, the range whole where those are not known
+  (`managed_sync.rs`)
   (`WorkCounts::managed_bytes_copied_in`, `managed_bytes_copied_out`, `managed_staging_bytes`). A
   kernel reading one 256 MiB such buffer and writing another (`examples/managed_bandwidth.rs`,
   release) ran at 864.6-866.8 GB/s on the RX 7900 XTX (RADV), where the buffer lay in its pages
