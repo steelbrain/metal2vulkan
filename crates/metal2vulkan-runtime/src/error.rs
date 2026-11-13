@@ -2214,7 +2214,10 @@ pub enum CommandBufferError {
     DeviceLost,
     /// The device ran out of memory for the submission.
     OutOfMemory,
-    /// Any other Vulkan failure of the submission, raw.
+    /// Any other Vulkan failure of the submission, raw; a recording that failed on the runtime's
+    /// own error reads as `VK_ERROR_UNKNOWN`. The device's message sink hears which: a failed
+    /// `vkQueueSubmit` logs a `metal2vulkan-submit-failed` warning naming what it held, a failed
+    /// recording a `metal2vulkan-recording-failed` one naming its error.
     Internal(VkResultCode),
     /// An indexed indirect draw's index bounds or index rewrite pass found the rest of the
     /// command buffer's index pool too small for the draw's indices, and drew nothing of the draw.

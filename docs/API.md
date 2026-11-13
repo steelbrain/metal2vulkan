@@ -2040,8 +2040,23 @@ an empty command buffer stop there and say so (id name `metal2vulkan-submit-chec
 severity): nothing is submitted again, each check that had not answered takes the form a device
 without its answer takes for the device's life, and nothing is recorded. Where that submission
 still has not completed after 10 s more of the device's teardown, the teardown leaves the device
-and its instance to the process's end rather than wait for its idle. That text is for people, not
-a contract.
+and its instance to the process's end rather than wait for its idle. Every `vkQueueSubmit` the
+runtime makes that fails (a command buffer's batch, a group of batches, a failed group's signals, a
+command buffer's rerun or its fence after its queue's work, the device's internal submissions, the
+staging and fill queues') logs one line as it fails (id name `metal2vulkan-submit-failed`,
+`Warning` severity): the result and the queue; each `VkSubmitInfo`'s waits, command buffers and
+signals, each semaphore binary or a timeline (the queue's, the device's own or an event's) with the
+value it waits for or signals and the timeline's counter read then, a signal value not above that
+counter or more than 2^31 - 1 from it flagged with the valid-usage rule it breaks; the command
+buffers it carries, by label, object ID and encoder; and the resources they name, each with its
+kind, object ID, bytes, storage mode, memory and memory type, how it was imported, how many
+submissions the device made since the resource was registered, and whether it is gone, released or
+detached now. It names at most 8 infos, 8 waits and 8 signals of each, 32 `VkCommandBuffer`s, 8
+command buffers and 32 resources, and counts the rest; state another thread holds at that moment
+reads as busy, and a submission that succeeds does none of it. A command buffer whose recording
+fails with a Vulkan result or the runtime's own error (`CommandBufferError::Internal` for both) logs
+that error (id name `metal2vulkan-recording-failed`, `Warning` severity). That text is for people,
+not a contract.
 
 Each entry below gives the code, its category, the `Degradation` kind (or the `PrecisionNote`) and
 what triggers it; a runtime kind's cost follows. The kind's rustdoc states the trigger, cost and
