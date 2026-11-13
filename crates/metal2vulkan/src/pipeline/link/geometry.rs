@@ -447,7 +447,11 @@ impl GeometryStages {
                 )
                 .into());
             }
-            fan.copies = room.min(u64::from(fan_out::MOST_COPIES)) as u32;
+            let most = match fan.mode {
+                RegionFanOut::DrawFew => crate::bind::fan_out::FEW_COPIES,
+                RegionFanOut::Draw | RegionFanOut::Probe => fan_out::MOST_COPIES,
+            };
+            fan.copies = room.min(u64::from(most)) as u32;
         }
         let vertices = 3u64;
         for (limit, required, available) in [

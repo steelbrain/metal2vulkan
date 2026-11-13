@@ -8629,7 +8629,7 @@ impl RenderLowering {
         // A fan-out draw's work is its vertices, its triangles' geometry stage and the copies the
         // probe counted (`rate_mapped_pass::fan_out_work`).
         let fan_copies = match fans {
-            Some(RegionFanOut::Draw) => self.fan_out.map(|fan| fan.copies),
+            Some(RegionFanOut::Draw | RegionFanOut::DrawFew) => self.fan_out.map(|fan| fan.copies),
             Some(RegionFanOut::Probe) | None => None,
         };
         // A fragment function that runs the draw's depth test itself computes and clamps its
@@ -11668,7 +11668,7 @@ impl RenderLowering {
         // A draw binds no index: only a probe writes its words.
         let index = match fan.mode {
             RegionFanOut::Probe => fan.index,
-            RegionFanOut::Draw => 0,
+            RegionFanOut::Draw | RegionFanOut::DrawFew => 0,
         };
         Ok(Some((fan.mode, index)))
     }

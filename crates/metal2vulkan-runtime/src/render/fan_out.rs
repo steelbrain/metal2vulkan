@@ -81,7 +81,8 @@ impl Probe {
 impl FanOutRun {
     /// The fan-out of the draw of the command at `place` among the commands: the probe's, where
     /// it probes on; the route's draw where the probe probed it and flagged none of its
-    /// triangles; `None` for a draw recorded region by region.
+    /// triangles, of few copies where it marked none too wide for them; `None` for a draw
+    /// recorded region by region.
     pub(super) fn begin(&self, place: usize) -> Option<FanOutDraw> {
         match self {
             FanOutRun::Probe(probe) => (!probe.stopped).then_some(FanOutDraw {
@@ -92,11 +93,15 @@ impl FanOutRun {
             FanOutRun::Route(routes) => {
                 let index = routes.slots.get(place).copied().flatten()?;
                 let word = |w: u32| routes.words.get(w as usize).copied();
-                match word(2 * index)? {
+                let mode = match word(3 * index + 2)? {
+                    0 => RegionFanOut::DrawFew,
+                    _ => RegionFanOut::Draw,
+                };
+                match word(3 * index)? {
                     0 => Some(FanOutDraw {
-                        mode: RegionFanOut::Draw,
+                        mode,
                         index,
-                        copies: word(2 * index + 1)?,
+                        copies: word(3 * index + 1)?,
                     }),
                     _ => None,
                 }
@@ -143,8 +148,9 @@ impl FanOutRun {
 /// The routes of an execution's commands at its host step (the module docs): the commands as the
 /// step read them, once, for the probe and the routes alike, from command `start`; the faults the
 /// read found; the index of each command's draw among the probe's, by its place among the
-/// commands that run, where it was probed; and the probe's words, two a probed draw: its flag
-/// and the copies its triangles emit, its counts summed.
+/// commands that run, where it was probed; and the probe's words, three a probed draw: its flag,
+/// the copies its triangles emit (its counts summed), and 1 where a triangle of it is too wide for
+/// few copies (`bind::fan_out::FEW_COPIES`).
 pub(super) struct FanOutRoutes {
     pub(super) commands: Vec<Option<Command>>,
     pub(super) start: u32,

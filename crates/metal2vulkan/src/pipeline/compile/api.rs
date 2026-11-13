@@ -1750,6 +1750,7 @@ fn variant_fields(v: &VariantKey) -> String {
         None => {}
         Some(crate::pipeline::RegionFanOut::Draw) => fields.push_str(" region_fan_out"),
         Some(crate::pipeline::RegionFanOut::Probe) => fields.push_str(" region_fan_out probe"),
+        Some(crate::pipeline::RegionFanOut::DrawFew) => fields.push_str(" region_fan_out few"),
     }
     fields
 }

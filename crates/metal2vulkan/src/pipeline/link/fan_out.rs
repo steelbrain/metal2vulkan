@@ -17,7 +17,9 @@
 //!   the probe found. The copies are a loop the driver is asked not to unroll (`DontUnroll`): its
 //!   body compiled once, the pipeline is made in about a third of the time 16 unrolled copies
 //!   took (on an RTX 3090 45.2 against 81.3 ms for the probe's and the draw's, Iris Xe 20.0
-//!   against 66.9 ms, Radeon 780M 14.4 against 44.5 ms), with the same GPU time.
+//!   against 66.9 ms, Radeon 780M 14.4 against 44.5 ms), with the same GPU time. A draw of few
+//!   copies ([`RegionFanOut::DrawFew`]) is the same stage of at most `bind::fan_out::FEW_COPIES`
+//!   copies, which declares the output of that many.
 //! - **Probe** ([`RegionFanOut::Probe`]): emits nothing. Of the flags buffer's words of the
 //!   index `i` the draw pushes (`PushField::RegionProbe`; [`PROBE_DRAW_WORDS`] of them from
 //!   `PROBE_DRAW_WORDS·i`), it writes 1 into the first for a triangle the draw cannot fan out: one
@@ -25,11 +27,14 @@
 //!   widening, reach more pairs than the copies; and adds the copies the draw emits of each
 //!   triangle it fans out, the pairs its bounds reach unwidened, into the count its `PrimitiveId`
 //!   picks of the [`PROBE_COUNT_WORDS`] after it, so the consumer sums the draw's work and no
-//!   word takes every triangle's add. Its writes need `vertexPipelineStoresAndAtomics`.
+//!   word takes every triangle's add; and for a triangle whose bounds, widened, reach more pairs
+//!   than [`FEW_COPIES`], writes 1 into the word its `PrimitiveId` picks of the as many after
+//!   those, which mark the draw one its variant of few copies cannot draw. Its writes need
+//!   `vertexPipelineStoresAndAtomics`.
 
 use super::geometry::{array, kf, ku, scalar, GeometryStages};
 use crate::bind::fan_out::{
-    clip_entry, line_entry, MAX_SEGMENTS, PROBE_COUNT_WORDS, PROBE_DRAW_WORDS,
+    clip_entry, line_entry, FEW_COPIES, MAX_SEGMENTS, PROBE_COUNT_WORDS, PROBE_DRAW_WORDS,
 };
 use crate::pipeline::graphics::RegionFanOut;
 use crate::pipeline::stage_io::IoNumeric;
@@ -305,7 +310,7 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
             };
             Some((flags, member, mb.push_global()?, id))
         }
-        RegionFanOut::Draw => None,
+        RegionFanOut::Draw | RegionFanOut::DrawFew => None,
     };
     let mut fb = mb.function(void)?;
     let mut loaded = Vec::with_capacity(3);
@@ -417,6 +422,18 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
                 Ok(ArmEnd::FallThrough(Vec::new()))
             });
             fb.if_(&mut ctx, counted, arm, None)?;
+            // More pairs than a draw of few copies emits: the wide word its `PrimitiveId` picks.
+            let few = ku(&mut fb, FEW_COPIES)?;
+            let wide = fb.binary(BinOp::UGreaterThan, count, few)?;
+            let lanes = ku(&mut fb, PROBE_COUNT_WORDS)?;
+            let wide_at = fb.binary(BinOp::IAdd, count_at, lanes)?;
+            let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                let ptr = word_ptr(fb, wide_at)?;
+                let one = ku(fb, 1)?;
+                fb.atomic_store(ptr, Scope::Device, Semantics::RELAXED, one)?;
+                Ok(ArmEnd::FallThrough(Vec::new()))
+            });
+            fb.if_(&mut ctx, wide, arm, None)?;
         }
         None => {
             let c = Copies {
@@ -468,7 +485,7 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
     fb.ret(None)?;
     let f = fb.finish()?;
     let vertices = match fan.mode {
-        RegionFanOut::Draw => 3 * copies,
+        RegionFanOut::Draw | RegionFanOut::DrawFew => 3 * copies,
         RegionFanOut::Probe => 3,
     };
     let modes = vec![

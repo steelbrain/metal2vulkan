@@ -344,7 +344,8 @@ use gpu::GpuForm;
 pub(super) use gpu::ReplayedDraws;
 use metal2vulkan::bind::indirect_commands::{Action, BufferStage, CommandRecord};
 use metal2vulkan::bind::{
-    fan_out::PROBE_DRAW_WORDS, DrawCall, RateMapRegions, ReplayFaults, ViewSetup,
+    fan_out::{PROBE_COUNT_WORDS, PROBE_DRAW_WORDS},
+    DrawCall, RateMapRegions, ReplayFaults, ViewSetup,
 };
 use metal2vulkan::metal::{
     IndexType, IndirectCommandType, PrimitiveTopologyClass, PrimitiveType, VertexStepFunction,
@@ -2679,7 +2680,8 @@ impl RenderExecution {
                 let (fanned, writes) = encoder.fanned;
                 run.end(place, fanned, writes);
                 if fanned && !probing {
-                    (encoder.core.device().shared().counts).rate_map_fanned_draw();
+                    let few = (encoder.fan_out).is_some_and(|f| f.mode == RegionFanOut::DrawFew);
+                    (encoder.core.device().shared().counts).rate_map_fanned_draw(few);
                 }
             }
             if !probing {
@@ -3029,7 +3031,11 @@ impl RenderExecution {
         // draws' variants of the same draws, into `fanned` (`render/fan_out.rs`).
         let fans = self.snapshot.rate_map.is_some() && self.shadows.is_empty();
         if let Some(fanned) = fanned.filter(|_| fans) {
-            for mode in [RegionFanOut::Probe, RegionFanOut::Draw] {
+            for mode in [
+                RegionFanOut::Probe,
+                RegionFanOut::Draw,
+                RegionFanOut::DrawFew,
+            ] {
                 encoder.fan_out = Some(FanOutDraw {
                     mode,
                     index: 0,
@@ -4139,17 +4145,20 @@ impl DeferredPass {
                     // the host by its last barrier; the words are writable and apart from the
                     // region.
                     unsafe { flags.copy_out(0, read_words.as_mut_ptr().cast(), 4 * read) };
-                    // Each draw's flag, and the copies its triangles emit: its counts' sum.
-                    let pairs: Vec<u32> = (read_words.chunks(PROBE_DRAW_WORDS as usize))
+                    // Each draw's flag, the copies its triangles emit (its counts' sum), and
+                    // whether a triangle of it is too wide for few copies (a wide word marked).
+                    let lanes = PROBE_COUNT_WORDS as usize;
+                    let draws: Vec<u32> = (read_words.chunks(PROBE_DRAW_WORDS as usize))
                         .flat_map(|draw| {
-                            let copies =
-                                (draw.iter().skip(1)).fold(0u32, |a, &w| a.saturating_add(w));
-                            [draw[0], copies]
+                            let counts = draw.iter().skip(1).take(lanes);
+                            let copies = counts.fold(0u32, |a, &w| a.saturating_add(w));
+                            let wide = draw.iter().skip(1 + lanes).any(|&w| w != 0);
+                            [draw[0], copies, u32::from(wide)]
                         })
                         .collect();
-                    let flagged = pairs.chunks(2).filter(|pair| pair[0] != 0).count();
+                    let flagged = draws.chunks(3).filter(|draw| draw[0] != 0).count();
                     device.shared().counts.rate_map_probe(flagged as u64);
-                    words = pairs.into();
+                    words = draws.into();
                 }
                 probed = Some(recorded);
             }

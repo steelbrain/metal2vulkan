@@ -823,6 +823,7 @@ surface! {
         mod indirect_commands;
     }
     "bind::fan_out" => metal2vulkan::bind::fan_out {
+        const FEW_COPIES;
         const HEADER_ENTRIES;
         const MAX_SEGMENTS;
         const PROBE_COUNT_WORDS;

@@ -205,7 +205,11 @@
 //!   its GPU time `WorkCounts::rate_map_probe_gpu_nanos`); then a flagged draw is drawn region by
 //!   region (`WorkCounts::rate_map_flagged_draws`) and the others fanned out
 //!   (`WorkCounts::rate_map_fanned_draws`), each in its command's place, so a pixel's fragments
-//!   keep their order: a pixel lies in one region. A fanned-out draw's work is its vertices, its
+//!   keep their order: a pixel lies in one region. The probe also marks a draw a triangle of
+//!   which touches more regions than few copies (`bind::fan_out::FEW_COPIES`); a draw it marks
+//!   none of is drawn through the variant of that many copies (`RegionFanOut::DrawFew`,
+//!   `WorkCounts::rate_map_fanned_few_draws`), whose geometry stage declares the output of fewer
+//!   vertices. A fanned-out draw's work is its vertices, its
 //!   triangles' geometry stage and three vertices per copy ([`fan_out_work`]), and it is never
 //!   cut into ranges. The probe stops at a command's barrier, and after a draw whose pipeline
 //!   writes memory, as it runs before every draw of the pass: the later commands are drawn region

@@ -37,16 +37,28 @@
 //! 0)`.
 
 /// The words of a probe's flags each probed draw takes: its flag, then the
-/// [`PROBE_COUNT_WORDS`] its triangles add their copies into (`pipeline::link::fan_out`, the
-/// probe), from word `PROBE_DRAW_WORDS·i` for the draw of index `i`. The consumer sums a draw's
-/// counts.
-pub const PROBE_DRAW_WORDS: u32 = 1 + PROBE_COUNT_WORDS;
+/// [`PROBE_COUNT_WORDS`] its triangles add their copies into, then as many its triangles that
+/// reach more than [`FEW_COPIES`] pairs of segments mark (`pipeline::link::fan_out`, the probe),
+/// from word `PROBE_DRAW_WORDS·i` for the draw of index `i`. The consumer sums a draw's counts,
+/// and draws a draw none of whose wide words is marked through its variant of few copies
+/// (`RegionFanOut::DrawFew`).
+pub const PROBE_DRAW_WORDS: u32 = 1 + 2 * PROBE_COUNT_WORDS;
 
-/// The words a probed draw's triangles add their copies into, a triangle the one its
-/// `PrimitiveId` picks (`PrimitiveId mod PROBE_COUNT_WORDS`): one word every triangle of a draw
-/// added into made the probe 15.4 to 20.7 ms of an RTX 3090's GPU time for 64 draws of 306,036
-/// triangles; spread over these, 1.45 ms (NVIDIA 620.70.06, the pieces lane).
+/// The words a probed draw's triangles add their copies into, and the words they mark wide, a
+/// triangle the one of each its `PrimitiveId` picks (`PrimitiveId mod PROBE_COUNT_WORDS`): one
+/// word every triangle of a draw added into made the probe 15.4 to 20.7 ms of an RTX 3090's GPU
+/// time for 64 draws of 306,036 triangles; spread over these, 1.45 ms (NVIDIA 620.70.06, the
+/// pieces lane).
 pub const PROBE_COUNT_WORDS: u32 = 32;
+
+/// The most copies of a triangle a draw's variant of few copies emits (`RegionFanOut::DrawFew`),
+/// which a draw whose triangles each reach at most this many pairs of segments draws through: its
+/// geometry stage declares the output of this many copies' vertices, not the most copies'. The
+/// pieces lane's draws are all of few copies: in one run a Radeon 780M (Mesa 26.2.6) drew two warm
+/// frames in 29.7 and 30.8 ms of command buffer GPU time, where the same draws through the most
+/// copies took 36.8 and 34.5 ms; an Iris Xe (Mesa 26.2.6) drew it in 40.0 ms and an RTX 3090
+/// (NVIDIA 620.70.06) in 6.1 ms, as through the most copies in earlier runs (40.5 and 6.2 ms).
+pub const FEW_COPIES: u32 = 4;
 
 /// The most segments an axis holds: [`RateMapRegions::MAX_REGIONS`](crate::bind::RateMapRegions) is
 /// this many per axis squared.

@@ -85,7 +85,11 @@ fn a_fanned_out_draw_runs_its_variant() {
         let base = dev
             .compile_render_pipeline(&d, &budget)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        for mode in [RegionFanOut::Draw, RegionFanOut::Probe] {
+        for mode in [
+            RegionFanOut::Draw,
+            RegionFanOut::Probe,
+            RegionFanOut::DrawFew,
+        ] {
             let state = BindState {
                 region_fan_out: Some((mode, 5)),
                 region_viewports: true,
@@ -142,7 +146,7 @@ fn a_fanned_out_draw_runs_its_variant() {
                 .map(|w| (w.offset, w.bytes.clone()))
                 .collect();
             match mode {
-                RegionFanOut::Draw => assert!(pushed.is_empty(), "{stem}"),
+                RegionFanOut::Draw | RegionFanOut::DrawFew => assert!(pushed.is_empty(), "{stem}"),
                 RegionFanOut::Probe => {
                     assert_eq!(pushed, [(fan.push_offset, 5u32.to_le_bytes().to_vec())])
                 }

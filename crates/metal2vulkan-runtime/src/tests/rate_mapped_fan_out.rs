@@ -1,8 +1,10 @@
 //! A rate-mapped pass's executed commands at a host step, fanned out to the map's regions
 //! (`rate_mapped_pass.rs`, **Fan-out**), under both settings of `RateMapRegionPolicy`. Every
-//! command but one draws a grid of small triangles, twice, blended at half alpha in its own
-//! colour; the one between them draws a triangle over the whole target, which touches more regions
-//! than the fan-out's copies, so the probe flags it. Under `FanOut` the probe runs once, the grid
+//! command but two draws a grid of small triangles, twice, blended at half alpha in its own
+//! colour; one between them draws a triangle over the whole target, which touches more regions
+//! than the fan-out's copies, so the probe flags it, and another a triangle over four tiles a
+//! side, which touches more regions than few copies (`bind::fan_out::FEW_COPIES`) and no more than
+//! the copies. Under `FanOut` the probe runs once, the grid
 //! commands are fanned out and the large one is drawn region by region, in its place; under `Exact`
 //! no probe runs and every command is drawn region by region. Either way the target's bytes are
 //! those of the same commands drawn on the encoder, region by region: a command lost, drawn twice
@@ -34,8 +36,9 @@ use std::path::Path;
 
 /// The grid's quads on a side, the commands, and the one that draws the large triangle.
 const GRID: u32 = 16;
-const COMMANDS: u32 = 7;
+const COMMANDS: u32 = 8;
 const LARGE: u32 = 3;
+const MEDIUM: u32 = 5;
 /// A grid command's indices: the grid's triangles, twice.
 const INDICES: u32 = 2 * GRID * GRID * 6;
 /// The map's screen side, and its quality samples on both axes.
@@ -51,6 +54,7 @@ struct Workload {
     grid_indices: Buffer,
     large: Buffer,
     large_indices: Buffer,
+    medium_indices: Buffer,
     colors: Buffer,
     icb: IndirectCommandBuffer,
     map: RasterizationRateMap,
@@ -58,9 +62,10 @@ struct Workload {
 
 /// What a command draws: its positions, its indices and their count.
 fn draw_of(workload: &Workload, command: u32) -> (&Buffer, &Buffer, u32) {
-    match command == LARGE {
-        true => (&workload.large, &workload.large_indices, 3),
-        false => (&workload.grid, &workload.grid_indices, INDICES),
+    match command {
+        LARGE => (&workload.large, &workload.large_indices, 3),
+        MEDIUM => (&workload.large, &workload.medium_indices, 3),
+        _ => (&workload.grid, &workload.grid_indices, INDICES),
     }
 }
 
@@ -114,13 +119,23 @@ impl Workload {
             .collect();
         let twice = [&triangles[..], &triangles[..]].concat();
         let grid_indices: Vec<u8> = twice.iter().flat_map(|i| i.to_le_bytes()).collect();
-        // One triangle over the whole target.
-        let large: Vec<u8> = [[-1.0f32, -1.0], [3.0, -1.0], [-1.0, 3.0]]
-            .into_iter()
-            .flatten()
-            .flat_map(f32::to_le_bytes)
-            .collect();
-        let large_indices: Vec<u8> = [0u32, 1, 2].iter().flat_map(|i| i.to_le_bytes()).collect();
+        // One triangle over the whole target, and one from the centre of a tile of the map
+        // (32 screen pixels) to the centre of the fourth after it, on each axis.
+        let large: Vec<u8> = [
+            [-1.0f32, -1.0],
+            [3.0, -1.0],
+            [-1.0, 3.0],
+            [-0.4375, -0.4375],
+            [-0.0625, -0.4375],
+            [-0.4375, -0.0625],
+        ]
+        .into_iter()
+        .flatten()
+        .flat_map(f32::to_le_bytes)
+        .collect();
+        let indices =
+            |at: [u32; 3]| -> Vec<u8> { at.iter().flat_map(|i| i.to_le_bytes()).collect() };
+        let (large_indices, medium_indices) = (indices([0, 1, 2]), indices([3, 4, 5]));
         // Each command's colour at half alpha, 256 bytes apart.
         let colors: Vec<u8> = (0..COMMANDS)
             .flat_map(|k| {
@@ -156,6 +171,7 @@ impl Workload {
             grid_indices: buffer(&grid_indices),
             large: buffer(&large),
             large_indices: buffer(&large_indices),
+            medium_indices: buffer(&medium_indices),
             colors: buffer(&colors),
             icb,
             map,
@@ -292,9 +308,10 @@ fn differing(a: &[u8], b: &[u8]) -> usize {
 
 /// Under `FanOut` the host step probes once, fans the grid commands out and draws the large one
 /// region by region between them, with the pipelines `commit` began: the fan-out's and the
-/// regions variant's, so the step makes none. Its probe and its fanned-out draws each upload the
-/// region table once, the commit's settle none. The pixels are the encoder's region-by-region
-/// draws'.
+/// regions variant's, so the step makes none. The grid commands are drawn through the variant of
+/// few copies and the medium one through the most copies'. Its probe and its fanned-out draws
+/// each upload the region table once, the commit's settle none. The pixels are the encoder's
+/// region-by-region draws'.
 #[test]
 fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     let scratch = Scratch::new("rate-mapped-fan-out");
@@ -308,10 +325,11 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     let ready = after.rate_map_fan_out_pipelines_ready - before.rate_map_fan_out_pipelines_ready;
     let waited = after.rate_map_fan_out_pipelines_waited - before.rate_map_fan_out_pipelines_waited;
     let tables = after.rate_map_fan_tables_uploaded - before.rate_map_fan_tables_uploaded;
+    let few = after.rate_map_fanned_few_draws - before.rate_map_fanned_few_draws;
     eprintln!(
         "RATE-MAP-FAN-OUT counts {counts:?} probe_gpu_nanos {probe_nanos}; fan-out pipelines \
          {ready} ready, {waited} waited for; {made} made at the step; {tables} region tables \
-         uploaded"
+         uploaded; {few} drawn of few copies"
     );
     assert_eq!(made, 0, "pipelines the host step made");
     match fans_out(&workload.device) {
@@ -319,9 +337,10 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
             assert_eq!(counts, [1, 1, u64::from(COMMANDS - 1)]);
             assert_eq!(tables, 2, "region tables uploaded");
             assert!(
-                ready + waited >= 2,
+                ready + waited >= 3,
                 "the commit began no probe or draw pipeline"
             );
+            assert_eq!(few, u64::from(COMMANDS - 2), "draws of few copies");
         }
         false => assert_eq!(counts, [0; 3]),
     }

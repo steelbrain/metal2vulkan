@@ -417,6 +417,9 @@ pub enum RegionFanOut {
     Draw,
     /// Draw nothing, and flag the draw whose triangles the draw cannot fan out.
     Probe,
+    /// [`Draw`](Self::Draw) through a stage of at most `bind::fan_out::FEW_COPIES` copies, for a
+    /// draw the probe found none of whose triangles reaches more pairs of segments.
+    DrawFew,
 }
 
 /// What a consumer and the binder need of a render pipeline variant that draws a rate-mapped
@@ -427,12 +430,15 @@ pub enum RegionFanOut {
 /// Draw triangles alone, through one Vulkan viewport over the whole target and a scissor over it,
 /// with the region table (`bind::fan_out::table`, `SyntheticBinding::RateMapRegions`) of that
 /// viewport over the plan's regions bound. A probe ([`RegionFanOut::Probe`]) draws nothing. Of
-/// the flags buffer's (`SyntheticBinding::RateMapFlags`) pair of `u32`s at its pushed index `i`
-/// (`PushField::RegionProbe`, at [`push_offset`](Self::push_offset) for stage `GEOMETRY`; words
-/// `2i` and `2i + 1`), it writes 1 into the first where a triangle of the draw touches more
-/// regions than [`copies`](Self::copies), or crosses `w = 0`, and the consumer draws such a draw
-/// region by region; and adds to the second the copies the draw emits of each triangle it fans
-/// out, which the draw's work counts.
+/// the flags buffer's (`SyntheticBinding::RateMapFlags`) `bind::fan_out::PROBE_DRAW_WORDS`
+/// `u32`s from `PROBE_DRAW_WORDS·i`, `i` its pushed index (`PushField::RegionProbe`, at
+/// [`push_offset`](Self::push_offset) for stage `GEOMETRY`), it writes 1 into the first where a
+/// triangle of the draw touches more regions than [`copies`](Self::copies), or crosses `w = 0`,
+/// and the consumer draws such a draw region by region; adds the copies the draw emits of each
+/// triangle it fans out into one of the `bind::fan_out::PROBE_COUNT_WORDS` after it, which the
+/// draw's work counts; and writes 1 into one of the as many after those where a triangle touches
+/// more regions than `bind::fan_out::FEW_COPIES`: a draw none of whose such words is 1 draws
+/// through its [`RegionFanOut::DrawFew`] variant.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

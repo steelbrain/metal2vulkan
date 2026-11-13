@@ -233,6 +233,7 @@ pub(crate) struct Counters {
     rate_map_probe_gpu_nanos: AtomicU64,
     rate_map_flagged_draws: AtomicU64,
     rate_map_fanned_draws: AtomicU64,
+    rate_map_fanned_few_draws: AtomicU64,
     rate_map_fan_out_pipelines_ready: AtomicU64,
     rate_map_fan_out_pipelines_waited: AtomicU64,
     rate_map_fan_tables_uploaded: AtomicU64,
@@ -2792,10 +2793,13 @@ impl Counters {
         (self.rate_map_probe_gpu_nanos).fetch_add(nanos, Ordering::Relaxed);
     }
 
-    /// A command's draw in a rate-mapped pass was drawn once, fanned out to its regions
-    /// (`rate_mapped_pass.rs`, **Fan-out**).
-    pub(crate) fn rate_map_fanned_draw(&self) {
+    /// A command's draw in a rate-mapped pass was drawn once, fanned out to its regions, through
+    /// the variant of few copies where `few` (`rate_mapped_pass.rs`, **Fan-out**).
+    pub(crate) fn rate_map_fanned_draw(&self, few: bool) {
         (self.rate_map_fanned_draws).fetch_add(1, Ordering::Relaxed);
+        if few {
+            (self.rate_map_fanned_few_draws).fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// A `VkCommandBuffer` was begun (`vkBeginCommandBuffer`) for `what`.
@@ -6975,6 +6979,9 @@ pub struct WorkCounts {
     /// Executed commands' draws in rate-mapped passes drawn once, fanned out to the regions their
     /// triangles touch.
     pub rate_map_fanned_draws: u64,
+    /// Of them, those the probe marked no triangle of too wide for few copies, drawn through the
+    /// variant of `bind::fan_out::FEW_COPIES` copies (`RegionFanOut::DrawFew`).
+    pub rate_map_fanned_few_draws: u64,
     /// `VkPipeline`s of probes' and fanned-out draws' variants that `commit` began making on the
     /// device's pool, settling what the host step that records the pass compiles, and that a
     /// host step fanning the pass out found made already (`rate_mapped_pass.rs`, **Fan-out**).
@@ -10055,6 +10062,7 @@ impl Device {
             rate_map_probe_gpu_nanos: counters.rate_map_probe_gpu_nanos.load(Ordering::Relaxed),
             rate_map_flagged_draws: counters.rate_map_flagged_draws.load(Ordering::Relaxed),
             rate_map_fanned_draws: counters.rate_map_fanned_draws.load(Ordering::Relaxed),
+            rate_map_fanned_few_draws: (counters.rate_map_fanned_few_draws).load(Ordering::Relaxed),
             rate_map_fan_out_pipelines_ready: (counters.rate_map_fan_out_pipelines_ready)
                 .load(Ordering::Relaxed),
             rate_map_fan_out_pipelines_waited: (counters.rate_map_fan_out_pipelines_waited)

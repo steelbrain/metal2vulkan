@@ -63,12 +63,20 @@ fn a_fan_out_variant_s_triangle_stage_emits_its_copies() {
     for stem in ["lavapipe", "intel-irisxe-rplp-anv", "nvidia-pascal-linux"] {
         let p = profile(stem);
         let (v, f) = pipeline();
-        for mode in [RegionFanOut::Draw, RegionFanOut::Probe] {
+        for mode in [
+            RegionFanOut::Draw,
+            RegionFanOut::Probe,
+            RegionFanOut::DrawFew,
+        ] {
             let linked =
                 link(&[&v, &f], &fanned(mode), &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
             let g = linked.geometry.as_ref().expect("geometry stages");
             let fan = g.fan_out.expect("the fan-out stage");
-            assert!((1..=16).contains(&fan.copies), "{stem}: {}", fan.copies);
+            let most = match mode {
+                RegionFanOut::DrawFew => crate::bind::fan_out::FEW_COPIES,
+                RegionFanOut::Draw | RegionFanOut::Probe => 16,
+            };
+            assert!((1..=most).contains(&fan.copies), "{stem}: {}", fan.copies);
             let state = linked
                 .graphics
                 .as_ref()
@@ -84,7 +92,9 @@ fn a_fan_out_variant_s_triangle_stage_emits_its_copies() {
                 .map(|r| (r.offset, r.size))
                 .collect::<Vec<_>>();
             match mode {
-                RegionFanOut::Draw => assert!(pushes.is_empty(), "{stem}"),
+                RegionFanOut::Draw | RegionFanOut::DrawFew => {
+                    assert!(pushes.is_empty(), "{stem}")
+                }
                 RegionFanOut::Probe => assert_eq!(pushes, [(fan.push_offset, 4)], "{stem}"),
             }
             let made = g
@@ -97,12 +107,12 @@ fn a_fan_out_variant_s_triangle_stage_emits_its_copies() {
                 let (expected, outputs) = match (class, mode) {
                     (Class::Point, _) => (1, 1),
                     (Class::Line, _) => (2, 2),
-                    (_, RegionFanOut::Draw) => (3, 3 * fan.copies),
+                    (_, RegionFanOut::Draw | RegionFanOut::DrawFew) => (3, 3 * fan.copies),
                     (_, RegionFanOut::Probe) => (0, 3),
                 };
                 assert_eq!(emits, expected, "{stem} {mode:?} {class:?}");
                 let loops = count_ops(&module.spirv, crate::spv::Op::LoopMerge as u32);
-                let looped = (class, mode) == (Class::Triangle, RegionFanOut::Draw);
+                let looped = class == Class::Triangle && mode != RegionFanOut::Probe;
                 assert_eq!(loops, usize::from(looped), "{stem} {mode:?} {class:?}");
                 let declared = (instructions(&module.spirv, crate::spv::Op::ExecutionMode))
                     .into_iter()
@@ -155,6 +165,8 @@ fn a_probe_adds_a_triangle_s_copies_into_the_count_its_primitive_picks() {
             .expect("the triangle stage");
         let words = &module.spirv;
         assert_eq!(instructions(words, Op::AtomicIAdd).len(), 1, "one add");
+        // The flag's store, and the wide word's.
+        assert_eq!(instructions(words, Op::AtomicStore).len(), 2, "two stores");
         let primitive = (instructions(words, Op::Decorate).into_iter())
             .filter(|d| d[1..] == [Decoration::BuiltIn as u32, BuiltIn::PrimitiveId as u32])
             .count();

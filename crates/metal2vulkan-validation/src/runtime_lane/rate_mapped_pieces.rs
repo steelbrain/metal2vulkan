@@ -93,7 +93,7 @@ const PIECE_LIMIT: Duration = Duration::from_secs(1);
 /// The counts of `work`: the pieces past the first, the index ranges past the first, the pieces
 /// timed, their GPU time and the longest's; the probes, the draws they flagged, the draws fanned
 /// out and the probes' GPU time.
-fn counts(work: &WorkCounts) -> [u64; 14] {
+fn counts(work: &WorkCounts) -> [u64; 15] {
     [
         work.rate_map_pieces,
         work.rate_map_index_ranges,
@@ -109,6 +109,7 @@ fn counts(work: &WorkCounts) -> [u64; 14] {
         work.render_pipeline_create_nanos,
         work.rate_map_fan_out_pipelines_ready,
         work.rate_map_fan_out_pipelines_waited,
+        work.rate_map_fanned_few_draws,
     ]
 }
 
@@ -329,6 +330,7 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32) {
         let [pieces, ranges, timed, nanos] = [0, 1, 2, 3].map(delta);
         let [probes, flagged, fanned, probe_nanos] = [5, 6, 7, 8].map(delta);
         let [stepped, made, made_nanos, ready, waited] = [9, 10, 11, 12, 13].map(delta);
+        let few = delta(14);
         let most = Duration::from_nanos(after[4]);
         let indices: u64 = draws.iter().map(|&count| u64::from(count)).sum();
         let mean = Duration::from_nanos(nanos / timed.max(1));
@@ -342,7 +344,8 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32) {
              regions, {spread} commands of {indices} indices: the command buffer {:.1} ms of GPU \
              time, {} pieces ({ranges} index ranges past the first); {timed} pieces timed, the \
              longest {:.2} ms, the mean {:.2} ms; {probes} probes of {:.2} ms, {flagged} draws \
-             flagged, {fanned} fanned out; the host step {:.1} ms, {made} pipelines made there, \
+             flagged, {fanned} fanned out ({few} of few copies); the host step {:.1} ms, \
+             {made} pipelines made there, \
              {:.1} ms creating render pipelines; the fan-out's pipelines {ready} ready at the \
              step, {waited} waited for; the commit {:.1} ms",
             SCREEN[0],

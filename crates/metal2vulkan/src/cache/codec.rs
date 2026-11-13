@@ -1426,7 +1426,7 @@ codec_enum! {
     StorageAttachmentView { Attachment, SamplePlanes { layers } }
     StandInView { Image, SamplePlanes { layers } }
     BandPrimitive { Lines, Triangles }
-    RegionFanOut { Draw, Probe }
+    RegionFanOut { Draw, Probe, DrawFew }
     PrecisionNote {
         F16FmaDoubleRounding, F16IntConvDoubleRounding, GradFromBias,
         DeviceTranscendentals, ReductionOrder, DeviceDenormals,
