@@ -512,10 +512,11 @@ fn helper(
         index32(out, arg_at(args, at)?, m)
     };
     match h.f {
-        // Construction zeroes the elements the thread holds (`+0` over floats), a destination's
-        // and a right input's alike: Metal's answers to `tns_init`, whose loop constructs each
-        // round's tensor over the storage the round before set, and to the gather kernels, which
-        // construct their destination in a loop's body and accumulate into it.
+        // Construction zeroes the elements the thread holds (`+0` over floats), a destination's,
+        // a right input's and a left input's alike: Metal's answers to `tns_init` and
+        // `tns_init_left`, whose loops construct each round's tensor over the storage the round
+        // before set, and to the gather kernels, which construct their destination in a loop's
+        // body and accumulate into it.
         MatMul2dFn::TensorInit => {
             let elem = h
                 .elem

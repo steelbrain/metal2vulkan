@@ -8,8 +8,8 @@
 //!
 //! - **Tensor objects** follow this translation's layout ([`tensor`]).
 //! - **Cooperative tensors** follow Metal's measured layouts ([`layout`]): a thread's storage holds
-//!   its elements contiguously, construction zeroes them (`+0` over floats, a destination's and a
-//!   right input's alike), the size helpers answer constants (so the storage allocas SCCP sees are
+//!   its elements contiguously, construction zeroes them (`+0` over floats, a destination's, a
+//!   right input's and a left input's alike), the size helpers answer constants (so the storage allocas SCCP sees are
 //!   static), and the coordinate helper computes an element's place from the lane's index in its
 //!   simdgroup and the simdgroup's index in the threadgroup, which the expansion adds to the kernel
 //!   as two builtin parameters ([`Lanes`]).
