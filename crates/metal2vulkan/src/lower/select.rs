@@ -1245,7 +1245,7 @@ pub fn select(
         func: e.func,
         observed,
     };
-    let result = select_entry(cx, body, func.params.len(), m);
+    let result = select_entry(cx, body, func.params.len(), widest_pin, m);
     m.release(observed_bytes);
     m.release(root_bytes);
     result
@@ -1255,6 +1255,7 @@ fn select_entry(
     mut cx: SelectCx<'_>,
     body: &Body,
     params: usize,
+    widest_pin: simd::WidestPin,
     m: &mut Meter,
 ) -> Result<Plan, Error> {
     // The varyings a vertex function writes the same at every vertex of a primitive, which a
