@@ -93,6 +93,22 @@ pub const COMMAND_BYTES: usize =
     ((THREADGROUP_WORD + THREADGROUP_COUNT + 2) * 4).next_multiple_of(8);
 /// Host-initialized command count, atomic encoding-fault flag, descriptor flags, and packed binding counts.
 pub const COMMAND_BUFFER_HEADER_BYTES: usize = 16;
+/// Bytes of one command's written flag (a `u32`), past every record ([`written_flag_offset`]).
+pub const WRITTEN_FLAG_BYTES: usize = 4;
+
+/// The byte offset of command `index`'s written flag in the storage of a buffer of `capacity`
+/// commands: the flags follow the records, one `u32` a command. Each encoder operation that
+/// writes a command's record (one the header's policy takes, `lower::access::encode`) stores 1
+/// at its flag, contained as the record's fields are: storage that ends at its records takes no
+/// flag, and its records are written as before. A consumer whose storage holds the flags, and
+/// whose own writes of the records set them as well, knows a record whose flag is clear to hold
+/// what it last reset it to, and may reset only the flagged ones, clearing each flag with its
+/// record (`bind::IcbResetModule`).
+pub const fn written_flag_offset(capacity: u32, index: u32) -> u64 {
+    COMMAND_BUFFER_HEADER_BYTES as u64
+        + capacity as u64 * COMMAND_BYTES as u64
+        + index as u64 * WRITTEN_FLAG_BYTES as u64
+}
 
 /// The guest address of the records of the indirect command buffer of resource ID 0, the null
 /// one, which no records lie at ([`records_address`]).

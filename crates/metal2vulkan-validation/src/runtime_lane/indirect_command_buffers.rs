@@ -1267,10 +1267,12 @@ fn commands_read_back_their_type_and_slots_past_the_record() {
         assert_eq!(
             (
                 after.cmd_copy_buffer - before.cmd_copy_buffer,
-                after.cmd_fill_buffer - before.cmd_fill_buffer
+                after.cmd_fill_buffer - before.cmd_fill_buffer,
+                after.cmd_dispatch - before.cmd_dispatch,
             ),
-            (0, 2),
-            "a GPU reset fills the records and the slots past them, copying nothing"
+            (0, 1, 1),
+            "a GPU reset writes the flagged records by a dispatch and fills the slots past them, \
+             copying nothing"
         );
         let fresh = [Some(0), Some(0), Some(0), None];
         assert_eq!(slots(&command(&made, 1)), fresh, "cleared by a GPU reset");

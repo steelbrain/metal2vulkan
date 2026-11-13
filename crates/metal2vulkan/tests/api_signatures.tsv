@@ -125,6 +125,12 @@ assoc-const	metal2vulkan::bind::FlatIndirect::RECORD_OFFSET	pub const RECORD_OFF
 assoc-const	metal2vulkan::bind::FlatIndirect::SCRATCH_BYTES	pub const SCRATCH_BYTES: u64
 assoc-const	metal2vulkan::bind::GeneratedLayout::INDEX_OFFSET	pub const INDEX_OFFSET: u32
 assoc-const	metal2vulkan::bind::GeneratedLayout::PUSH_OFFSET	pub const PUSH_OFFSET: u32
+assoc-const	metal2vulkan::bind::IcbResetModule::FLAGS_BINDING	pub const FLAGS_BINDING: u32
+assoc-const	metal2vulkan::bind::IcbResetModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
+assoc-const	metal2vulkan::bind::IcbResetModule::PUSH_BYTES	pub const PUSH_BYTES: u32
+assoc-const	metal2vulkan::bind::IcbResetModule::RECORDS_BINDING	pub const RECORDS_BINDING: u32
+assoc-const	metal2vulkan::bind::IcbResetModule::RECORD_PAIRS	pub const RECORD_PAIRS: u32
+assoc-const	metal2vulkan::bind::IcbResetModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::IndexBoundsFillModule::INDICES_BINDING	pub const INDICES_BINDING: u32
 assoc-const	metal2vulkan::bind::IndexBoundsFillModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::IndexBoundsFillModule::POOL_BINDING	pub const POOL_BINDING: u32
@@ -608,6 +614,12 @@ assoc-const-value	metal2vulkan::bind::FlatIndirect::RECORD_OFFSET	0
 assoc-const-value	metal2vulkan::bind::FlatIndirect::SCRATCH_BYTES	48 + 32
 assoc-const-value	metal2vulkan::bind::GeneratedLayout::INDEX_OFFSET	0
 assoc-const-value	metal2vulkan::bind::GeneratedLayout::PUSH_OFFSET	4
+assoc-const-value	metal2vulkan::bind::IcbResetModule::FLAGS_BINDING	1
+assoc-const-value	metal2vulkan::bind::IcbResetModule::LOCAL_SIZE	64
+assoc-const-value	metal2vulkan::bind::IcbResetModule::PUSH_BYTES	8
+assoc-const-value	metal2vulkan::bind::IcbResetModule::RECORDS_BINDING	0
+assoc-const-value	metal2vulkan::bind::IcbResetModule::RECORD_PAIRS	(COMMAND_BYTES / 8) as u32
+assoc-const-value	metal2vulkan::bind::IcbResetModule::SET	0
 assoc-const-value	metal2vulkan::bind::IndexBoundsFillModule::INDICES_BINDING	1
 assoc-const-value	metal2vulkan::bind::IndexBoundsFillModule::LOCAL_SIZE	64
 assoc-const-value	metal2vulkan::bind::IndexBoundsFillModule::POOL_BINDING	2
@@ -1043,6 +1055,7 @@ const	metal2vulkan::bind::indirect_commands::COMMAND_BYTES	pub const COMMAND_BYT
 const	metal2vulkan::bind::indirect_commands::RECORDS_ADDRESS_BASE	pub const RECORDS_ADDRESS_BASE: u64
 const	metal2vulkan::bind::indirect_commands::RECORDS_ID_LIMIT	pub const RECORDS_ID_LIMIT: u64
 const	metal2vulkan::bind::indirect_commands::THREADGROUP_BUFFER_ARGUMENT_COUNT	pub const THREADGROUP_BUFFER_ARGUMENT_COUNT: u32
+const	metal2vulkan::bind::indirect_commands::WRITTEN_FLAG_BYTES	pub const WRITTEN_FLAG_BYTES: usize
 const	metal2vulkan::cache::ARTIFACT_FORMAT_VERSION	pub const ARTIFACT_FORMAT_VERSION: u32
 const	metal2vulkan::cache::RUNTIME_VERSION	pub const RUNTIME_VERSION: u32
 const	metal2vulkan::cache::SEMANTICS_VERSION	pub const SEMANTICS_VERSION: u32
@@ -1122,6 +1135,7 @@ const-value	metal2vulkan::bind::indirect_commands::COMMAND_BYTES	((THREADGROUP_W
 const-value	metal2vulkan::bind::indirect_commands::RECORDS_ADDRESS_BASE	1 <<63
 const-value	metal2vulkan::bind::indirect_commands::RECORDS_ID_LIMIT	1 <<31
 const-value	metal2vulkan::bind::indirect_commands::THREADGROUP_BUFFER_ARGUMENT_COUNT	31
+const-value	metal2vulkan::bind::indirect_commands::WRITTEN_FLAG_BYTES	4
 const-value	metal2vulkan::cache::SOURCE_DIGEST	env!("M2V_SOURCE_DIGEST")
 const-value	metal2vulkan::device::NVIDIA_AMPERE_GA10X	&[0x2200, 0x2203, 0x2204, 0x2205, 0x2206, 0x2207, 0x2208, 0x220a, 0x220d, 0x2216, 0x222b, 0x222f, 0x2230, 0x2231, 0x2232, 0x2233, 0x2235, 0x2236, 0x2237, 0x2238, 0x223f, 0x2414, 0x2420, 0x2438, 0x2460, 0x2480, 0x2482, 0x2483, 0x2484, 0x2486, 0x2487, 0x2488, 0x2489, 0x248a, 0x248c, 0x248d, 0x248e, 0x249c, 0x249d, 0x249f, 0x24a0, 0x24a4, 0x24ac, 0x24ad, 0x24af, 0x24b0, 0x24b1, 0x24b6, 0x24b7, 0x24b8, 0x24b9, 0x24ba, 0x24bb, 0x24bf, 0x24c0, 0x24c7, 0x24c8, 0x24c9, 0x24dc, 0x24dd, 0x24df, 0x24e0, 0x24fa, 0x2501, 0x2503, 0x2504, 0x2505, 0x2507, 0x2508, 0x2509, 0x2520, 0x2521, 0x2523, 0x252f, 0x2531, 0x2544, 0x2560, 0x2561, 0x2563, 0x2571, 0x2582, 0x2583, 0x2584, 0x25a0, 0x25a2, 0x25a3, 0x25a4, 0x25a5, 0x25a6, 0x25a7, 0x25a9, 0x25aa, 0x25ab, 0x25ac, 0x25ad, 0x25af, 0x25b0, 0x25b2, 0x25b5, 0x25b6, 0x25b8, 0x25b9, 0x25ba, 0x25bb, 0x25bc, 0x25bd, 0x25e0, 0x25e2, 0x25e5, 0x25ec, 0x25ed, 0x25f9, 0x25fa, 0x25fb]
 const-value	metal2vulkan::metal::sampler::NOT_MIPMAPPED_MAX_LOD	0.25
@@ -3880,6 +3894,8 @@ field	metal2vulkan::bind::GeneratedReplay.templates	pub templates: Vec<u8>
 field	metal2vulkan::bind::GeneratedVariant.commands	pub commands: &'a DispatchCommands
 field	metal2vulkan::bind::GeneratedVariant.pipeline	pub pipeline: &'a ComputePipeline
 field	metal2vulkan::bind::GeneratedVariant.plan	pub plan: &'a BindingPlan
+field	metal2vulkan::bind::IcbResetModule.requirements	pub requirements: Requirements
+field	metal2vulkan::bind::IcbResetModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::ImageViewDesc.aspect	pub aspect: vk::ImageAspectFlags
 field	metal2vulkan::bind::ImageViewDesc.components	pub components: vk::ComponentMapping
 field	metal2vulkan::bind::ImageViewDesc.format	pub format: vk::Format
@@ -5329,6 +5345,7 @@ fn	metal2vulkan::bind::handle_entry_flags	pub fn handle_entry_flags(facts: &Text
 fn	metal2vulkan::bind::heap_classes	pub fn heap_classes(profile: &DeviceProfile) -> Vec<HandleClass>
 fn	metal2vulkan::bind::heap_element	pub fn heap_element(profile: &DeviceProfile, class: &HandleClass, facts: &TextureFacts, layout: vk::ImageLayout) -> Result<HeapElement, BindError>
 fn	metal2vulkan::bind::heap_raw_form	pub fn heap_raw_form(facts: &TextureFacts) -> Option<crate::metal::format::ExtendedRange>
+fn	metal2vulkan::bind::icb_reset_module	pub fn icb_reset_module(device: &Device) -> Result<IcbResetModule, Error>
 fn	metal2vulkan::bind::index_bounds_fill_module	pub fn index_bounds_fill_module(device: &Device) -> Result<IndexBoundsFillModule, Error>
 fn	metal2vulkan::bind::index_bounds_fill_run_module	pub fn index_bounds_fill_run_module(device: &Device) -> Result<IndexBoundsFillModule, Error>
 fn	metal2vulkan::bind::index_bounds_plan_module	pub fn index_bounds_plan_module(device: &Device) -> Result<IndexBoundsPlanModule, Error>
@@ -5339,6 +5356,7 @@ fn	metal2vulkan::bind::index_rewrite_module	pub fn index_rewrite_module(device: 
 fn	metal2vulkan::bind::index_rewrite_run_module	pub fn index_rewrite_run_module(device: &Device, program: RewriteProgram) -> Result<IndexRewriteModule, Error>
 fn	metal2vulkan::bind::indirect_clamp_module	pub fn indirect_clamp_module(device: &Device) -> Result<IndirectClampModule, Error>
 fn	metal2vulkan::bind::indirect_commands::records_address	pub const fn records_address(id: u64) -> u64
+fn	metal2vulkan::bind::indirect_commands::written_flag_offset	pub const fn written_flag_offset(capacity: u32, index: u32) -> u64
 fn	metal2vulkan::bind::instance_record	pub fn instance_record(instance: &MetalInstance, reference: u64, geometry_table_offset: u32) -> Result<InstanceRecord, Unsupported>
 fn	metal2vulkan::bind::interleave_merge_modules	pub fn interleave_merge_modules(device: &Device, samples: u32) -> Result<InterleaveMergeModules, Error>
 fn	metal2vulkan::bind::interleave_split_module	pub fn interleave_split_module(device: &Device, copy: PlanesCopy, samples: u32) -> Result<InterleaveSplitModule, Error>
@@ -9292,6 +9310,8 @@ method	metal2vulkan::bind::GeneratedLayout::max_sequences	pub fn max_sequences(&
 method	metal2vulkan::bind::GeneratedLayout::sequence_offset	pub fn sequence_offset(&self, slot: u32, region: u32) -> u64
 method	metal2vulkan::bind::GeneratedVariant::new	pub fn new(pipeline: &'a ComputePipeline, plan: &'a BindingPlan, commands: &'a DispatchCommands) -> GeneratedVariant<'a>
 method	metal2vulkan::bind::HeapElements::element	pub fn element(&self, write: &DescriptorWrite) -> Option<u32>
+method	metal2vulkan::bind::IcbResetModule::firsts	pub fn firsts(first_record: u32, first_flag: u32) -> [u8; 8]
+method	metal2vulkan::bind::IcbResetModule::groups	pub fn groups(commands: u32) -> [u32; 3]
 method	metal2vulkan::bind::ImageViewDesc::new	pub fn new(view_type: vk::ImageViewType, format: vk::Format, aspect: vk::ImageAspectFlags, layout: vk::ImageLayout, components: vk::ComponentMapping) -> ImageViewDesc
 method	metal2vulkan::bind::ImageblockSize::new	pub fn new(width: u32, height: u32) -> ImageblockSize
 method	metal2vulkan::bind::IndexBoundsPass::new	pub fn new(arguments: IndirectRef, index_size: u64, index_offset: u64, index_end: u64, alignment: u64, max_range: u32, pool_bytes: u32) -> Option<IndexBoundsPass>
@@ -10393,6 +10413,7 @@ struct	metal2vulkan::bind::GeneratedReplay	#[derive(Clone, Debug, PartialEq, Eq)
 struct	metal2vulkan::bind::GeneratedVariant	#[derive(Clone, Copy, Debug)] #[non_exhaustive] pub struct GeneratedVariant<'a>
 struct	metal2vulkan::bind::GraphicsTemplate	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct GraphicsTemplate
 struct	metal2vulkan::bind::HeapElements	#[derive(Clone, Debug, Default, PartialEq, Eq)] pub struct HeapElements
+struct	metal2vulkan::bind::IcbResetModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct IcbResetModule
 struct	metal2vulkan::bind::ImageViewDesc	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ImageViewDesc
 struct	metal2vulkan::bind::ImageblockSize	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ImageblockSize
 struct	metal2vulkan::bind::IndexBoundsFillModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct IndexBoundsFillModule

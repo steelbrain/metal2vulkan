@@ -665,6 +665,8 @@ surface! {
         struct ShadowCopyInModule N;
         fn rows_copy_module;
         struct RowsCopyModule N;
+        fn icb_reset_module;
+        struct IcbResetModule N;
         fn pages_copy_module;
         enum PagesCopy E;
         struct PagesCopyModule N;
@@ -865,7 +867,9 @@ surface! {
         const RECORDS_ADDRESS_BASE;
         const RECORDS_ID_LIMIT;
         const THREADGROUP_BUFFER_ARGUMENT_COUNT;
+        const WRITTEN_FLAG_BYTES;
         fn records_address;
+        fn written_flag_offset;
     }
     "cache" => metal2vulkan::cache {
         type Hash256;

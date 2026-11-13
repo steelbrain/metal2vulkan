@@ -16,6 +16,8 @@
 //!   what Metal computes, and so does one whose kernel fetches a `[[stage_in]]` attribute
 //!   (the host step checks each command's fetch past 4 GiB);
 //! - a sticky encoding fault in the header runs no command, and the execution report says so;
+//! - an execution after a blit's reset of some of the commands the kernel wrote runs the rest
+//!   alone, on the GPU alone;
 //! - an execution whose commands' windows no encoder made resident writes what Metal computes
 //!   on either path: both reach every live buffer of its own.
 //!
@@ -186,6 +188,55 @@ fn a_total_execution_runs_on_the_gpu_alone() {
                 assert_eq!(setup.output(), expected(), "two command buffers, {at}");
                 assert!(ran_flat(&executing), "two command buffers, {at}");
                 ran_recording(device, generated, before, &at);
+            }
+            announced(device, messages, true);
+        });
+    }
+}
+
+/// An execution on the GPU alone reads the commands a blit's reset left: the kernel writes every
+/// command in one command buffer, a reset of commands 1 and 2 follows in the next (its flagged
+/// reset writes those the kernel flagged), and a total execution in the next runs commands 0 and 3
+/// alone, writing nothing in the others' windows; a reset of the whole range then leaves it
+/// running nothing. Nothing is announced.
+#[test]
+fn an_execution_on_the_gpu_alone_runs_what_a_reset_left() {
+    for withheld in [false, true] {
+        on_device(withheld, |device, messages, generated| {
+            let queue = device.new_command_queue().unwrap();
+            let setup = Setup::with_template(device, 2, flat_template(device));
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut encoder = command_buffer.compute_command_encoder().unwrap();
+            setup.write(&mut encoder);
+            encoder.end_encoding().unwrap();
+            complete(&command_buffer);
+            let at = format!("withheld {withheld}");
+            for (range, ran) in [(1..3, [0, 3].as_slice()), (0..COMMANDS, [].as_slice())] {
+                let command_buffer = queue.command_buffer().unwrap();
+                let mut blit = command_buffer.blit_command_encoder().unwrap();
+                blit.reset_commands_in_buffer(setup.icb(), range.clone())
+                    .unwrap();
+                blit.fill_buffer(setup.out(), 0..setup.out().length(), 0)
+                    .unwrap();
+                blit.end_encoding().unwrap();
+                complete(&command_buffer);
+                let before = recorded(device);
+                let command_buffer = queue.command_buffer().unwrap();
+                let mut encoder = command_buffer.compute_command_encoder().unwrap();
+                setup.execute(&mut encoder);
+                encoder.end_encoding().unwrap();
+                complete(&command_buffer);
+                let want: Vec<u32> = expected()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(word, value)| match ran.contains(&(word / THREADS)) {
+                        true => value,
+                        false => 0,
+                    })
+                    .collect();
+                assert_eq!(setup.output(), want, "reset {range:?}, {at}");
+                assert!(ran_flat(&command_buffer), "reset {range:?}, {at}");
+                ran_recording(device, generated, before, &format!("reset {range:?}, {at}"));
             }
             announced(device, messages, true);
         });

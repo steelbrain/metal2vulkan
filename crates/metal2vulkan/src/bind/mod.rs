@@ -90,7 +90,8 @@
 //! [`shadow_copy_in_module`] copies a merged texture's texels in and keeps them with one dispatch.
 //! A copy of many
 //! equal rows between two buffers is one dispatch of [`rows_copy_module`] where a copy's region
-//! per row costs more. A copy of 32-bit float depths into a depth image of a device that takes
+//! per row costs more. A reset of a run of indirect commands is one dispatch of
+//! [`icb_reset_module`], which writes only the records whose written flag is set. A copy of 32-bit float depths into a depth image of a device that takes
 //! none outside `[0, 1]` clamps them first through [`depth_clamp_module`] ([`clamped_depth`] on
 //! the CPU). A blit through a `BGRA10_XR` texture Metal keeps losslessly compressed
 //! writes Metal's canonical encoding of its texels through [`extended_canonical_module`] where
@@ -150,6 +151,7 @@ pub(crate) mod extended_shadow;
 pub mod fan_out;
 pub(crate) mod graphics;
 pub(crate) mod heap;
+pub(crate) mod icb_reset;
 pub(crate) mod index_bounds;
 pub(crate) mod index_rewrite;
 pub(crate) mod indirect_clamp;
@@ -307,6 +309,7 @@ pub use state::{
 // How `BindState::shape` classes a buffer: the crate reads it from `state`, and a consumer takes
 // shapes from `BindState::shape`; only the crate's tests and validation reach it here.
 pub use dynamic_views::{dynamic_views_module, DynamicViewsModule};
+pub use icb_reset::{icb_reset_module, IcbResetModule};
 pub use plane_bytes_copy::{
     plane_bytes_copy_module, PlaneBytes, PlaneBytesCopyModule, PlaneSource,
 };

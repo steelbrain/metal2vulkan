@@ -90,6 +90,9 @@ pub(super) enum OwnedModule {
     /// `bind::rows_copy_module`: many equal rows of words copied from one buffer into another by
     /// a dispatch, in place of a copy's region per row (`row_copies.rs`).
     RowsCopy,
+    /// `bind::icb_reset_module`: a run of indirect commands reset, only the records whose written
+    /// flag is set written, each flag cleared (`blit_indirect.rs`).
+    IcbReset,
     /// `bind::pages_copy_module` of one direction: runs of words, up to a 4 KiB page each, copied
     /// between a chunk of a guest RAM and a buffer by a table of them, a gather or a scatter
     /// (`host_ram/copy.rs`).
@@ -214,15 +217,17 @@ impl OwnedModule {
     }
 
     /// Whether the module's set 0 is pushed on `device` ([`OwnedKernel::pushed`]): the rows
-    /// copy's, a guest RAM's pages copy's and a shadowed texture's copies' and merges', on a
-    /// device with `VK_KHR_push_descriptor` whose pushed sets hold their buffers' sizes (not
-    /// MoltenVK's, `RuntimeDriverDefect::PushedBufferSizesUnset`), so their commands make no pool
-    /// on the encoding thread (`row_copies.rs`, `host_ram/copy.rs`, `shadow_copy_back.rs`,
-    /// `shadow_copy_in.rs`, `shadow_merge.rs`).
+    /// copy's, an indirect command buffer's reset's, a guest RAM's pages copy's and a shadowed
+    /// texture's copies' and merges', on a device with `VK_KHR_push_descriptor` whose pushed sets
+    /// hold their buffers' sizes (not MoltenVK's, `RuntimeDriverDefect::PushedBufferSizesUnset`),
+    /// so their commands make no pool on the encoding thread (`row_copies.rs`,
+    /// `blit_indirect.rs`, `host_ram/copy.rs`, `shadow_copy_back.rs`, `shadow_copy_in.rs`,
+    /// `shadow_merge.rs`).
     fn pushed(self, device: &Device) -> bool {
         matches!(
             self,
             OwnedModule::RowsCopy
+                | OwnedModule::IcbReset
                 | OwnedModule::PagesCopy(_)
                 | OwnedModule::ShadowCopyBack(_)
                 | OwnedModule::ShadowCopyIn(_)
@@ -337,6 +342,12 @@ impl OwnedModule {
                 let module = metal2vulkan::bind::rows_copy_module(device.compile_device())
                     .map_err(Error::Compile)?;
                 let push_bytes = metal2vulkan::bind::RowsCopyModule::PUSH_BYTES;
+                Ok((module.spirv.to_vec(), 2, push_bytes))
+            }
+            OwnedModule::IcbReset => {
+                let module = metal2vulkan::bind::icb_reset_module(device.compile_device())
+                    .map_err(Error::Compile)?;
+                let push_bytes = metal2vulkan::bind::IcbResetModule::PUSH_BYTES;
                 Ok((module.spirv.to_vec(), 2, push_bytes))
             }
             OwnedModule::PagesCopy(copy) => {
@@ -583,6 +594,7 @@ pub(super) struct OwnedKernels {
     index_rewrite_runs: HashMap<RewriteProgram, OwnedKernel>,
     rotate_texels: Option<OwnedKernel>,
     rows_copy: Option<OwnedKernel>,
+    icb_reset: Option<OwnedKernel>,
     pages_gather: Option<OwnedKernel>,
     pages_scatter: Option<OwnedKernel>,
     extended_canonical: Option<OwnedKernel>,
@@ -640,6 +652,7 @@ impl OwnedKernels {
             self.plane_copy,
             self.rotate_texels,
             self.rows_copy,
+            self.icb_reset,
             self.pages_gather,
             self.pages_scatter,
             self.extended_canonical,
@@ -825,6 +838,7 @@ impl OwnedKernels {
             OwnedModule::PlaneCopy => &mut self.plane_copy,
             OwnedModule::RotateTexels => &mut self.rotate_texels,
             OwnedModule::RowsCopy => &mut self.rows_copy,
+            OwnedModule::IcbReset => &mut self.icb_reset,
             OwnedModule::PagesCopy(metal2vulkan::bind::PagesCopy::Gather) => &mut self.pages_gather,
             OwnedModule::PagesCopy(metal2vulkan::bind::PagesCopy::Scatter) => {
                 &mut self.pages_scatter

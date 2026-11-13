@@ -18,7 +18,8 @@
 //! - a checked execution's host step checks each command before it records any, from the records
 //!   it read once; `commit` checks the CPU's records it records the same way, where a state the
 //!   records may name may encode, and never where none may;
-//! - the blit encoder's copy, reset and optimize act on the commands as they run;
+//! - the blit encoder's copy, reset and optimize act on the commands as they run, and a reset
+//!   resets every command a kernel, the CPU or a copy wrote since the last (its written flags);
 //! - a record the kernel wrote runs the state its ID named as it wrote it, after the program
 //!   released it and after another state took its ID; where the state was released before the
 //!   buffer could be written, nothing, announced;
@@ -274,6 +275,11 @@ impl Setup {
     /// `out`, which the commands write.
     pub(super) fn out(&self) -> &Buffer {
         &self.out
+    }
+
+    /// The buffer of the commands the kernel writes.
+    pub(super) fn icb(&self) -> &IndirectCommandBuffer {
+        &self.icb
     }
 
     /// `out`, read back.
@@ -1269,6 +1275,154 @@ fn blits_copy_reset_and_optimize_commands_as_they_run() {
         );
         blit.end_encoding().unwrap();
         complete(&command_buffer);
+    });
+}
+
+/// [`expected`] where only the commands of `ran` run: zero in the other commands' windows.
+fn expected_of(ran: &[usize]) -> Vec<u32> {
+    expected()
+        .into_iter()
+        .enumerate()
+        .map(|(word, value)| {
+            if ran.contains(&(word / WINDOW)) {
+                value
+            } else {
+                0
+            }
+        })
+        .collect()
+}
+
+/// Whether the getters read command `index` of `icb` as a reset command: no dispatch, no
+/// barrier, no pipeline state, no buffer and no threadgroup length.
+fn reads_reset(icb: &IndirectCommandBuffer, index: u64) -> bool {
+    match icb.commands(index..index + 1).unwrap().remove(0) {
+        IndirectCommand::Compute(command) => {
+            command.dispatch.is_none()
+                && !command.barrier
+                && command.pipeline.is_none()
+                && command.kernel_buffers.iter().all(Option::is_none)
+                && command.threadgroup_memory_lengths.iter().all(|&l| l == 0)
+        }
+        other => panic!("not a compute command: {other:?}"),
+    }
+}
+
+/// A blit's reset writes only the commands whose written flag is set (`blit_indirect.rs`), so
+/// every writer of the records sets it: after a kernel's writes, the CPU's setters and a blit's
+/// copy, each in a command buffer before the reset's, a reset of part of the range leaves its
+/// commands reset, the getters reading them so and an execution after it (its host step)
+/// running nothing for them, and the rest as written. A second reset of
+/// the whole range after the first resets the rest, and the kernel's writes after a reset reach
+/// the next one too: a reset clears the flags it consumed, and a later write sets them again.
+/// Each reset is one dispatch of the flagged reset and no fill or copy of the records, where the
+/// device counts its commands.
+#[test]
+fn a_reset_resets_what_each_writer_wrote_since_the_last() {
+    on_device_forcing(&[Degradation::UnmeasuredUniqueIdentifier], |device| {
+        let queue = device.new_command_queue().unwrap();
+        let setup = Setup::new(device, 2);
+        let counted = device.work_counts().commands_uncounted == 0;
+        // A reset of `range` of `icb` in a command buffer of its own, then the execution of every
+        // command of `icb` in the next.
+        let reset_then_run = |icb: &IndirectCommandBuffer, range: std::ops::Range<u64>| {
+            let before = device.work_counts().commands_recorded;
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.reset_commands_in_buffer(icb, range).unwrap();
+            blit.end_encoding().unwrap();
+            complete(&command_buffer);
+            let after = device.work_counts().commands_recorded;
+            if counted {
+                let recorded = (
+                    after.cmd_dispatch - before.cmd_dispatch,
+                    after.cmd_fill_buffer - before.cmd_fill_buffer,
+                    after.cmd_copy_buffer - before.cmd_copy_buffer,
+                );
+                // The flagged reset's dispatch, and the fill that clears the slots past the
+                // records (every compute command's threadgroup lengths there): no fill or copy of
+                // the records.
+                assert_eq!(recorded, (1, 1, 0), "one dispatch of the flagged reset");
+            }
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.fill_buffer(&setup.out, 0..setup.out.length(), 0)
+                .unwrap();
+            blit.end_encoding().unwrap();
+            let mut encoder = command_buffer.compute_command_encoder().unwrap();
+            encoder
+                .use_resource(setup.params.as_resource(), ResourceUsage::READ)
+                .unwrap();
+            encoder
+                .use_resource(setup.out.as_resource(), ResourceUsage::WRITE)
+                .unwrap();
+            encoder
+                .execute_commands_in_buffer(icb, 0..COMMANDS)
+                .unwrap();
+            encoder.end_encoding().unwrap();
+            complete(&command_buffer);
+            setup.output()
+        };
+        let resets = |icb: &IndirectCommandBuffer| -> Vec<bool> {
+            (0..COMMANDS).map(|index| reads_reset(icb, index)).collect()
+        };
+        // A kernel's writes, then a reset of commands 1 and 2.
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        setup.write(&mut encoder);
+        encoder.end_encoding().unwrap();
+        complete(&command_buffer);
+        assert_eq!(
+            resets(&setup.icb),
+            [false; 4],
+            "the kernel wrote every command"
+        );
+        let out = reset_then_run(&setup.icb, 1..3);
+        assert_eq!(out, expected_of(&[0, 3]), "kernel: 1 and 2 reset");
+        assert_eq!(resets(&setup.icb), [false, true, true, false], "kernel");
+        // The whole range: the flags of 1 and 2 cleared, 0 and 3 reset now.
+        let out = reset_then_run(&setup.icb, 0..COMMANDS);
+        assert_eq!(out, expected_of(&[]), "kernel: all reset");
+        assert_eq!(resets(&setup.icb), [true; 4], "kernel: all reset");
+        // The kernel's writes after a reset set the flags again.
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        setup.write(&mut encoder);
+        encoder.end_encoding().unwrap();
+        complete(&command_buffer);
+        let out = reset_then_run(&setup.icb, 3..4);
+        assert_eq!(out, expected_of(&[0, 1, 2]), "kernel again: 3 reset");
+        assert_eq!(
+            resets(&setup.icb),
+            [false, false, false, true],
+            "kernel again"
+        );
+        // The CPU's setters, then a reset of commands 0 and 1.
+        setup.write_on_the_cpu();
+        let out = reset_then_run(&setup.icb, 0..2);
+        assert_eq!(out, expected_of(&[2, 3]), "CPU: 0 and 1 reset");
+        assert_eq!(resets(&setup.icb), [true, true, false, false], "CPU");
+        // The CPU's own reset of command 2: the commands it leaves reset need no blit's.
+        setup.icb.reset_with_range(2..3).unwrap();
+        let out = reset_then_run(&setup.icb, 0..COMMANDS);
+        assert_eq!(out, expected_of(&[]), "CPU: all reset");
+        assert_eq!(resets(&setup.icb), [true; 4], "CPU: all reset");
+        // A copy of the CPU's commands into a fresh buffer, then a reset of 2 and 3 there.
+        setup.write_on_the_cpu();
+        let copied = commands_buffer(device, 2);
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.copy_indirect_command_buffer(&setup.icb, 0..COMMANDS, &copied, 0)
+            .unwrap();
+        blit.end_encoding().unwrap();
+        complete(&command_buffer);
+        assert_eq!(resets(&copied), [false; 4], "copied");
+        let out = reset_then_run(&copied, 2..4);
+        assert_eq!(out, expected_of(&[0, 1]), "copy: 2 and 3 reset");
+        assert_eq!(resets(&copied), [false, false, true, true], "copy");
+        let out = reset_then_run(&copied, 0..COMMANDS);
+        assert_eq!(out, expected_of(&[]), "copy: all reset");
+        assert_eq!(resets(&copied), [true; 4], "copy: all reset");
     });
 }
 

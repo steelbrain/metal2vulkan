@@ -11,15 +11,31 @@
 //!   copies the records' bytes ([`BlitCommandEncoder::copy_from_buffer_to_buffer`], which moves
 //!   overlapping ranges of one buffer as `memmove` does); a record the destination's descriptor
 //!   does not allow runs nothing where an execution meets it (`ReplayFaults::RECORD`), the defined
-//!   answer for Metal's garbled one. A reset writes a reset record (`CommandRecord::default`'s
-//!   bytes) over each command: one fill of the range's records where those bytes are all zero,
-//!   as the record format makes them, and otherwise a copy of them from the command buffer's
-//!   upload arena to each command. Both write the destination's
-//!   records on the GPU as the command buffer runs, so the call marks it written by the GPU
-//!   (`IndirectCommandBuffer::written_by_gpu`): its executions run the records as they stand once
-//!   the work before them completed. An optimize records nothing. Counted as encoded, in the
-//!   records' bytes (`COMMAND_BYTES` a command, whatever the descriptor):
-//!   `WorkCounts::indirect_record_bytes_gpu_copied` and `indirect_record_bytes_gpu_reset`.
+//!   answer for Metal's garbled one; it sets the destination commands' written flags
+//!   (`indirect_commands::written_flag_offset`) by one fill. A reset writes the reset record, all
+//!   zero (`CommandRecord::default`'s bytes), over each command whose written flag is set, and
+//!   clears the flag, by dispatches of `bind::icb_reset_module`, one workgroup a command, each
+//!   dispatch a run of commands whose records one storage-buffer binding holds: every writer of
+//!   the records sets the flag of each record it writes (a kernel's encoder operations, the CPU's
+//!   setters, a copy) and the CPU's writes of the reset record clear it, so a clear flag's record
+//!   holds the reset record already, and a reset of many commands of which few were written
+//!   stores those few records rather than every record of the range (where the records lie in
+//!   host memory across a discrete GPU's link, the range's whole bytes over the link). Both write
+//!   the destination's records on the GPU as the command buffer runs, so the call marks it
+//!   written by the GPU (`IndirectCommandBuffer::written_by_gpu`): its executions run the records
+//!   as they stand once the work before them completed. An optimize records nothing. Counted as
+//!   encoded, in the records' bytes of the range (`COMMAND_BYTES` a command, whatever the
+//!   descriptor, a reset's flagged or not): `WorkCounts::indirect_record_bytes_gpu_copied` and
+//!   `indirect_record_bytes_gpu_reset`.
+//! - **What a reset costs** (an RTX 2080 on a PCIe 3.0 x4 link, NVIDIA 620.70.06, release, the
+//!   median GPU time of 15 command buffers of one reset each, two runs alike). A reset of 45,000
+//!   render commands (101 MB of records in host-cached system memory) took 0.26 ms with no command
+//!   written since the last reset, 1.74 ms with 1,300 written by the CPU, and 60.5 ms with every
+//!   command written, where one fill of the same records took 56.8 ms whatever was written. So a
+//!   buffer whose every command is written between resets resets about 6% slower than a fill
+//!   would, a known gap; the flags' reads alone took 0.26 ms of it. A kernel's flag stores, one
+//!   per operation, took a kernel that encodes 45,000 render commands (two buffers and a draw
+//!   each) from 19.80 ms to 20.11 ms.
 //! - **A buffer of no command types beside one of command types.** The copy completes and moves
 //!   nothing, as plain Metal's does. Metal's own answer, read through what the destination then
 //!   paints rather than through its status (an M3 Max, macOS 27.0.1, build 26A434, the validation
@@ -44,13 +60,16 @@
 //!   the program releases meanwhile gives its ID back at once, as Metal handed a blit's buffer's ID
 //!   out again while the blit waited. An optimize holds nothing.
 
-use super::blit::{reads, writes, BlitCommandEncoder};
+use super::blit::{reads, writes, writes_by, BlitCommandEncoder};
 use super::error::{internal, Error};
 use super::indirect_command_buffer::{IndirectCommandBuffer, Overflow};
+use super::owned_kernel::{OwnedBinds, OwnedModule, OwnedSet};
 use super::replay::BlitCall;
+use super::tracker::Access;
 use super::write_routes::GpuWriter;
 use ash::vk;
-use metal2vulkan::bind::indirect_commands::{CommandRecord, COMMAND_BYTES};
+use metal2vulkan::bind::indirect_commands::COMMAND_BYTES;
+use metal2vulkan::bind::IcbResetModule;
 use std::ops::Range;
 
 impl BlitCommandEncoder {
@@ -106,6 +125,17 @@ impl BlitCommandEncoder {
                 // The slots past the records', carried as Metal's copy carries every slot below the
                 // count.
                 this.copy_overflow(source, from.clone(), destination, to.start)?;
+                // The destination commands' written flags, set: a reset writes their records.
+                let flags = destination.flag_bytes(to.clone());
+                let storage = destination.storage();
+                let (raw, at) = storage.at(flags.start);
+                let size = flags.end - flags.start;
+                this.command(&[writes(storage, flags)], |device, command_buffer| {
+                    // SAFETY: the encoder's command buffer is recording; the storage is live and
+                    // retained until it completes; the flags lie inside it, their offset and size
+                    // multiples of 4 (`u32`s past the records, which end at a multiple of 8).
+                    unsafe { device.cmd_fill_buffer(command_buffer, raw, at, size, 1) };
+                })?;
                 let bytes = IndirectCommandBuffer::record_bytes(from);
                 let at = IndirectCommandBuffer::record_bytes(to).start;
                 let counts = &this.core().device().shared().counts;
@@ -146,68 +176,117 @@ impl BlitCommandEncoder {
                 if range.is_empty() {
                     return Ok(());
                 }
-                let mut reset = [0u8; COMMAND_BYTES];
-                CommandRecord::default()
-                    .encode_into(&mut reset)
-                    .map_err(|_| internal("a reset record does not encode"))?;
                 buffer.written_by_gpu(GpuWriter::Reset);
                 this.core().retain(buffer.gpu_write());
                 let bytes = IndirectCommandBuffer::record_bytes(range.clone());
                 let counts = &this.core().device().shared().counts;
                 counts.indirect_record_bytes_gpu_reset(bytes.end - bytes.start);
-                let overflow = buffer
-                    .overflow()
-                    .map(|overflow| (overflow, overflow.bytes(range.clone())));
-                let storage = buffer.storage();
-                if reset.iter().all(|&b| b == 0) {
-                    // One fill of the records: a copy region per command costs the device a copy
-                    // each.
-                    let (raw, at) = storage.at(bytes.start);
-                    let size = bytes.end - bytes.start;
-                    this.command(&[writes(storage, bytes)], |device, command_buffer| {
-                        // SAFETY: the encoder's command buffer is recording; the storage is live
-                        // and retained until it completes; the range lies inside it, its offset and
-                        // size multiples of 4 (whole records after the 16-byte header).
-                        unsafe { device.cmd_fill_buffer(command_buffer, raw, at, size, 0) };
-                    })?;
-                    this.core().retain(storage.clone());
-                    if let Some((overflow, bytes)) = overflow {
-                        this.clear_overflow(overflow, bytes)?;
-                    }
-                    return Ok(());
-                }
-                let device = this.core().device().clone();
-                let upload = this.core().command_buffer().state().uploads.upload(
-                    &device,
-                    &reset,
-                    COMMAND_BYTES as u64,
-                )?;
-                let (raw, _) = storage.at(0);
-                let regions: Vec<vk::BufferCopy> = range
-                    .map(|index| {
-                        let at = IndirectCommandBuffer::record_bytes(index..index + 1).start;
-                        vk::BufferCopy {
-                            src_offset: upload.offset(),
-                            dst_offset: storage.at(at).1,
-                            size: COMMAND_BYTES as u64,
-                        }
-                    })
-                    .collect();
-                let from = upload.raw();
-                this.command(&[writes(storage, bytes)], |device, command_buffer| {
-                    // SAFETY: the encoder's command buffer is recording; the storage is live and
-                    // retained until it completes, and the arena's region until the command buffer
-                    // completes; each region is one record, inside both.
-                    unsafe { device.cmd_copy_buffer(command_buffer, from, raw, &regions) };
-                })?;
-                this.core().retain(storage.clone());
+                this.reset_flagged(buffer, range.clone())?;
+                this.core().retain(buffer.storage().clone());
                 // The slots past the records', cleared as Metal's reset clears every slot.
-                if let Some((overflow, bytes)) = overflow {
-                    this.clear_overflow(overflow, bytes)?;
+                if let Some(overflow) = buffer.overflow() {
+                    this.clear_overflow(overflow, overflow.bytes(range))?;
                 }
                 Ok(())
             },
         )
+    }
+
+    /// Reset the flagged commands of `range` of `buffer` (the module docs), by dispatches of the
+    /// flagged reset, each a run of commands whose records' and flags' bindings start at the
+    /// device's storage-buffer alignment below them and fit its range and workgroup count.
+    fn reset_flagged(
+        &mut self,
+        buffer: &IndirectCommandBuffer,
+        range: Range<u32>,
+    ) -> Result<(), Error> {
+        let device = self.core().device().clone();
+        let kernel = device.owned_kernel(OwnedModule::IcbReset)?;
+        let limits = &device.properties().description.limits;
+        let align = limits.min_storage_buffer_offset_alignment.max(4);
+        let most = u64::from(limits.max_storage_buffer_range);
+        // Commands a run takes: its records from below an aligned offset within the range (at
+        // least 2^27 bytes, `maxStorageBufferRange`'s least, holds many), and one workgroup each.
+        let run = most.saturating_sub(align.max(8)) / COMMAND_BYTES as u64;
+        let run = run.min(u64::from(limits.max_compute_work_group_count[0]));
+        let run = u32::try_from(run).unwrap_or(u32::MAX).max(1);
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let access = Access::new(
+            compute,
+            vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::SHADER_STORAGE_WRITE,
+        );
+        let storage = buffer.storage();
+        let mut start = range.start;
+        while start < range.end {
+            let end = start.saturating_add(run).min(range.end);
+            let records = IndirectCommandBuffer::record_bytes(start..end);
+            let flags = buffer.flag_bytes(start..end);
+            let (raw, record_at) = storage.at(records.start);
+            let (_, flag_at) = storage.at(flags.start);
+            // The records binding holds 8-byte pairs: its offset at a multiple of 8 too, and the
+            // records at one (`COMMAND_BYTES`: the storage is 8-byte aligned).
+            if !record_at.is_multiple_of(8) {
+                return Err(internal(
+                    "an indirect command buffer's records not 8-byte aligned",
+                ));
+            }
+            let record_offset = record_at - record_at % align.max(8);
+            let flag_offset = flag_at - flag_at % align;
+            let set = OwnedSet {
+                images: Vec::new(),
+                storage_images: Vec::new(),
+                buffers: vec![
+                    (
+                        raw,
+                        record_offset,
+                        record_at - record_offset + (records.end - records.start),
+                    ),
+                    (
+                        raw,
+                        flag_offset,
+                        flag_at - flag_offset + (flags.end - flags.start),
+                    ),
+                ],
+            };
+            let binds = OwnedBinds::new(&device, &kernel, &[set])?;
+            // Each first place below the alignment, a `u32`.
+            let firsts = IcbResetModule::firsts(
+                ((record_at - record_offset) / 8) as u32,
+                ((flag_at - flag_offset) / 4) as u32,
+            );
+            let [x, y, z] = IcbResetModule::groups(end - start);
+            let uses = [
+                writes_by(storage, records, access),
+                writes_by(storage, flags, access),
+            ];
+            self.command_in(compute, &uses, |device, command_buffer| {
+                // SAFETY: the encoder's command buffer is recording; the kernel is the device's,
+                // and the storage is live and retained until the command buffer completes (the
+                // caller); the bindings hold the run's records and flags, within the device's
+                // range and alignment, and the dispatch is one workgroup a command of the run.
+                unsafe {
+                    device.cmd_bind_pipeline(
+                        command_buffer,
+                        vk::PipelineBindPoint::COMPUTE,
+                        kernel.pipeline,
+                    );
+                    binds.bind(device, command_buffer, &kernel, 0);
+                    device.cmd_push_constants(
+                        command_buffer,
+                        kernel.layout,
+                        vk::ShaderStageFlags::COMPUTE,
+                        0,
+                        &firsts,
+                    );
+                    device.cmd_dispatch(command_buffer, x, y, z);
+                }
+            })?;
+            if let OwnedBinds::Sets(sets) = binds {
+                self.core().retain(sets);
+            }
+            start = end;
+        }
+        Ok(())
     }
 
     /// Carry the slots past the records' of `source`'s commands `from` into `destination`'s from

@@ -2,7 +2,10 @@
 //!
 //! - **Storage.** An indirect command buffer is one runtime buffer in the record format of
 //!   `bind::indirect_commands`: a header, then one record per command, so a kernel encodes the same
-//!   records the CPU does. Its `gpu_resource_id` is the ID Metal's pool hands out, of the indirect
+//!   records the CPU does, then a written flag per command, which every write of a record sets
+//!   (a kernel's, the CPU's setters', a blit's copy into it) and a reset clears: the CPU's
+//!   writes of the reset record clear it, and a blit's reset writes only the flagged records
+//!   (`blit_indirect.rs`). Its `gpu_resource_id` is the ID Metal's pool hands out, of the indirect
 //!   command buffers' own space, or the one its descriptor places it at (an M3 Max and an M4,
 //!   compute and render buffers in one space beside textures', samplers', tables' and pipeline
 //!   states'; the pool and the placement). The buffer holds the ID until it and every command that
@@ -57,7 +60,8 @@
 //!   as they stand when the execution's batch is submitted, or for records the GPU may write, once
 //!   the work before it completed ([`indirect_execute`](super::indirect_execute)); it refuses a
 //!   buffer of render commands, which a render encoder's runs (`render/executions.rs`).
-//! - **Creation.** The records of every command, and the slots past them, must each fit one buffer
+//! - **Creation.** The records of every command with their written flags, and the slots past
+//!   them, must each fit one buffer
 //!   of the device's `max_buffer_length`; a larger buffer is refused, naming the limit. The record
 //!   format holds every render command type, mesh draws among them, whose object and mesh buffers a
 //!   command sets as its vertex and fragment buffers; a buffer of either mesh kind holds both mesh
@@ -89,6 +93,7 @@ use super::{
     CpuCacheMode, Device, GpuAddress, HazardTrackingMode, PurgeableState, ResourceOptions,
     StorageMode,
 };
+use metal2vulkan::bind::indirect_commands::written_flag_offset;
 use metal2vulkan::bind::indirect_commands::{
     Action, BufferBinding, BufferStage, CommandBuffer, CommandBufferError, CommandDescriptor,
     CommandRecord, ComputeDispatch, Inheritance, RecordError, RecordField, RecordView, RenderDraws,
@@ -931,9 +936,10 @@ impl Released {
     }
 }
 
-/// The bytes of the records of `size` commands, header included.
+/// The bytes of the storage of `size` commands: the header, the records, and a written flag a
+/// command past them (`written_flag_offset`).
 fn storage_length(size: u32) -> u64 {
-    COMMAND_BUFFER_HEADER_BYTES as u64 + u64::from(size) * COMMAND_BYTES as u64
+    written_flag_offset(size, size)
 }
 
 /// Metal's `allocatedSize` of a buffer of `count` commands of `descriptor`, whatever the
@@ -1606,14 +1612,33 @@ impl IndirectCommandBuffer {
         self.write_header()
     }
 
-    /// [`initialize`](Self::initialize), under the caller's hold of `pipelines`.
+    /// [`initialize`](Self::initialize), under the caller's hold of `pipelines`: every record
+    /// reset and every written flag clear.
     fn write_header(&self) -> Result<(), Error> {
         let length = storage_length(self.0.size) as usize;
         // SAFETY: the storage is host-visible and mapped, `length` bytes from its start; the
         // caller holds `pipelines`, so no other CPU write reaches it meanwhile.
         let bytes = unsafe { std::slice::from_raw_parts_mut(self.bytes(), length) };
-        CommandBuffer::initialize(bytes, self.0.size, &self.0.records, self.0.inheritance)
+        let (records, flags) = bytes.split_at_mut(record_offset(self.0.size));
+        flags.fill(0);
+        CommandBuffer::initialize(records, self.0.size, &self.0.records, self.0.inheritance)
             .map_err(|_| internal("an indirect command buffer's header was refused"))
+    }
+
+    /// Set command `index`'s written flag (below the size) where `written`, else clear it: the
+    /// CPU's record writes keep it, as a kernel's do (`written_flag_offset`), so a blit's reset
+    /// writes only the records a flag marks (`blit_indirect.rs`). A clear flag is a record that
+    /// holds the reset record.
+    fn mark(&self, index: u32, written: bool) {
+        let at = written_flag_offset(self.0.size, index) as usize;
+        // SAFETY: the flag of a command below the size lies inside the mapped storage. A GPU
+        // write to it meanwhile is the program's race, as one to the record is.
+        unsafe {
+            self.bytes()
+                .add(at)
+                .cast::<u32>()
+                .write_unaligned(u32::from(written));
+        }
     }
 
     /// The bytes of command `index`'s record (below the size), as they are now. A host read
@@ -1678,6 +1703,8 @@ impl IndirectCommandBuffer {
                 COMMAND_BYTES,
             );
         }
+        // A reset record, all zero, needs no reset.
+        self.mark(index, bytes.iter().any(|&byte| byte != 0));
         self.wrote(commands, index..index + 1);
         Ok(())
     }
@@ -1924,6 +1951,7 @@ impl IndirectCommandBuffer {
             | RecordError::PipelineState => undecodable(),
             _ => internal("an indirect command's record does not take a setter's field"),
         })?;
+        self.mark(index, true);
         self.wrote(&mut commands, index..index + 1);
         let named = set.as_ref().map(|set| set.named);
         // Read before the state is set, so a state set is always added: only a GPU write since
@@ -1973,6 +2001,7 @@ impl IndirectCommandBuffer {
             std::slice::from_raw_parts_mut(self.bytes().add(record_offset(index)), COMMAND_BYTES)
         };
         CommandRecord::write_field(bytes, field).map_err(field_error)?;
+        self.mark(index, true);
         self.0.unlocked.wrote(index);
         self.0.unlocked_writes.fetch_add(1, Ordering::Release);
         Ok(())
@@ -3671,6 +3700,11 @@ impl IndirectCommandBuffer {
     /// The bytes of commands `range`'s records in the storage.
     pub(super) fn record_bytes(range: Range<u32>) -> Range<u64> {
         record_offset(range.start) as u64..record_offset(range.end) as u64
+    }
+
+    /// The bytes of commands `range`'s written flags in the storage (`written_flag_offset`).
+    pub(super) fn flag_bytes(&self, range: Range<u32>) -> Range<u64> {
+        written_flag_offset(self.0.size, range.start)..written_flag_offset(self.0.size, range.end)
     }
 
     /// The typed command of `record`, its pipeline state `pipeline`.

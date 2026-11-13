@@ -37,7 +37,9 @@
 //! its flag (set or cleared); a threadgroup-length setter the length at its binding, as set (a
 //! multiple of 16 or not, as Metal keeps it); a stage-in region setter its six words; an imageblock
 //! size setter its two `u16`s; and a reset (of a compute or render command) the whole record as
-//! `CommandRecord::default` encodes it, in a loop of `u64` stores.
+//! `CommandRecord::default` encodes it, in a loop of `u64` stores. A valid operation (a copy too)
+//! also stores 1 at its command's written flag past every record
+//! (`indirect_commands::written_flag_offset`), contained as its fields are.
 //!
 //! **Copies** (`copy_command`). The source command buffer is an object word too, and its record
 //! buffer is searched as the command's is. A copy is valid when the source index is below the
@@ -66,7 +68,7 @@ use crate::device::requirements::VkFeature;
 use crate::error::{Capability, Error, Feature, Unsupported};
 use crate::indirect_commands::{
     layout, BufferStage, CommandEncoderOperation, Policy, DYNAMIC_STRIDE, INHERIT_BUFFERS,
-    INHERIT_PIPELINE, RECORDS_ADDRESS_BASE, RECORDS_ADDRESS_SHIFT,
+    INHERIT_PIPELINE, RECORDS_ADDRESS_BASE, RECORDS_ADDRESS_SHIFT, WRITTEN_FLAG_BYTES,
 };
 use crate::lower::arith::{Form, Held};
 use crate::lower::emit::EmitCx;
@@ -242,8 +244,9 @@ impl EncodeStrategy {
 }
 
 /// SPIR-V words of an operation before its fields: the search call, the root entry, the header
-/// loads, the policy test, the fault store, and the selection.
-const COMMAND_WORDS: u32 = dynamic::BASE_WORDS + 24 + 3 * FIELD_WORDS + 160;
+/// loads, the policy test, the written flag's address and store, the fault store, and the
+/// selection.
+const COMMAND_WORDS: u32 = dynamic::BASE_WORDS + 40 + 4 * FIELD_WORDS + 160;
 /// SPIR-V words of one contained field access.
 const FIELD_WORDS: u32 = 72;
 /// SPIR-V words of a reset's loop beyond its store: the counter, the exit test, the stride test
@@ -1097,9 +1100,15 @@ fn emit_command<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, c: &Comma
             writes.push((to, tag, WORD));
         }
     }
+    // The command's written flag past every record (`indirect_commands::written_flag_offset`),
+    // set with its record.
+    let past = indexed(fb, layout::RECORDS, capacity, layout::RECORD)?;
+    let flag = indexed(fb, 0, index, WRITTEN_FLAG_BYTES as u64)?;
+    let flag = fb.binary(BinOp::IAdd, past, flag)?;
+    let one = k32(fb, 1)?;
+    writes.push((flag, one, WORD));
     let fault_at = k64(fb, layout::FAULT)?;
     let fault = dynamic::word_place(fb, b, fault_at)?;
-    let one = k32(fb, 1)?;
     let write: ArmFn<'_, EmitCx<'c>> = Box::new(move |fb, cx| {
         for (to, v, leaf) in writes {
             dynamic::wide_at(fb, b, Some(to), &leaf, Some(v))?;
