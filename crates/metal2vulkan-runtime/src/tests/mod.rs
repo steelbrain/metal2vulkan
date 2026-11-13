@@ -143,6 +143,8 @@ mod device_recovery_carry;
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
 mod device_recovery_exportable;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod device_recovery_handles;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device_recovery_heap;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device_recovery_no_copy;
