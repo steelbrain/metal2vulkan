@@ -339,7 +339,7 @@ impl Texture {
                 "faces of a texture without an image",
             ));
         };
-        let device = self.device();
+        let device = self.generation();
         let record = &self.0.record;
         let layout = TextureLayout {
             texture_type: record.texture_type,
@@ -414,7 +414,7 @@ impl Texture {
         if faces.frozen.load(Ordering::Acquire) {
             return Err(Unturned::Frozen);
         }
-        let device = self.device();
+        let device = self.generation();
         let shared = device.shared();
         let swaps = &shared.face_swaps;
         if point.bound_heaps || shared.uncommitted.count() != 1 || swaps.named(&self.0) {
@@ -474,7 +474,7 @@ impl Texture {
     pub(crate) fn retake_turn(&self) -> Option<Turned> {
         let faces = self.s().faces.get()?;
         let (owner, parts) = encoding_again()?;
-        let swaps = &self.device().shared().face_swaps;
+        let swaps = &self.generation().shared().face_swaps;
         let from = swaps.turned_in(&self.0, owner, &parts)?;
         let to = 1 - usize::from(from);
         (usize::from(faces.face.load(Ordering::Acquire)) == to).then(|| Turned {

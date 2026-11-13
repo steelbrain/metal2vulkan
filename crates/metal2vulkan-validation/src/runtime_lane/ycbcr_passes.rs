@@ -250,7 +250,7 @@ fn render(
     (pass, clear): (Pass, [f64; 4]),
     (state, values): (&RenderPipelineState, &Buffer),
 ) {
-    let device = texture.device();
+    let device = &texture.device();
     let mut descriptor = RenderPassDescriptor::new();
     let color = &mut descriptor.color_attachments[0];
     color.texture = Some(texture.clone());

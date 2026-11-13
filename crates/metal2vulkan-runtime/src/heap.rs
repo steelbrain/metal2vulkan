@@ -338,7 +338,7 @@ impl Drop for HeapShared {
     fn drop(&mut self) {
         if let HeapStorage::Bytes(bytes) = &self.storage {
             bytes
-                .device()
+                .generation()
                 .shared()
                 .heap_keys
                 .forget(bytes.identity().key);
@@ -887,10 +887,20 @@ impl Heap {
         }
     }
 
-    /// `device`.
-    pub fn device(&self) -> &Device {
+    /// `device`: a generation handle of the device: of the generation the heap was made on, then of
+    /// each one the device's recoveries carried the heap to. A handle taken of it is the caller's:
+    /// it keeps meaning that generation while held, past a recovery that carries the heap on, its
+    /// raw handles that generation's `VkDevice`'s, kept alive while held.
+    pub fn device(&self) -> Device {
+        self.generation().clone()
+    }
+
+    /// The generation handle [`device`](Self::device) answers a clone of, borrowed for the
+    /// runtime's own reads: a caller's handle is `device`'s, as a recovery lets go of the
+    /// object's handle of a lost generation at that generation's rest (`device/carry.rs`).
+    pub(crate) fn generation(&self) -> &Device {
         match &self.0.storage {
-            HeapStorage::Bytes(bytes) => bytes.device(),
+            HeapStorage::Bytes(bytes) => bytes.generation(),
             HeapStorage::Sparse(sparse) => &sparse.device,
         }
     }
@@ -1099,8 +1109,8 @@ impl Heap {
         if length > self.size() {
             return Err(nil(CALL, self.past_end(0, length)));
         }
-        if self.device().is_lost() {
-            return Err(self.device().lost_refusal());
+        if self.generation().is_lost() {
+            return Err(self.generation().lost_refusal());
         }
         let offset = self
             .allocate(length, PLACEMENT_ALIGNMENT)
@@ -1139,8 +1149,8 @@ impl Heap {
         {
             return Err(nil(CALL, self.past_end(offset, length)));
         }
-        if self.device().is_lost() {
-            return Err(self.device().lost_refusal());
+        if self.generation().is_lost() {
+            return Err(self.generation().lost_refusal());
         }
         Ok(self.program_buffer(bytes, offset, length, options))
     }
@@ -1156,10 +1166,13 @@ impl Heap {
         options: ResourceOptions,
     ) -> Buffer {
         let buffer = self.placed_buffer(bytes, offset, length, options);
-        self.device().shared().live_buffers.placed(self, &buffer);
+        self.generation()
+            .shared()
+            .live_buffers
+            .placed(self, &buffer);
         // Placed as its device's recovery carried the heap's bytes on, after that carry looked
         // at the heap's buffers (`Heap::carry`): carried here.
-        if !buffer.device().same(self.device()) {
+        if !buffer.generation().same(self.generation()) {
             self.carry_placed_late(&buffer);
         }
         buffer
@@ -1185,7 +1198,7 @@ impl Heap {
             HeapStorage::Bytes(bytes) => bytes,
             HeapStorage::Sparse(_) => return Err(HeapLeft::Sparse),
         };
-        if bytes.device().same(to) {
+        if bytes.generation().same(to) {
             // Carried already, by its maker.
             return Ok((0, 0));
         }
@@ -1230,14 +1243,14 @@ impl Heap {
     fn carry_placed_late(&self, buffer: &Buffer) {
         let reached = {
             let placed = lock(&self.0.placed);
-            if buffer.device().same(self.device()) {
+            if buffer.generation().same(self.generation()) {
                 return;
             }
-            buffer.carry_placed(self.device());
+            buffer.carry_placed(self.generation());
             placed.reached
         };
         if reached {
-            self.device().shared().live_buffers.made(buffer);
+            self.generation().shared().live_buffers.made(buffer);
         }
     }
 
@@ -1289,7 +1302,7 @@ impl Heap {
     /// Refused for a length past the device's `max_buffer_length`, as a buffer's (`Nil`, as
     /// plain Metal answers nil).
     fn check_length(&self, call: &'static str, length: u64) -> Result<(), Error> {
-        if length > self.device().properties().max_buffer_length {
+        if length > self.generation().properties().max_buffer_length {
             return Err(nil(call, Problem::BufferLength { length }));
         }
         Ok(())
@@ -1309,7 +1322,7 @@ impl Heap {
     /// (`resource_ids.rs`, **Passing holds**): the range a resource the program released held is
     /// back by then, whichever thread let go of it last, as Metal's release gave it back.
     pub(super) fn allocate(&self, length: u64, alignment: u64) -> Option<u64> {
-        self.device().shared().passing_holds.wait();
+        self.generation().shared().passing_holds.wait();
         lock(&self.0.ranges).allocate(length, alignment)
     }
 

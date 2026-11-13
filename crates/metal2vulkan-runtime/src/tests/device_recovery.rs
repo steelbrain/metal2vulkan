@@ -636,7 +636,7 @@ fn a_call_that_took_its_arguments_completes_on_a_generation_lost_after() {
         assert!(!buffer.device().generation_serves());
         assert!(matches!(
             buffer
-                .device()
+                .generation()
                 .new_buffer_now(4096, ResourceOptions::shared()),
             Err(Error::NotImplemented(crate::RuntimeGap::MadeBeforeRecovery))
         ));

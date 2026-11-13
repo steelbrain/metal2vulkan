@@ -344,7 +344,7 @@ fn computed(
     options: &PipelineOptions,
 ) -> Result<Vec<f32>, Error> {
     dispatched(
-        library.device(),
+        &library.device(),
         &descriptor(library, kernel, preloaded),
         options,
     )

@@ -248,7 +248,7 @@ impl Function {
                 .map(Arc::new)
                 .map_err(|error| layout_error(CALL, error))
         })?;
-        Ok(ArgumentEncoder::new(self.device(), layout))
+        Ok(ArgumentEncoder::new(self.generation(), layout))
     }
 }
 
@@ -400,8 +400,8 @@ impl ArgumentEncoder {
             self.target = None;
             return Ok(());
         };
-        if !buffer.device().same(&self.device) {
-            return Err(buffer.device().foreign(call, &self.device));
+        if !buffer.generation().same(&self.device) {
+            return Err(buffer.generation().foreign(call, &self.device));
         }
         if buffer.storage_mode() == StorageMode::Private || buffer.mapped_contents().is_none() {
             return Err(invalid(call, Problem::StorageMode));
@@ -523,7 +523,7 @@ impl ArgumentEncoder {
         offset: u64,
     ) -> Result<u64, Error> {
         if let Some(buffer) = buffer {
-            self.check_device(call, buffer.device())?;
+            self.check_device(call, buffer.generation())?;
         }
         buffer_word(buffer.map(|b| (b.gpu_address().0, b.length())), offset)
             .map_err(|p| invalid(call, p))
@@ -569,7 +569,7 @@ impl ArgumentEncoder {
         match texture {
             None => Ok(0),
             Some(texture) => {
-                self.check_device(call, texture.device())?;
+                self.check_device(call, texture.generation())?;
                 Ok(texture.gpu_resource_id().0)
             }
         }
@@ -601,7 +601,7 @@ impl ArgumentEncoder {
         match sampler {
             None => Ok(0),
             Some(sampler) => {
-                self.check_device(call, sampler.device())?;
+                self.check_device(call, sampler.generation())?;
                 Ok(sampler.gpu_resource_id().0)
             }
         }
@@ -724,7 +724,7 @@ impl ArgumentEncoder {
         match buffer {
             None => Ok(0),
             Some(buffer) => {
-                self.check_device(call, buffer.device())?;
+                self.check_device(call, buffer.generation())?;
                 Ok(buffer.gpu_resource_id().0)
             }
         }

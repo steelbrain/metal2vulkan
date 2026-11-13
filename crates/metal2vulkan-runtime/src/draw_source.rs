@@ -260,7 +260,7 @@ impl<'a> DrawSource<'a> {
         }
         // A multiple of 16 bytes, so the new buffer's `VkBuffer` ends where its length does.
         let size = reach.next_multiple_of(16).max(16);
-        let scratch = buffer.device().write_combined_buffer(size)?;
+        let scratch = buffer.generation().write_combined_buffer(size)?;
         let (raw, start) = scratch.at(0);
         let into = if reach == 0 { 0 } else { size - reach };
         let region = vk::BufferCopy {
@@ -309,7 +309,9 @@ impl<'a> DrawSource<'a> {
         let (from, at) = buffer.at(offset);
         // A new buffer reads zero (the padding included), and its `VkBuffer` starts at a multiple
         // of 16 of it, so its byte 0 lies at a multiple of 4.
-        let scratch = buffer.device().write_combined_buffer(positions.max(16))?;
+        let scratch = buffer
+            .generation()
+            .write_combined_buffer(positions.max(16))?;
         let (raw, start) = scratch.at(0);
         let region = vk::BufferCopy {
             src_offset: at,
@@ -403,7 +405,7 @@ impl<'a> DrawSource<'a> {
             return None;
         }
         let (offset, at) = (self.offset, copy.region.src_offset);
-        let device = self.buffer.device();
+        let device = self.buffer.generation();
         match copy.why {
             CopyCause::Misaligned(zero) => device.degrade(Degradation::CopiedDrawBytes, || {
                 let object =

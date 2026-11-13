@@ -204,7 +204,7 @@ pub(super) fn copy_arguments(
     bytes: u64,
 ) -> Result<Buffer, Error> {
     let copy = buffer
-        .device()
+        .generation()
         .own_buffer(COPY_BYTES, ResourceOptions::shared())?;
     let (from, at) = buffer.at(offset);
     let (into, start) = copy.at(0);

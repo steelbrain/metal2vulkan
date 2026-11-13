@@ -898,7 +898,7 @@ impl ComputeCommandEncoder {
             |_| ComputeCall::StageInRegionIndirect(indirect_buffer.clone(), indirect_buffer_offset),
             |this| {
                 const CALL: &str = "set_stage_in_region_indirect";
-                this.core.check_device(CALL, indirect_buffer.device())?;
+                this.core.check_device(CALL, indirect_buffer.generation())?;
                 let offset = indirect_dispatch::arguments_offset(
                     CALL,
                     (indirect_buffer.length(), indirect_buffer.copy_reach()),
@@ -1083,7 +1083,7 @@ impl ComputeCommandEncoder {
         let Some(pipeline) = self.pipeline.clone() else {
             return Err(invalid(call, Problem::NoPipelineState));
         };
-        self.core.check_device(call, buffer.device())?;
+        self.core.check_device(call, buffer.generation())?;
         let offset = indirect_dispatch::arguments_offset(
             call,
             (buffer.length(), buffer.copy_reach()),
@@ -1269,7 +1269,7 @@ impl ComputeCommandEncoder {
 
     fn use_heaps_of(&mut self, call: &'static str, heaps: &[&Heap]) -> Result<(), Error> {
         for heap in heaps {
-            self.core.check_device(call, heap.device())?;
+            self.core.check_device(call, heap.generation())?;
         }
         for heap in heaps {
             for used in self.residency.use_heap(heap, RenderStages::empty()) {
@@ -1339,7 +1339,7 @@ impl ComputeCommandEncoder {
             |_| ComputeCall::Execute(icb.clone(), range.clone()),
             |this| {
                 const CALL: &str = indirect_execute::CALL;
-                this.core.check_device(CALL, icb.device())?;
+                this.core.check_device(CALL, icb.generation())?;
                 if icb.is_render() {
                     return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
                         IndirectRule::OtherEncoderKind,
@@ -1431,8 +1431,8 @@ impl ComputeCommandEncoder {
             |_| ComputeCall::ExecuteIndirect(icb.clone(), range_buffer.clone(), offset),
             |this| {
                 const CALL: &str = indirect_execute::CALL_INDIRECT;
-                this.core.check_device(CALL, icb.device())?;
-                this.core.check_device(CALL, range_buffer.device())?;
+                this.core.check_device(CALL, icb.generation())?;
+                this.core.check_device(CALL, range_buffer.generation())?;
                 if icb.is_render() {
                     return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
                         IndirectRule::OtherEncoderKind,

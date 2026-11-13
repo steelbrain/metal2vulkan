@@ -126,10 +126,10 @@ fn a_recovery_carries_private_heaps_with_their_buffers() {
     // The heaps and the buffers placed in them before: the same objects on the next generation,
     // their bytes zero.
     for device in [
-        placement.device(),
-        automatic.device(),
-        placed.device(),
-        taken.device(),
+        placement.generation(),
+        automatic.generation(),
+        placed.generation(),
+        taken.generation(),
     ] {
         assert!(device.generation_serves());
     }

@@ -74,7 +74,7 @@ impl Texture {
                 let storage = Storage::Image(image.shared());
                 let record = ViewRecord::of_descriptor(&layout, &descriptor);
                 Ok(Texture::made(
-                    self.device(),
+                    self.generation(),
                     storage,
                     record,
                     None,
@@ -84,7 +84,7 @@ impl Texture {
         }
         let unit = surface_depth_unit(pf).ok_or_else(gap)?;
         texels.twin(pf, || {
-            let device = self.device();
+            let device = self.generation();
             let [width, height, _] = record.extent();
             let [w, h] = [u64::from(width), u64::from(height)];
             let bytes = u64::from(unit.bytes);
@@ -196,7 +196,7 @@ impl Texture {
         check: impl FnOnce(&ImagePlan) -> Result<(), Error>,
     ) -> Result<(Image, TextureLayout, TextureDescriptor), Error> {
         const CALL: &str = "render_command_encoder";
-        let device = self.device();
+        let device = self.generation();
         let record = self.record();
         let [width, height, _] = record.extent();
         let options = texels.options();

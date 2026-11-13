@@ -111,7 +111,7 @@ impl Texture {
         call: &'static str,
         record: &ViewRecord,
     ) -> Result<Storage, Error> {
-        let device = self.device();
+        let device = self.generation();
         let refused = |image: Option<&Image>| {
             Error::Unsupported(device.apart_refusal(image, record.pixel_format))
         };
@@ -129,10 +129,13 @@ impl Texture {
                     | Owner::Heap(_)
                     | Owner::HeapShadow(_) => return Err(refused(Some(image.as_ref()))),
                 };
-                if self.device().image_takes_view(base, record.pixel_format) {
+                if self
+                    .generation()
+                    .image_takes_view(base, record.pixel_format)
+                {
                     return Ok(Storage::Image(Arc::clone(base)));
                 }
-                let shadow = self.device().new_view_shadow(
+                let shadow = self.generation().new_view_shadow(
                     call,
                     base,
                     &self.root().0.record,
@@ -161,11 +164,11 @@ impl Texture {
                 descriptor.swizzle = record.swizzle;
                 descriptor.resource_options = texels.options();
                 let layout = descriptor
-                    .check(self.device().properties().texture_rules())
+                    .check(self.generation().properties().texture_rules())
                     .map_err(|_| refused(None))?;
                 // A view's storage never moves in place (`texture/storage_form.rs`).
                 let over = (Arc::clone(texels), &mut None);
-                self.device()
+                self.generation()
                     .storage_over_buffer(call, over, &descriptor, &layout)
             }
             // A texture buffer's views are texel buffer views of its bytes, which take any
@@ -185,7 +188,7 @@ impl Texture {
             return None;
         };
         let base = truth(image);
-        let read_as = self.device().read_as(base, record)?;
+        let read_as = self.generation().read_as(base, record)?;
         Some((Arc::clone(base), read_as))
     }
 
@@ -203,7 +206,7 @@ impl Texture {
     pub(crate) fn bound_twin(&self) -> Option<Texture> {
         self.0.record.read_as?;
         Some(Texture::made(
-            self.device(),
+            self.generation(),
             self.storage().clone(),
             self.0.record.bound(),
             Some(self.clone()),
@@ -230,7 +233,7 @@ impl Texture {
             read_as: None,
             ..self.0.record
         };
-        let device = self.device();
+        let device = self.generation();
         let base = truth(image);
         let shadow = device.new_view_shadow(call, base, &self.root().0.record, &record, true)?;
         let texture = Texture::made(

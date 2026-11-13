@@ -181,7 +181,7 @@ fn a_recovery_keeps_the_bytes_of_textures_over_carried_pages() {
     let read_only = descriptor(TextureUsage::SHADER_READ);
     // A `Shared` texture over a buffer of the program's in fresh pages, its bytes the host's.
     let fresh = {
-        let made_on = device.new_fence().device().clone();
+        let made_on = device.new_fence().device();
         let fresh = made_on
             .fresh_pages_check_buffer(2 * FRESH_PAGES_PAST)
             .unwrap();

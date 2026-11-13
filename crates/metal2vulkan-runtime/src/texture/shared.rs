@@ -49,8 +49,9 @@ impl std::fmt::Debug for SharedTextureHandle {
 }
 
 impl SharedTextureHandle {
-    /// `device`: the device the texture was made by, the only one that opens the handle.
-    pub fn device(&self) -> &Device {
+    /// `device`: the device the texture was made by, the only one that opens the handle: a handle
+    /// of it, the caller's ([`Texture::device`]).
+    pub fn device(&self) -> Device {
         self.0.device()
     }
 }
@@ -178,8 +179,8 @@ impl Device {
     ) -> Result<Texture, Error> {
         const CALL: &str = "new_shared_texture_with_handle";
         let texture = &handle.0;
-        if !texture.device().same(self) {
-            return Err(texture.device().foreign(CALL, self));
+        if !texture.generation().same(self) {
+            return Err(texture.generation().foreign(CALL, self));
         }
         let record = &texture.0.record;
         self.check_texture_placement(CALL, placement, record.usage, record.texture_type)?;

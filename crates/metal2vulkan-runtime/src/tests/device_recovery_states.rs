@@ -172,11 +172,11 @@ fn an_objects_device_keeps_meaning_its_generation_past_a_recovery() {
         .unwrap();
     let devices = || {
         [
-            fence.device().clone(),
-            state.device().clone(),
-            library.device().clone(),
-            function.device().clone(),
-            pool.device().clone(),
+            fence.device(),
+            state.device(),
+            library.device(),
+            function.device(),
+            pool.device(),
         ]
     };
     let taken = devices();

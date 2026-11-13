@@ -124,7 +124,7 @@ pub(super) fn degrade_nan_clears(device: &Device, layout: &PassLayout, drew: boo
 /// draw call. A resolve texture's level of the same keeps the clear's texel through the pass's
 /// resolve.
 pub(super) fn keeps_nan_sign(target: &Target, called: bool) -> bool {
-    if called || !target.texture.device().metal_compresses_textures() {
+    if called || !target.texture.generation().metal_compresses_textures() {
         return false;
     }
     let mut root = &target.texture;

@@ -305,7 +305,7 @@ impl Texture {
         if attached && self.faces_fit() {
             let shadow = self.make_faces()?;
             self.log_usage_shadow(call, need);
-            (self.device().shared().usage_shadows_made).fetch_add(1, Ordering::Release);
+            (self.generation().shared().usage_shadows_made).fetch_add(1, Ordering::Release);
             return Ok(shadow);
         }
         // A converted texture's image has both shader usages: the slot holds its write shadow.
@@ -327,14 +327,14 @@ impl Texture {
             return Err(internal("a usage shadow made twice"));
         }
         // Counted once it can be read, so a list made after the count reads it.
-        (self.device().shared().usage_shadows_made).fetch_add(1, Ordering::Release);
+        (self.generation().shared().usage_shadows_made).fetch_add(1, Ordering::Release);
         Ok(shadow)
     }
 
     /// A new shadow of the texture (the module docs).
     fn new_usage_shadow(&self, call: &'static str) -> Result<UsageShadow, Error> {
         self.check_plane_copied()?;
-        let device = self.device();
+        let device = self.generation();
         let record = &self.0.record.bound();
         let wider = ViewRecord {
             usage: record.usage | TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
@@ -455,14 +455,14 @@ impl Texture {
             "a usage shadow: {}; the texture's own image is {own}",
             need.why()
         );
-        crate::shadow_log::made_of(self.device(), call, &texture, texels, &why);
+        crate::shadow_log::made_of(self.generation(), call, &texture, texels, &why);
     }
 
     /// Announce a binding beyond the texture's usage through its shadow, `truth` what the
     /// shadow stands for (the module docs).
     fn announce_usage_shadow(&self, truth: &str) {
         let record = &self.0.record.bound();
-        self.device()
+        self.generation()
             .degrade(Degradation::UndeclaredUsageShadow, || {
                 let object = format!(
                     "a {:?} {:?} texture of usage {:#x}",

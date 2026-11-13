@@ -893,7 +893,9 @@ impl Device {
 /// was made on, as every object's device is, until the object's parts there were let go of
 /// (`Carry::lost`); then let go of itself ([`MadeOn::let_go`]), so a carried object holds the lost
 /// generation no longer and that generation goes with the objects left on it (the module docs).
-/// Read as a [`Device`] at one indirection, as the field it stands for.
+/// Read as a [`Device`] at one indirection, as the field it stands for. No borrow of it reaches
+/// the program, which may hold one past the generation's rest: an object's `device` answers a
+/// clone.
 pub(crate) struct MadeOn {
     device: UnsafeCell<ManuallyDrop<Device>>,
     /// It was let go of.

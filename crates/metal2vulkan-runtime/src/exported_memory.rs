@@ -611,7 +611,7 @@ impl Buffer {
         call: &'static str,
         export: MemoryExport,
     ) -> Result<ExportedMemory, Error> {
-        let device = self.device();
+        let device = self.generation();
         if device.is_lost() {
             return Err(device.lost_refusal());
         }
@@ -664,7 +664,7 @@ impl Buffer {
     /// into its payload imported again (`memory.rs`'s `Block::payload`): what its exports, and a
     /// texture's import of its memory, answer clones of.
     pub(super) fn carried_payload(&self) -> Option<Payload> {
-        let shared = self.device().shared();
+        let shared = self.generation().shared();
         (self.own_placement(|placement, _| lock(&shared.memory).payload(placement))).flatten()
     }
 
@@ -672,7 +672,7 @@ impl Buffer {
     /// memory, the buffer's first byte's offset in it and its memory type; `None` for a buffer
     /// not made exportable.
     pub(super) fn exported(&self) -> Option<(Exported, u64, (vk::DeviceMemory, u64, u32))> {
-        let shared = self.device().shared();
+        let shared = self.generation().shared();
         let found = self.own_placement(|placement, offset| {
             let (exported, size) = lock(&shared.memory).exported(placement)?;
             let at = placement.offset + offset;
@@ -708,7 +708,7 @@ impl Buffer {
         // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
         let _held = self.held_parts();
         const CALL: &str = "external_write_done";
-        let device = self.device();
+        let device = self.generation();
         if device.is_lost() {
             return Err(device.lost_refusal());
         }

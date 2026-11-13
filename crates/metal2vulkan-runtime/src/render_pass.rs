@@ -1557,8 +1557,8 @@ pub(super) fn layout(
         // of one is not measured: it keeps the format's refusal (`target`).
         let unresolved = color.resolve_texture.is_none() && !color.store_action.resolves();
         if unresolved && AstcDecode::of(texture.pixel_format()).is_some() {
-            if !texture.device().same(device) {
-                return Err(foreign(texture.device()));
+            if !texture.generation().same(device) {
+                return Err(foreign(texture.generation()));
             }
             let facts = Facts::of(texture.record());
             let sub = check_target(
@@ -1760,8 +1760,8 @@ pub(super) fn layout(
     }
     let extents = &extents[..attached];
     if let Some(buffer) = &descriptor.visibility_result_buffer {
-        if !buffer.device().same(device) {
-            return Err(foreign(buffer.device()));
+        if !buffer.generation().same(device) {
+            return Err(foreign(buffer.generation()));
         }
     }
     let (extent, samples) = area(
@@ -1871,8 +1871,8 @@ fn target(
     subresource: (u64, u64, u64),
     length: u64,
 ) -> Result<Target, Error> {
-    if !texture.device().same(device) {
-        return Err(texture.device().foreign(call, device));
+    if !texture.generation().same(device) {
+        return Err(texture.generation().foreign(call, device));
     }
     let facts = Facts::of(texture.record());
     let sub = check_target(call, which, &facts, subresource, length)?;

@@ -3740,8 +3740,8 @@ impl Heap {
         options: ResourceOptions,
     ) -> Buffer {
         Buffer(Arc::new(BufferShared {
-            device: MadeOn::new(heap_bytes.device().clone()),
-            generation: std::ptr::from_ref(heap_bytes.device().shared()).addr(),
+            device: MadeOn::new(heap_bytes.generation().clone()),
+            generation: std::ptr::from_ref(heap_bytes.generation().shared()).addr(),
             object_id: ObjectId::new(),
             length,
             options,
@@ -4676,7 +4676,7 @@ impl Buffer {
             match before {
                 0 => {
                     if pages.import.expose(reason) {
-                        self.device().shared().live_buffers.refresh(self);
+                        self.generation().shared().live_buffers.refresh(self);
                     }
                 }
                 // Kept imported already: the new reason is only counted.
@@ -4777,7 +4777,7 @@ impl Buffer {
             // Made over detached bytes, its stand-in's sink may be read through.
             if noted.sink && cell.detached() {
                 let reached = std::iter::once((noted.texture(), noted.id, Unexact::StorageSink));
-                self.device().note_stale(cell, reached);
+                self.generation().note_stale(cell, reached);
             }
             cell.watch_texture(noted);
         }
@@ -4839,8 +4839,18 @@ impl Buffer {
         }
     }
 
-    /// `device`.
-    pub fn device(&self) -> &Device {
+    /// `device`: a generation handle of the device: of the generation the buffer was made on, then
+    /// of each one the device's recoveries carried the buffer to. A handle taken of it is the
+    /// caller's: it keeps meaning that generation while held, past a recovery that carries the
+    /// buffer on, its raw handles that generation's `VkDevice`'s, kept alive while held.
+    pub fn device(&self) -> Device {
+        self.generation().clone()
+    }
+
+    /// The generation handle [`device`](Self::device) answers a clone of, borrowed for the
+    /// runtime's own reads: a caller's handle is `device`'s, as a recovery lets go of the
+    /// object's handle of a lost generation at that generation's rest (`device/carry.rs`).
+    pub(crate) fn generation(&self) -> &Device {
         &self.s().device
     }
 

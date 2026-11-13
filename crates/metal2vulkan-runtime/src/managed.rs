@@ -86,7 +86,7 @@ impl Buffer {
         // A two-copy buffer over the caller's pages (`managed_copy.rs`): the range the program
         // asked, which the next commit that may use the buffer copies in.
         if self.caller_copy().is_some() && !range.is_empty() {
-            let counts = &self.device().shared().counts;
+            let counts = &self.generation().shared().counts;
             counts.managed_asked(range.end - range.start, true);
         }
         self.modified(range);
@@ -99,7 +99,7 @@ impl Buffer {
         if self.mirror().is_none() || range.is_empty() {
             return;
         }
-        self.device().shared().modified.note(self, range);
+        self.generation().shared().modified.note(self, range);
     }
 }
 

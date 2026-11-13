@@ -145,7 +145,7 @@ impl Texture {
                     false,
                 )
             };
-            let device = self.device();
+            let device = self.generation();
             let layout = descriptor
                 .check(device.properties().texture_rules())
                 .map_err(|refused| refused.error(CALL))?;
@@ -183,9 +183,9 @@ impl Texture {
             )
         };
         let layout = descriptor
-            .check(self.device().properties().texture_rules())
+            .check(self.generation().properties().texture_rules())
             .map_err(|refused| refused.error(call))?;
-        self.device().rotated_frame(
+        self.generation().rotated_frame(
             call,
             (Arc::clone(texels), &stored),
             &descriptor,

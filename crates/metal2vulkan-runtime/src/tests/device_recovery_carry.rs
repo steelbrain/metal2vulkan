@@ -140,7 +140,7 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
     );
     // A buffer of the program's in fresh pages, wherever the device takes them.
     let fresh = {
-        let made_on = private.device().clone();
+        let made_on = private.device();
         let fresh = made_on
             .fresh_pages_check_buffer(2 * FRESH_PAGES_PAST)
             .unwrap();
@@ -196,7 +196,7 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
         })
         .collect();
     drop(reused);
-    let before = shared_heap.device().work_counts_now();
+    let before = shared_heap.generation().work_counts_now();
     let from = heard.lock().unwrap().len();
     device.recover_for_test().unwrap();
     let said = recovery_notices(&heard, from, "the device");
@@ -281,7 +281,7 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
     // What is left holds the lost `VkDevice`, which keeps no memory for work.
     assert!(!shared_heap.device().generation_serves());
     assert_eq!(live_vk_devices(&device, 2), 2);
-    let after = shared_heap.device().work_counts_now();
+    let after = shared_heap.generation().work_counts_now();
     let blocks =
         |counts: &crate::WorkCounts| counts.memory_blocks_live + counts.empty_memory_blocks_live;
     eprintln!(
@@ -351,7 +351,7 @@ fn a_call_under_way_keeps_the_parts_it_read_past_the_lost_generation_s_rest() {
     let buffer = device
         .new_buffer(BYTES, ResourceOptions::private())
         .unwrap();
-    let made_on = buffer.device().clone();
+    let made_on = buffer.device();
     let (parked, at_hook) = mpsc::channel();
     let (go, wait) = mpsc::channel::<()>();
     let call = {
@@ -362,7 +362,7 @@ fn a_call_under_way_keeps_the_parts_it_read_past_the_lost_generation_s_rest() {
             descriptor.usage = TextureUsage::SHADER_READ;
             descriptor.resource_options = buffer.resource_options();
             let row = buffer
-                .device()
+                .generation()
                 .minimum_linear_texture_alignment_for_pixel_format(PixelFormat::RGBA8Unorm)
                 .unwrap()
                 .max(16);

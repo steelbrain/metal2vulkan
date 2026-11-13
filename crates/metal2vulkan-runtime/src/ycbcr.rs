@@ -955,7 +955,7 @@ impl YCbCrConversion {
         let Some(made) = self.made.get() else {
             return;
         };
-        let owner = made.staging.device();
+        let owner = made.staging.generation();
         let staging = made.staging.at(0).0;
         let state_at = made.shape_at + STATE_AT;
         let completed_at = made.shape_at + COMPLETED_AT;
@@ -971,7 +971,7 @@ impl YCbCrConversion {
             device.cmd_update_buffer(command_buffer, staging, made.shape_at, &made.shape);
             let (zeros_at, zeros) = made.zeros;
             crate::word_fill::record(
-                made.staging.device(),
+                made.staging.generation(),
                 command_buffer,
                 staging,
                 zeros_at..zeros_at + zeros,

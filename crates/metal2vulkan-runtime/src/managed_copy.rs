@@ -193,7 +193,7 @@ impl Staging {
 
 impl Drop for Staging {
     fn drop(&mut self) {
-        let counts = &self.buffer.device().shared().counts;
+        let counts = &self.buffer.generation().shared().counts;
         counts.managed_staging(self.bytes, false);
     }
 }
@@ -231,7 +231,7 @@ impl CopyBack {
                 bytes as usize,
             );
         }
-        let counts = &self.staging.buffer.device().shared().counts;
+        let counts = &self.staging.buffer.generation().shared().counts;
         counts.managed_copied(bytes, false);
     }
 }
@@ -261,7 +261,7 @@ impl AtCompletion {
                     return;
                 };
                 if let Some(caller) = buffer.caller_copy() {
-                    buffer.device().shared().counts.managed_write_undone();
+                    buffer.generation().shared().counts.managed_write_undone();
                     // Unbounded: the completion makes no submission (the next one takes it).
                     let _ = caller.copy_in(&buffer, 0..caller.reach, false, 0);
                 }
@@ -486,7 +486,7 @@ impl CallerCopy {
         keep_alive: Option<super::host_memory::KeepAlive>,
     ) -> Result<(), Error> {
         const CALL: &str = "rebind_bytes_no_copy";
-        let device = buffer.device();
+        let device = buffer.generation();
         let release = super::host_memory::HostRelease::new(deallocator, keep_alive);
         let parts = memory.into_parts();
         let release = release.of(parts.pointer, buffer.length());
@@ -517,7 +517,7 @@ pub(super) fn stage_in(
     bounded: bool,
     commit: u64,
 ) -> Result<(), Error> {
-    let device = buffer.device();
+    let device = buffer.generation();
     let mut start = range.start;
     while start < range.end {
         let bytes = (range.end - start).min(STAGED_CHUNK);

@@ -872,9 +872,12 @@ impl std::fmt::Debug for Event {
 }
 
 impl Event {
-    /// `device`.
-    pub fn device(&self) -> &Device {
-        &self.0.serving().device
+    /// `device`: a generation handle of the device: of the generation the event was made on, then
+    /// of each one the device's recoveries carried the event to. A handle taken of it is the
+    /// caller's: it keeps meaning that generation while held, past a recovery that carries the
+    /// event on, its raw handles that generation's `VkDevice`'s, kept alive while held.
+    pub fn device(&self) -> Device {
+        Device::clone(&self.0.serving().device)
     }
 
     /// `setLabel:`.

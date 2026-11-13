@@ -438,7 +438,7 @@ fn regions_meet(a: &ImageRegion, b: &ImageRegion) -> bool {
 impl BlitCommandEncoder {
     /// Refuse `texture` of another device; note it for its heap shadow (`BlitCommandEncoder::see`).
     fn check_texture(&mut self, call: &'static str, texture: &Texture) -> Result<(), Error> {
-        self.core().check_device(call, texture.device())?;
+        self.core().check_device(call, texture.generation())?;
         self.see(texture);
         Ok(())
     }
@@ -557,7 +557,7 @@ impl BlitCommandEncoder {
         options: BlitOption,
     ) -> Result<(), Error> {
         const CALL: &str = "copy_from_buffer_to_texture";
-        self.core().check_device(CALL, source_buffer.device())?;
+        self.core().check_device(CALL, source_buffer.generation())?;
         self.check_texture(CALL, destination_texture)?;
         destination_texture.check_plane_copied()?;
         if self.fails_on_memoryless(&[destination_texture]) {
@@ -744,7 +744,7 @@ impl BlitCommandEncoder {
                 this.check_texture(CALL, source_texture)?;
                 source_texture.check_plane_copied()?;
                 this.core()
-                    .check_device(CALL, destination_buffer.device())?;
+                    .check_device(CALL, destination_buffer.generation())?;
                 if this.fails_on_memoryless(&[source_texture]) {
                     return Ok(());
                 }
@@ -2166,7 +2166,7 @@ impl BlitCommandEncoder {
         // texture as it is, over a buffer or not, and its API validation asserts. Every texture
         // over a buffer has one level but a tiled one, which is an image to a blit, its own copy
         // of the bytes (`Texture::blit_texels`).
-        self.core().check_device(CALL, texture.device())?;
+        self.core().check_device(CALL, texture.generation())?;
         texture.check_rotated_reach()?;
         let record = texture.record();
         let gap = || Error::Unsupported(Unsupported::not_implemented(Feature::MipmapGeneration));

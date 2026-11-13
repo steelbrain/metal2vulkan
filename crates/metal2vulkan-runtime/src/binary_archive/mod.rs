@@ -138,10 +138,18 @@ impl Device {
 }
 
 impl BinaryArchive {
-    /// `device`: a generation handle of the device: of the generation the archive was made on, then of
-    /// each one the device's recoveries carried the archive to. A handle taken of it keeps meaning that
-    /// generation: its raw handles are that generation's `VkDevice`'s, kept alive while held.
-    pub fn device(&self) -> &Device {
+    /// `device`: a generation handle of the device: of the generation the archive was made on, then
+    /// of each one the device's recoveries carried the archive to. A handle taken of it is the
+    /// caller's: it keeps meaning that generation while held, past a recovery that carries the
+    /// archive on, its raw handles that generation's `VkDevice`'s, kept alive while held.
+    pub fn device(&self) -> Device {
+        self.generation().clone()
+    }
+
+    /// The generation handle [`device`](Self::device) answers a clone of, borrowed for the
+    /// runtime's own reads: a caller's handle is `device`'s, as a recovery lets go of the
+    /// object's handle of a lost generation at that generation's rest (`device/carry.rs`).
+    pub(crate) fn generation(&self) -> &Device {
         self.0.device.generation()
     }
 
@@ -332,7 +340,7 @@ impl BinaryArchive {
 
     /// The fingerprint of the device's profile.
     fn profile(&self) -> Hash256 {
-        self.device().compile_device().profile_fingerprint()
+        self.generation().compile_device().profile_fingerprint()
     }
 
     /// Keep `used`, compiled for the profile of fingerprint `profile`, and the archive keys

@@ -478,7 +478,7 @@ impl RenderLowering {
             )))
         });
         const CALL: &str = "draw_mesh_threadgroups_indirect";
-        self.core.check_device(CALL, indirect_buffer.device())?;
+        self.core.check_device(CALL, indirect_buffer.generation())?;
         // Arguments at an offset that is not a multiple of 4 draw nothing (the module docs).
         let aligned = indirect_buffer_offset.is_multiple_of(4);
         check_arguments(

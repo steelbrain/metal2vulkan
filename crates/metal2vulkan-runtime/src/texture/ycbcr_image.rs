@@ -499,7 +499,7 @@ impl Texture {
         descriptor.resource_options = texels.options();
         descriptor.alpha_reads_one = true;
         descriptor.address_mode_map = ycbcr_modes(codes);
-        let device = self.device();
+        let device = self.generation();
         Some(
             descriptor
                 .check_over_surface(device.properties().texture_rules())
@@ -583,7 +583,7 @@ impl Texture {
             _ => [S::Green, S::Zero, S::Zero],
         };
         let swizzle = over_read(luma, record.swizzle);
-        let device = self.device();
+        let device = self.generation();
         Some(
             descriptor
                 .check_over_surface(device.properties().texture_rules())
@@ -641,7 +641,7 @@ impl Texture {
         if conversion.reads_zeros() || !rows_apart(&planes) || codes_alone(pf, &planes) {
             return Err(gap());
         }
-        let device = self.device();
+        let device = self.generation();
         let [width, height] = planes.size;
         let layout = TextureLayout {
             texture_type: TextureType::Type2D,
@@ -768,7 +768,7 @@ impl Texture {
         if (across && width % 2 != 0) || (down && height % 2 != 0) {
             return Err(gap());
         }
-        let device = self.device();
+        let device = self.generation();
         let profile = device.compile_device().profile();
         let float = TextureLayout {
             texture_type: TextureType::Type2D,

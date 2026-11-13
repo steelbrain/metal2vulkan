@@ -142,9 +142,9 @@ impl ResourceRef<'_> {
     /// The device that made the resource.
     pub(super) fn device(&self) -> &Device {
         match self {
-            ResourceRef::Buffer(buffer) => buffer.device(),
-            ResourceRef::Texture(texture) => texture.device(),
-            ResourceRef::IndirectCommandBuffer(icb) => icb.device(),
+            ResourceRef::Buffer(buffer) => buffer.generation(),
+            ResourceRef::Texture(texture) => texture.generation(),
+            ResourceRef::IndirectCommandBuffer(icb) => icb.generation(),
         }
     }
 

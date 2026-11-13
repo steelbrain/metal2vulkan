@@ -207,11 +207,12 @@ impl Device {
 }
 
 impl Library {
-    /// `device`: a generation handle of the device: of the generation the library was made on, then of
-    /// each one the device's recoveries carried the library to. A handle taken of it keeps meaning that
-    /// generation: its raw handles are that generation's `VkDevice`'s, kept alive while held.
-    pub fn device(&self) -> &Device {
-        self.device.generation()
+    /// `device`: a generation handle of the device: of the generation the library was made on, then
+    /// of each one the device's recoveries carried the library to. A handle taken of it is the
+    /// caller's: it keeps meaning that generation while held, past a recovery that carries the
+    /// library on, its raw handles that generation's `VkDevice`'s, kept alive while held.
+    pub fn device(&self) -> Device {
+        self.device.generation().clone()
     }
 
     /// A root handle of the library's device, which the calls that take it match by its line.
@@ -422,10 +423,18 @@ impl Library {
 }
 
 impl Function {
-    /// `device`: a generation handle of the device: of the generation its library was made on, then of
-    /// each one the device's recoveries carried its library to. A handle taken of it keeps meaning that
-    /// generation: its raw handles are that generation's `VkDevice`'s, kept alive while held.
-    pub fn device(&self) -> &Device {
+    /// `device`: a generation handle of the device: of the generation its library was made on, then
+    /// of each one the device's recoveries carried its library to. A handle taken of it is the
+    /// caller's: it keeps meaning that generation while held, past a recovery that carries its
+    /// library on, its raw handles that generation's `VkDevice`'s, kept alive while held.
+    pub fn device(&self) -> Device {
+        self.generation().clone()
+    }
+
+    /// The generation handle [`device`](Self::device) answers a clone of, borrowed for the
+    /// runtime's own reads: a caller's handle is `device`'s, as a recovery lets go of the
+    /// object's handle of a lost generation at that generation's rest (`device/carry.rs`).
+    pub(crate) fn generation(&self) -> &Device {
         self.device.generation()
     }
 

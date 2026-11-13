@@ -845,7 +845,7 @@ impl Texture {
             texel: texels.texel_bytes(),
         };
         *lock(&shared.pending_move) = Some(pending);
-        let device = self.device();
+        let device = self.generation();
         let forms = &device.shared().textures.storage_forms;
         lock(&forms.moves).push(wait);
         // The verdicts may have come since it asked them.

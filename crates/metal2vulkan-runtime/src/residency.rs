@@ -866,7 +866,7 @@ impl Residency {
         let index = self.addresses.get_or_init(|| {
             let index = AddressIndex::of_used(&self.held().used);
             if let Some((buffer, _)) = self.buffers_written().next() {
-                let counts = &buffer.device().shared().counts;
+                let counts = &buffer.generation().shared().counts;
                 counts.resident_address_index_made();
             }
             Arc::new(index)

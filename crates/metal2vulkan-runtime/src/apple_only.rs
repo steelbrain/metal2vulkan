@@ -238,7 +238,7 @@ impl BlitCommandEncoder {
             |_| BlitCall::InvalidateCompressedTexture(texture.clone()),
             |this| {
                 this.core()
-                    .check_device("invalidate_compressed_texture", texture.device())?;
+                    .check_device("invalidate_compressed_texture", texture.generation())?;
                 answer(AppleOnlyCall::InvalidateCompressedTexture)
             },
         )
@@ -258,7 +258,7 @@ impl BlitCommandEncoder {
             |_| BlitCall::InvalidateCompressedTextureSlice(texture.clone(), slice, level),
             |this| {
                 const CALL: &str = "invalidate_compressed_texture_slice";
-                this.core().check_device(CALL, texture.device())?;
+                this.core().check_device(CALL, texture.generation())?;
                 check_slice_level(CALL, texture, slice, level)?;
                 answer(AppleOnlyCall::InvalidateCompressedTextureSlice)
             },

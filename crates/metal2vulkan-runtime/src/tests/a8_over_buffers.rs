@@ -225,7 +225,7 @@ fn widths(device: &Device) {
 /// The shadows the making of a texture of `descriptor` over `buffer`'s first bytes, rows `pitch`
 /// apart, counted.
 fn shadows_made(buffer: &Buffer, descriptor: &TextureDescriptor, pitch: u64) -> u64 {
-    let device = buffer.device();
+    let device = buffer.generation();
     let before = device.work_counts().shadowed_textures;
     drop(buffer.new_texture(descriptor, 0, pitch).unwrap());
     device.work_counts().shadowed_textures - before

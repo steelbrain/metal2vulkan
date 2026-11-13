@@ -1020,7 +1020,7 @@ impl Buffer {
         };
         // SAFETY: the caller's contract.
         let rebound = unsafe {
-            self.device().rebind_host_pages(
+            self.generation().rebind_host_pages(
                 CALL,
                 self,
                 cell,
@@ -1078,7 +1078,7 @@ impl Heap {
         };
         // SAFETY: the caller's contract.
         let rebound = unsafe {
-            self.device().rebind_host_pages(
+            self.generation().rebind_host_pages(
                 CALL,
                 own,
                 cell,

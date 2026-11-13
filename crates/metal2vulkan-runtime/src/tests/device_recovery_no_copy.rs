@@ -307,7 +307,7 @@ fn a_recovery_carries_a_use_of_guest_ram_and_the_buffers_over_it() {
     );
     assert!(buffer.device().generation_serves());
     assert_eq!(runs.lock().unwrap().len(), 2, "the resolver is asked again");
-    let counts = buffer.device().work_counts_now();
+    let counts = buffer.generation().work_counts_now();
     assert_eq!(
         bound(&counts) - bound_before,
         1,

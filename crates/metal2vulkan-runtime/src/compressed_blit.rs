@@ -116,7 +116,7 @@ pub(super) enum Writer {
 /// (`Device::metal_compresses_textures`), not a texture over a buffer, its root's type, level 0,
 /// usage and `allowGPUOptimizedContents` and its own samples ([`rewritten`]).
 fn compressed(texture: &Texture) -> bool {
-    if texture.over_buffer() || !texture.device().metal_compresses_textures() {
+    if texture.over_buffer() || !texture.generation().metal_compresses_textures() {
         return false;
     }
     let mut root = texture;
@@ -145,7 +145,7 @@ pub(super) fn extended(pixel_format: PixelFormat) -> bool {
 /// device's policy asks for it (`ExtendedRangeBlitPolicy::Canonical`), and `texture` is a
 /// `BGRA10_XR` or `BGRA10_XR_sRGB` texture Metal keeps losslessly compressed (the module docs).
 pub(super) fn canonical(texture: &Texture) -> bool {
-    let policy = texture.device().compile_device().policy();
+    let policy = texture.generation().compile_device().policy();
     policy.extended_range_blits == ExtendedRangeBlitPolicy::Canonical
         && extended(texture.pixel_format())
         && compressed(texture)
@@ -176,7 +176,7 @@ pub(super) fn degrade_compressed_fill(texture: &Texture) {
     }
     let pf = texture.pixel_format();
     texture
-        .device()
+        .generation()
         .degrade(Degradation::ExtendedRangeBitsKept, || {
             (
                 format!("a fill of a {pf:?} texture Metal keeps losslessly compressed"),
@@ -203,7 +203,7 @@ fn copies_rewrite(format: Format) -> bool {
 /// compressed image rewrite texels, an image of such a format that Metal keeps compressed (neither
 /// `STORAGE` usage nor `MUTABLE_FORMAT`).
 fn copy_rewrites(texture: &Texture) -> Result<bool, Error> {
-    let defects = &texture.device().properties().driver_defects;
+    let defects = &texture.generation().properties().driver_defects;
     if !defects.contains(&RuntimeDriverDefect::CompressedImageCopiesRewriteTexels) {
         return Ok(false);
     }
@@ -231,7 +231,7 @@ pub(super) fn degrade_compressed_blit(call: &'static str, texture: &Texture) -> 
         Degradation::DeviceNanEncoding => "makes a NaN field the quiet NaN",
         _ => "lowers the shared exponent to the least that holds the texel's value",
     };
-    texture.device().degrade(kind, || {
+    texture.generation().degrade(kind, || {
         (
             format!("{call} through a {pf:?} texture Metal keeps losslessly compressed"),
             format!(

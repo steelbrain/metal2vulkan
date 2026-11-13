@@ -268,7 +268,7 @@ impl SparseImage {
         aspects: vk::ImageAspectFlags,
         extras: SparseExtras,
     ) -> Result<SparseImage, Error> {
-        let device = heap.device().shared().vk();
+        let device = heap.generation().shared().vk();
         let levels = u32::try_from(shape.levels).unwrap_or(u32::MAX);
         // SAFETY: the caller's.
         let made = unsafe { sparse_layout(device, raw, levels, aspects) }.and_then(|layout| {
@@ -345,7 +345,7 @@ impl SparseImage {
         } = extras;
         Ok(SparseImage {
             heap: heap.downgrade(),
-            device: heap.device().clone(),
+            device: heap.generation().clone(),
             page,
             tail_size_in_bytes: tail,
             grid: UnitGrid {

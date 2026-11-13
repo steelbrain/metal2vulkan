@@ -128,11 +128,12 @@ impl Device {
 }
 
 impl DynamicLibrary {
-    /// `device`: a generation handle of the device: of the generation the library was made on, then of
-    /// each one the device's recoveries carried the library to. A handle taken of it keeps meaning that
-    /// generation: its raw handles are that generation's `VkDevice`'s, kept alive while held.
-    pub fn device(&self) -> &Device {
-        self.0.device.generation()
+    /// `device`: a generation handle of the device: of the generation the library was made on, then
+    /// of each one the device's recoveries carried the library to. A handle taken of it is the
+    /// caller's: it keeps meaning that generation while held, past a recovery that carries the
+    /// library on, its raw handles that generation's `VkDevice`'s, kept alive while held.
+    pub fn device(&self) -> Device {
+        self.0.device.generation().clone()
     }
 
     /// `setLabel:`.

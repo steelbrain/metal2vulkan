@@ -212,7 +212,7 @@ impl Texture {
                 if buffer.heap().is_some() {
                     return Err(TextureLeft::Heap);
                 }
-                if !buffer.device().same(to) {
+                if !buffer.generation().same(to) {
                     return Err(TextureLeft::Buffer);
                 }
                 let over = (*offset, *bytes_per_row);
@@ -255,7 +255,7 @@ impl Texture {
     fn texels_carried_to(&self, to: &Device) -> Option<Buffer> {
         match self.storage() {
             Storage::Texels(texels)
-                if texels.home == TexelsHome::Buffer && texels.buffer.device().same(to) =>
+                if texels.home == TexelsHome::Buffer && texels.buffer.generation().same(to) =>
             {
                 Some(texels.buffer.clone())
             }

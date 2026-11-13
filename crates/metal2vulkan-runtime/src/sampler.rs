@@ -1030,10 +1030,17 @@ impl SamplerState {
     }
 
     /// `device`: a generation handle of the device: of the generation the state was made on, then
-    /// of each one the device's recoveries carried the state to. A handle taken of it keeps
-    /// meaning that generation: its raw handles are that generation's `VkDevice`'s, kept alive
-    /// while held.
-    pub fn device(&self) -> &Device {
+    /// of each one the device's recoveries carried the state to. A handle taken of it is the
+    /// caller's: it keeps meaning that generation while held, past a recovery that carries the
+    /// state on, its raw handles that generation's `VkDevice`'s, kept alive while held.
+    pub fn device(&self) -> Device {
+        self.generation().clone()
+    }
+
+    /// The generation handle [`device`](Self::device) answers a clone of, borrowed for the
+    /// runtime's own reads: a caller's handle is `device`'s, as a recovery lets go of the
+    /// object's handle of a lost generation at that generation's rest (`device/carry.rs`).
+    pub(crate) fn generation(&self) -> &Device {
         self.0.device.generation()
     }
 

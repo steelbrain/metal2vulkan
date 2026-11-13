@@ -811,7 +811,7 @@ impl StandInCopies {
             if aspect_mask == vk::ImageAspectFlags::COLOR {
                 let direction = if into_stand_in { "into" } else { "back from" };
                 nan_clear::degrade_converting_copy(
-                    to.texture.device(),
+                    to.texture.generation(),
                     to.format,
                     to.samples,
                     || {

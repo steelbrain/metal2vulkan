@@ -505,7 +505,7 @@ impl PassStartReads {
             return Ok((copy.scratch.clone(), offset - copy.from));
         }
         let size = buffer.length() - offset;
-        let device = buffer.device().clone();
+        let device = buffer.generation().clone();
         let scratch = device.own_buffer(
             size,
             ResourceOptions::new(

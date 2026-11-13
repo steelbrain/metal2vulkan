@@ -1330,8 +1330,8 @@ fn destination(
     texture: &Texture,
     wanted: &Wanted<'_>,
 ) -> Result<Option<Destination>, Error> {
-    if !texture.device().same(device) {
-        return Err(texture.device().foreign(call, device));
+    if !texture.generation().same(device) {
+        return Err(texture.generation().foreign(call, device));
     }
     if texture.storage_mode() == StorageMode::Memoryless {
         return Err(problem(call, RenderPassProblem::MemorylessResolve(which)));

@@ -605,7 +605,7 @@ pub(super) fn check_bound_buffer(
     (buffer, offset): (&Buffer, u64),
     compute: bool,
 ) -> Result<(), Error> {
-    super::encoder::check_device(device, call, buffer.device())?;
+    super::encoder::check_device(device, call, buffer.generation())?;
     let length = buffer.length();
     if offset > length && !compute {
         return Err(invalid(call, Problem::OffsetOutOfRange { offset, length }));
@@ -1224,7 +1224,7 @@ impl ArgumentTable {
         }
         check_range(call, first, textures.len(), TEXTURE_SLOTS)?;
         for texture in textures.iter().flatten() {
-            core.check_device(call, texture.device())?;
+            core.check_device(call, texture.generation())?;
         }
         for (texture, index) in textures.iter().zip(first..) {
             match texture {
@@ -1302,7 +1302,7 @@ impl ArgumentTable {
         }
         check_range(call, first, samplers.len(), SAMPLER_SLOTS)?;
         for sampler in samplers.iter().flatten() {
-            core.check_device(call, sampler.device())?;
+            core.check_device(call, sampler.generation())?;
         }
         for (i, (sampler, index)) in samplers.iter().zip(first..).enumerate() {
             let clamp = clamps.map(|(min, max)| [min[i], max[i]]);

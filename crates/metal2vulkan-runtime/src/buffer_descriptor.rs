@@ -2518,8 +2518,8 @@ impl Device {
         placement: AddressPlacement,
         in_pool: bool,
     ) -> Result<Place, Error> {
-        if !other.device().same(self) {
-            return Err(other.device().foreign(call, self));
+        if !other.generation().same(self) {
+            return Err(other.generation().foreign(call, self));
         }
         let unshared = || {
             let address = other.exposed_address(ReadApart::SecondBuffer);

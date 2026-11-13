@@ -234,10 +234,12 @@ impl ResourceStateCommandEncoder {
         const CALL: &str = "update_texture_mapping_indirect";
         let offset = indirect_buffer_offset - indirect_buffer_offset % 4;
         if !indirect_buffer
-            .device()
+            .generation()
             .same(self.open.command_buffer.device())
         {
-            return Err((indirect_buffer.device()).foreign(CALL, self.open.command_buffer.device()));
+            return Err(
+                (indirect_buffer.generation()).foreign(CALL, self.open.command_buffer.device())
+            );
         }
         let Some(sparse) = self.sparse(CALL, texture)? else {
             return Ok(());
@@ -480,9 +482,9 @@ impl ResourceStateCommandEncoder {
         call: &'static str,
         texture: &'a Texture,
     ) -> Result<Option<&'a SparseImage>, Error> {
-        if !texture.device().same(self.open.command_buffer.device()) {
+        if !texture.generation().same(self.open.command_buffer.device()) {
             return Err(texture
-                .device()
+                .generation()
                 .foreign(call, self.open.command_buffer.device()));
         }
         Ok(texture.sparse_image())

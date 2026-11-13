@@ -1569,7 +1569,7 @@ impl IndirectCommandBuffer {
 
     /// The bytes of command `index`'s record (below the size), as they are now.
     fn record_now(&self, index: u32) -> [u8; COMMAND_BYTES] {
-        (self.device().shared().counts).indirect_record_bytes_copied(COMMAND_BYTES as u64);
+        (self.generation().shared().counts).indirect_record_bytes_copied(COMMAND_BYTES as u64);
         let mut bytes = [0; COMMAND_BYTES];
         // SAFETY: the record of a command below the size lies inside the mapped storage. A GPU
         // write to it meanwhile is the program's race, as on Metal.
@@ -1596,7 +1596,7 @@ impl IndirectCommandBuffer {
         index: u32,
         read: impl FnOnce(&RecordView<'_>) -> T,
     ) -> Result<T, Error> {
-        self.device().shared().counts.indirect_records_read(1);
+        self.generation().shared().counts.indirect_records_read(1);
         let bytes = self.record_now(index);
         let view = RecordView::new(&bytes).map_err(|_| undecodable())?;
         Ok(read(&view))
@@ -1677,9 +1677,20 @@ impl IndirectCommandBuffer {
         Ok(range.start as u32..range.end as u32)
     }
 
-    /// `device`.
-    pub fn device(&self) -> &Device {
-        self.0.storage.device()
+    /// `device`: a generation handle of the device: of the generation the indirect command buffer
+    /// was made on, then of each one the device's recoveries carried the indirect command buffer
+    /// to. A handle taken of it is the caller's: it keeps meaning that generation while held, past
+    /// a recovery that carries the indirect command buffer on, its raw handles that generation's
+    /// `VkDevice`'s, kept alive while held.
+    pub fn device(&self) -> Device {
+        self.generation().clone()
+    }
+
+    /// The generation handle [`device`](Self::device) answers a clone of, borrowed for the
+    /// runtime's own reads: a caller's handle is `device`'s, as a recovery lets go of the
+    /// object's handle of a lost generation at that generation's rest (`device/carry.rs`).
+    pub(crate) fn generation(&self) -> &Device {
+        self.0.storage.generation()
     }
 
     /// `size`: the `max_count` the buffer was made with.
@@ -1718,7 +1729,7 @@ impl IndirectCommandBuffer {
     pub fn unique_identifier(&self) -> u64 {
         self.0
             .identifier
-            .answer(self.device(), "an indirect command buffer")
+            .answer(self.generation(), "an indirect command buffer")
     }
 
     /// Whether the buffer's [`unique_identifier`](Self::unique_identifier) is a number not
@@ -1735,7 +1746,7 @@ impl IndirectCommandBuffer {
     /// Whether the buffer holds its ID's slot: whether a kernel encoding through the ID reaches
     /// its records, which it does only while no buffer made later holds the ID.
     pub(super) fn holds_id_slot(&self) -> bool {
-        lock(&self.device().shared().addresses).holds_records_slot(self.0.id.held)
+        lock(&self.generation().shared().addresses).holds_records_slot(self.0.id.held)
     }
 
     /// `indirectComputeCommandAtIndex:`: command `index`'s setters. Refused (`Invalid`): a buffer
@@ -1988,8 +1999,8 @@ impl IndirectCommandBuffer {
             attribute_stride,
         } = set;
         if let Some(buffer) = buffer {
-            if !buffer.device().same(self.device()) {
-                return Err(buffer.device().foreign(call, self.device()));
+            if !buffer.generation().same(self.generation()) {
+                return Err(buffer.generation().foreign(call, self.generation()));
             }
         }
         // At or past the descriptor's count nothing binds the slot and no getter reads it, so
@@ -2307,7 +2318,7 @@ impl IndirectCommandBuffer {
         // A getter runs nothing, so it announces none of the commands it reads that name a
         // released state: an execution of them does.
         let commands: Vec<IndirectCommand> = if self.is_render() {
-            let live = || RenderPipelineState::indirect_states(self.device());
+            let live = || RenderPipelineState::indirect_states(self.generation());
             let (named, _) = self.name_records(read.clone(), Reader::Getter, &RENDER, live);
             read.zip(named)
                 .map(|((index, record, set), pipeline)| {
@@ -2321,7 +2332,7 @@ impl IndirectCommandBuffer {
                 })
                 .collect()
         } else {
-            let live = || ComputePipelineState::indirect_states(self.device());
+            let live = || ComputePipelineState::indirect_states(self.generation());
             let (named, _) = self.name_records(read.clone(), Reader::Getter, &COMPUTE, live);
             read.zip(named)
                 .map(|((index, record, set), pipeline)| {
@@ -2414,7 +2425,11 @@ impl IndirectCommandBuffer {
             }
         }
         for kind in kinds.into_iter().flatten() {
-            degrade_identifier(self.device(), kind, "an indirect command's pipeline state");
+            degrade_identifier(
+                self.generation(),
+                kind,
+                "an indirect command's pipeline state",
+            );
         }
     }
 
@@ -2470,7 +2485,7 @@ impl IndirectCommandBuffer {
         index: u32,
     ) -> Result<(Option<ComputePipelineState>, Option<u64>), Error> {
         let (reported, runs, set) = self.read_pipeline(index)?;
-        let live = || ComputePipelineState::indirect_states(self.device());
+        let live = || ComputePipelineState::indirect_states(self.generation());
         let read = std::iter::once((index, runs, set.as_ref()));
         let (mut named, _) = self.name_pipelines(read, Reader::Getter, &COMPUTE, live);
         Ok(self.compute_reading(reported, set.as_ref(), named.pop().flatten()))
@@ -2483,7 +2498,7 @@ impl IndirectCommandBuffer {
         index: u32,
     ) -> Result<(Option<RenderPipelineState>, Option<u64>), Error> {
         let (_, runs, set) = self.read_pipeline(index)?;
-        let live = || RenderPipelineState::indirect_states(self.device());
+        let live = || RenderPipelineState::indirect_states(self.generation());
         let read = std::iter::once((index, runs, set.as_ref()));
         let (mut named, _) = self.name_pipelines(read, Reader::Getter, &RENDER, live);
         Ok(self.render_reading(runs, set.as_ref(), named.pop().flatten()))
@@ -2493,7 +2508,11 @@ impl IndirectCommandBuffer {
     /// [`announce_identifiers`](Self::announce_identifiers) does.
     fn announce_identifier(&self, identifier: Option<u64>) {
         if let Some(kind) = identifier.and_then(state_value_degradation) {
-            degrade_identifier(self.device(), kind, "an indirect command's pipeline state");
+            degrade_identifier(
+                self.generation(),
+                kind,
+                "an indirect command's pipeline state",
+            );
         }
     }
 
@@ -2711,7 +2730,7 @@ impl IndirectCommandBuffer {
             };
             // Settled without the lock: a commit meanwhile adds its executions, settled next.
             for execution in &pending {
-                execution.settle(self.device());
+                execution.settle(self.generation());
             }
         }
     }
@@ -2722,11 +2741,11 @@ impl IndirectCommandBuffer {
     /// (`released_programs.rs`).
     pub(super) fn gpu_write(&self) -> GpuWrite {
         if !self.0.keeping.swap(true, Ordering::AcqRel) {
-            self.device().shared().keepers.add(&self.0.kept);
+            self.generation().shared().keepers.add(&self.0.kept);
         }
         lock(&self.0.gpu_writes).pending += 1;
         GpuWrite {
-            device: self.device().clone(),
+            device: self.generation().clone(),
             writes: Arc::clone(&self.0.gpu_writes),
         }
     }
@@ -2767,7 +2786,7 @@ impl IndirectCommandBuffer {
     /// write the records, or the ID's holder then is past the ones the device keeps.
     fn window_holder(&self, named: u64) -> Option<HolderThen> {
         let window = self.window()?;
-        lock(&self.device().shared().resource_ids).pipeline_holder_by(named, window)
+        lock(&self.generation().shared().resource_ids).pipeline_holder_by(named, window)
     }
 
     /// How many programs of released states the buffer keeps (`released_programs.rs`).
@@ -2796,7 +2815,7 @@ impl IndirectCommandBuffer {
             return false;
         };
         serial < window
-            && lock(&self.device().shared().resource_ids)
+            && lock(&self.generation().shared().resource_ids)
                 .pipeline_holder_by(named, window)
                 .map(|then| (then.kind, then.serial))
                 != Some((kind, serial))
@@ -2870,7 +2889,7 @@ impl IndirectCommandBuffer {
                 return;
             }
         }
-        execution.settle(self.device());
+        execution.settle(self.generation());
     }
 
     /// Whether the GPU may have written the buffer's records: a runtime extension, with no Metal
@@ -3054,7 +3073,7 @@ impl IndirectCommandBuffer {
                 records: Vec::new(),
             };
         }
-        (self.device().shared().counts).indirect_records_read(count as u64);
+        (self.generation().shared().counts).indirect_records_read(count as u64);
         let mut faults = ReplayFaults::default();
         let mut decoded = Vec::with_capacity(count);
         for bytes in records {
@@ -3136,7 +3155,7 @@ impl IndirectCommandBuffer {
         into: Option<Box<[u8]>>,
     ) -> Box<[u8]> {
         let bytes = record_offset(range.start)..record_offset(range.end);
-        (self.device().shared().counts).indirect_record_bytes_copied(bytes.len() as u64);
+        (self.generation().shared().counts).indirect_record_bytes_copied(bytes.len() as u64);
         let mut copy = match into {
             Some(into) if into.len() == bytes.len() => into,
             Some(_) | None => vec![0; bytes.len()].into_boxed_slice(),
@@ -3177,7 +3196,7 @@ impl IndirectCommandBuffer {
                 faults = ReplayFaults::RECORD;
             }
         }
-        (self.device().shared().counts).indirect_records_read(records.len() as u64);
+        (self.generation().shared().counts).indirect_records_read(records.len() as u64);
         WrittenRecords { faults, records }
     }
 
@@ -3223,7 +3242,7 @@ impl IndirectCommandBuffer {
         reader: Reader,
     ) -> Result<(Vec<(CommandRecord, Option<ComputePipelineState>)>, Released), Error> {
         self.named_records(range, reader, &COMPUTE, || {
-            ComputePipelineState::indirect_states(self.device())
+            ComputePipelineState::indirect_states(self.generation())
         })
     }
 
@@ -3235,7 +3254,7 @@ impl IndirectCommandBuffer {
         reader: Reader,
     ) -> Result<(Vec<(CommandRecord, Option<RenderPipelineState>)>, Released), Error> {
         self.named_records(range, reader, &RENDER, || {
-            RenderPipelineState::indirect_states(self.device())
+            RenderPipelineState::indirect_states(self.generation())
         })
     }
 
@@ -3268,7 +3287,7 @@ impl IndirectCommandBuffer {
         range: Range<u32>,
         held: impl Fn(CommandRecord) -> T,
     ) -> Result<(Vec<T>, Vec<Option<CommandState>>), Error> {
-        let counts = &self.device().shared().counts;
+        let counts = &self.generation().shared().counts;
         counts.indirect_records_read(range.len() as u64);
         if !range.is_empty() {
             counts.indirect_record_run_read();
@@ -3508,7 +3527,7 @@ impl IndirectCommandBuffer {
     /// The kind and hold serial of the state that last held pipeline state ID `named`, where
     /// the program released it and no state took the ID since (`ResourceIds::released_pipeline`).
     fn released_holder(&self, named: u64) -> Option<(StateKind, u64)> {
-        lock(&self.device().shared().resource_ids).released_pipeline(named)
+        lock(&self.generation().shared().resource_ids).released_pipeline(named)
     }
 
     /// Announce `Degradation::ReleasedCommandState` for an execution of commands of which
@@ -3518,7 +3537,7 @@ impl IndirectCommandBuffer {
         let Some(&(index, named, unmatched)) = released.0.first() else {
             return;
         };
-        self.device()
+        self.generation()
             .degrade(Degradation::ReleasedCommandState, || {
                 (
                     format!(
@@ -3982,8 +4001,8 @@ impl IndirectComputeCommand {
         const CALL: &str = "set_compute_pipeline_state";
         self.icb.check_command_types(CALL)?;
         let device = state.bound_device()?;
-        if !device.same(self.icb.device()) {
-            return Err(device.foreign(CALL, self.icb.device()));
+        if !device.same(self.icb.generation()) {
+            return Err(device.foreign(CALL, self.icb.generation()));
         }
         if self.descriptor().inherit_pipeline_state {
             return Err(problem(
@@ -4602,8 +4621,8 @@ impl IndirectRenderCommand {
         const CALL: &str = "set_render_pipeline_state";
         self.icb.check_command_types(CALL)?;
         let device = state.bound_device()?;
-        if !device.same(self.icb.device()) {
-            return Err(device.foreign(CALL, self.icb.device()));
+        if !device.same(self.icb.generation()) {
+            return Err(device.foreign(CALL, self.icb.generation()));
         }
         if self.descriptor().inherit_pipeline_state {
             return Err(problem(
@@ -4871,8 +4890,10 @@ impl IndirectRenderCommand {
             base_instance: base_instance as u32,
         };
         self.check_draw(CALL, IndirectCommandType::DRAW_INDEXED, &action)?;
-        if !index_buffer.device().same(self.icb.device()) {
-            return Err(index_buffer.device().foreign(CALL, self.icb.device()));
+        if !index_buffer.generation().same(self.icb.generation()) {
+            return Err(index_buffer
+                .generation()
+                .foreign(CALL, self.icb.generation()));
         }
         let size = index_size(index_type);
         let offset = index_buffer_offset - index_buffer_offset % size;
@@ -5082,14 +5103,14 @@ impl IndirectRenderCommand {
         control_point_index_buffer: Option<&Buffer>,
         factor_buffer: &Buffer,
     ) -> Result<(), Error> {
-        let device = self.icb.device();
+        let device = self.icb.generation();
         let foreign = patch_index_buffer
             .into_iter()
             .chain(control_point_index_buffer)
             .chain([factor_buffer])
-            .find(|buffer| !buffer.device().same(device));
+            .find(|buffer| !buffer.generation().same(device));
         if let Some(buffer) = foreign {
-            return Err(buffer.device().foreign(call, device));
+            return Err(buffer.generation().foreign(call, device));
         }
         let draw = |problem| Err(invalid(call, Problem::Draw(problem)));
         if let Some(buffer) = patch_index_buffer {
@@ -5240,7 +5261,7 @@ impl IndirectRenderCommand {
     fn render_state(&self, call: &'static str) -> Error {
         if self
             .icb
-            .device()
+            .generation()
             .supports_family_now(GpuFamily::Apple10.raw())
         {
             return Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
@@ -5256,8 +5277,9 @@ impl IndirectRenderCommand {
     /// first: a state of another device.
     pub fn set_depth_stencil_state(&self, state: Option<&DepthStencilState>) -> Result<(), Error> {
         const CALL: &str = "set_depth_stencil_state";
-        if let Some(state) = state.filter(|state| !state.root_device().same(self.icb.device())) {
-            return Err(state.root_device().foreign(CALL, self.icb.device()));
+        if let Some(state) = state.filter(|state| !state.root_device().same(self.icb.generation()))
+        {
+            return Err(state.root_device().foreign(CALL, self.icb.generation()));
         }
         Err(self.render_state(CALL))
     }

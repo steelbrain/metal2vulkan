@@ -2754,7 +2754,7 @@ pub(super) fn sample_round_trip(
     write: &dyn Fn(&[u8]),
 ) -> Option<(usize, usize)> {
     use super::heap_layouts::tiled_offset;
-    let device = texture.device();
+    let device = &texture.device();
     let count = w * h * samples;
     let (mut off, mut read_off) = (0, 0);
     for &(unit, option, slice, first) in aspects {

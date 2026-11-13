@@ -109,7 +109,7 @@ impl RenderLowering {
         stages: RenderStages,
     ) -> Result<(), Error> {
         for heap in heaps {
-            self.core.check_device(call, heap.device())?;
+            self.core.check_device(call, heap.generation())?;
         }
         for heap in heaps {
             for used in self.residency.use_heap(heap, stages) {

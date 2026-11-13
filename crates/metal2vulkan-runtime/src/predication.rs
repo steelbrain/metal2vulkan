@@ -1656,7 +1656,7 @@ impl ComputeCommandEncoder {
         (comparison, reference): (u64, u32),
     ) -> Result<(OwnedKernel, Option<Condition<'a>>), Error> {
         if let Some(buffer) = buffer {
-            self.core().check_device(call, buffer.device())?;
+            self.core().check_device(call, buffer.generation())?;
         }
         let kernel = self.predication_kernel()?;
         let condition = buffer.map(|buffer| Condition {

@@ -736,7 +736,7 @@ fn in_place(texture: &Texture, level: u32, extent: [u32; 3]) -> Result<bool, Err
     if planned != extent || !plan.usage.contains(ImageUsageFlags::TRANSFER_DST) {
         return Ok(false);
     }
-    let device = texture.device();
+    let device = texture.generation();
     let profile = device.compile_device().profile();
     let facts = device.shared().textures.facts(profile);
     let features = match texture.linear_image()? {
@@ -910,7 +910,7 @@ impl BlitCommandEncoder {
             |_| BlitCall::FillBufferPattern4(buffer.clone(), range.clone(), pattern),
             |this| {
                 const CALL: &str = "fill_buffer_pattern4";
-                this.core().check_device(CALL, buffer.device())?;
+                this.core().check_device(CALL, buffer.generation())?;
                 let size = range.end.saturating_sub(range.start);
                 if size == 0 {
                     return Ok(());
@@ -1021,7 +1021,7 @@ impl BlitCommandEncoder {
         region: Region,
         (value, color): (vk::ClearColorValue, [f64; 4]),
     ) -> Result<(), Error> {
-        self.core().check_device(call, texture.device())?;
+        self.core().check_device(call, texture.generation())?;
         texture.check_plane_copied()?;
         self.see(texture);
         let Size {
@@ -1276,7 +1276,7 @@ impl BlitCommandEncoder {
         region: Region,
         pattern: &[u8],
     ) -> Result<(), Error> {
-        self.core().check_device(call, texture.device())?;
+        self.core().check_device(call, texture.generation())?;
         texture.check_plane_copied()?;
         self.see(texture);
         check_pattern(call, texture.texture_type(), pattern)?;

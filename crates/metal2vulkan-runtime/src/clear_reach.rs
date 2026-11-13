@@ -198,7 +198,7 @@ pub(super) fn cleared(layout: &PassLayout, target: &Target, called: bool) -> [u3
 /// the whole texture: jobs m3-max-12736 and m3-max-12737), and the runtime gives the 5300M's
 /// answer.
 pub(super) fn clears_whole(target: &Target) -> bool {
-    let device = target.texture.device();
+    let device = target.texture.generation();
     if !device.metal_compresses_textures() {
         return true;
     }

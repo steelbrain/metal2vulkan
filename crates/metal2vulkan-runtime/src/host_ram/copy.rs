@@ -1059,7 +1059,8 @@ impl BlitCommandEncoder {
     fn record_host_ram_copy(&mut self, call: &HostRamCall) -> Result<(), Error> {
         let call_name = call.name();
         let device = self.core().device().clone();
-        self.core().check_device(call_name, call.buffer.device())?;
+        self.core()
+            .check_device(call_name, call.buffer.generation())?;
         let shared = device.shared();
         let importer = match &shared.host_import {
             Ok(importer) => importer,

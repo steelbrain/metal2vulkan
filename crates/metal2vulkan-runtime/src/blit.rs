@@ -397,8 +397,9 @@ impl BlitCommandEncoder {
             },
             |this| {
                 const CALL: &str = "copy_from_buffer_to_buffer";
-                this.core.check_device(CALL, source_buffer.device())?;
-                this.core.check_device(CALL, destination_buffer.device())?;
+                this.core.check_device(CALL, source_buffer.generation())?;
+                this.core
+                    .check_device(CALL, destination_buffer.generation())?;
                 if size == 0 {
                     return Ok(());
                 }
@@ -509,7 +510,7 @@ impl BlitCommandEncoder {
             |_| BlitCall::FillBuffer(buffer.clone(), range.clone(), value),
             |this| {
                 const CALL: &str = "fill_buffer";
-                this.core.check_device(CALL, buffer.device())?;
+                this.core.check_device(CALL, buffer.generation())?;
                 let size = range.end.saturating_sub(range.start);
                 if size == 0 {
                     return Ok(());

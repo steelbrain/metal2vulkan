@@ -612,8 +612,8 @@ impl RasterizationRateMap {
     /// (`StorageMode`), and a write past its length (`RangeOutOfBounds`).
     pub fn copy_parameter_data_to_buffer(&self, buffer: &Buffer, offset: u64) -> Result<(), Error> {
         const CALL: &str = "copy_parameter_data_to_buffer";
-        if !buffer.device().same(&self.0.device) {
-            return Err(buffer.device().foreign(CALL, &self.0.device));
+        if !buffer.generation().same(&self.0.device) {
+            return Err(buffer.generation().foreign(CALL, &self.0.device));
         }
         let Some(contents) = buffer.mapped_contents() else {
             return Err(invalid(CALL, Problem::StorageMode));

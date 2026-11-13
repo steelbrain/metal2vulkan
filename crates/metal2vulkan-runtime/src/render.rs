@@ -3637,7 +3637,7 @@ impl RenderLowering {
         });
         const CALL: &str = "set_tessellation_factor_buffer";
         if let Some(buffer) = buffer {
-            self.core.check_device(CALL, buffer.device())?;
+            self.core.check_device(CALL, buffer.generation())?;
         }
         self.factors.buffer = buffer.map(|buffer| FactorBuffer {
             buffer: buffer.clone(),
@@ -3740,7 +3740,7 @@ impl RenderLowering {
             base_instance,
         });
         const CALL: &str = "draw_indexed_primitives";
-        self.core.check_device(CALL, index_buffer.device())?;
+        self.core.check_device(CALL, index_buffer.generation())?;
         // Metal reads from the offset's low 32 bits.
         let index_buffer_offset = u64::from(index_buffer_offset as u32);
         let index_buffer_offset =
@@ -3824,7 +3824,7 @@ impl RenderLowering {
             )
         });
         const CALL: &str = "draw_primitives_indirect";
-        self.core.check_device(CALL, indirect_buffer.device())?;
+        self.core.check_device(CALL, indirect_buffer.generation())?;
         let indirect_buffer_offset =
             check_arguments(CALL, indirect_buffer.length(), indirect_buffer_offset, 16)?;
         let indirect =
@@ -3867,8 +3867,8 @@ impl RenderLowering {
             }))
         });
         const CALL: &str = "draw_indexed_primitives_indirect";
-        self.core.check_device(CALL, index_buffer.device())?;
-        self.core.check_device(CALL, indirect_buffer.device())?;
+        self.core.check_device(CALL, index_buffer.generation())?;
+        self.core.check_device(CALL, indirect_buffer.generation())?;
         let size = index_size(index_type);
         let index_buffer_offset = index_buffer_offset - index_buffer_offset % size;
         let indirect_buffer_offset =
@@ -4054,7 +4054,7 @@ impl RenderLowering {
         const CALL: &str = "draw_patches_indirect";
         let patch_index_buffer_offset =
             self.check_patch_indices(CALL, patch_index_buffer, patch_index_buffer_offset, None)?;
-        self.core.check_device(CALL, indirect_buffer.device())?;
+        self.core.check_device(CALL, indirect_buffer.generation())?;
         let indirect_buffer_offset =
             check_arguments(CALL, indirect_buffer.length(), indirect_buffer_offset, 16)?;
         let indirect =
@@ -4178,7 +4178,7 @@ impl RenderLowering {
             control_point_index_buffer_offset,
             None,
         )?;
-        self.core.check_device(CALL, indirect_buffer.device())?;
+        self.core.check_device(CALL, indirect_buffer.generation())?;
         let indirect_buffer_offset =
             check_arguments(CALL, indirect_buffer.length(), indirect_buffer_offset, 16)?;
         let indirect =
@@ -4222,7 +4222,7 @@ impl RenderLowering {
         let Some(buffer) = buffer else {
             return Ok(offset);
         };
-        self.core.check_device(call, buffer.device())?;
+        self.core.check_device(call, buffer.generation())?;
         let offset = offset - offset % 4;
         let Some((patch_start, patch_count)) = direct else {
             return Ok(offset);
@@ -4305,7 +4305,7 @@ impl RenderLowering {
         offset: u64,
         indices: Option<u64>,
     ) -> Result<u64, Error> {
-        self.core.check_device(call, buffer.device())?;
+        self.core.check_device(call, buffer.generation())?;
         let Some(size) = self.control_point_index_size() else {
             return Ok(offset);
         };

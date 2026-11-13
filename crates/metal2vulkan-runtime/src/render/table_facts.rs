@@ -198,7 +198,7 @@ pub(super) fn check_textures<'a>(
 ) -> Result<(), Error> {
     check_range(call, first, textures.len(), TEXTURE_SLOTS)?;
     for texture in textures.flatten() {
-        check_device(device, call, texture.device())?;
+        check_device(device, call, texture.generation())?;
     }
     Ok(())
 }
@@ -219,7 +219,7 @@ pub(super) fn check_samplers<'a>(
     }
     check_range(call, first, samplers.len(), SAMPLER_SLOTS)?;
     for sampler in samplers.flatten() {
-        check_device(device, call, sampler.device())?;
+        check_device(device, call, sampler.generation())?;
     }
     Ok(())
 }

@@ -45,11 +45,13 @@ impl AddressPool {
         self.length
     }
 
-    /// The device whose address space the pool is of: a generation handle of the device: of the generation the pool was made on, then of
-    /// each one the device's recoveries carried the pool to. A handle taken of it keeps meaning that
-    /// generation: its raw handles are that generation's `VkDevice`'s, kept alive while held.
-    pub fn device(&self) -> &Device {
-        self.device.generation()
+    /// The device whose address space the pool is of: a generation handle of the device: of the
+    /// generation the pool was made on, then of each one the device's recoveries carried the pool
+    /// to. A handle taken of it is the caller's: it keeps meaning that generation while held, past
+    /// a recovery that carries the pool on, its raw handles that generation's `VkDevice`'s, kept
+    /// alive while held.
+    pub fn device(&self) -> Device {
+        self.device.generation().clone()
     }
 
     /// A root handle of the pool's device, which a buffer's placement in a slot matches by its

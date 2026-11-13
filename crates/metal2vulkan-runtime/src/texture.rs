@@ -534,7 +534,7 @@ impl Drop for TextureShared {
             (Storage::Image(image), None) => (Owned::TextureImage, &image.device),
             (Storage::Shadow { image, .. }, _) => (Owned::TextureShadow, &image.device),
             (Storage::Alias { image, .. }, _) => (Owned::TextureAlias, &image.device),
-            (Storage::Texels(texels), _) => (Owned::TextureTexels, texels.buffer.device()),
+            (Storage::Texels(texels), _) => (Owned::TextureTexels, texels.buffer.generation()),
         };
         device.shared().counts.churn.released(owned);
         self.leave_slot();
@@ -596,7 +596,7 @@ impl TextureShared {
                 };
                 (&image.device, Some(Box::new((Arc::clone(image), moved))))
             }
-            Storage::Texels(texels) => (texels.buffer.device(), None),
+            Storage::Texels(texels) => (texels.buffer.generation(), None),
         }
     }
 }
@@ -4741,10 +4741,12 @@ impl Heap {
     /// Refused for a placement heap, whose textures take an offset (`Invalid`, as for its
     /// buffers).
     pub fn new_texture(&self, descriptor: &TextureDescriptor) -> Result<Texture, Error> {
-        let descriptor = &self.device().texture_options("new_texture", descriptor)?;
+        let descriptor = &self
+            .generation()
+            .texture_options("new_texture", descriptor)?;
         match self.heap_type() {
-            HeapType::Sparse => self.device().new_sparse_texture(self, descriptor),
-            HeapType::Automatic => self.device().new_heap_texture(self, descriptor, None),
+            HeapType::Sparse => self.generation().new_sparse_texture(self, descriptor),
+            HeapType::Automatic => self.generation().new_heap_texture(self, descriptor, None),
             heap_type => {
                 let problem = Problem::Heap(HeapProblem::HeapType { heap_type });
                 Err(invalid("new_texture", problem))
@@ -4776,7 +4778,7 @@ impl Heap {
         descriptor: &TextureDescriptor,
         offset: u64,
     ) -> Result<Texture, Error> {
-        let device = self.device();
+        let device = self.generation();
         let descriptor = &device.texture_options("new_texture_at_offset", descriptor)?;
         device.new_heap_texture(self, descriptor, Some(offset))
     }
@@ -5418,7 +5420,7 @@ impl Texture {
 
     /// A texture over `texels`, presenting `record` of them, its ID as `id_use` says.
     pub(super) fn of_texels(texels: Texels, record: ViewRecord, id_use: IdUse) -> Texture {
-        let device = texels.buffer.device().clone();
+        let device = texels.buffer.generation().clone();
         let storage = Storage::Texels(Arc::new(texels));
         Texture::made(&device, storage, record, None, id_use)
     }
@@ -5785,7 +5787,7 @@ impl Texture {
         if aspect != ImageAspectFlags::DEPTH || !self.float_depth_image() {
             return;
         }
-        let (device, format) = (self.device(), self.pixel_format());
+        let (device, format) = (self.generation(), self.pixel_format());
         if self.depth_clamps() {
             device.degrade(Degradation::RestrictedDepthUpload, || {
                 let why = format!(
@@ -5811,7 +5813,7 @@ impl Texture {
         if !self.float_depth_image() || !self.depth_clamps() || !self.holds_depth_texels() {
             return;
         }
-        let (device, format) = (self.device(), self.pixel_format());
+        let (device, format) = (self.generation(), self.pixel_format());
         device.degrade(Degradation::RestrictedDepthUpload, || {
             let why = format!(
                 "`{call}`'s texture in a heap takes the depth its bytes hold into its depth \
@@ -5827,7 +5829,7 @@ impl Texture {
     /// there clamped.
     pub(super) fn clamps_depth_upload(&self, aspect: ImageAspectFlags) -> bool {
         self.image().is_ok_and(|image| {
-            depth_clamp::clamps_depth(self.device(), image.plan().format, aspect)
+            depth_clamp::clamps_depth(self.generation(), image.plan().format, aspect)
         })
     }
 
@@ -5853,7 +5855,7 @@ impl Texture {
     /// Whether the device may store a value outside `[0, 1]` that a copy writes into a
     /// `D32_SFLOAT` image clamped (`ImageFacts::depth_clamps`).
     fn depth_clamps(&self) -> bool {
-        let device = self.device();
+        let device = self.generation();
         let profile = device.compile_device().profile();
         device.shared().textures.facts(profile).depth_clamps()
     }
@@ -5875,7 +5877,7 @@ impl Texture {
             return;
         }
         let format = self.pixel_format();
-        self.device().degrade(Degradation::SignedDepthTest, || {
+        self.generation().degrade(Degradation::SignedDepthTest, || {
             let why = format!(
                 "{call} may store a negative or NaN depth in a render target's depth image, which \
                  the device's depth test compares as it is, where Metal's compares its magnitude, \
@@ -5900,7 +5902,7 @@ impl Texture {
             return;
         }
         let format = self.pixel_format();
-        self.device().degrade(Degradation::SignedDepthTest, || {
+        self.generation().degrade(Degradation::SignedDepthTest, || {
             let why = "a pass that loads and stores a render target's depth, which may hold a \
                        negative or NaN value, sets a depth/stencil state with depth writes but \
                        draws under none, so it keeps the value's sign, where Metal stores it \
@@ -5922,7 +5924,7 @@ impl Texture {
         if !float_depth || !self.usage().contains(TextureUsage::RENDER_TARGET) {
             return None;
         }
-        let device = self.device();
+        let device = self.generation();
         let facts = device
             .shared()
             .textures
@@ -5950,7 +5952,7 @@ impl Texture {
         if aspect != ImageAspectFlags::DEPTH || !float_depth {
             return;
         }
-        let device = self.device();
+        let device = self.generation();
         let profile = device.compile_device().profile();
         let facts = device.shared().textures.facts(profile);
         let Some(loss) = facts.denormal_loss(on_host) else {
@@ -5976,7 +5978,7 @@ impl Texture {
     ) -> Result<vk::ImageView, Error> {
         let (view, read) = self.view_reading(call, desc, storage)?;
         if let Some(read) = read {
-            read.announce(self.device());
+            read.announce(self.generation());
         }
         Ok(view)
     }
@@ -6125,13 +6127,23 @@ impl Texture {
 }
 
 impl Texture {
-    /// `device`.
-    pub fn device(&self) -> &Device {
+    /// `device`: a generation handle of the device: of the generation the texture was made on, then
+    /// of each one the device's recoveries carried the texture to. A handle taken of it is the
+    /// caller's: it keeps meaning that generation while held, past a recovery that carries the
+    /// texture on, its raw handles that generation's `VkDevice`'s, kept alive while held.
+    pub fn device(&self) -> Device {
+        self.generation().clone()
+    }
+
+    /// The generation handle [`device`](Self::device) answers a clone of, borrowed for the
+    /// runtime's own reads: a caller's handle is `device`'s, as a recovery lets go of the
+    /// object's handle of a lost generation at that generation's rest (`device/carry.rs`).
+    pub(crate) fn generation(&self) -> &Device {
         match self.storage() {
             Storage::Image(image)
             | Storage::Alias { image, .. }
             | Storage::Shadow { image, .. } => &image.device,
-            Storage::Texels(texels) => texels.buffer.device(),
+            Storage::Texels(texels) => texels.buffer.generation(),
         }
     }
 
@@ -6636,7 +6648,7 @@ impl Texture {
             call,
             request: request.clone(),
         };
-        Ok(self.device().kept_texture(view, remake))
+        Ok(self.generation().kept_texture(view, remake))
     }
 
     /// [`view`](Self::view), its resource ID as `id_use` says: the runtime's own for a view a
@@ -6649,14 +6661,14 @@ impl Texture {
     ) -> Result<Texture, Error> {
         self.check_viewable(call)?;
         if let IdUse::Program(placement) = id_use {
-            self.device().check_texture_placement(
+            self.generation().check_texture_placement(
                 call,
                 placement,
                 self.0.record.usage,
                 request.texture_type,
             )?;
         }
-        let profile = self.device().compile_device().profile();
+        let profile = self.generation().compile_device().profile();
         let record = check_view(&self.0.record, request, profile)
             .map_err(|refusal| view_error(call, refusal))?;
         // A view of a rotated texture acts as the texture does in its own format; only the views
@@ -6726,9 +6738,9 @@ impl Texture {
             Storage::Texels(_) => false,
             Storage::Image(image)
             | Storage::Alias { image, .. }
-            | Storage::Shadow { image, .. } => {
-                !self.device().image_takes_view(image, record.pixel_format)
-            }
+            | Storage::Shadow { image, .. } => !self
+                .generation()
+                .image_takes_view(image, record.pixel_format),
         };
         let mut record = record;
         // A view presents the face its texture presents now, for good (`texture/faces.rs`).
@@ -6742,7 +6754,10 @@ impl Texture {
         } else if !apart {
             self.storage().clone()
         } else if let Some((image, read_as)) = self.read_through(&record) {
-            self.device().shared().counts.view_through_swizzle_made();
+            self.generation()
+                .shared()
+                .counts
+                .view_through_swizzle_made();
             record.read_as = Some(read_as);
             Storage::Image(image)
         } else {
@@ -6750,7 +6765,7 @@ impl Texture {
         };
         let parent = Some(self.clone());
         Ok(Texture::made(
-            self.device(),
+            self.generation(),
             storage,
             record,
             parent,
@@ -6902,7 +6917,7 @@ impl Texture {
         if let Owner::HeapShadow(shadow) = &image.owner {
             if shadow.holds(image.plan(), &image_region) {
                 shadow.write(CALL, image.plan(), &image_region, &host, bytes.slice())?;
-                self.device().shared().counts.heap_shadow_cpu_copy();
+                self.generation().shared().counts.heap_shadow_cpu_copy();
                 return Ok(());
             }
         }
@@ -6925,7 +6940,7 @@ impl Texture {
                 let mut packed = vec![0; host.packed_len() as usize];
                 bytes.pack(&host, &mut packed);
                 depth_clamp::clamp_depth_bytes(&mut packed);
-                self.device().shared().counts.depth_upload_clamped();
+                self.generation().shared().counts.depth_upload_clamped();
                 clamped = packed;
                 (Upload::Slice(&clamped), host.packed())
             }
@@ -6968,7 +6983,7 @@ impl Texture {
             // A decoded twin's decode, staged; on the CPU while a batch may read it.
             return truth.decode_written(&image_region, pack);
         }
-        let device = self.device();
+        let device = self.generation();
         if truth.defers_copies() {
             let staging = device.own_buffer(host.packed_len(), ResourceOptions::shared())?;
             let contents = (staging.mapped_contents())
@@ -7116,7 +7131,7 @@ impl Texture {
         region: &ImageRegion,
         words: u64,
     ) -> Result<Staging<'_>, Error> {
-        let device = self.device();
+        let device = self.generation();
         let staging = Staging::new(device, 2 * words)?;
         // A shadowed view's texels are its texture's (`texture/view_shadow.rs`).
         let truth = view_shadow::truth(image);
@@ -7236,7 +7251,7 @@ impl Texture {
         if let Owner::HeapShadow(shadow) = &image.owner {
             if shadow.holds(image.plan(), image_region) {
                 shadow.read(call, image.plan(), image_region, host, bytes)?;
-                self.device().shared().counts.heap_shadow_cpu_copy();
+                self.generation().shared().counts.heap_shadow_cpu_copy();
                 return Ok(());
             }
         }
@@ -7273,7 +7288,7 @@ impl Texture {
         {
             return Ok(());
         }
-        let device = self.device();
+        let device = self.generation();
         let mut staging = Staging::new(device, host.packed_len())?;
         let (buffer, image) = (staging.raw, truth.raw.get());
         truth.submit_copy(|raw, command_buffer| {

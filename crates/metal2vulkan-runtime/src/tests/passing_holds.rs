@@ -69,7 +69,7 @@ fn rows(device: &Device) -> (u64, u64) {
 
 /// A 4x4 `RGBA8Unorm` texture over `buffer`'s bytes, at a plain ID.
 fn over(buffer: &Buffer) -> Texture {
-    let (row, _) = rows(buffer.device());
+    let (row, _) = rows(buffer.generation());
     let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
     descriptor.usage = TextureUsage::SHADER_READ;
     descriptor.resource_options = buffer.resource_options();

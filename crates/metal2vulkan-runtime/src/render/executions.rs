@@ -405,7 +405,7 @@ impl RenderLowering {
         check: Option<(IndirectCommandCheck, IndirectCommandCheckNeeds)>,
     ) -> Result<(), Error> {
         self.log(|_| RenderCall::Execute(icb.clone(), range.clone()));
-        self.core.check_device(CALL, icb.device())?;
+        self.core.check_device(CALL, icb.generation())?;
         if !icb.is_render() {
             if !icb.runs_nothing_in_a_pass() {
                 return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
@@ -474,9 +474,9 @@ impl RenderLowering {
     ) -> Result<(), Error> {
         self.log(|_| RenderCall::ExecuteIndirect(icb.clone(), range_buffer.clone(), offset));
         const CALL_INDIRECT: &str = indirect_execute::CALL_INDIRECT;
-        self.core.check_device(CALL_INDIRECT, icb.device())?;
+        self.core.check_device(CALL_INDIRECT, icb.generation())?;
         self.core
-            .check_device(CALL_INDIRECT, range_buffer.device())?;
+            .check_device(CALL_INDIRECT, range_buffer.generation())?;
         if !icb.is_render() {
             return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
                 IndirectRule::OtherEncoderKind,
@@ -2861,7 +2861,7 @@ impl RenderExecution {
                 continue;
             };
             if !binding.names_buffer() {
-                indirect_execute::degrade_nil_offset(self.icb.device(), binding, index);
+                indirect_execute::degrade_nil_offset(self.icb.generation(), binding, index);
                 continue;
             }
             let Some(bound) = residency.resolve(binding.address) else {

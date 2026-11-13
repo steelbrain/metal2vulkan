@@ -8137,7 +8137,7 @@ method	metal2vulkan-runtime::AddressModeMap::is_identity	pub fn is_identity(&sel
 method	metal2vulkan-runtime::AddressModeMap::mode	pub fn mode(&self, from: SamplerAddressMode) -> SamplerAddressMode
 method	metal2vulkan-runtime::AddressModeMap::sampler	pub fn sampler(&self, mut desc: SamplerDescriptor) -> SamplerDescriptor
 method	metal2vulkan-runtime::AddressModeMap::with	pub fn with(mut self, from: SamplerAddressMode, to: SamplerAddressMode) -> AddressModeMap
-method	metal2vulkan-runtime::AddressPool::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::AddressPool::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::AddressPool::gpu_address	pub fn gpu_address(&self) -> GpuAddress
 method	metal2vulkan-runtime::AddressPool::length	pub fn length(&self) -> u64
 method	metal2vulkan-runtime::AppleOnly::gap	pub const fn gap(self) -> AppleOnlyGap
@@ -8171,7 +8171,7 @@ method	metal2vulkan-runtime::BinaryArchive::add_compute_pipeline_functions	pub f
 method	metal2vulkan-runtime::BinaryArchive::add_mesh_render_pipeline_functions	pub fn add_mesh_render_pipeline_functions(&self, descriptor: &MeshPipelineDescriptor) -> Result<(), Error>
 method	metal2vulkan-runtime::BinaryArchive::add_render_pipeline_functions	pub fn add_render_pipeline_functions(&self, descriptor: &RenderPipelineDescriptor) -> Result<(), Error>
 method	metal2vulkan-runtime::BinaryArchive::add_tile_render_pipeline_functions	pub fn add_tile_render_pipeline_functions(&self, descriptor: &TileRenderPipelineDescriptor) -> Result<(), Error>
-method	metal2vulkan-runtime::BinaryArchive::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::BinaryArchive::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::BinaryArchive::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::BinaryArchive::serialize_to_url	pub fn serialize_to_url(&self, url: &Path) -> Result<(), Error>
 method	metal2vulkan-runtime::BinaryArchive::set_label	pub fn set_label(&self, label: &str)
@@ -8212,7 +8212,7 @@ method	metal2vulkan-runtime::Buffer::as_resource	pub fn as_resource(&self) -> Re
 method	metal2vulkan-runtime::Buffer::contents	pub fn contents(&self) -> Option<NonNull<u8>>
 method	metal2vulkan-runtime::Buffer::cpu_cache_mode	pub fn cpu_cache_mode(&self) -> CpuCacheMode
 method	metal2vulkan-runtime::Buffer::detach_backing	pub fn detach_backing(&self) -> Result<bool, Error>
-method	metal2vulkan-runtime::Buffer::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::Buffer::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::Buffer::did_modify_range	pub fn did_modify_range(&self, range: Range<u64>) -> Result<(), Error>
 method	metal2vulkan-runtime::Buffer::export_memory_dma_buf	pub fn export_memory_dma_buf(&self) -> Result<ExportedMemory, Error>
 method	metal2vulkan-runtime::Buffer::export_memory_fd	pub fn export_memory_fd(&self) -> Result<ExportedMemory, Error>
@@ -8380,7 +8380,7 @@ method	metal2vulkan-runtime::CpuCacheMode::raw	pub fn raw(self) -> u64
 method	metal2vulkan-runtime::Degradation::exactness	pub const fn exactness(self) -> Exactness
 method	metal2vulkan-runtime::Degradation::from_code	pub fn from_code(code: &str) -> Option<Degradation>
 method	metal2vulkan-runtime::DepthStencilState::descriptor	pub fn descriptor(&self) -> &DepthStencilDescriptor
-method	metal2vulkan-runtime::DepthStencilState::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::DepthStencilState::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::DepthStencilState::gpu_resource_id	pub fn gpu_resource_id(&self) -> Result<ResourceId, Error>
 method	metal2vulkan-runtime::Device::all	pub fn all() -> Result<Vec<Device>, Error>
 method	metal2vulkan-runtime::Device::all_with	pub fn all_with(options: &DeviceOptions) -> Result<Vec<Device>, Error>
@@ -8509,7 +8509,7 @@ method	metal2vulkan-runtime::DeviceProperties::supports_vertex_amplification_cou
 method	metal2vulkan-runtime::DrawPrimitiveType::from_raw	pub fn from_raw(raw: u64) -> Result<DrawPrimitiveType, Error>
 method	metal2vulkan-runtime::DrawPrimitiveType::raw	pub fn raw(self) -> u64
 method	metal2vulkan-runtime::DriverFact::pipeline_creation_diagnostics	pub fn pipeline_creation_diagnostics(self, dynamic_states: &[DynamicState], topology: PrimitiveTopology, blendless_colors: &[Format]) -> Vec<DriverDiagnostic>
-method	metal2vulkan-runtime::DynamicLibrary::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::DynamicLibrary::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::DynamicLibrary::install_name	pub fn install_name(&self) -> &str
 method	metal2vulkan-runtime::DynamicLibrary::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::DynamicLibrary::preloaded_library	pub fn preloaded_library(&self) -> metal2vulkan::library::DynamicLibrary
@@ -8522,7 +8522,7 @@ method	metal2vulkan-runtime::EncodedRenderCommand::mesh_buffer_address	pub fn me
 method	metal2vulkan-runtime::EncodedRenderCommand::object_buffer_address	pub fn object_buffer_address(&self, index: u64) -> Option<u64>
 method	metal2vulkan-runtime::EncodedRenderCommand::vertex_attribute_stride	pub fn vertex_attribute_stride(&self, index: u64) -> Option<u64>
 method	metal2vulkan-runtime::EncodedRenderCommand::vertex_buffer_address	pub fn vertex_buffer_address(&self, index: u64) -> Option<u64>
-method	metal2vulkan-runtime::Event::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::Event::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::Event::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::Event::reserve_vk_signal	pub unsafe fn reserve_vk_signal(&self, value: u64) -> Result<VkEventSignal, Error>
 method	metal2vulkan-runtime::Event::set_label	pub fn set_label(&self, label: &str)
@@ -8530,7 +8530,7 @@ method	metal2vulkan-runtime::Event::vk_semaphore	pub unsafe fn vk_semaphore(&sel
 method	metal2vulkan-runtime::Event::vk_wait	pub fn vk_wait(&self, value: u64) -> VkEventWait
 method	metal2vulkan-runtime::FamilyRow::label	pub fn label(self) -> &'static str
 method	metal2vulkan-runtime::FeatureRow::label	pub fn label(self) -> &'static str
-method	metal2vulkan-runtime::Fence::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::Fence::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::Fence::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::Fence::set_label	pub fn set_label(&self, label: &str)
 method	metal2vulkan-runtime::FormatCapabilities::contains	pub fn contains(self, capability: FormatCapability) -> bool
@@ -8538,7 +8538,7 @@ method	metal2vulkan-runtime::FormatCapabilities::iter	pub fn iter(self) -> impl 
 method	metal2vulkan-runtime::FormatCapabilities::of	pub const fn of(capabilities: &[FormatCapability]) -> FormatCapabilities
 method	metal2vulkan-runtime::FormatRow::formats	pub fn formats(self) -> &'static [PixelFormat]
 method	metal2vulkan-runtime::FormatRow::label	pub fn label(self) -> &'static str
-method	metal2vulkan-runtime::Function::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::Function::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::Function::function_constants_dictionary	pub fn function_constants_dictionary(&self) -> Result<BTreeMap<String, FunctionConstant>, Error>
 method	metal2vulkan-runtime::Function::function_descriptor	pub fn function_descriptor(&self) -> StageFunction
 method	metal2vulkan-runtime::Function::function_type	pub fn function_type(&self) -> Result<FunctionType, Error>
@@ -8561,7 +8561,7 @@ method	metal2vulkan-runtime::HazardTrackingMode::raw	pub fn raw(self) -> u64
 method	metal2vulkan-runtime::Heap::cpu_cache_mode	pub fn cpu_cache_mode(&self) -> CpuCacheMode
 method	metal2vulkan-runtime::Heap::current_allocated_size	pub fn current_allocated_size(&self) -> u64
 method	metal2vulkan-runtime::Heap::detach_backing	pub fn detach_backing(&self) -> Result<bool, Error>
-method	metal2vulkan-runtime::Heap::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::Heap::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::Heap::gpu_address	pub fn gpu_address(&self) -> GpuAddress
 method	metal2vulkan-runtime::Heap::hazard_tracking_mode	pub fn hazard_tracking_mode(&self) -> HazardTrackingMode
 method	metal2vulkan-runtime::Heap::heap_type	pub fn heap_type(&self) -> HeapType
@@ -8607,7 +8607,7 @@ method	metal2vulkan-runtime::IndirectCommandBuffer::as_resource	pub fn as_resour
 method	metal2vulkan-runtime::IndirectCommandBuffer::command_writes	pub fn command_writes(&self) -> CommandWrites
 method	metal2vulkan-runtime::IndirectCommandBuffer::commands	pub fn commands(&self, range: Range<u64>) -> Result<Vec<IndirectCommand>, Error>
 method	metal2vulkan-runtime::IndirectCommandBuffer::cpu_cache_mode	pub fn cpu_cache_mode(&self) -> CpuCacheMode
-method	metal2vulkan-runtime::IndirectCommandBuffer::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::IndirectCommandBuffer::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::IndirectCommandBuffer::gpu_resource_id	pub fn gpu_resource_id(&self) -> ResourceId
 method	metal2vulkan-runtime::IndirectCommandBuffer::gpu_written	pub fn gpu_written(&self) -> bool
 method	metal2vulkan-runtime::IndirectCommandBuffer::hazard_tracking_mode	pub fn hazard_tracking_mode(&self) -> HazardTrackingMode
@@ -8691,7 +8691,7 @@ method	metal2vulkan-runtime::IoSurfacePlane::with_ycbcr	pub const fn with_ycbcr(
 method	metal2vulkan-runtime::IoSurfaceYCbCr::new	pub const fn new(pixel_format: u32, plane: u64, size: [u64; 2], chroma_offset: u64, chroma_bytes_per_row: u64) -> IoSurfaceYCbCr
 method	metal2vulkan-runtime::IoSurfaceYCbCr::with_matrix	pub const fn with_matrix(mut self, matrix: SurfaceYCbCrMatrix) -> IoSurfaceYCbCr
 method	metal2vulkan-runtime::LayerSetting::new	pub fn new(layer: CString, name: CString, value: LayerSettingValue) -> LayerSetting
-method	metal2vulkan-runtime::Library::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::Library::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::Library::extern_function_names	pub fn extern_function_names(&self) -> Vec<String>
 method	metal2vulkan-runtime::Library::function_names	pub fn function_names(&self) -> Vec<String>
 method	metal2vulkan-runtime::Library::install_name	pub fn install_name(&self) -> Option<&str>
@@ -8927,7 +8927,7 @@ method	metal2vulkan-runtime::ResourceStateCommandEncoder::update_texture_mapping
 method	metal2vulkan-runtime::ResourceStateCommandEncoder::wait_for_fence	pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error>
 method	metal2vulkan-runtime::RowState::blocks	pub fn blocks(&self) -> bool
 method	metal2vulkan-runtime::SamplePosition::new	pub fn new(x: f32, y: f32) -> SamplePosition
-method	metal2vulkan-runtime::SamplerState::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::SamplerState::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::SamplerState::gpu_resource_id	pub fn gpu_resource_id(&self) -> ResourceId
 method	metal2vulkan-runtime::ScissorRect::new	pub fn new(x: u64, y: u64, width: u64, height: u64) -> ScissorRect
 method	metal2vulkan-runtime::ShaderCacheError::new	pub fn new(path: Option<PathBuf>, kind: std::io::ErrorKind, message: &str) -> ShaderCacheError
@@ -8946,7 +8946,7 @@ method	metal2vulkan-runtime::SharedEvent::vk_wait	pub fn vk_wait(&self, value: u
 method	metal2vulkan-runtime::SharedEvent::wait_until_signaled_value	pub fn wait_until_signaled_value(&self, value: u64, timeout: Duration) -> bool
 method	metal2vulkan-runtime::SharedEventHandle::label	pub fn label(&self) -> Option<String>
 method	metal2vulkan-runtime::SharedEventListener::new	pub fn new() -> SharedEventListener
-method	metal2vulkan-runtime::SharedTextureHandle::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::SharedTextureHandle::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::Size::new	pub fn new(width: u64, height: u64, depth: u64) -> Size
 method	metal2vulkan-runtime::SparseFeatures::features	pub fn features(&self) -> vk::PhysicalDeviceFeatures
 method	metal2vulkan-runtime::SparseFeatures::of	pub fn of(features: &vk::PhysicalDeviceFeatures) -> SparseFeatures
@@ -8977,7 +8977,7 @@ method	metal2vulkan-runtime::Texture::array_length	pub fn array_length(&self) ->
 method	metal2vulkan-runtime::Texture::as_resource	pub fn as_resource(&self) -> ResourceRef<'_>
 method	metal2vulkan-runtime::Texture::cpu_cache_mode	pub fn cpu_cache_mode(&self) -> CpuCacheMode
 method	metal2vulkan-runtime::Texture::depth	pub fn depth(&self) -> u64
-method	metal2vulkan-runtime::Texture::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::Texture::device	pub fn device(&self) -> Device
 method	metal2vulkan-runtime::Texture::did_modify_data	pub fn did_modify_data(&self)
 method	metal2vulkan-runtime::Texture::first_mipmap_in_tail	pub fn first_mipmap_in_tail(&self) -> Option<u64>
 method	metal2vulkan-runtime::Texture::framebuffer_only	pub fn framebuffer_only(&self) -> bool

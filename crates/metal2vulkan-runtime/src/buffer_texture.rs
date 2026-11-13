@@ -728,7 +728,7 @@ impl Buffer {
         )?;
         // Metal's device takes a sampler ID as it makes a surface's texture, as for a texture of
         // its own (unlike a buffer's: `resource_ids.rs`).
-        self.device().take_device_sampler();
+        self.generation().take_device_sampler();
         Ok(texture)
     }
 
@@ -863,7 +863,7 @@ impl Buffer {
             form,
             ycbcr: ycbcr_surface,
         };
-        let device = texture.device().clone();
+        let device = texture.generation().clone();
         Ok(device.kept_texture(texture, remake))
     }
 
@@ -908,7 +908,7 @@ impl Buffer {
         // A two-plane extended-range format reads the surface's plane 1 from the same facts.
         let surface_facts = ycbcr_surface;
         let ycbcr_surface = ycbcr_surface.filter(|_| ycbcr(asked_format) && surface);
-        let device = self.device();
+        let device = self.generation();
         let asked = device.texture_options(call, descriptor)?;
         device.check_texture_placement(call, asked.placement, asked.usage, asked.texture_type)?;
         let options = asked.resource_options;
@@ -938,7 +938,7 @@ impl Buffer {
         let id_use = whose.id_use(descriptor.placement);
         // A texture buffer of more than one level is stopped by `linear_plan`, as Metal's
         // buffer creator stops it, not refused as the device's gap.
-        let rules = self.device().properties().texture_rules();
+        let rules = self.generation().properties().texture_rules();
         let checked = match ycbcr_surface {
             Some(_) => descriptor.check_over_surface(rules),
             None => descriptor.check_made(Creator::Buffer, rules),
@@ -1077,8 +1077,8 @@ impl Buffer {
             Err(_) => return Err(internal("a rotation past the descriptor's check")),
         };
         if let Some((rotation, stored)) = rotation {
-            if self.device().is_lost() {
-                return Err(self.device().lost_refusal());
+            if self.generation().is_lost() {
+                return Err(self.generation().lost_refusal());
             }
             if goal == Goal::Ask {
                 return Ok(Over::Asked(TexturePlacement::OtherShape));
@@ -1091,7 +1091,7 @@ impl Buffer {
             );
             let stored = Texels::placed(self.clone(), stored, texel_bytes, descriptor);
             return self
-                .device()
+                .generation()
                 .new_rotated_texture(
                     call,
                     [rows, stored].map(|texels| texels.with_options(options).over_surface(surface)),
@@ -1112,15 +1112,15 @@ impl Buffer {
                 return Ok(Over::Asked(TexturePlacement::OtherShape));
             }
             let made = self
-                .device()
+                .generation()
                 .surface_texture_apart(call, descriptor, id_use)?;
             self.degrade_apart(&layout, offset, bytes_per_row);
             return Ok(Over::Made(made));
         }
         let placed = plan_buffer_texture(&texture, &buffer)
             .map_err(|refusal| refusal_error(call, refusal))?;
-        if self.device().is_lost() {
-            return Err(self.device().lost_refusal());
+        if self.generation().is_lost() {
+            return Err(self.generation().lost_refusal());
         }
         // A texture of a surface's two planes, a texture buffer and a converted texture take no
         // image in place.
@@ -1135,7 +1135,7 @@ impl Buffer {
                 .with_options(options)
                 .over_surface(surface);
             return self
-                .device()
+                .generation()
                 .new_surface_planes_texture(call, texels, descriptor, &layout, id_use, alpha)
                 .map(Over::Made);
         }
@@ -1144,7 +1144,7 @@ impl Buffer {
                 .with_options(options)
                 .over_surface(surface);
             return self
-                .device()
+                .generation()
                 .new_converted_texture(call, texels, descriptor, &layout, id_use, (&planes, span))
                 .map(Over::Made);
         }
@@ -1172,7 +1172,7 @@ impl Buffer {
                 let past = texels.runs_past();
                 let asked = (descriptor, &layout);
                 let placement = self
-                    .device()
+                    .generation()
                     .placement_over_buffer(call, &texels, asked, past)?;
                 return Ok(Over::Asked(placement));
             }
@@ -1180,7 +1180,7 @@ impl Buffer {
             let texels = texels.with_tail()?;
             let tail = surface && texels.tail.is_some();
             let texture = self
-                .device()
+                .generation()
                 .new_texture_over_buffer(call, texels, descriptor, &layout, id_use)?;
             if tail {
                 self.degrade_surface_tail(&layout, &placed);
@@ -1291,38 +1291,41 @@ impl Buffer {
     /// Announce `NarrowSurfaceRows` for an IOSurface plane of `layout` placed as `placed`, once
     /// it is made (`linear_plan.rs`).
     fn degrade_narrow_rows(&self, layout: &TextureLayout, placed: &Placed) {
-        self.device().degrade(Degradation::NarrowSurfaceRows, || {
-            let [width, height, _] = layout.extent;
-            let object = format!(
+        self.generation()
+            .degrade(Degradation::NarrowSurfaceRows, || {
+                let [width, height, _] = layout.extent;
+                let object = format!(
                 "{width}x{height} {:?} texture of an IOSurface plane at offset {}, {} bytes a row",
                 layout.pixel_format, placed.cpu.offset, placed.cpu.row_pitch
             );
-            let reason = format!(
+                let reason = format!(
                 "Metal's GPU writes its rows {} bytes apart from byte {} and reads every row past \
                  the first as memory-dependent bytes",
                 placed.gpu.row_pitch, placed.gpu.offset
             );
-            (object, reason)
-        });
+                (object, reason)
+            });
     }
 
     /// Announce `SurfaceTexelsApart` for a texture of `layout` over the IOSurface plane at `offset`,
     /// `bytes_per_row` a row, made in memory of its own (`linear_plan.rs`'s **Beyond the plane's
     /// rows**).
     fn degrade_apart(&self, layout: &TextureLayout, offset: u64, bytes_per_row: u64) {
-        self.device().degrade(Degradation::SurfaceTexelsApart, || {
-            let [width, height, depth] = layout.extent;
-            let object = format!(
+        self.generation()
+            .degrade(Degradation::SurfaceTexelsApart, || {
+                let [width, height, depth] = layout.extent;
+                let object = format!(
                 "{width}x{height}x{depth} {:?} {:?} texture of {} levels and {} samples over an \
                  IOSurface plane at offset {offset}, {bytes_per_row} bytes a row",
                 layout.texture_type, layout.pixel_format, layout.levels, layout.samples
             );
-            let reason = "Metal lays such a texture's texels over a plane in no one place, its \
+                let reason =
+                    "Metal lays such a texture's texels over a plane in no one place, its \
                           first level's and slice's among them: its GPU reads them from other \
                           bytes than its writes and its CPU put them"
-                .to_owned();
-            (object, reason)
-        });
+                        .to_owned();
+                (object, reason)
+            });
     }
 
     /// Announce `SurfaceTexelsTail` for an IOSurface plane of `layout` placed as `placed`, whose
@@ -1330,37 +1333,38 @@ impl Buffer {
     /// first, into the texture's tail, once it is made (`linear_plan.rs`'s **Beyond the plane's
     /// rows**).
     fn degrade_surface_tail(&self, layout: &TextureLayout, placed: &Placed) {
-        self.device().degrade(Degradation::SurfaceTexelsTail, || {
-            let [width, height, _] = layout.extent;
-            let slices = match layout.layers {
-                1 => String::new(),
-                layers => format!(" of {layers} slices"),
-            };
-            let object = format!(
-                "{width}x{height} {:?} texture{slices} of an IOSurface plane at offset {}, {} \
+        self.generation()
+            .degrade(Degradation::SurfaceTexelsTail, || {
+                let [width, height, _] = layout.extent;
+                let slices = match layout.layers {
+                    1 => String::new(),
+                    layers => format!(" of {layers} slices"),
+                };
+                let object = format!(
+                    "{width}x{height} {:?} texture{slices} of an IOSurface plane at offset {}, {} \
                  bytes a row",
-                layout.pixel_format, placed.cpu.offset, placed.cpu.row_pitch
-            );
-            let end = placed.gpu.end().max(placed.cpu.end());
-            let reason = match placed.kept {
-                Some(kept) => format!(
-                    "Metal lays its slices past the first in no one place: they lie from byte \
+                    layout.pixel_format, placed.cpu.offset, placed.cpu.row_pitch
+                );
+                let end = placed.gpu.end().max(placed.cpu.end());
+                let reason = match placed.kept {
+                    Some(kept) => format!(
+                        "Metal lays its slices past the first in no one place: they lie from byte \
                      {kept} of the buffer's space on, in the tail"
-                ),
-                None => format!(
+                    ),
+                    None => format!(
                     "its texels run to byte {end} of the {} bytes standing for its surface, and \
                      Metal lays those past the surface in no one place",
                     self.length()
                 ),
-            };
-            (object, reason)
-        });
+                };
+                (object, reason)
+            });
     }
 
     /// Announce `CollidingSurfaceRowWrites` for an IOSurface plane of `layout` placed as `placed`,
     /// whose GPU rows share bytes, once it is made (`linear_plan.rs`'s **Rows that overlap**).
     fn degrade_colliding_rows(&self, layout: &TextureLayout, placed: &Placed) {
-        self.device()
+        self.generation()
             .degrade(Degradation::CollidingSurfaceRowWrites, || {
                 let [width, height, _] = layout.extent;
                 let object = format!(
@@ -1406,7 +1410,7 @@ impl Texture {
         let record = self.record();
         let pixel_format = record.pixel_format;
         texels.twin(pixel_format, || {
-            let device = texels.buffer.device();
+            let device = texels.buffer.generation();
             let width = u64::from(record.extent()[0]);
             let unmeasured = !texels.layout.offset.is_multiple_of(LINEAR_ALIGNMENT);
             if width > u64::from(device.shared().max_framebuffer[0]) || unmeasured {
@@ -1636,7 +1640,7 @@ impl Texels {
         };
         let hazard = self.options.hazard_tracking_mode()?;
         let turn = Box::new(RotatedCopies::new(
-            self.buffer.device(),
+            self.buffer.generation(),
             &staging,
             frame,
             hazard,
@@ -1821,7 +1825,7 @@ impl Texels {
         descriptor: &TextureDescriptor,
     ) -> Texels {
         let views = Arc::new(TexelViews {
-            device: buffer.device().clone(),
+            device: buffer.generation().clone(),
             views: Mutex::new(KeyMap::default()),
         });
         // A rebind of the buffer's host pages empties the views (`rebind.rs`).
@@ -1863,7 +1867,7 @@ impl Texels {
         let hazard = self.options.hazard_tracking_mode()?;
         let options = ResourceOptions::new(StorageMode::Shared, CpuCacheMode::DefaultCache, hazard);
         let span = end - self.tail_base();
-        let tail = (self.buffer.device()).own_buffer(span.next_multiple_of(4), options)?;
+        let tail = (self.buffer.generation()).own_buffer(span.next_multiple_of(4), options)?;
         Ok(Texels {
             tail: Some(tail),
             ..self
@@ -1951,7 +1955,7 @@ impl Texels {
         // which their bindings view, as a staging buffer's: no view of the buffer reaches them.
         let mut texels = texels.with_tail()?;
         let (raw, at) = (texels.buffer).at_for(texels.shader.offset, ReadApart::Texture);
-        let device = texels.buffer.device();
+        let device = texels.buffer.generation();
         let limits = device.compile_device().profile().limits();
         let past = texels.tail.is_some();
         if !past && at.is_multiple_of(limits.min_texel_buffer_offset_alignment.max(1)) {
@@ -1989,7 +1993,7 @@ impl Texels {
         let length = texels.buffer.length();
         texels
             .buffer
-            .device()
+            .generation()
             .degrade(Degradation::StagedTextureBuffer, || {
                 let object = format!("texture buffer over a buffer at offset {offset}");
                 let reason = match past {
@@ -2144,7 +2148,7 @@ impl Texels {
                 let hazard = self.options.hazard_tracking_mode()?;
                 let options =
                     ResourceOptions::new(StorageMode::Private, CpuCacheMode::DefaultCache, hazard);
-                (self.buffer.device()).own_buffer(span.next_multiple_of(4), options)?
+                (self.buffer.generation()).own_buffer(span.next_multiple_of(4), options)?
             }
         };
         let (_, start) = buffer.at(0);
@@ -2239,7 +2243,7 @@ impl Texels {
         if let Some(&view) = views.get(&key) {
             return Ok(view);
         }
-        let device = self.buffer.device();
+        let device = self.buffer.generation();
         let profile = device.compile_device().profile();
         let usage = view_usage(
             |usage| profile.supports_format(format, usage),

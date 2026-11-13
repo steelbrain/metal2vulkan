@@ -138,7 +138,7 @@ impl Buffer {
             }
             return Err(invalid(CALL, Problem::Rebind(RebindProblem::NotHostMemory)));
         };
-        self.device().detach_host_pages(self, cell, None)
+        self.generation().detach_host_pages(self, cell, None)
     }
 }
 
@@ -165,7 +165,7 @@ impl Heap {
         else {
             return Err(invalid(CALL, Problem::Rebind(RebindProblem::NotHostMemory)));
         };
-        self.device().detach_host_pages(own, cell, Some(self))
+        self.generation().detach_host_pages(own, cell, Some(self))
     }
 }
 

@@ -575,7 +575,7 @@ impl Execute {
         };
         let mut uses = residency.bound_uses();
         uses.extend(self.range.host_reads(&self.icb));
-        let aliases = &self.icb.device().shared().aliases;
+        let aliases = &self.icb.generation().shared().aliases;
         uses.extend(aliases.augment(&inherited).unwrap_or(inherited));
         let mut bound = EncoderUses::new(false);
         bound.record(vk::PipelineStageFlags2::ALL_COMMANDS, &uses, None);
@@ -719,7 +719,7 @@ impl Execute {
                     continue;
                 };
                 if !binding.names_buffer() {
-                    degrade_nil_offset(self.icb.device(), binding, index);
+                    degrade_nil_offset(self.icb.generation(), binding, index);
                     continue;
                 }
                 let Some(bound) = residency.resolve(binding.address) else {
