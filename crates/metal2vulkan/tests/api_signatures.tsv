@@ -10758,6 +10758,7 @@ trait-impl	metal2vulkan-runtime::PipelineRecord impl Eq	impl Eq for PipelineReco
 trait-impl	metal2vulkan-runtime::PipelineRecord impl PartialEq	impl PartialEq for PipelineRecord
 trait-impl	metal2vulkan-runtime::PipelineRecord impl std::fmt::Debug	impl std::fmt::Debug for PipelineRecord
 trait-impl	metal2vulkan-runtime::PipelineRecord impl std::hash::Hash	impl std::hash::Hash for PipelineRecord
+trait-impl	metal2vulkan-runtime::Query impl Drop	impl Drop for Query
 trait-impl	metal2vulkan-runtime::RasterizationRateMap impl Eq	impl Eq for RasterizationRateMap
 trait-impl	metal2vulkan-runtime::RasterizationRateMap impl PartialEq	impl PartialEq for RasterizationRateMap
 trait-impl	metal2vulkan-runtime::RasterizationRateMap impl std::fmt::Debug	impl std::fmt::Debug for RasterizationRateMap
