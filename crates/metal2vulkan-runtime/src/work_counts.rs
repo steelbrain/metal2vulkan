@@ -340,6 +340,7 @@ pub(crate) struct Counters {
     kept_draws_carried_aside: AtomicU64,
     kept_draws_carry_capped: AtomicU64,
     kept_draws_uncarried_attached: AtomicU64,
+    encoders_uncarried: [AtomicU64; Uncarried::COUNT],
     inline_split_instances: AtomicU64,
     inline_memoryless_write_splits: AtomicU64,
     passes_not_inline: [AtomicU64; NotInline::COUNT],
@@ -873,6 +874,46 @@ pub(crate) enum CarryDropped {
 impl CarryDropped {
     /// How many there are.
     pub(crate) const COUNT: usize = 4;
+}
+
+/// Why a render encoder that ended carried no kept draw into its command buffer's next render
+/// encoder (`render/carried.rs`, `WorkCounts::encoders_uncarried_*`): the first that held, in this
+/// order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Uncarried {
+    /// It recorded no draw.
+    Drawless,
+    /// It drew, but kept no draw at its end: its last draw kept nothing, or a call after its
+    /// last kept draw let every kept draw go.
+    NoneKept,
+    /// Its bind state held no settle of its last draw's state.
+    Unsettled,
+    /// Its pass split: an instance before the current one, or pieces of the current one.
+    Split,
+    /// Its pass is drawn in color groups or over a rasterization-rate map.
+    Pass,
+    /// It encoded an ended encoder again, or recorded a draw again into another instance.
+    Replay,
+    /// Executed render commands, a pipeline being made, or a tile dispatch in its pass.
+    Commands,
+    /// A shader-side stencil or depth test, or its stand-in, in its pass.
+    ShaderTests,
+    /// A fragment or tile imageblock in its pass.
+    Imageblock,
+    /// A visibility result active at its end.
+    Visibility,
+    /// Its current instance renders a color through a view of another format, draws views, or
+    /// holds storage attachments.
+    Instance,
+    /// Its last kept draw does not rebind (`Kept::rebinds`).
+    Unrebound,
+    /// Its last kept draw holds a depth/stencil state that fails every fragment.
+    FailingState,
+}
+
+impl Uncarried {
+    /// How many there are.
+    pub(crate) const COUNT: usize = 13;
 }
 
 /// Where the rebind of a render encoder's first draw of the kept draw its command buffer's last
@@ -3264,6 +3305,12 @@ impl Counters {
             self.kept_draws_uncarried_attached
                 .fetch_add(count, Ordering::Relaxed);
         }
+    }
+
+    /// A render encoder ended carrying no kept draw, for `why`
+    /// (`WorkCounts::encoders_uncarried_*`).
+    pub(crate) fn encoder_uncarried(&self, why: Uncarried) {
+        self.encoders_uncarried[why as usize].fetch_add(1, Ordering::Relaxed);
     }
 
     /// A render pass's first instance did not record inline, for `why` (`NotInline`).
@@ -6933,6 +6980,38 @@ pub struct WorkCounts {
     /// encoder's first draw of each one's state takes every step (`draws_none_kept`). One that
     /// reads it through its copy carries (`kept_draws_carried`).
     pub kept_draws_uncarried_attached: u64,
+    /// Render encoders that ended carrying no kept draw into their command buffer's next render
+    /// encoder (`render/carried.rs`), by the first reason that held, in this order: they recorded
+    /// no draw.
+    pub encoders_uncarried_drawless: u64,
+    /// They drew but kept no draw at their end: the last draw kept nothing (`draws_unkept`), or
+    /// a call after the last kept draw let every kept draw go.
+    pub encoders_uncarried_none_kept: u64,
+    /// Their bind state held no settle of the last draw's state.
+    pub encoders_uncarried_unsettled: u64,
+    /// Their pass split: an instance before the current one, or pieces of the current one.
+    pub encoders_uncarried_split: u64,
+    /// Their pass is drawn in color groups or over a rasterization-rate map.
+    pub encoders_uncarried_pass: u64,
+    /// They encoded an ended encoder again, or recorded a draw again into another instance.
+    pub encoders_uncarried_replay: u64,
+    /// Their pass executed render commands, drew through a pipeline still being made, or
+    /// dispatched tiles.
+    pub encoders_uncarried_commands: u64,
+    /// Their pass tests the stencil or depth in the shader, or holds such a test's stand-in.
+    pub encoders_uncarried_shader_tests: u64,
+    /// Their pass holds a fragment or tile imageblock.
+    pub encoders_uncarried_imageblock: u64,
+    /// A visibility result was active at their end.
+    pub encoders_uncarried_visibility: u64,
+    /// Their current instance renders a color through a view of another format, draws views, or
+    /// holds storage attachments.
+    pub encoders_uncarried_instance: u64,
+    /// Their last kept draw does not rebind: a visible-function table, a push hole, a use beyond
+    /// its plan's, a set-0 write that holds a keeper, or a recording of more than one Vulkan draw.
+    pub encoders_uncarried_unrebound: u64,
+    /// Their last kept draw holds a depth/stencil state that fails every fragment.
+    pub encoders_uncarried_failing_state: u64,
     /// Those of them that ended with more than one instance.
     pub inline_passes_split: u64,
     /// The instances after a split of such passes that recorded their draws inline too, in the
@@ -9570,6 +9649,8 @@ impl Device {
         let carry_dropped = |why: CarryDropped| {
             counters.kept_draws_carry_dropped[why as usize].load(Ordering::Relaxed)
         };
+        let uncarried =
+            |why: Uncarried| counters.encoders_uncarried[why as usize].load(Ordering::Relaxed);
         let group_end = |end: GroupEnd| counters.group_ends[end as usize].load(Ordering::Relaxed);
         let unswapped = |cause: Unturned| {
             let at = cause as usize;
@@ -10141,6 +10222,19 @@ impl Device {
             kept_draws_carry_capped: counters.kept_draws_carry_capped.load(Ordering::Relaxed),
             kept_draws_uncarried_attached: (counters.kept_draws_uncarried_attached)
                 .load(Ordering::Relaxed),
+            encoders_uncarried_drawless: uncarried(Uncarried::Drawless),
+            encoders_uncarried_none_kept: uncarried(Uncarried::NoneKept),
+            encoders_uncarried_unsettled: uncarried(Uncarried::Unsettled),
+            encoders_uncarried_split: uncarried(Uncarried::Split),
+            encoders_uncarried_pass: uncarried(Uncarried::Pass),
+            encoders_uncarried_replay: uncarried(Uncarried::Replay),
+            encoders_uncarried_commands: uncarried(Uncarried::Commands),
+            encoders_uncarried_shader_tests: uncarried(Uncarried::ShaderTests),
+            encoders_uncarried_imageblock: uncarried(Uncarried::Imageblock),
+            encoders_uncarried_visibility: uncarried(Uncarried::Visibility),
+            encoders_uncarried_instance: uncarried(Uncarried::Instance),
+            encoders_uncarried_unrebound: uncarried(Uncarried::Unrebound),
+            encoders_uncarried_failing_state: uncarried(Uncarried::FailingState),
             inline_passes_split: counters.inline_passes_split.load(Ordering::Relaxed),
             inline_split_instances: counters.inline_split_instances.load(Ordering::Relaxed),
             inline_memoryless_write_splits: (counters.inline_memoryless_write_splits)

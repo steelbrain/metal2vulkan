@@ -26,7 +26,10 @@
 //!   (`LiveBind::end_carried`): they are the residency's, which is the encoder's. The carry names
 //!   the program's objects by key and handle alone (the bind state's values, the kept draws'
 //!   index buffers, their pipeline states held weakly), and holds only the runtime's own: the
-//!   settles' variants, the kept draws' `VkPipeline`s (`Kept::made`) and settings.
+//!   settles' variants, the kept draws' `VkPipeline`s (`Kept::made`) and settings. An encoder
+//!   that ends carrying none counts the first reason ([`Uncarried`],
+//!   `WorkCounts::encoders_uncarried_*`): no draw, no kept draw, or which of the above did not
+//!   hold.
 //! - **Let go.** Any call of the command buffer but the commit that settles its last render
 //!   encoder's end (`CommandBuffer::settle_end`: another encoder's opening, an event, a
 //!   semaphore) lets it go to the device's spares, counted
@@ -92,7 +95,7 @@ use super::{Lowering, Opening, RenderLowering, ViewSetup};
 use crate::device::Device;
 use crate::live_bind::LiveBind;
 use crate::render_target::PassShape;
-use crate::work_counts::CarryDropped;
+use crate::work_counts::{CarryDropped, Uncarried};
 
 /// The most pipeline states whose kept draws a render encoder carries into its command buffer's
 /// next render encoder: its last draw's and those of the three drawn most lately before it, of the
@@ -176,32 +179,23 @@ impl RenderLowering {
     /// states of the [`CARRIED_STATES`] pipeline states drawn most lately that carry with it,
     /// every other set aside let go (the module docs).
     fn carried_out(&mut self, live: &mut LiveBind) -> Option<Kept> {
-        let kept = self.again_kept()?;
-        let ends = live.settled.is_some()
-            && self.earlier.is_empty()
-            && self.grouped.is_none()
-            && self.rate_map.is_none()
-            && !self.replaying
-            && !self.rerouting
-            && self.executions.is_empty()
-            && self.pending.is_empty()
-            && self.dispatches.is_empty()
-            && !self.dispatched
-            && self.shadow.is_none()
-            && self.depth_stand_in.is_none()
-            && self.imageblock.is_none()
-            && !self.tile_imageblock
-            && !self.visibility.active()
-            && self.current.pieces.is_empty()
-            && self.current.reformats.is_empty()
-            && self.current.views == ViewSetup::default()
-            && !self.current.shadow
-            && !self.current.shader_tests
-            && self.current.shape.storage.is_empty();
         let counts = &self.core.device().shared().counts;
-        if !(ends && kept.carries()) {
-            if ends && kept.carries_but_attached() {
-                counts.kept_draws_uncarried_attached(1);
+        let Some(kept) = self.again_kept() else {
+            counts.encoder_uncarried(match self.draw_calls {
+                0 => Uncarried::Drawless,
+                _ => Uncarried::NoneKept,
+            });
+            return None;
+        };
+        if let Err(why) = self.carry_ends(live) {
+            counts.encoder_uncarried(why);
+            return None;
+        }
+        if !kept.carries() {
+            match (kept.carries_but_attached(), kept.rebinds) {
+                (true, _) => counts.kept_draws_uncarried_attached(1),
+                (false, false) => counts.encoder_uncarried(Uncarried::Unrebound),
+                (false, true) => counts.encoder_uncarried(Uncarried::FailingState),
             }
             return None;
         }
@@ -213,6 +207,55 @@ impl RenderLowering {
         counts.kept_draws_carry_capped(capped);
         counts.kept_draws_uncarried_attached(attached);
         self.take_kept()
+    }
+
+    /// Whether the encoder ends in a state its kept draw carries from (the module docs): its
+    /// bind state holds the settle of its last draw's state, and its pass recorded no step a
+    /// carried draw's first rebind does not repeat; else the first reason it does not
+    /// (`WorkCounts::encoders_uncarried_*`).
+    fn carry_ends(&self, live: &LiveBind) -> Result<(), Uncarried> {
+        let current = &self.current;
+        let checks = [
+            (live.settled.is_some(), Uncarried::Unsettled),
+            (
+                self.earlier.is_empty() && current.pieces.is_empty(),
+                Uncarried::Split,
+            ),
+            (
+                self.grouped.is_none() && self.rate_map.is_none(),
+                Uncarried::Pass,
+            ),
+            (!self.replaying && !self.rerouting, Uncarried::Replay),
+            (
+                self.executions.is_empty()
+                    && self.pending.is_empty()
+                    && self.dispatches.is_empty()
+                    && !self.dispatched,
+                Uncarried::Commands,
+            ),
+            (
+                self.shadow.is_none()
+                    && self.depth_stand_in.is_none()
+                    && !current.shadow
+                    && !current.shader_tests,
+                Uncarried::ShaderTests,
+            ),
+            (
+                self.imageblock.is_none() && !self.tile_imageblock,
+                Uncarried::Imageblock,
+            ),
+            (!self.visibility.active(), Uncarried::Visibility),
+            (
+                current.reformats.is_empty()
+                    && current.views == ViewSetup::default()
+                    && current.shape.storage.is_empty(),
+                Uncarried::Instance,
+            ),
+        ];
+        match checks.into_iter().find(|&(holds, _)| !holds) {
+            Some((_, why)) => Err(why),
+            None => Ok(()),
+        }
     }
 
     /// Start from `kept`, the kept draw the command buffer's last render encoder carried, or

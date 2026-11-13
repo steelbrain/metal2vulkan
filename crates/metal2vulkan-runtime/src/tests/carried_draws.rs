@@ -124,6 +124,29 @@ impl Frame {
     fn across(&self) -> u64 {
         self.counted(|c| c.kept_draws_carried_across)
     }
+
+    /// The render encoders that ended carrying nothing, by reason (`encoders_uncarried_*`, in
+    /// their order): drawless, none kept, and the eleven others together.
+    fn uncarried(&self) -> [u64; 3] {
+        let others: [fn(&WorkCounts) -> u64; 11] = [
+            |c| c.encoders_uncarried_unsettled,
+            |c| c.encoders_uncarried_split,
+            |c| c.encoders_uncarried_pass,
+            |c| c.encoders_uncarried_replay,
+            |c| c.encoders_uncarried_commands,
+            |c| c.encoders_uncarried_shader_tests,
+            |c| c.encoders_uncarried_imageblock,
+            |c| c.encoders_uncarried_visibility,
+            |c| c.encoders_uncarried_instance,
+            |c| c.encoders_uncarried_unrebound,
+            |c| c.encoders_uncarried_failing_state,
+        ];
+        [
+            self.counted(|c| c.encoders_uncarried_drawless),
+            self.counted(|c| c.encoders_uncarried_none_kept),
+            others.into_iter().map(|of| self.counted(of)).sum(),
+        ]
+    }
 }
 
 /// The carry's counts ([`Frame::carries`]) of a frame whose carried draws are `carried`, the
@@ -302,6 +325,30 @@ fn passes_of_the_same_state_rebind_the_carried_draw() {
         pixel.iter().all(|&c| c >= least),
         "every pass's color added: {pixel:?}"
     );
+}
+
+/// A render encoder that ends carrying nothing counts the first reason
+/// (`encoders_uncarried_*`): passes that each carry their kept draw into the next count none, and
+/// passes that draw nothing count each as drawless.
+#[test]
+fn an_encoder_that_carries_nothing_counts_why() {
+    let scratch = Scratch::new("carried-uncarried");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let queue = device.new_command_queue().unwrap();
+    let state = adding_state(&device);
+    let color = colors(&device, &[[1.0 / 16.0; 4]]);
+    let pass = |encoder: &mut RenderCommandEncoder| rectangle(encoder, &state, (&color, 0));
+    let drawless = |_: &mut RenderCommandEncoder| {};
+    warm(&device, pass);
+    const PASSES: usize = 3;
+    let passes: [Pass<'_>; PASSES] = [&pass; PASSES];
+    let drawn = frame(&queue, &passes, Apart::Together);
+    let passes: [Pass<'_>; PASSES] = [&drawless; PASSES];
+    let cleared = frame(&queue, &passes, Apart::Together);
+    assert_eq!(drawn.carries(), rebound(PASSES as u64 - 1), "drawn");
+    assert_eq!(drawn.uncarried(), [0, 0, 0], "drawn");
+    assert_eq!(cleared.uncarried(), [PASSES as u64, 0, 0], "drawless");
 }
 
 /// Passes that each draw through three pipeline states, each pass after the first starting from a
