@@ -26,7 +26,8 @@
 //! simdgroup count no probe measured, a cooperative left input, a tensor destination, a dynamic
 //! `k`, a tensor other than `tensor_inline`, an element type outside the measured ones, the
 //! forms `get_element_index`, the copies,
-//! conversions, reductions, the `_v2` and single-thread runs, and any stage but a kernel.
+//! conversions, reductions, the single-thread runs, a `_v2` run's tensor with scale factors or a
+//! static extent, and any stage but a kernel.
 
 mod layout;
 mod synth;

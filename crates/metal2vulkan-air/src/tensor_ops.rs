@@ -9,8 +9,8 @@
 //! declaration's section, the symbol's grammar, and the argument positions the header gives each
 //! form. Nothing here keys on a kernel's or a library's own names.
 //!
-//! The forms (the header's macOS 26.2 spelling, which every corpus use and every owned fixture
-//! has):
+//! The forms (the header's macOS 26.2 spelling; for a deployment target of 27.0 the header spells
+//! every `run` in its `_v2` form and keeps the helpers'):
 //!
 //! - **Cooperative-tensor helpers**, each taking the operand index
 //!   (`__matmul2d_cooperative_operand_index`: left 0, right 1, destination 2) and the descriptor
@@ -40,6 +40,14 @@ pub const SECTION: &[u8] = b"air.externally_defined";
 
 /// The symbol prefix of the `matmul2d` ABI.
 pub const PREFIX: &[u8] = b"__tensorops_impl_matmul2d_op_";
+
+/// `__tensor_ops_datatype_invalid`: the scale type a `_v2` run passes for a tensor operand without
+/// scale factors (`tensor_plane_scales`).
+pub const NO_SCALE: u64 = 0;
+
+/// `dynamic_extent` as a `_v2` run passes a tensor's static extent that is dynamic: the `int` -1,
+/// zero-extended.
+pub const DYNAMIC_EXTENT: u64 = 0xFFFF_FFFF;
 
 /// The reserved element index (`__tensor_ops_reserved_index`, `USHRT_MAX`): the header passes
 /// `get_element_pointer` of it to `run` and to the copy helpers as the storage itself.
@@ -301,6 +309,14 @@ impl RunForm {
         let right = left + width(self.left);
         let destination = right + width(self.right);
         [left, right, destination]
+    }
+
+    /// The argument indices of a `_v2` input tensor's scale type, its scale factors' two block
+    /// sizes and its two static extents (`get_static_extent`), which follow its descriptor type
+    /// in that order, for the tensor whose pointer is argument `at` ([`RunForm::operand_args`]).
+    /// `None` for a form other than `_v2`.
+    pub fn v2_tensor_args(&self, at: usize) -> Option<[usize; 5]> {
+        self.v2.then_some([at + 2, at + 3, at + 4, at + 5, at + 6])
     }
 }
 

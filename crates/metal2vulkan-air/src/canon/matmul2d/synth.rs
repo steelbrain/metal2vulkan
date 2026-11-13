@@ -18,7 +18,7 @@ use crate::ir::{
 };
 use crate::tensor_ops::{
     DataType, Descriptor, DescriptorType, Inner, MatMul2dFn, Mode, OperandForm, OperandIndex,
-    RunForm, TensorSpace, RESERVED_INDEX,
+    RunForm, TensorSpace, DYNAMIC_EXTENT, NO_SCALE, RESERVED_INDEX,
 };
 
 use super::super::out::Out;
@@ -229,7 +229,9 @@ impl Run {
     /// The `run` form `form` called with `args`, whose descriptor argument points at `desc`
     /// (when it is a constant) and whose destination's (and a cooperative right input's) storage
     /// `storage` reads as the helper call that made it. A refusal names the first of: the form,
-    /// the descriptor, the shape, then the storage.
+    /// the descriptor, the shape, then the storage. A `_v2` run whose tensor operands have no
+    /// scale factors and only dynamic extents passes them as the earlier form does, so it is that
+    /// form's run.
     pub fn of_call(
         form: RunForm,
         args: &[Value],
@@ -237,8 +239,8 @@ impl Run {
         eval: &dyn Fn(Value) -> Option<u64>,
         storage: &dyn Fn(Value) -> Option<Helper>,
     ) -> Result<Run, Error> {
-        if form.single_thread || form.v2 {
-            return Err(refuse("a matmul2d run of the single-thread or v2 form"));
+        if form.single_thread {
+            return Err(refuse("a matmul2d run of the single-thread form"));
         }
         if args.len() != form.arity() {
             return Err(refuse("a matmul2d run of another arity"));
@@ -265,6 +267,20 @@ impl Run {
                 let kind = args.get(at + 1).copied().and_then(eval);
                 if kind.and_then(DescriptorType::from_raw) != Some(DescriptorType::Inline) {
                     return Err(refuse("a matmul2d tensor other than tensor_inline"));
+                }
+                if let Some([scale, block0, block1, extent0, extent1]) = form.v2_tensor_args(at) {
+                    let word = |i: usize| args.get(i).copied().and_then(eval);
+                    if word(scale) != Some(NO_SCALE)
+                        || word(block0) != Some(0)
+                        || word(block1) != Some(0)
+                    {
+                        return Err(refuse("a matmul2d tensor with scale factors"));
+                    }
+                    if word(extent0) != Some(DYNAMIC_EXTENT)
+                        || word(extent1) != Some(DYNAMIC_EXTENT)
+                    {
+                        return Err(refuse("a matmul2d tensor of a static extent"));
+                    }
                 }
             }
         }
