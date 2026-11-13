@@ -534,9 +534,9 @@ fn did_modify_range_steps(policy: ManagedCopyInPolicy) {
     // one, macOS 26.7.1), each with what the command buffer read there: `a` written first, `b`
     // second. With two copies the default may read either oracle's answer where they differ.
     let (a, b) = (0xa1u8, 0xb2u8);
-    let either: &[u8] = match policy {
-        ManagedCopyInPolicy::AtSubmission => &[a, b],
-        ManagedCopyInPolicy::AtCommit => &[a],
+    let either: &[u8] = match policy == ManagedCopyInPolicy::AtCommit {
+        true => &[a],
+        false => &[a, b],
     };
     let steps: [(&[Act], &[u8], u8); 5] = [
         (&[Write(a), Modify, Encode, Commit], &[a], a),

@@ -1035,13 +1035,11 @@ fn rounds(
 /// earlier round's, nor another buffer's.
 fn readable(round: u8, salt: u8, policy: ManagedCopyInPolicy) -> Vec<u8> {
     let byte = |round: u8| 1 + 2 * round + salt;
-    match (policy, round % 4) {
-        (ManagedCopyInPolicy::AtCommit, _) | (_, 3) => vec![byte(round)],
-        (ManagedCopyInPolicy::AtSubmission, _) => {
-            let last = round - round % 4 + 3;
-            (round..=last).map(byte).chain([0xee]).collect()
-        }
+    if policy == ManagedCopyInPolicy::AtCommit || round % 4 == 3 {
+        return vec![byte(round)];
     }
+    let last = round - round % 4 + 3;
+    (round..=last).map(byte).chain([0xee]).collect()
 }
 
 /// `did_modify_range` across commits of two-copy buffers, the runtime's own host copy and the
