@@ -10,10 +10,10 @@ profile	amd-rdna2-apu-radv	2c82e91729c00397
 profile	amd-rdna3-radv	5887bf936507f44e
 profile	gate-lavapipe	796f4a4399fc7113
 profile	gate-lavapipe-x86_64	30c6c6accb28c40d
-profile	intel-arl-anv	b325ce108e6701a4
-profile	intel-irisxe-anv	98895ca520e4ea38
-profile	intel-irisxe-rplp-anv	e8088bc99e601a3d
-profile	intel-uhd770-rpls-anv	e8088bc99e601a3d
+profile	intel-arl-anv	0f9cb49ac06a9470
+profile	intel-irisxe-anv	227e95583298b83b
+profile	intel-irisxe-rplp-anv	cab189645cf76489
+profile	intel-uhd770-rpls-anv	cab189645cf76489
 profile	lavapipe	82c60245c6658291
 profile	lunarg-desktop-baseline-2023	fc11150a41da5c91
 profile	moltenvk-m3	9c48de3c62a3556a
