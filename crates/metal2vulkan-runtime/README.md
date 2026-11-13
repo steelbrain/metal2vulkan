@@ -854,9 +854,11 @@ meanwhile wait for it.
   `Private` buffer's contents are lost: it reads zero. So are a `Private` heap's, whose buffers
   placed before go on with it and in which buffers and textures are made again; the textures it
   made before are refused. A texture of `new_texture` is made again in new memory, so its
-  contents are lost (it reads as a new texture of its descriptor: refill one filled once and
-  kept); one over a carried buffer is made again over the buffer's bytes, and reads them; a view
-  views its parent there. Their images on the lost `VkDevice` stay with them, and keep it alive,
+  contents are lost whatever its storage mode, `Shared` included, as its image was their only copy
+  (it reads as a new texture of its descriptor: refill one filled once and kept); the notice
+  counts these by storage mode. A texture buffer of `new_texture` is made again over its texels'
+  buffer where the recovery carried that, and one over a carried buffer over the buffer's bytes:
+  each reads what the buffer holds. A view views its parent there. Their images on the lost `VkDevice` stay with them, and keep it alive,
   until they go.
 - Any other object made before the recovery is refused where it meets the new `VkDevice` (an
   encoder's bind, a pipeline made from its functions) and in its own calls that need its lost one:

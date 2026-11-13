@@ -47,8 +47,17 @@
 //!   parts on the generation it was carried to last (`Heap::carry`, `Buffer::carry_placed`). A
 //!   texture, after the heaps: its call made again there as a texture of the runtime's own, which
 //!   holds its parts there, a view's after its parent's; a texture of its own image's contents
-//!   lost, one over a carried buffer reading the buffer's bytes; its identity, resource ID,
-//!   label and purgeable state kept (`Texture::carry`).
+//!   lost whatever its storage mode, as its image in the lost `VkDevice`'s memory was their only
+//!   copy, one over a carried buffer (a texture buffer of `Device::new_texture` over its texels'
+//!   buffer too) reading the buffer's bytes; its identity, resource ID, label and purgeable state
+//!   kept (`Texture::carry`).
+//! - **The bytes kept are the pages'.** A buffer or texture carried with its contents reads the
+//!   pages it lies in, imported again. Vulkan makes the content of external memory imported to a
+//!   lost device undefined (vkspec 5.2.3, "Lost Device"): read here as the hung work's writes,
+//!   which may have landed in part, as a hung Metal command buffer's may. Once the lost
+//!   generation's import is let go of, the pages are the runtime's or the caller's memory alone,
+//!   and the new generation reads what they hold; no promise is made about the bytes the hung
+//!   work was writing.
 //! - **What stays the lost generation's**, refused where it meets the next
 //!   (`RuntimeGap::MadeBeforeRecovery`): a buffer of pooled host-visible memory (`Shared`, and
 //!   `Managed`) the device allocated, whose `contents` pointer is its block's mapping, which
@@ -516,8 +525,9 @@ pub(crate) struct Carried {
     heaps: (u64, u64, u64),
     /// The heaps left the lost generation's, by why.
     heaps_left: [u64; 4],
-    /// The textures carried, by what was made again ([`Remade`]).
-    textures: [u64; 3],
+    /// The textures carried, by what was made again ([`Remade`]): those whose contents were lost
+    /// by storage mode, then those over carried buffers, then views.
+    textures: [u64; 5],
     /// The textures left the lost generation's, by why.
     textures_left: [u64; 7],
 }
@@ -587,10 +597,12 @@ impl Carried {
             ),
         };
         let textures = match self.textures {
-            [0, 0, 0] => String::new(),
-            [own, over, views] => format!(
-                ", and {own} textures whose contents were lost too (they read as new ones), \
-                 {over} textures over the buffers carried and {views} texture views"
+            [0, 0, 0, 0, 0] => String::new(),
+            [shared, managed, private, over, views] => format!(
+                ", and {} textures whose contents were lost too (they read as new ones: {shared} \
+                 `Shared`, {managed} `Managed`, {private} `Private` or memoryless), {over} \
+                 textures over the buffers carried and {views} texture views",
+                shared + managed + private
             ),
         };
         format!(

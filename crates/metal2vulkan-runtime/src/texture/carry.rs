@@ -1,9 +1,11 @@
 //! What a device's recovery carries of the program's textures (`device/carry.rs`): each texture
 //! made by a call the recovery can make again, the same texture object on the new `VkDevice`.
 //!
-//! - **What is made again.** A texture of `Device::new_texture` (its image new memory, its
-//!   contents lost: it reads as a new texture of its descriptor reads), one over a buffer the
-//!   recovery carried (`Buffer::new_texture` and its kin: made over the buffer's bytes there, so it
+//! - **What is made again.** A texture of `Device::new_texture` of any storage mode (its image
+//!   new memory, its contents lost: it reads as a new texture of its descriptor reads, as no copy
+//!   of its texels but its image's in the lost `VkDevice`'s memory exists; a texture buffer's
+//!   made over its texels' buffer where the recovery carried that, so it reads what the buffer
+//!   holds), one over a buffer the recovery carried (`Buffer::new_texture` and its kin: made over the buffer's bytes there, so it
 //!   reads what the buffer holds), and a view of either (`new_texture_view` and its kin: of its
 //!   parent's parts there). The call is made again on the new generation as the runtime's own
 //!   texture ([`Remake`]), which takes no resource ID, and holds the texture's parts there
@@ -25,11 +27,12 @@
 //!   and the lost `VkDevice` with them.
 
 use super::super::buffer::Buffer;
-use super::super::buffer_texture::TexelsHome;
+use super::super::buffer_texture::{texture_buffer_over, TexelsHome};
 use super::super::degradation::NoticesFor;
 use super::super::heap_sets;
 use super::super::linear_plan::BufferTextureCall;
 use super::super::texture_descriptor::TextureDescriptor;
+use super::super::values::StorageMode;
 use super::super::view_plan::ViewRequest;
 use super::super::ycbcr::IoSurfaceYCbCr;
 use super::super::Device;
@@ -67,12 +70,28 @@ pub(crate) enum Remake {
 /// What a recovery made again of a texture it carried ([`Texture::carry`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Remade {
-    /// A texture of its own image: its contents lost.
-    Lost,
-    /// A texture over a buffer the recovery carried: it reads what the buffer holds.
+    /// A `Shared` texture of its own image or texels: its contents lost.
+    LostShared,
+    /// A `Managed` one.
+    LostManaged,
+    /// A `Private` or memoryless one.
+    LostPrivate,
+    /// A texture over a buffer the recovery carried (a texture buffer of `Device::new_texture`
+    /// over its texels' buffer too): it reads what the buffer holds.
     Over,
     /// A view, of its parent's parts there.
     View,
+}
+
+impl Remade {
+    /// A texture of `descriptor` made again with its contents lost, by its storage mode.
+    fn lost(descriptor: &TextureDescriptor) -> Remade {
+        match descriptor.resource_options.storage_mode() {
+            Ok(StorageMode::Shared) => Remade::LostShared,
+            Ok(StorageMode::Managed) => Remade::LostManaged,
+            _ => Remade::LostPrivate,
+        }
+    }
 }
 
 /// Why a texture stays the lost generation's ([`Texture::carry`]; the module docs). A view
@@ -165,10 +184,22 @@ impl Texture {
             Remake::Own {
                 descriptor,
                 initial,
-            } => {
-                let made = to.texture_as(CALL, descriptor, (IdUse::Runtime, *initial));
-                (made, Remade::Lost)
-            }
+            } => match self.texels_carried_to(to) {
+                // A texture buffer, over its texels' buffer where the recovery carried it.
+                Some(buffer) => {
+                    let made = (descriptor.check(to.properties().texture_rules()))
+                        .map_err(|refused| refused.error(CALL))
+                        .and_then(|layout| {
+                            let (id_use, home) = (IdUse::Runtime, TexelsHome::Buffer);
+                            texture_buffer_over(buffer, descriptor, &layout, id_use, home)
+                        });
+                    (made, Remade::Over)
+                }
+                None => {
+                    let made = to.texture_as(CALL, descriptor, (IdUse::Runtime, *initial));
+                    (made, Remade::lost(descriptor))
+                }
+            },
             Remake::Over {
                 buffer,
                 call,
@@ -217,6 +248,19 @@ impl Texture {
             to.carry_late(|serving| self.carry(serving));
         }
         Ok(Some(remade))
+    }
+
+    /// The buffer the texels of the texture, a texture buffer of `Device::new_texture`, lie in,
+    /// where the recovery carried it to `to`; `None` for any other texture, or where it left it.
+    fn texels_carried_to(&self, to: &Device) -> Option<Buffer> {
+        match self.storage() {
+            Storage::Texels(texels)
+                if texels.home == TexelsHome::Buffer && texels.buffer.device().same(to) =>
+            {
+                Some(texels.buffer.clone())
+            }
+            _ => None,
+        }
     }
 
     /// Why the texture, which no call a recovery makes again made, stays the lost generation's.

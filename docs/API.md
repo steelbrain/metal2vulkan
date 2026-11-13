@@ -3651,7 +3651,8 @@ bound.
   textures over such pages take what they take over its own memory), `Private` heaps with the
   buffers placed in them, textures of `new_texture`, textures over the buffers carried and views of
   them made before it go on, the contents of a `Private` buffer or heap lost (it reads zero) and of
-  a texture of `new_texture` (it reads as a new one); the other objects made before it are refused
+  a texture of `new_texture` of any storage mode (it reads as a new one) but a texture buffer over
+  its texels' buffer carried; the other objects made before it are refused
   (`MadeBeforeRecovery`), where Metal's go on; the calls during it wait for it, and a device call
   the loss met while it ran runs again after it. A no-copy buffer is made again over
   the same pages on the new `VkDevice`, as its making or last rebind made it, so the caller's
