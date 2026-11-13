@@ -90,12 +90,13 @@ const NEIGHBOUR: &str = "  %hp = getelementptr inbounds i8, ptr addrspace(1) %0,
   store i16 4660, ptr addrspace(1) %hp, align 2
 ";
 
-const KERNELS: [&str; 9] = [
+const KERNELS: [&str; 10] = [
     "nuw_i16_loops",
     "plain_i16_loops",
     "nuw_i8_loops",
     "plain_i8_loops",
     "frozen_wrap",
+    "frozen_wrap_chunked",
     "stored_wrap_lane",
     "stored_wrap_scalar",
     "atomic_wrap",
@@ -116,6 +117,18 @@ fn module() -> String {
             "{}  %f = freeze i16 %s\n  %r = zext i16 %f to i32\n  store i32 %r, ptr addrspace(1) %0, align 4\n",
             wrapped(16)
         ),
+    ));
+    s.push_str(&kernel(
+        "frozen_wrap_chunked",
+        "  %ip = getelementptr inbounds i8, ptr addrspace(1) %0, i64 8
+  %a = load i16, ptr addrspace(1) %ip, align 4
+  %v = insertelement <8 x i16> zeroinitializer, i16 %a, i32 5
+  %s = add nuw <8 x i16> %v, <i16 1, i16 1, i16 1, i16 1, i16 1, i16 1, i16 1, i16 1>
+  %f = freeze <8 x i16> %s
+  %e = extractelement <8 x i16> %f, i32 5
+  %r = zext i16 %e to i32
+  store i32 %r, ptr addrspace(1) %0, align 4
+",
     ));
     s.push_str(&kernel(
         "stored_wrap_lane",
@@ -261,8 +274,9 @@ fn a_nuw_loop_counter_is_not_masked() {
     }
 }
 
-/// A poison value of a `nuw` add stays its own: a `freeze` of it is a value of `i16`, and a
-/// store, an atomic exchange and a bitcast's packing of it leave the neighbouring `i16` 0x1234.
+/// A poison value of a `nuw` add stays its own: a `freeze` of it (a chunked vector's lane too) is a
+/// value of `i16`, and a store, an atomic exchange and a bitcast's packing of it leave the
+/// neighbouring `i16` 0x1234.
 #[test]
 fn a_poison_nuw_result_reaches_no_neighbour() {
     let Some(bitcode) = assemble() else {
@@ -272,6 +286,7 @@ fn a_poison_nuw_result_reaches_no_neighbour() {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
         for entry in [
             "frozen_wrap",
+            "frozen_wrap_chunked",
             "stored_wrap_lane",
             "stored_wrap_scalar",
             "atomic_wrap",
@@ -282,7 +297,9 @@ fn a_poison_nuw_result_reaches_no_neighbour() {
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             let got = interpret(&bitcode, entry, &p);
             match entry {
-                "frozen_wrap" => assert!(got <= 0xFFFF, "{what}: {got:#x}"),
+                "frozen_wrap" | "frozen_wrap_chunked" => {
+                    assert!(got <= 0xFFFF, "{what}: {got:#x}")
+                }
                 "bitcast_wrap" => assert_eq!(got, 0x1234, "{what}: {got:#x}"),
                 _ => assert_eq!(got >> 16, 0x1234, "{what}: {got:#x}"),
             }

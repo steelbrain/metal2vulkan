@@ -1430,6 +1430,11 @@ fn padded_int(cx: &SelectCx<'_>, v: Value, chunk: Option<u8>) -> Result<Option<F
     if !matches!(types.get(elem), Some(Type::Int(w)) if *w != 1) {
         return Ok(None);
     }
+    // A chunked vector frozen whole holds its lanes whole: `chunk::select` freezes one of padded
+    // lanes per chunk.
+    if chunk.is_none() && legal::chunked(types, t).is_some() {
+        return Ok(None);
+    }
     let f = chunk_form(cx, t, chunk)?;
     Ok(f.legalized().then_some(f))
 }

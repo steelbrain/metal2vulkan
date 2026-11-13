@@ -2,8 +2,9 @@
 //! half>`, `<16 x i8>`, `<64 x float>`, ...) is held as a [`DemoteTy::Composite`] of **chunks**
 //! ([`legal::chunk_lanes`]): 4-lane SPIR-V vectors, the last one holding the remaining 1 to 4 lanes
 //! (a 1-lane chunk is a scalar member). No profile needs `Vector16`, and a chunked value is an
-//! ordinary layout-free struct for demotion, phis, `select` on a scalar condition, `freeze`, and
-//! aggregate insertion and extraction.
+//! ordinary layout-free struct for demotion, phis, `select` on a scalar condition, `freeze` (but
+//! of integer lanes held narrower than their container: masked per chunk), and aggregate
+//! insertion and extraction.
 //!
 //! Operations:
 //!
@@ -145,6 +146,17 @@ fn value_chunked(cx: &SelectCx<'_>, v: Value) -> bool {
     cx.value_ty(v).is_some_and(|t| is_chunked(cx, t))
 }
 
+/// Whether `freeze` of chunked `v` is lane-wise: `v` is no `undef`, and its lanes are integers
+/// held narrower than their container, which a poison lane (a `nuw` operation's,
+/// [`ops::int_binary`]) may exceed ([`ArithStrategy::Freeze`]).
+fn freezes_per_chunk(cx: &SelectCx<'_>, v: Value) -> bool {
+    let padded = cx
+        .value_ty(v)
+        .and_then(|t| legal::chunked(cx.entry.module.types(), t))
+        .is_some_and(|(held, _)| Form { held, lanes: 1 }.legalized());
+    padded && !matches!(cx.constant(v), Some(legal::LoweredConst::Undef(_)))
+}
+
 /// The value operands of `inst` as emission reads them (a call's arguments).
 fn value_operands(inst: &Inst) -> Vec<Value> {
     match &inst.kind {
@@ -203,8 +215,12 @@ pub fn select(
 ) -> Result<ArithStrategy, Error> {
     use ArithStrategy as S;
     match &inst.kind {
-        // Whole-value operations: the composite as it is.
-        InstKind::Freeze(_) | InstKind::ExtractValue { .. } | InstKind::InsertValue { .. } => {
+        // Whole-value operations: the composite as it is. A `freeze` of padded integer lanes
+        // masks them, per chunk (the lane-wise arm below).
+        InstKind::Freeze(v) if !freezes_per_chunk(cx, *v) => {
+            super::select_in(cx, at, inst, None, m)
+        }
+        InstKind::ExtractValue { .. } | InstKind::InsertValue { .. } => {
             super::select_in(cx, at, inst, None, m)
         }
         InstKind::Select { c, .. } if !value_chunked(cx, *c) => {
