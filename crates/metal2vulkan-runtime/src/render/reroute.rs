@@ -244,6 +244,9 @@ impl RenderLowering {
             ..DrawBuffers::default()
         };
         self.swap_held(&mut kept.held);
+        // Its steps begin now: a draw it keeps is kept under what another thread may change as
+        // they began (`render/draw_again.rs`'s `Outside`).
+        self.draw_began();
         let drawn = self.draw_resident(live, kept.call, kept.assembly, kept.draw, buffers, false);
         self.swap_held(&mut kept.held);
         drawn
