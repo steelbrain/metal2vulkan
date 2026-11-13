@@ -412,6 +412,8 @@ mod memory_frees;
 mod memory_make_hold_bench;
 mod memory_reads;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod memoryless_fresh;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod merge_scratch;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod mesh_reflection_derived;
