@@ -436,6 +436,81 @@ fn copies_in_of_pages_no_import_maps_land_in_their_order() {
     ordered(Route::Pages);
 }
 
+/// The two-copy buffers of the making leg.
+const MADE: usize = 8;
+
+/// On a device without a fill queue, the copies in of two-copy buffers' makings, through an
+/// import of their pages, go with the device's next submission, whose commands reach none of
+/// those buffers: no command buffer can have read the bytes they replace, and each holds its
+/// buffer's import until it is made (`buffer.rs`'s `Replaces::Unread`). Left for a batch that
+/// reaches its buffer, each held its import while no command buffer used the buffer, which every
+/// RADV submission lists (`WorkCounts::dma_buf_memories_live`). The buffers read their pages'
+/// bytes after.
+#[test]
+fn makings_copies_in_go_with_the_next_submission() {
+    let scratch = Scratch::new("managed-made");
+    let Some(device) = two_copy_device(&scratch, "made", Route::Import) else {
+        return;
+    };
+    let name = device.name().to_owned();
+    if device.has_fill_queue() {
+        // There a batch takes only the fills of the program's memory its commands may reach.
+        eprintln!("MADE-COPY-IN on {name}: skipped, the device has a fill queue");
+        return;
+    }
+    let pages: Vec<Pages> = (0..MADE)
+        .map(|_| {
+            let pages = Pages::new(BYTES);
+            pages.write_pattern();
+            pages
+        })
+        .collect();
+    let queue = device.new_command_queue().unwrap();
+    let other = device.new_buffer(BYTES, ResourceOptions::shared()).unwrap();
+    let before = device.work_counts();
+    let ran = Ran::default();
+    let buffers: Vec<Buffer> = (pages.iter())
+        .map(|pages| no_copy(&device, pages, Route::Import, managed(), &ran))
+        .collect();
+    let made = device.work_counts();
+    let firsts = &device.shared().textures.first_moves;
+    let waiting = || {
+        (buffers.iter())
+            .filter(|buffer| firsts.fills_wait(buffer.at(0).0))
+            .count()
+    };
+    let waited = waiting();
+    // A command buffer whose commands reach none of them, completed.
+    gpu_write(&queue, &other, 0x3c);
+    let left = waiting();
+    let after = device.work_counts();
+    eprintln!(
+        "MADE-COPY-IN on {name}: {MADE} two-copy buffers' copies in waiting {waited} at their \
+         making, {left} after another buffer's command buffer; dma_buf_memories_live {} -> {} \
+         -> {}, host_imports_live {} -> {} -> {}, host_imports_resident {} -> {} -> {}, \
+         host_imports_released {} -> {} -> {}",
+        before.dma_buf_memories_live,
+        made.dma_buf_memories_live,
+        after.dma_buf_memories_live,
+        before.host_imports_live,
+        made.host_imports_live,
+        after.host_imports_live,
+        before.host_imports_resident,
+        made.host_imports_resident,
+        after.host_imports_resident,
+        before.host_imports_released,
+        made.host_imports_released,
+        after.host_imports_released,
+    );
+    assert_eq!(waited, MADE, "each making registers its copy in");
+    assert_eq!(left, 0, "the next submission takes every making's copy in");
+    for buffer in &buffers {
+        assert_eq!(read(&device, &queue, buffer, 0..BYTES), pattern(BYTES));
+    }
+    drop(buffers);
+    assert!(ran_to(&ran, MADE), "the deallocators did not run");
+}
+
 /// A 256 MiB two-copy buffer over pages no import maps holds 256 MiB of device-local memory and
 /// staging within the bound, none at rest, across cycles (the module docs, **Bounded**).
 #[test]
