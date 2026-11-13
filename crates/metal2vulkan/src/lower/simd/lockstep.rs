@@ -525,12 +525,16 @@ fn apart(
     }
 }
 
-/// The blocks reachable from the end of each block on barrier-free paths, with how
-/// ([`via`]), computed on demand and kept for the blocks whose accesses reach their end; or,
-/// walked back (`back`), the blocks whose end reaches the start of each block so.
+/// The blocks reachable from the end of a block on barrier-free paths, with how ([`via`]),
+/// computed on demand; or, walked back (`back`), the blocks whose end reaches the start of a
+/// block so. Only the last block's list is kept: [`pairs`] asks for one block's at a time (the
+/// accesses go in block order), so a block is walked at most once a pass over them, and the
+/// tables stay linear in the blocks. Keeping every block's list held one entry for each block
+/// every walked block reaches, quadratic in the blocks of a long barrier-free body: 6,000 blocks
+/// of one charged past the ledger's bound.
 struct Reach {
-    /// By block: the reached blocks, or `None` before it is computed.
-    from_end: Vec<Option<Vec<(BlockId, u8)>>>,
+    /// The block whose list is kept, and the list.
+    last: Option<(BlockId, Vec<(BlockId, u8)>)>,
     /// Scratch: by block, the states reached in the current walk.
     seen: Vec<u8>,
     /// The walk follows edges back, from a block's start to the blocks whose end reaches it.
@@ -539,34 +543,37 @@ struct Reach {
 
 impl Reach {
     fn new(nb: usize, back: bool, m: &mut Meter) -> Result<Reach, Error> {
-        let mut from_end = Vec::new();
-        m.reserve(&mut from_end, nb)?;
-        from_end.resize(nb, None);
         let mut seen = Vec::new();
         m.reserve(&mut seen, nb)?;
         seen.resize(nb, 0u8);
         Ok(Reach {
-            from_end,
+            last: None,
             seen,
             back,
         })
     }
 
     /// The blocks reached from the end of `x`; walked back, the blocks whose end reaches the
-    /// start of `x`.
+    /// start of `x`. The list of the block asked for before is released.
     fn of(&mut self, x: BlockId, s: &Shape<'_>, m: &mut Meter) -> Result<&[(BlockId, u8)], Error> {
-        let computed = self.from_end.get(x.index()).is_some_and(Option::is_some);
-        if !computed {
-            let list = self.walk(x, s, m)?;
-            if let Some(slot) = self.from_end.get_mut(x.index()) {
-                *slot = Some(list);
+        if self.last.as_ref().is_none_or(|(at, _)| *at != x) {
+            if let Some((_, list)) = &self.last {
+                m.release(crate::budget::vec_bytes(list));
             }
+            self.last = None;
+            let list = self.walk(x, s, m)?;
+            self.last = Some((x, list));
         }
-        Ok(self
-            .from_end
-            .get(x.index())
-            .and_then(Option::as_deref)
-            .unwrap_or(&[]))
+        Ok(self.last.as_ref().map_or(&[], |(_, list)| list.as_slice()))
+    }
+
+    /// The ledger bytes its tables hold.
+    fn ledger_bytes(&self) -> usize {
+        let list = self
+            .last
+            .as_ref()
+            .map_or(0, |(_, list)| crate::budget::vec_bytes(list));
+        crate::budget::vec_bytes(&self.seen) + list
     }
 
     fn walk(
@@ -621,14 +628,14 @@ impl Reach {
             }
         }
         let mut out = Vec::new();
-        m.reserve(&mut out, touched.len())?;
-        for y in touched {
+        m.reserve_exact(&mut out, touched.len())?;
+        for &y in &touched {
             if let Some(seen) = self.seen.get_mut(y.index()) {
                 out.push((y, *seen));
                 *seen = 0;
             }
         }
-        m.release(crate::budget::vec_bytes(&stack));
+        m.release(crate::budget::vec_bytes(&stack) + crate::budget::vec_bytes(&touched));
         Ok(out)
     }
 }
@@ -916,12 +923,11 @@ fn pairs<'a>(
             (inb || around).then_some((inb, if around { self_flags } else { 0 }))
         };
         if a.write {
-            let reached: Vec<(BlockId, u8)> = if escapes {
-                reach.of(a.block, &shape, m)?.to_vec()
+            let reached: &[(BlockId, u8)] = if escapes {
+                reach.of(a.block, &shape, m)?
             } else {
-                Vec::new()
+                &[]
             };
-            m.charge(crate::budget::vec_bytes(&reached))?;
             let self_flags = reached
                 .iter()
                 .find(|&&(y, _)| y == a.block)
@@ -931,7 +937,7 @@ fn pairs<'a>(
                     consider((ai, start + k), inb, flags, m)?;
                 }
             }
-            for &(y, flags) in &reached {
+            for &(y, flags) in reached {
                 if y == a.block {
                     continue;
                 }
@@ -980,22 +986,18 @@ fn pairs<'a>(
         }
         done = Some(y);
         let first_bar = acc.first_barrier(y);
-        let ws: Vec<usize> = writes_of(y)
-            .iter()
-            .map(|&i| i as usize)
-            .filter(|&i| {
-                acc.list
-                    .get(i)
-                    .is_some_and(|w| first_bar.is_none_or(|p| w.pos < p))
-            })
-            .collect();
-        m.charge(crate::budget::vec_bytes(&ws))?;
-        if ws.is_empty() {
+        // The block's writes before its first barrier.
+        let before_bar = |&&i: &&u32| {
+            acc.list
+                .get(i as usize)
+                .is_some_and(|w| first_bar.is_none_or(|p| w.pos < p))
+        };
+        let ws = writes_of(y);
+        if !ws.iter().any(|i| before_bar(&i)) {
             continue;
         }
-        let from = back.of(y, &shape, m)?.to_vec();
-        m.charge(crate::budget::vec_bytes(&from))?;
-        for &(x, flags) in &from {
+        let from = back.of(y, &shape, m)?;
+        for &(x, flags) in from {
             if x == y {
                 continue;
             }
@@ -1005,12 +1007,13 @@ fn pairs<'a>(
                 if a.write || last_bar.is_some_and(|p| a.pos < p) {
                     continue;
                 }
-                for &bi in &ws {
-                    consider((start + k, bi), false, flags, m)?;
+                for &bi in ws.iter().filter(before_bar) {
+                    consider((start + k, bi as usize), false, flags, m)?;
                 }
             }
         }
     }
+    m.release(reach.ledger_bytes() + back.ledger_bytes());
     Ok(())
 }
 

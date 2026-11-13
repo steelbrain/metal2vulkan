@@ -36,10 +36,14 @@
 
 use std::collections::BTreeMap;
 
+use crate::budget::{Budget, Meter, SPIRV_WORDS};
 use crate::device::requirements::VkProperty;
 use crate::device::subgroup::{OpBits, SimdClass, Tier};
 use crate::device::DevicePolicy;
-use crate::lower::select::Plan;
+use crate::error::Error;
+use crate::library::FunctionConstantValues;
+use crate::lower::select::{LowerInputs, Plan};
+use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
     compile, llvm_assemble, profile, typed_module, AssembleError, Scratch,
@@ -2515,4 +2519,161 @@ fn grid_position_records_take_no_barrier_unless_two_stores_share_a_word() {
             "device_record_shared on {profile_name}: no lockstep barrier"
         );
     }
+}
+
+/// Kernel `grow(device float *data [[buffer(0)]], device ulong *args [[buffer(1)]], device uint
+/// *idx [[buffer(2)]], uint t [[thread_position_in_grid]])`, a module of its own: `steps` steps,
+/// each a branch on one of `accs` live accumulators whose arm stores a device word and loads the
+/// next (a lockstep pair in divergent flow, in no loop and behind no barrier), through a pointer
+/// the arm loads from `args` where `pointers`, then every accumulator updated. Three blocks a
+/// step, every one reaching every later one on barrier-free paths.
+fn barrier_free_steps(steps: usize, accs: usize, pointers: bool) -> String {
+    let hex = |x: f32| format!("0x{:016X}", f64::from(x).to_bits());
+    let (half, quarter) = (hex(0.5), hex(0.25));
+    let mut b = String::new();
+    let mut line = |s: String| {
+        b.push_str(&s);
+        b.push('\n');
+    };
+    line("define void @grow(ptr addrspace(1) noundef %data, ptr addrspace(1) noundef %args, ptr addrspace(1) noundef %idx, i32 %t) {\nentry:".into());
+    line("  %ip = getelementptr inbounds i32, ptr addrspace(1) %idx, i32 %t".into());
+    line("  %si = load i32, ptr addrspace(1) %ip, align 4".into());
+    line("  %s = zext i32 %si to i64".into());
+    line("  %xp = getelementptr inbounds float, ptr addrspace(1) %data, i64 %s".into());
+    line("  %x = load float, ptr addrspace(1) %xp, align 4".into());
+    for k in 0..accs {
+        let c = hex((k as f32 + 1.0) / accs as f32);
+        line(format!("  %a{k}_0 = fmul float %x, {c}"));
+    }
+    line("  br label %step0".into());
+    for j in 0..steps {
+        let c = j % accs;
+        line(format!(
+            "step{j}:\n  %c{j} = fcmp ogt float %a{c}_{j}, {half}"
+        ));
+        line(format!(
+            "  br i1 %c{j}, label %then{j}, label %join{j}\nthen{j}:"
+        ));
+        let base = if pointers {
+            line(format!(
+                "  %pp{j} = getelementptr inbounds i8, ptr addrspace(1) %args, i64 {}",
+                8 * (j % 8)
+            ));
+            line(format!(
+                "  %d{j} = load ptr addrspace(1), ptr addrspace(1) %pp{j}, align 8"
+            ));
+            format!("%d{j}")
+        } else {
+            "%data".to_owned()
+        };
+        let off = (j + 1) * 2 * 12288;
+        line(format!("  %o{j} = add i64 %s, {off}"));
+        line(format!(
+            "  %q{j} = getelementptr inbounds float, ptr addrspace(1) {base}, i64 %o{j}"
+        ));
+        line(format!(
+            "  store float %a{c}_{j}, ptr addrspace(1) %q{j}, align 4"
+        ));
+        line(format!("  %e{j} = add i64 %o{j}, 1"));
+        line(format!(
+            "  %r{j} = getelementptr inbounds float, ptr addrspace(1) {base}, i64 %e{j}"
+        ));
+        line(format!(
+            "  %v{j} = load float, ptr addrspace(1) %r{j}, align 4"
+        ));
+        line(format!("  br label %join{j}\njoin{j}:"));
+        line(format!(
+            "  %w{j} = phi float [ %v{j}, %then{j} ], [ {quarter}, %step{j} ]"
+        ));
+        for k in 0..accs {
+            let next = (k + 1) % accs;
+            line(format!("  %m{k}_{j} = fmul float %a{k}_{j}, %w{j}"));
+            line(format!("  %n{k}_{j} = fadd float %m{k}_{j}, %a{next}_{j}"));
+            line(format!("  %a{k}_{} = fmul float %n{k}_{j}, {half}", j + 1));
+        }
+        line(format!("  br label %step{}", j + 1));
+    }
+    line(format!("step{steps}:"));
+    let mut sum = format!("%a0_{steps}");
+    for k in 1..accs {
+        line(format!("  %z{k} = fadd float {sum}, %a{k}_{steps}"));
+        sum = format!("%z{k}");
+    }
+    line("  %op = getelementptr inbounds float, ptr addrspace(1) %data, i64 %s".into());
+    line(format!(
+        "  store float {sum}, ptr addrspace(1) %op, align 4\n  ret void\n}}"
+    ));
+    format!(
+        r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+{b}
+!air.kernel = !{{!2}}
+!air.version = !{{!8}}
+!air.language_version = !{{!9}}
+!2 = !{{ptr @grow, !3, !4}}
+!3 = !{{}}
+!4 = !{{!5, !6, !7, !10}}
+!5 = !{{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"float", !"air.arg_name", !"data"}}
+!6 = !{{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"ulong", !"air.arg_name", !"args"}}
+!7 = !{{i32 2, !"air.buffer", !"air.location_index", i32 2, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"idx"}}
+!10 = !{{i32 3, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}}
+!8 = !{{i32 2, i32 8, i32 0}}
+!9 = !{{!"Metal", i32 4, i32 0, i32 0}}
+"#
+    )
+}
+
+/// What compiling `grow` of [`barrier_free_steps`] for the RTX 5080 laptop profile spent under
+/// the standard budget: its work units and ledger peak, and whether it compiled. `None` where
+/// `llvm-as` is missing.
+fn steps_cost(steps: usize, accs: usize, pointers: bool) -> Option<(u64, u64, Result<(), Error>)> {
+    let bc = assemble_text("grow", &barrier_free_steps(steps, accs, pointers))?;
+    let p = profile("nvidia-rtx5080-laptop", DevicePolicy::default()).expect("profile");
+    let mut m = Meter::new(&Budget::standard());
+    let compiled = compile_bitcode(
+        &bc,
+        EntryRef::Name("grow"),
+        &FunctionConstantValues::defaults(),
+        &p,
+        &LowerInputs::new(),
+        &mut m,
+        SPIRV_WORDS,
+    )
+    .map(|_| ());
+    Some((m.work(), m.ledger_peak(), compiled))
+}
+
+/// A long barrier-free kernel's lockstep tables grow with its blocks, not with their square: the
+/// pair search keeps one block's reachable blocks at a time. Four times the steps (and blocks)
+/// takes at most five times the ledger peak; the search that kept every block's list took
+/// sixteen times its share.
+#[test]
+fn a_long_barrier_free_kernel_s_ledger_grows_with_its_blocks() {
+    let Some((_, short, compiled)) = steps_cost(256, 1, false) else {
+        return;
+    };
+    compiled.expect("256 steps");
+    let Some((_, long, compiled)) = steps_cost(1024, 1, false) else {
+        return;
+    };
+    compiled.expect("1024 steps");
+    eprintln!("BARRIER-FREE-STEPS: ledger peak {short} at 256 steps, {long} at 1024");
+    assert!(
+        long <= 5 * short,
+        "the ledger peak grew {long} / {short} for four times the blocks"
+    );
+}
+
+/// The authored kernel of 2,048 steps through loaded pointers, 16 accumulators (about 129,000
+/// instructions and 6,000 blocks), compiles inside the standard budget's work and ledger bounds,
+/// which stand for the 20 s and 500 MiB ceilings; the search that kept every block's reachable
+/// blocks refused it past the ledger's bound.
+#[test]
+fn the_authored_2048_step_kernel_compiles_inside_the_budget() {
+    let Some((work, peak, compiled)) = steps_cost(2048, 16, true) else {
+        return;
+    };
+    eprintln!("BARRIER-FREE-STEPS: 2048 steps: {work} work units, ledger peak {peak}");
+    compiled.expect("2048 steps inside the standard budget");
 }
