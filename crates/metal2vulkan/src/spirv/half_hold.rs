@@ -197,14 +197,12 @@ fn moved_operands(inst: &Inst) -> Option<Vec<Value>> {
 /// rounded; `None` for any other instruction.
 fn rounded_operands(inst: &Inst) -> Option<Vec<Value>> {
     Some(match inst {
-        Inst::Binary { op, a, b, .. }
-            if matches!(
-                op,
-                BinOp::FAdd | BinOp::FSub | BinOp::FMul | BinOp::VectorTimesScalar | BinOp::Dot
-            ) =>
-        {
-            vec![*a, *b]
-        }
+        Inst::Binary {
+            op: BinOp::FAdd | BinOp::FSub | BinOp::FMul | BinOp::VectorTimesScalar | BinOp::Dot,
+            a,
+            b,
+            ..
+        } => vec![*a, *b],
         Inst::Glsl {
             op: GlslOp::FMix,
             args,

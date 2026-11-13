@@ -718,8 +718,9 @@ fn rounding(words: &[u32]) -> Rounding {
 /// Metal's `half(float)` by the Vulkan spec (every ANV and RADV profile), and its driver does not
 /// fold the round trip (`DriverWorkaround::HalfConversionPairFolded`, NVIDIA's), each kernel
 /// rounds its `half` through that conversion and its widening, every one decorated
-/// `NoContraction`, with no quantize, and computes its `half` sum on the
-/// device's 16-bit arithmetic, between conversions that are exact and undecorated; its entry
+/// `NoContraction`, with no quantize, and computes its `half` sum on the device's 16-bit
+/// arithmetic, which reads the roundings' 16-bit results themselves and is widened once, exactly
+/// and undecorated (`spirv::half_hold`); its entry
 /// declares `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits and the
 /// modes the device's independence ties to them (`RoundingModeRTE` for 32 and 64 bits on ANV,
 /// whose rounding modes are not independent; `RoundingModeRTE` and `DenormPreserve` for 64 bits on
@@ -780,11 +781,15 @@ fn a_controlled_conversion_rounds_half_where_the_float_controls_allow() {
             let r = rounding(&a.module.words);
             assert_eq!(r.quantizes, 0, "{what}: {r:?}");
             assert!(r.narrowings > 0 && r.widenings > 0, "{what}: {r:?}");
-            assert_eq!(r.f16_ops, usize::from(*name == "half_sum"), "{what}: {r:?}");
-            // Each 16-bit operation narrows its two operands and widens its result, exactly.
+            let sum = *name == "half_sum";
+            assert_eq!(r.f16_ops, usize::from(sum), "{what}: {r:?}");
+            // The roundings' narrowings, each decorated, and one widening of the result: the
+            // 16-bit sum reads the roundings' 16-bit results themselves (`spirv::half_hold`) and
+            // its widening is exact and undecorated; the narrowing alone keeps its pair's
+            // decorated widening.
             assert_eq!(
-                r.uncontracted + 3 * r.f16_ops,
-                r.narrowings + r.widenings,
+                (r.narrowings, r.widenings, r.uncontracted),
+                if sum { (2, 1, 2) } else { (1, 1, 2) },
                 "{what}: {r:?}"
             );
             // Less `SignedZeroInfNanPreserve` for 32 and 64 bits, which the entry's own `float`

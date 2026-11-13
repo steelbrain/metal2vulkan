@@ -2388,8 +2388,9 @@ fn narrow_float_module_growth_is_bounded() {
 /// `shaderFloat16` whose float controls do not make the conversion Metal's (moltenvk-m3) rounds
 /// through the conversion of `x` itself and its widening, declaring no 16-bit float mode or
 /// `RoundingModeRTE`. A profile whose float controls make that conversion Metal's
-/// (amd-rdna3-radv) rounds through the conversion of `x` itself and its widening, each decorated
-/// `NoContraction`, in an entry declaring `RoundingModeRTE`, `DenormPreserve` and
+/// (amd-rdna3-radv) holds the chain at 16 bits (`spirv::half_hold`): the `float` sum it narrows
+/// is the 16-bit sum, each operation reads the previous one's 16-bit result, and the last is
+/// widened once, in an entry declaring `RoundingModeRTE`, `DenormPreserve` and
 /// `SignedZeroInfNanPreserve` for 16 bits and the modes its independence ties to them
 /// (`narrow::controlled_modes`). No other module declares a 16-bit float mode or
 /// `RoundingModeRTE` for it. A quantize records `NativeHalfQuantize` on every profile.
@@ -2465,10 +2466,14 @@ fn half_rounding_follows_the_operation() {
             // `%x0`, the conversion's rounding, which stays a pair (the first operation reads it
             // twice); the last result is widened once.
             let operations = if kept > 0 { kept + 2 } else { 0 };
-            // Without `shaderFloat16` each rounding is the device's quantize alone.
-            let want = match converted || controlled {
-                true => (0, c + 2 * (q - kept) + operations, 0),
-                false => (q, c, 0),
+            // Without `shaderFloat16` each rounding is the device's quantize alone. Under the
+            // 16-bit float controls the module holds its halves at 16 bits (`spirv::half_hold`):
+            // `%a`, a `float` sum of halves only narrowed, is the 16-bit sum, the chain reads its
+            // 16-bit results, and the last is widened once.
+            let want = match (controlled, converted) {
+                (true, _) => (0, 1, 0),
+                (false, true) => (0, c + 2 * (q - kept) + operations, 0),
+                (false, false) => (q, c, 0),
             };
             assert_eq!(
                 (quantize, fconvert, round_even),
@@ -2482,7 +2487,7 @@ fn half_rounding_follows_the_operation() {
             let own_barrier = usize::from(kk.name == "strict_chain");
             assert_eq!(
                 barred_roundings(&words),
-                if converted || controlled {
+                if converted && !controlled {
                     (q - kept, q - kept - own_barrier)
                 } else {
                     (0, 0)
