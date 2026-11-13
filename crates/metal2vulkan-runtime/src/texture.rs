@@ -2887,7 +2887,7 @@ impl Device {
             );
             (object, why)
         });
-        self.shared().counts.shadowed_texture_made(apart);
+        self.shared().counts.shadowed_texture_made(start.is_some());
         Ok(Storage::Shadow {
             image: image.shared(),
             texels,
