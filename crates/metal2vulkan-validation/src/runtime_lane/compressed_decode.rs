@@ -771,15 +771,14 @@ const EVERY_BC: [(PixelFormat, usize); 14] = [
 /// and storage held random blocks, was read and was released, reads what a texture written with
 /// zero blocks reads (the device's decode of the same blocks): Metal's new texture holds zeros, so
 /// no earlier resource's bytes show through as blocks. On a device that presents a Mac keeping no
-/// texture compressed a new `Private` one holds what its memory held, written by no command, as
-/// such a Mac's does (docs/API.md, the accepted differences): its making is counted as unfilled
-/// and what it reads is printed (`BCFRESH-UNFILLED`), the `Shared` one still reads zero blocks.
+/// texture compressed a new `Private` one is filled with zeros at its first use (docs/API.md, the
+/// accepted differences), its making counted as zero-filled.
 #[test]
 fn new_bc_textures_read_zero_blocks() {
     on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
-        let unfilled = super::fresh_contents::unfilled(device);
+        let zero_filled = super::fresh_contents::zero_filled(device);
         let mut wrong = Vec::new();
         for (f, (pf, block)) in EVERY_BC.into_iter().enumerate() {
             let zeros: Vec<u8> = read_texels(device, &state, pf, &vec![0; 16 * block])
@@ -804,14 +803,13 @@ fn new_bc_textures_read_zero_blocks() {
                     let mut descriptor = TextureDescriptor::texture_2d(pf, 16, 16, false);
                     descriptor.usage = TextureUsage::SHADER_READ;
                     descriptor.resource_options = options;
-                    let before = super::fresh_contents::unfilled_count(device);
+                    let before = super::fresh_contents::zero_filled_count(device);
                     let texture = device.new_texture(&descriptor).unwrap();
-                    let counted = super::fresh_contents::unfilled_count(device) - before;
-                    let held = s == 0 && unfilled;
+                    let counted = super::fresh_contents::zero_filled_count(device) - before;
                     assert_eq!(
                         counted,
-                        u64::from(held),
-                        "{pf:?} {:?} round {round}: counted as made unfilled",
+                        u64::from(s == 0 && zero_filled),
+                        "{pf:?} {:?} round {round}: counted as zero-filled",
                         ["Private", "Shared"][s]
                     );
                     let got = read_whole(device, &state, &texture);
@@ -822,12 +820,7 @@ fn new_bc_textures_read_zero_blocks() {
                         .zip(zeros.as_chunks::<16>().0.iter())
                         .filter(|(a, b)| a != b)
                         .count();
-                    if held {
-                        println!(
-                            "BCFRESH-UNFILLED {name}: {pf:?} round {round}: {differ} of 256 \
-                             texels differ from zero blocks'"
-                        );
-                    } else if differ > 0 {
+                    if differ > 0 {
                         wrong.push(format!(
                             "{pf:?} {:?} round {round}: {differ} of 256 texels differ from zero \
                              blocks'",

@@ -189,7 +189,7 @@ fn a_fresh_texture_s_pattern_notice_follows_the_commit_order() {
             announced[0], announced[1]
         );
         // No pattern, so nothing to announce, on a device without Metal's compression.
-        let expected = match super::fresh_contents::unfilled(&device) {
+        let expected = match super::fresh_contents::zero_filled(&device) {
             true => 0,
             false => metal.unwrap_or(announced[0]),
         };

@@ -62,8 +62,9 @@
 //! pattern, each target reads zero and draws and stores as over a zero depth, announced
 //! (`fresh-pattern-zeroed`) at its first load. A new target cleared first loads its clear,
 //! announcing neither (`FRESH-SIGNED-DEPTH` lines). On a device without Metal's compression
-//! (`DeviceProperties::lossless_compression` false) a new target holds what its memory held, so
-//! its draws and stores are unchecked and its passes announce neither.
+//! (`DeviceProperties::lossless_compression` false) a new target holds no pattern: it reads zero,
+//! filled at its first use (`fresh_contents` checks those zeros), so its draws and stores are
+//! unchecked here and its passes announce neither.
 
 use super::degrade_notices::{assert_made_once, assert_once_allowing, bound_value_kinds};
 use super::degrade_notices::{clamps_depth_uploads, forced, loses_depth_denormals};
@@ -1282,8 +1283,8 @@ fn a_new_target_s_pattern_loaded_unwritten_draws_as_the_device_tests_it() {
         let keeps = !clamps_depth_uploads(&device);
         // The device keeps the pattern and its test is not Metal's own.
         let signs = signs_depth_tests(&device);
-        // No pattern at all: a new target holds what its memory held.
-        let unfilled = super::fresh_contents::unfilled(&device);
+        // No pattern at all: a new target reads zero, filled at its first use.
+        let zero_filled = super::fresh_contents::zero_filled(&device);
         let lane = Lane::new(device);
         let white = |pf: PixelFormat| {
             let mut d = white_descriptor(&lane.library);
@@ -1329,7 +1330,7 @@ fn a_new_target_s_pattern_loaded_unwritten_draws_as_the_device_tests_it() {
                 // Metal's; where its test is not, every other the pattern, with or without its
                 // sign; elsewhere the target reads zero, announced, and draws and stores as over a
                 // zero depth.
-                if unfilled {
+                if zero_filled {
                     continue;
                 }
                 let (draws, unwritten) = match keeps {
@@ -1359,7 +1360,7 @@ fn a_new_target_s_pattern_loaded_unwritten_draws_as_the_device_tests_it() {
             );
             // A device whose test is not Metal's announces its test at each pass that loads a
             // target's pattern.
-            let signed = if signs && !unfilled { targets } else { 0 };
+            let signed = if signs && !zero_filled { targets } else { 0 };
             assert_eq!(
                 of(Degradation::SignedDepthTest),
                 signed,
@@ -1376,7 +1377,7 @@ fn a_new_target_s_pattern_loaded_unwritten_draws_as_the_device_tests_it() {
             );
             // A device that may clamp the pattern writes none: zero, announced where each target's
             // pass first loads it.
-            let zeroed = if keeps || unfilled { 0 } else { targets };
+            let zeroed = if keeps || zero_filled { 0 } else { targets };
             assert_eq!(
                 of(Degradation::FreshPatternZeroed),
                 zeroed,

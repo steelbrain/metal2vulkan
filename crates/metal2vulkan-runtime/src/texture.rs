@@ -7,7 +7,9 @@
 //!   the device's first submission after its making, which moves it there before any command
 //!   (`texture/first_move.rs`), so ordering its accesses needs memory barriers only.
 //! - **Contents.** A new `Shared` or `Managed` texture reads zero, as Metal's do; a `Private` one
-//!   holds what its memory held, as Metal's do (measured on an Apple M3 Max and M4).
+//!   reads zero or, on a device that presents an Apple silicon Mac's compression, Metal's fixed
+//!   pattern where Metal compresses it (measured on an Apple M3 Max and M4), never what its memory
+//!   held (`Device::new_texture_image`).
 //! - **Views.** A view (`new_texture_view*`) shares its texture's image, and so its resource
 //!   identity: hazard tracking sees one resource. It is a [`ViewRecord`] of the part of the image
 //!   it presents; the runtime makes the `VkImageView`s a binding needs when it binds one. A view

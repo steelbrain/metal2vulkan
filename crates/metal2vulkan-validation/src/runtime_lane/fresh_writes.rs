@@ -26,7 +26,7 @@ use super::degrade_notices::{assert_made_once, assert_once, clamps_depth_uploads
 use super::degrade_notices::{
     draws_depth_copies, forced, loses_depth_denormals, signs_depth_tests,
 };
-use super::fresh_contents::{patterns_of, unfilled};
+use super::fresh_contents::{patterns_of, zero_filled};
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
     ScratchCache, WAIT,
@@ -436,7 +436,7 @@ fn a_new_texture_written_in_parts_or_by_a_pass_reads_its_texels_unannounced() {
         let first = forced(&[
             (
                 Degradation::FreshPatternZeroed,
-                clamps_depth_uploads(&device) && !unfilled(&device),
+                clamps_depth_uploads(&device) && !zero_filled(&device),
             ),
             (
                 Degradation::SharedInSystemMemory,
