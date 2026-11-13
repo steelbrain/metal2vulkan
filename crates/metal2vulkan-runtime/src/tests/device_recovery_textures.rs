@@ -155,10 +155,15 @@ fn a_recovery_carries_textures_their_views_and_those_over_carried_buffers() {
             vec![128; BYTES as usize]
         );
     }
-    // The lost `VkDevice` goes with the textures' parts there.
-    assert_eq!(live_vk_devices(&device, 2), 2);
-    drop((view, later, target, over));
+    // The lost `VkDevice` went at its rest, the textures' parts there let go of while they live.
     assert_eq!(live_vk_devices(&device, 1), 1);
+    for texture in [&target, &view, &later] {
+        assert_eq!(
+            texels(&device, &queue, texture).unwrap(),
+            vec![128; BYTES as usize]
+        );
+    }
+    drop((view, later, target, over));
 }
 
 /// What a recovery keeps of textures' contents, by where their texels lie: a `Shared` texture

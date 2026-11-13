@@ -80,8 +80,8 @@ fn through(
 /// bytes zero and the texture's contents lost, as its notice counts. The texture made before it
 /// takes copies there, and a use of its heap makes it resident. Buffers and textures made in
 /// them after it serve, at the automatic heap's free ranges as they were. A carried buffer's
-/// release gives its range back once, and the lost `VkDevice` goes with the texture, which holds
-/// its parts there.
+/// release gives its range back once, and the lost `VkDevice` goes at its rest, the texture's
+/// parts there let go of while it lives.
 #[test]
 fn a_recovery_carries_private_heaps_with_their_buffers_and_textures() {
     let scratch = Scratch::new();
@@ -202,8 +202,7 @@ fn a_recovery_carries_private_heaps_with_their_buffers_and_textures() {
     let used = automatic.used_size();
     drop(taken);
     assert_eq!(automatic.used_size(), used - BYTES);
-    // The lost `VkDevice` goes with the texture left on it.
-    assert_eq!(live_vk_devices(&device, 2), 2);
-    drop(before);
+    // The lost `VkDevice` went at its rest, the carried texture's parts there let go of.
     assert_eq!(live_vk_devices(&device, 1), 1);
+    drop(before);
 }

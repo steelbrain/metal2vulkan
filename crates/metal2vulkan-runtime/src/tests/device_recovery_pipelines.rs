@@ -128,9 +128,9 @@ fn state(
 }
 
 /// A compute state made before a recovery is the same state after it (its `uniqueIdentifier` and
-/// label), on the next generation, as the recovery's notice counts; its dispatches there run it
-/// and write what they wrote before; and the lost generation, whose program the state holds,
-/// goes with the state.
+/// label, a borrow of which taken before it reads the same), on the next generation, as the
+/// recovery's notice counts; its dispatches there run it and write what they wrote before; and
+/// the lost generation goes at its rest, its program there let go of while the state lives.
 #[test]
 fn a_recovery_carries_a_compute_state() {
     let scratch = Scratch::new();
@@ -140,6 +140,7 @@ fn a_recovery_carries_a_compute_state() {
     let state = state(&device, &kernel(&device), None, "scaled");
     assert_eq!(run(&device, &queue, &state).unwrap(), expected());
     let identity = (state.unique_identifier(), state.label().map(str::to_owned));
+    let label = state.label();
     let from = heard.lock().unwrap().len();
     device.recover_for_test().unwrap();
     let said = recovery_notices(&heard, from, "the device");
@@ -157,9 +158,10 @@ fn a_recovery_carries_a_compute_state() {
         identity
     );
     assert_eq!(run(&device, &queue, &state).unwrap(), expected());
-    assert_eq!(live_vk_devices(&device, 2), 2);
-    drop(state);
+    // The lost `VkDevice` went at its rest, the state's program there let go of.
     assert_eq!(live_vk_devices(&device, 1), 1);
+    assert_eq!(label, Some("scaled"));
+    assert_eq!(run(&device, &queue, &state).unwrap(), expected());
 }
 
 /// A drawing state of `tob_rect` and `tob_solid` of `library` into `RGBA8Unorm`, blending by
@@ -243,8 +245,9 @@ fn drawn() -> Vec<u32> {
 }
 
 /// A drawing state made before a recovery is the same state after it (its `uniqueIdentifier` and
-/// label), on the next generation, as the recovery's notice counts; its draws there draw what they
-/// drew before; and the lost generation, whose program the state holds, goes with the state.
+/// label, a borrow of which taken before it reads the same), on the next generation, as the
+/// recovery's notice counts; its draws there draw what they drew before; and the lost generation
+/// goes at its rest, its program there let go of while the state lives.
 #[test]
 fn a_recovery_carries_a_drawing_state() {
     let scratch = Scratch::new();
@@ -254,6 +257,7 @@ fn a_recovery_carries_a_drawing_state() {
     let state = drawing_state(&device, &drawing_library(&device), None, "drawn");
     assert_eq!(draw(&device, &queue, &state).unwrap(), drawn());
     let identity = (state.unique_identifier(), state.label().map(str::to_owned));
+    let label = state.label();
     let from = heard.lock().unwrap().len();
     device.recover_for_test().unwrap();
     let said = recovery_notices(&heard, from, "the device");
@@ -271,9 +275,10 @@ fn a_recovery_carries_a_drawing_state() {
         identity
     );
     assert_eq!(draw(&device, &queue, &state).unwrap(), drawn());
-    assert_eq!(live_vk_devices(&device, 2), 2);
-    drop(state);
+    // The lost `VkDevice` went at its rest, the state's program there let go of.
     assert_eq!(live_vk_devices(&device, 1), 1);
+    assert_eq!(label, Some("drawn"));
+    assert_eq!(draw(&device, &queue, &state).unwrap(), drawn());
 }
 
 /// How long `device`'s recovery takes, `recover_for_test` returning once the new `VkDevice`
