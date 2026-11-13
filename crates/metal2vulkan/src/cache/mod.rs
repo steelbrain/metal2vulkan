@@ -27,9 +27,9 @@
 
 // Key derivation is `pipeline::compile::key`. `CompiledFunction::to_bytes`/`from_bytes` and the
 // `PipelineArtifact` impls frame a canonical body encoding (`codec`) with magic,
-// `ARTIFACT_FORMAT_VERSION`, `SEMANTICS_VERSION`, the key, the profile fingerprint, and a SHA-256
-// checksum (`envelope`). A load is trusted by that identity plus a linear sanity scan of every
-// module (`scan`), not by re-running the owned verifier.
+// `ARTIFACT_FORMAT_VERSION`, `SEMANTICS_VERSION`, the key, the profile fingerprint, and an XXH64
+// checksum (`envelope`, `checksum`). A load is trusted by that identity plus a linear sanity scan
+// of every module (`scan`), not by re-running the owned verifier.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -41,6 +41,7 @@ use crate::pipeline::sym::{SlotRef, SnapshotForm};
 use crate::vk;
 
 mod artifacts;
+mod checksum;
 mod codec;
 // Content digests: `ComputePipeline::content_digest`, `RenderPipeline::content_digest` and
 // `BindingPlan::content_digest`.
@@ -70,7 +71,7 @@ pub const SEMANTICS_VERSION: u32 = 2083;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 516;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 517;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
