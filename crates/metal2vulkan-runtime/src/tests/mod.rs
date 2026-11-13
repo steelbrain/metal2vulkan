@@ -689,6 +689,8 @@ mod unsubmitted;
 mod upload_chunk_zeros;
 mod values;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod vector_placement;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod vertex_conversion_notices;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod video_interop;
