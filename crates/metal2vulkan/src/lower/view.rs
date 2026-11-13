@@ -89,7 +89,8 @@ impl CfgView for EntryView<'_> {
     fn unrolling(&self, b: BlockId) -> Unrolling {
         let hints = self.body.terminator(b).and_then(|t| t.kind.loop_hints());
         match hints.map(|h| h.unroll) {
-            Some(Unroll::Full) => Unrolling::Unroll,
+            Some(Unroll::Full | Unroll::Enable) => Unrolling::Unroll,
+            Some(Unroll::Count(n)) if n > 0 => Unrolling::PartialCount(n),
             Some(Unroll::Disable) => Unrolling::DontUnroll,
             _ => Unrolling::Driver,
         }

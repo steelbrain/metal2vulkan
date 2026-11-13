@@ -1250,13 +1250,18 @@ pub enum Unrolling {
     /// Nothing (`None`): the driver decides.
     #[default]
     Driver,
-    /// `Unroll`: the loop's AIR latch carries `llvm.loop.unroll.full`, the program's request to
-    /// unroll it fully (Metal's compiler writes it for `#pragma clang loop unroll(full)`).
+    /// `Unroll`, to the degree possible: the loop's AIR latch carries `llvm.loop.unroll.full`
+    /// (Metal's compiler writes it for `#pragma clang loop unroll(full)`) or
+    /// `llvm.loop.unroll.enable` (`#pragma unroll`: fully where the trip count is known, else
+    /// partly).
     Unroll,
     /// `DontUnroll`: a loop written so that the driver compiles its body once (a region
     /// `spirv::roll` rolled, a routine's own loop), or one whose AIR latch carries
     /// `llvm.loop.unroll.disable` (`#pragma nounroll`).
     DontUnroll,
+    /// `PartialCount` and its factor (SPIR-V 1.4): the loop's AIR latch carries
+    /// `llvm.loop.unroll.count` of that factor (`#pragma unroll N`), at least 1.
+    PartialCount(u32),
 }
 
 impl Unrolling {
@@ -1266,6 +1271,15 @@ impl Unrolling {
             Unrolling::Driver => 0,
             Unrolling::Unroll => 0x1,
             Unrolling::DontUnroll => 0x2,
+            Unrolling::PartialCount(_) => 0x100,
+        }
+    }
+
+    /// The literal the `LoopControl` bits take after them: `PartialCount`'s factor.
+    pub const fn literal(self) -> Option<u32> {
+        match self {
+            Unrolling::PartialCount(n) => Some(n),
+            _ => None,
         }
     }
 }

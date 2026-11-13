@@ -1,10 +1,12 @@
-//! A loop's unroll request end to end. The AIR states it on the loop's latch (`!llvm.loop`):
-//! Metal's compiler writes `llvm.loop.unroll.full` for a source's `#pragma clang loop
-//! unroll(full)` and `llvm.loop.unroll.disable` for `#pragma nounroll`. The loop's `OpLoopMerge`
-//! asks the driver the same (`LoopControl` `Unroll`, `DontUnroll`), a hint that changes no answer;
-//! a loop that asks neither (`#pragma unroll`'s `llvm.loop.unroll.enable` too) asks the driver
-//! nothing. Each kernel sums the buffer's first four words (1 to 4) into its first. `llvm-as`
-//! assembles the module; without it the test skips visibly.
+//! A loop's unroll request end to end. The AIR states it on the loop's latch (`!llvm.loop`), as
+//! Metal's compiler writes it: `llvm.loop.unroll.full` for a source's `#pragma clang loop
+//! unroll(full)`, `llvm.loop.unroll.enable` for `#pragma unroll`, `llvm.loop.unroll.count` for
+//! `#pragma unroll N`, and `llvm.loop.unroll.disable` for `#pragma nounroll`. The loop's
+//! `OpLoopMerge` asks the driver the same, a hint that changes no answer: `Unroll` for the first
+//! two, `PartialCount` and the factor for a count, `DontUnroll` for the last. A loop that asks
+//! nothing, or asks what the translator does not take (a count of 0), asks the driver nothing.
+//! Each kernel sums the buffer's first four words (1 to 4) into its first. `llvm-as` assembles the
+//! module; without it each test skips visibly.
 
 use crate::air::{self, SpecRequest};
 use crate::device::{DevicePolicy, DeviceProfile};
@@ -20,19 +22,21 @@ use crate::spv::Op;
 
 const PROFILES: [&str; 4] = ["amd-rdna3-radv", "lavapipe", "vk12-floor", "moltenvk-m3"];
 
-/// The kernels: name, the latch's attachment, and the `LoopControl` its loop asks.
-const KERNELS: [(&str, &str, u32); 4] = [
-    ("unroll_full", ", !llvm.loop !40", 0x1),
-    ("unroll_disable", ", !llvm.loop !42", 0x2),
-    ("unroll_enable", ", !llvm.loop !45", 0x0),
-    ("unroll_unasked", "", 0x0),
+/// The kernels: name, and the latch's attachment.
+const KERNELS: [(&str, &str); 6] = [
+    ("unroll_full", ", !llvm.loop !40"),
+    ("unroll_disable", ", !llvm.loop !42"),
+    ("unroll_enable", ", !llvm.loop !45"),
+    ("unroll_count", ", !llvm.loop !47"),
+    ("unroll_count_zero", ", !llvm.loop !49"),
+    ("unroll_unasked", ""),
 ];
 
 fn module() -> String {
     let mut s = String::from(
         "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n",
     );
-    for (name, latch, _) in KERNELS {
+    for (name, latch) in KERNELS {
         s.push_str(&format!(
             "define void @{name}(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0) {{
 entry:
@@ -60,13 +64,15 @@ exit:
         refs.join(", ")
     ));
     s.push_str("!0 = !{i32 7, !\"air.max_device_buffers\", i32 31}\n!10 = !{}\n!11 = !{!12}\n!12 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"buf\"}\n!17 = !{i32 2, i32 8, i32 0}\n!18 = !{!\"Metal\", i32 4, i32 0, i32 0}\n");
-    for (i, (name, _, _)) in KERNELS.iter().enumerate() {
+    for (i, (name, _)) in KERNELS.iter().enumerate() {
         s.push_str(&format!("!{} = !{{ptr @{name}, !10, !11}}\n", 20 + i));
     }
     s.push_str("!40 = distinct !{!40, !41, !44}\n!41 = !{!\"llvm.loop.unroll.full\"}\n");
     s.push_str("!42 = distinct !{!42, !43, !44}\n!43 = !{!\"llvm.loop.unroll.disable\"}\n");
     s.push_str("!44 = !{!\"llvm.loop.mustprogress\"}\n");
     s.push_str("!45 = distinct !{!45, !46, !44}\n!46 = !{!\"llvm.loop.unroll.enable\"}\n");
+    s.push_str("!47 = distinct !{!47, !48, !44}\n!48 = !{!\"llvm.loop.unroll.count\", i32 4}\n");
+    s.push_str("!49 = distinct !{!49, !50, !44}\n!50 = !{!\"llvm.loop.unroll.count\", i32 0}\n");
     s
 }
 
@@ -85,15 +91,15 @@ fn assemble() -> Option<Vec<u8>> {
     }
 }
 
-/// The `LoopControl` of each `OpLoopMerge` in module `words`, in order.
-fn loop_controls(words: &[u32]) -> Vec<u32> {
+/// The `LoopControl` of each `OpLoopMerge` in module `words` and the literals after it, in order.
+fn loop_controls(words: &[u32]) -> Vec<Vec<u32>> {
     let mut i = 5;
     let mut controls = Vec::new();
     while i < words.len() {
         let (len, op) = ((words[i] >> 16) as usize, words[i] & 0xFFFF);
         assert!(len > 0 && i + len <= words.len(), "malformed module");
         if op == Op::LoopMerge as u32 {
-            controls.push(words[i + 3]);
+            controls.push(words[i + 3..i + len].to_vec());
         }
         i += len;
     }
@@ -137,22 +143,50 @@ fn interpret(bitcode: &[u8], entry: &str, p: &DeviceProfile) -> u32 {
     u32::from_le_bytes([b[0], b[1], b[2], b[3]])
 }
 
-/// A latch's `llvm.loop.unroll.full` makes its loop's `OpLoopMerge` ask `Unroll`, and
-/// `llvm.loop.unroll.disable` `DontUnroll`; a loop with neither (`llvm.loop.unroll.enable`, or no
-/// request) asks nothing. Each sums to 10.
-#[test]
-fn a_loops_unroll_request_reaches_its_loop_merge() {
+/// Kernel `entry`'s one loop asks `control` (its `LoopControl` and the literals after it) on
+/// every profile, and the kernel sums to 10.
+fn asks(entry: &str, control: &[u32]) {
     let Some(bitcode) = assemble() else {
         return;
     };
     for stem in PROFILES {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
-        for (entry, _, control) in KERNELS {
-            let what = format!("{entry} on {stem}");
-            let a = compile(&bitcode, entry, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            assert_eq!(loop_controls(&a.module.words), [control], "{what}");
-            assert_eq!(interpret(&bitcode, entry, &p), 10, "{what}");
-        }
+        let what = format!("{entry} on {stem}");
+        let a = compile(&bitcode, entry, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        assert_eq!(loop_controls(&a.module.words), [control], "{what}");
+        assert_eq!(interpret(&bitcode, entry, &p), 10, "{what}");
     }
+}
+
+/// `llvm.loop.unroll.full` asks `Unroll`.
+#[test]
+fn a_full_unroll_request_asks_unroll() {
+    asks("unroll_full", &[0x1]);
+}
+
+/// `llvm.loop.unroll.enable` (`#pragma unroll`) asks `Unroll`: fully where the trip count is
+/// known, else partly, which is `Unroll`'s "to the degree possible".
+#[test]
+fn an_enabled_unroll_asks_unroll() {
+    asks("unroll_enable", &[0x1]);
+}
+
+/// `llvm.loop.unroll.count` 4 asks `PartialCount` 4.
+#[test]
+fn an_unroll_count_asks_its_partial_count() {
+    asks("unroll_count", &[0x100, 4]);
+}
+
+/// `llvm.loop.unroll.disable` asks `DontUnroll`.
+#[test]
+fn a_disabled_unroll_asks_dont_unroll() {
+    asks("unroll_disable", &[0x2]);
+}
+
+/// A count of 0, which no unrolling takes, asks nothing; nor does a loop with no request.
+#[test]
+fn a_loop_without_a_request_it_takes_asks_nothing() {
+    asks("unroll_count_zero", &[0x0]);
+    asks("unroll_unasked", &[0x0]);
 }

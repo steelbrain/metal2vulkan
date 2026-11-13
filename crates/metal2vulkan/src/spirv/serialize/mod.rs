@@ -37,7 +37,7 @@ use crate::spirv::ir::{
     BinOp, Block, ConstKind, Constant, Contraction, Decl, Dim, ExecMode, ExecModel, GlobalKind,
     GlslOp, GroupInst, GroupOperation, ImageOperands, ImageQuery, ImageUsage, Inst, Interpolation,
     IoDir, MemAccess, Merge, RayQueryInst, Sampling, SpecOp, StorageClass, Terminator, TexelMemory,
-    Type, TypedModule, UnOp, ValueOrigin,
+    Type, TypedModule, UnOp, Unrolling, ValueOrigin,
 };
 use crate::spirv::requirements::{
     spirv_extension_name, uses_physical_storage_buffer, uses_vulkan_memory_model,
@@ -49,6 +49,9 @@ mod tests;
 
 /// The SPIR-V version every profile emits: 1.5.
 pub const SPIRV_VERSION: u32 = 0x0001_0500;
+
+// A loop's `PartialCount` (`Unrolling::PartialCount`) is SPIR-V 1.4's.
+const _: () = assert!(SPIRV_VERSION >= 0x0001_0400);
 
 /// The entry point's name in every module (modules are compiled per function).
 pub const ENTRY_NAME: &str = "main";
@@ -229,13 +232,13 @@ fn write(m: TypedModule, options: Options) -> BResult<RelocatableModule> {
     // Header; the bound is patched below.
     w.words
         .extend_from_slice(&[crate::spv::MAGIC_NUMBER, SPIRV_VERSION, 0, 0, 0]);
-    let mut controls: Vec<(BlockId, u32)> = m
+    let mut controls: Vec<(BlockId, Unrolling)> = m
         .loops
         .iter()
-        .map(|l| (l.header, l.unrolling.control()))
-        .filter(|&(_, control)| control != 0)
+        .filter(|l| l.unrolling != Unrolling::Driver)
+        .map(|l| (l.header, l.unrolling))
         .collect();
-    controls.sort_unstable();
+    controls.sort_unstable_by_key(|&(header, _)| header);
     let s = Ser {
         m: &m,
         ids: &ids,
@@ -273,8 +276,8 @@ fn write(m: TypedModule, options: Options) -> BResult<RelocatableModule> {
 /// insert's composite, and each load, extract, or shuffle where it materializes loads). Where it
 /// materializes loads past atomics and calls: one byte per function (the storage classes it writes
 /// and those whose writes it holds unseen), and every load in the materialized values' map. One
-/// `BlockId` and control word per loop that asks `Unroll` or `DontUnroll` (the sorted headers the
-/// loop merges look up).
+/// `BlockId` and `Unrolling` per loop that asks something of the driver's unrolling (the sorted
+/// headers the loop merges look up).
 pub fn id_table_bytes(m: &TypedModule, p: &DeviceProfile) -> usize {
     let dense = m
         .types
@@ -346,9 +349,9 @@ pub fn id_table_bytes(m: &TypedModule, p: &DeviceProfile) -> usize {
         .saturating_add(
             m.loops
                 .iter()
-                .filter(|l| l.unrolling.control() != 0)
+                .filter(|l| l.unrolling != Unrolling::Driver)
                 .count()
-                .saturating_mul(std::mem::size_of::<(BlockId, u32)>()),
+                .saturating_mul(std::mem::size_of::<(BlockId, Unrolling)>()),
         )
 }
 
@@ -1340,8 +1343,8 @@ struct Ser<'a> {
     /// Each sampling routine is declared `DontInline` ([`Options::keeps_calls`]).
     keeps_calls: bool,
     /// The headers of the loops whose `OpLoopMerge` asks something of the driver's unrolling,
-    /// with the `LoopControl` they ask, sorted ([`crate::spirv::ir::LoopMeta::unrolling`]).
-    controls: Vec<(BlockId, u32)>,
+    /// with what they ask, sorted ([`crate::spirv::ir::LoopMeta::unrolling`]).
+    controls: Vec<(BlockId, Unrolling)>,
 }
 
 impl Ser<'_> {
@@ -2089,14 +2092,17 @@ impl Ser<'_> {
             }
             Some(Merge::Loop { merge, cont }) => {
                 // What the loop asks of the driver's unrolling (`Unrolling`).
-                let control = match self.controls.binary_search_by_key(&id, |&(h, _)| h) {
-                    Ok(at) => self.controls[at].1,
-                    Err(_) => 0,
-                };
-                w.inst(
-                    Op::LoopMerge,
-                    &[self.ids.block(merge)?, self.ids.block(cont)?, control],
-                )?
+                let unrolling = self
+                    .controls
+                    .binary_search_by_key(&id, |&(h, _)| h)
+                    .ok()
+                    .and_then(|at| self.controls.get(at))
+                    .map_or(Unrolling::Driver, |&(_, u)| u);
+                let (merge, cont) = (self.ids.block(merge)?, self.ids.block(cont)?);
+                match unrolling.literal() {
+                    Some(n) => w.inst(Op::LoopMerge, &[merge, cont, unrolling.control(), n])?,
+                    None => w.inst(Op::LoopMerge, &[merge, cont, unrolling.control()])?,
+                }
             }
             None => {}
         }
