@@ -1979,8 +1979,9 @@ fn narrow_views_are_declared_where_the_profile_accesses_the_unit() {
     }
 }
 
-/// A fragment function over one `read_write` buffer `data`: `body` reads and writes it and
-/// defines the `i32` `%r`, which the function returns as its color's red channel.
+/// A fragment function over one `read_write` buffer `data` of `uint4`s (bound at a multiple of 16,
+/// so a 16-byte unit at a multiple of 16 is proven one): `body` reads and writes it and defines the
+/// `i32` `%r`, which the function returns as its color's red channel.
 fn fragment_over_data(name: &str, body: &str) -> String {
     format!(
         r#"define <4 x float> @{name}(<4 x float> noundef %pos, ptr addrspace(1) noundef %data) {{
@@ -1996,7 +1997,7 @@ fn fragment_over_data(name: &str, body: &str) -> String {
 !11 = !{{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4"}}
 !2 = !{{!12, !3}}
 !12 = !{{i32 0, !"air.position", !"air.center", !"air.no_perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"pos"}}
-!3 = !{{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"data"}}
+!3 = !{{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"uint4", !"air.arg_name", !"data"}}
 !9 = !{{i32 2, i32 8, i32 0}}
 !10 = !{{!"Metal", i32 4, i32 0, i32 0}}
 "#
