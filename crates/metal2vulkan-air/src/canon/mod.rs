@@ -327,12 +327,23 @@ pub struct Lockstep {
     /// 32-lane tier (maximal reconvergence on 32-lane subgroups, without the device's own
     /// lockstep); `false` elsewhere and where no barrier is inserted.
     pub rows: bool,
+    /// The inserted threadgroup barriers that order only pairs whose threads meet where a
+    /// simdgroup spans two rows of its threadgroup, sorted: each runs only in a threadgroup whose
+    /// simdgroups may span two rows (more than one row, of a width not a multiple of 32), and in
+    /// any other no pair it orders meets.
+    pub across_rows: Vec<crate::ir::InstId>,
 }
 
 impl Lockstep {
     /// Whether instruction `i` is an inserted barrier.
     pub fn inserted(&self, i: crate::ir::InstId) -> bool {
         self.barriers.binary_search(&i).is_ok()
+    }
+
+    /// Whether instruction `i` is an inserted barrier that orders only pairs meeting across rows
+    /// (one of [`across_rows`](Self::across_rows)).
+    pub fn orders_across_rows(&self, i: crate::ir::InstId) -> bool {
+        self.across_rows.binary_search(&i).is_ok()
     }
 }
 

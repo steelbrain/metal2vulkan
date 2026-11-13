@@ -658,8 +658,10 @@ impl<'s, 'a> Search<'s, 'a> {
             .shape
             .conflict((a, fa), (b, fb), flags & via::CROSS != 0)
         {
+            m.tick(u32::try_from(self.shape.lanes_work.take()).unwrap_or(u32::MAX))?;
             return Ok(());
         }
+        m.tick(u32::try_from(self.shape.lanes_work.take()).unwrap_or(u32::MAX))?;
         let w = self.shape.place((a, b), inb, &mut self.avoid, m)?;
         if self.wants.insert(w) {
             m.charge(tree_bytes(1, std::mem::size_of::<Want>()))?;

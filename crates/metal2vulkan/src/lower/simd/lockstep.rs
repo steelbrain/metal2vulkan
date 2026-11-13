@@ -40,7 +40,14 @@
 //! - two extended indices of one GEP shape where one is a sum `u + t` that does not wrap, `u`
 //!   uniform in the simdgroup, and the other runs only under a branch that tested it below `u`
 //!   (a tree reduction's `if (t < h) a[t] += a[t + h]`), unsigned for zero-extended indices and
-//!   signed, with `t` not negative, for sign-extended ones.
+//!   signed, with `t` not negative, for sign-extended ones;
+//! - one base in every thread of the simdgroup plus an offset computed from the thread's place
+//!   and constants alone (its index in the threadgroup or the simdgroup, or, where each simdgroup
+//!   lies within one row, the `x` of its position), whose bytes meet at no two lanes of any
+//!   simdgroup: both offsets evaluated at each of a threadgroup's 1024 places, a simdgroup being
+//!   the 32 from a multiple of 32 (`facts::Lanes`). It is exact for strides of any size, where
+//!   the lattice above needs powers of two (`4 (t >> 3) + 144 (t & 7)` against the same plus 64
+//!   bytes takes none, `12 t` against `12 t + 36` keeps its barrier: lanes 3 apart meet).
 //!
 //! An anchor or row index differs between threads when it depends on the thread through
 //! `thread_index_in_simdgroup` or `thread_index_in_threadgroup` and exact additions, scalings,
@@ -109,6 +116,13 @@
 //!   the same path, the threads Apple's simdgroup runs that instruction for. It orders the pair as
 //!   lockstep does, so the kernel keeps the tier its class gives.
 //!
+//! A threadgroup barrier stands for pairs the same detection clears where each simdgroup lies
+//! within one row of its threadgroup (`Lockstep::rows`'s facts) only when no other pair wants it
+//! there; otherwise it orders only pairs whose threads meet where a simdgroup spans two rows, and
+//! runs only in a threadgroup whose local size lets one (more than one row, of a width not a
+//! multiple of 32: [`Lockstep::across_rows`], a test of specialization constants a driver folds).
+//! The kernel's one-row variant leaves such barriers out.
+//!
 //! Each pair names an interval of positions in one block where its barrier may stand; one
 //! barrier at a position of the most intervals serves them all (interval stabbing, threadgroup
 //! barriers first). It stands at the latest position its intervals share, right before the `b`
@@ -144,6 +158,7 @@
 mod facts;
 mod search;
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::air::abi::Stage as AbiStage;
@@ -175,6 +190,10 @@ fn invariant(what: &'static str) -> Error {
 enum Order {
     /// `threadgroup_barrier(mem_threadgroup)`.
     Threadgroup,
+    /// `threadgroup_barrier(mem_threadgroup)` that orders only pairs whose threads meet where a
+    /// simdgroup spans two rows of its threadgroup: it runs only in such a threadgroup
+    /// (`air::Lockstep::across_rows`).
+    Rows,
     /// `simdgroup_barrier(mem_threadgroup)`, exact where it stands.
     Simdgroup,
     /// `simdgroup_barrier(mem_threadgroup)`, exact on emulated simdgroups only.
@@ -208,6 +227,8 @@ struct Shape<'a> {
     us: &'a Uniformity,
     pdom: &'a PostDomTree<BlockId>,
     loops: &'a LoopForest<BlockId>,
+    /// The lane pairs `facts::Lanes::apart` compared since the search last charged them.
+    lanes_work: Cell<u64>,
 }
 
 impl Shape<'_> {
@@ -447,6 +468,17 @@ impl Shape<'_> {
                 return false;
             }
         }
+        // Each lane of every simdgroup at its address: from one base, no two lanes' bytes meet.
+        if let (Some(la), Some(lb), Some(sa), Some(sb)) = (&fa.lanes, &fb.lanes, a.size, b.size) {
+            let settled_base = |h: Option<BlockId>| !cross || h.is_none_or(invariant);
+            let mut work = 0;
+            let apart = la.apart(sa, lb, sb, &mut work);
+            self.lanes_work
+                .set(self.lanes_work.get().saturating_add(work));
+            if settled_base(la.base_home) && settled_base(lb.base_home) && apart {
+                return false;
+            }
+        }
         !self.one_value((a, fa), b, cross, &invariant)
     }
 
@@ -630,11 +662,21 @@ pub fn order(
         e.module = Module::new(parts, m)?;
         barriers
     };
+    let mut across_rows = Vec::new();
+    m.reserve(&mut across_rows, barriers.len())?;
+    across_rows.extend(
+        d.inserts
+            .iter()
+            .zip(&barriers)
+            .filter(|((_, _, o), _)| *o == Order::Rows)
+            .map(|(_, &id)| id),
+    );
     e.lockstep = Lockstep {
         barriers,
         emulated: d.emulated,
         device: d.device,
         rows,
+        across_rows,
     };
     Ok(e)
 }
@@ -690,32 +732,42 @@ fn decide(
     }
     // The same pairs where each simdgroup lies within one row of its threadgroup, so that two of
     // its threads' positions differ in `x` and are equal in `y` and `z` (`AddrFacts::new`'s
-    // `rows`): where none that conflicts wants more than a threadgroup barrier, a dispatch of
-    // such threadgroups needs none of the simdgroup barriers. Only a kernel whose subgroup
-    // barriers keep a 32-lane tier asks (`tangle`, without the device's own lockstep).
+    // `rows`). A threadgroup barrier none of them wants orders only pairs that meet where a
+    // simdgroup spans two rows, so it runs only in such a threadgroup (`Order::Rows`). And where
+    // none of them wants more than a threadgroup barrier, a dispatch of such threadgroups needs
+    // none of the simdgroup barriers; only a kernel whose subgroup barriers keep a 32-lane tier
+    // asks that (`tangle`, without the device's own lockstep).
     drop(af);
-    let mut rows = tangle && !device;
-    if rows {
+    let mut in_rows: BTreeSet<Want> = BTreeSet::new();
+    if (tangle && !device) || wants.iter().any(|w| w.order == Order::Threadgroup) {
         let mut rows_af = AddrFacts::new(e, body, &layouts, &us, true, m)?;
         for (_, acc) in &spaces {
-            let mut found = BTreeSet::new();
             pairs(
                 e,
                 acc,
                 (&u, &us),
                 (&pdom, &loops),
                 &mut rows_af,
-                &mut found,
+                &mut in_rows,
                 m,
             )?;
-            if found.iter().any(|w| w.order != Order::Threadgroup) {
-                rows = false;
-                break;
-            }
         }
     }
+    let rows = tangle && !device && in_rows.iter().all(|w| w.order == Order::Threadgroup);
+    let mut wants: BTreeSet<Want> = wants
+        .into_iter()
+        .map(
+            |w| match w.order == Order::Threadgroup && !in_rows.contains(&w) {
+                true => Want {
+                    order: Order::Rows,
+                    ..w
+                },
+                false => w,
+            },
+        )
+        .collect();
     // The one-row variant keeps the threadgroup barriers alone: in a threadgroup whose simdgroups
-    // each lie within one row, no pair a simdgroup barrier orders meets.
+    // each lie within one row, no pair a simdgroup barrier or an `Order::Rows` one orders meets.
     if one_row && rows {
         wants.retain(|w| w.order == Order::Threadgroup);
         if wants.is_empty() {
@@ -756,6 +808,7 @@ fn pairs<'a>(
         us,
         pdom,
         loops,
+        lanes_work: Cell::new(0),
     };
     let mut s = Search::new(&shape, &addrs, wants, m)?;
     // Two reads never conflict, so a pair holds a write: a write's pairs are searched from it
@@ -859,7 +912,9 @@ fn pairs<'a>(
 }
 
 /// One barrier at a position of as many intervals as it can serve ([`points`]): threadgroup
-/// barriers first, then simdgroup barriers for the intervals no threadgroup barrier serves. On a
+/// barriers first, then `Order::Rows` ones for the intervals of pairs that meet only across rows
+/// no threadgroup barrier serves, then simdgroup barriers for the intervals no threadgroup barrier
+/// that always runs serves. On a
 /// device that runs a simdgroup in lockstep (`device`), the places only emulated simdgroups
 /// would make exact are counted rather than given a barrier; where a subgroup barrier orders the
 /// threads that run it together (`tangle`), they take a simdgroup barrier and leave the tier to
@@ -888,9 +943,19 @@ fn stab(
             .range((w.block, w.lo, Order::Threadgroup)..=(w.block, w.hi, Order::Threadgroup))
             .any(|&(_, _, o)| o == Order::Threadgroup)
     };
+    let rows: Vec<Want> = wants
+        .iter()
+        .filter(|w| w.order == Order::Rows && !served(&placed, w))
+        .copied()
+        .collect();
+    m.charge(crate::budget::vec_bytes(&rows))?;
+    for (w, at) in points(rows, term, m)? {
+        m.charge(bytes)?;
+        placed.insert((w.block, at, Order::Rows));
+    }
     let rest: Vec<Want> = wants
         .iter()
-        .filter(|w| w.order != Order::Threadgroup && !served(&placed, w))
+        .filter(|w| !matches!(w.order, Order::Threadgroup | Order::Rows) && !served(&placed, w))
         .copied()
         .collect();
     m.charge(crate::budget::vec_bytes(&rest))?;
@@ -1066,12 +1131,18 @@ fn insert(
     let mem = int32(parts, bits, m)?;
     let wg_scope = int32(parts, 1, m)?;
     let sg_scope = int32(parts, 4, m)?;
-    let wg = if inserts.iter().any(|&(_, _, o)| o == Order::Threadgroup) {
+    let wg = if inserts
+        .iter()
+        .any(|&(_, _, o)| matches!(o, Order::Threadgroup | Order::Rows))
+    {
         Some(declaration(parts, b"air.wg.barrier", m)?)
     } else {
         None
     };
-    let sg = if inserts.iter().any(|&(_, _, o)| o != Order::Threadgroup) {
+    let sg = if inserts
+        .iter()
+        .any(|&(_, _, o)| matches!(o, Order::Simdgroup | Order::Emulated))
+    {
         Some(declaration(parts, b"air.simdgroup.barrier", m)?)
     } else {
         None
@@ -1084,7 +1155,7 @@ fn insert(
     };
     let call = |o: Order| -> Result<Inst, Error> {
         let (decl, name, scope, arg) = match o {
-            Order::Threadgroup => (
+            Order::Threadgroup | Order::Rows => (
                 wg,
                 BarrierName::Threadgroup,
                 ThreadScope::Threadgroup,

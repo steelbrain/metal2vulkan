@@ -63,6 +63,7 @@ use crate::lower::select::{FamilyPlans, Plan, SelectCx};
 use crate::lower::strategy::{FamilyStrategy, Strategy};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::sym::Stage;
+use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ir::{DerivOp, ExecMode, MemoryOrder, Scope, Semantics};
@@ -122,6 +123,12 @@ pub struct Barrier {
     /// Whether the program placed the barrier or `lower::simd::lockstep` inserted it: emitted
     /// alike, named apart in the census.
     pub origin: Origin,
+    /// An inserted threadgroup barrier that orders only pairs meeting where a simdgroup spans two
+    /// rows of its threadgroup (`air::Lockstep::across_rows`), outside the emulated tier: it runs
+    /// only where the kernel's local size lets a simdgroup span two rows
+    /// (`dispatch::KernelDecl::rows_may_split`), a condition of specialization constants alone,
+    /// so it is uniform and a driver folds it.
+    pub rows: bool,
     /// The program's `seq_cst` barrier orders memory at `Device` scope, past its threadgroup:
     /// it is also a sequentially consistent fence there ([`seq_cst_order`]).
     pub seq_cst: bool,
@@ -179,6 +186,7 @@ impl FamilyStrategy for BarrierStrategy {
                 (Scope::Subgroup, Origin::Program) => "barrier.simdgroup",
                 (_, Origin::Program) => "barrier.threadgroup",
                 (Scope::Subgroup, Origin::Lockstep) => "barrier.lockstep.simdgroup",
+                (_, Origin::Lockstep) if b.rows => "barrier.lockstep.threadgroup.rows",
                 (_, Origin::Lockstep) => "barrier.lockstep.threadgroup",
                 (Scope::Subgroup, Origin::LockstepEmulated) => {
                     "barrier.lockstep.emulated.simdgroup"
@@ -195,8 +203,11 @@ impl FamilyStrategy for BarrierStrategy {
     fn words(&self) -> u32 {
         match self {
             // The instruction and its scope and semantics constants; a sequentially consistent
-            // one's status word address and atomic.
-            BarrierStrategy::Barrier(b) => 16 + SEQ_CST_WORDS * u32::from(b.seq_cst),
+            // one's status word address and atomic; a guarded one's local-size test and
+            // selection.
+            BarrierStrategy::Barrier(b) => {
+                16 + SEQ_CST_WORDS * u32::from(b.seq_cst) + ROWS_GUARD_WORDS * u32::from(b.rows)
+            }
             BarrierStrategy::Fence(f) => 12 + SEQ_CST_WORDS * u32::from(f.seq_cst),
             BarrierStrategy::NoFence => 0,
             BarrierStrategy::Derivative(_) => 4,
@@ -336,7 +347,13 @@ pub fn select(cx: &mut SelectCx<'_>, at: InstId, inst: &Inst) -> Result<BarrierS
                 .barrier_order()
                 .ok_or_else(|| cx.invariant("a barrier without its order"))?;
             let flags = stage_flags(cx.stage, *flags);
-            select_barrier(cx, (id, origin), (flags, order), (*scope, *memory))
+            let mut s = select_barrier(cx, (id, origin), (flags, order), (*scope, *memory))?;
+            if let BarrierStrategy::Barrier(b) = &mut s {
+                b.rows = origin == Origin::Lockstep
+                    && b.scope == Scope::Workgroup
+                    && cx.entry.lockstep.orders_across_rows(at);
+            }
+            Ok(s)
         }
         AirIntrinsic::Sync(Sync::Fence {
             flags,
@@ -416,6 +433,7 @@ fn select_barrier(
         flags,
         order,
         origin,
+        rows: false,
         seq_cst,
     }))
 }
@@ -459,6 +477,10 @@ fn select_fence(
 /// The words [`seq_cst_order`] adds: the status word's address and the atomic, with its
 /// constants.
 pub const SEQ_CST_WORDS: u32 = 48;
+
+/// The words a guarded barrier ([`Barrier::rows`]) adds: the local-size test
+/// (`dispatch::KernelDecl::rows_may_split`), its constants, and the selection around the barrier.
+pub const ROWS_GUARD_WORDS: u32 = 40;
 
 /// What a sequentially consistent fence needs ([`seq_cst_order`]): the command buffer's
 /// `ExecutionStatus` word (`absent::state_status`), and the stage's atomics; a device without them
@@ -592,7 +614,25 @@ pub fn emit(
             let sem = semantics(b.flags, b.order, model);
             let scope = simdgroup_scope(cx.plan, b.scope);
             let memory = simdgroup_scope(cx.plan, b.memory);
-            fb.control_barrier(scope, memory, sem)?;
+            // A barrier of pairs that meet only across rows runs where a simdgroup may span two;
+            // in a predicated walk, or a thread layout other than the local size's rows, always.
+            let guard = match (
+                b.rows && cx.plan.families.simd.predication.is_none(),
+                cx.decl.families.dispatch.kernel.as_ref(),
+            ) {
+                (true, Some(k)) => k.rows_may_split(fb)?,
+                _ => None,
+            };
+            match guard {
+                Some(split) => {
+                    let then: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                        fb.control_barrier(scope, memory, sem)?;
+                        Ok(ArmEnd::FallThrough(Vec::new()))
+                    });
+                    fb.if_(&mut (), split, then, None)?;
+                }
+                None => fb.control_barrier(scope, memory, sem)?,
+            }
             match b.seq_cst {
                 true => seq_cst_order(cx, fb, memory, b.flags),
                 false => Ok(()),

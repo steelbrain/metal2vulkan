@@ -2,7 +2,8 @@
 //! about their addresses (device memory): the objects a pointer may point into, the bytes of one
 //! object it may start at, a canonical spelling of the address, its offset into the array row its
 //! last non-constant index steps through, whether the address is injective in the thread of a
-//! simdgroup, and the unsigned comparisons the branches dominating the access settled. Value bounds
+//! simdgroup, its value at each place of a thread where only the place and constants compute it
+//! ([`Lanes`]), and the unsigned comparisons the branches dominating the access settled. Value bounds
 //! come from constants, the thread-index builtins, a multisampled texture's sample count, exact
 //! arithmetic, and loop counters' exit tests (against a constant, or a bound computed before the
 //! loop).
@@ -37,6 +38,13 @@ const MAX_CHAIN: u32 = 64;
 /// The deepest operation tree [`AddrFacts::fixed`] reads below a value: it visits both operands
 /// of each operation, so its work is bounded by `2^MAX_FIXED`.
 const MAX_FIXED: u32 = 6;
+/// The places a threadgroup's threads take in [`Lanes`]: a threadgroup has at most 1024 threads,
+/// and a simdgroup is the 32 consecutive places from a multiple of 32.
+const PLACES: usize = 1024;
+/// The simdgroups of [`PLACES`]: blocks of 32.
+const BLOCKS: usize = PLACES / 32;
+/// The most operations [`AddrFacts::lanes`] evaluates for one address at each place.
+const MAX_LANE_OPS: u32 = 64;
 
 /// The memory one pass of the analysis orders: threadgroup memory, whose objects never overlap, or
 /// device memory, whose buffers the analysis takes as distinct objects too (see [`Root`]).
@@ -189,6 +197,9 @@ pub(super) struct Addr {
     /// arithmetic alone ([`AddrFacts::leaves`]); `None` for another access, or where the walk
     /// does not end.
     pub leaves: Option<Vec<BlockId>>,
+    /// The address at each place of a thread, where it is a base the simdgroup shares plus an
+    /// offset computed from the thread's place and constants alone ([`AddrFacts::lanes`]).
+    pub lanes: Option<Lanes>,
 }
 
 /// A fact `x == c` wherever an access runs, where `x` differs between any two threads of a
@@ -236,6 +247,104 @@ pub(super) struct Span {
     pub root: Root,
     pub lo: i64,
     pub hi: i64,
+}
+
+/// The base of a [`Lanes`] address: a value, or a global's address (one global through its
+/// constant GEPs and casts, whichever constant spells it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LaneBase {
+    Value(Value),
+    Global(GlobalId),
+}
+
+/// Which of a thread's places an address's offset reads ([`Lanes`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Basis {
+    /// Its index in its simdgroup alone (or nothing of the thread): the same at every place of
+    /// one lane.
+    Lane,
+    /// Its index in its threadgroup.
+    Index,
+    /// The `x` of its position in its threadgroup, where each simdgroup lies within one row
+    /// (`AddrFacts::rows`).
+    Position,
+}
+
+/// An address as a base every thread of a simdgroup shares, plus a byte offset computed from the
+/// thread's place and constants alone, evaluated at each place `p = 32 k + i` below 1024 (`k` the
+/// simdgroup, `i` the lane), wrapping at the pointer's index width.
+///
+/// The place is what the offset reads ([`Basis`]): the thread's index in its threadgroup, which
+/// is `p` (a simdgroup is the 32 consecutive linear threads from a multiple of 32, and a
+/// threadgroup has at most 1024 threads); its index in its simdgroup, `p mod 32`; or, where each
+/// simdgroup lies within one row of its threadgroup (a single row, whose `x` is the linear index,
+/// or rows of a multiple of 32 threads, whose `x` is the linear index less a multiple of 32), the
+/// `x` of its position, which is `p` there too. Two threads of one simdgroup are two lanes `i != j`
+/// of one `k`; places past a threadgroup's threads only add pairs, which is the sound side.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Lanes {
+    pub base: LaneBase,
+    /// The block computing the base, where an instruction does.
+    pub base_home: Option<BlockId>,
+    pub basis: Basis,
+    /// The pointer's index width, at which the offsets wrap.
+    pub bits: u32,
+    /// The offset at each place, in the index width.
+    pub offsets: Vec<u64>,
+    /// For each simdgroup after the first, the shift that makes its offsets the previous one's,
+    /// lane by lane, where one shift does.
+    pub shifts: [Option<u64>; BLOCKS],
+}
+
+impl Lanes {
+    /// Whether no two threads of one simdgroup, one running an access of `size` bytes at these
+    /// addresses and the other one of `other_size` bytes at `other`'s, touch one byte: both from
+    /// one base (one value in every thread of the simdgroup, so the base cancels), with places
+    /// of one kind, and at no two lanes of one simdgroup do the byte ranges meet, modulo the
+    /// index width. A simdgroup both addresses reach from the previous one by one shift, the same
+    /// for both, has the previous one's differences and its answer. `work` counts the lane pairs
+    /// compared.
+    pub fn apart(&self, size: u64, other: &Lanes, other_size: u64, work: &mut u64) -> bool {
+        let kinds = match (self.basis, other.basis) {
+            (Basis::Lane, _) | (_, Basis::Lane) => true,
+            (x, y) => x == y,
+        };
+        if self.base != other.base
+            || self.bits != other.bits
+            || !kinds
+            || self.offsets.len() != PLACES
+            || other.offsets.len() != PLACES
+        {
+            return false;
+        }
+        let mask = u64::MAX >> (64 - self.bits);
+        if size > mask || other_size > mask {
+            return false;
+        }
+        let blocks = self.offsets.as_chunks::<32>().0;
+        let other_blocks = other.offsets.as_chunks::<32>().0;
+        blocks
+            .iter()
+            .zip(other_blocks)
+            .zip(self.shifts.iter().zip(&other.shifts))
+            .all(|((a, b), shifts)| {
+                if let (Some(da), Some(db)) = shifts {
+                    if da == db {
+                        return true;
+                    }
+                }
+                *work += 32 * 32;
+                a.iter().enumerate().all(|(i, &x)| {
+                    b.iter().enumerate().all(|(j, &y)| {
+                        // `[x, x + size)` and `[y, y + other_size)` meet where one starts inside
+                        // the other.
+                        i == j
+                            || (y.wrapping_sub(x) & mask >= size
+                                && x.wrapping_sub(y) & mask >= other_size)
+                    })
+                })
+            })
+    }
 }
 
 /// The spelling of an anchor: a value, or a GEP's source type, canonical base, the indices
@@ -813,7 +922,346 @@ impl<'a> AddrFacts<'a> {
             below,
             lone,
             leaves,
+            lanes: self.lanes(ptr, m)?,
         })
+    }
+
+    /// Address `ptr` at each place of a thread ([`Lanes`]), where its walk down bitcasts, GEPs and
+    /// phis of one value (at most [`MAX_CHAIN`] steps) ends at a base uniform in the simdgroup and
+    /// every non-constant index is computed from a thread's place and constants alone
+    /// ([`AddrFacts::place_value`]), [`MAX_LANE_OPS`] operations in all. A GEP index is
+    /// sign-extended or truncated to the index width and scaled by its stride, a struct index
+    /// adds its field's offset, and the sum wraps at the index width, as the address does.
+    fn lanes(&self, ptr: Value, m: &mut Meter) -> Result<Option<Lanes>, Error> {
+        let Some(bits) = self.index_bits(ptr).filter(|b| (1..=64).contains(b)) else {
+            return Ok(None);
+        };
+        let mask = u64::MAX >> (64 - bits);
+        let types = self.e.module.types();
+        // The constant offset, and each non-constant index with its stride.
+        let mut konst = 0u64;
+        let mut terms: Vec<(u64, Value)> = Vec::new();
+        let mut b = ptr;
+        let mut based = false;
+        for _ in 0..MAX_CHAIN {
+            m.tick(1)?;
+            if let Some(one) = self.one_incoming(b) {
+                b = one;
+                continue;
+            }
+            // A uniform base, unless a constant step over another: a constant GEP of a global
+            // and the global itself are one base whichever names it.
+            let constant_step = match self.kind(b) {
+                Some(InstKind::Cast {
+                    op: CastOp::Bitcast,
+                    ..
+                }) => true,
+                Some(InstKind::Gep { indices, .. }) => {
+                    indices.iter().all(|k| matches!(k, Value::Const(_)))
+                }
+                _ => false,
+            };
+            if self.uniform(b) && !constant_step {
+                based = true;
+                break;
+            }
+            match self.kind(b) {
+                Some(InstKind::Cast {
+                    op: CastOp::Bitcast,
+                    v,
+                }) => b = *v,
+                Some(InstKind::Gep {
+                    src_ty,
+                    base,
+                    indices,
+                    ..
+                }) => {
+                    for (at, &k) in indices.iter().enumerate() {
+                        let before = match at {
+                            0 => None,
+                            _ => self.type_after(*src_ty, indices, at - 1),
+                        };
+                        if matches!(before.and_then(|t| types.get(t)), Some(Type::Struct { .. })) {
+                            let field = match k {
+                                Value::Const(c) => const_int(self.e, c),
+                                _ => None,
+                            };
+                            let at_field = field
+                                .and_then(|f| usize::try_from(f).ok())
+                                .zip(before.and_then(|t| self.layouts.field_offsets(t)))
+                                .and_then(|(f, offs)| offs.get(f).copied());
+                            let Some(off) = at_field else {
+                                return Ok(None);
+                            };
+                            konst = konst.wrapping_add(off);
+                            continue;
+                        }
+                        let Some(stride) = self.stride_at(*src_ty, indices, at) else {
+                            return Ok(None);
+                        };
+                        match k {
+                            Value::Const(c) => {
+                                let Some(i) = const_int(self.e, c) else {
+                                    return Ok(None);
+                                };
+                                konst = konst.wrapping_add((i as u64).wrapping_mul(stride));
+                            }
+                            _ => {
+                                m.grow(&mut terms, 1)?;
+                                terms.push((stride, k));
+                            }
+                        }
+                    }
+                    b = *base;
+                }
+                _ => return Ok(None),
+            }
+        }
+        if !based || terms.is_empty() {
+            return Ok(None);
+        }
+        // A constant base: its root, past constant GEPs and casts, whose offsets add.
+        let base = match b {
+            Value::Const(c) => {
+                let (root, off) = self.const_base(c, m)?;
+                konst = konst.wrapping_add(off);
+                match self.e.module.consts().get(root).map(|k| &k.value) {
+                    Some(Const::GlobalAddr(g)) => LaneBase::Global(*g),
+                    _ => LaneBase::Value(Value::Const(root)),
+                }
+            }
+            _ => LaneBase::Value(b),
+        };
+        // Each index read once at place 0: what it reads of the thread, and how many operations.
+        let mut basis = Basis::Lane;
+        let mut ops = 0u32;
+        for &(_, k) in &terms {
+            if self
+                .place_value(k, 0, &mut Some((&mut basis, &mut ops)))
+                .is_none()
+            {
+                return Ok(None);
+            }
+        }
+        m.tick(ops.saturating_mul(PLACES as u32))?;
+        let mut offsets = Vec::new();
+        m.reserve(&mut offsets, PLACES)?;
+        for p in 0..PLACES as u64 {
+            let mut off = konst;
+            for &(stride, k) in &terms {
+                let Some(v) = self.place_value(k, p, &mut None) else {
+                    return Ok(None);
+                };
+                // The index sign-extended (or truncated) to the index width.
+                let w = self.width(k).unwrap_or(64);
+                let x = match w {
+                    64 => v,
+                    _ => (((v << (64 - w)) as i64) >> (64 - w)) as u64,
+                };
+                off = off.wrapping_add(x.wrapping_mul(stride));
+            }
+            offsets.push(off & mask);
+        }
+        m.tick(PLACES as u32)?;
+        let mut shifts = [None; BLOCKS];
+        let blocks = offsets.as_chunks::<32>().0;
+        for (k, pair) in blocks.windows(2).enumerate() {
+            let [before, here] = pair else {
+                continue;
+            };
+            let d = here[0].wrapping_sub(before[0]) & mask;
+            let one = here
+                .iter()
+                .zip(before)
+                .all(|(&y, &x)| y.wrapping_sub(x) & mask == d);
+            if let Some(slot) = shifts.get_mut(k + 1) {
+                *slot = one.then_some(d);
+            }
+        }
+        Ok(Some(Lanes {
+            base,
+            base_home: self.home_of(b),
+            basis,
+            bits,
+            offsets,
+            shifts,
+        }))
+    }
+
+    /// Constant address `c` as the constant its constant GEPs and pointer casts start from, and
+    /// the bytes the GEPs add (wrapping).
+    fn const_base(&self, mut c: ConstId, m: &mut Meter) -> Result<(ConstId, u64), Error> {
+        let types = self.e.module.types();
+        let mut off = 0u64;
+        for _ in 0..MAX_CHAIN {
+            m.tick(1)?;
+            match self.e.module.consts().get(c).map(|k| &k.value) {
+                Some(Const::Expr(ConstExpr::Gep { src_ty, ops, .. })) => {
+                    let Some((&base, idx)) = ops.split_first() else {
+                        break;
+                    };
+                    let Some((first, rest)) = idx.split_first() else {
+                        c = base;
+                        continue;
+                    };
+                    let (Some(k), Some(size)) =
+                        (const_int(self.e, *first), self.layouts.alloc_size(*src_ty))
+                    else {
+                        break;
+                    };
+                    let mut step = (k as u64).wrapping_mul(size);
+                    let mut ty = *src_ty;
+                    for &i in rest {
+                        let Some(i) = const_int(self.e, i) else {
+                            return Ok((c, off));
+                        };
+                        let next = match types.get(ty) {
+                            Some(Type::Struct { fields, .. }) => {
+                                usize::try_from(i).ok().and_then(|f| {
+                                    let at = *self.layouts.field_offsets(ty)?.get(f)?;
+                                    Some((at, *fields.get(f)?))
+                                })
+                            }
+                            Some(Type::Array { elem, .. } | Type::Vector { elem, .. }) => self
+                                .layouts
+                                .alloc_size(*elem)
+                                .map(|size| ((i as u64).wrapping_mul(size), *elem)),
+                            _ => None,
+                        };
+                        let Some((add, elem)) = next else {
+                            return Ok((c, off));
+                        };
+                        step = step.wrapping_add(add);
+                        ty = elem;
+                    }
+                    off = off.wrapping_add(step);
+                    c = base;
+                }
+                Some(Const::Expr(ConstExpr::Cast {
+                    op: CastOp::Bitcast | CastOp::AddrSpaceCast,
+                    ops: [base],
+                })) => c = *base,
+                _ => break,
+            }
+        }
+        Ok((c, off))
+    }
+
+    /// Integer `v` at place `p` of a thread ([`Lanes`]), in its width: a constant; the thread's
+    /// index in its threadgroup (`p`) or in its simdgroup (`p mod 32`); where each simdgroup lies
+    /// within one row, the `x` of its position in its threadgroup (`p`), a scalar or a position
+    /// vector's component 0; and additions, subtractions, multiplications, bitwise operations,
+    /// shifts below the width, unsigned divisions and remainders by a value other than 0,
+    /// extensions, truncations and freezes of such values and phis of one such value, each
+    /// wrapping at its width as the
+    /// operation does. `None` for anything else. `seen`, when given, records what the value
+    /// reads of the thread (an index and a position together are `None`: they are one place only
+    /// in a single row) and counts the operations, at most [`MAX_LANE_OPS`].
+    fn place_value(
+        &self,
+        v: Value,
+        p: u64,
+        seen: &mut Option<(&mut Basis, &mut u32)>,
+    ) -> Option<u64> {
+        if let Some((_, ops)) = seen {
+            **ops += 1;
+            if **ops > MAX_LANE_OPS {
+                return None;
+            }
+        }
+        let w = self.width(v).filter(|w| (1..=64).contains(w))?;
+        let mask = u64::MAX >> (64 - w);
+        let place = |b: Basis, seen: &mut Option<(&mut Basis, &mut u32)>| {
+            let x = match b {
+                Basis::Lane => p & 31,
+                Basis::Index | Basis::Position => p,
+            };
+            if let Some((basis, _)) = seen {
+                **basis = match (**basis, b) {
+                    (Basis::Lane, b) | (b, Basis::Lane) => b,
+                    (x, y) if x == y => x,
+                    // An index and a position: one place only in a single row.
+                    _ => return None,
+                };
+            }
+            Some(x & mask)
+        };
+        let builtin = |a: u32| {
+            self.e
+                .ep
+                .params
+                .iter()
+                .find(|q| q.param == a)
+                .and_then(|q| match q.role {
+                    ParamRole::Builtin(b) => Some(b),
+                    _ => None,
+                })
+        };
+        match v {
+            Value::Const(c) => const_int(self.e, c).map(|i| i as u64 & mask),
+            Value::Arg(a) => match builtin(a.raw()) {
+                Some(Builtin::ThreadIndexInThreadgroup) => place(Basis::Index, seen),
+                Some(Builtin::ThreadIndexInSimdgroup) => place(Basis::Lane, seen),
+                Some(Builtin::ThreadPositionInThreadgroup) if self.rows => {
+                    place(Basis::Position, seen)
+                }
+                _ => None,
+            },
+            _ => match self.kind(v) {
+                Some(InstKind::ExtractElement {
+                    vec: Value::Arg(a),
+                    idx: Value::Const(c),
+                }) if self.rows
+                    && builtin(a.raw()) == Some(Builtin::ThreadPositionInThreadgroup)
+                    && const_int(self.e, *c) == Some(0) =>
+                {
+                    place(Basis::Position, seen)
+                }
+                Some(InstKind::BinOp { op, a, b, .. }) => {
+                    let x = self.place_value(*a, p, seen)?;
+                    let y = self.place_value(*b, p, seen)?;
+                    let signed = |z: u64| ((z << (64 - w)) as i64) >> (64 - w);
+                    match op {
+                        BinOp::Add => Some(x.wrapping_add(y) & mask),
+                        BinOp::Sub => Some(x.wrapping_sub(y) & mask),
+                        BinOp::Mul => Some(x.wrapping_mul(y) & mask),
+                        BinOp::And => Some(x & y),
+                        BinOp::Or => Some(x | y),
+                        BinOp::Xor => Some(x ^ y),
+                        BinOp::Shl if y < u64::from(w) => Some((x << y) & mask),
+                        BinOp::LShr if y < u64::from(w) => Some(x >> y),
+                        BinOp::AShr if y < u64::from(w) => Some((signed(x) >> y) as u64 & mask),
+                        BinOp::UDiv if y != 0 => Some(x / y),
+                        BinOp::URem if y != 0 => Some(x % y),
+                        _ => None,
+                    }
+                }
+                Some(InstKind::Cast { op, v: x }) => {
+                    let wx = self.width(*x).filter(|w| (1..=64).contains(w))?;
+                    let y = self.place_value(*x, p, seen)?;
+                    match op {
+                        CastOp::ZExt | CastOp::Trunc => Some(y & mask),
+                        CastOp::SExt => {
+                            Some((((y << (64 - wx)) as i64) >> (64 - wx)) as u64 & mask)
+                        }
+                        _ => None,
+                    }
+                }
+                Some(InstKind::Freeze(x)) => self.place_value(*x, p, seen),
+                Some(InstKind::Phi { .. }) => self.place_value(self.one_incoming(v)?, p, seen),
+                _ => None,
+            },
+        }
+    }
+
+    /// The value phi `v` takes along every incoming edge, where it is one value: the phi is
+    /// that value wherever it runs.
+    fn one_incoming(&self, v: Value) -> Option<Value> {
+        let Some(InstKind::Phi { incoming, .. }) = self.kind(v) else {
+            return None;
+        };
+        let (&(first, _), rest) = incoming.split_first()?;
+        (first != v && rest.iter().all(|&(x, _)| x == first)).then_some(first)
     }
 
     /// The blocks of the instructions address `ptr` is computed from through arithmetic alone

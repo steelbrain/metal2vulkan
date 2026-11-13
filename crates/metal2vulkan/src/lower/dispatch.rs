@@ -1150,6 +1150,38 @@ impl KernelDecl {
         fb.load(p, MemAccess::default())
     }
 
+    /// Whether a simdgroup of the threadgroup may span two of its rows, so a lockstep barrier of
+    /// pairs that meet only across rows must run (`air::Lockstep::across_rows`): the threadgroup
+    /// has more than one row (`sy` or `sz` is not 1) and its rows are not whole simdgroups (`sx`
+    /// is not a multiple of 32). A simdgroup is 32 consecutive linear threads from a multiple of
+    /// 32, so otherwise each lies within one row. A test of specialization constants alone.
+    /// `None` where the threads' positions are not `lin` over `(sx, sy, sz)`: a tile function's
+    /// layout, partial threadgroups, a flat, folded or object grid, or the call's threadgroups.
+    pub fn rows_may_split(&self, fb: &mut FunctionBuilder<'_>) -> BResult<Option<SValue>> {
+        if self.tile
+            || self.partial_groups
+            || self.flat_grid
+            || self.call_threadgroups
+            || self.folded_groups
+            || self.object_grid
+        {
+            return Ok(None);
+        }
+        let [sx, sy, sz] = self.size;
+        let sx = fb.module().const_value(sx)?;
+        let sy = fb.module().const_value(sy)?;
+        let sz = fb.module().const_value(sz)?;
+        let one = Self::k(fb, 1)?;
+        let tall = fb.binary(BinOp::INotEqual, sy, one)?;
+        let deep = fb.binary(BinOp::INotEqual, sz, one)?;
+        let rows = fb.binary(BinOp::LogicalOr, tall, deep)?;
+        let low = Self::k(fb, 31)?;
+        let lanes = fb.binary(BinOp::BitwiseAnd, sx, low)?;
+        let zero = Self::k(fb, 0)?;
+        let ragged = fb.binary(BinOp::INotEqual, lanes, zero)?;
+        fb.binary(BinOp::LogicalAnd, rows, ragged).map(Some)
+    }
+
     fn k(fb: &mut FunctionBuilder<'_>, n: u32) -> BResult<SValue> {
         let c = fb.u32_const(n)?;
         fb.module().const_value(c)

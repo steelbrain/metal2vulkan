@@ -1637,6 +1637,7 @@ field	metal2vulkan-air::LinkedName.specialized	pub specialized: bool
 field	metal2vulkan-air::LinkedSamplerGroup.kept	pub kept: usize
 field	metal2vulkan-air::LinkedSamplerGroup.library	pub library: bool
 field	metal2vulkan-air::LinkedSamplerGroup.states	pub states: Vec<SamplerState>
+field	metal2vulkan-air::Lockstep.across_rows	pub across_rows: Vec<crate::ir::InstId>
 field	metal2vulkan-air::Lockstep.barriers	pub barriers: Vec<crate::ir::InstId>
 field	metal2vulkan-air::Lockstep.device	pub device: u32
 field	metal2vulkan-air::Lockstep.emulated	pub emulated: bool
@@ -7863,6 +7864,7 @@ method	metal2vulkan-air::Entry::command_writes	pub fn command_writes(&self) -> C
 method	metal2vulkan-air::Entry::may_encode_indirect_commands	pub fn may_encode_indirect_commands(&self) -> bool
 method	metal2vulkan-air::Entry::may_write_textures	pub fn may_write_textures(&self) -> bool
 method	metal2vulkan-air::Lockstep::inserted	pub fn inserted(&self, i: crate::ir::InstId) -> bool
+method	metal2vulkan-air::Lockstep::orders_across_rows	pub fn orders_across_rows(&self, i: crate::ir::InstId) -> bool
 method	metal2vulkan-air::abi::AirAbi::check_container	pub fn check_container(&mut self, m: &Module, f: &LibraryFunction<'_>, meter: &mut Meter) -> Result<(), Error>
 method	metal2vulkan-air::abi::AirAbi::control_point_fetches	pub fn control_point_fetches(&self) -> impl Iterator<Item = FuncId> + '_
 method	metal2vulkan-air::abi::AirAbi::reaches_function_tables	pub fn reaches_function_tables(&self, ep: &EntryPoint) -> bool

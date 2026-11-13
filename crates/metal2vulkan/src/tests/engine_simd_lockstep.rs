@@ -1404,8 +1404,14 @@ define void @device_record_shared(ptr addrspace(1) %0, i32 %1, i32 %sg) #0 {
 /// The words of `out` after one workgroup of `threads` threads ran `m`, in both scheduling
 /// orders (which must agree) at subgroup width `lanes`.
 fn run_words(plan: &Plan, m: &TypedModule, threads: u32, lanes: SubgroupSize) -> Vec<u32> {
+    run_shape(plan, m, [threads, 1, 1], lanes)
+}
+
+/// [`run_words`] for one workgroup of local size `local`.
+fn run_shape(plan: &Plan, m: &TypedModule, local: [u32; 3], lanes: SubgroupSize) -> Vec<u32> {
+    let threads = local.iter().product::<u32>();
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip([threads, 1, 1]) {
+    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip(local) {
         spec.insert(SpecKey::LocalSize(a), u64::from(v));
     }
     // The flattened tiers' Vulkan workgroup width.
@@ -2138,8 +2144,9 @@ fn a_branchs_two_arms_take_no_device_barrier() {
 }
 
 /// The lockstep census names of the inserted barriers.
-const LOCKSTEP_NAMES: [&str; 4] = [
+const LOCKSTEP_NAMES: [&str; 5] = [
     "barrier.lockstep.threadgroup",
+    "barrier.lockstep.threadgroup.rows",
     "barrier.lockstep.simdgroup",
     "barrier.lockstep.emulated.simdgroup",
     "barrier.lockstep.device",
@@ -2862,4 +2869,222 @@ fn the_authored_4096_step_kernel_compiles_inside_the_budget() {
     };
     eprintln!("BARRIER-FREE-STEPS: 4096 steps: {work} work units, ledger peak {peak}");
     compiled.expect("4096 steps inside the standard budget");
+}
+
+/// The metadata of kernel `name(device uint *out [[buffer(0)]], uint3 pos
+/// [[thread_position_in_threadgroup]], uint t [[thread_index_in_threadgroup]])`.
+fn footer_pos(name: &str) -> String {
+    format!(
+        r#"
+declare void @air.wg.barrier(i32, i32) #1
+
+attributes #0 = {{ convergent mustprogress nounwind willreturn }}
+attributes #1 = {{ convergent mustprogress nounwind willreturn }}
+
+!air.kernel = !{{!9}}
+!air.version = !{{!18}}
+!air.language_version = !{{!19}}
+
+!9 = !{{ptr @{name}, !10, !11}}
+!10 = !{{}}
+!11 = !{{!12, !13, !14}}
+!12 = !{{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}}
+!13 = !{{i32 1, !"air.thread_position_in_threadgroup", !"air.arg_type_name", !"uint3", !"air.arg_name", !"pos"}}
+!14 = !{{i32 2, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}}
+!18 = !{{i32 2, i32 8, i32 0}}
+!19 = !{{!"Metal", i32 4, i32 0, i32 0}}
+"#
+    )
+}
+
+/// Kernel `name` (of [`footer_pos`]'s parameters) planned on `profile_name`, run in one workgroup
+/// of each local size of `shapes` at each width of `lanes`, read as lockstep reads (`expect` of
+/// the thread's `x` and index). Returns the plan.
+fn check_shapes(
+    name: &str,
+    body: &str,
+    profile_name: &str,
+    shapes: &[[u32; 3]],
+    lanes: &[SubgroupSize],
+    expect: impl Fn(u32, u32) -> u32,
+) -> Option<Plan> {
+    let bc = assemble_text(name, &format!("{HEADER}\n{body}\n{}", footer_pos(name)))?;
+    let p = profile(profile_name, DevicePolicy::default()).expect("profile");
+    let (plan, m) = typed_module(&bc, name, &p).unwrap_or_else(|e| panic!("{name}: {e}"));
+    for &local in shapes {
+        let threads = local.iter().product::<u32>();
+        let want: Vec<u32> = (0..threads).map(|t| expect(t % local[0], t)).collect();
+        for &w in lanes {
+            assert_eq!(
+                run_shape(&plan, &m, local, w),
+                want,
+                "{name} on {profile_name} at {local:?} {w:?}"
+            );
+        }
+    }
+    Some(plan)
+}
+
+/// Each thread stores at words `a = (x >> 3) + 36 (x & 7)` and `a + 16` of `@grid`, then at
+/// words `288 + (x & 31) + (x & -32)` and that plus 96, and after a barrier reads back word
+/// `a` (the stores of an 8-by-8 tile and its weights). The row index and the third address each
+/// pass through a phi of one value, as branches a constant decided leave them. Where each
+/// simdgroup lies within one row, its threads' `x`s are 32 places from a multiple of 32, and no
+/// two of them meet: `a` and `a + 16` meet only for `x`s 128 apart, the last two for `x`s 96
+/// apart. A threadgroup whose simdgroups may span two rows has pairs that do, so each of the
+/// three barriers between the stores runs only there.
+const STRIDE_144: &str = r#"
+define void @stride_144(ptr addrspace(1) %0, <3 x i32> %pos, i32 %t) #0 {
+entry:
+  %x = extractelement <3 x i32> %pos, i64 0
+  %hi0 = lshr i32 %x, 3
+  br label %tile
+tile:
+  %hi = phi i32 [ %hi0, %entry ]
+  %lo = and i32 %x, 7
+  %lo36 = mul nuw nsw i32 %lo, 36
+  %a = add nuw nsw i32 %hi, %lo36
+  %aw = zext i32 %a to i64
+  %pa = getelementptr inbounds [512 x i32], ptr addrspace(3) @grid, i64 0, i64 %aw
+  store i32 %x, ptr addrspace(3) %pa, align 4
+  %pb = getelementptr inbounds i32, ptr addrspace(3) %pa, i64 16
+  %xb = add i32 %x, 1000
+  store i32 %xb, ptr addrspace(3) %pb, align 4
+  %lane = and i32 %x, 31
+  %first = and i32 %x, -32
+  %c = add nuw nsw i32 %lane, %first
+  %cw = zext i32 %c to i64
+  %pc0 = getelementptr inbounds [512 x i32], ptr addrspace(3) @grid, i64 0, i64 288
+  %pc1 = getelementptr inbounds i32, ptr addrspace(3) %pc0, i64 %cw
+  br label %weights
+weights:
+  %pc = phi ptr addrspace(3) [ %pc1, %tile ]
+  store i32 %t, ptr addrspace(3) %pc, align 4
+  %pd = getelementptr inbounds i32, ptr addrspace(3) %pc, i64 96
+  store i32 %t, ptr addrspace(3) %pd, align 4
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  %v = load i32, ptr addrspace(3) %pa, align 4
+  %tw = zext i32 %t to i64
+  %po = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %tw
+  store i32 %v, ptr addrspace(1) %po, align 4
+  ret void
+}
+"#;
+
+/// Each thread stores its index at word `3 t` of `@wide` and its index plus 100 at word
+/// `3 t + 9`, the first word of thread `t + 3`, which reads its word after a barrier. A 12-byte
+/// stride is no power of two, and lanes 3 apart meet: the pair keeps its barrier, and lockstep's
+/// later store wins.
+const STRIDE_12: &str = r#"
+define void @stride_12(ptr addrspace(1) %0, i32 %1, i32 %sg) #0 {
+  %a = mul nuw nsw i32 %1, 3
+  %aw = zext i32 %a to i64
+  %pa = getelementptr inbounds [128 x i32], ptr addrspace(3) @wide, i64 0, i64 %aw
+  store i32 %1, ptr addrspace(3) %pa, align 4
+  %pb = getelementptr inbounds i32, ptr addrspace(3) %pa, i64 9
+  %v100 = add i32 %1, 100
+  store i32 %v100, ptr addrspace(3) %pb, align 4
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  %v = load i32, ptr addrspace(3) %pa, align 4
+  %tw = zext i32 %1 to i64
+  %po = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %tw
+  store i32 %v, ptr addrspace(1) %po, align 4
+  ret void
+}
+"#;
+
+/// Each thread stores `x + 100` at word `x` of `@tg`, alike in every row, then after a barrier
+/// loads word `x` and stores one more there. Lockstep loads every word before any is stored
+/// again. Two threads of a simdgroup share an `x` only where it spans two rows, so the barrier
+/// between the load and the store runs only there.
+const ROW_WORD: &str = r#"
+define void @row_word(ptr addrspace(1) %0, <3 x i32> %pos, i32 %t) #0 {
+  %x = extractelement <3 x i32> %pos, i64 0
+  %xw = zext i32 %x to i64
+  %p = getelementptr inbounds [64 x i32], ptr addrspace(3) @tg, i64 0, i64 %xw
+  %init = add i32 %x, 100
+  store i32 %init, ptr addrspace(3) %p, align 4
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  %v = load i32, ptr addrspace(3) %p, align 4
+  %next = add i32 %v, 1
+  store i32 %next, ptr addrspace(3) %p, align 4
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  %tw = zext i32 %t to i64
+  %po = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %tw
+  store i32 %v, ptr addrspace(1) %po, align 4
+  ret void
+}
+"#;
+
+/// Stores whose bytes meet only for `x`s 96 or 128 apart ([`STRIDE_144`]) take barriers that run only
+/// where a simdgroup may span two rows, and read back their own word in one row; stores 12 bytes
+/// apart a thread, three threads from meeting ([`STRIDE_12`]), keep an unconditional barrier and
+/// read lockstep's answer at every width.
+#[test]
+fn a_stride_no_lanes_of_a_simdgroup_share_takes_no_barrier_one_they_share_keeps_it() {
+    for profile_name in ["lavapipe", "nvidia-rtx5080-laptop", "moltenvk-m3"] {
+        let Some(plan) = check_shapes(
+            "stride_144",
+            STRIDE_144,
+            profile_name,
+            &[[128, 1, 1], [64, 2, 1]],
+            &CHUNKED,
+            |x, _| x,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            uses(&plan, "barrier.lockstep.threadgroup.rows"),
+            3,
+            "{profile_name}"
+        );
+        assert_eq!(
+            uses(&plan, "barrier.lockstep.threadgroup"),
+            0,
+            "{profile_name}"
+        );
+        let keep = |t: u32| if t < 3 { t } else { t + 97 };
+        let Some(plan) = check("stride_12", STRIDE_12, profile_name, 32, &CHUNKED, keep) else {
+            return;
+        };
+        assert_eq!(
+            uses(&plan, "barrier.lockstep.threadgroup"),
+            1,
+            "{profile_name}"
+        );
+        assert_eq!(
+            uses(&plan, "barrier.lockstep.threadgroup.rows"),
+            0,
+            "{profile_name}"
+        );
+    }
+}
+
+/// A barrier of pairs that meet only across rows ([`ROW_WORD`]) runs in a simdgroup of four rows
+/// of 8 and of two rows of 16, where every thread reads the word before any thread stores it
+/// again, and in rows of 32 it stands down with the same answers.
+#[test]
+fn a_barrier_of_pairs_meeting_across_rows_runs_where_a_simdgroup_spans_them() {
+    for profile_name in ["lavapipe", "nvidia-rtx5080-laptop"] {
+        let Some(plan) = check_shapes(
+            "row_word",
+            ROW_WORD,
+            profile_name,
+            &[[8, 4, 1], [16, 2, 1], [32, 1, 1]],
+            &CHUNKED,
+            |x, _| x + 100,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            uses(&plan, "barrier.lockstep.threadgroup.rows"),
+            1,
+            "{profile_name}"
+        );
+        assert_eq!(
+            uses(&plan, "barrier.lockstep.threadgroup"),
+            0,
+            "{profile_name}"
+        );
+    }
 }
