@@ -123,6 +123,22 @@ pub(super) fn import_page(device: &Device) -> Option<u64> {
     Some(page)
 }
 
+/// Why the serving generation imports no host memory, and whether its physical device offers
+/// `VK_EXT_external_memory_host` all the same; `None` where it imports host memory. Read as
+/// [`import_page`] reads the page.
+pub(super) fn no_import(device: &Device) -> Option<(String, bool)> {
+    let serving = device.current();
+    let shared = serving.shared();
+    let refused = shared.host_import.as_ref().err()?;
+    // SAFETY: the physical device is the instance's, which the generation holds.
+    let listed =
+        unsafe { (shared.instance.raw).enumerate_device_extension_properties(shared.physical) };
+    let offered = listed.unwrap().iter().any(|extension| {
+        extension.extension_name_as_c_str() == Ok(ash::ext::external_memory_host::NAME)
+    });
+    Some((format!("{refused:?}"), offered))
+}
+
 /// The device's live `VkDevice`s once they are `live`, waited for at most [`WAIT`].
 fn live_vk_devices(device: &Device, live: u64) -> u64 {
     let began = Instant::now();

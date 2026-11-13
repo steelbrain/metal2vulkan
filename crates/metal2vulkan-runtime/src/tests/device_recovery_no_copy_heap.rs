@@ -5,9 +5,11 @@
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). No GPU fault: the loss is marked (`Device::recover_for_test`).
+//! It says whether it ran: a device that imports no host memory skips it, named with the reason,
+//! and one that offers `VK_EXT_external_memory_host` must import.
 
 use super::device_recovery::{heard_device, outcome, recovery_notices, Heard, Scratch};
-use super::device_recovery_no_copy::{fill, import_page, mapping, read, unmap, BYTES};
+use super::device_recovery_no_copy::{fill, mapping, no_import, read, unmap, BYTES};
 use crate::{
     BlitOption, CommandBufferStatus, CommandQueue, HeapDescriptor, HeapType, HostMemory, Origin,
     ResourceOptions, Size, Texture, TextureDescriptor,
@@ -95,8 +97,16 @@ fn a_recovery_carries_a_no_copy_heap_with_its_buffer_and_texture() {
     let scratch = Scratch::new();
     let heard = Heard::default();
     let device = heard_device(&scratch.0, &heard);
-    if import_page(&device).is_none() {
-        eprintln!("NO-COPY-HEAP-CARRY: the device imports no host memory here; nothing to test");
+    let name = device.name().to_owned();
+    if let Some((refused, offered)) = no_import(&device) {
+        // A device that offers host-pointer import imports here: RADV, lavapipe.
+        assert!(
+            !offered,
+            "{name} offers VK_EXT_external_memory_host but imports no host memory: {refused}"
+        );
+        eprintln!(
+            "NO-COPY-HEAP-CARRY on {name}: skipped, the device imports no host memory: {refused}"
+        );
         return;
     }
     let queue = device.new_command_queue().unwrap();
@@ -159,4 +169,9 @@ fn a_recovery_carries_a_no_copy_heap_with_its_buffer_and_texture() {
     assert_eq!(texels(&queue, &later_texture), vec![0x55; texel_bytes]);
     drop((later_texture, later, over, placed, buffer, heap));
     unmap(at, HEAP);
+    eprintln!(
+        "NO-COPY-HEAP-CARRY on {name}: ran: the heap over host pages carried with its buffer, its \
+         placed texture and the texture over the buffer; placements after the recovery read the \
+         pages"
+    );
 }
