@@ -132,7 +132,12 @@ fn executed_through_range(
         (CommandBufferStatus::Completed, None)
     );
     let forms = command_buffer.trail_form_texts();
-    eprintln!("TRAIL-GPU-FORMS {}: {forms:?}", device.name());
+    let gpu = command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap();
+    eprintln!(
+        "TRAIL-GPU-FORMS {}: GPU {:.3} ms; {forms:?}",
+        device.name(),
+        gpu * 1e3
+    );
     if forms.is_empty() && device.work_counts().gpu_form_commands == 0 {
         eprintln!("TRAIL-GPU-FORMS: the device records no execution in its GPU form");
     }
