@@ -166,6 +166,7 @@ impl Program {
             stand_in: self.stand_in,
             others: Mutex::new(Lru::counted(VARIANTS)),
             flat_refused: AtomicBool::new(false),
+            call_flat_refused: AtomicBool::new(false),
             replay_refused: AtomicBool::new(false),
             folded_refused: AtomicBool::new(false),
             added_unsupported: self.added_unsupported,
