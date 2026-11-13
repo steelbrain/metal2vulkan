@@ -273,7 +273,7 @@
 //!   own draw reads such a buffer at stride 0 (`render/vertex_strides.rs`).
 
 use super::bound::Bound;
-use super::fan_out::{self, FanOutDraw, FanOutRoutes, FanOutRun, Probe};
+use super::fan_out::{self, FanOutDraw, FanOutRoutes, FanOutRun, Part, Probe, Probed};
 use super::mesh::MeshGrid;
 use super::pass_start_reads::{PassStartReads, PassStartTables};
 use super::pass_steps::PassSteps;
@@ -344,8 +344,7 @@ use gpu::GpuForm;
 pub(super) use gpu::ReplayedDraws;
 use metal2vulkan::bind::indirect_commands::{Action, BufferStage, CommandRecord};
 use metal2vulkan::bind::{
-    fan_out::{PROBE_COUNT_WORDS, PROBE_DRAW_WORDS},
-    DrawCall, RateMapRegions, ReplayFaults, ViewSetup,
+    fan_out::PROBE_DRAW_WORDS, DrawCall, RateMapRegions, ReplayFaults, ViewSetup,
 };
 use metal2vulkan::metal::{
     IndexType, IndirectCommandType, PrimitiveTopologyClass, PrimitiveType, VertexStepFunction,
@@ -1114,15 +1113,69 @@ fn trail_draw(action: &Action) -> Option<(bool, u32, u32, u32)> {
 
 /// The vertices of each primitive of `draw` of `pipeline`, where its indices may be drawn as
 /// consecutive ranges, each a draw of its own, as Metal draws the whole (`rate_mapped_pass.rs`,
-/// **Pieces**): a list of points, lines or triangles, which Metal never restarts, of one
-/// instance, whose pipeline reads no `[[primitive_id]]` and writes no memory. `None` for any
-/// other.
+/// **Pieces**): [`list_vertices`]'s.
 fn index_ranges_of(pipeline: &RenderPipelineState, draw: &IndexedDraw) -> Option<u32> {
+    list_vertices(pipeline, draw.primitive_type, draw.instance_count)
+}
+
+/// The triangles of `draw` of `pipeline`, and whether its parts begin at even ones, where a draw
+/// the probe flagged is drawn in parts (`render/fan_out.rs`, **Parts**): a list of triangles whose
+/// vertices or indices may be drawn as consecutive ranges ([`list_vertices`]), its parts of a
+/// 16-bit index list beginning at even triangles. `None` for any other, drawn region by region
+/// whole.
+fn in_parts<B>(pipeline: &RenderPipelineState, draw: &Draw<B>) -> Option<(u32, bool)> {
+    let triangle = DrawPrimitiveType::Public(PrimitiveType::Triangle);
+    match draw {
+        Draw::Primitives(
+            Assembly::Primitives(PrimitiveType::Triangle),
+            DrawCall::Primitives {
+                vertex_count,
+                instance_count,
+                ..
+            },
+        ) => (list_vertices(pipeline, triangle, *instance_count) == Some(3))
+            .then_some((vertex_count / 3, false)),
+        Draw::Indexed(draw, _) => (draw.primitive_type == triangle
+            && index_ranges_of(pipeline, draw) == Some(3))
+        .then_some((draw.index_count / 3, index_size(draw.index_type) == 2)),
+        _ => None,
+    }
+}
+
+/// The draw of `part` of a draw without indices `whole` (`render/fan_out.rs`, **Parts**): its
+/// triangles' vertices, from the part's first.
+fn part_call(whole: DrawCall, part: Part) -> DrawCall {
+    match whole {
+        DrawCall::Primitives {
+            vertex_start,
+            instance_count,
+            base_instance,
+            ..
+        } => DrawCall::Primitives {
+            vertex_start: vertex_start + 3 * part.first,
+            vertex_count: 3 * part.count,
+            instance_count,
+            base_instance,
+        },
+        other => other,
+    }
+}
+
+/// The vertices of each primitive of a draw of `primitive_type` and `instance_count` instances of
+/// `pipeline`, where its vertices or indices may be drawn as consecutive ranges, each a draw of
+/// its own, as Metal draws the whole: a list of points, lines or triangles, which Metal never
+/// restarts, of one instance, whose pipeline reads no `[[primitive_id]]` and writes no memory.
+/// `None` for any other.
+fn list_vertices(
+    pipeline: &RenderPipelineState,
+    primitive_type: DrawPrimitiveType,
+    instance_count: u32,
+) -> Option<u32> {
     let RenderStateKind::Graphics(state) = pipeline.kind() else {
         return None;
     };
     let graphics = &state.base().graphics;
-    if draw.instance_count != 1
+    if instance_count != 1
         || graphics.reads_primitive_id
         || graphics.vertex_writes_memory
         || graphics.fragment_writes_memory
@@ -1130,7 +1183,7 @@ fn index_ranges_of(pipeline: &RenderPipelineState, draw: &IndexedDraw) -> Option
     {
         return None;
     }
-    match draw.primitive_type {
+    match primitive_type {
         DrawPrimitiveType::Public(PrimitiveType::Point) => Some(1),
         DrawPrimitiveType::Public(PrimitiveType::Line) => Some(2),
         DrawPrimitiveType::Public(PrimitiveType::Triangle) => Some(3),
@@ -2598,42 +2651,105 @@ impl RenderExecution {
             if !probing {
                 found.piece_before(encoder);
             }
-            match draw {
-                Draw::Primitives(assembly, draw) => {
-                    encoder.draw(live, CALL, assembly, draw, DrawBuffers::default(), false)?
+            // A draw the probe flagged: drawn in parts where it can be, its triangles from the
+            // first it flagged to the last region by region and the others fanned out, each part
+            // a draw a piece may begin before; else region by region whole (`render/fan_out.rs`,
+            // **Parts**).
+            let fan = encoder.fan_out;
+            let parts = match fan.and_then(|fan| fan.flagged) {
+                Some(flagged) => {
+                    let parts = (encoder.pipeline.as_ref())
+                        .and_then(|pipeline| in_parts(pipeline, &draw))
+                        .map(|(triangles, even)| fan_out::parts(flagged, triangles, even));
+                    if parts.is_none() {
+                        encoder.fan_out = None;
+                    }
+                    parts
                 }
-                Draw::Indexed(mut draw, (buffer, mut offset)) => {
-                    // A draw that would hold more than a piece's work, drawn as consecutive ranges
-                    // of its indices, each a draw a piece may begin before; the last below. A
-                    // fanned-out draw, and a probe, is drawn whole.
-                    let cut = encoder.rate_map.is_some() && !probing && encoder.fan_out.is_none();
-                    let per_primitive = cut
-                        .then(|| index_ranges_of(encoder.pipeline.as_ref()?, &draw))
-                        .flatten();
-                    if let Some(per_primitive) = per_primitive {
-                        let size = index_size(draw.index_type);
-                        let mut ranges = 0u64;
-                        loop {
-                            let most = rate_mapped_pass::index_range(regions, per_primitive);
-                            if draw.index_count <= most {
-                                break;
-                            }
-                            let range = IndexedDraw {
-                                index_count: most,
-                                ..draw
-                            };
-                            encoder.draw_indexed(live, CALL, range, &buffer, offset)?;
+                None => None,
+            };
+            let part_fan = |part: &Part| {
+                (fan.filter(|_| part.fanned)).map(|fan| FanOutDraw {
+                    flagged: None,
+                    ..fan
+                })
+            };
+            // Each part's triangles and whether its draw ran its fan-out variant.
+            let mut drawn = Vec::new();
+            match draw {
+                Draw::Primitives(assembly, whole) => {
+                    let draws: Vec<(Option<FanOutDraw>, DrawCall, u32)> = match &parts {
+                        None => vec![(encoder.fan_out, whole, 0)],
+                        Some(parts) => (parts.iter())
+                            .map(|part| (part_fan(part), part_call(whole, *part), part.count))
+                            .collect(),
+                    };
+                    for (at, (fan_out, draw, triangles)) in draws.into_iter().enumerate() {
+                        if at > 0 {
                             regions = note(found.piece_after(encoder));
                             found.piece_before(encoder);
-                            draw.index_count -= most;
-                            offset += u64::from(most) * size;
-                            ranges += 1;
                         }
-                        if ranges > 0 {
-                            (encoder.core.device().shared().counts).rate_map_index_ranges(ranges);
-                        }
+                        encoder.fan_out = fan_out;
+                        encoder.draw(live, CALL, assembly, draw, DrawBuffers::default(), false)?;
+                        drawn.push((triangles, encoder.fanned.0));
                     }
-                    encoder.draw_indexed(live, CALL, draw, &buffer, offset)?;
+                }
+                Draw::Indexed(whole, (buffer, whole_offset)) => {
+                    let size = index_size(whole.index_type);
+                    let draws: Vec<(Option<FanOutDraw>, IndexedDraw, u64)> = match &parts {
+                        None => vec![(encoder.fan_out, whole, whole_offset)],
+                        Some(parts) => (parts.iter())
+                            .map(|part| {
+                                let draw = IndexedDraw {
+                                    index_count: 3 * part.count,
+                                    ..whole
+                                };
+                                let offset = whole_offset + 3 * u64::from(part.first) * size;
+                                (part_fan(part), draw, offset)
+                            })
+                            .collect(),
+                    };
+                    for (at, (fan_out, mut draw, mut offset)) in draws.into_iter().enumerate() {
+                        if at > 0 {
+                            regions = note(found.piece_after(encoder));
+                            found.piece_before(encoder);
+                        }
+                        encoder.fan_out = fan_out;
+                        let triangles = draw.index_count / 3;
+                        // A draw that would hold more than a piece's work, drawn as consecutive
+                        // ranges of its indices, each a draw a piece may begin before; the last
+                        // below. A fanned-out draw, and a probe, is drawn whole.
+                        let cut =
+                            encoder.rate_map.is_some() && !probing && encoder.fan_out.is_none();
+                        let per_primitive = cut
+                            .then(|| index_ranges_of(encoder.pipeline.as_ref()?, &draw))
+                            .flatten();
+                        if let Some(per_primitive) = per_primitive {
+                            let mut ranges = 0u64;
+                            loop {
+                                let most = rate_mapped_pass::index_range(regions, per_primitive);
+                                if draw.index_count <= most {
+                                    break;
+                                }
+                                let range = IndexedDraw {
+                                    index_count: most,
+                                    ..draw
+                                };
+                                encoder.draw_indexed(live, CALL, range, &buffer, offset)?;
+                                regions = note(found.piece_after(encoder));
+                                found.piece_before(encoder);
+                                draw.index_count -= most;
+                                offset += u64::from(most) * size;
+                                ranges += 1;
+                            }
+                            if ranges > 0 {
+                                let counts = &encoder.core.device().shared().counts;
+                                counts.rate_map_index_ranges(ranges);
+                            }
+                        }
+                        encoder.draw_indexed(live, CALL, draw, &buffer, offset)?;
+                        drawn.push((triangles, encoder.fanned.0));
+                    }
                 }
                 Draw::Mesh(grid, object, mesh) => {
                     encoder.replay_plain = false;
@@ -2674,9 +2790,19 @@ impl RenderExecution {
             if let Some(run) = &mut encoder.fan_run {
                 let (fanned, writes) = encoder.fanned;
                 run.end(place, fanned, writes);
-                if fanned && !probing {
-                    let few = (encoder.fan_out).is_some_and(|f| f.mode == RegionFanOut::DrawFew);
-                    (encoder.core.device().shared().counts).rate_map_fanned_draw(few);
+                let counts = &encoder.core.device().shared().counts;
+                match parts.is_some() {
+                    true => counts.rate_map_drawn_in_parts(
+                        (drawn.iter().filter(|(_, fanned)| !fanned))
+                            .map(|&(triangles, _)| u64::from(triangles))
+                            .sum(),
+                    ),
+                    false if fanned && !probing => {
+                        let few =
+                            (encoder.fan_out).is_some_and(|fan| fan.mode == RegionFanOut::DrawFew);
+                        counts.rate_map_fanned_draw(few);
+                    }
+                    false => {}
                 }
             }
             if !probing {
@@ -2684,14 +2810,20 @@ impl RenderExecution {
             }
             if let Some((notes, _)) = &mut trail {
                 use crate::encoder_trail::Route;
-                notes.routed(
-                    match (probing, encoder.fanned.0, encoder.rate_map.is_some()) {
+                // Each part's route, or the whole draw's (a draw without parts drew once, or a
+                // mesh or patch draw none above).
+                let routes = match drawn.is_empty() {
+                    true => vec![encoder.fanned.0],
+                    false => drawn.iter().map(|&(_, fanned)| fanned).collect(),
+                };
+                for fanned in routes {
+                    notes.routed(match (probing, fanned, encoder.rate_map.is_some()) {
                         (true, _, _) => Route::Probe,
                         (false, true, _) => Route::FannedOut,
                         (false, false, true) => Route::RegionByRegion,
                         (false, false, false) => Route::Plain,
-                    },
-                );
+                    });
+                }
             }
         }
         if let Some((notes, _)) = trail {
@@ -3035,6 +3167,7 @@ impl RenderExecution {
                     mode,
                     index: 0,
                     copies: 0,
+                    flagged: None,
                 });
                 for pipeline in named {
                     encoder.settle_draws(&mut live, pipeline, fanned);
@@ -4107,7 +4240,7 @@ impl DeferredPass {
             .sum();
         let draw_words = u64::from(PROBE_DRAW_WORDS);
         let mut probes: Vec<ProbeRun> = Vec::with_capacity(reads.len());
-        let mut words: Arc<[u32]> = Arc::from([]);
+        let mut found_draws: Arc<[Probed]> = Arc::from([]);
         let mut probed = None;
         if commands > 0 {
             let len = 4 * draw_words * commands as u64;
@@ -4140,20 +4273,13 @@ impl DeferredPass {
                     // the host by its last barrier; the words are writable and apart from the
                     // region.
                     unsafe { flags.copy_out(0, read_words.as_mut_ptr().cast(), 4 * read) };
-                    // Each draw's flag, the copies its triangles emit (its counts' sum), and
-                    // whether a triangle of it is too wide for few copies (a wide word marked).
-                    let lanes = PROBE_COUNT_WORDS as usize;
-                    let draws: Vec<u32> = (read_words.chunks(PROBE_DRAW_WORDS as usize))
-                        .flat_map(|draw| {
-                            let counts = draw.iter().skip(1).take(lanes);
-                            let copies = counts.fold(0u32, |a, &w| a.saturating_add(w));
-                            let wide = draw.iter().skip(1 + lanes).any(|&w| w != 0);
-                            [draw[0], copies, u32::from(wide)]
-                        })
+                    // What the probe found of each draw (`fan_out::Probed`).
+                    let draws: Vec<Probed> = (read_words.chunks(PROBE_DRAW_WORDS as usize))
+                        .map(Probed::of)
                         .collect();
-                    let flagged = draws.chunks(3).filter(|draw| draw[0] != 0).count();
+                    let flagged = draws.iter().filter(|draw| draw.flagged.is_some()).count();
                     device.shared().counts.rate_map_probe(flagged as u64);
-                    words = draws.into();
+                    found_draws = draws.into();
                 }
                 probed = Some(recorded);
             }
@@ -4167,7 +4293,7 @@ impl DeferredPass {
                     start,
                     faults,
                     slots,
-                    words: Arc::clone(&words),
+                    probed: Arc::clone(&found_draws),
                 }))
             })
             .collect();
@@ -4238,11 +4364,14 @@ impl DeferredPass {
         });
         core.retain(passes);
         let mut recorded = core.end_segment()?;
+        // The host's wait for it, counted.
+        let started = Instant::now();
         // SAFETY: the segment's command buffers, of the command buffer's pool, ended and
         // recorded for this submission alone; what they use the segment holds, which the pass's
         // joins.
         let what = "the rasterization-rate map's fan-out probe";
         let completed = unsafe { command_buffer.submit_waited(&recorded.raws, what) }?;
+        (device.shared().counts).rate_map_probe_waited(started.elapsed());
         // Its time read and counted, its submission done.
         drop(times);
         recorded.raws.clear();

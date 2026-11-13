@@ -27,9 +27,12 @@
 //!   widening, reach more pairs than the copies; and adds the copies the draw emits of each
 //!   triangle it fans out, the pairs its bounds reach unwidened, into the count its `PrimitiveId`
 //!   picks of the [`PROBE_COUNT_WORDS`] after it, so the consumer sums the draw's work and no
-//!   word takes every triangle's add; and for a triangle whose bounds, widened, reach more pairs
-//!   than [`FEW_COPIES`], writes 1 into the word its `PrimitiveId` picks of the as many after
-//!   those, which mark the draw one its variant of few copies cannot draw. Its writes need
+//!   word takes every triangle's add; for a triangle it does not flag whose bounds, widened,
+//!   reach more pairs than [`FEW_COPIES`], writes 1 into the word its `PrimitiveId` picks of the
+//!   as many after those, which mark the draw one its variant of few copies cannot draw; and for
+//!   a triangle it flags, raises the word its `PrimitiveId` picks of the as many after those to
+//!   `u32::MAX − PrimitiveId`, and of the as many after them to `PrimitiveId + 1`, so the
+//!   consumer finds the draw's first and last flagged triangle. Its writes need
 //!   `vertexPipelineStoresAndAtomics`.
 
 use super::geometry::{array, kf, ku, scalar, GeometryStages};
@@ -402,10 +405,29 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
                 let zero = ku(fb, 0)?;
                 fb.access_chain(base, &[zero, at])
             };
+            // A flagged triangle: the draw's flag, and its `PrimitiveId` raised into the first's
+            // and the last's words it picks.
+            let lanes = ku(&mut fb, PROBE_COUNT_WORDS)?;
+            let wide_at = fb.binary(BinOp::IAdd, count_at, lanes)?;
+            let first_at = fb.binary(BinOp::IAdd, wide_at, lanes)?;
+            let last_at = fb.binary(BinOp::IAdd, first_at, lanes)?;
+            let most_id = ku(&mut fb, u32::MAX)?;
+            let first = fb.binary(BinOp::ISub, most_id, id)?;
+            let last = fb.binary(BinOp::IAdd, id, one)?;
             let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
                 let ptr = word_ptr(fb, flag_at)?;
                 let one = ku(fb, 1)?;
                 fb.atomic_store(ptr, Scope::Device, Semantics::RELAXED, one)?;
+                for (at, value) in [(first_at, first), (last_at, last)] {
+                    let ptr = word_ptr(fb, at)?;
+                    fb.atomic(
+                        AtomicOp::UMax,
+                        ptr,
+                        Scope::Device,
+                        Semantics::RELAXED,
+                        value,
+                    )?;
+                }
                 Ok(ArmEnd::FallThrough(Vec::new()))
             });
             fb.if_(&mut ctx, flagged, arm, None)?;
@@ -422,11 +444,12 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
                 Ok(ArmEnd::FallThrough(Vec::new()))
             });
             fb.if_(&mut ctx, counted, arm, None)?;
-            // More pairs than a draw of few copies emits: the wide word its `PrimitiveId` picks.
+            // A triangle it does not flag of more pairs than a draw of few copies emits: the wide
+            // word its `PrimitiveId` picks.
             let few = ku(&mut fb, FEW_COPIES)?;
             let wide = fb.binary(BinOp::UGreaterThan, count, few)?;
-            let lanes = ku(&mut fb, PROBE_COUNT_WORDS)?;
-            let wide_at = fb.binary(BinOp::IAdd, count_at, lanes)?;
+            let fanned = fb.unary(UnOp::LogicalNot, flagged)?;
+            let wide = fb.binary(BinOp::LogicalAnd, fanned, wide)?;
             let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
                 let ptr = word_ptr(fb, wide_at)?;
                 let one = ku(fb, 1)?;

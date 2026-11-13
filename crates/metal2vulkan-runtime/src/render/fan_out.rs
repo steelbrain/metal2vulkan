@@ -1,12 +1,23 @@
 //! A rate-mapped pass's triangles that a host step records, each drawn once and fanned out to the
 //! map's regions (`rate_mapped_pass.rs`, **Fan-out**): whether the device fans them out, what the
-//! next command's draw records, the probe's and the routes' runs of an execution's commands, and
-//! the region table and viewport a fanned-out draw records through.
+//! next command's draw records, the probe's and the routes' runs of an execution's commands, the
+//! parts a flagged draw is drawn in, and the region table and viewport a fanned-out draw records
+//! through.
+//!
+//! **Parts.** A draw the probe flagged, a list of triangles of one instance whose pipeline reads
+//! no `[[primitive_id]]` and writes no memory (`render/executions.rs`, `in_parts`), is drawn in
+//! up to three parts in its place ([`parts`]): its triangles before the first the probe flagged,
+//! fanned out; those from it to the last it flagged, region by region; and those after, fanned
+//! out. Each part is a draw of a range of the draw's vertices or indices, so each triangle keeps
+//! its vertices, its `vertex_id`s and its place among the draw's: a pixel takes the draw's
+//! fragments in the draw's order. A flagged draw of any other kind is drawn region by region
+//! whole.
 
 use super::executions::Command;
 use crate::render_values::{ScissorRect, Viewport};
 use crate::Device;
 use ash::vk;
+use metal2vulkan::bind::fan_out::PROBE_COUNT_WORDS;
 use metal2vulkan::bind::ReplayFaults;
 use metal2vulkan::device::{RateMapRegionPolicy, VkFeature};
 use metal2vulkan::pipeline::RegionFanOut;
@@ -38,6 +49,74 @@ pub(super) struct FanOutDraw {
     /// A draw's: the copies of its triangles the probe counted, which its work counts
     /// (`rate_mapped_pass::fan_out_work`).
     pub(super) copies: u32,
+    /// A draw the probe flagged: the first and the last of its triangles it flagged, between
+    /// which its parts are drawn region by region (the module docs, **Parts**).
+    pub(super) flagged: Option<(u32, u32)>,
+}
+
+/// What the probe found of a draw it probed, from its words (`bind::fan_out::PROBE_DRAW_WORDS`):
+/// the copies its triangles emit (its counts summed), whether a triangle it does not flag is too
+/// wide for few copies (`bind::fan_out::FEW_COPIES`, a wide word marked), and the first and the
+/// last of its triangles it flagged, where it flagged one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Probed {
+    pub(super) copies: u32,
+    pub(super) wide: bool,
+    pub(super) flagged: Option<(u32, u32)>,
+}
+
+impl Probed {
+    /// What the probe found of a draw of its `words`.
+    pub(super) fn of(words: &[u32]) -> Probed {
+        let lanes = PROBE_COUNT_WORDS as usize;
+        let set = |k: usize| words.iter().skip(1 + k * lanes).take(lanes).copied();
+        let first = set(2).max().unwrap_or(0);
+        let last = set(3).max().unwrap_or(0);
+        Probed {
+            copies: set(0).fold(0u32, u32::saturating_add),
+            wide: set(1).any(|w| w != 0),
+            flagged: (words.first().is_some_and(|&flag| flag != 0))
+                .then(|| (u32::MAX - first, last.saturating_sub(1))),
+        }
+    }
+}
+
+/// A part of a flagged draw (the module docs, **Parts**): `count` of its triangles from triangle
+/// `first`, fanned out or region by region.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Part {
+    pub(super) first: u32,
+    pub(super) count: u32,
+    pub(super) fanned: bool,
+}
+
+/// The parts of a draw of `triangles` triangles whose triangles from `first` to `last` the probe
+/// flagged (the module docs, **Parts**): those before `first` fanned out, those from it to `last`
+/// region by region, and those after fanned out, an empty part left out. Where `even` (a list of
+/// 16-bit indices, whose ranges start 4-byte aligned as the draw's do) each part begins at an even
+/// triangle, the part drawn region by region widened to one. A flag past the triangles draws
+/// every triangle region by region.
+pub(super) fn parts((first, last): (u32, u32), triangles: u32, even: bool) -> Vec<Part> {
+    if first > last || last >= triangles {
+        return vec![Part {
+            first: 0,
+            count: triangles,
+            fanned: false,
+        }];
+    }
+    let (from, to) = match even {
+        true => (first & !1, (last + 1).next_multiple_of(2).min(triangles)),
+        false => (first, last + 1),
+    };
+    [(0, from, true), (from, to, false), (to, triangles, true)]
+        .into_iter()
+        .filter(|&(start, end, _)| end > start)
+        .map(|(start, end, fanned)| Part {
+            first: start,
+            count: end - start,
+            fanned,
+        })
+        .collect()
 }
 
 /// An encoder's run of an execution's commands where its host step fans the pass's triangles
@@ -80,31 +159,30 @@ impl Probe {
 
 impl FanOutRun {
     /// The fan-out of the draw of the command at `place` among the commands: the probe's, where
-    /// it probes on; the route's draw where the probe probed it and flagged none of its
-    /// triangles, of few copies where it marked none too wide for them; `None` for a draw
-    /// recorded region by region.
+    /// it probes on; the route's draw where the probe probed it, of few copies where it marked
+    /// none of the triangles it fans out too wide for them, and the triangles it flagged where it
+    /// flagged one, which the draw's parts take (the module docs, **Parts**); `None` for a draw
+    /// the probe did not probe, recorded region by region.
     pub(super) fn begin(&self, place: usize) -> Option<FanOutDraw> {
         match self {
             FanOutRun::Probe(probe) => (!probe.stopped).then_some(FanOutDraw {
                 mode: RegionFanOut::Probe,
                 index: probe.next,
                 copies: 0,
+                flagged: None,
             }),
             FanOutRun::Route(routes) => {
                 let index = routes.slots.get(place).copied().flatten()?;
-                let word = |w: u32| routes.words.get(w as usize).copied();
-                let mode = match word(3 * index + 2)? {
-                    0 => RegionFanOut::DrawFew,
-                    _ => RegionFanOut::Draw,
-                };
-                match word(3 * index)? {
-                    0 => Some(FanOutDraw {
-                        mode,
-                        index,
-                        copies: word(3 * index + 1)?,
-                    }),
-                    _ => None,
-                }
+                let probed = routes.probed.get(index as usize)?;
+                Some(FanOutDraw {
+                    mode: match probed.wide {
+                        false => RegionFanOut::DrawFew,
+                        true => RegionFanOut::Draw,
+                    },
+                    index,
+                    copies: probed.copies,
+                    flagged: probed.flagged,
+                })
             }
         }
     }
@@ -148,15 +226,14 @@ impl FanOutRun {
 /// The routes of an execution's commands at its host step (the module docs): the commands as the
 /// step read them, once, for the probe and the routes alike, from command `start`; the faults the
 /// read found; the index of each command's draw among the probe's, by its place among the
-/// commands that run, where it was probed; and the probe's words, three a probed draw: its flag,
-/// the copies its triangles emit (its counts summed), and 1 where a triangle of it is too wide for
-/// few copies (`bind::fan_out::FEW_COPIES`).
+/// commands that run, where it was probed; and what the probe found of each draw it probed, by
+/// its index.
 pub(super) struct FanOutRoutes {
     pub(super) commands: Vec<Option<Command>>,
     pub(super) start: u32,
     pub(super) faults: ReplayFaults,
     pub(super) slots: Vec<Option<u32>>,
-    pub(super) words: Arc<[u32]>,
+    pub(super) probed: Arc<[Probed]>,
 }
 
 /// An encoder's region table ([`table`]): its bytes, until its first draw that binds it uploads
@@ -241,3 +318,6 @@ pub(super) fn target(
         },
     )
 }
+
+#[cfg(test)]
+mod tests;

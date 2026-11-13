@@ -1107,7 +1107,7 @@ const-value	metal2vulkan::bind::fan_out::FEW_COPIES	4
 const-value	metal2vulkan::bind::fan_out::HEADER_ENTRIES	2
 const-value	metal2vulkan::bind::fan_out::MAX_SEGMENTS	128
 const-value	metal2vulkan::bind::fan_out::PROBE_COUNT_WORDS	32
-const-value	metal2vulkan::bind::fan_out::PROBE_DRAW_WORDS	1 + 2 * PROBE_COUNT_WORDS
+const-value	metal2vulkan::bind::fan_out::PROBE_DRAW_WORDS	1 + 4 * PROBE_COUNT_WORDS
 const-value	metal2vulkan::bind::fan_out::TABLE_BYTES	(HEADER_ENTRIES as u64 + 4 * MAX_SEGMENTS as u64) * 16
 const-value	metal2vulkan::bind::fan_out::WIDEN_PIXELS	0.125
 const-value	metal2vulkan::bind::indirect_commands::BINDING_COUNT	32
@@ -3243,11 +3243,14 @@ field	metal2vulkan-runtime::WorkCounts.rate_map_fanned_draws	pub rate_map_fanned
 field	metal2vulkan-runtime::WorkCounts.rate_map_fanned_few_draws	pub rate_map_fanned_few_draws: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_flagged_draws	pub rate_map_flagged_draws: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_index_ranges	pub rate_map_index_ranges: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_parted_draws	pub rate_map_parted_draws: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_parted_region_triangles	pub rate_map_parted_region_triangles: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_piece_gpu_nanos	pub rate_map_piece_gpu_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_piece_gpu_nanos_most	pub rate_map_piece_gpu_nanos_most: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_pieces	pub rate_map_pieces: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_pieces_timed	pub rate_map_pieces_timed: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_probe_gpu_nanos	pub rate_map_probe_gpu_nanos: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_probe_wait_nanos	pub rate_map_probe_wait_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_probes	pub rate_map_probes: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_by_coverage	pub reading_draws_by_coverage: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_in_place	pub reading_draws_in_place: u64

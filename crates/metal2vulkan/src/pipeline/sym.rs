@@ -291,8 +291,9 @@ pub enum SyntheticBinding {
     RateMapRegions,
     /// A fan-out probe's flags (`GraphicsState::region_fan_out`), a storage buffer of `u32`s its
     /// geometry stage writes into at the pushed index (`PushField::RegionProbe`,
-    /// `bind::fan_out::PROBE_DRAW_WORDS` a draw): a flag, the copies its draw emits, and the marks
-    /// of its triangles too wide for few copies. Declared with the vertex stage's symbols.
+    /// `bind::fan_out::PROBE_DRAW_WORDS` a draw): a flag, the copies its draw emits, the marks
+    /// of its triangles too wide for few copies, and its first and last flagged triangle. Declared
+    /// with the vertex stage's symbols.
     RateMapFlags,
     /// The render encoder's tessellation factor buffer (`setTessellationFactorBuffer:offset:
     /// instanceStride:`), a read-only storage buffer of a tessellation pipeline's synthesized

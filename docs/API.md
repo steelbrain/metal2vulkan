@@ -5774,11 +5774,16 @@ each item named states the rule in full.
   triangles is drawn once instead where a probe finds that none of its triangles crosses `w = 0`
   or touches more regions than the fan-out's copies: its variant's geometry stage emits a copy of
   each triangle for each region it touches (`VariantKey::region_fan_out`), a pixel centre within a
-  rounding error of an edge possibly covered otherwise (`docs/FAST-PATHS.md`). The probe costs
-  the host step a submission it waits for before the pass, which runs each probed draw's vertex
-  function and geometry stage once and shades nothing (`WorkCounts::rate_map_probes`,
-  `rate_map_probe_gpu_nanos`); a fanned-out draw runs its vertex function once where region by
-  region it runs once per region (`rate_mapped_pass.rs`, **Fan-out**).
+  rounding error of an edge possibly covered otherwise (`docs/FAST-PATHS.md`). A draw the probe
+  flags, a list of triangles of one instance whose pipeline reads no `[[primitive_id]]` and
+  writes no memory, is drawn in parts in its place: its triangles from the first the probe
+  flagged to the last region by region, those before and after fanned out
+  (`WorkCounts::rate_map_parted_draws`); another flagged draw is drawn region by region. The
+  probe costs the host step a submission it waits for before the pass, which runs each probed
+  draw's vertex function and geometry stage once and shades nothing (`WorkCounts::rate_map_probes`,
+  `rate_map_probe_gpu_nanos`, the host's wait `rate_map_probe_wait_nanos`); a fanned-out draw
+  runs its vertex function once where region by region it runs once per region
+  (`rate_mapped_pass.rs`, **Fan-out**).
 - **A pass over a map of a zero screen extent is refused**, `RegionError::RegionExtent` on that
   axis: the layer has no physical pixel there, so no attachment of the map's physical size can be
   made, and what Metal rasterizes in such a pass is not measured.

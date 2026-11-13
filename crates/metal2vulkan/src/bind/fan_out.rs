@@ -37,15 +37,19 @@
 //! 0)`.
 
 /// The words of a probe's flags each probed draw takes: its flag, then the
-/// [`PROBE_COUNT_WORDS`] its triangles add their copies into, then as many its triangles that
-/// reach more than [`FEW_COPIES`] pairs of segments mark (`pipeline::link::fan_out`, the probe),
-/// from word `PROBE_DRAW_WORDS·i` for the draw of index `i`. The consumer sums a draw's counts,
-/// and draws a draw none of whose wide words is marked through its variant of few copies
-/// (`RegionFanOut::DrawFew`).
-pub const PROBE_DRAW_WORDS: u32 = 1 + 2 * PROBE_COUNT_WORDS;
+/// [`PROBE_COUNT_WORDS`] its triangles add their copies into, then as many its triangles that it
+/// does not flag and that reach more than [`FEW_COPIES`] pairs of segments mark, then as many
+/// that hold the greatest `u32::MAX − PrimitiveId` of its flagged triangles, then as many that
+/// hold the greatest `PrimitiveId + 1` of them (`pipeline::link::fan_out`, the probe), from word
+/// `PROBE_DRAW_WORDS·i` for the draw of index `i`, each zero before the probe. The consumer sums
+/// a draw's counts, draws a draw none of whose wide words is marked through its variant of few
+/// copies (`RegionFanOut::DrawFew`), and takes the first and the last flagged primitive of a
+/// flagged draw from the least and the greatest of the last two sets.
+pub const PROBE_DRAW_WORDS: u32 = 1 + 4 * PROBE_COUNT_WORDS;
 
-/// The words a probed draw's triangles add their copies into, and the words they mark wide, a
-/// triangle the one of each its `PrimitiveId` picks (`PrimitiveId mod PROBE_COUNT_WORDS`): one
+/// The words a probed draw's triangles add their copies into, and in each of the other sets of
+/// its words ([`PROBE_DRAW_WORDS`]) as many, a triangle the one of each set its `PrimitiveId`
+/// picks (`PrimitiveId mod PROBE_COUNT_WORDS`): one
 /// word every triangle of a draw added into made the probe 15.4 to 20.7 ms of an RTX 3090's GPU
 /// time for 64 draws of 306,036 triangles; spread over these, 1.45 ms (NVIDIA 620.70.06, the
 /// pieces lane).
