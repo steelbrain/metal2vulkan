@@ -1417,7 +1417,8 @@ fn a_heap_two_plane_array_lays_its_slices_out_as_metal_does() {
 }
 
 /// A heap numbers its textures in the order it makes them: an encoder that made the textures
-/// before number `n` resident takes those from `n` on as it encodes its next command.
+/// before number `n` resident takes those from `n` on as it encodes its next command. One it
+/// forgets (a texture a recovery left) it holds no more.
 #[test]
 fn a_heap_numbers_its_textures_and_finds_those_made_after_a_mark() {
     use std::sync::{Arc, Weak};
@@ -1452,6 +1453,15 @@ fn a_heap_numbers_its_textures_and_finds_those_made_after_a_mark() {
         .collect();
     assert_eq!(all, [10, 40]);
     assert_eq!(held.since(4).count(), 0);
+    // One forgotten is held no more, its number taken still.
+    held.forget(&Arc::downgrade(&first));
+    let left: Vec<u32> = held
+        .since(0)
+        .filter_map(Weak::upgrade)
+        .map(|v| *v)
+        .collect();
+    assert_eq!(left, [40]);
+    assert_eq!(held.made(), 4);
 }
 
 /// An image takes whole granularity pages, at a multiple of the larger of its alignment and the

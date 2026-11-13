@@ -85,11 +85,11 @@ fn texels(queue: &CommandQueue, texture: &Texture) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(contents.as_ptr(), length as usize) }.to_vec()
 }
 
-/// A placement heap over the caller's pages, with a buffer and a texture placed in it, made
-/// before a recovery, is carried with them, as the notice counts: the heap is the new
-/// generation's, the buffer and the texture read the pages' bytes there, the GPU's write of the
-/// buffer reaches the pages, and a buffer and a texture placed in the heap after the recovery
-/// read the pages' bytes too.
+/// A placement heap over the caller's pages, with a buffer and a texture placed in it and a
+/// texture over the buffer, made before a recovery, is carried with them, as the notice counts:
+/// the heap is the new generation's, the buffer and the textures read the pages' bytes there, the
+/// GPU's write of the buffer reaches the pages and the texture over it, and a buffer and a
+/// texture placed in the heap after the recovery read the pages' bytes too.
 #[test]
 fn a_recovery_carries_a_no_copy_heap_with_its_buffer_and_texture() {
     let scratch = Scratch::new();
@@ -117,9 +117,11 @@ fn a_recovery_carries_a_no_copy_heap_with_its_buffer_and_texture() {
             .unwrap();
     let buffer = (heap.new_buffer_at_offset(BYTES, ResourceOptions::shared(), 0)).unwrap();
     let placed = heap.new_texture_at_offset(&texture, placed_at).unwrap();
+    let over = buffer.new_texture(&texture, 0, ROW).unwrap();
     assert_eq!(read(&device, &queue, &buffer), vec![5; BYTES as usize]);
     let texel_bytes = (ROW * HEIGHT) as usize;
     assert_eq!(texels(&queue, &placed), vec![0x33; texel_bytes]);
+    assert_eq!(texels(&queue, &over), vec![5; texel_bytes]);
     let address = buffer.gpu_address();
     let from = heard.lock().unwrap().len();
     device.recover_for_test().unwrap();
@@ -127,7 +129,10 @@ fn a_recovery_carries_a_no_copy_heap_with_its_buffer_and_texture() {
     assert_eq!(said.len(), 1, "{said:?}");
     assert!(
         said[0].contains(", and 1 no-copy heaps with the 1 buffers placed in them")
-            && said[0].contains(" 1 textures placed in the no-copy heaps carried ")
+            && said[0].contains(
+                " 1 textures over the buffers carried, 1 textures placed in the \
+                 no-copy heaps carried "
+            )
             && !said[0].contains("heaps' textures")
             && !said[0].contains("heaps' buffers"),
         "{said:?}"
@@ -136,6 +141,7 @@ fn a_recovery_carries_a_no_copy_heap_with_its_buffer_and_texture() {
         heap.device().generation_serves(),
         buffer.device().generation_serves(),
         placed.device().generation_serves(),
+        over.device().generation_serves(),
     ] {
         assert!(serves);
     }
@@ -145,11 +151,12 @@ fn a_recovery_carries_a_no_copy_heap_with_its_buffer_and_texture() {
     assert_eq!(texels(&queue, &placed), vec![0x33; texel_bytes]);
     fill(&queue, &buffer, 9);
     assert_eq!(host_first(at), 9);
+    assert_eq!(texels(&queue, &over), vec![9; texel_bytes]);
     // The heap places more there, over the same pages.
     let later = (heap.new_buffer_at_offset(BYTES, ResourceOptions::shared(), LATER)).unwrap();
     assert_eq!(read(&device, &queue, &later), vec![0x44; BYTES as usize]);
     let later_texture = heap.new_texture_at_offset(&texture, later_at).unwrap();
     assert_eq!(texels(&queue, &later_texture), vec![0x55; texel_bytes]);
-    drop((later_texture, later, placed, buffer, heap));
+    drop((later_texture, later, over, placed, buffer, heap));
     unmap(at, HEAP);
 }

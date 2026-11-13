@@ -2311,15 +2311,16 @@ degradations! {
              (fresh pages, and the blocks of pages the `Shared` and `Managed` buffers lie in where \
              the device's checks found a held host-page import costs its submissions nothing and \
              textures over such pages take what they take over its own memory), `Private` heaps \
-             with the buffers placed in them, textures of `new_texture`, textures over the \
-             buffers carried and views of them, and pipeline and sampler states made before it go on, the \
-             contents of a `Private` \
+             and heaps over the caller's memory with the buffers and textures placed in them, \
+             textures of `new_texture`, textures over the buffers carried and views of them, and \
+             pipeline and sampler states made before it go on, the contents of a `Private` \
              buffer or heap lost (it reads zero) but an exportable buffer's, re-imported over \
              its own memory, which keeps whatever that memory holds, and of a texture of \
-             `new_texture` of any \
-             storage mode (it reads as a new one) but a texture buffer over its texels' buffer \
-             carried; the other objects made before it are refused (`MadeBeforeRecovery`), \
-             where Metal's go on; the calls during it wait for it";
+             `new_texture` or of a `Private` heap of any storage mode (it reads as a new one) but \
+             a texture buffer over its texels' buffer carried, a heap over the caller's memory \
+             and what is placed in it reading the same pages; the other objects made before it \
+             are refused (`MadeBeforeRecovery`), where Metal's go on; the calls during it wait \
+             for it";
         /// Apple's private device properties the device has no answer for
         /// (`private_properties.rs`): no document describes them and nothing the device reports
         /// maps to them. Announced once, when `Device::private_properties` is first read; the

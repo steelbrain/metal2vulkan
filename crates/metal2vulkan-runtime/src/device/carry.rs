@@ -1,7 +1,8 @@
 //! What a device's recovery carries to its next generation (`line.rs`): the program's events, its
 //! uses of guest RAM, its no-copy buffers, the buffers of the runtime's memory whose bytes no
-//! pointer of the program's reaches or whose pages the runtime owns, its `Private` heaps with
-//! the buffers placed in them, its textures made by a call the recovery makes again
+//! pointer of the program's reaches or whose pages the runtime owns, its `Private` heaps and its
+//! heaps over the caller's memory with the buffers placed in them, its textures made by a call
+//! the recovery makes again (those placed in the heaps it carries among them)
 //! (`texture/carry.rs`), its pipeline states (`pipeline/carry.rs`) and its sampler states
 //! (`sampler.rs`), each the same object on the new `VkDevice`, as Metal keeps its objects across its GPU's recovery. A fence, a depth/stencil state, a library, a function, an address
 //! pool, a dynamic library and a binary archive hold no Vulkan object (`fence.rs`,
@@ -46,14 +47,17 @@
 //!   let go of. Each buffer keeps its identity: its `ObjectId`, hazard key, Metal address (a
 //!   share of its range) and range token, its label and purgeable state. A `Private` heap, after
 //!   the buffers: its own buffer in new memory where its textures can lie too, its contents lost
-//!   (it reads zero), its identity kept as a buffer's, registered there by its key; each buffer
+//!   (it reads zero); a heap over the caller's memory, its own buffer made again over the same
+//!   pages as a no-copy buffer is, its bytes as they are; either's identity kept as a buffer's,
+//!   registered there by its key; each buffer
 //!   placed in it that lives, the same buffer there at its offset in the heap's carried bytes,
 //!   its identity and aliasable state kept, its range in an automatic heap given back once, by its
 //!   parts on the generation it was carried to last (`Heap::carry`, `Buffer::carry_placed`). A
 //!   texture, after the heaps: its call made again there as a texture of the runtime's own, which
-//!   holds its parts there, a view's after its parent's; a texture of its own image's contents
-//!   lost whatever its storage mode, as its image in the lost `VkDevice`'s memory was their only
-//!   copy, one over a carried buffer (a texture buffer of `Device::new_texture` over its texels'
+//!   holds its parts there, a view's after its parent's, a heap's at its range of the heap
+//!   carried; a texture of its own image's contents (a `Private` heap's too) lost whatever its
+//!   storage mode, as its image in the lost `VkDevice`'s memory was their only copy, one placed in
+//!   a heap over the caller's memory reading the pages, one over a carried buffer (a texture buffer of `Device::new_texture` over its texels'
 //!   buffer too) reading the buffer's bytes; its identity, resource ID, label and purgeable state
 //!   kept (`Texture::carry`). A pipeline state, after the textures, the compute and tile states
 //!   first, then the drawing ones: its base variant's objects (and a drawing state's
@@ -88,8 +92,8 @@
 //!   pages; and a `Managed` buffer's host copy without unified memory); a detached no-copy
 //!   buffer, or one whose last detach's deallocator waits for its next rebind; a `Shared` heap,
 //!   whose bytes are such pooled memory (a heap's own buffer lies where its textures can, never
-//!   in the runtime's own pages), a heap over the caller's memory and a sparse heap, each with
-//!   the buffers placed in it; a heap's texture or one over a heap's buffer, a texture over the
+//!   in the runtime's own pages), a detached heap over the caller's memory and a sparse heap,
+//!   each with the buffers and textures placed in it; a texture over the
 //!   caller's `VkImage`, a sparse or shareable texture, one over a buffer left, and a view of
 //!   each (`texture/carry.rs`); a buffer over the caller's
 //!   `VkBuffer`, an object of the lost `VkDevice` that only the caller can make again on the
@@ -628,11 +632,15 @@ pub(crate) struct Carried {
     /// The `Private` heaps carried, their bytes, which read zero, and the buffers placed in them
     /// carried with them.
     heaps: (u64, u64, u64),
+    /// The heaps over the caller's memory carried over the same pages, and the buffers placed in
+    /// them carried with them.
+    host_heaps: (u64, u64),
     /// The heaps left the lost generation's, by why.
     heaps_left: [u64; 4],
     /// The textures carried, by what was made again ([`Remade`]): those whose contents were lost
-    /// by storage mode, then those over carried buffers, then views.
-    textures: [u64; 5],
+    /// by storage mode, then those over carried buffers, views, and those placed in heaps over
+    /// the caller's memory.
+    textures: [u64; 6],
     /// The textures left the lost generation's, by why.
     textures_left: [u64; 7],
     /// The pipeline states made again there, and those whose making there failed.
@@ -713,12 +721,20 @@ impl Carried {
                  in them, whose contents were lost too"
             ),
         };
+        let host_heaps = match self.host_heaps {
+            (0, _) => String::new(),
+            (heaps, buffers) => format!(
+                ", and {heaps} no-copy heaps with the {buffers} buffers placed in them, over the \
+                 same pages (their contents kept)"
+            ),
+        };
         let textures = match self.textures {
-            [0, 0, 0, 0, 0] => String::new(),
-            [shared, managed, private, over, views] => format!(
+            [0, 0, 0, 0, 0, 0] => String::new(),
+            [shared, managed, private, over, views, in_host_heaps] => format!(
                 ", and {} textures whose contents were lost too (they read as new ones: {shared} \
                  `Shared`, {managed} `Managed`, {private} `Private` or memoryless), {over} \
-                 textures over the buffers carried and {views} texture views",
+                 textures over the buffers carried, {in_host_heaps} textures placed in the \
+                 no-copy heaps carried and {views} texture views",
                 shared + managed + private
             ),
         };
@@ -737,7 +753,8 @@ impl Carried {
         format!(
             "it carried {} events, {ram}{} buffers with their contents and {lost} `Private` \
              buffers ({lost_bytes} bytes) whose contents were lost (they read zero){heaps}\
-             {textures}{states}{samplers}; left refused (`MadeBeforeRecovery`): {left}",
+             {host_heaps}{textures}{states}{samplers}; left refused (`MadeBeforeRecovery`): \
+             {left}",
             self.events, self.kept
         )
     }
@@ -755,13 +772,18 @@ impl Carried {
     }
 
     /// One heap's carry: its bytes and the buffers placed in it carried, or why it was left.
-    fn heap(&mut self, carried: Result<(u64, u64), HeapLeft>) {
+    fn heap(&mut self, carried: Result<Option<(Contents, u64)>, HeapLeft>) {
         match carried {
-            Ok((bytes, buffers)) => {
+            Ok(Some((Contents::Lost(bytes), buffers))) => {
                 self.heaps.0 += 1;
                 self.heaps.1 += bytes;
                 self.heaps.2 += buffers;
             }
+            Ok(Some((Contents::Kept, buffers))) => {
+                self.host_heaps.0 += 1;
+                self.host_heaps.1 += buffers;
+            }
+            Ok(None) => {}
             Err(left) => self.heaps_left[left as usize] += 1,
         }
     }

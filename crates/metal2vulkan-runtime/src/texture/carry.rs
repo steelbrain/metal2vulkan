@@ -1,22 +1,25 @@
 //! What a device's recovery carries of the program's textures (`device/carry.rs`): each texture
 //! made by a call the recovery can make again, the same texture object on the new `VkDevice`.
 //!
-//! - **What is made again.** A texture of `Device::new_texture` of any storage mode (its image
-//!   new memory, its contents lost: it reads as a new texture of its descriptor reads, as no copy
-//!   of its texels but its image's in the lost `VkDevice`'s memory exists; a texture buffer's
-//!   made over its texels' buffer where the recovery carried that, so it reads what the buffer
-//!   holds), one over a buffer the recovery carried (`Buffer::new_texture` and its kin: made over the buffer's bytes there, so it
-//!   reads what the buffer holds), and a view of either (`new_texture_view` and its kin: of its
-//!   parent's parts there). The call is made again on the new generation as the runtime's own
-//!   texture ([`Remake`]), which takes no resource ID, and holds the texture's parts there
-//!   (`TextureShared::next`): its handles reach them from then on (`Texture::s`). The texture
+//! - **What is made again.** A texture of `Device::new_texture` of any storage mode (its image new
+//!   memory, its contents lost: it reads as a new texture of its descriptor reads, as no copy of
+//!   its texels but its image's in the lost `VkDevice`'s memory exists; a texture buffer's made
+//!   over its texels' buffer where the recovery carried that, so it reads what the buffer holds),
+//!   one over a buffer the recovery carried (`Buffer::new_texture` and its kin, a heap's buffer
+//!   among them: made over the buffer's bytes there, so it reads what the buffer holds), a heap's
+//!   texture (`Heap::new_texture`, `Heap::new_texture_at_offset`: made again at its range of the
+//!   heap the recovery carried, its contents lost in a `Private` heap, as a new texture's, and the
+//!   pages' bytes in a heap over the caller's memory), and a view of any (`new_texture_view` and
+//!   its kin: of its parent's parts there). The call is made again on the new generation as the
+//!   runtime's own texture ([`Remake`]), which takes no resource ID, and holds the texture's parts
+//!   there (`TextureShared::next`): its handles reach them from then on (`Texture::s`). The texture
 //!   object stays what it was: its `ObjectId`, resource ID, label, purgeable state, parent and
 //!   handles; its ID's slot in the new generation's texture table and heap sets names its parts
-//!   there (`heap_sets::place`). What its uses made of its image (views, shadows, faces,
-//!   snapshots, memoryless backings, decoded twins) is made again there as its uses need it.
+//!   there (`heap_sets::place`). What its uses made of its image (views, shadows, faces, snapshots,
+//!   memoryless backings, decoded twins) is made again there as its uses need it.
 //! - **What stays the lost generation's**, refused where it meets the next
-//!   (`RuntimeGap::MadeBeforeRecovery`), by kind ([`TextureLeft`]): a heap's texture or one over a
-//!   heap's buffer, a texture over the caller's `VkImage`, a sparse texture, a shareable texture
+//!   (`RuntimeGap::MadeBeforeRecovery`), by kind ([`TextureLeft`]): a texture of a heap the
+//!   recovery left, a texture over the caller's `VkImage`, a sparse texture, a shareable texture
 //!   and one opened from its handles, a texture over a buffer the recovery left, and a view of
 //!   any of them.
 //! - **Kept as made.** Each texture of the program's is kept by its generation's registry as it
@@ -26,7 +29,7 @@
 //! - **Its parts on the lost generation** stay with the texture until it goes: its images there
 //!   and the lost `VkDevice` with them.
 
-use super::super::buffer::Buffer;
+use super::super::buffer::{Buffer, CallerMemory};
 use super::super::buffer_texture::{texture_buffer_over, TexelsHome};
 use super::super::degradation::NoticesFor;
 use super::super::heap_sets;
@@ -65,6 +68,13 @@ pub(crate) enum Remake {
         call: &'static str,
         request: ViewRequest,
     },
+    /// A heap's texture (`Heap::new_texture`, `Heap::new_texture_at_offset`) of `descriptor`
+    /// (its options resolved), at `offset` in its heap: made again there, in the heap's bytes the
+    /// recovery carried before the textures (`Heap::carry`), over the same range.
+    Heap {
+        descriptor: TextureDescriptor,
+        offset: u64,
+    },
 }
 
 /// What a recovery made again of a texture it carried ([`Texture::carry`]).
@@ -81,6 +91,9 @@ pub(crate) enum Remade {
     Over,
     /// A view, of its parent's parts there.
     View,
+    /// A texture placed in a heap over the caller's memory, made again over the same pages: it
+    /// reads what they hold.
+    InHostHeap,
 }
 
 impl Remade {
@@ -98,7 +111,7 @@ impl Remade {
 /// stays where its parent stays, and for its parent's reason.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextureLeft {
-    /// A heap's texture, or one over a heap's buffer.
+    /// A texture of a heap the recovery left (a `Shared`, sparse or detached no-copy heap).
     Heap,
     /// Over the caller's `VkImage` (`texture/wrapped.rs`), an object of the lost `VkDevice`.
     Caller,
@@ -209,9 +222,6 @@ impl Texture {
                 form,
                 ycbcr,
             } => {
-                if buffer.heap().is_some() {
-                    return Err(TextureLeft::Heap);
-                }
                 if !buffer.generation().same(to) {
                     return Err(TextureLeft::Buffer);
                 }
@@ -225,6 +235,25 @@ impl Texture {
                 };
                 parent.carry(to)?;
                 (parent.view_as(call, request, IdUse::Runtime), Remade::View)
+            }
+            Remake::Heap { descriptor, offset } => {
+                let Some(heap) = &self.0.heap else {
+                    return Err(TextureLeft::Heap);
+                };
+                if !heap.generation().same(to) {
+                    return Err(TextureLeft::Heap);
+                }
+                let made = to.heap_texture_again(heap, descriptor, *offset, self);
+                if made.is_err() {
+                    // No use of the heap there makes it resident.
+                    heap.forget_texture(self);
+                }
+                let host = heap.bytes().and_then(Buffer::caller_memory);
+                let remade = match host {
+                    Some(CallerMemory::HostPages) => Remade::InHostHeap,
+                    _ => Remade::lost(descriptor),
+                };
+                (made, remade)
             }
         };
         let made = made.map_err(|_| TextureLeft::Failed)?;

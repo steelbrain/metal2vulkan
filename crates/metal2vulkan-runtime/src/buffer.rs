@@ -5102,12 +5102,13 @@ impl Buffer {
     }
 
     /// [`Buffer::carry`] of a heap's own buffer (`heap.rs`), for its heap's carry
-    /// (`Heap::carry`): a `Private` one in new memory where the heap's textures can lie too
-    /// ([`Device::place_heap_buffer`]), its contents lost with the `VkDevice` (it reads zero),
-    /// kept among none of `to`'s program resources or live buffers, as it was among none of its
-    /// lost generation's. Left the lost generation's: a `Shared` one, of pooled host-visible
-    /// memory (a heap's own buffer never lies in the runtime's own pages), and one over the
-    /// caller's host memory.
+    /// (`Heap::carry`), kept among none of `to`'s program resources or live buffers, as it was
+    /// among none of its lost generation's: a `Private` one in new memory where the heap's
+    /// textures can lie too ([`Device::place_heap_buffer`]), its contents lost with the
+    /// `VkDevice` (it reads zero); one over the caller's host memory made again over the same
+    /// pages, as a no-copy buffer is, its bytes as they are. Left the lost generation's: a
+    /// `Shared` one, of pooled host-visible memory (a heap's own buffer never lies in the
+    /// runtime's own pages), and one over the caller's memory a no-copy buffer's carry leaves.
     pub(crate) fn carry_heap_bytes(&self, to: &Device) -> Result<Contents, Left> {
         self.carry_as(to, true)
     }
@@ -5129,8 +5130,8 @@ impl Buffer {
         };
         let fixed = match (&own.owner, &own.lie) {
             (Owner::Runtime, Lie::Fixed(fixed)) => fixed,
-            (Owner::Caller, Lie::Host(cell)) if !of_heap => {
-                return self.carry_no_copy(last, own, cell, to)
+            (Owner::Caller, Lie::Host(cell)) => {
+                return self.carry_no_copy(last, own, cell, to, of_heap)
             }
             (Owner::Caller, _) => return Err(Left::NoCopy),
             (Owner::Vulkan, _) | (Owner::Runtime, Lie::Host(_)) => return Err(Left::Caller),
@@ -5385,8 +5386,10 @@ impl Buffer {
 }
 
 impl Buffer {
-    /// [`Buffer::carry`] of a no-copy buffer whose parts on the generation it leaves are `last`,
-    /// `own` their bytes and `cell` their hold on the caller's pages: made again on `to` of the
+    /// [`Buffer::carry`] of a no-copy buffer, or of a no-copy heap's own buffer where `of_heap`
+    /// (`Device::new_heap_with_bytes_no_copy`, among no program resources), whose parts on the
+    /// generation it leaves are `last`, `own` their bytes and `cell` their hold on the caller's
+    /// pages: made again on `to` of the
     /// caller's memory its pages were made of ([`HostPages::made_of`]), over the same pages, as its
     /// making or last rebind made it (an import of the pointer or of the source's dma-bufs, a run
     /// of a guest RAM the device uses, a copy, a read-only view), the caller's gate and resolver
@@ -5401,8 +5404,12 @@ impl Buffer {
         own: &OwnBytes,
         cell: &Arc<HostCell>,
         to: &Device,
+        of_heap: bool,
     ) -> Result<Contents, Left> {
-        const CALL: &str = "new_buffer_with_bytes_no_copy";
+        let call = match of_heap {
+            true => "new_heap_with_bytes_no_copy",
+            false => "new_buffer_with_bytes_no_copy",
+        };
         if lock(&cell.held_back).is_some() {
             return Err(Left::NoCopy);
         }
@@ -5418,11 +5425,11 @@ impl Buffer {
             address: last.address,
             held: own.reserved,
         };
-        let made = (CALL, last.length, last.options, at);
+        let made = (call, last.length, last.options, at);
         // SAFETY: the caller's pages stay mapped while the buffer lives, as the contract of the
         // memory it was made or rebound over says (`HostMemory::new`).
         let carried = unsafe {
-            to.buffer_over_host_parts(made, parts, None, false, cell.drops_writes(), naming)
+            to.buffer_over_host_parts(made, parts, None, of_heap, cell.drops_writes(), naming)
         }
         .map_err(|_| Left::Failed)?;
         let (Bytes::Own(carried_own), Some(carried_pages)) =
@@ -5451,8 +5458,11 @@ impl Buffer {
         last.carried.store(true, Ordering::Release);
         // Its parts on the lost generation go once none of its command buffers may record.
         from.carry.lost(from, Box::new(lost));
-        // The program's buffer is the next generation's from now on.
-        let _kept = to.visible(self.clone());
+        // The program's buffer is the next generation's from now on; a heap's own buffer is its
+        // heap's, among no program resources.
+        if !of_heap {
+            let _kept = to.visible(self.clone());
+        }
         Ok(Contents::Kept)
     }
 

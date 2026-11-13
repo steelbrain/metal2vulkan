@@ -2142,16 +2142,19 @@ pub enum RuntimeGap {
     /// its own memory; the `Private` buffers in exportable memory (imported again over their own
     /// memory, which other APIs' imports reach still and which they read as it holds it); and the
     /// `Private` heaps with the buffers placed in them (their contents
-    /// lost: they read zero), in which buffers and textures are made again after it; and the
-    /// textures of `Device::new_texture` (their contents lost), those over the buffers it carried
-    /// (reading the buffers' bytes) and the views of either; and the pipeline states (their base
+    /// lost: they read zero) and the heaps over the caller's memory with the buffers placed in
+    /// them (made again over the same pages, their contents kept), in which buffers and textures
+    /// are made again after it; and the textures of `Device::new_texture` and those placed in the
+    /// heaps it carried (their contents lost, but a heap's over the caller's memory, which reads
+    /// the pages), those over the buffers it carried (reading the buffers' bytes) and the views of
+    /// either; and the pipeline states (their base
     /// variants made again there from what their creations compiled; a bind of one whose making
     /// there failed is refused, `RemadeAfterRecoveryFailed`); and the sampler states (their
     /// `VkSampler`s made there as their binds need them). Every other object's Vulkan objects
     /// are the lost `VkDevice`'s, which serves nothing more: a pooled `Shared` or `Managed` buffer
     /// in memory the device allocated, whose `contents` pointer is its lost memory's mapping, a
-    /// detached no-copy buffer, a `Shared`, no-copy or sparse heap and the buffers placed in it, a
-    /// heap's texture or one over a heap's buffer, a texture over the caller's `VkImage`, a sparse
+    /// detached no-copy buffer, a `Shared`, sparse or detached no-copy heap and the buffers and
+    /// textures placed in it, a texture over the caller's `VkImage`, a sparse
     /// or shareable texture, a texture over a buffer left, a view of any of them, an indirect
     /// command buffer, a buffer over the caller's `VkBuffer`, a `Shared` or `Managed` buffer in
     /// exportable memory or one in an opaque descriptor's dedicated allocation (Vulkan defines no

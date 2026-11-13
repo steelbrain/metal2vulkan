@@ -721,8 +721,8 @@ impl Device {
     /// [`Device::buffer_over_host_memory`] of the caller's memory's `parts`, `made` (for its call,
     /// of its length and options, at its placement) as the buffer `naming` names, given back to
     /// `release`: a new buffer, or one its device's recovery carries to this generation
-    /// (`Buffer::carry`). A buffer's pages (not a heap's own) keep what they were made of, which
-    /// a recovery makes the buffer again of ([`HostPages::made_of`]). A new `Managed` one on a
+    /// (`Buffer::carry`). A buffer's pages, a heap's own buffer's among them, keep what they were
+    /// made of, which a recovery makes the buffer again of ([`HostPages::made_of`]). A new `Managed` one on a
     /// device without unified memory is two copies (`managed_copy.rs`).
     ///
     /// # Safety
@@ -789,9 +789,9 @@ impl Device {
             .host_import
             .as_ref()
             .map_err(|unsupported| Error::Unsupported(unsupported.clone()))?;
-        // What a buffer (not a heap's own) is made of stays with its pages, given them with the
-        // rest below, from the one look at them.
-        let made_of = (!of_heap).then(|| parts.clone());
+        // What the buffer is made of stays with its pages, a heap's own buffer's too, given them
+        // with the rest below, from the one look at them.
+        let made_of = parts.clone();
         let HostParts {
             pointer,
             source,
@@ -847,9 +847,7 @@ impl Device {
             if let Some(pages) = buffer.host_pages() {
                 pages.logged_as(key);
                 pages.copied_as(key);
-                if let Some(made_of) = made_of {
-                    pages.keep_made_of(made_of);
-                }
+                pages.keep_made_of(made_of);
             }
             if kind == Kind::Copy {
                 shared.counts.copied_host_buffer_shared();
@@ -1213,8 +1211,9 @@ impl Device {
             .as_ref()
             .map_err(|unsupported| Error::Unsupported(unsupported.clone()))?;
         let parts = memory.into_parts();
-        // What a recovery makes a buffer's new pages again of (`HostPages::made_of`).
-        let made_of = heap.is_none().then(|| parts.clone());
+        // What a recovery makes the buffer, or the heap, again of over its new pages
+        // (`HostPages::made_of`).
+        let made_of = parts.clone();
         let HostParts {
             pointer,
             source,
@@ -1666,9 +1665,7 @@ impl Device {
         if let Some(release) = release.of(pointer, length) {
             pages.release_to(release);
         }
-        if let Some(made_of) = made_of {
-            pages.keep_made_of(made_of);
-        }
+        pages.keep_made_of(made_of);
         // What lay in the old pages goes with them: the images swapped out, and the texel views.
         // A detached buffer lay in none: what took its stand-in goes with the new pages.
         let keeper = match &old {
@@ -2660,7 +2657,7 @@ fn kept(
     buffer: Buffer,
     log: Option<Arc<PagesLog>>,
     runs: Option<(Arc<RamOnDevice>, Box<[std::ops::Range<u64>]>)>,
-    made_of: Option<HostParts>,
+    made_of: HostParts,
 ) -> Buffer {
     if let Some(pages) = buffer.host_pages() {
         keep_in(&pages, &buffer, log, runs, made_of);
@@ -2676,7 +2673,7 @@ fn keep_in(
     buffer: &Buffer,
     log: Option<Arc<PagesLog>>,
     runs: Option<(Arc<RamOnDevice>, Box<[std::ops::Range<u64>]>)>,
-    made_of: Option<HostParts>,
+    made_of: HostParts,
 ) {
     let key = buffer.identity().key;
     if let Some(log) = log {
@@ -2687,9 +2684,7 @@ fn keep_in(
     if let Some(runs) = runs {
         pages.keep_runs(runs);
     }
-    if let Some(made_of) = made_of {
-        pages.keep_made_of(made_of);
-    }
+    pages.keep_made_of(made_of);
 }
 
 /// The logs of the writes to the `length` bytes at `pointer` (`dirty_pages::PagesLog`): their

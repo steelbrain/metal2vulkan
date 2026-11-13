@@ -1,7 +1,7 @@
 //! What a device's recovery carries of its heaps (`Heap::carry`, `device/carry.rs`): a `Private`
-//! heap goes on as the same heap, its bytes new memory that reads zero, with the buffers placed
-//! in it before; buffers and textures made in it after the recovery serve, and the textures it
-//! made before stay refused, as a heap's textures made before a recovery do.
+//! heap goes on as the same heap, its bytes new memory that reads zero, with the buffers and the
+//! textures placed in it before (a texture's contents lost, as a new texture's are); buffers and
+//! textures made in it after the recovery serve.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). No GPU fault: the loss is marked (`Device::recover_for_test`).
@@ -10,7 +10,7 @@ use super::device_recovery::{heard_device, outcome, recovery_notices, Heard, Scr
 use super::device_recovery_carry::{fill, live_vk_devices, read, BYTES};
 use crate::{
     BlitOption, Buffer, CommandBufferStatus, CommandQueue, Device, Error, HeapDescriptor, HeapType,
-    Origin, ResourceOptions, RuntimeGap, Size, Texture, TextureDescriptor,
+    Origin, ResourceOptions, Size, Texture, TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 
@@ -75,14 +75,15 @@ fn through(
 }
 
 /// A recovery carries a `Private` placement heap and a `Private` automatic heap, with the buffer
-/// placed in each before it: each heap and buffer the same object on the next generation (its
-/// `ObjectId`, Metal address and label), its bytes zero, as its notice counts. Buffers and
-/// textures made in them after it serve, at the automatic heap's free ranges as they were; the
-/// texture made before it stays refused, and a use of its heap makes it resident nowhere. A
-/// carried buffer's release gives its range back once, and the lost `VkDevice` goes with the
-/// texture left on it.
+/// placed in each before it and the texture placed in the automatic one: each heap, buffer and
+/// texture the same object on the next generation (its `ObjectId`, Metal address and label), its
+/// bytes zero and the texture's contents lost, as its notice counts. The texture made before it
+/// takes copies there, and a use of its heap makes it resident. Buffers and textures made in
+/// them after it serve, at the automatic heap's free ranges as they were. A carried buffer's
+/// release gives its range back once, and the lost `VkDevice` goes with the texture, which holds
+/// its parts there.
 #[test]
-fn a_recovery_carries_private_heaps_with_their_buffers() {
+fn a_recovery_carries_private_heaps_with_their_buffers_and_textures() {
     let scratch = Scratch::new();
     let heard = Heard::default();
     let device = heard_device(&scratch.0, &heard);
@@ -118,9 +119,12 @@ fn a_recovery_carries_private_heaps_with_their_buffers() {
     assert!(
         said[0].contains(&format!(
             ", and 2 `Private` heaps ({} bytes) with the 2 buffers placed in them, whose \
-             contents were lost too; left refused",
+             contents were lost too, and 1 textures whose contents were lost too (they read as \
+             new ones: 0 `Shared`, 0 `Managed`, 1 `Private` or memoryless), 0 textures over the \
+             buffers carried, 0 textures placed in the no-copy heaps carried and 0 texture \
+             views; left refused",
             2 * HEAP
-        )),
+        )) && !said[0].contains("heaps' textures"),
         "{said:?}"
     );
     // The heaps and the buffers placed in them before: the same objects on the next generation,
@@ -177,18 +181,14 @@ fn a_recovery_carries_private_heaps_with_their_buffers() {
         through(&device, &queue, &placed, &texture).unwrap(),
         vec![11; BYTES as usize]
     );
-    // The texture made before stays the lost generation's, refused where it meets the next.
-    assert!(!before.device().generation_serves());
-    let refused = through(&device, &queue, &placed, &before);
-    assert!(
-        matches!(
-            refused,
-            Err(Error::NotImplemented(RuntimeGap::MadeBeforeRecovery))
-        ),
-        "{refused:?}"
+    // The texture made before is the next generation's, in the heap there: it takes copies.
+    assert!(before.device().generation_serves());
+    assert_eq!(
+        through(&device, &queue, &later, &before).unwrap(),
+        vec![13; BYTES as usize]
     );
-    // A use of the heap on the next generation makes its textures of that generation resident,
-    // the one made before not.
+    // A use of the heap on the next generation makes its textures resident, the one made before
+    // among them.
     let command_buffer = queue.command_buffer().unwrap();
     let mut compute = command_buffer.compute_command_encoder().unwrap();
     compute.use_heap(&automatic).unwrap();

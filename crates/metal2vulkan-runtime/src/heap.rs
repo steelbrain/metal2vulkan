@@ -44,9 +44,10 @@
 //!   tighter than on Metal and change what a read past a buffer's end reaches. The 16-KiB size
 //!   granule is the address space's page, Metal's too.
 //! - **A recovery.** A device's recovery from the loss of its `VkDevice` carries a `Private` heap
-//!   to the new one, with the buffers placed in it, its bytes reading zero there; a `Shared`, a
-//!   no-copy and a sparse heap stay the lost one's, with their buffers ([`Heap::carry`],
-//!   `device/carry.rs`).
+//!   to the new one, with the buffers and textures placed in it, its bytes reading zero there, and
+//!   a heap over the caller's memory, made again over the same pages with what is placed in it,
+//!   its bytes as they are; a `Shared`, a sparse and a detached no-copy heap stay the lost one's,
+//!   with what is placed in them ([`Heap::carry`], `device/carry.rs`).
 //! - **The largest heap.** One allocation of the device, at most `maxMemoryAllocationSize` (a
 //!   larger heap answers out of device memory, as Metal answers nil for a heap too large), and one
 //!   `VkBuffer`, at most `maxBufferSize`: a heap past that is refused
@@ -440,10 +441,9 @@ impl<T> Numbered<T> {
         self.made
     }
 
-    /// Hold none of those held: their numbers stay taken, so the next one held is numbered after
-    /// every one held before.
-    pub(super) fn forget_held(&mut self) {
-        self.held.clear();
+    /// Hold `item` no more: its number stays taken.
+    pub(super) fn forget(&mut self, item: &Weak<T>) {
+        self.held.retain(|(_, held)| !Weak::ptr_eq(held, item));
     }
 
     /// Those numbered `from` or later that may still live, in the order they were held.
@@ -1182,37 +1182,36 @@ impl Heap {
     /// Carry the heap, made on a generation of its device that a recovery leaves, to `to`, the
     /// generation that recovery made (`device/carry.rs`), with the buffers placed in it. A
     /// `Private` heap's own buffer lies in new memory there ([`Buffer::carry_heap_bytes`]), its
-    /// contents lost with the `VkDevice` (it reads zero), and it keeps its identity (its
-    /// `ObjectId`, hazard key, Metal address and range, range token, label and purgeable state):
-    /// the heap is the same heap there, registered by its key, and each buffer placed in it that
-    /// lives is the same buffer there, at its offset ([`Buffer::carry_placed`]), listed among the
-    /// generation's live buffers where a command buffer's commands used the heap already. The
-    /// textures it made stay the lost generation's, as a heap's textures do: they are refused where
-    /// they meet the next generation (`RuntimeGap::MadeBeforeRecovery`), and no use of the heap
-    /// there makes them resident; those it makes there are that generation's, numbered after
-    /// them. The bytes carried, and the buffers placed in it carried with them; or why the heap
-    /// is left the lost generation's, with its buffers: a `Shared` heap's bytes are pooled
-    /// host-visible memory, whose mapping its buffers' `contents` pointers are; a heap over the
-    /// caller's memory and a sparse heap are not carried; or its making there failed.
-    pub(crate) fn carry(&self, to: &Device) -> Result<(u64, u64), HeapLeft> {
+    /// contents lost with the `VkDevice` (it reads zero); a heap's over the caller's memory is
+    /// made again over the same pages, as a no-copy buffer is, its bytes as they are. Either keeps
+    /// its identity (its `ObjectId`, hazard key, Metal address and range, range token, label and
+    /// purgeable state): the heap is the same heap there, registered by its key, and each buffer
+    /// placed in it that lives is the same buffer there, at its offset
+    /// ([`Buffer::carry_placed`]), listed among the generation's live buffers where a command
+    /// buffer's commands used the heap already. The textures it made stay among its textures,
+    /// numbered as they were: the recovery makes each again there after the heaps, at its range
+    /// of the heap (`texture/carry.rs`), and forgets one it leaves, which no use of the heap
+    /// there makes resident. What its bytes' carry did with their contents (kept over the
+    /// caller's pages, or lost) and the buffers placed in it carried with them; `None` where it
+    /// was carried there already; or why the heap is left the lost generation's, with its
+    /// buffers: a `Shared` heap's bytes are pooled host-visible memory, whose mapping its
+    /// buffers' `contents` pointers are; a detached heap over the caller's memory and a sparse
+    /// heap are not carried; or its making there failed.
+    pub(crate) fn carry(&self, to: &Device) -> Result<Option<(Contents, u64)>, HeapLeft> {
         let bytes = match &self.0.storage {
             HeapStorage::Bytes(bytes) => bytes,
             HeapStorage::Sparse(_) => return Err(HeapLeft::Sparse),
         };
         if bytes.generation().same(to) {
             // Carried already, by its maker.
-            return Ok((0, 0));
+            return Ok(None);
         }
-        let lost = match bytes.carry_heap_bytes(to).map_err(HeapLeft::of)? {
-            Contents::Lost(lost) => lost,
-            Contents::Kept => 0,
-        };
+        let contents = bytes.carry_heap_bytes(to).map_err(HeapLeft::of)?;
         to.shared().heap_keys.register(
             bytes.identity().key,
             Arc::downgrade(&self.0),
             self.0.object_id,
         );
-        lock(&self.0.textures).forget_held();
         // Under the lock a buffer's placing takes: one placed from now on finds the heap's bytes
         // carried, and carries itself (`program_buffer`).
         let (buffers, reached) = {
@@ -1235,7 +1234,7 @@ impl Heap {
         if to.shared().carry.heap(self) {
             to.carry_late(|serving| self.carry(serving));
         }
-        Ok((lost, buffers.len() as u64))
+        Ok(Some((contents, buffers.len() as u64)))
     }
 
     /// Carry `buffer`, placed in the heap on the generation its bytes were carried from, to the
@@ -1325,6 +1324,13 @@ impl Heap {
     pub(super) fn allocate(&self, length: u64, alignment: u64) -> Option<u64> {
         self.generation().shared().passing_holds.wait();
         lock(&self.0.ranges).allocate(length, alignment)
+    }
+
+    /// `texture`, made in the heap, is among the heap's textures no more: a recovery carried the
+    /// heap and left the texture, which no use of the heap on the next generation makes resident
+    /// (`texture/carry.rs`).
+    pub(crate) fn forget_texture(&self, texture: &Texture) {
+        lock(&self.0.textures).forget(&texture.retained());
     }
 
     /// `texture`, made in the heap, is among the heap's textures while it lives, numbered after

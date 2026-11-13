@@ -663,10 +663,11 @@ driver's. Each is open work.
 
 - **A GPU recovery loses the contents of textures whose only copy is device memory**
   (`texture/carry.rs`, `device-recovered`): a texture of `Device::new_texture` of any storage
-  mode, `Shared` and `Managed` included, is made again as a new one, as its image in the lost
-  `VkDevice`'s memory held its texels alone; the recovery's notice counts them by storage mode.
-  Metal's `Shared` texture keeps its bytes across its GPU's recovery. Textures over carried pages
-  keep what their buffer keeps.
+  mode, `Shared` and `Managed` included, and one placed in a `Private` heap, is made again as a
+  new one, as its image in the lost `VkDevice`'s memory held its texels alone; the recovery's
+  notice counts them by storage mode. Metal's `Shared` texture keeps its bytes across its GPU's
+  recovery. Textures over carried pages, and those placed in a heap over the caller's memory,
+  keep what the pages hold.
 
 - **A texture over host pages whose buffer ends inside its last row's pitch is a shadow**
   (`InPlaceRefusal::Placement`, `WorkCounts::host_texture_shadows_refused_placement`,

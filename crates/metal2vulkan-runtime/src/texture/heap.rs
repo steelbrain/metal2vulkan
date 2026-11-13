@@ -222,6 +222,7 @@
 //!   answers `heap`, `heap_offset`, `make_aliasable` and `is_aliasable` through the buffer, which
 //!   is no resource of the program's (Metal's texture answers `buffer` nil).
 
+use super::carry::Remake;
 use super::first_move::FirstMove;
 use super::heap_tiled::{
     footprint_size, metal_compresses_layout, metal_heap_layout, modelled_size, own_heap_layout,
@@ -285,9 +286,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub(crate) const HEAP_BASE_ALIGNMENT: u64 = 256 << 10;
 
 /// Where a heap texture's image lies: its heap, and its offset and size there. The range has
-/// this one owner from its allocation on, the texture's image once it is made. The last texture
-/// object over the image gives an automatic heap's range back (`give_back`), as Metal's texture
-/// does at its release, unless `makeAliasable` gave it back already; the place's
+/// this one owner from its allocation on, the texture's image once it is made, and after a
+/// recovery the image made again of it on the new generation ([`again`](Self::again)). The last
+/// texture object over the image gives an automatic heap's range back (`give_back`), as Metal's
+/// texture does at its release, unless `makeAliasable` gave it back already; the place's
 /// drop gives it back where no texture object was made over it.
 pub(crate) struct HeapPlace {
     /// Its heap, held weakly: the texture objects hold it (`TextureShared::heap`), as Metal's
@@ -296,8 +298,8 @@ pub(crate) struct HeapPlace {
     pub(crate) heap: WeakHeap,
     pub(crate) offset: u64,
     pub(crate) size: u64,
-    /// `makeAliasable` was called.
-    pub(crate) aliasable: AtomicBool,
+    /// `makeAliasable` was called: one flag for the texture's place on every generation.
+    pub(crate) aliasable: Arc<AtomicBool>,
     /// The heap's memory an image bound to it holds ([`MemoryHold`]): `None` for an image in
     /// memory of its own (a shadow, an unaliased one), and while the heap's bytes are detached. A
     /// rebind's swap holds the new pages' instead.
@@ -314,9 +316,32 @@ impl HeapPlace {
             heap: heap.downgrade(),
             offset,
             size,
-            aliasable: AtomicBool::new(aliasable),
+            aliasable: Arc::new(AtomicBool::new(aliasable)),
             memory: Mutex::new(None),
             given_back: AtomicBool::new(false),
+        }
+    }
+
+    /// The same range, for the image a recovery makes again of its texture on the next
+    /// generation (`texture/carry.rs`): its `makeAliasable` flag shared, and no range of its own
+    /// to give back until this one hands it over ([`hand_range_to`](Self::hand_range_to)).
+    fn again(&self) -> HeapPlace {
+        HeapPlace {
+            heap: self.heap.clone(),
+            offset: self.offset,
+            size: self.size,
+            aliasable: Arc::clone(&self.aliasable),
+            memory: Mutex::new(None),
+            given_back: AtomicBool::new(true),
+        }
+    }
+
+    /// Hand the range to `next`, the place [`again`](Self::again) made of it, whose image was
+    /// made: the newest image over it gives it back, after its own waiting move goes unmade, as
+    /// its last texture object goes. Nothing where this one gave it back already.
+    fn hand_range_to(&self, next: &HeapPlace) {
+        if !self.given_back.swap(true, Ordering::AcqRel) {
+            next.given_back.store(false, Ordering::Release);
         }
     }
 
@@ -340,6 +365,13 @@ impl Drop for HeapPlace {
             heap.release(self.offset, self.size, &self.aliasable);
         }
     }
+}
+
+/// What a recovery makes a heap's texture again over ([`Device::heap_texture_again`]): the range
+/// of the heap its image holds, or a texture buffer's buffer placed in the heap.
+pub(crate) enum Again<'a> {
+    Image(&'a HeapPlace),
+    Texels(&'a Buffer),
 }
 
 /// What a heap's depth or stencil texture held as a shadow of the heap's bytes
@@ -2866,7 +2898,8 @@ impl Device {
     /// A texture of `descriptor` in `heap`: at `offset` of a placement heap, or where an
     /// automatic heap has room when `None`. Where a placement heap makes none (`Nil` or
     /// `OutOfMemory`) at an offset inside it, the device says so ([`HEAP_TEXTURE_REFUSED`]) the
-    /// first time, and counts each later one (`WorkCounts::heap_texture_refused_withheld`).
+    /// first time, and counts each later one (`WorkCounts::heap_texture_refused_withheld`). Kept
+    /// for a recovery to make again in the heap, at its offset there (`texture/carry.rs`).
     pub(crate) fn new_heap_texture(
         &self,
         heap: &Heap,
@@ -2874,7 +2907,7 @@ impl Device {
         offset: Option<u64>,
     ) -> Result<Texture, Error> {
         let mut planned = None;
-        let made = self.planned_heap_texture(heap, descriptor, offset, &mut planned);
+        let made = self.planned_heap_texture(heap, descriptor, offset, &mut planned, None);
         if let (Err(e @ (Error::Nil(_) | Error::OutOfMemory(_))), Some(offset)) = (&made, offset) {
             if offset < heap.size() {
                 self.inform_once(Told::HeapTextureRefused, HEAP_TEXTURE_REFUSED, || {
@@ -2882,24 +2915,73 @@ impl Device {
                 });
             }
         }
-        made
+        let (texture, offset) = made?;
+        let remake = Remake::Heap {
+            descriptor: *descriptor,
+            offset,
+        };
+        Ok(self.kept_texture(texture, remake))
     }
 
-    /// [`Device::new_heap_texture`], noting in `planned` what the making planned as it plans it.
+    /// `texture`, a heap's texture of `descriptor` at `offset` in `heap`, made again there on
+    /// this generation, which a recovery carried the heap to (`texture/carry.rs`): as the
+    /// runtime's own texture, over the same range of the heap's bytes there, as its making made
+    /// it (a texture buffer's buffer carried there), its range handed to it. Refused as that
+    /// making refuses.
+    pub(crate) fn heap_texture_again(
+        &self,
+        heap: &Heap,
+        descriptor: &TextureDescriptor,
+        offset: u64,
+        texture: &Texture,
+    ) -> Result<Texture, Error> {
+        let again = match (texture.heap_texels(), texture.heap_place()) {
+            (Some(buffer), _) => Again::Texels(buffer),
+            (None, Some(place)) => Again::Image(place),
+            (None, None) => return Err(internal("a heap's texture with no range of its heap")),
+        };
+        let mut planned = None;
+        let found = Some(&again);
+        let (made, _) =
+            self.planned_heap_texture(heap, descriptor, Some(offset), &mut planned, found)?;
+        if let (Again::Image(lost), Some(place)) = (&again, made.heap_place()) {
+            lost.hand_range_to(place);
+        }
+        Ok(made)
+    }
+
+    /// [`Device::new_heap_texture`], noting in `planned` what the making planned as it plans it:
+    /// the texture, and its offset in the heap. Made `again` of a texture a recovery carries
+    /// ([`Device::heap_texture_again`]): at `offset` in a heap of either type, as the runtime's
+    /// own texture over the range the texture holds.
     fn planned_heap_texture(
         &self,
         heap: &Heap,
         descriptor: &TextureDescriptor,
         offset: Option<u64>,
         planned: &mut Option<Planned>,
-    ) -> Result<Texture, Error> {
-        let (call, heap_type, creator) = match offset {
-            Some(_) => (
+        again: Option<&Again<'_>>,
+    ) -> Result<(Texture, u64), Error> {
+        let placement = match again {
+            Some(_) => heap.heap_type() == HeapType::Placement,
+            None => offset.is_some(),
+        };
+        let (call, heap_type, creator) = match placement {
+            true => (
                 "new_texture_at_offset",
                 HeapType::Placement,
                 Creator::Placement,
             ),
-            None => ("new_texture", HeapType::Automatic, Creator::Device),
+            false => ("new_texture", HeapType::Automatic, Creator::Device),
+        };
+        // Made again over the range it holds, at its offset.
+        let offset_in = |taken: SizeAndAlign, place: SizeAndAlign| match (again, offset) {
+            (Some(_), Some(offset)) => Ok(offset),
+            _ => heap_offset(heap, call, taken, place, offset),
+        };
+        let id_use = match again {
+            Some(_) => IdUse::Runtime,
+            None => IdUse::Program(descriptor.placement),
         };
         let bytes = heap.check_type(call, heap_type)?.clone();
         // A detach waits for none being made in the heap (`detach.rs`), nor does a rebind of it
@@ -2943,14 +3025,22 @@ impl Device {
                 descriptor.usage,
                 layout.texture_type,
             )?;
-            let offset = heap_offset(heap, call, size_and_align, size_and_align, offset)?;
-            // The buffer's drop gives an automatic heap's range back.
-            let buffer = heap.placed_buffer(&bytes, offset, size_and_align.size, options);
-            let id_use = IdUse::Program(descriptor.placement);
+            let offset = offset_in(size_and_align, size_and_align)?;
+            // The buffer's drop gives an automatic heap's range back. Made again, the buffer
+            // carried there.
+            let buffer = match again {
+                Some(Again::Texels(buffer)) => {
+                    buffer.carry_placed(self);
+                    (*buffer).clone()
+                }
+                _ => heap.placed_buffer(&bytes, offset, size_and_align.size, options),
+            };
             let texture =
                 texture_buffer_over(buffer, descriptor, &layout, id_use, TexelsHome::Heap)?;
-            heap.hold_texture(&texture);
-            return Ok(texture);
+            if again.is_none() {
+                heap.hold_texture(&texture);
+            }
+            return Ok((texture, offset));
         }
         // A heap over host pages plans its images from the plan without a refit
         // (`host_heap_plan`).
@@ -2963,12 +3053,19 @@ impl Device {
             descriptor.usage,
             p.layout.texture_type,
         )?;
+        // Made again, its range the one the texture holds.
+        let place_at = |offset: u64, size: u64, aliasable: bool| match again {
+            Some(Again::Image(lost)) => lost.again(),
+            _ => HeapPlace::new(heap, offset, size, aliasable),
+        };
         if host {
             let p = self.host_heap_plan(call, p, descriptor, &bytes)?;
             *planned = Some(Planned::of(&p));
-            let offset = heap_offset(heap, call, p.size_and_align, p.placement(), offset)?;
-            let place = HeapPlace::new(heap, offset, p.size_and_align.size, false);
-            return self.heap_texture_at((call, heap), &bytes, p, place, options, descriptor);
+            let offset = offset_in(p.size_and_align, p.placement())?;
+            let place = place_at(offset, p.size_and_align.size, false);
+            let made = (call, heap, id_use);
+            let texture = self.heap_texture_at(made, &bytes, p, place, options, descriptor)?;
+            return Ok((texture, offset));
         }
         let (_, _, type_index) = bytes.memory();
         // A shadowed or unaliased image lies in memory of its own, so the heap's memory type is
@@ -2980,11 +3077,13 @@ impl Device {
         if !own_memory && image.requirements.memory_type_bits & (1 << type_index) == 0 {
             return Err(image.memory_refusal());
         }
-        let offset = heap_offset(heap, call, p.size_and_align, p.placement(), offset)?;
+        let offset = offset_in(p.size_and_align, p.placement())?;
         // A placement heap's texture answers aliasable from the start, as Metal's does.
         let aliasable = heap.heap_type() == HeapType::Placement;
-        let place = HeapPlace::new(heap, offset, p.size_and_align.size, aliasable);
-        self.heap_texture_at((call, heap), &bytes, p, place, options, descriptor)
+        let place = place_at(offset, p.size_and_align.size, aliasable);
+        let made = (call, heap, id_use);
+        let texture = self.heap_texture_at(made, &bytes, p, place, options, descriptor)?;
+        Ok((texture, offset))
     }
 
     /// The plan of a texture of `descriptor` in a heap over the caller's host memory whose own
@@ -3915,7 +4014,7 @@ impl Device {
     /// `options` (the heap's), in the `GENERAL` layout and holding what its bytes held.
     fn heap_texture_at(
         &self,
-        (call, heap): (&'static str, &Heap),
+        (call, heap, id_use): (&'static str, &Heap, IdUse),
         bytes: &Buffer,
         p: HeapPlan,
         place: HeapPlace,
@@ -4074,13 +4173,8 @@ impl Device {
         // Before the texture takes its ID (`resource_ids.rs`): what follows fails only on the
         // runtime's own fault (`internal`).
         image.decode_whole()?;
-        let texture = Texture::made(
-            self,
-            Storage::Image(image),
-            record,
-            None,
-            IdUse::Program(descriptor.placement),
-        );
+        let program = matches!(id_use, IdUse::Program(_));
+        let texture = Texture::made(self, Storage::Image(image), record, None, id_use);
         // A multisample texture's moves between its image and Metal's tiles, which name its
         // image's views, are planned as its copies are recorded (`heap_tiled.rs`), of the texture
         // known now; `sample_tiles` found that the device runs them.
@@ -4102,7 +4196,10 @@ impl Device {
         if texture.shadow().is_some() {
             texture.degrade_shadowed_depth(call);
         }
-        heap.hold_texture(&texture);
+        // Made again, the program's texture is the heap's already.
+        if program {
+            heap.hold_texture(&texture);
+        }
         if making.refit.is_some() {
             self.shared().counts.heap_texture_refit();
         }

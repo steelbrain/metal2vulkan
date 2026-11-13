@@ -121,8 +121,8 @@ fn a_recovery_carries_textures_their_views_and_those_over_carried_buffers() {
     assert!(
         said[0].contains(
             ", and 1 textures whose contents were lost too (they read as new ones: 0 `Shared`, 0 \
-             `Managed`, 1 `Private` or memoryless), 1 textures over the buffers carried and 1 \
-             texture views; left refused"
+             `Managed`, 1 `Private` or memoryless), 1 textures over the buffers carried, 0 \
+             textures placed in the no-copy heaps carried and 1 texture views; left refused"
         ),
         "{said:?}"
     );
@@ -241,7 +241,7 @@ fn a_recovery_keeps_the_bytes_of_textures_over_carried_pages() {
         said[0].contains(&format!(
             ", and {} textures whose contents were lost too (they read as new ones: {shared_lost} \
              `Shared`, 1 `Managed`, 1 `Private` or memoryless), {carried_over} textures over the \
-             buffers carried and 0 texture views",
+             buffers carried, 0 textures placed in the no-copy heaps carried and 0 texture views",
             shared_lost + 2
         )),
         "{said:?}"

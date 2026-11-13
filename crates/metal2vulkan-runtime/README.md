@@ -840,8 +840,8 @@ meanwhile wait for it.
 - The recovery carries the events, the fences, the depth/stencil states, the libraries and their
   functions, the dynamic libraries, the binary archives, the address pools (`AddressPool`, whose slots take buffers after it as before), the
   uses of guest RAM (`HostRamUse`), the no-copy buffers, the `Private` buffers (exportable ones
-  among them), the buffers in the runtime's own pages, the `Private` heaps with the buffers placed
-  in them, the textures of
+  among them), the buffers in the runtime's own pages, the `Private` heaps and the heaps over the
+  caller's memory with the buffers and textures placed in them, the textures of
   `new_texture`, the textures over the buffers it carried and the views of either, the compute,
   tile, drawing and mesh pipeline states, and the sampler states to the new `VkDevice`: the same
   objects, at the same addresses and resource IDs. A pipeline state's base variant is made again there from what its creation
@@ -866,11 +866,13 @@ meanwhile wait for it.
   its own memory's payload imported on the new `VkDevice`, at its offset there: the other API's
   imports reach it still, it keeps whatever that memory holds, and its exports after answer the
   same memory, with the same allocation size, offset and memory type. So are a `Private` heap's, whose buffers
-  placed before go on with it and in which buffers and textures are made again; the textures it
-  made before are refused. A texture of `new_texture` is made again in new memory, so its
-  contents are lost whatever its storage mode, `Shared` included, as its image was their only copy
-  (it reads as a new texture of its descriptor: refill one filled once and kept); the notice
-  counts these by storage mode. A texture buffer of `new_texture` is made again over its texels'
+  and textures placed before go on with it and in which buffers and textures are made again. A
+  heap over the caller's memory (`new_heap_with_bytes_no_copy`) is made again over the same pages,
+  as a no-copy buffer is, with the buffers and textures placed in it, which read what the pages
+  hold, and places more there. A texture of `new_texture`, and one placed in a `Private` heap, is
+  made again in new memory, so its contents are lost whatever its storage mode, `Shared` included,
+  as its image was their only copy (it reads as a new texture of its descriptor: refill one filled
+  once and kept); the notice counts these by storage mode. A texture buffer of `new_texture` is made again over its texels'
   buffer where the recovery carried that, and one over a carried buffer over the buffer's bytes:
   each reads what the buffer holds. A view views its parent there. Their images on the lost `VkDevice` stay with them, and keep it alive,
   until they go.
@@ -880,8 +882,8 @@ meanwhile wait for it.
   `Managed` buffers in memory the device allocated, whose `contents` pointer is the lost memory's
   mapping (on a device that imports no host pointer, or whose checks found that a held import
   costs its submissions or that textures over such pages take less, or had not answered; and a
-  `Managed` buffer without unified memory), detached no-copy buffers, `Shared`, no-copy and
-  sparse heaps with the buffers placed in them, heaps' textures, textures over the caller's
+  `Managed` buffer without unified memory), detached no-copy buffers, `Shared`, sparse and
+  detached no-copy heaps with the buffers and textures placed in them, textures over the caller's
   `VkImage`, sparse and shareable textures, textures over buffers left and their views, buffers
   over the caller's `VkBuffer`, `Shared` and `Managed` buffers in exportable memory, buffers in an
   opaque descriptor's dedicated allocation (Vulkan defines no buffer of another device identical to
