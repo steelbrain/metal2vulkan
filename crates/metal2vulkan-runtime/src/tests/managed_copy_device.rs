@@ -17,11 +17,13 @@
 //!   copies it whole (`WorkCounts::managed_synchronizes_whole`); one after no GPU write copies
 //!   nothing (`managed_synchronizes_unwritten`, `managed_bytes_unwritten_skipped`); one after a
 //!   fill of a range in an earlier command buffer copies that range alone
-//!   (`managed_bytes_copied_out`). The CPU reads every byte as written after each: the GPU's
-//!   writes where it wrote, the earlier bytes elsewhere, a write of a command buffer committed
-//!   before the synchronize's and encoded after it among them, and a CPU write
-//!   `did_modify_range` named, which no copy out overwrites. A write after the synchronize in its
-//!   own encoder reaches the CPU at the next. An untracked buffer is copied whole each time.
+//!   (`managed_bytes_copied_out`); one encoded before a write of a command buffer committed
+//!   before its own copies that write's range, before its part, at its submission
+//!   (`managed_synchronizes_topped_up`), and none of a write committed after its own. The CPU
+//!   reads every byte as written after each: the GPU's writes where it wrote, the earlier bytes
+//!   elsewhere, and a CPU write `did_modify_range` named, which no copy out overwrites. A write
+//!   after the synchronize in its own command buffer, or in one committed after it, reaches the
+//!   CPU at the next. An untracked buffer is copied whole each time.
 //! - **Bounded.** A 256 MiB buffer over pages no import maps holds its 256 MiB of device-local
 //!   memory and, across cycles of a whole `did_modify_range` and a command buffer, at most the
 //!   bound of what is staged, none once the cycle completed.
@@ -1014,13 +1016,15 @@ fn host_bytes(buffer: &Buffer) -> Vec<u8> {
 }
 
 /// The counts the copies out of the GPU's writes move, from `before` to `after`: the bytes copied
-/// out and skipped, and the synchronizes that copied nothing and that copied their range whole.
-fn copied_out(before: &WorkCounts, after: &WorkCounts) -> (u64, u64, u64, u64) {
+/// out and skipped, and the synchronizes that copied nothing, that copied their range whole, and
+/// that copied writes submitted since their encoding at their submission.
+fn copied_out(before: &WorkCounts, after: &WorkCounts) -> (u64, u64, u64, u64, u64) {
     (
         after.managed_bytes_copied_out - before.managed_bytes_copied_out,
         after.managed_bytes_unwritten_skipped - before.managed_bytes_unwritten_skipped,
         after.managed_synchronizes_unwritten - before.managed_synchronizes_unwritten,
         after.managed_synchronizes_whole - before.managed_synchronizes_whole,
+        after.managed_synchronizes_topped_up - before.managed_synchronizes_topped_up,
     )
 }
 
@@ -1057,14 +1061,14 @@ fn copies_out(route: Option<Route>) {
     // The first copies it whole: its writes before it were not kept.
     let first = synchronized("first", &expected);
     if counted {
-        assert_eq!(first, (BYTES, 0, 0, 1), "{leg}: the first synchronize");
+        assert_eq!(first, (BYTES, 0, 0, 1, 0), "{leg}: the first synchronize");
     }
     // None since: nothing.
     let unwritten = synchronized("unwritten", &expected);
     if counted {
         assert_eq!(
             unwritten,
-            (0, BYTES, 1, 0),
+            (0, BYTES, 1, 0, 0),
             "{leg}: a synchronize after no write"
         );
     }
@@ -1079,13 +1083,13 @@ fn copies_out(route: Option<Route>) {
     if counted {
         assert_eq!(
             partly,
-            (bytes, BYTES - bytes, 0, 0),
+            (bytes, BYTES - bytes, 0, 0, 0),
             "{leg}: a range written"
         );
     }
 
     // A write in a command buffer committed before the synchronize's and encoded after it, not
-    // waited for: the synchronize's copy follows it.
+    // waited for: the synchronize's batch copies it before the synchronize's part.
     let later = 9 * 4096 + 1..10 * 4096 + 77;
     let synced = queue.command_buffer().unwrap();
     let mut sync = synced.blit_command_encoder().unwrap();
@@ -1110,11 +1114,51 @@ fn copies_out(route: Option<Route>) {
         "{leg}: a write committed first"
     );
     if counted {
-        let moved = copied_out(&before, &device.work_counts()).0;
+        let moved = copied_out(&before, &device.work_counts());
+        let bytes = later.end - later.start;
         assert_eq!(
             moved,
-            later.end - later.start,
+            (bytes, BYTES - bytes, 0, 0, 1),
             "{leg}: a write committed first"
+        );
+    }
+
+    // A write in a command buffer committed after the synchronize's: it runs after the copy,
+    // which copies nothing of it; the next synchronize copies it.
+    let after = 24 * 4096 + 3..25 * 4096 + 9;
+    let synced = queue.command_buffer().unwrap();
+    let mut sync = synced.blit_command_encoder().unwrap();
+    sync.synchronize_resource(ResourceRef::Buffer(&buffer))
+        .unwrap();
+    sync.end_encoding().unwrap();
+    let before = device.work_counts();
+    synced.commit().unwrap();
+    let writer = queue.command_buffer().unwrap();
+    let mut fill = writer.blit_command_encoder().unwrap();
+    fill.fill_buffer(&buffer, after.clone(), 0x4f).unwrap();
+    fill.end_encoding().unwrap();
+    writer.commit().unwrap();
+    for command_buffer in [&synced, &writer] {
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    }
+    assert_eq!(
+        host_bytes(&buffer),
+        expected,
+        "{leg}: a write committed after"
+    );
+    if counted {
+        let moved = copied_out(&before, &device.work_counts());
+        assert_eq!(moved, (0, BYTES, 1, 0, 0), "{leg}: a write committed after");
+    }
+    expected[after.start as usize..after.end as usize].fill(0x4f);
+    let next = synchronized("the synchronize after a write committed after", &expected);
+    if counted {
+        let bytes = after.end - after.start;
+        assert_eq!(
+            next,
+            (bytes, BYTES - bytes, 0, 0, 0),
+            "{leg}: the synchronize after a write committed after"
         );
     }
 
@@ -1157,8 +1201,8 @@ fn copies_out(route: Option<Route>) {
         assert_eq!(pages.bytes(), expected, "{leg}: the pages");
     }
     eprintln!(
-        "MANAGED-COPY copies-out {leg} {}: (copied, skipped, unwritten, whole) first {first:?}, \
-         unwritten {unwritten:?}, a range written {partly:?}",
+        "MANAGED-COPY copies-out {leg} {}: (copied, skipped, unwritten, whole, topped up) \
+         first {first:?}, unwritten {unwritten:?}, a range written {partly:?}",
         device.name()
     );
 }
@@ -1199,7 +1243,7 @@ fn an_untracked_buffer_is_copied_out_whole() {
         let before = device.work_counts();
         synchronize(&queue, &buffer);
         let moved = copied_out(&before, &device.work_counts());
-        assert_eq!(moved, (BYTES, 0, 0, 1), "round {round}");
+        assert_eq!(moved, (BYTES, 0, 0, 1, 0), "round {round}");
     }
     assert_eq!(pages.bytes(), pattern(BYTES));
 }

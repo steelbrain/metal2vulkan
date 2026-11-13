@@ -1429,6 +1429,16 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         self.parts.last_mut().expect("an encoder has a part")
     }
 
+    /// The ranges of `key` its tracked uses so far write, in every part: what a copy out decided
+    /// as it is encoded takes of its encoder's commands before it (`managed_sync.rs`).
+    pub(super) fn written_ranges(&self, key: K) -> impl Iterator<Item = &UseRange> + '_ {
+        (self.parts.iter())
+            .filter_map(move |part| part.tracked.get(&key))
+            .flat_map(Few::iter)
+            .filter(|used| !used.write.is_empty())
+            .map(|used| &used.range)
+    }
+
     /// End the current part: the commands after this run in a part of their own, after
     /// everything before it completed, so they need no barrier after the commands before.
     pub(super) fn split(&mut self) {

@@ -1448,6 +1448,38 @@ impl State {
         };
     }
 
+    /// The bytes of the buffer of `key` its ended encoders' commands may write, as their encoding
+    /// says: their tracked uses, their segments' (`managed_sync::segment_writes`), and what they
+    /// made resident for writing, the buffer whole. What a copy out decided as it is encoded
+    /// copies of its command buffer's commands before it (`managed_sync.rs`); `None` where one may
+    /// write the buffer unknown: a command that may write memory no use names
+    /// ([`writes_unnamed`](Self::writes_unnamed)) or whose recording finds its uses.
+    pub(super) fn written_before(
+        &self,
+        device: &Device,
+        key: ResourceKey,
+    ) -> Option<Vec<Range<u64>>> {
+        if self.writes_unnamed {
+            return None;
+        }
+        let mut written = Vec::new();
+        for part in self.recorded.iter() {
+            crate::managed_sync::writes_of(&part.summary, key, &mut written);
+            for segment in &part.segments {
+                if !crate::managed_sync::segment_writes(segment, device, key, &mut written) {
+                    return None;
+                }
+            }
+        }
+        let resident = (self.ended.iter())
+            .filter_map(|record| record.residency.as_ref())
+            .any(|residency| (residency.written_uses().iter()).any(|used| used.key == key));
+        if resident {
+            written.push(0..u64::MAX);
+        }
+        Some(written)
+    }
+
     /// Let go of what its ended encoders' commands use, as it completes: their keys, and what
     /// they made resident, for the caller to release without this lock.
     fn let_go_of_uses(&mut self) -> Vec<Residency> {
@@ -4955,10 +4987,6 @@ impl CommandBufferShared {
                 summaries.push(&encoder.summary);
                 for segment in &encoder.segments {
                     probes.push(SegmentProbe::of(segment));
-                    // A copy out's uses are its encoder's, noted at its call (`managed_sync.rs`).
-                    if matches!(segment.work, Deferred::SyncOut(_)) {
-                        continue;
-                    }
                     // A loop's check may run its laying again: what the laying's parts use
                     // (`rerun.rs`).
                     if let Deferred::Loop(check) = &segment.work {

@@ -692,7 +692,7 @@ impl BlitCommandEncoder {
         shadow::overwritten(&mut shadows, &uses, &[]);
         let copies = self.core.plan_shadows(&shadows, &uses)?;
         self.core.shadow_copies(&copies);
-        self.core.sync_out(TRANSFER, &uses, copy);
+        self.core.sync_out(TRANSFER, &uses, &copy);
         self.core.shadows_used(&shadows, &uses, &[]);
         self.core.retain_shared(buffer.held());
         Ok(())

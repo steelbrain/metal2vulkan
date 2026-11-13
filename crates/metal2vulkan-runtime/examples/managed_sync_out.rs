@@ -1,29 +1,35 @@
 //! Not a consumer's example: what `synchronize_resource` of `Managed` buffers over the caller's
 //! pages costs a command buffer on a device without unified memory, where each such buffer is two
 //! copies (the caller's pages and the GPU's own) and a synchronize copies the GPU's copy out to the
-//! pages. The shape a guest workload showed: 40 buffers of 4,399,104 bytes each, all synchronized
-//! by each command buffer (about 176 MB), of which an earlier encoder of the same command buffer
-//! wrote some.
+//! pages. Two shapes a guest workload showed:
+//!
+//! - **Synchronizes of 40 buffers a command buffer**, 4,399,104 bytes each (about 176 MB a command
+//!   buffer, 800 synchronizes over 20 command buffers), after a blit encoder that fills `written`
+//!   of them whole; the rest the CPU wrote and named with `did_modify_range` before the command
+//!   buffer (rows `all`, `mixed`), or nobody wrote (row `none`).
+//! - **Synchronizes of two 335,872-byte buffers nobody wrote**, after a 1 MiB fill of a `Private`
+//!   buffer (row `small`), against the fill alone (row `fill`).
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-runtime --example managed_sync_out
 //! ```
 //!
-//! Each command buffer has two blit encoders: the first fills `written` of the buffers whole
-//! (with a value of its round), the second synchronizes all 40. After each, the CPU checks a
-//! sample of every buffer's pages: a written buffer's hold its round's value, the rest their
-//! first bytes. It prints one line a row:
+//! After each command buffer the CPU checks a sample of every buffer's pages. It prints one line
+//! a row, each value a command buffer's (medians of the times, means of the counts over the timed
+//! ones):
 //!
 //! ```text
-//! SYNC-OUT <written>/40 <GPU ms, median> <min> <max> <wall ms, median> <MB copied out a command buffer> <the device>
+//! ROW <row> gpu_ms <GPU time> wall_ms <commit to completion> copied_mb <MB copied out>
+//!     subs <vkQueueSubmit calls> infos <VkSubmitInfos> vkcbs <VkCommandBuffers begun>
+//!     (encoders, continuations, batch work, batch barriers, internal) fillq <fill-queue
+//!     submissions> commit_us <commit's own time> topped_up <managed_synchronizes_topped_up> <device>
 //! ```
 //!
-//! The wall time runs from the commit to the completion. The bytes copied out are the device's
-//! count (`WorkCounts::managed_bytes_copied_out`) over the timed command buffers.
+//! `topped_up` reads `-` where the device's counts have no such field.
 
 use metal2vulkan_runtime::{
     Buffer, CommandBufferStatus, CommandQueue, CpuCacheMode, Device, HazardTrackingMode,
-    HostMemory, ResourceOptions, ResourceRef, StorageMode,
+    HostMemory, ResourceOptions, ResourceRef, StorageMode, WorkCounts,
 };
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
@@ -34,27 +40,27 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 /// The longest the example waits for a command buffer.
 const WAIT: Duration = Duration::from_secs(60);
 
-/// The buffers each command buffer synchronizes.
-const BUFFERS: usize = 40;
-/// The bytes of each buffer: whole pages of any host.
-const BYTES: u64 = 1074 * 4096;
+/// The bytes of each of the 40 buffers: whole pages of any host.
+const LARGE: u64 = 1074 * 4096;
+/// The bytes of each of the two small buffers.
+const SMALL: u64 = 82 * 4096;
+/// The bytes of the small rows' fill.
+const FILL: u64 = 1 << 20;
 /// The command buffers run before the timed ones.
 const WARM: usize = 3;
-/// The command buffers timed.
-const TIMED: usize = 20;
 /// The first bytes of every buffer's pages.
 const FIRST: u8 = 0x11;
 
 /// Anonymous private pages of the example's own, unmapped when dropped, after the buffer over them.
-struct Pages(NonNull<u8>);
+struct Pages(NonNull<u8>, u64);
 
 impl Pages {
-    fn new() -> Result<Pages> {
+    fn new(bytes: u64) -> Result<Pages> {
         // SAFETY: a new anonymous mapping, which nothing else uses.
         let pointer = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
-                BYTES as usize,
+                bytes as usize,
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
                 -1,
@@ -65,9 +71,15 @@ impl Pages {
             return Err("mmap failed".into());
         }
         let pointer = NonNull::new(pointer.cast::<u8>()).ok_or("mmap gave null")?;
-        // SAFETY: the new mapping's bytes, the example's alone.
-        unsafe { std::ptr::write_bytes(pointer.as_ptr(), FIRST, BYTES as usize) };
-        Ok(Pages(pointer))
+        let pages = Pages(pointer, bytes);
+        pages.write(FIRST);
+        Ok(pages)
+    }
+
+    /// Write `value` over every byte, as the CPU.
+    fn write(&self, value: u8) {
+        // SAFETY: the mapping's bytes, which no command buffer uses while the CPU writes them.
+        unsafe { std::ptr::write_bytes(self.0.as_ptr(), value, self.1 as usize) };
     }
 
     /// The byte at `at`, as the CPU reads it.
@@ -75,16 +87,27 @@ impl Pages {
         // SAFETY: inside the mapping, which no command buffer writes while the CPU reads it.
         unsafe { self.0.as_ptr().add(at as usize).read_volatile() }
     }
+
+    /// Check a sample of its bytes hold `want`.
+    fn check(&self, want: u8, what: &str) -> Result<()> {
+        for at in (0..self.1).step_by(65_537).chain([self.1 - 1]) {
+            let byte = self.byte(at);
+            if byte != want {
+                return Err(format!("{what}: byte {at} is {byte:#x}, not {want:#x}").into());
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Pages {
     fn drop(&mut self) {
         // SAFETY: the mapping `new` made; every buffer over it went before it.
-        unsafe { libc::munmap(self.0.as_ptr().cast(), BYTES as usize) };
+        unsafe { libc::munmap(self.0.as_ptr().cast(), self.1 as usize) };
     }
 }
 
-/// The buffers, each over pages of its own.
+/// `count` buffers of `bytes` each, each over pages of its own.
 struct Buffers {
     buffers: Vec<Buffer>,
     // After the buffers: dropped once they went.
@@ -92,65 +115,82 @@ struct Buffers {
 }
 
 impl Buffers {
-    fn new(device: &Device) -> Result<Buffers> {
+    fn new(device: &Device, count: usize, bytes: u64) -> Result<Buffers> {
         let options = ResourceOptions::new(
             StorageMode::Managed,
             CpuCacheMode::DefaultCache,
             HazardTrackingMode::Default,
         );
-        let mut buffers = Vec::with_capacity(BUFFERS);
-        let mut pages = Vec::with_capacity(BUFFERS);
-        for _ in 0..BUFFERS {
-            let host = Pages::new()?;
+        let mut buffers = Vec::with_capacity(count);
+        let mut pages = Vec::with_capacity(count);
+        for _ in 0..count {
+            let host = Pages::new(bytes)?;
             // SAFETY: the pages outlive the buffer (dropped after it, `Buffers`), and only its
-            // commands and this example's CPU reads use them.
+            // commands and this example's CPU accesses use them.
             let buffer = unsafe {
-                device.new_buffer_with_bytes_no_copy(HostMemory::new(host.0), BYTES, options, None)
+                device.new_buffer_with_bytes_no_copy(HostMemory::new(host.0), bytes, options, None)
             }?;
             buffers.push(buffer);
             pages.push(host);
         }
         Ok(Buffers { buffers, pages })
     }
-
-    /// Check a sample of each buffer's pages after round `round` of `written` buffers written.
-    fn check(&self, written: usize, round: u8) -> Result<()> {
-        for (index, pages) in self.pages.iter().enumerate() {
-            let want = match index < written {
-                true => round,
-                false => FIRST,
-            };
-            for at in (0..BYTES).step_by(65_537).chain([BYTES - 1]) {
-                let byte = pages.byte(at);
-                if byte != want {
-                    return Err(format!(
-                        "round {round}, {written} written: buffer {index} byte {at} is {byte:#x}, \
-                         not {want:#x}"
-                    )
-                    .into());
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
-/// One command buffer: `written` of the buffers filled with `round`, then all synchronized. Its GPU
-/// time and its wall time from the commit, in seconds.
-fn run(queue: &CommandQueue, buffers: &Buffers, written: usize, round: u8) -> Result<(f64, f64)> {
+/// One row's command buffers: what each does.
+#[derive(Clone, Copy)]
+enum Shape {
+    /// 40 large buffers: the GPU fills `written` of them, the CPU writes the rest where
+    /// `modified`, and a blit synchronizes all 40.
+    Large { written: usize, modified: bool },
+    /// The 1 MiB fill, then a blit synchronizing the two small buffers where `synchronized`.
+    Small { synchronized: bool },
+}
+
+/// One command buffer of `shape`, of round `round`: its GPU time and its wall time from the commit
+/// to its completion, in seconds.
+fn run(
+    queue: &CommandQueue,
+    shape: Shape,
+    buffers: &Buffers,
+    target: &Buffer,
+    round: u8,
+) -> Result<(f64, f64)> {
     let command_buffer = queue.command_buffer()?;
-    if written > 0 {
-        let mut fill = command_buffer.blit_command_encoder()?;
-        for buffer in &buffers.buffers[..written] {
-            fill.fill_buffer(buffer, 0..BYTES, round)?;
+    match shape {
+        Shape::Large { written, modified } => {
+            if modified {
+                for (buffer, pages) in buffers.buffers.iter().zip(&buffers.pages).skip(written) {
+                    pages.write(round);
+                    buffer.did_modify_range(0..LARGE)?;
+                }
+            }
+            if written > 0 {
+                let mut fill = command_buffer.blit_command_encoder()?;
+                for buffer in &buffers.buffers[..written] {
+                    fill.fill_buffer(buffer, 0..LARGE, round)?;
+                }
+                fill.end_encoding()?;
+            }
+            let mut sync = command_buffer.blit_command_encoder()?;
+            for buffer in &buffers.buffers {
+                sync.synchronize_resource(ResourceRef::Buffer(buffer))?;
+            }
+            sync.end_encoding()?;
         }
-        fill.end_encoding()?;
+        Shape::Small { synchronized } => {
+            let mut fill = command_buffer.blit_command_encoder()?;
+            fill.fill_buffer(target, 0..FILL, round)?;
+            fill.end_encoding()?;
+            if synchronized {
+                let mut sync = command_buffer.blit_command_encoder()?;
+                for buffer in &buffers.buffers {
+                    sync.synchronize_resource(ResourceRef::Buffer(buffer))?;
+                }
+                sync.end_encoding()?;
+            }
+        }
     }
-    let mut sync = command_buffer.blit_command_encoder()?;
-    for buffer in &buffers.buffers {
-        sync.synchronize_resource(ResourceRef::Buffer(buffer))?;
-    }
-    sync.end_encoding()?;
     let began = Instant::now();
     command_buffer.commit()?;
     command_buffer
@@ -166,7 +206,40 @@ fn run(queue: &CommandQueue, buffers: &Buffers, written: usize, round: u8) -> Re
         .into());
     }
     let gpu = command_buffer.gpu_end_time()? - command_buffer.gpu_start_time()?;
+    match shape {
+        Shape::Large { written, modified } => {
+            for (index, pages) in buffers.pages.iter().enumerate() {
+                let want = match index < written || modified {
+                    true => round,
+                    false => FIRST,
+                };
+                pages.check(want, &format!("round {round}, buffer {index}"))?;
+            }
+        }
+        Shape::Small { .. } => {
+            for (index, pages) in buffers.pages.iter().enumerate() {
+                pages.check(FIRST, &format!("round {round}, small buffer {index}"))?;
+            }
+        }
+    }
     Ok((gpu, wall))
+}
+
+/// A field of `counts` by name, read from their `Debug` form: `None` where they have none.
+fn field(counts: &WorkCounts, name: &str) -> Option<u64> {
+    let text = format!("{counts:?}");
+    let at = text.find(&format!(" {name}: "))? + name.len() + 3;
+    let digits: String = text[at..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
+}
+
+/// The median of `values`, sorted here.
+fn median(values: &mut [f64]) -> f64 {
+    values.sort_by(f64::total_cmp);
+    values[values.len() / 2]
 }
 
 fn main() -> Result<()> {
@@ -174,38 +247,94 @@ fn main() -> Result<()> {
     let unified = device.properties().has_unified_memory;
     println!("device: {} (unified memory: {unified})", device.name());
     let queue = device.new_command_queue()?;
-    for written in [BUFFERS, 4, 0] {
-        let buffers = Buffers::new(&device)?;
+    let private = ResourceOptions::new(
+        StorageMode::Private,
+        CpuCacheMode::DefaultCache,
+        HazardTrackingMode::Default,
+    );
+    let target = device.new_buffer(FILL, private)?;
+    let rows = [
+        (
+            "all",
+            Shape::Large {
+                written: 40,
+                modified: false,
+            },
+            20,
+        ),
+        (
+            "mixed",
+            Shape::Large {
+                written: 30,
+                modified: true,
+            },
+            20,
+        ),
+        (
+            "none",
+            Shape::Large {
+                written: 0,
+                modified: false,
+            },
+            20,
+        ),
+        ("small", Shape::Small { synchronized: true }, 200),
+        (
+            "fill",
+            Shape::Small {
+                synchronized: false,
+            },
+            200,
+        ),
+    ];
+    for (name, shape, timed) in rows {
+        let buffers = match shape {
+            Shape::Large { .. } => Buffers::new(&device, 40, LARGE)?,
+            Shape::Small { .. } => Buffers::new(&device, 2, SMALL)?,
+        };
         let mut round = 0u8;
         let mut next = || {
             round = round.wrapping_add(1).max(FIRST + 1);
             round
         };
         for _ in 0..WARM {
-            let round = next();
-            run(&queue, &buffers, written, round)?;
-            buffers.check(written, round)?;
+            run(&queue, shape, &buffers, &target, next())?;
         }
-        let copied = device.work_counts().managed_bytes_copied_out;
-        let mut gpu = Vec::with_capacity(TIMED);
-        let mut wall = Vec::with_capacity(TIMED);
-        for _ in 0..TIMED {
-            let round = next();
-            let (seconds, elapsed) = run(&queue, &buffers, written, round)?;
-            buffers.check(written, round)?;
+        let before = device.work_counts();
+        let mut gpu = Vec::with_capacity(timed);
+        let mut wall = Vec::with_capacity(timed);
+        for _ in 0..timed {
+            let (seconds, elapsed) = run(&queue, shape, &buffers, &target, next())?;
             gpu.push(seconds * 1e3);
             wall.push(elapsed * 1e3);
         }
-        let copied = (device.work_counts().managed_bytes_copied_out - copied) / TIMED as u64;
-        gpu.sort_by(f64::total_cmp);
-        wall.sort_by(f64::total_cmp);
+        let after = device.work_counts();
+        let each =
+            |pick: fn(&WorkCounts) -> u64| (pick(&after) - pick(&before)) as f64 / timed as f64;
+        let topped_up = match (
+            field(&after, "managed_synchronizes_topped_up"),
+            field(&before, "managed_synchronizes_topped_up"),
+        ) {
+            (Some(after), Some(before)) => (after - before).to_string(),
+            _ => "-".to_string(),
+        };
         println!(
-            "SYNC-OUT {written}/{BUFFERS} {:.3} {:.3} {:.3} {:.3} {:.1} {}",
-            gpu[TIMED / 2],
-            gpu[0],
-            gpu[TIMED - 1],
-            wall[TIMED / 2],
-            copied as f64 / 1e6,
+            "ROW {name} gpu_ms {:.3} wall_ms {:.3} copied_mb {:.2} subs {:.2} infos {:.2} \
+             vkcbs {:.2} ({:.2}, {:.2}, {:.2}, {:.2}, {:.2}) fillq {:.2} commit_us {:.1} \
+             topped_up {topped_up} {}",
+            median(&mut gpu),
+            median(&mut wall),
+            each(|counts| counts.managed_bytes_copied_out) / 1e6,
+            each(|counts| counts.queue_submissions),
+            each(|counts| counts.submit_infos),
+            each(|counts| counts.command_buffers_begun),
+            each(|counts| counts.command_buffers_begun_encoders),
+            each(|counts| counts.command_buffers_begun_continuations),
+            each(|counts| counts.command_buffers_begun_batch_work),
+            each(|counts| counts.command_buffers_begun_batch_barriers),
+            each(|counts| counts.command_buffers_begun_internal),
+            each(|counts| counts.fill_queue_submissions),
+            each(|counts| counts.commit_nanos) / 1e3,
             device.name()
         );
     }

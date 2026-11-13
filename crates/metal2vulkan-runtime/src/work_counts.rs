@@ -524,6 +524,7 @@ pub(crate) struct Counters {
     managed_bytes_synchronized: AtomicU64,
     managed_synchronizes_unwritten: AtomicU64,
     managed_synchronizes_whole: AtomicU64,
+    managed_synchronizes_topped_up: AtomicU64,
     managed_bytes_unwritten_skipped: AtomicU64,
     managed_staging_bytes: AtomicU64,
     managed_writes_undone: AtomicU64,
@@ -4389,6 +4390,12 @@ impl Counters {
         if whole {
             (self.managed_synchronizes_whole).fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// A two-copy buffer's copy out took, at its batch's submission, writes submitted since its
+    /// encoding (`managed_sync.rs`).
+    pub(crate) fn managed_synchronize_topped_up(&self) {
+        (self.managed_synchronizes_topped_up).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A staging buffer of `bytes` bytes of a two-copy buffer's copies was made (`made`), or
@@ -8847,10 +8854,15 @@ pub struct WorkCounts {
     pub managed_synchronizes_unwritten: u64,
     /// Of those commands, those that copied their range whole as the GPU's writes to the buffer
     /// since its last copy out are not known: an untracked buffer, an exported one or one whose
-    /// `VkBuffer` was handed out, the buffer's first synchronize, a command buffer that may write
-    /// memory no use names submitted since, or a command recorded where its encoder recorded it
-    /// (inside a predicated loop's laying, or where no new `VkCommandBuffer` could be made).
+    /// `VkBuffer` was handed out, the buffer's first synchronize, a command before it in its
+    /// command buffer that may write memory no use names or whose recording finds its uses, a
+    /// command buffer that may write memory no use names submitted since, or a command inside a
+    /// predicated loop's laying.
     pub managed_synchronizes_whole: u64,
+    /// Of those commands, those whose batch's submission copied, before their part, writes of
+    /// other command buffers submitted between their encoding and that submission: one of a
+    /// command buffer committed before theirs and encoded after them (`managed_sync.rs`).
+    pub managed_synchronizes_topped_up: u64,
     /// The bytes those commands asked that they did not copy out, as no write of the GPU's since
     /// the buffer's last copy out reached them: `managed_bytes_synchronized` less the bytes copied
     /// out of them.
@@ -11016,6 +11028,8 @@ impl Device {
             managed_synchronizes_unwritten: (counters.managed_synchronizes_unwritten)
                 .load(Ordering::Relaxed),
             managed_synchronizes_whole: (counters.managed_synchronizes_whole)
+                .load(Ordering::Relaxed),
+            managed_synchronizes_topped_up: (counters.managed_synchronizes_topped_up)
                 .load(Ordering::Relaxed),
             managed_bytes_unwritten_skipped: (counters.managed_bytes_unwritten_skipped)
                 .load(Ordering::Relaxed),

@@ -14,7 +14,6 @@ use super::gpu_execute::{self, Rerecord};
 use super::host_ram::copy::{StagedGather, StagedScatter};
 use super::indirect_dispatch::ArgumentDispatch;
 use super::indirect_execute::{self, Execute, Settled, Unforeseen};
-use super::managed_sync::SyncOut;
 use super::pass_runs::RunMerge;
 use super::pending_dispatch::PendingDispatch;
 use super::pipeline::ComputePipelineState;
@@ -44,10 +43,6 @@ pub(super) enum Deferred {
     /// a scrub, neither `commit` nor a host step records it, but its batch's submission, once the
     /// commit's stamp is published (`shadow::GatedCopyIn`, `dirty_pages.rs`).
     GatedCopyIn(Arc<GatedCopyIn>),
-    /// The copies out of buffers with a host copy, whose regions the writes noted decide: as with
-    /// a scrub, neither `commit` nor a host step records them, but their batch's submission
-    /// (`managed_sync.rs`).
-    SyncOut(Arc<SyncOut>),
     /// The merge of a run's pass over a linear attachment rendered apart, or over a shadowed
     /// texture merged back (`pass_runs.rs`): as with a scrub, neither `commit` nor a host step
     /// records it, but its batch's submission, unless a later pass of the run took it over.
@@ -94,7 +89,6 @@ const _: fn(&Deferred) = |work| {
         Deferred::Dispatch(work) => shared(work),
         Deferred::SparseScrub(work) => shared(work),
         Deferred::GatedCopyIn(work) => shared(work),
-        Deferred::SyncOut(work) => shared(work),
         Deferred::RunMerge(work) => shared(work),
         Deferred::RenderPass(work) => shared(work),
         Deferred::Pending(work) => shared(work),
@@ -188,7 +182,6 @@ impl Deferred {
             (Deferred::Dispatch(a), Deferred::Dispatch(b)) => Arc::ptr_eq(a, b),
             (Deferred::SparseScrub(a), Deferred::SparseScrub(b)) => Arc::ptr_eq(a, b),
             (Deferred::GatedCopyIn(a), Deferred::GatedCopyIn(b)) => Arc::ptr_eq(a, b),
-            (Deferred::SyncOut(a), Deferred::SyncOut(b)) => Arc::ptr_eq(a, b),
             (Deferred::RunMerge(a), Deferred::RunMerge(b)) => Arc::ptr_eq(a, b),
             (Deferred::RenderPass(a), Deferred::RenderPass(b)) => Arc::ptr_eq(a, b),
             (Deferred::Pending(a), Deferred::Pending(b)) => Arc::ptr_eq(a, b),
@@ -208,8 +201,7 @@ impl Deferred {
     /// at the dispatch, and its writes are its encoder's to copy back. Nor is a gated copy in,
     /// which is one of the encoder's shadow copies, nor a run's merge (`pass_runs.rs`): a linear
     /// attachment's touches no shadowed texture, and a shadowed texture's is the copy back its
-    /// encoder took out of its shadows to leave there. Nor is a copy out (`managed_sync.rs`),
-    /// whose call copied back the shadows over the bytes it reads, as a command's. A staged copy's do: a gather's writes the
+    /// encoder took out of its shadows to leave there. A staged copy's do: a gather's writes the
     /// buffer, a scatter's reads it and writes the pages, after every command before them.
     pub(super) fn leaves_shadows(&self) -> bool {
         match self {
@@ -223,7 +215,6 @@ impl Deferred {
             Deferred::RenderPass(_)
             | Deferred::Pending(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::SyncOut(_)
             | Deferred::RunMerge(_) => false,
         }
     }
@@ -248,7 +239,6 @@ impl Deferred {
             Deferred::GatherStage(gather) => gather.after_the_gpu(),
             Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::SyncOut(_)
             | Deferred::RunMerge(_)
             | Deferred::Pending(_)
             | Deferred::ScatterStage(_) => false,
@@ -366,18 +356,17 @@ impl Deferred {
             Deferred::Dispatch(_) => Err(internal(
                 "an indirect dispatch recorded before the work it waits for completed",
             )),
-            Deferred::SparseScrub(_)
-            | Deferred::GatedCopyIn(_)
-            | Deferred::SyncOut(_)
-            | Deferred::RunMerge(_) => Ok(Prepared {
-                recorded: None,
-                for_good: false,
-                inputs: StepInputs::None,
-                retained: None,
-                pipelines: false,
-                bound: None,
-                held: false,
-            }),
+            Deferred::SparseScrub(_) | Deferred::GatedCopyIn(_) | Deferred::RunMerge(_) => {
+                Ok(Prepared {
+                    recorded: None,
+                    for_good: false,
+                    inputs: StepInputs::None,
+                    retained: None,
+                    pipelines: false,
+                    bound: None,
+                    held: false,
+                })
+            }
             // Recorded now for good where every execution whose records the GPU may write runs
             // on the GPU alone (`render/executions/gpu.rs`). Otherwise its step's draws compile
             // what `commit` cannot foresee alone: it settles their variants and pipelines now
@@ -546,7 +535,6 @@ impl Deferred {
             Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::SyncOut(_)
             | Deferred::RunMerge(_)
             | Deferred::Pending(_)
             | Deferred::Loop(_)
@@ -601,7 +589,6 @@ impl Deferred {
             Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::SyncOut(_)
             | Deferred::RunMerge(_)
             | Deferred::Pending(_)
             | Deferred::Loop(_)
@@ -654,7 +641,6 @@ impl Deferred {
             Deferred::Dispatch(dispatch) => dispatch.record(command_buffer),
             Deferred::SparseScrub(_) => Err(internal("a sparse scrub's host step")),
             Deferred::GatedCopyIn(_) => Err(internal("a gated copy in's host step")),
-            Deferred::SyncOut(_) => Err(internal("a copy out's host step")),
             Deferred::RunMerge(_) => Err(internal("a run's merge's host step")),
             Deferred::RenderPass(pass) => pass.record(command_buffer, true),
             Deferred::Pending(dispatch) => dispatch.record(command_buffer),
@@ -677,7 +663,6 @@ impl Deferred {
             Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::SyncOut(_)
             | Deferred::RunMerge(_)
             | Deferred::Pending(_)
             | Deferred::Loop(_)
@@ -698,7 +683,6 @@ impl Deferred {
             Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::SyncOut(_)
             | Deferred::RunMerge(_)
             | Deferred::Pending(_)
             | Deferred::Loop(_)
@@ -720,7 +704,6 @@ impl Deferred {
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::SyncOut(_)
             | Deferred::RunMerge(_)
             | Deferred::RenderPass(_)
             | Deferred::Pending(_) => false,
@@ -747,7 +730,6 @@ impl Deferred {
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::SyncOut(_)
             | Deferred::RunMerge(_)
             | Deferred::Loop(_)
             | Deferred::GatherStage(_)
@@ -761,8 +743,7 @@ impl Deferred {
     /// command buffer's execution and a render pass that executes render commands, whose
     /// commands its step resolves from records, an indirect dispatch and a scrub, which their
     /// steps or submissions record. A dispatch whose pipelines were being made records the uses
-    /// its encoding noted, a gated copy in writes the shadow it names, a copy out the host copy
-    /// its call noted, a run's merge
+    /// its encoding noted, a gated copy in writes the shadow it names, a run's merge
     /// the bytes its pass noted it writes, a loop's check records nothing, and a staged copy's
     /// steps write the runtime's staging and the buffer or pages its call noted.
     pub(super) fn reaches_unnamed(&self) -> bool {
@@ -770,7 +751,6 @@ impl Deferred {
             Deferred::Execute(_) | Deferred::Dispatch(_) | Deferred::SparseScrub(_) => true,
             Deferred::RenderPass(pass) => pass.executes(),
             Deferred::GatedCopyIn(_)
-            | Deferred::SyncOut(_)
             | Deferred::RunMerge(_)
             | Deferred::Pending(_)
             | Deferred::Loop(_)
@@ -792,14 +772,12 @@ impl Deferred {
     /// bytes its encoder's commands named (a linear attachment's, none over host pages; a
     /// shadowed texture's truth, whose uses its pass noted): a rebind of them encodes that
     /// encoder again, the merge with it. So do a staged copy's steps, between the buffer its call
-    /// resolved (`blit_at`) and the pages it named, and a copy out's submission, between the
-    /// buffer and the host copy its call resolved (`managed_sync.rs`). Everything else its step resolves as it
+    /// resolved (`blit_at`) and the pages it named. Everything else its step resolves as it
     /// records: a rebind meanwhile is refused.
     pub(super) fn resolved_at_its_calls(&self, pipelines: bool) -> bool {
         match self {
             Deferred::Pending(_)
             | Deferred::RunMerge(_)
-            | Deferred::SyncOut(_)
             | Deferred::GatherStage(_)
             | Deferred::ScatterStage(_)
             | Deferred::ScatterDrain(_) => true,
@@ -825,7 +803,6 @@ impl Deferred {
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::SyncOut(_)
             | Deferred::RunMerge(_)
             | Deferred::Loop(_)
             | Deferred::GatherStage(_)
@@ -838,13 +815,13 @@ impl Deferred {
     /// (`DeferredPass::known_summary`): a render pass's that executes no render commands. `None`
     /// for the rest, whose uses their recording finds: an execution's or an indirect dispatch's
     /// from the records and arguments it reads, a scrub's at its submission; a loop's check's are
-    /// its laying's (`CommandBufferShared::footprint`). A staged copy's GPU copy and a copy out
-    /// use none past what their calls noted in their encoder's part.
+    /// its laying's (`CommandBufferShared::footprint`). A staged copy's GPU copy uses none past
+    /// what its call noted in its encoder's part.
     pub(super) fn known_summary(&self, device: &Device) -> Option<Summary<ResourceKey>> {
         match self {
             Deferred::RenderPass(pass) => pass.known_summary(device),
             Deferred::Pending(dispatch) => Some(dispatch.known_summary()),
-            Deferred::GatherStage(_) | Deferred::ScatterStage(_) | Deferred::SyncOut(_) => {
+            Deferred::GatherStage(_) | Deferred::ScatterStage(_) => {
                 Some(EncoderUses::new(true).finish())
             }
             Deferred::Execute(_)
@@ -866,7 +843,6 @@ impl Deferred {
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::SyncOut(_)
             | Deferred::RunMerge(_)
             | Deferred::Loop(_)
             | Deferred::GatherStage(_)
@@ -885,7 +861,6 @@ impl Deferred {
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::SyncOut(_)
             | Deferred::RunMerge(_)
             | Deferred::Loop(_)
             | Deferred::GatherStage(_)
@@ -901,7 +876,6 @@ impl Deferred {
             Deferred::Dispatch(dispatch) => dispatch.degrade(device),
             Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::SyncOut(_)
             | Deferred::RunMerge(_)
             | Deferred::Pending(_)
             | Deferred::Loop(_)
