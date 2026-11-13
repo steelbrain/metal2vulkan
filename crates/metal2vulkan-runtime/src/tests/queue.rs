@@ -1,5 +1,6 @@
 //! A command queue's slots (`queue.rs`): one per uncompleted command buffer, at most the queue's
-//! `maxCommandBufferCount`, each counted open until its command buffer is committed.
+//! `maxCommandBufferCount`, each counted open until its command buffer is committed, and among the
+//! device's uncommitted command buffers until its commit handed its batches to the scheduler.
 
 use crate::queue::{Held, Slots, Uncommitted};
 use std::sync::Arc;
@@ -19,10 +20,14 @@ fn a_queue_hands_out_its_slots_up_to_its_count_and_takes_each_back_when_dropped(
         .take(&mut others.lock())
         .expect("another queue's slot");
     assert_eq!(uncommitted.count(), 3);
-    // Committed, a slot is no longer open, and only its drop gives it back.
+    // Committed, a slot is no longer open, and only its drop gives it back; it counts among the
+    // uncommitted until its batches are handed to the scheduler.
     second.committed();
     second.committed();
     assert_eq!(*slots.lock(), Held { all: 2, open: 1 });
+    assert_eq!(uncommitted.count(), 3);
+    second.handed();
+    second.handed();
     assert_eq!(uncommitted.count(), 2);
     drop(second);
     assert_eq!(uncommitted.count(), 2);
@@ -31,7 +36,11 @@ fn a_queue_hands_out_its_slots_up_to_its_count_and_takes_each_back_when_dropped(
     drop(first);
     assert_eq!(*slots.lock(), Held { all: 0, open: 0 });
     assert_eq!(uncommitted.count(), 1);
-    drop(other);
+    // One committed and dropped before its batches were handed counts no more once dropped.
+    let mut committed = other;
+    committed.committed();
+    assert_eq!(uncommitted.count(), 1);
+    drop(committed);
     assert_eq!(uncommitted.count(), 0);
     let again: Vec<_> = {
         let mut held = slots.lock();

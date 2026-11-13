@@ -287,10 +287,14 @@ impl Drop for HeldContext {
     }
 }
 
-/// The command buffers of a device's queues made and not committed (nor dropped): its slots open,
-/// over all its queues. A fetched render target takes its storage form only as the only one
-/// commits (`texture/storage_form.rs`); a new one counts itself as it takes its slot, before it
-/// reads that module's gate.
+/// The command buffers of a device's queues made and not yet handed to the scheduler (nor
+/// dropped), over all its queues: those not committed, and those committing, until their commit
+/// handed their batches to the scheduler ([`Slot::handed`]). A fetched render target takes its
+/// storage form only as the only one commits (`texture/storage_form.rs`), and a texture's face
+/// turns only in the only one (`texture/faces.rs`), where the scheduler holds no batch: so no
+/// command buffer whose commands may name what the switch or the turn changes is between its
+/// commit and the scheduler then. A new one counts itself as it takes its slot, before it reads
+/// those modules' gates.
 #[derive(Default)]
 pub(crate) struct Uncommitted(AtomicUsize);
 
@@ -313,6 +317,9 @@ pub(crate) struct Slot {
     slots: Arc<Slots>,
     /// The command buffer holding it is not committed.
     open: bool,
+    /// The command buffer holding it counts among the device's [`Uncommitted`]: its commit has not
+    /// handed its batches to the scheduler.
+    counted: bool,
 }
 
 impl Slots {
@@ -358,16 +365,29 @@ impl Slots {
         Some(Slot {
             slots: Arc::clone(self),
             open: true,
+            counted: true,
         })
     }
 }
 
 impl Slot {
-    /// The command buffer holding the slot was committed: only its completion gives it back now.
+    /// The command buffer holding the slot was committed: only its completion gives it back now,
+    /// and the program can no longer drop it to give it back (`own.rs`'s `slot_wait`). It counts
+    /// among the device's [`Uncommitted`] until its batches are handed to the scheduler
+    /// ([`handed`](Self::handed)).
     pub(crate) fn committed(&mut self) {
         if self.open {
             self.open = false;
             self.slots.lock().open -= 1;
+        }
+    }
+
+    /// The commit of the command buffer holding the slot handed its batches to the scheduler,
+    /// which holds them until each is submitted: it no longer counts among the device's
+    /// [`Uncommitted`].
+    pub(crate) fn handed(&mut self) {
+        if self.counted {
+            self.counted = false;
             self.slots.uncommitted.0.fetch_sub(1, Ordering::SeqCst);
         }
     }
@@ -380,6 +400,8 @@ impl Drop for Slot {
             held.all -= 1;
             if self.open {
                 held.open -= 1;
+            }
+            if self.counted {
                 self.slots.uncommitted.0.fetch_sub(1, Ordering::SeqCst);
             }
             // The last committed here completed: the next place's context runs on.

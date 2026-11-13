@@ -1993,8 +1993,11 @@ impl State {
     /// decode its submission may record after it, `texture/decoded_twin.rs`), and name no texture
     /// over the caller's image that moves between layouts (whose move back its submission plans
     /// before the end), while no texture's turn may leave its submission a copy after its work
-    /// (`texture/faces.rs`). An event's kept signal that waits for another queue's still goes
-    /// after that wait, in an end of its own at the submission (`submit.rs`).
+    /// (`texture/faces.rs`); none begins before the batch's submission, a turn waiting for the
+    /// device's only uncommitted command buffer, which counts this one until the scheduler holds
+    /// its batches (`queue.rs`'s `Uncommitted`), and for a scheduler that holds no batch. An
+    /// event's kept signal that waits for another queue's still
+    /// goes after that wait, in an end of its own at the submission (`submit.rs`).
     fn may_fold(&self, device: &Device, index: usize) -> bool {
         let parts = &self.recorded[self.batch_range(index)];
         !device.shared().face_swaps.any()
@@ -4207,11 +4210,23 @@ impl CommandBuffer {
         // Its reads and writes of new textures' patterns, in commit order: announced in the
         // committing call, before the scheduler sees it (`fresh_unwritten.rs`).
         FreshUnwritten::commit(device, &self.0.fresh, run != CommitRun::Refused);
+        // A device test holds the commit here, its last command buffer ended and its batches not
+        // yet the scheduler's (`completion::trace::Point::Committing`).
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        completion::trace::at(completion::trace::Point::Committing);
         // The scheduler's lock is taken before a command buffer's, never under it.
         device
             .shared()
             .scheduler
             .commit(&self.0, self.0.queue.id(), waits, hand);
+        // Only now, its batches the scheduler's, it leaves the device's uncommitted command
+        // buffers (`queue.rs`'s `Uncommitted`): until then no texture's face turns and no storage
+        // form switches beside it, whose commands, recorded for good and their batches' ends
+        // folded where they may, would meet the turn's copies or the switch as their batches are
+        // submitted.
+        if let Some(slot) = &mut self.state().slot {
+            slot.handed();
+        }
         // Its passes that took a rasterization-rate map since reset, encoded again in this call
         // as a reset's are; its first submission waits for them (marked above). Those it cannot
         // encode again are announced.

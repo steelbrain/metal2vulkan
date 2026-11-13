@@ -32,6 +32,15 @@
 //! passes old. The pass turns nothing (`Unturned::Busy`) and copies in, and the command reads the
 //! texels from before the pass, Metal's answer.
 //!
+//! A fourth and a fifth test encode a pass beside a command buffer that commits, held as it
+//! commits once its last command buffer ended and before the scheduler holds its batches: the
+//! committing command buffer counts among the device's uncommitted ones until then
+//! (`queue.rs`'s `Uncommitted`), so the pass turns nothing and copies in. A turn there would
+//! leave a batch submitted after it that a face fix copies around, though its end may already lie
+//! in its last command buffer (the fourth: the submission found that end where the batch does not
+//! end), and whose rendering the fix's copy back would overwrite with the face from before (the
+//! fifth, whose end is a command buffer of its own while another texture's turn is pending).
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_rect`,
 //! `tob_solid` and `tob_read` of the owned fixture `validation/fixtures/public/engine/tob_renders.ll`,
@@ -40,6 +49,7 @@
 
 use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
+use crate::command_buffer::completion::trace::{self, Point};
 use crate::{
     BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, EventRef,
     IndirectCommandBufferDescriptor, LoadAction, Origin, PipelineOptions, RenderPassDescriptor,
@@ -689,4 +699,131 @@ fn an_execution_before_a_clearing_pass_reads_the_texels_from_before_it() {
     let want = image(0x30, 0x50);
     let differ = (0..got.len()).filter(|&at| got[at] != want[at]).count();
     assert_eq!(differ, 0, "the pass: {differ} bytes differ");
+}
+
+/// The points a lane of the commit tests holds, let go as this drops, a failing test's unwinding
+/// too.
+struct HeldCommit;
+
+impl HeldCommit {
+    fn new() -> HeldCommit {
+        trace::hold_at(Point::Committing);
+        HeldCommit
+    }
+}
+
+impl Drop for HeldCommit {
+    fn drop(&mut self) {
+        trace::release(Point::Committing);
+    }
+}
+
+/// A lane of the commit tests (the module docs): a command buffer `committing` that draws into
+/// the texture, reads it beside an open one, `turning`, and draws over the read, held as it commits
+/// (`Point::Committing`: its last command buffer ended, its batches not yet the scheduler's);
+/// meanwhile `turning`'s pass, which clears the texture and reads it, opens. Where `folds`, the
+/// committing command buffer's one batch ends in its last command buffer; else a turn of another
+/// texture whose command buffer went uncommitted is pending as it commits, so its end is a command
+/// buffer of its own. Every step's bytes are checked: the committing command buffer's pass
+/// leaves 0x30 outside [`RECT`] and 0x70 inside it, which the turning pass reads.
+fn beside_a_commit(lane: &str, folds: bool) {
+    let scratch = Scratch::new(lane);
+    let device = device(&scratch.0);
+    let tools = Tools::new(&device);
+    // The texture whose turn is pending, of the lane whose end does not fold.
+    let other = (!folds).then(|| texture(&device));
+    let texture = texture(&device);
+    let check = |want: Vec<u8>, what: &str| {
+        let (got, _) = tools.bytes(&texture);
+        let differ = (0..got.len()).filter(|&at| got[at] != want[at]).count();
+        assert_eq!(differ, 0, "{lane}: {what}: {differ} bytes differ");
+    };
+    // The faces, made by the first read; then 0x20 outside the rectangle and 0x50 inside it.
+    tools.pass(&texture, Some(0x10), Draw::Nothing);
+    tools.pass(&texture, None, Draw::Solid(0x40));
+    let moved = tools.pass(&texture, Some(0x20), Draw::Read);
+    assert_eq!(moved.made, 1, "{lane}: the first read makes the faces");
+    check(image(0x20, 0x40), "the first read");
+    tools.pass(&texture, None, Draw::Solid(0x50));
+    check(image(0x20, 0x50), "the solid draw");
+    // A turn of the other texture, whose command buffer goes uncommitted: pending until a batch
+    // names that texture, which none does.
+    if let Some(other) = &other {
+        tools.pass(other, Some(0x10), Draw::Nothing);
+        let moved = tools.pass(other, Some(0x20), Draw::Read);
+        assert_eq!(moved.made, 1, "{lane}: the other texture's faces");
+        let before = device.work_counts();
+        let dropped = tools.queue.command_buffer().unwrap();
+        tools.encode(&dropped, other, Some(0x30), Draw::Read);
+        drop(dropped);
+        let moved = Moved::of(&before, &device.work_counts());
+        assert_eq!(
+            moved.swaps, 1,
+            "{lane}: the other texture's uncommitted turn"
+        );
+    }
+    let before = device.work_counts();
+    let turning = tools.queue.command_buffer().unwrap();
+    let committing = tools.queue.command_buffer().unwrap();
+    // A draw before the read, so the read's copy in is recorded in its encoder, not left to the
+    // batch's submission (`shadow_standing.rs`, **The copy in**), which would hold the batch's end
+    // apart and the heap sets' ticket the turn waits for.
+    tools.encode(&committing, &texture, None, Draw::Solid(0x55));
+    tools.encode(&committing, &texture, Some(0x30), Draw::Read);
+    tools.encode(&committing, &texture, None, Draw::Solid(0x70));
+    let encoded = device.work_counts();
+    let held = HeldCommit::new();
+    let commit = {
+        let committing = committing.clone();
+        std::thread::spawn(move || committing.commit())
+    };
+    assert!(
+        trace::reached(Point::Committing, WAIT),
+        "{lane}: the commit reached its hold"
+    );
+    tools.encode(&turning, &texture, Some(0x60), Draw::Read);
+    drop(held);
+    commit.join().unwrap().unwrap();
+    committing.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(
+        committing.error(),
+        None,
+        "{lane}: the committing command buffer"
+    );
+    let ended = device.work_counts();
+    let (folded, apart) = (
+        ended.finales_folded - encoded.finales_folded,
+        ended.finales_apart - encoded.finales_apart,
+    );
+    eprintln!("ATTACHED-READ-FACES: {lane}: its end folded {folded}, apart {apart}");
+    let want = match folds {
+        true => (1, 0),
+        false => (0, 1),
+    };
+    assert_eq!((folded, apart), want, "{lane}: the committing batch's end");
+    check(image(0x30, 0x70), "the committing command buffer");
+    Tools::run(&turning);
+    check(image(0x60, 0x70), "the pass beside the commit");
+    let moved = Moved::of(&before, &device.work_counts());
+    eprintln!("ATTACHED-READ-FACES: {lane}: {moved:?}");
+    assert_eq!(
+        (moved.swaps, moved.busy, moved.fixes),
+        (0, 2, 0),
+        "{lane}: neither pass turns, beside an open command buffer or a commit"
+    );
+    drop(other);
+}
+
+/// The fourth test of the module docs: the committing command buffer's batch ends in its last
+/// command buffer.
+#[test]
+fn a_pass_beside_a_commit_turns_nothing_and_the_commit_s_end_stays_folded() {
+    beside_a_commit("attached-read-faces-commit-folded", true);
+}
+
+/// The fifth test of the module docs: the committing command buffer's batch ends in a command
+/// buffer of its own, so its submission would take a turn's copies.
+#[test]
+fn a_pass_beside_a_commit_turns_nothing_and_the_commit_s_pixels_stay() {
+    beside_a_commit("attached-read-faces-commit-apart", false);
 }

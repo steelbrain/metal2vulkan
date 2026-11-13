@@ -1646,10 +1646,14 @@ pub(crate) mod trace {
         /// A queue's waiter, once it published a value its queue's timeline completed and before
         /// the batches at or below it leave the `VkQueue`'s flight (`QueueSlot::completed`).
         Leave,
+        /// A committing thread, once its command buffer's last command buffer ended (with its
+        /// batch's end where it may) and before it hands the batches to the scheduler
+        /// (`CommandBuffer::commit`).
+        Committing,
     }
 
     /// Of each [`Point`]: whether a test holds threads there, and whether one reached it since.
-    static POINTS: Mutex<[(bool, bool); 3]> = Mutex::new([(false, false); 3]);
+    static POINTS: Mutex<[(bool, bool); 4]> = Mutex::new([(false, false); 4]);
     static POINTS_CHANGED: std::sync::Condvar = std::sync::Condvar::new();
 
     /// Hold every thread that reaches `point` from now on, until [`release`].

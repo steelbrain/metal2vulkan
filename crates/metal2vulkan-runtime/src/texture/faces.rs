@@ -33,7 +33,8 @@
 //!   follows the pass either. Each copy in of a color texture's attached reads that no turn took
 //!   off counts by why (`WorkCounts::attached_read_unswapped_*`, [`Unturned`]).
 //! - **When.** Only where nothing else can name the face presented until then: the opening command
-//!   buffer is the device's only uncommitted one, the scheduler holds no batch, no command buffer
+//!   buffer is the device's only uncommitted one (a committing one counts until the scheduler holds
+//!   its batches, `queue.rs`'s `Uncommitted`), the scheduler holds no batch, no command buffer
 //!   that may read the heap sets is incomplete and this one bound none (as a storage form's switch,
 //!   `texture/storage_form.rs`), nor holds an execution of indirect commands, whose commands bind
 //!   them as the commit or a host step records them, after the turn, though they run before the
