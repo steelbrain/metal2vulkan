@@ -71,7 +71,7 @@ use super::device::lock;
 use super::error::{internal, invalid, Error, IndirectRule, MemoryKind, Problem, RuntimeGap};
 use super::families::GpuFamily;
 use super::indirect_execute::Unforeseen;
-use super::kept_commands::{Kept, KeptChunk, KeptChunks, StepChunk, StepCopy};
+use super::kept_commands::{Kept, KeptChunk, KeptChunks, StepChunk, StepCopy, UnlockedWrites};
 use super::memory::MemoryClass;
 use super::pipeline::{
     ComputePipelineState, ComputeProgram, RenderPipelineState, RenderProgram, RenderStateKind,
@@ -653,6 +653,7 @@ impl Device {
             size,
             options,
             pipelines: Mutex::default(),
+            unlocked: UnlockedWrites::new(size),
             gpu_written: AtomicBool::new(false),
             gpu_writer: OnceLock::new(),
             unforeseen: Mutex::new(Vec::new()),
@@ -1074,8 +1075,12 @@ struct IcbShared {
     /// The options asked for, the hazard tracking mode resolved.
     options: ResourceOptions,
     /// The pipeline state the CPU set on each command, and the kept recordings of its chunks
-    /// ([`CommandStates`]). Held while the CPU writes a record, so writes are one at a time.
+    /// ([`CommandStates`]). Held while the CPU writes a record, but for a buffer slot's setter's
+    /// write, which takes no lock ([`edit_unlocked`](IndirectCommandBuffer::edit_unlocked)).
     pipelines: Mutex<CommandStates>,
+    /// The chunks a buffer slot's setter wrote without `pipelines`, for the kept recordings'
+    /// next look to forget ([`UnlockedWrites`]).
+    unlocked: UnlockedWrites,
     /// A route that may write the buffer's records met it (`write_routes.rs`): the GPU may write
     /// them from then on (`written_by_gpu`). Set, and read where it decides, under
     /// `unforeseen`'s lock.
@@ -1086,9 +1091,9 @@ struct IcbShared {
     /// weakly until it is (`watch`, `written_by_gpu`).
     unforeseen: Mutex<Vec<Weak<Unforeseen>>>,
     /// The CPU's writes of the records and of the slots past them so far, counted
-    /// ([`cpu_writes`](IndirectCommandBuffer::cpu_writes)). Each adds one under `pipelines`,
-    /// after it wrote, by a load and a store: every writer holds the lock, so no locked
-    /// instruction is needed, and its readers load it without the lock.
+    /// ([`cpu_writes`](IndirectCommandBuffer::cpu_writes)). Each adds one after it wrote, by an
+    /// atomic add (`Release`), under `pipelines` or, for a buffer slot's setter, without it, and
+    /// its readers load it without the lock.
     cpu_writes: AtomicU64,
     /// The CPU set a render command's barrier: an execution's render pass instance may split at
     /// it (`render/executions.rs`), for good.
@@ -1144,6 +1149,7 @@ const _: fn(&IcbShared) = |icb| {
         size,
         options,
         pipelines,
+        unlocked,
         gpu_written,
         gpu_writer,
         unforeseen,
@@ -1166,6 +1172,7 @@ const _: fn(&IcbShared) = |icb| {
     shared(size);
     shared(options);
     shared(pipelines);
+    shared(unlocked);
     shared(gpu_written);
     shared(gpu_writer);
     shared(unforeseen);
@@ -1632,7 +1639,9 @@ impl IndirectCommandBuffer {
         record
             .encode_into(&mut bytes)
             .map_err(|_| internal("an indirect command's record does not encode"))?;
-        // SAFETY: as `record`'s; writes are one at a time (`pipelines`).
+        // SAFETY: as `record`'s; the CPU's writes are one at a time (`pipelines`), but a buffer
+        // slot's setter's, without it (`edit_unlocked`): one of the same command meanwhile is the
+        // program's race, as two threads encoding one command are on Metal.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),
@@ -1648,11 +1657,9 @@ impl IndirectCommandBuffer {
     /// and forget the kept recordings of the chunks they lie in (`kept_commands.rs`), under
     /// `commands`, the caller's hold of `pipelines`.
     fn wrote(&self, commands: &mut CommandStates, range: Range<u32>) {
-        // Every write of the counter is under `pipelines` (`commands` is its hold), so a load and
-        // a store count it: a locked add would wait for the setter's stores into the record
-        // (`tests::icb_encode_bench` measures a setter's cost).
-        let writes = self.0.cpu_writes.load(Ordering::Relaxed);
-        self.0.cpu_writes.store(writes + 1, Ordering::Release);
+        // An atomic add: a buffer slot's setter counts its write without `pipelines`
+        // (`edit_unlocked`).
+        self.0.cpu_writes.fetch_add(1, Ordering::Release);
         commands.kept.wrote(range);
     }
 
@@ -1869,22 +1876,21 @@ impl IndirectCommandBuffer {
     /// pipeline state, `set` as the state the CPU set on it: the field's words alone, in place, as
     /// Metal's setter writes its field, the rest of the record as the GPU and the CPU left it
     /// (`CommandRecord::write_field`); then what the record holds joins what its records may
-    /// (`grown_writes`, `add_written`). All of it under one hold of `pipelines`.
+    /// (`grown_writes`, `add_written`). All of it under one hold of `pipelines`, but a buffer
+    /// slot's on a buffer the GPU may not have written ([`edit_unlocked`](Self::edit_unlocked)).
     fn edit(&self, index: u32, field: RecordField, set: Option<CommandState>) -> Result<(), Error> {
+        if set.is_none() && matches!(field, RecordField::Buffer { .. }) && !self.gpu_written() {
+            return self.edit_unlocked(index, field);
+        }
         let mut commands = lock(&self.0.pipelines);
         // SAFETY: the record of a command below the size lies inside the mapped storage, and the
-        // CPU's writes of the records are one at a time (`pipelines`, held while the slice lives).
-        // A GPU write to it meanwhile is the program's race, as on Metal.
+        // CPU's writes of the records are one at a time (`pipelines`, held while the slice lives),
+        // but a buffer slot's setter's (`edit_unlocked`): one of the same command meanwhile, as a
+        // GPU write to it, is the program's race, as on Metal.
         let bytes = unsafe {
             std::slice::from_raw_parts_mut(self.bytes().add(record_offset(index)), COMMAND_BYTES)
         };
-        CommandRecord::write_field(bytes, field).map_err(|error| match error {
-            RecordError::Length { .. }
-            | RecordError::Action { .. }
-            | RecordError::Barrier { .. }
-            | RecordError::PipelineState => undecodable(),
-            _ => internal("an indirect command's record does not take a setter's field"),
-        })?;
+        CommandRecord::write_field(bytes, field).map_err(field_error)?;
         self.wrote(&mut commands, index..index + 1);
         let named = set.as_ref().map(CommandState::named);
         // Read before the state is set, so a state set is always added: only a GPU write since
@@ -1901,6 +1907,29 @@ impl IndirectCommandBuffer {
         // The buffers a commit left unmarked where this one's commands ran, which its record
         // naming a state that may write records marks now (`write_routes.rs`), without its lock.
         followed.mark();
+        Ok(())
+    }
+
+    /// [`edit`](Self::edit) of `field`, a buffer slot, into command `index`'s record (below the
+    /// size) without `pipelines`, on a buffer the GPU may not have written: there such an edit
+    /// names no state and adds nothing to what the records may hold (`grown_writes` reads no record
+    /// for it), so the count of the CPU's writes and the kept recordings of the command's chunk
+    /// alone follow it, as they follow a write under the lock ([`wrote`](Self::wrote)): the chunk
+    /// noted for the kept recordings' next look to forget ([`UnlockedWrites`],
+    /// `KeptChunks::settle`), then the write counted, by an atomic add. A buffer the GPU starts
+    /// writing meanwhile is the race a write under the lock has with it too (`gpu_written` is set
+    /// under `unforeseen`'s lock). The lock's two locked instructions were most of a buffer
+    /// setter's cost (`tests::icb_encode_bench`).
+    fn edit_unlocked(&self, index: u32, field: RecordField) -> Result<(), Error> {
+        // SAFETY: the record of a command below the size lies inside the mapped storage. Another
+        // write of the same command meanwhile, under `pipelines` or not, is the program's race, as
+        // two threads encoding one command, or a GPU write to it, are on Metal.
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(self.bytes().add(record_offset(index)), COMMAND_BYTES)
+        };
+        CommandRecord::write_field(bytes, field).map_err(field_error)?;
+        self.0.unlocked.wrote(index);
+        self.0.cpu_writes.fetch_add(1, Ordering::Release);
         Ok(())
     }
 
@@ -2655,11 +2684,15 @@ impl IndirectCommandBuffer {
 
     /// What is kept of each chunk of commands `range` (inside the size), in order, each noted as
     /// run now (`kept_commands.rs`), and the CPU's writes so far
-    /// ([`cpu_writes`](Self::cpu_writes)), read under the same lock; `None` where the execution
-    /// records as one that keeps nothing: an execution last recorded one of them otherwise than
-    /// plainly, or none of them ran before since a write last reached it.
+    /// ([`cpu_writes`](Self::cpu_writes)), read under the same lock before the chunks a buffer
+    /// slot's setter wrote without it are forgotten (`KeptChunks::settle`): every write the count
+    /// counts is forgotten, and one it does not moves it; `None` where the execution records as
+    /// one that keeps nothing: an execution last recorded one of them otherwise than plainly, or
+    /// none of them ran before since a write last reached it.
     pub(super) fn kept_chunks(&self, range: Range<u32>) -> Option<(Vec<Kept>, u64)> {
         let mut commands = lock(&self.0.pipelines);
+        let writes = self.cpu_writes();
+        commands.kept.settle(&self.0.unlocked);
         if commands.kept.stepped_in(range.clone()) {
             return None;
         }
@@ -2667,15 +2700,16 @@ impl IndirectCommandBuffer {
         if kept.iter().all(|kept| matches!(kept, Kept::First)) {
             return None;
         }
-        Some((kept, self.cpu_writes()))
+        Some((kept, writes))
     }
 
     /// Keep `kept`, the recording of chunk `chunk` from its records as the CPU's writes `read_at`
-    /// left them, or (`None`) note that it was not plain: only where no write came since and the
-    /// GPU may not write the records.
+    /// left them, or (`None`) note that it was not plain: only where no write came since, none
+    /// without the lock noted the chunk that no look took yet (one whose count is still to come),
+    /// and the GPU may not write the records.
     pub(super) fn keep_chunk(&self, chunk: u32, kept: Option<Arc<KeptChunk>>, read_at: u64) {
         let mut commands = lock(&self.0.pipelines);
-        if self.cpu_writes() != read_at || self.gpu_written() {
+        if self.cpu_writes() != read_at || self.0.unlocked.pending(chunk) || self.gpu_written() {
             return;
         }
         match kept {
@@ -3985,6 +4019,17 @@ fn draw_of(action: &Action) -> Option<IndirectDraw> {
 /// The byte offset of command `index`'s record in the storage.
 fn record_offset(index: u32) -> usize {
     COMMAND_BUFFER_HEADER_BYTES + index as usize * COMMAND_BYTES
+}
+
+/// The error of a setter whose field the record refuses (`CommandRecord::write_field`).
+fn field_error(error: RecordError) -> Error {
+    match error {
+        RecordError::Length { .. }
+        | RecordError::Action { .. }
+        | RecordError::Barrier { .. }
+        | RecordError::PipelineState => undecodable(),
+        _ => internal("an indirect command's record does not take a setter's field"),
+    }
 }
 
 /// The runtime's error for a record that does not decode (a GPU write, the program's race).

@@ -33,7 +33,9 @@
 //!   recording's own did, and counts it (`WorkCounts::indirect_chunks_kept`,
 //!   `indirect_commands_kept`). Its records are not read.
 //! - **Forgotten** at the CPU's every write of one of the chunk's commands (a setter, a reset, a
-//!   slot past the record's), under the lock the write takes; for good at the buffer's first
+//!   slot past the record's), under the lock the write takes, or, for a buffer slot's setter,
+//!   which takes none, at the next look at the kept recordings after it ([`UnlockedWrites`],
+//!   [`KeptChunks::settle`]); for good at the buffer's first
 //!   GPU write (`IndirectCommandBuffer::written_by_gpu`), after which no execution reads the
 //!   CPU's records at commit; and where its inputs differ, its next recording replacing it. A
 //!   recording made from records the CPU wrote while it recorded them is not kept. What a
@@ -58,6 +60,7 @@ use metal2vulkan::bind::ReplayFaults;
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 /// The commands of a chunk: a render chunk's draws record into one secondary command buffer, a
@@ -529,7 +532,56 @@ pub(super) struct StepChunk {
     pub(super) copy: StepCopy,
 }
 
+/// The chunks the CPU wrote a record of without the buffer's lock (a buffer slot's setter,
+/// `IndirectCommandBuffer::edit_unlocked`), noted for the next look at the kept recordings to
+/// forget ([`KeptChunks::settle`]): a flag a chunk, and one that some flag is set. A write notes
+/// its chunk after it wrote, and the note is published (`Release`) before the write is counted
+/// (`IndirectCommandBuffer::cpu_writes`), so a settle after a read of the count that counts the
+/// write finds the note.
+pub(super) struct UnlockedWrites {
+    chunks: Box<[AtomicBool]>,
+    any: AtomicBool,
+}
+
+impl UnlockedWrites {
+    /// The notes of a buffer of `size` commands: none.
+    pub(super) fn new(size: u32) -> UnlockedWrites {
+        UnlockedWrites {
+            chunks: chunks_of(0..size).map(|_| AtomicBool::new(false)).collect(),
+            any: AtomicBool::new(false),
+        }
+    }
+
+    /// The CPU wrote command `index`'s record without the lock: note its chunk.
+    pub(super) fn wrote(&self, index: u32) {
+        if let Some(flag) = self.chunks.get((index / CHUNK) as usize) {
+            flag.store(true, Ordering::Relaxed);
+        }
+        self.any.store(true, Ordering::Release);
+    }
+
+    /// Whether a write without the lock noted chunk `chunk` that no settle took yet.
+    pub(super) fn pending(&self, chunk: u32) -> bool {
+        (self.chunks.get(chunk as usize)).is_some_and(|flag| flag.load(Ordering::Relaxed))
+    }
+}
+
 impl KeptChunks {
+    /// Forget the chunks `unlocked` noted the CPU wrote without the lock, as [`wrote`](Self::wrote)
+    /// forgets them, taking the notes. Nothing while none is noted.
+    pub(super) fn settle(&mut self, unlocked: &UnlockedWrites) {
+        if !unlocked.any.load(Ordering::Relaxed) || !unlocked.any.swap(false, Ordering::Acquire) {
+            return;
+        }
+        for (chunk, flag) in unlocked.chunks.iter().enumerate() {
+            if flag.load(Ordering::Relaxed) && flag.swap(false, Ordering::Relaxed) {
+                if let Some(state) = self.chunks.get_mut(chunk) {
+                    *state = ChunkState::default();
+                }
+            }
+        }
+    }
+
     /// The CPU wrote commands `range`: forget the chunks they lie in. How many chunks' states it
     /// looked at: those `range` covers that hold one, none while no chunk holds a state.
     pub(super) fn wrote(&mut self, range: Range<u32>) -> usize {
@@ -637,7 +689,9 @@ impl KeptChunks {
 
 #[cfg(test)]
 mod tests {
-    use super::{chunks, chunks_of, pieces, Kept, KeptChunks, StepCopy, CHUNK, COPY_EVERY};
+    use super::{
+        chunks, chunks_of, pieces, Kept, KeptChunks, StepCopy, UnlockedWrites, CHUNK, COPY_EVERY,
+    };
 
     /// Records that change at each step are copied at a chunk's first read and first change, then
     /// at one step in `COPY_EVERY`, each chunk at a step of its own: from the step after the first
@@ -711,6 +765,44 @@ mod tests {
         assert!(kept.stepped_in(CHUNK * 8..CHUNK * 8 + 1));
         kept.clear();
         assert_eq!(kept.wrote(0..CHUNK * 1000), 0, "forgotten for good");
+    }
+
+    /// A write without the lock is forgotten at the next settle, its chunk's state alone, as a
+    /// locked write forgets it; the note is pending until then, and a settle with no note
+    /// forgets nothing.
+    #[test]
+    fn a_write_without_the_lock_is_forgotten_at_the_next_settle() {
+        let unlocked = UnlockedWrites::new(CHUNK * 4);
+        let mut kept = KeptChunks::default();
+        kept.look_up(0..CHUNK * 4);
+        kept.stepped(3);
+        unlocked.wrote(CHUNK + 7);
+        unlocked.wrote(CHUNK * 3);
+        assert!(unlocked.pending(1) && unlocked.pending(3) && !unlocked.pending(0));
+        assert!(kept.stepped_in(CHUNK * 3..CHUNK * 4), "not yet settled");
+        kept.settle(&unlocked);
+        assert!(!unlocked.pending(1) && !unlocked.pending(3), "taken");
+        assert!(!kept.stepped_in(CHUNK * 3..CHUNK * 4), "forgotten");
+        let again = kept.look_up(0..CHUNK * 4);
+        let firsts: Vec<bool> = again.iter().map(|k| matches!(k, Kept::First)).collect();
+        assert_eq!(
+            firsts,
+            [false, true, false, true],
+            "chunks 1 and 3 alone written"
+        );
+        kept.settle(&unlocked);
+        let again = kept.look_up(0..CHUNK * 4);
+        assert!(
+            again.iter().all(|k| matches!(k, Kept::Again)),
+            "nothing more forgotten"
+        );
+        // A write past the last chunk notes nothing but that some write came.
+        unlocked.wrote(CHUNK * 9);
+        kept.settle(&unlocked);
+        assert!(kept
+            .look_up(0..CHUNK * 4)
+            .iter()
+            .all(|k| matches!(k, Kept::Again)));
     }
 
     #[test]
