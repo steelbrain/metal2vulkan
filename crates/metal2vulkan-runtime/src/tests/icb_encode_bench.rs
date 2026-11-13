@@ -1,6 +1,8 @@
 //! What the CPU spends encoding the commands of a render indirect command buffer through
 //! `IndirectRenderCommand`'s setters, in nanoseconds a command, the median and least of [`REPS`]
-//! loops over [`COMMANDS`] commands after one untimed:
+//! loops of [`COMMANDS`] commands after one untimed, on a buffer of [`COMMANDS`] (whose records
+//! outgrow a CPU's last-level cache) and on one of [`CACHED`] (whose records fit in its L2), its
+//! commands encoded in turn over and over:
 //!
 //! - **three fields**: `indirect_render_command_at(i)`, a vertex buffer at `(i % 8) * 256`, a
 //!   fragment buffer at `(i % 4) * 64` and a draw of primitives, a consumer's loop;
@@ -18,23 +20,27 @@ use crate::{
     DrawPrimitiveType, Error, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
     ResourceOptions,
 };
+use metal2vulkan::bind::indirect_commands::COMMAND_BYTES;
 use metal2vulkan::metal::IndirectCommandType;
 use std::hint::black_box;
 use std::time::Instant;
 
-/// The commands of the buffer.
+/// The commands of the large buffer, and the commands encoded a loop.
 const COMMANDS: u64 = 16384;
+
+/// The commands of the small buffer.
+const CACHED: u64 = 256;
 
 /// The timed loops of each case, after one untimed.
 const REPS: usize = 20;
 
-/// The median and least of [`REPS`] runs of `encode` over the commands, after one untimed, in
-/// nanoseconds a command.
-fn per_command(encode: impl Fn(u64)) -> (f64, f64) {
+/// The median and least of [`REPS`] runs of `encode` over [`COMMANDS`] commands, the `i`th of
+/// them at index `i % size`, after one untimed, in nanoseconds a command.
+fn per_command(size: u64, encode: impl Fn(u64)) -> (f64, f64) {
     let run = || {
         let start = Instant::now();
         for i in 0..COMMANDS {
-            encode(i);
+            encode(i % size);
         }
         start.elapsed().as_nanos() as f64 / COMMANDS as f64
     };
@@ -62,44 +68,48 @@ fn icb_encode_costs() {
     descriptor.max_vertex_buffer_bind_count = 2;
     descriptor.max_fragment_buffer_bind_count = 1;
     let shared = ResourceOptions::shared();
-    let icb: IndirectCommandBuffer = device
-        .new_indirect_command_buffer(&descriptor, COMMANDS, shared)
-        .unwrap();
     let (vertex, fragment) = (
         device.new_buffer(65536, shared).unwrap(),
         device.new_buffer(65536, shared).unwrap(),
     );
     let strip = DrawPrimitiveType::from_raw(4).unwrap();
     eprintln!(
-        "ICB-ENCODE {}: Result<(), Error> {} bytes, Error {} bytes, {COMMANDS} commands",
+        "ICB-ENCODE {}: Result<(), Error> {} bytes, Error {} bytes, a record {COMMAND_BYTES} \
+         bytes, {COMMANDS} commands a loop",
         device.name(),
         size_of::<Result<(), Error>>(),
         size_of::<Error>(),
     );
-    print(
-        "three fields",
-        per_command(|i| {
-            let command = icb.indirect_render_command_at(i).unwrap();
-            command
-                .set_vertex_buffer(Some(&vertex), (i % 8) * 256, 0)
-                .unwrap();
-            command
-                .set_fragment_buffer(Some(&fragment), (i % 4) * 64, 0)
-                .unwrap();
-            command.draw_primitives(strip, 1, 3, 2, 7).unwrap();
-        }),
-    );
-    print(
-        "draw only",
-        per_command(|i| {
-            let command = icb.indirect_render_command_at(i).unwrap();
-            command.draw_primitives(strip, 1, 3, 2, 7).unwrap();
-        }),
-    );
-    print(
-        "command only",
-        per_command(|i| {
-            black_box(icb.indirect_render_command_at(i).unwrap());
-        }),
-    );
+    for size in [COMMANDS, CACHED] {
+        let icb: IndirectCommandBuffer = device
+            .new_indirect_command_buffer(&descriptor, size, shared)
+            .unwrap();
+        let records = size * COMMAND_BYTES as u64 / 1024;
+        print(
+            &format!("{size} commands ({records} KiB of records), three fields"),
+            per_command(size, |i| {
+                let command = icb.indirect_render_command_at(i).unwrap();
+                command
+                    .set_vertex_buffer(Some(&vertex), (i % 8) * 256, 0)
+                    .unwrap();
+                command
+                    .set_fragment_buffer(Some(&fragment), (i % 4) * 64, 0)
+                    .unwrap();
+                command.draw_primitives(strip, 1, 3, 2, 7).unwrap();
+            }),
+        );
+        print(
+            &format!("{size} commands, draw only"),
+            per_command(size, |i| {
+                let command = icb.indirect_render_command_at(i).unwrap();
+                command.draw_primitives(strip, 1, 3, 2, 7).unwrap();
+            }),
+        );
+        print(
+            &format!("{size} commands, command only"),
+            per_command(size, |i| {
+                black_box(icb.indirect_render_command_at(i).unwrap());
+            }),
+        );
+    }
 }
