@@ -542,9 +542,10 @@ pub fn check_payload(cx: &SelectCx<'_>, size: u64) -> Result<(), Error> {
 /// past them return before the body where the body holds no workgroup barrier; where it holds
 /// one, the body is walked predicated from its threadgroup's threads
 /// (`simd::divergent::barriers`, `Predication::partial_groups`), so they walk to each barrier
-/// without running anything else of it. A tile function, a kernel that reads a stage-input region
-/// and one with compute derivatives (whose quads a returned lane would leave partial) are refused
-/// the kernel's input, `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`. Called before
+/// without running anything else of it. A tile function, a kernel that reads a stage-input region,
+/// one with compute derivatives (whose quads a returned lane would leave partial) and one with a
+/// cooperative imageblock slice write (`texture::cooperative`, whose cells every invocation of the
+/// workgroup shares) are refused the kernel's input, `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`. Called before
 /// the push fields are placed.
 pub fn plan_partial_groups(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     match cx.stage {
@@ -553,6 +554,7 @@ pub fn plan_partial_groups(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             if crate::lower::access::tile::is_tile(cx)
                 || cx.inputs.stage_input.is_some()
                 || cx.families.barrier.compute_derivatives
+                || !cx.families.texture.cooperative.is_empty()
             {
                 return Err(
                     Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into(),
