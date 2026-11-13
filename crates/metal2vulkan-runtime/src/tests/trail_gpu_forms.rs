@@ -178,7 +178,7 @@ fn a_merged_gpu_form_names_its_range_and_draws_as_its_scratch_holds_them() {
         "an execution's GPU form, recorded at commit: merged into one draw, of primitive type \
          Triangle, over 4 command(s) from 0, its range read from a buffer at offset 0; read while \
          the work is pending: the range copied 1+2,",
-        " the merged draws [2147483646 vertices x 0 from vertex 0, instance 0; 48 vertices x 1 \
+        " the merged draws [0 vertices x 0 from vertex 0, instance 0; 48 vertices x 1 \
          from vertex 2147483648, instance 0],",
         " 2 argument(s) that draw, 50 vertices or indices times instances, the most command 2's: \
          12 x 3 from 0, instance 0",
@@ -240,7 +240,7 @@ fn an_indexed_merged_gpu_form_through_a_range_draws_no_whole_chunk_below_one() {
         "an execution's GPU form, recorded at commit: merged into one draw, indexed, of primitive \
          type Triangle, over 8162 command(s) from 0, its range read from a buffer at offset 0; \
          read while the work is pending: the range copied 0+86,",
-        " the merged draws [2147483646 vertices x 0 from vertex 0, instance 0; 22446 vertices x 1 \
+        " the merged draws [0 vertices x 0 from vertex 0, instance 0; 22446 vertices x 1 \
          from vertex 2147483648, instance 0],",
         " 86 argument(s) that draw, 22446 vertices or indices times instances, the most command \
          85's: 516 x 1 from 0, instance 0 (600 whole indices of 4 byte(s))",

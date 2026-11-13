@@ -699,7 +699,11 @@ fn decoded_over(
     };
     let [first_vertices, chunks, first_first, first_base] = draw(0);
     let [rest, rest_instances, rest_first, rest_base] = draw(1);
-    assert_eq!((first_vertices, first_first, first_base), (chunk, 0, 0));
+    let first_chunk = if chunks == 0 { 0 } else { chunk };
+    assert_eq!(
+        (first_vertices, first_first, first_base),
+        (first_chunk, 0, 0)
+    );
     assert_eq!(
         (rest_instances, rest_first, rest_base),
         (1, MERGED_REST_FIRST, 0)

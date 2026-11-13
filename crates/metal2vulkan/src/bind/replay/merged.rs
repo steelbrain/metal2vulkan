@@ -24,8 +24,8 @@
 //!   guest's two executions' totals read `2^33` above the sum of their commands' corners (no sum
 //!   of whole triangles), so each first draw drew 4 chunks, seconds of vertices.
 //! - **The merged draw** is two draws, recorded in this order: the first draws
-//!   [`MERGED_CHUNK`] vertices in each of `⌊total / MERGED_CHUNK⌋` instances (none where the total
-//!   is below it), the second the remaining `total mod MERGED_CHUNK` vertices from first vertex
+//!   [`MERGED_CHUNK`] vertices in each of `⌊total / MERGED_CHUNK⌋` instances (where the total is
+//!   below a chunk, no vertex in no instance), the second the remaining `total mod MERGED_CHUNK` vertices from first vertex
 //!   [`MERGED_REST_FIRST`] in one instance. An invocation's corner is `InstanceIndex ·
 //!   MERGED_CHUNK + VertexIndex` in the first and `⌊total / MERGED_CHUNK⌋ · MERGED_CHUNK +
 //!   (VertexIndex - MERGED_REST_FIRST)` in the second (a `VertexIndex` at or past
@@ -789,8 +789,12 @@ pub fn typed_module(phase: MergePhase) -> BResult<TypedModule> {
                 let chunks_at = at(fb, header, H_CHUNKS)?;
                 let kept_chunks = fb.select(fits, chunks32, zero)?;
                 store32(fb, t, chunks_at, kept_chunks)?;
+                // The first draw draws nothing at all, no vertex and no instance, where the total
+                // holds no whole chunk.
+                let whole_chunks = fb.binary(BinOp::INotEqual, chunks32, zero)?;
+                let first_vertices = fb.select(whole_chunks, chunk, zero)?;
                 let words = [
-                    [chunk, chunks32, zero, zero],
+                    [first_vertices, chunks32, zero, zero],
                     [rest32, one, rest_first, zero],
                 ];
                 for (d, w) in words.into_iter().enumerate() {
