@@ -788,6 +788,12 @@ assert!(stats.reachable_blocks <= stats.blocks);
   produced, walk the entry `DeviceProfile::specialized_entry` gives, which is that AIR specialized
   and canonicalized. A decoded function's `ir::InstKind::Call` sites give each callee's call
   count, which is what turns its own blocks into the program inlining will make of it.
+- `inert` says the module holds no loop and that no instruction of it writes memory other than an
+  invocation's own and its workgroup's (`Function`, `Private` and `Workgroup` storage), writes an
+  image, or emits or drops an output of its stage. Every invocation of such a module ends and
+  leaves nothing behind, so a dispatch of an inert kernel computes nothing anyone can read:
+  `metal2vulkan-runtime` records no Vulkan dispatch of it. An instruction the check does not
+  classify as reading or computing alone (an interlock, a ray query) makes a module not inert.
 
 The counts are of the module `spirv` holds: the verifier counts the module it checked, and
 serialization and relocation assign link numbers without adding or removing an instruction. They

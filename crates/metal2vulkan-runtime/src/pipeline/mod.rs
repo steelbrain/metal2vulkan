@@ -1371,6 +1371,17 @@ impl ComputePipelineState {
             })
     }
 
+    /// Whether the state is a kernel's whose module is inert
+    /// ([`ModuleStats::inert`](metal2vulkan::pipeline::ModuleStats::inert)): it holds no loop and
+    /// writes nothing but its invocations' own and its threadgroups' memory, so a dispatch of it
+    /// ends and leaves nothing a later command or the program can read. A compute encoder records
+    /// no Vulkan dispatch of it (`compute::record`). The base variant answers for every variant:
+    /// they bind and partition the kernel otherwise, and store what it stores. A tile function's
+    /// state is never inert: its threadgroup memory is the render pass's imageblock.
+    pub(super) fn inert(&self) -> bool {
+        !self.is_tile() && self.0.base.pipeline.stage.stats.inert
+    }
+
     /// Whether the kernel reads texture handles from memory (its layout has a handle table): only
     /// then does a dispatch reach a resident heap's textures.
     pub(super) fn reads_texture_handles(&self) -> bool {

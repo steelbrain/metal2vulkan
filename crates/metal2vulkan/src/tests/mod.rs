@@ -83,6 +83,7 @@ mod engine_image_shapes;
 mod engine_imageblock;
 mod engine_index_words;
 mod engine_indirect_commands;
+mod engine_inert;
 mod engine_inline_asm;
 mod engine_integer_median3;
 mod engine_kernel_lod;

@@ -45,12 +45,14 @@
 //!
 //! A pass counts what it covered as it checks it, and that count is the module's public
 //! [`ModuleStats`]: the verifier runs on every translation, so the statistics cost nothing beyond
-//! it.
+//! it. A last pass over every instruction decides whether the module is inert
+//! ([`ModuleStats::inert`], `effects`).
 //!
 //! Work is linear in the module plus, per branch edge, the number of constructs it leaves; it is
 //! metered on the per-attempt [`Meter`] and every table is charged to its ledger.
 
 mod cfg;
+mod effects;
 mod rules;
 
 #[cfg(test)]
@@ -299,6 +301,7 @@ fn check_in(
     rules::check_places(m, &defs, meter)?;
     rules::check_stage(m)?;
     rules::check_derived(m)?;
+    report.inert = effects::inert(m, meter)?;
     Ok(report)
 }
 

@@ -757,6 +757,7 @@ struct CommandCounters {
     dispatch_shapes_found: AtomicU64,
     dispatch_used_resources_listed: AtomicU64,
     dispatches_settled_as_before: AtomicU64,
+    dispatches_skipped_inert: AtomicU64,
     dispatches_planned_as_before: AtomicU64,
     whole_dispatches_on_partial_variants: AtomicU64,
     dispatches_pushing_set_zero: AtomicU64,
@@ -1681,6 +1682,11 @@ impl Counting<'_> {
     /// (`compute::DispatchMemo`).
     pub(crate) fn dispatch_settled_as_before(&self) {
         self.0.add(|counts| &counts.dispatches_settled_as_before, 1);
+    }
+
+    /// A dispatch of an inert kernel that recorded no Vulkan dispatch (`compute::record`).
+    pub(crate) fn dispatch_skipped_inert(&self) {
+        self.0.add(|counts| &counts.dispatches_skipped_inert, 1);
     }
 
     /// A direct dispatch that settled a bind state of the shape its state's last direct dispatch
@@ -8096,6 +8102,12 @@ pub struct WorkCounts {
     /// visible-function table, while no no-copy buffer moved, no sampler state was made or went
     /// and no buffer took a resident indirect command buffer's ID (`compute::DispatchMemo`).
     pub dispatches_settled_as_before: u64,
+    /// Dispatches of an inert kernel (`ModuleStats::inert`: no loop, and no write but to its
+    /// invocations' own and its threadgroups' memory) that recorded no Vulkan dispatch, direct,
+    /// indirect and an indirect command buffer's alike (`compute::record`): nothing such a
+    /// dispatch does outlasts it, and the runtime samples no counter that would count its
+    /// threads. Not counted in `dispatches_settled_as_before`.
+    pub dispatches_skipped_inert: u64,
     /// Direct dispatches that settled their bind state again (another table, another residency,
     /// another encoder) into one of the shape their pipeline state's last direct dispatch that
     /// planned planned, of the same dispatch and buffer forms, and took that one's variant and
@@ -10666,6 +10678,7 @@ impl Device {
             }),
             host_holds_looked_up: commands(|counts| &counts.host_holds_looked_up),
             dispatches_settled_as_before: commands(|counts| &counts.dispatches_settled_as_before),
+            dispatches_skipped_inert: commands(|counts| &counts.dispatches_skipped_inert),
             dispatches_planned_as_before: commands(|counts| &counts.dispatches_planned_as_before),
             whole_dispatches_on_partial_variants: commands(|counts| {
                 &counts.whole_dispatches_on_partial_variants

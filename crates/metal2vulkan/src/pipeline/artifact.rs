@@ -419,6 +419,14 @@ pub struct ModuleStats {
     pub constructs: u32,
     /// Loops. The structurizer makes none of its own, so this is the input's own loop count.
     pub loops: u32,
+    /// Whether the module is inert: it holds no loop, and no instruction of any of its functions
+    /// writes memory other than an invocation's own and its workgroup's (`Function`, `Private`
+    /// and `Workgroup` storage), writes an image, or emits or drops an output of its stage. So
+    /// every invocation ends, and a dispatch of a kernel of it leaves nothing behind but the time
+    /// it took: `metal2vulkan-runtime` records none. An instruction the classification does not
+    /// name as reading or computing alone (an interlock, a ray query) makes it not inert.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub inert: bool,
 }
 
 /// A precision note a stage records only where a specialized module runs an arm that keeps its

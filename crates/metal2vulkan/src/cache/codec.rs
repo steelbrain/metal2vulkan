@@ -774,6 +774,7 @@ impl Codec for ModuleStats {
             instructions: _,
             constructs: _,
             loops: _,
+            inert: _,
         } = self;
         Node::ZERO
     }
@@ -785,6 +786,7 @@ impl Codec for ModuleStats {
             instructions,
             constructs,
             loops,
+            inert,
         } = self;
         functions.put(w);
         blocks.put(w);
@@ -792,6 +794,7 @@ impl Codec for ModuleStats {
         instructions.put(w);
         constructs.put(w);
         loops.put(w);
+        inert.put(w);
     }
     fn get(r: &mut Reader<'_>) -> Result<Self, Malformed> {
         Ok(ModuleStats {
@@ -801,6 +804,7 @@ impl Codec for ModuleStats {
             instructions: Codec::get(r)?,
             constructs: Codec::get(r)?,
             loops: Codec::get(r)?,
+            inert: Codec::get(r)?,
         })
     }
 }
