@@ -1077,9 +1077,10 @@ fn check_field_atomic(plan: &Plan, m: &TypedModule, what: &str) {
     }
 }
 
-/// A pointer parked in a private struct whose every access is visible is a forwarding cell: the
-/// struct holds its pointer as its fat pointer, and the one read back is exactly the pointer stored
-/// at its field (`slots`). The other field, which nothing reads back, is not stored at all.
+/// A pointer parked in a private struct whose field one store writes, ahead of the read, is read
+/// back as that pointer itself (`canon::forward`): no cell is left, and the compare-exchange
+/// through it is exact (`slots`). The other field, which nothing reads back, goes with the struct.
+/// (The copied and zero-filled variants below keep the struct a forwarding cell.)
 #[test]
 fn a_pointer_parked_in_a_private_struct_is_exact() {
     let Some(bc) = assemble("field_atomic", FIELD_ATOMIC) else {
@@ -1087,8 +1088,8 @@ fn a_pointer_parked_in_a_private_struct_is_exact() {
     };
     for (what, p) in profiles() {
         let (plan, m) = checked(&bc, "field_atomic", &p, &LowerInputs::new(), &what);
-        assert_eq!(uses(&plan, "access.cell.store"), 1, "{what}");
-        assert_eq!(uses(&plan, "access.cell.load"), 1, "{what}");
+        assert_eq!(uses(&plan, "access.cell.store"), 0, "{what}");
+        assert_eq!(uses(&plan, "access.cell.load"), 0, "{what}");
         assert_eq!(uses(&plan, "access.atomic.buffer.cmpxchg"), 1, "{what}");
         check_field_atomic(&plan, &m, &what);
     }

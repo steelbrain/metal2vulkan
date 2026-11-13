@@ -454,7 +454,9 @@ fn volatile_threadgroup_accesses_are_exact() {
 
 /// Volatile accesses of private memory: a typed alloca (the corpus's `float` slot) and the private
 /// arena (an alloca a `memset` reaches), with a volatile byte store (the arena's plain
-/// read-modify-write, both of whose words carry `Volatile`).
+/// read-modify-write, both of whose words carry `Volatile`). The slot is written twice: a plain
+/// slot one store writes is read as the value stored (`canon::forward`), which would leave the
+/// twin without the slot's accesses.
 #[test]
 fn volatile_private_accesses_are_exact() {
     let text = kernel(
@@ -467,6 +469,7 @@ fn volatile_private_accesses_are_exact() {
   %i = zext i32 %t to i64
   %s = getelementptr inbounds float, ptr addrspace(1) %b1, i64 %i
   %x = load float, ptr addrspace(1) %s, align 4
+  store volatile float %x, ptr %f, align 4
   store volatile float %x, ptr %f, align 4
   %y = load volatile float, ptr %f, align 4
   %z = fadd float %y, 1.0
@@ -492,9 +495,9 @@ fn volatile_private_accesses_are_exact() {
     let want2: Vec<u32> = (0..THREADS).map(|t| t << (8 * (t % 4))).collect();
     let bufs = [vec![0; THREADS as usize], inp, vec![0; THREADS as usize]];
     for (stem, plan, out) in run_everywhere("private", &text, &bufs, |_: &DeviceProfile| {
-        Volatiles::of(&[(PRIV, 3)], &[(PRIV, 2)])
+        Volatiles::of(&[(PRIV, 3)], &[(PRIV, 3)])
     }) {
-        assert_eq!(count(&plan, "access.typed.store"), 1, "{stem}");
+        assert_eq!(count(&plan, "access.typed.store"), 2, "{stem}");
         assert!(count(&plan, "access.private.store") >= 1, "{stem}");
         assert_eq!(out[0], want0, "{stem}");
         assert_eq!(out[2], want2, "{stem}");

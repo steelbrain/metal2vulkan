@@ -25,6 +25,7 @@ mod constant_sets;
 mod conversions;
 mod float_compares;
 mod float_folds;
+mod forwarding;
 mod generic_pointers;
 mod global_builtins;
 mod opencl;
@@ -3943,7 +3944,7 @@ fn absent_threadgroup_memory_used_another_way_is_refused() {
 }
 
 /// What sits between an absent texture and the store of its sample in [`absent_sample`].
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SampleUse {
     /// The sample's color is stored.
     Stored,
@@ -3951,8 +3952,12 @@ enum SampleUse {
     Dropped,
     /// The texture is also compared with null, a use that is no texture call.
     Compared,
-    /// The texture is stored into a stack slot and sampled as loaded back from it.
+    /// The texture is stored twice into a stack slot, so no one store decides what the slot holds,
+    /// and sampled as loaded back from it.
     Parked,
+    /// The texture is stored once into a stack slot and sampled as loaded back from it, which
+    /// thread-memory forwarding reads as the texture itself.
+    ParkedOnce,
 }
 
 /// `kernel k(texture2d tex, sampler smp, device float4* out)` sampling `tex` through `smp` and
@@ -3982,7 +3987,7 @@ fn absent_sample(gone: u32, how: SampleUse) -> Result<Entry, Error> {
     let one = m.const_int(i32t, 1);
     let mut f = m.define("k", fty);
     let tex = match how {
-        SampleUse::Parked => {
+        SampleUse::Parked | SampleUse::ParkedOnce => {
             let slot = f.push(
                 thread,
                 InstKind::Alloca {
@@ -3992,6 +3997,9 @@ fn absent_sample(gone: u32, how: SampleUse) -> Result<Entry, Error> {
                 },
             );
             store(&mut f, arg(0), slot);
+            if how == SampleUse::Parked {
+                store(&mut f, arg(0), slot);
+            }
             load(&mut f, dev, slot)
         }
         SampleUse::Stored | SampleUse::Dropped | SampleUse::Compared => arg(0),
@@ -4003,7 +4011,7 @@ fn absent_sample(gone: u32, how: SampleUse) -> Result<Entry, Error> {
         &[tex, arg(1), half, yes, zero2, yes, zf, zf, z],
     );
     match how {
-        SampleUse::Stored | SampleUse::Parked => {
+        SampleUse::Stored | SampleUse::Parked | SampleUse::ParkedOnce => {
             let color = f.push(
                 v4f,
                 InstKind::ExtractValue {
@@ -4134,9 +4142,13 @@ fn an_absent_texture_read_beyond_texture_calls_stays_for_lowering() {
         assert!(text.contains("air.sample_texture_2d"), "{text}");
         assert!(text.contains("%a0"), "{text}");
     }
-    // Read only by its call, it is rewritten as before and not listed.
-    let e = absent_sample(0, SampleUse::Stored).unwrap();
-    assert!(e.absent_handles.is_empty());
+    // Read only by its call, it is rewritten as before and not listed; so is one a stack slot held
+    // that one store wrote, read as the texture itself.
+    for how in [SampleUse::Stored, SampleUse::ParkedOnce] {
+        let e = absent_sample(0, how).unwrap();
+        assert!(e.absent_handles.is_empty(), "{how:?}");
+        assert_eq!(absent_read_ops(&e).len(), 1, "{how:?}");
+    }
 }
 
 /// An output gated off leaves the entry point; the outputs that stay name their field of the

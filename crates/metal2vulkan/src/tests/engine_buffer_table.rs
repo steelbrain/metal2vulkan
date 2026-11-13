@@ -303,10 +303,11 @@ fn a_table_pointer_crossing_blocks_is_exact() {
 }
 
 /// A table pointer parked in a private cell and read back is its `u32` offset there; the element it
-/// names is exact, and an out-of-range index is still clamped into the table.
+/// names is exact, and an out-of-range index is still clamped into the table. The cell is written
+/// twice: one store's value would be read directly (`canon::forward`), leaving no cell.
 #[test]
 fn a_table_pointer_parked_in_a_private_cell_is_exact() {
-    let body = "  %cell = alloca ptr, align 8\n  %k = load i32, ptr addrspace(1) %0, align 4\n  %x = zext i32 %k to i64\n  %tp = getelementptr inbounds ptr addrspace(1), ptr %1, i64 %x\n  store ptr %tp, ptr %cell, align 8\n  %back = load ptr, ptr %cell, align 8\n  %el = load ptr addrspace(1), ptr %back, align 8\n  %v = load i32, ptr addrspace(1) %el, align 4\n  %o = getelementptr inbounds i32, ptr addrspace(1) %0, i64 1\n  store i32 %v, ptr addrspace(1) %o, align 4\n";
+    let body = "  %cell = alloca ptr, align 8\n  %k = load i32, ptr addrspace(1) %0, align 4\n  %x = zext i32 %k to i64\n  %tp = getelementptr inbounds ptr addrspace(1), ptr %1, i64 %x\n  store ptr %tp, ptr %cell, align 8\n  store ptr %tp, ptr %cell, align 8\n  %back = load ptr, ptr %cell, align 8\n  %el = load ptr addrspace(1), ptr %back, align 8\n  %v = load i32, ptr addrspace(1) %el, align 4\n  %o = getelementptr inbounds i32, ptr addrspace(1) %0, i64 1\n  store i32 %v, ptr addrspace(1) %o, align 4\n";
     let Some(bc) = assemble_text("table_cell", &kernel("table_cell", body)) else {
         return;
     };

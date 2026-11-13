@@ -3923,8 +3923,8 @@ fn an_indirect_command_object_members_bytes_are_never_data() {
 /// first run-time dereference is `ArgumentBufferObjects`, not implemented, on every committed
 /// profile: the escaped address read back through `inttoptr` or through memory, and every
 /// dereference of the loaded pointer member (a word of its object, the handle at its field, and its
-/// data alike). A pointer kept in a forwarding cell keeps its root, so its access is refused by the
-/// rule itself. The other five compiled on the nine profiles with device addresses before this
+/// data alike). A pointer kept in a forwarding cell (written twice: one store's value is read
+/// directly, `canon::forward`) keeps its root, so its access is refused by the rule itself. The other five compiled on the nine profiles with device addresses before this
 /// rule.
 #[test]
 fn an_object_buffers_address_as_data_refuses_every_run_time_dereference() {
@@ -3932,7 +3932,7 @@ fn an_object_buffers_address_as_data_refuses_every_run_time_dereference() {
     let escaped = [
         ("round_trip", format!("  %a = ptrtoint ptr addrspace(1) %ab to i64\n  %b = add i64 %a, 8\n  %p = inttoptr i64 %b to ptr addrspace(1)\n  %w = load i64, ptr addrspace(1) %p, align 8\n{word_out}"), 3),
         ("through_memory", format!("  %o1 = getelementptr inbounds i64, ptr addrspace(1) %out, i64 1\n  store ptr addrspace(1) %ab, ptr addrspace(1) %o1, align 8\n  %q = load ptr addrspace(1), ptr addrspace(1) %o1, align 8\n  %pp = getelementptr inbounds i8, ptr addrspace(1) %q, i64 8\n  %w = load i64, ptr addrspace(1) %pp, align 8\n{word_out}"), 4),
-        ("through_cell", format!("  %cell = alloca ptr addrspace(1), align 8\n  store ptr addrspace(1) %ab, ptr %cell, align 8\n  %q = load ptr addrspace(1), ptr %cell, align 8\n  %pp = getelementptr inbounds i8, ptr addrspace(1) %q, i64 8\n  %w = load i64, ptr addrspace(1) %pp, align 8\n{word_out}"), 4),
+        ("through_cell", format!("  %cell = alloca ptr addrspace(1), align 8\n  store ptr addrspace(1) %ab, ptr %cell, align 8\n  store ptr addrspace(1) %ab, ptr %cell, align 8\n  %q = load ptr addrspace(1), ptr %cell, align 8\n  %pp = getelementptr inbounds i8, ptr addrspace(1) %q, i64 8\n  %w = load i64, ptr addrspace(1) %pp, align 8\n{word_out}"), 5),
     ];
     for (entry, body, at) in escaped {
         let Some(bc) = assemble(entry, &pipeline_members_kernel(entry, 1, &body, "")) else {

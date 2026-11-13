@@ -36,7 +36,14 @@
 //!    run knows as the `select` chain over its elements (`const_tables`), the integer `llvm.*`
 //!    operations on constants, and the
 //!    float operations a constant operand decides whatever the others hold (a NaN operand, and a
-//!    product by a zero under `nnan` and `nsz`); unreachable blocks are deleted. **Generic
+//!    product by a zero under `nnan` and `nsz`); unreachable blocks are deleted.
+//!    **Thread-memory forwarding** then reads each load of a stack allocation whose address does
+//!    not escape as the value of the one store that wrote its bytes, where that store dominates
+//!    it (a load of an aggregate that holds a pointer excepted), and removes an allocation no read
+//!    is left of, with its stores: a lambda's closure of captured addresses, and a struct passed
+//!    to a function by pointer, leave the captured objects' own addresses, and a pointer's bits
+//!    read back and turned back into its pointer are the pointer (`forward`). It runs over the
+//!    body SCCP specialized, and SCCP runs again where it changed one. **Generic
 //!    pointers**: then each pointer of MSL 4.1's generic address space becomes a pointer of the
 //!    one space every pointer it may hold comes from, its space queries answered, and SCCP runs
 //!    again where one was; a generic pointer of two spaces, or of one only the run knows, is
@@ -108,6 +115,7 @@ mod dynamic_tests;
 mod erase;
 mod fc;
 mod fold;
+mod forward;
 pub mod function_table;
 mod generic;
 mod global_builtin;
@@ -666,13 +674,31 @@ pub fn specialize_dynamic(
     // A pointer loaded from a constant table at an index only the run knows is the `select` chain
     // over the table's elements: a `constexpr` sampler table read at a dynamic index.
     let (body, tabled) = const_tables::fold(body, &mut parts, func, m)?;
-    let mut body = if folded || tabled {
+    let body = if folded || tabled {
         let solved = solve(&body, &mut parts, &fcs, &name, m)?;
         body.release(m);
         undefined_reads.extend(solved.reads);
         solved.body
     } else {
         body
+    };
+    // Thread-memory fields that one store wrote, read as its value, and the objects no read is
+    // left of removed: a closure's captured addresses are the captured objects' own (`forward`).
+    // It runs over the body SCCP specialized to the constants, whose size is the variant's, not
+    // the whole function's; SCCP runs again over a body it changed, to fold what the values it
+    // read decide.
+    let params: Vec<TypeId> = match parts.funcs.get(func).and_then(|f| parts.types.get(f.ty)) {
+        Some(Type::Function { params, .. }) => params.to_vec(),
+        _ => return Err(invariant("the entry's type is not a function")),
+    };
+    let (forwarded, changed) = forward::forward(body, &parts, &params, m)?;
+    let mut body = if changed {
+        let solved = solve(&forwarded, &mut parts, &fcs, &name, m)?;
+        forwarded.release(m);
+        undefined_reads.extend(solved.reads);
+        solved.body
+    } else {
+        forwarded
     };
     // MSL 4.1's generic pointers, each a pointer of the one space its pointers come from; SCCP
     // runs again over a body whose space queries that answered.

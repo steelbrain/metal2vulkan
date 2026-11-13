@@ -217,14 +217,15 @@ fn private_store(reach: Reach) -> Result<Entry, Error> {
 
 /// A gated-off value stored into a private field that no observed read reaches, in a struct whose
 /// address sits in a pointer cell nothing reads, is not observed. Nothing observes the store or the
-/// cell's either, so both go: what stays stores the present field, and the read of it into `out`.
+/// cell's either, so both go, and the present field's one store decides its read
+/// (`canon::forward`): what stays stores the present value into `out`.
 #[test]
 fn an_absent_value_stored_into_private_bytes_nothing_reads_is_unobserved() {
     let e = private_store(Reach::Kept).unwrap();
     let text = body_text(&e);
     assert!(!text.contains("undef"), "{text}");
     assert!(!text.contains("%a1"), "{text}");
-    assert_eq!(text.matches("store ").count(), 2, "{text}");
+    assert_eq!(text.matches("store ").count(), 1, "{text}");
 }
 
 /// Every read that reaches the gated-off field's bytes observes the store: the field itself, an
@@ -278,7 +279,8 @@ fn an_absent_length_of_a_private_write_nothing_reads_goes_with_it() {
 
 /// The index that places a private store decides where it writes, so a gated-off index is observed
 /// (it reads zero). Nothing reads the written memory, so the store goes, and the address its index
-/// places with it.
+/// places with it. The present field's one store decides its read (`canon::forward`), so only the
+/// store into `out` stays.
 #[test]
 fn an_absent_index_of_a_private_write_nothing_reads_goes_with_it() {
     let e = private_store(Reach::Index).unwrap();
@@ -286,7 +288,7 @@ fn an_absent_index_of_a_private_write_nothing_reads_goes_with_it() {
     assert!(!text.contains("zext"), "{text}");
     assert!(!text.contains("undef"), "{text}");
     assert!(!text.contains("%a1"), "{text}");
-    assert_eq!(text.matches("store ").count(), 2, "{text}");
+    assert_eq!(text.matches("store ").count(), 1, "{text}");
 }
 
 /// The work of a kernel whose private `uint arr[n]` is covered by one `memset`, then written

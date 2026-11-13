@@ -1374,8 +1374,8 @@ enum Out {
     /// The texel's lanes reversed.
     Reversed,
     /// A sparse read's texel with lane 3 replaced by `2.0` where it is resident: its residency
-    /// is observed, and its alpha too, which reaches the kernel through memory (a sparse block
-    /// read's texels go through the block's array).
+    /// is observed, its alpha not (the block's array, which its texels go through, is read as the
+    /// values stored: `canon::forward`).
     Resident,
 }
 
@@ -1446,10 +1446,8 @@ impl ReadCase {
     /// Whether the kernel observes its texel's alpha.
     fn alpha(&self) -> bool {
         match self.out {
-            Out::Vec4 | Out::Half4 | Out::Lane0 | Out::Alpha | Out::Reversed | Out::Resident => {
-                true
-            }
-            Out::Rgb2 | Out::First => false,
+            Out::Vec4 | Out::Half4 | Out::Lane0 | Out::Alpha | Out::Reversed => true,
+            Out::Rgb2 | Out::First | Out::Resident => false,
         }
     }
 

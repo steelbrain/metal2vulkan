@@ -186,8 +186,9 @@ fn a_side_effect_nothing_uses_stays() {
     assert!(text.contains("addrspace(3) @g"), "{text}");
 }
 
-/// A write into a stack allocation stays when a load reaches its bytes, or once the allocation
-/// escapes; one nothing reads goes. `private_memory` covers each reach.
+/// A write into a stack allocation stays once the allocation escapes; one nothing reads goes, and
+/// so does one whose only load reads it whole at its own type, which reads the stored value
+/// (`canon::forward`). `private_memory` covers each reach.
 #[test]
 fn a_private_write_goes_only_when_no_load_reaches_it() {
     let shaped = |read: bool, escape: bool| {
@@ -233,9 +234,11 @@ fn a_private_write_goes_only_when_no_load_reaches_it() {
     let alone = body_text(&shaped(false, false));
     assert!(!alone.contains(" = add "), "{alone}");
     assert_eq!(alone.matches("store ").count(), 0, "{alone}");
-    for (read, escape) in [(true, false), (false, true)] {
-        let text = body_text(&shaped(read, escape));
-        assert!(text.contains(" = add "), "{read} {escape}: {text}");
-        assert_eq!(text.matches("store ").count(), 2, "{read} {escape}: {text}");
-    }
+    let read = body_text(&shaped(true, false));
+    assert!(read.contains(" = add "), "{read}");
+    assert!(!read.contains("alloca"), "{read}");
+    assert_eq!(read.matches("store ").count(), 1, "{read}");
+    let escaped = body_text(&shaped(false, true));
+    assert!(escaped.contains(" = add "), "{escaped}");
+    assert_eq!(escaped.matches("store ").count(), 2, "{escaped}");
 }

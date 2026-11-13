@@ -22,6 +22,8 @@ enum Held {
     Mixed,
     /// `in`, made generic, stored to the thread's array and loaded back.
     Loaded,
+    /// As `Loaded`, stored twice: no one store decides the load (`canon::forward`).
+    LoadedTwice,
     /// As `Loaded`, `in` or null as word 0 of `in` decides.
     LoadedNullable,
     /// `in` stored at byte 0 of the thread's array and another array's address at byte 8, and
@@ -158,6 +160,11 @@ fn queried(held: Held) -> Result<Entry, Error> {
             pick(&mut f, input, mine)
         }
         Held::Loaded => {
+            store(&mut f, input, local);
+            load(&mut f, generic, local)
+        }
+        Held::LoadedTwice => {
+            store(&mut f, input, local);
             store(&mut f, input, local);
             load(&mut f, generic, local)
         }
@@ -493,18 +500,25 @@ fn a_generic_pointer_an_aggregate_holds_is_its_field_s_space() {
 /// A generic pointer loaded from a slot of thread memory whose every access is visible is in the
 /// group of the pointers stored there: a device pointer. Where no null is stored there, the
 /// queries are answered; where one may be, the device query compares the pointer with the device
-/// null.
+/// null. A slot one store writes, ahead of the load, is read as the pointer stored before the space
+/// is decided (`canon::forward`), and no load is left; a slot written twice keeps its load, of the
+/// device space.
 #[test]
 fn a_generic_pointer_loaded_from_a_thread_slot_is_its_stores_space_s() {
-    for (held, device) in [
-        (Held::Loaded, Some(1.0)),
-        (Held::TwoSlots, Some(1.0)),
-        (Held::LoadedNullable, None),
+    for (held, device, kept) in [
+        (Held::Loaded, Some(1.0), false),
+        (Held::LoadedTwice, Some(1.0), true),
+        (Held::TwoSlots, Some(1.0), false),
+        (Held::LoadedNullable, None, false),
     ] {
         let e = queried(held).unwrap_or_else(|e| panic!("{held:?}: {e}"));
         let text = body_text(&e);
         assert!(!names_generic(&e), "{held:?}: {text}");
-        assert!(text.contains("load ptr addrspace(1),"), "{held:?}: {text}");
+        assert_eq!(
+            text.contains("load ptr addrspace(1),"),
+            kept,
+            "{held:?}: {text}"
+        );
         let compared = text
             .lines()
             .any(|l| l.contains("icmp ne") && l.contains("ptr addrspace(1) zeroinitializer"));

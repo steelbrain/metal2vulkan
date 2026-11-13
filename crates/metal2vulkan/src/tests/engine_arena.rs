@@ -1359,7 +1359,8 @@ fn the_recorded_shapes_are_released_when_selection_ends() {
 
 /// A kernel whose alloca `a` is a struct DAG `depth` levels deep: `%e1 = { i32, i32 }` and
 /// `%e{k} = { %e{k-1}, %e{k-1} }`, `2^depth` leaves through `depth + 1` types. It stores `t` at
-/// byte 0 and 7 at byte 4, then `v0` reads byte 0 and `v1` byte 4. With `constant`, `v0` also
+/// byte 0 (twice, so no one store decides the read and `a` stays: `canon::forward`) and 7 at byte
+/// 4, then `v0` reads byte 0 and `v1` byte 4. With `constant`, `v0` also
 /// adds word 1 of `@g`, a closed constant of the same type, all zero, read at its byte address
 /// (SCCP reads an integer field at a typed address as its constant, which would leave no load of
 /// `@g` to plan). Every access is a plain `i32` load or store at a constant offset, so `a` and
@@ -1378,6 +1379,7 @@ fn struct_dag_kernel(depth: u32, constant: bool) -> String {
     };
     let body = format!(
         r#"  %a = alloca %e{depth}, align 4
+  store i32 %t, ptr %a, align 4
   store i32 %t, ptr %a, align 4
   %q = getelementptr inbounds i8, ptr %a, i32 4
   store i32 7, ptr %q, align 4

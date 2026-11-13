@@ -688,7 +688,8 @@ fn in_ordered_entry(bitcode: &[u8], at: u32) -> u32 {
 /// Reading an intersection's primitive data, which no Vulkan structure holds, is refused as ray
 /// tracing at the reader: a load or an address computation through the pointer, a compare, a
 /// conversion, a merge, a store into a buffer, and a store into thread memory whose bytes are read
-/// back or may be.
+/// back or may be (written twice where read back: one store's value is read directly,
+/// `canon::forward`).
 #[test]
 fn reading_primitive_data_is_refused() {
     for (tag, extra, reader) in [
@@ -730,9 +731,9 @@ fn reading_primitive_data_is_refused() {
         (
             "data-read-back",
             "  %cell = alloca ptr addrspace(1), align 8\n  store ptr addrspace(1) %pd, ptr \
-             %cell, align 8\n  %back = load ptr addrspace(1), ptr %cell, align 8\n  %bw = load \
-             i32, ptr addrspace(1) %back, align 4\n  store i32 %bw, ptr addrspace(1) %0, align \
-             4\n",
+             %cell, align 8\n  store ptr addrspace(1) %pd, ptr %cell, align 8\n  %back = load \
+             ptr addrspace(1), ptr %cell, align 8\n  %bw = load i32, ptr addrspace(1) %back, \
+             align 4\n  store i32 %bw, ptr addrspace(1) %0, align 4\n",
             "store ptr addrspace(1) %pd",
         ),
         (

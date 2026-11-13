@@ -12,6 +12,10 @@
 //! format on a profile that asks for it (the floor, without formatless storage), as the runtime
 //! compiles the variant of the bound texture's format.
 //!
+//! A slot one store writes, ahead of every read of it, is read as the value stored before the plan
+//! sees it (`canon::forward`), and leaves no cell. So each kernel here that reads back a slot it
+//! writes once writes it twice, the same value: no one store decides the read, and the cell stays.
+//!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
 use std::collections::BTreeMap;
@@ -247,7 +251,9 @@ fn buffer_pointers_parked_in_a_struct_read_back_statically() {
   %s = alloca %S, align 8
   %f0 = getelementptr inbounds %S, ptr %s, i64 0, i32 0
   store ptr addrspace(1) %b1, ptr %f0, align 8
+  store ptr addrspace(1) %b1, ptr %f0, align 8
   %f1 = getelementptr inbounds %S, ptr %s, i64 0, i32 1
+  store ptr addrspace(1) %b0, ptr %f1, align 8
   store ptr addrspace(1) %b0, ptr %f1, align 8
   %i = zext i32 %t to i64
   %src = load ptr addrspace(1), ptr %f0, align 8
@@ -265,7 +271,7 @@ fn buffer_pointers_parked_in_a_struct_read_back_statically() {
     };
     let inp = input(3);
     let want: Vec<u32> = inp.iter().map(|v| v.wrapping_add(1)).collect();
-    for (stem, bufs) in run_everywhere(&bc, "parked", &[vec![0; THREADS as usize], inp], (2, 2)) {
+    for (stem, bufs) in run_everywhere(&bc, "parked", &[vec![0; THREADS as usize], inp], (4, 2)) {
         assert_eq!(bufs[0], want, "{stem}");
     }
 }
@@ -374,6 +380,7 @@ fn a_private_pointer_parked_in_a_struct_reads_back_its_array() {
   store float 1.5, ptr %d, align 16
   %f = getelementptr inbounds %S, ptr %s, i64 0, i32 2
   store ptr %arr, ptr %f, align 8
+  store ptr %arr, ptr %f, align 8
   %a0 = getelementptr inbounds [4 x i32], ptr %arr, i64 0, i64 0
   store i32 %t, ptr %a0, align 4
   %a1 = getelementptr inbounds [4 x i32], ptr %arr, i64 0, i64 1
@@ -403,7 +410,7 @@ fn a_private_pointer_parked_in_a_struct_reads_back_its_array() {
         return;
     };
     let want: Vec<u32> = (0..THREADS).map(|t| t * ((t & 3) + 1) + 1).collect();
-    for (stem, bufs) in run_everywhere(&bc, "private", &[vec![0; THREADS as usize]], (1, 1)) {
+    for (stem, bufs) in run_everywhere(&bc, "private", &[vec![0; THREADS as usize]], (2, 1)) {
         assert_eq!(bufs[0], want, "{stem}");
     }
 }
@@ -418,6 +425,7 @@ fn a_threadgroup_address_parked_in_a_cell_is_its_arena_offset() {
          @g = internal addrspace(3) global [32 x i32] undef, align 4",
         r#"entry:
   %s = alloca ptr addrspace(3), align 8
+  store ptr addrspace(3) @g, ptr %s, align 8
   store ptr addrspace(3) @g, ptr %s, align 8
   %i = zext i32 %t to i64
   %pad = getelementptr inbounds [8 x i32], ptr addrspace(3) @pad, i64 0, i64 0
@@ -437,7 +445,7 @@ fn a_threadgroup_address_parked_in_a_cell_is_its_arena_offset() {
         return;
     };
     let want: Vec<u32> = (0..THREADS).map(|t| t * 5).collect();
-    for (stem, bufs) in run_everywhere(&bc, "shared", &[vec![0; THREADS as usize]], (1, 1)) {
+    for (stem, bufs) in run_everywhere(&bc, "shared", &[vec![0; THREADS as usize]], (2, 1)) {
         assert_eq!(bufs[0], want, "{stem}");
     }
 }
@@ -452,6 +460,7 @@ define void @tex(ptr addrspace(1) %tex, <2 x i16> %pos) {
 entry:
   %h = alloca %H, align 8
   %f = getelementptr inbounds %H, ptr %h, i64 0, i32 0, i32 0
+  store ptr addrspace(1) %tex, ptr %f, align 8
   store ptr addrspace(1) %tex, ptr %f, align 8
   %g = getelementptr inbounds %H, ptr %h, i64 0, i32 1
   store <2 x i16> %pos, ptr %g, align 8
@@ -483,7 +492,7 @@ declare void @air.write_texture_2d.i16.v4f16(ptr addrspace(1), <2 x i16>, <4 x h
         let uses = |n: &str| a.strategies.entries.get(n).map_or(0, |u| u.uses);
         assert_eq!(
             (uses("access.cell.store"), uses("access.cell.load")),
-            (1, 1),
+            (2, 1),
             "{stem}"
         );
         assert!(
@@ -504,6 +513,7 @@ fn a_pointer_slot_read_as_data_stays_an_open_cell() {
         "",
         r#"entry:
   %s = alloca ptr addrspace(1), align 8
+  store ptr addrspace(1) %b1, ptr %s, align 8
   store ptr addrspace(1) %b1, ptr %s, align 8
   %bits = load i64, ptr %s, align 8
   %lo = trunc i64 %bits to i32
@@ -564,6 +574,7 @@ fn a_copy_beside_a_pointer_slot_keeps_the_cell() {
   %s = alloca %S, align 8
   %f = getelementptr inbounds %S, ptr %s, i64 0, i32 1
   store ptr addrspace(1) %b1, ptr %f, align 8
+  store ptr addrspace(1) %b1, ptr %f, align 8
   %d = getelementptr inbounds %S, ptr %s, i64 0, i32 0
   call void @llvm.memcpy.p0.p1.i64(ptr align 8 %d, ptr addrspace(1) align 4 %b1, i64 16, i1 false)
   %i = zext i32 %t to i64
@@ -583,7 +594,7 @@ fn a_copy_beside_a_pointer_slot_keeps_the_cell() {
     };
     let inp = input(5);
     let want: Vec<u32> = inp.iter().map(|v| v.wrapping_add(inp[2])).collect();
-    for (stem, bufs) in run_everywhere(&bc, "copied", &[vec![0; THREADS as usize], inp], (1, 1)) {
+    for (stem, bufs) in run_everywhere(&bc, "copied", &[vec![0; THREADS as usize], inp], (2, 1)) {
         assert_eq!(bufs[0], want, "{stem}");
     }
 }
@@ -949,7 +960,9 @@ fn a_blob_pointer_parked_in_a_cell_is_its_offset() {
   %s = alloca %S, align 8
   %f0 = getelementptr inbounds %S, ptr %s, i64 0, i32 0
   store ptr addrspace(2) %q, ptr %f0, align 8
+  store ptr addrspace(2) %q, ptr %f0, align 8
   %f1 = getelementptr inbounds %S, ptr %s, i64 0, i32 1
+  store ptr addrspace(2) @k, ptr %f1, align 8
   store ptr addrspace(2) @k, ptr %f1, align 8
   %r = load ptr addrspace(2), ptr %f0, align 8
   %v = load i32, ptr addrspace(2) %r, align 4
@@ -968,7 +981,7 @@ fn a_blob_pointer_parked_in_a_cell_is_its_offset() {
     let want: Vec<u32> = (0..THREADS as usize)
         .map(|t| TABLE_WORDS[t & 3] + TABLE_WORDS[3])
         .collect();
-    for (stem, bufs) in run_everywhere(&bc, "blob_cell", &[vec![0; THREADS as usize]], (2, 2)) {
+    for (stem, bufs) in run_everywhere(&bc, "blob_cell", &[vec![0; THREADS as usize]], (4, 2)) {
         assert_eq!(bufs[0], want, "{stem}");
     }
 }
@@ -1449,10 +1462,15 @@ fn pointer_bits_observed_as_an_integer_stay_an_integer() {
 #[test]
 fn a_pointer_read_back_through_its_bits_is_the_pointer() {
     for (name, store) in [
-        ("word", "  store ptr addrspace(1) %b1, ptr %f, align 8\n"),
+        (
+            "word",
+            "  store ptr addrspace(1) %b1, ptr %f, align 8\n  store ptr addrspace(1) %b1, ptr %f, \
+             align 8\n",
+        ),
         (
             "word_of_bits",
-            "  %bits = ptrtoint ptr addrspace(1) %b1 to i64\n  store i64 %bits, ptr %f, align 8\n",
+            "  %bits = ptrtoint ptr addrspace(1) %b1 to i64\n  store i64 %bits, ptr %f, align 8\n  \
+             store i64 %bits, ptr %f, align 8\n",
         ),
     ] {
         let text = kernel(
@@ -1487,7 +1505,7 @@ z:
         let want: Vec<u32> = (0..THREADS as usize)
             .map(|t| if t % 2 == 1 { inp[t] } else { 77 })
             .collect();
-        for (stem, bufs) in run_everywhere(&bc, name, &[vec![0; THREADS as usize], inp], (1, 1)) {
+        for (stem, bufs) in run_everywhere(&bc, name, &[vec![0; THREADS as usize], inp], (2, 1)) {
             assert_eq!(bufs[0], want, "{name} {stem}");
         }
         for stem in PROFILES {
@@ -1611,6 +1629,7 @@ fn pointer_bits_copied_out_of_the_cells_are_data() {
         r#"entry:
   %s = alloca ptr addrspace(1), align 8
   store ptr addrspace(1) %b1, ptr %s, align 8
+  store ptr addrspace(1) %b1, ptr %s, align 8
   %w = load i64, ptr %s, align 8
   store i64 %w, ptr addrspace(1) %b0, align 8
   %i = zext i32 %t to i64
@@ -1667,8 +1686,10 @@ body:
   %x0 = extractvalue %A %g1, 0
   %e0 = getelementptr inbounds %A, ptr %a, i64 0, i32 0
   store ptr addrspace(1) %x0, ptr %e0, align 8
+  store ptr addrspace(1) %x0, ptr %e0, align 8
   %x1 = extractvalue %A %g1, 1
   %e1 = getelementptr inbounds %A, ptr %a, i64 0, i32 1
+  store ptr addrspace(1) %x1, ptr %e1, align 8
   store ptr addrspace(1) %x1, ptr %e1, align 8
   %p = load ptr addrspace(1), ptr %e0, align 8
   %q = load ptr addrspace(1), ptr %e1, align 8
@@ -1689,7 +1710,7 @@ body:
     let want: Vec<u32> = (0..THREADS)
         .map(|t| if t % 2 == 1 { 9 } else { 7 })
         .collect();
-    for (stem, bufs) in run_everywhere(&bc, "nullmember", &[vec![0; THREADS as usize]], (2, 2)) {
+    for (stem, bufs) in run_everywhere(&bc, "nullmember", &[vec![0; THREADS as usize]], (4, 2)) {
         assert_eq!(bufs[0], want, "{stem}");
     }
     for stem in PROFILES {
@@ -1718,11 +1739,14 @@ body:
   %x0 = extractvalue %A %g1, 0, 0
   %e0 = getelementptr inbounds %A, ptr %a, i64 0, i32 0, i32 0
   store ptr addrspace(1) %x0, ptr %e0, align 8
+  store ptr addrspace(1) %x0, ptr %e0, align 8
   %x1 = extractvalue %A %g1, 1, 0
   %e1 = getelementptr inbounds %A, ptr %a, i64 0, i32 1, i32 0
   store ptr addrspace(1) %x1, ptr %e1, align 8
+  store ptr addrspace(1) %x1, ptr %e1, align 8
   %x2 = extractvalue %A %g1, 2, 0
   %e2 = getelementptr inbounds %A, ptr %a, i64 0, i32 2, i32 0
+  store ptr addrspace(1) %x2, ptr %e2, align 8
   store ptr addrspace(1) %x2, ptr %e2, align 8
   %u = load ptr addrspace(1), ptr %e0, align 8
   call void @air.write_texture_2d.i16.v4f16(ptr addrspace(1) %u, <2 x i16> %pos, <4 x half> <half 1.0, half 1.0, half 1.0, half 1.0>, i16 0, i32 2)
@@ -1760,7 +1784,7 @@ declare void @air.write_texture_2d.i16.v4f16(ptr addrspace(1), <2 x i16>, <4 x h
                 uses("access.cell.load"),
                 uses("texture.null.switch"),
             ),
-            (3, 3, 3, 2),
+            (3, 6, 3, 2),
             "{stem}: {:?}",
             a.strategies.entries.keys().collect::<Vec<_>>()
         );

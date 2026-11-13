@@ -782,10 +782,10 @@ fn a_pointer_copied_into_a_pool_as_data_is_among_its_loads() {
 }
 
 /// A renderer's context struct holding a constant pointer to an argument buffer of textures, beside
-/// a pool: the pool's loads are not `Dynamic`, so the context stays a forwarding cell and the
-/// argument buffer pointer loaded from it is the parameter's fat pointer. Without device addresses
-/// the kernel is refused where it follows the pointer the argument buffer holds, a pointer loaded
-/// from a buffer.
+/// a pool: the context's field is written once, ahead of its read, so the argument buffer pointer
+/// read from it is the parameter itself (`canon::forward`) and no constant-space pointer is loaded;
+/// the pool stays. Without device addresses the kernel is refused where it follows the pointer the
+/// argument buffer holds, a pointer loaded from a buffer.
 #[test]
 fn a_pool_leaves_a_context_s_argument_buffer_pointer_resolved() {
     let Some(e) = pooled_cells("pooled_context") else {
@@ -795,27 +795,9 @@ fn a_pool_leaves_a_context_s_argument_buffer_pointer_resolved() {
         refused_feature(plan(&e, &floor())),
         Feature::DereferenceLoadedPointer
     );
-    {
-        let plan = plan(&e, &addressed()).expect("pooled_context");
-        assert!(!plan.cells.pooled.is_empty());
-        let loads = pointer_loads(&e, AddrSpace::Constant);
-        assert!(!loads.is_empty());
-        for l in loads {
-            assert!(
-                matches!(
-                    plan.repr(Value::Inst(l)),
-                    Some(Repr::BufPtr { wide: false, .. })
-                ),
-                "{:?}",
-                plan.repr(Value::Inst(l))
-            );
-            let roots = plan.roots_of(Value::Inst(l)).expect("roots");
-            assert!(
-                roots.iter().all(|r| matches!(r, Root::Param(_))),
-                "{roots:?}"
-            );
-        }
-    }
+    let plan = plan(&e, &addressed()).expect("pooled_context");
+    assert!(!plan.cells.pooled.is_empty());
+    assert_eq!(pointer_loads(&e, AddrSpace::Constant), []);
 }
 
 // ---- Threadgroup arena ----
